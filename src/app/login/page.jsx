@@ -32,21 +32,36 @@ export default function LoginPage() {
         <form onSubmit={handleLogin}>
           <div className="mb-4">
             <label className="block text-sm font-semibold text-slate-600 mb-1">Email</label>
-            <input type="email" value={email} onChange={(e) => setEmail(e.target.value)}
-              className="w-full px-4 py-3 rounded-lg border border-slate-200 focus:ring-2 focus:ring-blue-500 outline-none"
-              placeholder="you@ktcegypt.com" required />
+            <input
+              type="email"
+              value={email}
+              onChange={(e) => setEmail(e.target.value)}
+              className="w-full px-4 py-3 rounded-lg border border-slate-200 focus:ring-2 focus:ring-blue-500 focus:border-transparent outline-none"
+              placeholder="you@ktcegypt.com"
+              required
+            />
           </div>
           <div className="mb-6">
             <label className="block text-sm font-semibold text-slate-600 mb-1">Password</label>
-            <input type="password" value={password} onChange={(e) => setPassword(e.target.value)}
-              className="w-full px-4 py-3 rounded-lg border border-slate-200 focus:ring-2 focus:ring-blue-500 outline-none"
-              placeholder="••••••••" required />
+            <input
+              type="password"
+              value={password}
+              onChange={(e) => setPassword(e.target.value)}
+              className="w-full px-4 py-3 rounded-lg border border-slate-200 focus:ring-2 focus:ring-blue-500 focus:border-transparent outline-none"
+              placeholder="••••••••"
+              required
+            />
           </div>
           {error && (
-            <div className="mb-4 p-3 bg-red-50 border border-red-200 rounded-lg text-sm text-red-700">{error}</div>
+            <div className="mb-4 p-3 bg-red-50 border border-red-200 rounded-lg text-sm text-red-700">
+              {error}
+            </div>
           )}
-          <button type="submit" disabled={loading}
-            className="w-full py-3 bg-blue-600 text-white font-bold rounded-lg hover:bg-blue-700 transition disabled:opacity-50">
+          <button
+            type="submit"
+            disabled={loading}
+            className="w-full py-3 bg-blue-600 text-white font-bold rounded-lg hover:bg-blue-700 transition disabled:opacity-50"
+          >
             {loading ? 'Signing in...' : 'Sign In / تسجيل الدخول'}
           </button>
         </form>
