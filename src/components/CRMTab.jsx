@@ -13,6 +13,7 @@ export default function CRMTab({ customers, invoices, user, users, onReload, isA
   const [groupF, setGroupF] = useState('all');
   const [catF, setCatF] = useState('all');
   const [sortBy, setSortBy] = useState('alpha');
+  const [repF, setRepF] = useState('all');
   const [customCategories, setCustomCategories] = useState([]);
   const [customGroups, setCustomGroups] = useState([]);
   const [listsLoaded, setListsLoaded] = useState(false);
@@ -136,6 +137,7 @@ export default function CRMTab({ customers, invoices, user, users, onReload, isA
       if (q && !(c.name || '').includes(q) && !(c.name_en || '').toLowerCase().includes(q.toLowerCase())) return false;
       if (groupF !== 'all' && c.group_name !== groupF) return false;
       if (catF !== 'all' && c.industry !== catF) return false;
+      if (repF !== 'all') { if (repF === 'unassigned') { if (c.assigned_rep) return false; } else if (c.assigned_rep !== repF) return false; }
       return true;
     });
     if (sortBy === 'alpha') arr.sort((a, b) => (a.name || '').localeCompare(b.name || ''));
@@ -197,6 +199,7 @@ export default function CRMTab({ customers, invoices, user, users, onReload, isA
         phone: f.phone || sel.phone, email: f.email || sel.email, address: f.address || sel.address,
         city: f.city || sel.city, group_name: f.group || sel.group_name, industry: f.industry !== undefined ? f.industry : sel.industry,
         lead_source: f.leadSource || sel.lead_source,
+        assigned_rep: f.assignedRep !== undefined ? (f.assignedRep || null) : sel.assigned_rep,
       }, user?.id);
       await logActivity(user?.id, 'Edited client: ' + (f.name || sel.name));
       setEditingClient(false); setF({}); onReload();
@@ -268,6 +271,11 @@ export default function CRMTab({ customers, invoices, user, users, onReload, isA
         <select value={groupF} onChange={e => setGroupF(e.target.value)} className="px-2 py-1 rounded border border-slate-200 text-xs">
           <option value="all">All Groups</option>
           {allGroups.map(g => <option key={g} value={g}>{g}</option>)}
+        </select>
+        <select value={repF} onChange={e => setRepF(e.target.value)} className="px-2 py-1 rounded border border-slate-200 text-xs">
+          <option value="all">All Reps / كل الممثلين</option>
+          {(users || []).map(u => <option key={u.id} value={u.id}>{u.name}</option>)}
+          <option value="unassigned">Unassigned / غير معيّن</option>
         </select>
         <select value={sortBy} onChange={e => setSortBy(e.target.value)} className="px-2 py-1 rounded border border-slate-200 text-xs">
           <option value="alpha">A-Z / أبجدي</option>
@@ -384,6 +392,7 @@ export default function CRMTab({ customers, invoices, user, users, onReload, isA
               </div>
               {/* Last Note Date */}
               <div className="mt-1.5 border-t border-slate-100 pt-1.5">
+                {c.assigned_rep && (() => { const rep = users?.find(u => u.id === c.assigned_rep); return rep ? <div className="text-[10px] text-indigo-600 font-semibold mb-0.5">👤 {rep.name}</div> : null; })()}
                 {lastNote ? (
                   <div className="text-[10px] text-blue-600">
                     Last note: {new Date(lastNote.created_at).toLocaleDateString()}
@@ -393,7 +402,7 @@ export default function CRMTab({ customers, invoices, user, users, onReload, isA
                   <div className="text-[10px] text-red-500 font-semibold">No notes yet</div>
                 )}
                 {lastOrder && (
-                  <div className="text-[10px] text-purple-600">Last order: #{lastOrder.order_number}</div>
+                  <div className="text-[10px] text-purple-600">Last order: #{lastOrder.order_number} ({lastOrder.invoice_date})</div>
                 )}
               </div>
             </div>);
@@ -432,6 +441,11 @@ export default function CRMTab({ customers, invoices, user, users, onReload, isA
               <input value={f.phone!==undefined?f.phone:(sel.phone||'')} onChange={e=>setF({...f,phone:e.target.value})} className="w-full px-2 py-1.5 border rounded text-sm" /></div>
             <div><label className="text-[10px] font-semibold">City</label>
               <input value={f.city!==undefined?f.city:(sel.city||'')} onChange={e=>setF({...f,city:e.target.value})} className="w-full px-2 py-1.5 border rounded text-sm" /></div>
+            <div><label className="text-[10px] font-semibold">Assigned Rep / الممثل</label>
+              <select value={f.assignedRep!==undefined?f.assignedRep:(sel.assigned_rep||'')} onChange={e=>setF({...f,assignedRep:e.target.value})} className="w-full px-2 py-1.5 border rounded text-sm">
+                <option value="">Unassigned / غير معيّن</option>
+                {(users||[]).map(u=><option key={u.id} value={u.id}>{u.name}</option>)}
+              </select></div>
             <div className="col-span-2 flex gap-2">
               <button onClick={handleEditClient} className="px-3 py-1.5 bg-emerald-500 text-white rounded text-xs font-semibold">Save / حفظ</button>
               <button onClick={()=>{setEditingClient(false);setF({});}} className="px-3 py-1.5 border border-slate-200 rounded text-xs">Cancel</button>
@@ -464,6 +478,7 @@ export default function CRMTab({ customers, invoices, user, users, onReload, isA
               {sel.important ? '⭐ Important Client / عميل مهم' : '☆ Mark as Important / تعيين كمهم'}
             </button>
             {sel.phone && <div className="text-xs text-slate-500 mt-2">Phone: {sel.phone}</div>}
+            {sel.assigned_rep && (() => { const rep = users?.find(u => u.id === sel.assigned_rep); return rep ? <div className="text-xs text-indigo-600 font-semibold mt-1">👤 Assigned Rep / الممثل: {rep.name}</div> : null; })()}
             {sel.credit_limit && <div className="text-xs text-slate-500">Credit Limit: {fE(sel.credit_limit)}</div>}
             {isAdmin && (
               <div className="flex items-center gap-2 mt-2 p-2 bg-red-50 rounded border border-red-200">
