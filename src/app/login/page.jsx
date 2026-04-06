@@ -1,7 +1,7 @@
 'use client';
 import { useState, useEffect, useMemo, useCallback } from 'react';
 import { supabase, dbInsert, dbUpdate, dbDelete } from '../lib/supabase';
-import { fmt, fE, COLORS, EXPENSE_CATS, getReconStatus, STATUS_STYLES, today, inRange, monthOf } from '../lib/utils';
+import { fmt, fE, COLORS, EXPENSE_CATS, getReconStatus, STATUS_STYLES, today, inRange, monthOf, getWarehouseCat } from '../lib/utils';
 import {
   BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip,
   ResponsiveContainer, Legend
@@ -50,6 +50,7 @@ export default function App() {
   const [customers, setCustomers] = useState([]);
   const [warehouse, setWarehouse] = useState([]);
   const [invoiceItems, setInvoiceItems] = useState([]);
+  const [expenseRules, setExpenseRules] = useState([]);
 
   // Modals
   const [selectedInvoice, setSelectedInvoice] = useState(null);
@@ -61,6 +62,7 @@ export default function App() {
   const [checkView, setCheckView] = useState('pending');
   const [reconcileCheck, setReconcileCheck] = useState(null);
   const [expenseDrill, setExpenseDrill] = useState(null);
+  const [warehouseDrill, setWarehouseDrill] = useState(null);
   const [customerGroup, setCustomerGroup] = useState('all');
 
   // Forms
@@ -115,7 +117,7 @@ export default function App() {
 
   const loadAllData = async () => {
     try {
-      const [inv, tres, chk, dbt, cust, wh, items] = await Promise.all([
+      const [inv, tres, chk, dbt, cust, wh, items, rules] = await Promise.all([
         fetchAll('invoices', 'invoice_date'),
         fetchAll('treasury', 'transaction_date'),
         fetchAll('checks', 'check_date', true),
@@ -123,6 +125,7 @@ export default function App() {
         fetchAll('customers', 'name', true),
         fetchAll('warehouse_expenses', 'expense_date'),
         fetchAll('invoice_items', 'created_at', true),
+        fetchAll('expense_rules', 'created_at', true),
       ]);
       setInvoices(inv);
       setTreasury(tres);
@@ -131,6 +134,7 @@ export default function App() {
       setCustomers(cust);
       setWarehouse(wh);
       setInvoiceItems(items);
+      setExpenseRules(rules);
     } catch (err) {
       console.error('Load error:', err);
     }
@@ -223,13 +227,18 @@ export default function App() {
     }).sort((a, b) => a.year - b.year);
   }, [invoices, treasury, mode, df, dt]);
 
-  // Month transactions for drill-down
+  // Month transactions for drill-down (filtered by in/out/net)
   const monthTransactions = useMemo(() => {
     if (!selectedMonth) return [];
     return filteredTreasury
       .filter(t => monthOf(t.transaction_date) === selectedMonth)
+      .filter(t => {
+        if (treasuryDrill === 'in') return Number(t.cash_in) > 0;
+        if (treasuryDrill === 'out') return Number(t.cash_out) > 0;
+        return true; // 'net' shows all
+      })
       .sort((a, b) => a.transaction_date.localeCompare(b.transaction_date));
-  }, [selectedMonth, filteredTreasury]);
+  }, [selectedMonth, filteredTreasury, treasuryDrill]);
 
   // ==========================================
   // ACTIONS
@@ -310,14 +319,52 @@ export default function App() {
 
   const handleEditTreasury = async (txn) => {
     try {
-      await dbUpdate('treasury', txn.id, {
+      const updates = {
         transaction_date: formData.date || txn.transaction_date,
         description: formData.desc || txn.description,
         cash_in: formData.cashIn != null ? Number(formData.cashIn) : txn.cash_in,
         cash_out: formData.cashOut != null ? Number(formData.cashOut) : txn.cash_out,
         order_number: formData.orderNumber != null ? formData.orderNumber : txn.order_number,
         category: formData.category != null ? formData.category : txn.category,
-      }, user?.id);
+        subcategory: formData.subcategory != null ? formData.subcategory : txn.subcategory,
+      };
+      await dbUpdate('treasury', txn.id, updates, user?.id);
+
+      // Smart categorization: if category changed, offer to apply to all similar
+      if (formData.category && formData.category !== txn.category) {
+        const desc = txn.description || '';
+        // Find key words from description (first 2 significant words)
+        const words = desc.split(/\s+/).filter(w => w.length > 2).slice(0, 2).join(' ');
+        if (words && confirm('Apply "' + (EXPENSE_CATS[formData.category] || formData.category) + '" to all transactions containing "' + words + '"?\n\nتطبيق على جميع المعاملات المماثلة؟')) {
+          // Save rule
+          const existing = expenseRules.find(r => r.description_match === words);
+          if (existing) {
+            await dbUpdate('expense_rules', existing.id, {
+              category: formData.category,
+              subcategory: formData.subcategory || '',
+            }, user?.id);
+          } else {
+            await dbInsert('expense_rules', {
+              description_match: words,
+              category: formData.category,
+              subcategory: formData.subcategory || '',
+            }, user?.id);
+          }
+          // Batch update matching treasury entries
+          const matching = treasury.filter(t =>
+            t.id !== txn.id && t.cash_out > 0 &&
+            (t.description || '').includes(words) &&
+            t.category !== formData.category
+          );
+          for (const m of matching) {
+            await dbUpdate('treasury', m.id, {
+              category: formData.category,
+              subcategory: formData.subcategory || '',
+            }, user?.id);
+          }
+        }
+      }
+
       setEditingTxn(null);
       setFormData({});
       await loadAllData();
@@ -825,7 +872,7 @@ export default function App() {
         ========================================== */}
         {treasuryDrill && (
           <Modal onClose={() => { setTreasuryDrill(null); setSelectedMonth(null); }}
-            title={selectedMonth ? `Transactions ${selectedMonth}` : `Cash ${treasuryDrill === 'in' ? 'In / وارد' : 'Out / منصرف'}`}>
+            title={selectedMonth ? ('Transactions ' + selectedMonth) : (treasuryDrill === 'in' ? 'Cash In / وارد' : treasuryDrill === 'out' ? 'Cash Out / منصرف' : 'Net / صافي')}>
             {!selectedMonth ? (
               <div>
                 <p className="text-xs text-slate-400 mb-3">Tap month for transactions / اضغط الشهر للتفاصيل</p>
@@ -833,18 +880,30 @@ export default function App() {
                   <table className="w-full border-collapse">
                     <thead><tr className="bg-slate-50">
                       <th className="px-3 py-2 text-xs text-left">Month</th>
-                      <th className="px-3 py-2 text-xs text-right">{treasuryDrill === 'in' ? 'In / وارد' : 'Out / منصرف'}</th>
+                      {treasuryDrill === 'net' ? (
+                        <><th className="px-3 py-2 text-xs text-right">In</th><th className="px-3 py-2 text-xs text-right">Out</th><th className="px-3 py-2 text-xs text-right">Net</th></>
+                      ) : (
+                        <th className="px-3 py-2 text-xs text-right">{treasuryDrill === 'in' ? 'In / وارد' : 'Out / منصرف'}</th>
+                      )}
                       <th className="px-3 py-2 text-xs text-right">Entries</th>
                     </tr></thead>
                     <tbody>
-                      {monthlyTreasury.map(m => (
+                      {monthlyTreasury
+                        .filter(m => treasuryDrill === 'in' ? m.cashIn > 0 : treasuryDrill === 'out' ? m.cashOut > 0 : true)
+                        .map(m => (
                         <tr key={m.month} onClick={() => setSelectedMonth(m.month)}
                           className="border-b border-slate-50 cursor-pointer hover:bg-blue-50">
                           <td className="px-3 py-2 text-xs font-semibold">{m.month}</td>
-                          <td className="px-3 py-2 text-xs text-right font-semibold"
-                            style={{ color: treasuryDrill === 'in' ? '#10b981' : '#ef4444' }}>
-                            {fE(treasuryDrill === 'in' ? m.cashIn : m.cashOut)}
-                          </td>
+                          {treasuryDrill === 'net' ? (
+                            <><td className="px-3 py-2 text-xs text-right text-emerald-600 font-semibold">{fE(m.cashIn)}</td>
+                            <td className="px-3 py-2 text-xs text-right text-red-500 font-semibold">{fE(m.cashOut)}</td>
+                            <td className="px-3 py-2 text-xs text-right font-bold" style={{ color: m.cashIn - m.cashOut >= 0 ? '#10b981' : '#ef4444' }}>{fE(m.cashIn - m.cashOut)}</td></>
+                          ) : (
+                            <td className="px-3 py-2 text-xs text-right font-semibold"
+                              style={{ color: treasuryDrill === 'in' ? '#10b981' : '#ef4444' }}>
+                              {fE(treasuryDrill === 'in' ? m.cashIn : m.cashOut)}
+                            </td>
+                          )}
                           <td className="px-3 py-2 text-xs text-right">{m.count}</td>
                         </tr>
                       ))}
@@ -896,6 +955,9 @@ export default function App() {
                                   onChange={e => setFormData({...formData, category: e.target.value})}
                                   className="w-full text-[10px] border rounded px-1 py-0.5 mt-1" />
                               )}
+                              <input defaultValue={txn.subcategory || ''} placeholder="Subcategory (optional)"
+                                onChange={e => setFormData({...formData, subcategory: e.target.value})}
+                                className="w-full text-[10px] border rounded px-1 py-0.5 mt-1 bg-orange-50" />
                             </td>
                             <td className="px-2 py-1.5"><input type="number" defaultValue={txn.cash_in || 0}
                               onChange={e => setFormData({...formData, cashIn: e.target.value})}
@@ -917,7 +979,10 @@ export default function App() {
                           <td className="px-3 py-2 text-xs" style={{ direction: 'rtl' }}>
                             {txn.description}
                             {txn.cash_out > 0 && (
-                              <div className="text-[9px] text-amber-600 mt-0.5">{EXPENSE_CATS[txn.category] || txn.category || 'Operations'}</div>
+                              <div className="text-[9px] text-amber-600 mt-0.5">
+                                {EXPENSE_CATS[txn.category] || txn.category || 'Operations'}
+                                {txn.subcategory && (' > ' + txn.subcategory)}
+                              </div>
                             )}
                           </td>
                           <td className="px-3 py-2 text-xs text-right text-emerald-600 font-semibold">
@@ -1083,7 +1148,7 @@ export default function App() {
                 </select>
               </div>
             </div>
-            <p className="text-[10px] text-slate-400 mt-2">Cash/Check: marks as collected only (treasury entry already exists). Bank transfer/Deposit/Other: also creates a treasury entry and updates invoice.</p>
+            <p className="text-[10px] text-slate-400 mt-2">Cash/Check: marks as collected only (treasury entry already exists) — نقد/شيك: يتم تسجيلها كمحصّلة فقط (المعاملة موجودة بالفعل في الخزنة)<br/>Bank transfer/Deposit/Other: also creates a treasury entry and updates invoice — تحويل بنكي/إيداع/أخرى: يتم إنشاء معاملة في الخزنة وتحديث الفاتورة</p>
             <button onClick={handleCollectCheck}
               className="mt-3 px-4 py-2 bg-emerald-500 text-white rounded-lg font-semibold w-full">Reconcile / تسوية ✓</button>
           </Modal>
@@ -1157,7 +1222,7 @@ export default function App() {
                 </select>
               </div>
               <div>
-                <label className="text-xs font-semibold text-slate-600">Date / التاريخ</label>
+                <label className="text-xs font-semibold text-slate-600">Date / التاريخ <span className="text-[9px] text-slate-400">(mm/dd/yyyy)</span></label>
                 <input type="date" value={formData.date || today()}
                   onChange={e => setFormData({ ...formData, date: e.target.value })}
                   className="w-full px-3 py-2 rounded-lg border border-slate-200 text-sm" />
@@ -1167,6 +1232,19 @@ export default function App() {
                 <input type="number" value={formData.amount || ''}
                   onChange={e => setFormData({ ...formData, amount: e.target.value })}
                   className="w-full px-3 py-2 rounded-lg border border-slate-200 text-sm" />
+              </div>
+              <div>
+                <label className="text-xs font-semibold text-slate-600">Currency / العملة</label>
+                <select value={formData.currency || 'EGP'}
+                  onChange={e => setFormData({ ...formData, currency: e.target.value })}
+                  className="w-full px-3 py-2 rounded-lg border border-slate-200 text-sm">
+                  <option value="EGP">EGP - Egyptian Pound</option>
+                  <option value="USD">USD - US Dollar</option>
+                  <option value="EUR">EUR - Euro</option>
+                  <option value="GBP">GBP - British Pound</option>
+                  <option value="SAR">SAR - Saudi Riyal</option>
+                  <option value="AED">AED - UAE Dirham</option>
+                </select>
               </div>
               <div>
                 <label className="text-xs font-semibold text-slate-600">Order # / رقم</label>
@@ -1251,7 +1329,7 @@ export default function App() {
             <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-5">
               <Card title="Cash In" titleAr="وارد" value={fE(totalCashIn)} sub="Tap / اضغط" color="#10b981" onClick={() => setTreasuryDrill('in')} />
               <Card title="Cash Out" titleAr="منصرف" value={fE(totalCashOut)} sub="Tap / اضغط" color="#ef4444" onClick={() => setTreasuryDrill('out')} />
-              <Card title="Net" titleAr="صافي" value={fE(totalCashIn - totalCashOut)} color={totalCashIn > totalCashOut ? '#10b981' : '#ef4444'} />
+              <Card title="Net" titleAr="صافي" value={fE(totalCashIn - totalCashOut)} sub="Tap / اضغط" color={totalCashIn > totalCashOut ? '#10b981' : '#ef4444'} onClick={() => setTreasuryDrill('net')} />
               <Card title="Checks" titleAr="شيكات" value={fE(pendingChecks.reduce((a, c) => a + Number(c.amount), 0))} sub={`${pendingChecks.length} pending`} color="#f59e0b" onClick={() => navigate('checks')} />
             </div>
 
@@ -1321,6 +1399,17 @@ export default function App() {
               </div>
             </div>
             <InvoiceTable data={filteredInvoices} onSelect={setSelectedInvoice} />
+            <div className="bg-white rounded-lg p-3 mt-3 border border-slate-200">
+              <h4 className="text-xs font-bold text-slate-600 mb-2">Key / المفتاح</h4>
+              <div className="grid grid-cols-2 md:grid-cols-3 gap-x-4 gap-y-1 text-[10px]">
+                <div><span className="inline-block w-3 h-3 rounded-full bg-green-500 mr-1 align-middle"></span>✅ Reconciled / تم التسوية — Treasury matches invoice</div>
+                <div><span className="inline-block w-3 h-3 rounded-full bg-red-500 mr-1 align-middle"></span>🔴 Open / مفتوح — Outstanding balance remaining</div>
+                <div><span className="inline-block w-3 h-3 rounded-full bg-amber-500 mr-1 align-middle"></span>⚠️ Unverified / غير مؤكد — No treasury entries linked</div>
+                <div><span className="inline-block w-3 h-3 rounded-full bg-orange-500 mr-1 align-middle"></span>⚡ Mismatch / عدم تطابق — Treasury differs from sales record</div>
+                <div><span className="inline-block w-3 h-3 rounded-full bg-orange-600 mr-1 align-middle"></span>🟠 Overpaid / دفع زائد — Collected more than invoiced</div>
+                <div><span className="text-blue-500 font-bold mr-1">EGP</span>Egyptian Pound / جنيه مصري — Default currency</div>
+              </div>
+            </div>
           </div>
         )}
 
@@ -1439,7 +1528,7 @@ export default function App() {
                 <div className="text-[10px] text-slate-500">Cash Out / منصرف</div>
                 <div className="text-lg font-extrabold">{fE(totalCashOut)}</div>
               </div>
-              <div className="bg-white rounded-lg p-3" style={{ borderLeftWidth: 3, borderLeftColor: totalCashIn > totalCashOut ? '#10b981' : '#ef4444' }}>
+              <div onClick={() => setTreasuryDrill('net')} className="bg-white rounded-lg p-3 cursor-pointer hover:shadow-md" style={{ borderLeftWidth: 3, borderLeftColor: totalCashIn > totalCashOut ? '#10b981' : '#ef4444' }}>
                 <div className="text-[10px] text-slate-500">Net / صافي</div>
                 <div className="text-lg font-extrabold">{fE(totalCashIn - totalCashOut)}</div>
               </div>
@@ -1588,34 +1677,104 @@ export default function App() {
         ========================================== */}
         {tab === 'warehouse' && (
           <div>
-            <h2 className="text-xl font-extrabold mb-3">Warehouse / عهدة المخزن</h2>
-            <ModeBar />
-            <div className="bg-white rounded-xl p-4 mt-3 mb-3" style={{ borderLeftWidth: 3, borderLeftColor: '#8b5cf6' }}>
-              <div className="text-[10px] text-slate-500">Total / الإجمالي</div>
-              <div className="text-2xl font-extrabold text-purple-600">
-                {fE(warehouse.filter(w => inRange(w.expense_date, mode, df, dt)).reduce((a, w) => a + Number(w.amount), 0))}
-              </div>
+            <div className="flex justify-between flex-wrap gap-2 mb-3">
+              <h2 className="text-xl font-extrabold">Warehouse / عهدة المخزن</h2>
+              <ModeBar />
             </div>
-            <div className="overflow-auto rounded-lg border border-slate-200 max-h-[400px]">
-              <table className="w-full border-collapse">
-                <thead className="sticky top-0"><tr className="bg-slate-50">
-                  <th className="px-3 py-2 text-xs text-left">Date</th>
-                  <th className="px-3 py-2 text-xs" style={{ direction: 'rtl' }}>Description</th>
-                  <th className="px-3 py-2 text-xs text-right">Amount</th>
-                  <th className="px-3 py-2 text-xs">Ref</th>
-                </tr></thead>
-                <tbody>
-                  {warehouse.filter(w => inRange(w.expense_date, mode, df, dt)).map(w => (
-                    <tr key={w.id} className="border-b border-slate-50">
-                      <td className="px-3 py-2 text-xs">{w.expense_date}</td>
-                      <td className="px-3 py-2 text-xs" style={{ direction: 'rtl' }}>{w.description}</td>
-                      <td className="px-3 py-2 text-xs text-right font-semibold text-purple-600">{fE(w.amount)}</td>
-                      <td className="px-3 py-2 text-xs">{w.america_ref || '—'}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
+            {(() => {
+              const filtered = warehouse.filter(w => inRange(w.expense_date, mode, df, dt));
+              const total = filtered.reduce((a, w) => a + Number(w.amount), 0);
+              const buckets = {};
+              filtered.forEach(w => {
+                const cat = getWarehouseCat(w.description);
+                if (!buckets[cat]) buckets[cat] = { total: 0, count: 0 };
+                buckets[cat].total += Number(w.amount);
+                buckets[cat].count++;
+              });
+              const sortedBuckets = Object.entries(buckets).sort((a, b) => b[1].total - a[1].total);
+              return (
+                <div>
+                  <div className="bg-white rounded-xl p-4 mb-3" style={{ borderLeftWidth: 3, borderLeftColor: '#8b5cf6' }}>
+                    <div className="text-[10px] text-slate-500">Total / الإجمالي ({filtered.length} entries)</div>
+                    <div className="text-2xl font-extrabold text-purple-600">{fE(total)}</div>
+                  </div>
+                  <div className="bg-white rounded-xl p-4 mb-3">
+                    <h3 className="text-sm font-bold mb-2">Expense Buckets / تصنيف المصروفات</h3>
+                    {sortedBuckets.map(([cat, data], i) => (
+                      <div key={cat} onClick={() => setWarehouseDrill(cat)}
+                        className="flex justify-between py-1.5 border-b border-slate-50 text-xs cursor-pointer hover:bg-purple-50">
+                        <div className="flex items-center gap-1.5">
+                          <div className="w-2 h-2 rounded-full" style={{ background: COLORS[i % COLORS.length] }} />
+                          <span>{cat}</span>
+                          <span className="text-slate-400">({data.count})</span>
+                        </div>
+                        <span className="font-bold text-purple-600">{fE(data.total)} →</span>
+                      </div>
+                    ))}
+                  </div>
+                  {warehouseDrill ? (
+                    <div className="bg-white rounded-xl p-4">
+                      <div className="flex justify-between items-center mb-2">
+                        <h3 className="text-sm font-bold">{warehouseDrill} ({filtered.filter(w => getWarehouseCat(w.description) === warehouseDrill).length})</h3>
+                        <button onClick={() => setWarehouseDrill(null)}
+                          className="px-2 py-1 rounded border border-slate-200 text-xs">Close</button>
+                      </div>
+                      <div className="overflow-auto max-h-[350px] rounded-lg border border-slate-200">
+                        <table className="w-full border-collapse">
+                          <thead className="sticky top-0"><tr className="bg-slate-50">
+                            <th className="px-2 py-2 text-xs text-left">Date</th>
+                            <th className="px-2 py-2 text-xs" style={{ direction: 'rtl' }}>Description</th>
+                            <th className="px-2 py-2 text-xs text-right">Amount</th>
+                          </tr></thead>
+                          <tbody>
+                            {filtered
+                              .filter(w => getWarehouseCat(w.description) === warehouseDrill)
+                              .sort((a, b) => b.expense_date.localeCompare(a.expense_date))
+                              .map(w => (
+                                <tr key={w.id} className="border-b border-slate-50">
+                                  <td className="px-2 py-1.5 text-xs">{w.expense_date}</td>
+                                  <td className="px-2 py-1.5 text-xs" style={{ direction: 'rtl' }}>{w.description}</td>
+                                  <td className="px-2 py-1.5 text-xs text-right font-semibold text-purple-600">{fE(w.amount)}</td>
+                                </tr>
+                              ))}
+                          </tbody>
+                        </table>
+                      </div>
+                      <div className="flex justify-between pt-2 mt-1 border-t-2 border-purple-300">
+                        <span className="text-xs font-bold">Total</span>
+                        <span className="text-sm font-extrabold text-purple-600">
+                          {fE(filtered.filter(w => getWarehouseCat(w.description) === warehouseDrill).reduce((a, w) => a + Number(w.amount), 0))}
+                        </span>
+                      </div>
+                    </div>
+                  ) : (
+                    <div className="bg-white rounded-xl p-4">
+                      <h3 className="text-sm font-bold mb-2">All Transactions</h3>
+                      <div className="overflow-auto max-h-[350px] rounded-lg border border-slate-200">
+                        <table className="w-full border-collapse">
+                          <thead className="sticky top-0"><tr className="bg-slate-50">
+                            <th className="px-2 py-2 text-xs text-left">Date</th>
+                            <th className="px-2 py-2 text-xs" style={{ direction: 'rtl' }}>Description</th>
+                            <th className="px-2 py-2 text-xs text-right">Amount</th>
+                            <th className="px-2 py-2 text-xs">Category</th>
+                          </tr></thead>
+                          <tbody>
+                            {filtered.sort((a, b) => b.expense_date.localeCompare(a.expense_date)).slice(0, 200).map(w => (
+                              <tr key={w.id} className="border-b border-slate-50">
+                                <td className="px-2 py-1.5 text-xs">{w.expense_date}</td>
+                                <td className="px-2 py-1.5 text-xs" style={{ direction: 'rtl' }}>{w.description}</td>
+                                <td className="px-2 py-1.5 text-xs text-right font-semibold text-purple-600">{fE(w.amount)}</td>
+                                <td className="px-2 py-1.5 text-[10px] text-amber-600">{getWarehouseCat(w.description)}</td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      </div>
+                    </div>
+                  )}
+                </div>
+              );
+            })()}
           </div>
         )}
 
