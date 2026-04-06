@@ -49,6 +49,7 @@ export default function App() {
   const [debts, setDebts] = useState([]);
   const [customers, setCustomers] = useState([]);
   const [warehouse, setWarehouse] = useState([]);
+  const [invoiceItems, setInvoiceItems] = useState([]);
 
   // Modals
   const [selectedInvoice, setSelectedInvoice] = useState(null);
@@ -59,6 +60,8 @@ export default function App() {
   const [selectedMonth, setSelectedMonth] = useState(null);
   const [checkView, setCheckView] = useState('pending');
   const [reconcileCheck, setReconcileCheck] = useState(null);
+  const [expenseDrill, setExpenseDrill] = useState(null);
+  const [customerGroup, setCustomerGroup] = useState('all');
 
   // Forms
   const [showAddPayment, setShowAddPayment] = useState(false);
@@ -67,6 +70,8 @@ export default function App() {
   const [editingTxn, setEditingTxn] = useState(null);
   const [splittingTxn, setSplittingTxn] = useState(null);
   const [splitData, setSplitData] = useState({ order1: '', amount1: 0, order2: '', amount2: 0 });
+  const [linkSearch, setLinkSearch] = useState('');
+  const [showLinkSearch, setShowLinkSearch] = useState(false);
   const [formData, setFormData] = useState({});
 
   // ==========================================
@@ -110,13 +115,14 @@ export default function App() {
 
   const loadAllData = async () => {
     try {
-      const [inv, tres, chk, dbt, cust, wh] = await Promise.all([
+      const [inv, tres, chk, dbt, cust, wh, items] = await Promise.all([
         fetchAll('invoices', 'invoice_date'),
         fetchAll('treasury', 'transaction_date'),
         fetchAll('checks', 'check_date', true),
         fetchAll('debts', 'total_debt'),
         fetchAll('customers', 'name', true),
         fetchAll('warehouse_expenses', 'expense_date'),
+        fetchAll('invoice_items', 'created_at', true),
       ]);
       setInvoices(inv);
       setTreasury(tres);
@@ -124,6 +130,7 @@ export default function App() {
       setDebts(dbt);
       setCustomers(cust);
       setWarehouse(wh);
+      setInvoiceItems(items);
     } catch (err) {
       console.error('Load error:', err);
     }
@@ -356,13 +363,61 @@ export default function App() {
     }
   };
 
+  const handleUnlinkTreasury = async (txn) => {
+    if (!confirm('Unlink this transaction from order ' + (selectedInvoice?.order_number || '') + '?')) return;
+    try {
+      await dbUpdate('treasury', txn.id, { order_number: '' }, user?.id);
+      await loadAllData();
+    } catch (err) {
+      alert('Error: ' + err.message);
+    }
+  };
+
+  const handleLinkTreasury = async (txn) => {
+    if (!selectedInvoice) return;
+    try {
+      await dbUpdate('treasury', txn.id, { order_number: selectedInvoice.order_number }, user?.id);
+      setLinkSearch('');
+      setShowLinkSearch(false);
+      await loadAllData();
+    } catch (err) {
+      alert('Error: ' + err.message);
+    }
+  };
+
   const handleCollectCheck = async () => {
     if (!reconcileCheck || !formData.collectionDate) return;
     try {
+      const payMethod = formData.paymentMethod || 'check';
+      // 1. Mark check as collected
       await dbUpdate('checks', reconcileCheck.id, {
         status: 'collected',
         collection_date: formData.collectionDate,
       }, user?.id);
+      // 2. Only create treasury entry for bank transfer/deposit/other
+      // Cash and check payments already have treasury entries created by the accountant
+      if (payMethod !== 'cash' && payMethod !== 'check') {
+        const desc = reconcileCheck.customer_name + ' (' + payMethod + ' - check reconciled)';
+        await dbInsert('treasury', {
+          transaction_date: formData.collectionDate,
+          order_number: reconcileCheck.order_number || '',
+          description: desc,
+          cash_in: Number(reconcileCheck.amount),
+          cash_out: 0,
+          source: 'check',
+        }, user?.id);
+        // Update invoice collected amount
+        if (reconcileCheck.order_number) {
+          const inv = invoices.find(i => i.order_number === reconcileCheck.order_number);
+          if (inv) {
+            const newCollected = Number(inv.total_collected) + Number(reconcileCheck.amount);
+            await dbUpdate('invoices', inv.id, {
+              total_collected: newCollected,
+              outstanding: Math.max(0, Number(inv.total_amount) - newCollected),
+            }, user?.id);
+          }
+        }
+      }
       setReconcileCheck(null);
       setFormData({});
       await loadAllData();
@@ -505,7 +560,7 @@ export default function App() {
             INVOICE DETAIL MODAL
         ========================================== */}
         {selectedInvoice && (
-          <Modal onClose={() => { setSelectedInvoice(null); setShowAddPayment(false); setFormData({}); setEditingTxn(null); }}
+          <Modal onClose={() => { setSelectedInvoice(null); setShowAddPayment(false); setFormData({}); setEditingTxn(null); setShowLinkSearch(false); setLinkSearch(''); }}
             title={`Invoice / فاتورة #${selectedInvoice.order_number}`}>
             <div style={{ direction: 'rtl' }} className="text-lg font-bold mb-4 pb-3 border-b border-slate-200">
               {selectedInvoice.customer_name}
@@ -540,6 +595,41 @@ export default function App() {
                     {status === 'overpaid' && ` — ${fE(tTotal - selectedInvoice.total_amount)}`}
                     {status === 'unverified' && ` — Gap: ${fE(selectedInvoice.total_amount - tTotal)}`}
                     {status === 'open' && ` — ${fE(selectedInvoice.outstanding)}`}
+                  </div>
+                </div>
+              );
+            })()}
+
+            {/* Invoice Line Items */}
+            {(() => {
+              const items = invoiceItems.filter(it => it.invoice_id === selectedInvoice.id);
+              if (items.length === 0) return null;
+              return (
+                <div className="bg-blue-50 rounded-lg p-4 mb-4 border border-blue-200">
+                  <h4 className="text-sm font-bold text-blue-800 mb-2">📦 Items / البضاعة ({items.length})</h4>
+                  <div className="overflow-auto max-h-[200px]">
+                    <table className="w-full border-collapse">
+                      <thead><tr className="bg-blue-100">
+                        <th className="px-2 py-1.5 text-[10px] text-left" style={{ direction: 'rtl' }}>Description</th>
+                        <th className="px-2 py-1.5 text-[10px] text-right">Qty</th>
+                        <th className="px-2 py-1.5 text-[10px] text-right">Price</th>
+                        <th className="px-2 py-1.5 text-[10px] text-right">Total</th>
+                      </tr></thead>
+                      <tbody>
+                        {items.map(it => (
+                          <tr key={it.id} className="border-b border-blue-100">
+                            <td className="px-2 py-1 text-xs" style={{ direction: 'rtl' }}>{it.description}</td>
+                            <td className="px-2 py-1 text-xs text-right">{fmt(it.quantity)}</td>
+                            <td className="px-2 py-1 text-xs text-right">{fmt(it.unit_price)}</td>
+                            <td className="px-2 py-1 text-xs text-right font-semibold">{fE(it.line_total)}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                  <div className="flex justify-between pt-2 mt-1 border-t-2 border-blue-300">
+                    <span className="text-xs font-bold">Items Total</span>
+                    <span className="text-sm font-extrabold text-blue-600">{fE(items.reduce((a, it) => a + Number(it.line_total || 0), 0))}</span>
                   </div>
                 </div>
               );
@@ -597,6 +687,10 @@ export default function App() {
                           className="px-2 py-0.5 rounded border border-blue-300 text-blue-600 text-[10px] mr-1 hover:bg-blue-50">
                           Edit
                         </button>
+                        <button onClick={() => handleUnlinkTreasury(txn)}
+                          className="px-2 py-0.5 rounded border border-red-300 text-red-500 text-[10px] hover:bg-red-50">
+                          Unlink
+                        </button>
                       </div>
                     )}
                   </div>
@@ -607,6 +701,54 @@ export default function App() {
                     {fE((treasuryByOrder[selectedInvoice.order_number] || []).reduce((a, t) => a + Number(t.cash_in || 0), 0))}
                   </span>
                 </div>
+              </div>
+            )}
+
+            {/* Link Existing Transaction */}
+            {!showLinkSearch ? (
+              <button onClick={() => { setShowLinkSearch(true); setLinkSearch(''); }}
+                className="px-4 py-2 bg-purple-500 text-white rounded-lg font-semibold text-sm hover:bg-purple-600 transition mb-3 mr-2">
+                🔗 Link Transaction / ربط معاملة
+              </button>
+            ) : (
+              <div className="bg-purple-50 rounded-lg p-4 border border-purple-200 mb-3">
+                <h4 className="text-sm font-bold text-purple-800 mb-2">Search Treasury to Link / بحث للربط</h4>
+                <input value={linkSearch} onChange={e => setLinkSearch(e.target.value)}
+                  placeholder="Search by name, description, date, amount... / بحث"
+                  className="w-full px-3 py-2 rounded-lg border border-purple-200 text-sm mb-2" autoFocus />
+                {linkSearch.length >= 2 && (
+                  <div className="max-h-[200px] overflow-auto rounded border border-purple-200 bg-white">
+                    {treasury
+                      .filter(t => !t.order_number || t.order_number === '')
+                      .filter(t => {
+                        const words = linkSearch.split(/\s+/).filter(w => w.length > 0);
+                        const haystack = [t.description || '', t.transaction_date || '', String(t.cash_in || 0), String(t.cash_out || 0)].join(' ');
+                        return words.every(w => haystack.includes(w));
+                      })
+                      .slice(0, 20)
+                      .map(txn => (
+                        <div key={txn.id} className="flex justify-between items-center px-3 py-2 border-b border-slate-50 hover:bg-purple-50">
+                          <div className="flex-1">
+                            <div className="text-xs font-semibold" style={{ direction: 'rtl' }}>{txn.description}</div>
+                            <div className="text-[10px] text-slate-500">{txn.transaction_date} {txn.cash_in > 0 ? '| In: ' + fE(txn.cash_in) : '| Out: ' + fE(txn.cash_out)}</div>
+                          </div>
+                          <button onClick={() => handleLinkTreasury(txn)}
+                            className="px-3 py-1 bg-purple-600 text-white rounded text-[10px] font-semibold ml-2 hover:bg-purple-700">
+                            Link / ربط
+                          </button>
+                        </div>
+                      ))}
+                    {treasury.filter(t => !t.order_number || t.order_number === '').filter(t => {
+                      const words = linkSearch.split(/\s+/).filter(w => w.length > 0);
+                      const haystack = [t.description || '', t.transaction_date || '', String(t.cash_in || 0), String(t.cash_out || 0)].join(' ');
+                      return words.every(w => haystack.includes(w));
+                    }).length === 0 && (
+                      <div className="px-3 py-3 text-xs text-slate-400 text-center">No unlinked transactions found</div>
+                    )}
+                  </div>
+                )}
+                <button onClick={() => { setShowLinkSearch(false); setLinkSearch(''); }}
+                  className="mt-2 px-3 py-1 border border-slate-200 rounded text-xs">Cancel / إلغاء</button>
               </div>
             )}
 
@@ -828,21 +970,76 @@ export default function App() {
           </Modal>
         )}
 
+        {/* EXPENSE DRILL MODAL */}
+        {expenseDrill && (
+          <Modal onClose={() => setExpenseDrill(null)}
+            title={`${EXPENSE_CATS[expenseDrill] || expenseDrill} / ${expenseDrill}`}>
+            <p className="text-xs text-slate-500 mb-2">
+              {filteredTreasury.filter(t => (t.category || 'Operations') === expenseDrill && t.cash_out > 0).length} transactions
+            </p>
+            <div className="overflow-auto max-h-[400px] rounded-lg border border-slate-200">
+              <table className="w-full border-collapse">
+                <thead><tr className="bg-slate-50 sticky top-0">
+                  <th className="px-2 py-2 text-xs text-left">Date</th>
+                  <th className="px-2 py-2 text-xs" style={{ direction: 'rtl' }}>Description</th>
+                  <th className="px-2 py-2 text-xs text-right">Amount</th>
+                </tr></thead>
+                <tbody>
+                  {filteredTreasury
+                    .filter(t => (t.category || 'Operations') === expenseDrill && t.cash_out > 0)
+                    .sort((a, b) => b.transaction_date.localeCompare(a.transaction_date))
+                    .map(txn => (
+                      <tr key={txn.id} className="border-b border-slate-50">
+                        <td className="px-2 py-1.5 text-xs">{txn.transaction_date}</td>
+                        <td className="px-2 py-1.5 text-xs" style={{ direction: 'rtl' }}>{txn.description}</td>
+                        <td className="px-2 py-1.5 text-xs text-right text-red-500 font-semibold">{fE(txn.cash_out)}</td>
+                      </tr>
+                    ))}
+                </tbody>
+              </table>
+            </div>
+            <div className="flex justify-between pt-2 mt-2 border-t-2 border-slate-300">
+              <span className="text-xs font-bold">Total</span>
+              <span className="text-sm font-extrabold text-red-500">
+                {fE(filteredTreasury.filter(t => (t.category || 'Operations') === expenseDrill && t.cash_out > 0).reduce((a, t) => a + Number(t.cash_out), 0))}
+              </span>
+            </div>
+          </Modal>
+        )}
+
         {/* ==========================================
             CHECK RECONCILE MODAL
         ========================================== */}
         {reconcileCheck && (
-          <Modal onClose={() => { setReconcileCheck(null); setFormData({}); }} title="Check / شيك">
+          <Modal onClose={() => { setReconcileCheck(null); setFormData({}); }} title="Reconcile Check / تسوية شيك">
             <div style={{ direction: 'rtl' }} className="text-lg font-bold mb-1">{reconcileCheck.customer_name}</div>
-            <div className="text-sm mb-4">{fE(reconcileCheck.amount)} | {reconcileCheck.check_date}</div>
-            <div>
-              <label className="text-xs font-semibold text-slate-600">Collection Date / تاريخ التحصيل</label>
-              <input type="date" value={formData.collectionDate || ''}
-                onChange={e => setFormData({ ...formData, collectionDate: e.target.value })}
-                className="w-full px-3 py-2 rounded-lg border border-slate-200 text-sm" />
+            <div className="text-sm mb-2">{fE(reconcileCheck.amount)} | {reconcileCheck.check_date}</div>
+            {reconcileCheck.order_number && (
+              <div className="text-xs text-blue-600 mb-3">Order #{reconcileCheck.order_number}</div>
+            )}
+            <div className="grid grid-cols-2 gap-3">
+              <div>
+                <label className="text-xs font-semibold text-slate-600">Collection Date / تاريخ التحصيل</label>
+                <input type="date" value={formData.collectionDate || ''}
+                  onChange={e => setFormData({ ...formData, collectionDate: e.target.value })}
+                  className="w-full px-3 py-2 rounded-lg border border-slate-200 text-sm" />
+              </div>
+              <div>
+                <label className="text-xs font-semibold text-slate-600">Method / طريقة</label>
+                <select value={formData.paymentMethod || 'check'}
+                  onChange={e => setFormData({ ...formData, paymentMethod: e.target.value })}
+                  className="w-full px-3 py-2 rounded-lg border border-slate-200 text-sm">
+                  <option value="cash">Cash / نقداً</option>
+                  <option value="check">Check / شيك</option>
+                  <option value="bank_transfer">Bank Transfer / تحويل بنكي</option>
+                  <option value="deposit">Bank Deposit / إيداع</option>
+                  <option value="other">Other / أخرى</option>
+                </select>
+              </div>
             </div>
+            <p className="text-[10px] text-slate-400 mt-2">Cash/Check: marks as collected only (treasury entry already exists). Bank transfer/Deposit/Other: also creates a treasury entry and updates invoice.</p>
             <button onClick={handleCollectCheck}
-              className="mt-3 px-4 py-2 bg-blue-500 text-white rounded-lg font-semibold">Done / تم ✓</button>
+              className="mt-3 px-4 py-2 bg-emerald-500 text-white rounded-lg font-semibold w-full">Reconcile / تسوية ✓</button>
           </Modal>
         )}
 
@@ -1014,12 +1211,13 @@ export default function App() {
             <div className="bg-white rounded-xl p-4">
               <h3 className="text-sm font-bold mb-2">Expense Buckets / تصنيف المنصرفات</h3>
               {expenseBuckets.map((e, i) => (
-                <div key={e.cat} className="flex justify-between py-1 border-b border-slate-50 text-xs">
+                <div key={e.cat} onClick={() => setExpenseDrill(e.cat)}
+                  className="flex justify-between py-1 border-b border-slate-50 text-xs cursor-pointer hover:bg-slate-50">
                   <div className="flex items-center gap-1.5">
                     <div className="w-2 h-2 rounded-full" style={{ background: COLORS[i % COLORS.length] }} />
                     <span>{e.eng}</span>
                   </div>
-                  <span className="font-bold">{fE(e.total)}</span>
+                  <span className="font-bold">{fE(e.total)} →</span>
                 </div>
               ))}
             </div>
@@ -1066,37 +1264,56 @@ export default function App() {
         ========================================== */}
         {tab === 'customers' && !selectedCustomer && (
           <div>
-            <div className="flex justify-between mb-3">
+            <div className="flex justify-between flex-wrap gap-2 mb-3">
               <h2 className="text-xl font-extrabold">Customers / العملاء</h2>
-              <input value={query} onChange={e => setQuery(e.target.value)}
-                placeholder="بحث" className="px-3 py-1.5 rounded-lg border border-slate-200 text-xs w-32" />
+              <div className="flex gap-2 items-center flex-wrap">
+                <ModeBar />
+                <input value={query} onChange={e => setQuery(e.target.value)}
+                  placeholder="بحث / Search" className="px-3 py-1.5 rounded-lg border border-slate-200 text-xs w-32" />
+              </div>
+            </div>
+            <div className="flex gap-2 mb-3 flex-wrap">
+              {[['all', 'All'], ['owing', 'Owing / مدين'], ['paid', 'Paid / مسدد'], ['top', 'Top Sales']].map(([v, l]) => (
+                <button key={v} onClick={() => setCustomerGroup(v)}
+                  className={`px-3 py-1 rounded-md text-xs font-semibold transition ${customerGroup === v ? 'bg-slate-900 text-white' : 'bg-slate-100 text-slate-500 hover:bg-slate-200'}`}>
+                  {l}
+                </button>
+              ))}
             </div>
             <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-3">
-              {[...new Set(filteredInvoices.map(x => x.customer_name))].sort()
-                .filter(c => !query || c.includes(query))
-                .map(c => {
+              {(() => {
+                let custList = [...new Set(filteredInvoices.map(x => x.customer_name))].map(c => {
                   const cs = filteredInvoices.filter(x => x.customer_name === c);
                   const tot = cs.reduce((a, r) => a + Number(r.total_amount), 0);
                   const rem = cs.reduce((a, r) => a + Number(r.outstanding), 0);
-                  return (
-                    <div key={c} onClick={() => setSelectedCustomer(c)}
-                      className="bg-white rounded-lg p-3 cursor-pointer border border-slate-200 hover:shadow-md transition">
-                      <div className="text-sm font-bold" style={{ direction: 'rtl' }}>{c}</div>
-                      <div className="flex justify-between mt-2">
-                        <div>
-                          <div className="text-[9px] text-slate-400">Inv</div>
-                          <div className="text-xs font-bold text-blue-500">{fmt(tot)}</div>
-                        </div>
-                        <div className="text-right">
-                          <div className="text-[9px] text-slate-400">Owed</div>
-                          <div className={`text-xs font-bold ${rem > 0 ? 'text-red-500' : 'text-emerald-500'}`}>
-                            {rem > 0 ? fmt(rem) : '✓'}
-                          </div>
+                  const col = cs.reduce((a, r) => a + Number(r.total_collected), 0);
+                  return { name: c, total: tot, outstanding: rem, collected: col, count: cs.length };
+                });
+                if (query) custList = custList.filter(c => c.name.includes(query));
+                if (customerGroup === 'owing') custList = custList.filter(c => c.outstanding > 0);
+                if (customerGroup === 'paid') custList = custList.filter(c => c.outstanding <= 0);
+                if (customerGroup === 'top') custList.sort((a, b) => b.total - a.total);
+                else custList.sort((a, b) => a.name.localeCompare(b.name));
+                return custList.map(c => (
+                  <div key={c.name} onClick={() => setSelectedCustomer(c.name)}
+                    className="bg-white rounded-lg p-3 cursor-pointer border border-slate-200 hover:shadow-md transition">
+                    <div className="text-sm font-bold" style={{ direction: 'rtl' }}>{c.name}</div>
+                    <div className="text-[9px] text-slate-400 mt-1">{c.count} invoices</div>
+                    <div className="flex justify-between mt-1">
+                      <div>
+                        <div className="text-[9px] text-slate-400">Sales</div>
+                        <div className="text-xs font-bold text-blue-500">{fmt(c.total)}</div>
+                      </div>
+                      <div className="text-right">
+                        <div className="text-[9px] text-slate-400">Owed</div>
+                        <div className={`text-xs font-bold ${c.outstanding > 0 ? 'text-red-500' : 'text-emerald-500'}`}>
+                          {c.outstanding > 0 ? fmt(c.outstanding) : '✓'}
                         </div>
                       </div>
                     </div>
-                  );
-                })}
+                  </div>
+                ));
+              })()}
             </div>
           </div>
         )}
@@ -1106,7 +1323,21 @@ export default function App() {
               className="px-3 py-1 rounded border border-slate-200 text-xs font-semibold mb-3 hover:bg-slate-50">
               ← Back / رجوع
             </button>
-            <h3 className="text-xl font-extrabold mb-3" style={{ direction: 'rtl' }}>{selectedCustomer}</h3>
+            <h3 className="text-xl font-extrabold mb-1" style={{ direction: 'rtl' }}>{selectedCustomer}</h3>
+            <div className="grid grid-cols-3 gap-3 mb-3">
+              <div className="bg-blue-50 rounded-lg p-2 text-center">
+                <div className="text-[9px] text-slate-500">Total Sales</div>
+                <div className="text-sm font-bold text-blue-600">{fE(invoices.filter(s => s.customer_name === selectedCustomer).reduce((a, r) => a + Number(r.total_amount), 0))}</div>
+              </div>
+              <div className="bg-emerald-50 rounded-lg p-2 text-center">
+                <div className="text-[9px] text-slate-500">Collected</div>
+                <div className="text-sm font-bold text-emerald-600">{fE(invoices.filter(s => s.customer_name === selectedCustomer).reduce((a, r) => a + Number(r.total_collected), 0))}</div>
+              </div>
+              <div className="bg-red-50 rounded-lg p-2 text-center">
+                <div className="text-[9px] text-slate-500">Outstanding</div>
+                <div className="text-sm font-bold text-red-500">{fE(invoices.filter(s => s.customer_name === selectedCustomer).reduce((a, r) => a + Number(r.outstanding), 0))}</div>
+              </div>
+            </div>
             <InvoiceTable
               data={invoices.filter(s => s.customer_name === selectedCustomer)}
               onSelect={setSelectedInvoice}
@@ -1150,11 +1381,11 @@ export default function App() {
             </div>
             {query && (
               <div className="bg-white rounded-xl p-4 mb-3">
-                <h3 className="text-sm font-bold mb-2">Search Results ({filteredTreasury.filter(t =>
-                  (t.order_number || '').includes(query) ||
-                  (t.description || '').includes(query) ||
-                  (t.transaction_date || '').includes(query)
-                ).length})</h3>
+                <h3 className="text-sm font-bold mb-2">Search Results ({filteredTreasury.filter(t => {
+                  const words = query.split(/\s+/).filter(w => w.length > 0);
+                  const hay = [t.order_number || '', t.description || '', t.transaction_date || '', String(t.cash_in || 0), String(t.cash_out || 0)].join(' ');
+                  return words.every(w => hay.includes(w));
+                }).length})</h3>
                 <div className="overflow-auto max-h-[400px] rounded-lg border border-slate-200">
                   <table className="w-full border-collapse">
                     <thead><tr className="bg-slate-50 sticky top-0">
@@ -1165,11 +1396,11 @@ export default function App() {
                       <th className="px-2 py-2 text-xs text-right">Out</th>
                     </tr></thead>
                     <tbody>
-                      {filteredTreasury.filter(t =>
-                        (t.order_number || '').includes(query) ||
-                        (t.description || '').includes(query) ||
-                        (t.transaction_date || '').includes(query)
-                      ).slice(0, 200).map(txn => (
+                      {filteredTreasury.filter(t => {
+                        const words = query.split(/\s+/).filter(w => w.length > 0);
+                        const hay = [t.order_number || '', t.description || '', t.transaction_date || '', String(t.cash_in || 0), String(t.cash_out || 0)].join(' ');
+                        return words.every(w => hay.includes(w));
+                      }).slice(0, 200).map(txn => (
                         <tr key={txn.id} className="border-b border-slate-50">
                           <td className="px-2 py-1.5 text-xs">{txn.transaction_date}</td>
                           <td className="px-2 py-1.5 text-xs font-semibold text-center">{txn.order_number || ''}</td>
