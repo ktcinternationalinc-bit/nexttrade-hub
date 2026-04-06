@@ -14,16 +14,24 @@ const ROLES = [
 const MODULES = [
   'Dashboard', 'Sales', 'Customers', 'Treasury', 'Checks', 'Debts',
   'Warehouse', 'Inventory', 'CRM', 'Tickets', 'Calendar', 'Customs',
-  'Daily Log', 'Admin', 'Settings', 'Import'
+  'Shipping Rates', 'Daily Log', 'Admin', 'AI Assistant', 'Settings', 'Import'
 ];
 
 const NOTIF_TYPES = [
   { v: 'ticket_assigned', l: 'Ticket Assigned / تعيين تذكرة' },
-  { v: 'status_changed', l: 'Status Changed / تغيير حالة' },
+  { v: 'ticket_status', l: 'Ticket Status Changed / تغيير حالة التذكرة' },
+  { v: 'ticket_comment', l: 'Ticket Comment / تعليق على تذكرة' },
+  { v: 'ticket_reassigned', l: 'Ticket Reassigned / إعادة تعيين تذكرة' },
   { v: 'event_scheduled', l: 'Event Scheduled / حدث مجدول' },
   { v: 'followup_created', l: 'Follow-up Created / متابعة جديدة' },
   { v: 'overdue_digest', l: 'Overdue Digest / تنبيه متأخر' },
   { v: 'daily_reminder', l: 'Daily Log Reminder / تذكير يومي' },
+  { v: 'shipping_rate_added', l: 'Shipping Rate Added / سعر شحن جديد' },
+  { v: 'shipping_rate_booked', l: 'Shipping Rate Booked / حجز شحنة' },
+  { v: 'shipping_quote', l: 'Shipping Quote Created / عرض سعر شحن' },
+  { v: 'crm_status_change', l: 'CRM Status Changed / تغيير حالة العميل' },
+  { v: 'client_assigned', l: 'Client Assigned to Rep / تعيين عميل لمندوب' },
+  { v: 'translation_complete', l: 'Translation Complete / اكتمال الترجمة' },
 ];
 
 export default function SettingsTab({ user, users, onReload, isAdmin }) {
