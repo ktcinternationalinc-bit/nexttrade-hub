@@ -11,6 +11,7 @@ import AdminTab from '../components/AdminTab';
 import SettingsTab from '../components/SettingsTab';
 import CustomsTab from '../components/CustomsTab';
 import PersonalDashboard from '../components/PersonalDashboard';
+import AIAssistant from '../components/AIAssistant';
 import {
   BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip,
   ResponsiveContainer, Legend
@@ -34,6 +35,7 @@ const TABS = [
   { id: 'customs', label: 'Customs / جمارك', icon: '🚢' },
   { id: 'dailylog', label: 'Daily Log / يومي', icon: '📓' },
   { id: 'admin', label: 'Admin / إدارة', icon: '👑' },
+  { id: 'ai', label: 'AI Assistant / ذكي', icon: '🤖' },
   { id: 'settings', label: 'Settings / إعدادات', icon: '⚙️' },
   { id: 'import', label: 'Import / استيراد', icon: '📥' },
 ];
@@ -48,8 +50,8 @@ export default function App() {
 
   // Navigation
   const [tab, setTab] = useState('dashboard');
-  const [mode, setMode] = useState('custom');
-  const [df, setDf] = useState('2024-01-01');
+  const [mode, setMode] = useState('all');
+  const [df, setDf] = useState('2010-01-01');
   const [dt, setDt] = useState(today());
   const [query, setQuery] = useState('');
 
@@ -434,14 +436,25 @@ export default function App() {
       };
       await dbUpdate('treasury', txn.id, updates, user?.id);
 
-      // Smart categorization: if category changed, offer to apply to all similar
+      // Smart categorization: if category changed, offer to apply to all with EXACT same description
       if (formData.category && formData.category !== txn.category) {
-        const desc = txn.description || '';
-        // Find key words from description (first 2 significant words)
-        const words = desc.split(/\s+/).filter(w => w.length > 2).slice(0, 2).join(' ');
-        if (words && confirm('Apply "' + (EXPENSE_CATS[formData.category] || formData.category) + '" to all transactions containing "' + words + '"?\n\nتطبيق على جميع المعاملات المماثلة؟')) {
-          // Save rule
-          const existing = expenseRules.find(r => r.description_match === words);
+        const desc = (txn.description || '').trim();
+        if (desc) {
+          const matching = treasury.filter(t =>
+            t.id !== txn.id &&
+            (t.description || '').trim() === desc &&
+            t.category !== formData.category
+          );
+          if (matching.length > 0 && confirm('Apply "' + (EXPENSE_CATS[formData.category] || formData.category) + '" to ' + matching.length + ' transactions with exact same description?\n\n"' + desc + '"\n\nتطبيق على جميع المعاملات بنفس الوصف بالضبط؟')) {
+            for (const m of matching) {
+              await dbUpdate('treasury', m.id, {
+                category: formData.category,
+                subcategory: formData.subcategory || '',
+              }, user?.id);
+            }
+          }
+          // Save/update rule with full description
+          const existing = expenseRules.find(r => r.description_match === desc);
           if (existing) {
             await dbUpdate('expense_rules', existing.id, {
               category: formData.category,
@@ -449,19 +462,7 @@ export default function App() {
             }, user?.id);
           } else {
             await dbInsert('expense_rules', {
-              description_match: words,
-              category: formData.category,
-              subcategory: formData.subcategory || '',
-            }, user?.id);
-          }
-          // Batch update matching treasury entries
-          const matching = treasury.filter(t =>
-            t.id !== txn.id && t.cash_out > 0 &&
-            (t.description || '').includes(words) &&
-            t.category !== formData.category
-          );
-          for (const m of matching) {
-            await dbUpdate('treasury', m.id, {
+              description_match: desc,
               category: formData.category,
               subcategory: formData.subcategory || '',
             }, user?.id);
@@ -782,7 +783,7 @@ export default function App() {
   // ==========================================
   const ModeBar = () => (
     <div className="flex gap-1 items-center flex-wrap">
-      {[['3yr', '3yr'], ['all', 'All'], ['custom', 'Custom']].map(([v, l]) => (
+      {[['all', 'All / الكل'], ['1yr', '1 Year'], ['3yr', '3 Years'], ['custom', 'Custom / مخصص']].map(([v, l]) => (
         <button key={v} onClick={() => setMode(v)}
           className={`px-3 py-1 rounded-md text-xs font-semibold transition ${mode === v ? 'bg-slate-900 text-white' : 'bg-slate-100 text-slate-500 hover:bg-slate-200'}`}
         >{l}</button>
@@ -1520,18 +1521,15 @@ export default function App() {
                                     const newCat = e.target.value;
                                     try {
                                       await dbUpdate('treasury', txn.id, { category: newCat }, user?.id);
-                                      // Auto-apply to similar descriptions
-                                      const desc = txn.description || '';
-                                      const words = desc.split(/\s+/).filter(w => w.length > 2).slice(0, 2).join(' ');
-                                      if (words) {
-                                        const similar = treasury.filter(t => t.id !== txn.id && (t.description || '').includes(words) && t.category !== newCat);
-                                        if (similar.length > 0 && confirm('Apply to ' + similar.length + ' similar transactions?\nتطبيق على ' + similar.length + ' معاملات مماثلة؟')) {
+                                      const desc = (txn.description || '').trim();
+                                      if (desc) {
+                                        const similar = treasury.filter(t => t.id !== txn.id && (t.description || '').trim() === desc && t.category !== newCat);
+                                        if (similar.length > 0 && confirm('Apply to ' + similar.length + ' transactions with exact same description?\n"' + desc + '"')) {
                                           for (const s of similar) { await dbUpdate('treasury', s.id, { category: newCat }, user?.id); }
                                         }
-                                        // Save rule
-                                        const existing = expenseRules.find(r => r.description_match === words);
+                                        const existing = expenseRules.find(r => r.description_match === desc);
                                         if (existing) { await dbUpdate('expense_rules', existing.id, { category: newCat }, user?.id); }
-                                        else { await dbInsert('expense_rules', { description_match: words, category: newCat, subcategory: txn.subcategory || '' }, user?.id); }
+                                        else { await dbInsert('expense_rules', { description_match: desc, category: newCat, subcategory: txn.subcategory || '' }, user?.id); }
                                       }
                                       await loadAllData();
                                     } catch(err) { alert('Error: ' + err.message); }
@@ -1546,18 +1544,15 @@ export default function App() {
                                     if (newSub !== (txn.subcategory || '')) {
                                       try {
                                         await dbUpdate('treasury', txn.id, { subcategory: newSub }, user?.id);
-                                        // Auto-apply subcategory to similar
-                                        const desc = txn.description || '';
-                                        const words = desc.split(/\s+/).filter(w => w.length > 2).slice(0, 2).join(' ');
-                                        if (words) {
-                                          const similar = treasury.filter(t => t.id !== txn.id && (t.description || '').includes(words) && t.category === (txn.category || '') && t.subcategory !== newSub);
-                                          if (similar.length > 0 && confirm('Apply subcategory "' + newSub + '" to ' + similar.length + ' similar?\nتطبيق على المعاملات المماثلة؟')) {
+                                        const desc = (txn.description || '').trim();
+                                        if (desc) {
+                                          const similar = treasury.filter(t => t.id !== txn.id && (t.description || '').trim() === desc && t.category === (txn.category || '') && t.subcategory !== newSub);
+                                          if (similar.length > 0 && confirm('Apply subcategory "' + newSub + '" to ' + similar.length + ' exact matches?\n"' + desc + '"')) {
                                             for (const s of similar) { await dbUpdate('treasury', s.id, { subcategory: newSub }, user?.id); }
                                           }
-                                          // Update rule
-                                          const existing = expenseRules.find(r => r.description_match === words);
+                                          const existing = expenseRules.find(r => r.description_match === desc);
                                           if (existing) { await dbUpdate('expense_rules', existing.id, { subcategory: newSub }, user?.id); }
-                                          else { await dbInsert('expense_rules', { description_match: words, category: txn.category || '', subcategory: newSub }, user?.id); }
+                                          else { await dbInsert('expense_rules', { description_match: desc, category: txn.category || '', subcategory: newSub }, user?.id); }
                                         }
                                         await loadAllData();
                                       } catch(err) { alert('Error: ' + err.message); }
@@ -2958,6 +2953,13 @@ export default function App() {
         ========================================== */}
         {tab === 'admin' && (
           <AdminTab user={user} users={teamUsers} />
+        )}
+
+        {/* ==========================================
+            AI ASSISTANT TAB
+        ========================================== */}
+        {tab === 'ai' && (
+          <AIAssistant />
         )}
 
         {/* ==========================================
