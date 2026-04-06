@@ -2955,7 +2955,7 @@ export default function App() {
             SHIPPING RATES TAB
         ========================================== */}
         {tab === 'shipping' && (
-          <ShippingRatesTab user={user} isAdmin={isAdmin} />
+          <ShippingRatesTab user={user} isAdmin={isAdmin} customers={customers} />
         )}
 
         {/* ==========================================
