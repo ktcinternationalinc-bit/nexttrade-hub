@@ -452,3 +452,30 @@ BEGIN
   RETURN NEW;
 END;
 $$ LANGUAGE plpgsql;
+
+-- SHIPMENTS / CUSTOMS
+CREATE TABLE IF NOT EXISTS shipments (
+  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  origin TEXT NOT NULL,
+  destination TEXT NOT NULL,
+  container_type TEXT DEFAULT '20ft' CHECK (container_type IN ('20ft','40ft','40ft HC','LCL')),
+  container_count INT DEFAULT 1,
+  broker_name TEXT,
+  rate_usd NUMERIC(10,2),
+  status TEXT NOT NULL DEFAULT 'Pending' CHECK (status IN ('Pending','In Transit','At Port','Clearing','Cleared','Delivered')),
+  customer_id UUID REFERENCES customers(id),
+  order_number TEXT,
+  notes TEXT,
+  eta DATE,
+  created_by UUID REFERENCES users(id),
+  created_at TIMESTAMPTZ DEFAULT NOW(),
+  updated_at TIMESTAMPTZ DEFAULT NOW()
+);
+CREATE INDEX idx_shipments_status ON shipments(status);
+
+ALTER TABLE shipments ENABLE ROW LEVEL SECURITY;
+CREATE POLICY "auth_read" ON shipments FOR SELECT USING (auth.role() = 'authenticated');
+CREATE POLICY "auth_write" ON shipments FOR ALL USING (auth.role() = 'authenticated');
+
+-- Add Customs to module permissions
+CREATE TRIGGER update_shipments_timestamp BEFORE UPDATE ON shipments FOR EACH ROW EXECUTE FUNCTION update_updated_at();
