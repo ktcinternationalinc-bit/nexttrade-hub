@@ -1481,6 +1481,7 @@ export default function App() {
                           <th className="px-2 py-1.5 text-[10px] text-left">Date</th>
                           <th className="px-2 py-1.5 text-[10px]" style={{ direction: 'rtl' }}>Description</th>
                           <th className="px-2 py-1.5 text-[10px] text-right">Amount</th>
+                          <th className="px-2 py-1.5 text-[10px]">Category</th>
                         </tr></thead>
                         <tbody>
                           {searched.sort((a, b) => b.transaction_date.localeCompare(a.transaction_date)).map(txn => (
@@ -1488,6 +1489,27 @@ export default function App() {
                               <td className="px-2 py-1 text-[10px]">{txn.transaction_date}</td>
                               <td className="px-2 py-1 text-[10px]" style={{ direction: 'rtl' }}>{txn.description}</td>
                               <td className="px-2 py-1 text-[10px] text-right font-semibold" style={{ color: color }}>{fE(txn[amtField])}</td>
+                              <td className="px-1 py-1">
+                                <select defaultValue={txn.category || ''} onChange={async (e) => {
+                                  try {
+                                    await dbUpdate('treasury', txn.id, { category: e.target.value }, user?.id);
+                                    await loadAllData();
+                                  } catch(err) { alert('Error: ' + err.message); }
+                                }} className="w-full text-[9px] border rounded px-1 py-0.5 bg-amber-50">
+                                  <option value="">None</option>
+                                  {Object.entries(EXPENSE_CATS).map(([ar, en]) => <option key={ar} value={ar}>{en}</option>)}
+                                  {[...new Set(treasury.map(t=>t.category).filter(c=>c&&!EXPENSE_CATS[c]))].map(c => <option key={c} value={c}>{c}</option>)}
+                                </select>
+                                <input defaultValue={txn.subcategory || ''} placeholder="Sub..."
+                                  onBlur={async (e) => {
+                                    if (e.target.value !== (txn.subcategory || '')) {
+                                      try {
+                                        await dbUpdate('treasury', txn.id, { subcategory: e.target.value }, user?.id);
+                                        await loadAllData();
+                                      } catch(err) { alert('Error: ' + err.message); }
+                                    }
+                                  }} className="w-full text-[9px] border rounded px-1 py-0.5 mt-0.5 bg-orange-50" />
+                              </td>
                             </tr>
                           ))}
                         </tbody>
