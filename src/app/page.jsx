@@ -1,5 +1,5 @@
 'use client';
-import React, { useState, useEffect, useMemo, useCallback } from 'react';
+import { useState, useEffect, useMemo, useCallback } from 'react';
 import { supabase, dbInsert, dbUpdate, dbDelete } from '../lib/supabase';
 import { fmt, fE, COLORS, EXPENSE_CATS, getReconStatus, STATUS_STYLES, today, inRange, monthOf, getWarehouseCat } from '../lib/utils';
 import * as XLSX from 'xlsx';
@@ -92,7 +92,6 @@ export default function App() {
   const [renameValue, setRenameValue] = useState('');
   const [warehouseDrill, setWarehouseDrill] = useState(null);
   const [customerGroup, setCustomerGroup] = useState('all');
-  const [expandedInv, setExpandedInv] = useState(null);
 
   // Forms
   const [showAddPayment, setShowAddPayment] = useState(false);
@@ -844,7 +843,7 @@ export default function App() {
   };
 
   const InvoiceTable = ({ data, onSelect }) => (
-    <div className="overflow-auto rounded-lg border border-slate-200 max-h-[520px]">
+    <div className="overflow-auto rounded-lg border border-slate-200 max-h-[420px]">
       <table className="w-full border-collapse">
         <thead className="sticky top-0 z-10">
           <tr className="bg-slate-50">
@@ -858,71 +857,20 @@ export default function App() {
           </tr>
         </thead>
         <tbody>
-          {data.map(inv => {
-            const isExpanded = expandedInv === inv.id;
-            const items = isExpanded ? invoiceItems.filter(it => it.invoice_id === inv.id) : [];
-            return (
-              <React.Fragment key={inv.id}>
-                <tr onClick={() => setExpandedInv(isExpanded ? null : inv.id)}
-                  className={'border-b cursor-pointer transition ' + (isExpanded ? 'bg-blue-50 border-blue-200' : 'border-slate-50 hover:bg-blue-50')}>
-                  <td className="px-3 py-2 text-xs">
-                    <span className={'inline-block mr-1 text-[10px] transition-transform ' + (isExpanded ? 'rotate-90' : '')}>▶</span>
-                    {inv.invoice_date || '—'}
-                  </td>
-                  <td className="px-3 py-2 text-xs font-semibold">{inv.order_number}</td>
-                  <td className="px-3 py-2 text-xs font-semibold text-right" style={{ direction: lang === 'ar' ? 'rtl' : 'ltr' }}>{tx(inv.customer_name, inv.customer_name_en)}</td>
-                  <td className="px-3 py-2 text-xs text-right">{fE(inv.total_amount)}</td>
-                  <td className="px-3 py-2 text-xs text-right text-emerald-600">{fE(inv.total_collected)}</td>
-                  <td className="px-3 py-2 text-xs text-right" style={{ color: inv.outstanding > 0 ? '#ef4444' : '#10b981' }}>
-                    {inv.outstanding > 0 ? fE(inv.outstanding) : '✓'}
-                  </td>
-                  <td className="px-3 py-2"><StatusBadge invoice={inv} /></td>
-                </tr>
-                {isExpanded && (
-                  <tr>
-                    <td colSpan="7" className="p-0">
-                      <div className="bg-blue-50 px-4 py-3 border-b border-blue-200">
-                        {items.length > 0 ? (
-                          <div>
-                            <table className="w-full border-collapse mb-2">
-                              <thead><tr className="bg-blue-100">
-                                <th className="px-2 py-1.5 text-[10px] text-left font-semibold" style={{ direction: lang === 'ar' ? 'rtl' : 'ltr' }}>Description / البند</th>
-                                <th className="px-2 py-1.5 text-[10px] text-right font-semibold">Qty / الكمية</th>
-                                <th className="px-2 py-1.5 text-[10px] text-right font-semibold">Unit Price / السعر</th>
-                                <th className="px-2 py-1.5 text-[10px] text-right font-semibold">Total / الإجمالي</th>
-                              </tr></thead>
-                              <tbody>
-                                {items.map(it => (
-                                  <tr key={it.id} className="border-b border-blue-100 bg-white">
-                                    <td className="px-2 py-1.5 text-xs" style={{ direction: lang === 'ar' ? 'rtl' : 'ltr' }}>{tx(it.description, it.description_en)}</td>
-                                    <td className="px-2 py-1.5 text-xs text-right">{fmt(it.quantity)}</td>
-                                    <td className="px-2 py-1.5 text-xs text-right">{fE(it.unit_price)}</td>
-                                    <td className="px-2 py-1.5 text-xs text-right font-bold text-blue-600">{fE(it.line_total)}</td>
-                                  </tr>
-                                ))}
-                              </tbody>
-                            </table>
-                            <div className="flex justify-between items-center border-t-2 border-blue-300 pt-1.5">
-                              <span className="text-[10px] font-bold text-blue-800">{items.length} items</span>
-                              <span className="text-sm font-extrabold text-blue-600">{fE(items.reduce((a, it) => a + Number(it.line_total || 0), 0))}</span>
-                            </div>
-                          </div>
-                        ) : (
-                          <div className="text-xs text-slate-400 text-center py-2">No line items for this order / لا توجد بنود لهذا الأمر</div>
-                        )}
-                        <div className="flex gap-2 mt-2">
-                          <button onClick={(e) => { e.stopPropagation(); onSelect(inv); }}
-                            className="px-3 py-1.5 bg-blue-500 text-white rounded-lg text-[10px] font-semibold hover:bg-blue-600">
-                            Full Details / التفاصيل الكاملة →
-                          </button>
-                        </div>
-                      </div>
-                    </td>
-                  </tr>
-                )}
-              </React.Fragment>
-            );
-          })}
+          {data.map(inv => (
+            <tr key={inv.id} onClick={() => onSelect(inv)}
+              className="border-b border-slate-50 cursor-pointer hover:bg-blue-50 transition">
+              <td className="px-3 py-2 text-xs">{inv.invoice_date || '—'}</td>
+              <td className="px-3 py-2 text-xs font-semibold">{inv.order_number}</td>
+              <td className="px-3 py-2 text-xs font-semibold text-right" style={{ direction: lang === 'ar' ? 'rtl' : 'ltr' }}>{tx(inv.customer_name, inv.customer_name_en)}</td>
+              <td className="px-3 py-2 text-xs text-right">{fE(inv.total_amount)}</td>
+              <td className="px-3 py-2 text-xs text-right text-emerald-600">{fE(inv.total_collected)}</td>
+              <td className="px-3 py-2 text-xs text-right" style={{ color: inv.outstanding > 0 ? '#ef4444' : '#10b981' }}>
+                {inv.outstanding > 0 ? fE(inv.outstanding) : '✓'}
+              </td>
+              <td className="px-3 py-2"><StatusBadge invoice={inv} /></td>
+            </tr>
+          ))}
         </tbody>
       </table>
     </div>
@@ -1068,37 +1016,51 @@ export default function App() {
               );
             })()}
 
-            {/* Invoice Line Items */}
+            {/* Invoice Line Items — always visible */}
             {(() => {
               const items = invoiceItems.filter(it => it.invoice_id === selectedInvoice.id);
-              if (items.length === 0) return null;
               return (
                 <div className="bg-blue-50 rounded-lg p-4 mb-4 border border-blue-200">
-                  <h4 className="text-sm font-bold text-blue-800 mb-2">📦 Items / البضاعة ({items.length})</h4>
-                  <div className="overflow-auto max-h-[200px]">
-                    <table className="w-full border-collapse">
-                      <thead><tr className="bg-blue-100">
-                        <th className="px-2 py-1.5 text-[10px] text-left" style={{ direction: 'rtl' }}>Description</th>
-                        <th className="px-2 py-1.5 text-[10px] text-right">Qty</th>
-                        <th className="px-2 py-1.5 text-[10px] text-right">Price</th>
-                        <th className="px-2 py-1.5 text-[10px] text-right">Total</th>
-                      </tr></thead>
-                      <tbody>
-                        {items.map(it => (
-                          <tr key={it.id} className="border-b border-blue-100">
-                            <td className="px-2 py-1 text-xs" style={{ direction: lang === 'ar' ? 'rtl' : 'ltr' }}>{tx(it.description, it.description_en)}</td>
-                            <td className="px-2 py-1 text-xs text-right">{fmt(it.quantity)}</td>
-                            <td className="px-2 py-1 text-xs text-right">{fmt(it.unit_price)}</td>
-                            <td className="px-2 py-1 text-xs text-right font-semibold">{fE(it.line_total)}</td>
-                          </tr>
-                        ))}
-                      </tbody>
-                    </table>
-                  </div>
-                  <div className="flex justify-between pt-2 mt-1 border-t-2 border-blue-300">
-                    <span className="text-xs font-bold">Items Total</span>
-                    <span className="text-sm font-extrabold text-blue-600">{fE(items.reduce((a, it) => a + Number(it.line_total || 0), 0))}</span>
-                  </div>
+                  <h4 className="text-sm font-bold text-blue-800 mb-2">📦 Order Breakdown / تفاصيل الأمر {items.length > 0 ? '(' + items.length + ' items)' : ''}</h4>
+                  {items.length > 0 ? (
+                    <div>
+                      <div className="overflow-auto max-h-[250px]">
+                        <table className="w-full border-collapse">
+                          <thead><tr className="bg-blue-100">
+                            <th className="px-2 py-1.5 text-[10px] text-left" style={{ direction: lang === 'ar' ? 'rtl' : 'ltr' }}>Description / البند</th>
+                            <th className="px-2 py-1.5 text-[10px] text-right">Qty / الكمية</th>
+                            <th className="px-2 py-1.5 text-[10px] text-right">Unit Price / السعر</th>
+                            <th className="px-2 py-1.5 text-[10px] text-right">Total / الإجمالي</th>
+                          </tr></thead>
+                          <tbody>
+                            {items.map(it => (
+                              <tr key={it.id} className="border-b border-blue-100">
+                                <td className="px-2 py-1.5 text-xs" style={{ direction: lang === 'ar' ? 'rtl' : 'ltr' }}>{tx(it.description, it.description_en)}</td>
+                                <td className="px-2 py-1.5 text-xs text-right">{fmt(it.quantity)}</td>
+                                <td className="px-2 py-1.5 text-xs text-right">{fE(it.unit_price)}</td>
+                                <td className="px-2 py-1.5 text-xs text-right font-semibold">{fE(it.line_total)}</td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      </div>
+                      <div className="flex justify-between pt-2 mt-1 border-t-2 border-blue-300">
+                        <span className="text-xs font-bold">Items Total</span>
+                        <span className="text-sm font-extrabold text-blue-600">{fE(items.reduce((a, it) => a + Number(it.line_total || 0), 0))}</span>
+                      </div>
+                    </div>
+                  ) : (
+                    <div className="text-center py-3">
+                      <div className="text-xs text-slate-400 mb-1">No item breakdown available for this order</div>
+                      <div className="text-[10px] text-slate-400">Import merchandiser Excel via the Import tab to load product details</div>
+                      <div className="bg-white rounded-lg p-3 mt-2 border border-blue-100">
+                        <div className="flex justify-between text-xs">
+                          <span className="font-semibold">Invoice Total / إجمالي الفاتورة</span>
+                          <span className="font-extrabold text-blue-600">{fE(selectedInvoice.total_amount)}</span>
+                        </div>
+                      </div>
+                    </div>
+                  )}
                 </div>
               );
             })()}
@@ -2002,7 +1964,7 @@ export default function App() {
 
             {/* ===== PERSONAL DASHBOARD (everyone sees this) ===== */}
             <PersonalDashboard user={user} userProfile={userProfile} isAdmin={isAdmin}
-              invoices={invoices} customers={customers} navigate={navigate} fE={fE} />
+              invoices={invoices} customers={customers} navigate={navigate} fE={fE} users={teamUsers} />
 
             {/* ===== FINANCIAL DASHBOARD (admin or users with finance access) ===== */}
             {(isAdmin || modulePerms['Sales'] || modulePerms['Treasury']) && (<>
