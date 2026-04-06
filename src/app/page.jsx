@@ -69,7 +69,7 @@ export default function App() {
   const [showAddTreasury, setShowAddTreasury] = useState(false);
   const [editingTxn, setEditingTxn] = useState(null);
   const [splittingTxn, setSplittingTxn] = useState(null);
-  const [splitData, setSplitData] = useState({ order1: '', amount1: 0, order2: '', amount2: 0 });
+  const [splits, setSplits] = useState([{ order: '', amount: 0 }, { order: '', amount: 0 }]);
   const [linkSearch, setLinkSearch] = useState('');
   const [showLinkSearch, setShowLinkSearch] = useState(false);
   const [formData, setFormData] = useState({});
@@ -328,35 +328,38 @@ export default function App() {
   const handleSplitTreasury = async () => {
     if (!splittingTxn) return;
     const txn = splittingTxn;
-    const a1 = Number(splitData.amount1) || 0;
-    const a2 = Number(splitData.amount2) || 0;
     const isIn = Number(txn.cash_in) > 0;
     const total = isIn ? Number(txn.cash_in) : Number(txn.cash_out);
-    if (a1 + a2 !== total) {
-      alert('Split amounts must equal the original (' + total.toLocaleString() + '). Currently: ' + (a1 + a2).toLocaleString());
+    const splitTotal = splits.reduce((a, s) => a + (Number(s.amount) || 0), 0);
+    if (splitTotal !== total) {
+      alert('Split amounts must equal ' + total.toLocaleString() + '. Currently: ' + splitTotal.toLocaleString());
       return;
     }
-    if (!splitData.order1 && !splitData.order2) {
+    if (splits.every(s => !s.order)) {
       alert('Please enter at least one order number');
       return;
     }
     try {
+      // Update original entry to first split
       await dbUpdate('treasury', txn.id, {
-        order_number: splitData.order1,
-        cash_in: isIn ? a1 : 0,
-        cash_out: isIn ? 0 : a1,
-        description: txn.description + ' (split 1/2)',
+        order_number: splits[0].order,
+        cash_in: isIn ? Number(splits[0].amount) : 0,
+        cash_out: isIn ? 0 : Number(splits[0].amount),
+        description: txn.description + ' (split 1/' + splits.length + ')',
       }, user?.id);
-      await dbInsert('treasury', {
-        transaction_date: txn.transaction_date,
-        order_number: splitData.order2,
-        description: txn.description + ' (split 2/2)',
-        cash_in: isIn ? a2 : 0,
-        cash_out: isIn ? 0 : a2,
-        source: txn.source || 'main',
-      }, user?.id);
+      // Create new entries for remaining splits
+      for (let i = 1; i < splits.length; i++) {
+        await dbInsert('treasury', {
+          transaction_date: txn.transaction_date,
+          order_number: splits[i].order,
+          description: txn.description + ' (split ' + (i + 1) + '/' + splits.length + ')',
+          cash_in: isIn ? Number(splits[i].amount) : 0,
+          cash_out: isIn ? 0 : Number(splits[i].amount),
+          source: txn.source || 'main',
+        }, user?.id);
+      }
       setSplittingTxn(null);
-      setSplitData({ order1: '', amount1: 0, order2: '', amount2: 0 });
+      setSplits([{ order: '', amount: 0 }, { order: '', amount: 0 }]);
       await loadAllData();
     } catch (err) {
       alert('Error: ' + err.message);
@@ -367,6 +370,16 @@ export default function App() {
     if (!confirm('Unlink this transaction from order ' + (selectedInvoice?.order_number || '') + '?')) return;
     try {
       await dbUpdate('treasury', txn.id, { order_number: '' }, user?.id);
+      // Recalculate invoice collected from remaining treasury entries
+      if (selectedInvoice) {
+        const remaining = treasury.filter(t => t.order_number === selectedInvoice.order_number && t.id !== txn.id);
+        const newCollected = remaining.reduce((a, t) => a + Number(t.cash_in || 0), 0);
+        await dbUpdate('invoices', selectedInvoice.id, {
+          total_collected: newCollected,
+          outstanding: Math.max(0, Number(selectedInvoice.total_amount) - newCollected),
+          notes: newCollected === 0 ? 'UNVERIFIED: No treasury entries linked' : (selectedInvoice.notes || '').replace('UNVERIFIED:', 'VERIFIED:'),
+        }, user?.id);
+      }
       await loadAllData();
     } catch (err) {
       alert('Error: ' + err.message);
@@ -377,6 +390,14 @@ export default function App() {
     if (!selectedInvoice) return;
     try {
       await dbUpdate('treasury', txn.id, { order_number: selectedInvoice.order_number }, user?.id);
+      // Recalculate collected from ALL treasury entries now linked to this order
+      const linked = treasury.filter(t => t.order_number === selectedInvoice.order_number);
+      const newCollected = linked.reduce((a, t) => a + Number(t.cash_in || 0), 0) + Number(txn.cash_in || 0);
+      await dbUpdate('invoices', selectedInvoice.id, {
+        total_collected: newCollected,
+        outstanding: Math.max(0, Number(selectedInvoice.total_amount) - newCollected),
+        notes: (selectedInvoice.notes || '').replace('UNVERIFIED:', 'RECONCILED:'),
+      }, user?.id);
       setLinkSearch('');
       setShowLinkSearch(false);
       await loadAllData();
@@ -592,10 +613,16 @@ export default function App() {
                 <div className="rounded-lg p-3 mb-4" style={{ background: s.bg }}>
                   <div className="text-sm font-bold" style={{ color: s.color }}>
                     {s.icon} {s.label}
-                    {status === 'overpaid' && ` — ${fE(tTotal - selectedInvoice.total_amount)}`}
-                    {status === 'unverified' && ` — Gap: ${fE(selectedInvoice.total_amount - tTotal)}`}
-                    {status === 'open' && ` — ${fE(selectedInvoice.outstanding)}`}
+                    {status === 'overpaid' && ' — ' + fE(tTotal - selectedInvoice.total_amount)}
+                    {status === 'unverified' && tTotal > 0 && ' — Treasury: ' + fE(tTotal) + ' vs Invoice: ' + fE(selectedInvoice.total_amount)}
+                    {status === 'unverified' && tTotal === 0 && ' — Sales says ' + fE(selectedInvoice.total_collected) + ' collected but no treasury entries linked'}
+                    {status === 'open' && ' — ' + fE(selectedInvoice.outstanding)}
                   </div>
+                  {status === 'unverified' && (
+                    <div className="text-xs mt-1" style={{ color: s.color }}>
+                      Use "Link Transaction" below to find and link the matching treasury payment
+                    </div>
+                  )}
                 </div>
               );
             })()}
@@ -880,7 +907,7 @@ export default function App() {
                           <td className="px-3 py-2 flex gap-1">
                             <button onClick={() => { setEditingTxn(txn.id); setFormData({}); }}
                               className="px-2 py-0.5 rounded border border-blue-300 text-blue-600 text-[10px]">Edit</button>
-                            <button onClick={() => { setSplittingTxn(txn); const isIn = Number(txn.cash_in) > 0; const total = isIn ? Number(txn.cash_in) : Number(txn.cash_out); setSplitData({ order1: txn.order_number || '', amount1: total, order2: '', amount2: 0 }); }}
+                            <button onClick={() => { setSplittingTxn(txn); const isIn = Number(txn.cash_in) > 0; const total = isIn ? Number(txn.cash_in) : Number(txn.cash_out); setSplits([{ order: txn.order_number || '', amount: total }, { order: '', amount: 0 }]); }}
                               className="px-2 py-0.5 rounded border border-purple-300 text-purple-600 text-[10px]">Split</button>
                           </td>
                         </tr>
@@ -899,57 +926,54 @@ export default function App() {
           <Modal onClose={() => setSplittingTxn(null)} title="Split Payment / تقسيم الدفعة">
             <div className="space-y-3">
               <div className="bg-slate-50 rounded-lg p-3 text-xs">
-                <div className="font-bold mb-1">{splittingTxn.transaction_date} — {splittingTxn.description}</div>
+                <div className="font-bold mb-1" style={{ direction: 'rtl' }}>{splittingTxn.transaction_date} — {splittingTxn.description}</div>
                 <div>Original: <span className="font-bold text-emerald-600">{fE(Number(splittingTxn.cash_in) > 0 ? Number(splittingTxn.cash_in) : Number(splittingTxn.cash_out))}</span>
                   {splittingTxn.order_number ? (' — Order: ' + splittingTxn.order_number) : ''}
                 </div>
               </div>
-              <div className="bg-white rounded-lg border p-3">
-                <div className="text-xs font-bold text-purple-700 mb-2">Split 1</div>
-                <div className="flex gap-2">
-                  <div className="flex-1">
-                    <label className="text-[10px] text-slate-500">Order #</label>
-                    <input value={splitData.order1} onChange={e => setSplitData({...splitData, order1: e.target.value})}
-                      className="w-full px-2 py-1.5 border rounded text-sm" placeholder="Order #" />
+              <div className="max-h-[300px] overflow-auto space-y-2">
+                {splits.map((sp, idx) => (
+                  <div key={idx} className="bg-white rounded-lg border p-3">
+                    <div className="flex justify-between items-center mb-2">
+                      <div className="text-xs font-bold text-purple-700">Split {idx + 1}</div>
+                      {splits.length > 2 && (
+                        <button onClick={() => setSplits(splits.filter((_, i) => i !== idx))}
+                          className="text-red-400 text-[10px] hover:text-red-600">Remove</button>
+                      )}
+                    </div>
+                    <div className="flex gap-2">
+                      <div className="flex-1">
+                        <label className="text-[10px] text-slate-500">Order #</label>
+                        <input value={sp.order} onChange={e => {
+                          const ns = [...splits]; ns[idx] = {...ns[idx], order: e.target.value}; setSplits(ns);
+                        }} className="w-full px-2 py-1.5 border rounded text-sm" placeholder="Order #" />
+                      </div>
+                      <div className="flex-1">
+                        <label className="text-[10px] text-slate-500">Amount</label>
+                        <input type="number" value={sp.amount} onChange={e => {
+                          const ns = [...splits]; ns[idx] = {...ns[idx], amount: Number(e.target.value) || 0}; setSplits(ns);
+                        }} className="w-full px-2 py-1.5 border rounded text-sm" />
+                      </div>
+                    </div>
                   </div>
-                  <div className="flex-1">
-                    <label className="text-[10px] text-slate-500">Amount</label>
-                    <input type="number" value={splitData.amount1} onChange={e => {
-                      const a1 = Number(e.target.value) || 0;
-                      const isIn = Number(splittingTxn.cash_in) > 0;
-                      const total = isIn ? Number(splittingTxn.cash_in) : Number(splittingTxn.cash_out);
-                      setSplitData({...splitData, amount1: a1, amount2: total - a1});
-                    }} className="w-full px-2 py-1.5 border rounded text-sm" />
-                  </div>
-                </div>
+                ))}
               </div>
-              <div className="bg-white rounded-lg border p-3">
-                <div className="text-xs font-bold text-purple-700 mb-2">Split 2</div>
-                <div className="flex gap-2">
-                  <div className="flex-1">
-                    <label className="text-[10px] text-slate-500">Order #</label>
-                    <input value={splitData.order2} onChange={e => setSplitData({...splitData, order2: e.target.value})}
-                      className="w-full px-2 py-1.5 border rounded text-sm" placeholder="Order #" />
-                  </div>
-                  <div className="flex-1">
-                    <label className="text-[10px] text-slate-500">Amount</label>
-                    <input type="number" value={splitData.amount2} onChange={e => {
-                      const a2 = Number(e.target.value) || 0;
-                      const isIn = Number(splittingTxn.cash_in) > 0;
-                      const total = isIn ? Number(splittingTxn.cash_in) : Number(splittingTxn.cash_out);
-                      setSplitData({...splitData, amount2: a2, amount1: total - a2});
-                    }} className="w-full px-2 py-1.5 border rounded text-sm" />
-                  </div>
-                </div>
-              </div>
+              <button onClick={() => setSplits([...splits, { order: '', amount: 0 }])}
+                className="w-full py-1.5 border-2 border-dashed border-purple-300 text-purple-600 rounded-lg text-xs font-semibold hover:bg-purple-50">
+                + Add Split
+              </button>
               <div className="text-xs text-center text-slate-400">
-                Total: {fE(Number(splitData.amount1) + Number(splitData.amount2))} / {fE(Number(splittingTxn.cash_in) > 0 ? Number(splittingTxn.cash_in) : Number(splittingTxn.cash_out))}
-                {Number(splitData.amount1) + Number(splitData.amount2) === (Number(splittingTxn.cash_in) > 0 ? Number(splittingTxn.cash_in) : Number(splittingTxn.cash_out))
-                  ? ' ✅' : ' ❌ Must match'}
+                {(() => {
+                  const isIn = Number(splittingTxn.cash_in) > 0;
+                  const total = isIn ? Number(splittingTxn.cash_in) : Number(splittingTxn.cash_out);
+                  const splitTotal = splits.reduce((a, s) => a + (Number(s.amount) || 0), 0);
+                  const remaining = total - splitTotal;
+                  return 'Total: ' + fE(splitTotal) + ' / ' + fE(total) + (remaining === 0 ? ' ✅' : ' — Remaining: ' + fE(remaining));
+                })()}
               </div>
               <button onClick={handleSplitTreasury}
                 className="w-full py-2 bg-purple-600 text-white rounded-lg font-semibold text-sm hover:bg-purple-700">
-                Split Payment / تقسيم
+                Split into {splits.length} / تقسيم
               </button>
             </div>
           </Modal>
