@@ -72,6 +72,10 @@ export default function App() {
   const [modulePerms, setModulePerms] = useState({});
   const [lang, setLang] = useState('ar'); // 'ar' or 'en'
 
+  // Translation helper — picks English text when available and lang is 'en'
+  const tx = (arText, enText) => (lang === 'en' && enText) ? enText : (arText || '');
+  const txCat = (arCat) => lang === 'en' ? (EXPENSE_CATS[arCat] || arCat || 'Uncategorized') : (arCat || 'Uncategorized');
+
   // Modals
   const [selectedInvoice, setSelectedInvoice] = useState(null);
   const [drillType, setDrillType] = useState(null);
@@ -858,7 +862,7 @@ export default function App() {
               className="border-b border-slate-50 cursor-pointer hover:bg-blue-50 transition">
               <td className="px-3 py-2 text-xs">{inv.invoice_date || '—'}</td>
               <td className="px-3 py-2 text-xs font-semibold">{inv.order_number}</td>
-              <td className="px-3 py-2 text-xs font-semibold text-right" style={{ direction: 'rtl' }}>{inv.customer_name}</td>
+              <td className="px-3 py-2 text-xs font-semibold text-right" style={{ direction: lang === 'ar' ? 'rtl' : 'ltr' }}>{tx(inv.customer_name, inv.customer_name_en)}</td>
               <td className="px-3 py-2 text-xs text-right">{fE(inv.total_amount)}</td>
               <td className="px-3 py-2 text-xs text-right text-emerald-600">{fE(inv.total_collected)}</td>
               <td className="px-3 py-2 text-xs text-right" style={{ color: inv.outstanding > 0 ? '#ef4444' : '#10b981' }}>
@@ -890,7 +894,7 @@ export default function App() {
       <div className="bg-gradient-to-r from-slate-900 via-slate-800 to-blue-900 px-4 py-3 flex justify-between items-center shadow-lg">
         <div>
           <h1 className="text-white text-xl font-extrabold tracking-tight">KANDIL KTC EGYPT HUB</h1>
-          <p className="text-blue-300/50 text-xs">KTC — لوحة التحكم المالية</p>
+          <p className="text-blue-300/50 text-xs">{lang === 'en' ? 'KTC — Financial Control Panel' : 'KTC — لوحة التحكم المالية'}</p>
         </div>
         <div className="flex items-center gap-3">
           {userProfile && (
@@ -899,8 +903,8 @@ export default function App() {
               <div className="text-blue-300/50 text-[10px]">{userProfile.role === 'super_admin' ? '🔴 Super Admin' : userProfile.role === 'admin' ? '🟣 Admin' : '🔵 Team'}</div>
             </div>
           )}
-          {/* Language Toggle — visible to super_admin or users with 'both' access */}
-          {(!userProfile || userProfile.role === 'super_admin' || userProfile.language_access === 'both') && (
+          {/* Language Toggle — visible to admins or users with language access */}
+          {(isAdmin || !userProfile || userProfile.language_access === 'both' || userProfile.language_access === 'en') && (
             <button onClick={() => setLang(lang === 'ar' ? 'en' : 'ar')}
               className={'px-3 py-1.5 rounded-lg text-xs font-bold transition ' + (lang === 'en' ? 'bg-emerald-500/80 text-white' : 'bg-white/10 text-white/70 hover:bg-white/20')}>
               {lang === 'ar' ? '🌐 EN' : '🌐 AR'}
@@ -919,7 +923,7 @@ export default function App() {
             className={`px-3 py-2.5 text-xs font-semibold whitespace-nowrap border-b-2 transition ${
               tab === t.id ? 'text-blue-600 border-blue-600 bg-blue-50/50' : 'text-slate-400 border-transparent hover:text-slate-600 hover:bg-slate-50'
             }`}
-          >{t.icon} {t.label}</button>
+          >{t.icon} {lang === 'en' ? t.label.split(' / ')[0] : t.label}</button>
         ))}
       </div>
 
@@ -960,7 +964,7 @@ export default function App() {
                 </div>
               ) : (
                 <div className="flex justify-between items-center">
-                  <span className="text-lg font-bold">{selectedInvoice.customer_name}</span>
+                  <span className="text-lg font-bold">{tx(selectedInvoice.customer_name, selectedInvoice.customer_name_en)}</span>
                   <button onClick={() => setFormData({...formData, editingName: true, newName: selectedInvoice.customer_name})}
                     className="px-2 py-0.5 rounded border border-slate-300 text-slate-500 text-[10px] hover:bg-slate-50" style={{ direction: 'ltr' }}>
                     Edit Name / تعديل الاسم
@@ -1030,7 +1034,7 @@ export default function App() {
                       <tbody>
                         {items.map(it => (
                           <tr key={it.id} className="border-b border-blue-100">
-                            <td className="px-2 py-1 text-xs" style={{ direction: 'rtl' }}>{it.description}</td>
+                            <td className="px-2 py-1 text-xs" style={{ direction: lang === 'ar' ? 'rtl' : 'ltr' }}>{tx(it.description, it.description_en)}</td>
                             <td className="px-2 py-1 text-xs text-right">{fmt(it.quantity)}</td>
                             <td className="px-2 py-1 text-xs text-right">{fmt(it.unit_price)}</td>
                             <td className="px-2 py-1 text-xs text-right font-semibold">{fE(it.line_total)}</td>
@@ -1110,7 +1114,7 @@ export default function App() {
                     ) : (
                       <div className="flex justify-between items-center py-2 border-b border-emerald-100">
                         <div className="flex-1">
-                          <div className="text-xs font-semibold" style={{ direction: 'rtl' }}>{txn.description}</div>
+                          <div className="text-xs font-semibold" style={{ direction: lang === 'ar' ? 'rtl' : 'ltr' }}>{tx(txn.description, txn.description_en)}</div>
                           <div className="text-[10px] text-slate-500">{txn.transaction_date}</div>
                         </div>
                         <div className="text-sm font-bold text-emerald-600 mr-2">{fE(txn.cash_in)}</div>
@@ -1164,7 +1168,7 @@ export default function App() {
                       .map(txn => (
                         <div key={txn.id} className="flex justify-between items-center px-3 py-2 border-b border-slate-50 hover:bg-purple-50">
                           <div className="flex-1">
-                            <div className="text-xs font-semibold" style={{ direction: 'rtl' }}>{txn.description}</div>
+                            <div className="text-xs font-semibold" style={{ direction: lang === 'ar' ? 'rtl' : 'ltr' }}>{tx(txn.description, txn.description_en)}</div>
                             <div className="text-[10px] text-slate-500">{txn.transaction_date} | {fE(txn.cash_in)}</div>
                           </div>
                           <button onClick={() => handleLinkTreasury(txn)}
@@ -1344,10 +1348,10 @@ export default function App() {
                           <td className="px-3 py-2 text-xs">{txn.transaction_date}</td>
                           <td className="px-3 py-2 text-xs font-semibold">{txn.order_number || '—'}</td>
                           <td className="px-3 py-2 text-xs" style={{ direction: 'rtl' }}>
-                            {txn.description}
+                            {tx(txn.description, txn.description_en)}
                             {txn.cash_out > 0 && (
                               <div className="text-[9px] text-amber-600 mt-0.5">
-                                {EXPENSE_CATS[txn.category] || txn.category || 'Operations'}
+                                {txCat(txn.category)}
                                 {txn.subcategory && (' > ' + txn.subcategory)}
                               </div>
                             )}
@@ -1524,7 +1528,7 @@ export default function App() {
                           {searched.sort((a, b) => b.transaction_date.localeCompare(a.transaction_date)).map(txn => (
                             <tr key={txn.id} className="border-b border-slate-50">
                               <td className="px-2 py-1 text-[10px]">{txn.transaction_date}</td>
-                              <td className="px-2 py-1 text-[10px]" style={{ direction: 'rtl' }}>{txn.description}</td>
+                              <td className="px-2 py-1 text-[10px]" style={{ direction: lang === 'ar' ? 'rtl' : 'ltr' }}>{tx(txn.description, txn.description_en)}</td>
                               <td className="px-2 py-1 text-[10px] text-right font-semibold" style={{ color: color }}>{fE(txn[amtField])}</td>
                               <td className="px-1 py-1">
                                 <select defaultValue={txn.category || ''} onChange={async (e) => {
@@ -2106,7 +2110,7 @@ export default function App() {
                         {filtered.sort((a, b) => a.check_date.localeCompare(b.check_date)).map(c => (
                           <tr key={c.id} className="border-b border-amber-50 hover:bg-amber-50">
                             <td className="px-2 py-1.5 text-xs">{c.check_date}</td>
-                            <td className="px-2 py-1.5 text-xs font-semibold" style={{ direction: 'rtl' }}>{c.customer_name}</td>
+                            <td className="px-2 py-1.5 text-xs font-semibold" style={{ direction: lang === 'ar' ? 'rtl' : 'ltr' }}>{tx(c.customer_name, c.customer_name_en)}</td>
                             <td className="px-2 py-1.5 text-xs text-center">{c.order_number || '—'}</td>
                             <td className="px-2 py-1.5 text-xs text-right font-bold text-amber-600">{fE(c.amount)}</td>
                             <td className="px-2 py-1.5">
@@ -2283,8 +2287,8 @@ export default function App() {
                   return (
                   <div key={c.name} onClick={() => setSelectedCustomer(c.name)}
                     className="bg-white rounded-lg p-3 cursor-pointer border border-slate-200 hover:shadow-md transition">
-                    <div className="text-sm font-bold" style={{ direction: 'rtl' }}>{c.name}</div>
-                    {enName && <div className="text-[10px] text-blue-500">{enName}</div>}
+                    <div className="text-sm font-bold" style={{ direction: lang === 'ar' ? 'rtl' : 'ltr' }}>{lang === 'en' && enName ? enName : c.name}</div>
+                    {lang === 'ar' && enName && <div className="text-[10px] text-blue-500">{enName}</div>}
                     <div className="text-[9px] text-slate-400 mt-1">{c.count} invoices</div>
                     <div className="flex justify-between mt-1">
                       <div>
@@ -2316,7 +2320,7 @@ export default function App() {
               const enName = custRecord ? custRecord.name_en : '';
               return (
                 <div className="mb-3">
-                  <h3 className="text-xl font-extrabold" style={{ direction: 'rtl' }}>{selectedCustomer}</h3>
+                  <h3 className="text-xl font-extrabold" style={{ direction: lang === 'ar' ? 'rtl' : 'ltr' }}>{selectedCustomer}</h3>
                   <div className="flex items-center gap-2 mt-1">
                     {formData.editingEnName ? (
                       <div className="flex gap-2 items-center">
@@ -2429,7 +2433,7 @@ export default function App() {
                         <tr key={txn.id} className="border-b border-slate-50">
                           <td className="px-2 py-1.5 text-xs">{txn.transaction_date}</td>
                           <td className="px-2 py-1.5 text-xs font-semibold text-center">{txn.order_number || ''}</td>
-                          <td className="px-2 py-1.5 text-xs" style={{ direction: 'rtl' }}>{txn.description}</td>
+                          <td className="px-2 py-1.5 text-xs" style={{ direction: lang === 'ar' ? 'rtl' : 'ltr' }}>{tx(txn.description, txn.description_en)}</td>
                           <td className="px-2 py-1.5 text-xs text-right text-emerald-600 font-semibold">
                             {txn.cash_in > 0 ? fE(txn.cash_in) : ''}
                           </td>
@@ -2519,7 +2523,7 @@ export default function App() {
                 <tbody>
                   {(checkView === 'pending' ? pendingChecks : collectedChecks).map(c => (
                     <tr key={c.id} className="border-b border-slate-50">
-                      <td className="px-3 py-2 text-xs font-semibold" style={{ direction: 'rtl' }}>{c.customer_name}</td>
+                      <td className="px-3 py-2 text-xs font-semibold" style={{ direction: lang === 'ar' ? 'rtl' : 'ltr' }}>{tx(c.customer_name, c.customer_name_en)}</td>
                       <td className="px-3 py-2 text-xs text-right font-semibold">{fE(c.amount)}</td>
                       <td className="px-3 py-2 text-xs">{c.check_date}</td>
                       <td className="px-3 py-2">
@@ -2556,7 +2560,7 @@ export default function App() {
                   {debts.map(d => (
                     <tr key={d.id} onClick={() => setSelectedDebtor(d.customer_name)}
                       className="border-b border-slate-50 cursor-pointer hover:bg-blue-50">
-                      <td className="px-3 py-2 text-xs font-semibold" style={{ direction: 'rtl' }}>{d.customer_name}</td>
+                      <td className="px-3 py-2 text-xs font-semibold" style={{ direction: lang === 'ar' ? 'rtl' : 'ltr' }}>{tx(d.customer_name, d.customer_name_en || d.debtor_name_en)}</td>
                       <td className="px-3 py-2 text-xs text-right font-semibold text-red-500">{fE(d.total_debt)}</td>
                     </tr>
                   ))}
@@ -2569,7 +2573,7 @@ export default function App() {
           <div>
             <button onClick={() => setSelectedDebtor(null)}
               className="px-3 py-1 rounded border border-slate-200 text-xs font-semibold mb-3">← رجوع</button>
-            <h3 className="text-xl font-extrabold mb-3" style={{ direction: 'rtl' }}>{selectedDebtor}</h3>
+            <h3 className="text-xl font-extrabold mb-3" style={{ direction: lang === 'ar' ? 'rtl' : 'ltr' }}>{selectedDebtor}</h3>
             <InvoiceTable
               data={invoices.filter(s => s.customer_name && s.customer_name.includes(selectedDebtor) && s.outstanding > 0)}
               onSelect={setSelectedInvoice}
@@ -2675,7 +2679,7 @@ export default function App() {
                             {filtered.sort((a, b) => b.expense_date.localeCompare(a.expense_date)).slice(0, 200).map(w => (
                               <tr key={w.id} className="border-b border-slate-50">
                                 <td className="px-2 py-1.5 text-xs">{w.expense_date}</td>
-                                <td className="px-2 py-1.5 text-xs" style={{ direction: 'rtl' }}>{w.description}</td>
+                                <td className="px-2 py-1.5 text-xs" style={{ direction: lang === 'ar' ? 'rtl' : 'ltr' }}>{tx(w.description, w.description_en)}</td>
                                 <td className="px-2 py-1.5 text-xs text-right font-semibold text-purple-600">{fE(w.amount)}</td>
                                 <td className="px-2 py-1.5 text-[10px] text-amber-600">{getWarehouseCat(w.description)}</td>
                               </tr>
@@ -2828,12 +2832,12 @@ export default function App() {
                       <td className="px-2 py-1.5 text-xs font-semibold">{p.reference_number}</td>
                       <td className="px-2 py-1.5 text-[10px] text-slate-500">{p.shipment_reference || '—'}</td>
                       <td className="px-2 py-1.5">
-                        <div className="text-xs" style={{ direction: 'rtl' }}>{p.description}</div>
-                        {p.description_en && <div className="text-[10px] text-blue-500">{p.description_en}</div>}
+                        <div className="text-xs" style={{ direction: lang === 'ar' ? 'rtl' : 'ltr' }}>{lang === 'en' && p.description_en ? p.description_en : p.description}</div>
+                        {lang === 'ar' && p.description_en && <div className="text-[10px] text-blue-500">{p.description_en}</div>}
                       </td>
                       <td className="px-2 py-1.5">
-                        <div className="text-xs" style={{ direction: 'rtl' }}>{p.color}</div>
-                        {p.color_en && <div className="text-[10px] text-blue-500">{p.color_en}</div>}
+                        <div className="text-xs" style={{ direction: lang === 'ar' ? 'rtl' : 'ltr' }}>{lang === 'en' && p.color_en ? p.color_en : p.color}</div>
+                        {lang === 'ar' && p.color_en && <div className="text-[10px] text-blue-500">{p.color_en}</div>}
                       </td>
                       <td className="px-2 py-1.5 text-xs text-right font-semibold">{p.roll_count}</td>
                       <td className="px-2 py-1.5 text-xs text-right">{fmt(p.net_weight)} kg</td>
@@ -2927,14 +2931,14 @@ export default function App() {
             CRM TAB
         ========================================== */}
         {tab === 'crm' && (
-          <CRMTab customers={customers} invoices={invoices} user={user} users={teamUsers} onReload={loadAllData} isAdmin={isAdmin} onSelectInvoice={setSelectedInvoice} />
+          <CRMTab customers={customers} invoices={invoices} user={user} users={teamUsers} onReload={loadAllData} isAdmin={isAdmin} onSelectInvoice={setSelectedInvoice} lang={lang} />
         )}
 
         {/* ==========================================
             TICKETS TAB
         ========================================== */}
         {tab === 'tickets' && (
-          <TicketsTab customers={customers} user={user} users={teamUsers} onReload={loadAllData} />
+          <TicketsTab customers={customers} user={user} users={teamUsers} onReload={loadAllData} lang={lang} />
         )}
 
         {/* ==========================================
