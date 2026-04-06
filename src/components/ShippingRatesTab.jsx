@@ -147,6 +147,71 @@ function QuotePrintView({ quote, onClose }) {
   </div>);
 }
 
+// ========== REQUEST QUOTE MODAL ==========
+function RequestQuoteModal({ data, onClose, origins, destinations, openWhatsApp, openEmail, generateQuoteRequest }) {
+  const [origin, setOrigin] = useState(data.origin || '');
+  const [dest, setDest] = useState(data.destination || 'Egypt');
+  const [container, setContainer] = useState(data.container || '40ft');
+  const [commodity, setCommodity] = useState('General cargo / Trading materials');
+  const vendor = data.vendor;
+  const { subject, body } = generateQuoteRequest(vendor, origin, dest, container);
+  // Custom body with commodity
+  const customBody = body.replace('General cargo / Trading materials', commodity);
+
+  return (<div className="fixed inset-0 bg-black/60 z-50 flex items-start justify-center overflow-auto p-4" onClick={e=>{if(e.target===e.currentTarget)onClose();}}>
+    <div className="bg-white rounded-xl shadow-2xl w-full max-w-[600px] my-8">
+      <div className="p-4 border-b flex justify-between items-center">
+        <div>
+          <h3 className="text-lg font-bold">📋 Request Rate Quote</h3>
+          <p className="text-xs text-slate-500">From: {vendor.company_name}{vendor.contact_name ? ' — ' + vendor.contact_name : ''}</p>
+        </div>
+        <button onClick={onClose} className="text-2xl text-slate-400">×</button>
+      </div>
+      <div className="p-4">
+        <div className="grid grid-cols-2 gap-3 mb-4">
+          <div><label className="text-[10px] font-semibold">Origin</label><input list="rq-origins" value={origin} onChange={e=>setOrigin(e.target.value)} className="w-full px-3 py-2 rounded-lg border text-sm" placeholder="e.g. China, Turkey..." /><datalist id="rq-origins">{origins.map(o=><option key={o} value={o}/>)}</datalist></div>
+          <div><label className="text-[10px] font-semibold">Destination</label><input list="rq-dests" value={dest} onChange={e=>setDest(e.target.value)} className="w-full px-3 py-2 rounded-lg border text-sm" /><datalist id="rq-dests">{destinations.map(d=><option key={d} value={d}/>)}</datalist></div>
+          <div><label className="text-[10px] font-semibold">Container</label><select value={container} onChange={e=>setContainer(e.target.value)} className="w-full px-3 py-2 rounded-lg border text-sm">{CONTAINER_TYPES.map(c=><option key={c}>{c}</option>)}</select></div>
+          <div><label className="text-[10px] font-semibold">Commodity</label><input value={commodity} onChange={e=>setCommodity(e.target.value)} className="w-full px-3 py-2 rounded-lg border text-sm" /></div>
+        </div>
+
+        {/* Preview */}
+        <div className="bg-slate-50 rounded-lg p-3 mb-4 border max-h-[200px] overflow-auto">
+          <div className="text-[10px] font-semibold text-slate-500 mb-1">Message Preview:</div>
+          <pre className="text-xs whitespace-pre-wrap text-slate-700" style={{fontFamily:'inherit'}}>{customBody}</pre>
+        </div>
+
+        {/* Action Buttons — BIG for mobile */}
+        <div className="space-y-2">
+          {vendor.whatsapp && (
+            <button onClick={()=>{openWhatsApp(vendor.whatsapp, customBody);onClose();}}
+              className="w-full py-4 rounded-xl text-base font-bold bg-emerald-500 text-white flex items-center justify-center gap-2 hover:bg-emerald-600 transition"
+              style={{boxShadow:'0 4px 15px rgba(52,211,153,0.3)'}}>
+              💬 Send via WhatsApp
+            </button>
+          )}
+          {vendor.email && (
+            <button onClick={()=>{openEmail(vendor.email, subject, customBody);onClose();}}
+              className="w-full py-4 rounded-xl text-base font-bold bg-blue-500 text-white flex items-center justify-center gap-2 hover:bg-blue-600 transition"
+              style={{boxShadow:'0 4px 15px rgba(56,189,248,0.3)'}}>
+              📧 Send via Email
+            </button>
+          )}
+          {vendor.phone && (
+            <a href={'tel:'+vendor.phone}
+              className="w-full py-3 rounded-xl text-sm font-bold border-2 border-slate-200 text-slate-600 flex items-center justify-center gap-2 hover:bg-slate-50 transition block text-center">
+              📞 Call {vendor.contact_name || vendor.company_name}
+            </a>
+          )}
+          {!vendor.whatsapp && !vendor.email && (
+            <div className="text-center text-sm text-red-500 py-4">No email or WhatsApp on file for this vendor. Edit the vendor to add contact info.</div>
+          )}
+        </div>
+      </div>
+    </div>
+  </div>);
+}
+
 export default function ShippingRatesTab({ user, isAdmin, customers }) {
   const [rates, setRates] = useState([]);
   const [quotes, setQuotes] = useState([]);
@@ -177,9 +242,12 @@ export default function ShippingRatesTab({ user, isAdmin, customers }) {
   const [manualShip, setManualShip] = useState(false);
   const [manualTruck, setManualTruck] = useState(false);
   const [manualBroker, setManualBroker] = useState(false);
+  const [vendorContacts, setVendorContacts] = useState([]);
+  const [editingVendor, setEditingVendor] = useState(null);
+  const [requestQuoteData, setRequestQuoteData] = useState(null);
 
   const fetchAll = async (table, orderCol) => { let all = [], from = 0; while (true) { const { data } = await supabase.from(table).select('*').order(orderCol, { ascending: false }).range(from, from + 999); if (!data || data.length === 0) break; all = all.concat(data); if (data.length < 1000) break; from += 1000; } return all; };
-  const loadData = useCallback(async () => { setLoading(true); try { const [r, q, b] = await Promise.all([fetchAll('shipping_rates', 'effective_date'), fetchAll('shipping_quotes', 'quote_date').catch(() => []), fetchAll('shipping_bookings', 'booking_date').catch(() => [])]); setRates(r); setQuotes(q); setBookings(b); } catch (err) { console.error(err); } setLoading(false); }, []);
+  const loadData = useCallback(async () => { setLoading(true); try { const [r, q, b, vc] = await Promise.all([fetchAll('shipping_rates', 'effective_date'), fetchAll('shipping_quotes', 'quote_date').catch(() => []), fetchAll('shipping_bookings', 'booking_date').catch(() => []), supabase.from('vendor_contacts').select('*').order('company_name').then(r => r.data || []).catch(() => [])]); setRates(r); setQuotes(q); setBookings(b); setVendorContacts(vc); } catch (err) { console.error(err); } setLoading(false); }, []);
   useEffect(() => { loadData(); }, [loadData]);
 
   const origins = useMemo(() => [...new Set(rates.map(r => r.origin).filter(Boolean))].sort(), [rates]);
@@ -236,7 +304,150 @@ export default function ShippingRatesTab({ user, isAdmin, customers }) {
   const handleAiQuery = async () => { if (!aiQuery.trim()) return; setAiLoading(true); setAiAnswer(''); try { const summary = routeGroups.slice(0,50).map(rg => { const c=rg.cheapest; return rg.key+': '+rg.count+' quotes ('+rg.activeCount+' active), best: '+(c?'$'+c.rate_amount+' '+c.vendor_name+'/'+(c.shipping_line||'N/A'):'none'); }).join('\n'); const res = await fetch('/api/ask',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({question:aiQuery,context:'Shipping rates assistant for KTC.\n\nROUTES:\n'+summary+'\n\nAnswer concisely.'})}); const data = await res.json(); setAiAnswer(data.answer||'No response'); } catch(err) { setAiAnswer('Error: '+err.message); } setAiLoading(false); };
   const resetQuoteForm = () => { setF({}); setEditingQuote(null); setPickedShipRate(null); setPickedTruckRate(null); setPickedBrokerRate(null); setManualShip(false); setManualTruck(false); setManualBroker(false); };
 
+  // ===== VENDOR CONTACT HANDLERS =====
+  const handleSaveVendor = async () => {
+    if (!f.vcCompany) { alert('Company name required'); return; }
+    const record = { company_name: f.vcCompany, contact_name: f.vcContact || '', role: f.vcRole || '', vendor_type: f.vcType || 'Shipping', email: f.vcEmail || '', phone: f.vcPhone || '', whatsapp: f.vcWhatsapp || f.vcPhone || '', origin_regions: f.vcOrigins || '', destination_regions: f.vcDests || '', notes: f.vcNotes || '', is_active: true };
+    try {
+      if (editingVendor) await dbUpdate('vendor_contacts', editingVendor.id, record, user?.id);
+      else await dbInsert('vendor_contacts', record, user?.id);
+      await logActivity(user?.id, (editingVendor ? 'Updated' : 'Added') + ' vendor: ' + record.company_name);
+      setF({}); setEditingVendor(null); setView('vendors'); await loadData();
+    } catch (err) { alert('Error: ' + err.message); }
+  };
+
+  const openWhatsApp = (phone, message) => {
+    let clean = (phone || '').replace(/[^0-9+]/g, '');
+    if (clean.startsWith('0')) clean = '+2' + clean;
+    if (!clean.startsWith('+')) clean = '+' + clean;
+    const url = 'https://wa.me/' + clean.replace('+', '') + (message ? '?text=' + encodeURIComponent(message) : '');
+    window.open(url, '_blank');
+  };
+
+  const openEmail = (email, subject, body) => {
+    window.open('mailto:' + email + '?subject=' + encodeURIComponent(subject) + '&body=' + encodeURIComponent(body), '_blank');
+  };
+
+  const generateQuoteRequest = (vendor, origin, destination, containerType) => {
+    const today = new Date().toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: 'numeric' });
+    const subject = 'Rate Request — ' + (origin || 'Origin') + ' to ' + (destination || 'Egypt') + ' — KTC International';
+    const body = `Dear ${vendor?.contact_name || vendor?.company_name || 'Team'},
+
+I hope this message finds you well.
+
+We are requesting your best rates for the following:
+
+Origin: ${origin || '[Origin]'}
+Destination: ${destination || '[Destination]'}
+Container: ${containerType || '40ft Standard'}
+Commodity: General cargo / Trading materials
+
+Please include:
+• Ocean freight / Trucking rate
+• Transit time
+• Free days at destination
+• Any additional fees (THC, documentation, etc.)
+• Rate validity period
+
+If you have any available space in the coming weeks, please advise.
+
+Thank you for your continued partnership.
+
+Best regards,
+KTC International Trading
+Kandil Trading Company
+Date: ${today}`;
+    return { subject, body };
+  };
+
   if (loading) return <div className="text-center py-8 text-slate-400">Loading...</div>;
+
+  // ========== VENDOR CONTACTS LIST ==========
+  if (view === 'vendors') return (<div>
+    <button onClick={()=>setView('routes')} className="px-3 py-1 rounded border border-slate-200 text-xs font-semibold mb-3">← Back</button>
+    <div className="flex justify-between items-center mb-3">
+      <h2 className="text-xl font-extrabold">📇 Vendor Contacts ({vendorContacts.length})</h2>
+      <div className="flex gap-2">
+        <button onClick={()=>{setView('add_vendor');setF({});setEditingVendor(null);}} className="px-3 py-1.5 bg-blue-500 text-white rounded-lg text-xs font-semibold">+ Add Vendor</button>
+      </div>
+    </div>
+    <div className="grid grid-cols-3 gap-3 mb-4">
+      <div className="bg-white rounded-lg p-3" style={{borderLeftWidth:3,borderLeftColor:'#0ea5e9'}}><div className="text-[10px] text-slate-500">Shipping</div><div className="text-lg font-extrabold">{vendorContacts.filter(v=>v.vendor_type==='Shipping').length}</div></div>
+      <div className="bg-white rounded-lg p-3" style={{borderLeftWidth:3,borderLeftColor:'#f59e0b'}}><div className="text-[10px] text-slate-500">Trucking</div><div className="text-lg font-extrabold">{vendorContacts.filter(v=>v.vendor_type==='Trucking').length}</div></div>
+      <div className="bg-white rounded-lg p-3" style={{borderLeftWidth:3,borderLeftColor:'#8b5cf6'}}><div className="text-[10px] text-slate-500">Customs</div><div className="text-lg font-extrabold">{vendorContacts.filter(v=>v.vendor_type==='Customs/Brokerage').length}</div></div>
+    </div>
+    <div className="space-y-2">
+      {vendorContacts.map(vc => (
+        <div key={vc.id} className="bg-white rounded-xl p-4 border border-slate-200">
+          <div className="flex justify-between items-start">
+            <div>
+              <div className="text-sm font-bold">{vc.company_name}</div>
+              {vc.contact_name && <div className="text-xs text-slate-500">{vc.contact_name}{vc.role ? ' — ' + vc.role : ''}</div>}
+              <div className="flex gap-1 mt-1">
+                <span className={'px-1.5 py-0.5 rounded text-[9px] font-semibold ' + (vc.vendor_type === 'Shipping' ? 'bg-blue-100 text-blue-700' : vc.vendor_type === 'Trucking' ? 'bg-amber-100 text-amber-700' : 'bg-purple-100 text-purple-700')}>{vc.vendor_type}</span>
+                {vc.origin_regions && <span className="text-[9px] text-slate-400">📍 {vc.origin_regions}</span>}
+              </div>
+            </div>
+            <div className="flex gap-1.5">
+              {vc.whatsapp && <button onClick={()=>openWhatsApp(vc.whatsapp, '')} className="px-2.5 py-1.5 rounded-lg text-xs font-semibold bg-emerald-500 text-white">💬 WhatsApp</button>}
+              {vc.email && <button onClick={()=>{const {subject,body}=generateQuoteRequest(vc);openEmail(vc.email,subject,body);}} className="px-2.5 py-1.5 rounded-lg text-xs font-semibold bg-blue-500 text-white">📧 Email</button>}
+              {vc.phone && <a href={'tel:'+vc.phone} className="px-2.5 py-1.5 rounded-lg text-xs font-semibold bg-slate-500 text-white">📞</a>}
+              <button onClick={()=>{setEditingVendor(vc);setF({vcCompany:vc.company_name,vcContact:vc.contact_name,vcRole:vc.role,vcType:vc.vendor_type,vcEmail:vc.email,vcPhone:vc.phone,vcWhatsapp:vc.whatsapp,vcOrigins:vc.origin_regions,vcDests:vc.destination_regions,vcNotes:vc.notes});setView('add_vendor');}} className="px-2 py-1.5 rounded-lg text-xs border border-slate-200">Edit</button>
+            </div>
+          </div>
+          <div className="flex gap-2 mt-2 text-[10px] text-slate-400">
+            {vc.email && <span>📧 {vc.email}</span>}
+            {vc.phone && <span>📞 {vc.phone}</span>}
+          </div>
+          {/* Quick Request Rate Button */}
+          <button onClick={()=>setRequestQuoteData({vendor:vc, origin:'', destination:'Egypt', container:'40ft'})}
+            className="mt-2 px-3 py-1.5 rounded-lg text-[10px] font-bold border border-blue-300 text-blue-500 hover:bg-blue-50 transition w-full">
+            📋 Request Rate Quote from {vc.company_name}
+          </button>
+        </div>
+      ))}
+      {vendorContacts.length === 0 && <div className="text-center py-8 text-slate-400 text-sm">No vendor contacts yet. Add your freight forwarders, truckers, and brokers.</div>}
+    </div>
+    {requestQuoteData && <RequestQuoteModal data={requestQuoteData} onClose={()=>setRequestQuoteData(null)} origins={origins} destinations={destinations} openWhatsApp={openWhatsApp} openEmail={openEmail} generateQuoteRequest={generateQuoteRequest} />}
+  </div>);
+
+  // ========== ADD/EDIT VENDOR ==========
+  if (view === 'add_vendor') return (<div>
+    <button onClick={()=>{setView('vendors');setF({});setEditingVendor(null);}} className="px-3 py-1 rounded border border-slate-200 text-xs font-semibold mb-3">← Back</button>
+    <h2 className="text-xl font-extrabold mb-3">{editingVendor ? 'Edit Vendor' : 'New Vendor Contact'}</h2>
+    <div className="bg-white rounded-xl p-5 border border-slate-200">
+      <div className="grid grid-cols-2 gap-3 mb-4">
+        <div><label className="text-[10px] font-semibold">Company Name *</label><input value={f.vcCompany||''} onChange={e=>setF({...f,vcCompany:e.target.value})} className="w-full px-3 py-2 rounded-lg border text-sm" placeholder="e.g. MSC, Maersk Logistics..." /></div>
+        <div><label className="text-[10px] font-semibold">Contact Person</label><input value={f.vcContact||''} onChange={e=>setF({...f,vcContact:e.target.value})} className="w-full px-3 py-2 rounded-lg border text-sm" placeholder="Name" /></div>
+        <div><label className="text-[10px] font-semibold">Role / Title</label><input value={f.vcRole||''} onChange={e=>setF({...f,vcRole:e.target.value})} className="w-full px-3 py-2 rounded-lg border text-sm" placeholder="Sales Rep, Account Manager..." /></div>
+        <div><label className="text-[10px] font-semibold">Vendor Type *</label>
+          <div className="flex gap-2 mt-1">{RATE_TYPES.map(rt=>(
+            <button key={rt} onClick={()=>setF({...f,vcType:rt})} className={'flex-1 px-3 py-2 rounded-lg text-xs font-bold border-2 transition ' + (f.vcType===rt ? 'bg-indigo-500 text-white border-indigo-500' : 'bg-white text-slate-600 border-slate-200')}>
+              {rt==='Shipping'?'🚢':rt==='Trucking'?'🚛':'📋'} {rt}
+            </button>
+          ))}</div>
+        </div>
+      </div>
+      <div className="bg-blue-50 rounded-lg p-3 mb-4 border border-blue-200">
+        <h3 className="text-xs font-bold text-blue-800 mb-2">📱 Contact Info</h3>
+        <div className="grid grid-cols-2 gap-3">
+          <div><label className="text-[10px] font-semibold">Email</label><input type="email" value={f.vcEmail||''} onChange={e=>setF({...f,vcEmail:e.target.value})} className="w-full px-3 py-2 rounded-lg border text-sm" placeholder="rates@company.com" /></div>
+          <div><label className="text-[10px] font-semibold">Phone</label><input value={f.vcPhone||''} onChange={e=>setF({...f,vcPhone:e.target.value})} className="w-full px-3 py-2 rounded-lg border text-sm" placeholder="+1 555 123 4567" /></div>
+          <div className="col-span-2"><label className="text-[10px] font-semibold">WhatsApp Number (if different)</label><input value={f.vcWhatsapp||''} onChange={e=>setF({...f,vcWhatsapp:e.target.value})} className="w-full px-3 py-2 rounded-lg border text-sm" placeholder="Leave blank to use phone number" /></div>
+        </div>
+      </div>
+      <div className="grid grid-cols-2 gap-3 mb-4">
+        <div><label className="text-[10px] font-semibold">Origin Regions / Coverage</label><input value={f.vcOrigins||''} onChange={e=>setF({...f,vcOrigins:e.target.value})} className="w-full px-3 py-2 rounded-lg border text-sm" placeholder="China, Turkey, USA..." /></div>
+        <div><label className="text-[10px] font-semibold">Destination Regions</label><input value={f.vcDests||''} onChange={e=>setF({...f,vcDests:e.target.value})} className="w-full px-3 py-2 rounded-lg border text-sm" placeholder="Egypt, Middle East..." /></div>
+      </div>
+      <div className="mb-4"><label className="text-[10px] font-semibold">Notes</label><textarea value={f.vcNotes||''} onChange={e=>setF({...f,vcNotes:e.target.value})} rows={2} className="w-full px-3 py-2 rounded-lg border text-sm" /></div>
+      <div className="flex gap-2">
+        <button onClick={handleSaveVendor} className="px-5 py-2 bg-blue-500 text-white rounded-lg font-semibold text-sm">{editingVendor?'Update':'Save Vendor'} ✓</button>
+        <button onClick={()=>{setView('vendors');setF({});setEditingVendor(null);}} className="px-5 py-2 border border-slate-200 rounded-lg text-sm">Cancel</button>
+        {editingVendor && isAdmin && <button onClick={async()=>{if(!confirm('Delete this vendor?'))return;try{await supabase.from('vendor_contacts').delete().eq('id',editingVendor.id);setView('vendors');setF({});setEditingVendor(null);await loadData();}catch(err){alert(err.message);}}} className="px-5 py-2 bg-red-500 text-white rounded-lg text-sm ml-auto">Delete</button>}
+      </div>
+    </div>
+  </div>);
 
   // ========== ADD/EDIT RATE ==========
   if (view === 'add_rate') return (<div>
@@ -427,9 +638,10 @@ export default function ShippingRatesTab({ user, isAdmin, customers }) {
       {chartSorted.length>1&&(<div className="bg-white rounded-xl p-4 mb-4 border border-slate-200"><h3 className="text-sm font-bold mb-2">📈 Rate Trend</h3><div className="flex items-end gap-1 h-[120px]">{chartSorted.map((d,i)=>{const mx=Math.max(...chartSorted.map(x=>x.max)); const h=mx>0?(d.avg/mx)*100:0; return (<div key={d.month} className="flex-1 flex flex-col items-center" title={d.month+': avg $'+d.avg}><div className="text-[8px] text-slate-400 mb-1">${d.avg}</div><div className="w-full rounded-t" style={{height:h+'%',background:i===chartSorted.length-1?'#0ea5e9':'#cbd5e1',minHeight:4}}></div><div className="text-[8px] text-slate-400 mt-1 -rotate-45">{d.month.substring(5)}</div></div>);})}</div></div>)}
       {Object.keys(byVL).length>0&&(<div className="bg-white rounded-xl p-4 mb-4 border border-slate-200"><h3 className="text-sm font-bold mb-2">🏆 Vendor Comparison</h3><div className="overflow-auto"><table className="w-full border-collapse text-xs"><thead><tr className="bg-slate-50"><th className="px-3 py-2 text-left text-[10px]">Vendor / Line</th><th className="px-3 py-2 text-right text-[10px]">Best Rate</th><th className="px-3 py-2 text-right text-[10px]">Transit</th><th className="px-3 py-2 text-right text-[10px]">Free Days</th><th className="px-3 py-2 text-[10px]">Expiry</th></tr></thead><tbody>{Object.entries(byVL).sort((a,b)=>(a[1][0]?.rate_amount||Infinity)-(b[1][0]?.rate_amount||Infinity)).map(([key,vr],i)=>{const best=vr.reduce((a,b)=>(a.rate_amount||Infinity)<(b.rate_amount||Infinity)?a:b); return (<tr key={key} className={'border-b border-slate-50 '+(i===0?'bg-emerald-50':'')}><td className="px-3 py-2 font-semibold">{i===0&&<span className="text-emerald-500 mr-1">★</span>}{key}</td><td className="px-3 py-2 text-right font-bold text-blue-600">{fCur(best.rate_amount,best.currency)}</td><td className="px-3 py-2 text-right">{best.transit_days?best.transit_days+'d':'—'}</td><td className="px-3 py-2 text-right">{best.free_days||'—'}</td><td className="px-3 py-2"><ExpiryBadge date={best.expiry_date}/></td></tr>);})}</tbody></table></div></div>)}
       {routeQuotes.length>0&&(<div className="bg-white rounded-xl p-4 mt-4 border border-slate-200"><h3 className="text-sm font-bold mb-2">📋 Quotes ({routeQuotes.length})</h3>{routeQuotes.map(qt=>(<div key={qt.id} className="flex justify-between items-center py-2 border-b border-slate-50"><div><div className="text-xs font-semibold">{qt.quote_number} — {qt.customer_name}</div><div className="text-[10px] text-slate-500">{qt.quote_date} • {qt.status}</div></div><div className="flex items-center gap-3"><div className="text-right"><div className="text-xs">Client: <span className="font-bold">{fCur(qt.client_total,qt.currency)}</span></div><div className="text-[10px]" style={{color:qt.profit>0?'#10b981':'#ef4444'}}>Profit: {fCur(qt.profit,qt.currency)}</div></div><button onClick={()=>setPreviewQuote(qt)} className="px-2 py-1 rounded border border-purple-300 text-purple-600 text-[10px]">📄</button></div></div>))}</div>)}
-      <div className="bg-white rounded-xl p-4 border border-slate-200 mt-4"><div className="flex justify-between items-center mb-2"><h3 className="text-sm font-bold">All Rates</h3><button onClick={()=>{setF({origin:selectedRoute.origin,destination:selectedRoute.destination});setView('add_rate');}} className="px-3 py-1 bg-blue-500 text-white rounded text-[10px] font-semibold">+ Add Rate</button></div>
+      <div className="bg-white rounded-xl p-4 border border-slate-200 mt-4"><div className="flex justify-between items-center mb-2"><h3 className="text-sm font-bold">All Rates</h3><div className="flex gap-1"><button onClick={()=>{const matchVendors=vendorContacts.filter(v=>!v.origin_regions||(v.origin_regions||'').toLowerCase().includes((selectedRoute.origin||'').toLowerCase().substring(0,4)));if(matchVendors.length>0)setRequestQuoteData({vendor:matchVendors[0],origin:selectedRoute.origin,destination:selectedRoute.destination,container:'40ft'});else alert('No vendor contacts found. Add vendors first (📇 Vendors).');}} className="px-3 py-1 bg-cyan-500 text-white rounded text-[10px] font-semibold">📋 Request Rate</button><button onClick={()=>{setF({origin:selectedRoute.origin,destination:selectedRoute.destination});setView('add_rate');}} className="px-3 py-1 bg-blue-500 text-white rounded text-[10px] font-semibold">+ Add Rate</button></div></div>
       <div className="overflow-auto max-h-[400px] rounded-lg border border-slate-200"><table className="w-full border-collapse text-xs"><thead className="sticky top-0"><tr className="bg-slate-50"><th className="px-2 py-2 text-[10px] text-left">Date</th><th className="px-2 py-2 text-[10px] text-left">Vendor</th><th className="px-2 py-2 text-[10px] text-left">Line</th><th className="px-2 py-2 text-[10px]">Container</th><th className="px-2 py-2 text-[10px] text-right">Rate</th><th className="px-2 py-2 text-[10px] text-right">Total</th><th className="px-2 py-2 text-[10px]">Expiry</th><th className="px-2 py-2 text-[10px]"></th></tr></thead><tbody>{routeHistory.map(r=>{const exp=isExpired(r.expiry_date); return (<tr key={r.id} className={'border-b border-slate-50 '+(exp?'bg-red-50/50':'')+(r.booked?' bg-green-50/50':'')}><td className="px-2 py-1.5">{r.effective_date}</td><td className="px-2 py-1.5 font-semibold">{r.vendor_name}</td><td className="px-2 py-1.5">{r.shipping_line||'—'}</td><td className="px-2 py-1.5 text-center"><span className="px-1.5 py-0.5 bg-blue-100 text-blue-700 rounded text-[9px]">{r.container_type}</span></td><td className={'px-2 py-1.5 text-right font-bold '+(exp?'text-red-400 line-through':'text-blue-600')}>{fCur(r.rate_amount,r.currency)}</td><td className="px-2 py-1.5 text-right font-bold text-amber-600">{fCur(r.total_cost,r.currency)}</td><td className="px-2 py-1.5"><ExpiryBadge date={r.expiry_date}/></td><td className="px-2 py-1.5 flex gap-1">{!exp&&<button onClick={()=>handleMarkBooked(r)} className="px-2 py-0.5 rounded border border-green-300 text-green-600 text-[10px]">Book</button>}<button onClick={()=>{setEditingRate(r);setF({origin:r.origin,destination:r.destination,vendorName:r.vendor_name,shippingLine:r.shipping_line,transportMode:r.transport_mode,rateType:r.rate_type||'',containerType:r.container_type,rateAmount:r.rate_amount,currency:r.currency,transitDays:r.transit_days,freeDays:r.free_days,portFees:r.port_fees,thcFees:r.thc_fees,docFees:r.documentation_fees,customsFees:r.customs_fees,otherFees:r.other_fees,otherFeesDesc:r.other_fees_desc,effectiveDate:r.effective_date,expiryDate:r.expiry_date,pol:r.port_of_loading,pod:r.port_of_discharge,notes:r.notes,booked:r.booked,shipmentRef:r.shipment_reference,bookingDate:r.booking_date,bookingNotes:r.booking_notes});setView('add_rate');}} className="px-2 py-0.5 rounded border border-blue-300 text-blue-600 text-[10px]">Edit</button>{isAdmin&&<button onClick={()=>handleDeleteRate(r)} className="px-2 py-0.5 rounded border border-red-300 text-red-500 text-[10px]">Del</button>}</td></tr>);})}</tbody></table></div></div>
       {previewQuote && <QuotePrintView quote={previewQuote} onClose={() => setPreviewQuote(null)} />}
+      {requestQuoteData && <RequestQuoteModal data={requestQuoteData} onClose={()=>setRequestQuoteData(null)} origins={origins} destinations={destinations} openWhatsApp={openWhatsApp} openEmail={openEmail} generateQuoteRequest={generateQuoteRequest} />}
     </div>);
   }
 
@@ -462,6 +674,8 @@ export default function ShippingRatesTab({ user, isAdmin, customers }) {
         <button onClick={()=>setView('quotes')} className="px-3 py-1.5 bg-purple-500 text-white rounded-lg text-xs font-semibold">📋 Quotes</button>
         <button onClick={()=>setView('import')} className="px-3 py-1.5 bg-amber-500 text-white rounded-lg text-xs font-semibold">📥 Import</button>
         <button onClick={()=>setView('ai')} className="px-3 py-1.5 bg-emerald-500 text-white rounded-lg text-xs font-semibold">🤖 AI</button>
+        <button onClick={()=>setView('vendors')} className="px-3 py-1.5 bg-indigo-500 text-white rounded-lg text-xs font-semibold">📇 Vendors</button>
+        <button onClick={()=>{if(vendorContacts.length===0){alert('Add vendor contacts first (📇 Vendors button)');return;}setRequestQuoteData({vendor:vendorContacts[0],origin:'',destination:'Egypt',container:'40ft'});}} className="px-3 py-1.5 bg-cyan-500 text-white rounded-lg text-xs font-semibold">📋 Request Rate</button>
       </div>
     </div>
     <div className="grid grid-cols-5 gap-3 mb-4">
@@ -484,5 +698,6 @@ export default function ShippingRatesTab({ user, isAdmin, customers }) {
       <div className="flex justify-between text-[10px] text-slate-500 border-t border-slate-100 pt-2"><span>{rg.activeCount} active{rg.expiredCount>0&&<span className="text-red-400 ml-1">({rg.expiredCount} exp)</span>}</span><span>{[...rg.vendors].length} vendors</span>{(() => { const rb = routeBookings(rg.origin,rg.destination); return rb.length > 0 && <span className="text-emerald-600">✓ {rb.length}x</span>; })()}</div>
     </div>);})}</div>)}
     {previewQuote && <QuotePrintView quote={previewQuote} onClose={() => setPreviewQuote(null)} />}
+    {requestQuoteData && <RequestQuoteModal data={requestQuoteData} onClose={()=>setRequestQuoteData(null)} origins={origins} destinations={destinations} openWhatsApp={openWhatsApp} openEmail={openEmail} generateQuoteRequest={generateQuoteRequest} />}
   </div>);
 }
