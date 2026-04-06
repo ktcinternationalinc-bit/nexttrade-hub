@@ -70,6 +70,7 @@ export default function App() {
   const [teamUsers, setTeamUsers] = useState([]);
   const [userProfile, setUserProfile] = useState(null);
   const [modulePerms, setModulePerms] = useState({});
+  const [lang, setLang] = useState('ar'); // 'ar' or 'en'
 
   // Modals
   const [selectedInvoice, setSelectedInvoice] = useState(null);
@@ -897,6 +898,13 @@ export default function App() {
               <div className="text-white text-xs font-semibold">{userProfile.name}</div>
               <div className="text-blue-300/50 text-[10px]">{userProfile.role === 'super_admin' ? '🔴 Super Admin' : userProfile.role === 'admin' ? '🟣 Admin' : '🔵 Team'}</div>
             </div>
+          )}
+          {/* Language Toggle — visible to super_admin or users with 'both' access */}
+          {(!userProfile || userProfile.role === 'super_admin' || userProfile.language_access === 'both') && (
+            <button onClick={() => setLang(lang === 'ar' ? 'en' : 'ar')}
+              className={'px-3 py-1.5 rounded-lg text-xs font-bold transition ' + (lang === 'en' ? 'bg-emerald-500/80 text-white' : 'bg-white/10 text-white/70 hover:bg-white/20')}>
+              {lang === 'ar' ? '🌐 EN' : '🌐 AR'}
+            </button>
           )}
           <button onClick={handleSignOut} className="px-3 py-1.5 bg-white/10 hover:bg-white/20 text-white/80 text-xs rounded-lg transition font-medium">
             Sign Out
@@ -2975,7 +2983,7 @@ export default function App() {
             SETTINGS TAB
         ========================================== */}
         {tab === 'settings' && (
-          <SettingsTab user={user} users={teamUsers} onReload={loadAllData} />
+          <SettingsTab user={user} users={teamUsers} onReload={loadAllData} isAdmin={isAdmin} />
         )}
 
 
