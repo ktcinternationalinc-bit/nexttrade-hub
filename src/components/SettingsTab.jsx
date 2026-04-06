@@ -2,6 +2,7 @@
 import { useState, useEffect } from 'react';
 import { supabase, dbInsert, dbUpdate } from '../lib/supabase';
 import { EXPENSE_CATS } from '../lib/utils';
+import TranslationPanel from './TranslationPanel';
 
 const ROLES = [
   { v: 'super_admin', l: '🔴 Super Admin', c: 'text-red-500' },
@@ -25,7 +26,7 @@ const NOTIF_TYPES = [
   { v: 'daily_reminder', l: 'Daily Log Reminder / تذكير يومي' },
 ];
 
-export default function SettingsTab({ user, users, onReload }) {
+export default function SettingsTab({ user, users, onReload, isAdmin }) {
   const [section, setSection] = useState('roles');
   const [showAddMember, setShowAddMember] = useState(false);
   const [f, setF] = useState({});
@@ -124,7 +125,7 @@ export default function SettingsTab({ user, users, onReload }) {
 
       {/* Section Tabs */}
       <div className="flex gap-1 mb-3 flex-wrap">
-        {[['roles', 'Team & Roles'], ['permissions', 'Module Access'], ['notifications', 'Notifications'], ['rules', 'Category Rules / قواعد']].map(([v, l]) => (
+        {[['roles', 'Team & Roles'], ['permissions', 'Module Access'], ['notifications', 'Notifications'], ['rules', 'Category Rules / قواعد'], ['translation', '🌐 Translation / ترجمة']].map(([v, l]) => (
           <button key={v} onClick={() => setSection(v)}
             className={'px-3 py-1.5 rounded-lg text-xs font-semibold transition ' + (section === v ? 'bg-slate-900 text-white' : 'bg-slate-100 text-slate-500')}>
             {l}
@@ -363,6 +364,11 @@ export default function SettingsTab({ user, users, onReload }) {
             )}
           </div>
         </div>
+      )}
+
+      {/* ===== TRANSLATION ===== */}
+      {section === 'translation' && (
+        <TranslationPanel user={user} users={users} isAdmin={isAdmin} />
       )}
     </div>
   );
