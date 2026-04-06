@@ -60,6 +60,17 @@ export async function dbDelete(table, id, userId) {
   }
 }
 
+// Activity logger — auto-captures all user actions to daily_log
+export async function logActivity(userId, text) {
+  if (!userId) return;
+  try {
+    const today = new Date().toISOString().substring(0, 10);
+    await supabase.from('daily_log').insert({
+      user_id: userId, entry_text: text, auto_generated: true, log_date: today,
+    });
+  } catch(e) { console.log('Log error:', e); }
+}
+
 // Auth helpers
 export async function signIn(email, password) {
   const { data, error } = await supabase.auth.signInWithPassword({ email, password });
