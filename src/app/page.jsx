@@ -94,22 +94,36 @@ export default function App() {
   // ==========================================
   // DATA LOADING
   // ==========================================
+  const fetchAll = async (table, orderCol, asc = false) => {
+    let all = [];
+    let from = 0;
+    const batch = 1000;
+    while (true) {
+      const { data } = await supabase.from(table).select('*').order(orderCol, { ascending: asc }).range(from, from + batch - 1);
+      if (!data || data.length === 0) break;
+      all = all.concat(data);
+      if (data.length < batch) break;
+      from += batch;
+    }
+    return all;
+  };
+
   const loadAllData = async () => {
     try {
       const [inv, tres, chk, dbt, cust, wh] = await Promise.all([
-        supabase.from('invoices').select('*').order('invoice_date', { ascending: false }).range(0, 9999),
-        supabase.from('treasury').select('*').order('transaction_date', { ascending: false }).range(0, 9999),
-        supabase.from('checks').select('*').order('check_date').range(0, 9999),
-        supabase.from('debts').select('*').order('total_debt', { ascending: false }).range(0, 9999),
-        supabase.from('customers').select('*').order('name').range(0, 9999),
-        supabase.from('warehouse_expenses').select('*').order('expense_date', { ascending: false }).range(0, 9999),
+        fetchAll('invoices', 'invoice_date'),
+        fetchAll('treasury', 'transaction_date'),
+        fetchAll('checks', 'check_date', true),
+        fetchAll('debts', 'total_debt'),
+        fetchAll('customers', 'name', true),
+        fetchAll('warehouse_expenses', 'expense_date'),
       ]);
-      setInvoices(inv.data || []);
-      setTreasury(tres.data || []);
-      setChecks(chk.data || []);
-      setDebts(dbt.data || []);
-      setCustomers(cust.data || []);
-      setWarehouse(wh.data || []);
+      setInvoices(inv);
+      setTreasury(tres);
+      setChecks(chk);
+      setDebts(dbt);
+      setCustomers(cust);
+      setWarehouse(wh);
     } catch (err) {
       console.error('Load error:', err);
     }
@@ -915,7 +929,22 @@ export default function App() {
                 <label className="text-xs font-semibold text-slate-600">Order # / رقم</label>
                 <input value={formData.orderNumber || ''}
                   onChange={e => setFormData({ ...formData, orderNumber: e.target.value })}
+                  placeholder="Type to search..."
                   className="w-full px-3 py-2 rounded-lg border border-slate-200 text-sm" />
+                {formData.orderNumber && formData.orderNumber.length >= 2 && (
+                  <div className="mt-1 max-h-[120px] overflow-auto rounded border border-slate-200 bg-white">
+                    {invoices
+                      .filter(inv => (inv.order_number || '').includes(formData.orderNumber) || (inv.customer_name || '').includes(formData.orderNumber))
+                      .slice(0, 8)
+                      .map(inv => (
+                        <div key={inv.id} onClick={() => setFormData({ ...formData, orderNumber: inv.order_number, desc: inv.customer_name })}
+                          className="px-3 py-1.5 text-xs cursor-pointer hover:bg-blue-50 border-b border-slate-50">
+                          <span className="font-bold">{inv.order_number}</span> — <span style={{ direction: 'rtl' }}>{inv.customer_name}</span>
+                          <span className="text-slate-400 ml-1">{fE(inv.total_amount)}</span>
+                        </div>
+                      ))}
+                  </div>
+                )}
               </div>
               <div className="col-span-2">
                 <label className="text-xs font-semibold text-slate-600">Description / الوصف</label>
@@ -955,6 +984,7 @@ export default function App() {
 
             <div className="bg-emerald-100 rounded-lg px-3 py-2 mb-3">
               <span className="text-sm font-bold text-emerald-800">🏦 CASH REGISTER / الخزنة</span>
+              <span className="text-xs text-emerald-600 ml-2">(Loaded: {treasury.length} rows, Filtered: {filteredTreasury.length})</span>
             </div>
             <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-5">
               <Card title="Cash In" titleAr="وارد" value={fE(totalCashIn)} sub="Tap / اضغط" color="#10b981" onClick={() => setTreasuryDrill('in')} />
