@@ -1,6 +1,7 @@
 'use client';
 import { useState, useEffect } from 'react';
 import { supabase, dbInsert, dbUpdate } from '../lib/supabase';
+import { EXPENSE_CATS } from '../lib/utils';
 
 const ROLES = [
   { v: 'super_admin', l: '🔴 Super Admin', c: 'text-red-500' },
@@ -30,6 +31,7 @@ export default function SettingsTab({ user, users, onReload }) {
   const [f, setF] = useState({});
   const [permissions, setPermissions] = useState({});
   const [notifPrefs, setNotifPrefs] = useState({});
+  const [rules, setRules] = useState([]);
   const [loaded, setLoaded] = useState(false);
 
   useEffect(() => {
@@ -37,24 +39,24 @@ export default function SettingsTab({ user, users, onReload }) {
   }, []);
 
   const loadPrefs = async () => {
-    const [perms, notifs] = await Promise.all([
+    const [perms, notifs, rls] = await Promise.all([
       supabase.from('module_permissions').select('*'),
       supabase.from('notification_prefs').select('*'),
+      supabase.from('expense_rules').select('*').order('created_at', { ascending: false }),
     ]);
-    // Build permission map: {userId: {module: boolean}}
     const pMap = {};
     (perms.data || []).forEach(p => {
       if (!pMap[p.user_id]) pMap[p.user_id] = {};
       pMap[p.user_id][p.module_name] = p.has_access;
     });
     setPermissions(pMap);
-
     const nMap = {};
     (notifs.data || []).forEach(n => {
       if (!nMap[n.user_id]) nMap[n.user_id] = {};
       nMap[n.user_id][n.notif_type] = n.enabled;
     });
     setNotifPrefs(nMap);
+    setRules(rls.data || []);
     setLoaded(true);
   };
 
@@ -122,7 +124,7 @@ export default function SettingsTab({ user, users, onReload }) {
 
       {/* Section Tabs */}
       <div className="flex gap-1 mb-3 flex-wrap">
-        {[['roles', 'Team & Roles'], ['permissions', 'Module Access'], ['notifications', 'Notifications']].map(([v, l]) => (
+        {[['roles', 'Team & Roles'], ['permissions', 'Module Access'], ['notifications', 'Notifications'], ['rules', 'Category Rules / قواعد']].map(([v, l]) => (
           <button key={v} onClick={() => setSection(v)}
             className={'px-3 py-1.5 rounded-lg text-xs font-semibold transition ' + (section === v ? 'bg-slate-900 text-white' : 'bg-slate-100 text-slate-500')}>
             {l}
@@ -280,6 +282,86 @@ export default function SettingsTab({ user, users, onReload }) {
               ))}
             </tbody>
           </table>
+        </div>
+      )}
+
+      {/* ===== CATEGORY RULES ===== */}
+      {section === 'rules' && (
+        <div>
+          <div className="bg-white rounded-xl p-4 mb-3">
+            <h3 className="text-sm font-bold mb-2">Category Rules / قواعد التصنيف ({rules.length})</h3>
+            <p className="text-xs text-slate-500 mb-3">These rules auto-categorize transactions when imported. Exact description match only. You can edit, delete, or reverse any rule.</p>
+            {rules.length > 0 ? (
+              <div className="overflow-auto max-h-[500px]">
+                <table className="w-full border-collapse text-xs">
+                  <thead><tr className="bg-slate-50">
+                    <th className="px-3 py-2 text-left">Description Match / الوصف</th>
+                    <th className="px-3 py-2 text-left">Category / التصنيف</th>
+                    <th className="px-3 py-2 text-left">Subcategory / فرعي</th>
+                    <th className="px-3 py-2 text-center">Matches</th>
+                    <th className="px-3 py-2"></th>
+                  </tr></thead>
+                  <tbody>
+                    {rules.map(r => (
+                      <tr key={r.id} className="border-b border-slate-50">
+                        <td className="px-3 py-2 font-semibold" style={{direction:'rtl', maxWidth:'200px', overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap'}}>{r.description_match}</td>
+                        <td className="px-3 py-2">
+                          <select defaultValue={r.category || ''} onChange={async (e) => {
+                            try {
+                              await dbUpdate('expense_rules', r.id, { category: e.target.value }, user?.id);
+                              loadPrefs();
+                            } catch(err) { alert('Error: ' + err.message); }
+                          }} className="text-xs border rounded px-1 py-0.5 bg-amber-50 w-full">
+                            <option value="">None</option>
+                            {Object.entries(EXPENSE_CATS).map(([ar, en]) => <option key={ar} value={ar}>{en}</option>)}
+                          </select>
+                        </td>
+                        <td className="px-3 py-2">
+                          <input defaultValue={r.subcategory || ''} onBlur={async (e) => {
+                            if (e.target.value !== (r.subcategory || '')) {
+                              try {
+                                await dbUpdate('expense_rules', r.id, { subcategory: e.target.value }, user?.id);
+                                loadPrefs();
+                              } catch(err) { alert('Error: ' + err.message); }
+                            }
+                          }} className="text-xs border rounded px-1 py-0.5 bg-orange-50 w-full" />
+                        </td>
+                        <td className="px-3 py-2 text-center text-slate-400">—</td>
+                        <td className="px-3 py-2">
+                          <div className="flex gap-1">
+                            <button onClick={async () => {
+                              if (!confirm('Reverse this rule? All transactions matching "' + r.description_match + '" will be reset to Uncategorized.\n\nعكس هذه القاعدة؟')) return;
+                              try {
+                                const { data: matching } = await supabase.from('treasury').select('id').eq('category', r.category).ilike('description', r.description_match);
+                                for (const t of (matching || [])) {
+                                  await dbUpdate('treasury', t.id, { category: '', subcategory: '' }, user?.id);
+                                }
+                                alert('Reversed ' + (matching || []).length + ' transactions');
+                                onReload();
+                              } catch(err) { alert('Error: ' + err.message); }
+                            }} className="px-2 py-0.5 rounded border border-amber-300 text-amber-600 text-[10px] hover:bg-amber-50">
+                              Reverse / عكس
+                            </button>
+                            <button onClick={async () => {
+                              if (!confirm('Delete this rule?\nحذف هذه القاعدة؟')) return;
+                              try {
+                                await supabase.from('expense_rules').delete().eq('id', r.id);
+                                loadPrefs();
+                              } catch(err) { alert('Error: ' + err.message); }
+                            }} className="px-2 py-0.5 rounded border border-red-300 text-red-600 text-[10px] hover:bg-red-50">
+                              Delete / حذف
+                            </button>
+                          </div>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            ) : (
+              <div className="text-center text-slate-400 py-6">No rules yet. Rules are created when you categorize transactions.</div>
+            )}
+          </div>
         </div>
       )}
     </div>
