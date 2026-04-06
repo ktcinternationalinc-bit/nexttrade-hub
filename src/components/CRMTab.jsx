@@ -5,8 +5,9 @@ import { fE, fmt } from '../lib/utils';
 
 const GROUPS = ['Textiles', 'Leather', 'Pool', 'Industrial', 'Retail', 'Export', 'Other'];
 const TYPES = ['Trader', 'Manufacturer', 'Retailer', 'Wholesaler', 'Distributor', 'Agent'];
+const LEAD_SOURCES = ['Referral', 'Facebook', 'WhatsApp', 'Exhibition', 'Walk-in', 'Website', 'Cold Call', 'Existing'];
 
-export default function CRMTab({ customers, invoices, user, onReload, isAdmin, onSelectInvoice }) {
+export default function CRMTab({ customers, invoices, user, users, onReload, isAdmin, onSelectInvoice }) {
   const [sel, setSel] = useState(null);
   const [q, setQ] = useState('');
   const [groupF, setGroupF] = useState('all');
@@ -18,7 +19,17 @@ export default function CRMTab({ customers, invoices, user, onReload, isAdmin, o
   const [editingClient, setEditingClient] = useState(false);
   const [notes, setNotes] = useState([]);
   const [followUps, setFollowUps] = useState([]);
+  const [allNotes, setAllNotes] = useState([]);
+  const [notesLoaded, setNotesLoaded] = useState(false);
   const [f, setF] = useState({});
+
+  // Load all notes once for card display
+  const loadAllNotes = async () => {
+    const { data } = await supabase.from('client_notes').select('customer_id, created_at, created_by').order('created_at', { ascending: false });
+    setAllNotes(data || []);
+    setNotesLoaded(true);
+  };
+  if (!notesLoaded) loadAllNotes();
 
   const loadClientData = async (client) => {
     setSel(client);
@@ -33,6 +44,19 @@ export default function CRMTab({ customers, invoices, user, onReload, isAdmin, o
 
   const custInvoices = (c) => invoices.filter(i => i.customer_id === (c ? c.id : null) || (c && i.customer_name === c.name));
 
+  // Get last note info for a customer
+  const getLastNote = (customerId) => {
+    const cn = allNotes.filter(n => n.customer_id === customerId);
+    if (cn.length === 0) return null;
+    return cn[0]; // already sorted desc
+  };
+
+  // Get last order for a customer
+  const getLastOrder = (c) => {
+    const invs = custInvoices(c).sort((a, b) => (b.invoice_date || '').localeCompare(a.invoice_date || ''));
+    return invs.length > 0 ? invs[0] : null;
+  };
+
   const filtered = useMemo(() => {
     let arr = customers.filter(c => {
       if (!isAdmin && c.restricted) return false;
@@ -42,14 +66,38 @@ export default function CRMTab({ customers, invoices, user, onReload, isAdmin, o
       return true;
     });
     if (sortBy === 'alpha') arr.sort((a, b) => (a.name || '').localeCompare(b.name || ''));
+    if (sortBy === 'alpha_rev') arr.sort((a, b) => (b.name || '').localeCompare(a.name || ''));
     if (sortBy === 'most_orders') arr.sort((a, b) => custInvoices(b).length - custInvoices(a).length);
     if (sortBy === 'top_sales') arr.sort((a, b) => {
       const aT = custInvoices(a).reduce((s, i) => s + Number(i.total_amount || 0), 0);
       const bT = custInvoices(b).reduce((s, i) => s + Number(i.total_amount || 0), 0);
       return bT - aT;
     });
+    if (sortBy === 'latest_note') arr.sort((a, b) => {
+      const aN = getLastNote(a.id);
+      const bN = getLastNote(b.id);
+      if (!aN && !bN) return 0;
+      if (!aN) return 1;
+      if (!bN) return -1;
+      return (bN.created_at || '').localeCompare(aN.created_at || '');
+    });
+    if (sortBy === 'earliest_note') arr.sort((a, b) => {
+      const aN = getLastNote(a.id);
+      const bN = getLastNote(b.id);
+      if (!aN && !bN) return 0;
+      if (!aN) return -1;
+      if (!bN) return 1;
+      return (aN.created_at || '').localeCompare(bN.created_at || '');
+    });
+    if (sortBy === 'no_notes') arr.sort((a, b) => {
+      const aN = getLastNote(a.id);
+      const bN = getLastNote(b.id);
+      if (!aN && bN) return -1;
+      if (aN && !bN) return 1;
+      return 0;
+    });
     return arr;
-  }, [customers, q, groupF, typeF, sortBy, invoices]);
+  }, [customers, q, groupF, typeF, sortBy, invoices, allNotes]);
 
   const groups = [...new Set(customers.map(c => c.group_name).filter(Boolean))].sort();
 
@@ -63,7 +111,7 @@ export default function CRMTab({ customers, invoices, user, onReload, isAdmin, o
         industry: f.industry || '', lead_source: f.leadSource || '',
         credit_limit: f.creditLimit ? Number(f.creditLimit) : null, status: 'active',
       }, user?.id);
-      setShowAdd(false); setF({}); onReload();
+      setShowAdd(false); setF({}); onReload(); loadAllNotes();
     } catch (err) { alert('Error / خطأ: ' + err.message); }
   };
 
@@ -74,6 +122,7 @@ export default function CRMTab({ customers, invoices, user, onReload, isAdmin, o
         name: f.name || sel.name, name_ar: f.nameAr || sel.name_ar, name_en: f.nameEn || sel.name_en,
         phone: f.phone || sel.phone, email: f.email || sel.email, address: f.address || sel.address,
         city: f.city || sel.city, group_name: f.group || sel.group_name, client_type: f.clientType || sel.client_type,
+        lead_source: f.leadSource || sel.lead_source,
       }, user?.id);
       setEditingClient(false); setF({}); onReload();
       loadClientData({...sel, name: f.name || sel.name});
@@ -84,22 +133,32 @@ export default function CRMTab({ customers, invoices, user, onReload, isAdmin, o
     if (!f.noteText || !sel) return;
     try {
       await dbInsert('client_notes', { customer_id: sel.id, note_text: f.noteText }, user?.id);
-      setShowNote(false); setF({}); loadClientData(sel);
+      setShowNote(false); setF({}); loadClientData(sel); loadAllNotes();
     } catch (err) { alert('Error / خطأ: ' + err.message); }
   };
 
   const handleAddFollowUp = async () => {
     if (!f.task || !f.dueDate || !sel) return;
     try {
+      const assignTo = f.assignTo || user?.id;
       await dbInsert('follow_ups', {
         customer_id: sel.id, task: f.task, due_date: f.dueDate,
-        due_time: f.dueTime || '09:00',
+        due_time: f.dueTime || '09:00', assigned_to: assignTo,
       }, user?.id);
+      // Create calendar event for assignee
       await dbInsert('calendar_events', {
         title: 'Follow-up: ' + f.task + ' (' + sel.name + ')',
         event_date: f.dueDate, event_time: f.dueTime || '09:00',
-        event_type: 'call', customer_id: sel.id,
+        event_type: 'call', customer_id: sel.id, assigned_to: assignTo,
       }, user?.id);
+      // Also create on creator's calendar if different from assignee
+      if (assignTo && assignTo !== user?.id) {
+        await dbInsert('calendar_events', {
+          title: '[Assigned] Follow-up: ' + f.task + ' (' + sel.name + ') → ' + (users?.find(u => u.id === assignTo)?.name || ''),
+          event_date: f.dueDate, event_time: f.dueTime || '09:00',
+          event_type: 'call', customer_id: sel.id, assigned_to: user?.id,
+        }, user?.id);
+      }
       setShowFollowUp(false); setF({}); loadClientData(sel);
     } catch (err) { alert('Error / خطأ: ' + err.message); }
   };
@@ -111,6 +170,7 @@ export default function CRMTab({ customers, invoices, user, onReload, isAdmin, o
     } catch (err) { alert('Error / خطأ: ' + err.message); }
   };
 
+  // ===== LIST VIEW =====
   if (!sel) return (
     <div>
       <div className="flex justify-between flex-wrap gap-2 mb-3">
@@ -132,9 +192,13 @@ export default function CRMTab({ customers, invoices, user, onReload, isAdmin, o
           {TYPES.map(t => <option key={t} value={t}>{t}</option>)}
         </select>
         <select value={sortBy} onChange={e => setSortBy(e.target.value)} className="px-2 py-1 rounded border border-slate-200 text-xs">
-          <option value="alpha">A-Z</option>
-          <option value="most_orders">Most Orders</option>
-          <option value="top_sales">Top Sales</option>
+          <option value="alpha">A-Z / أبجدي</option>
+          <option value="alpha_rev">Z-A / عكسي</option>
+          <option value="most_orders">Most Orders / أكثر أوامر</option>
+          <option value="top_sales">Top Sales / أعلى مبيعات</option>
+          <option value="latest_note">Last Note (newest) / آخر ملاحظة</option>
+          <option value="earliest_note">Last Note (oldest) / أقدم ملاحظة</option>
+          <option value="no_notes">No Recent Notes / بدون ملاحظات</option>
         </select>
       </div>
       <div className="grid grid-cols-3 gap-3 mb-3">
@@ -159,20 +223,28 @@ export default function CRMTab({ customers, invoices, user, onReload, isAdmin, o
             <div><label className="text-[10px] font-semibold">Group</label>
               <select value={f.group||''} onChange={e=>setF({...f,group:e.target.value})} className="w-full px-3 py-2 rounded border text-sm">
                 <option value="">Select...</option>{GROUPS.map(g=><option key={g} value={g}>{g}</option>)}</select></div>
-            <div><label className="text-[10px] font-semibold">Type</label>
+            <div><label className="text-[10px] font-semibold">Type / النوع</label>
               <select value={f.clientType||''} onChange={e=>setF({...f,clientType:e.target.value})} className="w-full px-3 py-2 rounded border text-sm">
                 <option value="">Select...</option>{TYPES.map(t=><option key={t} value={t}>{t}</option>)}</select></div>
+            <div><label className="text-[10px] font-semibold">Industry / القطاع</label>
+              <input value={f.industry||''} onChange={e=>setF({...f,industry:e.target.value})} className="w-full px-3 py-2 rounded border text-sm" /></div>
+            <div><label className="text-[10px] font-semibold">Lead Source / المصدر</label>
+              <select value={f.leadSource||''} onChange={e=>setF({...f,leadSource:e.target.value})} className="w-full px-3 py-2 rounded border text-sm">
+                <option value="">Select...</option>{LEAD_SOURCES.map(s=><option key={s} value={s}>{s}</option>)}</select></div>
             <div><label className="text-[10px] font-semibold">Phone</label>
               <input value={f.phone||''} onChange={e=>setF({...f,phone:e.target.value})} className="w-full px-3 py-2 rounded border text-sm" /></div>
             <div><label className="text-[10px] font-semibold">City</label>
               <input value={f.city||''} onChange={e=>setF({...f,city:e.target.value})} className="w-full px-3 py-2 rounded border text-sm" /></div>
-            <div><label className="text-[10px] font-semibold">Credit Limit</label>
+            <div><label className="text-[10px] font-semibold">Credit Limit / حد ائتمان</label>
               <input type="number" value={f.creditLimit||''} onChange={e=>setF({...f,creditLimit:e.target.value})} className="w-full px-3 py-2 rounded border text-sm" /></div>
-            <div><label className="text-[10px] font-semibold">Industry</label>
-              <input value={f.industry||''} onChange={e=>setF({...f,industry:e.target.value})} className="w-full px-3 py-2 rounded border text-sm" /></div>
+            <div><label className="text-[10px] font-semibold">Address / العنوان</label>
+              <input value={f.address||''} onChange={e=>setF({...f,address:e.target.value})} className="w-full px-3 py-2 rounded border text-sm" /></div>
           </div>
+          <div className="mt-2"><label className="text-[10px] font-semibold">Initial Notes / ملاحظات أولية</label>
+            <textarea value={f.initialNotes||''} onChange={e=>setF({...f,initialNotes:e.target.value})} rows={2} className="w-full px-3 py-2 rounded border text-sm" /></div>
           <div className="flex gap-2 mt-3">
-            <button onClick={handleAddClient} className="px-4 py-2 bg-emerald-500 text-white rounded-lg text-sm font-semibold">Save / حفظ</button>
+            <button onClick={async () => { await handleAddClient(); if (f.initialNotes && f.name) { /* note added separately after client creation */ } }}
+              className="px-4 py-2 bg-emerald-500 text-white rounded-lg text-sm font-semibold">Save / حفظ</button>
             <button onClick={()=>setShowAdd(false)} className="px-4 py-2 border border-slate-200 rounded-lg text-sm">Cancel / إلغاء</button>
           </div>
         </div>
@@ -182,6 +254,9 @@ export default function CRMTab({ customers, invoices, user, onReload, isAdmin, o
           const invs = custInvoices(c);
           const total = invs.reduce((a,i) => a + Number(i.total_amount||0), 0);
           const owed = invs.reduce((a,i) => a + Number(i.outstanding||0), 0);
+          const lastNote = getLastNote(c.id);
+          const lastOrder = getLastOrder(c);
+          const noteUser = lastNote ? users?.find(u => u.id === lastNote.created_by) : null;
           return (
             <div key={c.id} onClick={()=>loadClientData(c)} className="bg-white rounded-lg p-3 cursor-pointer border border-slate-200 hover:shadow-md transition">
               <div className="text-sm font-bold" style={{direction:'rtl'}}>{c.name}</div>
@@ -189,6 +264,7 @@ export default function CRMTab({ customers, invoices, user, onReload, isAdmin, o
               <div className="flex gap-1 mt-1 flex-wrap">
                 {c.group_name && <span className="px-1.5 py-0.5 bg-purple-100 text-purple-700 rounded text-[9px]">{c.group_name}</span>}
                 {c.client_type && <span className="px-1.5 py-0.5 bg-blue-100 text-blue-700 rounded text-[9px]">{c.client_type}</span>}
+                {c.lead_source && <span className="px-1.5 py-0.5 bg-green-100 text-green-700 rounded text-[9px]">{c.lead_source}</span>}
               </div>
               <div className="flex justify-between mt-2">
                 <div><div className="text-[9px] text-slate-400">Sales</div>
@@ -196,12 +272,27 @@ export default function CRMTab({ customers, invoices, user, onReload, isAdmin, o
                 <div className="text-right"><div className="text-[9px] text-slate-400">{invs.length} orders</div>
                   <div className={'text-xs font-bold '+(owed>0?'text-red-500':'text-emerald-500')}>{owed>0?fmt(owed):'✓'}</div></div>
               </div>
+              {/* Last Note Date */}
+              <div className="mt-1.5 border-t border-slate-100 pt-1.5">
+                {lastNote ? (
+                  <div className="text-[10px] text-blue-600">
+                    Last note: {new Date(lastNote.created_at).toLocaleDateString()}
+                    {noteUser && <span className="text-slate-400"> — {noteUser.name}</span>}
+                  </div>
+                ) : (
+                  <div className="text-[10px] text-red-500 font-semibold">No notes yet</div>
+                )}
+                {lastOrder && (
+                  <div className="text-[10px] text-purple-600">Last order: #{lastOrder.order_number}</div>
+                )}
+              </div>
             </div>);
         })}
       </div>
     </div>
   );
 
+  // ===== DETAIL VIEW =====
   const invs = custInvoices(sel);
   const totalSales = invs.reduce((a,i)=>a+Number(i.total_amount||0),0);
   const totalCollected = invs.reduce((a,i)=>a+Number(i.total_collected||0),0);
@@ -224,6 +315,9 @@ export default function CRMTab({ customers, invoices, user, onReload, isAdmin, o
             <div><label className="text-[10px] font-semibold">Type</label>
               <select value={f.clientType!==undefined?f.clientType:(sel.client_type||'')} onChange={e=>setF({...f,clientType:e.target.value})} className="w-full px-2 py-1.5 border rounded text-sm">
                 <option value="">None</option>{TYPES.map(t=><option key={t} value={t}>{t}</option>)}</select></div>
+            <div><label className="text-[10px] font-semibold">Lead Source</label>
+              <select value={f.leadSource!==undefined?f.leadSource:(sel.lead_source||'')} onChange={e=>setF({...f,leadSource:e.target.value})} className="w-full px-2 py-1.5 border rounded text-sm">
+                <option value="">None</option>{LEAD_SOURCES.map(s=><option key={s} value={s}>{s}</option>)}</select></div>
             <div><label className="text-[10px] font-semibold">Phone</label>
               <input value={f.phone!==undefined?f.phone:(sel.phone||'')} onChange={e=>setF({...f,phone:e.target.value})} className="w-full px-2 py-1.5 border rounded text-sm" /></div>
             <div><label className="text-[10px] font-semibold">City</label>
@@ -242,6 +336,8 @@ export default function CRMTab({ customers, invoices, user, onReload, isAdmin, o
                 <div className="flex gap-1 mt-1 flex-wrap">
                   {sel.group_name && <span className="px-2 py-0.5 bg-purple-100 text-purple-700 rounded text-xs">{sel.group_name}</span>}
                   {sel.client_type && <span className="px-2 py-0.5 bg-blue-100 text-blue-700 rounded text-xs">{sel.client_type}</span>}
+                  {sel.industry && <span className="px-2 py-0.5 bg-amber-100 text-amber-700 rounded text-xs">{sel.industry}</span>}
+                  {sel.lead_source && <span className="px-2 py-0.5 bg-green-100 text-green-700 rounded text-xs">{sel.lead_source}</span>}
                   {sel.city && <span className="px-2 py-0.5 bg-slate-100 text-slate-600 rounded text-xs">{sel.city}</span>}
                 </div>
               </div>
@@ -290,9 +386,13 @@ export default function CRMTab({ customers, invoices, user, onReload, isAdmin, o
             <input value={f.task||''} onChange={e=>setF({...f,task:e.target.value})} placeholder="Task / المهمة" className="col-span-2 px-3 py-2 rounded border text-sm" />
             <input type="date" value={f.dueDate||''} onChange={e=>setF({...f,dueDate:e.target.value})} className="px-3 py-2 rounded border text-sm" />
             <input type="time" value={f.dueTime||'09:00'} onChange={e=>setF({...f,dueTime:e.target.value})} className="px-3 py-2 rounded border text-sm" />
+            <select value={f.assignTo||''} onChange={e=>setF({...f,assignTo:e.target.value})} className="col-span-2 px-3 py-2 rounded border text-sm">
+              <option value="">Assign to me / تعيين لي</option>
+              {(users || []).map(u => <option key={u.id} value={u.id}>{u.name}</option>)}
+            </select>
           </div>
           <div className="flex gap-2">
-            <button onClick={handleAddFollowUp} className="px-3 py-1.5 bg-amber-500 text-white rounded text-xs font-semibold">Save</button>
+            <button onClick={handleAddFollowUp} className="px-3 py-1.5 bg-amber-500 text-white rounded text-xs font-semibold">Save + Add to Calendar / حفظ</button>
             <button onClick={()=>setShowFollowUp(false)} className="px-3 py-1.5 border border-slate-200 rounded text-xs">Cancel</button>
           </div>
         </div>
@@ -300,23 +400,40 @@ export default function CRMTab({ customers, invoices, user, onReload, isAdmin, o
       {pendingFU.length > 0 && (
         <div className="bg-amber-50 rounded-xl p-4 mb-3 border border-amber-200">
           <h4 className="text-sm font-bold text-amber-800 mb-2">Follow-ups ({pendingFU.length})</h4>
-          {pendingFU.map(fu => (
-            <div key={fu.id} className="flex justify-between items-center py-2 border-b border-amber-100">
-              <div><div className="text-xs font-semibold">{fu.task}</div><div className="text-[10px] text-slate-500">{fu.due_date}</div></div>
-              <button onClick={()=>completeFollowUp(fu.id)} className="px-2 py-0.5 bg-emerald-500 text-white rounded text-[10px]">Done / تم</button>
-            </div>
-          ))}
+          {pendingFU.map(fu => {
+            const isOverdue = fu.due_date && fu.due_date < new Date().toISOString().substring(0, 10);
+            const assignedName = users?.find(u => u.id === fu.assigned_to)?.name;
+            return (
+              <div key={fu.id} className={'flex justify-between items-center py-2 border-b border-amber-100 ' + (isOverdue ? 'bg-red-50 -mx-2 px-2 rounded' : '')}>
+                <div>
+                  <div className={'text-xs font-semibold ' + (isOverdue ? 'text-red-700' : '')}>{fu.task}</div>
+                  <div className="text-[10px] text-slate-500">
+                    {fu.due_date} {fu.due_time ? fu.due_time.substring(0, 5) : ''}
+                    {assignedName && <span className="ml-1 text-purple-600">→ {assignedName}</span>}
+                    {isOverdue && <span className="ml-1 text-red-600 font-bold">OVERDUE</span>}
+                  </div>
+                </div>
+                <button onClick={()=>completeFollowUp(fu.id)} className="px-2 py-0.5 bg-emerald-500 text-white rounded text-[10px]">Done / تم</button>
+              </div>
+            );
+          })}
         </div>
       )}
       {notes.length > 0 && (
         <div className="bg-white rounded-xl p-4 mb-3 border border-slate-200">
           <h4 className="text-sm font-bold mb-2">Notes / ملاحظات ({notes.length})</h4>
-          {notes.map(n => (
-            <div key={n.id} className="py-2 border-b border-slate-50">
-              <div className="text-xs">{n.note_text}</div>
-              <div className="text-[10px] text-slate-400 mt-1">{new Date(n.created_at).toLocaleString()}</div>
-            </div>
-          ))}
+          {notes.map(n => {
+            const noteUser = users?.find(u => u.id === n.created_by);
+            return (
+              <div key={n.id} className="py-2 border-b border-slate-50">
+                <div className="text-xs">{n.note_text}</div>
+                <div className="text-[10px] text-slate-400 mt-1">
+                  {noteUser && <span className="font-semibold text-blue-500 mr-1">{noteUser.name}</span>}
+                  {new Date(n.created_at).toLocaleString()}
+                </div>
+              </div>
+            );
+          })}
         </div>
       )}
       {invs.length > 0 && (

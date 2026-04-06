@@ -6,15 +6,16 @@ const EVENT_TYPES = [{v:'task',l:'Task / مهمة',c:'#3b82f6'},{v:'meeting',l:'
 const DAYS = ['Sun','Mon','Tue','Wed','Thu','Fri','Sat'];
 const MONTHS_AR = ['يناير','فبراير','مارس','أبريل','مايو','يونيو','يوليو','أغسطس','سبتمبر','أكتوبر','نوفمبر','ديسمبر'];
 
-export default function CalendarTab({ customers, user, onReload }) {
+export default function CalendarTab({ customers, user, users, onReload }) {
   const [events, setEvents] = useState([]);
   const [loaded, setLoaded] = useState(false);
   const [view, setView] = useState('month');
   const [curDate, setCurDate] = useState(new Date());
   const [selDate, setSelDate] = useState(null);
   const [showAdd, setShowAdd] = useState(false);
-  const [selEvent, setSelEvent] = useState(null);
   const [f, setF] = useState({});
+  const [selectedUsers, setSelectedUsers] = useState([]);
+  const [calView, setCalView] = useState('my'); // my | team
 
   const loadEvents = async () => {
     const { data } = await supabase.from('calendar_events').select('*').order('event_date');
@@ -30,31 +31,44 @@ export default function CalendarTab({ customers, user, onReload }) {
   const firstDay = new Date(year, month, 1).getDay();
   const todayStr = new Date().toISOString().substring(0, 10);
 
-  const monthEvents = useMemo(() => {
-    const prefix = year + '-' + String(month + 1).padStart(2, '0');
-    return events.filter(e => (e.event_date || '').startsWith(prefix));
-  }, [events, year, month]);
+  // Filter events based on calView
+  const visibleEvents = useMemo(() => {
+    if (calView === 'my') return events.filter(e => e.assigned_to === user?.id || e.created_by === user?.id);
+    return events; // team view shows all
+  }, [events, calView, user]);
 
   const dayEvents = (day) => {
     const ds = year + '-' + String(month + 1).padStart(2, '0') + '-' + String(day).padStart(2, '0');
-    return events.filter(e => e.event_date === ds);
+    return visibleEvents.filter(e => e.event_date === ds);
   };
 
-  const selectedDayEvents = selDate ? events.filter(e => e.event_date === selDate) : [];
+  const selectedDayEvents = selDate ? visibleEvents.filter(e => e.event_date === selDate) : [];
 
   const prevMonth = () => setCurDate(new Date(year, month - 1, 1));
   const nextMonth = () => setCurDate(new Date(year, month + 1, 1));
 
+  const toggleUser = (uid) => {
+    setSelectedUsers(prev => prev.includes(uid) ? prev.filter(id => id !== uid) : [...prev, uid]);
+  };
+
+  const selectAllUsers = () => {
+    if (!users) return;
+    setSelectedUsers(users.map(u => u.id));
+  };
+
   const handleAddEvent = async () => {
     if (!f.title || !f.eventDate) return;
     try {
-      await dbInsert('calendar_events', {
-        title: f.title, event_date: f.eventDate, event_time: f.eventTime || null,
-        event_type: f.eventType || 'task', assigned_to: user?.id,
-        customer_id: f.customerId || null, recurring: f.recurring || 'none',
-        recurring_end: f.recurringEnd || null,
-      }, user?.id);
-      setShowAdd(false); setF({}); loadEvents();
+      const assignees = selectedUsers.length > 0 ? selectedUsers : [user?.id];
+      for (const uid of assignees) {
+        await dbInsert('calendar_events', {
+          title: f.title, event_date: f.eventDate, event_time: f.eventTime || null,
+          event_type: f.eventType || 'task', assigned_to: uid,
+          customer_id: f.customerId || null, recurring: f.recurring || 'none',
+          recurring_end: f.recurringEnd || null,
+        }, user?.id);
+      }
+      setShowAdd(false); setF({}); setSelectedUsers([]); loadEvents();
     } catch (err) { alert('Error / خطأ: ' + err.message); }
   };
 
@@ -65,14 +79,22 @@ export default function CalendarTab({ customers, user, onReload }) {
     } catch (err) { alert('Error / خطأ: ' + err.message); }
   };
 
+  const getUserName = (id) => users?.find(u => u.id === id)?.name || '';
+
   return (
     <div>
       <div className="flex justify-between flex-wrap gap-2 mb-3">
         <h2 className="text-xl font-extrabold">Calendar / التقويم</h2>
-        <div className="flex gap-2 items-center">
+        <div className="flex gap-2 items-center flex-wrap">
+          <div className="flex bg-slate-100 rounded-lg p-0.5">
+            <button onClick={() => setCalView('my')}
+              className={'px-3 py-1 rounded text-xs font-semibold transition ' + (calView === 'my' ? 'bg-white shadow text-slate-900' : 'text-slate-500')}>My Calendar</button>
+            <button onClick={() => setCalView('team')}
+              className={'px-3 py-1 rounded text-xs font-semibold transition ' + (calView === 'team' ? 'bg-white shadow text-slate-900' : 'text-slate-500')}>Team</button>
+          </div>
           <button onClick={() => setView(view === 'month' ? 'day' : 'month')}
             className="px-3 py-1.5 bg-slate-100 rounded-lg text-xs font-semibold">{view === 'month' ? 'Day View' : 'Month View'}</button>
-          <button onClick={() => { setShowAdd(true); setF({eventDate: selDate || todayStr}); }}
+          <button onClick={() => { setShowAdd(true); setF({eventDate: selDate || todayStr}); setSelectedUsers([]); }}
             className="px-3 py-1.5 bg-blue-500 text-white rounded-lg text-xs font-semibold">+ Event / حدث</button>
         </div>
       </div>
@@ -107,7 +129,7 @@ export default function CalendarTab({ customers, user, onReload }) {
                 <option value="weekly">Weekly / أسبوعي</option><option value="biweekly">Biweekly</option>
                 <option value="monthly">Monthly / شهري</option></select></div>
             {f.recurring && f.recurring !== 'none' && (
-              <div><label className="text-[10px] font-semibold">Recurring End</label>
+              <div><label className="text-[10px] font-semibold">Until / حتى</label>
                 <input type="date" value={f.recurringEnd||''} onChange={e=>setF({...f,recurringEnd:e.target.value})} className="w-full px-3 py-2 rounded border text-sm" /></div>
             )}
             <div><label className="text-[10px] font-semibold">Client / العميل</label>
@@ -115,9 +137,26 @@ export default function CalendarTab({ customers, user, onReload }) {
                 <option value="">None</option>
                 {customers.map(c=><option key={c.id} value={c.id}>{c.name}</option>)}</select></div>
           </div>
+          {/* Multi-assign */}
+          <div className="mt-3">
+            <label className="text-[10px] font-semibold block mb-1">Assign To / تعيين إلى</label>
+            <div className="flex gap-2 flex-wrap items-center">
+              <button onClick={selectAllUsers}
+                className={'px-3 py-1.5 rounded-lg text-xs font-semibold border-2 transition ' + (selectedUsers.length === (users||[]).length ? 'border-blue-500 bg-blue-50 text-blue-700' : 'border-slate-200 text-slate-500')}>
+                All Team / كل الفريق
+              </button>
+              {(users || []).map(u => (
+                <button key={u.id} onClick={() => toggleUser(u.id)}
+                  className={'px-3 py-1.5 rounded-lg text-xs font-semibold border-2 transition ' + (selectedUsers.includes(u.id) ? 'border-blue-500 bg-blue-50 text-blue-700' : 'border-slate-200 text-slate-500')}>
+                  {selectedUsers.includes(u.id) ? '✓ ' : ''}{u.name}
+                </button>
+              ))}
+            </div>
+            {selectedUsers.length === 0 && <div className="text-[10px] text-slate-400 mt-1">No selection = assigned to you</div>}
+          </div>
           <div className="flex gap-2 mt-3">
             <button onClick={handleAddEvent} className="px-4 py-2 bg-emerald-500 text-white rounded-lg text-sm font-semibold">Save / حفظ</button>
-            <button onClick={()=>setShowAdd(false)} className="px-4 py-2 border border-slate-200 rounded-lg text-sm">Cancel / إلغاء</button>
+            <button onClick={()=>{setShowAdd(false);setSelectedUsers([]);}} className="px-4 py-2 border border-slate-200 rounded-lg text-sm">Cancel / إلغاء</button>
           </div>
         </div>
       )}
@@ -158,14 +197,19 @@ export default function CalendarTab({ customers, user, onReload }) {
             <div className="text-sm font-bold">{selDate || todayStr}</div>
             <button onClick={() => {const d = new Date(selDate || todayStr); d.setDate(d.getDate()+1); setSelDate(d.toISOString().substring(0,10));}} className="px-2 py-1 border rounded text-xs">→</button>
           </div>
-          {(events.filter(e => e.event_date === (selDate || todayStr))).length > 0 ? (
-            events.filter(e => e.event_date === (selDate || todayStr)).sort((a,b) => (a.event_time||'').localeCompare(b.event_time||'')).map(ev => {
+          {(visibleEvents.filter(e => e.event_date === (selDate || todayStr))).length > 0 ? (
+            visibleEvents.filter(e => e.event_date === (selDate || todayStr)).sort((a,b) => (a.event_time||'').localeCompare(b.event_time||'')).map(ev => {
               const tc = EVENT_TYPES.find(t=>t.v===ev.event_type)?.c || '#3b82f6';
+              const assignedName = getUserName(ev.assigned_to);
               return (
                 <div key={ev.id} className={'flex justify-between items-center p-3 rounded-lg mb-2 border ' + (ev.completed ? 'opacity-50' : '')} style={{borderColor:tc,background:tc+'10'}}>
                   <div>
                     <div className={'text-sm font-bold ' + (ev.completed ? 'line-through' : '')}>{ev.title}</div>
-                    <div className="text-[10px] text-slate-500">{ev.event_time || 'All day'} | {ev.event_type}</div>
+                    <div className="text-[10px] text-slate-500">
+                      {ev.event_time || 'All day'} | {ev.event_type}
+                      {calView === 'team' && assignedName && <span className="ml-1 text-purple-600">→ {assignedName}</span>}
+                      {ev.recurring && ev.recurring !== 'none' && <span className="ml-1">🔄 {ev.recurring}</span>}
+                    </div>
                   </div>
                   {!ev.completed && <button onClick={() => completeEvent(ev)} className="px-2 py-1 bg-emerald-500 text-white rounded text-[10px]">Done / تم</button>}
                 </div>
@@ -177,17 +221,22 @@ export default function CalendarTab({ customers, user, onReload }) {
         </div>
       )}
 
-      {/* Selected Date Events */}
+      {/* Selected Date Events (Month View) */}
       {view === 'month' && selDate && selectedDayEvents.length > 0 && (
         <div className="bg-white rounded-xl p-4 mt-3">
           <h3 className="text-sm font-bold mb-2">{selDate}</h3>
           {selectedDayEvents.sort((a,b) => (a.event_time||'').localeCompare(b.event_time||'')).map(ev => {
             const tc = EVENT_TYPES.find(t=>t.v===ev.event_type)?.c || '#3b82f6';
+            const assignedName = getUserName(ev.assigned_to);
             return (
               <div key={ev.id} className={'flex justify-between items-center p-2 rounded mb-1 ' + (ev.completed ? 'opacity-50' : '')} style={{background:tc+'10'}}>
                 <div>
                   <div className={'text-xs font-semibold ' + (ev.completed ? 'line-through' : '')}>{ev.title}</div>
-                  <div className="text-[10px] text-slate-500">{ev.event_time || 'All day'} | {ev.event_type}{ev.recurring && ev.recurring !== 'none' ? ' | \u{1F504} ' + ev.recurring : ''}</div>
+                  <div className="text-[10px] text-slate-500">
+                    {ev.event_time || 'All day'} | {ev.event_type}
+                    {calView === 'team' && assignedName && <span className="ml-1 text-purple-600">→ {assignedName}</span>}
+                    {ev.recurring && ev.recurring !== 'none' ? ' | 🔄 ' + ev.recurring : ''}
+                  </div>
                 </div>
                 {!ev.completed && <button onClick={() => completeEvent(ev)} className="px-2 py-0.5 bg-emerald-500 text-white rounded text-[10px]">Done</button>}
               </div>
