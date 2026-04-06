@@ -15,6 +15,33 @@ export default function TicketsTab({ customers, user, onReload }) {
   const [showAdd, setShowAdd] = useState(false);
   const [f, setF] = useState({});
   const [loaded, setLoaded] = useState(false);
+  const [listening, setListening] = useState(false);
+
+  const startVoice = () => {
+    if (!('webkitSpeechRecognition' in window) && !('SpeechRecognition' in window)) {
+      alert('Voice not supported in this browser / المتصفح لا يدعم الصوت');
+      return;
+    }
+    const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+    const recognition = new SR();
+    recognition.lang = 'en-US';
+    recognition.continuous = false;
+    recognition.interimResults = false;
+    setListening(true);
+    recognition.onresult = (event) => {
+      const text = event.results[0][0].transcript;
+      setListening(false);
+      // Smart parsing
+      let priority = 'medium';
+      if (text.toLowerCase().includes('urgent') || text.toLowerCase().includes('high')) priority = 'high';
+      if (text.toLowerCase().includes('low')) priority = 'low';
+      setF({ title: text, priority: priority });
+      setShowAdd(true);
+    };
+    recognition.onerror = () => setListening(false);
+    recognition.onend = () => setListening(false);
+    recognition.start();
+  };
 
   const loadTickets = async () => {
     const { data } = await supabase.from('tickets').select('*').order('created_at', { ascending: false });
@@ -121,6 +148,9 @@ export default function TicketsTab({ customers, user, onReload }) {
             className="px-3 py-1.5 rounded-lg border border-slate-200 text-xs w-28" />
           <button onClick={() => { setShowAdd(true); setF({}); }}
             className="px-3 py-1.5 bg-blue-500 text-white rounded-lg text-xs font-semibold">+ Ticket / تذكرة</button>
+          <button onClick={startVoice}
+            className={'px-3 py-1.5 rounded-lg text-xs font-semibold ' + (listening ? 'bg-red-500 text-white animate-pulse' : 'bg-amber-500 text-white')}>
+            {listening ? '🎙 Listening... / جاري الاستماع' : '🎤 Voice / صوت'}</button>
         </div>
       </div>
       <div className="flex gap-2 mb-3 flex-wrap">
