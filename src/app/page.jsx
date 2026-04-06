@@ -2,6 +2,7 @@
 import { useState, useEffect, useMemo, useCallback } from 'react';
 import { supabase, dbInsert, dbUpdate, dbDelete } from '../lib/supabase';
 import { fmt, fE, COLORS, EXPENSE_CATS, getReconStatus, STATUS_STYLES, today, inRange, monthOf, getWarehouseCat } from '../lib/utils';
+import * as XLSX from 'xlsx';
 import {
   BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip,
   ResponsiveContainer, Legend
@@ -18,6 +19,7 @@ const TABS = [
   { id: 'checks', label: 'Checks / شيكات', icon: '📝' },
   { id: 'debts', label: 'Debts / المديونية', icon: '⚠️' },
   { id: 'warehouse', label: 'Warehouse / المخزن', icon: '🏭' },
+  { id: 'inventory', label: 'Inventory / المخزون', icon: '📦' },
   { id: 'crm', label: 'CRM', icon: '🤝' },
   { id: 'tickets', label: 'Tickets / تذاكر', icon: '🎫' },
   { id: 'calendar', label: 'Calendar / تقويم', icon: '📅' },
@@ -51,6 +53,7 @@ export default function App() {
   const [warehouse, setWarehouse] = useState([]);
   const [invoiceItems, setInvoiceItems] = useState([]);
   const [expenseRules, setExpenseRules] = useState([]);
+  const [inventory, setInventory] = useState([]);
 
   // Modals
   const [selectedInvoice, setSelectedInvoice] = useState(null);
@@ -62,6 +65,10 @@ export default function App() {
   const [checkView, setCheckView] = useState('pending');
   const [reconcileCheck, setReconcileCheck] = useState(null);
   const [expenseDrill, setExpenseDrill] = useState(null);
+  const [bucketSub, setBucketSub] = useState(null);
+  const [bucketSearch, setBucketSearch] = useState('');
+  const [renamingBucket, setRenamingBucket] = useState(null);
+  const [renameValue, setRenameValue] = useState('');
   const [warehouseDrill, setWarehouseDrill] = useState(null);
   const [customerGroup, setCustomerGroup] = useState('all');
 
@@ -75,6 +82,13 @@ export default function App() {
   const [linkSearch, setLinkSearch] = useState('');
   const [showLinkSearch, setShowLinkSearch] = useState(false);
   const [formData, setFormData] = useState({});
+
+  // Import
+  const [importStep, setImportStep] = useState('select'); // select, preview, importing, done
+  const [importType, setImportType] = useState(null);
+  const [importData, setImportData] = useState([]);
+  const [importStats, setImportStats] = useState(null);
+  const [importProgress, setImportProgress] = useState(0);
 
   // ==========================================
   // AUTH CHECK
@@ -117,7 +131,7 @@ export default function App() {
 
   const loadAllData = async () => {
     try {
-      const [inv, tres, chk, dbt, cust, wh, items, rules] = await Promise.all([
+      const [inv, tres, chk, dbt, cust, wh, items, rules, stock] = await Promise.all([
         fetchAll('invoices', 'invoice_date'),
         fetchAll('treasury', 'transaction_date'),
         fetchAll('checks', 'check_date', true),
@@ -126,6 +140,7 @@ export default function App() {
         fetchAll('warehouse_expenses', 'expense_date'),
         fetchAll('invoice_items', 'created_at', true),
         fetchAll('expense_rules', 'created_at', true),
+        fetchAll('inventory', 'created_at', true),
       ]);
       setInvoices(inv);
       setTreasury(tres);
@@ -135,6 +150,7 @@ export default function App() {
       setWarehouse(wh);
       setInvoiceItems(items);
       setExpenseRules(rules);
+      setInventory(stock);
     } catch (err) {
       console.error('Load error:', err);
     }
@@ -481,6 +497,171 @@ export default function App() {
       await loadAllData();
     } catch (err) {
       alert('Error / خطأ: ' + err.message);
+    }
+  };
+
+  const handleRenameBucket = async (oldName, newName, field) => {
+    if (!newName || newName === oldName) { setRenamingBucket(null); return; }
+    try {
+      // field is 'category' or 'subcategory'
+      const matching = treasury.filter(t => t[field] === oldName);
+      if (matching.length === 0) { setRenamingBucket(null); return; }
+      for (const t of matching) {
+        await dbUpdate('treasury', t.id, { [field]: newName }, user?.id);
+      }
+      // Update expense_rules too
+      const rules = expenseRules.filter(r => r[field] === oldName);
+      for (const r of rules) {
+        await dbUpdate('expense_rules', r.id, { [field]: newName }, user?.id);
+      }
+      setRenamingBucket(null);
+      setRenameValue('');
+      await loadAllData();
+    } catch (err) {
+      alert('Error / خطأ: ' + err.message);
+    }
+  };
+
+  const processImportFile = async (file) => {
+    const data = await file.arrayBuffer();
+    const wb = XLSX.read(data);
+
+    // Auto-detect file type from first sheet columns
+    const ws = wb.Sheets[wb.SheetNames[0]];
+    const rows = XLSX.utils.sheet_to_json(ws, { header: 1 });
+    if (rows.length < 2) { alert('Empty file / ملف فارغ'); return; }
+
+    const header = rows[0].map(h => String(h || '').trim());
+    const headerStr = header.join(' ').toLowerCase();
+
+    let detected = null;
+    let parsed = [];
+
+    // Detect Treasury: has cash_in/cash_out columns or وارد/منصرف
+    if (headerStr.includes('وارد') || headerStr.includes('منصرف') || headerStr.includes('cash')) {
+      detected = 'treasury';
+      for (let i = 1; i < rows.length; i++) {
+        const r = rows[i];
+        if (!r || !r[0]) continue;
+        const dateVal = r[0];
+        let d = '';
+        if (typeof dateVal === 'number') {
+          const dt = XLSX.SSF.parse_date_code(dateVal);
+          d = dt.y + '-' + String(dt.m).padStart(2,'0') + '-' + String(dt.d).padStart(2,'0');
+        } else { d = String(dateVal).substring(0, 10); }
+        parsed.push({ transaction_date: d, order_number: String(r[1] || ''), description: String(r[2] || ''), cash_in: Number(r[3]) || 0, cash_out: Number(r[4]) || 0, source: 'import' });
+      }
+    }
+    // Detect Sales: has amount/paid/remaining or اجمالى/مسدد/متبقى
+    else if (headerStr.includes('مسدد') || headerStr.includes('متبق') || headerStr.includes('paid') || headerStr.includes('remaining')) {
+      detected = 'sales';
+      for (let i = 1; i < rows.length; i++) {
+        const r = rows[i];
+        if (!r || !r[0]) continue;
+        const dateVal = r[0];
+        let d = '';
+        if (typeof dateVal === 'number') {
+          const dt = XLSX.SSF.parse_date_code(dateVal);
+          d = dt.y + '-' + String(dt.m).padStart(2,'0') + '-' + String(dt.d).padStart(2,'0');
+        } else { d = String(dateVal).substring(0, 10); }
+        const amt = Number(r[3] || r[2]) || 0;
+        const paid = Number(r[4] || r[3]) || 0;
+        parsed.push({ invoice_date: d, order_number: String(r[1] || ''), customer_name: String(r[2] || r[1] || ''), total_amount: amt, total_collected: paid, outstanding: Math.max(0, amt - paid), source: 'import' });
+      }
+    }
+    // Detect Warehouse: simple date/description/amount
+    else if (wb.SheetNames.length === 1 && header.length <= 5) {
+      detected = 'warehouse';
+      for (let i = 1; i < rows.length; i++) {
+        const r = rows[i];
+        if (!r || !r[0]) continue;
+        const dateVal = r[0];
+        let d = '';
+        if (typeof dateVal === 'number') {
+          const dt = XLSX.SSF.parse_date_code(dateVal);
+          d = dt.y + '-' + String(dt.m).padStart(2,'0') + '-' + String(dt.d).padStart(2,'0');
+        } else { d = String(dateVal).substring(0, 10); }
+        parsed.push({ expense_date: d, description: String(r[1] || ''), amount: Number(r[2]) || 0 });
+      }
+    }
+    // Detect Merchandiser: multiple sheets with product data
+    else if (wb.SheetNames.length > 5) {
+      detected = 'merchandiser';
+      for (const sn of wb.SheetNames) {
+        const sheet = wb.Sheets[sn];
+        const sRows = XLSX.utils.sheet_to_json(sheet, { header: 1 });
+        for (let i = 1; i < sRows.length; i++) {
+          const r = sRows[i];
+          if (!r || !r[0] || !String(r[0]).match(/\d/)) continue;
+          const desc = String(r[4] || '');
+          if (desc.includes('اجمالى') || desc.includes('اجمالي')) continue;
+          parsed.push({ customer: sn, order_number: String(r[0]).replace(/[^\d/\-]/g, ''), description: (String(r[3] || '') + ' ' + desc).trim(), quantity: Number(r[5]) || 0, unit_price: Number(r[6]) || 0, line_total: Number(r[7]) || 0 });
+        }
+      }
+    }
+    // Detect Checks
+    else if (headerStr.includes('شيك') || headerStr.includes('check')) {
+      detected = 'checks';
+      for (let i = 1; i < rows.length; i++) {
+        const r = rows[i];
+        if (!r || !r[0]) continue;
+        parsed.push({ customer_name: String(r[0] || ''), order_number: String(r[1] || ''), amount: Number(r[2]) || 0, check_date: String(r[3] || ''), status: 'pending' });
+      }
+    }
+
+    if (!detected) {
+      alert('Could not detect file type / لم يتم التعرف على نوع الملف. Please check the format.');
+      return;
+    }
+
+    setImportType(detected);
+    setImportData(parsed);
+    setImportStats({ total: parsed.length, newCount: parsed.length, file: file.name });
+    setImportStep('preview');
+  };
+
+  const executeImport = async () => {
+    setImportStep('importing');
+    setImportProgress(0);
+    const batch = 50;
+    let imported = 0;
+    let skipped = 0;
+
+    try {
+      for (let i = 0; i < importData.length; i += batch) {
+        const chunk = importData.slice(i, i + batch);
+        for (const row of chunk) {
+          try {
+            if (importType === 'treasury') {
+              // Auto-categorize from rules
+              const rule = expenseRules.find(r => (row.description || '').includes(r.description_match));
+              if (rule) { row.category = rule.category; row.subcategory = rule.subcategory || ''; }
+              await dbInsert('treasury', row, user?.id);
+            } else if (importType === 'sales') {
+              const existing = invoices.find(inv => inv.order_number === row.order_number);
+              if (existing) { skipped++; continue; }
+              await dbInsert('invoices', row, user?.id);
+            } else if (importType === 'warehouse') {
+              await dbInsert('warehouse_expenses', row, user?.id);
+            } else if (importType === 'checks') {
+              await dbInsert('checks', row, user?.id);
+            } else if (importType === 'merchandiser') {
+              const inv = invoices.find(inv => inv.order_number === row.order_number);
+              if (inv) {
+                await dbInsert('invoice_items', { invoice_id: inv.id, description: row.description, quantity: row.quantity, unit_price: row.unit_price, line_total: row.line_total }, user?.id);
+              } else { skipped++; continue; }
+            }
+            imported++;
+          } catch (e) { skipped++; }
+        }
+        setImportProgress(Math.round((i + chunk.length) / importData.length * 100));
+      }
+      setImportStats({ ...importStats, imported: imported, skipped: skipped });
+      setImportStep('done');
+      await loadAllData();
+    } catch (err) {
+      alert('Import error / خطأ في الاستيراد: ' + err.message);
+      setImportStep('preview');
     }
   };
 
@@ -1151,52 +1332,128 @@ export default function App() {
           </Modal>
         )}
 
-        {/* EXPENSE/INCOME DRILL MODAL */}
+        {/* BUCKET DRILL MODAL — Two-Level with Search & Rename */}
         {expenseDrill && (
-          <Modal onClose={() => setExpenseDrill(null)}
+          <Modal onClose={() => { setExpenseDrill(null); setBucketSub(null); setBucketSearch(''); setRenamingBucket(null); }}
             title={(() => {
               const isIn = expenseDrill.startsWith('in:');
               const cat = isIn ? expenseDrill.slice(3) : expenseDrill;
-              return (isIn ? 'Income / إيرادات: ' : 'Expense / منصرف: ') + (EXPENSE_CATS[cat] || cat);
+              const prefix = isIn ? 'Income / إيرادات' : 'Expense / منصرف';
+              return bucketSub ? prefix + ': ' + cat + ' > ' + bucketSub : prefix + ': ' + (EXPENSE_CATS[cat] || cat);
             })()}>
             {(() => {
               const isIn = expenseDrill.startsWith('in:');
               const cat = isIn ? expenseDrill.slice(3) : expenseDrill;
               const defaultCat = isIn ? 'Customer Payment' : 'Operations';
-              const txns = filteredTreasury.filter(t =>
-                (t.category || defaultCat) === cat && (isIn ? Number(t.cash_in) > 0 : Number(t.cash_out) > 0)
+              const amtField = isIn ? 'cash_in' : 'cash_out';
+              const color = isIn ? '#10b981' : '#ef4444';
+              const allTxns = filteredTreasury.filter(t =>
+                (t.category || defaultCat) === cat && Number(t[amtField]) > 0
               );
-              return (
-                <div>
-                  <p className="text-xs text-slate-500 mb-2">{txns.length} transactions / معاملات</p>
-                  <div className="overflow-auto max-h-[400px] rounded-lg border border-slate-200">
-                    <table className="w-full border-collapse">
-                      <thead><tr className="bg-slate-50 sticky top-0">
-                        <th className="px-2 py-2 text-xs text-left">Date / التاريخ</th>
-                        <th className="px-2 py-2 text-xs" style={{ direction: 'rtl' }}>Description / الوصف</th>
-                        <th className="px-2 py-2 text-xs">Sub / فرعي</th>
-                        <th className="px-2 py-2 text-xs text-right">Amount / المبلغ</th>
-                      </tr></thead>
-                      <tbody>
-                        {txns.sort((a, b) => b.transaction_date.localeCompare(a.transaction_date))
-                          .map(txn => (
+
+              // LEVEL 2: Subcategory transactions
+              if (bucketSub) {
+                const txns = allTxns.filter(t => (t.subcategory || 'Uncategorized') === bucketSub);
+                const searched = bucketSearch ? txns.filter(t => {
+                  const words = bucketSearch.split(/\s+/).filter(w => w.length > 0);
+                  const hay = [t.description || '', t.transaction_date || '', String(t[amtField] || 0)].join(' ');
+                  return words.every(w => hay.includes(w));
+                }) : txns;
+                return (
+                  <div>
+                    <button onClick={() => { setBucketSub(null); setBucketSearch(''); }}
+                      className="px-3 py-1 rounded border border-slate-200 text-xs font-semibold mb-2">← Back / رجوع</button>
+                    <div className="flex gap-2 mb-2 items-center">
+                      {renamingBucket === 'sub' ? (
+                        <div className="flex gap-1 flex-1">
+                          <input value={renameValue} onChange={e => setRenameValue(e.target.value)}
+                            className="flex-1 px-2 py-1 border rounded text-xs" autoFocus />
+                          <button onClick={() => handleRenameBucket(bucketSub, renameValue, 'subcategory')}
+                            className="px-2 py-1 bg-emerald-500 text-white rounded text-[10px]">Save / حفظ</button>
+                          <button onClick={() => setRenamingBucket(null)}
+                            className="px-2 py-1 bg-slate-300 rounded text-[10px]">Cancel</button>
+                        </div>
+                      ) : (
+                        <button onClick={() => { setRenamingBucket('sub'); setRenameValue(bucketSub); }}
+                          className="px-2 py-0.5 rounded border border-blue-300 text-blue-500 text-[10px]">Rename / تغيير الاسم</button>
+                      )}
+                    </div>
+                    <input value={bucketSearch} onChange={e => setBucketSearch(e.target.value)}
+                      placeholder="Search transactions / بحث..." className="w-full px-2 py-1.5 border rounded text-xs mb-2" />
+                    <p className="text-[10px] text-slate-400 mb-1">{searched.length} transactions</p>
+                    <div className="overflow-auto max-h-[300px] rounded-lg border border-slate-200">
+                      <table className="w-full border-collapse">
+                        <thead><tr className="bg-slate-50 sticky top-0">
+                          <th className="px-2 py-1.5 text-[10px] text-left">Date</th>
+                          <th className="px-2 py-1.5 text-[10px]" style={{ direction: 'rtl' }}>Description</th>
+                          <th className="px-2 py-1.5 text-[10px] text-right">Amount</th>
+                        </tr></thead>
+                        <tbody>
+                          {searched.sort((a, b) => b.transaction_date.localeCompare(a.transaction_date)).map(txn => (
                             <tr key={txn.id} className="border-b border-slate-50">
-                              <td className="px-2 py-1.5 text-xs">{txn.transaction_date}</td>
-                              <td className="px-2 py-1.5 text-xs" style={{ direction: 'rtl' }}>{txn.description}</td>
-                              <td className="px-2 py-1.5 text-[10px] text-amber-600">{txn.subcategory || ''}</td>
-                              <td className="px-2 py-1.5 text-xs text-right font-semibold" style={{ color: isIn ? '#10b981' : '#ef4444' }}>
-                                {fE(isIn ? txn.cash_in : txn.cash_out)}
-                              </td>
+                              <td className="px-2 py-1 text-[10px]">{txn.transaction_date}</td>
+                              <td className="px-2 py-1 text-[10px]" style={{ direction: 'rtl' }}>{txn.description}</td>
+                              <td className="px-2 py-1 text-[10px] text-right font-semibold" style={{ color: color }}>{fE(txn[amtField])}</td>
                             </tr>
                           ))}
-                      </tbody>
-                    </table>
+                        </tbody>
+                      </table>
+                    </div>
+                    <div className="flex justify-between pt-2 mt-1 border-t-2 border-slate-300">
+                      <span className="text-[10px] font-bold">Total / الإجمالي</span>
+                      <span className="text-sm font-extrabold" style={{ color: color }}>{fE(searched.reduce((a, t) => a + Number(t[amtField]), 0))}</span>
+                    </div>
+                  </div>
+                );
+              }
+
+              // LEVEL 1: Subcategory list
+              const subs = {};
+              allTxns.forEach(t => {
+                const s = t.subcategory || 'Uncategorized';
+                if (!subs[s]) subs[s] = { total: 0, count: 0 };
+                subs[s].total += Number(t[amtField]);
+                subs[s].count++;
+              });
+              const subList = Object.entries(subs).sort((a, b) => b[1].total - a[1].total);
+              const searched = bucketSearch ? subList.filter(([s]) => s.toLowerCase().includes(bucketSearch.toLowerCase())) : subList;
+
+              return (
+                <div>
+                  <div className="flex gap-2 mb-2 items-center">
+                    {renamingBucket === 'cat' ? (
+                      <div className="flex gap-1 flex-1">
+                        <input value={renameValue} onChange={e => setRenameValue(e.target.value)}
+                          className="flex-1 px-2 py-1 border rounded text-xs" autoFocus />
+                        <button onClick={() => handleRenameBucket(cat, renameValue, 'category')}
+                          className="px-2 py-1 bg-emerald-500 text-white rounded text-[10px]">Save / حفظ</button>
+                        <button onClick={() => setRenamingBucket(null)}
+                          className="px-2 py-1 bg-slate-300 rounded text-[10px]">Cancel</button>
+                      </div>
+                    ) : (
+                      <button onClick={() => { setRenamingBucket('cat'); setRenameValue(cat); }}
+                        className="px-2 py-0.5 rounded border border-blue-300 text-blue-500 text-[10px]">Rename Category / تغيير التصنيف</button>
+                    )}
+                  </div>
+                  <input value={bucketSearch} onChange={e => setBucketSearch(e.target.value)}
+                    placeholder="Search subcategories / بحث التصنيفات الفرعية..." className="w-full px-2 py-1.5 border rounded text-xs mb-2" />
+                  <p className="text-[10px] text-slate-400 mb-1">{allTxns.length} total transactions, {subList.length} subcategories</p>
+                  <div className="overflow-auto max-h-[350px]">
+                    {searched.map(([sub, data], i) => (
+                      <div key={sub} onClick={() => { setBucketSub(sub); setBucketSearch(''); }}
+                        className="flex justify-between py-2 px-3 border-b border-slate-100 cursor-pointer hover:bg-slate-50 rounded">
+                        <div className="flex items-center gap-2">
+                          <div className="w-2 h-2 rounded-full" style={{ background: COLORS[i % COLORS.length] }} />
+                          <span className="text-xs font-semibold">{sub}</span>
+                          <span className="text-[10px] text-slate-400">({data.count})</span>
+                        </div>
+                        <span className="text-xs font-bold" style={{ color: color }}>{fE(data.total)} →</span>
+                      </div>
+                    ))}
                   </div>
                   <div className="flex justify-between pt-2 mt-2 border-t-2 border-slate-300">
                     <span className="text-xs font-bold">Total / الإجمالي</span>
-                    <span className="text-sm font-extrabold" style={{ color: isIn ? '#10b981' : '#ef4444' }}>
-                      {fE(txns.reduce((a, t) => a + Number(isIn ? t.cash_in : t.cash_out), 0))}
-                    </span>
+                    <span className="text-sm font-extrabold" style={{ color: color }}>{fE(allTxns.reduce((a, t) => a + Number(t[amtField]), 0))}</span>
                   </div>
                 </div>
               );
@@ -2041,6 +2298,224 @@ export default function App() {
         )}
 
         {/* ==========================================
+            INVENTORY TAB
+        ========================================== */}
+        {tab === 'inventory' && (
+          <div>
+            <div className="flex justify-between flex-wrap gap-2 mb-3">
+              <h2 className="text-xl font-extrabold">Inventory / المخزون</h2>
+              <div className="flex gap-2 items-center">
+                <input value={query} onChange={e => setQuery(e.target.value)}
+                  placeholder="Search / بحث" className="px-3 py-1.5 rounded-lg border border-slate-200 text-xs w-32" />
+                <button onClick={() => setFormData({...formData, showAddProduct: true})}
+                  className="px-3 py-1.5 bg-blue-500 text-white rounded-lg text-xs font-semibold hover:bg-blue-600">
+                  + Add Product / إضافة منتج
+                </button>
+              </div>
+            </div>
+
+            {/* Summary */}
+            <div className="grid grid-cols-3 gap-3 mb-3">
+              <div className="bg-white rounded-lg p-3" style={{ borderLeftWidth: 3, borderLeftColor: '#8b5cf6' }}>
+                <div className="text-[10px] text-slate-500">Total Products / إجمالي المنتجات</div>
+                <div className="text-lg font-extrabold">{inventory.length}</div>
+              </div>
+              <div className="bg-white rounded-lg p-3" style={{ borderLeftWidth: 3, borderLeftColor: '#0ea5e9' }}>
+                <div className="text-[10px] text-slate-500">Total Rolls / إجمالي اللفات</div>
+                <div className="text-lg font-extrabold">{inventory.reduce((a, p) => a + Number(p.roll_count || 0), 0).toLocaleString()}</div>
+              </div>
+              <div className="bg-white rounded-lg p-3" style={{ borderLeftWidth: 3, borderLeftColor: '#10b981' }}>
+                <div className="text-[10px] text-slate-500">Total Net Weight / الوزن الصافي</div>
+                <div className="text-lg font-extrabold">{inventory.reduce((a, p) => a + Number(p.net_weight || 0), 0).toLocaleString()} kg</div>
+              </div>
+            </div>
+
+            {/* Add Product Form */}
+            {formData.showAddProduct && (
+              <div className="bg-blue-50 rounded-xl p-4 mb-3 border border-blue-200">
+                <h3 className="text-sm font-bold text-blue-800 mb-3">New Product / منتج جديد</h3>
+                <div className="grid grid-cols-2 gap-3">
+                  <div>
+                    <label className="text-[10px] font-semibold text-slate-600">Reference # / رقم المرجع</label>
+                    <input value={formData.prodRef || ''} onChange={e => setFormData({...formData, prodRef: e.target.value})}
+                      className="w-full px-3 py-2 rounded-lg border border-slate-200 text-sm" />
+                  </div>
+                  <div>
+                    <label className="text-[10px] font-semibold text-slate-600">Color / اللون</label>
+                    <input value={formData.prodColor || ''} onChange={e => setFormData({...formData, prodColor: e.target.value})}
+                      placeholder="Arabic" className="w-full px-3 py-1.5 rounded-lg border border-slate-200 text-sm" style={{ direction: 'rtl' }} />
+                    <input value={formData.prodColorEn || ''} onChange={e => setFormData({...formData, prodColorEn: e.target.value})}
+                      placeholder="English" className="w-full px-3 py-1.5 rounded-lg border border-slate-200 text-sm mt-1" />
+                  </div>
+                  <div>
+                    <label className="text-[10px] font-semibold text-slate-600">Description / الوصف</label>
+                    <input value={formData.prodDesc || ''} onChange={e => setFormData({...formData, prodDesc: e.target.value})}
+                      placeholder="Arabic" className="w-full px-3 py-1.5 rounded-lg border border-slate-200 text-sm" style={{ direction: 'rtl' }} />
+                    <input value={formData.prodDescEn || ''} onChange={e => setFormData({...formData, prodDescEn: e.target.value})}
+                      placeholder="English" className="w-full px-3 py-1.5 rounded-lg border border-slate-200 text-sm mt-1" />
+                  </div>
+                  <div>
+                    <label className="text-[10px] font-semibold text-slate-600">Roll Count / عدد اللفات</label>
+                    <input type="number" value={formData.prodRolls || ''} onChange={e => setFormData({...formData, prodRolls: e.target.value})}
+                      className="w-full px-3 py-2 rounded-lg border border-slate-200 text-sm" />
+                  </div>
+                  <div>
+                    <label className="text-[10px] font-semibold text-slate-600">Gross Weight / الوزن الإجمالي (kg)</label>
+                    <input type="number" value={formData.prodGross || ''} onChange={e => setFormData({...formData, prodGross: e.target.value})}
+                      className="w-full px-3 py-2 rounded-lg border border-slate-200 text-sm" />
+                  </div>
+                  <div>
+                    <label className="text-[10px] font-semibold text-slate-600">Net Weight / الوزن الصافي (kg)</label>
+                    <input type="number" value={formData.prodNet || ''} onChange={e => setFormData({...formData, prodNet: e.target.value})}
+                      className="w-full px-3 py-2 rounded-lg border border-slate-200 text-sm" />
+                  </div>
+                  <div>
+                    <label className="text-[10px] font-semibold text-slate-600">Unit Price / سعر الوحدة</label>
+                    <input type="number" value={formData.prodPrice || ''} onChange={e => setFormData({...formData, prodPrice: e.target.value})}
+                      className="w-full px-3 py-2 rounded-lg border border-slate-200 text-sm" />
+                  </div>
+                </div>
+                <div className="flex gap-2 mt-3">
+                  <button onClick={async () => {
+                    try {
+                      await dbInsert('inventory', {
+                        reference_number: formData.prodRef || '',
+                        description: formData.prodDesc || '',
+                        description_en: formData.prodDescEn || '',
+                        color: formData.prodColor || '',
+                        color_en: formData.prodColorEn || '',
+                        roll_count: Number(formData.prodRolls) || 0,
+                        gross_weight: Number(formData.prodGross) || 0,
+                        net_weight: Number(formData.prodNet) || 0,
+                        unit_price: Number(formData.prodPrice) || 0,
+                      }, user?.id);
+                      setFormData({});
+                      await loadAllData();
+                    } catch (err) { alert('Error / خطأ: ' + err.message); }
+                  }} className="px-4 py-2 bg-emerald-500 text-white rounded-lg font-semibold text-sm">Save / حفظ</button>
+                  <button onClick={() => setFormData({})} className="px-4 py-2 border border-slate-200 rounded-lg text-sm">Cancel / إلغاء</button>
+                </div>
+              </div>
+            )}
+
+            {/* Product List */}
+            <div className="overflow-auto rounded-lg border border-slate-200 max-h-[450px]">
+              <table className="w-full border-collapse">
+                <thead className="sticky top-0"><tr className="bg-slate-50">
+                  <th className="px-2 py-2 text-[10px] text-left">Ref# / المرجع</th>
+                  <th className="px-2 py-2 text-[10px]">Description / الوصف</th>
+                  <th className="px-2 py-2 text-[10px]">Color / اللون</th>
+                  <th className="px-2 py-2 text-[10px] text-right">Rolls / لفات</th>
+                  <th className="px-2 py-2 text-[10px] text-right">Gross / إجمالي</th>
+                  <th className="px-2 py-2 text-[10px] text-right">Net / صافي</th>
+                  <th className="px-2 py-2 text-[10px] text-right">Price / سعر</th>
+                  <th className="px-2 py-2 text-[10px]">Status</th>
+                </tr></thead>
+                <tbody>
+                  {inventory
+                    .filter(p => !query || (p.reference_number || '').includes(query) || (p.description || '').includes(query) || (p.description_en || '').toLowerCase().includes(query.toLowerCase()) || (p.color || '').includes(query))
+                    .map(p => (
+                    <tr key={p.id} className="border-b border-slate-50 hover:bg-slate-50 cursor-pointer"
+                      onClick={() => setFormData({...formData, selectedProduct: p})}>
+                      <td className="px-2 py-1.5 text-xs font-bold">{p.reference_number}</td>
+                      <td className="px-2 py-1.5">
+                        <div className="text-xs" style={{ direction: 'rtl' }}>{p.description}</div>
+                        {p.description_en && <div className="text-[10px] text-blue-500">{p.description_en}</div>}
+                      </td>
+                      <td className="px-2 py-1.5">
+                        <div className="text-xs" style={{ direction: 'rtl' }}>{p.color}</div>
+                        {p.color_en && <div className="text-[10px] text-blue-500">{p.color_en}</div>}
+                      </td>
+                      <td className="px-2 py-1.5 text-xs text-right font-semibold">{p.roll_count}</td>
+                      <td className="px-2 py-1.5 text-xs text-right">{fmt(p.gross_weight)} kg</td>
+                      <td className="px-2 py-1.5 text-xs text-right">{fmt(p.net_weight)} kg</td>
+                      <td className="px-2 py-1.5 text-xs text-right font-semibold text-emerald-600">{fE(p.unit_price)}</td>
+                      <td className="px-2 py-1.5">
+                        <span className={'px-1.5 py-0.5 rounded-full text-[9px] font-semibold ' +
+                          (p.stock_status === 'in_stock' ? 'bg-green-100 text-green-700' :
+                           p.stock_status === 'low' ? 'bg-amber-100 text-amber-700' :
+                           p.stock_status === 'reserved' ? 'bg-blue-100 text-blue-700' :
+                           'bg-red-100 text-red-700')}>
+                          {p.stock_status === 'in_stock' ? 'In Stock' : p.stock_status === 'low' ? 'Low' : p.stock_status === 'reserved' ? 'Reserved' : 'Out'}
+                        </span>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+
+            {/* Product Detail */}
+            {formData.selectedProduct && (
+              <Modal onClose={() => setFormData({...formData, selectedProduct: null})}
+                title={'Product / منتج: ' + formData.selectedProduct.reference_number}>
+                <div className="space-y-3">
+                  <div className="grid grid-cols-2 gap-3">
+                    <div className="bg-slate-50 rounded-lg p-3">
+                      <div className="text-[10px] text-slate-500">Description / الوصف</div>
+                      <div className="text-sm font-bold" style={{ direction: 'rtl' }}>{formData.selectedProduct.description}</div>
+                      {formData.selectedProduct.description_en && <div className="text-xs text-blue-500">{formData.selectedProduct.description_en}</div>}
+                    </div>
+                    <div className="bg-slate-50 rounded-lg p-3">
+                      <div className="text-[10px] text-slate-500">Color / اللون</div>
+                      <div className="text-sm font-bold" style={{ direction: 'rtl' }}>{formData.selectedProduct.color}</div>
+                      {formData.selectedProduct.color_en && <div className="text-xs text-blue-500">{formData.selectedProduct.color_en}</div>}
+                    </div>
+                  </div>
+                  <div className="grid grid-cols-4 gap-2">
+                    <div className="bg-purple-50 rounded-lg p-2 text-center">
+                      <div className="text-[9px] text-slate-500">Rolls / لفات</div>
+                      <div className="text-lg font-bold text-purple-600">{formData.selectedProduct.roll_count}</div>
+                    </div>
+                    <div className="bg-blue-50 rounded-lg p-2 text-center">
+                      <div className="text-[9px] text-slate-500">Gross / إجمالي</div>
+                      <div className="text-sm font-bold">{fmt(formData.selectedProduct.gross_weight)} kg</div>
+                    </div>
+                    <div className="bg-emerald-50 rounded-lg p-2 text-center">
+                      <div className="text-[9px] text-slate-500">Net / صافي</div>
+                      <div className="text-sm font-bold">{fmt(formData.selectedProduct.net_weight)} kg</div>
+                    </div>
+                    <div className="bg-amber-50 rounded-lg p-2 text-center">
+                      <div className="text-[9px] text-slate-500">Price / سعر</div>
+                      <div className="text-sm font-bold text-emerald-600">{fE(formData.selectedProduct.unit_price)}</div>
+                    </div>
+                  </div>
+                  <h4 className="text-xs font-bold mt-2">Linked Invoices / الفواتير المرتبطة</h4>
+                  <div className="overflow-auto max-h-[200px] rounded border border-slate-200">
+                    {invoiceItems.filter(it => (it.description || '').includes(formData.selectedProduct.description) || (it.description || '').includes(formData.selectedProduct.reference_number)).length > 0 ? (
+                      <table className="w-full border-collapse">
+                        <thead><tr className="bg-slate-50">
+                          <th className="px-2 py-1 text-[10px] text-left">Invoice</th>
+                          <th className="px-2 py-1 text-[10px] text-right">Qty</th>
+                          <th className="px-2 py-1 text-[10px] text-right">Price</th>
+                          <th className="px-2 py-1 text-[10px] text-right">Total</th>
+                        </tr></thead>
+                        <tbody>
+                          {invoiceItems.filter(it => (it.description || '').includes(formData.selectedProduct.description) || (it.description || '').includes(formData.selectedProduct.reference_number)).map(it => {
+                            const inv = invoices.find(i => i.id === it.invoice_id);
+                            return (
+                              <tr key={it.id} className="border-b border-slate-50 cursor-pointer hover:bg-blue-50"
+                                onClick={() => { if (inv) { setFormData({...formData, selectedProduct: null}); setSelectedInvoice(inv); } }}>
+                                <td className="px-2 py-1 text-xs font-semibold">{inv ? '#' + inv.order_number : '—'}</td>
+                                <td className="px-2 py-1 text-xs text-right">{fmt(it.quantity)}</td>
+                                <td className="px-2 py-1 text-xs text-right">{fmt(it.unit_price)}</td>
+                                <td className="px-2 py-1 text-xs text-right font-semibold">{fE(it.line_total)}</td>
+                              </tr>
+                            );
+                          })}
+                        </tbody>
+                      </table>
+                    ) : (
+                      <div className="px-3 py-4 text-xs text-slate-400 text-center">No linked invoices / لا توجد فواتير مرتبطة</div>
+                    )}
+                  </div>
+                </div>
+              </Modal>
+            )}
+          </div>
+        )}
+
+        {/* ==========================================
             CRM TAB
         ========================================== */}
         {tab === 'crm' && (
@@ -2168,43 +2643,106 @@ export default function App() {
         {tab === 'import' && (
           <div>
             <h2 className="text-xl font-extrabold mb-3">Import / استيراد البيانات</h2>
-            <div className="bg-white rounded-xl p-4 mb-4">
-              <h3 className="text-sm font-bold mb-3">Import Types / أنواع الاستيراد</h3>
-              <div className="space-y-2">
-                <div className="bg-blue-50 rounded-lg p-3">
-                  <div className="text-xs font-bold text-blue-700">1. Override / استبدال كامل</div>
-                  <div className="text-[10px] text-slate-500">Replace all data with new file</div>
-                </div>
-                <div className="bg-emerald-50 rounded-lg p-3">
-                  <div className="text-xs font-bold text-emerald-700">2. Insert / إضافة جديد</div>
-                  <div className="text-[10px] text-slate-500">Add new transactions within existing periods</div>
-                </div>
-                <div className="bg-amber-50 rounded-lg p-3">
-                  <div className="text-xs font-bold text-amber-700">3. Append / إلحاق من تاريخ</div>
-                  <div className="text-[10px] text-slate-500">Add data from last recorded date forward</div>
-                </div>
-              </div>
-            </div>
-            <div className="bg-white rounded-xl p-4">
-              <h3 className="text-sm font-bold mb-3">File Templates / قوالب الملفات</h3>
-              {['Treasury / الخزنة', 'Sales / المبيعات', 'Merchandiser / الأوامر', 'Checks / شيكات', 'Warehouse / المخزن'].map((f, i) => (
-                <div key={i} className="flex justify-between items-center py-3 border-b border-slate-100">
-                  <div>
-                    <div className="text-xs font-semibold">{f}</div>
-                    <div className="text-[10px] text-slate-400">Excel (.xlsx)</div>
-                  </div>
-                  <label className="px-3 py-1.5 bg-blue-500 text-white rounded-lg text-xs font-semibold cursor-pointer hover:bg-blue-600">
-                    Upload
+
+            {importStep === 'select' && (
+              <div>
+                <div className="bg-white rounded-xl p-6 mb-4 text-center border-2 border-dashed border-blue-300">
+                  <div className="text-4xl mb-2">📁</div>
+                  <h3 className="text-sm font-bold mb-1">Upload Excel File / رفع ملف إكسل</h3>
+                  <p className="text-[10px] text-slate-400 mb-3">System auto-detects: Sales, Treasury, Warehouse, Merchandiser, Checks<br/>النظام يكتشف تلقائياً نوع الملف</p>
+                  <label className="px-6 py-3 bg-blue-500 text-white rounded-lg text-sm font-semibold cursor-pointer hover:bg-blue-600 inline-block">
+                    Select File / اختر ملف
                     <input type="file" accept=".xlsx,.xls,.csv" className="hidden"
                       onChange={async (e) => {
                         const file = e.target.files[0];
                         if (!file) return;
-                        alert("File selected / تم اختيار الملف: " + file.name + ". Import coming soon / الاستيراد قريباً");
+                        await processImportFile(file);
                       }} />
                   </label>
                 </div>
-              ))}
-            </div>
+                <div className="bg-white rounded-xl p-4">
+                  <h3 className="text-sm font-bold mb-2">Supported File Types / أنواع الملفات المدعومة</h3>
+                  <div className="space-y-2 text-xs">
+                    <div className="flex gap-3 py-2 border-b border-slate-50"><span className="font-bold text-blue-600 w-28">Sales / المبيعات</span><span className="text-slate-500">Order#, Customer, Amount, Paid, Remaining</span></div>
+                    <div className="flex gap-3 py-2 border-b border-slate-50"><span className="font-bold text-emerald-600 w-28">Treasury / الخزنة</span><span className="text-slate-500">Date, Order#, Description, Cash In, Cash Out</span></div>
+                    <div className="flex gap-3 py-2 border-b border-slate-50"><span className="font-bold text-purple-600 w-28">Warehouse / المخزن</span><span className="text-slate-500">Date, Description, Amount</span></div>
+                    <div className="flex gap-3 py-2 border-b border-slate-50"><span className="font-bold text-amber-600 w-28">Merchandiser / الأوامر</span><span className="text-slate-500">Multiple tabs with Product Code, Qty, Price</span></div>
+                    <div className="flex gap-3 py-2"><span className="font-bold text-red-600 w-28">Checks / شيكات</span><span className="text-slate-500">Customer, Order#, Amount, Check Date</span></div>
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {importStep === 'preview' && importData.length > 0 && (
+              <div>
+                <div className="bg-emerald-50 rounded-xl p-4 mb-3 border border-emerald-200">
+                  <div className="flex justify-between items-center">
+                    <div>
+                      <h3 className="text-sm font-bold text-emerald-800">Detected / تم الكشف: {importType.toUpperCase()}</h3>
+                      <p className="text-xs text-emerald-600">{importStats.file} — {importStats.total} rows / صفوف</p>
+                    </div>
+                    <div className="flex gap-2">
+                      <button onClick={() => { setImportStep('select'); setImportData([]); setImportType(null); }}
+                        className="px-3 py-1.5 border border-slate-200 rounded-lg text-xs font-semibold">Cancel / إلغاء</button>
+                      <button onClick={executeImport}
+                        className="px-4 py-1.5 bg-emerald-500 text-white rounded-lg text-xs font-semibold hover:bg-emerald-600">
+                        Import {importStats.total} Rows / استيراد
+                      </button>
+                    </div>
+                  </div>
+                </div>
+                <div className="bg-white rounded-xl p-4">
+                  <h3 className="text-sm font-bold mb-2">Preview / معاينة (first 20 rows)</h3>
+                  <div className="overflow-auto max-h-[400px] rounded-lg border border-slate-200">
+                    <table className="w-full border-collapse text-xs">
+                      <thead className="sticky top-0"><tr className="bg-slate-50">
+                        {Object.keys(importData[0] || {}).map(k => (
+                          <th key={k} className="px-2 py-2 text-[10px] text-left font-semibold">{k}</th>
+                        ))}
+                      </tr></thead>
+                      <tbody>
+                        {importData.slice(0, 20).map((row, i) => (
+                          <tr key={i} className="border-b border-slate-50">
+                            {Object.values(row).map((v, j) => (
+                              <td key={j} className="px-2 py-1.5 text-[10px]" style={{ direction: typeof v === 'string' && /[\u0600-\u06FF]/.test(v) ? 'rtl' : 'ltr' }}>
+                                {typeof v === 'number' ? v.toLocaleString() : String(v || '')}
+                              </td>
+                            ))}
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {importStep === 'importing' && (
+              <div className="bg-white rounded-xl p-8 text-center">
+                <div className="text-4xl mb-3">⏳</div>
+                <h3 className="text-lg font-bold mb-2">Importing / جاري الاستيراد...</h3>
+                <div className="w-full bg-slate-200 rounded-full h-3 mb-2">
+                  <div className="bg-blue-500 h-3 rounded-full transition-all" style={{ width: importProgress + '%' }}></div>
+                </div>
+                <p className="text-sm text-slate-500">{importProgress}%</p>
+              </div>
+            )}
+
+            {importStep === 'done' && (
+              <div className="bg-white rounded-xl p-8 text-center">
+                <div className="text-4xl mb-3">✅</div>
+                <h3 className="text-lg font-bold mb-2 text-emerald-700">Import Complete / تم الاستيراد</h3>
+                <div className="text-sm space-y-1 mb-4">
+                  <p>Type / النوع: <span className="font-bold">{importType}</span></p>
+                  <p>Imported / تم استيراد: <span className="font-bold text-emerald-600">{importStats.imported}</span></p>
+                  {importStats.skipped > 0 && <p>Skipped (duplicates) / تم تخطي: <span className="font-bold text-amber-600">{importStats.skipped}</span></p>}
+                </div>
+                <button onClick={() => { setImportStep('select'); setImportData([]); setImportType(null); setImportStats(null); }}
+                  className="px-6 py-2 bg-blue-500 text-white rounded-lg font-semibold">
+                  Import Another File / استيراد ملف آخر
+                </button>
+              </div>
+            )}
           </div>
         )}
 
