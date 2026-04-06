@@ -88,6 +88,8 @@ export default function App() {
   const [expenseDrill, setExpenseDrill] = useState(null);
   const [bucketSub, setBucketSub] = useState(null);
   const [bucketSearch, setBucketSearch] = useState('');
+  const [editSubTxnId, setEditSubTxnId] = useState(null);
+  const [editSubValue, setEditSubValue] = useState('');
   const [renamingBucket, setRenamingBucket] = useState(null);
   const [renameValue, setRenameValue] = useState('');
   const [warehouseDrill, setWarehouseDrill] = useState(null);
@@ -780,43 +782,76 @@ export default function App() {
     const batch = 50;
     let imported = 0;
     let skipped = 0;
+    const importedIds = [];
+    const tableName = importType === 'treasury' ? 'treasury' : importType === 'sales' ? 'invoices' : importType === 'warehouse' ? 'warehouse_expenses' : importType === 'checks' ? 'checks' : importType === 'merchandiser' ? 'invoice_items' : '';
 
     try {
       for (let i = 0; i < importData.length; i += batch) {
         const chunk = importData.slice(i, i + batch);
         for (const row of chunk) {
           try {
+            let result;
             if (importType === 'treasury') {
-              // Auto-categorize from rules
               const rule = expenseRules.find(r => (row.description || '').includes(r.description_match));
               if (rule) { row.category = rule.category; row.subcategory = rule.subcategory || ''; }
-              await dbInsert('treasury', row, user?.id);
+              result = await dbInsert('treasury', row, user?.id);
             } else if (importType === 'sales') {
               const existing = invoices.find(inv => inv.order_number === row.order_number);
               if (existing) { skipped++; continue; }
-              await dbInsert('invoices', row, user?.id);
+              result = await dbInsert('invoices', row, user?.id);
             } else if (importType === 'warehouse') {
-              await dbInsert('warehouse_expenses', row, user?.id);
+              result = await dbInsert('warehouse_expenses', row, user?.id);
             } else if (importType === 'checks') {
-              await dbInsert('checks', row, user?.id);
+              result = await dbInsert('checks', row, user?.id);
             } else if (importType === 'merchandiser') {
               const inv = invoices.find(inv => inv.order_number === row.order_number);
               if (inv) {
-                await dbInsert('invoice_items', { invoice_id: inv.id, description: row.description, quantity: row.quantity, unit_price: row.unit_price, line_total: row.line_total }, user?.id);
+                result = await dbInsert('invoice_items', { invoice_id: inv.id, description: row.description, quantity: row.quantity, unit_price: row.unit_price, line_total: row.line_total }, user?.id);
               } else { skipped++; continue; }
             }
+            if (result?.id) importedIds.push(result.id);
             imported++;
           } catch (e) { skipped++; }
         }
         setImportProgress(Math.round((i + chunk.length) / importData.length * 100));
       }
-      setImportStats({ ...importStats, imported: imported, skipped: skipped });
+      // Save import batch for undo
+      if (importedIds.length > 0 && tableName) {
+        try {
+          await supabase.from('import_batches').insert({
+            import_type: importType, table_name: tableName,
+            record_ids: importedIds, record_count: importedIds.length,
+            imported_by: user?.id,
+          });
+        } catch (e) { console.log('Batch tracking failed:', e); }
+      }
+      setImportStats({ ...importStats, imported, skipped, lastBatchIds: importedIds, lastBatchTable: tableName });
       setImportStep('done');
       await loadAllData();
     } catch (err) {
       alert('Import error / خطأ في الاستيراد: ' + err.message);
       setImportStep('preview');
     }
+  };
+
+  const undoLastImport = async () => {
+    const table = importStats?.lastBatchTable;
+    const ids = importStats?.lastBatchIds;
+    if (!table || !ids || ids.length === 0) { alert('No import to undo / لا يوجد استيراد لإلغائه'); return; }
+    if (!confirm('Undo last import? This will DELETE ' + ids.length + ' records from ' + table + '.\n\nإلغاء آخر استيراد؟ سيتم حذف ' + ids.length + ' سجل.')) return;
+    try {
+      for (const id of ids) {
+        await supabase.from(table).delete().eq('id', id);
+      }
+      // Mark batch as undone
+      await supabase.from('import_batches').update({ undone: true, undone_at: new Date().toISOString() })
+        .eq('table_name', table).eq('record_count', ids.length).eq('undone', false)
+        .order('imported_at', { ascending: false }).limit(1);
+      setImportStats({ ...importStats, lastBatchIds: [], lastBatchTable: '' });
+      alert('✅ Import undone! / تم إلغاء الاستيراد — ' + ids.length + ' records deleted.');
+      await loadAllData();
+      setImportStep('select');
+    } catch (err) { alert('Error undoing: ' + err.message); }
   };
 
   const handleCollectCheck = async () => {
@@ -955,8 +990,11 @@ export default function App() {
   // LOADING
   // ==========================================
   if (loading) return (
-    <div className="min-h-screen flex items-center justify-center">
-      <div className="text-xl font-bold text-slate-400">Loading...</div>
+    <div className="min-h-screen flex items-center justify-center" style={{background:'#0a0e1a'}}>
+      <div className="text-center">
+        <div className="text-2xl font-black mb-2" style={{background:'linear-gradient(135deg, #38bdf8, #a78bfa)',WebkitBackgroundClip:'text',WebkitTextFillColor:'transparent'}}>NEXTTRADE HUB</div>
+        <div className="text-sm" style={{color:'rgba(148,163,184,0.5)'}}>Loading...</div>
+      </div>
     </div>
   );
 
@@ -964,28 +1002,28 @@ export default function App() {
   // RENDER
   // ==========================================
   return (
-    <div className="min-h-screen bg-slate-100">
+    <div className="min-h-screen" style={{background:'var(--bg-primary)'}}>
       {/* Header */}
-      <div className="bg-gradient-to-r from-slate-900 via-slate-800 to-blue-900 px-4 py-3 flex justify-between items-center shadow-lg">
+      <div style={{background:'linear-gradient(135deg, #0f172a 0%, #1e1b4b 50%, #0f172a 100%)', borderBottom:'1px solid rgba(56,189,248,0.15)'}} className="px-5 py-4 flex justify-between items-center">
         <div>
-          <h1 className="text-white text-xl font-extrabold tracking-tight">KANDIL KTC EGYPT HUB</h1>
-          <p className="text-blue-300/50 text-xs">{lang === 'en' ? 'KTC — Financial Control Panel' : 'KTC — لوحة التحكم المالية'}</p>
+          <h1 className="text-2xl font-black tracking-tight" style={{background:'linear-gradient(135deg, #38bdf8, #818cf8, #a78bfa)',WebkitBackgroundClip:'text',WebkitTextFillColor:'transparent'}}>NEXTTRADE HUB</h1>
+          <p style={{color:'rgba(148,163,184,0.5)'}} className="text-xs font-medium tracking-widest uppercase">{lang === 'en' ? 'KTC Trading Operations' : 'KTC — لوحة التحكم المالية'}</p>
         </div>
         <div className="flex items-center gap-3">
           {userProfile && (
             <div className="text-right">
-              <div className="text-white text-xs font-semibold">{userProfile.name}</div>
-              <div className="text-blue-300/50 text-[10px]">{userProfile.role === 'super_admin' ? '🔴 Super Admin' : userProfile.role === 'admin' ? '🟣 Admin' : '🔵 Team'}</div>
+              <div className="text-sm font-bold" style={{color:'#f1f5f9'}}>{userProfile.name}</div>
+              <div style={{color:'rgba(148,163,184,0.6)'}} className="text-[10px]">{userProfile.role === 'super_admin' ? '🔴 Super Admin' : userProfile.role === 'admin' ? '🟣 Admin' : '🔵 Team'}</div>
             </div>
           )}
-          {/* Language Toggle — visible to admins or users with language access */}
           {(isAdmin || !userProfile || userProfile.language_access === 'both' || userProfile.language_access === 'en') && (
             <button onClick={() => setLang(lang === 'ar' ? 'en' : 'ar')}
-              className={'px-3 py-1.5 rounded-lg text-xs font-bold transition ' + (lang === 'en' ? 'bg-emerald-500/80 text-white' : 'bg-white/10 text-white/70 hover:bg-white/20')}>
+              style={{background: lang === 'en' ? 'linear-gradient(135deg, #0ea5e9, #6366f1)' : 'rgba(255,255,255,0.06)', border:'1px solid rgba(255,255,255,0.1)', color: lang === 'en' ? 'white' : 'rgba(255,255,255,0.6)'}}
+              className="px-3 py-1.5 rounded-lg text-xs font-bold transition">
               {lang === 'ar' ? '🌐 EN' : '🌐 AR'}
             </button>
           )}
-          <button onClick={handleSignOut} className="px-3 py-1.5 bg-white/10 hover:bg-white/20 text-white/80 text-xs rounded-lg transition font-medium">
+          <button onClick={handleSignOut} style={{background:'rgba(255,255,255,0.06)', border:'1px solid rgba(255,255,255,0.1)', color:'rgba(255,255,255,0.7)'}} className="px-3 py-1.5 text-xs rounded-lg font-medium hover:bg-white/10 transition">
             Sign Out
           </button>
         </div>
@@ -1641,27 +1679,43 @@ export default function App() {
                                   {Object.entries(EXPENSE_CATS).map(([ar, en]) => <option key={ar} value={ar}>{en}</option>)}
                                   {[...new Set(treasury.map(t=>t.category).filter(c=>c&&!EXPENSE_CATS[c]))].map(c => <option key={c} value={c}>{c}</option>)}
                                 </select>
-                                <input list={'subs-'+txn.id} defaultValue={txn.subcategory || ''} placeholder="Subcategory..."
-                                  onBlur={async (e) => {
-                                    const newSub = e.target.value;
-                                    if (newSub !== (txn.subcategory || '')) {
-                                      try {
-                                        await dbUpdate('treasury', txn.id, { subcategory: newSub }, user?.id);
-                                        const desc = (txn.description || '').trim();
-                                        if (desc) {
-                                          const similar = treasury.filter(t => t.id !== txn.id && (t.description || '').trim() === desc && t.category === (txn.category || '') && t.subcategory !== newSub);
-                                          if (similar.length > 0 && confirm('Apply subcategory "' + newSub + '" to ' + similar.length + ' exact matches?\n"' + desc + '"')) {
-                                            for (const s of similar) { await dbUpdate('treasury', s.id, { subcategory: newSub }, user?.id); }
-                                          }
-                                          const existing = expenseRules.find(r => r.description_match === desc);
-                                          if (existing) { await dbUpdate('expense_rules', existing.id, { subcategory: newSub }, user?.id); }
-                                          else { await dbInsert('expense_rules', { description_match: desc, category: txn.category || '', subcategory: newSub }, user?.id); }
+                                {editSubTxnId === txn.id ? (
+                                  <div className="flex gap-1 mt-0.5">
+                                    <input list="subs-all" autoFocus value={editSubValue}
+                                      onChange={e => setEditSubValue(e.target.value)}
+                                      onKeyDown={async (e) => {
+                                        if (e.key === 'Enter') {
+                                          e.preventDefault();
+                                          try {
+                                            await dbUpdate('treasury', txn.id, { subcategory: editSubValue }, user?.id);
+                                            const desc = (txn.description || '').trim();
+                                            if (desc) {
+                                              const similar = treasury.filter(t => t.id !== txn.id && (t.description || '').trim() === desc && t.category === (txn.category || '') && t.subcategory !== editSubValue);
+                                              if (similar.length > 0 && confirm('Apply "' + editSubValue + '" to ' + similar.length + ' exact matches?')) {
+                                                for (const s of similar) { await dbUpdate('treasury', s.id, { subcategory: editSubValue }, user?.id); }
+                                              }
+                                              const existing = expenseRules.find(r => r.description_match === desc);
+                                              if (existing) { await dbUpdate('expense_rules', existing.id, { subcategory: editSubValue }, user?.id); }
+                                              else { await dbInsert('expense_rules', { description_match: desc, category: txn.category || '', subcategory: editSubValue }, user?.id); }
+                                            }
+                                            setEditSubTxnId(null); setEditSubValue('');
+                                            await loadAllData();
+                                          } catch(err) { alert('Error: ' + err.message); }
                                         }
-                                        await loadAllData();
-                                      } catch(err) { alert('Error: ' + err.message); }
-                                    }
-                                  }} className="w-full text-[9px] border rounded px-1 py-0.5 mt-0.5 bg-orange-50" />
-                                <datalist id={'subs-'+txn.id}>
+                                        if (e.key === 'Escape') { setEditSubTxnId(null); setEditSubValue(''); }
+                                      }}
+                                      placeholder="Type & press Enter..."
+                                      className="flex-1 text-[9px] border-2 border-blue-400 rounded px-1 py-0.5 bg-blue-50 focus:outline-none" />
+                                    <button onClick={() => { setEditSubTxnId(null); setEditSubValue(''); }}
+                                      className="text-[9px] text-red-500 px-1">✕</button>
+                                  </div>
+                                ) : (
+                                  <div onClick={() => { setEditSubTxnId(txn.id); setEditSubValue(txn.subcategory || ''); }}
+                                    className="text-[9px] mt-0.5 px-1 py-0.5 rounded cursor-pointer hover:bg-orange-100 bg-orange-50 border border-orange-200 min-h-[18px]">
+                                    {txn.subcategory || <span className="text-slate-300 italic">+ subcategory</span>}
+                                  </div>
+                                )}
+                                <datalist id="subs-all">
                                   {[...new Set(treasury.map(t=>t.subcategory).filter(Boolean))].sort().map(s => <option key={s} value={s}/>)}
                                 </datalist>
                               </td>
@@ -3099,7 +3153,7 @@ export default function App() {
             AI ASSISTANT TAB
         ========================================== */}
         {tab === 'ai' && (
-          <AIAssistant />
+          <AIAssistant user={user} />
         )}
 
         {/* ==========================================
@@ -3214,6 +3268,12 @@ export default function App() {
                   className="px-6 py-2 bg-blue-500 text-white rounded-lg font-semibold">
                   Import Another File / استيراد ملف آخر
                 </button>
+                {importStats?.lastBatchIds?.length > 0 && (
+                  <button onClick={undoLastImport}
+                    className="px-6 py-2 bg-red-500 text-white rounded-lg font-semibold ml-2">
+                    ⏪ Undo Import / إلغاء الاستيراد ({importStats.lastBatchIds.length} records)
+                  </button>
+                )}
               </div>
             )}
           </div>
