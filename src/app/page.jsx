@@ -65,6 +65,8 @@ export default function App() {
   const [showAddInvoice, setShowAddInvoice] = useState(false);
   const [showAddTreasury, setShowAddTreasury] = useState(false);
   const [editingTxn, setEditingTxn] = useState(null);
+  const [splittingTxn, setSplittingTxn] = useState(null);
+  const [splitData, setSplitData] = useState({ order1: '', amount1: 0, order2: '', amount2: 0 });
   const [formData, setFormData] = useState({});
 
   // ==========================================
@@ -296,6 +298,44 @@ export default function App() {
       }, user?.id);
       setEditingTxn(null);
       setFormData({});
+      await loadAllData();
+    } catch (err) {
+      alert('Error: ' + err.message);
+    }
+  };
+
+  const handleSplitTreasury = async () => {
+    if (!splittingTxn) return;
+    const txn = splittingTxn;
+    const a1 = Number(splitData.amount1) || 0;
+    const a2 = Number(splitData.amount2) || 0;
+    const isIn = Number(txn.cash_in) > 0;
+    const total = isIn ? Number(txn.cash_in) : Number(txn.cash_out);
+    if (a1 + a2 !== total) {
+      alert('Split amounts must equal the original (' + total.toLocaleString() + '). Currently: ' + (a1 + a2).toLocaleString());
+      return;
+    }
+    if (!splitData.order1 && !splitData.order2) {
+      alert('Please enter at least one order number');
+      return;
+    }
+    try {
+      await dbUpdate('treasury', txn.id, {
+        order_number: splitData.order1,
+        cash_in: isIn ? a1 : 0,
+        cash_out: isIn ? 0 : a1,
+        description: txn.description + ' (split 1/2)',
+      }, user?.id);
+      await dbInsert('treasury', {
+        transaction_date: txn.transaction_date,
+        order_number: splitData.order2,
+        description: txn.description + ' (split 2/2)',
+        cash_in: isIn ? a2 : 0,
+        cash_out: isIn ? 0 : a2,
+        source: txn.source || 'main',
+      }, user?.id);
+      setSplittingTxn(null);
+      setSplitData({ order1: '', amount1: 0, order2: '', amount2: 0 });
       await loadAllData();
     } catch (err) {
       alert('Error: ' + err.message);
@@ -681,9 +721,11 @@ export default function App() {
                           <td className="px-3 py-2 text-xs text-right text-red-500 font-semibold">
                             {txn.cash_out > 0 ? fE(txn.cash_out) : ''}
                           </td>
-                          <td className="px-3 py-2">
+                          <td className="px-3 py-2 flex gap-1">
                             <button onClick={() => { setEditingTxn(txn.id); setFormData({}); }}
                               className="px-2 py-0.5 rounded border border-blue-300 text-blue-600 text-[10px]">Edit</button>
+                            <button onClick={() => { setSplittingTxn(txn); const isIn = Number(txn.cash_in) > 0; const total = isIn ? Number(txn.cash_in) : Number(txn.cash_out); setSplitData({ order1: txn.order_number || '', amount1: total, order2: '', amount2: 0 }); }}
+                              className="px-2 py-0.5 rounded border border-purple-300 text-purple-600 text-[10px]">Split</button>
                           </td>
                         </tr>
                         )
@@ -693,6 +735,67 @@ export default function App() {
                 </div>
               </div>
             )}
+          </Modal>
+        )}
+
+        {/* SPLIT PAYMENT MODAL */}
+        {splittingTxn && (
+          <Modal onClose={() => setSplittingTxn(null)} title="Split Payment / تقسيم الدفعة">
+            <div className="space-y-3">
+              <div className="bg-slate-50 rounded-lg p-3 text-xs">
+                <div className="font-bold mb-1">{splittingTxn.transaction_date} — {splittingTxn.description}</div>
+                <div>Original: <span className="font-bold text-emerald-600">{fE(Number(splittingTxn.cash_in) > 0 ? Number(splittingTxn.cash_in) : Number(splittingTxn.cash_out))}</span>
+                  {splittingTxn.order_number ? (' — Order: ' + splittingTxn.order_number) : ''}
+                </div>
+              </div>
+              <div className="bg-white rounded-lg border p-3">
+                <div className="text-xs font-bold text-purple-700 mb-2">Split 1</div>
+                <div className="flex gap-2">
+                  <div className="flex-1">
+                    <label className="text-[10px] text-slate-500">Order #</label>
+                    <input value={splitData.order1} onChange={e => setSplitData({...splitData, order1: e.target.value})}
+                      className="w-full px-2 py-1.5 border rounded text-sm" placeholder="Order #" />
+                  </div>
+                  <div className="flex-1">
+                    <label className="text-[10px] text-slate-500">Amount</label>
+                    <input type="number" value={splitData.amount1} onChange={e => {
+                      const a1 = Number(e.target.value) || 0;
+                      const isIn = Number(splittingTxn.cash_in) > 0;
+                      const total = isIn ? Number(splittingTxn.cash_in) : Number(splittingTxn.cash_out);
+                      setSplitData({...splitData, amount1: a1, amount2: total - a1});
+                    }} className="w-full px-2 py-1.5 border rounded text-sm" />
+                  </div>
+                </div>
+              </div>
+              <div className="bg-white rounded-lg border p-3">
+                <div className="text-xs font-bold text-purple-700 mb-2">Split 2</div>
+                <div className="flex gap-2">
+                  <div className="flex-1">
+                    <label className="text-[10px] text-slate-500">Order #</label>
+                    <input value={splitData.order2} onChange={e => setSplitData({...splitData, order2: e.target.value})}
+                      className="w-full px-2 py-1.5 border rounded text-sm" placeholder="Order #" />
+                  </div>
+                  <div className="flex-1">
+                    <label className="text-[10px] text-slate-500">Amount</label>
+                    <input type="number" value={splitData.amount2} onChange={e => {
+                      const a2 = Number(e.target.value) || 0;
+                      const isIn = Number(splittingTxn.cash_in) > 0;
+                      const total = isIn ? Number(splittingTxn.cash_in) : Number(splittingTxn.cash_out);
+                      setSplitData({...splitData, amount2: a2, amount1: total - a2});
+                    }} className="w-full px-2 py-1.5 border rounded text-sm" />
+                  </div>
+                </div>
+              </div>
+              <div className="text-xs text-center text-slate-400">
+                Total: {fE(Number(splitData.amount1) + Number(splitData.amount2))} / {fE(Number(splittingTxn.cash_in) > 0 ? Number(splittingTxn.cash_in) : Number(splittingTxn.cash_out))}
+                {Number(splitData.amount1) + Number(splitData.amount2) === (Number(splittingTxn.cash_in) > 0 ? Number(splittingTxn.cash_in) : Number(splittingTxn.cash_out))
+                  ? ' ✅' : ' ❌ Must match'}
+              </div>
+              <button onClick={handleSplitTreasury}
+                className="w-full py-2 bg-purple-600 text-white rounded-lg font-semibold text-sm hover:bg-purple-700">
+                Split Payment / تقسيم
+              </button>
+            </div>
           </Modal>
         )}
 
