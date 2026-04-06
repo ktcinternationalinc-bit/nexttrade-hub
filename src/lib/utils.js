@@ -86,6 +86,15 @@ export const yearOf = (d) => d ? parseInt(d.substring(0, 4)) : 0;
 export const inRange = (d, mode, df, dt) => {
   if (!d || d.length < 4) return mode === 'all';
   if (mode === 'all') return true;
-  if (mode === '3yr') return d >= '2024';
+  if (mode === '1yr') {
+    const oneYearAgo = new Date();
+    oneYearAgo.setFullYear(oneYearAgo.getFullYear() - 1);
+    return d >= oneYearAgo.toISOString().substring(0, 10);
+  }
+  if (mode === '3yr') {
+    const threeYearsAgo = new Date();
+    threeYearsAgo.setFullYear(threeYearsAgo.getFullYear() - 3);
+    return d >= threeYearsAgo.toISOString().substring(0, 10);
+  }
   return d >= df && d <= dt;
 };
