@@ -5,10 +5,21 @@ const supabase = createClient(
   process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY
 );
 
+export async function GET() {
+  const hasKey = !!process.env.ANTHROPIC_API_KEY;
+  const hasSupabase = !!process.env.NEXT_PUBLIC_SUPABASE_URL;
+  return Response.json({ 
+    status: 'AI API route is working',
+    anthropic_key: hasKey ? 'SET' : 'MISSING',
+    supabase: hasSupabase ? 'SET' : 'MISSING',
+  });
+}
+
 export async function POST(request) {
   try {
-    const { question } = await request.json();
-    if (!question) return Response.json({ error: 'No question' }, { status: 400 });
+    const body = await request.json();
+    const question = body?.question;
+    if (!question) return Response.json({ answer: 'Error: No question received' });
 
     const apiKey = process.env.ANTHROPIC_API_KEY;
     if (!apiKey) return Response.json({ answer: 'AI not configured. Add ANTHROPIC_API_KEY in Vercel environment variables.\n\nالذكاء الاصطناعي غير مفعل. أضف مفتاح API في إعدادات Vercel.' });
@@ -98,9 +109,12 @@ ${(debts.data || []).map(d => `- ${d.debtor_name}: EGP ${Number(d.total_debt).to
     });
 
     const data = await response.json();
-    const answer = data.content?.[0]?.text || 'No response / لا يوجد رد';
+    if (data.error) {
+      return Response.json({ answer: 'Anthropic API Error: ' + (data.error.message || JSON.stringify(data.error)) });
+    }
+    const answer = data.content?.[0]?.text || 'No text in response. Raw: ' + JSON.stringify(data).substring(0, 200);
     return Response.json({ answer });
   } catch (err) {
-    return Response.json({ answer: 'Error: ' + err.message }, { status: 500 });
+    return Response.json({ answer: 'Server Error: ' + err.message });
   }
 }
