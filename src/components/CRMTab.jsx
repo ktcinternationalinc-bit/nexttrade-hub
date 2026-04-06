@@ -3,16 +3,19 @@ import { useState, useMemo } from 'react';
 import { supabase, dbInsert, dbUpdate, logActivity } from '../lib/supabase';
 import { fE, fmt } from '../lib/utils';
 
-const GROUPS = ['Textiles', 'Leather', 'Pool', 'Industrial', 'Retail', 'Export', 'Other'];
-const TYPES = ['Trader', 'Manufacturer', 'Retailer', 'Wholesaler', 'Distributor', 'Agent'];
+const DEFAULT_CATEGORIES = ['Pool', 'Leather'];
+const DEFAULT_GROUPS = ['Retail', 'Manufacturer', 'Export', 'Distributor'];
 const LEAD_SOURCES = ['Referral', 'Facebook', 'WhatsApp', 'Exhibition', 'Walk-in', 'Website', 'Cold Call', 'Existing'];
 
 export default function CRMTab({ customers, invoices, user, users, onReload, isAdmin, onSelectInvoice, lang }) {
   const [sel, setSel] = useState(null);
   const [q, setQ] = useState('');
   const [groupF, setGroupF] = useState('all');
-  const [typeF, setTypeF] = useState('all');
+  const [catF, setCatF] = useState('all');
   const [sortBy, setSortBy] = useState('alpha');
+  const [customCategories, setCustomCategories] = useState([]);
+  const [customGroups, setCustomGroups] = useState([]);
+  const [listsLoaded, setListsLoaded] = useState(false);
   const [showAdd, setShowAdd] = useState(false);
   const [showNote, setShowNote] = useState(false);
   const [showFollowUp, setShowFollowUp] = useState(false);
@@ -31,6 +34,50 @@ export default function CRMTab({ customers, invoices, user, users, onReload, isA
     setNotesLoaded(true);
   };
   if (!notesLoaded) loadAllNotes();
+
+  // Load custom categories & groups from app_settings
+  const loadCustomLists = async () => {
+    try {
+      const { data } = await supabase.from('app_settings').select('setting_key, setting_value').in('setting_key', ['custom_categories', 'custom_groups']);
+      (data || []).forEach(row => {
+        try {
+          if (row.setting_key === 'custom_categories') setCustomCategories(JSON.parse(row.setting_value));
+          if (row.setting_key === 'custom_groups') setCustomGroups(JSON.parse(row.setting_value));
+        } catch(e) {}
+      });
+    } catch(e) { console.log('Custom lists not loaded:', e); }
+    setListsLoaded(true);
+  };
+  if (!listsLoaded) loadCustomLists();
+
+  // Merged lists: defaults + custom
+  const allCategories = [...new Set([...DEFAULT_CATEGORIES, ...customCategories])].sort();
+  const allGroups = [...new Set([...DEFAULT_GROUPS, ...customGroups])].sort();
+
+  const saveCustomList = async (key, list) => {
+    try {
+      const { data: existing } = await supabase.from('app_settings').select('id').eq('setting_key', key).single();
+      if (existing) {
+        await supabase.from('app_settings').update({ setting_value: JSON.stringify(list) }).eq('id', existing.id);
+      } else {
+        await supabase.from('app_settings').insert({ setting_key: key, setting_value: JSON.stringify(list) });
+      }
+    } catch(e) { console.log('Save list error:', e); }
+  };
+
+  const addCategory = async (name) => {
+    if (!name || allCategories.includes(name)) return;
+    const updated = [...customCategories, name];
+    setCustomCategories(updated);
+    await saveCustomList('custom_categories', updated);
+  };
+
+  const addGroup = async (name) => {
+    if (!name || allGroups.includes(name)) return;
+    const updated = [...customGroups, name];
+    setCustomGroups(updated);
+    await saveCustomList('custom_groups', updated);
+  };
 
   const loadClientData = async (client) => {
     setSel(client);
@@ -88,7 +135,7 @@ export default function CRMTab({ customers, invoices, user, users, onReload, isA
       if (!isAdmin && c.restricted) return false;
       if (q && !(c.name || '').includes(q) && !(c.name_en || '').toLowerCase().includes(q.toLowerCase())) return false;
       if (groupF !== 'all' && c.group_name !== groupF) return false;
-      if (typeF !== 'all' && c.client_type !== typeF) return false;
+      if (catF !== 'all' && c.industry !== catF) return false;
       return true;
     });
     if (sortBy === 'alpha') arr.sort((a, b) => (a.name || '').localeCompare(b.name || ''));
@@ -123,7 +170,7 @@ export default function CRMTab({ customers, invoices, user, users, onReload, isA
       return 0;
     });
     return arr;
-  }, [customers, q, groupF, typeF, sortBy, invoices, allNotes]);
+  }, [customers, q, groupF, catF, sortBy, invoices, allNotes]);
 
   const groups = [...new Set(customers.map(c => c.group_name).filter(Boolean))].sort();
 
@@ -148,7 +195,7 @@ export default function CRMTab({ customers, invoices, user, users, onReload, isA
       await dbUpdate('customers', sel.id, {
         name: f.name || sel.name, name_ar: f.nameAr || sel.name_ar, name_en: f.nameEn || sel.name_en,
         phone: f.phone || sel.phone, email: f.email || sel.email, address: f.address || sel.address,
-        city: f.city || sel.city, group_name: f.group || sel.group_name, client_type: f.clientType || sel.client_type,
+        city: f.city || sel.city, group_name: f.group || sel.group_name, industry: f.industry !== undefined ? f.industry : sel.industry,
         lead_source: f.leadSource || sel.lead_source,
       }, user?.id);
       await logActivity(user?.id, 'Edited client: ' + (f.name || sel.name));
@@ -214,13 +261,13 @@ export default function CRMTab({ customers, invoices, user, users, onReload, isA
         </div>
       </div>
       <div className="flex gap-2 mb-3 flex-wrap">
-        <select value={groupF} onChange={e => setGroupF(e.target.value)} className="px-2 py-1 rounded border border-slate-200 text-xs">
-          <option value="all">All Groups / كل المجموعات</option>
-          {[...new Set([...GROUPS, ...groups])].map(g => <option key={g} value={g}>{g}</option>)}
+        <select value={catF} onChange={e => setCatF(e.target.value)} className="px-2 py-1 rounded border border-slate-200 text-xs">
+          <option value="all">All Categories</option>
+          {allCategories.map(c => <option key={c} value={c}>{c}</option>)}
         </select>
-        <select value={typeF} onChange={e => setTypeF(e.target.value)} className="px-2 py-1 rounded border border-slate-200 text-xs">
-          <option value="all">All Types / كل الأنواع</option>
-          {TYPES.map(t => <option key={t} value={t}>{t}</option>)}
+        <select value={groupF} onChange={e => setGroupF(e.target.value)} className="px-2 py-1 rounded border border-slate-200 text-xs">
+          <option value="all">All Groups</option>
+          {allGroups.map(g => <option key={g} value={g}>{g}</option>)}
         </select>
         <select value={sortBy} onChange={e => setSortBy(e.target.value)} className="px-2 py-1 rounded border border-slate-200 text-xs">
           <option value="alpha">A-Z / أبجدي</option>
@@ -240,8 +287,8 @@ export default function CRMTab({ customers, invoices, user, users, onReload, isA
           <div className="text-[10px] text-slate-500">Active / نشط</div>
           <div className="text-lg font-extrabold">{filtered.filter(c => c.status !== 'inactive').length}</div></div>
         <div className="bg-white rounded-lg p-3" style={{borderLeftWidth:3,borderLeftColor:'#f59e0b'}}>
-          <div className="text-[10px] text-slate-500">Groups / مجموعات</div>
-          <div className="text-lg font-extrabold">{groups.length || '—'}</div></div>
+          <div className="text-[10px] text-slate-500">Categories</div>
+          <div className="text-lg font-extrabold">{[...new Set(customers.map(c=>c.industry).filter(Boolean))].length || '—'}</div></div>
       </div>
       {showAdd && (
         <div className="bg-blue-50 rounded-xl p-4 mb-3 border border-blue-200">
@@ -251,14 +298,12 @@ export default function CRMTab({ customers, invoices, user, users, onReload, isA
               <input value={f.name||''} onChange={e=>setF({...f,name:e.target.value})} className="w-full px-3 py-2 rounded border text-sm" style={{direction:'rtl'}} /></div>
             <div><label className="text-[10px] font-semibold">Name (English)</label>
               <input value={f.nameEn||''} onChange={e=>setF({...f,nameEn:e.target.value})} className="w-full px-3 py-2 rounded border text-sm" /></div>
-            <div><label className="text-[10px] font-semibold">Group</label>
-              <select value={f.group||''} onChange={e=>setF({...f,group:e.target.value})} className="w-full px-3 py-2 rounded border text-sm">
-                <option value="">Select...</option>{GROUPS.map(g=><option key={g} value={g}>{g}</option>)}</select></div>
-            <div><label className="text-[10px] font-semibold">Type / النوع</label>
-              <select value={f.clientType||''} onChange={e=>setF({...f,clientType:e.target.value})} className="w-full px-3 py-2 rounded border text-sm">
-                <option value="">Select...</option>{TYPES.map(t=><option key={t} value={t}>{t}</option>)}</select></div>
-            <div><label className="text-[10px] font-semibold">Industry / القطاع</label>
-              <input value={f.industry||''} onChange={e=>setF({...f,industry:e.target.value})} className="w-full px-3 py-2 rounded border text-sm" /></div>
+            <div><label className="text-[10px] font-semibold">Category / الفئة</label>
+              <select value={f.industry||''} onChange={e=>{if(e.target.value==='_new'){const n=prompt('New category name:');if(n){addCategory(n);setF({...f,industry:n});}}else{setF({...f,industry:e.target.value});}}} className="w-full px-3 py-2 rounded border text-sm">
+                <option value="">Select...</option>{allCategories.map(c=><option key={c} value={c}>{c}</option>)}<option value="_new">+ Add New Category...</option></select></div>
+            <div><label className="text-[10px] font-semibold">Group / المجموعة</label>
+              <select value={f.group||''} onChange={e=>{if(e.target.value==='_new'){const n=prompt('New group name:');if(n){addGroup(n);setF({...f,group:n});}}else{setF({...f,group:e.target.value});}}} className="w-full px-3 py-2 rounded border text-sm">
+                <option value="">Select...</option>{allGroups.map(g=><option key={g} value={g}>{g}</option>)}<option value="_new">+ Add New Group...</option></select></div>
             <div><label className="text-[10px] font-semibold">Lead Source / المصدر</label>
               <select value={f.leadSource||''} onChange={e=>setF({...f,leadSource:e.target.value})} className="w-full px-3 py-2 rounded border text-sm">
                 <option value="">Select...</option>{LEAD_SOURCES.map(s=><option key={s} value={s}>{s}</option>)}</select></div>
@@ -327,8 +372,8 @@ export default function CRMTab({ customers, invoices, user, users, onReload, isA
               <div className="text-sm font-bold" style={{direction:'rtl'}}>{c.important ? '⭐ ' : ''}{lang === 'en' && c.name_en ? c.name_en : c.name}</div>
               {lang === 'ar' && c.name_en && <div className="text-[10px] text-blue-500">{c.name_en}</div>}
               <div className="flex gap-1 mt-1 flex-wrap">
+                {c.industry && <span className="px-1.5 py-0.5 bg-amber-100 text-amber-700 rounded text-[9px]">{c.industry}</span>}
                 {c.group_name && <span className="px-1.5 py-0.5 bg-purple-100 text-purple-700 rounded text-[9px]">{c.group_name}</span>}
-                {c.client_type && <span className="px-1.5 py-0.5 bg-blue-100 text-blue-700 rounded text-[9px]">{c.client_type}</span>}
                 {c.lead_source && <span className="px-1.5 py-0.5 bg-green-100 text-green-700 rounded text-[9px]">{c.lead_source}</span>}
               </div>
               <div className="flex justify-between mt-2">
@@ -374,12 +419,12 @@ export default function CRMTab({ customers, invoices, user, users, onReload, isA
               <input value={f.name!==undefined?f.name:sel.name} onChange={e=>setF({...f,name:e.target.value})} className="w-full px-2 py-1.5 border rounded text-sm" style={{direction:'rtl'}} /></div>
             <div><label className="text-[10px] font-semibold">Name (English)</label>
               <input value={f.nameEn!==undefined?f.nameEn:(sel.name_en||'')} onChange={e=>setF({...f,nameEn:e.target.value})} className="w-full px-2 py-1.5 border rounded text-sm" /></div>
+            <div><label className="text-[10px] font-semibold">Category</label>
+              <select value={f.industry!==undefined?f.industry:(sel.industry||'')} onChange={e=>{if(e.target.value==='_new'){const n=prompt('New category:');if(n){addCategory(n);setF({...f,industry:n});}}else{setF({...f,industry:e.target.value});}}} className="w-full px-2 py-1.5 border rounded text-sm">
+                <option value="">None</option>{allCategories.map(c=><option key={c} value={c}>{c}</option>)}<option value="_new">+ Add New...</option></select></div>
             <div><label className="text-[10px] font-semibold">Group</label>
-              <select value={f.group!==undefined?f.group:(sel.group_name||'')} onChange={e=>setF({...f,group:e.target.value})} className="w-full px-2 py-1.5 border rounded text-sm">
-                <option value="">None</option>{GROUPS.map(g=><option key={g} value={g}>{g}</option>)}</select></div>
-            <div><label className="text-[10px] font-semibold">Type</label>
-              <select value={f.clientType!==undefined?f.clientType:(sel.client_type||'')} onChange={e=>setF({...f,clientType:e.target.value})} className="w-full px-2 py-1.5 border rounded text-sm">
-                <option value="">None</option>{TYPES.map(t=><option key={t} value={t}>{t}</option>)}</select></div>
+              <select value={f.group!==undefined?f.group:(sel.group_name||'')} onChange={e=>{if(e.target.value==='_new'){const n=prompt('New group:');if(n){addGroup(n);setF({...f,group:n});}}else{setF({...f,group:e.target.value});}}} className="w-full px-2 py-1.5 border rounded text-sm">
+                <option value="">None</option>{allGroups.map(g=><option key={g} value={g}>{g}</option>)}<option value="_new">+ Add New...</option></select></div>
             <div><label className="text-[10px] font-semibold">Lead Source</label>
               <select value={f.leadSource!==undefined?f.leadSource:(sel.lead_source||'')} onChange={e=>setF({...f,leadSource:e.target.value})} className="w-full px-2 py-1.5 border rounded text-sm">
                 <option value="">None</option>{LEAD_SOURCES.map(s=><option key={s} value={s}>{s}</option>)}</select></div>
@@ -399,9 +444,8 @@ export default function CRMTab({ customers, invoices, user, users, onReload, isA
                 <h3 className="text-xl font-extrabold" style={{direction: lang === 'ar' ? 'rtl' : 'ltr'}}>{lang === 'en' && sel.name_en ? sel.name_en : sel.name}</h3>
                 {lang === 'ar' && sel.name_en && <div className="text-sm text-blue-500">{sel.name_en}</div>}
                 <div className="flex gap-1 mt-1 flex-wrap">
+                  {sel.industry && <span className="px-2 py-0.5 bg-amber-100 text-amber-700 rounded text-xs font-semibold">{sel.industry}</span>}
                   {sel.group_name && <span className="px-2 py-0.5 bg-purple-100 text-purple-700 rounded text-xs">{sel.group_name}</span>}
-                  {sel.client_type && <span className="px-2 py-0.5 bg-blue-100 text-blue-700 rounded text-xs">{sel.client_type}</span>}
-                  {sel.industry && <span className="px-2 py-0.5 bg-amber-100 text-amber-700 rounded text-xs">{sel.industry}</span>}
                   {sel.lead_source && <span className="px-2 py-0.5 bg-green-100 text-green-700 rounded text-xs">{sel.lead_source}</span>}
                   {sel.city && <span className="px-2 py-0.5 bg-slate-100 text-slate-600 rounded text-xs">{sel.city}</span>}
                 </div>
