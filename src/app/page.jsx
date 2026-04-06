@@ -425,7 +425,7 @@ export default function App() {
       {/* Header */}
       <div className="bg-gradient-to-r from-slate-900 to-blue-900 px-4 py-3 flex justify-between items-center">
         <div>
-          <h1 className="text-white text-xl font-extrabold">NextTrade Hub</h1>
+          <h1 className="text-white text-xl font-extrabold">KANDIL KTC EGYPT HUB</h1>
           <p className="text-white/40 text-xs">KTC — لوحة التحكم المالية</p>
         </div>
         <button onClick={handleSignOut} className="text-white/60 text-xs hover:text-white transition">
@@ -646,6 +646,31 @@ export default function App() {
                     </tr></thead>
                     <tbody>
                       {monthTransactions.map(txn => (
+                        editingTxn === txn.id ? (
+                          <tr key={txn.id} className="bg-blue-50">
+                            <td className="px-2 py-1.5"><input type="date" defaultValue={txn.transaction_date}
+                              onChange={e => setFormData({...formData, date: e.target.value})}
+                              className="w-full text-xs border rounded px-1 py-1" /></td>
+                            <td className="px-2 py-1.5"><input defaultValue={txn.order_number || ''}
+                              onChange={e => setFormData({...formData, orderNumber: e.target.value})}
+                              className="w-16 text-xs border rounded px-1 py-1" /></td>
+                            <td className="px-2 py-1.5"><input defaultValue={txn.description}
+                              onChange={e => setFormData({...formData, desc: e.target.value})}
+                              className="w-full text-xs border rounded px-1 py-1" style={{ direction: 'rtl' }} /></td>
+                            <td className="px-2 py-1.5"><input type="number" defaultValue={txn.cash_in || 0}
+                              onChange={e => setFormData({...formData, cashIn: e.target.value})}
+                              className="w-20 text-xs border rounded px-1 py-1" /></td>
+                            <td className="px-2 py-1.5"><input type="number" defaultValue={txn.cash_out || 0}
+                              onChange={e => setFormData({...formData, cashOut: e.target.value})}
+                              className="w-20 text-xs border rounded px-1 py-1" /></td>
+                            <td className="px-2 py-1.5 flex gap-1">
+                              <button onClick={() => handleEditTreasury(txn)}
+                                className="px-2 py-0.5 rounded bg-emerald-500 text-white text-[10px]">Save</button>
+                              <button onClick={() => { setEditingTxn(null); setFormData({}); }}
+                                className="px-2 py-0.5 rounded bg-slate-300 text-[10px]">Cancel</button>
+                            </td>
+                          </tr>
+                        ) : (
                         <tr key={txn.id} className="border-b border-slate-50">
                           <td className="px-3 py-2 text-xs">{txn.transaction_date}</td>
                           <td className="px-3 py-2 text-xs font-semibold">{txn.order_number || '—'}</td>
@@ -661,6 +686,7 @@ export default function App() {
                               className="px-2 py-0.5 rounded border border-blue-300 text-blue-600 text-[10px]">Edit</button>
                           </td>
                         </tr>
+                        )
                       ))}
                     </tbody>
                   </table>
@@ -970,6 +996,11 @@ export default function App() {
                 </button>
               </div>
             </div>
+            <div className="mb-3">
+              <input value={query} onChange={e => setQuery(e.target.value)}
+                placeholder="Search order #, description, date / بحث"
+                className="w-full px-3 py-2 rounded-lg border border-slate-200 text-sm" />
+            </div>
             <div className="grid grid-cols-3 gap-3 mb-3">
               <div onClick={() => setTreasuryDrill('in')} className="bg-white rounded-lg p-3 cursor-pointer hover:shadow-md" style={{ borderLeftWidth: 3, borderLeftColor: '#10b981' }}>
                 <div className="text-[10px] text-slate-500">Cash In / وارد</div>
@@ -984,6 +1015,45 @@ export default function App() {
                 <div className="text-lg font-extrabold">{fE(totalCashIn - totalCashOut)}</div>
               </div>
             </div>
+            {query && (
+              <div className="bg-white rounded-xl p-4 mb-3">
+                <h3 className="text-sm font-bold mb-2">Search Results ({filteredTreasury.filter(t =>
+                  (t.order_number || '').includes(query) ||
+                  (t.description || '').includes(query) ||
+                  (t.transaction_date || '').includes(query)
+                ).length})</h3>
+                <div className="overflow-auto max-h-[400px] rounded-lg border border-slate-200">
+                  <table className="w-full border-collapse">
+                    <thead><tr className="bg-slate-50 sticky top-0">
+                      <th className="px-2 py-2 text-xs text-left">Date</th>
+                      <th className="px-2 py-2 text-xs">Order</th>
+                      <th className="px-2 py-2 text-xs" style={{ direction: 'rtl' }}>Description</th>
+                      <th className="px-2 py-2 text-xs text-right">In</th>
+                      <th className="px-2 py-2 text-xs text-right">Out</th>
+                    </tr></thead>
+                    <tbody>
+                      {filteredTreasury.filter(t =>
+                        (t.order_number || '').includes(query) ||
+                        (t.description || '').includes(query) ||
+                        (t.transaction_date || '').includes(query)
+                      ).slice(0, 200).map(txn => (
+                        <tr key={txn.id} className="border-b border-slate-50">
+                          <td className="px-2 py-1.5 text-xs">{txn.transaction_date}</td>
+                          <td className="px-2 py-1.5 text-xs font-semibold text-center">{txn.order_number || ''}</td>
+                          <td className="px-2 py-1.5 text-xs" style={{ direction: 'rtl' }}>{txn.description}</td>
+                          <td className="px-2 py-1.5 text-xs text-right text-emerald-600 font-semibold">
+                            {txn.cash_in > 0 ? fE(txn.cash_in) : ''}
+                          </td>
+                          <td className="px-2 py-1.5 text-xs text-right text-red-500 font-semibold">
+                            {txn.cash_out > 0 ? fE(txn.cash_out) : ''}
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            )}
             <div className="bg-white rounded-xl p-4">
               <h3 className="text-sm font-bold mb-2">Expense Buckets / تصنيف المنصرفات</h3>
               {expenseBuckets.map((e, i) => (
