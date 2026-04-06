@@ -32,6 +32,27 @@ export const COLORS = [
   '#ec4899', '#14b8a6', '#f97316', '#6366f1', '#84cc16',
 ];
 
+// Warehouse expense categories (keyword-based)
+export const WAREHOUSE_CATS = {
+  'Transport': ['مواصلات', 'تاكس', 'تاكسى', 'سائق', 'السائق', 'نقل'],
+  'Container': ['الكونتنر', 'كونتنر', 'تنزيل', 'تحميل', 'ميزان'],
+  'Labor': ['عمال', 'افراد', 'اكراميه', 'يوميه'],
+  'Phone': ['تليفون', 'كارت', 'كرت', 'رسائل', 'شحن كارت'],
+  'Medical': ['علاج', 'دواء', 'طبيب'],
+  'Supplies': ['ادوات', 'كتابيه', 'تصوير', 'مستندات', 'حبر', 'ورق'],
+  'Food': ['اكل', 'سكر', 'شاى', 'مياه', 'غذاء'],
+  'Rent': ['ايجار', 'كهرباء'],
+  'Security': ['الغفره', 'غفير', 'حراسه', 'امن'],
+  'Leather': ['الجلد', 'جلد'],
+};
+
+export const getWarehouseCat = (desc) => {
+  for (const [cat, keywords] of Object.entries(WAREHOUSE_CATS)) {
+    if (keywords.some(k => (desc || '').includes(k))) return cat;
+  }
+  return 'Other';
+};
+
 // Reconciliation status with 2% tolerance
 export const getReconStatus = (invoice, treasuryTotal) => {
   const tolerance = invoice.total_amount * 0.02;
