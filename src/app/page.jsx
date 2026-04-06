@@ -2492,8 +2492,18 @@ export default function App() {
                 <h3 className="text-sm font-bold text-blue-800 mb-3">New Product / منتج جديد</h3>
                 <div className="grid grid-cols-2 gap-3">
                   <div>
+                    <label className="text-[10px] font-semibold text-slate-600">Product ID / رقم المنتج</label>
+                    <input value={formData.prodId || ''} onChange={e => setFormData({...formData, prodId: e.target.value})}
+                      className="w-full px-3 py-2 rounded-lg border border-slate-200 text-sm" />
+                  </div>
+                  <div>
                     <label className="text-[10px] font-semibold text-slate-600">Reference # / رقم المرجع</label>
                     <input value={formData.prodRef || ''} onChange={e => setFormData({...formData, prodRef: e.target.value})}
+                      className="w-full px-3 py-2 rounded-lg border border-slate-200 text-sm" />
+                  </div>
+                  <div className="col-span-2">
+                    <label className="text-[10px] font-semibold text-slate-600">Shipment Reference / مرجع الشحنة</label>
+                    <input value={formData.prodShipment || ''} onChange={e => setFormData({...formData, prodShipment: e.target.value})}
                       className="w-full px-3 py-2 rounded-lg border border-slate-200 text-sm" />
                   </div>
                   <div>
@@ -2535,7 +2545,9 @@ export default function App() {
                   <button onClick={async () => {
                     try {
                       await dbInsert('inventory', {
+                        product_id: formData.prodId || '',
                         reference_number: formData.prodRef || '',
+                        shipment_reference: formData.prodShipment || '',
                         description: formData.prodDesc || '',
                         description_en: formData.prodDescEn || '',
                         color: formData.prodColor || '',
@@ -2558,22 +2570,25 @@ export default function App() {
             <div className="overflow-auto rounded-lg border border-slate-200 max-h-[450px]">
               <table className="w-full border-collapse">
                 <thead className="sticky top-0"><tr className="bg-slate-50">
+                  <th className="px-2 py-2 text-[10px] text-left">Product ID / المنتج</th>
                   <th className="px-2 py-2 text-[10px] text-left">Ref# / المرجع</th>
+                  <th className="px-2 py-2 text-[10px]">Shipment / الشحنة</th>
                   <th className="px-2 py-2 text-[10px]">Description / الوصف</th>
                   <th className="px-2 py-2 text-[10px]">Color / اللون</th>
                   <th className="px-2 py-2 text-[10px] text-right">Rolls / لفات</th>
-                  <th className="px-2 py-2 text-[10px] text-right">Gross / إجمالي</th>
                   <th className="px-2 py-2 text-[10px] text-right">Net / صافي</th>
                   <th className="px-2 py-2 text-[10px] text-right">Price / سعر</th>
                   <th className="px-2 py-2 text-[10px]">Status</th>
                 </tr></thead>
                 <tbody>
                   {inventory
-                    .filter(p => !query || (p.reference_number || '').includes(query) || (p.description || '').includes(query) || (p.description_en || '').toLowerCase().includes(query.toLowerCase()) || (p.color || '').includes(query))
+                    .filter(p => !query || (p.product_id || '').includes(query) || (p.reference_number || '').includes(query) || (p.shipment_reference || '').includes(query) || (p.description || '').includes(query) || (p.description_en || '').toLowerCase().includes(query.toLowerCase()) || (p.color || '').includes(query))
                     .map(p => (
                     <tr key={p.id} className="border-b border-slate-50 hover:bg-slate-50 cursor-pointer"
                       onClick={() => setFormData({...formData, selectedProduct: p})}>
-                      <td className="px-2 py-1.5 text-xs font-bold">{p.reference_number}</td>
+                      <td className="px-2 py-1.5 text-xs font-bold text-blue-600">{p.product_id || '—'}</td>
+                      <td className="px-2 py-1.5 text-xs font-semibold">{p.reference_number}</td>
+                      <td className="px-2 py-1.5 text-[10px] text-slate-500">{p.shipment_reference || '—'}</td>
                       <td className="px-2 py-1.5">
                         <div className="text-xs" style={{ direction: 'rtl' }}>{p.description}</div>
                         {p.description_en && <div className="text-[10px] text-blue-500">{p.description_en}</div>}
@@ -2583,7 +2598,6 @@ export default function App() {
                         {p.color_en && <div className="text-[10px] text-blue-500">{p.color_en}</div>}
                       </td>
                       <td className="px-2 py-1.5 text-xs text-right font-semibold">{p.roll_count}</td>
-                      <td className="px-2 py-1.5 text-xs text-right">{fmt(p.gross_weight)} kg</td>
                       <td className="px-2 py-1.5 text-xs text-right">{fmt(p.net_weight)} kg</td>
                       <td className="px-2 py-1.5 text-xs text-right font-semibold text-emerald-600">{fE(p.unit_price)}</td>
                       <td className="px-2 py-1.5">
@@ -2675,7 +2689,7 @@ export default function App() {
             CRM TAB
         ========================================== */}
         {tab === 'crm' && (
-          <CRMTab customers={customers} invoices={invoices} user={user} onReload={loadAllData} />
+          <CRMTab customers={customers} invoices={invoices} user={user} onReload={loadAllData} isAdmin={true} onSelectInvoice={setSelectedInvoice} />
         )}
 
         {/* ==========================================
