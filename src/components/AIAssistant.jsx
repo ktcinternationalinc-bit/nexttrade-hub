@@ -19,10 +19,15 @@ export default function AIAssistant() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ question }),
       });
-      const data = await res.json();
-      setMessages(prev => [...prev, { role: 'ai', text: data.answer || 'No response' }]);
+      if (!res.ok) {
+        const errText = await res.text();
+        setMessages(prev => [...prev, { role: 'ai', text: 'API Error (' + res.status + '): ' + errText }]);
+      } else {
+        const data = await res.json();
+        setMessages(prev => [...prev, { role: 'ai', text: data.answer || data.error || 'No response — check API key in Vercel' }]);
+      }
     } catch (err) {
-      setMessages(prev => [...prev, { role: 'ai', text: 'Error: ' + err.message }]);
+      setMessages(prev => [...prev, { role: 'ai', text: 'Connection Error: ' + err.message + '\n\nMake sure route.js is at src/app/api/ask/route.js' }]);
     }
     setLoading(false);
   };
