@@ -3,6 +3,7 @@ import { useState, useEffect, useMemo, useCallback } from 'react';
 import { supabase, dbInsert, dbUpdate, dbDelete } from '../lib/supabase';
 import { fmt, fE, COLORS, EXPENSE_CATS, getReconStatus, STATUS_STYLES, today, inRange, monthOf, getWarehouseCat } from '../lib/utils';
 import * as XLSX from 'xlsx';
+import CRMTab from '../components/CRMTab';
 import {
   BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip,
   ResponsiveContainer, Legend
@@ -1205,8 +1206,8 @@ export default function App() {
                                   onChange={e => setFormData({...formData, category: e.target.value})}
                                   className="w-full text-[10px] border rounded px-1 py-0.5 mt-1" />
                               )}
-                              <input value={formData.subcategory !== undefined ? formData.subcategory : (txn.subcategory || '')}
-                                onChange={e => setFormData({...formData, subcategory: e.target.value})}
+                              <input key={'sub-'+txn.id} defaultValue={txn.subcategory || ''}
+                                onBlur={e => setFormData({...formData, subcategory: e.target.value})}
                                 placeholder="Subcategory / تصنيف فرعي (optional)"
                                 className="w-full text-[10px] border rounded px-1 py-0.5 mt-1 bg-orange-50" />
                             </td>
@@ -1502,7 +1503,7 @@ export default function App() {
         ========================================== */}
         {showAddInvoice && (
           <Modal onClose={() => { setShowAddInvoice(false); setFormData({}); }} title="New Invoice / فاتورة جديدة">
-            <div className="grid grid-cols-2 gap-3">
+            <div className="grid grid-cols-2 gap-3 mb-3">
               <div>
                 <label className="text-xs font-semibold text-slate-600">Order # / رقم الأمر</label>
                 <input value={formData.orderNumber || ''}
@@ -1510,7 +1511,7 @@ export default function App() {
                   className="w-full px-3 py-2 rounded-lg border border-slate-200 text-sm" />
               </div>
               <div>
-                <label className="text-xs font-semibold text-slate-600">Date / التاريخ</label>
+                <label className="text-xs font-semibold text-slate-600">Date / التاريخ <span className="text-[9px] text-slate-400">(mm/dd/yyyy)</span></label>
                 <input type="date" value={formData.date || today()}
                   onChange={e => setFormData({ ...formData, date: e.target.value })}
                   className="w-full px-3 py-2 rounded-lg border border-slate-200 text-sm" />
@@ -1522,27 +1523,132 @@ export default function App() {
                   className="w-full px-3 py-2 rounded-lg border border-slate-200 text-sm" />
               </div>
               <div>
-                <label className="text-xs font-semibold text-slate-600">Amount / المبلغ</label>
-                <input type="number" value={formData.amount || ''}
-                  onChange={e => setFormData({ ...formData, amount: e.target.value })}
-                  className="w-full px-3 py-2 rounded-lg border border-slate-200 text-sm" />
-              </div>
-              <div>
                 <label className="text-xs font-semibold text-slate-600">Sales Rep / المندوب</label>
                 <input value={formData.salesRep || ''}
                   onChange={e => setFormData({ ...formData, salesRep: e.target.value })}
                   className="w-full px-3 py-2 rounded-lg border border-slate-200 text-sm" />
               </div>
-              <div className="col-span-2">
+              <div>
                 <label className="text-xs font-semibold text-slate-600">Notes / ملاحظات</label>
                 <input value={formData.notes || ''}
                   onChange={e => setFormData({ ...formData, notes: e.target.value })}
                   className="w-full px-3 py-2 rounded-lg border border-slate-200 text-sm" />
               </div>
             </div>
-            <div className="flex gap-2 mt-4">
-              <button onClick={handleAddInvoice}
-                className="px-4 py-2 bg-blue-500 text-white rounded-lg font-semibold">Create / إنشاء ✓</button>
+
+            {/* Product Line Items */}
+            <div className="bg-blue-50 rounded-lg p-3 mb-3 border border-blue-200">
+              <div className="flex justify-between items-center mb-2">
+                <h4 className="text-xs font-bold text-blue-800">Items / البضاعة ({(formData.invoiceItems || []).length}/20)</h4>
+                {(formData.invoiceItems || []).length < 20 && (
+                  <button onClick={() => setFormData({...formData, showProductPicker: true})}
+                    className="px-2 py-1 bg-blue-500 text-white rounded text-[10px] font-semibold">+ Add Item / إضافة</button>
+                )}
+              </div>
+
+              {/* Product Picker */}
+              {formData.showProductPicker && (
+                <div className="bg-white rounded-lg p-3 mb-2 border border-blue-300">
+                  <input value={formData.prodSearch || ''} onChange={e => setFormData({...formData, prodSearch: e.target.value})}
+                    placeholder="Search inventory by ref#, name... / بحث" className="w-full px-2 py-1.5 border rounded text-xs mb-2" autoFocus />
+                  <div className="max-h-[150px] overflow-auto">
+                    {inventory.filter(p => {
+                      const sq = formData.prodSearch || '';
+                      if (sq.length < 1) return true;
+                      return (p.reference_number || '').includes(sq) || (p.description || '').includes(sq) || (p.description_en || '').toLowerCase().includes(sq.toLowerCase());
+                    }).slice(0, 10).map(p => (
+                      <div key={p.id} onClick={() => {
+                        const items = formData.invoiceItems || [];
+                        items.push({ inv_desc: (p.reference_number || '') + ' - ' + (p.description || ''), inv_qty: 1, inv_price: Number(p.unit_price) || 0, inv_total: Number(p.unit_price) || 0, product_id: p.id });
+                        setFormData({...formData, invoiceItems: items, showProductPicker: false, prodSearch: ''});
+                      }} className="px-2 py-1.5 text-xs cursor-pointer hover:bg-blue-50 border-b border-slate-50">
+                        <span className="font-bold">{p.reference_number}</span> — <span style={{direction:'rtl'}}>{p.description}</span>
+                        {p.description_en && <span className="text-blue-400 ml-1">({p.description_en})</span>}
+                        <span className="text-emerald-600 ml-1">{fE(p.unit_price)}</span>
+                      </div>
+                    ))}
+                  </div>
+                  <div className="border-t border-slate-200 pt-2 mt-2">
+                    <div className="text-[10px] text-slate-500 mb-1">Or create custom item / أو أضف عنصر مخصص:</div>
+                    <div className="flex gap-1">
+                      <input value={formData.customDesc || ''} onChange={e => setFormData({...formData, customDesc: e.target.value})}
+                        placeholder="Description" className="flex-1 px-2 py-1 border rounded text-[10px]" />
+                      <input type="number" value={formData.customPrice || ''} onChange={e => setFormData({...formData, customPrice: e.target.value})}
+                        placeholder="Price" className="w-20 px-2 py-1 border rounded text-[10px]" />
+                      <button onClick={() => {
+                        if (!formData.customDesc) return;
+                        const items = formData.invoiceItems || [];
+                        items.push({ inv_desc: formData.customDesc, inv_qty: 1, inv_price: Number(formData.customPrice) || 0, inv_total: Number(formData.customPrice) || 0 });
+                        setFormData({...formData, invoiceItems: items, showProductPicker: false, customDesc: '', customPrice: ''});
+                      }} className="px-2 py-1 bg-emerald-500 text-white rounded text-[10px]">Add</button>
+                    </div>
+                  </div>
+                  <button onClick={() => setFormData({...formData, showProductPicker: false})}
+                    className="mt-2 px-2 py-1 border border-slate-200 rounded text-[10px] w-full">Close</button>
+                </div>
+              )}
+
+              {/* Items List */}
+              {(formData.invoiceItems || []).length > 0 && (
+                <div>
+                  <table className="w-full border-collapse text-xs mb-2">
+                    <thead><tr className="bg-blue-100">
+                      <th className="px-2 py-1 text-left text-[10px]">Item / البند</th>
+                      <th className="px-2 py-1 text-right text-[10px] w-16">Qty</th>
+                      <th className="px-2 py-1 text-right text-[10px] w-20">Price</th>
+                      <th className="px-2 py-1 text-right text-[10px] w-20">Total</th>
+                      <th className="px-2 py-1 text-[10px] w-8"></th>
+                    </tr></thead>
+                    <tbody>
+                      {(formData.invoiceItems || []).map((item, idx) => (
+                        <tr key={idx} className="border-b border-blue-100">
+                          <td className="px-2 py-1 text-[10px]">{item.inv_desc}</td>
+                          <td className="px-2 py-1"><input type="number" value={item.inv_qty}
+                            onChange={e => { const items = [...(formData.invoiceItems || [])]; items[idx] = {...items[idx], inv_qty: Number(e.target.value) || 0, inv_total: (Number(e.target.value) || 0) * items[idx].inv_price}; setFormData({...formData, invoiceItems: items}); }}
+                            className="w-full text-right text-[10px] border rounded px-1 py-0.5" /></td>
+                          <td className="px-2 py-1"><input type="number" value={item.inv_price}
+                            onChange={e => { const items = [...(formData.invoiceItems || [])]; items[idx] = {...items[idx], inv_price: Number(e.target.value) || 0, inv_total: items[idx].inv_qty * (Number(e.target.value) || 0)}; setFormData({...formData, invoiceItems: items}); }}
+                            className="w-full text-right text-[10px] border rounded px-1 py-0.5" /></td>
+                          <td className="px-2 py-1 text-right text-[10px] font-bold">{fE(item.inv_total)}</td>
+                          <td className="px-2 py-1"><button onClick={() => { const items = (formData.invoiceItems || []).filter((_, i) => i !== idx); setFormData({...formData, invoiceItems: items}); }}
+                            className="text-red-400 text-[10px]">X</button></td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                  <div className="flex justify-between text-xs font-bold border-t-2 border-blue-300 pt-1">
+                    <span>Total / الإجمالي</span>
+                    <span className="text-blue-600">{fE((formData.invoiceItems || []).reduce((a, i) => a + (i.inv_total || 0), 0))}</span>
+                  </div>
+                </div>
+              )}
+            </div>
+
+            <div className="flex gap-2">
+              <button onClick={async () => {
+                const items = formData.invoiceItems || [];
+                const totalAmt = items.reduce((a, i) => a + (i.inv_total || 0), 0) || Number(formData.amount) || 0;
+                if (!formData.orderNumber || !formData.customerName || totalAmt <= 0) {
+                  alert('Please fill order#, customer, and add items / الرجاء ملء رقم الأمر والعميل وإضافة بنود'); return;
+                }
+                try {
+                  const { data: newInv } = await supabase.from('invoices').insert({
+                    order_number: formData.orderNumber, customer_name: formData.customerName,
+                    invoice_date: formData.date || today(), total_amount: totalAmt,
+                    total_collected: 0, outstanding: totalAmt, sales_rep: formData.salesRep || '',
+                    notes: formData.notes || '', source: 'manual',
+                  }).select('id').single();
+                  if (newInv && items.length > 0) {
+                    for (const item of items) {
+                      await dbInsert('invoice_items', {
+                        invoice_id: newInv.id, description: item.inv_desc,
+                        quantity: item.inv_qty, unit_price: item.inv_price, line_total: item.inv_total,
+                      }, user?.id);
+                    }
+                  }
+                  setShowAddInvoice(false); setFormData({}); await loadAllData();
+                } catch (err) { alert('Error / خطأ: ' + err.message); }
+              }} className="px-4 py-2 bg-blue-500 text-white rounded-lg font-semibold">Create Invoice / إنشاء ✓</button>
               <button onClick={() => { setShowAddInvoice(false); setFormData({}); }}
                 className="px-4 py-2 border border-slate-200 rounded-lg font-semibold">Cancel / إلغاء</button>
             </div>
@@ -1694,6 +1800,54 @@ export default function App() {
                   <Bar dataKey="cashOut" fill="#ef4444" name="Cash Out" radius={[3, 3, 0, 0]} />
                 </BarChart>
               </ResponsiveContainer>
+            </div>
+
+            {/* Monthly Sales Tracking */}
+            <div className="bg-white rounded-xl p-4 mb-4">
+              <h3 className="text-sm font-bold mb-2">Monthly Sales / المبيعات الشهرية</h3>
+              {(() => {
+                const months = {};
+                let running = 0;
+                filteredInvoices.forEach(inv => {
+                  const m = (inv.invoice_date || '').substring(0, 7);
+                  if (!m) return;
+                  if (!months[m]) months[m] = { month: m, invoiced: 0, collected: 0, outstanding: 0, count: 0 };
+                  months[m].invoiced += Number(inv.total_amount || 0);
+                  months[m].collected += Number(inv.total_collected || 0);
+                  months[m].outstanding += Number(inv.outstanding || 0);
+                  months[m].count++;
+                });
+                const sorted = Object.values(months).sort((a, b) => a.month.localeCompare(b.month));
+                return (
+                  <div className="overflow-auto max-h-[300px] rounded-lg border border-slate-200">
+                    <table className="w-full border-collapse">
+                      <thead className="sticky top-0"><tr className="bg-slate-50">
+                        <th className="px-2 py-1.5 text-[10px] text-left">Month / الشهر</th>
+                        <th className="px-2 py-1.5 text-[10px] text-right">Invoiced / فواتير</th>
+                        <th className="px-2 py-1.5 text-[10px] text-right">Collected / محصّل</th>
+                        <th className="px-2 py-1.5 text-[10px] text-right">Outstanding / متبقّي</th>
+                        <th className="px-2 py-1.5 text-[10px] text-right">Running / تراكمي</th>
+                        <th className="px-2 py-1.5 text-[10px] text-right">#</th>
+                      </tr></thead>
+                      <tbody>
+                        {sorted.map(m => {
+                          running += m.invoiced;
+                          return (
+                            <tr key={m.month} className="border-b border-slate-50">
+                              <td className="px-2 py-1 text-xs font-semibold">{m.month}</td>
+                              <td className="px-2 py-1 text-xs text-right text-blue-600">{fE(m.invoiced)}</td>
+                              <td className="px-2 py-1 text-xs text-right text-emerald-600">{fE(m.collected)}</td>
+                              <td className="px-2 py-1 text-xs text-right text-red-500">{m.outstanding > 0 ? fE(m.outstanding) : '-'}</td>
+                              <td className="px-2 py-1 text-xs text-right font-bold text-purple-600">{fE(running)}</td>
+                              <td className="px-2 py-1 text-[10px] text-right text-slate-400">{m.count}</td>
+                            </tr>
+                          );
+                        })}
+                      </tbody>
+                    </table>
+                  </div>
+                );
+              })()}
             </div>
 
             {/* Income Buckets */}
@@ -2519,25 +2673,7 @@ export default function App() {
             CRM TAB
         ========================================== */}
         {tab === 'crm' && (
-          <div>
-            <div className="flex justify-between flex-wrap gap-2 mb-3">
-              <h2 className="text-xl font-extrabold">CRM / إدارة العملاء</h2>
-              <div className="flex gap-2">
-                <input value={query} onChange={e => setQuery(e.target.value)} placeholder="بحث" className="px-3 py-1.5 rounded-lg border border-slate-200 text-xs w-28" />
-                <button className="px-3 py-1.5 bg-blue-500 text-white rounded-lg text-xs font-semibold">+ Client</button>
-              </div>
-            </div>
-            <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-3">
-              {customers.map(c => (
-                <div key={c.id} className="bg-white rounded-lg p-3 cursor-pointer border border-slate-200 hover:shadow-md transition">
-                  <div className="text-sm font-bold" style={{ direction: 'rtl' }}>{c.name}</div>
-                  <div className="text-xs text-slate-500 mt-1">{c.phone || ''}</div>
-                  {c.client_type && <span className="inline-block mt-1 px-2 py-0.5 rounded-full bg-blue-50 text-blue-700 text-[8px] font-semibold">{c.client_type}</span>}
-                  {c.group_name && <span className="inline-block mt-1 ml-1 px-2 py-0.5 rounded-full bg-green-50 text-green-700 text-[8px] font-semibold">{c.group_name}</span>}
-                </div>
-              ))}
-            </div>
-          </div>
+          <CRMTab customers={customers} invoices={invoices} user={user} onReload={loadAllData} />
         )}
 
         {/* ==========================================
