@@ -95,12 +95,12 @@ export default function App() {
   const loadAllData = async () => {
     try {
       const [inv, tres, chk, dbt, cust, wh] = await Promise.all([
-        supabase.from('invoices').select('*').order('invoice_date', { ascending: false }),
-        supabase.from('treasury').select('*').order('transaction_date', { ascending: false }),
-        supabase.from('checks').select('*').order('check_date'),
-        supabase.from('debts').select('*').order('total_debt', { ascending: false }),
-        supabase.from('customers').select('*').order('name'),
-        supabase.from('warehouse_expenses').select('*').order('expense_date', { ascending: false }),
+        supabase.from('invoices').select('*').order('invoice_date', { ascending: false }).range(0, 9999),
+        supabase.from('treasury').select('*').order('transaction_date', { ascending: false }).range(0, 9999),
+        supabase.from('checks').select('*').order('check_date').range(0, 9999),
+        supabase.from('debts').select('*').order('total_debt', { ascending: false }).range(0, 9999),
+        supabase.from('customers').select('*').order('name').range(0, 9999),
+        supabase.from('warehouse_expenses').select('*').order('expense_date', { ascending: false }).range(0, 9999),
       ]);
       setInvoices(inv.data || []);
       setTreasury(tres.data || []);
