@@ -35,6 +35,10 @@ export const COLORS = [
 // Reconciliation status with 2% tolerance
 export const getReconStatus = (invoice, treasuryTotal) => {
   const tolerance = invoice.total_amount * 0.02;
+  // If invoice notes say UNVERIFIED, always show unverified
+  if ((invoice.notes || '').includes('UNVERIFIED')) return 'unverified';
+  // If says paid but no treasury entries, it's unverified
+  if (invoice.total_collected > 0 && treasuryTotal === 0 && invoice.total_amount > 0) return 'unverified';
   if (invoice.outstanding > tolerance) return 'open';
   if (treasuryTotal > invoice.total_amount * 1.02) return 'overpaid';
   if (treasuryTotal >= invoice.total_amount * 0.98 || invoice.total_collected >= invoice.total_amount * 0.98) return 'reconciled';
