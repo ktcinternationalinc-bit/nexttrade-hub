@@ -1069,6 +1069,25 @@ export default function App() {
                               onChange={e => setFormData({ ...formData, orderNumber: e.target.value })}
                               className="w-full px-2 py-1 rounded border border-slate-200 text-xs" />
                           </div>
+                          <div>
+                            <label className="text-[10px] font-semibold text-slate-600">Category / التصنيف</label>
+                            <select value={formData.category !== undefined ? formData.category : (txn.category || '')}
+                              onChange={e => setFormData({...formData, category: e.target.value})}
+                              className="w-full px-2 py-1 rounded border border-slate-200 text-xs bg-amber-50">
+                              <option value="">Uncategorized</option>
+                              {Object.entries(EXPENSE_CATS).map(([ar, en]) => <option key={ar} value={ar}>{en} / {ar}</option>)}
+                              {txn.category && !EXPENSE_CATS[txn.category] && <option value={txn.category}>{txn.category}</option>}
+                            </select>
+                          </div>
+                          <div>
+                            <label className="text-[10px] font-semibold text-slate-600">Subcategory / فرعي</label>
+                            <input list="inv-subcats" value={formData.subcategory !== undefined ? formData.subcategory : (txn.subcategory || '')}
+                              onChange={e => setFormData({...formData, subcategory: e.target.value})}
+                              className="w-full px-2 py-1 rounded border border-slate-200 text-xs bg-orange-50" />
+                            <datalist id="inv-subcats">
+                              {[...new Set(treasury.map(t=>t.subcategory).filter(Boolean))].sort().map(s => <option key={s} value={s}/>)}
+                            </datalist>
+                          </div>
                         </div>
                         <div className="flex gap-2 mt-2">
                           <button onClick={() => handleEditTreasury(txn)}
@@ -1087,6 +1106,10 @@ export default function App() {
                         <button onClick={() => { setEditingTxn(txn.id); setFormData({}); }}
                           className="px-2 py-0.5 rounded border border-blue-300 text-blue-600 text-[10px] mr-1 hover:bg-blue-50">
                           Edit
+                        </button>
+                        <button onClick={() => { setSplittingTxn(txn); const isIn = Number(txn.cash_in) > 0; const total = isIn ? Number(txn.cash_in) : Number(txn.cash_out); setSplits([{ order: txn.order_number || '', amount: total }, { order: '', amount: 0 }]); }}
+                          className="px-2 py-0.5 rounded border border-purple-300 text-purple-600 text-[10px] mr-1 hover:bg-purple-50">
+                          Split
                         </button>
                         <button onClick={() => handleUnlinkTreasury(txn)}
                           className="px-2 py-0.5 rounded border border-red-300 text-red-500 text-[10px] hover:bg-red-50">
@@ -1284,10 +1307,13 @@ export default function App() {
                                   onChange={e => setFormData({...formData, category: e.target.value})}
                                   className="w-full text-[10px] border rounded px-1 py-0.5 mt-1" />
                               )}
-                              <input value={formData.subcategory !== undefined ? formData.subcategory : (txn.subcategory || '')}
+                              <input list="all-subcats" value={formData.subcategory !== undefined ? formData.subcategory : (txn.subcategory || '')}
                                 onChange={e => setFormData({...formData, subcategory: e.target.value})}
                                 placeholder="Subcategory / تصنيف فرعي (optional)"
                                 className="w-full text-[10px] border rounded px-1 py-0.5 mt-1 bg-orange-50" />
+                              <datalist id="all-subcats">
+                                {[...new Set(treasury.map(t=>t.subcategory).filter(Boolean))].sort().map(s => <option key={s} value={s}/>)}
+                              </datalist>
                             </td>
                             <td className="px-2 py-1.5"><input type="number" defaultValue={txn.cash_in || 0}
                               onChange={e => setFormData({...formData, cashIn: e.target.value})}
@@ -1491,24 +1517,55 @@ export default function App() {
                               <td className="px-2 py-1 text-[10px] text-right font-semibold" style={{ color: color }}>{fE(txn[amtField])}</td>
                               <td className="px-1 py-1">
                                 <select defaultValue={txn.category || ''} onChange={async (e) => {
-                                  try {
-                                    await dbUpdate('treasury', txn.id, { category: e.target.value }, user?.id);
-                                    await loadAllData();
-                                  } catch(err) { alert('Error: ' + err.message); }
-                                }} className="w-full text-[9px] border rounded px-1 py-0.5 bg-amber-50">
+                                    const newCat = e.target.value;
+                                    try {
+                                      await dbUpdate('treasury', txn.id, { category: newCat }, user?.id);
+                                      // Auto-apply to similar descriptions
+                                      const desc = txn.description || '';
+                                      const words = desc.split(/\s+/).filter(w => w.length > 2).slice(0, 2).join(' ');
+                                      if (words) {
+                                        const similar = treasury.filter(t => t.id !== txn.id && (t.description || '').includes(words) && t.category !== newCat);
+                                        if (similar.length > 0 && confirm('Apply to ' + similar.length + ' similar transactions?\nتطبيق على ' + similar.length + ' معاملات مماثلة؟')) {
+                                          for (const s of similar) { await dbUpdate('treasury', s.id, { category: newCat }, user?.id); }
+                                        }
+                                        // Save rule
+                                        const existing = expenseRules.find(r => r.description_match === words);
+                                        if (existing) { await dbUpdate('expense_rules', existing.id, { category: newCat }, user?.id); }
+                                        else { await dbInsert('expense_rules', { description_match: words, category: newCat, subcategory: txn.subcategory || '' }, user?.id); }
+                                      }
+                                      await loadAllData();
+                                    } catch(err) { alert('Error: ' + err.message); }
+                                  }} className="w-full text-[9px] border rounded px-1 py-0.5 bg-amber-50">
                                   <option value="">None</option>
                                   {Object.entries(EXPENSE_CATS).map(([ar, en]) => <option key={ar} value={ar}>{en}</option>)}
                                   {[...new Set(treasury.map(t=>t.category).filter(c=>c&&!EXPENSE_CATS[c]))].map(c => <option key={c} value={c}>{c}</option>)}
                                 </select>
-                                <input defaultValue={txn.subcategory || ''} placeholder="Sub..."
+                                <input list={'subs-'+txn.id} defaultValue={txn.subcategory || ''} placeholder="Subcategory..."
                                   onBlur={async (e) => {
-                                    if (e.target.value !== (txn.subcategory || '')) {
+                                    const newSub = e.target.value;
+                                    if (newSub !== (txn.subcategory || '')) {
                                       try {
-                                        await dbUpdate('treasury', txn.id, { subcategory: e.target.value }, user?.id);
+                                        await dbUpdate('treasury', txn.id, { subcategory: newSub }, user?.id);
+                                        // Auto-apply subcategory to similar
+                                        const desc = txn.description || '';
+                                        const words = desc.split(/\s+/).filter(w => w.length > 2).slice(0, 2).join(' ');
+                                        if (words) {
+                                          const similar = treasury.filter(t => t.id !== txn.id && (t.description || '').includes(words) && t.category === (txn.category || '') && t.subcategory !== newSub);
+                                          if (similar.length > 0 && confirm('Apply subcategory "' + newSub + '" to ' + similar.length + ' similar?\nتطبيق على المعاملات المماثلة؟')) {
+                                            for (const s of similar) { await dbUpdate('treasury', s.id, { subcategory: newSub }, user?.id); }
+                                          }
+                                          // Update rule
+                                          const existing = expenseRules.find(r => r.description_match === words);
+                                          if (existing) { await dbUpdate('expense_rules', existing.id, { subcategory: newSub }, user?.id); }
+                                          else { await dbInsert('expense_rules', { description_match: words, category: txn.category || '', subcategory: newSub }, user?.id); }
+                                        }
                                         await loadAllData();
                                       } catch(err) { alert('Error: ' + err.message); }
                                     }
                                   }} className="w-full text-[9px] border rounded px-1 py-0.5 mt-0.5 bg-orange-50" />
+                                <datalist id={'subs-'+txn.id}>
+                                  {[...new Set(treasury.map(t=>t.subcategory).filter(Boolean))].sort().map(s => <option key={s} value={s}/>)}
+                                </datalist>
                               </td>
                             </tr>
                           ))}
@@ -1854,9 +1911,12 @@ export default function App() {
                       onChange={e => setFormData({ ...formData, category: e.target.value })}
                       className="w-full px-3 py-2 rounded-lg border border-slate-200 text-sm mt-1" />
                   )}
-                  <input value={formData.subcategory || ''} placeholder="Subcategory / تصنيف فرعي (optional)"
+                  <input list="add-subcats" value={formData.subcategory || ''} placeholder="Subcategory / تصنيف فرعي (optional)"
                     onChange={e => setFormData({ ...formData, subcategory: e.target.value })}
                     className="w-full px-3 py-2 rounded-lg border border-slate-200 text-sm mt-1 bg-orange-50" />
+                  <datalist id="add-subcats">
+                    {[...new Set(treasury.map(t=>t.subcategory).filter(Boolean))].sort().map(s => <option key={s} value={s}/>)}
+                  </datalist>
                 </div>
               )}
             </div>
@@ -1972,7 +2032,7 @@ export default function App() {
             </div>
 
             {/* Income Buckets */}
-            {incomeBuckets.length > 1 && (
+            {incomeBuckets.length > 0 && (
               <div className="bg-white rounded-xl p-4 mb-4">
                 <h3 className="text-sm font-bold mb-2 text-emerald-700">Income Buckets / تصنيف الإيرادات</h3>
                 {incomeBuckets.map((e, i) => (
@@ -2378,7 +2438,7 @@ export default function App() {
                 </div>
               </div>
             )}
-            {incomeBuckets.length > 1 && (
+            {incomeBuckets.length > 0 && (
               <div className="bg-white rounded-xl p-4 mb-3">
                 <h3 className="text-sm font-bold mb-2 text-emerald-700">Income Buckets / تصنيف الإيرادات</h3>
                 {incomeBuckets.map((e, i) => (
