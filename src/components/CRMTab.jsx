@@ -1,488 +1,632 @@
 'use client';
-import { useState, useMemo, useEffect, useCallback, useRef } from 'react';
-import { supabase, dbInsert, dbUpdate, dbDelete, logActivity } from '../lib/supabase';
+import { useState, useMemo } from 'react';
+import { supabase, dbInsert, dbUpdate, logActivity } from '../lib/supabase';
 import { fE, fmt } from '../lib/utils';
-import * as XLSX from 'xlsx';
 
-const CONTAINER_TYPES = ['20ft', '40ft', '40ft HC', '45ft', 'LCL', 'Bulk', 'Flatbed', 'Reefer', 'Open Top', 'Truck', 'Trailer'];
-const TRANSPORT_MODES = ['Ocean', 'Trucking', 'Air', 'Rail', 'Multi-modal'];
-const RATE_TYPES = ['Shipping', 'Trucking', 'Customs/Brokerage'];
-const CURRENCIES = ['USD', 'EUR', 'EGP', 'GBP', 'SAR', 'AED', 'CNY', 'TRY'];
-const QUOTE_STATUSES = ['draft', 'sent', 'accepted', 'rejected', 'expired', 'booked'];
-const fCur = (amount, currency) => { if (!amount && amount !== 0) return '—'; const sym = { USD: '\$', EUR: '€', EGP: 'E£', GBP: '£', CNY: '¥', TRY: '₺', SAR: 'SR', AED: 'AED ' }; return (sym[currency] || currency + ' ') + Number(amount).toLocaleString(); };
-const isExpired = (d) => d && d < new Date().toISOString().substring(0, 10);
-const daysUntil = (d) => { if (!d) return null; return Math.ceil((new Date(d) - new Date()) / 86400000); };
+const DEFAULT_CATEGORIES = ['Pool', 'Leather'];
+const DEFAULT_GROUPS = ['Retail', 'Manufacturer', 'Export', 'Distributor'];
+const LEAD_SOURCES = ['Referral', 'Facebook', 'WhatsApp', 'Exhibition', 'Walk-in', 'Website', 'Cold Call', 'Existing'];
 
-function ExpiryBadge({ date }) {
-  if (!date) return <span className="text-[9px] text-slate-400">No expiry</span>;
-  const d = daysUntil(date); const exp = d < 0; const soon = d >= 0 && d <= 7;
-  return <span className={'px-1.5 py-0.5 rounded text-[9px] font-bold ' + (exp ? 'bg-red-100 text-red-600' : soon ? 'bg-amber-100 text-amber-600' : 'bg-green-100 text-green-700')}>{exp ? 'Expired ' + Math.abs(d) + 'd ago' : d === 0 ? 'Expires today' : d + 'd left'}</span>;
-}
-
-// ========== RATE PICKER ==========
-function RatePicker({ rates, label, rateType, origin, destination, selected, onSelect, onClear }) {
-  const [search, setSearch] = useState('');
-  const [expanded, setExpanded] = useState(false);
-  const available = useMemo(() => {
-    let arr = rates.filter(r => !isExpired(r.expiry_date));
-    if (rateType) arr = arr.filter(r => (r.rate_type || '').toLowerCase() === rateType.toLowerCase());
-    if (origin) arr = arr.filter(r => r.origin === origin);
-    if (destination) arr = arr.filter(r => r.destination === destination);
-    if (search) { const s = search.toLowerCase(); arr = arr.filter(r => [r.vendor_name, r.shipping_line, r.origin, r.destination, r.container_type].filter(Boolean).join(' ').toLowerCase().includes(s)); }
-    return arr.sort((a, b) => (a.rate_amount || Infinity) - (b.rate_amount || Infinity));
-  }, [rates, rateType, origin, destination, search]);
-
-  if (selected) {
-    const r = rates.find(x => x.id === selected);
-    if (!r) return null;
-    return (<div className="bg-blue-50 rounded-lg p-3 border border-blue-200">
-      <div className="flex justify-between items-start">
-        <div>
-          <div className="text-[10px] font-bold text-blue-600 mb-0.5">{label} — Selected</div>
-          <div className="text-sm font-bold">{r.vendor_name} {r.shipping_line ? '/ ' + r.shipping_line : ''}</div>
-          <div className="text-[10px] text-slate-500">{r.origin} → {r.destination} • {r.container_type} • {r.rate_type || r.transport_mode}{r.transit_days ? ' • ' + r.transit_days + 'd transit' : ''}</div>
-        </div>
-        <div className="text-right">
-          <div className="text-lg font-extrabold text-blue-700">{fCur(r.total_cost || r.rate_amount, r.currency)}</div>
-          <button onClick={onClear} className="text-[10px] text-red-500 underline mt-1">Change</button>
-        </div>
-      </div>
-    </div>);
-  }
-
-  return (<div className="border rounded-lg overflow-hidden">
-    <div className="flex justify-between items-center bg-slate-50 px-3 py-2 cursor-pointer" onClick={() => setExpanded(!expanded)}>
-      <span className="text-xs font-bold">{label} — Pick from DB ({available.length} rates)</span>
-      <span className="text-xs text-slate-400">{expanded ? '▲' : '▼'}</span>
-    </div>
-    {expanded && (<div className="p-2 bg-white">
-      <input value={search} onChange={e => setSearch(e.target.value)} placeholder="Search vendor, line..." className="w-full px-3 py-1.5 border rounded text-xs mb-2" />
-      {available.length === 0 ? <div className="text-center text-xs text-slate-400 py-3">No rates found{origin ? ` for ${origin} → ${destination}` : '. Set origin & destination first.'}</div> : (
-        <div className="max-h-[180px] overflow-auto space-y-1">{available.map(r => (
-          <div key={r.id} onClick={() => { onSelect(r); setExpanded(false); setSearch(''); }}
-            className="flex justify-between items-center p-2 rounded hover:bg-blue-50 cursor-pointer border border-transparent hover:border-blue-200">
-            <div>
-              <div className="text-xs font-semibold">{r.vendor_name} {r.shipping_line ? '/ ' + r.shipping_line : ''}</div>
-              <div className="text-[10px] text-slate-500">{r.origin}→{r.destination} • {r.container_type} • <span className="font-semibold text-indigo-600">{r.rate_type || r.transport_mode}</span>{r.transit_days ? ' • ' + r.transit_days + 'd' : ''}</div>
-            </div>
-            <div className="text-right">
-              <div className="text-sm font-extrabold text-blue-600">{fCur(r.total_cost || r.rate_amount, r.currency)}</div>
-              <ExpiryBadge date={r.expiry_date} />
-            </div>
-          </div>
-        ))}</div>
-      )}
-      <div className="text-center mt-2"><button onClick={() => { onSelect(null); setExpanded(false); }} className="text-[10px] text-slate-400 underline">Enter manually instead</button></div>
-    </div>)}
-  </div>);
-}
-
-// ========== QUOTE PRINT PREVIEW ==========
-function QuotePrintView({ quote, onClose }) {
-  const printRef = useRef(null);
-  const handlePrint = () => {
-    const content = printRef.current;
-    const win = window.open('', '_blank', 'width=800,height=1100');
-    win.document.write(`<!DOCTYPE html><html><head><title>Quote ${quote.quote_number}</title><style>
-      @media print { body { margin: 0; } @page { margin: 20mm 15mm; } }
-      * { box-sizing: border-box; margin: 0; padding: 0; }
-      body { font-family: 'Segoe UI', Arial, sans-serif; color: #1e293b; line-height: 1.5; padding: 40px; }
-      .hdr { display: flex; justify-content: space-between; border-bottom: 3px solid #0ea5e9; padding-bottom: 20px; margin-bottom: 30px; }
-      .co { font-size: 24px; font-weight: 800; } .co-sub { font-size: 11px; color: #64748b; margin-top: 4px; }
-      .qt { font-size: 20px; font-weight: 800; color: #0ea5e9; text-align: right; }
-      .qm { font-size: 11px; color: #64748b; text-align: right; margin-top: 4px; }
-      .sec { margin-bottom: 24px; } .st { font-size: 13px; font-weight: 700; text-transform: uppercase; letter-spacing: .5px; border-bottom: 1px solid #e2e8f0; padding-bottom: 6px; margin-bottom: 12px; }
-      .ig { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; } .il { font-size: 10px; color: #94a3b8; text-transform: uppercase; } .iv { font-size: 13px; font-weight: 600; }
-      table { width: 100%; border-collapse: collapse; margin-top: 8px; }
-      th { background: #f1f5f9; text-align: left; padding: 10px 12px; font-size: 11px; font-weight: 700; text-transform: uppercase; color: #475569; }
-      td { padding: 10px 12px; border-bottom: 1px solid #f1f5f9; font-size: 13px; } .am { text-align: right; font-weight: 700; }
-      .tr td { border-top: 2px solid #0ea5e9; font-weight: 800; font-size: 15px; background: #f0f9ff; }
-      .ft { margin-top: 40px; padding-top: 20px; border-top: 1px solid #e2e8f0; font-size: 10px; color: #94a3b8; text-align: center; }
-      .vl { background: #fef3c7; padding: 10px 16px; border-radius: 6px; font-size: 12px; color: #92400e; margin-top: 16px; text-align: center; }
-      .nt { background: #f8fafc; padding: 12px 16px; border-radius: 6px; font-size: 12px; color: #475569; margin-top: 12px; }
-    </style></head><body>${content.innerHTML}</body></html>`);
-    win.document.close();
-    setTimeout(() => win.print(), 500);
-  };
-  const cur = quote.currency || 'USD';
-  const showBD = quote.client_show_breakdown;
-  return (<div className="fixed inset-0 bg-black/60 z-50 flex items-start justify-center overflow-auto p-4" onClick={e => { if (e.target === e.currentTarget) onClose(); }}>
-    <div className="bg-white rounded-xl shadow-2xl w-full max-w-[700px] my-8">
-      <div className="flex justify-between items-center p-4 border-b">
-        <h3 className="text-lg font-bold">Quote Preview — {quote.quote_number}</h3>
-        <div className="flex gap-2">
-          <button onClick={handlePrint} className="px-4 py-2 bg-blue-500 text-white rounded-lg text-sm font-semibold">🖨️ Print / Save PDF</button>
-          <button onClick={onClose} className="px-3 py-2 border rounded-lg text-sm">Close</button>
-        </div>
-      </div>
-      <div className="p-6 text-sm" ref={printRef}>
-        <div className="hdr"><div><div className="co">KTC Trading Operations</div><div className="co-sub">International Trading & Logistics</div></div><div><div className="qt">SHIPPING QUOTE</div><div className="qm">{quote.quote_number}<br/>{quote.quote_date}</div></div></div>
-        <div className="sec"><div className="st">Client</div><div className="ig"><div><div className="il">Customer</div><div className="iv">{quote.customer_name}</div></div>{quote.customer_email&&<div><div className="il">Email</div><div className="iv">{quote.customer_email}</div></div>}</div></div>
-        <div className="sec"><div className="st">Shipment Details</div><div className="ig">
-          <div><div className="il">Origin</div><div className="iv">{quote.origin}</div></div>
-          <div><div className="il">Destination</div><div className="iv">{quote.destination}</div></div>
-          {quote.port_of_loading&&<div><div className="il">POL</div><div className="iv">{quote.port_of_loading}</div></div>}
-          {quote.port_of_discharge&&<div><div className="il">POD</div><div className="iv">{quote.port_of_discharge}</div></div>}
-          <div><div className="il">Container</div><div className="iv">{quote.container_type}</div></div>
-          <div><div className="il">Currency</div><div className="iv">{cur}</div></div>
-        </div></div>
-        <div className="sec"><div className="st">Pricing</div>
-          {showBD ? (<table><thead><tr><th>Service</th><th className="am">Amount</th></tr></thead><tbody>
-            {quote.client_shipping_fee>0&&<tr><td>Ocean Freight / Shipping</td><td className="am">{fCur(quote.client_shipping_fee,cur)}</td></tr>}
-            {quote.client_trucking_fee>0&&<tr><td>Inland Trucking</td><td className="am">{fCur(quote.client_trucking_fee,cur)}</td></tr>}
-            {quote.client_customs_fee>0&&<tr><td>Customs & Brokerage</td><td className="am">{fCur(quote.client_customs_fee,cur)}</td></tr>}
-            {quote.client_service_fee>0&&<tr><td>Service Fee</td><td className="am">{fCur(quote.client_service_fee,cur)}</td></tr>}
-            {quote.client_other_fee>0&&<tr><td>{quote.client_other_desc||'Other'}</td><td className="am">{fCur(quote.client_other_fee,cur)}</td></tr>}
-            <tr className="tr"><td>TOTAL</td><td className="am">{fCur(quote.client_total,cur)}</td></tr>
-          </tbody></table>) : (<div>
-            {quote.client_display_text&&<p style={{fontSize:13,color:'#475569',marginBottom:12}}>{quote.client_display_text}</p>}
-            <table><tbody><tr className="tr"><td>{quote.client_display_text||'All-inclusive Shipping'}</td><td className="am">{fCur(quote.client_total,cur)}</td></tr></tbody></table>
-          </div>)}
-        </div>
-        {quote.valid_until&&<div className="vl">This quote is valid until <strong>{quote.valid_until}</strong></div>}
-        {quote.notes&&<div className="nt"><strong>Notes:</strong> {quote.notes}</div>}
-        <div className="ft"><div>KTC Trading Operations — International Trading & Logistics</div><div style={{marginTop:4}}>Generated {new Date().toLocaleDateString()}</div></div>
-      </div>
-    </div>
-  </div>);
-}
-
-export default function ShippingRatesTab({ user, isAdmin, customers }) {
-  const [rates, setRates] = useState([]);
-  const [quotes, setQuotes] = useState([]);
-  const [bookings, setBookings] = useState([]);
-  const [loading, setLoading] = useState(true);
-  const [view, setView] = useState('routes');
+export default function CRMTab({ customers, invoices, user, users, onReload, isAdmin, onSelectInvoice, lang }) {
+  const [sel, setSel] = useState(null);
   const [q, setQ] = useState('');
-  const [filterOrigin, setFilterOrigin] = useState('all');
-  const [filterDest, setFilterDest] = useState('all');
-  const [filterVendor, setFilterVendor] = useState('all');
-  const [filterLine, setFilterLine] = useState('all');
-  const [filterMode, setFilterMode] = useState('all');
-  const [filterExpiry, setFilterExpiry] = useState('all');
-  const [selectedRoute, setSelectedRoute] = useState(null);
-  const [editingRate, setEditingRate] = useState(null);
-  const [editingQuote, setEditingQuote] = useState(null);
+  const [groupF, setGroupF] = useState('all');
+  const [catF, setCatF] = useState('all');
+  const [sortBy, setSortBy] = useState('alpha');
+  const [repF, setRepF] = useState('all');
+  const [customCategories, setCustomCategories] = useState([]);
+  const [customGroups, setCustomGroups] = useState([]);
+  const [listsLoaded, setListsLoaded] = useState(false);
+  const [showAdd, setShowAdd] = useState(false);
+  const [showNote, setShowNote] = useState(false);
+  const [showFollowUp, setShowFollowUp] = useState(false);
+  const [editingClient, setEditingClient] = useState(false);
+  const [notes, setNotes] = useState([]);
+  const [followUps, setFollowUps] = useState([]);
+  const [contactLog, setContactLog] = useState([]);
+  const [allNotes, setAllNotes] = useState([]);
+  const [notesLoaded, setNotesLoaded] = useState(false);
   const [f, setF] = useState({});
-  const [aiQuery, setAiQuery] = useState('');
-  const [aiAnswer, setAiAnswer] = useState('');
-  const [aiLoading, setAiLoading] = useState(false);
-  const [importData, setImportData] = useState([]);
-  const [importStep, setImportStep] = useState('select');
-  const [importProgress, setImportProgress] = useState(0);
-  const [previewQuote, setPreviewQuote] = useState(null);
-  const [pickedShipRate, setPickedShipRate] = useState(null);
-  const [pickedTruckRate, setPickedTruckRate] = useState(null);
-  const [pickedBrokerRate, setPickedBrokerRate] = useState(null);
-  const [manualShip, setManualShip] = useState(false);
-  const [manualTruck, setManualTruck] = useState(false);
-  const [manualBroker, setManualBroker] = useState(false);
 
-  const fetchAll = async (table, orderCol) => { let all = [], from = 0; while (true) { const { data } = await supabase.from(table).select('*').order(orderCol, { ascending: false }).range(from, from + 999); if (!data || data.length === 0) break; all = all.concat(data); if (data.length < 1000) break; from += 1000; } return all; };
-  const loadData = useCallback(async () => { setLoading(true); try { const [r, q, b] = await Promise.all([fetchAll('shipping_rates', 'effective_date'), fetchAll('shipping_quotes', 'quote_date').catch(() => []), fetchAll('shipping_bookings', 'booking_date').catch(() => [])]); setRates(r); setQuotes(q); setBookings(b); } catch (err) { console.error(err); } setLoading(false); }, []);
-  useEffect(() => { loadData(); }, [loadData]);
+  // Load all notes once for card display
+  const loadAllNotes = async () => {
+    const { data } = await supabase.from('client_notes').select('customer_id, created_at, created_by').order('created_at', { ascending: false });
+    setAllNotes(data || []);
+    setNotesLoaded(true);
+  };
+  if (!notesLoaded) loadAllNotes();
 
-  const origins = useMemo(() => [...new Set(rates.map(r => r.origin).filter(Boolean))].sort(), [rates]);
-  const destinations = useMemo(() => [...new Set(rates.map(r => r.destination).filter(Boolean))].sort(), [rates]);
-  const vendors = useMemo(() => [...new Set(rates.map(r => r.vendor_name).filter(Boolean))].sort(), [rates]);
-  const lines = useMemo(() => [...new Set(rates.map(r => r.shipping_line).filter(Boolean))].sort(), [rates]);
-  const pols = useMemo(() => [...new Set(rates.map(r => r.port_of_loading).filter(Boolean))].sort(), [rates]);
-  const pods = useMemo(() => [...new Set(rates.map(r => r.port_of_discharge).filter(Boolean))].sort(), [rates]);
+  // Load custom categories & groups from app_settings
+  const loadCustomLists = async () => {
+    try {
+      const { data } = await supabase.from('app_settings').select('setting_key, setting_value').in('setting_key', ['custom_categories', 'custom_groups']);
+      (data || []).forEach(row => {
+        try {
+          if (row.setting_key === 'custom_categories') setCustomCategories(JSON.parse(row.setting_value));
+          if (row.setting_key === 'custom_groups') setCustomGroups(JSON.parse(row.setting_value));
+        } catch(e) {}
+      });
+    } catch(e) { console.log('Custom lists not loaded:', e); }
+    setListsLoaded(true);
+  };
+  if (!listsLoaded) loadCustomLists();
 
-  const filtered = useMemo(() => rates.filter(r => {
-    if (filterOrigin !== 'all' && r.origin !== filterOrigin) return false;
-    if (filterDest !== 'all' && r.destination !== filterDest) return false;
-    if (filterVendor !== 'all' && r.vendor_name !== filterVendor) return false;
-    if (filterLine !== 'all' && r.shipping_line !== filterLine) return false;
-    if (filterMode !== 'all' && r.transport_mode !== filterMode) return false;
-    if (filterExpiry === 'active' && isExpired(r.expiry_date)) return false;
-    if (filterExpiry === 'expired' && !isExpired(r.expiry_date)) return false;
-    if (q) { const hay = [r.origin, r.destination, r.vendor_name, r.shipping_line, r.port_of_loading, r.port_of_discharge, r.container_type, r.notes, r.shipment_reference].filter(Boolean).join(' ').toLowerCase(); return q.toLowerCase().split(/\s+/).every(w => hay.includes(w)); }
-    return true;
-  }), [rates, filterOrigin, filterDest, filterVendor, filterLine, filterMode, filterExpiry, q]);
+  // Merged lists: defaults + custom
+  const allCategories = [...new Set([...DEFAULT_CATEGORIES, ...customCategories])].sort();
+  const allGroups = [...new Set([...DEFAULT_GROUPS, ...customGroups])].sort();
 
-  const routeGroups = useMemo(() => {
-    const groups = {};
-    filtered.forEach(r => { const key = (r.origin||'?') + ' → ' + (r.destination||'?'); if (!groups[key]) groups[key] = { origin: r.origin, destination: r.destination, rates: [], vendors: new Set(), lines: new Set(), modes: new Set() }; groups[key].rates.push(r); if (r.vendor_name) groups[key].vendors.add(r.vendor_name); if (r.shipping_line) groups[key].lines.add(r.shipping_line); if (r.transport_mode) groups[key].modes.add(r.transport_mode); });
-    return Object.entries(groups).map(([key, data]) => { const ar = data.rates.filter(r => !isExpired(r.expiry_date)); const ch = ar.length > 0 ? ar.reduce((a,b) => (a.rate_amount||Infinity) < (b.rate_amount||Infinity) ? a : b) : null; return { key, ...data, cheapest: ch, activeCount: ar.length, expiredCount: data.rates.length - ar.length, count: data.rates.length }; }).sort((a,b) => b.count - a.count);
-  }, [filtered]);
-
-  const routeHistory = useMemo(() => { if (!selectedRoute) return []; return rates.filter(r => r.origin === selectedRoute.origin && r.destination === selectedRoute.destination).sort((a,b) => (b.effective_date||'').localeCompare(a.effective_date||'')); }, [selectedRoute, rates]);
-  const routeQuotes = useMemo(() => { if (!selectedRoute) return []; return quotes.filter(q => q.origin === selectedRoute.origin && q.destination === selectedRoute.destination).sort((a,b) => (b.quote_date||'').localeCompare(a.quote_date||'')); }, [selectedRoute, quotes]);
-  const rateBookings = (rateId) => bookings.filter(b => b.rate_id === rateId);
-  const routeBookings = (origin, dest) => { const rateIds = new Set(rates.filter(r => r.origin === origin && r.destination === dest).map(r => r.id)); return bookings.filter(b => rateIds.has(b.rate_id)); };
-
-  const handleSaveRate = async () => {
-    if (!f.origin || !f.destination || !f.vendorName) { alert('Fill Origin, Destination, Vendor'); return; }
-    if (!f.rateType) { alert('Rate Type is required! Select Shipping, Trucking, or Customs/Brokerage.\n\nنوع السعر مطلوب! اختر شحن أو نقل بري أو جمارك'); return; }
-    const record = { origin: f.origin, destination: f.destination, vendor_name: f.vendorName, shipping_line: f.shippingLine || '', transport_mode: f.transportMode || 'Ocean', rate_type: f.rateType, container_type: f.containerType || '40ft', rate_amount: Number(f.rateAmount) || 0, currency: f.currency || 'USD', transit_days: f.transitDays ? Number(f.transitDays) : null, free_days: f.freeDays ? Number(f.freeDays) : null, port_fees: Number(f.portFees) || 0, thc_fees: Number(f.thcFees) || 0, documentation_fees: Number(f.docFees) || 0, customs_fees: Number(f.customsFees) || 0, other_fees: Number(f.otherFees) || 0, other_fees_desc: f.otherFeesDesc || '', total_cost: Number(f.rateAmount||0)+Number(f.portFees||0)+Number(f.thcFees||0)+Number(f.docFees||0)+Number(f.customsFees||0)+Number(f.otherFees||0), effective_date: f.effectiveDate || new Date().toISOString().substring(0,10), expiry_date: f.expiryDate || null, port_of_loading: f.pol || '', port_of_discharge: f.pod || '', notes: f.notes || '', is_active: true, booked: f.booked || false, shipment_reference: f.shipmentRef || '', booking_date: f.bookingDate || null, booking_notes: f.bookingNotes || '' };
-    try { if (editingRate) await dbUpdate('shipping_rates', editingRate.id, record, user?.id); else await dbInsert('shipping_rates', record, user?.id); setF({}); setEditingRate(null); setView(selectedRoute ? 'route_detail' : 'routes'); await loadData(); } catch (err) { alert('Error: ' + err.message); }
+  const saveCustomList = async (key, list) => {
+    try {
+      const { data: existing } = await supabase.from('app_settings').select('id').eq('setting_key', key).single();
+      if (existing) {
+        await supabase.from('app_settings').update({ setting_value: JSON.stringify(list) }).eq('id', existing.id);
+      } else {
+        await supabase.from('app_settings').insert({ setting_key: key, setting_value: JSON.stringify(list) });
+      }
+    } catch(e) { console.log('Save list error:', e); }
   };
 
-  const handleMarkBooked = async (rate) => { const ref = prompt('Shipment reference #:'); if (ref === null || !ref.trim()) return; const cust = prompt('Customer name (optional):') || ''; try { await dbInsert('shipping_bookings', { rate_id: rate.id, shipment_reference: ref, customer_name: cust, booking_date: new Date().toISOString().substring(0,10) }, user?.id); await dbUpdate('shipping_rates', rate.id, { booked: true }, user?.id); await loadData(); } catch (err) { alert(err.message); } };
-
-  const handleSaveQuote = async () => {
-    if (!f.qCustomer || !f.qOrigin || !f.qDest) { alert('Fill Customer, Origin, Destination'); return; }
-    const iT = Number(f.qShipCost||0)+Number(f.qTruckCost||0)+Number(f.qCustomsCost||0)+Number(f.qOtherInternal||0);
-    const cT = Number(f.qClientShip||0)+Number(f.qClientTruck||0)+Number(f.qClientCustoms||0)+Number(f.qClientService||0)+Number(f.qClientOther||0);
-    const profit = cT - iT;
-    const record = { quote_number: f.qNumber || ('Q-' + Date.now().toString(36).toUpperCase()), quote_date: f.qDate || new Date().toISOString().substring(0,10), customer_name: f.qCustomer, customer_email: f.qEmail || '', origin: f.qOrigin, destination: f.qDest, port_of_loading: f.qPol || '', port_of_discharge: f.qPod || '', container_type: f.qContainer || '40ft', shipping_rate_id: pickedShipRate || f.qRateId || null, shipping_cost: Number(f.qShipCost)||0, shipping_vendor: f.qShipVendor || '', shipping_line: f.qShipLine || '', trucking_cost: Number(f.qTruckCost)||0, trucking_vendor: f.qTruckVendor || '', customs_cost: Number(f.qCustomsCost)||0, other_internal_cost: Number(f.qOtherInternal)||0, other_internal_desc: f.qOtherInternalDesc || '', total_internal_cost: iT, client_shipping_fee: Number(f.qClientShip)||0, client_trucking_fee: Number(f.qClientTruck)||0, client_customs_fee: Number(f.qClientCustoms)||0, client_service_fee: Number(f.qClientService)||0, client_other_fee: Number(f.qClientOther)||0, client_other_desc: f.qClientOtherDesc || '', client_total: cT, client_display_text: f.qDisplayText || '', client_show_breakdown: f.qShowBreakdown || false, profit, profit_pct: iT > 0 ? Math.round((profit/iT)*10000)/100 : 0, currency: f.qCurrency || 'USD', status: f.qStatus || 'draft', valid_until: f.qValidUntil || null, notes: f.qNotes || '' };
-    try { if (editingQuote) await dbUpdate('shipping_quotes', editingQuote.id, record, user?.id); else await dbInsert('shipping_quotes', record, user?.id); await logActivity(user?.id, `Quote ${record.quote_number} ${editingQuote?'updated':'created'} for ${record.customer_name}`); resetQuoteForm(); setView('quotes'); await loadData(); } catch (err) { alert('Error: ' + err.message); }
+  const addCategory = async (name) => {
+    if (!name || allCategories.includes(name)) return;
+    const updated = [...customCategories, name];
+    setCustomCategories(updated);
+    await saveCustomList('custom_categories', updated);
   };
 
-  const handleDeleteRate = async (rate) => { if (!confirm('Delete this rate?')) return; try { await dbDelete('shipping_rates', rate.id, user?.id); await loadData(); } catch (err) { alert(err.message); } };
-  const processImportFile = async (file) => { const d = await file.arrayBuffer(); const wb = XLSX.read(d); const rows = XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]]); if (!rows.length) { alert('Empty'); return; } const parsed = rows.map(row => { const get = (...keys) => { for (const k of keys) { const v = row[k]||row[k?.toLowerCase?.()]||row[k?.toUpperCase?.()]; if (v!=null&&v!=='') return String(v).trim(); } return ''; }; const getNum = (...keys) => { const v = get(...keys); return v ? Number(v.replace(/[^0-9.-]/g,''))||0 : 0; }; const r = { origin:get('Origin','From','المنشأ'), destination:get('Destination','To','الوجهة'), vendor_name:get('Vendor','Forwarder','المورد'), shipping_line:get('Shipping Line','Line','Carrier','الناقل'), transport_mode:get('Mode','Transport')||'Ocean', container_type:get('Container','Size')||'40ft', rate_amount:getNum('Rate','Amount','Freight'), currency:get('Currency','Cur')||'USD', transit_days:getNum('Transit','Transit Days')||null, free_days:getNum('Free Days','Free')||null, port_fees:getNum('Port Fees'), thc_fees:getNum('THC'), documentation_fees:getNum('Doc Fees'), customs_fees:getNum('Customs'), other_fees:getNum('Other Fees'), effective_date:get('Date','Effective')||new Date().toISOString().substring(0,10), expiry_date:get('Expiry','Valid Until')||null, port_of_loading:get('POL','Loading Port'), port_of_discharge:get('POD','Discharge Port'), notes:get('Notes','Remarks'), is_active:true }; r.total_cost=(r.rate_amount||0)+(r.port_fees||0)+(r.thc_fees||0)+(r.documentation_fees||0)+(r.customs_fees||0)+(r.other_fees||0); return r; }).filter(r=>r.origin&&r.destination); setImportData(parsed); setImportStep('preview'); };
-  const executeImport = async () => { setImportStep('importing'); setImportProgress(0); for (let i=0;i<importData.length;i++) { try { await dbInsert('shipping_rates',importData[i],user?.id); } catch(e){} if(i%10===0) setImportProgress(Math.round((i/importData.length)*100)); } setImportProgress(100); setImportStep('done'); await loadData(); };
-  const handleAiQuery = async () => { if (!aiQuery.trim()) return; setAiLoading(true); setAiAnswer(''); try { const summary = routeGroups.slice(0,50).map(rg => { const c=rg.cheapest; return rg.key+': '+rg.count+' quotes ('+rg.activeCount+' active), best: '+(c?'$'+c.rate_amount+' '+c.vendor_name+'/'+(c.shipping_line||'N/A'):'none'); }).join('\n'); const res = await fetch('/api/ask',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({question:aiQuery,context:'Shipping rates assistant for KTC.\n\nROUTES:\n'+summary+'\n\nAnswer concisely.'})}); const data = await res.json(); setAiAnswer(data.answer||'No response'); } catch(err) { setAiAnswer('Error: '+err.message); } setAiLoading(false); };
-  const resetQuoteForm = () => { setF({}); setEditingQuote(null); setPickedShipRate(null); setPickedTruckRate(null); setPickedBrokerRate(null); setManualShip(false); setManualTruck(false); setManualBroker(false); };
+  const addGroup = async (name) => {
+    if (!name || allGroups.includes(name)) return;
+    const updated = [...customGroups, name];
+    setCustomGroups(updated);
+    await saveCustomList('custom_groups', updated);
+  };
 
-  if (loading) return <div className="text-center py-8 text-slate-400">Loading...</div>;
+  const loadClientData = async (client) => {
+    setSel(client);
+    if (!client) return;
+    const [n, fu, cl] = await Promise.all([
+      supabase.from('client_notes').select('*').eq('customer_id', client.id).order('created_at', { ascending: false }),
+      supabase.from('follow_ups').select('*').eq('customer_id', client.id).order('due_date', { ascending: true }),
+      supabase.from('contact_log').select('*').eq('customer_id', client.id).order('contacted_at', { ascending: false }).limit(50),
+    ]);
+    setNotes(n.data || []);
+    setFollowUps(fu.data || []);
+    setContactLog(cl.data || []);
+  };
 
-  // ========== ADD/EDIT RATE ==========
-  if (view === 'add_rate') return (<div>
-    <button onClick={()=>{setView(selectedRoute?'route_detail':'routes');setF({});setEditingRate(null);}} className="px-3 py-1 rounded border border-slate-200 text-xs font-semibold mb-3">← Back</button>
-    <h2 className="text-xl font-extrabold mb-3">{editingRate ? 'Edit Rate' : 'New Shipping Rate'}</h2>
-    <div className="bg-white rounded-xl p-5 border border-slate-200">
-      <div className="bg-blue-50 rounded-lg p-3 mb-4 border border-blue-200"><h3 className="text-xs font-bold text-blue-800 mb-2">🚢 Route</h3>
-        <div className="grid grid-cols-2 gap-3">
-          <div><label className="text-[10px] font-semibold">Origin *</label><input list="o-l" value={f.origin||''} onChange={e=>setF({...f,origin:e.target.value})} className="w-full px-3 py-2 rounded-lg border text-sm" /><datalist id="o-l">{origins.map(o=><option key={o} value={o}/>)}</datalist></div>
-          <div><label className="text-[10px] font-semibold">Destination *</label><input list="d-l" value={f.destination||''} onChange={e=>setF({...f,destination:e.target.value})} className="w-full px-3 py-2 rounded-lg border text-sm" /><datalist id="d-l">{destinations.map(d=><option key={d} value={d}/>)}</datalist></div>
-          <div><label className="text-[10px] font-semibold">Port of Loading</label><input list="pol-l" value={f.pol||''} onChange={e=>setF({...f,pol:e.target.value})} className="w-full px-3 py-2 rounded-lg border text-sm" /><datalist id="pol-l">{pols.map(p=><option key={p} value={p}/>)}</datalist></div>
-          <div><label className="text-[10px] font-semibold">Port of Discharge</label><input list="pod-l" value={f.pod||''} onChange={e=>setF({...f,pod:e.target.value})} className="w-full px-3 py-2 rounded-lg border text-sm" /><datalist id="pod-l">{pods.map(p=><option key={p} value={p}/>)}</datalist></div>
-        </div></div>
-      <div className="bg-indigo-50 rounded-lg p-3 mb-4 border-2 border-indigo-300"><h3 className="text-xs font-bold text-indigo-800 mb-2">🏷️ Rate Type / نوع السعر * (Required / مطلوب)</h3>
-        <div className="flex gap-2">
-          {RATE_TYPES.map(rt => (
-            <button key={rt} onClick={() => setF({...f, rateType: rt})}
-              className={'flex-1 px-4 py-3 rounded-lg text-sm font-bold border-2 transition ' +
-                (f.rateType === rt ? 'bg-indigo-500 text-white border-indigo-500 shadow-lg' : 'bg-white text-slate-600 border-slate-200 hover:border-indigo-300')}>
-              {rt === 'Shipping' ? '🚢' : rt === 'Trucking' ? '🚛' : '📋'} {rt}
-            </button>
-          ))}
+  const logContact = async (type, notes) => {
+    if (!sel) return;
+    try {
+      await dbInsert('contact_log', {
+        customer_id: sel.id, contact_type: type,
+        notes: notes || '', contacted_by: user?.id,
+        contacted_at: new Date().toISOString(),
+      }, user?.id);
+      await logActivity(user?.id, type + ' contact with: ' + sel.name + (notes ? ' — ' + notes : ''));
+      loadClientData(sel);
+    } catch(err) { console.log('Contact log error:', err); }
+  };
+
+  const openWhatsApp = (phone) => {
+    if (!phone) { alert('No phone number / لا يوجد رقم هاتف'); return; }
+    // Clean phone number
+    let clean = phone.replace(/[^0-9+]/g, '');
+    if (clean.startsWith('0')) clean = '+2' + clean; // Egypt default
+    if (!clean.startsWith('+')) clean = '+' + clean;
+    logContact('whatsapp', 'Opened WhatsApp chat');
+    window.open('https://wa.me/' + clean.replace('+', ''), '_blank');
+  };
+
+  const custInvoices = (c) => invoices.filter(i => i.customer_id === (c ? c.id : null) || (c && i.customer_name === c.name));
+
+  // Get last note info for a customer
+  const getLastNote = (customerId) => {
+    const cn = allNotes.filter(n => n.customer_id === customerId);
+    if (cn.length === 0) return null;
+    return cn[0]; // already sorted desc
+  };
+
+  // Get last order for a customer
+  const getLastOrder = (c) => {
+    const invs = custInvoices(c).sort((a, b) => (b.invoice_date || '').localeCompare(a.invoice_date || ''));
+    return invs.length > 0 ? invs[0] : null;
+  };
+
+  const filtered = useMemo(() => {
+    let arr = customers.filter(c => {
+      if (!isAdmin && c.restricted) return false;
+      if (q && !(c.name || '').includes(q) && !(c.name_en || '').toLowerCase().includes(q.toLowerCase())) return false;
+      if (groupF !== 'all' && c.group_name !== groupF) return false;
+      if (catF !== 'all' && c.industry !== catF) return false;
+      if (repF !== 'all') { if (repF === 'unassigned') { if (c.assigned_rep) return false; } else if (c.assigned_rep !== repF) return false; }
+      return true;
+    });
+    if (sortBy === 'alpha') arr.sort((a, b) => (a.name || '').localeCompare(b.name || ''));
+    if (sortBy === 'alpha_rev') arr.sort((a, b) => (b.name || '').localeCompare(a.name || ''));
+    if (sortBy === 'most_orders') arr.sort((a, b) => custInvoices(b).length - custInvoices(a).length);
+    if (sortBy === 'top_sales') arr.sort((a, b) => {
+      const aT = custInvoices(a).reduce((s, i) => s + Number(i.total_amount || 0), 0);
+      const bT = custInvoices(b).reduce((s, i) => s + Number(i.total_amount || 0), 0);
+      return bT - aT;
+    });
+    if (sortBy === 'latest_note') arr.sort((a, b) => {
+      const aN = getLastNote(a.id);
+      const bN = getLastNote(b.id);
+      if (!aN && !bN) return 0;
+      if (!aN) return 1;
+      if (!bN) return -1;
+      return (bN.created_at || '').localeCompare(aN.created_at || '');
+    });
+    if (sortBy === 'earliest_note') arr.sort((a, b) => {
+      const aN = getLastNote(a.id);
+      const bN = getLastNote(b.id);
+      if (!aN && !bN) return 0;
+      if (!aN) return -1;
+      if (!bN) return 1;
+      return (aN.created_at || '').localeCompare(bN.created_at || '');
+    });
+    if (sortBy === 'no_notes') arr.sort((a, b) => {
+      const aN = getLastNote(a.id);
+      const bN = getLastNote(b.id);
+      if (!aN && bN) return -1;
+      if (aN && !bN) return 1;
+      return 0;
+    });
+    return arr;
+  }, [customers, q, groupF, catF, sortBy, invoices, allNotes]);
+
+  const groups = [...new Set(customers.map(c => c.group_name).filter(Boolean))].sort();
+
+  const handleAddClient = async () => {
+    if (!f.name) return;
+    try {
+      await dbInsert('customers', {
+        name: f.name, name_ar: f.nameAr || f.name, name_en: f.nameEn || '',
+        phone: f.phone || '', email: f.email || '', address: f.address || '', city: f.city || '',
+        group_name: f.group || '', client_type: f.clientType || '',
+        industry: f.industry || '', lead_source: f.leadSource || '',
+        credit_limit: f.creditLimit ? Number(f.creditLimit) : null, status: 'active',
+      }, user?.id);
+      await logActivity(user?.id, 'Created client: ' + f.name);
+      setShowAdd(false); setF({}); onReload(); loadAllNotes();
+    } catch (err) { alert('Error / خطأ: ' + err.message); }
+  };
+
+  const handleEditClient = async () => {
+    if (!sel) return;
+    try {
+      await dbUpdate('customers', sel.id, {
+        name: f.name || sel.name, name_ar: f.nameAr || sel.name_ar, name_en: f.nameEn || sel.name_en,
+        phone: f.phone || sel.phone, email: f.email || sel.email, address: f.address || sel.address,
+        city: f.city || sel.city, group_name: f.group || sel.group_name, industry: f.industry !== undefined ? f.industry : sel.industry,
+        lead_source: f.leadSource || sel.lead_source,
+        assigned_rep: f.assignedRep !== undefined ? (f.assignedRep || null) : sel.assigned_rep,
+      }, user?.id);
+      await logActivity(user?.id, 'Edited client: ' + (f.name || sel.name));
+      setEditingClient(false); setF({}); onReload();
+      loadClientData({...sel, name: f.name || sel.name});
+    } catch (err) { alert('Error / خطأ: ' + err.message); }
+  };
+
+  const handleAddNote = async () => {
+    if (!f.noteText || !sel) return;
+    try {
+      await dbInsert('client_notes', { customer_id: sel.id, note_text: f.noteText }, user?.id);
+      await logActivity(user?.id, 'Added note to client: ' + sel.name);
+      setShowNote(false); setF({}); loadClientData(sel); loadAllNotes();
+    } catch (err) { alert('Error / خطأ: ' + err.message); }
+  };
+
+  const handleAddFollowUp = async () => {
+    if (!f.task || !f.dueDate || !sel) return;
+    try {
+      const assignTo = f.assignTo || user?.id;
+      await dbInsert('follow_ups', {
+        customer_id: sel.id, task: f.task, due_date: f.dueDate,
+        due_time: f.dueTime || '09:00', assigned_to: assignTo,
+      }, user?.id);
+      // Create calendar event for assignee
+      await dbInsert('calendar_events', {
+        title: 'Follow-up: ' + f.task + ' (' + sel.name + ')',
+        event_date: f.dueDate, event_time: f.dueTime || '09:00',
+        event_type: 'call', customer_id: sel.id, assigned_to: assignTo,
+      }, user?.id);
+      // Also create on creator's calendar if different from assignee
+      if (assignTo && assignTo !== user?.id) {
+        await dbInsert('calendar_events', {
+          title: '[Assigned] Follow-up: ' + f.task + ' (' + sel.name + ') → ' + (users?.find(u => u.id === assignTo)?.name || ''),
+          event_date: f.dueDate, event_time: f.dueTime || '09:00',
+          event_type: 'call', customer_id: sel.id, assigned_to: user?.id,
+        }, user?.id);
+      }
+      await logActivity(user?.id, 'Created follow-up for ' + sel.name + ': ' + f.task);
+      setShowFollowUp(false); setF({}); loadClientData(sel);
+    } catch (err) { alert('Error / خطأ: ' + err.message); }
+  };
+
+  const completeFollowUp = async (id) => {
+    try {
+      await dbUpdate('follow_ups', id, { completed: true, completed_at: new Date().toISOString() }, user?.id);
+      await logActivity(user?.id, 'Completed follow-up for ' + sel.name);
+      loadClientData(sel);
+    } catch (err) { alert('Error / خطأ: ' + err.message); }
+  };
+
+  // ===== LIST VIEW =====
+  if (!sel) return (
+    <div>
+      <div className="flex justify-between flex-wrap gap-2 mb-3">
+        <h2 className="text-xl font-extrabold">CRM / إدارة العملاء</h2>
+        <div className="flex gap-2 items-center flex-wrap">
+          <input value={q} onChange={e => setQ(e.target.value)} placeholder="Search / بحث"
+            className="px-3 py-1.5 rounded-lg border border-slate-200 text-xs w-28" />
+          <button onClick={() => { setShowAdd(true); setF({}); }}
+            className="px-3 py-1.5 bg-blue-500 text-white rounded-lg text-xs font-semibold">+ Client / عميل</button>
         </div>
-        {!f.rateType && <div className="text-[10px] text-red-500 mt-1 font-semibold">⚠️ You must select a rate type before saving</div>}
       </div>
-      <div className="bg-emerald-50 rounded-lg p-3 mb-4 border border-emerald-200"><h3 className="text-xs font-bold text-emerald-800 mb-2">🏢 Vendor & Shipping Line</h3>
-        <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
-          <div><label className="text-[10px] font-semibold">Vendor *</label><input list="v-l" value={f.vendorName||''} onChange={e=>setF({...f,vendorName:e.target.value})} className="w-full px-3 py-2 rounded-lg border text-sm" /><datalist id="v-l">{vendors.map(v=><option key={v} value={v}/>)}</datalist></div>
-          <div><label className="text-[10px] font-semibold">Shipping Line</label><input list="l-l" value={f.shippingLine||''} onChange={e=>setF({...f,shippingLine:e.target.value})} className="w-full px-3 py-2 rounded-lg border text-sm" /><datalist id="l-l">{lines.map(l=><option key={l} value={l}/>)}</datalist></div>
-          <div><label className="text-[10px] font-semibold">Mode</label><select value={f.transportMode||'Ocean'} onChange={e=>setF({...f,transportMode:e.target.value})} className="w-full px-3 py-2 rounded-lg border text-sm">{TRANSPORT_MODES.map(m=><option key={m}>{m}</option>)}</select></div>
-          <div><label className="text-[10px] font-semibold">Container</label><select value={f.containerType||'40ft'} onChange={e=>setF({...f,containerType:e.target.value})} className="w-full px-3 py-2 rounded-lg border text-sm">{CONTAINER_TYPES.map(c=><option key={c}>{c}</option>)}</select></div>
-        </div></div>
-      <div className="bg-amber-50 rounded-lg p-3 mb-4 border border-amber-200"><h3 className="text-xs font-bold text-amber-800 mb-2">💰 Rates & Fees</h3>
-        <div className="grid grid-cols-4 gap-3">
-          <div><label className="text-[10px] font-semibold">Base Rate</label><input type="number" value={f.rateAmount||''} onChange={e=>setF({...f,rateAmount:e.target.value})} className="w-full px-3 py-2 rounded-lg border text-sm" /></div>
-          <div><label className="text-[10px] font-semibold">Currency</label><select value={f.currency||'USD'} onChange={e=>setF({...f,currency:e.target.value})} className="w-full px-3 py-2 rounded-lg border text-sm">{CURRENCIES.map(c=><option key={c}>{c}</option>)}</select></div>
-          <div><label className="text-[10px] font-semibold">Transit Days</label><input type="number" value={f.transitDays||''} onChange={e=>setF({...f,transitDays:e.target.value})} className="w-full px-3 py-2 rounded-lg border text-sm" /></div>
-          <div><label className="text-[10px] font-semibold">Free Days</label><input type="number" value={f.freeDays||''} onChange={e=>setF({...f,freeDays:e.target.value})} className="w-full px-3 py-2 rounded-lg border text-sm" /></div>
-          <div><label className="text-[10px] font-semibold">Port Fees</label><input type="number" value={f.portFees||''} onChange={e=>setF({...f,portFees:e.target.value})} className="w-full px-3 py-2 rounded-lg border text-sm" /></div>
-          <div><label className="text-[10px] font-semibold">THC</label><input type="number" value={f.thcFees||''} onChange={e=>setF({...f,thcFees:e.target.value})} className="w-full px-3 py-2 rounded-lg border text-sm" /></div>
-          <div><label className="text-[10px] font-semibold">Documentation</label><input type="number" value={f.docFees||''} onChange={e=>setF({...f,docFees:e.target.value})} className="w-full px-3 py-2 rounded-lg border text-sm" /></div>
-          <div><label className="text-[10px] font-semibold">Customs</label><input type="number" value={f.customsFees||''} onChange={e=>setF({...f,customsFees:e.target.value})} className="w-full px-3 py-2 rounded-lg border text-sm" /></div>
-          <div><label className="text-[10px] font-semibold">Other Fees</label><input type="number" value={f.otherFees||''} onChange={e=>setF({...f,otherFees:e.target.value})} className="w-full px-3 py-2 rounded-lg border text-sm" /></div>
-          <div className="col-span-3"><label className="text-[10px] font-semibold">Other Desc</label><input value={f.otherFeesDesc||''} onChange={e=>setF({...f,otherFeesDesc:e.target.value})} className="w-full px-3 py-2 rounded-lg border text-sm" /></div>
-        </div>
-        <div className="mt-2 text-right"><span className="text-xs text-slate-500">Total: </span><span className="text-lg font-extrabold text-amber-700">{fCur(Number(f.rateAmount||0)+Number(f.portFees||0)+Number(f.thcFees||0)+Number(f.docFees||0)+Number(f.customsFees||0)+Number(f.otherFees||0), f.currency||'USD')}</span></div></div>
-      <div className="grid grid-cols-4 gap-3 mb-4">
-        <div><label className="text-[10px] font-semibold">Effective Date</label><input type="date" value={f.effectiveDate||new Date().toISOString().substring(0,10)} onChange={e=>setF({...f,effectiveDate:e.target.value})} className="w-full px-3 py-2 rounded-lg border text-sm" /></div>
-        <div><label className="text-[10px] font-semibold text-red-600">Expiry Date</label><input type="date" value={f.expiryDate||''} onChange={e=>setF({...f,expiryDate:e.target.value})} className="w-full px-3 py-2 rounded-lg border text-sm border-red-200" /></div>
-        <div><label className="text-[10px] font-semibold">Notes</label><input value={f.notes||''} onChange={e=>setF({...f,notes:e.target.value})} className="w-full px-3 py-2 rounded-lg border text-sm" /></div>
-        <div className="flex items-end"><label className="flex items-center gap-2 text-xs"><input type="checkbox" checked={f.booked||false} onChange={e=>setF({...f,booked:e.target.checked})} className="w-4 h-4" /> Booked</label></div>
+      <div className="flex gap-2 mb-3 flex-wrap">
+        <select value={catF} onChange={e => setCatF(e.target.value)} className="px-2 py-1 rounded border border-slate-200 text-xs">
+          <option value="all">All Categories</option>
+          {allCategories.map(c => <option key={c} value={c}>{c}</option>)}
+        </select>
+        <select value={groupF} onChange={e => setGroupF(e.target.value)} className="px-2 py-1 rounded border border-slate-200 text-xs">
+          <option value="all">All Groups</option>
+          {allGroups.map(g => <option key={g} value={g}>{g}</option>)}
+        </select>
+        <select value={repF} onChange={e => setRepF(e.target.value)} className="px-2 py-1 rounded border border-slate-200 text-xs">
+          <option value="all">All Reps / كل الممثلين</option>
+          {(users || []).map(u => <option key={u.id} value={u.id}>{u.name}</option>)}
+          <option value="unassigned">Unassigned / غير معيّن</option>
+        </select>
+        <select value={sortBy} onChange={e => setSortBy(e.target.value)} className="px-2 py-1 rounded border border-slate-200 text-xs">
+          <option value="alpha">A-Z / أبجدي</option>
+          <option value="alpha_rev">Z-A / عكسي</option>
+          <option value="most_orders">Most Orders / أكثر أوامر</option>
+          <option value="top_sales">Top Sales / أعلى مبيعات</option>
+          <option value="latest_note">Last Note (newest) / آخر ملاحظة</option>
+          <option value="earliest_note">Last Note (oldest) / أقدم ملاحظة</option>
+          <option value="no_notes">No Recent Notes / بدون ملاحظات</option>
+        </select>
       </div>
-      {f.booked && (<div className="grid grid-cols-3 gap-3 mb-4 bg-green-50 rounded-lg p-3 border border-green-200">
-        <div><label className="text-[10px] font-semibold text-green-800">Shipment Ref</label><input value={f.shipmentRef||''} onChange={e=>setF({...f,shipmentRef:e.target.value})} className="w-full px-3 py-2 rounded-lg border text-sm" /></div>
-        <div><label className="text-[10px] font-semibold text-green-800">Booking Date</label><input type="date" value={f.bookingDate||''} onChange={e=>setF({...f,bookingDate:e.target.value})} className="w-full px-3 py-2 rounded-lg border text-sm" /></div>
-        <div><label className="text-[10px] font-semibold text-green-800">Notes</label><input value={f.bookingNotes||''} onChange={e=>setF({...f,bookingNotes:e.target.value})} className="w-full px-3 py-2 rounded-lg border text-sm" /></div>
-      </div>)}
-      <div className="flex gap-2"><button onClick={handleSaveRate} className="px-5 py-2 bg-blue-500 text-white rounded-lg font-semibold text-sm">{editingRate?'Update':'Save Rate'} ✓</button><button onClick={()=>{setView(selectedRoute?'route_detail':'routes');setF({});setEditingRate(null);}} className="px-5 py-2 border border-slate-200 rounded-lg text-sm">Cancel</button></div>
-    </div></div>);
-
-  // ========== QUOTES LIST ==========
-  if (view === 'quotes') return (<div>
-    <button onClick={()=>setView('routes')} className="px-3 py-1 rounded border border-slate-200 text-xs font-semibold mb-3">← Routes</button>
-    <div className="flex justify-between items-center mb-3"><h2 className="text-xl font-extrabold">📋 Quotes ({quotes.length})</h2><button onClick={()=>{setView('add_quote');resetQuoteForm();}} className="px-3 py-1.5 bg-blue-500 text-white rounded-lg text-xs font-semibold">+ New Quote</button></div>
-    <div className="grid grid-cols-4 gap-3 mb-4">
-      <div className="bg-white rounded-lg p-3" style={{borderLeftWidth:3,borderLeftColor:'#0ea5e9'}}><div className="text-[10px] text-slate-500">Total</div><div className="text-lg font-extrabold">{quotes.length}</div></div>
-      <div className="bg-white rounded-lg p-3" style={{borderLeftWidth:3,borderLeftColor:'#10b981'}}><div className="text-[10px] text-slate-500">Accepted</div><div className="text-lg font-extrabold text-emerald-600">{quotes.filter(q=>q.status==='accepted'||q.status==='booked').length}</div></div>
-      <div className="bg-white rounded-lg p-3" style={{borderLeftWidth:3,borderLeftColor:'#f59e0b'}}><div className="text-[10px] text-slate-500">Pending</div><div className="text-lg font-extrabold text-amber-600">{quotes.filter(q=>q.status==='draft'||q.status==='sent').length}</div></div>
-      <div className="bg-white rounded-lg p-3" style={{borderLeftWidth:3,borderLeftColor:'#10b981'}}><div className="text-[10px] text-slate-500">Total Profit</div><div className="text-lg font-extrabold text-emerald-600">{fCur(quotes.reduce((a,q)=>a+Number(q.profit||0),0),'USD')}</div></div>
-    </div>
-    <div className="overflow-auto rounded-lg border bg-white max-h-[500px]"><table className="w-full border-collapse text-xs"><thead className="sticky top-0"><tr className="bg-slate-50">
-      <th className="px-2 py-2 text-[10px] text-left">Quote #</th><th className="px-2 py-2 text-[10px] text-left">Date</th><th className="px-2 py-2 text-[10px] text-left">Customer</th><th className="px-2 py-2 text-[10px] text-left">Route</th><th className="px-2 py-2 text-[10px] text-right">Our Cost</th><th className="px-2 py-2 text-[10px] text-right">Client</th><th className="px-2 py-2 text-[10px] text-right">Profit</th><th className="px-2 py-2 text-[10px]">Status</th><th className="px-2 py-2 text-[10px]"></th>
-    </tr></thead><tbody>{quotes.map(qt => { const sc = {draft:'bg-slate-100 text-slate-600',sent:'bg-blue-100 text-blue-700',accepted:'bg-green-100 text-green-700',rejected:'bg-red-100 text-red-600',expired:'bg-red-50 text-red-400',booked:'bg-emerald-100 text-emerald-700'}; return (
-      <tr key={qt.id} className="border-b border-slate-50 hover:bg-blue-50">
-        <td className="px-2 py-2 font-bold text-blue-600 cursor-pointer" onClick={()=>{setEditingQuote(qt);setF({qNumber:qt.quote_number,qDate:qt.quote_date,qCustomer:qt.customer_name,qEmail:qt.customer_email,qOrigin:qt.origin,qDest:qt.destination,qPol:qt.port_of_loading,qPod:qt.port_of_discharge,qContainer:qt.container_type,qShipCost:qt.shipping_cost,qShipVendor:qt.shipping_vendor,qShipLine:qt.shipping_line,qTruckCost:qt.trucking_cost,qTruckVendor:qt.trucking_vendor,qCustomsCost:qt.customs_cost,qOtherInternal:qt.other_internal_cost,qClientShip:qt.client_shipping_fee,qClientTruck:qt.client_trucking_fee,qClientCustoms:qt.client_customs_fee,qClientService:qt.client_service_fee,qClientOther:qt.client_other_fee,qDisplayText:qt.client_display_text,qShowBreakdown:qt.client_show_breakdown,qCurrency:qt.currency,qStatus:qt.status,qValidUntil:qt.valid_until,qNotes:qt.notes});setManualShip(true);setManualTruck(true);setManualBroker(true);setView('add_quote');}}>{qt.quote_number}</td>
-        <td className="px-2 py-2">{qt.quote_date}</td><td className="px-2 py-2 font-semibold">{qt.customer_name}</td><td className="px-2 py-2">{qt.origin}→{qt.destination}</td><td className="px-2 py-2 text-right text-red-500">{fCur(qt.total_internal_cost,qt.currency)}</td><td className="px-2 py-2 text-right font-bold">{fCur(qt.client_total,qt.currency)}</td><td className="px-2 py-2 text-right font-bold" style={{color:qt.profit>0?'#10b981':'#ef4444'}}>{fCur(qt.profit,qt.currency)}</td><td className="px-2 py-2"><span className={'px-2 py-0.5 rounded-full text-[9px] font-bold '+(sc[qt.status]||'bg-slate-100')}>{qt.status}</span></td>
-        <td className="px-2 py-2"><button onClick={()=>setPreviewQuote(qt)} className="px-2 py-0.5 rounded border border-purple-300 text-purple-600 text-[10px] font-semibold">📄 PDF</button></td>
-      </tr>); })}</tbody></table></div>
-    {previewQuote && <QuotePrintView quote={previewQuote} onClose={() => setPreviewQuote(null)} />}
-  </div>);
-
-  // ========== CREATE/EDIT QUOTE ==========
-  if (view === 'add_quote') return (<div>
-    <button onClick={()=>{setView('quotes');resetQuoteForm();}} className="px-3 py-1 rounded border border-slate-200 text-xs font-semibold mb-3">← Back</button>
-    <h2 className="text-xl font-extrabold mb-3">{editingQuote?'Edit Quote':'Create Quote'}</h2>
-    <div className="bg-white rounded-xl p-5 border border-slate-200">
-      <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-4">
-        <div><label className="text-[10px] font-semibold">Quote #</label><input value={f.qNumber||''} onChange={e=>setF({...f,qNumber:e.target.value})} placeholder="Auto" className="w-full px-3 py-2 rounded-lg border text-sm" /></div>
-        <div><label className="text-[10px] font-semibold">Customer * (type or select / اكتب أو اختر)</label><input list="cl" value={f.qCustomer||''} onChange={e=>setF({...f,qCustomer:e.target.value})} placeholder="Type name or pick from list..." className="w-full px-3 py-2 rounded-lg border text-sm" /><datalist id="cl">{(customers||[]).map(c=><option key={c.id} value={c.name}/>)}</datalist></div>
-        <div><label className="text-[10px] font-semibold">Origin *</label><input list="qol" value={f.qOrigin||''} onChange={e=>setF({...f,qOrigin:e.target.value})} className="w-full px-3 py-2 rounded-lg border text-sm" /><datalist id="qol">{origins.map(o=><option key={o} value={o}/>)}</datalist></div>
-        <div><label className="text-[10px] font-semibold">Destination *</label><input list="qdl" value={f.qDest||''} onChange={e=>setF({...f,qDest:e.target.value})} className="w-full px-3 py-2 rounded-lg border text-sm" /><datalist id="qdl">{destinations.map(d=><option key={d} value={d}/>)}</datalist></div>
-        <div><label className="text-[10px] font-semibold">Container</label><select value={f.qContainer||'40ft'} onChange={e=>setF({...f,qContainer:e.target.value})} className="w-full px-3 py-2 rounded-lg border text-sm">{CONTAINER_TYPES.map(c=><option key={c}>{c}</option>)}</select></div>
-        <div><label className="text-[10px] font-semibold">Currency</label><select value={f.qCurrency||'USD'} onChange={e=>setF({...f,qCurrency:e.target.value})} className="w-full px-3 py-2 rounded-lg border text-sm">{CURRENCIES.map(c=><option key={c}>{c}</option>)}</select></div>
-        <div><label className="text-[10px] font-semibold">Valid Until</label><input type="date" value={f.qValidUntil||''} onChange={e=>setF({...f,qValidUntil:e.target.value})} className="w-full px-3 py-2 rounded-lg border text-sm" /></div>
-        <div><label className="text-[10px] font-semibold">Email</label><input value={f.qEmail||''} onChange={e=>setF({...f,qEmail:e.target.value})} className="w-full px-3 py-2 rounded-lg border text-sm" /></div>
+      <div className="grid grid-cols-3 gap-3 mb-3">
+        <div className="bg-white rounded-lg p-3" style={{borderLeftWidth:3,borderLeftColor:'#0ea5e9'}}>
+          <div className="text-[10px] text-slate-500">Clients / عملاء</div>
+          <div className="text-lg font-extrabold">{filtered.length}</div></div>
+        <div className="bg-white rounded-lg p-3" style={{borderLeftWidth:3,borderLeftColor:'#10b981'}}>
+          <div className="text-[10px] text-slate-500">Active / نشط</div>
+          <div className="text-lg font-extrabold">{filtered.filter(c => c.status !== 'inactive').length}</div></div>
+        <div className="bg-white rounded-lg p-3" style={{borderLeftWidth:3,borderLeftColor:'#f59e0b'}}>
+          <div className="text-[10px] text-slate-500">Categories</div>
+          <div className="text-lg font-extrabold">{[...new Set(customers.map(c=>c.industry).filter(Boolean))].length || '—'}</div></div>
       </div>
-
-      {/* INTERNAL COSTS with RATE PICKERS */}
-      <div className="bg-red-50 rounded-lg p-3 mb-4 border border-red-200">
-        <h3 className="text-xs font-bold text-red-800 mb-3">🔒 Internal Costs — Select from your rates or enter manually</h3>
-        <div className="space-y-3">
-          {/* SHIPPING */}
-          {!manualShip ? (
-            <RatePicker rates={rates} label="🚢 Shipping" rateType="Shipping" origin={f.qOrigin} destination={f.qDest} selected={pickedShipRate}
-              onSelect={(r) => { if (!r) { setManualShip(true); return; } setPickedShipRate(r.id); setF(p=>({...p,qShipCost:r.total_cost||r.rate_amount,qShipVendor:r.vendor_name,qShipLine:r.shipping_line||''})); }}
-              onClear={() => { setPickedShipRate(null); setF(p=>({...p,qShipCost:'',qShipVendor:'',qShipLine:''})); }} />
-          ) : (
-            <div className="border rounded-lg p-3 bg-white">
-              <div className="flex justify-between items-center mb-2"><span className="text-xs font-bold">🚢 Shipping — Manual</span><button onClick={()=>{setManualShip(false);setPickedShipRate(null);}} className="text-[10px] text-blue-500 underline">Pick from DB</button></div>
-              <div className="grid grid-cols-3 gap-2">
-                <div><label className="text-[10px] font-semibold">Cost</label><input type="number" value={f.qShipCost||''} onChange={e=>setF({...f,qShipCost:e.target.value})} className="w-full px-2 py-1.5 rounded border text-sm" /></div>
-                <div><label className="text-[10px] font-semibold">Vendor</label><input list="qsvl" value={f.qShipVendor||''} onChange={e=>setF({...f,qShipVendor:e.target.value})} className="w-full px-2 py-1.5 rounded border text-sm" /><datalist id="qsvl">{vendors.map(v=><option key={v} value={v}/>)}</datalist></div>
-                <div><label className="text-[10px] font-semibold">Line</label><input list="qsll" value={f.qShipLine||''} onChange={e=>setF({...f,qShipLine:e.target.value})} className="w-full px-2 py-1.5 rounded border text-sm" /><datalist id="qsll">{lines.map(l=><option key={l} value={l}/>)}</datalist></div>
-              </div>
-            </div>
-          )}
-          {/* TRUCKING */}
-          {!manualTruck ? (
-            <RatePicker rates={rates} label="🚛 Trucking" rateType="Trucking" origin={f.qOrigin} destination={f.qDest} selected={pickedTruckRate}
-              onSelect={(r) => { if (!r) { setManualTruck(true); return; } setPickedTruckRate(r.id); setF(p=>({...p,qTruckCost:r.total_cost||r.rate_amount,qTruckVendor:r.vendor_name})); }}
-              onClear={() => { setPickedTruckRate(null); setF(p=>({...p,qTruckCost:'',qTruckVendor:''})); }} />
-          ) : (
-            <div className="border rounded-lg p-3 bg-white">
-              <div className="flex justify-between items-center mb-2"><span className="text-xs font-bold">🚛 Trucking — Manual</span><button onClick={()=>{setManualTruck(false);setPickedTruckRate(null);}} className="text-[10px] text-blue-500 underline">Pick from DB</button></div>
-              <div className="grid grid-cols-2 gap-2">
-                <div><label className="text-[10px] font-semibold">Cost</label><input type="number" value={f.qTruckCost||''} onChange={e=>setF({...f,qTruckCost:e.target.value})} className="w-full px-2 py-1.5 rounded border text-sm" /></div>
-                <div><label className="text-[10px] font-semibold">Vendor</label><input value={f.qTruckVendor||''} onChange={e=>setF({...f,qTruckVendor:e.target.value})} className="w-full px-2 py-1.5 rounded border text-sm" /></div>
-              </div>
-            </div>
-          )}
-          {/* CUSTOMS/BROKERAGE */}
-          {!manualBroker ? (
-            <RatePicker rates={rates} label="📋 Customs / Brokerage" rateType="Customs/Brokerage" origin={f.qOrigin} destination={f.qDest} selected={pickedBrokerRate}
-              onSelect={(r) => { if (!r) { setManualBroker(true); return; } setPickedBrokerRate(r.id); setF(p=>({...p,qCustomsCost:r.total_cost||r.rate_amount})); }}
-              onClear={() => { setPickedBrokerRate(null); setF(p=>({...p,qCustomsCost:''})); }} />
-          ) : (
-            <div className="border rounded-lg p-3 bg-white">
-              <div className="flex justify-between items-center mb-2"><span className="text-xs font-bold">📋 Customs — Manual</span><button onClick={()=>{setManualBroker(false);setPickedBrokerRate(null);}} className="text-[10px] text-blue-500 underline">Pick from DB</button></div>
-              <div><label className="text-[10px] font-semibold">Customs Cost</label><input type="number" value={f.qCustomsCost||''} onChange={e=>setF({...f,qCustomsCost:e.target.value})} className="w-full px-2 py-1.5 rounded border text-sm" /></div>
-            </div>
-          )}
-          <div className="grid grid-cols-2 gap-2">
-            <div><label className="text-[10px] font-semibold">Other Internal</label><input type="number" value={f.qOtherInternal||''} onChange={e=>setF({...f,qOtherInternal:e.target.value})} className="w-full px-2 py-1.5 rounded border text-sm" /></div>
-            <div><label className="text-[10px] font-semibold">Desc</label><input value={f.qOtherInternalDesc||''} onChange={e=>setF({...f,qOtherInternalDesc:e.target.value})} className="w-full px-2 py-1.5 rounded border text-sm" /></div>
+      {showAdd && (
+        <div className="bg-blue-50 rounded-xl p-4 mb-3 border border-blue-200">
+          <h3 className="text-sm font-bold text-blue-800 mb-3">New Client / عميل جديد</h3>
+          <div className="grid grid-cols-2 gap-3">
+            <div><label className="text-[10px] font-semibold">Name (Arabic)</label>
+              <input value={f.name||''} onChange={e=>setF({...f,name:e.target.value})} className="w-full px-3 py-2 rounded border text-sm" style={{direction:'rtl'}} /></div>
+            <div><label className="text-[10px] font-semibold">Name (English)</label>
+              <input value={f.nameEn||''} onChange={e=>setF({...f,nameEn:e.target.value})} className="w-full px-3 py-2 rounded border text-sm" /></div>
+            <div><label className="text-[10px] font-semibold">Category / الفئة</label>
+              <select value={f.industry||''} onChange={e=>{if(e.target.value==='_new'){const n=prompt('New category name:');if(n){addCategory(n);setF({...f,industry:n});}}else{setF({...f,industry:e.target.value});}}} className="w-full px-3 py-2 rounded border text-sm">
+                <option value="">Select...</option>{allCategories.map(c=><option key={c} value={c}>{c}</option>)}<option value="_new">+ Add New Category...</option></select></div>
+            <div><label className="text-[10px] font-semibold">Group / المجموعة</label>
+              <select value={f.group||''} onChange={e=>{if(e.target.value==='_new'){const n=prompt('New group name:');if(n){addGroup(n);setF({...f,group:n});}}else{setF({...f,group:e.target.value});}}} className="w-full px-3 py-2 rounded border text-sm">
+                <option value="">Select...</option>{allGroups.map(g=><option key={g} value={g}>{g}</option>)}<option value="_new">+ Add New Group...</option></select></div>
+            <div><label className="text-[10px] font-semibold">Lead Source / المصدر</label>
+              <select value={f.leadSource||''} onChange={e=>setF({...f,leadSource:e.target.value})} className="w-full px-3 py-2 rounded border text-sm">
+                <option value="">Select...</option>{LEAD_SOURCES.map(s=><option key={s} value={s}>{s}</option>)}</select></div>
+            <div><label className="text-[10px] font-semibold">Phone</label>
+              <input value={f.phone||''} onChange={e=>setF({...f,phone:e.target.value})} className="w-full px-3 py-2 rounded border text-sm" /></div>
+            <div><label className="text-[10px] font-semibold">City</label>
+              <input value={f.city||''} onChange={e=>setF({...f,city:e.target.value})} className="w-full px-3 py-2 rounded border text-sm" /></div>
+            <div><label className="text-[10px] font-semibold">Credit Limit / حد ائتمان</label>
+              <input type="number" value={f.creditLimit||''} onChange={e=>setF({...f,creditLimit:e.target.value})} className="w-full px-3 py-2 rounded border text-sm" /></div>
+            <div><label className="text-[10px] font-semibold">Address / العنوان</label>
+              <input value={f.address||''} onChange={e=>setF({...f,address:e.target.value})} className="w-full px-3 py-2 rounded border text-sm" /></div>
+          </div>
+          <div className="mt-2"><label className="text-[10px] font-semibold">Initial Notes / ملاحظات أولية</label>
+            <textarea value={f.initialNotes||''} onChange={e=>setF({...f,initialNotes:e.target.value})} rows={2} className="w-full px-3 py-2 rounded border text-sm" /></div>
+          <div className="flex gap-2 mt-3">
+            <button onClick={async () => { await handleAddClient(); if (f.initialNotes && f.name) { /* note added separately after client creation */ } }}
+              className="px-4 py-2 bg-emerald-500 text-white rounded-lg text-sm font-semibold">Save / حفظ</button>
+            <button onClick={()=>setShowAdd(false)} className="px-4 py-2 border border-slate-200 rounded-lg text-sm">Cancel / إلغاء</button>
           </div>
         </div>
-        <div className="mt-3 text-right"><span className="text-xs">Our Total: </span><span className="text-lg font-extrabold text-red-700">{fCur(Number(f.qShipCost||0)+Number(f.qTruckCost||0)+Number(f.qCustomsCost||0)+Number(f.qOtherInternal||0),f.qCurrency||'USD')}</span></div>
+      )}
+      {/* 30-Day Alert: Important Clients with No Recent Activity */}
+      {(() => {
+        const thirtyDaysAgo = new Date();
+        thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
+        const cutoff = thirtyDaysAgo.toISOString();
+        const neglected = customers.filter(c => {
+          if (!c.important) return false;
+          const lastNote = getLastNote(c.id);
+          if (!lastNote) return true;
+          return lastNote.created_at < cutoff;
+        });
+        if (neglected.length === 0) return null;
+        return (
+          <div className="bg-red-50 rounded-xl p-4 mb-3 border border-red-200">
+            <h3 className="text-sm font-bold text-red-700 mb-2">⚠️ Important Clients — No Contact in 30+ Days ({neglected.length})</h3>
+            {neglected.map(c => {
+              const lastNote = getLastNote(c.id);
+              const daysSince = lastNote ? Math.floor((Date.now() - new Date(lastNote.created_at).getTime()) / 86400000) : null;
+              return (
+                <div key={c.id} onClick={() => loadClientData(c)}
+                  className="flex justify-between items-center py-2 border-b border-red-100 cursor-pointer hover:bg-red-100 rounded px-2">
+                  <div>
+                    <span className="text-xs font-bold" style={{direction: lang === 'ar' ? 'rtl' : 'ltr'}}>{lang === 'en' && c.name_en ? c.name_en : c.name}</span>
+                    {c.group_name && <span className="ml-2 text-[10px] text-purple-600">{c.group_name}</span>}
+                  </div>
+                  <span className="text-[10px] font-bold text-red-600">
+                    {daysSince ? daysSince + ' days ago' : 'Never contacted'}
+                  </span>
+                </div>
+              );
+            })}
+          </div>
+        );
+      })()}
+      <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-3">
+        {filtered.map(c => {
+          const invs = custInvoices(c);
+          const total = invs.reduce((a,i) => a + Number(i.total_amount||0), 0);
+          const owed = invs.reduce((a,i) => a + Number(i.outstanding||0), 0);
+          const lastNote = getLastNote(c.id);
+          const lastOrder = getLastOrder(c);
+          const noteUser = lastNote ? users?.find(u => u.id === lastNote.created_by) : null;
+          return (
+            <div key={c.id} onClick={()=>loadClientData(c)} className="bg-white rounded-lg p-3 cursor-pointer border border-slate-200 hover:shadow-md transition">
+              <div className="text-sm font-bold" style={{direction:'rtl'}}>{c.important ? '⭐ ' : ''}{lang === 'en' && c.name_en ? c.name_en : c.name}</div>
+              {lang === 'ar' && c.name_en && <div className="text-[10px] text-blue-500">{c.name_en}</div>}
+              <div className="flex gap-1 mt-1 flex-wrap">
+                {c.industry && <span className="px-1.5 py-0.5 bg-amber-100 text-amber-700 rounded text-[9px]">{c.industry}</span>}
+                {c.group_name && <span className="px-1.5 py-0.5 bg-purple-100 text-purple-700 rounded text-[9px]">{c.group_name}</span>}
+                {c.lead_source && <span className="px-1.5 py-0.5 bg-green-100 text-green-700 rounded text-[9px]">{c.lead_source}</span>}
+              </div>
+              <div className="flex justify-between mt-2">
+                <div><div className="text-[9px] text-slate-400">Sales</div>
+                  <div className="text-xs font-bold text-blue-500">{total>0?fmt(total):'—'}</div></div>
+                <div className="text-right"><div className="text-[9px] text-slate-400">{invs.length} orders</div>
+                  <div className={'text-xs font-bold '+(owed>0?'text-red-500':'text-emerald-500')}>{owed>0?fmt(owed):'✓'}</div></div>
+              </div>
+              {/* Last Note Date */}
+              <div className="mt-1.5 border-t border-slate-100 pt-1.5">
+                {c.assigned_rep && (() => { const rep = users?.find(u => u.id === c.assigned_rep); return rep ? <div className="text-[10px] text-indigo-600 font-semibold mb-0.5">👤 {rep.name}</div> : null; })()}
+                {lastNote ? (
+                  <div className="text-[10px] text-blue-600">
+                    Last note: {new Date(lastNote.created_at).toLocaleDateString()}
+                    {noteUser && <span className="text-slate-400"> — {noteUser.name}</span>}
+                  </div>
+                ) : (
+                  <div className="text-[10px] text-red-500 font-semibold">No notes yet</div>
+                )}
+                {lastOrder && (
+                  <div className="text-[10px] text-purple-600">Last order: #{lastOrder.order_number} ({lastOrder.invoice_date})</div>
+                )}
+              </div>
+            </div>);
+        })}
       </div>
+    </div>
+  );
 
-      {/* CLIENT FEES */}
-      <div className="bg-emerald-50 rounded-lg p-3 mb-4 border border-emerald-200"><h3 className="text-xs font-bold text-emerald-800 mb-2">👤 Client Quote</h3>
-        <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
-          <div><label className="text-[10px] font-semibold">Shipping Fee</label><input type="number" value={f.qClientShip||''} onChange={e=>setF({...f,qClientShip:e.target.value})} className="w-full px-3 py-2 rounded-lg border text-sm" /></div>
-          <div><label className="text-[10px] font-semibold">Trucking Fee</label><input type="number" value={f.qClientTruck||''} onChange={e=>setF({...f,qClientTruck:e.target.value})} className="w-full px-3 py-2 rounded-lg border text-sm" /></div>
-          <div><label className="text-[10px] font-semibold">Customs Fee</label><input type="number" value={f.qClientCustoms||''} onChange={e=>setF({...f,qClientCustoms:e.target.value})} className="w-full px-3 py-2 rounded-lg border text-sm" /></div>
-          <div><label className="text-[10px] font-semibold">Service Fee</label><input type="number" value={f.qClientService||''} onChange={e=>setF({...f,qClientService:e.target.value})} className="w-full px-3 py-2 rounded-lg border text-sm bg-emerald-100" /></div>
-          <div><label className="text-[10px] font-semibold">Other</label><input type="number" value={f.qClientOther||''} onChange={e=>setF({...f,qClientOther:e.target.value})} className="w-full px-3 py-2 rounded-lg border text-sm" /></div>
-          <div className="col-span-3"><label className="text-[10px] font-semibold">Display Text</label><input value={f.qDisplayText||''} onChange={e=>setF({...f,qDisplayText:e.target.value})} placeholder="e.g. All-in shipping fee..." className="w-full px-3 py-2 rounded-lg border text-sm" /></div>
+  // ===== DETAIL VIEW =====
+  const invs = custInvoices(sel);
+  const totalSales = invs.reduce((a,i)=>a+Number(i.total_amount||0),0);
+  const totalCollected = invs.reduce((a,i)=>a+Number(i.total_collected||0),0);
+  const totalOwed = invs.reduce((a,i)=>a+Number(i.outstanding||0),0);
+  const pendingFU = followUps.filter(fu=>!fu.completed);
+
+  return (
+    <div>
+      <button onClick={()=>{setSel(null);setEditingClient(false);setF({});}} className="px-3 py-1 rounded border border-slate-200 text-xs font-semibold mb-3">← Back / رجوع</button>
+      <div className="bg-white rounded-xl p-4 mb-3">
+        {editingClient ? (
+          <div className="grid grid-cols-2 gap-3">
+            <div><label className="text-[10px] font-semibold">Name (Arabic)</label>
+              <input value={f.name!==undefined?f.name:sel.name} onChange={e=>setF({...f,name:e.target.value})} className="w-full px-2 py-1.5 border rounded text-sm" style={{direction:'rtl'}} /></div>
+            <div><label className="text-[10px] font-semibold">Name (English)</label>
+              <input value={f.nameEn!==undefined?f.nameEn:(sel.name_en||'')} onChange={e=>setF({...f,nameEn:e.target.value})} className="w-full px-2 py-1.5 border rounded text-sm" /></div>
+            <div><label className="text-[10px] font-semibold">Category</label>
+              <select value={f.industry!==undefined?f.industry:(sel.industry||'')} onChange={e=>{if(e.target.value==='_new'){const n=prompt('New category:');if(n){addCategory(n);setF({...f,industry:n});}}else{setF({...f,industry:e.target.value});}}} className="w-full px-2 py-1.5 border rounded text-sm">
+                <option value="">None</option>{allCategories.map(c=><option key={c} value={c}>{c}</option>)}<option value="_new">+ Add New...</option></select></div>
+            <div><label className="text-[10px] font-semibold">Group</label>
+              <select value={f.group!==undefined?f.group:(sel.group_name||'')} onChange={e=>{if(e.target.value==='_new'){const n=prompt('New group:');if(n){addGroup(n);setF({...f,group:n});}}else{setF({...f,group:e.target.value});}}} className="w-full px-2 py-1.5 border rounded text-sm">
+                <option value="">None</option>{allGroups.map(g=><option key={g} value={g}>{g}</option>)}<option value="_new">+ Add New...</option></select></div>
+            <div><label className="text-[10px] font-semibold">Lead Source</label>
+              <select value={f.leadSource!==undefined?f.leadSource:(sel.lead_source||'')} onChange={e=>setF({...f,leadSource:e.target.value})} className="w-full px-2 py-1.5 border rounded text-sm">
+                <option value="">None</option>{LEAD_SOURCES.map(s=><option key={s} value={s}>{s}</option>)}</select></div>
+            <div><label className="text-[10px] font-semibold">Phone</label>
+              <input value={f.phone!==undefined?f.phone:(sel.phone||'')} onChange={e=>setF({...f,phone:e.target.value})} className="w-full px-2 py-1.5 border rounded text-sm" /></div>
+            <div><label className="text-[10px] font-semibold">City</label>
+              <input value={f.city!==undefined?f.city:(sel.city||'')} onChange={e=>setF({...f,city:e.target.value})} className="w-full px-2 py-1.5 border rounded text-sm" /></div>
+            <div><label className="text-[10px] font-semibold">Assigned Rep / الممثل</label>
+              <select value={f.assignedRep!==undefined?f.assignedRep:(sel.assigned_rep||'')} onChange={e=>setF({...f,assignedRep:e.target.value})} className="w-full px-2 py-1.5 border rounded text-sm">
+                <option value="">Unassigned / غير معيّن</option>
+                {(users||[]).map(u=><option key={u.id} value={u.id}>{u.name}</option>)}
+              </select></div>
+            <div className="col-span-2 flex gap-2">
+              <button onClick={handleEditClient} className="px-3 py-1.5 bg-emerald-500 text-white rounded text-xs font-semibold">Save / حفظ</button>
+              <button onClick={()=>{setEditingClient(false);setF({});}} className="px-3 py-1.5 border border-slate-200 rounded text-xs">Cancel</button>
+            </div>
+          </div>
+        ) : (
+          <div>
+            <div className="flex justify-between items-start">
+              <div>
+                <h3 className="text-xl font-extrabold" style={{direction: lang === 'ar' ? 'rtl' : 'ltr'}}>{lang === 'en' && sel.name_en ? sel.name_en : sel.name}</h3>
+                {lang === 'ar' && sel.name_en && <div className="text-sm text-blue-500">{sel.name_en}</div>}
+                <div className="flex gap-1 mt-1 flex-wrap">
+                  {sel.industry && <span className="px-2 py-0.5 bg-amber-100 text-amber-700 rounded text-xs font-semibold">{sel.industry}</span>}
+                  {sel.group_name && <span className="px-2 py-0.5 bg-purple-100 text-purple-700 rounded text-xs">{sel.group_name}</span>}
+                  {sel.lead_source && <span className="px-2 py-0.5 bg-green-100 text-green-700 rounded text-xs">{sel.lead_source}</span>}
+                  {sel.city && <span className="px-2 py-0.5 bg-slate-100 text-slate-600 rounded text-xs">{sel.city}</span>}
+                </div>
+              </div>
+              <button onClick={()=>{setEditingClient(true);setF({});}} className="px-3 py-1 border border-blue-300 text-blue-500 rounded text-xs">Edit / تعديل</button>
+            </div>
+            {/* Important Toggle */}
+            <button onClick={async () => {
+              try {
+                const newVal = !sel.important;
+                await dbUpdate('customers', sel.id, { important: newVal }, user?.id);
+                setSel({...sel, important: newVal});
+                onReload();
+              } catch(err) { alert('Error: ' + err.message); }
+            }} className={'mt-2 px-3 py-1.5 rounded-lg text-xs font-bold border-2 transition ' + (sel.important ? 'border-amber-400 bg-amber-50 text-amber-700' : 'border-slate-200 text-slate-400')}>
+              {sel.important ? '⭐ Important Client / عميل مهم' : '☆ Mark as Important / تعيين كمهم'}
+            </button>
+            {sel.phone && <div className="text-xs text-slate-500 mt-2">Phone: {sel.phone}</div>}
+            {sel.assigned_rep && (() => { const rep = users?.find(u => u.id === sel.assigned_rep); return rep ? <div className="text-xs text-indigo-600 font-semibold mt-1">👤 Assigned Rep / الممثل: {rep.name}</div> : null; })()}
+            {sel.credit_limit && <div className="text-xs text-slate-500">Credit Limit: {fE(sel.credit_limit)}</div>}
+            {isAdmin && (
+              <div className="flex items-center gap-2 mt-2 p-2 bg-red-50 rounded border border-red-200">
+                <input type="checkbox" checked={sel.restricted || false}
+                  onChange={async (e) => {
+                    try {
+                      await dbUpdate('customers', sel.id, { restricted: e.target.checked }, user?.id);
+                      setSel({...sel, restricted: e.target.checked});
+                      onReload();
+                    } catch (err) { alert('Error: ' + err.message); }
+                  }} className="w-4 h-4" />
+                <label className="text-xs font-semibold text-red-700">Restricted — Admin Only / مقيد — للمسؤول فقط</label>
+              </div>
+            )}
+          </div>
+        )}
+      </div>
+      <div className="grid grid-cols-4 gap-2 mb-3">
+        <div className="bg-blue-50 rounded-lg p-2 text-center"><div className="text-[9px] text-slate-500">Sales</div><div className="text-sm font-bold text-blue-600">{fE(totalSales)}</div></div>
+        <div className="bg-emerald-50 rounded-lg p-2 text-center"><div className="text-[9px] text-slate-500">Collected</div><div className="text-sm font-bold text-emerald-600">{fE(totalCollected)}</div></div>
+        <div className="bg-red-50 rounded-lg p-2 text-center"><div className="text-[9px] text-slate-500">Owed</div><div className="text-sm font-bold text-red-500">{fE(totalOwed)}</div></div>
+        <div className="bg-amber-50 rounded-lg p-2 text-center"><div className="text-[9px] text-slate-500">Orders</div><div className="text-sm font-bold">{invs.length}</div></div>
+      </div>
+      <div className="flex gap-2 mb-3 flex-wrap">
+        <button onClick={()=>{setShowNote(true);setF({});}} className="px-3 py-1.5 bg-blue-500 text-white rounded-lg text-xs font-semibold">+ Note / ملاحظة</button>
+        <button onClick={()=>{setShowFollowUp(true);setF({});}} className="px-3 py-1.5 bg-amber-500 text-white rounded-lg text-xs font-semibold">+ Follow-up / متابعة</button>
+        <button onClick={() => openWhatsApp(sel.phone)} className="px-3 py-1.5 bg-green-500 text-white rounded-lg text-xs font-semibold">💬 WhatsApp</button>
+        <button onClick={() => { if(sel.phone) { logContact('phone', 'Phone call'); window.open('tel:'+sel.phone); } else alert('No phone'); }}
+          className="px-3 py-1.5 bg-purple-500 text-white rounded-lg text-xs font-semibold">📞 Call</button>
+        <button onClick={() => { const note = prompt('Contact notes / ملاحظات الاتصال:'); if(note) logContact('email', note); }}
+          className="px-3 py-1.5 bg-slate-500 text-white rounded-lg text-xs font-semibold">📧 Email</button>
+        <button onClick={() => { const note = prompt('Visit notes / ملاحظات الزيارة:'); if(note) logContact('visit', note); }}
+          className="px-3 py-1.5 bg-cyan-500 text-white rounded-lg text-xs font-semibold">🚗 Visit</button>
+      </div>
+      {showNote && (
+        <div className="bg-blue-50 rounded-lg p-3 mb-3 border border-blue-200">
+          <textarea value={f.noteText||''} onChange={e=>setF({...f,noteText:e.target.value})} placeholder="Note / ملاحظة..." rows={3} className="w-full px-3 py-2 rounded border text-sm mb-2" />
+          <div className="flex gap-2">
+            <button onClick={handleAddNote} className="px-3 py-1.5 bg-blue-500 text-white rounded text-xs font-semibold">Save</button>
+            <button onClick={()=>setShowNote(false)} className="px-3 py-1.5 border border-slate-200 rounded text-xs">Cancel</button>
+          </div>
         </div>
-        <label className="flex items-center gap-2 text-xs mt-2"><input type="checkbox" checked={f.qShowBreakdown||false} onChange={e=>setF({...f,qShowBreakdown:e.target.checked})} /> Show breakdown to client</label>
-        <div className="mt-2 text-right"><span className="text-xs">Client Total: </span><span className="text-lg font-extrabold text-emerald-700">{fCur(Number(f.qClientShip||0)+Number(f.qClientTruck||0)+Number(f.qClientCustoms||0)+Number(f.qClientService||0)+Number(f.qClientOther||0),f.qCurrency||'USD')}</span></div>
-      </div>
-
-      {(() => { const iT=Number(f.qShipCost||0)+Number(f.qTruckCost||0)+Number(f.qCustomsCost||0)+Number(f.qOtherInternal||0); const cT=Number(f.qClientShip||0)+Number(f.qClientTruck||0)+Number(f.qClientCustoms||0)+Number(f.qClientService||0)+Number(f.qClientOther||0); const p=cT-iT; const pct=iT>0?((p/iT)*100).toFixed(1):0; return (<div className={'rounded-lg p-4 mb-4 border-2 '+(p>0?'bg-green-50 border-green-300':p<0?'bg-red-50 border-red-300':'bg-slate-50 border-slate-200')}><div className="flex justify-between items-center"><div className="text-sm font-bold">Profit</div><div><span className={'text-2xl font-extrabold '+(p>0?'text-green-600':'text-red-600')}>{fCur(p,f.qCurrency||'USD')}</span><span className="text-xs text-slate-500 ml-2">({pct}%)</span></div></div></div>); })()}
-      <div className="grid grid-cols-2 gap-3 mb-4">
-        <div><label className="text-[10px] font-semibold">Status</label><select value={f.qStatus||'draft'} onChange={e=>setF({...f,qStatus:e.target.value})} className="w-full px-3 py-2 rounded-lg border text-sm">{QUOTE_STATUSES.map(s=><option key={s} value={s}>{s.charAt(0).toUpperCase()+s.slice(1)}</option>)}</select></div>
-        <div><label className="text-[10px] font-semibold">Notes</label><input value={f.qNotes||''} onChange={e=>setF({...f,qNotes:e.target.value})} className="w-full px-3 py-2 rounded-lg border text-sm" /></div>
-      </div>
-      <div className="flex gap-2"><button onClick={handleSaveQuote} className="px-5 py-2 bg-blue-500 text-white rounded-lg font-semibold text-sm">{editingQuote?'Update':'Save Quote'} ✓</button><button onClick={()=>{setView('quotes');resetQuoteForm();}} className="px-5 py-2 border border-slate-200 rounded-lg text-sm">Cancel</button></div>
+      )}
+      {showFollowUp && (
+        <div className="bg-amber-50 rounded-lg p-3 mb-3 border border-amber-200">
+          <div className="grid grid-cols-2 gap-2 mb-2">
+            <input value={f.task||''} onChange={e=>setF({...f,task:e.target.value})} placeholder="Task / المهمة" className="col-span-2 px-3 py-2 rounded border text-sm" />
+            <input type="date" value={f.dueDate||''} onChange={e=>setF({...f,dueDate:e.target.value})} className="px-3 py-2 rounded border text-sm" />
+            <input type="time" value={f.dueTime||'09:00'} onChange={e=>setF({...f,dueTime:e.target.value})} className="px-3 py-2 rounded border text-sm" />
+            <select value={f.assignTo||''} onChange={e=>setF({...f,assignTo:e.target.value})} className="col-span-2 px-3 py-2 rounded border text-sm">
+              <option value="">Assign to me / تعيين لي</option>
+              {(users || []).map(u => <option key={u.id} value={u.id}>{u.name}</option>)}
+            </select>
+          </div>
+          <div className="flex gap-2">
+            <button onClick={handleAddFollowUp} className="px-3 py-1.5 bg-amber-500 text-white rounded text-xs font-semibold">Save + Add to Calendar / حفظ</button>
+            <button onClick={()=>setShowFollowUp(false)} className="px-3 py-1.5 border border-slate-200 rounded text-xs">Cancel</button>
+          </div>
+        </div>
+      )}
+      {pendingFU.length > 0 && (
+        <div className="bg-amber-50 rounded-xl p-4 mb-3 border border-amber-200">
+          <h4 className="text-sm font-bold text-amber-800 mb-2">Follow-ups ({pendingFU.length})</h4>
+          {pendingFU.map(fu => {
+            const isOverdue = fu.due_date && fu.due_date < new Date().toISOString().substring(0, 10);
+            const assignedName = users?.find(u => u.id === fu.assigned_to)?.name;
+            return (
+              <div key={fu.id} className={'flex justify-between items-center py-2 border-b border-amber-100 ' + (isOverdue ? 'bg-red-50 -mx-2 px-2 rounded' : '')}>
+                <div>
+                  <div className={'text-xs font-semibold ' + (isOverdue ? 'text-red-700' : '')}>{fu.task}</div>
+                  <div className="text-[10px] text-slate-500">
+                    {fu.due_date} {fu.due_time ? fu.due_time.substring(0, 5) : ''}
+                    {assignedName && <span className="ml-1 text-purple-600">→ {assignedName}</span>}
+                    {isOverdue && <span className="ml-1 text-red-600 font-bold">OVERDUE</span>}
+                  </div>
+                </div>
+                <button onClick={()=>completeFollowUp(fu.id)} className="px-2 py-0.5 bg-emerald-500 text-white rounded text-[10px]">Done / تم</button>
+              </div>
+            );
+          })}
+        </div>
+      )}
+      {notes.length > 0 && (
+        <div className="bg-white rounded-xl p-4 mb-3 border border-slate-200">
+          <h4 className="text-sm font-bold mb-2">Notes / ملاحظات ({notes.length})</h4>
+          {notes.map(n => {
+            const noteUser = users?.find(u => u.id === n.created_by);
+            return (
+              <div key={n.id} className="py-2 border-b border-slate-50">
+                <div className="text-xs">{n.note_text}</div>
+                <div className="text-[10px] text-slate-400 mt-1">
+                  {noteUser && <span className="font-semibold text-blue-500 mr-1">{noteUser.name}</span>}
+                  {new Date(n.created_at).toLocaleString()}
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      )}
+      {/* Contact History */}
+      {contactLog.length > 0 && (
+        <div className="bg-white rounded-xl p-4 mb-3 border border-slate-200">
+          <h4 className="text-sm font-bold mb-2">Contact History / سجل الاتصال ({contactLog.length})</h4>
+          {contactLog.map(c => {
+            const icons = { whatsapp: '💬', phone: '📞', email: '📧', visit: '🚗' };
+            const colors = { whatsapp: 'text-green-600', phone: 'text-purple-600', email: 'text-slate-600', visit: 'text-cyan-600' };
+            const contactUser = users?.find(u => u.id === c.contacted_by);
+            return (
+              <div key={c.id} className="flex items-start gap-2 py-2 border-b border-slate-50">
+                <span className="text-sm">{icons[c.contact_type] || '📋'}</span>
+                <div className="flex-1">
+                  <div className="text-xs">
+                    <span className={'font-semibold ' + (colors[c.contact_type] || '')}>{c.contact_type}</span>
+                    {c.notes && <span className="text-slate-600 ml-1">— {c.notes}</span>}
+                  </div>
+                  <div className="text-[10px] text-slate-400">
+                    {contactUser && <span className="font-semibold text-blue-500 mr-1">{contactUser.name}</span>}
+                    {new Date(c.contacted_at).toLocaleString()}
+                  </div>
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      )}
+      {invs.length > 0 && (
+        <div className="bg-white rounded-xl p-4 border border-slate-200">
+          <h4 className="text-sm font-bold mb-2">Invoices / الفواتير ({invs.length})</h4>
+          <div className="overflow-auto max-h-[300px]">
+            <table className="w-full border-collapse"><thead><tr className="bg-slate-50">
+              <th className="px-2 py-1.5 text-[10px] text-left">Order</th>
+              <th className="px-2 py-1.5 text-[10px] text-left">Date</th>
+              <th className="px-2 py-1.5 text-[10px] text-right">Amount</th>
+              <th className="px-2 py-1.5 text-[10px] text-right">Owed</th>
+            </tr></thead><tbody>
+              {invs.sort((a,b)=>(b.invoice_date||'').localeCompare(a.invoice_date||'')).map(inv=>(
+                <tr key={inv.id} onClick={() => onSelectInvoice && onSelectInvoice(inv)}
+                  className="border-b border-slate-50 cursor-pointer hover:bg-blue-50">
+                  <td className="px-2 py-1 text-xs font-bold text-blue-600">{inv.order_number}</td>
+                  <td className="px-2 py-1 text-xs">{inv.invoice_date}</td>
+                  <td className="px-2 py-1 text-xs text-right">{fE(inv.total_amount)}</td>
+                  <td className="px-2 py-1 text-xs text-right text-red-500">{inv.outstanding>0?fE(inv.outstanding):'✓'}</td>
+                </tr>
+              ))}
+            </tbody></table>
+          </div>
+        </div>
+      )}
     </div>
-  </div>);
-
-  // ========== ROUTE DETAIL ==========
-  if (view === 'route_detail' && selectedRoute) {
-    const bk = routeHistory.filter(r=>r.booked); const active = routeHistory.filter(r=>!isExpired(r.expiry_date)); const byVL = {}; active.forEach(r => { const k=(r.vendor_name||'?')+' / '+(r.shipping_line||'N/A'); if(!byVL[k])byVL[k]=[]; byVL[k].push(r); });
-    const chartData = {}; routeHistory.forEach(r => { const m=(r.effective_date||'').substring(0,7); if(!m)return; if(!chartData[m])chartData[m]={month:m,rates:[],min:Infinity,max:0}; chartData[m].rates.push(Number(r.rate_amount||0)); chartData[m].min=Math.min(chartData[m].min,Number(r.rate_amount||0)); chartData[m].max=Math.max(chartData[m].max,Number(r.rate_amount||0)); }); Object.values(chartData).forEach(d=>{d.avg=Math.round(d.rates.reduce((a,b)=>a+b,0)/d.rates.length);}); const chartSorted=Object.values(chartData).sort((a,b)=>a.month.localeCompare(b.month));
-    return (<div>
-      <button onClick={()=>{setSelectedRoute(null);setView('routes');}} className="px-3 py-1 rounded border border-slate-200 text-xs font-semibold mb-3">← Back</button>
-      <h2 className="text-xl font-extrabold mb-1">🚢 {selectedRoute.origin} → {selectedRoute.destination}</h2>
-      <p className="text-xs text-slate-500 mb-3">{routeHistory.length} rates • {active.length} active • {bk.length} booked</p>
-      <div className="grid grid-cols-5 gap-3 mb-4">
-        <div className="bg-white rounded-lg p-3" style={{borderLeftWidth:3,borderLeftColor:'#10b981'}}><div className="text-[10px] text-slate-500">Best Active</div><div className="text-lg font-extrabold text-emerald-600">{active.length>0?fCur(Math.min(...active.map(r=>r.rate_amount||Infinity)),active[0]?.currency):'—'}</div></div>
-        <div className="bg-white rounded-lg p-3" style={{borderLeftWidth:3,borderLeftColor:'#ef4444'}}><div className="text-[10px] text-slate-500">Highest</div><div className="text-lg font-extrabold text-red-500">{fCur(Math.max(...routeHistory.map(r=>r.rate_amount||0)),routeHistory[0]?.currency)}</div></div>
-        <div className="bg-white rounded-lg p-3" style={{borderLeftWidth:3,borderLeftColor:'#0ea5e9'}}><div className="text-[10px] text-slate-500">Avg</div><div className="text-lg font-extrabold">{fCur(Math.round(routeHistory.reduce((a,r)=>a+Number(r.rate_amount||0),0)/routeHistory.length),routeHistory[0]?.currency)}</div></div>
-        <div className="bg-white rounded-lg p-3" style={{borderLeftWidth:3,borderLeftColor:'#8b5cf6'}}><div className="text-[10px] text-slate-500">Vendors</div><div className="text-lg font-extrabold">{Object.keys(byVL).length}</div></div>
-        <div className="bg-white rounded-lg p-3" style={{borderLeftWidth:3,borderLeftColor:'#f59e0b'}}><div className="text-[10px] text-slate-500">Bookings</div><div className="text-lg font-extrabold">{routeBookings(selectedRoute.origin,selectedRoute.destination).length}</div></div>
-      </div>
-      {chartSorted.length>1&&(<div className="bg-white rounded-xl p-4 mb-4 border border-slate-200"><h3 className="text-sm font-bold mb-2">📈 Rate Trend</h3><div className="flex items-end gap-1 h-[120px]">{chartSorted.map((d,i)=>{const mx=Math.max(...chartSorted.map(x=>x.max)); const h=mx>0?(d.avg/mx)*100:0; return (<div key={d.month} className="flex-1 flex flex-col items-center" title={d.month+': avg $'+d.avg}><div className="text-[8px] text-slate-400 mb-1">${d.avg}</div><div className="w-full rounded-t" style={{height:h+'%',background:i===chartSorted.length-1?'#0ea5e9':'#cbd5e1',minHeight:4}}></div><div className="text-[8px] text-slate-400 mt-1 -rotate-45">{d.month.substring(5)}</div></div>);})}</div></div>)}
-      {Object.keys(byVL).length>0&&(<div className="bg-white rounded-xl p-4 mb-4 border border-slate-200"><h3 className="text-sm font-bold mb-2">🏆 Vendor Comparison</h3><div className="overflow-auto"><table className="w-full border-collapse text-xs"><thead><tr className="bg-slate-50"><th className="px-3 py-2 text-left text-[10px]">Vendor / Line</th><th className="px-3 py-2 text-right text-[10px]">Best Rate</th><th className="px-3 py-2 text-right text-[10px]">Transit</th><th className="px-3 py-2 text-right text-[10px]">Free Days</th><th className="px-3 py-2 text-[10px]">Expiry</th></tr></thead><tbody>{Object.entries(byVL).sort((a,b)=>(a[1][0]?.rate_amount||Infinity)-(b[1][0]?.rate_amount||Infinity)).map(([key,vr],i)=>{const best=vr.reduce((a,b)=>(a.rate_amount||Infinity)<(b.rate_amount||Infinity)?a:b); return (<tr key={key} className={'border-b border-slate-50 '+(i===0?'bg-emerald-50':'')}><td className="px-3 py-2 font-semibold">{i===0&&<span className="text-emerald-500 mr-1">★</span>}{key}</td><td className="px-3 py-2 text-right font-bold text-blue-600">{fCur(best.rate_amount,best.currency)}</td><td className="px-3 py-2 text-right">{best.transit_days?best.transit_days+'d':'—'}</td><td className="px-3 py-2 text-right">{best.free_days||'—'}</td><td className="px-3 py-2"><ExpiryBadge date={best.expiry_date}/></td></tr>);})}</tbody></table></div></div>)}
-      {routeQuotes.length>0&&(<div className="bg-white rounded-xl p-4 mt-4 border border-slate-200"><h3 className="text-sm font-bold mb-2">📋 Quotes ({routeQuotes.length})</h3>{routeQuotes.map(qt=>(<div key={qt.id} className="flex justify-between items-center py-2 border-b border-slate-50"><div><div className="text-xs font-semibold">{qt.quote_number} — {qt.customer_name}</div><div className="text-[10px] text-slate-500">{qt.quote_date} • {qt.status}</div></div><div className="flex items-center gap-3"><div className="text-right"><div className="text-xs">Client: <span className="font-bold">{fCur(qt.client_total,qt.currency)}</span></div><div className="text-[10px]" style={{color:qt.profit>0?'#10b981':'#ef4444'}}>Profit: {fCur(qt.profit,qt.currency)}</div></div><button onClick={()=>setPreviewQuote(qt)} className="px-2 py-1 rounded border border-purple-300 text-purple-600 text-[10px]">📄</button></div></div>))}</div>)}
-      <div className="bg-white rounded-xl p-4 border border-slate-200 mt-4"><div className="flex justify-between items-center mb-2"><h3 className="text-sm font-bold">All Rates</h3><button onClick={()=>{setF({origin:selectedRoute.origin,destination:selectedRoute.destination});setView('add_rate');}} className="px-3 py-1 bg-blue-500 text-white rounded text-[10px] font-semibold">+ Add Rate</button></div>
-      <div className="overflow-auto max-h-[400px] rounded-lg border border-slate-200"><table className="w-full border-collapse text-xs"><thead className="sticky top-0"><tr className="bg-slate-50"><th className="px-2 py-2 text-[10px] text-left">Date</th><th className="px-2 py-2 text-[10px] text-left">Vendor</th><th className="px-2 py-2 text-[10px] text-left">Line</th><th className="px-2 py-2 text-[10px]">Container</th><th className="px-2 py-2 text-[10px] text-right">Rate</th><th className="px-2 py-2 text-[10px] text-right">Total</th><th className="px-2 py-2 text-[10px]">Expiry</th><th className="px-2 py-2 text-[10px]"></th></tr></thead><tbody>{routeHistory.map(r=>{const exp=isExpired(r.expiry_date); return (<tr key={r.id} className={'border-b border-slate-50 '+(exp?'bg-red-50/50':'')+(r.booked?' bg-green-50/50':'')}><td className="px-2 py-1.5">{r.effective_date}</td><td className="px-2 py-1.5 font-semibold">{r.vendor_name}</td><td className="px-2 py-1.5">{r.shipping_line||'—'}</td><td className="px-2 py-1.5 text-center"><span className="px-1.5 py-0.5 bg-blue-100 text-blue-700 rounded text-[9px]">{r.container_type}</span></td><td className={'px-2 py-1.5 text-right font-bold '+(exp?'text-red-400 line-through':'text-blue-600')}>{fCur(r.rate_amount,r.currency)}</td><td className="px-2 py-1.5 text-right font-bold text-amber-600">{fCur(r.total_cost,r.currency)}</td><td className="px-2 py-1.5"><ExpiryBadge date={r.expiry_date}/></td><td className="px-2 py-1.5 flex gap-1">{!exp&&<button onClick={()=>handleMarkBooked(r)} className="px-2 py-0.5 rounded border border-green-300 text-green-600 text-[10px]">Book</button>}<button onClick={()=>{setEditingRate(r);setF({origin:r.origin,destination:r.destination,vendorName:r.vendor_name,shippingLine:r.shipping_line,transportMode:r.transport_mode,rateType:r.rate_type||'',containerType:r.container_type,rateAmount:r.rate_amount,currency:r.currency,transitDays:r.transit_days,freeDays:r.free_days,portFees:r.port_fees,thcFees:r.thc_fees,docFees:r.documentation_fees,customsFees:r.customs_fees,otherFees:r.other_fees,otherFeesDesc:r.other_fees_desc,effectiveDate:r.effective_date,expiryDate:r.expiry_date,pol:r.port_of_loading,pod:r.port_of_discharge,notes:r.notes,booked:r.booked,shipmentRef:r.shipment_reference,bookingDate:r.booking_date,bookingNotes:r.booking_notes});setView('add_rate');}} className="px-2 py-0.5 rounded border border-blue-300 text-blue-600 text-[10px]">Edit</button>{isAdmin&&<button onClick={()=>handleDeleteRate(r)} className="px-2 py-0.5 rounded border border-red-300 text-red-500 text-[10px]">Del</button>}</td></tr>);})}</tbody></table></div></div>
-      {previewQuote && <QuotePrintView quote={previewQuote} onClose={() => setPreviewQuote(null)} />}
-    </div>);
-  }
-
-  // ========== IMPORT ==========
-  if (view === 'import') return (<div>
-    <button onClick={()=>{setView('routes');setImportData([]);setImportStep('select');}} className="px-3 py-1 rounded border border-slate-200 text-xs font-semibold mb-3">← Back</button>
-    <h2 className="text-xl font-extrabold mb-3">Import Shipping Rates</h2>
-    {importStep==='select'&&<div className="bg-white rounded-xl p-6 text-center border-2 border-dashed border-blue-300"><div className="text-4xl mb-2">📁</div><p className="text-xs text-slate-400 mb-3">Columns: Origin, Destination, Vendor, Shipping Line, Rate, Container, Transit, Free Days, Expiry...</p><label className="px-6 py-3 bg-blue-500 text-white rounded-lg text-sm font-semibold cursor-pointer inline-block">Select File<input type="file" accept=".xlsx,.xls,.csv" className="hidden" onChange={async(e)=>{if(e.target.files[0])await processImportFile(e.target.files[0]);}}/></label></div>}
-    {importStep==='preview'&&importData.length>0&&<div><div className="bg-emerald-50 rounded-xl p-4 mb-3 border border-emerald-200 flex justify-between items-center"><span className="text-sm font-bold text-emerald-800">Found {importData.length} rates</span><div className="flex gap-2"><button onClick={()=>{setImportStep('select');setImportData([]);}} className="px-3 py-1.5 border rounded-lg text-xs">Cancel</button><button onClick={executeImport} className="px-4 py-1.5 bg-emerald-500 text-white rounded-lg text-xs font-semibold">Import</button></div></div><div className="overflow-auto max-h-[350px] rounded-lg border bg-white text-xs"><table className="w-full border-collapse"><thead><tr className="bg-slate-50"><th className="px-2 py-1.5 text-[10px]">Origin</th><th className="px-2 py-1.5 text-[10px]">Dest</th><th className="px-2 py-1.5 text-[10px]">Vendor</th><th className="px-2 py-1.5 text-[10px]">Line</th><th className="px-2 py-1.5 text-[10px] text-right">Rate</th><th className="px-2 py-1.5 text-[10px]">Expiry</th></tr></thead><tbody>{importData.slice(0,30).map((r,i)=>(<tr key={i} className="border-b border-slate-50"><td className="px-2 py-1">{r.origin}</td><td className="px-2 py-1">{r.destination}</td><td className="px-2 py-1">{r.vendor_name}</td><td className="px-2 py-1">{r.shipping_line}</td><td className="px-2 py-1 text-right font-bold">{fCur(r.rate_amount,r.currency)}</td><td className="px-2 py-1">{r.expiry_date||'—'}</td></tr>))}</tbody></table></div></div>}
-    {importStep==='importing'&&<div className="bg-white rounded-xl p-8 text-center"><div className="text-4xl mb-3">⏳</div><div className="w-full bg-slate-200 rounded-full h-3"><div className="bg-blue-500 h-3 rounded-full" style={{width:importProgress+'%'}}></div></div><p className="text-sm mt-2">{importProgress}%</p></div>}
-    {importStep==='done'&&<div className="bg-white rounded-xl p-8 text-center"><div className="text-4xl mb-3">✅</div><h3 className="text-lg font-bold text-emerald-700">Done!</h3><button onClick={()=>{setView('routes');setImportData([]);setImportStep('select');}} className="mt-3 px-6 py-2 bg-blue-500 text-white rounded-lg font-semibold">Done</button></div>}
-  </div>);
-
-  // ========== AI ==========
-  if (view === 'ai') return (<div>
-    <button onClick={()=>setView('routes')} className="px-3 py-1 rounded border border-slate-200 text-xs font-semibold mb-3">← Back</button>
-    <h2 className="text-xl font-extrabold mb-3">🤖 AI Shipping Assistant</h2>
-    <div className="bg-white rounded-xl p-5 border mb-3"><div className="flex gap-2 mb-3"><input value={aiQuery} onChange={e=>setAiQuery(e.target.value)} placeholder="Ask about rates..." onKeyDown={e=>{if(e.key==='Enter')handleAiQuery();}} className="flex-1 px-4 py-3 rounded-lg border text-sm" /><button onClick={handleAiQuery} disabled={aiLoading} className="px-5 py-3 bg-blue-500 text-white rounded-lg font-semibold text-sm disabled:opacity-50">{aiLoading?'...':'Ask'}</button></div>
-    <div className="flex gap-2 flex-wrap">{['Cheapest active from China?','Compare vendors Turkey','Rates expiring this week?'].map(qx=>(<button key={qx} onClick={()=>setAiQuery(qx)} className="px-3 py-1 bg-slate-100 text-slate-600 rounded-full text-[10px]">{qx}</button>))}</div></div>
-    {aiAnswer&&<div className="bg-blue-50 rounded-xl p-5 border border-blue-200"><div className="text-sm whitespace-pre-wrap">{aiAnswer}</div></div>}
-  </div>);
-
-  // ========== MAIN ROUTES ==========
-  return (<div>
-    <div className="flex justify-between flex-wrap gap-2 mb-3">
-      <h2 className="text-xl font-extrabold">🚢 Shipping Rates</h2>
-      <div className="flex gap-2 items-center flex-wrap">
-        <input value={q} onChange={e=>setQ(e.target.value)} placeholder="Search..." className="px-3 py-1.5 rounded-lg border text-xs w-32" />
-        <button onClick={()=>{setView('add_rate');setF({});setEditingRate(null);}} className="px-3 py-1.5 bg-blue-500 text-white rounded-lg text-xs font-semibold">+ Rate</button>
-        <button onClick={()=>setView('quotes')} className="px-3 py-1.5 bg-purple-500 text-white rounded-lg text-xs font-semibold">📋 Quotes</button>
-        <button onClick={()=>setView('import')} className="px-3 py-1.5 bg-amber-500 text-white rounded-lg text-xs font-semibold">📥 Import</button>
-        <button onClick={()=>setView('ai')} className="px-3 py-1.5 bg-emerald-500 text-white rounded-lg text-xs font-semibold">🤖 AI</button>
-      </div>
-    </div>
-    <div className="grid grid-cols-5 gap-3 mb-4">
-      <div className="bg-white rounded-lg p-3" style={{borderLeftWidth:3,borderLeftColor:'#0ea5e9'}}><div className="text-[10px] text-slate-500">Total</div><div className="text-lg font-extrabold">{rates.length}</div></div>
-      <div className="bg-white rounded-lg p-3" style={{borderLeftWidth:3,borderLeftColor:'#10b981'}}><div className="text-[10px] text-slate-500">Active</div><div className="text-lg font-extrabold text-emerald-600">{rates.filter(r=>!isExpired(r.expiry_date)).length}</div></div>
-      <div className="bg-white rounded-lg p-3" style={{borderLeftWidth:3,borderLeftColor:'#ef4444'}}><div className="text-[10px] text-slate-500">Expired</div><div className="text-lg font-extrabold text-red-500">{rates.filter(r=>isExpired(r.expiry_date)).length}</div></div>
-      <div className="bg-white rounded-lg p-3" style={{borderLeftWidth:3,borderLeftColor:'#8b5cf6'}}><div className="text-[10px] text-slate-500">Routes</div><div className="text-lg font-extrabold">{routeGroups.length}</div></div>
-      <div className="bg-white rounded-lg p-3" style={{borderLeftWidth:3,borderLeftColor:'#f59e0b'}}><div className="text-[10px] text-slate-500">Bookings</div><div className="text-lg font-extrabold">{bookings.length}</div></div>
-    </div>
-    <div className="flex gap-2 mb-3 flex-wrap">
-      <select value={filterOrigin} onChange={e=>setFilterOrigin(e.target.value)} className="px-2 py-1 rounded border text-xs"><option value="all">All Origins</option>{origins.map(o=><option key={o} value={o}>{o}</option>)}</select>
-      <select value={filterDest} onChange={e=>setFilterDest(e.target.value)} className="px-2 py-1 rounded border text-xs"><option value="all">All Destinations</option>{destinations.map(d=><option key={d} value={d}>{d}</option>)}</select>
-      <select value={filterVendor} onChange={e=>setFilterVendor(e.target.value)} className="px-2 py-1 rounded border text-xs"><option value="all">All Vendors</option>{vendors.map(v=><option key={v} value={v}>{v}</option>)}</select>
-      <select value={filterLine} onChange={e=>setFilterLine(e.target.value)} className="px-2 py-1 rounded border text-xs"><option value="all">All Lines</option>{lines.map(l=><option key={l} value={l}>{l}</option>)}</select>
-      <select value={filterExpiry} onChange={e=>setFilterExpiry(e.target.value)} className="px-2 py-1 rounded border text-xs"><option value="all">All Rates</option><option value="active">Active Only</option><option value="expired">Expired Only</option></select>
-    </div>
-    {routeGroups.length===0?(<div className="bg-white rounded-xl p-8 text-center border"><div className="text-4xl mb-2">🚢</div><p className="text-sm text-slate-400">No rates yet</p></div>):(<div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">{routeGroups.map(rg=>{const c=rg.cheapest; return (<div key={rg.key} onClick={()=>{setSelectedRoute({origin:rg.origin,destination:rg.destination});setView('route_detail');}} className="bg-white rounded-xl p-4 cursor-pointer border border-slate-200 hover:shadow-lg hover:-translate-y-0.5 transition-all">
-      <div className="flex justify-between items-start mb-2"><div><div className="text-sm font-extrabold text-blue-700">{rg.origin}</div><div className="text-[10px] text-slate-400">↓</div><div className="text-sm font-extrabold text-emerald-700">{rg.destination}</div></div><div className="text-right">{c?(<><div className="text-[9px] text-slate-400">Best Active</div><div className="text-lg font-extrabold text-emerald-600">{fCur(c.rate_amount,c.currency)}</div><div className="text-[9px] text-blue-500">{c.vendor_name}{c.shipping_line?' / '+c.shipping_line:''}</div><ExpiryBadge date={c.expiry_date}/></>):(<div className="text-xs text-red-400 font-bold">All Expired</div>)}</div></div>
-      <div className="flex gap-1 flex-wrap mb-2">{[...rg.lines].filter(Boolean).map(l=><span key={l} className="px-1.5 py-0.5 bg-purple-100 text-purple-700 rounded text-[9px]">{l}</span>)}{[...rg.modes].map(m=><span key={m} className="px-1.5 py-0.5 bg-blue-100 text-blue-700 rounded text-[9px]">{m}</span>)}</div>
-      <div className="flex justify-between text-[10px] text-slate-500 border-t border-slate-100 pt-2"><span>{rg.activeCount} active{rg.expiredCount>0&&<span className="text-red-400 ml-1">({rg.expiredCount} exp)</span>}</span><span>{[...rg.vendors].length} vendors</span>{(() => { const rb = routeBookings(rg.origin,rg.destination); return rb.length > 0 && <span className="text-emerald-600">✓ {rb.length}x</span>; })()}</div>
-    </div>);})}</div>)}
-    {previewQuote && <QuotePrintView quote={previewQuote} onClose={() => setPreviewQuote(null)} />}
-  </div>);
+  );
 }
