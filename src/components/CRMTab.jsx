@@ -6,7 +6,7 @@ import { fE, fmt } from '../lib/utils';
 const GROUPS = ['Textiles', 'Leather', 'Pool', 'Industrial', 'Retail', 'Export', 'Other'];
 const TYPES = ['Trader', 'Manufacturer', 'Retailer', 'Wholesaler', 'Distributor', 'Agent'];
 
-export default function CRMTab({ customers, invoices, user, onReload }) {
+export default function CRMTab({ customers, invoices, user, onReload, isAdmin, onSelectInvoice }) {
   const [sel, setSel] = useState(null);
   const [q, setQ] = useState('');
   const [groupF, setGroupF] = useState('all');
@@ -35,6 +35,7 @@ export default function CRMTab({ customers, invoices, user, onReload }) {
 
   const filtered = useMemo(() => {
     let arr = customers.filter(c => {
+      if (!isAdmin && c.restricted) return false;
       if (q && !(c.name || '').includes(q) && !(c.name_en || '').toLowerCase().includes(q.toLowerCase())) return false;
       if (groupF !== 'all' && c.group_name !== groupF) return false;
       if (typeF !== 'all' && c.client_type !== typeF) return false;
@@ -63,7 +64,7 @@ export default function CRMTab({ customers, invoices, user, onReload }) {
         credit_limit: f.creditLimit ? Number(f.creditLimit) : null, status: 'active',
       }, user?.id);
       setShowAdd(false); setF({}); onReload();
-    } catch (err) { alert('Error / \u062e\u0637\u0623: ' + err.message); }
+    } catch (err) { alert('Error / خطأ: ' + err.message); }
   };
 
   const handleEditClient = async () => {
@@ -76,7 +77,7 @@ export default function CRMTab({ customers, invoices, user, onReload }) {
       }, user?.id);
       setEditingClient(false); setF({}); onReload();
       loadClientData({...sel, name: f.name || sel.name});
-    } catch (err) { alert('Error / \u062e\u0637\u0623: ' + err.message); }
+    } catch (err) { alert('Error / خطأ: ' + err.message); }
   };
 
   const handleAddNote = async () => {
@@ -84,7 +85,7 @@ export default function CRMTab({ customers, invoices, user, onReload }) {
     try {
       await dbInsert('client_notes', { customer_id: sel.id, note_text: f.noteText }, user?.id);
       setShowNote(false); setF({}); loadClientData(sel);
-    } catch (err) { alert('Error / \u062e\u0637\u0623: ' + err.message); }
+    } catch (err) { alert('Error / خطأ: ' + err.message); }
   };
 
   const handleAddFollowUp = async () => {
@@ -92,42 +93,42 @@ export default function CRMTab({ customers, invoices, user, onReload }) {
     try {
       await dbInsert('follow_ups', {
         customer_id: sel.id, task: f.task, due_date: f.dueDate,
-        due_time: f.dueTime || '09:00', assigned_to: user?.id,
+        due_time: f.dueTime || '09:00',
       }, user?.id);
       await dbInsert('calendar_events', {
         title: 'Follow-up: ' + f.task + ' (' + sel.name + ')',
         event_date: f.dueDate, event_time: f.dueTime || '09:00',
-        event_type: 'call', assigned_to: user?.id, customer_id: sel.id,
+        event_type: 'call', customer_id: sel.id,
       }, user?.id);
       setShowFollowUp(false); setF({}); loadClientData(sel);
-    } catch (err) { alert('Error / \u062e\u0637\u0623: ' + err.message); }
+    } catch (err) { alert('Error / خطأ: ' + err.message); }
   };
 
   const completeFollowUp = async (id) => {
     try {
       await dbUpdate('follow_ups', id, { completed: true, completed_at: new Date().toISOString() }, user?.id);
       loadClientData(sel);
-    } catch (err) { alert('Error / \u062e\u0637\u0623: ' + err.message); }
+    } catch (err) { alert('Error / خطأ: ' + err.message); }
   };
 
   if (!sel) return (
     <div>
       <div className="flex justify-between flex-wrap gap-2 mb-3">
-        <h2 className="text-xl font-extrabold">CRM / \u0625\u062f\u0627\u0631\u0629 \u0627\u0644\u0639\u0645\u0644\u0627\u0621</h2>
+        <h2 className="text-xl font-extrabold">CRM / إدارة العملاء</h2>
         <div className="flex gap-2 items-center flex-wrap">
-          <input value={q} onChange={e => setQ(e.target.value)} placeholder="Search / \u0628\u062d\u062b"
+          <input value={q} onChange={e => setQ(e.target.value)} placeholder="Search / بحث"
             className="px-3 py-1.5 rounded-lg border border-slate-200 text-xs w-28" />
           <button onClick={() => { setShowAdd(true); setF({}); }}
-            className="px-3 py-1.5 bg-blue-500 text-white rounded-lg text-xs font-semibold">+ Client / \u0639\u0645\u064a\u0644</button>
+            className="px-3 py-1.5 bg-blue-500 text-white rounded-lg text-xs font-semibold">+ Client / عميل</button>
         </div>
       </div>
       <div className="flex gap-2 mb-3 flex-wrap">
         <select value={groupF} onChange={e => setGroupF(e.target.value)} className="px-2 py-1 rounded border border-slate-200 text-xs">
-          <option value="all">All Groups / \u0643\u0644 \u0627\u0644\u0645\u062c\u0645\u0648\u0639\u0627\u062a</option>
+          <option value="all">All Groups / كل المجموعات</option>
           {[...new Set([...GROUPS, ...groups])].map(g => <option key={g} value={g}>{g}</option>)}
         </select>
         <select value={typeF} onChange={e => setTypeF(e.target.value)} className="px-2 py-1 rounded border border-slate-200 text-xs">
-          <option value="all">All Types / \u0643\u0644 \u0627\u0644\u0623\u0646\u0648\u0627\u0639</option>
+          <option value="all">All Types / كل الأنواع</option>
           {TYPES.map(t => <option key={t} value={t}>{t}</option>)}
         </select>
         <select value={sortBy} onChange={e => setSortBy(e.target.value)} className="px-2 py-1 rounded border border-slate-200 text-xs">
@@ -138,18 +139,18 @@ export default function CRMTab({ customers, invoices, user, onReload }) {
       </div>
       <div className="grid grid-cols-3 gap-3 mb-3">
         <div className="bg-white rounded-lg p-3" style={{borderLeftWidth:3,borderLeftColor:'#0ea5e9'}}>
-          <div className="text-[10px] text-slate-500">Clients / \u0639\u0645\u0644\u0627\u0621</div>
+          <div className="text-[10px] text-slate-500">Clients / عملاء</div>
           <div className="text-lg font-extrabold">{filtered.length}</div></div>
         <div className="bg-white rounded-lg p-3" style={{borderLeftWidth:3,borderLeftColor:'#10b981'}}>
-          <div className="text-[10px] text-slate-500">Active / \u0646\u0634\u0637</div>
+          <div className="text-[10px] text-slate-500">Active / نشط</div>
           <div className="text-lg font-extrabold">{filtered.filter(c => c.status !== 'inactive').length}</div></div>
         <div className="bg-white rounded-lg p-3" style={{borderLeftWidth:3,borderLeftColor:'#f59e0b'}}>
-          <div className="text-[10px] text-slate-500">Groups / \u0645\u062c\u0645\u0648\u0639\u0627\u062a</div>
-          <div className="text-lg font-extrabold">{groups.length || '\u2014'}</div></div>
+          <div className="text-[10px] text-slate-500">Groups / مجموعات</div>
+          <div className="text-lg font-extrabold">{groups.length || '—'}</div></div>
       </div>
       {showAdd && (
         <div className="bg-blue-50 rounded-xl p-4 mb-3 border border-blue-200">
-          <h3 className="text-sm font-bold text-blue-800 mb-3">New Client / \u0639\u0645\u064a\u0644 \u062c\u062f\u064a\u062f</h3>
+          <h3 className="text-sm font-bold text-blue-800 mb-3">New Client / عميل جديد</h3>
           <div className="grid grid-cols-2 gap-3">
             <div><label className="text-[10px] font-semibold">Name (Arabic)</label>
               <input value={f.name||''} onChange={e=>setF({...f,name:e.target.value})} className="w-full px-3 py-2 rounded border text-sm" style={{direction:'rtl'}} /></div>
@@ -171,8 +172,8 @@ export default function CRMTab({ customers, invoices, user, onReload }) {
               <input value={f.industry||''} onChange={e=>setF({...f,industry:e.target.value})} className="w-full px-3 py-2 rounded border text-sm" /></div>
           </div>
           <div className="flex gap-2 mt-3">
-            <button onClick={handleAddClient} className="px-4 py-2 bg-emerald-500 text-white rounded-lg text-sm font-semibold">Save / \u062d\u0641\u0638</button>
-            <button onClick={()=>setShowAdd(false)} className="px-4 py-2 border border-slate-200 rounded-lg text-sm">Cancel / \u0625\u0644\u063a\u0627\u0621</button>
+            <button onClick={handleAddClient} className="px-4 py-2 bg-emerald-500 text-white rounded-lg text-sm font-semibold">Save / حفظ</button>
+            <button onClick={()=>setShowAdd(false)} className="px-4 py-2 border border-slate-200 rounded-lg text-sm">Cancel / إلغاء</button>
           </div>
         </div>
       )}
@@ -191,9 +192,9 @@ export default function CRMTab({ customers, invoices, user, onReload }) {
               </div>
               <div className="flex justify-between mt-2">
                 <div><div className="text-[9px] text-slate-400">Sales</div>
-                  <div className="text-xs font-bold text-blue-500">{total>0?fmt(total):'\u2014'}</div></div>
+                  <div className="text-xs font-bold text-blue-500">{total>0?fmt(total):'—'}</div></div>
                 <div className="text-right"><div className="text-[9px] text-slate-400">{invs.length} orders</div>
-                  <div className={'text-xs font-bold '+(owed>0?'text-red-500':'text-emerald-500')}>{owed>0?fmt(owed):'\u2713'}</div></div>
+                  <div className={'text-xs font-bold '+(owed>0?'text-red-500':'text-emerald-500')}>{owed>0?fmt(owed):'✓'}</div></div>
               </div>
             </div>);
         })}
@@ -209,7 +210,7 @@ export default function CRMTab({ customers, invoices, user, onReload }) {
 
   return (
     <div>
-      <button onClick={()=>{setSel(null);setEditingClient(false);setF({});}} className="px-3 py-1 rounded border border-slate-200 text-xs font-semibold mb-3">\u2190 Back / \u0631\u062c\u0648\u0639</button>
+      <button onClick={()=>{setSel(null);setEditingClient(false);setF({});}} className="px-3 py-1 rounded border border-slate-200 text-xs font-semibold mb-3">← Back / رجوع</button>
       <div className="bg-white rounded-xl p-4 mb-3">
         {editingClient ? (
           <div className="grid grid-cols-2 gap-3">
@@ -228,7 +229,7 @@ export default function CRMTab({ customers, invoices, user, onReload }) {
             <div><label className="text-[10px] font-semibold">City</label>
               <input value={f.city!==undefined?f.city:(sel.city||'')} onChange={e=>setF({...f,city:e.target.value})} className="w-full px-2 py-1.5 border rounded text-sm" /></div>
             <div className="col-span-2 flex gap-2">
-              <button onClick={handleEditClient} className="px-3 py-1.5 bg-emerald-500 text-white rounded text-xs font-semibold">Save / \u062d\u0641\u0638</button>
+              <button onClick={handleEditClient} className="px-3 py-1.5 bg-emerald-500 text-white rounded text-xs font-semibold">Save / حفظ</button>
               <button onClick={()=>{setEditingClient(false);setF({});}} className="px-3 py-1.5 border border-slate-200 rounded text-xs">Cancel</button>
             </div>
           </div>
@@ -244,10 +245,23 @@ export default function CRMTab({ customers, invoices, user, onReload }) {
                   {sel.city && <span className="px-2 py-0.5 bg-slate-100 text-slate-600 rounded text-xs">{sel.city}</span>}
                 </div>
               </div>
-              <button onClick={()=>{setEditingClient(true);setF({});}} className="px-3 py-1 border border-blue-300 text-blue-500 rounded text-xs">Edit / \u062a\u0639\u062f\u064a\u0644</button>
+              <button onClick={()=>{setEditingClient(true);setF({});}} className="px-3 py-1 border border-blue-300 text-blue-500 rounded text-xs">Edit / تعديل</button>
             </div>
             {sel.phone && <div className="text-xs text-slate-500 mt-2">Phone: {sel.phone}</div>}
             {sel.credit_limit && <div className="text-xs text-slate-500">Credit Limit: {fE(sel.credit_limit)}</div>}
+            {isAdmin && (
+              <div className="flex items-center gap-2 mt-2 p-2 bg-red-50 rounded border border-red-200">
+                <input type="checkbox" checked={sel.restricted || false}
+                  onChange={async (e) => {
+                    try {
+                      await dbUpdate('customers', sel.id, { restricted: e.target.checked }, user?.id);
+                      setSel({...sel, restricted: e.target.checked});
+                      onReload();
+                    } catch (err) { alert('Error: ' + err.message); }
+                  }} className="w-4 h-4" />
+                <label className="text-xs font-semibold text-red-700">Restricted — Admin Only / مقيد — للمسؤول فقط</label>
+              </div>
+            )}
           </div>
         )}
       </div>
@@ -258,12 +272,12 @@ export default function CRMTab({ customers, invoices, user, onReload }) {
         <div className="bg-amber-50 rounded-lg p-2 text-center"><div className="text-[9px] text-slate-500">Orders</div><div className="text-sm font-bold">{invs.length}</div></div>
       </div>
       <div className="flex gap-2 mb-3 flex-wrap">
-        <button onClick={()=>{setShowNote(true);setF({});}} className="px-3 py-1.5 bg-blue-500 text-white rounded-lg text-xs font-semibold">+ Note / \u0645\u0644\u0627\u062d\u0638\u0629</button>
-        <button onClick={()=>{setShowFollowUp(true);setF({});}} className="px-3 py-1.5 bg-amber-500 text-white rounded-lg text-xs font-semibold">+ Follow-up / \u0645\u062a\u0627\u0628\u0639\u0629</button>
+        <button onClick={()=>{setShowNote(true);setF({});}} className="px-3 py-1.5 bg-blue-500 text-white rounded-lg text-xs font-semibold">+ Note / ملاحظة</button>
+        <button onClick={()=>{setShowFollowUp(true);setF({});}} className="px-3 py-1.5 bg-amber-500 text-white rounded-lg text-xs font-semibold">+ Follow-up / متابعة</button>
       </div>
       {showNote && (
         <div className="bg-blue-50 rounded-lg p-3 mb-3 border border-blue-200">
-          <textarea value={f.noteText||''} onChange={e=>setF({...f,noteText:e.target.value})} placeholder="Note / \u0645\u0644\u0627\u062d\u0638\u0629..." rows={3} className="w-full px-3 py-2 rounded border text-sm mb-2" />
+          <textarea value={f.noteText||''} onChange={e=>setF({...f,noteText:e.target.value})} placeholder="Note / ملاحظة..." rows={3} className="w-full px-3 py-2 rounded border text-sm mb-2" />
           <div className="flex gap-2">
             <button onClick={handleAddNote} className="px-3 py-1.5 bg-blue-500 text-white rounded text-xs font-semibold">Save</button>
             <button onClick={()=>setShowNote(false)} className="px-3 py-1.5 border border-slate-200 rounded text-xs">Cancel</button>
@@ -273,7 +287,7 @@ export default function CRMTab({ customers, invoices, user, onReload }) {
       {showFollowUp && (
         <div className="bg-amber-50 rounded-lg p-3 mb-3 border border-amber-200">
           <div className="grid grid-cols-2 gap-2 mb-2">
-            <input value={f.task||''} onChange={e=>setF({...f,task:e.target.value})} placeholder="Task / \u0627\u0644\u0645\u0647\u0645\u0629" className="col-span-2 px-3 py-2 rounded border text-sm" />
+            <input value={f.task||''} onChange={e=>setF({...f,task:e.target.value})} placeholder="Task / المهمة" className="col-span-2 px-3 py-2 rounded border text-sm" />
             <input type="date" value={f.dueDate||''} onChange={e=>setF({...f,dueDate:e.target.value})} className="px-3 py-2 rounded border text-sm" />
             <input type="time" value={f.dueTime||'09:00'} onChange={e=>setF({...f,dueTime:e.target.value})} className="px-3 py-2 rounded border text-sm" />
           </div>
@@ -289,14 +303,14 @@ export default function CRMTab({ customers, invoices, user, onReload }) {
           {pendingFU.map(fu => (
             <div key={fu.id} className="flex justify-between items-center py-2 border-b border-amber-100">
               <div><div className="text-xs font-semibold">{fu.task}</div><div className="text-[10px] text-slate-500">{fu.due_date}</div></div>
-              <button onClick={()=>completeFollowUp(fu.id)} className="px-2 py-0.5 bg-emerald-500 text-white rounded text-[10px]">Done / \u062a\u0645</button>
+              <button onClick={()=>completeFollowUp(fu.id)} className="px-2 py-0.5 bg-emerald-500 text-white rounded text-[10px]">Done / تم</button>
             </div>
           ))}
         </div>
       )}
       {notes.length > 0 && (
         <div className="bg-white rounded-xl p-4 mb-3 border border-slate-200">
-          <h4 className="text-sm font-bold mb-2">Notes / \u0645\u0644\u0627\u062d\u0638\u0627\u062a ({notes.length})</h4>
+          <h4 className="text-sm font-bold mb-2">Notes / ملاحظات ({notes.length})</h4>
           {notes.map(n => (
             <div key={n.id} className="py-2 border-b border-slate-50">
               <div className="text-xs">{n.note_text}</div>
@@ -307,7 +321,7 @@ export default function CRMTab({ customers, invoices, user, onReload }) {
       )}
       {invs.length > 0 && (
         <div className="bg-white rounded-xl p-4 border border-slate-200">
-          <h4 className="text-sm font-bold mb-2">Invoices / \u0627\u0644\u0641\u0648\u0627\u062a\u064a\u0631 ({invs.length})</h4>
+          <h4 className="text-sm font-bold mb-2">Invoices / الفواتير ({invs.length})</h4>
           <div className="overflow-auto max-h-[300px]">
             <table className="w-full border-collapse"><thead><tr className="bg-slate-50">
               <th className="px-2 py-1.5 text-[10px] text-left">Order</th>
@@ -316,11 +330,12 @@ export default function CRMTab({ customers, invoices, user, onReload }) {
               <th className="px-2 py-1.5 text-[10px] text-right">Owed</th>
             </tr></thead><tbody>
               {invs.sort((a,b)=>(b.invoice_date||'').localeCompare(a.invoice_date||'')).map(inv=>(
-                <tr key={inv.id} className="border-b border-slate-50">
-                  <td className="px-2 py-1 text-xs font-bold">{inv.order_number}</td>
+                <tr key={inv.id} onClick={() => onSelectInvoice && onSelectInvoice(inv)}
+                  className="border-b border-slate-50 cursor-pointer hover:bg-blue-50">
+                  <td className="px-2 py-1 text-xs font-bold text-blue-600">{inv.order_number}</td>
                   <td className="px-2 py-1 text-xs">{inv.invoice_date}</td>
                   <td className="px-2 py-1 text-xs text-right">{fE(inv.total_amount)}</td>
-                  <td className="px-2 py-1 text-xs text-right text-red-500">{inv.outstanding>0?fE(inv.outstanding):'\u2713'}</td>
+                  <td className="px-2 py-1 text-xs text-right text-red-500">{inv.outstanding>0?fE(inv.outstanding):'✓'}</td>
                 </tr>
               ))}
             </tbody></table>
