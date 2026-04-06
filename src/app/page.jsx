@@ -992,7 +992,7 @@ export default function App() {
   if (loading) return (
     <div className="min-h-screen flex items-center justify-center" style={{background:'#0a0e1a'}}>
       <div className="text-center">
-        <div className="text-2xl font-black mb-2" style={{background:'linear-gradient(135deg, #38bdf8, #a78bfa)',WebkitBackgroundClip:'text',WebkitTextFillColor:'transparent'}}>NEXTTRADE HUB</div>
+        <div className="text-2xl font-black mb-2" style={{background:'linear-gradient(135deg, #38bdf8, #a78bfa)',WebkitBackgroundClip:'text',WebkitTextFillColor:'transparent'}}>KANDIL KTC EGYPT HUB</div>
         <div className="text-sm" style={{color:'rgba(148,163,184,0.5)'}}>Loading...</div>
       </div>
     </div>
@@ -1006,7 +1006,7 @@ export default function App() {
       {/* Header */}
       <div style={{background:'linear-gradient(135deg, #0f172a 0%, #1e1b4b 50%, #0f172a 100%)', borderBottom:'1px solid rgba(56,189,248,0.15)'}} className="px-5 py-4 flex justify-between items-center">
         <div>
-          <h1 className="text-2xl font-black tracking-tight" style={{background:'linear-gradient(135deg, #38bdf8, #818cf8, #a78bfa)',WebkitBackgroundClip:'text',WebkitTextFillColor:'transparent'}}>NEXTTRADE HUB</h1>
+          <h1 className="text-2xl font-black tracking-tight" style={{background:'linear-gradient(135deg, #38bdf8, #818cf8, #a78bfa)',WebkitBackgroundClip:'text',WebkitTextFillColor:'transparent'}}>KANDIL KTC EGYPT HUB</h1>
           <p style={{color:'rgba(148,163,184,0.5)'}} className="text-xs font-medium tracking-widest uppercase">{lang === 'en' ? 'KTC Trading Operations' : 'KTC — لوحة التحكم المالية'}</p>
         </div>
         <div className="flex items-center gap-3">
