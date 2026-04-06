@@ -19,6 +19,7 @@ export default function CRMTab({ customers, invoices, user, users, onReload, isA
   const [editingClient, setEditingClient] = useState(false);
   const [notes, setNotes] = useState([]);
   const [followUps, setFollowUps] = useState([]);
+  const [contactLog, setContactLog] = useState([]);
   const [allNotes, setAllNotes] = useState([]);
   const [notesLoaded, setNotesLoaded] = useState(false);
   const [f, setF] = useState({});
@@ -34,12 +35,37 @@ export default function CRMTab({ customers, invoices, user, users, onReload, isA
   const loadClientData = async (client) => {
     setSel(client);
     if (!client) return;
-    const [n, fu] = await Promise.all([
+    const [n, fu, cl] = await Promise.all([
       supabase.from('client_notes').select('*').eq('customer_id', client.id).order('created_at', { ascending: false }),
       supabase.from('follow_ups').select('*').eq('customer_id', client.id).order('due_date', { ascending: true }),
+      supabase.from('contact_log').select('*').eq('customer_id', client.id).order('contacted_at', { ascending: false }).limit(50),
     ]);
     setNotes(n.data || []);
     setFollowUps(fu.data || []);
+    setContactLog(cl.data || []);
+  };
+
+  const logContact = async (type, notes) => {
+    if (!sel) return;
+    try {
+      await dbInsert('contact_log', {
+        customer_id: sel.id, contact_type: type,
+        notes: notes || '', contacted_by: user?.id,
+        contacted_at: new Date().toISOString(),
+      }, user?.id);
+      await logActivity(user?.id, type + ' contact with: ' + sel.name + (notes ? ' — ' + notes : ''));
+      loadClientData(sel);
+    } catch(err) { console.log('Contact log error:', err); }
+  };
+
+  const openWhatsApp = (phone) => {
+    if (!phone) { alert('No phone number / لا يوجد رقم هاتف'); return; }
+    // Clean phone number
+    let clean = phone.replace(/[^0-9+]/g, '');
+    if (clean.startsWith('0')) clean = '+2' + clean; // Egypt default
+    if (!clean.startsWith('+')) clean = '+' + clean;
+    logContact('whatsapp', 'Opened WhatsApp chat');
+    window.open('https://wa.me/' + clean.replace('+', ''), '_blank');
   };
 
   const custInvoices = (c) => invoices.filter(i => i.customer_id === (c ? c.id : null) || (c && i.customer_name === c.name));
@@ -420,6 +446,13 @@ export default function CRMTab({ customers, invoices, user, users, onReload, isA
       <div className="flex gap-2 mb-3 flex-wrap">
         <button onClick={()=>{setShowNote(true);setF({});}} className="px-3 py-1.5 bg-blue-500 text-white rounded-lg text-xs font-semibold">+ Note / ملاحظة</button>
         <button onClick={()=>{setShowFollowUp(true);setF({});}} className="px-3 py-1.5 bg-amber-500 text-white rounded-lg text-xs font-semibold">+ Follow-up / متابعة</button>
+        <button onClick={() => openWhatsApp(sel.phone)} className="px-3 py-1.5 bg-green-500 text-white rounded-lg text-xs font-semibold">💬 WhatsApp</button>
+        <button onClick={() => { if(sel.phone) { logContact('phone', 'Phone call'); window.open('tel:'+sel.phone); } else alert('No phone'); }}
+          className="px-3 py-1.5 bg-purple-500 text-white rounded-lg text-xs font-semibold">📞 Call</button>
+        <button onClick={() => { const note = prompt('Contact notes / ملاحظات الاتصال:'); if(note) logContact('email', note); }}
+          className="px-3 py-1.5 bg-slate-500 text-white rounded-lg text-xs font-semibold">📧 Email</button>
+        <button onClick={() => { const note = prompt('Visit notes / ملاحظات الزيارة:'); if(note) logContact('visit', note); }}
+          className="px-3 py-1.5 bg-cyan-500 text-white rounded-lg text-xs font-semibold">🚗 Visit</button>
       </div>
       {showNote && (
         <div className="bg-blue-50 rounded-lg p-3 mb-3 border border-blue-200">
@@ -480,6 +513,32 @@ export default function CRMTab({ customers, invoices, user, users, onReload, isA
                 <div className="text-[10px] text-slate-400 mt-1">
                   {noteUser && <span className="font-semibold text-blue-500 mr-1">{noteUser.name}</span>}
                   {new Date(n.created_at).toLocaleString()}
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      )}
+      {/* Contact History */}
+      {contactLog.length > 0 && (
+        <div className="bg-white rounded-xl p-4 mb-3 border border-slate-200">
+          <h4 className="text-sm font-bold mb-2">Contact History / سجل الاتصال ({contactLog.length})</h4>
+          {contactLog.map(c => {
+            const icons = { whatsapp: '💬', phone: '📞', email: '📧', visit: '🚗' };
+            const colors = { whatsapp: 'text-green-600', phone: 'text-purple-600', email: 'text-slate-600', visit: 'text-cyan-600' };
+            const contactUser = users?.find(u => u.id === c.contacted_by);
+            return (
+              <div key={c.id} className="flex items-start gap-2 py-2 border-b border-slate-50">
+                <span className="text-sm">{icons[c.contact_type] || '📋'}</span>
+                <div className="flex-1">
+                  <div className="text-xs">
+                    <span className={'font-semibold ' + (colors[c.contact_type] || '')}>{c.contact_type}</span>
+                    {c.notes && <span className="text-slate-600 ml-1">— {c.notes}</span>}
+                  </div>
+                  <div className="text-[10px] text-slate-400">
+                    {contactUser && <span className="font-semibold text-blue-500 mr-1">{contactUser.name}</span>}
+                    {new Date(c.contacted_at).toLocaleString()}
+                  </div>
                 </div>
               </div>
             );
