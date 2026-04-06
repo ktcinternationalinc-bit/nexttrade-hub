@@ -17,12 +17,9 @@ export default function AdminTab({ user, users }) {
   const getUserName = (id) => (users || []).find(u => u.id === id)?.name || 'Unknown';
 
   const loadData = async () => {
-    const [l, t, a] = await Promise.all([
-      supabase.from('daily_log').select('*').gte('log_date', dateFrom).lte('log_date', dateTo).order('created_at', { ascending: false }).limit(500),
-      supabase.from('tickets').select('*').order('created_at', { ascending: false }),
-      supabase.from('audit_log').select('*').gte('created_at', dateFrom + 'T00:00:00').order('created_at', { ascending: false }).limit(300).catch(() => ({ data: [] })),
-    ]);
-    setLogs(l.data || []); setTickets(t.data || []); setAuditLogs(a.data || []);
+    try { const { data } = await supabase.from('daily_log').select('*').gte('log_date', dateFrom).lte('log_date', dateTo).order('created_at', { ascending: false }).limit(500); setLogs(data || []); } catch(e) { console.log('daily_log:', e); }
+    try { const { data } = await supabase.from('tickets').select('*').order('created_at', { ascending: false }); setTickets(data || []); } catch(e) { console.log('tickets:', e); }
+    try { const { data } = await supabase.from('audit_log').select('*').gte('created_at', dateFrom + 'T00:00:00').order('created_at', { ascending: false }).limit(300); setAuditLogs(data || []); } catch(e) { console.log('audit_log:', e); }
     setLoaded(true);
   };
   if (!loaded) loadData();
