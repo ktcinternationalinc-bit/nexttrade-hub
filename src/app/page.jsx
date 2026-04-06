@@ -1962,11 +1962,7 @@ export default function App() {
               {isAdmin && <ModeBar />}
             </div>
 
-            {/* ===== PERSONAL DASHBOARD (everyone sees this) ===== */}
-            <PersonalDashboard user={user} userProfile={userProfile} isAdmin={isAdmin}
-              invoices={invoices} customers={customers} navigate={navigate} fE={fE} users={teamUsers} />
-
-            {/* ===== FINANCIAL DASHBOARD (admin or users with finance access) ===== */}
+            {/* ===== FINANCIAL DASHBOARD (shown first for users with access) ===== */}
             {(isAdmin || modulePerms['Sales'] || modulePerms['Treasury']) && (<>
             <div className="bg-blue-100 rounded-lg px-3 py-2 mb-3">
               <span className="text-sm font-bold text-blue-800">📋 INVOICES / فواتير العملاء</span>
@@ -2144,6 +2140,10 @@ export default function App() {
               );
             })()}
             </>)}
+
+            {/* ===== PERSONAL DASHBOARD (tickets, reminders, calendar — after financial for admins, first for team) ===== */}
+            <PersonalDashboard user={user} userProfile={userProfile} isAdmin={isAdmin}
+              invoices={invoices} customers={customers} navigate={navigate} fE={fE} users={teamUsers} />
           </div>
         )}
 
