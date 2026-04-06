@@ -39,6 +39,8 @@ export const getReconStatus = (invoice, treasuryTotal) => {
   if ((invoice.notes || '').includes('UNVERIFIED')) return 'unverified';
   // If says paid but no treasury entries, it's unverified
   if (invoice.total_collected > 0 && treasuryTotal === 0 && invoice.total_amount > 0) return 'unverified';
+  // If treasury exists but doesn't match collected amount (>2% gap)
+  if (treasuryTotal > 0 && invoice.total_collected > 0 && Math.abs(treasuryTotal - invoice.total_collected) > invoice.total_collected * 0.02) return 'mismatch';
   if (invoice.outstanding > tolerance) return 'open';
   if (treasuryTotal > invoice.total_amount * 1.02) return 'overpaid';
   if (treasuryTotal >= invoice.total_amount * 0.98 || invoice.total_collected >= invoice.total_amount * 0.98) return 'reconciled';
@@ -49,6 +51,7 @@ export const getReconStatus = (invoice, treasuryTotal) => {
 export const STATUS_STYLES = {
   reconciled: { bg: '#dcfce7', color: '#16a34a', icon: '✅', label: 'RECONCILED / تم التسوية' },
   overpaid: { bg: '#ffedd5', color: '#c2410c', icon: '🟠', label: 'OVERPAID / دفع زائد' },
+  mismatch: { bg: '#fef3c7', color: '#b45309', icon: '⚡', label: 'MISMATCH / عدم تطابق' },
   unverified: { bg: '#fef3c7', color: '#d97706', icon: '⚠️', label: 'UNVERIFIED / غير مؤكد' },
   open: { bg: '#fef2f2', color: '#dc2626', icon: '🔴', label: 'OPEN / مفتوح' },
 };
