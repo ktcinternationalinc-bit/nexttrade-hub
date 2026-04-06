@@ -800,13 +800,13 @@ export default function App() {
 
   const Card = ({ title, titleAr, value, sub, color, onClick }) => (
     <div onClick={onClick}
-      className={`bg-white rounded-xl p-4 border-l-4 ${onClick ? 'cursor-pointer hover:shadow-md transition' : ''}`}
+      className={`bg-white rounded-xl p-5 border-l-4 ${onClick ? 'cursor-pointer hover:shadow-lg hover:-translate-y-0.5 transition-all' : ''}`}
       style={{ borderLeftColor: color || '#0ea5e9' }}
     >
-      <div className="text-xs font-semibold text-slate-500 uppercase">{title}</div>
+      <div className="text-xs font-semibold text-slate-500 uppercase tracking-wide">{title}</div>
       {titleAr && <div className="text-sm font-bold text-slate-900 mt-0.5" style={{ direction: 'rtl' }}>{titleAr}</div>}
-      <div className="text-2xl font-extrabold mt-1">{value}</div>
-      {sub && <div className="text-xs text-slate-500 mt-1">{sub}</div>}
+      <div className="text-3xl font-extrabold mt-2">{value}</div>
+      {sub && <div className="text-xs text-slate-500 mt-1.5">{sub}</div>}
     </div>
   );
 
