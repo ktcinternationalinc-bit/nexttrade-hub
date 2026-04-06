@@ -1,6 +1,6 @@
 'use client';
 import { useState, useMemo } from 'react';
-import { supabase, dbInsert, dbUpdate } from '../lib/supabase';
+import { supabase, dbInsert, dbUpdate, logActivity } from '../lib/supabase';
 
 const STATUSES = ['New','Acknowledged','In Progress','Waiting','Review','Testing','Ready','Closed','Reopened'];
 const PRIORITIES = [{v:'high',l:'High / عالي',c:'#ef4444'},{v:'medium',l:'Medium / متوسط',c:'#f59e0b'},{v:'low',l:'Low / منخفض',c:'#10b981'}];
@@ -19,7 +19,7 @@ export default function TicketsTab({ customers, user, users, onReload }) {
 
   const startVoice = () => {
     if (!('webkitSpeechRecognition' in window) && !('SpeechRecognition' in window)) {
-      alert('Voice not supported / المتصفح لا يدعم الصوت'); return;
+      alert('Voice not supported'); return;
     }
     const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
     const recognition = new SR();
@@ -70,12 +70,17 @@ export default function TicketsTab({ customers, user, users, onReload }) {
   const handleAddTicket = async () => {
     if (!f.title) return;
     try {
+      const assignedName = users?.find(u => u.id === f.assignedTo)?.name || '';
       await dbInsert('tickets', {
         title: f.title, description: f.description || '', priority: f.priority || 'medium',
         order_number: f.orderNumber || '', due_date: f.dueDate || null,
-        customer_id: f.customerId || null, status: 'New',
+        customer_id: f.customerId || null, client_name: f.clientName || '', status: 'New',
         assigned_to: f.assignedTo || null, created_by: user?.id,
       }, user?.id);
+      await logActivity(user?.id, 'Created ticket: ' + f.title + (assignedName ? ' → assigned to ' + assignedName : ''));
+      if (f.assignedTo && f.assignedTo !== user?.id) {
+        await logActivity(f.assignedTo, 'Ticket assigned to you: ' + f.title);
+      }
       setShowAdd(false); setF({}); loadTickets();
     } catch (err) { alert('Error / خطأ: ' + err.message); }
   };
@@ -85,7 +90,8 @@ export default function TicketsTab({ customers, user, users, onReload }) {
       const updates = { status: newStatus };
       if (newStatus === 'Closed') { updates.closed_at = new Date().toISOString(); updates.closed_by = user?.id; }
       await dbUpdate('tickets', ticket.id, updates, user?.id);
-      await dbInsert('ticket_comments', { ticket_id: ticket.id, comment_text: `Status changed to ${newStatus}` }, user?.id);
+      await dbInsert('ticket_comments', { ticket_id: ticket.id, comment_text: 'Status changed to ' + newStatus }, user?.id);
+      await logActivity(user?.id, 'Changed ticket to ' + newStatus + ': ' + ticket.title);
       loadTickets();
       if (sel && sel.id === ticket.id) { setSel({...sel, ...updates}); loadComments(ticket.id); }
     } catch (err) { alert('Error / خطأ: ' + err.message); }
@@ -95,17 +101,15 @@ export default function TicketsTab({ customers, user, users, onReload }) {
     if (!f.comment || !sel) return;
     try {
       await dbInsert('ticket_comments', { ticket_id: sel.id, comment_text: f.comment }, user?.id);
+      await logActivity(user?.id, 'Commented on ticket: ' + sel.title);
       setF({...f, comment: ''}); loadComments(sel.id);
     } catch (err) { alert('Error / خطأ: ' + err.message); }
   };
 
   const getUserName = (id) => users?.find(u => u.id === id)?.name || '';
 
-  // ===== DETAIL VIEW =====
   if (sel) {
     const priColor = PRIORITIES.find(p => p.v === sel.priority)?.c || '#f59e0b';
-    const assignedName = getUserName(sel.assigned_to);
-    const createdName = getUserName(sel.created_by);
     const isOverdue = sel.due_date && sel.due_date < todayStr && sel.status !== 'Closed';
     return (
       <div>
@@ -118,16 +122,15 @@ export default function TicketsTab({ customers, user, users, onReload }) {
           {sel.description && <p className="text-xs text-slate-600 mb-3">{sel.description}</p>}
           <div className="flex gap-2 flex-wrap mb-3">
             <span className="px-2 py-0.5 rounded text-[10px] font-semibold" style={{background:priColor+'20',color:priColor}}>{sel.priority}</span>
-            {assignedName && <span className="px-2 py-0.5 bg-purple-50 text-purple-700 rounded text-[10px]">👤 {assignedName}</span>}
-            {createdName && <span className="px-2 py-0.5 bg-slate-50 text-slate-600 rounded text-[10px]">Created by: {createdName}</span>}
+            {getUserName(sel.assigned_to) && <span className="px-2 py-0.5 bg-purple-50 text-purple-700 rounded text-[10px]">👤 {getUserName(sel.assigned_to)}</span>}
+            {getUserName(sel.created_by) && <span className="px-2 py-0.5 bg-slate-50 text-slate-600 rounded text-[10px]">Created by: {getUserName(sel.created_by)}</span>}
             {sel.order_number && <span className="px-2 py-0.5 bg-blue-50 text-blue-700 rounded text-[10px]">Order #{sel.order_number}</span>}
             {sel.due_date && <span className={'px-2 py-0.5 rounded text-[10px] ' + (isOverdue ? 'bg-red-100 text-red-700 font-bold' : 'bg-slate-100 text-slate-600')}>Due: {sel.due_date}</span>}
           </div>
           {sel.status === 'New' && sel.assigned_to === user?.id && (
             <button onClick={() => updateStatus(sel, 'Acknowledged')}
               className="w-full mb-3 px-4 py-2.5 bg-purple-600 text-white rounded-lg text-sm font-bold animate-pulse">
-              ✓ Acknowledge / اعتراف
-            </button>
+              ✓ Acknowledge / اعتراف</button>
           )}
           <div className="flex gap-1 flex-wrap">
             <span className="text-[10px] text-slate-500 mr-1">Change status:</span>
@@ -159,7 +162,6 @@ export default function TicketsTab({ customers, user, users, onReload }) {
     );
   }
 
-  // ===== LIST VIEW =====
   return (
     <div>
       <div className="flex justify-between flex-wrap gap-2 mb-3">
@@ -199,22 +201,26 @@ export default function TicketsTab({ customers, user, users, onReload }) {
               <input value={f.title||''} onChange={e=>setF({...f,title:e.target.value})} className="w-full px-3 py-2 rounded border text-sm" /></div>
             <div className="col-span-2"><label className="text-[10px] font-semibold">Description / الوصف</label>
               <textarea value={f.description||''} onChange={e=>setF({...f,description:e.target.value})} rows={3} className="w-full px-3 py-2 rounded border text-sm" /></div>
-            <div><label className="text-[10px] font-semibold">Priority / الأولوية</label>
+            <div><label className="text-[10px] font-semibold">Priority</label>
               <select value={f.priority||'medium'} onChange={e=>setF({...f,priority:e.target.value})} className="w-full px-3 py-2 rounded border text-sm">
                 {PRIORITIES.map(p=><option key={p.v} value={p.v}>{p.l}</option>)}</select></div>
-            <div><label className="text-[10px] font-semibold">Due Date / تاريخ</label>
+            <div><label className="text-[10px] font-semibold">Due Date</label>
               <input type="date" value={f.dueDate||''} onChange={e=>setF({...f,dueDate:e.target.value})} className="w-full px-3 py-2 rounded border text-sm" /></div>
-            <div><label className="text-[10px] font-semibold">Assign To / تعيين إلى</label>
+            <div><label className="text-[10px] font-semibold">Assign To / تعيين</label>
               <select value={f.assignedTo||''} onChange={e=>setF({...f,assignedTo:e.target.value})} className="w-full px-3 py-2 rounded border text-sm">
-                <option value="">Unassigned / غير معين</option>
+                <option value="">Unassigned</option>
                 {(users||[]).map(u=><option key={u.id} value={u.id}>{u.name}</option>)}
               </select></div>
-            <div><label className="text-[10px] font-semibold">Order # / رقم الأمر</label>
+            <div><label className="text-[10px] font-semibold">Order #</label>
               <input value={f.orderNumber||''} onChange={e=>setF({...f,orderNumber:e.target.value})} className="w-full px-3 py-2 rounded border text-sm" /></div>
-            <div className="col-span-2"><label className="text-[10px] font-semibold">Client / العميل</label>
-              <select value={f.customerId||''} onChange={e=>setF({...f,customerId:e.target.value})} className="w-full px-3 py-2 rounded border text-sm">
-                <option value="">None</option>
-                {customers.map(c=><option key={c.id} value={c.id}>{c.name}</option>)}</select></div>
+            <div className="col-span-2"><label className="text-[10px] font-semibold">Client / العميل (type or select)</label>
+              <input list="client-list" value={f.clientName||''} onChange={e=>{
+                const match = customers.find(c => c.name === e.target.value);
+                setF({...f, clientName: e.target.value, customerId: match ? match.id : ''});
+              }} placeholder="Type a name or pick from list..." className="w-full px-3 py-2 rounded border text-sm" />
+              <datalist id="client-list">
+                {customers.map(c=><option key={c.id} value={c.name}/>)}
+              </datalist></div>
           </div>
           <div className="flex gap-2 mt-3">
             <button onClick={handleAddTicket} className="px-4 py-2 bg-emerald-500 text-white rounded-lg text-sm font-semibold">Create / إنشاء</button>
@@ -250,8 +256,7 @@ export default function TicketsTab({ customers, user, users, onReload }) {
               {needsAck && (
                 <button onClick={(e) => { e.stopPropagation(); updateStatus(t, 'Acknowledged'); }}
                   className="mt-2 w-full px-3 py-1.5 bg-purple-600 text-white rounded-lg text-xs font-bold">
-                  ✓ Acknowledge / اعتراف
-                </button>
+                  ✓ Acknowledge / اعتراف</button>
               )}
             </div>
           );

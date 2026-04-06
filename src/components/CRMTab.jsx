@@ -1,6 +1,6 @@
 'use client';
 import { useState, useMemo } from 'react';
-import { supabase, dbInsert, dbUpdate } from '../lib/supabase';
+import { supabase, dbInsert, dbUpdate, logActivity } from '../lib/supabase';
 import { fE, fmt } from '../lib/utils';
 
 const GROUPS = ['Textiles', 'Leather', 'Pool', 'Industrial', 'Retail', 'Export', 'Other'];
@@ -111,6 +111,7 @@ export default function CRMTab({ customers, invoices, user, users, onReload, isA
         industry: f.industry || '', lead_source: f.leadSource || '',
         credit_limit: f.creditLimit ? Number(f.creditLimit) : null, status: 'active',
       }, user?.id);
+      await logActivity(user?.id, 'Created client: ' + f.name);
       setShowAdd(false); setF({}); onReload(); loadAllNotes();
     } catch (err) { alert('Error / خطأ: ' + err.message); }
   };
@@ -124,6 +125,7 @@ export default function CRMTab({ customers, invoices, user, users, onReload, isA
         city: f.city || sel.city, group_name: f.group || sel.group_name, client_type: f.clientType || sel.client_type,
         lead_source: f.leadSource || sel.lead_source,
       }, user?.id);
+      await logActivity(user?.id, 'Edited client: ' + (f.name || sel.name));
       setEditingClient(false); setF({}); onReload();
       loadClientData({...sel, name: f.name || sel.name});
     } catch (err) { alert('Error / خطأ: ' + err.message); }
@@ -133,6 +135,7 @@ export default function CRMTab({ customers, invoices, user, users, onReload, isA
     if (!f.noteText || !sel) return;
     try {
       await dbInsert('client_notes', { customer_id: sel.id, note_text: f.noteText }, user?.id);
+      await logActivity(user?.id, 'Added note to client: ' + sel.name);
       setShowNote(false); setF({}); loadClientData(sel); loadAllNotes();
     } catch (err) { alert('Error / خطأ: ' + err.message); }
   };
@@ -159,6 +162,7 @@ export default function CRMTab({ customers, invoices, user, users, onReload, isA
           event_type: 'call', customer_id: sel.id, assigned_to: user?.id,
         }, user?.id);
       }
+      await logActivity(user?.id, 'Created follow-up for ' + sel.name + ': ' + f.task);
       setShowFollowUp(false); setF({}); loadClientData(sel);
     } catch (err) { alert('Error / خطأ: ' + err.message); }
   };
@@ -166,6 +170,7 @@ export default function CRMTab({ customers, invoices, user, users, onReload, isA
   const completeFollowUp = async (id) => {
     try {
       await dbUpdate('follow_ups', id, { completed: true, completed_at: new Date().toISOString() }, user?.id);
+      await logActivity(user?.id, 'Completed follow-up for ' + sel.name);
       loadClientData(sel);
     } catch (err) { alert('Error / خطأ: ' + err.message); }
   };
@@ -249,6 +254,40 @@ export default function CRMTab({ customers, invoices, user, users, onReload, isA
           </div>
         </div>
       )}
+      {/* 30-Day Alert: Important Clients with No Recent Activity */}
+      {(() => {
+        const thirtyDaysAgo = new Date();
+        thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
+        const cutoff = thirtyDaysAgo.toISOString();
+        const neglected = customers.filter(c => {
+          if (!c.important) return false;
+          const lastNote = getLastNote(c.id);
+          if (!lastNote) return true;
+          return lastNote.created_at < cutoff;
+        });
+        if (neglected.length === 0) return null;
+        return (
+          <div className="bg-red-50 rounded-xl p-4 mb-3 border border-red-200">
+            <h3 className="text-sm font-bold text-red-700 mb-2">⚠️ Important Clients — No Contact in 30+ Days ({neglected.length})</h3>
+            {neglected.map(c => {
+              const lastNote = getLastNote(c.id);
+              const daysSince = lastNote ? Math.floor((Date.now() - new Date(lastNote.created_at).getTime()) / 86400000) : null;
+              return (
+                <div key={c.id} onClick={() => loadClientData(c)}
+                  className="flex justify-between items-center py-2 border-b border-red-100 cursor-pointer hover:bg-red-100 rounded px-2">
+                  <div>
+                    <span className="text-xs font-bold" style={{direction:'rtl'}}>{c.name}</span>
+                    {c.group_name && <span className="ml-2 text-[10px] text-purple-600">{c.group_name}</span>}
+                  </div>
+                  <span className="text-[10px] font-bold text-red-600">
+                    {daysSince ? daysSince + ' days ago' : 'Never contacted'}
+                  </span>
+                </div>
+              );
+            })}
+          </div>
+        );
+      })()}
       <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-3">
         {filtered.map(c => {
           const invs = custInvoices(c);
@@ -259,7 +298,7 @@ export default function CRMTab({ customers, invoices, user, users, onReload, isA
           const noteUser = lastNote ? users?.find(u => u.id === lastNote.created_by) : null;
           return (
             <div key={c.id} onClick={()=>loadClientData(c)} className="bg-white rounded-lg p-3 cursor-pointer border border-slate-200 hover:shadow-md transition">
-              <div className="text-sm font-bold" style={{direction:'rtl'}}>{c.name}</div>
+              <div className="text-sm font-bold" style={{direction:'rtl'}}>{c.important ? '⭐ ' : ''}{c.name}</div>
               {c.name_en && <div className="text-[10px] text-blue-500">{c.name_en}</div>}
               <div className="flex gap-1 mt-1 flex-wrap">
                 {c.group_name && <span className="px-1.5 py-0.5 bg-purple-100 text-purple-700 rounded text-[9px]">{c.group_name}</span>}
@@ -343,6 +382,17 @@ export default function CRMTab({ customers, invoices, user, users, onReload, isA
               </div>
               <button onClick={()=>{setEditingClient(true);setF({});}} className="px-3 py-1 border border-blue-300 text-blue-500 rounded text-xs">Edit / تعديل</button>
             </div>
+            {/* Important Toggle */}
+            <button onClick={async () => {
+              try {
+                const newVal = !sel.important;
+                await dbUpdate('customers', sel.id, { important: newVal }, user?.id);
+                setSel({...sel, important: newVal});
+                onReload();
+              } catch(err) { alert('Error: ' + err.message); }
+            }} className={'mt-2 px-3 py-1.5 rounded-lg text-xs font-bold border-2 transition ' + (sel.important ? 'border-amber-400 bg-amber-50 text-amber-700' : 'border-slate-200 text-slate-400')}>
+              {sel.important ? '⭐ Important Client / عميل مهم' : '☆ Mark as Important / تعيين كمهم'}
+            </button>
             {sel.phone && <div className="text-xs text-slate-500 mt-2">Phone: {sel.phone}</div>}
             {sel.credit_limit && <div className="text-xs text-slate-500">Credit Limit: {fE(sel.credit_limit)}</div>}
             {isAdmin && (
