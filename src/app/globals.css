@@ -2,5 +2,90 @@
 @tailwind components;
 @tailwind utilities;
 
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&display=swap');
+
 * { box-sizing: border-box; }
-body { font-family: system-ui, -apple-system, sans-serif; background: #f1f5f9; }
+
+body {
+  font-family: 'Inter', system-ui, -apple-system, sans-serif;
+  background: linear-gradient(135deg, #f0f4f8 0%, #e2e8f0 100%);
+  min-height: 100vh;
+  -webkit-font-smoothing: antialiased;
+}
+
+/* Scrollbar */
+::-webkit-scrollbar { width: 6px; height: 6px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: #cbd5e1; border-radius: 3px; }
+::-webkit-scrollbar-thumb:hover { background: #94a3b8; }
+
+/* Cards */
+.bg-white {
+  box-shadow: 0 1px 3px rgba(0,0,0,0.04), 0 1px 2px rgba(0,0,0,0.03);
+  transition: box-shadow 0.2s ease, transform 0.15s ease;
+}
+.bg-white:hover {
+  box-shadow: 0 4px 12px rgba(0,0,0,0.07), 0 2px 4px rgba(0,0,0,0.04);
+}
+
+/* Buttons */
+button {
+  transition: all 0.15s ease;
+}
+button:active {
+  transform: scale(0.97);
+}
+
+/* Inputs */
+input, select, textarea {
+  transition: border-color 0.2s ease, box-shadow 0.2s ease;
+}
+input:focus, select:focus, textarea:focus {
+  outline: none;
+  border-color: #3b82f6;
+  box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.1);
+}
+
+/* Tab navigation */
+.tab-nav {
+  background: linear-gradient(to bottom, #ffffff, #f8fafc);
+  border-bottom: 1px solid #e2e8f0;
+}
+
+/* Stat cards with left border */
+[style*="borderLeftWidth"] {
+  transition: transform 0.15s ease, box-shadow 0.2s ease;
+}
+[style*="borderLeftWidth"]:hover {
+  transform: translateY(-1px);
+}
+
+/* Priority pulse */
+@keyframes gentlePulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.85; }
+}
+.animate-pulse {
+  animation: gentlePulse 2s ease-in-out infinite;
+}
+
+/* Table rows */
+tbody tr {
+  transition: background-color 0.1s ease;
+}
+
+/* Modal backdrop */
+.modal-backdrop {
+  backdrop-filter: blur(4px);
+}
+
+/* RTL support */
+[style*="direction: rtl"], [style*="direction:'rtl'"] {
+  font-feature-settings: "liga" 0;
+}
+
+/* Print styles */
+@media print {
+  body { background: white; }
+  button, .tab-nav, nav { display: none !important; }
+}
