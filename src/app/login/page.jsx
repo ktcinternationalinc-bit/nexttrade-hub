@@ -23,48 +23,51 @@ export default function LoginPage() {
   };
 
   return (
-    <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-slate-900 to-blue-900 p-4">
-      <div className="bg-white rounded-2xl shadow-2xl p-8 w-full max-w-md">
+    <div className="min-h-screen flex items-center justify-center p-4"
+      style={{
+        background: '#0a0e1a',
+        backgroundImage: 'radial-gradient(ellipse 80% 50% at 50% 0%, rgba(56,189,248,0.12) 0%, transparent 60%), radial-gradient(ellipse 60% 40% at 80% 100%, rgba(167,139,250,0.08) 0%, transparent 50%)',
+      }}>
+      <div style={{
+        background: 'rgba(17,24,39,0.8)',
+        backdropFilter: 'blur(20px)',
+        border: '1px solid rgba(255,255,255,0.08)',
+        boxShadow: '0 25px 60px rgba(0,0,0,0.5), 0 0 40px rgba(56,189,248,0.05)',
+      }} className="rounded-2xl p-8 w-full max-w-md">
         <div className="text-center mb-8">
-          <h1 className="text-3xl font-extrabold text-slate-900">KANDIL KTC EGYPT HUB</h1>
-          <p className="text-sm text-slate-500 mt-1">KTC — لوحة التحكم المالية</p>
+          <h1 className="text-3xl font-black tracking-tight"
+            style={{background:'linear-gradient(135deg, #38bdf8, #818cf8, #a78bfa)',WebkitBackgroundClip:'text',WebkitTextFillColor:'transparent'}}>
+            NEXTTRADE HUB
+          </h1>
+          <p style={{color:'rgba(148,163,184,0.5)'}} className="text-sm mt-1 tracking-widest uppercase">KTC Trading Operations</p>
         </div>
-        <form onSubmit={handleLogin}>
+        <div onSubmit={handleLogin}>
           <div className="mb-4">
-            <label className="block text-sm font-semibold text-slate-600 mb-1">Email</label>
-            <input
-              type="email"
-              value={email}
-              onChange={(e) => setEmail(e.target.value)}
-              className="w-full px-4 py-3 rounded-lg border border-slate-200 focus:ring-2 focus:ring-blue-500 focus:border-transparent outline-none"
-              placeholder="you@ktcegypt.com"
-              required
-            />
+            <label style={{color:'rgba(148,163,184,0.7)'}} className="block text-sm font-semibold mb-1.5">Email</label>
+            <input type="email" value={email} onChange={(e) => setEmail(e.target.value)}
+              style={{background:'rgba(255,255,255,0.05)',border:'1px solid rgba(255,255,255,0.1)',color:'#f1f5f9'}}
+              className="w-full px-4 py-3 rounded-lg outline-none"
+              placeholder="you@ktcegypt.com" required />
           </div>
           <div className="mb-6">
-            <label className="block text-sm font-semibold text-slate-600 mb-1">Password</label>
-            <input
-              type="password"
-              value={password}
-              onChange={(e) => setPassword(e.target.value)}
-              className="w-full px-4 py-3 rounded-lg border border-slate-200 focus:ring-2 focus:ring-blue-500 focus:border-transparent outline-none"
-              placeholder="••••••••"
-              required
-            />
+            <label style={{color:'rgba(148,163,184,0.7)'}} className="block text-sm font-semibold mb-1.5">Password</label>
+            <input type="password" value={password} onChange={(e) => setPassword(e.target.value)}
+              style={{background:'rgba(255,255,255,0.05)',border:'1px solid rgba(255,255,255,0.1)',color:'#f1f5f9'}}
+              className="w-full px-4 py-3 rounded-lg outline-none"
+              onKeyDown={(e) => e.key === 'Enter' && handleLogin(e)}
+              placeholder="••••••••" required />
           </div>
           {error && (
-            <div className="mb-4 p-3 bg-red-50 border border-red-200 rounded-lg text-sm text-red-700">
+            <div className="mb-4 p-3 rounded-lg text-sm" style={{background:'rgba(248,113,113,0.1)',border:'1px solid rgba(248,113,113,0.2)',color:'#fca5a5'}}>
               {error}
             </div>
           )}
-          <button
-            type="submit"
-            disabled={loading}
-            className="w-full py-3 bg-blue-600 text-white font-bold rounded-lg hover:bg-blue-700 transition disabled:opacity-50"
-          >
+          <button onClick={handleLogin} disabled={loading}
+            style={{background:'linear-gradient(135deg, #0ea5e9, #6366f1)',boxShadow:'0 4px 20px rgba(56,189,248,0.35)'}}
+            className="w-full py-3.5 text-white font-bold rounded-lg transition disabled:opacity-50 text-base">
             {loading ? 'Signing in...' : 'Sign In / تسجيل الدخول'}
           </button>
-        </form>
+        </div>
       </div>
     </div>
   );
