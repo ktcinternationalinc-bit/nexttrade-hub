@@ -7,7 +7,7 @@ const GROUPS = ['Textiles', 'Leather', 'Pool', 'Industrial', 'Retail', 'Export',
 const TYPES = ['Trader', 'Manufacturer', 'Retailer', 'Wholesaler', 'Distributor', 'Agent'];
 const LEAD_SOURCES = ['Referral', 'Facebook', 'WhatsApp', 'Exhibition', 'Walk-in', 'Website', 'Cold Call', 'Existing'];
 
-export default function CRMTab({ customers, invoices, user, users, onReload, isAdmin, onSelectInvoice }) {
+export default function CRMTab({ customers, invoices, user, users, onReload, isAdmin, onSelectInvoice, lang }) {
   const [sel, setSel] = useState(null);
   const [q, setQ] = useState('');
   const [groupF, setGroupF] = useState('all');
@@ -302,7 +302,7 @@ export default function CRMTab({ customers, invoices, user, users, onReload, isA
                 <div key={c.id} onClick={() => loadClientData(c)}
                   className="flex justify-between items-center py-2 border-b border-red-100 cursor-pointer hover:bg-red-100 rounded px-2">
                   <div>
-                    <span className="text-xs font-bold" style={{direction:'rtl'}}>{c.name}</span>
+                    <span className="text-xs font-bold" style={{direction: lang === 'ar' ? 'rtl' : 'ltr'}}>{lang === 'en' && c.name_en ? c.name_en : c.name}</span>
                     {c.group_name && <span className="ml-2 text-[10px] text-purple-600">{c.group_name}</span>}
                   </div>
                   <span className="text-[10px] font-bold text-red-600">
@@ -324,8 +324,8 @@ export default function CRMTab({ customers, invoices, user, users, onReload, isA
           const noteUser = lastNote ? users?.find(u => u.id === lastNote.created_by) : null;
           return (
             <div key={c.id} onClick={()=>loadClientData(c)} className="bg-white rounded-lg p-3 cursor-pointer border border-slate-200 hover:shadow-md transition">
-              <div className="text-sm font-bold" style={{direction:'rtl'}}>{c.important ? '⭐ ' : ''}{c.name}</div>
-              {c.name_en && <div className="text-[10px] text-blue-500">{c.name_en}</div>}
+              <div className="text-sm font-bold" style={{direction:'rtl'}}>{c.important ? '⭐ ' : ''}{lang === 'en' && c.name_en ? c.name_en : c.name}</div>
+              {lang === 'ar' && c.name_en && <div className="text-[10px] text-blue-500">{c.name_en}</div>}
               <div className="flex gap-1 mt-1 flex-wrap">
                 {c.group_name && <span className="px-1.5 py-0.5 bg-purple-100 text-purple-700 rounded text-[9px]">{c.group_name}</span>}
                 {c.client_type && <span className="px-1.5 py-0.5 bg-blue-100 text-blue-700 rounded text-[9px]">{c.client_type}</span>}
@@ -396,8 +396,8 @@ export default function CRMTab({ customers, invoices, user, users, onReload, isA
           <div>
             <div className="flex justify-between items-start">
               <div>
-                <h3 className="text-xl font-extrabold" style={{direction:'rtl'}}>{sel.name}</h3>
-                {sel.name_en && <div className="text-sm text-blue-500">{sel.name_en}</div>}
+                <h3 className="text-xl font-extrabold" style={{direction: lang === 'ar' ? 'rtl' : 'ltr'}}>{lang === 'en' && sel.name_en ? sel.name_en : sel.name}</h3>
+                {lang === 'ar' && sel.name_en && <div className="text-sm text-blue-500">{sel.name_en}</div>}
                 <div className="flex gap-1 mt-1 flex-wrap">
                   {sel.group_name && <span className="px-2 py-0.5 bg-purple-100 text-purple-700 rounded text-xs">{sel.group_name}</span>}
                   {sel.client_type && <span className="px-2 py-0.5 bg-blue-100 text-blue-700 rounded text-xs">{sel.client_type}</span>}
