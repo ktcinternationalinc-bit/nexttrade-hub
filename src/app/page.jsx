@@ -205,7 +205,7 @@ export default function App() {
     dashboard: 'Dashboard', sales: 'Sales', customers: 'Customers', treasury: 'Treasury',
     checks: 'Checks', debts: 'Debts', warehouse: 'Warehouse', inventory: 'Inventory',
     crm: 'CRM', tickets: 'Tickets', calendar: 'Calendar', customs: 'Customs', shipping: 'Shipping Rates',
-    dailylog: 'Daily Log', admin: 'Admin', settings: 'Settings', import: 'Import',
+    dailylog: 'Daily Log', admin: 'Admin', ai: 'AI Assistant', settings: 'Settings', import: 'Import',
   };
 
   const visibleTabs = useMemo(() => {
