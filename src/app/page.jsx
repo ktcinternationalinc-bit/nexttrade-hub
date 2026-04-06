@@ -4,6 +4,8 @@ import { supabase, dbInsert, dbUpdate, dbDelete } from '../lib/supabase';
 import { fmt, fE, COLORS, EXPENSE_CATS, getReconStatus, STATUS_STYLES, today, inRange, monthOf, getWarehouseCat } from '../lib/utils';
 import * as XLSX from 'xlsx';
 import CRMTab from '../components/CRMTab';
+import TicketsTab from '../components/TicketsTab';
+import CalendarTab from '../components/CalendarTab';
 import {
   BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip,
   ResponsiveContainer, Legend
@@ -2680,35 +2682,14 @@ export default function App() {
             TICKETS TAB
         ========================================== */}
         {tab === 'tickets' && (
-          <div>
-            <div className="flex justify-between flex-wrap gap-2 mb-3">
-              <h2 className="text-xl font-extrabold">Tickets / التذاكر</h2>
-              <button className="px-3 py-1.5 bg-blue-500 text-white rounded-lg text-xs font-semibold">+ New Ticket</button>
-            </div>
-            <div className="bg-white rounded-xl p-6 text-center text-slate-400">
-              <p className="text-4xl mb-2">🎫</p>
-              <p className="text-sm font-semibold">Ticket system ready</p>
-              <p className="text-xs mt-1">Create tickets, assign to team, track status workflow</p>
-              <p className="text-xs mt-1">New → Acknowledged → In Progress → Review → Closed</p>
-            </div>
-          </div>
+          <TicketsTab customers={customers} user={user} onReload={loadAllData} />
         )}
 
         {/* ==========================================
             CALENDAR TAB
         ========================================== */}
         {tab === 'calendar' && (
-          <div>
-            <div className="flex justify-between flex-wrap gap-2 mb-3">
-              <h2 className="text-xl font-extrabold">Calendar / التقويم</h2>
-              <button className="px-3 py-1.5 bg-blue-500 text-white rounded-lg text-xs font-semibold">+ Event</button>
-            </div>
-            <div className="bg-white rounded-xl p-6 text-center text-slate-400">
-              <p className="text-4xl mb-2">📅</p>
-              <p className="text-sm font-semibold">Calendar ready</p>
-              <p className="text-xs mt-1">Day and month views, recurring events, team calendar</p>
-            </div>
-          </div>
+          <CalendarTab customers={customers} user={user} onReload={loadAllData} />
         )}
 
         {/* ==========================================
