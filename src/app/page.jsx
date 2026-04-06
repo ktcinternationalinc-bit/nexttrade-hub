@@ -388,6 +388,81 @@ export default function App() {
     }
   };
 
+  // ========== RECONCILIATION REPORT GENERATOR ==========
+  const generateReconReport = () => {
+    const wb = XLSX.utils.book_new();
+    const now = new Date().toLocaleDateString();
+
+    // 1. Categorize all invoices
+    const mismatch = [], unverified = [], overpaid = [], overdue = [];
+    invoices.forEach(inv => {
+      const txns = treasuryByOrder[inv.order_number] || [];
+      const tTotal = txns.reduce((a, t) => a + Number(t.cash_in || 0), 0);
+      const status = getReconStatus(inv, tTotal);
+      const row = {
+        'Order # / رقم الأمر': inv.order_number,
+        'Customer / العميل': inv.customer_name,
+        'Date / التاريخ': inv.invoice_date,
+        'Invoice Amount / مبلغ الفاتورة': Number(inv.total_amount || 0),
+        'Collected (Sales) / المحصّل': Number(inv.total_collected || 0),
+        'Treasury Total / الخزنة': tTotal,
+        'Outstanding / المتبقّي': Number(inv.outstanding || 0),
+        'Status / الحالة': status.toUpperCase(),
+        'Difference / الفرق': Math.abs(tTotal - Number(inv.total_collected || 0)),
+      };
+      if (status === 'mismatch') mismatch.push(row);
+      if (status === 'unverified') unverified.push(row);
+      if (status === 'overpaid') { row['Overpaid Amount / المبلغ الزائد'] = tTotal - Number(inv.total_amount || 0); overpaid.push(row); }
+      if (status === 'open' && Number(inv.outstanding || 0) > 0) overdue.push(row);
+    });
+
+    // 2. Treasury deposits without order number
+    const noOrder = treasury
+      .filter(t => !t.order_number && Number(t.cash_in || 0) > 0)
+      .map(t => ({
+        'Date / التاريخ': t.transaction_date,
+        'Amount / المبلغ': Number(t.cash_in || 0),
+        'Description / الوصف': t.description || '',
+        'Category / الفئة': t.category || 'N/A',
+      }));
+
+    // 3. Treasury entries without category
+    const noCat = treasury
+      .filter(t => !t.category || t.category === '')
+      .map(t => ({
+        'Date / التاريخ': t.transaction_date,
+        'Cash In / وارد': Number(t.cash_in || 0),
+        'Cash Out / صادر': Number(t.cash_out || 0),
+        'Description / الوصف': t.description || '',
+        'Order # / رقم الأمر': t.order_number || '',
+      }));
+
+    // 4. Summary sheet
+    const summary = [
+      { 'Category / الفئة': 'Total Invoices / إجمالي الفواتير', 'Count / العدد': invoices.length, 'Amount / المبلغ': invoices.reduce((a, i) => a + Number(i.total_amount || 0), 0) },
+      { 'Category / الفئة': 'Mismatch / عدم تطابق', 'Count / العدد': mismatch.length, 'Amount / المبلغ': mismatch.reduce((a, r) => a + r['Invoice Amount / مبلغ الفاتورة'], 0) },
+      { 'Category / الفئة': 'Unverified / غير مؤكد', 'Count / العدد': unverified.length, 'Amount / المبلغ': unverified.reduce((a, r) => a + r['Invoice Amount / مبلغ الفاتورة'], 0) },
+      { 'Category / الفئة': 'Overpaid / دفع زائد', 'Count / العدد': overpaid.length, 'Amount / المبلغ': overpaid.reduce((a, r) => a + r['Invoice Amount / مبلغ الفاتورة'], 0) },
+      { 'Category / الفئة': 'Overdue (Outstanding) / متأخرة', 'Count / العدد': overdue.length, 'Amount / المبلغ': overdue.reduce((a, r) => a + r['Outstanding / المتبقّي'], 0) },
+      { 'Category / الفئة': 'Deposits Without Order / إيداعات بدون أمر', 'Count / العدد': noOrder.length, 'Amount / المبلغ': noOrder.reduce((a, r) => a + r['Amount / المبلغ'], 0) },
+      { 'Category / الفئة': 'Entries Without Category / بدون فئة', 'Count / العدد': noCat.length, 'Amount / المبلغ': '' },
+      { 'Category / الفئة': '', 'Count / العدد': '', 'Amount / المبلغ': '' },
+      { 'Category / الفئة': 'Report Generated / تاريخ التقرير', 'Count / العدد': now, 'Amount / المبلغ': '' },
+    ];
+
+    const addSheet = (name, data) => { if (data.length > 0) { const ws = XLSX.utils.json_to_sheet(data); ws['!cols'] = Object.keys(data[0]).map(() => ({ wch: 22 })); XLSX.utils.book_append_sheet(wb, ws, name); } };
+
+    addSheet('Summary', summary);
+    addSheet('Mismatch', mismatch);
+    addSheet('Unverified', unverified);
+    addSheet('Overpaid', overpaid);
+    addSheet('Overdue', overdue);
+    addSheet('No Order #', noOrder);
+    addSheet('No Category', noCat);
+
+    XLSX.writeFile(wb, 'KTC_Reconciliation_Report_' + new Date().toISOString().substring(0, 10) + '.xlsx');
+  };
+
   const handleAddInvoice = async () => {
     if (!formData.orderNumber || !formData.customerName || !formData.amount) return;
     try {
@@ -1051,8 +1126,8 @@ export default function App() {
                     </div>
                   ) : (
                     <div className="text-center py-3">
-                      <div className="text-xs text-slate-400 mb-1">No item breakdown available for this order</div>
-                      <div className="text-[10px] text-slate-400">Import merchandiser Excel via the Import tab to load product details</div>
+                      <div className="text-xs text-slate-400 mb-1">No item breakdown available for this order / لا يوجد تفاصيل بنود لهذا الأمر</div>
+                      <div className="text-[10px] text-slate-400">Import merchandiser Excel via the Import tab to load product details / استيراد ملف Excel من تبويب الاستيراد لتحميل تفاصيل المنتجات</div>
                       <div className="bg-white rounded-lg p-3 mt-2 border border-blue-100">
                         <div className="flex justify-between text-xs">
                           <span className="font-semibold">Invoice Total / إجمالي الفاتورة</span>
@@ -2172,6 +2247,10 @@ export default function App() {
                   className="px-3 py-1.5 bg-blue-500 text-white rounded-lg text-xs font-semibold hover:bg-blue-600">
                   + New Invoice
                 </button>
+                <button onClick={() => generateReconReport()}
+                  className="px-3 py-1.5 bg-red-500 text-white rounded-lg text-xs font-semibold hover:bg-red-600">
+                  📊 Recon Report
+                </button>
               </div>
             </div>
             <div className="grid grid-cols-3 gap-3 mb-3">
@@ -2716,9 +2795,15 @@ export default function App() {
           <div>
             <div className="flex justify-between flex-wrap gap-2 mb-3">
               <h2 className="text-xl font-extrabold">Inventory / المخزون</h2>
-              <div className="flex gap-2 items-center">
+              <div className="flex gap-2 items-center flex-wrap">
                 <input value={query} onChange={e => setQuery(e.target.value)}
                   placeholder="Search / بحث" className="px-3 py-1.5 rounded-lg border border-slate-200 text-xs w-32" />
+                <select value={formData.invTypeFilter || 'all'} onChange={e => setFormData({...formData, invTypeFilter: e.target.value})}
+                  className="px-2 py-1.5 rounded border text-xs">
+                  <option value="all">All Types / كل الأنواع</option>
+                  {[...new Set(inventory.map(p => p.product_type).filter(Boolean))].sort().map(t =>
+                    <option key={t} value={t}>{t}</option>)}
+                </select>
                 <button onClick={() => setFormData({...formData, showAddProduct: true})}
                   className="px-3 py-1.5 bg-blue-500 text-white rounded-lg text-xs font-semibold hover:bg-blue-600">
                   + Add Product / إضافة منتج
@@ -2762,6 +2847,19 @@ export default function App() {
                     <input value={formData.prodShipment || ''} onChange={e => setFormData({...formData, prodShipment: e.target.value})}
                       className="w-full px-3 py-2 rounded-lg border border-slate-200 text-sm" />
                   </div>
+                  <div className="col-span-2">
+                    <label className="text-[10px] font-semibold text-slate-600">Product Type / نوع المنتج</label>
+                    <div className="flex gap-2">
+                      <select value={formData.prodType || ''} onChange={e => { if (e.target.value === '_new') { const n = prompt('New product type / نوع جديد:'); if (n) setFormData({...formData, prodType: n}); } else { setFormData({...formData, prodType: e.target.value}); }}}
+                        className="flex-1 px-3 py-2 rounded-lg border border-slate-200 text-sm">
+                        <option value="">Select type... / اختر النوع</option>
+                        {['Pool', 'Leather', 'Roofing', 'Fabrics', 'PVC', 'Chemicals', 'Headliner', 'Boat Flooring', 'Upholstery',
+                          ...new Set(inventory.map(p => p.product_type).filter(Boolean))].filter((v, i, a) => v && a.indexOf(v) === i).sort().map(t =>
+                          <option key={t} value={t}>{t}</option>)}
+                        <option value="_new">+ Add New Type / إضافة نوع جديد</option>
+                      </select>
+                    </div>
+                  </div>
                   <div>
                     <label className="text-[10px] font-semibold text-slate-600">Color / اللون</label>
                     <input value={formData.prodColor || ''} onChange={e => setFormData({...formData, prodColor: e.target.value})}
@@ -2804,6 +2902,7 @@ export default function App() {
                         product_id: formData.prodId || '',
                         reference_number: formData.prodRef || '',
                         shipment_reference: formData.prodShipment || '',
+                        product_type: formData.prodType || '',
                         description: formData.prodDesc || '',
                         description_en: formData.prodDescEn || '',
                         color: formData.prodColor || '',
@@ -2828,6 +2927,7 @@ export default function App() {
                 <thead className="sticky top-0"><tr className="bg-slate-50">
                   <th className="px-2 py-2 text-[10px] text-left">Product ID / المنتج</th>
                   <th className="px-2 py-2 text-[10px] text-left">Ref# / المرجع</th>
+                  <th className="px-2 py-2 text-[10px]">Type / النوع</th>
                   <th className="px-2 py-2 text-[10px]">Shipment / الشحنة</th>
                   <th className="px-2 py-2 text-[10px]">Description / الوصف</th>
                   <th className="px-2 py-2 text-[10px]">Color / اللون</th>
@@ -2838,12 +2938,17 @@ export default function App() {
                 </tr></thead>
                 <tbody>
                   {inventory
-                    .filter(p => !query || (p.product_id || '').includes(query) || (p.reference_number || '').includes(query) || (p.shipment_reference || '').includes(query) || (p.description || '').includes(query) || (p.description_en || '').toLowerCase().includes(query.toLowerCase()) || (p.color || '').includes(query))
+                    .filter(p => {
+                      if (formData.invTypeFilter && formData.invTypeFilter !== 'all' && p.product_type !== formData.invTypeFilter) return false;
+                      if (!query) return true;
+                      return (p.product_id || '').includes(query) || (p.reference_number || '').includes(query) || (p.shipment_reference || '').includes(query) || (p.description || '').includes(query) || (p.description_en || '').toLowerCase().includes(query.toLowerCase()) || (p.color || '').includes(query) || (p.product_type || '').toLowerCase().includes(query.toLowerCase());
+                    })
                     .map(p => (
                     <tr key={p.id} className="border-b border-slate-50 hover:bg-slate-50 cursor-pointer"
                       onClick={() => setFormData({...formData, selectedProduct: p})}>
                       <td className="px-2 py-1.5 text-xs font-bold text-blue-600">{p.product_id || '—'}</td>
                       <td className="px-2 py-1.5 text-xs font-semibold">{p.reference_number}</td>
+                      <td className="px-2 py-1.5">{p.product_type ? <span className="px-1.5 py-0.5 bg-indigo-100 text-indigo-700 rounded text-[9px]">{p.product_type}</span> : <span className="text-[9px] text-slate-300">—</span>}</td>
                       <td className="px-2 py-1.5 text-[10px] text-slate-500">{p.shipment_reference || '—'}</td>
                       <td className="px-2 py-1.5">
                         <div className="text-xs" style={{ direction: lang === 'ar' ? 'rtl' : 'ltr' }}>{lang === 'en' && p.description_en ? p.description_en : p.description}</div>
