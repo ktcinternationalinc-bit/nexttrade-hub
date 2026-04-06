@@ -9,6 +9,8 @@ import CalendarTab from '../components/CalendarTab';
 import DailyLogTab from '../components/DailyLogTab';
 import AdminTab from '../components/AdminTab';
 import SettingsTab from '../components/SettingsTab';
+import CustomsTab from '../components/CustomsTab';
+import PersonalDashboard from '../components/PersonalDashboard';
 import {
   BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip,
   ResponsiveContainer, Legend
@@ -559,19 +561,32 @@ export default function App() {
   const handleRenameBucket = async (oldName, newName, field) => {
     if (!newName || newName === oldName) { setRenamingBucket(null); return; }
     try {
-      // field is 'category' or 'subcategory'
       const matching = treasury.filter(t => t[field] === oldName);
       if (matching.length === 0) { setRenamingBucket(null); return; }
       for (const t of matching) {
         await dbUpdate('treasury', t.id, { [field]: newName }, user?.id);
       }
-      // Update expense_rules too
       const rules = expenseRules.filter(r => r[field] === oldName);
       for (const r of rules) {
         await dbUpdate('expense_rules', r.id, { [field]: newName }, user?.id);
       }
       setRenamingBucket(null);
       setRenameValue('');
+      await loadAllData();
+    } catch (err) {
+      alert('Error / خطأ: ' + err.message);
+    }
+  };
+
+  const handleMoveSubcategory = async (subcatName, fromCategory, toCategory) => {
+    if (!toCategory || toCategory === fromCategory) return;
+    if (!confirm('Move "' + subcatName + '" from "' + fromCategory + '" to "' + toCategory + '"?\n\nنقل التصنيف الفرعي إلى تصنيف آخر؟')) return;
+    try {
+      const matching = treasury.filter(t => t.subcategory === subcatName && t.category === fromCategory);
+      for (const t of matching) {
+        await dbUpdate('treasury', t.id, { category: toCategory }, user?.id);
+      }
+      setBucketSub(null);
       await loadAllData();
     } catch (err) {
       alert('Error / خطأ: ' + err.message);
@@ -868,22 +883,30 @@ export default function App() {
   return (
     <div className="min-h-screen bg-slate-100">
       {/* Header */}
-      <div className="bg-gradient-to-r from-slate-900 to-blue-900 px-4 py-3 flex justify-between items-center">
+      <div className="bg-gradient-to-r from-slate-900 via-slate-800 to-blue-900 px-4 py-3 flex justify-between items-center shadow-lg">
         <div>
-          <h1 className="text-white text-xl font-extrabold">KANDIL KTC EGYPT HUB</h1>
-          <p className="text-white/40 text-xs">KTC — لوحة التحكم المالية</p>
+          <h1 className="text-white text-xl font-extrabold tracking-tight">KANDIL KTC EGYPT HUB</h1>
+          <p className="text-blue-300/50 text-xs">KTC — لوحة التحكم المالية</p>
         </div>
-        <button onClick={handleSignOut} className="text-white/60 text-xs hover:text-white transition">
-          Sign Out
-        </button>
+        <div className="flex items-center gap-3">
+          {userProfile && (
+            <div className="text-right">
+              <div className="text-white text-xs font-semibold">{userProfile.name}</div>
+              <div className="text-blue-300/50 text-[10px]">{userProfile.role === 'super_admin' ? '🔴 Super Admin' : userProfile.role === 'admin' ? '🟣 Admin' : '🔵 Team'}</div>
+            </div>
+          )}
+          <button onClick={handleSignOut} className="px-3 py-1.5 bg-white/10 hover:bg-white/20 text-white/80 text-xs rounded-lg transition font-medium">
+            Sign Out
+          </button>
+        </div>
       </div>
 
       {/* Tab Navigation */}
-      <div className="bg-white border-b border-slate-200 px-1 overflow-x-auto flex">
+      <div className="tab-nav px-1 overflow-x-auto flex" style={{background:'linear-gradient(to bottom, #ffffff, #f8fafc)'}}>
         {visibleTabs.map(t => (
           <button key={t.id} onClick={() => navigate(t.id)}
             className={`px-3 py-2.5 text-xs font-semibold whitespace-nowrap border-b-2 transition ${
-              tab === t.id ? 'text-blue-500 border-blue-500' : 'text-slate-500 border-transparent hover:text-slate-700'
+              tab === t.id ? 'text-blue-600 border-blue-600 bg-blue-50/50' : 'text-slate-400 border-transparent hover:text-slate-600 hover:bg-slate-50'
             }`}
           >{t.icon} {t.label}</button>
         ))}
@@ -1261,8 +1284,8 @@ export default function App() {
                                   onChange={e => setFormData({...formData, category: e.target.value})}
                                   className="w-full text-[10px] border rounded px-1 py-0.5 mt-1" />
                               )}
-                              <input key={'sub-'+txn.id} defaultValue={txn.subcategory || ''}
-                                onBlur={e => setFormData({...formData, subcategory: e.target.value})}
+                              <input value={formData.subcategory !== undefined ? formData.subcategory : (txn.subcategory || '')}
+                                onChange={e => setFormData({...formData, subcategory: e.target.value})}
                                 placeholder="Subcategory / تصنيف فرعي (optional)"
                                 className="w-full text-[10px] border rounded px-1 py-0.5 mt-1 bg-orange-50" />
                             </td>
@@ -1433,6 +1456,21 @@ export default function App() {
                         <button onClick={() => { setRenamingBucket('sub'); setRenameValue(bucketSub); }}
                           className="px-2 py-0.5 rounded border border-blue-300 text-blue-500 text-[10px]">Rename / تغيير الاسم</button>
                       )}
+                      <select onChange={e => { 
+                        if (e.target.value === '_new') {
+                          const name = prompt('New category name / اسم التصنيف الجديد:');
+                          if (name) handleMoveSubcategory(bucketSub, cat, name);
+                        } else if (e.target.value) {
+                          handleMoveSubcategory(bucketSub, cat, e.target.value);
+                        }
+                        e.target.value = '';
+                      }} className="px-2 py-0.5 rounded border border-amber-300 text-amber-600 text-[10px]">
+                        <option value="">Move to... / نقل إلى</option>
+                        {[...new Set(treasury.map(t => t.category).filter(Boolean))].filter(c => c !== cat).sort().map(c => (
+                          <option key={c} value={c}>{EXPENSE_CATS[c] || c}</option>
+                        ))}
+                        <option value="_new">+ New Category</option>
+                      </select>
                     </div>
                     <input value={bucketSearch} onChange={e => setBucketSearch(e.target.value)}
                       placeholder="Search transactions / بحث..." className="w-full px-2 py-1.5 border rounded text-xs mb-2" />
@@ -1816,9 +1854,15 @@ export default function App() {
           <div>
             <div className="flex justify-between flex-wrap gap-2 mb-4">
               <h2 className="text-xl font-extrabold">Dashboard / لوحة التحكم</h2>
-              <ModeBar />
+              {isAdmin && <ModeBar />}
             </div>
 
+            {/* ===== PERSONAL DASHBOARD (everyone sees this) ===== */}
+            <PersonalDashboard user={user} userProfile={userProfile} isAdmin={isAdmin}
+              invoices={invoices} customers={customers} navigate={navigate} fE={fE} />
+
+            {/* ===== FINANCIAL DASHBOARD (admin or users with finance access) ===== */}
+            {(isAdmin || modulePerms['Sales'] || modulePerms['Treasury']) && (<>
             <div className="bg-blue-100 rounded-lg px-3 py-2 mb-3">
               <span className="text-sm font-bold text-blue-800">📋 INVOICES / فواتير العملاء</span>
             </div>
@@ -1994,6 +2038,7 @@ export default function App() {
                 </div>
               );
             })()}
+            </>)}
           </div>
         )}
 
@@ -2815,154 +2860,9 @@ export default function App() {
         {/* ==========================================
             CUSTOMS / BROKER TAB
         ========================================== */}
-        {tab === 'customs' && (() => {
-          const CustomsTab = () => {
-            const [shipments, setShipments] = useState([]);
-            const [shipLoaded, setShipLoaded] = useState(false);
-            const [showAddShipment, setShowAddShipment] = useState(false);
-            const [shipForm, setShipForm] = useState({});
-            const [selShipment, setSelShipment] = useState(null);
-
-            const loadShipments = async () => {
-              try {
-                const { data } = await supabase.from('shipments').select('*').order('created_at', { ascending: false });
-                setShipments(data || []);
-              } catch(e) { /* table may not exist yet */ }
-              setShipLoaded(true);
-            };
-            if (!shipLoaded) loadShipments();
-
-            const handleAddShipment = async () => {
-              if (!shipForm.origin || !shipForm.destination) return;
-              try {
-                await dbInsert('shipments', {
-                  origin: shipForm.origin, destination: shipForm.destination,
-                  container_type: shipForm.containerType || '20ft',
-                  container_count: Number(shipForm.containerCount || 1),
-                  broker_name: shipForm.broker || '', rate_usd: shipForm.rate ? Number(shipForm.rate) : null,
-                  status: 'Pending', customer_id: shipForm.customerId || null,
-                  order_number: shipForm.orderNumber || '', notes: shipForm.notes || '',
-                  eta: shipForm.eta || null,
-                }, user?.id);
-                setShowAddShipment(false); setShipForm({}); loadShipments();
-              } catch(err) { alert('Error: ' + err.message + '\n\nNote: Run the schema migration to create the shipments table.'); }
-            };
-
-            const STATUS_COLORS_SHIP = {Pending:'#f59e0b','In Transit':'#3b82f6','At Port':'#8b5cf6',Clearing:'#ec4899',Cleared:'#10b981',Delivered:'#374151'};
-            const SHIP_STATUSES = ['Pending','In Transit','At Port','Clearing','Cleared','Delivered'];
-
-            return (
-              <div>
-                <div className="flex justify-between flex-wrap gap-2 mb-3">
-                  <h2 className="text-xl font-extrabold">Customs & Broker / الجمارك والتخليص</h2>
-                  <button onClick={() => { setShowAddShipment(true); setShipForm({}); }}
-                    className="px-3 py-1.5 bg-blue-500 text-white rounded-lg text-xs font-semibold">+ Shipment / شحنة</button>
-                </div>
-
-                <div className="grid grid-cols-3 gap-3 mb-3">
-                  <div className="bg-white rounded-lg p-3" style={{borderLeftWidth:3,borderLeftColor:'#f59e0b'}}>
-                    <div className="text-[10px] text-slate-500">Pending / معلق</div>
-                    <div className="text-lg font-extrabold">{shipments.filter(s=>s.status==='Pending'||s.status==='In Transit').length}</div></div>
-                  <div className="bg-white rounded-lg p-3" style={{borderLeftWidth:3,borderLeftColor:'#8b5cf6'}}>
-                    <div className="text-[10px] text-slate-500">At Port/Clearing</div>
-                    <div className="text-lg font-extrabold">{shipments.filter(s=>s.status==='At Port'||s.status==='Clearing').length}</div></div>
-                  <div className="bg-white rounded-lg p-3" style={{borderLeftWidth:3,borderLeftColor:'#10b981'}}>
-                    <div className="text-[10px] text-slate-500">Cleared / تم التخليص</div>
-                    <div className="text-lg font-extrabold">{shipments.filter(s=>s.status==='Cleared'||s.status==='Delivered').length}</div></div>
-                </div>
-
-                {showAddShipment && (
-                  <div className="bg-blue-50 rounded-xl p-4 mb-3 border border-blue-200">
-                    <h3 className="text-sm font-bold text-blue-800 mb-3">New Shipment / شحنة جديدة</h3>
-                    <div className="grid grid-cols-2 gap-3">
-                      <div><label className="text-[10px] font-semibold">Origin / المنشأ</label>
-                        <input value={shipForm.origin||''} onChange={e=>setShipForm({...shipForm,origin:e.target.value})} placeholder="e.g. China, Turkey" className="w-full px-3 py-2 rounded border text-sm" /></div>
-                      <div><label className="text-[10px] font-semibold">Destination / الوجهة</label>
-                        <input value={shipForm.destination||''} onChange={e=>setShipForm({...shipForm,destination:e.target.value})} placeholder="e.g. Egypt, Syria" className="w-full px-3 py-2 rounded border text-sm" /></div>
-                      <div><label className="text-[10px] font-semibold">Container Type</label>
-                        <select value={shipForm.containerType||'20ft'} onChange={e=>setShipForm({...shipForm,containerType:e.target.value})} className="w-full px-3 py-2 rounded border text-sm">
-                          <option value="20ft">20ft</option><option value="40ft">40ft</option><option value="40ft HC">40ft HC</option><option value="LCL">LCL</option>
-                        </select></div>
-                      <div><label className="text-[10px] font-semibold">Count / عدد</label>
-                        <input type="number" value={shipForm.containerCount||1} onChange={e=>setShipForm({...shipForm,containerCount:e.target.value})} className="w-full px-3 py-2 rounded border text-sm" /></div>
-                      <div><label className="text-[10px] font-semibold">Broker / المخلص</label>
-                        <input value={shipForm.broker||''} onChange={e=>setShipForm({...shipForm,broker:e.target.value})} className="w-full px-3 py-2 rounded border text-sm" /></div>
-                      <div><label className="text-[10px] font-semibold">Rate (USD)</label>
-                        <input type="number" value={shipForm.rate||''} onChange={e=>setShipForm({...shipForm,rate:e.target.value})} className="w-full px-3 py-2 rounded border text-sm" /></div>
-                      <div><label className="text-[10px] font-semibold">ETA</label>
-                        <input type="date" value={shipForm.eta||''} onChange={e=>setShipForm({...shipForm,eta:e.target.value})} className="w-full px-3 py-2 rounded border text-sm" /></div>
-                      <div><label className="text-[10px] font-semibold">Order # / رقم الأمر</label>
-                        <input value={shipForm.orderNumber||''} onChange={e=>setShipForm({...shipForm,orderNumber:e.target.value})} className="w-full px-3 py-2 rounded border text-sm" /></div>
-                      <div><label className="text-[10px] font-semibold">Client / العميل</label>
-                        <select value={shipForm.customerId||''} onChange={e=>setShipForm({...shipForm,customerId:e.target.value})} className="w-full px-3 py-2 rounded border text-sm">
-                          <option value="">None</option>
-                          {customers.map(c=><option key={c.id} value={c.id}>{c.name}</option>)}</select></div>
-                      <div className="col-span-2"><label className="text-[10px] font-semibold">Notes / ملاحظات</label>
-                        <textarea value={shipForm.notes||''} onChange={e=>setShipForm({...shipForm,notes:e.target.value})} rows={2} className="w-full px-3 py-2 rounded border text-sm" /></div>
-                    </div>
-                    <div className="flex gap-2 mt-3">
-                      <button onClick={handleAddShipment} className="px-4 py-2 bg-emerald-500 text-white rounded-lg text-sm font-semibold">Create / إنشاء</button>
-                      <button onClick={()=>setShowAddShipment(false)} className="px-4 py-2 border border-slate-200 rounded-lg text-sm">Cancel</button>
-                    </div>
-                  </div>
-                )}
-
-                {selShipment ? (
-                  <div className="bg-white rounded-xl p-4">
-                    <button onClick={()=>setSelShipment(null)} className="px-3 py-1 rounded border border-slate-200 text-xs font-semibold mb-3">← Back / رجوع</button>
-                    <h3 className="text-lg font-extrabold mb-2">{selShipment.origin} → {selShipment.destination}</h3>
-                    <div className="flex gap-2 flex-wrap mb-3">
-                      <span className="px-2 py-0.5 rounded-full text-[10px] font-bold text-white" style={{background:STATUS_COLORS_SHIP[selShipment.status]}}>{selShipment.status}</span>
-                      <span className="px-2 py-0.5 bg-blue-50 text-blue-700 rounded text-[10px]">{selShipment.container_count}x {selShipment.container_type}</span>
-                      {selShipment.broker_name && <span className="px-2 py-0.5 bg-purple-50 text-purple-700 rounded text-[10px]">Broker: {selShipment.broker_name}</span>}
-                      {selShipment.rate_usd && <span className="px-2 py-0.5 bg-emerald-50 text-emerald-700 rounded text-[10px]">${selShipment.rate_usd}</span>}
-                      {selShipment.eta && <span className="px-2 py-0.5 bg-amber-50 text-amber-700 rounded text-[10px]">ETA: {selShipment.eta}</span>}
-                    </div>
-                    {selShipment.notes && <p className="text-xs text-slate-600 mb-3">{selShipment.notes}</p>}
-                    <div className="flex gap-1 flex-wrap">
-                      <span className="text-[10px] text-slate-500 mr-1">Change status:</span>
-                      {SHIP_STATUSES.filter(s=>s!==selShipment.status).map(s=>(
-                        <button key={s} onClick={async()=>{
-                          try {
-                            await dbUpdate('shipments', selShipment.id, {status:s}, user?.id);
-                            setSelShipment({...selShipment, status:s}); loadShipments();
-                          } catch(err){ alert('Error: '+err.message); }
-                        }} className="px-2 py-0.5 rounded text-[10px] font-semibold border hover:shadow" style={{borderColor:STATUS_COLORS_SHIP[s],color:STATUS_COLORS_SHIP[s]}}>{s}</button>
-                      ))}
-                    </div>
-                  </div>
-                ) : (
-                  <div className="space-y-2">
-                    {shipments.length > 0 ? shipments.map(s => (
-                      <div key={s.id} onClick={()=>setSelShipment(s)}
-                        className="bg-white rounded-lg p-3 cursor-pointer border border-slate-200 hover:shadow-md transition">
-                        <div className="flex justify-between items-start">
-                          <div>
-                            <div className="text-sm font-bold">{s.origin} → {s.destination}</div>
-                            <div className="text-[10px] text-slate-500">{s.container_count}x {s.container_type} {s.broker_name ? '| Broker: '+s.broker_name : ''}</div>
-                          </div>
-                          <span className="px-2 py-0.5 rounded-full text-[9px] font-bold text-white" style={{background:STATUS_COLORS_SHIP[s.status]}}>{s.status}</span>
-                        </div>
-                        <div className="flex gap-2 mt-1 text-[10px] text-slate-400">
-                          {s.rate_usd && <span className="text-emerald-600">${s.rate_usd}</span>}
-                          {s.eta && <span>ETA: {s.eta}</span>}
-                          {s.order_number && <span>Order #{s.order_number}</span>}
-                        </div>
-                      </div>
-                    )) : (
-                      <div className="bg-white rounded-xl p-6 text-center text-slate-400">
-                        <p className="text-4xl mb-2">🚢</p>
-                        <p className="text-sm font-semibold">No shipments yet</p>
-                        <p className="text-xs mt-1">Add a shipment to track customs clearance and broker rates</p>
-                      </div>
-                    )}
-                  </div>
-                )}
-              </div>
-            );
-          };
-          return <CustomsTab />;
-        })()}
+        {tab === 'customs' && (
+          <CustomsTab customers={customers} user={user} />
+        )}
 
         {/* ==========================================
             DAILY LOG TAB
