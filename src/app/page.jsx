@@ -12,6 +12,8 @@ import SettingsTab from '../components/SettingsTab';
 import CustomsTab from '../components/CustomsTab';
 import PersonalDashboard from '../components/PersonalDashboard';
 import AIAssistant from '../components/AIAssistant';
+import ShippingRatesTab from '../components/ShippingRatesTab';
+import ShippingRatesTab from '../components/ShippingRatesTab';
 import {
   BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip,
   ResponsiveContainer, Legend
@@ -33,6 +35,8 @@ const TABS = [
   { id: 'tickets', label: 'Tickets / تذاكر', icon: '🎫' },
   { id: 'calendar', label: 'Calendar / تقويم', icon: '📅' },
   { id: 'customs', label: 'Customs / جمارك', icon: '🚢' },
+  { id: 'shipping', label: 'Shipping Rates / شحن', icon: '🚛' },
+  { id: 'shipping', label: 'Shipping Rates / شحن', icon: '🛳️' },
   { id: 'dailylog', label: 'Daily Log / يومي', icon: '📓' },
   { id: 'admin', label: 'Admin / إدارة', icon: '👑' },
   { id: 'ai', label: 'AI Assistant / ذكي', icon: '🤖' },
@@ -197,7 +201,7 @@ export default function App() {
   const TAB_MODULE_MAP = {
     dashboard: 'Dashboard', sales: 'Sales', customers: 'Customers', treasury: 'Treasury',
     checks: 'Checks', debts: 'Debts', warehouse: 'Warehouse', inventory: 'Inventory',
-    crm: 'CRM', tickets: 'Tickets', calendar: 'Calendar', customs: 'Customs',
+    crm: 'CRM', tickets: 'Tickets', calendar: 'Calendar', customs: 'Customs', shipping: 'Shipping Rates', shipping: 'Shipping Rates',
     dailylog: 'Daily Log', admin: 'Admin', settings: 'Settings', import: 'Import',
   };
 
@@ -2939,6 +2943,20 @@ export default function App() {
         ========================================== */}
         {tab === 'customs' && (
           <CustomsTab customers={customers} user={user} />
+        )}
+
+        {/* ==========================================
+            SHIPPING RATES TAB
+        ========================================== */}
+        {tab === 'shipping' && (
+          <ShippingRatesTab user={user} isAdmin={isAdmin} />
+        )}
+
+        {/* ==========================================
+            SHIPPING RATES TAB
+        ========================================== */}
+        {tab === 'shipping' && (
+          <ShippingRatesTab user={user} isAdmin={isAdmin} />
         )}
 
         {/* ==========================================
