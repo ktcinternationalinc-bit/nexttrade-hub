@@ -2,11 +2,15 @@ import { createClient } from '@supabase/supabase-js';
 
 const supabase = createClient(
   process.env.NEXT_PUBLIC_SUPABASE_URL,
-  process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY
+  process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY
 );
 
 export async function GET() {
-  return Response.json({ status: 'working', has_key: !!process.env.ANTHROPIC_API_KEY });
+  return Response.json({ 
+    status: 'working', 
+    has_anthropic: !!process.env.ANTHROPIC_API_KEY,
+    has_service_key: !!process.env.SUPABASE_SERVICE_ROLE_KEY,
+  });
 }
 
 export async function POST(request) {
@@ -18,7 +22,7 @@ export async function POST(request) {
     const apiKey = process.env.ANTHROPIC_API_KEY;
     if (!apiKey) return Response.json({ answer: 'API key not set' });
 
-    // Fetch data from database
+    // Fetch data from database using service role (bypasses RLS)
     let invoices = [], treasury = [], customers = [], tickets = [], debts = [];
     try {
       const [inv, tres, cust, tix, dbt] = await Promise.all([
@@ -33,7 +37,10 @@ export async function POST(request) {
       customers = cust.data || [];
       tickets = tix.data || [];
       debts = dbt.data || [];
-    } catch(e) { /* continue without data */ }
+    } catch(e) { /* continue */ }
+
+    // Debug: include data counts in response if no data found
+    const dataCounts = 'Data loaded: ' + invoices.length + ' invoices, ' + treasury.length + ' treasury, ' + customers.length + ' customers, ' + debts.length + ' debts';
 
     const totalInvoiced = invoices.reduce((a, i) => a + Number(i.total_amount || 0), 0);
     const totalCollected = invoices.reduce((a, i) => a + Number(i.total_collected || 0), 0);
@@ -43,7 +50,6 @@ export async function POST(request) {
     const totalDebt = debts.reduce((a, d) => a + Number(d.total_debt || 0), 0);
     const openTickets = tickets.filter(t => t.status !== 'Closed').length;
 
-    // Top customers by outstanding
     const custOutstanding = {};
     invoices.forEach(i => {
       if (Number(i.outstanding) > 0) {
@@ -53,7 +59,6 @@ export async function POST(request) {
     });
     const topOwing = Object.entries(custOutstanding).sort((a, b) => b[1] - a[1]).slice(0, 10);
 
-    // Monthly breakdown
     const months = {};
     invoices.forEach(i => {
       const m = (i.invoice_date || '').substring(0, 7);
@@ -66,7 +71,9 @@ export async function POST(request) {
     const context = `You are a business data assistant for KTC International (Kandil Trading Company), an Egyptian trading/textile company.
 Answer in the same language the user asks in. Be concise and specific with numbers.
 Currency is EGP (Egyptian Pound). Format large numbers with commas.
-You have FULL ACCESS to the company database. Here is the current data:
+You have FULL ACCESS to the company database.
+
+${dataCounts}
 
 FINANCIAL SUMMARY:
 - Total Invoiced: EGP ${totalInvoiced.toLocaleString()}
@@ -80,23 +87,23 @@ FINANCIAL SUMMARY:
 - Total Customers: ${customers.length}
 - Total Invoices: ${invoices.length}
 
-TOP 10 CUSTOMERS OWING MONEY:
-${topOwing.map(([name, amt]) => '- ' + name + ': EGP ' + amt.toLocaleString()).join('\n')}
+TOP CUSTOMERS OWING MONEY:
+${topOwing.length > 0 ? topOwing.map(([name, amt]) => '- ' + name + ': EGP ' + amt.toLocaleString()).join('\n') : 'None'}
 
-MONTHLY SALES (recent 12 months):
-${Object.entries(months).sort((a, b) => b[0].localeCompare(a[0])).slice(0, 12).map(([m, d]) => '- ' + m + ': Invoiced EGP ' + d.invoiced.toLocaleString() + ', Collected EGP ' + d.collected.toLocaleString()).join('\n')}
+MONTHLY SALES (recent):
+${Object.entries(months).sort((a, b) => b[0].localeCompare(a[0])).slice(0, 12).map(([m, d]) => '- ' + m + ': Invoiced EGP ' + d.invoiced.toLocaleString() + ', Collected EGP ' + d.collected.toLocaleString()).join('\n') || 'No data'}
 
-ALL CUSTOMERS:
-${customers.slice(0, 50).map(c => '- ' + c.name + ' (' + (c.client_type || '') + ', ' + (c.group_name || '') + ', ' + (c.city || '') + ')' + (c.important ? ' IMPORTANT' : '')).join('\n')}
+CUSTOMERS:
+${customers.slice(0, 50).map(c => '- ' + c.name + ' (' + (c.client_type || '') + ', ' + (c.group_name || '') + ')' + (c.important ? ' IMPORTANT' : '')).join('\n') || 'No customers'}
 
 DEBTORS:
-${debts.map(d => '- ' + d.debtor_name + ': EGP ' + Number(d.total_debt).toLocaleString()).join('\n')}
+${debts.map(d => '- ' + d.debtor_name + ': EGP ' + Number(d.total_debt).toLocaleString()).join('\n') || 'None'}
 
-RECENT TREASURY TRANSACTIONS (last 20):
-${treasury.slice(0, 20).map(t => '- ' + t.transaction_date + ': ' + t.description + ' | In: ' + (t.cash_in || 0) + ' | Out: ' + (t.cash_out || 0) + ' | Cat: ' + (t.category || 'none')).join('\n')}
+RECENT TRANSACTIONS:
+${treasury.slice(0, 20).map(t => '- ' + t.transaction_date + ': ' + t.description + ' | In: ' + (t.cash_in || 0) + ' | Out: ' + (t.cash_out || 0)).join('\n') || 'No transactions'}
 
 TICKETS:
-${tickets.slice(0, 20).map(t => '- ' + t.title + ' | ' + t.status + ' | ' + t.priority + (t.due_date ? ' | Due: ' + t.due_date : '')).join('\n')}`;
+${tickets.slice(0, 20).map(t => '- ' + t.title + ' | ' + t.status + ' | ' + t.priority).join('\n') || 'No tickets'}`;
 
     const response = await fetch('https://api.anthropic.com/v1/messages', {
       method: 'POST',
@@ -119,7 +126,7 @@ ${tickets.slice(0, 20).map(t => '- ' + t.title + ' | ' + t.status + ' | ' + t.pr
     }
 
     const data = await response.json();
-    return Response.json({ answer: data.content?.[0]?.text || 'No response from AI' });
+    return Response.json({ answer: data.content?.[0]?.text || 'No response' });
   } catch (err) {
     return Response.json({ answer: 'Error: ' + err.message });
   }
