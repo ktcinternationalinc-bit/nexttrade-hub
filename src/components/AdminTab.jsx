@@ -1,70 +1,103 @@
 'use client';
-import { useState, useMemo } from 'react';
+import { useState, useMemo, useEffect } from 'react';
 import { supabase } from '../lib/supabase';
 
 const STATUS_COLORS = {New:'#3b82f6',Acknowledged:'#8b5cf6','In Progress':'#f59e0b',Waiting:'#6b7280',Review:'#ec4899',Testing:'#14b8a6',Ready:'#10b981',Closed:'#374151',Reopened:'#ef4444'};
 
-export default function AdminTab({ user, users }) {
+export default function AdminTab({ user, userProfile, users, isAdmin }) {
   const [logs, setLogs] = useState([]);
   const [tickets, setTickets] = useState([]);
+  const [rates, setRates] = useState([]);
+  const [quotes, setQuotes] = useState([]);
   const [auditLogs, setAuditLogs] = useState([]);
   const [loaded, setLoaded] = useState(false);
   const [selUser, setSelUser] = useState('all');
-  const [section, setSection] = useState('activity');
-  const [dateFrom, setDateFrom] = useState(() => { const d = new Date(); d.setDate(d.getDate() - 7); return d.toISOString().substring(0, 10); });
+  const [section, setSection] = useState('scorecards');
+  const [dateFrom, setDateFrom] = useState(() => { const d = new Date(); d.setDate(d.getDate() - 30); return d.toISOString().substring(0, 10); });
   const [dateTo, setDateTo] = useState(new Date().toISOString().substring(0, 10));
 
-  const getUserName = (id) => (users || []).find(u => u.id === id)?.name || 'Unknown';
+  const myId = userProfile?.id || user?.id;
+  const isSuperAdmin = userProfile?.role === 'super_admin';
+  const getUserName = (id) => (users || []).find(u => u.id === id)?.name || '';
+
+  // Filter visible team members based on role
+  const visibleUsers = useMemo(() => {
+    if (!users) return [];
+    if (isSuperAdmin) return users;
+    // Admin/manager sees only direct reports
+    return users.filter(u => u.reports_to === myId || u.id === myId);
+  }, [users, myId, isSuperAdmin]);
 
   const loadData = async () => {
-    try { const { data } = await supabase.from('daily_log').select('*').gte('log_date', dateFrom).lte('log_date', dateTo).order('created_at', { ascending: false }).limit(500); setLogs(data || []); } catch(e) { console.log('daily_log:', e); }
-    try { const { data } = await supabase.from('tickets').select('*').order('created_at', { ascending: false }); setTickets(data || []); } catch(e) { console.log('tickets:', e); }
-    try { const { data } = await supabase.from('audit_log').select('*').gte('created_at', dateFrom + 'T00:00:00').order('created_at', { ascending: false }).limit(300); setAuditLogs(data || []); } catch(e) { console.log('audit_log:', e); }
+    try { const { data } = await supabase.from('daily_log').select('*').gte('log_date', dateFrom).lte('log_date', dateTo).order('created_at', { ascending: false }).limit(1000); setLogs(data || []); } catch(e) {}
+    try { const { data } = await supabase.from('tickets').select('*').order('created_at', { ascending: false }); setTickets(data || []); } catch(e) {}
+    try { const { data } = await supabase.from('shipping_rates').select('id, vendor_name, origin, destination, rate_amount, currency, created_at').order('created_at', { ascending: false }).limit(500); setRates(data || []); } catch(e) {}
+    try { const { data } = await supabase.from('shipping_quotes').select('id, quote_number, customer_name, total_amount, created_at, created_by').order('created_at', { ascending: false }).limit(500); setQuotes(data || []); } catch(e) {}
+    try { const { data } = await supabase.from('audit_log').select('*').gte('created_at', dateFrom + 'T00:00:00').order('created_at', { ascending: false }).limit(300); setAuditLogs(data || []); } catch(e) {}
     setLoaded(true);
   };
-  if (!loaded) loadData();
+
+  useEffect(() => { if (!loaded) loadData(); }, [loaded]);
 
   const handleDateChange = (field, value) => { if (field === 'from') setDateFrom(value); else setDateTo(value); setLoaded(false); };
-
   const todayStr = new Date().toISOString().substring(0, 10);
 
-  // Per-user scorecards
+  // Enhanced scorecards
   const scorecards = useMemo(() => {
-    if (!users) return [];
-    return users.map(u => {
+    return visibleUsers.map(u => {
       const uLogs = logs.filter(l => l.user_id === u.id);
       const autoCount = uLogs.filter(l => l.auto_generated).length;
       const manualCount = uLogs.filter(l => !l.auto_generated).length;
       const uniqueDays = [...new Set(uLogs.map(l => l.log_date))].length;
-      const openT = tickets.filter(t => t.assigned_to === u.id && t.status !== 'Closed').length;
-      const closedT = tickets.filter(t => (t.assigned_to === u.id || t.closed_by === u.id) && t.status === 'Closed').length;
-      const overdueT = tickets.filter(t => t.assigned_to === u.id && t.due_date && t.due_date < todayStr && t.status !== 'Closed').length;
+
+      // Tickets
+      const myTickets = tickets.filter(t => t.assigned_to === u.id);
+      const openT = myTickets.filter(t => t.status !== 'Closed').length;
+      const closedT = myTickets.filter(t => t.status === 'Closed').length;
       const createdT = tickets.filter(t => t.created_by === u.id).length;
-      return { ...u, totalActivities: uLogs.length, autoCount, manualCount, uniqueDays, openT, closedT, overdueT, createdT };
+
+      // Overdue analysis
+      const overdueNow = myTickets.filter(t => t.due_date && t.due_date < todayStr && t.status !== 'Closed');
+      const overdueCount = overdueNow.length;
+      // Count all tickets that were ever overdue (closed after due date)
+      const closedOverdue = myTickets.filter(t => t.status === 'Closed' && t.due_date && t.closed_at && new Date(t.closed_at) > new Date(t.due_date + 'T23:59:59'));
+      const totalTimesOverdue = overdueCount + closedOverdue.length;
+      // Average overdue days
+      var totalOverdueDays = 0;
+      var overdueItemCount = 0;
+      overdueNow.forEach(function(t) {
+        var days = Math.floor((Date.now() - new Date(t.due_date).getTime()) / 86400000);
+        totalOverdueDays += days;
+        overdueItemCount++;
+      });
+      closedOverdue.forEach(function(t) {
+        var days = Math.floor((new Date(t.closed_at).getTime() - new Date(t.due_date).getTime()) / 86400000);
+        if (days > 0) { totalOverdueDays += days; overdueItemCount++; }
+      });
+      var avgOverdueDays = overdueItemCount > 0 ? Math.round(totalOverdueDays / overdueItemCount) : 0;
+
+      // Rates & Quotes (approximation - check if user created them via audit or direct match)
+      // We'll count rates where the audit shows this user created them
+      var ratesCompleted = 0;
+      var quotesCompleted = 0;
+      try {
+        var userAudits = auditLogs.filter(function(a) { return a.changed_by === u.id; });
+        ratesCompleted = userAudits.filter(function(a) { return a.table_name === 'shipping_rates' && a.action === 'create'; }).length;
+        quotesCompleted = quotes.filter(function(q) { return q.created_by === u.id; }).length;
+      } catch(e) {}
+
+      return {
+        ...u, totalActivities: uLogs.length, autoCount, manualCount, uniqueDays,
+        openT, closedT, createdT, overdueCount, totalTimesOverdue, avgOverdueDays,
+        ratesCompleted, quotesCompleted
+      };
     }).sort((a, b) => b.totalActivities - a.totalActivities);
-  }, [users, logs, tickets]);
+  }, [visibleUsers, logs, tickets, quotes, auditLogs, todayStr]);
 
-  // Filtered activity logs
-  const filteredLogs = useMemo(() => {
-    let arr = logs;
-    if (selUser !== 'all') arr = arr.filter(l => l.user_id === selUser);
-    return arr;
-  }, [logs, selUser]);
-
-  // Filtered tickets
-  const filteredTickets = useMemo(() => {
-    let arr = tickets;
-    if (selUser !== 'all') arr = arr.filter(t => t.assigned_to === selUser || t.created_by === selUser);
-    return arr;
-  }, [tickets, selUser]);
-
-  // Filtered audit logs
-  const filteredAudit = useMemo(() => {
-    let arr = auditLogs;
-    if (selUser !== 'all') arr = arr.filter(a => a.changed_by === selUser);
-    return arr;
-  }, [auditLogs, selUser]);
-
+  // Filtered data
+  const filteredLogs = useMemo(() => { let arr = logs; if (selUser !== 'all') arr = arr.filter(l => l.user_id === selUser); return arr; }, [logs, selUser]);
+  const filteredTickets = useMemo(() => { let arr = tickets; if (selUser !== 'all') arr = arr.filter(t => t.assigned_to === selUser || t.created_by === selUser); return arr; }, [tickets, selUser]);
+  const filteredAudit = useMemo(() => { let arr = auditLogs; if (selUser !== 'all') arr = arr.filter(a => a.changed_by === selUser); return arr; }, [auditLogs, selUser]);
   const selUserName = selUser !== 'all' ? getUserName(selUser) : 'All Team';
 
   return (<div>
@@ -73,8 +106,8 @@ export default function AdminTab({ user, users }) {
     {/* Filters */}
     <div className="flex gap-2 flex-wrap mb-3 items-center">
       <select value={selUser} onChange={e => setSelUser(e.target.value)} className="px-3 py-1.5 rounded-lg border border-slate-200 text-xs font-semibold">
-        <option value="all">👥 All Team</option>
-        {(users || []).map(u => <option key={u.id} value={u.id}>👤 {u.name} ({u.role})</option>)}
+        <option value="all">👥 All Team ({visibleUsers.length})</option>
+        {visibleUsers.map(u => <option key={u.id} value={u.id}>👤 {u.name} ({u.role})</option>)}
       </select>
       <input type="date" value={dateFrom} onChange={e => handleDateChange('from', e.target.value)} className="px-2 py-1.5 rounded border text-xs" />
       <span className="text-xs text-slate-400">to</span>
@@ -84,18 +117,96 @@ export default function AdminTab({ user, users }) {
 
     {/* Section tabs */}
     <div className="flex gap-1 mb-3 flex-wrap">
-      {[['activity','📋 Activity Feed'],['tickets','🎫 Tickets'],['scorecards','📊 Scorecards'],['audit','🔍 Audit Log']].map(([v,l]) => (
+      {[['scorecards','📊 Scorecards'],['activity','📋 Activity'],['tickets','🎫 Tickets'],['audit','🔍 Audit']].map(([v,l]) => (
         <button key={v} onClick={() => setSection(v)}
           className={'px-3 py-1.5 rounded-lg text-xs font-semibold transition ' + (section === v ? 'bg-slate-900 text-white' : 'bg-slate-100 text-slate-500')}>{l}</button>
       ))}
     </div>
 
-    {selUser !== 'all' && (
-      <div className="bg-blue-50 rounded-lg px-3 py-2 mb-3 border border-blue-200 flex justify-between items-center">
-        <span className="text-xs font-bold text-blue-800">Viewing: {selUserName}</span>
-        <button onClick={() => setSelUser('all')} className="text-[10px] text-blue-500 hover:underline">Clear filter</button>
+    {!isSuperAdmin && visibleUsers.length <= 1 && (
+      <div className="bg-amber-50 rounded-lg px-3 py-2 mb-3 border border-amber-200 text-xs text-amber-700">
+        You can see your direct reports only. Ask a Super Admin to assign team members to you via the <strong>reports_to</strong> field.
       </div>
     )}
+
+    {/* ===== SCORECARDS ===== */}
+    {section === 'scorecards' && (<div>
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+        {scorecards.map(u => (
+          <div key={u.id} onClick={() => setSelUser(selUser === u.id ? 'all' : u.id)}
+            className={'bg-white rounded-xl p-5 cursor-pointer border-2 transition hover:shadow-lg ' + (selUser === u.id ? 'border-blue-500 shadow-lg' : 'border-slate-200')}>
+            {/* Header */}
+            <div className="flex justify-between items-start mb-3">
+              <div>
+                <div className="text-base font-extrabold">{u.name}</div>
+                <div className="text-[10px]">
+                  <span className={'font-semibold ' + (u.role === 'super_admin' ? 'text-red-500' : u.role === 'admin' ? 'text-purple-500' : 'text-blue-500')}>
+                    {u.role === 'super_admin' ? '🔴 Super Admin' : u.role === 'admin' ? '🟣 Admin' : '🔵 Team'}
+                  </span>
+                </div>
+              </div>
+              <div className="text-right">
+                <div className="text-2xl font-extrabold">{u.totalActivities}</div>
+                <div className="text-[9px] text-slate-400">actions ({dateFrom.substring(5)} – {dateTo.substring(5)})</div>
+              </div>
+            </div>
+
+            {/* Ticket Metrics */}
+            <div className="grid grid-cols-4 gap-2 mb-3">
+              <div className="bg-blue-50 rounded-lg p-2 text-center">
+                <div className="text-lg font-bold text-blue-600">{u.openT}</div>
+                <div className="text-[8px] text-slate-500 font-semibold">In Queue</div>
+              </div>
+              <div className="bg-emerald-50 rounded-lg p-2 text-center">
+                <div className="text-lg font-bold text-emerald-600">{u.closedT}</div>
+                <div className="text-[8px] text-slate-500 font-semibold">Closed</div>
+              </div>
+              <div className={'rounded-lg p-2 text-center ' + (u.overdueCount > 0 ? 'bg-red-50' : 'bg-slate-50')}>
+                <div className={'text-lg font-bold ' + (u.overdueCount > 0 ? 'text-red-600' : 'text-slate-400')}>{u.overdueCount}</div>
+                <div className="text-[8px] text-slate-500 font-semibold">Overdue Now</div>
+              </div>
+              <div className="bg-purple-50 rounded-lg p-2 text-center">
+                <div className="text-lg font-bold text-purple-600">{u.createdT}</div>
+                <div className="text-[8px] text-slate-500 font-semibold">Created</div>
+              </div>
+            </div>
+
+            {/* Rates & Quotes */}
+            <div className="grid grid-cols-2 gap-2 mb-3">
+              <div className="bg-cyan-50 rounded-lg p-2 text-center">
+                <div className="text-lg font-bold text-cyan-600">{u.ratesCompleted}</div>
+                <div className="text-[8px] text-slate-500 font-semibold">Rates Added</div>
+              </div>
+              <div className="bg-amber-50 rounded-lg p-2 text-center">
+                <div className="text-lg font-bold text-amber-600">{u.quotesCompleted}</div>
+                <div className="text-[8px] text-slate-500 font-semibold">Quotes Created</div>
+              </div>
+            </div>
+
+            {/* Overdue History */}
+            <div className="flex gap-3 text-[10px] border-t border-slate-100 pt-2 mb-2">
+              <span className={u.totalTimesOverdue > 0 ? 'text-red-500 font-bold' : 'text-slate-400'}>
+                🚨 {u.totalTimesOverdue} times overdue
+              </span>
+              <span className={u.avgOverdueDays > 0 ? 'text-orange-500 font-bold' : 'text-slate-400'}>
+                ⏱️ {u.avgOverdueDays}d avg overdue
+              </span>
+            </div>
+
+            {/* Activity breakdown */}
+            <div className="flex gap-3 text-[10px] border-t border-slate-100 pt-2">
+              <span className="text-amber-600">⚡ {u.autoCount} auto</span>
+              <span className="text-blue-600">✏️ {u.manualCount} manual</span>
+              <span className="text-slate-500">📅 {u.uniqueDays}d active</span>
+            </div>
+
+            {/* Performance indicator */}
+            {u.overdueCount > 2 && <div className="mt-2 px-2 py-1 bg-red-100 border border-red-200 rounded text-[10px] text-red-700 font-bold">⚠️ {u.overdueCount} tickets overdue — needs attention</div>}
+            {u.totalActivities === 0 && <div className="mt-2 px-2 py-1 bg-slate-100 border border-slate-200 rounded text-[10px] text-slate-500">No activity in selected period</div>}
+          </div>
+        ))}
+      </div>
+    </div>)}
 
     {/* ===== ACTIVITY FEED ===== */}
     {section === 'activity' && (<div>
@@ -108,26 +219,24 @@ export default function AdminTab({ user, users }) {
         <h3 className="text-sm font-bold mb-3">{selUserName} — Activity Feed ({filteredLogs.length})</h3>
         <div className="space-y-1 max-h-[600px] overflow-auto">
           {filteredLogs.map(l => {
-            const userName = getUserName(l.user_id);
-            const isTicket = (l.entry_text||'').includes('ticket');
-            const isStatus = (l.entry_text||'').includes('status');
-            const isComment = (l.entry_text||'').includes('Comment');
-            const isCreate = (l.entry_text||'').includes('Created');
-            const icon = isStatus ? '📋' : isTicket ? '🎫' : isComment ? '💬' : isCreate ? '✨' : l.auto_generated ? '⚡' : '✏️';
+            var userName = getUserName(l.user_id);
+            var cat = l.log_category || 'other';
+            var icons = {ticket:'🎫',crm:'🤝',shipping:'🛳️',customs:'🚢',calendar:'📅',finance:'💰',manual:'✏️',other:'⚡'};
             return (
               <div key={l.id} className="flex items-start gap-2 py-2 border-b border-slate-50">
-                <span className="text-sm mt-0.5">{icon}</span>
+                <span className="text-sm mt-0.5">{icons[cat] || (l.auto_generated ? '⚡' : '✏️')}</span>
                 <div className="flex-1">
                   <div className="text-xs">{l.entry_text}</div>
                   <div className="text-[10px] text-slate-400 mt-0.5">
-                    <span className="font-semibold text-blue-500 mr-2">{userName}</span>
-                    {l.log_date} {l.created_at ? new Date(l.created_at).toLocaleTimeString([], {hour:'2-digit',minute:'2-digit'}) : ''}
+                    <span className="text-blue-500 font-semibold mr-2">{userName}</span>
+                    {l.log_date} {l.log_time ? l.log_time.substring(0, 5) : ''}
+                    {cat !== 'other' && <span className="ml-2 px-1 py-0.5 bg-slate-100 rounded text-[9px]">{cat}</span>}
                   </div>
                 </div>
               </div>
             );
           })}
-          {filteredLogs.length === 0 && <div className="text-center text-slate-400 text-sm py-6">No activity in this period</div>}
+          {filteredLogs.length === 0 && <div className="text-center text-slate-400 text-sm py-6">No activity</div>}
         </div>
       </div>
     </div>)}
@@ -141,30 +250,28 @@ export default function AdminTab({ user, users }) {
         <div className="bg-white rounded-lg p-3" style={{borderLeftWidth:3,borderLeftColor:'#8b5cf6'}}><div className="text-[10px] text-slate-500">Total</div><div className="text-lg font-extrabold">{filteredTickets.length}</div></div>
       </div>
       <div className="bg-white rounded-xl p-4">
-        <h3 className="text-sm font-bold mb-3">{selUserName} — Tickets ({filteredTickets.filter(t=>t.status!=='Closed').length} open)</h3>
+        <h3 className="text-sm font-bold mb-3">{selUserName} — Tickets</h3>
         <div className="overflow-auto max-h-[500px] rounded-lg border border-slate-200">
           <table className="w-full border-collapse text-xs">
             <thead className="sticky top-0"><tr className="bg-slate-50">
+              <th className="px-2 py-2 text-[10px] text-left">#</th>
               <th className="px-2 py-2 text-[10px] text-left">Title</th>
               <th className="px-2 py-2 text-[10px]">Status</th>
               <th className="px-2 py-2 text-[10px]">Priority</th>
-              <th className="px-2 py-2 text-[10px] text-left">Created By</th>
-              <th className="px-2 py-2 text-[10px] text-left">Assigned To</th>
+              <th className="px-2 py-2 text-[10px] text-left">Assigned</th>
               <th className="px-2 py-2 text-[10px]">Due</th>
-              <th className="px-2 py-2 text-[10px]">Created</th>
             </tr></thead>
             <tbody>
               {filteredTickets.filter(t=>t.status!=='Closed').concat(filteredTickets.filter(t=>t.status==='Closed').slice(0,20)).map(t => {
-                const isOverdue = t.due_date && t.due_date < todayStr && t.status !== 'Closed';
+                var isOverdue = t.due_date && t.due_date < todayStr && t.status !== 'Closed';
                 return (
                   <tr key={t.id} className={'border-b border-slate-50 ' + (isOverdue ? 'bg-red-50' : t.status === 'Closed' ? 'opacity-50' : '')}>
+                    <td className="px-2 py-2 text-blue-500 font-mono text-[10px]">{t.ticket_number || '—'}</td>
                     <td className="px-2 py-2 font-semibold max-w-[200px] truncate">{t.title}</td>
                     <td className="px-2 py-2 text-center"><span className="px-2 py-0.5 rounded-full text-[9px] font-bold text-white" style={{background:STATUS_COLORS[t.status]||'#6b7280'}}>{t.status}</span></td>
                     <td className="px-2 py-2 text-center"><span className={'font-bold ' + (t.priority==='high'?'text-red-500':t.priority==='low'?'text-green-500':'text-amber-500')}>{t.priority}</span></td>
-                    <td className="px-2 py-2 text-blue-600">{getUserName(t.created_by)}</td>
                     <td className="px-2 py-2"><span className={t.assigned_to ? 'text-purple-600 font-semibold' : 'text-red-400'}>{t.assigned_to ? getUserName(t.assigned_to) : 'UNASSIGNED'}</span></td>
                     <td className={'px-2 py-2 text-center ' + (isOverdue ? 'text-red-600 font-bold' : '')}>{t.due_date || '—'}</td>
-                    <td className="px-2 py-2 text-slate-400">{t.created_at ? new Date(t.created_at).toLocaleDateString() : ''}</td>
                   </tr>
                 );
               })}
@@ -174,72 +281,35 @@ export default function AdminTab({ user, users }) {
       </div>
     </div>)}
 
-    {/* ===== SCORECARDS ===== */}
-    {section === 'scorecards' && (<div>
-      <div className="grid grid-cols-2 md:grid-cols-3 gap-3">
-        {scorecards.map(u => (
-          <div key={u.id} onClick={() => setSelUser(selUser === u.id ? 'all' : u.id)}
-            className={'bg-white rounded-xl p-4 cursor-pointer border-2 transition hover:shadow-md ' + (selUser === u.id ? 'border-blue-500 shadow-md' : 'border-slate-200')}>
-            <div className="flex justify-between items-start mb-2">
-              <div>
-                <div className="text-sm font-extrabold">{u.name}</div>
-                <div className="text-[10px]">
-                  <span className={'font-semibold ' + (u.role === 'super_admin' ? 'text-red-500' : u.role === 'admin' ? 'text-purple-500' : 'text-blue-500')}>
-                    {u.role === 'super_admin' ? '🔴 Super Admin' : u.role === 'admin' ? '🟣 Admin' : '🔵 Team'}
-                  </span>
-                </div>
-              </div>
-              <div className="text-right">
-                <div className="text-2xl font-extrabold">{u.totalActivities}</div>
-                <div className="text-[9px] text-slate-400">total actions</div>
-              </div>
-            </div>
-            <div className="grid grid-cols-3 gap-1 text-center mt-2">
-              <div className="bg-blue-50 rounded p-1.5"><div className="text-sm font-bold text-blue-600">{u.openT}</div><div className="text-[8px] text-slate-500">Open</div></div>
-              <div className="bg-red-50 rounded p-1.5"><div className="text-sm font-bold text-red-500">{u.overdueT}</div><div className="text-[8px] text-slate-500">Overdue</div></div>
-              <div className="bg-green-50 rounded p-1.5"><div className="text-sm font-bold text-emerald-600">{u.closedT}</div><div className="text-[8px] text-slate-500">Closed</div></div>
-            </div>
-            <div className="flex gap-3 mt-2 text-[10px] border-t border-slate-100 pt-2">
-              <span className="text-amber-600">⚡ {u.autoCount} auto</span>
-              <span className="text-blue-600">✏️ {u.manualCount} manual</span>
-              <span className="text-slate-500">📅 {u.uniqueDays}d active</span>
-              <span className="text-purple-500">✨ {u.createdT} created</span>
-            </div>
-          </div>
-        ))}
-      </div>
-    </div>)}
-
     {/* ===== AUDIT LOG ===== */}
     {section === 'audit' && (<div>
       <div className="bg-white rounded-xl p-4">
-        <h3 className="text-sm font-bold mb-3">{selUserName} — Audit Log ({filteredAudit.length} changes)</h3>
-        <p className="text-[10px] text-slate-400 mb-3">Every database change — create, update, delete — with before/after values</p>
+        <h3 className="text-sm font-bold mb-3">{selUserName} — Audit Log ({filteredAudit.length})</h3>
         <div className="space-y-1 max-h-[600px] overflow-auto">
           {filteredAudit.map(a => {
-            const userName = getUserName(a.changed_by);
-            const actionColors = { create: 'text-emerald-600', update: 'text-blue-600', delete: 'text-red-600' };
-            const actionIcons = { create: '✨', update: '✏️', delete: '🗑️' };
+            var userName = getUserName(a.changed_by);
+            var actionColors = { create: 'text-emerald-600', update: 'text-blue-600', delete: 'text-red-600' };
+            var actionIcons = { create: '✨', update: '✏️', delete: '🗑️' };
             return (
               <div key={a.id} className="py-2 border-b border-slate-50">
                 <div className="flex items-center gap-2 text-xs">
                   <span>{actionIcons[a.action] || '📋'}</span>
-                  <span className={'font-bold ' + (actionColors[a.action] || '')}>{a.action?.toUpperCase()}</span>
+                  <span className={'font-bold ' + (actionColors[a.action] || '')}>{(a.action||'').toUpperCase()}</span>
                   <span className="text-slate-500">{a.table_name}</span>
                   <span className="text-blue-500 font-semibold ml-auto">{userName}</span>
                   <span className="text-slate-400">{a.created_at ? new Date(a.created_at).toLocaleString() : ''}</span>
                 </div>
                 {a.new_values && (
                   <div className="text-[10px] text-slate-500 mt-1 bg-slate-50 rounded p-1.5 max-h-[60px] overflow-auto">
-                    {typeof a.new_values === 'object' ? Object.entries(a.new_values).slice(0, 5).map(([k, v]) => (
-                      <span key={k} className="mr-2"><span className="text-slate-400">{k}:</span> <span className="font-semibold">{String(v).substring(0, 50)}</span></span>
-                    )) : String(a.new_values).substring(0, 200)}
+                    {typeof a.new_values === 'object' ? Object.entries(a.new_values).slice(0, 5).map(function(entry) {
+                      return <span key={entry[0]} className="mr-2"><span className="text-slate-400">{entry[0]}:</span> <span className="font-semibold">{String(entry[1]).substring(0, 50)}</span></span>;
+                    }) : String(a.new_values).substring(0, 200)}
                   </div>
                 )}
               </div>
             );
           })}
-          {filteredAudit.length === 0 && <div className="text-center text-slate-400 text-sm py-6">No audit entries{selUser !== 'all' ? ' for this user' : ''}</div>}
+          {filteredAudit.length === 0 && <div className="text-center text-slate-400 text-sm py-6">No audit entries</div>}
         </div>
       </div>
     </div>)}

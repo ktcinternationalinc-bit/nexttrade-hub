@@ -3113,7 +3113,7 @@ export default function App() {
             TICKETS TAB
         ========================================== */}
         {tab === 'tickets' && (
-          <TicketsTab customers={customers} user={user} userProfile={userProfile} users={teamUsers} onReload={loadAllData} lang={lang} />
+          <TicketsTab customers={customers} user={user} userProfile={userProfile} users={teamUsers} onReload={loadAllData} lang={lang} isAdmin={isAdmin} />
         )}
 
         {/* ==========================================
@@ -3134,28 +3134,28 @@ export default function App() {
             SHIPPING RATES TAB
         ========================================== */}
         {tab === 'shipping' && (
-          <ShippingRatesTab user={user} isAdmin={isAdmin} customers={customers} />
+          <ShippingRatesTab user={user} userProfile={userProfile} isAdmin={isAdmin} customers={customers} />
         )}
 
         {/* ==========================================
             DAILY LOG TAB
         ========================================== */}
         {tab === 'dailylog' && (
-          <DailyLogTab user={user} users={teamUsers} isAdmin={isAdmin} />
+          <DailyLogTab user={user} userProfile={userProfile} users={teamUsers} isAdmin={isAdmin} />
         )}
 
         {/* ==========================================
             ADMIN TAB
         ========================================== */}
         {tab === 'admin' && (
-          <AdminTab user={user} users={teamUsers} />
+          <AdminTab user={user} userProfile={userProfile} users={teamUsers} isAdmin={isAdmin} />
         )}
 
         {/* ==========================================
             AI ASSISTANT TAB
         ========================================== */}
         {tab === 'ai' && (
-          <AIAssistant user={user} />
+          <AIAssistant user={user} userProfile={userProfile} />
         )}
 
         {tab === 'comms' && (

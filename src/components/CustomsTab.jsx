@@ -34,7 +34,7 @@ export default function CustomsTab({ customers, user }) {
         order_number: shipForm.orderNumber || '', notes: shipForm.notes || '',
         eta: shipForm.eta || null,
       }, user?.id);
-      await logActivity(user?.id, 'Created shipment: ' + shipForm.origin + ' → ' + shipForm.destination);
+      await logActivity(user?.id, 'Created shipment: ' + shipForm.origin + ' → ' + shipForm.destination, 'customs');
       setShowAddShipment(false); setShipForm({}); loadShipments();
     } catch(err) { alert('Error: ' + err.message); }
   };
@@ -113,7 +113,7 @@ export default function CustomsTab({ customers, user }) {
               <button key={s} onClick={async()=>{
                 try {
                   await dbUpdate('shipments', selShipment.id, {status:s}, user?.id);
-                  await logActivity(user?.id, 'Shipment status → ' + s + ': ' + selShipment.origin + ' → ' + selShipment.destination);
+                  await logActivity(user?.id, 'Shipment status → ' + s + ': ' + selShipment.origin + ' → ' + selShipment.destination, 'customs');
                   setSelShipment({...selShipment, status:s}); loadShipments();
                 } catch(err){ alert('Error: '+err.message); }
               }} className="px-2 py-0.5 rounded text-[10px] font-semibold border hover:shadow" style={{borderColor:STATUS_COLORS_SHIP[s],color:STATUS_COLORS_SHIP[s]}}>{s}</button>

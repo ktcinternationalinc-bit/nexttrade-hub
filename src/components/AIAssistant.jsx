@@ -1,7 +1,8 @@
 'use client';
 import { useState, useRef, useEffect, useCallback } from 'react';
 
-export default function AIAssistant({ user }) {
+export default function AIAssistant({ user, userProfile }) {
+  const myId = userProfile?.id || user?.id;
   const [messages, setMessages] = useState([]);
   const [input, setInput] = useState('');
   const [loading, setLoading] = useState(false);
@@ -101,7 +102,7 @@ export default function AIAssistant({ user }) {
         } else {
           setLoading(true);
           try {
-            const res = await fetch('/api/ask', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ action: pendingAction, userId: user?.id }) });
+            const res = await fetch('/api/ask', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ action: pendingAction, userId: myId }) });
             const data = await res.json();
             setMessages(prev => [...prev, { role: 'ai', text: data.answer || 'Done.' }]);
             speak(data.answer || 'Done');
@@ -135,7 +136,7 @@ export default function AIAssistant({ user }) {
         body: JSON.stringify({
           question,
           history: [...messages, newMsg].slice(-10),
-          userId: user?.id,
+          userId: myId,
         }),
       });
       const data = await res.json();
@@ -161,7 +162,7 @@ export default function AIAssistant({ user }) {
       const res = await fetch('/api/ask', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ action: pendingAction, userId: user?.id }),
+        body: JSON.stringify({ action: pendingAction, userId: myId }),
       });
       const data = await res.json();
       setMessages(prev => [...prev, { role: 'ai', text: data.answer || 'Action completed.' }]);

@@ -61,13 +61,13 @@ export async function dbDelete(table, id, userId) {
 }
 
 // Activity logger — auto-captures all user actions to daily_log
-export async function logActivity(userId, text) {
+export async function logActivity(userId, text, category) {
   if (!userId) return;
   try {
     const today = new Date().toISOString().substring(0, 10);
-    await supabase.from('daily_log').insert({
-      user_id: userId, entry_text: text, auto_generated: true, log_date: today,
-    });
+    var record = { user_id: userId, entry_text: text, auto_generated: true, log_date: today };
+    if (category) record.log_category = category;
+    await supabase.from('daily_log').insert(record);
   } catch(e) { console.log('Log error:', e); }
 }
 

@@ -101,7 +101,7 @@ export default function CRMTab({ customers, invoices, user, users, onReload, isA
         notes: notes || '', contacted_by: user?.id,
         contacted_at: new Date().toISOString(),
       }, user?.id);
-      await logActivity(user?.id, type + ' contact with: ' + sel.name + (notes ? ' — ' + notes : ''));
+      await logActivity(user?.id, type + ' contact with: ' + sel.name + (notes ? ' — ' + notes : ''), 'crm');
       loadClientData(sel);
     } catch(err) { console.log('Contact log error:', err); }
   };
@@ -186,7 +186,7 @@ export default function CRMTab({ customers, invoices, user, users, onReload, isA
         industry: f.industry || '', lead_source: f.leadSource || '',
         credit_limit: f.creditLimit ? Number(f.creditLimit) : null, status: 'active',
       }, user?.id);
-      await logActivity(user?.id, 'Created client: ' + f.name);
+      await logActivity(user?.id, 'Created client: ' + f.name, 'crm');
       setShowAdd(false); setF({}); onReload(); loadAllNotes();
     } catch (err) { alert('Error / خطأ: ' + err.message); }
   };
@@ -201,7 +201,7 @@ export default function CRMTab({ customers, invoices, user, users, onReload, isA
         lead_source: f.leadSource || sel.lead_source,
         assigned_rep: f.assignedRep !== undefined ? (f.assignedRep || null) : sel.assigned_rep,
       }, user?.id);
-      await logActivity(user?.id, 'Edited client: ' + (f.name || sel.name));
+      await logActivity(user?.id, 'Edited client: ' + (f.name || sel.name), 'crm');
       setEditingClient(false); setF({}); onReload();
       loadClientData({...sel, name: f.name || sel.name});
     } catch (err) { alert('Error / خطأ: ' + err.message); }
@@ -211,7 +211,7 @@ export default function CRMTab({ customers, invoices, user, users, onReload, isA
     if (!f.noteText || !sel) return;
     try {
       await dbInsert('client_notes', { customer_id: sel.id, note_text: f.noteText }, user?.id);
-      await logActivity(user?.id, 'Added note to client: ' + sel.name);
+      await logActivity(user?.id, 'Added note to client: ' + sel.name, 'crm');
       setShowNote(false); setF({}); loadClientData(sel); loadAllNotes();
     } catch (err) { alert('Error / خطأ: ' + err.message); }
   };
@@ -238,7 +238,7 @@ export default function CRMTab({ customers, invoices, user, users, onReload, isA
           event_type: 'call', customer_id: sel.id, assigned_to: user?.id,
         }, user?.id);
       }
-      await logActivity(user?.id, 'Created follow-up for ' + sel.name + ': ' + f.task);
+      await logActivity(user?.id, 'Created follow-up for ' + sel.name + ': ' + f.task, 'crm');
       setShowFollowUp(false); setF({}); loadClientData(sel);
     } catch (err) { alert('Error / خطأ: ' + err.message); }
   };
@@ -246,7 +246,7 @@ export default function CRMTab({ customers, invoices, user, users, onReload, isA
   const completeFollowUp = async (id) => {
     try {
       await dbUpdate('follow_ups', id, { completed: true, completed_at: new Date().toISOString() }, user?.id);
-      await logActivity(user?.id, 'Completed follow-up for ' + sel.name);
+      await logActivity(user?.id, 'Completed follow-up for ' + sel.name, 'crm');
       loadClientData(sel);
     } catch (err) { alert('Error / خطأ: ' + err.message); }
   };

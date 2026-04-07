@@ -143,10 +143,12 @@ export async function POST(request) {
     if (action) {
       try {
         if (action.type === 'create_ticket') {
-          var result = await supabase.from('tickets').insert({ title: action.title, description: action.description || '', priority: action.priority || 'medium', status: 'New', assigned_to: action.assigned_to || null, due_date: action.due_date || null, created_by: userId || null }).select().single();
+          var tktCount = await supabase.from('tickets').select('*', { count: 'exact', head: true });
+          var tktNum = 'TKT-' + String(((tktCount.count || 0) + 1)).padStart(4, '0');
+          var result = await supabase.from('tickets').insert({ ticket_number: tktNum, title: action.title, description: action.description || '', priority: action.priority || 'medium', status: 'New', assigned_to: action.assigned_to || null, due_date: action.due_date || null, created_by: userId || null }).select().single();
           if (result.error) throw result.error;
-          if (userId) { await supabase.from('daily_log').insert({ user_id: userId, entry_text: 'AI created ticket: ' + action.title, auto_generated: true, log_date: new Date().toISOString().substring(0, 10) }); }
-          return Response.json({ answer: 'Ticket created: ' + action.title + '\nPriority: ' + action.priority + (action.due_date ? '\nDue: ' + action.due_date : ''), action_result: 'success' });
+          if (userId) { await supabase.from('daily_log').insert({ user_id: userId, entry_text: 'AI created ' + tktNum + ': ' + action.title, auto_generated: true, log_date: new Date().toISOString().substring(0, 10), log_category: 'ticket' }); }
+          return Response.json({ answer: tktNum + ' created: ' + action.title + '\nPriority: ' + action.priority + (action.due_date ? '\nDue: ' + action.due_date : ''), action_result: 'success' });
         }
         if (action.type === 'create_event') {
           var evResult = await supabase.from('calendar_events').insert({ title: action.title, event_date: action.event_date, event_time: action.event_time || '09:00', event_type: action.event_type || 'meeting', notes: action.notes || '', created_by: userId || null });
@@ -191,7 +193,7 @@ export async function POST(request) {
       safe(supabase.from('invoices').select('order_number, customer_name, invoice_date, total_amount, total_collected, outstanding, sales_rep').order('invoice_date', { ascending: false }).limit(500)),
       safe(supabase.from('treasury').select('transaction_date, description, cash_in, cash_out, order_number, category, subcategory').order('transaction_date', { ascending: false }).limit(500)),
       safe(supabase.from('customers').select('name, name_en, group_name, industry, city, credit_limit, status, important, assigned_rep, phone, email, whatsapp_number').limit(200)),
-      safe(supabase.from('tickets').select('title, status, priority, due_date, assigned_to, created_at, description').order('created_at', { ascending: false }).limit(100)),
+      safe(supabase.from('tickets').select('ticket_number, title, status, priority, due_date, assigned_to, created_at, description').order('created_at', { ascending: false }).limit(100)),
       safe(supabase.from('debts').select('debtor_name, total_debt').limit(100)),
       safe(supabase.from('shipping_rates').select('origin, destination, vendor_name, shipping_line, rate_type, rate_amount, currency, transit_days, expiry_date, container_type').order('effective_date', { ascending: false }).limit(200)),
       safe(supabase.from('follow_ups').select('task, due_date, completed, customer_id, assigned_to').order('due_date', { ascending: true }).limit(100)),
@@ -231,6 +233,14 @@ export async function POST(request) {
     var users = [];
     try { var ur = await supabase.from('users').select('id, name, role'); users = ur.data || []; } catch(e) {}
 
+    // Identify current user
+    var currentUserName = 'Unknown';
+    var currentUserId = userId || '';
+    if (userId && users.length > 0) {
+      var found = users.find(function(u) { return u.id === userId; });
+      if (found) currentUserName = found.name;
+    }
+
     var gmailConnected = false;
     var gmailEmail = '';
     try { var ea = await supabase.from('email_accounts').select('email_address').eq('is_active', true).limit(1).maybeSingle(); if (ea.data) { gmailConnected = true; gmailEmail = ea.data.email_address; } } catch(e) {}
@@ -238,7 +248,9 @@ export async function POST(request) {
 
     // BUILD CONTEXT
     var context = 'You are the AI Executive Assistant for KTC International (Kandil Trading Company), an Egyptian trading company.\n\n';
-    context += 'TODAY: ' + today + '\n\n';
+    context += 'TODAY: ' + today + '\n';
+    context += 'CURRENT USER: ' + currentUserName + ' (ID: ' + currentUserId + ')\n';
+    context += 'When the user says "my tickets" or "assigned to me", match assigned_to against ID: ' + currentUserId + '\n\n';
     context += 'CAPABILITIES:\n';
     context += '1. Answer business questions with real data\n';
     context += '2. Execute commands (tickets, meetings, reminders, rate requests)\n';
@@ -298,7 +310,9 @@ export async function POST(request) {
 
     context += '\nTICKETS (' + tickets.length + ', ' + openTickets + ' open):\n';
     tickets.slice(0, 25).forEach(function(t) {
-      context += '- [' + t.status + '/' + t.priority + '] ' + t.title + (t.due_date ? ' (due: ' + t.due_date + ')' : '') + '\n';
+      var assignedName = '';
+      if (t.assigned_to) { var u = users.find(function(x) { return x.id === t.assigned_to; }); assignedName = u ? u.name : t.assigned_to; }
+      context += '- ' + (t.ticket_number || '') + ' [' + t.status + '/' + t.priority + '] ' + t.title + (assignedName ? ' (assigned: ' + assignedName + ')' : ' (unassigned)') + (t.due_date ? ' (due: ' + t.due_date + ')' : '') + '\n';
     });
 
     context += '\nSHIPPING RATES:\n';
