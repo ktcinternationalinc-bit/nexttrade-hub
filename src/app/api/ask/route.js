@@ -304,8 +304,9 @@ export async function POST(request) {
     });
 
     context += '\nCUSTOMERS (' + customers.length + '):\n';
-    customers.slice(0, 60).forEach(function(c) {
-      context += '- ' + (c.name_en || c.name) + ' | ' + (c.industry || '') + ' | ' + (c.group_name || '') + (c.important ? ' IMPORTANT' : '') + (c.phone ? ' | Ph:' + c.phone : '') + (c.email ? ' | Em:' + c.email : '') + (c.whatsapp_number ? ' | WA:' + c.whatsapp_number : '') + '\n';
+    customers.forEach(function(c) {
+      var names = (c.name_en || c.name || '') + (c.name_en && c.name && c.name_en !== c.name ? ' / ' + c.name : '');
+      context += '- ' + names + ' | ' + (c.industry || '') + ' | ' + (c.group_name || '') + (c.important ? ' IMPORTANT' : '') + (c.phone ? ' | Ph:' + c.phone : '') + (c.email ? ' | Em:' + c.email : '') + (c.whatsapp_number ? ' | WA:' + c.whatsapp_number : '') + '\n';
     });
 
     context += '\nTICKETS (' + tickets.length + ', ' + openTickets + ' open):\n';

@@ -99,30 +99,61 @@ export default function SettingsTab({ user, users, onReload, isAdmin }) {
     } catch (err) { console.error(err); }
   };
 
+  const [addLoading, setAddLoading] = useState(false);
+  const [addError, setAddError] = useState('');
+  const [addSuccess, setAddSuccess] = useState('');
+  const [editingUser, setEditingUser] = useState(null);
+  const [selectedModules, setSelectedModules] = useState([]);
+
   const handleAddMember = async () => {
-    if (!f.name || !f.email) return;
+    if (!f.name || !f.email || !f.password) { setAddError('Name, email, and password are required'); return; }
+    if (f.password.length < 6) { setAddError('Password must be at least 6 characters'); return; }
+    setAddLoading(true); setAddError(''); setAddSuccess('');
     try {
-      await dbInsert('users', {
-        name: f.name, name_ar: f.nameAr || '', email: f.email,
-        role: f.role || 'team', reports_to: f.reportsTo || null,
-      }, user?.id);
-      setShowAddMember(false); setF({});
-      onReload();
+      var res = await fetch('/api/users', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          name: f.name, name_ar: f.nameAr || '', email: f.email,
+          password: f.password, role: f.role || 'team',
+          reports_to: f.reportsTo || null, phone: f.phone || '',
+          modules: selectedModules
+        })
+      });
+      var data = await res.json();
+      if (data.error) { setAddError(data.error); }
+      else if (data.warning) { setAddError(data.warning); }
+      else { setAddSuccess(f.name + ' added successfully! They can now log in with ' + f.email); setShowAddMember(false); setF({}); setSelectedModules([]); onReload(); }
+    } catch (err) { setAddError('Error: ' + err.message); }
+    setAddLoading(false);
+  };
+
+  const handleUpdateUser = async (userId, updates) => {
+    try {
+      var res = await fetch('/api/users', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ id: userId, ...updates })
+      });
+      var data = await res.json();
+      if (data.error) alert('Error: ' + data.error);
+      else onReload();
     } catch (err) { alert('Error: ' + err.message); }
   };
 
-  const updateRole = async (userId, newRole) => {
+  const handleDeactivateUser = async (userId, userName) => {
+    if (!confirm('Deactivate ' + userName + '? They will no longer be able to log in.')) return;
     try {
-      await dbUpdate('users', userId, { role: newRole }, user?.id);
-      onReload();
+      var res = await fetch('/api/users?id=' + userId, { method: 'DELETE' });
+      var data = await res.json();
+      if (data.error) alert('Error: ' + data.error);
+      else onReload();
     } catch (err) { alert('Error: ' + err.message); }
   };
 
-  const updateReportsTo = async (userId, reportsToId) => {
-    try {
-      await dbUpdate('users', userId, { reports_to: reportsToId || null }, user?.id);
-      onReload();
-    } catch (err) { alert('Error: ' + err.message); }
+  const toggleModule = (mod) => {
+    if (selectedModules.includes(mod)) setSelectedModules(selectedModules.filter(function(m) { return m !== mod; }));
+    else setSelectedModules([...selectedModules, mod]);
   };
 
   const nonSuperUsers = (users || []).filter(u => u.role !== 'super_admin');
@@ -155,24 +186,31 @@ export default function SettingsTab({ user, users, onReload, isAdmin }) {
           </div>
 
           {/* Add Member */}
-          <button onClick={() => { setShowAddMember(true); setF({}); }}
-            className="px-4 py-2 bg-blue-500 text-white rounded-lg text-xs font-semibold mb-3">+ Add Member / إضافة عضو</button>
+          <button onClick={() => { setShowAddMember(true); setF({}); setSelectedModules(['Dashboard','Tickets','Calendar','CRM','Daily Log']); setAddError(''); setAddSuccess(''); }}
+            className="px-4 py-2 bg-blue-500 text-white rounded-lg text-xs font-semibold mb-3">+ Add Team Member / إضافة عضو</button>
+
+          {addSuccess && <div className="bg-emerald-50 border border-emerald-200 rounded-lg px-3 py-2 mb-3 text-xs text-emerald-700 font-semibold">✅ {addSuccess}</div>}
 
           {showAddMember && (
             <div className="bg-blue-50 rounded-xl p-4 mb-3 border border-blue-200">
-              <h3 className="text-sm font-bold text-blue-800 mb-3">New Team Member</h3>
+              <h3 className="text-sm font-bold text-blue-800 mb-3">New Team Member / عضو جديد</h3>
+              {addError && <div className="bg-red-50 border border-red-200 rounded-lg px-3 py-2 mb-3 text-xs text-red-700">{addError}</div>}
               <div className="grid grid-cols-2 gap-3">
-                <div><label className="text-[10px] font-semibold">Name</label>
-                  <input value={f.name || ''} onChange={e => setF({ ...f, name: e.target.value })} className="w-full px-3 py-2 rounded border text-sm" /></div>
+                <div><label className="text-[10px] font-semibold">Name *</label>
+                  <input value={f.name || ''} onChange={e => setF({ ...f, name: e.target.value })} className="w-full px-3 py-2 rounded border text-sm" placeholder="Full name" /></div>
                 <div><label className="text-[10px] font-semibold">Name (Arabic)</label>
-                  <input value={f.nameAr || ''} onChange={e => setF({ ...f, nameAr: e.target.value })} className="w-full px-3 py-2 rounded border text-sm" style={{ direction: 'rtl' }} /></div>
-                <div><label className="text-[10px] font-semibold">Email</label>
-                  <input type="email" value={f.email || ''} onChange={e => setF({ ...f, email: e.target.value })} className="w-full px-3 py-2 rounded border text-sm" /></div>
+                  <input value={f.nameAr || ''} onChange={e => setF({ ...f, nameAr: e.target.value })} className="w-full px-3 py-2 rounded border text-sm" style={{ direction: 'rtl' }} placeholder="الاسم بالعربي" /></div>
+                <div><label className="text-[10px] font-semibold">Email *</label>
+                  <input type="email" value={f.email || ''} onChange={e => setF({ ...f, email: e.target.value })} className="w-full px-3 py-2 rounded border text-sm" placeholder="name@company.com" /></div>
+                <div><label className="text-[10px] font-semibold">Password * <span className="text-slate-400">(min 6 chars)</span></label>
+                  <input type="text" value={f.password || ''} onChange={e => setF({ ...f, password: e.target.value })} className="w-full px-3 py-2 rounded border text-sm" placeholder="Temp password" /></div>
+                <div><label className="text-[10px] font-semibold">Phone</label>
+                  <input value={f.phone || ''} onChange={e => setF({ ...f, phone: e.target.value })} className="w-full px-3 py-2 rounded border text-sm" placeholder="+20..." /></div>
                 <div><label className="text-[10px] font-semibold">Role</label>
                   <select value={f.role || 'team'} onChange={e => setF({ ...f, role: e.target.value })} className="w-full px-3 py-2 rounded border text-sm">
                     {ROLES.map(r => <option key={r.v} value={r.v}>{r.l}</option>)}
                   </select></div>
-                <div><label className="text-[10px] font-semibold">Reports To</label>
+                <div><label className="text-[10px] font-semibold">Reports To / المدير</label>
                   <select value={f.reportsTo || ''} onChange={e => setF({ ...f, reportsTo: e.target.value })} className="w-full px-3 py-2 rounded border text-sm">
                     <option value="">None (Top Level)</option>
                     {(users || []).filter(u => u.role === 'super_admin' || u.role === 'admin').map(u => (
@@ -180,10 +218,29 @@ export default function SettingsTab({ user, users, onReload, isAdmin }) {
                     ))}
                   </select></div>
               </div>
-              <div className="flex gap-2 mt-3">
-                <button onClick={handleAddMember} className="px-4 py-2 bg-emerald-500 text-white rounded-lg text-sm font-semibold">Save / حفظ</button>
-                <button onClick={() => setShowAddMember(false)} className="px-4 py-2 border border-slate-200 rounded-lg text-sm">Cancel</button>
+              <div className="mt-3">
+                <label className="text-[10px] font-semibold mb-1 block">Module Access / الصلاحيات</label>
+                <div className="flex gap-2 flex-wrap">
+                  {MODULES.map(mod => (
+                    <label key={mod} className={'flex items-center gap-1 px-2 py-1 rounded border text-[10px] cursor-pointer ' + (selectedModules.includes(mod) ? 'bg-blue-100 border-blue-300 text-blue-700 font-bold' : 'bg-white border-slate-200 text-slate-500')}>
+                      <input type="checkbox" checked={selectedModules.includes(mod)} onChange={() => toggleModule(mod)} className="w-3 h-3" />
+                      {mod}
+                    </label>
+                  ))}
+                </div>
+                <div className="flex gap-1 mt-1">
+                  <button onClick={() => setSelectedModules([...MODULES])} className="text-[9px] text-blue-500 hover:underline">Select All</button>
+                  <button onClick={() => setSelectedModules([])} className="text-[9px] text-slate-400 hover:underline">Clear</button>
+                </div>
               </div>
+              <div className="flex gap-2 mt-3">
+                <button onClick={handleAddMember} disabled={addLoading}
+                  className="px-4 py-2 bg-emerald-500 text-white rounded-lg text-sm font-semibold disabled:opacity-50">
+                  {addLoading ? 'Creating...' : '✅ Create Account & Add / إنشاء حساب'}
+                </button>
+                <button onClick={() => { setShowAddMember(false); setAddError(''); }} className="px-4 py-2 border border-slate-200 rounded-lg text-sm">Cancel</button>
+              </div>
+              <div className="text-[9px] text-slate-400 mt-2">This creates a login account + sets their role and permissions. They can sign in immediately.</div>
             </div>
           )}
 
@@ -193,21 +250,22 @@ export default function SettingsTab({ user, users, onReload, isAdmin }) {
               const roleInfo = ROLES.find(r => r.v === u.role) || ROLES[2];
               const reportsToUser = users?.find(m => m.id === u.reports_to);
               return (
-                <div key={u.id} className="bg-white rounded-xl p-4 border border-slate-200">
+                <div key={u.id} className={'bg-white rounded-xl p-4 border ' + (u.active === false ? 'opacity-50 border-red-200' : 'border-slate-200')}>
                   <div className="flex justify-between items-start">
                     <div>
-                      <div className="text-sm font-bold">{u.name}</div>
+                      <div className="text-sm font-bold">{u.name} {u.active === false && <span className="text-red-500 text-[10px]">(Deactivated)</span>}</div>
                       {u.name_ar && <div className="text-xs text-slate-500" style={{ direction: 'rtl' }}>{u.name_ar}</div>}
                       <div className="text-xs text-slate-400">{u.email}</div>
+                      {u.phone && <div className="text-[10px] text-slate-400">📱 {u.phone}</div>}
                     </div>
                     <span className={'text-xs font-bold ' + roleInfo.c}>{roleInfo.l}</span>
                   </div>
                   <div className="flex gap-2 mt-2 flex-wrap items-center">
-                    <select value={u.role} onChange={e => updateRole(u.id, e.target.value)}
+                    <select value={u.role} onChange={e => handleUpdateUser(u.id, { role: e.target.value })}
                       className="px-2 py-1 rounded border border-slate-200 text-[10px]">
                       {ROLES.map(r => <option key={r.v} value={r.v}>{r.l}</option>)}
                     </select>
-                    <select value={u.reports_to || ''} onChange={e => updateReportsTo(u.id, e.target.value)}
+                    <select value={u.reports_to || ''} onChange={e => handleUpdateUser(u.id, { reports_to: e.target.value || null })}
                       className="px-2 py-1 rounded border border-slate-200 text-[10px]">
                       <option value="">Reports to: None</option>
                       {(users || []).filter(m => m.id !== u.id).map(m => (
@@ -215,6 +273,13 @@ export default function SettingsTab({ user, users, onReload, isAdmin }) {
                       ))}
                     </select>
                     {reportsToUser && <span className="text-[10px] text-slate-400">→ {reportsToUser.name}</span>}
+                    <button onClick={() => {
+                      var pw = prompt('New password for ' + u.name + ' (min 6 chars):');
+                      if (pw && pw.length >= 6) handleUpdateUser(u.id, { new_password: pw });
+                      else if (pw) alert('Password must be at least 6 characters');
+                    }} className="px-2 py-1 rounded border border-amber-300 text-amber-600 text-[10px] font-semibold">🔑 Reset Password</button>
+                    {u.active !== false && <button onClick={() => handleDeactivateUser(u.id, u.name)}
+                      className="px-2 py-1 rounded border border-red-300 text-red-500 text-[10px] font-semibold">Deactivate</button>}
                   </div>
                 </div>
               );
