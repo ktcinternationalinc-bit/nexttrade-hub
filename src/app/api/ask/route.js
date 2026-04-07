@@ -6,7 +6,18 @@ const supabase = createClient(
 );
 
 export async function GET() {
-  return Response.json({ status: 'working', has_anthropic: !!process.env.ANTHROPIC_API_KEY });
+  // Quick diagnostic — hit /api/ask in browser to check
+  const hasServiceKey = !!process.env.SUPABASE_SERVICE_ROLE_KEY;
+  let ticketCount = 0;
+  try { const { count } = await supabase.from('tickets').select('*', { count: 'exact', head: true }); ticketCount = count || 0; } catch(e) {}
+  return Response.json({ 
+    status: 'working', 
+    has_anthropic: !!process.env.ANTHROPIC_API_KEY,
+    has_service_key: hasServiceKey,
+    using_key: hasServiceKey ? 'service_role' : 'anon_key',
+    ticket_count: ticketCount,
+    note: !hasServiceKey ? 'WARNING: No SUPABASE_SERVICE_ROLE_KEY set — using anon key, RLS may block data' : 'OK',
+  });
 }
 
 export async function POST(request) {
@@ -27,7 +38,7 @@ export async function POST(request) {
         if (action.type === 'create_ticket') {
           const { data, error } = await supabase.from('tickets').insert({
             title: action.title, description: action.description || '',
-            priority: action.priority || 'medium', status: 'Open',
+            priority: action.priority || 'medium', status: 'New',
             assigned_to: action.assigned_to || null,
             due_date: action.due_date || null,
             created_by: userId || null,
@@ -64,25 +75,24 @@ export async function POST(request) {
 
     // ===== FETCH BUSINESS DATA =====
     let invoices = [], treasury = [], customers = [], tickets = [], debts = [], 
-        shippingRates = [], followUps = [], calendarEvents = [], inventory = [], dailyLog = [];
-    try {
-      const [inv, tres, cust, tix, dbt, ship, fu, cal, inv2, dl] = await Promise.all([
-        supabase.from('invoices').select('order_number, customer_name, invoice_date, total_amount, total_collected, outstanding, sales_rep').order('invoice_date', { ascending: false }).limit(500),
-        supabase.from('treasury').select('transaction_date, description, cash_in, cash_out, order_number, category, subcategory').order('transaction_date', { ascending: false }).limit(500),
-        supabase.from('customers').select('name, name_en, group_name, industry, city, credit_limit, status, important, assigned_rep, phone').limit(200),
-        supabase.from('tickets').select('title, status, priority, due_date, assigned_to, created_at, description').order('created_at', { ascending: false }).limit(100),
-        supabase.from('debts').select('debtor_name, total_debt').limit(100),
-        supabase.from('shipping_rates').select('origin, destination, vendor_name, shipping_line, rate_type, rate_amount, currency, transit_days, expiry_date, container_type').order('effective_date', { ascending: false }).limit(200).catch(() => ({ data: [] })),
-        supabase.from('follow_ups').select('task, due_date, completed, customer_id, assigned_to').order('due_date', { ascending: true }).limit(100).catch(() => ({ data: [] })),
-        supabase.from('calendar_events').select('title, event_date, event_time, event_type').order('event_date', { ascending: true }).limit(50).catch(() => ({ data: [] })),
-        supabase.from('inventory').select('product_id, reference_number, description, product_type, roll_count, net_weight, stock_status').limit(200).catch(() => ({ data: [] })),
-        supabase.from('daily_log').select('entry_text, log_date, auto_generated').order('created_at', { ascending: false }).limit(30).catch(() => ({ data: [] })),
-      ]);
-      invoices = inv.data || []; treasury = tres.data || []; customers = cust.data || [];
-      tickets = tix.data || []; debts = dbt.data || [];
-      shippingRates = ship.data || ship || []; followUps = fu.data || fu || [];
-      calendarEvents = cal.data || cal || []; inventory = inv2.data || inv2 || [];
-      dailyLog = dl.data || dl || [];
+        shippingRates = [], followUps = [], calendarEvents = [], inventory = [], dailyLog = [], vendorContacts = [];
+    
+    // Each query catches independently — one failing table won't kill all data
+    const safe = async (fn) => { try { const r = await fn; return r.data || []; } catch(e) { return []; } };
+    
+    [invoices, treasury, customers, tickets, debts, shippingRates, followUps, calendarEvents, inventory, dailyLog, vendorContacts] = await Promise.all([
+      safe(supabase.from('invoices').select('order_number, customer_name, invoice_date, total_amount, total_collected, outstanding, sales_rep').order('invoice_date', { ascending: false }).limit(500)),
+      safe(supabase.from('treasury').select('transaction_date, description, cash_in, cash_out, order_number, category, subcategory').order('transaction_date', { ascending: false }).limit(500)),
+      safe(supabase.from('customers').select('name, name_en, group_name, industry, city, credit_limit, status, important, assigned_rep, phone').limit(200)),
+      safe(supabase.from('tickets').select('title, status, priority, due_date, assigned_to, created_at, description').order('created_at', { ascending: false }).limit(100)),
+      safe(supabase.from('debts').select('debtor_name, total_debt').limit(100)),
+      safe(supabase.from('shipping_rates').select('origin, destination, vendor_name, shipping_line, rate_type, rate_amount, currency, transit_days, expiry_date, container_type').order('effective_date', { ascending: false }).limit(200)),
+      safe(supabase.from('follow_ups').select('task, due_date, completed, customer_id, assigned_to').order('due_date', { ascending: true }).limit(100)),
+      safe(supabase.from('calendar_events').select('title, event_date, event_time, event_type').order('event_date', { ascending: true }).limit(50)),
+      safe(supabase.from('inventory').select('product_id, reference_number, description, product_type, roll_count, net_weight, stock_status').limit(200)),
+      safe(supabase.from('daily_log').select('entry_text, log_date, auto_generated').order('created_at', { ascending: false }).limit(30)),
+      safe(supabase.from('vendor_contacts').select('*').eq('is_active', true).order('company_name')),
+    ]);
     } catch(e) { console.log('Data fetch error:', e); }
 
     // ===== COMPUTED SUMMARIES =====
@@ -91,8 +101,8 @@ export async function POST(request) {
     const totalOutstanding = invoices.reduce((a, i) => a + Number(i.outstanding || 0), 0);
     const totalCashIn = treasury.reduce((a, t) => a + Number(t.cash_in || 0), 0);
     const totalCashOut = treasury.reduce((a, t) => a + Number(t.cash_out || 0), 0);
-    const openTickets = tickets.filter(t => t.status !== 'Closed' && t.status !== 'Done').length;
-    const overdueTickets = tickets.filter(t => t.status !== 'Closed' && t.status !== 'Done' && t.due_date && t.due_date < new Date().toISOString().substring(0, 10)).length;
+    const openTickets = tickets.filter(t => t.status !== 'Closed').length;
+    const overdueTickets = tickets.filter(t => t.status !== 'Closed' && t.due_date && t.due_date < new Date().toISOString().substring(0, 10)).length;
     const pendingFollowUps = (Array.isArray(followUps) ? followUps : []).filter(f => !f.completed).length;
 
     // Top owing customers
@@ -125,7 +135,7 @@ YOUR CAPABILITIES:
 1. ANSWER any business question using the data below
 2. EXECUTE commands when the user asks you to create tickets, schedule meetings, or set reminders
 
-WHEN THE USER GIVES A COMMAND (create ticket, schedule meeting, set reminder, etc.):
+WHEN THE USER GIVES A COMMAND (create ticket, schedule meeting, set reminder, request rate quote, etc.):
 Respond with a JSON block wrapped in \`\`\`action tags like this:
 \`\`\`action
 {"type":"create_ticket","title":"Get shipping rates from Turkey","description":"Research current rates for 40ft containers","priority":"high","due_date":"${tomorrow}"}
@@ -138,6 +148,11 @@ OR for reminders:
 \`\`\`action
 {"type":"create_reminder","task":"Follow up with supplier","due_date":"${tomorrow}","due_time":"09:00"}
 \`\`\`
+OR for requesting rate quotes from vendors (IMPORTANT — use this when user says "request rate", "get quote", "send rate request", "ask for rates", etc.):
+\`\`\`action
+{"type":"request_quote","vendor_company":"Ontrek","vendor_contact":"John","vendor_email":"rates@ontrek.com","vendor_whatsapp":"+1234567890","vendor_type":"Shipping","send_via":"whatsapp","origin":"China","destination":"Egypt","container":"40ft","commodity":"Trading materials","customer_name":"Ahmed"}
+\`\`\`
+IMPORTANT for request_quote: Match the vendor by name from the VENDOR CONTACTS list below. Use their exact email/whatsapp from the database. If the user says "send via whatsapp" use send_via:"whatsapp", if "send via email" use send_via:"email", if not specified use whichever contact method is available (prefer whatsapp). If user mentions a vendor type like "trucker" or "freight forwarder", match by vendor_type.
 After the action block, write a brief confirmation message.
 For assigned_to, use user IDs from the TEAM list below.
 
@@ -146,6 +161,7 @@ Answer clearly with specific numbers and data. Use tables or lists when helpful.
 Currency is EGP (Egyptian Pound) unless specified otherwise.
 
 ===== LIVE BUSINESS DATA =====
+[Data loaded: ${invoices.length} invoices, ${treasury.length} treasury, ${customers.length} customers, ${tickets.length} tickets, ${debts.length} debts, ${shippingRates.length} rates, ${vendorContacts.length} vendors, ${inventory.length} inventory]
 
 FINANCIAL SUMMARY:
 - Total Invoiced: EGP ${totalInvoiced.toLocaleString()}
@@ -196,7 +212,10 @@ TEAM:
 ${users.map(u => '• ' + u.name + ' (ID: ' + u.id + ', Role: ' + u.role + ')').join('\n') || 'No users'}
 
 DEBTORS:
-${debts.map(d => '• ' + d.debtor_name + ': EGP ' + Number(d.total_debt).toLocaleString()).join('\n') || 'None'}`;
+${debts.map(d => '• ' + d.debtor_name + ': EGP ' + Number(d.total_debt).toLocaleString()).join('\n') || 'None'}
+
+VENDOR CONTACTS (freight forwarders, truckers, brokers — use these for request_quote actions):
+${(Array.isArray(vendorContacts) ? vendorContacts : []).map(v => '• ' + v.company_name + (v.contact_name ? ' (' + v.contact_name + ')' : '') + ' | Type: ' + (v.vendor_type || '?') + (v.email ? ' | Email: ' + v.email : '') + (v.whatsapp ? ' | WhatsApp: ' + v.whatsapp : '') + (v.phone ? ' | Phone: ' + v.phone : '') + (v.origin_regions ? ' | Covers: ' + v.origin_regions : '')).join('\n') || 'No vendors yet — tell the user to add vendor contacts in Shipping → Vendors'}`;
 
     // ===== BUILD MESSAGES =====
     const messages = [];
