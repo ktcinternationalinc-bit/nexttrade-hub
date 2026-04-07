@@ -150,6 +150,37 @@ export async function POST(request) {
           if (userId) { await supabase.from('daily_log').insert({ user_id: userId, entry_text: 'AI created ' + tktNum + ': ' + action.title, auto_generated: true, log_date: new Date().toISOString().substring(0, 10), log_category: 'ticket' }); }
           return Response.json({ answer: tktNum + ' created: ' + action.title + '\nPriority: ' + action.priority + (action.due_date ? '\nDue: ' + action.due_date : ''), action_result: 'success' });
         }
+        if (action.type === 'update_ticket') {
+          // Find ticket by ticket_number or title
+          var findQuery = null;
+          if (action.ticket_number) {
+            findQuery = await supabase.from('tickets').select('*').eq('ticket_number', action.ticket_number).maybeSingle();
+          } else if (action.ticket_id) {
+            findQuery = await supabase.from('tickets').select('*').eq('id', action.ticket_id).maybeSingle();
+          } else if (action.title) {
+            findQuery = await supabase.from('tickets').select('*').ilike('title', '%' + action.title + '%').limit(1).maybeSingle();
+          }
+          if (!findQuery || !findQuery.data) return Response.json({ answer: 'Could not find ticket: ' + (action.ticket_number || action.title || 'unknown'), action_result: 'error' });
+          var ticket = findQuery.data;
+          var updates = {};
+          var changes = [];
+          if (action.status && action.status !== ticket.status) { updates.status = action.status; changes.push('Status → ' + action.status); }
+          if (action.priority && action.priority !== ticket.priority) { updates.priority = action.priority; changes.push('Priority → ' + action.priority); }
+          if (action.assigned_to && action.assigned_to !== ticket.assigned_to) { updates.assigned_to = action.assigned_to; var aName = ''; var aUser = users.find(function(u) { return u.id === action.assigned_to; }); if (aUser) aName = aUser.name; changes.push('Assigned → ' + (aName || action.assigned_to)); }
+          if (action.due_date !== undefined) { updates.due_date = action.due_date || null; changes.push('Due date → ' + (action.due_date || 'removed')); }
+          if (action.description) { updates.description = action.description; changes.push('Description updated'); }
+          if (action.status === 'Closed') { updates.closed_at = new Date().toISOString(); updates.closed_by = userId; }
+          updates.updated_at = new Date().toISOString();
+          if (Object.keys(updates).length === 0) return Response.json({ answer: 'No changes to make on ' + (ticket.ticket_number || ticket.title), action_result: 'success' });
+          var upResult = await supabase.from('tickets').update(updates).eq('id', ticket.id);
+          if (upResult.error) throw upResult.error;
+          // Add comment documenting the change
+          var changeText = '🤖 AI updated by ' + currentUserName + ': ' + changes.join(', ');
+          await supabase.from('ticket_comments').insert({ ticket_id: ticket.id, comment_text: changeText, is_system: true, created_by: userId });
+          // Daily log
+          if (userId) { await supabase.from('daily_log').insert({ user_id: userId, entry_text: 'AI updated ' + (ticket.ticket_number || ticket.title) + ': ' + changes.join(', '), auto_generated: true, log_date: new Date().toISOString().substring(0, 10), log_category: 'ticket' }); }
+          return Response.json({ answer: '✅ ' + (ticket.ticket_number || ticket.title) + ' updated:\n' + changes.join('\n'), action_result: 'success' });
+        }
         if (action.type === 'create_event') {
           var evResult = await supabase.from('calendar_events').insert({ title: action.title, event_date: action.event_date, event_time: action.event_time || '09:00', event_type: action.event_type || 'meeting', notes: action.notes || '', created_by: userId || null });
           if (evResult.error) throw evResult.error;
@@ -289,6 +320,10 @@ export async function POST(request) {
     context += 'FOR COMMANDS: Respond with JSON wrapped in ---ACTION_START--- and ---ACTION_END--- tags.\n\n';
     context += 'Available actions:\n';
     context += '- create_ticket: {type:"create_ticket", title, description, priority, due_date, assigned_to}\n';
+    context += '- update_ticket: {type:"update_ticket", ticket_number:"TKT-0001", status:"In Progress", priority:"high", assigned_to:"user-id", due_date:"2026-04-15", description:"new details"}\n';
+    context += '  Find ticket by ticket_number (preferred) or title. Only include fields being changed.\n';
+    context += '  Valid statuses: New, Acknowledged, In Progress, Waiting, Review, Testing, Ready, Closed, Reopened\n';
+    context += '  Valid priorities: high, medium, low\n';
     context += '- create_event: {type:"create_event", title, event_date, event_time, event_type}\n';
     context += '- create_reminder: {type:"create_reminder", task, due_date, due_time}\n';
     context += '- request_quote: {type:"request_quote", vendor_company, vendor_contact, vendor_email, vendor_whatsapp, vendor_type, send_via, origin, destination, container, commodity, customer_name}\n';

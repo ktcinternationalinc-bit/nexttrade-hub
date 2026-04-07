@@ -84,25 +84,33 @@ body {
 /* Colored tint cards */
 .bg-blue-50, .bg-emerald-50, .bg-green-50, .bg-amber-50, .bg-red-50, .bg-purple-50,
 .bg-indigo-50, .bg-orange-50, .bg-yellow-50, .bg-cyan-50 {
-  background: rgba(255,255,255,0.03) !important;
+  background: rgba(255,255,255,0.05) !important;
   backdrop-filter: blur(8px);
   border-color: var(--border-glass) !important;
+  color: var(--text-primary) !important;
 }
-.bg-blue-50 { background: rgba(56,189,248,0.06) !important; border-color: rgba(56,189,248,0.15) !important; }
-.bg-emerald-50, .bg-green-50 { background: rgba(52,211,153,0.06) !important; border-color: rgba(52,211,153,0.15) !important; }
-.bg-red-50 { background: rgba(248,113,113,0.06) !important; border-color: rgba(248,113,113,0.15) !important; }
-.bg-amber-50, .bg-yellow-50 { background: rgba(251,191,36,0.06) !important; border-color: rgba(251,191,36,0.15) !important; }
-.bg-purple-50, .bg-indigo-50 { background: rgba(167,139,250,0.06) !important; border-color: rgba(167,139,250,0.15) !important; }
-.bg-orange-50 { background: rgba(251,146,60,0.06) !important; border-color: rgba(251,146,60,0.15) !important; }
+.bg-blue-50 { background: rgba(56,189,248,0.1) !important; border-color: rgba(56,189,248,0.2) !important; }
+.bg-emerald-50, .bg-green-50 { background: rgba(52,211,153,0.1) !important; border-color: rgba(52,211,153,0.2) !important; }
+.bg-red-50 { background: rgba(248,113,113,0.1) !important; border-color: rgba(248,113,113,0.2) !important; }
+.bg-amber-50, .bg-yellow-50 { background: rgba(251,191,36,0.1) !important; border-color: rgba(251,191,36,0.2) !important; }
+.bg-purple-50, .bg-indigo-50 { background: rgba(167,139,250,0.1) !important; border-color: rgba(167,139,250,0.2) !important; }
+.bg-orange-50 { background: rgba(251,146,60,0.1) !important; border-color: rgba(251,146,60,0.2) !important; }
+.bg-cyan-50 { background: rgba(56,189,248,0.1) !important; border-color: rgba(56,189,248,0.2) !important; }
 
-/* Status badges */
-.bg-blue-100 { background: rgba(56,189,248,0.15) !important; color: #7dd3fc !important; }
-.bg-emerald-100, .bg-green-100 { background: rgba(52,211,153,0.15) !important; color: #6ee7b7 !important; }
-.bg-red-100 { background: rgba(248,113,113,0.15) !important; color: #fca5a5 !important; }
-.bg-amber-100 { background: rgba(251,191,36,0.15) !important; color: #fde68a !important; }
-.bg-purple-100 { background: rgba(167,139,250,0.15) !important; color: #c4b5fd !important; }
-.bg-slate-100:not(.min-h-screen) { background: rgba(255,255,255,0.06) !important; color: var(--text-secondary) !important; }
-.bg-indigo-100 { background: rgba(167,139,250,0.15) !important; color: #c4b5fd !important; }
+/* Ensure text inside tinted areas stays readable */
+.bg-blue-50 *, .bg-emerald-50 *, .bg-green-50 *, .bg-amber-50 *, .bg-red-50 *,
+.bg-purple-50 *, .bg-indigo-50 *, .bg-orange-50 *, .bg-cyan-50 * {
+  color: inherit;
+}
+
+/* Status badges - brighter */
+.bg-blue-100 { background: rgba(56,189,248,0.2) !important; color: #7dd3fc !important; }
+.bg-emerald-100, .bg-green-100 { background: rgba(52,211,153,0.2) !important; color: #6ee7b7 !important; }
+.bg-red-100 { background: rgba(248,113,113,0.2) !important; color: #fca5a5 !important; }
+.bg-amber-100 { background: rgba(251,191,36,0.2) !important; color: #fde68a !important; }
+.bg-purple-100 { background: rgba(167,139,250,0.2) !important; color: #c4b5fd !important; }
+.bg-slate-100:not(.min-h-screen) { background: rgba(255,255,255,0.08) !important; color: var(--text-secondary) !important; }
+.bg-indigo-100 { background: rgba(167,139,250,0.2) !important; color: #c4b5fd !important; }
 
 /* Text colors for dark */
 .text-slate-900, .text-slate-800, .text-slate-700 { color: var(--text-primary) !important; }
@@ -257,7 +265,7 @@ td {
   font-size: 0.84rem !important;
   border-color: var(--border-glass) !important;
 }
-tr:hover td { background: rgba(255,255,255,0.02); }
+tr:hover td { background: rgba(56,189,248,0.04); }
 thead { background: transparent !important; }
 tbody tr { border-color: var(--border-glass) !important; }
 
@@ -352,3 +360,17 @@ h3 { letter-spacing: -0.02em; }
   .grid-cols-7 > div { min-height: 3.5rem !important; }
   th, td { padding: 0.4rem 0.5rem !important; }
 }
+
+/* ===== HOVER STATES - ensure text stays readable ===== */
+.hover\:bg-blue-50:hover { background: rgba(56,189,248,0.12) !important; color: var(--text-primary) !important; }
+.hover\:bg-emerald-50:hover { background: rgba(52,211,153,0.12) !important; color: var(--text-primary) !important; }
+.hover\:bg-red-50:hover { background: rgba(248,113,113,0.12) !important; color: var(--text-primary) !important; }
+.hover\:bg-amber-50:hover { background: rgba(251,191,36,0.12) !important; color: var(--text-primary) !important; }
+.hover\:bg-purple-50:hover { background: rgba(167,139,250,0.12) !important; color: var(--text-primary) !important; }
+.hover\:bg-slate-50:hover { background: rgba(255,255,255,0.06) !important; color: var(--text-primary) !important; }
+
+/* Line-through for closed items - keep visible */
+.line-through { text-decoration-color: rgba(255,255,255,0.4) !important; }
+
+/* Opacity overrides - don't let items become invisible */
+.opacity-50 { opacity: 0.6 !important; }

@@ -72,7 +72,7 @@ export default function TicketsTab({ customers, user, userProfile, users, onRelo
       if (newStatus === 'Closed') { updates.closed_at = new Date().toISOString(); updates.closed_by = myId; }
       await dbUpdate('tickets', ticket.id, updates, myId);
       const myName = getUserName(myId) || 'Unknown';
-      await dbInsert('ticket_comments', { ticket_id: ticket.id, comment_text: '📋 Status changed to ' + newStatus + ' by ' + myName, is_system: true }, myId);
+      await dbInsert('ticket_comments', { ticket_id: ticket.id, comment_text: '📋 Status changed to ' + newStatus + ' by ' + myName, is_system: true, created_by: myId }, myId);
       await logActivity(myId, 'Ticket status → ' + newStatus + ': ' + ticket.title, 'ticket');
       loadTickets();
       if (sel && sel.id === ticket.id) { setSel({...sel, ...updates}); loadComments(ticket.id); }
@@ -84,7 +84,7 @@ export default function TicketsTab({ customers, user, userProfile, users, onRelo
       await dbUpdate('tickets', ticket.id, { assigned_to: newUserId }, myId);
       const newName = getUserName(newUserId);
       const myName = getUserName(myId);
-      await dbInsert('ticket_comments', { ticket_id: ticket.id, comment_text: '👤 Reassigned to ' + newName + ' by ' + myName, is_system: true }, myId);
+      await dbInsert('ticket_comments', { ticket_id: ticket.id, comment_text: '👤 Reassigned to ' + newName + ' by ' + myName, is_system: true, created_by: myId }, myId);
       await logActivity(myId, 'Reassigned ticket to ' + newName + ': ' + ticket.title, 'ticket');
       if (newUserId !== myId) await logActivity(newUserId, 'Ticket reassigned to you by ' + myName + ': ' + ticket.title, 'ticket');
       loadTickets();
@@ -95,7 +95,7 @@ export default function TicketsTab({ customers, user, userProfile, users, onRelo
   const addComment = async () => {
     if (!f.comment || !sel) return;
     try {
-      await dbInsert('ticket_comments', { ticket_id: sel.id, comment_text: f.comment, is_system: false }, myId);
+      await dbInsert('ticket_comments', { ticket_id: sel.id, comment_text: f.comment, is_system: false, created_by: myId }, myId);
       await logActivity(myId, 'Comment on ticket: ' + sel.title, 'ticket');
       setF({...f, comment: ''}); loadComments(sel.id);
     } catch (err) { alert('Error: ' + err.message); }
@@ -167,6 +167,14 @@ export default function TicketsTab({ customers, user, userProfile, users, onRelo
           </div>
         </div>
 
+        {/* LAST UPDATED INFO */}
+        {sel.updated_at && (
+          <div className="flex items-center gap-2 mb-3 text-[10px] text-slate-400 bg-slate-50 rounded-lg px-3 py-2">
+            <span>🕐 Last updated: {fmtDate(sel.updated_at)}</span>
+            {sel.closed_by && sel.status === 'Closed' && <span>• Closed by: <span className="font-semibold text-purple-500">{getUserName(sel.closed_by) || 'Unknown'}</span></span>}
+          </div>
+        )}
+
         {/* ACKNOWLEDGE BUTTON */}
         {sel.status === 'New' && sel.assigned_to === myId && (
           <button onClick={() => updateStatus(sel, 'Acknowledged')}
@@ -190,15 +198,21 @@ export default function TicketsTab({ customers, user, userProfile, users, onRelo
         <h4 className="text-sm font-bold mb-2">📋 Activity Log ({systemComments.length})</h4>
         {systemComments.length > 0 ? (
           <div className="space-y-1 max-h-[200px] overflow-auto">
-            {systemComments.map(c => (
-              <div key={c.id} className="flex items-start gap-2 py-1.5 border-b border-slate-50">
-                <span className="text-xs mt-0.5">📋</span>
-                <div>
-                  <div className="text-xs text-slate-700">{c.comment_text}</div>
-                  <div className="text-[10px] text-slate-400">{fmtDate(c.created_at)}</div>
+            {systemComments.map(c => {
+              const updaterName = getUserName(c.created_by) || 'System';
+              return (
+                <div key={c.id} className="flex items-start gap-2 py-1.5 border-b border-slate-50">
+                  <span className="text-xs mt-0.5">📋</span>
+                  <div className="flex-1">
+                    <div className="text-xs">{c.comment_text}</div>
+                    <div className="text-[10px] text-slate-400 mt-0.5">
+                      <span className="font-semibold text-purple-500">{updaterName}</span>
+                      <span className="ml-2">{fmtDate(c.created_at)}</span>
+                    </div>
+                  </div>
                 </div>
-              </div>
-            ))}
+              );
+            })}
           </div>
         ) : (
           <div className="text-xs text-slate-400">No status changes yet</div>

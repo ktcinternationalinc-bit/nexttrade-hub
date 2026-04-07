@@ -47,7 +47,7 @@ export default function AIAssistant({ user, userProfile }) {
       recognition.lang = 'en-US';
       recognition.onresult = (event) => {
         // Stop AI speech immediately when user starts talking
-        if ('speechSynthesis' in window) window.speechSynthesis.cancel();
+        if (audioRef.current) { audioRef.current.pause(); audioRef.current = null; } if ('speechSynthesis' in window) window.speechSynthesis.cancel(); speakingRef.current = false;
         let transcript = '';
         for (let i = 0; i < event.results.length; i++) {
           transcript += event.results[i][0].transcript;
@@ -55,18 +55,36 @@ export default function AIAssistant({ user, userProfile }) {
         setInput(transcript);
         if (silenceTimerRef.current) clearTimeout(silenceTimerRef.current);
         if (autoSendRef.current) clearTimeout(autoSendRef.current);
-        // After 5 seconds of silence, auto-send
+        // After 5 seconds of silence, auto-send but keep listening for interrupts
         silenceTimerRef.current = setTimeout(() => {
-          recognition.stop();
-          setListening(false);
-          autoSendRef.current = setTimeout(() => {
-            const btn = document.getElementById('ai-send-btn');
-            if (btn) btn.click();
-          }, 400);
+          if (conversationModeRef.current) {
+            // In conversation mode: send without stopping recognition
+            autoSendRef.current = setTimeout(() => {
+              const btn = document.getElementById('ai-send-btn');
+              if (btn) btn.click();
+            }, 400);
+          } else {
+            recognition.stop();
+            setListening(false);
+            autoSendRef.current = setTimeout(() => {
+              const btn = document.getElementById('ai-send-btn');
+              if (btn) btn.click();
+            }, 400);
+          }
         }, 5000);
       };
-      recognition.onerror = () => { setListening(false); if (silenceTimerRef.current) clearTimeout(silenceTimerRef.current); };
-      recognition.onend = () => { setListening(false); };
+      recognition.onerror = (e) => { 
+        if (e.error !== 'aborted' && e.error !== 'no-speech') { setListening(false); }
+        if (silenceTimerRef.current) clearTimeout(silenceTimerRef.current); 
+      };
+      recognition.onend = () => { 
+        // In conversation mode, auto-restart if it stops unexpectedly
+        if (conversationModeRef.current) {
+          try { setTimeout(() => { if (conversationModeRef.current) { recognition.start(); setListening(true); } }, 300); } catch(e) {}
+        } else {
+          setListening(false); 
+        }
+      };
       recognitionRef.current = recognition;
     }
     return () => { if (silenceTimerRef.current) clearTimeout(silenceTimerRef.current); if (autoSendRef.current) clearTimeout(autoSendRef.current); if (maxTimeoutRef.current) clearTimeout(maxTimeoutRef.current); };
@@ -85,7 +103,7 @@ export default function AIAssistant({ user, userProfile }) {
 
   const toggleVoice = () => {
     if (!recognitionRef.current) return;
-    if ('speechSynthesis' in window) window.speechSynthesis.cancel();
+    if (audioRef.current) { audioRef.current.pause(); audioRef.current = null; } if ('speechSynthesis' in window) window.speechSynthesis.cancel(); speakingRef.current = false;
     if (listening || conversationModeRef.current) {
       // Stop everything
       recognitionRef.current.stop();
@@ -105,23 +123,56 @@ export default function AIAssistant({ user, userProfile }) {
         conversationModeRef.current = false;
         try { recognitionRef.current.stop(); } catch(e) {}
         setListening(false);
-        if ('speechSynthesis' in window) window.speechSynthesis.cancel();
+        if (audioRef.current) { audioRef.current.pause(); audioRef.current = null; } if ('speechSynthesis' in window) window.speechSynthesis.cancel(); speakingRef.current = false;
       }, 120000);
     }
   };
 
-  const speak = (text) => {
+  const audioRef = useRef(null);
+  const speakingRef = useRef(false);
+
+  const stopSpeaking = () => {
+    speakingRef.current = false;
+    if (audioRef.current) { audioRef.current.pause(); audioRef.current = null; }
+    if ('speechSynthesis' in window) window.speechSynthesis.cancel();
+  };
+
+  const speak = async (text) => {
+    stopSpeaking();
+    const clean = text.replace(/[*#_`\-]/g, '').replace(/\n+/g, '. ').substring(0, 800);
+    speakingRef.current = true;
+
+    // Try ElevenLabs first
+    try {
+      const res = await fetch('/api/tts', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ text: clean })
+      });
+      if (res.ok && res.headers.get('content-type')?.includes('audio')) {
+        const blob = await res.blob();
+        const url = URL.createObjectURL(blob);
+        const audio = new Audio(url);
+        audioRef.current = audio;
+        audio.onended = () => {
+          speakingRef.current = false;
+          URL.revokeObjectURL(url);
+          audioRef.current = null;
+          if (conversationModeRef.current) setInput('');
+        };
+        audio.play();
+        return;
+      }
+    } catch(e) { /* ElevenLabs not available, fall back */ }
+
+    // Fallback: browser speech
     if ('speechSynthesis' in window) {
-      window.speechSynthesis.cancel();
-      const clean = text.replace(/[*#_`\-]/g, '').replace(/\n+/g, '. ').substring(0, 500);
-      const u = new SpeechSynthesisUtterance(clean);
+      const u = new SpeechSynthesisUtterance(clean.substring(0, 500));
       if (voiceRef.current) u.voice = voiceRef.current;
       u.rate = 1.0; u.pitch = 1.0;
-      // When AI finishes speaking, auto-restart listening if in conversation mode
       u.onend = () => {
-        if (conversationModeRef.current) {
-          setTimeout(startListeningAgain, 500);
-        }
+        speakingRef.current = false;
+        if (conversationModeRef.current) setInput('');
       };
       window.speechSynthesis.speak(u);
     }
