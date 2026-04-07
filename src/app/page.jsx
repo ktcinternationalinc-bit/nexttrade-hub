@@ -1259,7 +1259,7 @@ export default function App() {
 
             {/* Invoice Line Items — always visible */}
             {(() => {
-              const items = invoiceItems.filter(it => it.invoice_id === selectedInvoice.id);
+              const items = invoiceItems.filter(it => it.invoice_id === selectedInvoice.id || (it.order_number && it.order_number === String(selectedInvoice.order_number)));
               return (
                 <div className="bg-blue-50 rounded-lg p-4 mb-4 border border-blue-200">
                   <h4 className="text-sm font-bold text-blue-800 mb-2">📦 Order Breakdown / تفاصيل الأمر {items.length > 0 ? '(' + items.length + ' items)' : ''}</h4>
@@ -2399,6 +2399,64 @@ export default function App() {
             })()}
             </>}
             </>)}
+
+            {/* ===== USD DOLLAR LEDGER ===== */}
+            {(isAdmin || modulePerms['Treasury']) && (() => {
+              const usdIn = filteredTreasury.reduce((a, t) => a + Number(t.usd_in || 0), 0);
+              const usdOut = filteredTreasury.reduce((a, t) => a + Number(t.usd_out || 0), 0);
+              const usdNet = usdIn - usdOut;
+              const usdTxns = filteredTreasury.filter(t => Number(t.usd_in || 0) > 0 || Number(t.usd_out || 0) > 0);
+              if (usdTxns.length === 0) return null;
+              return (
+                <div className="mt-6">
+                  <div className="bg-amber-100 rounded-lg px-3 py-2 mb-3 flex justify-between items-center cursor-pointer" onClick={() => setHideSections({...hideSections, usd: !hideSections.usd})}>
+                    <span className="text-sm font-bold text-amber-800">💵 USD DOLLAR LEDGER / دفتر الدولار</span>
+                    <span className="text-xs text-amber-600">{hideSections.usd ? '👁️ Show' : '🙈 Hide'}</span>
+                  </div>
+                  {!hideSections.usd && (<>
+                  <div className="grid grid-cols-3 gap-3 mb-4">
+                    <div className="bg-white rounded-lg p-3" style={{borderLeftWidth:3,borderLeftColor:'#10b981'}}>
+                      <div className="text-[10px] text-slate-500">USD In / وارد دولار</div>
+                      <div className="text-lg font-extrabold text-emerald-600">${usdIn.toLocaleString(undefined,{minimumFractionDigits:0,maximumFractionDigits:0})}</div>
+                    </div>
+                    <div className="bg-white rounded-lg p-3" style={{borderLeftWidth:3,borderLeftColor:'#ef4444'}}>
+                      <div className="text-[10px] text-slate-500">USD Out / صادر دولار</div>
+                      <div className="text-lg font-extrabold text-red-500">${usdOut.toLocaleString(undefined,{minimumFractionDigits:0,maximumFractionDigits:0})}</div>
+                    </div>
+                    <div className="bg-white rounded-lg p-3" style={{borderLeftWidth:3,borderLeftColor:usdNet >= 0 ? '#10b981' : '#ef4444'}}>
+                      <div className="text-[10px] text-slate-500">USD Net / صافي دولار</div>
+                      <div className={'text-lg font-extrabold ' + (usdNet >= 0 ? 'text-emerald-600' : 'text-red-500')}>${usdNet.toLocaleString(undefined,{minimumFractionDigits:0,maximumFractionDigits:0})}</div>
+                    </div>
+                  </div>
+                  <div className="bg-white rounded-xl p-4 mb-4">
+                    <h4 className="text-sm font-bold mb-2">USD Transactions ({usdTxns.length})</h4>
+                    <div className="overflow-auto max-h-[300px] rounded-lg border border-slate-200">
+                      <table className="w-full border-collapse text-xs">
+                        <thead className="sticky top-0"><tr className="bg-slate-50">
+                          <th className="px-2 py-2 text-[10px] text-left">Date</th>
+                          <th className="px-2 py-2 text-[10px] text-left">Order</th>
+                          <th className="px-2 py-2 text-[10px] text-left" style={{direction:'rtl'}}>Description</th>
+                          <th className="px-2 py-2 text-[10px] text-right">USD In</th>
+                          <th className="px-2 py-2 text-[10px] text-right">USD Out</th>
+                        </tr></thead>
+                        <tbody>
+                          {usdTxns.sort((a,b) => (b.transaction_date||'').localeCompare(a.transaction_date||'')).map(t => (
+                            <tr key={t.id} className="border-b border-slate-50">
+                              <td className="px-2 py-1.5">{t.transaction_date}</td>
+                              <td className="px-2 py-1.5 font-semibold text-blue-600">{t.order_number || '—'}</td>
+                              <td className="px-2 py-1.5" style={{direction:'rtl'}}>{t.description}</td>
+                              <td className="px-2 py-1.5 text-right font-bold text-emerald-600">{Number(t.usd_in) > 0 ? '$' + Number(t.usd_in).toLocaleString() : ''}</td>
+                              <td className="px-2 py-1.5 text-right font-bold text-red-500">{Number(t.usd_out) > 0 ? '$' + Number(t.usd_out).toLocaleString() : ''}</td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  </div>
+                  </>)}
+                </div>
+              );
+            })()}
 
             {/* ===== PERSONAL DASHBOARD (tickets, reminders, calendar — after financial for admins, first for team) ===== */}
             <PersonalDashboard user={user} userProfile={userProfile} isAdmin={isAdmin}
