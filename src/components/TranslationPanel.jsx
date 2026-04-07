@@ -10,6 +10,7 @@ const TRANSLATE_TABLES = [
   { table: 'debts', label: 'Debts (Customer Names)', arCol: 'customer_name', enCol: 'customer_name_en', icon: '⚠️' },
   { table: 'invoice_items', label: 'Invoice Items', arCol: 'description', enCol: 'description_en', icon: '📦' },
   { table: 'customers', label: 'Customers', arCol: 'name', enCol: 'name_en', icon: '👥' },
+  { table: 'inventory', label: 'Inventory / المخزون', arCol: 'description', enCol: 'description_en', icon: '📦' },
 ];
 
 export default function TranslationPanel({ user, users, isAdmin }) {

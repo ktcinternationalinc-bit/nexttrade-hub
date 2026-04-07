@@ -96,5 +96,59 @@ export default function PersonalDashboard({ user, userProfile, isAdmin, invoices
     {(myCustomers.length>0||isAdmin)&&(<div className="bg-white rounded-xl p-4 mb-3"><h3 className="text-sm font-bold mb-2">📊 Client Pipeline</h3><div className="flex gap-2 flex-wrap mb-2">{Object.entries(CRM_STATUS_COLORS).map(([s,color])=>{const c=crmStats[s]||0; return (<div key={s} className="rounded-lg px-3 py-2 text-center min-w-[80px]" style={{background:color+'15',borderLeft:'3px solid '+color}}><div className="text-lg font-extrabold" style={{color}}>{c}</div><div className="text-[9px] font-semibold text-slate-600">{s}</div></div>);})}</div>{notContacted30.length>0&&<div className="bg-amber-50 rounded-lg p-2 mt-2 border border-amber-200"><div className="text-[10px] font-bold text-amber-700">⚠️ {notContacted30.length} clients not contacted in 30+ days</div></div>}</div>)}
 
     {overdueFollowUps.length>0&&(<div className="bg-red-50 rounded-xl p-4 mb-3 border border-red-200"><h3 className="text-sm font-bold text-red-700 mb-2">⚠️ Overdue Follow-ups ({overdueFollowUps.length})</h3>{overdueFollowUps.map(fu=>(<div key={fu.id} className="flex justify-between items-center py-1.5 border-b border-red-100"><div><div className="text-xs font-semibold">{fu.task}</div><div className="text-[10px] text-slate-500">{fu.customers?.name||''} • Due: {fu.due_date}</div></div><span className="text-[10px] font-bold text-red-600">{Math.floor((Date.now()-new Date(fu.due_date).getTime())/86400000)}d late</span></div>))}</div>)}
+
+    {/* Monthly Sales Report - visible to all */}
+    {(() => {
+      const monthlySales = {};
+      invoices.filter(inv => inv.invoice_date >= '2026-01-01').forEach(inv => {
+        const m = (inv.invoice_date || '').substring(0, 7);
+        if (m) {
+          if (!monthlySales[m]) monthlySales[m] = { invoiced: 0, collected: 0, count: 0 };
+          monthlySales[m].invoiced += Number(inv.total_amount || 0);
+          monthlySales[m].collected += Number(inv.total_collected || 0);
+          monthlySales[m].count++;
+        }
+      });
+      const months = Object.entries(monthlySales).sort((a, b) => b[0].localeCompare(a[0]));
+      const totalInvoiced = months.reduce((a, m) => a + m[1].invoiced, 0);
+      const totalCollected = months.reduce((a, m) => a + m[1].collected, 0);
+      if (months.length === 0) return null;
+      return (
+        <div className="bg-white rounded-xl p-4 mb-3">
+          <h3 className="text-sm font-bold mb-3">📊 Monthly Sales Report (2026)</h3>
+          <div className="grid grid-cols-3 gap-2 mb-3">
+            <div className="bg-blue-50 rounded-lg p-2 text-center"><div className="text-lg font-extrabold text-blue-600">{fE(totalInvoiced)}</div><div className="text-[9px] text-slate-500">Total Invoiced</div></div>
+            <div className="bg-emerald-50 rounded-lg p-2 text-center"><div className="text-lg font-extrabold text-emerald-600">{fE(totalCollected)}</div><div className="text-[9px] text-slate-500">Total Collected</div></div>
+            <div className="bg-amber-50 rounded-lg p-2 text-center"><div className="text-lg font-extrabold text-amber-600">{fE(totalInvoiced - totalCollected)}</div><div className="text-[9px] text-slate-500">Outstanding</div></div>
+          </div>
+          <div className="overflow-auto max-h-[300px] rounded-lg border border-slate-200">
+            <table className="w-full border-collapse text-xs">
+              <thead className="sticky top-0"><tr className="bg-slate-50">
+                <th className="px-3 py-2 text-left text-[10px]">Month</th>
+                <th className="px-3 py-2 text-right text-[10px]">Orders</th>
+                <th className="px-3 py-2 text-right text-[10px]">Invoiced</th>
+                <th className="px-3 py-2 text-right text-[10px]">Collected</th>
+                <th className="px-3 py-2 text-right text-[10px]">Outstanding</th>
+              </tr></thead>
+              <tbody>
+                {months.map(([month, data]) => {
+                  const outstanding = data.invoiced - data.collected;
+                  const collPct = data.invoiced > 0 ? Math.round((data.collected / data.invoiced) * 100) : 0;
+                  return (
+                    <tr key={month} className="border-b border-slate-50 hover:bg-blue-50">
+                      <td className="px-3 py-2 font-semibold">{month}</td>
+                      <td className="px-3 py-2 text-right">{data.count}</td>
+                      <td className="px-3 py-2 text-right font-bold text-blue-600">{fE(data.invoiced)}</td>
+                      <td className="px-3 py-2 text-right text-emerald-600">{fE(data.collected)} <span className="text-[9px] text-slate-400">({collPct}%)</span></td>
+                      <td className={'px-3 py-2 text-right font-bold ' + (outstanding > 0 ? 'text-amber-600' : 'text-emerald-500')}>{fE(outstanding)}</td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      );
+    })()}
   </div>);
 }

@@ -12,6 +12,7 @@ export const fE = (n) => {
 
 // Expense category translations
 export const EXPENSE_CATS = {
+  'مبيعات': 'Sales',
   'عهدة المخزن': 'Warehouse',
   'مرتبات': 'Salaries',
   'مواصلات وسفر': 'Transport',

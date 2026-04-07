@@ -236,10 +236,33 @@ export async function POST(request) {
     // Identify current user
     var currentUserName = 'Unknown';
     var currentUserId = userId || '';
+    var currentUserRole = 'viewer';
     if (userId && users.length > 0) {
       var found = users.find(function(u) { return u.id === userId; });
-      if (found) currentUserName = found.name;
+      if (found) { currentUserName = found.name; currentUserRole = found.role || 'viewer'; }
     }
+
+    // Check module permissions
+    var userPerms = {};
+    var isSuperAdmin = currentUserRole === 'super_admin';
+    if (!isSuperAdmin && userId) {
+      try {
+        var permResult = await supabase.from('module_permissions').select('module_name, has_access').eq('user_id', userId);
+        (permResult.data || []).forEach(function(p) { userPerms[p.module_name] = p.has_access; });
+      } catch(e) {}
+    }
+    var hasAccess = function(module) { return isSuperAdmin || currentUserRole === 'admin' || (userPerms[module] !== false); };
+    var restrictedModules = [];
+    if (!hasAccess('Sales')) restrictedModules.push('Sales');
+    if (!hasAccess('Treasury')) restrictedModules.push('Treasury');
+    if (!hasAccess('Debts')) restrictedModules.push('Debts');
+    if (!hasAccess('Checks')) restrictedModules.push('Checks');
+
+    // Clear restricted data
+    if (!hasAccess('Sales')) invoices = [];
+    if (!hasAccess('Treasury')) treasury = [];
+    if (!hasAccess('Debts')) debts = [];
+    if (!hasAccess('Customers')) customers = [];
 
     var gmailConnected = false;
     var gmailEmail = '';
@@ -249,8 +272,12 @@ export async function POST(request) {
     // BUILD CONTEXT
     var context = 'You are the AI Executive Assistant for KTC International (Kandil Trading Company), an Egyptian trading company.\n\n';
     context += 'TODAY: ' + today + '\n';
-    context += 'CURRENT USER: ' + currentUserName + ' (ID: ' + currentUserId + ')\n';
-    context += 'When the user says "my tickets" or "assigned to me", match assigned_to against ID: ' + currentUserId + '\n\n';
+    context += 'CURRENT USER: ' + currentUserName + ' (ID: ' + currentUserId + ', Role: ' + currentUserRole + ')\n';
+    context += 'When the user says "my tickets" or "assigned to me", match assigned_to against ID: ' + currentUserId + '\n';
+    if (restrictedModules.length > 0) {
+      context += 'ACCESS RESTRICTIONS: This user does NOT have access to: ' + restrictedModules.join(', ') + '. If they ask about restricted data, politely tell them they do not have access to that information and should contact their manager.\n';
+    }
+    context += '\n';
     context += 'CAPABILITIES:\n';
     context += '1. Answer business questions with real data\n';
     context += '2. Execute commands (tickets, meetings, reminders, rate requests)\n';

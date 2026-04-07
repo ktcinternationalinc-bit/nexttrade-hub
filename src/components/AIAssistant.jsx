@@ -14,7 +14,30 @@ export default function AIAssistant({ user, userProfile }) {
   const silenceTimerRef = useRef(null);
   const autoSendRef = useRef(null);
 
+  const conversationModeRef = useRef(false);
+  const maxTimeoutRef = useRef(null);
+  const voiceRef = useRef(null);
+
   useEffect(() => {
+    // Find a good voice
+    const loadVoices = () => {
+      const voices = window.speechSynthesis?.getVoices() || [];
+      // Prefer: Google UK English Male/Female, Microsoft voices, then any English voice
+      const preferred = ['Google UK English Male', 'Google UK English Female', 'Microsoft David', 'Microsoft Zira', 'Daniel', 'Samantha', 'Alex'];
+      for (const name of preferred) {
+        const found = voices.find(v => v.name.includes(name));
+        if (found) { voiceRef.current = found; break; }
+      }
+      if (!voiceRef.current) {
+        const eng = voices.find(v => v.lang.startsWith('en') && !v.name.includes('Google US'));
+        if (eng) voiceRef.current = eng;
+      }
+    };
+    if ('speechSynthesis' in window) {
+      loadVoices();
+      window.speechSynthesis.onvoiceschanged = loadVoices;
+    }
+
     const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
     if (SR) {
       setVoiceSupported(true);
@@ -23,47 +46,83 @@ export default function AIAssistant({ user, userProfile }) {
       recognition.interimResults = true;
       recognition.lang = 'en-US';
       recognition.onresult = (event) => {
+        // Stop AI speech immediately when user starts talking
+        if ('speechSynthesis' in window) window.speechSynthesis.cancel();
         let transcript = '';
         for (let i = 0; i < event.results.length; i++) {
           transcript += event.results[i][0].transcript;
         }
         setInput(transcript);
-        // Reset silence timer on every result
         if (silenceTimerRef.current) clearTimeout(silenceTimerRef.current);
         if (autoSendRef.current) clearTimeout(autoSendRef.current);
-        // After 3 seconds of silence, stop and auto-send
+        // After 5 seconds of silence, auto-send
         silenceTimerRef.current = setTimeout(() => {
           recognition.stop();
           setListening(false);
-          // Auto-send after a brief delay to let state update
           autoSendRef.current = setTimeout(() => {
             const btn = document.getElementById('ai-send-btn');
             if (btn) btn.click();
           }, 400);
-        }, 3000);
+        }, 5000);
       };
       recognition.onerror = () => { setListening(false); if (silenceTimerRef.current) clearTimeout(silenceTimerRef.current); };
       recognition.onend = () => { setListening(false); };
       recognitionRef.current = recognition;
     }
-    return () => { if (silenceTimerRef.current) clearTimeout(silenceTimerRef.current); if (autoSendRef.current) clearTimeout(autoSendRef.current); };
+    return () => { if (silenceTimerRef.current) clearTimeout(silenceTimerRef.current); if (autoSendRef.current) clearTimeout(autoSendRef.current); if (maxTimeoutRef.current) clearTimeout(maxTimeoutRef.current); };
   }, []);
 
   useEffect(() => { chatEndRef.current?.scrollIntoView({ behavior: 'smooth' }); }, [messages, loading]);
 
+  const startListeningAgain = () => {
+    if (!conversationModeRef.current || !recognitionRef.current) return;
+    try {
+      setInput('');
+      recognitionRef.current.start();
+      setListening(true);
+    } catch(e) { /* already running */ }
+  };
+
   const toggleVoice = () => {
     if (!recognitionRef.current) return;
-    // Always stop AI speech when mic is tapped
     if ('speechSynthesis' in window) window.speechSynthesis.cancel();
-    if (listening) { recognitionRef.current.stop(); setListening(false); }
-    else { setInput(''); recognitionRef.current.start(); setListening(true); }
+    if (listening || conversationModeRef.current) {
+      // Stop everything
+      recognitionRef.current.stop();
+      setListening(false);
+      conversationModeRef.current = false;
+      if (maxTimeoutRef.current) clearTimeout(maxTimeoutRef.current);
+      if (silenceTimerRef.current) clearTimeout(silenceTimerRef.current);
+    } else {
+      // Start conversation mode
+      setInput('');
+      conversationModeRef.current = true;
+      recognitionRef.current.start();
+      setListening(true);
+      // 2 minute max timeout
+      if (maxTimeoutRef.current) clearTimeout(maxTimeoutRef.current);
+      maxTimeoutRef.current = setTimeout(() => {
+        conversationModeRef.current = false;
+        try { recognitionRef.current.stop(); } catch(e) {}
+        setListening(false);
+        if ('speechSynthesis' in window) window.speechSynthesis.cancel();
+      }, 120000);
+    }
   };
 
   const speak = (text) => {
-    if ('speechSynthesis' in window && text.length < 600) {
+    if ('speechSynthesis' in window) {
       window.speechSynthesis.cancel();
-      const u = new SpeechSynthesisUtterance(text.replace(/[*#_`]/g, '').substring(0, 400));
-      u.rate = 1.05; u.pitch = 1.0;
+      const clean = text.replace(/[*#_`\-]/g, '').replace(/\n+/g, '. ').substring(0, 500);
+      const u = new SpeechSynthesisUtterance(clean);
+      if (voiceRef.current) u.voice = voiceRef.current;
+      u.rate = 1.0; u.pitch = 1.0;
+      // When AI finishes speaking, auto-restart listening if in conversation mode
+      u.onend = () => {
+        if (conversationModeRef.current) {
+          setTimeout(startListeningAgain, 500);
+        }
+      };
       window.speechSynthesis.speak(u);
     }
   };
@@ -459,8 +518,8 @@ ${today}`;
         </div>
         {listening && (
           <div className="text-center mt-2 py-2">
-            <div className="text-xs font-bold animate-pulse" style={{color:'#f87171'}}>🔴 Listening — speak your command...</div>
-            <div className="text-[10px] mt-1" style={{color:'var(--text-muted)'}}>Will auto-send 3 seconds after you stop talking</div>
+            <div className="text-xs font-bold animate-pulse" style={{color:'#f87171'}}>🔴 Conversation Mode — speak naturally...</div>
+            <div className="text-[10px] mt-1" style={{color:'var(--text-muted)'}}>Auto-sends after 5s silence • AI responds • listening resumes • Tap mic to end</div>
           </div>
         )}
       </div>

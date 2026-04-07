@@ -58,6 +58,7 @@ export default function App() {
   const [df, setDf] = useState('2010-01-01');
   const [dt, setDt] = useState(today());
   const [query, setQuery] = useState('');
+  const [customerFilter, setCustomerFilter] = useState('');
 
   // Data
   const [invoices, setInvoices] = useState([]);
@@ -232,11 +233,12 @@ export default function App() {
 
   const filteredInvoices = useMemo(() => {
     let arr = invoices.filter(s => inRange(s.invoice_date, mode, df, dt));
+    if (customerFilter) arr = arr.filter(s => s.customer_name === customerFilter || s.customer_name_en === customerFilter);
     if (query) arr = arr.filter(s =>
-      (s.customer_name || '').includes(query) || (s.order_number || '').includes(query)
+      (s.customer_name || '').includes(query) || (s.customer_name_en || '').toLowerCase().includes(query.toLowerCase()) || (s.order_number || '').includes(query)
     );
     return arr;
-  }, [invoices, mode, df, dt, query]);
+  }, [invoices, mode, df, dt, query, customerFilter]);
 
   const totalInvoiced = useMemo(() => filteredInvoices.reduce((a, r) => a + Number(r.total_amount || 0), 0), [filteredInvoices]);
   const totalCollected = useMemo(() => filteredInvoices.reduce((a, r) => a + Number(r.total_collected || 0), 0), [filteredInvoices]);
@@ -360,7 +362,7 @@ export default function App() {
   // ACTIONS
   // ==========================================
   const navigate = (t) => {
-    setTab(t); setQuery(''); setSelectedCustomer(null); setSelectedDebtor(null);
+    setTab(t); setQuery(''); setCustomerFilter(''); setSelectedCustomer(null); setSelectedDebtor(null);
     setSelectedInvoice(null); setDrillType(null); setTreasuryDrill(null); setSelectedMonth(null);
   };
 
@@ -405,7 +407,7 @@ export default function App() {
       const status = getReconStatus(inv, tTotal);
       const row = {
         'Order # / رقم الأمر': inv.order_number,
-        'Customer / العميل': inv.customer_name,
+        'Customer / العميل': inv.customer_name_en || inv.customer_name,
         'Date / التاريخ': inv.invoice_date,
         'Invoice Amount / مبلغ الفاتورة': Number(inv.total_amount || 0),
         'Collected (Sales) / المحصّل': Number(inv.total_collected || 0),
@@ -974,7 +976,13 @@ export default function App() {
               className="border-b border-slate-50 cursor-pointer hover:bg-blue-50 transition">
               <td className="px-3 py-2 text-xs">{inv.invoice_date || '—'}</td>
               <td className="px-3 py-2 text-xs font-semibold">{inv.order_number}</td>
-              <td className="px-3 py-2 text-xs font-semibold text-right" style={{ direction: lang === 'ar' ? 'rtl' : 'ltr' }}>{tx(inv.customer_name, inv.customer_name_en)}</td>
+              <td className="px-3 py-2 text-xs font-semibold text-right">
+                {inv.customer_name_en ? (
+                  <div><div>{inv.customer_name_en}</div><div className="text-[10px] text-slate-400" style={{direction:'rtl'}}>{inv.customer_name}</div></div>
+                ) : (
+                  <div style={{direction:'rtl'}}>{inv.customer_name}</div>
+                )}
+              </td>
               <td className="px-3 py-2 text-xs text-right">{fE(inv.total_amount)}</td>
               <td className="px-3 py-2 text-xs text-right text-emerald-600">{fE(inv.total_collected)}</td>
               <td className="px-3 py-2 text-xs text-right" style={{ color: inv.outstanding > 0 ? '#ef4444' : '#10b981' }}>
@@ -1018,7 +1026,7 @@ export default function App() {
               <div style={{color:'rgba(148,163,184,0.6)'}} className="text-[10px]">{userProfile.role === 'super_admin' ? '🔴 Super Admin' : userProfile.role === 'admin' ? '🟣 Admin' : '🔵 Team'}</div>
             </div>
           )}
-          {(isAdmin || !userProfile || userProfile.language_access === 'both' || userProfile.language_access === 'en') && (
+          {(true) && (
             <button onClick={() => setLang(lang === 'ar' ? 'en' : 'ar')}
               style={{background: lang === 'en' ? 'linear-gradient(135deg, #0ea5e9, #6366f1)' : 'rgba(255,255,255,0.06)', border:'1px solid rgba(255,255,255,0.1)', color: lang === 'en' ? 'white' : 'rgba(255,255,255,0.6)'}}
               className="px-3 py-1.5 rounded-lg text-xs font-bold transition">
@@ -2035,7 +2043,7 @@ export default function App() {
                       .map(inv => (
                         <div key={inv.id} onClick={() => setFormData({ ...formData, orderNumber: inv.order_number, desc: inv.customer_name })}
                           className="px-3 py-1.5 text-xs cursor-pointer hover:bg-blue-50 border-b border-slate-50">
-                          <span className="font-bold">{inv.order_number}</span> — <span style={{ direction: 'rtl' }}>{inv.customer_name}</span>
+                          <span className="font-bold">{inv.order_number}</span> — <span>{inv.customer_name_en || inv.customer_name}</span>
                           <span className="text-slate-400 ml-1">{fE(inv.total_amount)}</span>
                         </div>
                       ))}
@@ -2296,6 +2304,13 @@ export default function App() {
                   <option value="unverified">⚠️ Unverified / غير مؤكد</option>
                   <option value="mismatch">⚡ Mismatch / عدم تطابق</option>
                   <option value="overpaid">🟠 Overpaid / دفع زائد</option>
+                </select>
+                <select value={customerFilter} onChange={e => setCustomerFilter(e.target.value)}
+                  className="px-2 py-1 rounded-lg border border-slate-200 text-xs max-w-[180px]">
+                  <option value="">All Customers / كل العملاء</option>
+                  {[...new Set(invoices.map(i => i.customer_name_en || i.customer_name).filter(Boolean))].sort().map(c => (
+                    <option key={c} value={c}>{c}</option>
+                  ))}
                 </select>
                 <input value={query} onChange={e => setQuery(e.target.value)}
                   placeholder="بحث / Search" className="px-3 py-1.5 rounded-lg border border-slate-200 text-xs w-32" />

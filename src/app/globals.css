@@ -15,7 +15,7 @@
   --border-glow: rgba(56,189,248,0.25);
   --text-primary: #f1f5f9;
   --text-secondary: #94a3b8;
-  --text-muted: #64748b;
+  --text-muted: #8b9cb8;
   --accent: #38bdf8;
   --accent-glow: rgba(56,189,248,0.15);
   --accent2: #a78bfa;
@@ -49,11 +49,11 @@ body {
 ::-webkit-scrollbar-thumb:hover { background: rgba(255,255,255,0.2); }
 
 /* ===== GLOBAL TEXT SIZE ===== */
-.text-xs { font-size: 0.8rem !important; line-height: 1.4 !important; }
-.text-sm { font-size: 0.925rem !important; line-height: 1.5 !important; }
-.text-\[10px\] { font-size: 0.75rem !important; line-height: 1.3 !important; }
-.text-\[9px\] { font-size: 0.7rem !important; line-height: 1.3 !important; }
-.text-\[8px\] { font-size: 0.65rem !important; }
+.text-xs { font-size: 0.82rem !important; line-height: 1.4 !important; }
+.text-sm { font-size: 0.95rem !important; line-height: 1.5 !important; }
+.text-\[10px\] { font-size: 0.78rem !important; line-height: 1.35 !important; }
+.text-\[9px\] { font-size: 0.73rem !important; line-height: 1.3 !important; }
+.text-\[8px\] { font-size: 0.68rem !important; }
 .text-lg { font-size: 1.2rem !important; }
 .text-xl { font-size: 1.45rem !important; }
 .text-2xl { font-size: 1.7rem !important; }
@@ -108,8 +108,8 @@ body {
 .text-slate-900, .text-slate-800, .text-slate-700 { color: var(--text-primary) !important; }
 .text-slate-600 { color: var(--text-secondary) !important; }
 .text-slate-500 { color: var(--text-muted) !important; }
-.text-slate-400 { color: rgba(148,163,184,0.7) !important; }
-.text-slate-300 { color: rgba(148,163,184,0.5) !important; }
+.text-slate-400 { color: rgba(160,178,200,0.9) !important; }
+.text-slate-300 { color: rgba(170,188,210,0.8) !important; }
 
 /* Accent text - keep vibrant */
 .text-blue-600, .text-blue-700, .text-blue-500 { color: #38bdf8 !important; }
@@ -176,7 +176,7 @@ input, select, textarea {
   color: var(--text-primary) !important;
   border-color: var(--border-glass) !important;
 }
-input::placeholder, textarea::placeholder { color: var(--text-muted) !important; opacity: 0.6; }
+input::placeholder, textarea::placeholder { color: var(--text-muted) !important; opacity: 0.7; }
 input:focus, select:focus, textarea:focus {
   outline: none;
   border-color: var(--accent) !important;
@@ -254,7 +254,7 @@ th {
 }
 td {
   padding: 0.55rem 0.75rem !important;
-  font-size: 0.82rem !important;
+  font-size: 0.84rem !important;
   border-color: var(--border-glass) !important;
 }
 tr:hover td { background: rgba(255,255,255,0.02); }
@@ -293,7 +293,15 @@ h3 { letter-spacing: -0.02em; }
 /* ===== CALENDAR ===== */
 .grid-cols-7 > div {
   min-height: 5rem !important;
-  padding: 0.35rem !important;
+  padding: 0.4rem !important;
+  border: 1px solid rgba(255,255,255,0.06) !important;
+}
+.grid-cols-7 > div .text-\[8px\],
+.grid-cols-7 > div .text-\[9px\] {
+  font-size: 0.72rem !important;
+  font-weight: 600 !important;
+  padding: 0.15rem 0.3rem !important;
+  border-radius: 4px;
 }
 
 /* ===== CHART BARS ===== */

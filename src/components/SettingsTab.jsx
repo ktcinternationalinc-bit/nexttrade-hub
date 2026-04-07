@@ -123,7 +123,7 @@ export default function SettingsTab({ user, users, onReload, isAdmin }) {
       var data = await res.json();
       if (data.error) { setAddError(data.error); }
       else if (data.warning) { setAddError(data.warning); }
-      else { setAddSuccess(f.name + ' added successfully! They can now log in with ' + f.email); setShowAddMember(false); setF({}); setSelectedModules([]); onReload(); }
+      else { setAddSuccess(f.name + ' added successfully! They can now log in with ' + f.email); setShowAddMember(false); setF({}); setSelectedModules([]); onReload(); loadPrefs(); }
     } catch (err) { setAddError('Error: ' + err.message); }
     setAddLoading(false);
   };
@@ -137,7 +137,7 @@ export default function SettingsTab({ user, users, onReload, isAdmin }) {
       });
       var data = await res.json();
       if (data.error) alert('Error: ' + data.error);
-      else onReload();
+      else { onReload(); loadPrefs(); }
     } catch (err) { alert('Error: ' + err.message); }
   };
 
@@ -147,7 +147,7 @@ export default function SettingsTab({ user, users, onReload, isAdmin }) {
       var res = await fetch('/api/users?id=' + userId, { method: 'DELETE' });
       var data = await res.json();
       if (data.error) alert('Error: ' + data.error);
-      else onReload();
+      else { onReload(); loadPrefs(); }
     } catch (err) { alert('Error: ' + err.message); }
   };
 
@@ -249,38 +249,80 @@ export default function SettingsTab({ user, users, onReload, isAdmin }) {
             {(users || []).map(u => {
               const roleInfo = ROLES.find(r => r.v === u.role) || ROLES[2];
               const reportsToUser = users?.find(m => m.id === u.reports_to);
+              const isEditing = editingUser === u.id;
               return (
-                <div key={u.id} className={'bg-white rounded-xl p-4 border ' + (u.active === false ? 'opacity-50 border-red-200' : 'border-slate-200')}>
-                  <div className="flex justify-between items-start">
+                <div key={u.id} className={'bg-white rounded-xl p-4 border ' + (u.active === false ? 'opacity-50 border-red-200' : isEditing ? 'border-blue-400 shadow-md' : 'border-slate-200')}>
+                  {isEditing ? (
                     <div>
-                      <div className="text-sm font-bold">{u.name} {u.active === false && <span className="text-red-500 text-[10px]">(Deactivated)</span>}</div>
-                      {u.name_ar && <div className="text-xs text-slate-500" style={{ direction: 'rtl' }}>{u.name_ar}</div>}
-                      <div className="text-xs text-slate-400">{u.email}</div>
-                      {u.phone && <div className="text-[10px] text-slate-400">📱 {u.phone}</div>}
+                      <h4 className="text-xs font-bold text-blue-700 mb-2">✏️ Editing {u.name}</h4>
+                      <div className="grid grid-cols-2 gap-3">
+                        <div><label className="text-[10px] font-semibold">Name</label>
+                          <input defaultValue={u.name} id={'edit-name-'+u.id} className="w-full px-3 py-2 rounded border text-sm" /></div>
+                        <div><label className="text-[10px] font-semibold">Name (Arabic)</label>
+                          <input defaultValue={u.name_ar||''} id={'edit-namear-'+u.id} className="w-full px-3 py-2 rounded border text-sm" style={{direction:'rtl'}} /></div>
+                        <div><label className="text-[10px] font-semibold">Email</label>
+                          <input defaultValue={u.email} className="w-full px-3 py-2 rounded border text-sm bg-slate-50" disabled />
+                          <div className="text-[9px] text-slate-400">Email cannot be changed</div></div>
+                        <div><label className="text-[10px] font-semibold">Phone</label>
+                          <input defaultValue={u.phone||''} id={'edit-phone-'+u.id} className="w-full px-3 py-2 rounded border text-sm" placeholder="+20..." /></div>
+                        <div><label className="text-[10px] font-semibold">Role</label>
+                          <select defaultValue={u.role} id={'edit-role-'+u.id} className="w-full px-3 py-2 rounded border text-sm">
+                            {ROLES.map(r => <option key={r.v} value={r.v}>{r.l}</option>)}
+                          </select></div>
+                        <div><label className="text-[10px] font-semibold">Reports To</label>
+                          <select defaultValue={u.reports_to||''} id={'edit-reports-'+u.id} className="w-full px-3 py-2 rounded border text-sm">
+                            <option value="">None (Top Level)</option>
+                            {(users || []).filter(m => m.id !== u.id).map(m => (
+                              <option key={m.id} value={m.id}>{m.name}</option>
+                            ))}
+                          </select></div>
+                        <div><label className="text-[10px] font-semibold">New Password <span className="text-slate-400">(leave blank to keep)</span></label>
+                          <input type="text" id={'edit-pw-'+u.id} className="w-full px-3 py-2 rounded border text-sm" placeholder="Min 6 chars" /></div>
+                      </div>
+                      <div className="flex gap-2 mt-3">
+                        <button onClick={async () => {
+                          var updates = {
+                            name: document.getElementById('edit-name-'+u.id).value,
+                            name_ar: document.getElementById('edit-namear-'+u.id).value,
+                            phone: document.getElementById('edit-phone-'+u.id).value,
+                            role: document.getElementById('edit-role-'+u.id).value,
+                            reports_to: document.getElementById('edit-reports-'+u.id).value || null
+                          };
+                          var pw = document.getElementById('edit-pw-'+u.id).value;
+                          if (pw) { if (pw.length < 6) { alert('Password must be at least 6 characters'); return; } updates.new_password = pw; }
+                          await handleUpdateUser(u.id, updates);
+                          setEditingUser(null);
+                        }} className="px-4 py-2 bg-emerald-500 text-white rounded-lg text-xs font-semibold">💾 Save Changes</button>
+                        <button onClick={() => setEditingUser(null)} className="px-4 py-2 border border-slate-200 rounded-lg text-xs">Cancel</button>
+                      </div>
                     </div>
-                    <span className={'text-xs font-bold ' + roleInfo.c}>{roleInfo.l}</span>
-                  </div>
-                  <div className="flex gap-2 mt-2 flex-wrap items-center">
-                    <select value={u.role} onChange={e => handleUpdateUser(u.id, { role: e.target.value })}
-                      className="px-2 py-1 rounded border border-slate-200 text-[10px]">
-                      {ROLES.map(r => <option key={r.v} value={r.v}>{r.l}</option>)}
-                    </select>
-                    <select value={u.reports_to || ''} onChange={e => handleUpdateUser(u.id, { reports_to: e.target.value || null })}
-                      className="px-2 py-1 rounded border border-slate-200 text-[10px]">
-                      <option value="">Reports to: None</option>
-                      {(users || []).filter(m => m.id !== u.id).map(m => (
-                        <option key={m.id} value={m.id}>Reports to: {m.name}</option>
-                      ))}
-                    </select>
-                    {reportsToUser && <span className="text-[10px] text-slate-400">→ {reportsToUser.name}</span>}
-                    <button onClick={() => {
-                      var pw = prompt('New password for ' + u.name + ' (min 6 chars):');
-                      if (pw && pw.length >= 6) handleUpdateUser(u.id, { new_password: pw });
-                      else if (pw) alert('Password must be at least 6 characters');
-                    }} className="px-2 py-1 rounded border border-amber-300 text-amber-600 text-[10px] font-semibold">🔑 Reset Password</button>
-                    {u.active !== false && <button onClick={() => handleDeactivateUser(u.id, u.name)}
-                      className="px-2 py-1 rounded border border-red-300 text-red-500 text-[10px] font-semibold">Deactivate</button>}
-                  </div>
+                  ) : (
+                    <div>
+                      <div className="flex justify-between items-start">
+                        <div>
+                          <div className="text-sm font-bold">{u.name} {u.active === false && <span className="text-red-500 text-[10px]">(Deactivated)</span>}</div>
+                          {u.name_ar && <div className="text-xs text-slate-500" style={{ direction: 'rtl' }}>{u.name_ar}</div>}
+                          <div className="text-xs text-slate-400">{u.email}</div>
+                          {u.phone && <div className="text-[10px] text-slate-400">📱 {u.phone}</div>}
+                          {reportsToUser && <div className="text-[10px] text-slate-400">Reports to: {reportsToUser.name}</div>}
+                        </div>
+                        <span className={'text-xs font-bold ' + roleInfo.c}>{roleInfo.l}</span>
+                      </div>
+                      <div className="flex gap-2 mt-2 flex-wrap items-center">
+                        <button onClick={() => setEditingUser(u.id)}
+                          className="px-2 py-1 rounded border border-blue-300 text-blue-600 text-[10px] font-semibold">✏️ Edit</button>
+                        <button onClick={() => {
+                          var pw = prompt('New password for ' + u.name + ' (min 6 chars):');
+                          if (pw && pw.length >= 6) handleUpdateUser(u.id, { new_password: pw });
+                          else if (pw) alert('Password must be at least 6 characters');
+                        }} className="px-2 py-1 rounded border border-amber-300 text-amber-600 text-[10px] font-semibold">🔑 Reset Password</button>
+                        {u.active !== false && <button onClick={() => handleDeactivateUser(u.id, u.name)}
+                          className="px-2 py-1 rounded border border-red-300 text-red-500 text-[10px] font-semibold">Deactivate</button>}
+                        {u.active === false && <button onClick={() => handleUpdateUser(u.id, { active: true })}
+                          className="px-2 py-1 rounded border border-emerald-300 text-emerald-600 text-[10px] font-semibold">✅ Reactivate</button>}
+                      </div>
+                    </div>
+                  )}
                 </div>
               );
             })}
