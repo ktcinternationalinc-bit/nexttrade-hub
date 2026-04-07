@@ -108,6 +108,7 @@ export default function App() {
   const [linkSearch, setLinkSearch] = useState('');
   const [showLinkSearch, setShowLinkSearch] = useState(false);
   const [formData, setFormData] = useState({});
+  const [hideSections, setHideSections] = useState({});
 
   // Import
   const [importStep, setImportStep] = useState('select'); // select, preview, importing, done
@@ -2103,21 +2104,25 @@ export default function App() {
 
             {/* ===== FINANCIAL DASHBOARD (shown first for users with access) ===== */}
             {(isAdmin || modulePerms['Sales'] || modulePerms['Treasury']) && (<>
-            <div className="bg-blue-100 rounded-lg px-3 py-2 mb-3">
+            <div className="bg-blue-100 rounded-lg px-3 py-2 mb-3 flex justify-between items-center cursor-pointer" onClick={() => setHideSections({...hideSections, invoices: !hideSections.invoices})}>
               <span className="text-sm font-bold text-blue-800">📋 INVOICES / فواتير العملاء</span>
+              <span className="text-xs text-blue-600">{hideSections.invoices ? '👁️ Show' : '🙈 Hide'}</span>
             </div>
-            <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-5">
+            {!hideSections.invoices && <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-5">
               <Card title="Invoiced" titleAr="الفواتير" value={fE(totalInvoiced)} sub={`${filteredInvoices.length} inv`} color="#0ea5e9" onClick={() => setDrillType('invoiced')} />
               <Card title="Collected" titleAr="المحصّل" value={fE(totalCollected)} color="#10b981" onClick={() => setDrillType('collected')} />
               <Card title="Outstanding" titleAr="المتبقّي" value={fE(totalOutstanding)} sub={`${filteredInvoices.filter(s => s.outstanding > 0).length} open`} color="#ef4444" onClick={() => setDrillType('outstanding')} />
               <Card title="Debt" titleAr="المديونية" value={fE(totalDebt)} sub={`${debts.length} debtors`} color="#dc2626" onClick={() => navigate('debts')} />
-            </div>
+            </div>}
 
-            <div className="bg-emerald-100 rounded-lg px-3 py-2 mb-3">
-              <span className="text-sm font-bold text-emerald-800">🏦 CASH REGISTER / الخزنة</span>
-              <span className="text-xs text-emerald-600 ml-2">(Loaded: {treasury.length} rows, Filtered: {filteredTreasury.length})</span>
+            <div className="bg-emerald-100 rounded-lg px-3 py-2 mb-3 flex justify-between items-center cursor-pointer" onClick={() => setHideSections({...hideSections, cash: !hideSections.cash})}>
+              <div>
+                <span className="text-sm font-bold text-emerald-800">🏦 CASH REGISTER / الخزنة</span>
+                <span className="text-xs text-emerald-600 ml-2">(Loaded: {treasury.length} rows, Filtered: {filteredTreasury.length})</span>
+              </div>
+              <span className="text-xs text-emerald-600">{hideSections.cash ? '👁️ Show' : '🙈 Hide'}</span>
             </div>
-            <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-5">
+            {!hideSections.cash && <><div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-5">
               <Card title="Cash In" titleAr="وارد" value={fE(totalCashIn)} sub="Tap / اضغط" color="#10b981" onClick={() => setTreasuryDrill('in')} />
               <Card title="Cash Out" titleAr="منصرف" value={fE(totalCashOut)} sub="Tap / اضغط" color="#ef4444" onClick={() => setTreasuryDrill('out')} />
               <Card title="Net" titleAr="صافي" value={fE(totalCashIn - totalCashOut)} sub="Tap / اضغط" color={totalCashIn > totalCashOut ? '#10b981' : '#ef4444'} onClick={() => setTreasuryDrill('net')} />
@@ -2278,6 +2283,7 @@ export default function App() {
                 </div>
               );
             })()}
+            </>}
             </>)}
 
             {/* ===== PERSONAL DASHBOARD (tickets, reminders, calendar — after financial for admins, first for team) ===== */}
