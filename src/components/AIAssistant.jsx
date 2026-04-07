@@ -7,12 +7,14 @@ export default function AIAssistant({ user, userProfile }) {
   const [input, setInput] = useState('');
   const [loading, setLoading] = useState(false);
   const [listening, setListening] = useState(false);
+  const [speaking, setSpeaking] = useState(false);
   const [voiceSupported, setVoiceSupported] = useState(false);
   const [pendingAction, setPendingAction] = useState(null);
   const recognitionRef = useRef(null);
   const chatEndRef = useRef(null);
   const silenceTimerRef = useRef(null);
   const autoSendRef = useRef(null);
+  const pendingTextRef = useRef(null);
 
   const conversationModeRef = useRef(false);
   const maxTimeoutRef = useRef(null);
@@ -42,46 +44,55 @@ export default function AIAssistant({ user, userProfile }) {
     if (SR) {
       setVoiceSupported(true);
       const recognition = new SR();
-      recognition.continuous = true;
+      recognition.continuous = false; // Non-continuous — restart after each utterance
       recognition.interimResults = true;
       recognition.lang = 'en-US';
+      
+      var currentTranscript = '';
+      
       recognition.onresult = (event) => {
         // Stop AI speech immediately when user starts talking
-        if (audioRef.current) { audioRef.current.pause(); audioRef.current = null; } if ('speechSynthesis' in window) window.speechSynthesis.cancel(); speakingRef.current = false;
-        let transcript = '';
+        if (audioRef.current) { audioRef.current.pause(); audioRef.current = null; } if ('speechSynthesis' in window) window.speechSynthesis.cancel(); speakingRef.current = false; setSpeaking(false);
+        
+        currentTranscript = '';
         for (let i = 0; i < event.results.length; i++) {
-          transcript += event.results[i][0].transcript;
+          currentTranscript += event.results[i][0].transcript;
         }
-        setInput(transcript);
-        if (silenceTimerRef.current) clearTimeout(silenceTimerRef.current);
-        if (autoSendRef.current) clearTimeout(autoSendRef.current);
-        // After 5 seconds of silence, auto-send but keep listening for interrupts
-        silenceTimerRef.current = setTimeout(() => {
-          if (conversationModeRef.current) {
-            // In conversation mode: send without stopping recognition
-            autoSendRef.current = setTimeout(() => {
-              const btn = document.getElementById('ai-send-btn');
-              if (btn) btn.click();
-            }, 400);
-          } else {
-            recognition.stop();
-            setListening(false);
-            autoSendRef.current = setTimeout(() => {
-              const btn = document.getElementById('ai-send-btn');
-              if (btn) btn.click();
-            }, 400);
-          }
-        }, 5000);
+        setInput(currentTranscript);
+        
+        // Check if we have a final result
+        const lastResult = event.results[event.results.length - 1];
+        if (lastResult.isFinal) {
+          if (silenceTimerRef.current) clearTimeout(silenceTimerRef.current);
+          if (autoSendRef.current) clearTimeout(autoSendRef.current);
+          // Wait 1.5s after final result, then send
+          silenceTimerRef.current = setTimeout(() => {
+            const textToSend = currentTranscript.trim();
+            if (textToSend) {
+              pendingTextRef.current = textToSend;
+              setInput('');
+              currentTranscript = '';
+              // Trigger send
+              autoSendRef.current = setTimeout(() => {
+                const btn = document.getElementById('ai-send-btn-hidden');
+                if (btn) btn.click();
+              }, 100);
+            }
+          }, 1500);
+        } else {
+          // Interim result — reset silence timer
+          if (silenceTimerRef.current) clearTimeout(silenceTimerRef.current);
+        }
       };
       recognition.onerror = (e) => { 
         if (e.error !== 'aborted' && e.error !== 'no-speech') { setListening(false); }
         if (silenceTimerRef.current) clearTimeout(silenceTimerRef.current); 
       };
       recognition.onend = () => { 
-        // In conversation mode, auto-restart if it stops unexpectedly
-        if (conversationModeRef.current) {
+        // In conversation mode, auto-restart to listen for next utterance
+        if (conversationModeRef.current && !speakingRef.current) {
           try { setTimeout(() => { if (conversationModeRef.current) { recognition.start(); setListening(true); } }, 300); } catch(e) {}
-        } else {
+        } else if (!conversationModeRef.current) {
           setListening(false); 
         }
       };
@@ -103,7 +114,7 @@ export default function AIAssistant({ user, userProfile }) {
 
   const toggleVoice = () => {
     if (!recognitionRef.current) return;
-    if (audioRef.current) { audioRef.current.pause(); audioRef.current = null; } if ('speechSynthesis' in window) window.speechSynthesis.cancel(); speakingRef.current = false;
+    if (audioRef.current) { audioRef.current.pause(); audioRef.current = null; } if ('speechSynthesis' in window) window.speechSynthesis.cancel(); speakingRef.current = false; setSpeaking(false);
     if (listening || conversationModeRef.current) {
       // Stop everything
       recognitionRef.current.stop();
@@ -123,7 +134,7 @@ export default function AIAssistant({ user, userProfile }) {
         conversationModeRef.current = false;
         try { recognitionRef.current.stop(); } catch(e) {}
         setListening(false);
-        if (audioRef.current) { audioRef.current.pause(); audioRef.current = null; } if ('speechSynthesis' in window) window.speechSynthesis.cancel(); speakingRef.current = false;
+        if (audioRef.current) { audioRef.current.pause(); audioRef.current = null; } if ('speechSynthesis' in window) window.speechSynthesis.cancel(); speakingRef.current = false; setSpeaking(false);
       }, 120000);
     }
   };
@@ -132,22 +143,30 @@ export default function AIAssistant({ user, userProfile }) {
   const speakingRef = useRef(false);
 
   const stopSpeaking = () => {
-    speakingRef.current = false;
+    speakingRef.current = false; setSpeaking(false);
+    setSpeaking(false);
     if (audioRef.current) { audioRef.current.pause(); audioRef.current = null; }
     if ('speechSynthesis' in window) window.speechSynthesis.cancel();
   };
 
   const speak = async (text) => {
     stopSpeaking();
-    const clean = text.replace(/[*#_`\-]/g, '').replace(/\n+/g, '. ').substring(0, 800);
+    const clean = text.replace(/[*#_`\-]/g, '').replace(/\n+/g, '. ').replace(/\s+/g, ' ').trim();
+    if (!clean) return;
     speakingRef.current = true;
+    setSpeaking(true);
 
-    // Try ElevenLabs first
+    // Pause recognition while AI speaks to avoid feedback
+    if (recognitionRef.current && listening) {
+      try { recognitionRef.current.stop(); } catch(e) {}
+    }
+
+    // Try TTS API first (ElevenLabs / server)
     try {
       const res = await fetch('/api/tts', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ text: clean })
+        body: JSON.stringify({ text: clean.substring(0, 1200) })
       });
       if (res.ok && res.headers.get('content-type')?.includes('audio')) {
         const blob = await res.blob();
@@ -155,39 +174,66 @@ export default function AIAssistant({ user, userProfile }) {
         const audio = new Audio(url);
         audioRef.current = audio;
         audio.onended = () => {
-          speakingRef.current = false;
+          speakingRef.current = false; setSpeaking(false);
           URL.revokeObjectURL(url);
           audioRef.current = null;
-          if (conversationModeRef.current) setInput('');
+          if (conversationModeRef.current) { setInput(''); startListeningAgain(); }
         };
-        audio.play();
+        audio.onerror = () => {
+          speakingRef.current = false; setSpeaking(false);
+          audioRef.current = null;
+          if (conversationModeRef.current) startListeningAgain();
+        };
+        await audio.play();
         return;
       }
-    } catch(e) { /* ElevenLabs not available, fall back */ }
+    } catch(e) { /* TTS API not available, fall back */ }
 
-    // Fallback: browser speech
+    // Fallback: browser speech — chunk into sentences to avoid Chrome 15s cutoff
     if ('speechSynthesis' in window) {
-      const u = new SpeechSynthesisUtterance(clean.substring(0, 500));
-      if (voiceRef.current) u.voice = voiceRef.current;
-      u.rate = 1.0; u.pitch = 1.0;
-      u.onend = () => {
-        speakingRef.current = false;
-        if (conversationModeRef.current) setInput('');
+      window.speechSynthesis.cancel();
+      // Split into chunks at sentence boundaries, max 150 chars each
+      const sentences = clean.match(/[^.!?]+[.!?]*/g) || [clean];
+      const chunks = [];
+      let current = '';
+      for (const s of sentences) {
+        if ((current + s).length > 150 && current) { chunks.push(current.trim()); current = s; }
+        else { current += s; }
+      }
+      if (current.trim()) chunks.push(current.trim());
+
+      let i = 0;
+      const speakNext = () => {
+        if (i >= chunks.length || !speakingRef.current) {
+          speakingRef.current = false; setSpeaking(false);
+          if (conversationModeRef.current) { setInput(''); startListeningAgain(); }
+          return;
+        }
+        const u = new SpeechSynthesisUtterance(chunks[i]);
+        if (voiceRef.current) u.voice = voiceRef.current;
+        u.rate = 1.0; u.pitch = 1.0;
+        u.onend = () => { i++; speakNext(); };
+        u.onerror = () => { speakingRef.current = false; setSpeaking(false); if (conversationModeRef.current) startListeningAgain(); };
+        window.speechSynthesis.speak(u);
       };
-      window.speechSynthesis.speak(u);
+      speakNext();
     }
   };
 
   const askQuestion = useCallback(async (overrideText) => {
-    const question = (overrideText || input).trim();
+    // Check for pending voice text first
+    const voiceText = pendingTextRef.current;
+    pendingTextRef.current = null;
+    const question = (overrideText || voiceText || input).trim();
     if (!question || loading) return;
+    setInput(''); // Clear immediately
     
     // If there's a pending action and user says execute/yes/confirm — run it
     if (pendingAction) {
       const cmd = question.toLowerCase().replace(/[.,!?]/g, '');
       const confirmWords = ['execute', 'yes', 'yeah', 'yep', 'yup', 'ok', 'okay', 'do it', 'go ahead', 'confirm', 'send it', 'go', 'sure', 'approve', 'proceed', 'نعم', 'نفذ', 'تنفيذ', 'موافق'];
       if (confirmWords.some(w => cmd === w || cmd.startsWith(w + ' '))) {
-        setInput('');
+;
         setMessages(prev => [...prev, { role: 'user', text: '✅ ' + question }]);
         // Execute inline
         if (pendingAction.type === 'request_quote') {
@@ -226,7 +272,7 @@ export default function AIAssistant({ user, userProfile }) {
       }
       const cancelWords = ['cancel', 'no', 'nah', 'never mind', 'skip', 'stop', 'لا', 'إلغاء'];
       if (cancelWords.some(w => cmd === w || cmd.startsWith(w + ' '))) {
-        setInput('');
+;
         setMessages(prev => [...prev, { role: 'user', text: '❌ ' + question }]);
         setMessages(prev => [...prev, { role: 'ai', text: 'Cancelled.' }]);
         setPendingAction(null);
@@ -235,7 +281,7 @@ export default function AIAssistant({ user, userProfile }) {
       }
     }
     
-    setInput('');
+;
     const newMsg = { role: 'user', text: question };
     setMessages(prev => [...prev, newMsg]);
     setLoading(true);
@@ -551,13 +597,26 @@ ${today}`;
               {listening ? '⏹️' : '🎤'}
             </button>
           )}
+          {/* Stop Speaking button — visible when AI is talking */}
+          {speaking && (
+            <button onClick={() => { stopSpeaking(); if (conversationModeRef.current) startListeningAgain(); }}
+              className="rounded-xl text-lg transition flex-shrink-0 animate-pulse"
+              style={{
+                background: 'linear-gradient(135deg, #f59e0b, #d97706)',
+                color: 'white', width: 56, height: 56,
+                display: 'flex', alignItems: 'center', justifyContent: 'center',
+                boxShadow: '0 0 15px rgba(245,158,11,0.4)',
+              }}>
+              🔇
+            </button>
+          )}
           <input value={input} onChange={e => setInput(e.target.value)}
             onKeyDown={e => e.key === 'Enter' && askQuestion()}
-            placeholder={listening ? 'Listening...' : 'Ask anything or give a command...'}
+            placeholder={speaking ? 'AI is speaking... tap 🔇 to stop' : listening ? 'Listening...' : 'Ask anything or give a command...'}
             className="flex-1 px-4 py-3 rounded-xl text-sm"
             style={{
-              background: listening ? 'rgba(248,113,113,0.06)' : 'rgba(255,255,255,0.04)',
-              border: '1px solid ' + (listening ? 'rgba(248,113,113,0.2)' : 'rgba(255,255,255,0.08)'),
+              background: speaking ? 'rgba(245,158,11,0.06)' : listening ? 'rgba(248,113,113,0.06)' : 'rgba(255,255,255,0.04)',
+              border: '1px solid ' + (speaking ? 'rgba(245,158,11,0.2)' : listening ? 'rgba(248,113,113,0.2)' : 'rgba(255,255,255,0.08)'),
               color: 'var(--text-primary)',
               fontSize: '16px',
             }} />
@@ -566,11 +625,21 @@ ${today}`;
             style={{background:'linear-gradient(135deg, #0ea5e9, #6366f1)', boxShadow:'0 2px 12px rgba(56,189,248,0.3)', color:'white', height: 56}}>
             {loading ? '...' : '→'}
           </button>
+          {/* Hidden button for voice auto-send — not disabled, uses pendingTextRef */}
+          <button id="ai-send-btn-hidden" onClick={() => askQuestion()} style={{display:'none'}} />
         </div>
-        {listening && (
+        {speaking && (
+          <div className="text-center mt-2 py-1">
+            <div className="text-xs font-bold" style={{color:'#f59e0b'}}>🔊 AI Speaking... <button onClick={stopSpeaking} className="ml-2 px-2 py-0.5 rounded bg-amber-600 text-white text-[10px] font-bold">Stop</button></div>
+          </div>
+        )}
+        {listening && !speaking && (
           <div className="text-center mt-2 py-2">
-            <div className="text-xs font-bold animate-pulse" style={{color:'#f87171'}}>🔴 Conversation Mode — speak naturally...</div>
-            <div className="text-[10px] mt-1" style={{color:'var(--text-muted)'}}>Auto-sends after 5s silence • AI responds • listening resumes • Tap mic to end</div>
+            <div className="text-xs font-bold animate-pulse" style={{color:'#f87171'}}>🔴 Listening — speak naturally...</div>
+            <div className="text-[10px] mt-1" style={{color:'var(--text-muted)'}}>
+              Auto-sends after 3s silence • Tap ⏹️ to stop
+              <button onClick={() => { toggleVoice(); }} className="ml-2 px-2 py-0.5 rounded text-[10px] font-bold" style={{background:'rgba(248,113,113,0.2)', color:'#f87171'}}>End Session</button>
+            </div>
           </div>
         )}
       </div>

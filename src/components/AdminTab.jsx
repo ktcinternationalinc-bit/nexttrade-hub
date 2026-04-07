@@ -3,8 +3,17 @@ import { useState, useMemo, useEffect } from 'react';
 import { supabase } from '../lib/supabase';
 
 const STATUS_COLORS = {New:'#3b82f6',Acknowledged:'#8b5cf6','In Progress':'#f59e0b',Waiting:'#6b7280',Review:'#ec4899',Testing:'#14b8a6',Ready:'#10b981',Closed:'#374151',Reopened:'#ef4444'};
+const PIPELINE_STAGES = [
+  { v: 'lead', l: 'Lead', c: '#94a3b8', icon: '🔘' },
+  { v: 'contacted', l: 'Contacted', c: '#3b82f6', icon: '📞' },
+  { v: 'qualified', l: 'Qualified', c: '#8b5cf6', icon: '✅' },
+  { v: 'proposal', l: 'Proposal', c: '#f59e0b', icon: '📋' },
+  { v: 'negotiation', l: 'Negotiation', c: '#ec4899', icon: '🤝' },
+  { v: 'won', l: 'Won / Deal', c: '#10b981', icon: '🏆' },
+  { v: 'lost', l: 'Lost', c: '#ef4444', icon: '❌' },
+];
 
-export default function AdminTab({ user, userProfile, users, isAdmin }) {
+export default function AdminTab({ user, userProfile, users, isAdmin, customers }) {
   const [logs, setLogs] = useState([]);
   const [tickets, setTickets] = useState([]);
   const [rates, setRates] = useState([]);
@@ -13,6 +22,8 @@ export default function AdminTab({ user, userProfile, users, isAdmin }) {
   const [loaded, setLoaded] = useState(false);
   const [selUser, setSelUser] = useState('all');
   const [section, setSection] = useState('scorecards');
+  const [drillStage, setDrillStage] = useState(null);
+  const [drillUser, setDrillUser] = useState(null);
   const [dateFrom, setDateFrom] = useState(() => { const d = new Date(); d.setDate(d.getDate() - 30); return d.toISOString().substring(0, 10); });
   const [dateTo, setDateTo] = useState(new Date().toISOString().substring(0, 10));
 
@@ -117,7 +128,7 @@ export default function AdminTab({ user, userProfile, users, isAdmin }) {
 
     {/* Section tabs */}
     <div className="flex gap-1 mb-3 flex-wrap">
-      {[['scorecards','📊 Scorecards'],['activity','📋 Activity'],['tickets','🎫 Tickets'],['audit','🔍 Audit']].map(([v,l]) => (
+      {[['scorecards','📊 Scorecards'],['pipeline','🏆 Sales Pipeline'],['activity','📋 Activity'],['tickets','🎫 Tickets'],['audit','🔍 Audit']].map(([v,l]) => (
         <button key={v} onClick={() => setSection(v)}
           className={'px-3 py-1.5 rounded-lg text-xs font-semibold transition ' + (section === v ? 'bg-slate-900 text-white' : 'bg-slate-100 text-slate-500')}>{l}</button>
       ))}
@@ -206,6 +217,112 @@ export default function AdminTab({ user, userProfile, users, isAdmin }) {
           </div>
         ))}
       </div>
+    </div>)}
+
+    {/* ===== SALES PIPELINE ===== */}
+    {section === 'pipeline' && (<div>
+      {(() => {
+        const cust = customers || [];
+
+        // Per-user pipeline stats
+        const userStats = (users || []).map(u => {
+          const assigned = cust.filter(c => c.assigned_rep === u.id);
+          const byStage = {};
+          PIPELINE_STAGES.forEach(s => { byStage[s.v] = assigned.filter(c => (c.pipeline_stage || 'lead') === s.v).length; });
+          return { ...u, assigned: assigned.length, byStage };
+        }).filter(u => u.assigned > 0);
+
+        // Overall pipeline
+        const overallByStage = {};
+        PIPELINE_STAGES.forEach(s => { overallByStage[s.v] = cust.filter(c => (c.pipeline_stage || 'lead') === s.v).length; });
+
+        // Drill-down clients
+        const drillClients = drillStage ? cust.filter(c =>
+          (c.pipeline_stage || 'lead') === drillStage &&
+          (!drillUser || c.assigned_rep === drillUser)
+        ) : [];
+
+        return (<div>
+          {/* Overall funnel */}
+          <div className="bg-white rounded-xl p-4 mb-3">
+            <h3 className="text-sm font-bold mb-3">Overall Pipeline / خط المبيعات</h3>
+            <div className="flex gap-1 flex-wrap">
+              {PIPELINE_STAGES.map(s => (
+                <button key={s.v} onClick={() => { setDrillStage(s.v); setDrillUser(null); }}
+                  className={'px-3 py-2 rounded-lg text-xs font-bold transition flex-1 min-w-[80px] text-center ' + (drillStage === s.v && !drillUser ? 'text-white shadow' : '')}
+                  style={drillStage === s.v && !drillUser ? { background: s.c } : { background: s.c + '15', color: s.c }}>
+                  <div className="text-lg">{overallByStage[s.v]}</div>
+                  <div className="text-[9px]">{s.icon} {s.l}</div>
+                </button>
+              ))}
+            </div>
+          </div>
+
+          {/* Per-user breakdown */}
+          <div className="bg-white rounded-xl p-4 mb-3">
+            <h3 className="text-sm font-bold mb-3">By Team Member / حسب الفريق</h3>
+            <div className="overflow-auto">
+              <table className="w-full border-collapse text-xs">
+                <thead><tr className="bg-slate-50">
+                  <th className="px-3 py-2 text-left font-bold">Rep</th>
+                  <th className="px-3 py-2 text-center font-bold">Total</th>
+                  {PIPELINE_STAGES.map(s => <th key={s.v} className="px-2 py-2 text-center" style={{color:s.c}}>{s.icon}</th>)}
+                </tr></thead>
+                <tbody>
+                  {userStats.map(u => (
+                    <tr key={u.id} className="border-b border-slate-50">
+                      <td className="px-3 py-2 font-semibold">{u.name}</td>
+                      <td className="px-3 py-2 text-center font-bold">{u.assigned}</td>
+                      {PIPELINE_STAGES.map(s => (
+                        <td key={s.v} className="px-2 py-2 text-center">
+                          {u.byStage[s.v] > 0 ? (
+                            <button onClick={() => { setDrillStage(s.v); setDrillUser(u.id); }}
+                              className="px-2 py-0.5 rounded font-bold text-white text-[10px]" style={{background:s.c}}>
+                              {u.byStage[s.v]}
+                            </button>
+                          ) : <span className="text-slate-300">—</span>}
+                        </td>
+                      ))}
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </div>
+
+          {/* Drill-down */}
+          {drillStage && (
+            <div className="bg-white rounded-xl p-4 mb-3">
+              <div className="flex justify-between items-center mb-2">
+                <h3 className="text-sm font-bold">
+                  {PIPELINE_STAGES.find(s=>s.v===drillStage)?.icon} {PIPELINE_STAGES.find(s=>s.v===drillStage)?.l}
+                  {drillUser && ' — ' + (users?.find(u=>u.id===drillUser)?.name || '')}
+                  <span className="text-slate-400 ml-1">({drillClients.length})</span>
+                </h3>
+                <button onClick={() => { setDrillStage(null); setDrillUser(null); }} className="px-2 py-1 border rounded text-xs">Close</button>
+              </div>
+              <div className="space-y-1 max-h-[300px] overflow-auto">
+                {drillClients.map(c => {
+                  const rep = users?.find(u => u.id === c.assigned_rep);
+                  return (
+                    <div key={c.id} className="flex justify-between items-center py-2 px-2 border-b border-slate-50 hover:bg-slate-50 rounded">
+                      <div>
+                        <div className="text-xs font-bold" style={{direction:'rtl'}}>{c.name_en || c.name}</div>
+                        <div className="text-[10px] text-slate-500">{c.industry || ''} {c.group_name ? '· ' + c.group_name : ''}</div>
+                      </div>
+                      <div className="text-right">
+                        {rep && <div className="text-[10px] text-indigo-600 font-semibold">{rep.name}</div>}
+                        {c.phone && <div className="text-[10px] text-slate-400">{c.phone}</div>}
+                      </div>
+                    </div>
+                  );
+                })}
+                {drillClients.length === 0 && <div className="text-xs text-slate-400 text-center py-4">No clients in this stage</div>}
+              </div>
+            </div>
+          )}
+        </div>);
+      })()}
     </div>)}
 
     {/* ===== ACTIVITY FEED ===== */}

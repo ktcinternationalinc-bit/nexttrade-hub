@@ -233,11 +233,14 @@ export async function POST(request) {
       safe(supabase.from('daily_log').select('entry_text, log_date, auto_generated').order('created_at', { ascending: false }).limit(30)),
       safe(supabase.from('vendor_contacts').select('*').eq('is_active', true).order('company_name')),
       safe(supabase.from('messages').select('id, channel, direction, from_address, to_address, subject, body, status, created_at, ai_summary').order('created_at', { ascending: false }).limit(30)),
+      safe(supabase.from('invoice_items').select('order_number, product_code, description, description_en, quantity, unit_price, total_price, customer_name').order('created_at', { ascending: false }).limit(1000)),
+      safe(supabase.from('checks').select('customer_name, amount, check_date, bank_name, check_number, order_number, status, collection_date').order('check_date', { ascending: false }).limit(300)),
     ]);
     var invoices = results[0], treasury = results[1], customers = results[2], tickets = results[3];
     var debts = results[4], shippingRates = results[5], followUps = results[6];
     var calendarEvents = results[7], inventory = results[8], dailyLog = results[9], vendorContacts = results[10];
     var recentMessages = results[11];
+    var invoiceItems = results[12], checks = results[13];
 
     var totalInvoiced = invoices.reduce(function(a, i) { return a + Number(i.total_amount || 0); }, 0);
     var totalCollected = invoices.reduce(function(a, i) { return a + Number(i.total_collected || 0); }, 0);
@@ -291,8 +294,10 @@ export async function POST(request) {
 
     // Clear restricted data
     if (!hasAccess('Sales')) invoices = [];
+    if (!hasAccess('Sales')) invoiceItems = [];
     if (!hasAccess('Treasury')) treasury = [];
     if (!hasAccess('Debts')) debts = [];
+    if (!hasAccess('Checks')) checks = [];
     if (!hasAccess('Customers')) customers = [];
 
     var gmailConnected = false;
@@ -315,7 +320,8 @@ export async function POST(request) {
     context += '3. Read and search email' + (gmailConnected ? ' (CONNECTED: ' + gmailEmail + ')' : ' (NOT CONNECTED)') + '\n';
     context += '4. Send emails' + (gmailConnected ? ' (READY)' : ' (NOT CONNECTED)') + '\n';
     context += '5. Send WhatsApp messages' + (twilioConfigured ? ' (READY via Twilio)' : ' (NOT CONFIGURED)') + '\n';
-    context += '6. Search and summarize communications\n\n';
+    context += '6. Search and summarize communications\n';
+    context += '7. Financial reconciliation & audit — cross-check invoices vs treasury vs checks. Flag mismatches, duplicates, orphan entries, stale checks, over-collections, and uncategorized expenses. The RECONCILIATION ISSUES section below contains pre-computed flags. When user asks about discrepancies, inconsistencies, reconciliation, or audit, use this data AND drill into the raw INVOICES/TREASURY/CHECKS data to provide detailed analysis.\n\n';
 
     context += 'FOR COMMANDS: Respond with JSON wrapped in ---ACTION_START--- and ---ACTION_END--- tags.\n\n';
     context += 'Available actions:\n';
@@ -347,13 +353,129 @@ export async function POST(request) {
     context += '- Answer concisely. Use EGP currency. Format numbers with commas.\n\n';
 
     context += '===== LIVE DATA =====\n';
-    context += '[Loaded: ' + invoices.length + ' invoices, ' + treasury.length + ' treasury, ' + customers.length + ' customers, ' + tickets.length + ' tickets, ' + vendorContacts.length + ' vendors]\n\n';
+    context += '[Loaded: ' + invoices.length + ' invoices, ' + invoiceItems.length + ' line items, ' + treasury.length + ' treasury, ' + checks.length + ' checks, ' + customers.length + ' customers, ' + tickets.length + ' tickets, ' + vendorContacts.length + ' vendors]\n\n';
     context += 'FINANCIAL: Invoiced EGP ' + totalInvoiced.toLocaleString() + ' | Collected EGP ' + totalCollected.toLocaleString() + ' | Outstanding EGP ' + totalOutstanding.toLocaleString() + '\n';
     context += 'Cash In EGP ' + totalCashIn.toLocaleString() + ' | Cash Out EGP ' + totalCashOut.toLocaleString() + ' | Net EGP ' + (totalCashIn - totalCashOut).toLocaleString() + '\n\n';
+
+    // ===== RECONCILIATION ANALYSIS =====
+    var reconIssues = [];
+
+    // 1. Invoice vs Treasury by order number — find orders with mismatched amounts
+    var treasuryByOrder = {};
+    treasury.forEach(function(t) {
+      if (t.order_number) {
+        if (!treasuryByOrder[t.order_number]) treasuryByOrder[t.order_number] = { cashIn: 0, cashOut: 0, count: 0 };
+        treasuryByOrder[t.order_number].cashIn += Number(t.cash_in || 0);
+        treasuryByOrder[t.order_number].cashOut += Number(t.cash_out || 0);
+        treasuryByOrder[t.order_number].count++;
+      }
+    });
+
+    // Invoices where collected amount doesn't match treasury cash-in for same order
+    invoices.forEach(function(inv) {
+      if (!inv.order_number) return;
+      var tData = treasuryByOrder[inv.order_number];
+      var collected = Number(inv.total_collected || 0);
+      var invoiced = Number(inv.total_amount || 0);
+      var outstanding = Number(inv.outstanding || 0);
+
+      // Flag: invoice says collected but no matching treasury entries
+      if (collected > 0 && !tData) {
+        reconIssues.push('ORDER #' + inv.order_number + ' (' + (inv.customer_name || '?') + '): Invoice shows EGP ' + collected.toLocaleString() + ' collected but NO treasury entries found for this order.');
+      }
+      // Flag: treasury cash-in significantly differs from invoice collected
+      else if (tData && collected > 0) {
+        var diff = Math.abs(tData.cashIn - collected);
+        if (diff > 50 && diff / Math.max(collected, 1) > 0.05) {
+          reconIssues.push('ORDER #' + inv.order_number + ' (' + (inv.customer_name || '?') + '): Invoice collected = EGP ' + collected.toLocaleString() + ' but treasury cash-in = EGP ' + tData.cashIn.toLocaleString() + ' (difference: EGP ' + diff.toLocaleString() + ')');
+        }
+      }
+      // Flag: outstanding is negative (over-collected)
+      if (outstanding < -50) {
+        reconIssues.push('ORDER #' + inv.order_number + ' (' + (inv.customer_name || '?') + '): OVER-COLLECTED — outstanding is EGP ' + outstanding.toLocaleString() + ' (collected exceeds invoiced).');
+      }
+      // Flag: collected exceeds invoiced amount
+      if (collected > invoiced + 50) {
+        reconIssues.push('ORDER #' + inv.order_number + ' (' + (inv.customer_name || '?') + '): Collected EGP ' + collected.toLocaleString() + ' exceeds invoiced EGP ' + invoiced.toLocaleString());
+      }
+    });
+
+    // 2. Treasury entries with order numbers that don't match any invoice
+    var invoiceOrders = {};
+    invoices.forEach(function(i) { if (i.order_number) invoiceOrders[i.order_number] = true; });
+    var orphanTreasury = {};
+    treasury.forEach(function(t) {
+      if (t.order_number && !invoiceOrders[t.order_number] && Number(t.cash_in || 0) > 0) {
+        if (!orphanTreasury[t.order_number]) orphanTreasury[t.order_number] = { total: 0, count: 0 };
+        orphanTreasury[t.order_number].total += Number(t.cash_in);
+        orphanTreasury[t.order_number].count++;
+      }
+    });
+    Object.entries(orphanTreasury).forEach(function(entry) {
+      reconIssues.push('ORPHAN TREASURY: Order #' + entry[0] + ' has ' + entry[1].count + ' treasury entries totaling EGP ' + entry[1].total.toLocaleString() + ' cash-in but NO matching invoice exists.');
+    });
+
+    // 3. Checks vs invoices — checks with order numbers that have no invoice
+    checks.forEach(function(c) {
+      if (c.order_number && !invoiceOrders[c.order_number] && Number(c.amount) > 0) {
+        reconIssues.push('ORPHAN CHECK: ' + (c.customer_name || '?') + ' check #' + (c.check_number || '?') + ' for EGP ' + Number(c.amount).toLocaleString() + ' references Order #' + c.order_number + ' but no invoice found.');
+      }
+    });
+
+    // 4. Duplicate treasury entries (same date, same amount, same description)
+    var seenTx = {};
+    treasury.forEach(function(t) {
+      var key = (t.transaction_date || '') + '|' + (t.description || '').trim() + '|' + Number(t.cash_in || 0) + '|' + Number(t.cash_out || 0);
+      if (Number(t.cash_in || 0) + Number(t.cash_out || 0) > 100) {
+        if (!seenTx[key]) seenTx[key] = 0;
+        seenTx[key]++;
+      }
+    });
+    Object.entries(seenTx).forEach(function(entry) {
+      if (entry[1] > 1) {
+        var parts = entry[0].split('|');
+        reconIssues.push('POSSIBLE DUPLICATE: ' + entry[1] + 'x treasury entries on ' + parts[0] + ' for "' + parts[1].substring(0, 40) + '" — In: EGP ' + Number(parts[2]).toLocaleString() + ' Out: EGP ' + Number(parts[3]).toLocaleString());
+      }
+    });
+
+    // 5. Stale checks — pending for over 90 days
+    var ninetyDaysAgo = new Date(Date.now() - 90 * 86400000).toISOString().substring(0, 10);
+    checks.forEach(function(c) {
+      if ((!c.status || c.status === 'pending') && c.check_date && c.check_date < ninetyDaysAgo) {
+        reconIssues.push('STALE CHECK: ' + (c.customer_name || '?') + ' check #' + (c.check_number || '?') + ' for EGP ' + Number(c.amount).toLocaleString() + ' dated ' + c.check_date + ' still pending (' + Math.round((Date.now() - new Date(c.check_date).getTime()) / 86400000) + ' days).');
+      }
+    });
+
+    // 6. Large uncategorized expenses
+    var uncatTotal = 0, uncatCount = 0;
+    treasury.forEach(function(t) {
+      if (Number(t.cash_out) > 0 && (!t.category || t.category === '')) {
+        uncatTotal += Number(t.cash_out);
+        uncatCount++;
+      }
+    });
+    if (uncatCount > 10) {
+      reconIssues.push('UNCATEGORIZED: ' + uncatCount + ' treasury expense entries totaling EGP ' + uncatTotal.toLocaleString() + ' have no category assigned.');
+    }
+
+    context += 'RECONCILIATION ISSUES (' + reconIssues.length + '):\n';
+    if (reconIssues.length === 0) {
+      context += 'No major discrepancies detected.\n\n';
+    } else {
+      reconIssues.slice(0, 50).forEach(function(issue) { context += '⚠️ ' + issue + '\n'; });
+      if (reconIssues.length > 50) context += '... and ' + (reconIssues.length - 50) + ' more issues.\n';
+      context += '\n';
+    }
+
     context += 'OPERATIONS: ' + openTickets + ' open tickets (' + overdueTickets + ' overdue) | ' + pendingFollowUps + ' pending follow-ups | ' + customers.length + ' customers | ' + inventory.length + ' inventory\n\n';
 
     context += 'TOP OWING:\n';
     topOwing.forEach(function(x) { context += '- ' + x[0] + ': EGP ' + x[1].toLocaleString() + '\n'; });
+
+    context += '\nINVOICES (last ' + invoices.length + '):\n';
+    invoices.slice(0, 100).forEach(function(i) {
+      context += '- #' + (i.order_number || '?') + ' | ' + (i.customer_name || '') + ' | ' + (i.invoice_date || '') + ' | Total: EGP ' + Number(i.total_amount || 0).toLocaleString() + ' | Collected: EGP ' + Number(i.total_collected || 0).toLocaleString() + ' | Outstanding: EGP ' + Number(i.outstanding || 0).toLocaleString() + (i.sales_rep ? ' | Rep: ' + i.sales_rep : '') + '\n';
+    });
 
     context += '\nMONTHLY SALES:\n';
     Object.entries(months).sort(function(a, b) { return b[0].localeCompare(a[0]); }).slice(0, 12).forEach(function(x) {
@@ -403,6 +525,32 @@ export async function POST(request) {
 
     context += '\nDEBTORS:\n';
     debts.forEach(function(d) { context += '- ' + d.debtor_name + ': EGP ' + Number(d.total_debt).toLocaleString() + '\n'; });
+
+    // Group invoice items by order number for detailed drill-down
+    if (invoiceItems.length > 0) {
+      context += '\nINVOICE LINE ITEMS (' + invoiceItems.length + ' items):\n';
+      var byOrder = {};
+      invoiceItems.forEach(function(item) {
+        var key = item.order_number || '?';
+        if (!byOrder[key]) byOrder[key] = [];
+        byOrder[key].push(item);
+      });
+      Object.entries(byOrder).slice(0, 100).forEach(function(entry) {
+        var orderNum = entry[0], items = entry[1];
+        var custName = items[0].customer_name || '';
+        context += 'Order #' + orderNum + (custName ? ' (' + custName + ')' : '') + ':\n';
+        items.forEach(function(item) {
+          context += '  - ' + (item.description_en || item.description || item.product_code || '?') + ' | Qty: ' + (item.quantity || 0) + ' | Unit: EGP ' + Number(item.unit_price || 0).toLocaleString() + ' | Total: EGP ' + Number(item.total_price || 0).toLocaleString() + '\n';
+        });
+      });
+    }
+
+    if (checks.length > 0) {
+      context += '\nCHECKS (' + checks.length + '):\n';
+      checks.slice(0, 100).forEach(function(c) {
+        context += '- ' + (c.customer_name || '?') + ' | EGP ' + Number(c.amount).toLocaleString() + ' | ' + (c.check_date || '') + ' | ' + (c.bank_name || '') + ' #' + (c.check_number || '') + ' | Status: ' + (c.status || 'pending') + (c.order_number ? ' | Order #' + c.order_number : '') + (c.collection_date ? ' | Collected: ' + c.collection_date : '') + '\n';
+      });
+    }
 
     if (recentMessages.length > 0) {
       context += '\nRECENT COMMUNICATIONS (' + recentMessages.length + '):\n';

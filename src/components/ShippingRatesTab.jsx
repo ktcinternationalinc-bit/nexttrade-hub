@@ -1,6 +1,7 @@
 'use client';
 import { useState, useMemo, useEffect, useCallback, useRef } from 'react';
 import { supabase, dbInsert, dbUpdate, dbDelete, logActivity } from '../lib/supabase';
+import { notifyShippingRate, notifyShippingBooked } from '../lib/notify';
 import { fE, fmt } from '../lib/utils';
 import * as XLSX from 'xlsx';
 
@@ -299,7 +300,7 @@ export default function ShippingRatesTab({ user, userProfile, isAdmin, customers
     if (!f.origin || !f.destination || !f.vendorName) { alert('Fill Origin, Destination, Vendor'); return; }
     if (!f.rateType) { alert('Rate Type is required! Select Shipping, Trucking, or Customs/Brokerage.\n\nنوع السعر مطلوب! اختر شحن أو نقل بري أو جمارك'); return; }
     const record = { origin: f.origin, destination: f.destination, vendor_name: f.vendorName, shipping_line: f.shippingLine || '', transport_mode: f.transportMode || 'Ocean', rate_type: f.rateType, container_type: f.containerType || '40ft', rate_amount: Number(f.rateAmount) || 0, currency: f.currency || 'USD', transit_days: f.transitDays ? Number(f.transitDays) : null, free_days: f.freeDays ? Number(f.freeDays) : null, port_fees: Number(f.portFees) || 0, thc_fees: Number(f.thcFees) || 0, documentation_fees: Number(f.docFees) || 0, customs_fees: Number(f.customsFees) || 0, other_fees: Number(f.otherFees) || 0, other_fees_desc: f.otherFeesDesc || '', total_cost: Number(f.rateAmount||0)+Number(f.portFees||0)+Number(f.thcFees||0)+Number(f.docFees||0)+Number(f.customsFees||0)+Number(f.otherFees||0), effective_date: f.effectiveDate || new Date().toISOString().substring(0,10), expiry_date: f.expiryDate || null, port_of_loading: f.pol || '', port_of_discharge: f.pod || '', notes: f.notes || '', booked: f.booked || false, shipment_reference: f.shipmentRef || '', booking_date: f.bookingDate || null, booking_notes: f.bookingNotes || '' };
-    try { if (editingRate) await dbUpdate('shipping_rates', editingRate.id, record, myId); else await dbInsert('shipping_rates', record, myId); await logActivity(myId, (editingRate ? 'Updated' : 'Created') + ' ' + (f.rateType || 'shipping') + ' rate: ' + f.origin + ' → ' + f.destination + ' (' + f.vendorName + ', ' + (f.currency || 'USD') + ' ' + (f.rateAmount || 0) + ')', 'shipping'); setF({}); setEditingRate(null); setView(selectedRoute ? 'route_detail' : 'routes'); await loadData(); } catch (err) { alert('Error: ' + err.message); }
+    try { if (editingRate) await dbUpdate('shipping_rates', editingRate.id, record, myId); else { await dbInsert('shipping_rates', record, myId); notifyShippingRate('all', f.origin, f.destination, myId); } await logActivity(myId, (editingRate ? 'Updated' : 'Created') + ' ' + (f.rateType || 'shipping') + ' rate: ' + f.origin + ' → ' + f.destination + ' (' + f.vendorName + ', ' + (f.currency || 'USD') + ' ' + (f.rateAmount || 0) + ')', 'shipping'); setF({}); setEditingRate(null); setView(selectedRoute ? 'route_detail' : 'routes'); await loadData(); } catch (err) { alert('Error: ' + err.message); }
   };
 
   const [bookingModal, setBookingModal] = useState(null);
@@ -310,6 +311,7 @@ export default function ShippingRatesTab({ user, userProfile, isAdmin, customers
       await dbInsert('shipping_bookings', { rate_id: bookingModal.id, shipment_reference: f.bookRef, customer_name: f.bookCustomer || '', order_number: f.bookOrder || '', booking_date: new Date().toISOString().substring(0,10), notes: f.bookNotes || '', booked_by: myId }, myId);
       await dbUpdate('shipping_rates', bookingModal.id, { booked: true, shipment_reference: f.bookRef, booking_date: new Date().toISOString().substring(0,10), booking_notes: (f.bookCustomer ? 'Customer: ' + f.bookCustomer + ' | ' : '') + (f.bookOrder ? 'Order: ' + f.bookOrder : '') }, myId);
       await logActivity(myId, 'Booked rate: ' + bookingModal.vendor_name + ' ' + bookingModal.origin + '→' + bookingModal.destination + ' Ref: ' + f.bookRef + (f.bookCustomer ? ' for ' + f.bookCustomer : ''), 'shipping');
+      notifyShippingBooked('all', f.bookRef, myId);
       setBookingModal(null); setF(prev => ({...prev, bookRef:'', bookCustomer:'', bookOrder:'', bookNotes:''})); await loadData();
     } catch (err) { alert(err.message); }
   };

@@ -47,12 +47,12 @@ const TABS = [
 // ============================================
 // PAYMENT FORM (isolated state to prevent focus loss)
 // ============================================
-function PaymentForm({ invoice, categories, existingSubcats, onSave, onCancel }) {
-  const [pf, setPf] = useState({ date: new Date().toISOString().substring(0, 10), amount: '', payMethod: 'cash', desc: '', category: 'مبيعات', subcategory: '' });
+function PaymentForm({ invoice, categories, existingSubcats, onSave, onCancel, formData, setFormData }) {
+  const [pf, setPf] = useState({ date: formData.date || new Date().toISOString().substring(0, 10), amount: formData.amount || '', payMethod: formData.payMethod || 'cash', desc: formData.desc || '', category: formData.category || 'مبيعات', subcategory: formData.subcategory || '' });
 
   const handleSave = () => {
-    if (!pf.amount || !pf.date) { alert('Date and amount are required'); return; }
-    onSave(pf);
+    setFormData({ ...formData, ...pf });
+    setTimeout(() => onSave(pf), 50);
   };
 
   return (
@@ -72,15 +72,15 @@ function PaymentForm({ invoice, categories, existingSubcats, onSave, onCancel })
             placeholder={invoice ? 'Remaining: ' + (Number(invoice.outstanding || 0)).toLocaleString() : ''} />
         </div>
       </div>
+
+      {/* Payment Method — Radio Buttons */}
       <div className="mt-3">
         <label className="text-xs font-semibold text-slate-600 block mb-1.5">Payment Method / طريقة الدفع</label>
         <div className="flex gap-2 flex-wrap">
           {[
             { v: 'cash', l: '💵 Cash', sub: 'Adds to treasury' },
             { v: 'bank_transfer', l: '🏦 Bank Transfer', sub: 'Invoice only' },
-            { v: 'check', l: '📝 Check', sub: 'Invoice only' },
-            { v: 'vodafone', l: '📱 Vodafone Cash', sub: 'Invoice only' },
-            { v: 'other', l: '📋 Other', sub: 'Invoice only' },
+            { v: 'check', l: '📝 Check', sub: 'Check record' },
           ].map(m => (
             <label key={m.v} onClick={() => setPf({ ...pf, payMethod: m.v })}
               className={'flex items-center gap-2 px-3 py-2 rounded-lg border-2 cursor-pointer transition text-xs ' +
@@ -90,8 +90,10 @@ function PaymentForm({ invoice, categories, existingSubcats, onSave, onCancel })
             </label>
           ))}
         </div>
-        {pf.payMethod !== 'cash' && <div className="text-[10px] text-blue-600 mt-1">ℹ️ Only cash payments are added to the treasury register</div>}
+        {pf.payMethod === 'bank_transfer' && <div className="text-[10px] text-blue-600 mt-1">ℹ️ Bank transfers update the invoice but do NOT create a treasury entry</div>}
       </div>
+
+      {/* Category & Subcategory */}
       <div className="grid grid-cols-2 gap-3 mt-3">
         <div>
           <label className="text-xs font-semibold text-slate-600">Category / التصنيف</label>
@@ -103,12 +105,16 @@ function PaymentForm({ invoice, categories, existingSubcats, onSave, onCancel })
         </div>
         <div>
           <label className="text-xs font-semibold text-slate-600">Subcategory / تصنيف فرعي</label>
-          <input value={pf.subcategory || ''}
+          <input list="pay-subcats" value={pf.subcategory || ''}
             onChange={e => setPf({ ...pf, subcategory: e.target.value })}
             className="w-full px-3 py-2 rounded-lg border border-slate-200 text-sm"
-            placeholder="Type subcategory..." />
+            placeholder="Type or select..." />
+          <datalist id="pay-subcats">
+            {existingSubcats.map(s => <option key={s} value={s} />)}
+          </datalist>
         </div>
       </div>
+
       <div className="mt-3">
         <label className="text-xs font-semibold text-slate-600">Description / الوصف</label>
         <input value={pf.desc}
@@ -116,6 +122,7 @@ function PaymentForm({ invoice, categories, existingSubcats, onSave, onCancel })
           className="w-full px-3 py-2 rounded-lg border border-slate-200 text-sm"
           placeholder="Optional notes..." />
       </div>
+
       <div className="flex gap-2 mt-3">
         <button onClick={handleSave}
           className="px-4 py-2 bg-blue-500 text-white rounded-lg font-semibold text-sm">Save / حفظ ✓</button>
@@ -178,6 +185,8 @@ export default function App() {
   const [renamingBucket, setRenamingBucket] = useState(null);
   const [renameValue, setRenameValue] = useState('');
   const [warehouseDrill, setWarehouseDrill] = useState(null);
+  const [whDescDrill, setWhDescDrill] = useState(null);
+  const [whSubFilter, setWhSubFilter] = useState('all');
   const [customerGroup, setCustomerGroup] = useState('all');
 
   // Forms
@@ -327,7 +336,6 @@ export default function App() {
   const totalCollected = useMemo(() => filteredInvoices.reduce((a, r) => a + Number(r.total_collected || 0), 0), [filteredInvoices]);
   const totalOutstanding = useMemo(() => filteredInvoices.reduce((a, r) => a + Number(r.outstanding || 0), 0), [filteredInvoices]);
   const totalDebt = useMemo(() => debts.reduce((a, d) => a + Number(d.total_debt || 0), 0), [debts]);
-  const uniqueSubcats = useMemo(() => [...new Set(treasury.map(t=>t.subcategory).filter(Boolean))].sort().slice(0, 80), [treasury]);
 
   const filteredTreasury = useMemo(() =>
     treasury.filter(t => inRange(t.transaction_date, mode, df, dt)),
@@ -362,6 +370,8 @@ export default function App() {
   }, [filteredTreasury]);
 
   // Expense/Income buckets (dual-level for both Cash In and Cash Out)
+  const uniqueSubcats = useMemo(() => [...new Set(treasury.map(t=>t.subcategory).filter(Boolean))].sort().slice(0, 80), [treasury]);
+
   const expenseBuckets = useMemo(() => {
     const cats = {};
     filteredTreasury.forEach(t => {
@@ -459,13 +469,13 @@ export default function App() {
     var pd = pf || formData;
     if (!pd.amount || !pd.date || !selectedInvoice) return;
     try {
-      const isCash = pd.payMethod === 'cash';
-      // Only CASH goes to treasury
-      if (isCash) {
+      const isBankTransfer = pd.payMethod === 'bank_transfer';
+      // Bank transfers don't go in treasury (cash register) - they go directly to bank
+      if (!isBankTransfer) {
         await dbInsert('treasury', {
           transaction_date: pd.date,
           order_number: selectedInvoice.order_number,
-          description: pd.desc || selectedInvoice.customer_name + ' payment',
+          description: pd.desc || 'Payment',
           cash_in: Number(pd.amount),
           cash_out: 0,
           category: pd.category || 'مبيعات',
@@ -477,7 +487,7 @@ export default function App() {
       await dbUpdate('invoices', selectedInvoice.id, {
         total_collected: newCollected,
         outstanding: Math.max(0, Number(selectedInvoice.total_amount) - newCollected),
-        notes: (selectedInvoice.notes || '') + (!isCash ? '\n' + pd.payMethod + ': ' + fE(Number(pd.amount)) + ' on ' + pd.date : ''),
+        notes: (selectedInvoice.notes || '') + (isBankTransfer ? '\nBank transfer: ' + fE(Number(pd.amount)) + ' on ' + pd.date : ''),
       }, user?.id);
       setShowAddPayment(false);
       setFormData({});
@@ -563,31 +573,18 @@ export default function App() {
   };
 
   const handleAddInvoice = async () => {
-    var orderNum = document.getElementById('inv-order')?.value || formData.orderNumber;
-    var custName = document.getElementById('inv-customer')?.value || formData.customerName;
-    var invDate = document.getElementById('inv-date')?.value || formData.date || today();
-    var salesRep = document.getElementById('inv-rep')?.value || formData.salesRep || '';
-    var notes = document.getElementById('inv-notes')?.value || formData.notes || '';
-    var amount = formData.amount || (formData.invoiceItems || []).reduce((a, it) => a + (it.inv_total || 0), 0);
-    if (!orderNum || !custName || !amount) { alert('Order #, Customer, and Amount are required'); return; }
+    if (!formData.orderNumber || !formData.customerName || !formData.amount) return;
     try {
-      var invResult = await dbInsert('invoices', {
-        order_number: orderNum,
-        customer_name: custName,
-        invoice_date: invDate,
-        total_amount: Number(amount),
+      await dbInsert('invoices', {
+        order_number: formData.orderNumber,
+        customer_name: formData.customerName,
+        invoice_date: formData.date || today(),
+        total_amount: Number(formData.amount),
         total_collected: 0,
-        sales_rep: salesRep,
-        notes: notes,
+        sales_rep: formData.salesRep || '',
+        notes: formData.notes || '',
         source: 'manual',
       }, user?.id);
-      // Link to customer if exists
-      if (invResult) {
-        var matchCust = customers.find(c => c.name === custName || c.name_en === custName);
-        if (matchCust && invResult.id) {
-          await dbUpdate('invoices', invResult.id, { customer_id: matchCust.id }, user?.id);
-        }
-      }
       setShowAddInvoice(false);
       setFormData({});
       await loadAllData();
@@ -600,14 +597,22 @@ export default function App() {
     if (!formData.amount || !formData.date) return;
     try {
       const isIncome = formData.type === 'in';
+      let cat = formData.category || '';
+      let subcat = formData.subcategory || '';
+      // Auto-apply rule if no category manually set
+      if (!cat && formData.desc) {
+        const ruleType = isIncome ? 'income' : 'expense';
+        const rule = expenseRules.find(r => (formData.desc || '').includes(r.description_match) && (r.rule_type === ruleType || (!r.rule_type && ruleType === 'expense')));
+        if (rule) { cat = rule.category; subcat = rule.subcategory || ''; }
+      }
       await dbInsert('treasury', {
         transaction_date: formData.date,
         order_number: formData.orderNumber || '',
         description: formData.desc || '',
         cash_in: isIncome ? Number(formData.amount) : 0,
         cash_out: !isIncome ? Number(formData.amount) : 0,
-        category: formData.category || '',
-        subcategory: formData.subcategory || '',
+        category: cat,
+        subcategory: subcat,
       }, user?.id);
       setShowAddTreasury(false);
       setFormData({});
@@ -619,46 +624,58 @@ export default function App() {
 
   const handleEditTreasury = async (txn) => {
     try {
+      const fd = {
+        date: document.getElementById('tx-date')?.value,
+        desc: document.getElementById('tx-desc')?.value,
+        cashIn: document.getElementById('tx-in')?.value,
+        cashOut: document.getElementById('tx-out')?.value,
+        orderNumber: document.getElementById('tx-order')?.value,
+        category: document.getElementById('tx-cat')?.value,
+        subcategory: document.getElementById('tx-subcat')?.value,
+      };
       const updates = {
-        transaction_date: formData.date || txn.transaction_date,
-        description: formData.desc || txn.description,
-        cash_in: formData.cashIn != null ? Number(formData.cashIn) : txn.cash_in,
-        cash_out: formData.cashOut != null ? Number(formData.cashOut) : txn.cash_out,
-        order_number: formData.orderNumber != null ? formData.orderNumber : txn.order_number,
-        category: formData.category != null ? formData.category : txn.category,
-        subcategory: formData.subcategory != null ? formData.subcategory : txn.subcategory,
+        transaction_date: fd.date || txn.transaction_date,
+        description: fd.desc || txn.description,
+        cash_in: fd.cashIn != null ? Number(fd.cashIn) : txn.cash_in,
+        cash_out: fd.cashOut != null ? Number(fd.cashOut) : txn.cash_out,
+        order_number: fd.orderNumber != null ? fd.orderNumber : txn.order_number,
+        category: fd.category != null ? fd.category : txn.category,
+        subcategory: fd.subcategory != null ? fd.subcategory : txn.subcategory,
       };
       await dbUpdate('treasury', txn.id, updates, user?.id);
 
       // Smart categorization: if category changed, offer to apply to all with EXACT same description
-      if (formData.category && formData.category !== txn.category) {
+      if (fd.category && fd.category !== txn.category) {
         const desc = (txn.description || '').trim();
         if (desc) {
           const matching = treasury.filter(t =>
             t.id !== txn.id &&
             (t.description || '').trim() === desc &&
-            t.category !== formData.category
+            t.category !== fd.category
           );
-          if (matching.length > 0 && confirm('Apply "' + (EXPENSE_CATS[formData.category] || formData.category) + '" to ' + matching.length + ' transactions with exact same description?\n\n"' + desc + '"\n\nتطبيق على جميع المعاملات بنفس الوصف بالضبط؟')) {
+          if (matching.length > 0 && confirm('Apply "' + (EXPENSE_CATS[fd.category] || fd.category) + '" to ' + matching.length + ' transactions with exact same description?\n\n"' + desc + '"\n\nتطبيق على جميع المعاملات بنفس الوصف بالضبط؟')) {
             for (const m of matching) {
               await dbUpdate('treasury', m.id, {
-                category: formData.category,
-                subcategory: formData.subcategory || '',
+                category: fd.category,
+                subcategory: fd.subcategory || '',
               }, user?.id);
             }
           }
           // Save/update rule with full description
-          const existing = expenseRules.find(r => r.description_match === desc);
+          const ruleType = Number(txn.cash_in || 0) > 0 ? 'income' : 'expense';
+          const existing = expenseRules.find(r => r.description_match === desc && (r.rule_type === ruleType || (!r.rule_type && ruleType === 'expense')));
           if (existing) {
             await dbUpdate('expense_rules', existing.id, {
-              category: formData.category,
-              subcategory: formData.subcategory || '',
+              category: fd.category,
+              subcategory: fd.subcategory || '',
+              rule_type: ruleType,
             }, user?.id);
           } else {
             await dbInsert('expense_rules', {
               description_match: desc,
-              category: formData.category,
-              subcategory: formData.subcategory || '',
+              category: fd.category,
+              subcategory: fd.subcategory || '',
+              rule_type: ruleType,
             }, user?.id);
           }
         }
@@ -733,25 +750,18 @@ export default function App() {
     }
   };
 
-  const handleLinkTreasury = async (txn, isProofOnly) => {
+  const handleLinkTreasury = async (txn) => {
     if (!selectedInvoice) return;
     try {
       await dbUpdate('treasury', txn.id, { order_number: selectedInvoice.order_number }, user?.id);
-      if (!isProofOnly) {
-        // New payment: recalculate collected from ALL linked treasury entries
-        const linked = treasury.filter(t => t.order_number === selectedInvoice.order_number);
-        const newCollected = linked.reduce((a, t) => a + Number(t.cash_in || 0), 0) + Number(txn.cash_in || 0);
-        await dbUpdate('invoices', selectedInvoice.id, {
-          total_collected: newCollected,
-          outstanding: Math.max(0, Number(selectedInvoice.total_amount) - newCollected),
-          notes: (selectedInvoice.notes || '').replace('UNVERIFIED:', 'RECONCILED:'),
-        }, user?.id);
-      } else {
-        // Proof only: just mark as reconciled, don't change amounts
-        await dbUpdate('invoices', selectedInvoice.id, {
-          notes: (selectedInvoice.notes || '').replace('UNVERIFIED:', 'RECONCILED:') || 'RECONCILED: Linked to treasury',
-        }, user?.id);
-      }
+      // Recalculate collected from ALL linked treasury entries
+      const linked = treasury.filter(t => t.order_number === selectedInvoice.order_number);
+      const newCollected = linked.reduce((a, t) => a + Number(t.cash_in || 0), 0) + Number(txn.cash_in || 0);
+      await dbUpdate('invoices', selectedInvoice.id, {
+        total_collected: newCollected,
+        outstanding: Math.max(0, Number(selectedInvoice.total_amount) - newCollected),
+        notes: (selectedInvoice.notes || '').replace('UNVERIFIED:', 'RECONCILED:') || 'RECONCILED: Linked to treasury',
+      }, user?.id);
       setLinkSearch('');
       setShowLinkSearch(false);
       await loadAllData();
@@ -909,7 +919,9 @@ export default function App() {
           try {
             let result;
             if (importType === 'treasury') {
-              const rule = expenseRules.find(r => (row.description || '').includes(r.description_match));
+              const isIncome = Number(row.cash_in || 0) > 0;
+              const ruleType = isIncome ? 'income' : 'expense';
+              const rule = expenseRules.find(r => (row.description || '').includes(r.description_match) && (r.rule_type === ruleType || (!r.rule_type && ruleType === 'expense')));
               if (rule) { row.category = rule.category; row.subcategory = rule.subcategory || ''; }
               result = await dbInsert('treasury', row, user?.id);
             } else if (importType === 'sales') {
@@ -972,20 +984,21 @@ export default function App() {
   };
 
   const handleCollectCheck = async () => {
-    if (!reconcileCheck || !formData.collectionDate) return;
+    const collectionDate = document.getElementById('reconcile-date')?.value;
+    const payMethod = document.getElementById('reconcile-method')?.value || 'check';
+    if (!reconcileCheck || !collectionDate) return;
     try {
-      const payMethod = formData.paymentMethod || 'check';
       // 1. Mark check as collected
       await dbUpdate('checks', reconcileCheck.id, {
         status: 'collected',
-        collection_date: formData.collectionDate,
+        collection_date: collectionDate,
       }, user?.id);
       // 2. Only create treasury entry for bank transfer/deposit/other
       // Cash and check payments already have treasury entries created by the accountant
       if (payMethod !== 'cash' && payMethod !== 'check') {
         const desc = reconcileCheck.customer_name + ' (' + payMethod + ' - check reconciled)';
         await dbInsert('treasury', {
-          transaction_date: formData.collectionDate,
+          transaction_date: collectionDate,
           order_number: reconcileCheck.order_number || '',
           description: desc,
           cash_in: Number(reconcileCheck.amount),
@@ -1324,32 +1337,27 @@ export default function App() {
                         <div className="grid grid-cols-2 gap-2">
                           <div>
                             <label className="text-[10px] font-semibold text-slate-600">Date / تاريخ</label>
-                            <input type="date" value={formData.date || txn.transaction_date}
-                              onChange={e => setFormData({ ...formData, date: e.target.value })}
+                            <input type="date" id="tx-date" defaultValue={txn.transaction_date}
                               className="w-full px-2 py-1 rounded border border-slate-200 text-xs" />
                           </div>
                           <div>
                             <label className="text-[10px] font-semibold text-slate-600">Amount / مبلغ</label>
-                            <input type="number" value={formData.cashIn ?? txn.cash_in}
-                              onChange={e => setFormData({ ...formData, cashIn: e.target.value })}
+                            <input type="number" id="tx-in" defaultValue={txn.cash_in}
                               className="w-full px-2 py-1 rounded border border-slate-200 text-xs" />
                           </div>
                           <div className="col-span-2">
                             <label className="text-[10px] font-semibold text-slate-600">Description / الوصف</label>
-                            <input value={formData.desc ?? txn.description}
-                              onChange={e => setFormData({ ...formData, desc: e.target.value })}
+                            <input id="tx-desc" defaultValue={txn.description}
                               className="w-full px-2 py-1 rounded border border-slate-200 text-xs" />
                           </div>
                           <div className="col-span-2">
                             <label className="text-[10px] font-semibold text-slate-600">Order# / رقم الأمر</label>
-                            <input value={formData.orderNumber ?? txn.order_number}
-                              onChange={e => setFormData({ ...formData, orderNumber: e.target.value })}
+                            <input id="tx-order" defaultValue={txn.order_number}
                               className="w-full px-2 py-1 rounded border border-slate-200 text-xs" />
                           </div>
                           <div>
                             <label className="text-[10px] font-semibold text-slate-600">Category / التصنيف</label>
-                            <select value={formData.category !== undefined ? formData.category : (txn.category || '')}
-                              onChange={e => setFormData({...formData, category: e.target.value})}
+                            <select id="tx-cat" defaultValue={txn.category || ''}
                               className="w-full px-2 py-1 rounded border border-slate-200 text-xs bg-amber-50">
                               <option value="">Uncategorized</option>
                               {Object.entries(EXPENSE_CATS).map(([ar, en]) => <option key={ar} value={ar}>{en} / {ar}</option>)}
@@ -1358,8 +1366,7 @@ export default function App() {
                           </div>
                           <div>
                             <label className="text-[10px] font-semibold text-slate-600">Subcategory / فرعي</label>
-                            <input list="inv-subcats" value={formData.subcategory !== undefined ? formData.subcategory : (txn.subcategory || '')}
-                              onChange={e => setFormData({...formData, subcategory: e.target.value})}
+                            <input list="inv-subcats" id="tx-subcat" defaultValue={txn.subcategory || ''}
                               className="w-full px-2 py-1 rounded border border-slate-200 text-xs bg-orange-50" />
                             <datalist id="inv-subcats">
                               {uniqueSubcats.map(s => <option key={s} value={s}/>)}
@@ -1414,16 +1421,8 @@ export default function App() {
             ) : (
               <div className="bg-purple-50 rounded-lg p-4 border border-purple-200 mb-3">
                 <h4 className="text-sm font-bold text-purple-800 mb-1">Search Treasury to Link / بحث للربط</h4>
-                <div className="text-[10px] text-purple-600 mb-2">
-                  <strong>📎 Proof Only</strong> = Payment was already counted (e.g. bank transfer). Just links for verification — no amount change.<br/>
-                  <strong>💰 New Payment</strong> = This is uncounted money. Will ADD to collected amount.
-                </div>
-                <div className="text-[10px] text-purple-600 mb-2 bg-purple-100 rounded p-2">
-                  <strong>📎 Proof Only</strong> — Payment was already counted in collected amount. Just linking for verification (e.g. bank transfer proof).<br/>
-                  <strong>💰 New Payment</strong> — This is a new payment not yet reflected. Will increase collected amount.
-                </div>
                 <input value={linkSearch} onChange={e => setLinkSearch(e.target.value)}
-                  placeholder="Search name, date, amount, order # / بحث"
+                  placeholder="Search name, date, amount / بحث"
                   className="w-full px-3 py-2 rounded-lg border border-purple-200 text-sm mb-2" autoFocus />
                 {linkSearch.length >= 2 && (
                   <div className="max-h-[200px] overflow-auto rounded border border-purple-200 bg-white">
@@ -1431,7 +1430,7 @@ export default function App() {
                       .filter(t => (!t.order_number || t.order_number === '') && Number(t.cash_in) > 0)
                       .filter(t => {
                         const words = linkSearch.split(/\s+/).filter(w => w.length > 0);
-                        const haystack = [t.description || '', t.transaction_date || '', String(t.cash_in || 0), t.order_number || ''].join(' ');
+                        const haystack = [t.description || '', t.transaction_date || '', String(t.cash_in || 0)].join(' ');
                         return words.every(w => haystack.includes(w));
                       })
                       .slice(0, 20)
@@ -1441,26 +1440,18 @@ export default function App() {
                             <div className="text-xs font-semibold" style={{ direction: lang === 'ar' ? 'rtl' : 'ltr' }}>{tx(txn.description, txn.description_en)}</div>
                             <div className="text-[10px] text-slate-500">{txn.transaction_date} | {fE(txn.cash_in)}</div>
                           </div>
-                          <div className="flex flex-col gap-1 ml-2">
-                            <button onClick={() => handleLinkTreasury(txn, true)}
-                              className="px-3 py-1 bg-blue-600 text-white rounded text-[10px] font-semibold hover:bg-blue-700"
-                              title="Links for verification only — collected amount stays the same">
-                              📎 Proof Only (already counted)
-                            </button>
-                            <button onClick={() => handleLinkTreasury(txn, false)}
-                              className="px-3 py-1 bg-purple-600 text-white rounded text-[10px] font-semibold hover:bg-purple-700"
-                              title="This is a NEW payment not yet counted — will add to collected">
-                              💰 New Payment (add to collected)
-                            </button>
-                          </div>
+                          <button onClick={() => handleLinkTreasury(txn)}
+                            className="px-3 py-1.5 bg-purple-600 text-white rounded text-xs font-semibold hover:bg-purple-700 ml-2">
+                            🔗 Link
+                          </button>
                         </div>
                       ))}
                     {treasury.filter(t => (!t.order_number || t.order_number === '') && Number(t.cash_in) > 0).filter(t => {
                       const words = linkSearch.split(/\s+/).filter(w => w.length > 0);
-                      const haystack = [t.description || '', t.transaction_date || '', String(t.cash_in || 0), t.order_number || ''].join(' ');
+                      const haystack = [t.description || '', t.transaction_date || '', String(t.cash_in || 0)].join(' ');
                       return words.every(w => haystack.includes(w));
                     }).length === 0 && (
-                      <div className="px-3 py-3 text-xs text-slate-400 text-center">No unlinked transactions found</div>
+                      <div className="px-3 py-3 text-xs text-slate-400 text-center">No unlinked cash-in transactions found</div>
                     )}
                   </div>
                 )}
@@ -1479,9 +1470,11 @@ export default function App() {
               <PaymentForm
                 invoice={selectedInvoice}
                 categories={Object.entries(EXPENSE_CATS)}
-                existingSubcats={[...new Set(treasury.map(t=>t.subcategory).filter(Boolean))].sort().slice(0, 50)}
+                existingSubcats={uniqueSubcats}
                 onSave={handleAddPayment}
-                onCancel={() => { setShowAddPayment(false); }}
+                onCancel={() => { setShowAddPayment(false); setFormData({}); }}
+                formData={formData}
+                setFormData={setFormData}
               />
             )}
           </Modal>
@@ -1552,18 +1545,14 @@ export default function App() {
                       {monthTransactions.map(txn => (
                         editingTxn === txn.id ? (
                           <tr key={txn.id} className="bg-blue-50">
-                            <td className="px-2 py-1.5"><input type="date" defaultValue={txn.transaction_date}
-                              onChange={e => setFormData({...formData, date: e.target.value})}
+                            <td className="px-2 py-1.5"><input type="date" id="tx-date" defaultValue={txn.transaction_date}
                               className="w-full text-xs border rounded px-1 py-1" /></td>
-                            <td className="px-2 py-1.5"><input defaultValue={txn.order_number || ''}
-                              onChange={e => setFormData({...formData, orderNumber: e.target.value})}
+                            <td className="px-2 py-1.5"><input id="tx-order" defaultValue={txn.order_number || ''}
                               className="w-16 text-xs border rounded px-1 py-1" /></td>
                             <td className="px-2 py-1.5">
-                              <input defaultValue={txn.description}
-                                onChange={e => setFormData({...formData, desc: e.target.value})}
+                              <input id="tx-desc" defaultValue={txn.description}
                                 className="w-full text-xs border rounded px-1 py-1 mb-1" style={{ direction: 'rtl' }} />
-                              <select value={formData.category !== undefined ? formData.category : (txn.category || '')}
-                                onChange={e => setFormData({...formData, category: e.target.value})}
+                              <select id="tx-cat" defaultValue={txn.category || ''}
                                 className="w-full text-[10px] border rounded px-1 py-0.5 bg-amber-50">
                                 <option value="">Uncategorized</option>
                                 {Object.entries(EXPENSE_CATS).map(([ar, en]) => (
@@ -1574,24 +1563,16 @@ export default function App() {
                                 )}
                                 <option value="_new">+ New Category...</option>
                               </select>
-                              {formData.category === '_new' && (
-                                <input placeholder="New category name / اسم التصنيف الجديد"
-                                  onChange={e => setFormData({...formData, category: e.target.value})}
-                                  className="w-full text-[10px] border rounded px-1 py-0.5 mt-1" />
-                              )}
-                              <input list="all-subcats" value={formData.subcategory !== undefined ? formData.subcategory : (txn.subcategory || '')}
-                                onChange={e => setFormData({...formData, subcategory: e.target.value})}
+                              <input list="all-subcats" id="tx-subcat" defaultValue={txn.subcategory || ''}
                                 placeholder="Subcategory / تصنيف فرعي (optional)"
                                 className="w-full text-[10px] border rounded px-1 py-0.5 mt-1 bg-orange-50" />
                               <datalist id="all-subcats">
                                 {uniqueSubcats.map(s => <option key={s} value={s}/>)}
                               </datalist>
                             </td>
-                            <td className="px-2 py-1.5"><input type="number" defaultValue={txn.cash_in || 0}
-                              onChange={e => setFormData({...formData, cashIn: e.target.value})}
+                            <td className="px-2 py-1.5"><input type="number" id="tx-in" defaultValue={txn.cash_in || 0}
                               className="w-20 text-xs border rounded px-1 py-1" /></td>
-                            <td className="px-2 py-1.5"><input type="number" defaultValue={txn.cash_out || 0}
-                              onChange={e => setFormData({...formData, cashOut: e.target.value})}
+                            <td className="px-2 py-1.5"><input type="number" id="tx-out" defaultValue={txn.cash_out || 0}
                               className="w-20 text-xs border rounded px-1 py-1" /></td>
                             <td className="px-2 py-1.5 flex gap-1">
                               <button onClick={() => handleEditTreasury(txn)}
@@ -1920,7 +1901,7 @@ export default function App() {
             CHECK RECONCILE MODAL
         ========================================== */}
         {reconcileCheck && (
-          <Modal onClose={() => { setReconcileCheck(null); }} title="Reconcile Check / تسوية شيك">
+          <Modal onClose={() => { setReconcileCheck(null); setFormData({}); }} title="Reconcile Check / تسوية شيك">
             <div style={{ direction: 'rtl' }} className="text-lg font-bold mb-1">{reconcileCheck.customer_name}</div>
             <div className="text-sm mb-2">{fE(reconcileCheck.amount)} | {reconcileCheck.check_date}</div>
             {reconcileCheck.order_number && (
@@ -1929,7 +1910,7 @@ export default function App() {
             <div className="grid grid-cols-2 gap-3">
               <div>
                 <label className="text-xs font-semibold text-slate-600">Collection Date / تاريخ التحصيل</label>
-                <input type="date" id="reconcile-date" defaultValue={new Date().toISOString().substring(0,10)}
+                <input type="date" id="reconcile-date" defaultValue=""
                   className="w-full px-3 py-2 rounded-lg border border-slate-200 text-sm" />
               </div>
               <div>
@@ -1940,19 +1921,12 @@ export default function App() {
                   <option value="check">Check / شيك</option>
                   <option value="bank_transfer">Bank Transfer / تحويل بنكي</option>
                   <option value="deposit">Bank Deposit / إيداع</option>
-                  <option value="vodafone">Vodafone Cash</option>
                   <option value="other">Other / أخرى</option>
                 </select>
               </div>
             </div>
-            <p className="text-[10px] text-slate-400 mt-2">Cash/Check: marks as collected only — Bank transfer/Deposit/Other: also creates a treasury entry and updates invoice</p>
-            <button onClick={() => {
-              var dt = document.getElementById('reconcile-date').value;
-              var method = document.getElementById('reconcile-method').value;
-              if (!dt) { alert('Please enter collection date'); return; }
-              setFormData({ collectionDate: dt, paymentMethod: method });
-              setTimeout(() => handleCollectCheck(), 100);
-            }}
+            <p className="text-[10px] text-slate-400 mt-2">Cash/Check: marks as collected only (treasury entry already exists) — نقد/شيك: يتم تسجيلها كمحصّلة فقط (المعاملة موجودة بالفعل في الخزنة)<br/>Bank transfer/Deposit/Other: also creates a treasury entry and updates invoice — تحويل بنكي/إيداع/أخرى: يتم إنشاء معاملة في الخزنة وتحديث الفاتورة</p>
+            <button onClick={handleCollectCheck}
               className="mt-3 px-4 py-2 bg-emerald-500 text-white rounded-lg font-semibold w-full">Reconcile / تسوية ✓</button>
           </Modal>
         )}
@@ -1965,31 +1939,32 @@ export default function App() {
             <div className="grid grid-cols-2 gap-3 mb-3">
               <div>
                 <label className="text-xs font-semibold text-slate-600">Order # / رقم الأمر</label>
-                <input id="inv-order" defaultValue={formData.orderNumber || ''}
+                <input value={formData.orderNumber || ''}
+                  onChange={e => setFormData({ ...formData, orderNumber: e.target.value })}
                   className="w-full px-3 py-2 rounded-lg border border-slate-200 text-sm" />
               </div>
               <div>
-                <label className="text-xs font-semibold text-slate-600">Date / التاريخ</label>
-                <input type="date" id="inv-date" defaultValue={formData.date || today()}
+                <label className="text-xs font-semibold text-slate-600">Date / التاريخ <span className="text-[9px] text-slate-400">(mm/dd/yyyy)</span></label>
+                <input type="date" value={formData.date || today()}
+                  onChange={e => setFormData({ ...formData, date: e.target.value })}
                   className="w-full px-3 py-2 rounded-lg border border-slate-200 text-sm" />
               </div>
               <div className="col-span-2">
                 <label className="text-xs font-semibold text-slate-600">Customer / العميل</label>
-                <input id="inv-customer" list="cust-list" defaultValue={formData.customerName || ''}
-                  className="w-full px-3 py-2 rounded-lg border border-slate-200 text-sm"
-                  placeholder="Search customer or type new..." />
-                <datalist id="cust-list">
-                  {customers.slice(0, 100).map(c => <option key={c.id} value={c.name_en || c.name}>{c.name}</option>)}
-                </datalist>
+                <input value={formData.customerName || ''}
+                  onChange={e => setFormData({ ...formData, customerName: e.target.value })}
+                  className="w-full px-3 py-2 rounded-lg border border-slate-200 text-sm" />
               </div>
               <div>
                 <label className="text-xs font-semibold text-slate-600">Sales Rep / المندوب</label>
-                <input id="inv-rep" defaultValue={formData.salesRep || ''}
+                <input value={formData.salesRep || ''}
+                  onChange={e => setFormData({ ...formData, salesRep: e.target.value })}
                   className="w-full px-3 py-2 rounded-lg border border-slate-200 text-sm" />
               </div>
               <div>
                 <label className="text-xs font-semibold text-slate-600">Notes / ملاحظات</label>
-                <input id="inv-notes" defaultValue={formData.notes || ''}
+                <input value={formData.notes || ''}
+                  onChange={e => setFormData({ ...formData, notes: e.target.value })}
                   className="w-full px-3 py-2 rounded-lg border border-slate-200 text-sm" />
               </div>
             </div>
@@ -2948,44 +2923,182 @@ export default function App() {
             {(() => {
               const filtered = warehouse.filter(w => {
                 if (!inRange(w.expense_date, mode, df, dt)) return false;
-                if (formData.whSearch && !(w.description||'').includes(formData.whSearch)) return false;
+                if (formData.whSearch && !(w.description||'').includes(formData.whSearch) && !(w.description_en||'').toLowerCase().includes((formData.whSearch||'').toLowerCase())) return false;
                 return true;
               });
               const total = filtered.reduce((a, w) => a + Number(w.amount), 0);
-              const buckets = {};
+
+              // Build category → description → entries hierarchy
+              const catMap = {};
               filtered.forEach(w => {
                 const cat = getWarehouseCat(w.description);
-                if (!buckets[cat]) buckets[cat] = { total: 0, count: 0 };
-                buckets[cat].total += Number(w.amount);
-                buckets[cat].count++;
+                const desc = (w.description || '').trim();
+                if (!catMap[cat]) catMap[cat] = { total: 0, count: 0, descs: {} };
+                catMap[cat].total += Number(w.amount);
+                catMap[cat].count++;
+                if (!catMap[cat].descs[desc]) catMap[cat].descs[desc] = { total: 0, count: 0, entries: [], descEn: '', subcategory: '' };
+                catMap[cat].descs[desc].total += Number(w.amount);
+                catMap[cat].descs[desc].count++;
+                catMap[cat].descs[desc].entries.push(w);
+                if (w.description_en && !catMap[cat].descs[desc].descEn) catMap[cat].descs[desc].descEn = w.description_en;
+                if (w.subcategory && !catMap[cat].descs[desc].subcategory) catMap[cat].descs[desc].subcategory = w.subcategory;
               });
-              const sortedBuckets = Object.entries(buckets).sort((a, b) => b[1].total - a[1].total);
+
+              const sortedCats = Object.entries(catMap).sort((a, b) => b[1].total - a[1].total);
+
+              // Get all unique subcategories across all descriptions
+              const allSubcats = [...new Set(filtered.map(w => w.subcategory).filter(Boolean))].sort();
+
+              // Subcategory assignment handler
+              const assignSubcat = async (desc, newSubcat) => {
+                const matching = warehouse.filter(w => (w.description || '').trim() === desc);
+                for (const w of matching) {
+                  await dbUpdate('warehouse_expenses', w.id, { subcategory: newSubcat }, user?.id);
+                }
+                await loadAllData();
+              };
+
+              // Translate a description
+              const translateDesc = async (desc) => {
+                try {
+                  const res = await fetch('/api/translate', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ text: desc, targetLang: 'en' }) });
+                  const data = await res.json();
+                  const translated = data.translated || data.text || '';
+                  if (translated) {
+                    const matching = warehouse.filter(w => (w.description || '').trim() === desc);
+                    for (const w of matching) {
+                      await dbUpdate('warehouse_expenses', w.id, { description_en: translated }, user?.id);
+                    }
+                    await loadAllData();
+                  }
+                } catch (e) { alert('Translation error: ' + e.message); }
+              };
+
+              // Current drill state
+              const drillCat = warehouseDrill;
+              const drillDesc = whDescDrill;
+              const currentCatData = drillCat ? catMap[drillCat] : null;
+              const currentDescData = drillCat && drillDesc && currentCatData ? currentCatData.descs[drillDesc] : null;
+
+              // Filter descriptions by subcategory within drilled category
+              let descEntries = currentCatData ? Object.entries(currentCatData.descs).sort((a, b) => b[1].total - a[1].total) : [];
+              if (whSubFilter !== 'all' && currentCatData) {
+                descEntries = descEntries.filter(([_, d]) =>
+                  whSubFilter === 'uncategorized' ? !d.subcategory : d.subcategory === whSubFilter
+                );
+              }
+
               return (
                 <div>
+                  {/* Summary Card */}
                   <div className="bg-white rounded-xl p-4 mb-3" style={{ borderLeftWidth: 3, borderLeftColor: '#8b5cf6' }}>
                     <div className="text-[10px] text-slate-500">Total / الإجمالي ({filtered.length} entries)</div>
                     <div className="text-2xl font-extrabold text-purple-600">{fE(total)}</div>
                   </div>
-                  <div className="bg-white rounded-xl p-4 mb-3">
-                    <h3 className="text-sm font-bold mb-2">Expense Buckets / تصنيف المصروفات</h3>
-                    {sortedBuckets.map(([cat, data], i) => (
-                      <div key={cat} onClick={() => setWarehouseDrill(cat)}
-                        className="flex justify-between py-1.5 border-b border-slate-50 text-xs cursor-pointer hover:bg-purple-50">
-                        <div className="flex items-center gap-1.5">
-                          <div className="w-2 h-2 rounded-full" style={{ background: COLORS[i % COLORS.length] }} />
-                          <span>{cat}</span>
-                          <span className="text-slate-400">({data.count})</span>
+
+                  {/* Breadcrumb */}
+                  {(drillCat || drillDesc) && (
+                    <div className="flex items-center gap-1 text-xs mb-3 flex-wrap">
+                      <button onClick={() => { setWarehouseDrill(null); setWhDescDrill(null); setWhSubFilter('all'); }}
+                        className="text-blue-600 hover:underline font-semibold">All Categories</button>
+                      {drillCat && <>
+                        <span className="text-slate-400">›</span>
+                        <button onClick={() => { setWhDescDrill(null); }}
+                          className={'font-semibold ' + (drillDesc ? 'text-blue-600 hover:underline' : 'text-slate-800')}>{drillCat}</button>
+                      </>}
+                      {drillDesc && <>
+                        <span className="text-slate-400">›</span>
+                        <span className="text-slate-800 font-semibold truncate max-w-[200px]" style={{ direction: 'rtl' }}>{drillDesc}</span>
+                      </>}
+                    </div>
+                  )}
+
+                  {/* ===== LEVEL 1: Category Buckets ===== */}
+                  {!drillCat && (
+                    <div className="bg-white rounded-xl p-4 mb-3">
+                      <h3 className="text-sm font-bold mb-2">Expense Categories / تصنيف المصروفات</h3>
+                      {sortedCats.map(([cat, data], i) => (
+                        <div key={cat} onClick={() => { setWarehouseDrill(cat); setWhDescDrill(null); setWhSubFilter('all'); }}
+                          className="flex justify-between py-2 border-b border-slate-50 text-xs cursor-pointer hover:bg-purple-50 px-1">
+                          <div className="flex items-center gap-1.5">
+                            <div className="w-2.5 h-2.5 rounded-full" style={{ background: COLORS[i % COLORS.length] }} />
+                            <span className="font-medium">{cat}</span>
+                            <span className="text-slate-400">({data.count} entries, {Object.keys(data.descs).length} types)</span>
+                          </div>
+                          <span className="font-bold text-purple-600">{fE(data.total)} →</span>
                         </div>
-                        <span className="font-bold text-purple-600">{fE(data.total)} →</span>
+                      ))}
+                    </div>
+                  )}
+
+                  {/* ===== LEVEL 2: Description Buckets within Category ===== */}
+                  {drillCat && !drillDesc && currentCatData && (
+                    <div className="bg-white rounded-xl p-4 mb-3">
+                      <div className="flex justify-between items-center flex-wrap gap-2 mb-3">
+                        <div>
+                          <h3 className="text-sm font-bold">{drillCat}</h3>
+                          <div className="text-[10px] text-slate-500">{descEntries.length} unique descriptions · {fE(descEntries.reduce((a, [_, d]) => a + d.total, 0))}</div>
+                        </div>
+                        <div className="flex gap-2 items-center">
+                          <select value={whSubFilter} onChange={e => setWhSubFilter(e.target.value)}
+                            className="px-2 py-1 rounded border text-xs">
+                            <option value="all">All Subcategories</option>
+                            <option value="uncategorized">⚠️ No Subcategory</option>
+                            {allSubcats.map(s => <option key={s} value={s}>{s}</option>)}
+                          </select>
+                        </div>
                       </div>
-                    ))}
-                  </div>
-                  {warehouseDrill ? (
-                    <div className="bg-white rounded-xl p-4">
+                      <div className="overflow-auto max-h-[500px]">
+                        {descEntries.map(([desc, data], i) => (
+                          <div key={desc} onClick={() => setWhDescDrill(desc)}
+                            className="flex justify-between items-center py-2 border-b border-slate-50 cursor-pointer hover:bg-purple-50 px-1">
+                            <div className="flex-1 min-w-0">
+                              <div className="flex items-center gap-1.5">
+                                <div className="w-2 h-2 rounded-full flex-shrink-0" style={{ background: COLORS[i % COLORS.length] }} />
+                                <span className="text-xs truncate" style={{ direction: 'rtl' }}>{desc}</span>
+                              </div>
+                              {data.descEn && <div className="text-[10px] text-blue-500 ml-3.5 truncate">{data.descEn}</div>}
+                              {data.subcategory && <div className="text-[10px] text-amber-600 ml-3.5">📁 {data.subcategory}</div>}
+                            </div>
+                            <div className="text-right flex-shrink-0 ml-2">
+                              <div className="text-xs font-bold text-purple-600">{fE(data.total)}</div>
+                              <div className="text-[10px] text-slate-400">{data.count}x →</div>
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+
+                  {/* ===== LEVEL 3: Individual Entries for a Description ===== */}
+                  {drillCat && drillDesc && currentDescData && (
+                    <div className="bg-white rounded-xl p-4 mb-3">
+                      <div className="mb-3">
+                        <div className="text-sm font-bold" style={{ direction: 'rtl' }}>{drillDesc}</div>
+                        {currentDescData.descEn ? (
+                          <div className="text-xs text-blue-600 mt-0.5">{currentDescData.descEn}</div>
+                        ) : (
+                          <button onClick={() => translateDesc(drillDesc)}
+                            className="text-[10px] text-blue-500 hover:underline mt-0.5">🌐 Translate to English</button>
+                        )}
+                        <div className="flex items-center gap-2 mt-2">
+                          <span className="text-[10px] text-slate-500">Subcategory:</span>
+                          <input id="wh-subcat-input" defaultValue={currentDescData.subcategory || ''} placeholder="Enter subcategory..."
+                            className="px-2 py-1 border rounded text-xs w-40" 
+                            list="wh-subcats" />
+                          <datalist id="wh-subcats">
+                            {allSubcats.map(s => <option key={s} value={s} />)}
+                          </datalist>
+                          <button onClick={() => {
+                            const val = document.getElementById('wh-subcat-input')?.value;
+                            if (val) assignSubcat(drillDesc, val);
+                          }}
+                            className="px-2 py-1 bg-amber-500 text-white rounded text-[10px] font-semibold">Save</button>
+                        </div>
+                      </div>
                       <div className="flex justify-between items-center mb-2">
-                        <h3 className="text-sm font-bold">{warehouseDrill} ({filtered.filter(w => getWarehouseCat(w.description) === warehouseDrill).length})</h3>
-                        <button onClick={() => setWarehouseDrill(null)}
-                          className="px-2 py-1 rounded border border-slate-200 text-xs">Close</button>
+                        <div className="text-xs text-slate-500">{currentDescData.count} entries</div>
+                        <div className="text-sm font-extrabold text-purple-600">{fE(currentDescData.total)}</div>
                       </div>
                       <div className="overflow-auto max-h-[350px] rounded-lg border border-slate-200">
                         <table className="w-full border-collapse">
@@ -2995,9 +3108,8 @@ export default function App() {
                             <th className="px-2 py-2 text-xs text-right">Amount</th>
                           </tr></thead>
                           <tbody>
-                            {filtered
-                              .filter(w => getWarehouseCat(w.description) === warehouseDrill)
-                              .sort((a, b) => b.expense_date.localeCompare(a.expense_date))
+                            {currentDescData.entries
+                              .sort((a, b) => (b.expense_date || '').localeCompare(a.expense_date || ''))
                               .map(w => (
                                 <tr key={w.id} className="border-b border-slate-50">
                                   <td className="px-2 py-1.5 text-xs">{w.expense_date}</td>
@@ -3005,36 +3117,6 @@ export default function App() {
                                   <td className="px-2 py-1.5 text-xs text-right font-semibold text-purple-600">{fE(w.amount)}</td>
                                 </tr>
                               ))}
-                          </tbody>
-                        </table>
-                      </div>
-                      <div className="flex justify-between pt-2 mt-1 border-t-2 border-purple-300">
-                        <span className="text-xs font-bold">Total</span>
-                        <span className="text-sm font-extrabold text-purple-600">
-                          {fE(filtered.filter(w => getWarehouseCat(w.description) === warehouseDrill).reduce((a, w) => a + Number(w.amount), 0))}
-                        </span>
-                      </div>
-                    </div>
-                  ) : (
-                    <div className="bg-white rounded-xl p-4">
-                      <h3 className="text-sm font-bold mb-2">All Transactions</h3>
-                      <div className="overflow-auto max-h-[350px] rounded-lg border border-slate-200">
-                        <table className="w-full border-collapse">
-                          <thead className="sticky top-0"><tr className="bg-slate-50">
-                            <th className="px-2 py-2 text-xs text-left">Date</th>
-                            <th className="px-2 py-2 text-xs" style={{ direction: 'rtl' }}>Description</th>
-                            <th className="px-2 py-2 text-xs text-right">Amount</th>
-                            <th className="px-2 py-2 text-xs">Category</th>
-                          </tr></thead>
-                          <tbody>
-                            {filtered.sort((a, b) => b.expense_date.localeCompare(a.expense_date)).slice(0, 200).map(w => (
-                              <tr key={w.id} className="border-b border-slate-50">
-                                <td className="px-2 py-1.5 text-xs">{w.expense_date}</td>
-                                <td className="px-2 py-1.5 text-xs" style={{ direction: lang === 'ar' ? 'rtl' : 'ltr' }}>{tx(w.description, w.description_en)}</td>
-                                <td className="px-2 py-1.5 text-xs text-right font-semibold text-purple-600">{fE(w.amount)}</td>
-                                <td className="px-2 py-1.5 text-[10px] text-amber-600">{getWarehouseCat(w.description)}</td>
-                              </tr>
-                            ))}
                           </tbody>
                         </table>
                       </div>
@@ -3308,7 +3390,7 @@ export default function App() {
             CRM TAB
         ========================================== */}
         {tab === 'crm' && (
-          <CRMTab customers={customers} invoices={invoices} user={user} userProfile={userProfile} users={teamUsers} onReload={loadAllData} isAdmin={isAdmin} onSelectInvoice={setSelectedInvoice} lang={lang} />
+          <CRMTab customers={customers} invoices={invoices} user={user} userProfile={userProfile} users={teamUsers} onReload={loadAllData} isAdmin={isAdmin} onSelectInvoice={setSelectedInvoice} lang={lang} modulePerms={modulePerms} />
         )}
 
         {/* ==========================================
@@ -3350,7 +3432,7 @@ export default function App() {
             ADMIN TAB
         ========================================== */}
         {tab === 'admin' && (
-          <AdminTab user={user} userProfile={userProfile} users={teamUsers} isAdmin={isAdmin} />
+          <AdminTab user={user} userProfile={userProfile} users={teamUsers} isAdmin={isAdmin} customers={customers} />
         )}
 
         {/* ==========================================

@@ -1,6 +1,7 @@
 'use client';
 import { useState, useMemo } from 'react';
 import { supabase, dbInsert, dbUpdate, logActivity } from '../lib/supabase';
+import { notifyEventScheduled } from '../lib/notify';
 
 const EVENT_TYPES = [{v:'task',l:'Task / مهمة',c:'#3b82f6'},{v:'meeting',l:'Meeting / اجتماع',c:'#8b5cf6'},{v:'call',l:'Call / مكالمة',c:'#f59e0b'},{v:'visit',l:'Visit / زيارة',c:'#10b981'}];
 const DAYS = ['Sun','Mon','Tue','Wed','Thu','Fri','Sat'];
@@ -70,6 +71,8 @@ export default function CalendarTab({ customers, user, userProfile, users, onRel
         }, myId);
       }
       await logActivity(myId, 'Created ' + (f.eventType || 'task') + ': ' + f.title + ' on ' + f.eventDate, 'calendar');
+      const otherAssignees = assignees.filter(uid => uid !== myId);
+      if (otherAssignees.length) notifyEventScheduled(otherAssignees, f.title, f.eventDate, myId);
       setShowAdd(false); setF({}); setSelectedUsers([]); loadEvents();
     } catch (err) { alert('Error / خطأ: ' + err.message); }
   };

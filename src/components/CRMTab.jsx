@@ -1,20 +1,32 @@
 'use client';
 import { useState, useMemo } from 'react';
 import { supabase, dbInsert, dbUpdate, logActivity } from '../lib/supabase';
+import { notifyClientAssigned, notifyFollowUp } from '../lib/notify';
 import { fE, fmt } from '../lib/utils';
 
 const DEFAULT_CATEGORIES = ['Pool', 'Leather'];
 const DEFAULT_GROUPS = ['Retail', 'Manufacturer', 'Export', 'Distributor'];
 const LEAD_SOURCES = ['Referral', 'Facebook', 'WhatsApp', 'Exhibition', 'Walk-in', 'Website', 'Cold Call', 'Existing'];
+const PIPELINE_STAGES = [
+  { v: 'lead', l: 'Lead', c: '#94a3b8', icon: '🔘' },
+  { v: 'contacted', l: 'Contacted', c: '#3b82f6', icon: '📞' },
+  { v: 'qualified', l: 'Qualified', c: '#8b5cf6', icon: '✅' },
+  { v: 'proposal', l: 'Proposal', c: '#f59e0b', icon: '📋' },
+  { v: 'negotiation', l: 'Negotiation', c: '#ec4899', icon: '🤝' },
+  { v: 'won', l: 'Won / Deal', c: '#10b981', icon: '🏆' },
+  { v: 'lost', l: 'Lost', c: '#ef4444', icon: '❌' },
+];
 
-export default function CRMTab({ customers, invoices, user, userProfile, users, onReload, isAdmin, onSelectInvoice, lang }) {
+export default function CRMTab({ customers, invoices, user, userProfile, users, onReload, isAdmin, onSelectInvoice, lang, modulePerms }) {
   const myId = userProfile?.id || user?.id;
+  const canViewAll = isAdmin || modulePerms?.['CRM View All'] === true;
   const [sel, setSel] = useState(null);
   const [q, setQ] = useState('');
   const [groupF, setGroupF] = useState('all');
   const [catF, setCatF] = useState('all');
   const [sortBy, setSortBy] = useState('alpha');
   const [repF, setRepF] = useState('all');
+  const [stageF, setStageF] = useState('all');
   const [customCategories, setCustomCategories] = useState([]);
   const [customGroups, setCustomGroups] = useState([]);
   const [listsLoaded, setListsLoaded] = useState(false);
@@ -132,6 +144,9 @@ export default function CRMTab({ customers, invoices, user, userProfile, users, 
     return invs.length > 0 ? invs[0] : null;
   };
 
+  // Sales visibility: hide invoice amounts for customers not assigned to this user (unless admin or has CRM View All)
+  const canSeeSales = (c) => canViewAll || !c.assigned_rep || c.assigned_rep === myId;
+
   const filtered = useMemo(() => {
     let arr = customers.filter(c => {
       if (!isAdmin && c.restricted) return false;
@@ -139,6 +154,7 @@ export default function CRMTab({ customers, invoices, user, userProfile, users, 
       if (groupF !== 'all' && c.group_name !== groupF) return false;
       if (catF !== 'all' && c.industry !== catF) return false;
       if (repF !== 'all') { if (repF === 'unassigned') { if (c.assigned_rep) return false; } else if (c.assigned_rep !== repF) return false; }
+      if (stageF !== 'all') { if (stageF === 'active') { if (c.pipeline_stage === 'won' || c.pipeline_stage === 'lost') return false; } else if ((c.pipeline_stage || 'lead') !== stageF) return false; }
       return true;
     });
     if (sortBy === 'alpha') arr.sort((a, b) => (a.name || '').localeCompare(b.name || ''));
@@ -203,6 +219,7 @@ export default function CRMTab({ customers, invoices, user, userProfile, users, 
         assigned_rep: f.assignedRep !== undefined ? (f.assignedRep || null) : sel.assigned_rep,
       }, myId);
       await logActivity(myId, 'Edited client: ' + (f.name || sel.name), 'crm');
+      if (f.assignedRep && f.assignedRep !== sel.assigned_rep) notifyClientAssigned([f.assignedRep], f.name || sel.name, myId);
       setEditingClient(false); setF({}); onReload();
       loadClientData({...sel, name: f.name || sel.name});
     } catch (err) { alert('Error / خطأ: ' + err.message); }
@@ -240,6 +257,7 @@ export default function CRMTab({ customers, invoices, user, userProfile, users, 
         }, myId);
       }
       await logActivity(myId, 'Created follow-up for ' + sel.name + ': ' + f.task, 'crm');
+      if (assignTo && assignTo !== myId) notifyFollowUp([assignTo], sel.name, f.task, myId);
       setShowFollowUp(false); setF({}); loadClientData(sel);
     } catch (err) { alert('Error / خطأ: ' + err.message); }
   };
@@ -252,53 +270,94 @@ export default function CRMTab({ customers, invoices, user, userProfile, users, 
     } catch (err) { alert('Error / خطأ: ' + err.message); }
   };
 
+  const changeStage = async (client, newStage) => {
+    try {
+      const oldStage = client.pipeline_stage || 'lead';
+      await dbUpdate('customers', client.id, { pipeline_stage: newStage }, myId);
+      const stageName = PIPELINE_STAGES.find(s => s.v === newStage)?.l || newStage;
+      await logActivity(myId, 'Pipeline: ' + (client.name_en || client.name) + ' → ' + stageName, 'crm');
+      await dbInsert('client_notes', { customer_id: client.id, note_text: '📊 Pipeline stage changed: ' + oldStage + ' → ' + newStage + ' by ' + (users?.find(u => u.id === myId)?.name || '') }, myId);
+      if (sel && sel.id === client.id) { setSel({...sel, pipeline_stage: newStage}); loadClientData({...sel, pipeline_stage: newStage}); }
+      onReload();
+    } catch (err) { alert('Error: ' + err.message); }
+  };
+
   // ===== LIST VIEW =====
   if (!sel) return (
     <div>
-      <div className="flex justify-between flex-wrap gap-2 mb-3">
-        <h2 className="text-xl font-extrabold">CRM / إدارة العملاء</h2>
-        <div className="flex gap-2 items-center flex-wrap">
-          <input value={q} onChange={e => setQ(e.target.value)} placeholder="Search / بحث"
-            className="px-3 py-1.5 rounded-lg border border-slate-200 text-xs w-28" />
+      {/* Header */}
+      <div className="flex justify-between items-center mb-4">
+        <div>
+          <h2 className="text-xl font-extrabold tracking-tight">CRM</h2>
+          <p className="text-[11px] text-slate-400">{filtered.length} clients · {customers.filter(c=>(c.pipeline_stage||'lead')!=='won'&&(c.pipeline_stage||'lead')!=='lost').length} in pipeline</p>
+        </div>
+        <div className="flex gap-2 items-center">
+          <div className="relative">
+            <input value={q} onChange={e => setQ(e.target.value)} placeholder="Search..."
+              className="pl-8 pr-3 py-2 rounded-xl border border-slate-200 text-xs w-36 bg-white focus:ring-2 focus:ring-blue-200 focus:border-blue-400 transition" />
+            <span className="absolute left-2.5 top-2 text-slate-400 text-xs">🔍</span>
+          </div>
           <button onClick={() => { setShowAdd(true); setF({}); }}
-            className="px-3 py-1.5 bg-blue-500 text-white rounded-lg text-xs font-semibold">+ Client / عميل</button>
+            className="px-4 py-2 bg-gradient-to-r from-blue-500 to-indigo-600 text-white rounded-xl text-xs font-bold shadow-sm hover:shadow-md transition">+ New Client</button>
         </div>
       </div>
-      <div className="flex gap-2 mb-3 flex-wrap">
-        <select value={catF} onChange={e => setCatF(e.target.value)} className="px-2 py-1 rounded border border-slate-200 text-xs">
+
+      {/* Pipeline Visual */}
+      <div className="bg-white rounded-2xl p-4 mb-4 border border-slate-100 shadow-sm">
+        <div className="flex gap-1.5 overflow-x-auto pb-1">
+          <button onClick={() => setStageF('all')}
+            className={'px-3 py-2.5 rounded-xl text-[10px] font-bold transition whitespace-nowrap ' + (stageF === 'all' ? 'bg-slate-800 text-white shadow-md' : 'bg-slate-50 text-slate-500 hover:bg-slate-100')}>
+            All ({customers.length})
+          </button>
+          {PIPELINE_STAGES.map(s => {
+            const count = customers.filter(c => (c.pipeline_stage || 'lead') === s.v).length;
+            const isActive = stageF === s.v;
+            return (
+              <button key={s.v} onClick={() => setStageF(stageF === s.v ? 'all' : s.v)}
+                className={'px-3 py-2.5 rounded-xl text-[10px] font-bold transition whitespace-nowrap ' + (isActive ? 'text-white shadow-md scale-105' : 'hover:scale-102')}
+                style={isActive ? { background: s.c } : { background: s.c + '10', color: s.c }}>
+                <span className="text-sm">{count}</span> {s.icon} {s.l}
+              </button>
+            );
+          })}
+        </div>
+      </div>
+
+      {/* Filters Row */}
+      <div className="flex gap-2 mb-4 flex-wrap items-center">
+        <select value={catF} onChange={e => setCatF(e.target.value)} className="px-3 py-1.5 rounded-lg border border-slate-200 text-[11px] bg-white">
           <option value="all">All Categories</option>
           {allCategories.map(c => <option key={c} value={c}>{c}</option>)}
         </select>
-        <select value={groupF} onChange={e => setGroupF(e.target.value)} className="px-2 py-1 rounded border border-slate-200 text-xs">
+        <select value={groupF} onChange={e => setGroupF(e.target.value)} className="px-3 py-1.5 rounded-lg border border-slate-200 text-[11px] bg-white">
           <option value="all">All Groups</option>
           {allGroups.map(g => <option key={g} value={g}>{g}</option>)}
         </select>
-        <select value={repF} onChange={e => setRepF(e.target.value)} className="px-2 py-1 rounded border border-slate-200 text-xs">
-          <option value="all">All Reps / كل الممثلين</option>
+        <select value={repF} onChange={e => setRepF(e.target.value)} className="px-3 py-1.5 rounded-lg border border-slate-200 text-[11px] bg-white">
+          <option value="all">All Reps</option>
           {(users || []).map(u => <option key={u.id} value={u.id}>{u.name}</option>)}
-          <option value="unassigned">Unassigned / غير معيّن</option>
+          <option value="unassigned">Unassigned</option>
         </select>
-        <select value={sortBy} onChange={e => setSortBy(e.target.value)} className="px-2 py-1 rounded border border-slate-200 text-xs">
-          <option value="alpha">A-Z / أبجدي</option>
-          <option value="alpha_rev">Z-A / عكسي</option>
-          <option value="most_orders">Most Orders / أكثر أوامر</option>
-          <option value="top_sales">Top Sales / أعلى مبيعات</option>
-          <option value="latest_note">Last Note (newest) / آخر ملاحظة</option>
-          <option value="earliest_note">Last Note (oldest) / أقدم ملاحظة</option>
-          <option value="no_notes">No Recent Notes / بدون ملاحظات</option>
+        <select value={sortBy} onChange={e => setSortBy(e.target.value)} className="px-3 py-1.5 rounded-lg border border-slate-200 text-[11px] bg-white">
+          <option value="alpha">A → Z</option><option value="alpha_rev">Z → A</option>
+          <option value="most_orders">Most Orders</option><option value="top_sales">Top Sales</option>
+          <option value="latest_note">Latest Note</option><option value="no_notes">No Notes</option>
         </select>
+        <span className="text-[10px] text-slate-400 ml-auto">{filtered.length} results</span>
       </div>
-      <div className="grid grid-cols-3 gap-3 mb-3">
-        <div className="bg-white rounded-lg p-3" style={{borderLeftWidth:3,borderLeftColor:'#0ea5e9'}}>
-          <div className="text-[10px] text-slate-500">Clients / عملاء</div>
-          <div className="text-lg font-extrabold">{filtered.length}</div></div>
-        <div className="bg-white rounded-lg p-3" style={{borderLeftWidth:3,borderLeftColor:'#10b981'}}>
-          <div className="text-[10px] text-slate-500">Active / نشط</div>
-          <div className="text-lg font-extrabold">{filtered.filter(c => c.status !== 'inactive').length}</div></div>
-        <div className="bg-white rounded-lg p-3" style={{borderLeftWidth:3,borderLeftColor:'#f59e0b'}}>
-          <div className="text-[10px] text-slate-500">Categories</div>
-          <div className="text-lg font-extrabold">{[...new Set(customers.map(c=>c.industry).filter(Boolean))].length || '—'}</div></div>
+
+      {/* Stats Row */}
+      <div className="grid grid-cols-4 gap-3 mb-4">
+        <div className="bg-white rounded-xl p-3 border border-slate-100"><div className="text-[9px] text-slate-400 uppercase tracking-wide">Total</div>
+          <div className="text-xl font-extrabold">{filtered.length}</div></div>
+        <div className="bg-white rounded-xl p-3 border border-slate-100"><div className="text-[9px] text-slate-400 uppercase tracking-wide">Active</div>
+          <div className="text-xl font-extrabold text-blue-600">{filtered.filter(c=>!['won','lost'].includes(c.pipeline_stage||'lead')).length}</div></div>
+        <div className="bg-white rounded-xl p-3 border border-slate-100"><div className="text-[9px] text-emerald-500 uppercase tracking-wide">Won</div>
+          <div className="text-xl font-extrabold text-emerald-600">{filtered.filter(c=>(c.pipeline_stage)==='won').length}</div></div>
+        <div className="bg-white rounded-xl p-3 border border-slate-100"><div className="text-[9px] text-red-400 uppercase tracking-wide">Lost</div>
+          <div className="text-xl font-extrabold text-red-500">{filtered.filter(c=>(c.pipeline_stage)==='lost').length}</div></div>
       </div>
+
       {showAdd && (
         <div className="bg-blue-50 rounded-xl p-4 mb-3 border border-blue-200">
           <h3 className="text-sm font-bold text-blue-800 mb-3">New Client / عميل جديد</h3>
@@ -368,7 +427,7 @@ export default function CRMTab({ customers, invoices, user, userProfile, users, 
           </div>
         );
       })()}
-      <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-3">
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
         {filtered.map(c => {
           const invs = custInvoices(c);
           const total = invs.reduce((a,i) => a + Number(i.total_amount||0), 0);
@@ -376,35 +435,69 @@ export default function CRMTab({ customers, invoices, user, userProfile, users, 
           const lastNote = getLastNote(c.id);
           const lastOrder = getLastOrder(c);
           const noteUser = lastNote ? users?.find(u => u.id === lastNote.created_by) : null;
+          const stage = PIPELINE_STAGES.find(s => s.v === (c.pipeline_stage || 'lead'));
+          const rep = users?.find(u => u.id === c.assigned_rep);
+          const showSales = canSeeSales(c);
           return (
-            <div key={c.id} onClick={()=>loadClientData(c)} className="bg-white rounded-lg p-3 cursor-pointer border border-slate-200 hover:shadow-md transition">
-              <div className="text-sm font-bold" style={{direction:'rtl'}}>{c.important ? '⭐ ' : ''}{lang === 'en' && c.name_en ? c.name_en : c.name}</div>
-              {lang === 'ar' && c.name_en && <div className="text-[10px] text-blue-500">{c.name_en}</div>}
-              <div className="flex gap-1 mt-1 flex-wrap">
-                {c.industry && <span className="px-1.5 py-0.5 bg-amber-100 text-amber-700 rounded text-[9px]">{c.industry}</span>}
-                {c.group_name && <span className="px-1.5 py-0.5 bg-purple-100 text-purple-700 rounded text-[9px]">{c.group_name}</span>}
-                {c.lead_source && <span className="px-1.5 py-0.5 bg-green-100 text-green-700 rounded text-[9px]">{c.lead_source}</span>}
-              </div>
-              <div className="flex justify-between mt-2">
-                <div><div className="text-[9px] text-slate-400">Sales</div>
-                  <div className="text-xs font-bold text-blue-500">{total>0?fmt(total):'—'}</div></div>
-                <div className="text-right"><div className="text-[9px] text-slate-400">{invs.length} orders</div>
-                  <div className={'text-xs font-bold '+(owed>0?'text-red-500':'text-emerald-500')}>{owed>0?fmt(owed):'✓'}</div></div>
-              </div>
-              {/* Last Note Date */}
-              <div className="mt-1.5 border-t border-slate-100 pt-1.5">
-                {c.assigned_rep && (() => { const rep = users?.find(u => u.id === c.assigned_rep); return rep ? <div className="text-[10px] text-indigo-600 font-semibold mb-0.5">👤 {rep.name}</div> : null; })()}
-                {lastNote ? (
-                  <div className="text-[10px] text-blue-600">
-                    Last note: {new Date(lastNote.created_at).toLocaleDateString()}
-                    {noteUser && <span className="text-slate-400"> — {noteUser.name}</span>}
+            <div key={c.id} onClick={()=>loadClientData(c)}
+              className="bg-white rounded-2xl overflow-hidden cursor-pointer border border-slate-100 hover:border-slate-300 hover:shadow-lg transition-all group">
+              {/* Stage color bar */}
+              <div className="h-1.5" style={{ background: stage ? `linear-gradient(90deg, ${stage.c}, ${stage.c}88)` : '#e2e8f0' }} />
+              <div className="p-4">
+                {/* Name + Stage */}
+                <div className="flex justify-between items-start gap-2 mb-2">
+                  <div className="flex-1 min-w-0">
+                    <div className="text-sm font-bold truncate" style={{direction:'rtl'}}>
+                      {c.important && <span className="text-amber-400 mr-0.5">★</span>}
+                      {lang === 'en' && c.name_en ? c.name_en : c.name}
+                    </div>
+                    {lang === 'ar' && c.name_en && <div className="text-[10px] text-blue-500 truncate">{c.name_en}</div>}
+                  </div>
+                  {stage && <span className="px-2 py-1 rounded-lg text-[9px] font-bold text-white flex-shrink-0" style={{background:stage.c}}>{stage.icon} {stage.l}</span>}
+                </div>
+
+                {/* Tags */}
+                <div className="flex gap-1 mb-3 flex-wrap">
+                  {c.industry && <span className="px-2 py-0.5 bg-amber-50 text-amber-700 rounded-md text-[9px] font-medium">{c.industry}</span>}
+                  {c.group_name && <span className="px-2 py-0.5 bg-purple-50 text-purple-700 rounded-md text-[9px] font-medium">{c.group_name}</span>}
+                </div>
+
+                {/* Sales — hidden for non-assigned unless permitted */}
+                {showSales ? (
+                  <div className="flex justify-between items-end mb-3 px-3 py-2 rounded-xl bg-slate-50">
+                    <div><div className="text-[8px] text-slate-400 uppercase tracking-wider">Sales</div>
+                      <div className="text-sm font-extrabold text-slate-800">{total > 0 ? fmt(total) : '—'}</div></div>
+                    <div className="text-right"><div className="text-[8px] text-slate-400 uppercase tracking-wider">{invs.length} orders</div>
+                      <div className={'text-sm font-extrabold ' + (owed > 0 ? 'text-red-500' : 'text-emerald-500')}>{owed > 0 ? fmt(owed) : '✓ Paid'}</div></div>
                   </div>
                 ) : (
-                  <div className="text-[10px] text-red-500 font-semibold">No notes yet</div>
+                  <div className="flex items-center justify-center mb-3 px-3 py-2 rounded-xl bg-slate-50">
+                    <span className="text-[10px] text-slate-400">🔒 Sales restricted</span>
+                  </div>
                 )}
-                {lastOrder && (
-                  <div className="text-[10px] text-purple-600">Last order: #{lastOrder.order_number} ({lastOrder.invoice_date})</div>
-                )}
+
+                {/* Footer */}
+                <div className="flex justify-between items-center">
+                  <div className="flex items-center gap-1.5">
+                    {rep ? (
+                      <span className="inline-flex items-center gap-1 text-[10px] font-semibold text-indigo-600 bg-indigo-50 px-2 py-0.5 rounded-md">
+                        <span className="w-1.5 h-1.5 rounded-full bg-indigo-400" />{rep.name}
+                      </span>
+                    ) : (
+                      <span className="text-[10px] text-slate-400">No rep</span>
+                    )}
+                  </div>
+                  <div className="text-right">
+                    {lastNote ? (
+                      <div className="text-[9px] text-slate-400">
+                        {new Date(lastNote.created_at).toLocaleDateString()}
+                        {noteUser && <span className="ml-0.5 text-blue-400">{noteUser.name}</span>}
+                      </div>
+                    ) : (
+                      <span className="text-[9px] text-red-400 font-medium">No notes</span>
+                    )}
+                  </div>
+                </div>
               </div>
             </div>);
         })}
@@ -480,7 +573,25 @@ export default function CRMTab({ customers, invoices, user, userProfile, users, 
             </button>
             {sel.phone && <div className="text-xs text-slate-500 mt-2">Phone: {sel.phone}</div>}
             {sel.assigned_rep && (() => { const rep = users?.find(u => u.id === sel.assigned_rep); return rep ? <div className="text-xs text-indigo-600 font-semibold mt-1">👤 Assigned Rep / الممثل: {rep.name}</div> : null; })()}
-            {sel.credit_limit && <div className="text-xs text-slate-500">Credit Limit: {fE(sel.credit_limit)}</div>}
+
+            {/* Pipeline Stage */}
+            <div className="mt-3 p-3 bg-slate-50 rounded-lg">
+              <div className="text-[10px] text-slate-500 font-semibold mb-2">Pipeline Stage / مرحلة البيع</div>
+              <div className="flex gap-1 flex-wrap">
+                {PIPELINE_STAGES.map(s => {
+                  const isActive = (sel.pipeline_stage || 'lead') === s.v;
+                  return (
+                    <button key={s.v} onClick={(e) => { e.stopPropagation(); changeStage(sel, s.v); }}
+                      className={'px-2.5 py-1.5 rounded text-[10px] font-bold transition ' + (isActive ? 'text-white shadow-sm' : 'hover:opacity-80')}
+                      style={isActive ? { background: s.c } : { background: s.c + '18', color: s.c }}>
+                      {s.icon} {s.l}
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+
+            {sel.credit_limit && <div className="text-xs text-slate-500 mt-2">Credit Limit: {fE(sel.credit_limit)}</div>}
             {isAdmin && (
               <div className="flex items-center gap-2 mt-2 p-2 bg-red-50 rounded border border-red-200">
                 <input type="checkbox" checked={sel.restricted || false}
@@ -497,12 +608,16 @@ export default function CRMTab({ customers, invoices, user, userProfile, users, 
           </div>
         )}
       </div>
-      <div className="grid grid-cols-4 gap-2 mb-3">
-        <div className="bg-blue-50 rounded-lg p-2 text-center"><div className="text-[9px] text-slate-500">Sales</div><div className="text-sm font-bold text-blue-600">{fE(totalSales)}</div></div>
-        <div className="bg-emerald-50 rounded-lg p-2 text-center"><div className="text-[9px] text-slate-500">Collected</div><div className="text-sm font-bold text-emerald-600">{fE(totalCollected)}</div></div>
-        <div className="bg-red-50 rounded-lg p-2 text-center"><div className="text-[9px] text-slate-500">Owed</div><div className="text-sm font-bold text-red-500">{fE(totalOwed)}</div></div>
-        <div className="bg-amber-50 rounded-lg p-2 text-center"><div className="text-[9px] text-slate-500">Orders</div><div className="text-sm font-bold">{invs.length}</div></div>
-      </div>
+      {canSeeSales(sel) ? (
+        <div className="grid grid-cols-4 gap-2 mb-3">
+          <div className="bg-blue-50 rounded-lg p-2 text-center"><div className="text-[9px] text-slate-500">Sales</div><div className="text-sm font-bold text-blue-600">{fE(totalSales)}</div></div>
+          <div className="bg-emerald-50 rounded-lg p-2 text-center"><div className="text-[9px] text-slate-500">Collected</div><div className="text-sm font-bold text-emerald-600">{fE(totalCollected)}</div></div>
+          <div className="bg-red-50 rounded-lg p-2 text-center"><div className="text-[9px] text-slate-500">Owed</div><div className="text-sm font-bold text-red-500">{fE(totalOwed)}</div></div>
+          <div className="bg-amber-50 rounded-lg p-2 text-center"><div className="text-[9px] text-slate-500">Orders</div><div className="text-sm font-bold">{invs.length}</div></div>
+        </div>
+      ) : (
+        <div className="bg-slate-50 rounded-lg p-3 mb-3 text-center"><span className="text-xs text-slate-400">🔒 Sales data restricted — only visible to assigned rep or admins</span></div>
+      )}
       <div className="flex gap-2 mb-3 flex-wrap">
         <button onClick={()=>{setShowNote(true);setF({});}} className="px-3 py-1.5 bg-blue-500 text-white rounded-lg text-xs font-semibold">+ Note / ملاحظة</button>
         <button onClick={()=>{setShowFollowUp(true);setF({});}} className="px-3 py-1.5 bg-amber-500 text-white rounded-lg text-xs font-semibold">+ Follow-up / متابعة</button>
