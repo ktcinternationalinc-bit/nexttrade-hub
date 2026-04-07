@@ -15,39 +15,42 @@ export default function PersonalDashboard({ user, userProfile, isAdmin, invoices
   const [reminderDue, setReminderDue] = useState('');
   const todayStr = new Date().toISOString().substring(0, 10);
   const getUserName = (id) => (users || []).find(u => u.id === id)?.name || '';
+  const myId = userProfile?.id || user?.id;
 
   useEffect(() => { const load = async () => {
+    const pid = userProfile?.id || user?.id;
     const [t, e, fu] = await Promise.all([
       supabase.from('tickets').select('*').order('created_at', { ascending: false }),
       supabase.from('calendar_events').select('*').gte('event_date', todayStr).order('event_date').order('event_time').limit(30),
       supabase.from('follow_ups').select('*, customers(name, name_en)').eq('completed', false).order('due_date'),
     ]);
     setTickets(t.data || []); setEvents(e.data || []); setFollowUps(fu.data || []);
-    try { const { data: rm } = await supabase.from('reminders').select('*').eq('user_id', user?.id).eq('completed', false).order('due_date'); setReminders(rm || []); } catch(e) {}
+    try { const { data: rm } = await supabase.from('reminders').select('*').eq('user_id', pid).eq('completed', false).order('due_date'); setReminders(rm || []); } catch(e) {}
     setLoaded(true);
-  }; load(); }, [user]);
+  }; load(); }, [user, userProfile]);
 
-  const addReminder = async () => { if (!newReminder.trim()) return; try { await dbInsert('reminders', { user_id: user?.id, text: newReminder, due_date: reminderDue || null }, user?.id); setNewReminder(''); setReminderDue(''); const { data } = await supabase.from('reminders').select('*').eq('user_id', user?.id).eq('completed', false).order('due_date'); setReminders(data || []); } catch(e) {} };
-  const completeReminder = async (id) => { try { await dbUpdate('reminders', id, { completed: true }, user?.id); setReminders(reminders.filter(r => r.id !== id)); } catch(e) {} };
+  const addReminder = async () => { if (!newReminder.trim()) return; try { await dbInsert('reminders', { user_id: myId, text: newReminder, due_date: reminderDue || null }, myId); setNewReminder(''); setReminderDue(''); const { data } = await supabase.from('reminders').select('*').eq('user_id', myId).eq('completed', false).order('due_date'); setReminders(data || []); } catch(e) {} };
+  const completeReminder = async (id) => { try { await dbUpdate('reminders', id, { completed: true }, myId); setReminders(reminders.filter(r => r.id !== id)); } catch(e) {} };
 
   if (!loaded) return <div className="text-center text-slate-400 py-4 text-sm">Loading...</div>;
 
-  const myTickets = tickets.filter(t => t.assigned_to === user?.id && t.status !== 'Closed');
-  const ticketsICreated = tickets.filter(t => t.created_by === user?.id && t.assigned_to !== user?.id && t.status !== 'Closed');
+  const myTickets = tickets.filter(t => t.assigned_to === myId && t.status !== 'Closed');
+  const ticketsICreated = tickets.filter(t => t.created_by === myId && t.assigned_to !== myId && t.status !== 'Closed');
+  const teamTickets = tickets.filter(t => t.status !== 'Closed' && t.assigned_to !== myId && t.created_by !== myId);
   const needsAck = myTickets.filter(t => t.status === 'New');
-  const myEvents = events.filter(e => e.assigned_to === user?.id || e.created_by === user?.id);
+  const myEvents = events.filter(e => e.assigned_to === myId || e.created_by === myId);
   const todayEvents = myEvents.filter(e => e.event_date === todayStr);
   const upcomingEvents = myEvents.filter(e => e.event_date > todayStr).slice(0, 5);
-  const myFollowUps = followUps.filter(fu => fu.assigned_to === user?.id || fu.created_by === user?.id);
+  const myFollowUps = followUps.filter(fu => fu.assigned_to === myId || fu.created_by === myId);
   const overdueFollowUps = myFollowUps.filter(fu => fu.due_date && fu.due_date < todayStr);
   const overdueTickets = [...myTickets, ...ticketsICreated].filter(t => t.due_date && t.due_date < todayStr);
   const overdueReminders = reminders.filter(r => r.due_date && r.due_date < todayStr);
 
-  const myCustomers = customers.filter(c => c.assigned_rep === user?.id);
+  const myCustomers = customers.filter(c => c.assigned_rep === myId);
   const crmStats = {}; myCustomers.forEach(c => { const s = c.crm_status || 'New Lead'; crmStats[s] = (crmStats[s] || 0) + 1; });
-  const notContacted30 = customers.filter(c => { if (c.assigned_rep && c.assigned_rep !== user?.id && !isAdmin) return false; if (!c.last_contact_date) return c.assigned_rep === user?.id; return Math.floor((Date.now() - new Date(c.last_contact_date).getTime()) / 86400000) > 30; });
+  const notContacted30 = customers.filter(c => { if (c.assigned_rep && c.assigned_rep !== myId && !isAdmin) return false; if (!c.last_contact_date) return c.assigned_rep === myId; return Math.floor((Date.now() - new Date(c.last_contact_date).getTime()) / 86400000) > 30; });
 
-  const mySales = invoices.filter(inv => inv.sales_rep === userProfile?.name || inv.created_by === user?.id);
+  const mySales = invoices.filter(inv => inv.sales_rep === userProfile?.name || inv.created_by === myId);
   const thisMonth = todayStr.substring(0, 7);
   const monthlyTotal = mySales.filter(inv => (inv.invoice_date || '').startsWith(thisMonth)).reduce((a, i) => a + Number(i.total_amount || 0), 0);
 
@@ -72,6 +75,7 @@ export default function PersonalDashboard({ user, userProfile, isAdmin, invoices
     <div className="grid grid-cols-2 md:grid-cols-5 gap-2 mb-4">
       <div className="bg-white rounded-lg p-3 cursor-pointer hover:shadow" onClick={()=>navigate('tickets')} style={{borderLeftWidth:3,borderLeftColor:needsAck.length>0?'#ef4444':'#3b82f6'}}><div className="text-[10px] text-slate-500">My Tickets</div><div className="text-lg font-extrabold">{myTickets.length}</div>{needsAck.length>0&&<div className="text-[10px] text-red-600 font-bold">⚠️ {needsAck.length} new</div>}</div>
       <div className="bg-white rounded-lg p-3 cursor-pointer hover:shadow" onClick={()=>navigate('tickets')} style={{borderLeftWidth:3,borderLeftColor:'#8b5cf6'}}><div className="text-[10px] text-slate-500">Assigned by Me</div><div className="text-lg font-extrabold">{ticketsICreated.length}</div></div>
+      {(isAdmin || teamTickets.length > 0) && <div className="bg-white rounded-lg p-3 cursor-pointer hover:shadow" onClick={()=>navigate('tickets')} style={{borderLeftWidth:3,borderLeftColor:'#f59e0b'}}><div className="text-[10px] text-slate-500">Team Tickets</div><div className="text-lg font-extrabold">{teamTickets.length}</div></div>}
       <div className="bg-white rounded-lg p-3 cursor-pointer hover:shadow" onClick={()=>navigate('calendar')} style={{borderLeftWidth:3,borderLeftColor:'#0ea5e9'}}><div className="text-[10px] text-slate-500">Today's Events</div><div className="text-lg font-extrabold">{todayEvents.length}</div><div className="text-[10px] text-slate-400">{upcomingEvents.length} upcoming</div></div>
       <div className="bg-white rounded-lg p-3 cursor-pointer hover:shadow" onClick={()=>navigate('crm')} style={{borderLeftWidth:3,borderLeftColor:overdueFollowUps.length>0?'#ef4444':'#f59e0b'}}><div className="text-[10px] text-slate-500">Follow-ups</div><div className="text-lg font-extrabold">{myFollowUps.length}</div>{overdueFollowUps.length>0&&<div className="text-[10px] text-red-600 font-bold">⚠️ {overdueFollowUps.length} overdue</div>}</div>
       {monthlyTotal>0&&<div className="bg-white rounded-lg p-3 cursor-pointer hover:shadow" onClick={()=>navigate('sales')} style={{borderLeftWidth:3,borderLeftColor:'#10b981'}}><div className="text-[10px] text-slate-500">Sales ({thisMonth})</div><div className="text-lg font-extrabold text-emerald-600">{fE(monthlyTotal)}</div></div>}

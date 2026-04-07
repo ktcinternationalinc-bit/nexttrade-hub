@@ -13,6 +13,7 @@ import CustomsTab from '../components/CustomsTab';
 import PersonalDashboard from '../components/PersonalDashboard';
 import AIAssistant from '../components/AIAssistant';
 import ShippingRatesTab from '../components/ShippingRatesTab';
+import CommunicationsTab from '../components/CommunicationsTab';
 import {
   BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip,
   ResponsiveContainer, Legend
@@ -38,6 +39,7 @@ const TABS = [
   { id: 'dailylog', label: 'Daily Log / يومي', icon: '📓' },
   { id: 'admin', label: 'Admin / إدارة', icon: '👑' },
   { id: 'ai', label: 'AI Assistant / ذكي', icon: '🤖' },
+  { id: 'comms', label: 'Communications / رسائل', icon: '📬' },
   { id: 'settings', label: 'Settings / إعدادات', icon: '⚙️' },
   { id: 'import', label: 'Import / استيراد', icon: '📥' },
 ];
@@ -3111,7 +3113,7 @@ export default function App() {
             TICKETS TAB
         ========================================== */}
         {tab === 'tickets' && (
-          <TicketsTab customers={customers} user={user} users={teamUsers} onReload={loadAllData} lang={lang} />
+          <TicketsTab customers={customers} user={user} userProfile={userProfile} users={teamUsers} onReload={loadAllData} lang={lang} />
         )}
 
         {/* ==========================================
@@ -3154,6 +3156,10 @@ export default function App() {
         ========================================== */}
         {tab === 'ai' && (
           <AIAssistant user={user} />
+        )}
+
+        {tab === 'comms' && (
+          <CommunicationsTab user={user} supabase={supabase} />
         )}
 
         {/* ==========================================

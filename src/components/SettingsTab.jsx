@@ -14,7 +14,7 @@ const ROLES = [
 const MODULES = [
   'Dashboard', 'Sales', 'Customers', 'Treasury', 'Checks', 'Debts',
   'Warehouse', 'Inventory', 'CRM', 'Tickets', 'Calendar', 'Customs',
-  'Shipping Rates', 'Daily Log', 'Admin', 'AI Assistant', 'Settings', 'Import'
+  'Shipping Rates', 'Daily Log', 'Admin', 'AI Assistant', 'Communications', 'Settings', 'Import'
 ];
 
 const NOTIF_TYPES = [
@@ -133,7 +133,7 @@ export default function SettingsTab({ user, users, onReload, isAdmin }) {
 
       {/* Section Tabs */}
       <div className="flex gap-1 mb-3 flex-wrap">
-        {[['roles', 'Team & Roles'], ['permissions', 'Module Access'], ['notifications', 'Notifications'], ['rules', 'Category Rules / قواعد'], ['translation', '🌐 Translation / ترجمة']].map(([v, l]) => (
+        {[['roles', 'Team & Roles'], ['permissions', 'Module Access'], ['notifications', 'Notifications'], ['comms', '📬 Communications'], ['rules', 'Category Rules / قواعد'], ['translation', '🌐 Translation / ترجمة']].map(([v, l]) => (
           <button key={v} onClick={() => setSection(v)}
             className={'px-3 py-1.5 rounded-lg text-xs font-semibold transition ' + (section === v ? 'bg-slate-900 text-white' : 'bg-slate-100 text-slate-500')}>
             {l}
@@ -291,6 +291,44 @@ export default function SettingsTab({ user, users, onReload, isAdmin }) {
               ))}
             </tbody>
           </table>
+        </div>
+      )}
+
+      {/* ===== COMMUNICATIONS ===== */}
+      {section === 'comms' && (
+        <div className="space-y-3">
+          <div className="bg-white rounded-xl p-4">
+            <h3 className="text-sm font-bold mb-3">📧 Gmail Integration</h3>
+            <p className="text-xs text-slate-500 mb-3">Connect your Gmail account to read and send emails from the app and AI Secretary.</p>
+            <button onClick={() => { var url = '/api/gmail/connect'; if (user && user.id) url += '?userId=' + user.id; window.open(url, '_blank', 'width=600,height=700'); }}
+              className="px-4 py-2 rounded-lg text-sm font-bold text-white" style={{background:'linear-gradient(135deg, #0ea5e9, #3b82f6)'}}>
+              Connect Gmail Account
+            </button>
+            <div className="mt-2 text-[10px] text-slate-400">Requires: GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET, GOOGLE_REDIRECT_URI in Vercel env vars</div>
+          </div>
+          <div className="bg-white rounded-xl p-4">
+            <h3 className="text-sm font-bold mb-3">💬 WhatsApp Business (Twilio)</h3>
+            <p className="text-xs text-slate-500 mb-3">Send and receive WhatsApp messages via Twilio. Set up your Twilio account first.</p>
+            <div className="text-xs text-slate-500 space-y-1">
+              <div>1. Create account at <strong>twilio.com</strong></div>
+              <div>2. Get Account SID + Auth Token from console</div>
+              <div>3. Enable WhatsApp sandbox or request a business number</div>
+              <div>4. Add to Vercel: TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN, TWILIO_WHATSAPP_FROM</div>
+              <div>5. Set webhook URL: <code className="bg-slate-100 px-1 rounded">https://nexttrade-hub.vercel.app/api/whatsapp/webhook</code></div>
+            </div>
+          </div>
+          <div className="bg-white rounded-xl p-4">
+            <h3 className="text-sm font-bold mb-3">🤖 AI Secretary Communications</h3>
+            <p className="text-xs text-slate-500 mb-2">Once Gmail and/or WhatsApp are connected, the AI Secretary can:</p>
+            <div className="text-xs text-slate-600 space-y-1">
+              <div>• Check email: <em>&quot;Check my email for anything urgent&quot;</em></div>
+              <div>• Search email: <em>&quot;Find emails from Ahmed about shipping&quot;</em></div>
+              <div>• Reply to email: <em>&quot;Reply to Ahmed and tell him Thursday&quot;</em></div>
+              <div>• Send WhatsApp: <em>&quot;Send WhatsApp to Omar confirming the shipment&quot;</em></div>
+              <div>• Create tickets from messages: <em>&quot;Create a ticket from that email&quot;</em></div>
+            </div>
+            <p className="text-[10px] text-slate-400 mt-2">All sends require your approval first. Full audit log in Communications tab.</p>
+          </div>
         </div>
       )}
 

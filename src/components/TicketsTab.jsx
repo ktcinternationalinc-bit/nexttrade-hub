@@ -6,7 +6,8 @@ const STATUSES = ['New','Acknowledged','In Progress','Waiting','Review','Testing
 const PRIORITIES = [{v:'high',l:'High / عالي',c:'#ef4444'},{v:'medium',l:'Medium / متوسط',c:'#f59e0b'},{v:'low',l:'Low / منخفض',c:'#10b981'}];
 const STATUS_COLORS = {New:'#3b82f6',Acknowledged:'#8b5cf6','In Progress':'#f59e0b',Waiting:'#6b7280',Review:'#ec4899',Testing:'#14b8a6',Ready:'#10b981',Closed:'#374151',Reopened:'#ef4444'};
 
-export default function TicketsTab({ customers, user, users, onReload, lang }) {
+export default function TicketsTab({ customers, user, userProfile, users, onReload, lang }) {
+  const myId = userProfile?.id || user?.id;
   const [tickets, setTickets] = useState([]);
   const [comments, setComments] = useState([]);
   const [sel, setSel] = useState(null);
@@ -40,8 +41,9 @@ export default function TicketsTab({ customers, user, users, onReload, lang }) {
   const filtered = useMemo(() => {
     let arr = tickets;
     if (statusF === 'open') arr = arr.filter(t => t.status !== 'Closed');
-    else if (statusF === 'mine') arr = arr.filter(t => t.assigned_to === user?.id && t.status !== 'Closed');
-    else if (statusF === 'created') arr = arr.filter(t => t.created_by === user?.id && t.status !== 'Closed');
+    else if (statusF === 'mine') arr = arr.filter(t => t.assigned_to === myId && t.status !== 'Closed');
+    else if (statusF === 'team') arr = arr.filter(t => t.status !== 'Closed' && t.assigned_to && t.assigned_to !== myId);
+    else if (statusF === 'created') arr = arr.filter(t => t.created_by === myId && t.status !== 'Closed');
     else if (statusF === 'overdue') arr = arr.filter(t => t.due_date && t.due_date < todayStr && t.status !== 'Closed');
     else if (statusF !== 'all') arr = arr.filter(t => t.status === statusF);
     if (q) arr = arr.filter(t => (t.title||'').toLowerCase().includes(q.toLowerCase()) || (t.description||'').includes(q) || (t.order_number||'').includes(q));
@@ -52,10 +54,10 @@ export default function TicketsTab({ customers, user, users, onReload, lang }) {
     if (!f.title) return;
     try {
       const assignedName = getUserName(f.assignedTo);
-      const creatorName = getUserName(user?.id);
-      await dbInsert('tickets', { title: f.title, description: f.description || '', priority: f.priority || 'medium', order_number: f.orderNumber || '', due_date: f.dueDate || null, customer_id: f.customerId || null, client_name: f.clientName || '', status: 'New', assigned_to: f.assignedTo || null, created_by: user?.id }, user?.id);
-      await logActivity(user?.id, 'Created ticket: ' + f.title + (assignedName ? ' → ' + assignedName : ''));
-      if (f.assignedTo && f.assignedTo !== user?.id) await logActivity(f.assignedTo, 'Ticket assigned to you by ' + creatorName + ': ' + f.title);
+      const creatorName = getUserName(myId);
+      await dbInsert('tickets', { title: f.title, description: f.description || '', priority: f.priority || 'medium', order_number: f.orderNumber || '', due_date: f.dueDate || null, customer_id: f.customerId || null, client_name: f.clientName || '', status: 'New', assigned_to: f.assignedTo || null, created_by: myId || null }, myId || null);
+      await logActivity(myId, 'Created ticket: ' + f.title + (assignedName ? ' → ' + assignedName : ''));
+      if (f.assignedTo && f.assignedTo !== myId) await logActivity(f.assignedTo, 'Ticket assigned to you by ' + creatorName + ': ' + f.title);
       setShowAdd(false); setF({}); loadTickets();
     } catch (err) { alert('Error: ' + err.message); }
   };
@@ -63,11 +65,11 @@ export default function TicketsTab({ customers, user, users, onReload, lang }) {
   const updateStatus = async (ticket, newStatus) => {
     try {
       const updates = { status: newStatus };
-      if (newStatus === 'Closed') { updates.closed_at = new Date().toISOString(); updates.closed_by = user?.id; }
-      await dbUpdate('tickets', ticket.id, updates, user?.id);
-      const myName = getUserName(user?.id) || 'Unknown';
-      await dbInsert('ticket_comments', { ticket_id: ticket.id, comment_text: '📋 Status changed to ' + newStatus + ' by ' + myName, is_system: true }, user?.id);
-      await logActivity(user?.id, 'Ticket status → ' + newStatus + ': ' + ticket.title);
+      if (newStatus === 'Closed') { updates.closed_at = new Date().toISOString(); updates.closed_by = myId; }
+      await dbUpdate('tickets', ticket.id, updates, myId);
+      const myName = getUserName(myId) || 'Unknown';
+      await dbInsert('ticket_comments', { ticket_id: ticket.id, comment_text: '📋 Status changed to ' + newStatus + ' by ' + myName, is_system: true }, myId);
+      await logActivity(myId, 'Ticket status → ' + newStatus + ': ' + ticket.title);
       loadTickets();
       if (sel && sel.id === ticket.id) { setSel({...sel, ...updates}); loadComments(ticket.id); }
     } catch (err) { alert('Error: ' + err.message); }
@@ -75,12 +77,12 @@ export default function TicketsTab({ customers, user, users, onReload, lang }) {
 
   const reassignTicket = async (ticket, newUserId) => {
     try {
-      await dbUpdate('tickets', ticket.id, { assigned_to: newUserId }, user?.id);
+      await dbUpdate('tickets', ticket.id, { assigned_to: newUserId }, myId);
       const newName = getUserName(newUserId);
-      const myName = getUserName(user?.id);
-      await dbInsert('ticket_comments', { ticket_id: ticket.id, comment_text: '👤 Reassigned to ' + newName + ' by ' + myName, is_system: true }, user?.id);
-      await logActivity(user?.id, 'Reassigned ticket to ' + newName + ': ' + ticket.title);
-      if (newUserId !== user?.id) await logActivity(newUserId, 'Ticket reassigned to you by ' + myName + ': ' + ticket.title);
+      const myName = getUserName(myId);
+      await dbInsert('ticket_comments', { ticket_id: ticket.id, comment_text: '👤 Reassigned to ' + newName + ' by ' + myName, is_system: true }, myId);
+      await logActivity(myId, 'Reassigned ticket to ' + newName + ': ' + ticket.title);
+      if (newUserId !== myId) await logActivity(newUserId, 'Ticket reassigned to you by ' + myName + ': ' + ticket.title);
       loadTickets();
       if (sel && sel.id === ticket.id) { setSel({...sel, assigned_to: newUserId}); loadComments(ticket.id); }
     } catch (err) { alert('Error: ' + err.message); }
@@ -89,8 +91,8 @@ export default function TicketsTab({ customers, user, users, onReload, lang }) {
   const addComment = async () => {
     if (!f.comment || !sel) return;
     try {
-      await dbInsert('ticket_comments', { ticket_id: sel.id, comment_text: f.comment, is_system: false }, user?.id);
-      await logActivity(user?.id, 'Comment on ticket: ' + sel.title);
+      await dbInsert('ticket_comments', { ticket_id: sel.id, comment_text: f.comment, is_system: false }, myId);
+      await logActivity(myId, 'Comment on ticket: ' + sel.title);
       setF({...f, comment: ''}); loadComments(sel.id);
     } catch (err) { alert('Error: ' + err.message); }
   };
@@ -148,7 +150,7 @@ export default function TicketsTab({ customers, user, users, onReload, lang }) {
         </div>
 
         {/* ACKNOWLEDGE BUTTON */}
-        {sel.status === 'New' && sel.assigned_to === user?.id && (
+        {sel.status === 'New' && sel.assigned_to === myId && (
           <button onClick={() => updateStatus(sel, 'Acknowledged')}
             className="w-full mb-3 px-4 py-3 bg-purple-600 text-white rounded-lg text-sm font-bold animate-pulse">
             ✓ Acknowledge Ticket</button>
@@ -192,7 +194,7 @@ export default function TicketsTab({ customers, user, users, onReload, lang }) {
           <div className="space-y-2 max-h-[300px] overflow-auto mb-3">
             {userComments.map(c => {
               const authorName = getUserName(c.created_by) || 'Unknown';
-              const isMe = c.created_by === user?.id;
+              const isMe = c.created_by === myId;
               return (
                 <div key={c.id} className={'rounded-lg p-3 ' + (isMe ? 'bg-blue-50 ml-8' : 'bg-slate-50 mr-8')}>
                   <div className="text-xs">{c.comment_text}</div>
@@ -229,7 +231,7 @@ export default function TicketsTab({ customers, user, users, onReload, lang }) {
 
     {/* Filters */}
     <div className="flex gap-2 mb-3 flex-wrap">
-      {[['open','Open'],['mine','Assigned to Me'],['created','Created by Me'],['overdue','Overdue'],['all','All'],...STATUSES.map(s=>[s,s])].map(([v,l]) => (
+      {[['open','Open'],['mine','Assigned to Me'],['team','Assigned to Team'],['created','Created by Me'],['overdue','Overdue'],['all','All'],...STATUSES.map(s=>[s,s])].map(([v,l]) => (
         <button key={v} onClick={() => setStatusF(v)}
           className={'px-3 py-1 rounded-md text-xs font-semibold transition ' + (statusF === v ? 'bg-slate-900 text-white' : 'bg-slate-100 text-slate-500')}>{l}</button>
       ))}
@@ -278,7 +280,7 @@ export default function TicketsTab({ customers, user, users, onReload, lang }) {
         const assignedName = getUserName(t.assigned_to);
         const createdName = getUserName(t.created_by);
         const isOverdue = t.due_date && t.due_date < todayStr && t.status !== 'Closed';
-        const needsAck = t.status === 'New' && t.assigned_to === user?.id;
+        const needsAck = t.status === 'New' && t.assigned_to === myId;
         return (
           <div key={t.id} onClick={()=>{setSel(t);loadComments(t.id);}}
             className={'bg-white rounded-lg p-4 cursor-pointer border-l-4 hover:shadow-md transition ' + (isOverdue ? 'border-r border-r-red-200 bg-red-50/30' : needsAck ? 'border-r-2 border-r-purple-400' : '')}
