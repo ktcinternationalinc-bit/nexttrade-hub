@@ -8,373 +8,255 @@ export default function AIAssistant({ user }) {
   const [listening, setListening] = useState(false);
   const [voiceSupported, setVoiceSupported] = useState(false);
   const [pendingAction, setPendingAction] = useState(null);
+  const pendingActionRef = useRef(null);
   const recognitionRef = useRef(null);
   const chatEndRef = useRef(null);
   const silenceTimerRef = useRef(null);
   const autoSendRef = useRef(null);
+  const inputRef = useRef('');
+
+  // Keep refs in sync
+  useEffect(() => { pendingActionRef.current = pendingAction; }, [pendingAction]);
+  useEffect(() => { inputRef.current = input; }, [input]);
 
   useEffect(() => {
-    const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+    var SR = window.SpeechRecognition || window.webkitSpeechRecognition;
     if (SR) {
       setVoiceSupported(true);
-      const recognition = new SR();
+      var recognition = new SR();
       recognition.continuous = true;
       recognition.interimResults = true;
       recognition.lang = 'en-US';
-      recognition.onresult = (event) => {
-        let transcript = '';
-        for (let i = 0; i < event.results.length; i++) {
+      recognition.onresult = function(event) {
+        var transcript = '';
+        for (var i = 0; i < event.results.length; i++) {
           transcript += event.results[i][0].transcript;
         }
         setInput(transcript);
-        // Reset silence timer on every result
+        inputRef.current = transcript;
         if (silenceTimerRef.current) clearTimeout(silenceTimerRef.current);
         if (autoSendRef.current) clearTimeout(autoSendRef.current);
-        // After 3 seconds of silence, stop and auto-send
-        silenceTimerRef.current = setTimeout(() => {
+        silenceTimerRef.current = setTimeout(function() {
           recognition.stop();
           setListening(false);
-          // Auto-send after a brief delay to let state update
-          autoSendRef.current = setTimeout(() => {
-            const btn = document.getElementById('ai-send-btn');
-            if (btn) btn.click();
-          }, 400);
+          autoSendRef.current = setTimeout(function() {
+            var btn = document.getElementById('ai-send-btn');
+            if (btn && inputRef.current.trim()) btn.click();
+          }, 500);
         }, 3000);
       };
-      recognition.onerror = () => { setListening(false); if (silenceTimerRef.current) clearTimeout(silenceTimerRef.current); };
-      recognition.onend = () => { setListening(false); };
+      recognition.onerror = function() { setListening(false); if (silenceTimerRef.current) clearTimeout(silenceTimerRef.current); };
+      recognition.onend = function() { setListening(false); };
       recognitionRef.current = recognition;
     }
-    return () => { if (silenceTimerRef.current) clearTimeout(silenceTimerRef.current); if (autoSendRef.current) clearTimeout(autoSendRef.current); };
+    return function() { if (silenceTimerRef.current) clearTimeout(silenceTimerRef.current); if (autoSendRef.current) clearTimeout(autoSendRef.current); };
   }, []);
 
-  useEffect(() => { chatEndRef.current?.scrollIntoView({ behavior: 'smooth' }); }, [messages, loading]);
+  useEffect(function() { if (chatEndRef.current) chatEndRef.current.scrollIntoView({ behavior: 'smooth' }); }, [messages, loading]);
 
-  const toggleVoice = () => {
+  var toggleVoice = function() {
     if (!recognitionRef.current) return;
+    // STOP AI speech immediately
+    if (window.speechSynthesis) window.speechSynthesis.cancel();
     if (listening) { recognitionRef.current.stop(); setListening(false); }
-    else { setInput(''); recognitionRef.current.start(); setListening(true); }
+    else { setInput(''); inputRef.current = ''; recognitionRef.current.start(); setListening(true); }
   };
 
-  const speak = (text) => {
-    if ('speechSynthesis' in window && text.length < 600) {
+  var speak = function(text) {
+    if (window.speechSynthesis && text && text.length < 600) {
       window.speechSynthesis.cancel();
-      const u = new SpeechSynthesisUtterance(text.replace(/[*#_`]/g, '').substring(0, 400));
-      u.rate = 1.05; u.pitch = 1.0;
+      var u = new SpeechSynthesisUtterance(text.replace(/[*#_`]/g, '').substring(0, 400));
+      u.rate = 1.05;
       window.speechSynthesis.speak(u);
     }
   };
 
-  const askQuestion = useCallback(async (overrideText) => {
-    const question = (overrideText || input).trim();
+  var doExecuteAction = async function(actionToRun) {
+    if (!actionToRun) return;
+    if (actionToRun.type === 'request_quote') {
+      var a = actionToRun;
+      var todayStr = new Date().toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: 'numeric' });
+      var msg = 'Dear ' + (a.vendor_contact || a.vendor_company || 'Team') + ',\n\nWe are requesting your best rates:\n\nOrigin: ' + (a.origin || '[Origin]') + '\nDestination: ' + (a.destination || 'Egypt') + '\nContainer: ' + (a.container || '40ft') + '\nCommodity: ' + (a.commodity || 'Trading materials') + (a.customer_name ? '\nClient: ' + a.customer_name : '') + '\n\nPlease include freight rate, transit time, free days, fees, and validity.\n\nBest regards,\nKTC International\n' + todayStr;
+      var subj = 'Rate Request - ' + (a.origin || '') + ' to ' + (a.destination || 'Egypt') + ' - KTC';
+      if (a.send_via === 'email' && a.vendor_email) {
+        window.open('mailto:' + a.vendor_email + '?subject=' + encodeURIComponent(subj) + '&body=' + encodeURIComponent(msg));
+        setMessages(function(prev) { return prev.concat([{ role: 'ai', text: 'Email opened for ' + a.vendor_company }]); });
+      } else if (a.vendor_whatsapp) {
+        var cl = (a.vendor_whatsapp || '').replace(/[^0-9+]/g, '');
+        if (!cl.startsWith('+')) cl = '+' + cl;
+        window.open('https://wa.me/' + cl.replace('+', '') + '?text=' + encodeURIComponent(msg));
+        setMessages(function(prev) { return prev.concat([{ role: 'ai', text: 'WhatsApp opened for ' + a.vendor_company }]); });
+      } else if (a.vendor_email) {
+        window.open('mailto:' + a.vendor_email + '?subject=' + encodeURIComponent(subj) + '&body=' + encodeURIComponent(msg));
+        setMessages(function(prev) { return prev.concat([{ role: 'ai', text: 'Email opened for ' + a.vendor_company }]); });
+      } else {
+        setMessages(function(prev) { return prev.concat([{ role: 'ai', text: 'No contact info for ' + a.vendor_company }]); });
+      }
+      speak('Quote request sent to ' + a.vendor_company);
+      setPendingAction(null);
+    } else {
+      setLoading(true);
+      try {
+        var res = await fetch('/api/ask', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ action: actionToRun, userId: user ? user.id : null }) });
+        var data = await res.json();
+        setMessages(function(prev) { return prev.concat([{ role: 'ai', text: data.answer || 'Done.' }]); });
+        speak(data.answer || 'Done');
+      } catch (err) {
+        setMessages(function(prev) { return prev.concat([{ role: 'ai', text: 'Error: ' + err.message }]); });
+      }
+      setLoading(false);
+      setPendingAction(null);
+    }
+  };
+
+  var askQuestion = async function(overrideText) {
+    var question = (overrideText || inputRef.current || input).trim();
     if (!question || loading) return;
-    
-    // If there's a pending action and user says execute/yes/confirm — run it
-    if (pendingAction) {
-      const cmd = question.toLowerCase().replace(/[.,!?]/g, '');
-      const confirmWords = ['execute', 'yes', 'yeah', 'yep', 'yup', 'ok', 'okay', 'do it', 'go ahead', 'confirm', 'send it', 'go', 'sure', 'approve', 'proceed', 'نعم', 'نفذ', 'تنفيذ', 'موافق'];
-      if (confirmWords.some(w => cmd === w || cmd.startsWith(w + ' '))) {
+
+    // Check for pending action confirmation via REF (always fresh)
+    var currentAction = pendingActionRef.current;
+    if (currentAction) {
+      var cmd = question.toLowerCase().replace(/[.,!?]/g, '');
+      var confirmWords = ['execute', 'yes', 'yeah', 'yep', 'yup', 'ok', 'okay', 'do it', 'go ahead', 'confirm', 'send it', 'go', 'sure', 'approve', 'proceed'];
+      if (confirmWords.some(function(w) { return cmd === w || cmd.startsWith(w + ' '); })) {
         setInput('');
-        setMessages(prev => [...prev, { role: 'user', text: '✅ ' + question }]);
-        // Execute inline
-        if (pendingAction.type === 'request_quote') {
-          // Build and open quote request directly
-          const a = pendingAction;
-          const todayStr = new Date().toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: 'numeric' });
-          const msg = `Dear ${a.vendor_contact || a.vendor_company || 'Team'},\n\nWe are requesting your best rates:\n\nOrigin: ${a.origin || '[Origin]'}\nDestination: ${a.destination || 'Egypt'}\nContainer: ${a.container || '40ft'}\nCommodity: ${a.commodity || 'Trading materials'}${a.customer_name ? '\nClient: ' + a.customer_name : ''}\n\nPlease include freight rate, transit time, free days, fees, and validity.\n\nBest regards,\nKTC International\n${todayStr}`;
-          const subj = 'Rate Request — ' + (a.origin||'') + ' to ' + (a.destination||'Egypt') + ' — KTC';
-          if (a.send_via === 'email' && a.vendor_email) {
-            window.open('mailto:' + a.vendor_email + '?subject=' + encodeURIComponent(subj) + '&body=' + encodeURIComponent(msg));
-            setMessages(prev => [...prev, { role: 'ai', text: '✅ Email opened for ' + a.vendor_company }]);
-          } else if (a.vendor_whatsapp) {
-            let cl = (a.vendor_whatsapp||'').replace(/[^0-9+]/g,''); if (!cl.startsWith('+')) cl='+'+cl;
-            window.open('https://wa.me/' + cl.replace('+','') + '?text=' + encodeURIComponent(msg));
-            setMessages(prev => [...prev, { role: 'ai', text: '✅ WhatsApp opened for ' + a.vendor_company }]);
-          } else if (a.vendor_email) {
-            window.open('mailto:' + a.vendor_email + '?subject=' + encodeURIComponent(subj) + '&body=' + encodeURIComponent(msg));
-            setMessages(prev => [...prev, { role: 'ai', text: '✅ Email opened for ' + a.vendor_company }]);
-          } else {
-            setMessages(prev => [...prev, { role: 'ai', text: '❌ No contact info for ' + a.vendor_company }]);
-          }
-          speak('Quote request sent to ' + a.vendor_company);
-          setPendingAction(null);
-        } else {
-          setLoading(true);
-          try {
-            const res = await fetch('/api/ask', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ action: pendingAction, userId: user?.id }) });
-            const data = await res.json();
-            setMessages(prev => [...prev, { role: 'ai', text: data.answer || 'Done.' }]);
-            speak(data.answer || 'Done');
-          } catch (err) { setMessages(prev => [...prev, { role: 'ai', text: '❌ ' + err.message }]); }
-          setLoading(false);
-          setPendingAction(null);
-        }
+        inputRef.current = '';
+        setMessages(function(prev) { return prev.concat([{ role: 'user', text: question }]); });
+        await doExecuteAction(currentAction);
         return;
       }
-      const cancelWords = ['cancel', 'no', 'nah', 'never mind', 'skip', 'stop', 'لا', 'إلغاء'];
-      if (cancelWords.some(w => cmd === w || cmd.startsWith(w + ' '))) {
+      var cancelWords = ['cancel', 'no', 'nah', 'never mind', 'skip', 'stop'];
+      if (cancelWords.some(function(w) { return cmd === w || cmd.startsWith(w + ' '); })) {
         setInput('');
-        setMessages(prev => [...prev, { role: 'user', text: '❌ ' + question }]);
-        setMessages(prev => [...prev, { role: 'ai', text: 'Cancelled.' }]);
+        inputRef.current = '';
+        setMessages(function(prev) { return prev.concat([{ role: 'user', text: question }, { role: 'ai', text: 'Cancelled.' }]); });
         setPendingAction(null);
         speak('Cancelled');
         return;
       }
     }
-    
+
     setInput('');
-    const newMsg = { role: 'user', text: question };
-    setMessages(prev => [...prev, newMsg]);
+    inputRef.current = '';
+    var newMsg = { role: 'user', text: question };
+    setMessages(function(prev) { return prev.concat([newMsg]); });
     setLoading(true);
     setPendingAction(null);
 
     try {
-      const res = await fetch('/api/ask', {
+      var res = await fetch('/api/ask', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          question,
-          history: [...messages, newMsg].slice(-10),
-          userId: user?.id,
-        }),
+        body: JSON.stringify({ question: question, history: messages.slice(-10), userId: user ? user.id : null }),
       });
-      const data = await res.json();
-      const answer = data.answer || 'No response';
-      setMessages(prev => [...prev, { role: 'ai', text: answer }]);
+      var data = await res.json();
+      var answer = data.answer || 'No response';
+      setMessages(function(prev) { return prev.concat([{ role: 'ai', text: answer }]); });
       speak(answer);
       if (data.pending_action) setPendingAction(data.pending_action);
     } catch (err) {
-      setMessages(prev => [...prev, { role: 'ai', text: '❌ Connection error: ' + err.message }]);
-    }
-    setLoading(false);
-  }, [input, loading, messages, user, pendingAction]);
-
-  const executeAction = async () => {
-    if (!pendingAction) return;
-    // Handle request_quote locally (opens WhatsApp/email)
-    if (pendingAction.type === 'request_quote') {
-      executeQuoteRequest(pendingAction);
-      return;
-    }
-    setLoading(true);
-    try {
-      const res = await fetch('/api/ask', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ action: pendingAction, userId: user?.id }),
-      });
-      const data = await res.json();
-      setMessages(prev => [...prev, { role: 'ai', text: data.answer || 'Action completed.' }]);
-      speak(data.answer || 'Done');
-      setPendingAction(null);
-    } catch (err) {
-      setMessages(prev => [...prev, { role: 'ai', text: '❌ Action failed: ' + err.message }]);
+      setMessages(function(prev) { return prev.concat([{ role: 'ai', text: 'Connection error: ' + err.message }]); });
     }
     setLoading(false);
   };
 
-  const executeQuoteRequest = (action) => {
-    const today = new Date().toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: 'numeric' });
-    const msg = `Dear ${action.vendor_contact || action.vendor_company || 'Team'},
-
-I hope this message finds you well.
-
-We are requesting your best rates for the following:
-
-Origin: ${action.origin || '[Origin]'}
-Destination: ${action.destination || 'Egypt'}
-Container: ${action.container || '40ft Standard'}
-Commodity: ${action.commodity || 'General cargo / Trading materials'}${action.customer_name ? '\nClient Reference: ' + action.customer_name : ''}
-
-Please include:
-• Freight rate
-• Transit time
-• Free days at destination
-• Any additional fees (THC, documentation, etc.)
-• Rate validity period
-
-Thank you for your continued partnership.
-
-Best regards,
-KTC International Trading
-${today}`;
-
-    const subject = 'Rate Request — ' + (action.origin || 'Origin') + ' to ' + (action.destination || 'Egypt') + ' — KTC International';
-
-    if (action.send_via === 'email' && action.vendor_email) {
-      window.open('mailto:' + action.vendor_email + '?subject=' + encodeURIComponent(subject) + '&body=' + encodeURIComponent(msg), '_blank');
-      setMessages(prev => [...prev, { role: 'ai', text: '✅ Email opened for ' + action.vendor_company + '\n📧 ' + action.vendor_email + '\n\nSubject: ' + subject }]);
-    } else if (action.vendor_whatsapp) {
-      let clean = (action.vendor_whatsapp || '').replace(/[^0-9+]/g, '');
-      if (clean.startsWith('0')) clean = '+2' + clean;
-      if (!clean.startsWith('+')) clean = '+' + clean;
-      window.open('https://wa.me/' + clean.replace('+', '') + '?text=' + encodeURIComponent(msg), '_blank');
-      setMessages(prev => [...prev, { role: 'ai', text: '✅ WhatsApp opened for ' + action.vendor_company + '\n💬 ' + action.vendor_whatsapp }]);
-    } else if (action.vendor_email) {
-      window.open('mailto:' + action.vendor_email + '?subject=' + encodeURIComponent(subject) + '&body=' + encodeURIComponent(msg), '_blank');
-      setMessages(prev => [...prev, { role: 'ai', text: '✅ Email opened for ' + action.vendor_company + '\n📧 ' + action.vendor_email }]);
-    } else {
-      setMessages(prev => [...prev, { role: 'ai', text: '❌ No contact info found for ' + action.vendor_company + '. Add their email or WhatsApp in Shipping → Vendors.' }]);
-    }
-    speak('Quote request sent to ' + action.vendor_company);
-    setPendingAction(null);
-  };
-
-  const suggestions = [
-    { text: 'Who owes us the most?', icon: '💰' },
-    { text: 'Request shipping rate from China to Egypt, 40ft', icon: '📋' },
-    { text: 'How many tickets are overdue?', icon: '🎫' },
-    { text: 'Send rate request to all truckers for Cairo', icon: '🚛' },
-    { text: 'Give me a morning briefing', icon: '☀️' },
-    { text: 'Create a ticket for the team', icon: '✏️' },
-    { text: 'What are total sales this month?', icon: '📊' },
-    { text: 'Which vendors have rates expiring this week?', icon: '🚢' },
+  var suggestions = [
+    { text: 'Who owes us the most?', icon: '\uD83D\uDCB0' },
+    { text: 'Request shipping rate from China to Egypt, 40ft', icon: '\uD83D\uDCCB' },
+    { text: 'How many tickets are overdue?', icon: '\uD83C\uDFAB' },
+    { text: 'Send rate request to all truckers for Cairo', icon: '\uD83D\uDE9B' },
+    { text: 'Give me a morning briefing', icon: '\u2600\uFE0F' },
+    { text: 'Create a ticket for the team', icon: '\u270F\uFE0F' },
+    { text: 'What are total sales this month?', icon: '\uD83D\uDCCA' },
+    { text: 'Which vendors have rates expiring?', icon: '\uD83D\uDEA2' },
   ];
 
   return (
     <div>
       <div className="flex justify-between items-center mb-4">
         <div>
-          <h2 className="text-xl font-extrabold">AI Secretary / مساعد تنفيذي 🤖</h2>
-          <p className="text-[10px]" style={{color:'var(--text-muted)'}}>Voice commands + Business intelligence + Task execution</p>
+          <h2 className="text-xl font-extrabold">AI Secretary</h2>
+          <p className="text-[10px]" style={{color:'var(--text-muted,#64748b)'}}>Voice commands + Business intelligence + Actions</p>
         </div>
         <div className="flex gap-2">
           {voiceSupported && (
             <div className={'px-3 py-1.5 rounded-lg text-xs font-semibold ' + (listening ? 'text-red-400' : 'text-emerald-400')}
               style={{background: listening ? 'rgba(248,113,113,0.1)' : 'rgba(52,211,153,0.1)', border: '1px solid ' + (listening ? 'rgba(248,113,113,0.2)' : 'rgba(52,211,153,0.2)')}}>
-              {listening ? '🔴 Listening...' : '🎤 Voice Ready'}
+              {listening ? 'Listening...' : 'Voice Ready'}
             </div>
           )}
           {messages.length > 0 && (
-            <button onClick={() => { setMessages([]); setPendingAction(null); window.speechSynthesis?.cancel(); }}
+            <button onClick={function() { setMessages([]); setPendingAction(null); if (window.speechSynthesis) window.speechSynthesis.cancel(); }}
               className="px-3 py-1.5 rounded-lg text-xs font-semibold"
-              style={{background:'rgba(255,255,255,0.06)', border:'1px solid rgba(255,255,255,0.1)', color:'var(--text-secondary)'}}>
+              style={{background:'rgba(255,255,255,0.06)', border:'1px solid rgba(255,255,255,0.1)', color:'var(--text-secondary,#94a3b8)'}}>
               Clear
             </button>
           )}
         </div>
       </div>
 
-      {/* Voice Command Banner */}
       {messages.length === 0 && (
-        <div className="rounded-xl p-5 mb-4" style={{
-          background: 'linear-gradient(135deg, rgba(56,189,248,0.12), rgba(167,139,250,0.12))',
-          border: '1px solid rgba(56,189,248,0.2)',
-        }}>
+        <div className="rounded-xl p-5 mb-4" style={{background:'linear-gradient(135deg, rgba(56,189,248,0.12), rgba(167,139,250,0.12))', border:'1px solid rgba(56,189,248,0.2)'}}>
           <div className="flex items-center gap-4">
-            <div className="text-5xl">{voiceSupported ? '🎙️' : '🤖'}</div>
+            <div className="text-5xl">{voiceSupported ? '\uD83C\uDF99\uFE0F' : '\uD83E\uDD16'}</div>
             <div>
-              <h3 className="text-lg font-bold" style={{color:'var(--accent)'}}>AI Executive Secretary</h3>
-              <p className="text-sm" style={{color:'var(--text-secondary)'}}>Ask anything about your business or give commands</p>
-              <div className="flex gap-2 mt-2 flex-wrap">
-                <span className="px-2 py-0.5 rounded text-[10px] font-semibold" style={{background:'rgba(56,189,248,0.15)',color:'#7dd3fc'}}>📊 Q&A</span>
-                <span className="px-2 py-0.5 rounded text-[10px] font-semibold" style={{background:'rgba(167,139,250,0.15)',color:'#c4b5fd'}}>🎫 Create Tickets</span>
-                <span className="px-2 py-0.5 rounded text-[10px] font-semibold" style={{background:'rgba(52,211,153,0.15)',color:'#6ee7b7'}}>📅 Schedule</span>
-                <span className="px-2 py-0.5 rounded text-[10px] font-semibold" style={{background:'rgba(251,191,36,0.15)',color:'#fde68a'}}>⏰ Reminders</span>
-              </div>
+              <h3 className="text-lg font-bold" style={{color:'var(--accent,#38bdf8)'}}>AI Executive Secretary</h3>
+              <p className="text-sm" style={{color:'var(--text-secondary,#94a3b8)'}}>Ask anything about your business or give commands</p>
             </div>
           </div>
         </div>
       )}
 
-      {!voiceSupported && messages.length === 0 && (
-        <div className="rounded-xl p-3 mb-3" style={{background:'rgba(251,191,36,0.06)', border:'1px solid rgba(251,191,36,0.15)'}}>
-          <p className="text-xs" style={{color:'#fde68a'}}>⚠️ Voice not supported in this browser. Use Chrome for voice commands. You can still type below.</p>
-        </div>
-      )}
-
-      {/* Quick Suggestions */}
       {messages.length === 0 && (
         <div className="grid grid-cols-2 md:grid-cols-4 gap-2 mb-4">
-          {suggestions.map((s, i) => (
-            <button key={i} onClick={() => askQuestion(s.text)}
-              className="text-left px-3 py-2.5 rounded-lg text-xs font-medium transition"
-              style={{background:'rgba(255,255,255,0.04)', border:'1px solid rgba(255,255,255,0.08)', color:'var(--text-secondary)'}}
-              onMouseEnter={e => { e.target.style.background = 'rgba(56,189,248,0.08)'; e.target.style.borderColor = 'rgba(56,189,248,0.2)'; e.target.style.color = '#7dd3fc'; }}
-              onMouseLeave={e => { e.target.style.background = 'rgba(255,255,255,0.04)'; e.target.style.borderColor = 'rgba(255,255,255,0.08)'; e.target.style.color = 'var(--text-secondary)'; }}>
-              <span className="text-base mr-1">{s.icon}</span> {s.text}
-            </button>
-          ))}
+          {suggestions.map(function(s, i) {
+            return (
+              <button key={i} onClick={function() { askQuestion(s.text); }}
+                className="text-left px-3 py-2.5 rounded-lg text-xs font-medium transition"
+                style={{background:'rgba(255,255,255,0.04)', border:'1px solid rgba(255,255,255,0.08)', color:'var(--text-secondary,#94a3b8)'}}>
+                <span className="text-base mr-1">{s.icon}</span> {s.text}
+              </button>
+            );
+          })}
         </div>
       )}
 
-      {/* Chat Messages */}
       <div className="space-y-3 mb-3 max-h-[500px] overflow-auto">
-        {messages.map((m, i) => (
-          <div key={i} className="rounded-xl p-4" style={m.role === 'user' ? {
-            background: 'linear-gradient(135deg, #0ea5e9, #6366f1)',
-            marginLeft: '3rem', color: 'white',
-          } : {
-            background: 'rgba(255,255,255,0.04)',
-            border: '1px solid rgba(255,255,255,0.08)',
-            marginRight: '1rem',
-          }}>
-            <div className="text-[10px] font-semibold mb-1" style={{opacity: 0.6}}>
-              {m.role === 'user' ? '🎤 You' : '🤖 AI Secretary'}
+        {messages.map(function(m, i) {
+          return (
+            <div key={i} className="rounded-xl p-4" style={m.role === 'user' ? {background:'linear-gradient(135deg, #0ea5e9, #6366f1)', marginLeft:'3rem', color:'white'} : {background:'rgba(255,255,255,0.04)', border:'1px solid rgba(255,255,255,0.08)', marginRight:'1rem'}}>
+              <div className="text-[10px] font-semibold mb-1" style={{opacity:0.6}}>{m.role === 'user' ? 'You' : 'AI Secretary'}</div>
+              <div className="text-sm whitespace-pre-wrap" style={{lineHeight:1.7}}>{m.text}</div>
             </div>
-            <div className="text-sm whitespace-pre-wrap" style={{lineHeight: 1.7}}>{m.text}</div>
-          </div>
-        ))}
+          );
+        })}
 
-        {/* Pending Action Confirmation */}
         {pendingAction && !loading && (
-          <div className="rounded-xl p-4 mx-2" style={{
-            background: pendingAction.type === 'request_quote' ? 'rgba(56,189,248,0.08)' : 'rgba(167,139,250,0.08)',
-            border: '1px solid ' + (pendingAction.type === 'request_quote' ? 'rgba(56,189,248,0.25)' : 'rgba(167,139,250,0.25)'),
-          }}>
+          <div className="rounded-xl p-4 mx-2" style={{background: pendingAction.type === 'request_quote' ? 'rgba(56,189,248,0.08)' : 'rgba(167,139,250,0.08)', border:'1px solid ' + (pendingAction.type === 'request_quote' ? 'rgba(56,189,248,0.25)' : 'rgba(167,139,250,0.25)')}}>
             <div className="text-xs font-bold mb-2" style={{color: pendingAction.type === 'request_quote' ? '#7dd3fc' : '#c4b5fd'}}>
-              {pendingAction.type === 'request_quote' ? '📋 RATE QUOTE REQUEST' : '⚡ ' + (pendingAction.type?.replace('_', ' ').toUpperCase())}
+              {pendingAction.type === 'request_quote' ? 'RATE QUOTE REQUEST' : 'ACTION READY - ' + (pendingAction.type || '').replace('_', ' ').toUpperCase()}
             </div>
+            <div className="text-xs mb-1" style={{color:'var(--text-muted,#64748b)'}}>Say "execute" or tap a button below:</div>
             {pendingAction.type === 'request_quote' ? (
               <div>
-                <div className="text-sm mb-1" style={{color:'var(--text-primary)'}}>
-                  <strong>{pendingAction.vendor_company}</strong>{pendingAction.vendor_contact ? ' — ' + pendingAction.vendor_contact : ''}
-                </div>
-                <div className="text-xs mb-3" style={{color:'var(--text-secondary)'}}>
-                  {pendingAction.origin} → {pendingAction.destination} • {pendingAction.container || '40ft'}
-                  {pendingAction.customer_name && <span> • Client: {pendingAction.customer_name}</span>}
-                </div>
+                <div className="text-sm mb-1" style={{color:'var(--text-primary,#f1f5f9)'}}><strong>{pendingAction.vendor_company}</strong>{pendingAction.vendor_contact ? ' - ' + pendingAction.vendor_contact : ''}</div>
+                <div className="text-xs mb-3" style={{color:'var(--text-secondary,#94a3b8)'}}>{pendingAction.origin} to {pendingAction.destination} - {pendingAction.container || '40ft'}</div>
                 <div className="space-y-2">
-                  {pendingAction.vendor_whatsapp && (
-                    <button onClick={() => { const a = {...pendingAction, send_via:'whatsapp'}; executeQuoteRequest(a); }}
-                      className="w-full py-4 rounded-xl text-base font-bold text-white flex items-center justify-center gap-2"
-                      style={{background:'linear-gradient(135deg, #10b981, #059669)', boxShadow:'0 4px 15px rgba(52,211,153,0.3)'}}>
-                      💬 Send via WhatsApp
-                    </button>
-                  )}
-                  {pendingAction.vendor_email && (
-                    <button onClick={() => { const a = {...pendingAction, send_via:'email'}; executeQuoteRequest(a); }}
-                      className="w-full py-4 rounded-xl text-base font-bold text-white flex items-center justify-center gap-2"
-                      style={{background:'linear-gradient(135deg, #0ea5e9, #3b82f6)', boxShadow:'0 4px 15px rgba(56,189,248,0.3)'}}>
-                      📧 Send via Email
-                    </button>
-                  )}
-                  <button onClick={() => setPendingAction(null)}
-                    className="w-full py-2 rounded-xl text-xs"
-                    style={{background:'rgba(255,255,255,0.06)', border:'1px solid rgba(255,255,255,0.1)', color:'var(--text-secondary)'}}>
-                    Cancel
-                  </button>
+                  {pendingAction.vendor_whatsapp && <button onClick={function() { doExecuteAction(Object.assign({}, pendingAction, {send_via:'whatsapp'})); }} className="w-full py-4 rounded-xl text-base font-bold text-white" style={{background:'linear-gradient(135deg, #10b981, #059669)'}}>WhatsApp Send</button>}
+                  {pendingAction.vendor_email && <button onClick={function() { doExecuteAction(Object.assign({}, pendingAction, {send_via:'email'})); }} className="w-full py-4 rounded-xl text-base font-bold text-white" style={{background:'linear-gradient(135deg, #0ea5e9, #3b82f6)'}}>Email Send</button>}
+                  <button onClick={function() { setPendingAction(null); }} className="w-full py-2 rounded-xl text-xs" style={{background:'rgba(255,255,255,0.06)', border:'1px solid rgba(255,255,255,0.1)', color:'var(--text-secondary,#94a3b8)'}}>Cancel</button>
                 </div>
               </div>
             ) : (
               <div>
-                <div className="text-sm mb-3" style={{color:'var(--text-secondary)'}}>
+                <div className="text-sm mb-3" style={{color:'var(--text-secondary,#94a3b8)'}}>
                   {pendingAction.title || pendingAction.task}
-                  {pendingAction.priority && <span className="ml-2 text-[10px] font-bold" style={{color: pendingAction.priority === 'high' ? '#f87171' : pendingAction.priority === 'urgent' ? '#ef4444' : '#fbbf24'}}>({pendingAction.priority})</span>}
-                  {pendingAction.due_date && <span className="ml-2 text-[10px]" style={{color:'var(--text-muted)'}}>Due: {pendingAction.due_date}</span>}
-                  {pendingAction.event_date && <span className="ml-2 text-[10px]" style={{color:'var(--text-muted)'}}>{pendingAction.event_date} {pendingAction.event_time || ''}</span>}
+                  {pendingAction.priority && <span className="ml-2 text-[10px] font-bold" style={{color:'#fbbf24'}}>({pendingAction.priority})</span>}
+                  {pendingAction.due_date && <span className="ml-2 text-[10px]" style={{color:'var(--text-muted,#64748b)'}}>Due: {pendingAction.due_date}</span>}
                 </div>
                 <div className="flex gap-2">
-                  <button onClick={executeAction}
-                    className="flex-1 py-3 text-white rounded-xl text-sm font-bold"
-                    style={{background:'linear-gradient(135deg, #10b981, #059669)', boxShadow:'0 2px 12px rgba(52,211,153,0.3)'}}>
-                    ✅ Execute
-                  </button>
-                  <button onClick={() => setPendingAction(null)}
-                    className="px-4 py-3 rounded-xl text-xs"
-                    style={{background:'rgba(255,255,255,0.06)', border:'1px solid rgba(255,255,255,0.1)', color:'var(--text-secondary)'}}>
-                    Cancel
-                  </button>
+                  <button onClick={function() { doExecuteAction(pendingAction); }} className="flex-1 py-3 text-white rounded-xl text-sm font-bold" style={{background:'linear-gradient(135deg, #10b981, #059669)'}}>Execute</button>
+                  <button onClick={function() { setPendingAction(null); }} className="px-4 py-3 rounded-xl text-xs" style={{background:'rgba(255,255,255,0.06)', border:'1px solid rgba(255,255,255,0.1)', color:'var(--text-secondary,#94a3b8)'}}>Cancel</button>
                 </div>
               </div>
             )}
@@ -383,56 +265,36 @@ ${today}`;
 
         {loading && (
           <div className="rounded-xl p-4" style={{background:'rgba(255,255,255,0.04)', border:'1px solid rgba(255,255,255,0.08)', marginRight:'1rem'}}>
-            <div className="text-[10px] font-semibold mb-1" style={{opacity:0.6}}>🤖 AI Secretary</div>
-            <div className="text-sm animate-pulse" style={{color:'var(--text-muted)'}}>Thinking... / جاري التفكير...</div>
+            <div className="text-[10px] font-semibold mb-1" style={{opacity:0.6}}>AI Secretary</div>
+            <div className="text-sm animate-pulse" style={{color:'var(--text-muted,#64748b)'}}>Thinking...</div>
           </div>
         )}
         <div ref={chatEndRef} />
       </div>
 
-      {/* Input Bar — Mobile Optimized */}
-      <div className="rounded-xl p-2" style={{
-        background: 'rgba(255,255,255,0.04)',
-        border: '1px solid rgba(255,255,255,0.08)',
-      }}>
+      <div className="rounded-xl p-2" style={{background:'rgba(255,255,255,0.04)', border:'1px solid rgba(255,255,255,0.08)'}}>
         <div className="flex gap-2">
           {voiceSupported && (
-            <button onClick={toggleVoice}
-              className="rounded-xl text-2xl transition flex-shrink-0"
-              style={listening ? {
-                background: 'linear-gradient(135deg, #ef4444, #dc2626)',
-                boxShadow: '0 0 25px rgba(248,113,113,0.5)',
-                color: 'white', width: 56, height: 56,
-                display: 'flex', alignItems: 'center', justifyContent: 'center',
-              } : {
-                background: 'linear-gradient(135deg, rgba(56,189,248,0.15), rgba(167,139,250,0.15))',
-                border: '2px solid rgba(56,189,248,0.3)',
-                color: '#38bdf8', width: 56, height: 56,
-                display: 'flex', alignItems: 'center', justifyContent: 'center',
-              }}>
-              {listening ? '⏹️' : '🎤'}
+            <button onClick={toggleVoice} className="rounded-xl text-2xl transition flex-shrink-0"
+              style={listening ? {background:'linear-gradient(135deg, #ef4444, #dc2626)', boxShadow:'0 0 25px rgba(248,113,113,0.5)', color:'white', width:56, height:56, display:'flex', alignItems:'center', justifyContent:'center'} : {background:'linear-gradient(135deg, rgba(56,189,248,0.15), rgba(167,139,250,0.15))', border:'2px solid rgba(56,189,248,0.3)', color:'#38bdf8', width:56, height:56, display:'flex', alignItems:'center', justifyContent:'center'}}>
+              {listening ? '\u23F9\uFE0F' : '\uD83C\uDFA4'}
             </button>
           )}
-          <input value={input} onChange={e => setInput(e.target.value)}
-            onKeyDown={e => e.key === 'Enter' && askQuestion()}
+          <input value={input} onChange={function(e) { setInput(e.target.value); inputRef.current = e.target.value; }}
+            onKeyDown={function(e) { if (e.key === 'Enter') askQuestion(); }}
             placeholder={listening ? 'Listening...' : 'Ask anything or give a command...'}
             className="flex-1 px-4 py-3 rounded-xl text-sm"
-            style={{
-              background: listening ? 'rgba(248,113,113,0.06)' : 'rgba(255,255,255,0.04)',
-              border: '1px solid ' + (listening ? 'rgba(248,113,113,0.2)' : 'rgba(255,255,255,0.08)'),
-              color: 'var(--text-primary)',
-              fontSize: '16px',
-            }} />
-          <button id="ai-send-btn" onClick={() => askQuestion()} disabled={loading || !input.trim()}
+            style={{background: listening ? 'rgba(248,113,113,0.06)' : 'rgba(255,255,255,0.04)', border:'1px solid ' + (listening ? 'rgba(248,113,113,0.2)' : 'rgba(255,255,255,0.08)'), color:'var(--text-primary,#f1f5f9)', fontSize:'16px'}} />
+          <button id="ai-send-btn" onClick={function() { askQuestion(); }} disabled={loading}
             className="rounded-xl text-sm font-bold disabled:opacity-40 transition flex-shrink-0 px-5"
-            style={{background:'linear-gradient(135deg, #0ea5e9, #6366f1)', boxShadow:'0 2px 12px rgba(56,189,248,0.3)', color:'white', height: 56}}>
-            {loading ? '...' : '→'}
+            style={{background:'linear-gradient(135deg, #0ea5e9, #6366f1)', color:'white', height:56}}>
+            {loading ? '...' : '\u2192'}
           </button>
         </div>
         {listening && (
           <div className="text-center mt-2 py-2">
-            <div className="text-xs font-bold animate-pulse" style={{color:'#f87171'}}>🔴 Listening — speak your command...</div>
-            <div className="text-[10px] mt-1" style={{color:'var(--text-muted)'}}>Will auto-send 3 seconds after you stop talking</div>
+            <div className="text-xs font-bold animate-pulse" style={{color:'#f87171'}}>Listening - speak your command...</div>
+            <div className="text-[10px] mt-1" style={{color:'var(--text-muted,#64748b)'}}>Auto-sends 3 seconds after you stop talking</div>
           </div>
         )}
       </div>
