@@ -3106,7 +3106,7 @@ export default function App() {
             CRM TAB
         ========================================== */}
         {tab === 'crm' && (
-          <CRMTab customers={customers} invoices={invoices} user={user} users={teamUsers} onReload={loadAllData} isAdmin={isAdmin} onSelectInvoice={setSelectedInvoice} lang={lang} />
+          <CRMTab customers={customers} invoices={invoices} user={user} userProfile={userProfile} users={teamUsers} onReload={loadAllData} isAdmin={isAdmin} onSelectInvoice={setSelectedInvoice} lang={lang} />
         )}
 
         {/* ==========================================
@@ -3120,7 +3120,7 @@ export default function App() {
             CALENDAR TAB
         ========================================== */}
         {tab === 'calendar' && (
-          <CalendarTab customers={customers} user={user} users={teamUsers} onReload={loadAllData} />
+          <CalendarTab customers={customers} user={user} userProfile={userProfile} users={teamUsers} onReload={loadAllData} />
         )}
 
         {/* ==========================================

@@ -7,7 +7,8 @@ const DEFAULT_CATEGORIES = ['Pool', 'Leather'];
 const DEFAULT_GROUPS = ['Retail', 'Manufacturer', 'Export', 'Distributor'];
 const LEAD_SOURCES = ['Referral', 'Facebook', 'WhatsApp', 'Exhibition', 'Walk-in', 'Website', 'Cold Call', 'Existing'];
 
-export default function CRMTab({ customers, invoices, user, users, onReload, isAdmin, onSelectInvoice, lang }) {
+export default function CRMTab({ customers, invoices, user, userProfile, users, onReload, isAdmin, onSelectInvoice, lang }) {
+  const myId = userProfile?.id || user?.id;
   const [sel, setSel] = useState(null);
   const [q, setQ] = useState('');
   const [groupF, setGroupF] = useState('all');
@@ -98,10 +99,10 @@ export default function CRMTab({ customers, invoices, user, users, onReload, isA
     try {
       await dbInsert('contact_log', {
         customer_id: sel.id, contact_type: type,
-        notes: notes || '', contacted_by: user?.id,
+        notes: notes || '', contacted_by: myId,
         contacted_at: new Date().toISOString(),
-      }, user?.id);
-      await logActivity(user?.id, type + ' contact with: ' + sel.name + (notes ? ' — ' + notes : ''), 'crm');
+      }, myId);
+      await logActivity(myId, type + ' contact with: ' + sel.name + (notes ? ' — ' + notes : ''), 'crm');
       loadClientData(sel);
     } catch(err) { console.log('Contact log error:', err); }
   };
@@ -185,8 +186,8 @@ export default function CRMTab({ customers, invoices, user, users, onReload, isA
         group_name: f.group || '', client_type: f.clientType || '',
         industry: f.industry || '', lead_source: f.leadSource || '',
         credit_limit: f.creditLimit ? Number(f.creditLimit) : null, status: 'active',
-      }, user?.id);
-      await logActivity(user?.id, 'Created client: ' + f.name, 'crm');
+      }, myId);
+      await logActivity(myId, 'Created client: ' + f.name, 'crm');
       setShowAdd(false); setF({}); onReload(); loadAllNotes();
     } catch (err) { alert('Error / خطأ: ' + err.message); }
   };
@@ -200,8 +201,8 @@ export default function CRMTab({ customers, invoices, user, users, onReload, isA
         city: f.city || sel.city, group_name: f.group || sel.group_name, industry: f.industry !== undefined ? f.industry : sel.industry,
         lead_source: f.leadSource || sel.lead_source,
         assigned_rep: f.assignedRep !== undefined ? (f.assignedRep || null) : sel.assigned_rep,
-      }, user?.id);
-      await logActivity(user?.id, 'Edited client: ' + (f.name || sel.name), 'crm');
+      }, myId);
+      await logActivity(myId, 'Edited client: ' + (f.name || sel.name), 'crm');
       setEditingClient(false); setF({}); onReload();
       loadClientData({...sel, name: f.name || sel.name});
     } catch (err) { alert('Error / خطأ: ' + err.message); }
@@ -210,8 +211,8 @@ export default function CRMTab({ customers, invoices, user, users, onReload, isA
   const handleAddNote = async () => {
     if (!f.noteText || !sel) return;
     try {
-      await dbInsert('client_notes', { customer_id: sel.id, note_text: f.noteText }, user?.id);
-      await logActivity(user?.id, 'Added note to client: ' + sel.name, 'crm');
+      await dbInsert('client_notes', { customer_id: sel.id, note_text: f.noteText }, myId);
+      await logActivity(myId, 'Added note to client: ' + sel.name, 'crm');
       setShowNote(false); setF({}); loadClientData(sel); loadAllNotes();
     } catch (err) { alert('Error / خطأ: ' + err.message); }
   };
@@ -219,34 +220,34 @@ export default function CRMTab({ customers, invoices, user, users, onReload, isA
   const handleAddFollowUp = async () => {
     if (!f.task || !f.dueDate || !sel) return;
     try {
-      const assignTo = f.assignTo || user?.id;
+      const assignTo = f.assignTo || myId;
       await dbInsert('follow_ups', {
         customer_id: sel.id, task: f.task, due_date: f.dueDate,
         due_time: f.dueTime || '09:00', assigned_to: assignTo,
-      }, user?.id);
+      }, myId);
       // Create calendar event for assignee
       await dbInsert('calendar_events', {
         title: 'Follow-up: ' + f.task + ' (' + sel.name + ')',
         event_date: f.dueDate, event_time: f.dueTime || '09:00',
         event_type: 'call', customer_id: sel.id, assigned_to: assignTo,
-      }, user?.id);
+      }, myId);
       // Also create on creator's calendar if different from assignee
-      if (assignTo && assignTo !== user?.id) {
+      if (assignTo && assignTo !== myId) {
         await dbInsert('calendar_events', {
           title: '[Assigned] Follow-up: ' + f.task + ' (' + sel.name + ') → ' + (users?.find(u => u.id === assignTo)?.name || ''),
           event_date: f.dueDate, event_time: f.dueTime || '09:00',
-          event_type: 'call', customer_id: sel.id, assigned_to: user?.id,
-        }, user?.id);
+          event_type: 'call', customer_id: sel.id, assigned_to: myId,
+        }, myId);
       }
-      await logActivity(user?.id, 'Created follow-up for ' + sel.name + ': ' + f.task, 'crm');
+      await logActivity(myId, 'Created follow-up for ' + sel.name + ': ' + f.task, 'crm');
       setShowFollowUp(false); setF({}); loadClientData(sel);
     } catch (err) { alert('Error / خطأ: ' + err.message); }
   };
 
   const completeFollowUp = async (id) => {
     try {
-      await dbUpdate('follow_ups', id, { completed: true, completed_at: new Date().toISOString() }, user?.id);
-      await logActivity(user?.id, 'Completed follow-up for ' + sel.name, 'crm');
+      await dbUpdate('follow_ups', id, { completed: true, completed_at: new Date().toISOString() }, myId);
+      await logActivity(myId, 'Completed follow-up for ' + sel.name, 'crm');
       loadClientData(sel);
     } catch (err) { alert('Error / خطأ: ' + err.message); }
   };
@@ -470,7 +471,7 @@ export default function CRMTab({ customers, invoices, user, users, onReload, isA
             <button onClick={async () => {
               try {
                 const newVal = !sel.important;
-                await dbUpdate('customers', sel.id, { important: newVal }, user?.id);
+                await dbUpdate('customers', sel.id, { important: newVal }, myId);
                 setSel({...sel, important: newVal});
                 onReload();
               } catch(err) { alert('Error: ' + err.message); }
@@ -485,7 +486,7 @@ export default function CRMTab({ customers, invoices, user, users, onReload, isA
                 <input type="checkbox" checked={sel.restricted || false}
                   onChange={async (e) => {
                     try {
-                      await dbUpdate('customers', sel.id, { restricted: e.target.checked }, user?.id);
+                      await dbUpdate('customers', sel.id, { restricted: e.target.checked }, myId);
                       setSel({...sel, restricted: e.target.checked});
                       onReload();
                     } catch (err) { alert('Error: ' + err.message); }

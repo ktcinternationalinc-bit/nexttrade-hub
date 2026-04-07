@@ -1,12 +1,12 @@
 'use client';
 import { useState, useMemo } from 'react';
-import { supabase, dbInsert, dbUpdate } from '../lib/supabase';
+import { supabase, dbInsert, dbUpdate, logActivity } from '../lib/supabase';
 
 const EVENT_TYPES = [{v:'task',l:'Task / مهمة',c:'#3b82f6'},{v:'meeting',l:'Meeting / اجتماع',c:'#8b5cf6'},{v:'call',l:'Call / مكالمة',c:'#f59e0b'},{v:'visit',l:'Visit / زيارة',c:'#10b981'}];
 const DAYS = ['Sun','Mon','Tue','Wed','Thu','Fri','Sat'];
 const MONTHS_AR = ['يناير','فبراير','مارس','أبريل','مايو','يونيو','يوليو','أغسطس','سبتمبر','أكتوبر','نوفمبر','ديسمبر'];
 
-export default function CalendarTab({ customers, user, users, onReload }) {
+export default function CalendarTab({ customers, user, userProfile, users, onReload }) {
   const [events, setEvents] = useState([]);
   const [loaded, setLoaded] = useState(false);
   const [view, setView] = useState('month');
@@ -16,6 +16,7 @@ export default function CalendarTab({ customers, user, users, onReload }) {
   const [f, setF] = useState({});
   const [selectedUsers, setSelectedUsers] = useState([]);
   const [calView, setCalView] = useState('my'); // my | team
+  const myId = userProfile?.id || user?.id;
 
   const loadEvents = async () => {
     const { data } = await supabase.from('calendar_events').select('*').order('event_date');
@@ -33,7 +34,7 @@ export default function CalendarTab({ customers, user, users, onReload }) {
 
   // Filter events based on calView
   const visibleEvents = useMemo(() => {
-    if (calView === 'my') return events.filter(e => e.assigned_to === user?.id || e.created_by === user?.id);
+    if (calView === 'my') return events.filter(e => e.assigned_to === myId || e.created_by === myId);
     return events; // team view shows all
   }, [events, calView, user]);
 
@@ -59,22 +60,33 @@ export default function CalendarTab({ customers, user, users, onReload }) {
   const handleAddEvent = async () => {
     if (!f.title || !f.eventDate) return;
     try {
-      const assignees = selectedUsers.length > 0 ? selectedUsers : [user?.id];
+      const assignees = selectedUsers.length > 0 ? selectedUsers : [myId];
       for (const uid of assignees) {
         await dbInsert('calendar_events', {
           title: f.title, event_date: f.eventDate, event_time: f.eventTime || null,
           event_type: f.eventType || 'task', assigned_to: uid,
           customer_id: f.customerId || null, recurring: f.recurring || 'none',
           recurring_end: f.recurringEnd || null,
-        }, user?.id);
+        }, myId);
       }
+      await logActivity(myId, 'Created ' + (f.eventType || 'task') + ': ' + f.title + ' on ' + f.eventDate, 'calendar');
       setShowAdd(false); setF({}); setSelectedUsers([]); loadEvents();
     } catch (err) { alert('Error / خطأ: ' + err.message); }
   };
 
+  const markEventStatus = async (ev, status) => {
+    try {
+      await dbUpdate('calendar_events', ev.id, { completed: status === 'attended', event_status: status }, myId);
+      var logText = (ev.event_type || 'Event') + ' "' + ev.title + '" — ' + status;
+      await logActivity(myId, logText, 'calendar');
+      loadEvents();
+    } catch (err) { alert('Error: ' + err.message); }
+  };
+
   const completeEvent = async (ev) => {
     try {
-      await dbUpdate('calendar_events', ev.id, { completed: true }, user?.id);
+      await dbUpdate('calendar_events', ev.id, { completed: true, event_status: 'attended' }, myId);
+      await logActivity(myId, 'Attended ' + (ev.event_type || 'event') + ': ' + ev.title, 'calendar');
       loadEvents();
     } catch (err) { alert('Error / خطأ: ' + err.message); }
   };
@@ -211,7 +223,8 @@ export default function CalendarTab({ customers, user, users, onReload }) {
                       {ev.recurring && ev.recurring !== 'none' && <span className="ml-1">🔄 {ev.recurring}</span>}
                     </div>
                   </div>
-                  {!ev.completed && <button onClick={() => completeEvent(ev)} className="px-2 py-1 bg-emerald-500 text-white rounded text-[10px]">Done / تم</button>}
+                  {!ev.completed && <div className="flex gap-1">{ev.event_status === 'postponed' ? <span className="px-2 py-1 bg-amber-100 text-amber-700 rounded text-[10px] font-bold">Postponed</span> : <><button onClick={() => markEventStatus(ev, 'attended')} className="px-2 py-1 bg-emerald-500 text-white rounded text-[10px]">✓ Attended</button><button onClick={() => markEventStatus(ev, 'postponed')} className="px-2 py-1 bg-amber-500 text-white rounded text-[10px]">⏳ Postpone</button></>}</div>}
+                  {ev.completed && <span className="px-2 py-1 bg-emerald-100 text-emerald-700 rounded text-[10px] font-bold">✓ Attended</span>}
                 </div>
               );
             })
@@ -238,7 +251,9 @@ export default function CalendarTab({ customers, user, users, onReload }) {
                     {ev.recurring && ev.recurring !== 'none' ? ' | 🔄 ' + ev.recurring : ''}
                   </div>
                 </div>
-                {!ev.completed && <button onClick={() => completeEvent(ev)} className="px-2 py-0.5 bg-emerald-500 text-white rounded text-[10px]">Done</button>}
+                {!ev.completed && !ev.event_status && <div className="flex gap-1"><button onClick={() => markEventStatus(ev, 'attended')} className="px-2 py-0.5 bg-emerald-500 text-white rounded text-[10px]">✓</button><button onClick={() => markEventStatus(ev, 'postponed')} className="px-2 py-0.5 bg-amber-500 text-white rounded text-[10px]">⏳</button></div>}
+                {ev.event_status === 'postponed' && <span className="text-[9px] text-amber-600 font-bold">Postponed</span>}
+                {ev.completed && <span className="text-[9px] text-emerald-600 font-bold">✓</span>}
               </div>
             );
           })}

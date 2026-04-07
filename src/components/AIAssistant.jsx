@@ -53,6 +53,8 @@ export default function AIAssistant({ user, userProfile }) {
 
   const toggleVoice = () => {
     if (!recognitionRef.current) return;
+    // Always stop AI speech when mic is tapped
+    if ('speechSynthesis' in window) window.speechSynthesis.cancel();
     if (listening) { recognitionRef.current.stop(); setListening(false); }
     else { setInput(''); recognitionRef.current.start(); setListening(true); }
   };
