@@ -272,10 +272,14 @@ export default function App() {
         }
         // Load module permissions for current user
         if (authUser) {
-          const { data: perms } = await supabase.from('module_permissions').select('*');
-          const permMap = {};
-          (perms || []).forEach(p => { permMap[p.module_name] = p.has_access; });
-          setModulePerms(permMap);
+          const currentProfile = (usrs || []).find(u => u.email === authUser.email);
+          const currentUserId = currentProfile?.id;
+          if (currentUserId) {
+            const { data: perms } = await supabase.from('module_permissions').select('*').eq('user_id', currentUserId);
+            const permMap = {};
+            (perms || []).forEach(p => { permMap[p.module_name] = p.has_access; });
+            setModulePerms(permMap);
+          }
         }
       } catch(e) { console.log('Users table not ready'); }
       setInvoices(inv);
@@ -295,7 +299,7 @@ export default function App() {
   // ==========================================
   // COMPUTED VALUES
   // ==========================================
-  const isAdmin = !userProfile || userProfile.role === 'super_admin' || userProfile.role === 'admin';
+  const isAdmin = userProfile?.role === 'super_admin' || userProfile?.role === 'admin';
 
   // Tab-to-module mapping for permission filtering
   const TAB_MODULE_MAP = {
@@ -306,18 +310,15 @@ export default function App() {
   };
 
   const visibleTabs = useMemo(() => {
-    if (!userProfile || userProfile.role === 'super_admin') return TABS; // super admin sees all
+    if (userProfile?.role === 'super_admin') return TABS; // super admin sees all
+    if (!userProfile) return TABS.filter(t => t.id === 'dashboard'); // loading — show nothing
     return TABS.filter(t => {
-      // Admin always sees admin-level tabs
-      if (userProfile.role === 'admin' && ['dashboard', 'admin', 'settings'].includes(t.id)) return true;
-      // Everyone sees their own core tabs
-      if (['dashboard', 'crm', 'tickets', 'calendar', 'dailylog'].includes(t.id)) return true;
-      // Check module permissions (default to true if not explicitly set)
       const moduleName = TAB_MODULE_MAP[t.id];
+      // If permission explicitly set, use it
       if (moduleName && modulePerms[moduleName] !== undefined) return modulePerms[moduleName];
-      // If no permission set, admins see all, team members see non-financial
+      // Admin with no explicit permission: see everything
       if (userProfile.role === 'admin') return true;
-      // Team members: hide financial tabs by default
+      // Team/viewer with no explicit permission: hide financial + admin tabs
       if (['treasury', 'checks', 'debts', 'sales', 'warehouse', 'inventory', 'admin', 'settings', 'import'].includes(t.id)) return false;
       return true;
     });

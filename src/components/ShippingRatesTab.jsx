@@ -3,6 +3,7 @@ import { useState, useMemo, useEffect, useCallback, useRef } from 'react';
 import { supabase, dbInsert, dbUpdate, dbDelete, logActivity } from '../lib/supabase';
 import { notifyShippingRate, notifyShippingBooked } from '../lib/notify';
 import { fE, fmt } from '../lib/utils';
+import EmailComposer from './EmailComposer';
 import * as XLSX from 'xlsx';
 
 const CONTAINER_TYPES = ['20ft', '40ft', '40ft HC', '45ft', 'LCL', 'Bulk', 'Flatbed', 'Reefer', 'Open Top', 'Truck', 'Trailer'];
@@ -163,11 +164,12 @@ function QuotePrintView({ quote, onClose }) {
 }
 
 // ========== REQUEST QUOTE MODAL ==========
-function RequestQuoteModal({ data, onClose, origins, destinations, openWhatsApp, openEmail, generateQuoteRequest }) {
+function RequestQuoteModal({ data, onClose, origins, destinations, openWhatsApp, openEmail, generateQuoteRequest, userId }) {
   const [origin, setOrigin] = useState(data.origin || '');
   const [dest, setDest] = useState(data.destination || 'Egypt');
   const [container, setContainer] = useState(data.container || '40ft');
   const [commodity, setCommodity] = useState('General cargo / Trading materials');
+  const [showComposer, setShowComposer] = useState(false);
   const vendor = data.vendor;
   const { subject, body } = generateQuoteRequest(vendor, origin, dest, container);
   // Custom body with commodity
@@ -206,10 +208,16 @@ function RequestQuoteModal({ data, onClose, origins, destinations, openWhatsApp,
             </button>
           )}
           {vendor.email && (
+            <button onClick={()=>setShowComposer(true)}
+              className="w-full py-4 rounded-xl text-base font-bold text-white flex items-center justify-center gap-2 transition"
+              style={{background:'linear-gradient(135deg, #0ea5e9, #6366f1)', boxShadow:'0 4px 15px rgba(56,189,248,0.3)'}}>
+              📨 Send Direct from @ktcus.com
+            </button>
+          )}
+          {vendor.email && (
             <button onClick={()=>{openEmail(vendor.email, subject, customBody);onClose();}}
-              className="w-full py-4 rounded-xl text-base font-bold bg-blue-500 text-white flex items-center justify-center gap-2 hover:bg-blue-600 transition"
-              style={{boxShadow:'0 4px 15px rgba(56,189,248,0.3)'}}>
-              📧 Send via Email
+              className="w-full py-3 rounded-xl text-sm font-bold border-2 border-blue-200 text-blue-600 flex items-center justify-center gap-2 hover:bg-blue-50 transition">
+              📧 Open in Email Client
             </button>
           )}
           {vendor.phone && (
@@ -224,6 +232,17 @@ function RequestQuoteModal({ data, onClose, origins, destinations, openWhatsApp,
         </div>
       </div>
     </div>
+    {showComposer && (
+      <EmailComposer
+        to={vendor.email}
+        subject={subject}
+        body={customBody}
+        userId={userId}
+        senderName="KTC International"
+        onClose={() => setShowComposer(false)}
+        onSent={() => { setShowComposer(false); onClose(); }}
+      />
+    )}
   </div>);
 }
 
@@ -438,7 +457,7 @@ Date: ${today}`;
       ))}
       {vendorContacts.length === 0 && <div className="text-center py-8 text-slate-400 text-sm">No vendor contacts yet. Add your freight forwarders, truckers, and brokers.</div>}
     </div>
-    {requestQuoteData && <RequestQuoteModal data={requestQuoteData} onClose={()=>setRequestQuoteData(null)} origins={origins} destinations={destinations} openWhatsApp={openWhatsApp} openEmail={openEmail} generateQuoteRequest={generateQuoteRequest} />}
+    {requestQuoteData && <RequestQuoteModal data={requestQuoteData} onClose={()=>setRequestQuoteData(null)} origins={origins} destinations={destinations} openWhatsApp={openWhatsApp} openEmail={openEmail} generateQuoteRequest={generateQuoteRequest} userId={myId} />}
   </div>);
 
   // ========== ADD/EDIT VENDOR ==========
@@ -692,7 +711,7 @@ Date: ${today}`;
       <div className="text-[10px] text-slate-400 mt-1">Showing {filtered.length} of {routeHistory.length} rates</div>
       </>); })()}</div>
       {previewQuote && <QuotePrintView quote={previewQuote} onClose={() => setPreviewQuote(null)} />}
-      {requestQuoteData && <RequestQuoteModal data={requestQuoteData} onClose={()=>setRequestQuoteData(null)} origins={origins} destinations={destinations} openWhatsApp={openWhatsApp} openEmail={openEmail} generateQuoteRequest={generateQuoteRequest} />}
+      {requestQuoteData && <RequestQuoteModal data={requestQuoteData} onClose={()=>setRequestQuoteData(null)} origins={origins} destinations={destinations} openWhatsApp={openWhatsApp} openEmail={openEmail} generateQuoteRequest={generateQuoteRequest} userId={myId} />}
 
       {/* Booking Modal */}
       {bookingModal && (
@@ -798,6 +817,6 @@ Date: ${today}`;
       <div className="flex justify-between text-[10px] text-slate-500 border-t border-slate-100 pt-2"><span>{rg.activeCount} active{rg.expiredCount>0&&<span className="text-red-400 ml-1">({rg.expiredCount} exp)</span>}</span><span>{[...rg.vendors].length} vendors</span>{(() => { const rb = routeBookings(rg.origin,rg.destination); return rb.length > 0 && <span className="text-emerald-600">✓ {rb.length}x</span>; })()}</div>
     </div>);})}</div>)}
     {previewQuote && <QuotePrintView quote={previewQuote} onClose={() => setPreviewQuote(null)} />}
-    {requestQuoteData && <RequestQuoteModal data={requestQuoteData} onClose={()=>setRequestQuoteData(null)} origins={origins} destinations={destinations} openWhatsApp={openWhatsApp} openEmail={openEmail} generateQuoteRequest={generateQuoteRequest} />}
+    {requestQuoteData && <RequestQuoteModal data={requestQuoteData} onClose={()=>setRequestQuoteData(null)} origins={origins} destinations={destinations} openWhatsApp={openWhatsApp} openEmail={openEmail} generateQuoteRequest={generateQuoteRequest} userId={myId} />}
   </div>);
 }

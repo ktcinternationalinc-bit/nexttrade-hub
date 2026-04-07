@@ -2,6 +2,7 @@
 import { useState, useMemo } from 'react';
 import { supabase, dbInsert, dbUpdate, logActivity } from '../lib/supabase';
 import { notifyClientAssigned, notifyFollowUp } from '../lib/notify';
+import EmailComposer from './EmailComposer';
 import { fE, fmt } from '../lib/utils';
 
 const DEFAULT_CATEGORIES = ['Pool', 'Leather'];
@@ -34,6 +35,7 @@ export default function CRMTab({ customers, invoices, user, userProfile, users, 
   const [showNote, setShowNote] = useState(false);
   const [showFollowUp, setShowFollowUp] = useState(false);
   const [editingClient, setEditingClient] = useState(false);
+  const [showEmailComposer, setShowEmailComposer] = useState(false);
   const [notes, setNotes] = useState([]);
   const [followUps, setFollowUps] = useState([]);
   const [contactLog, setContactLog] = useState([]);
@@ -625,7 +627,10 @@ export default function CRMTab({ customers, invoices, user, userProfile, users, 
         <button onClick={() => { if(sel.phone) { logContact('phone', 'Phone call'); window.open('tel:'+sel.phone); } else alert('No phone'); }}
           className="px-3 py-1.5 bg-purple-500 text-white rounded-lg text-xs font-semibold">📞 Call</button>
         <button onClick={() => { const note = prompt('Contact notes / ملاحظات الاتصال:'); if(note) logContact('email', note); }}
-          className="px-3 py-1.5 bg-slate-500 text-white rounded-lg text-xs font-semibold">📧 Email</button>
+          className="px-3 py-1.5 bg-slate-500 text-white rounded-lg text-xs font-semibold">📧 Log Email</button>
+        {sel.email && <button onClick={() => setShowEmailComposer(true)}
+          className="px-3 py-1.5 text-white rounded-lg text-xs font-semibold"
+          style={{background:'linear-gradient(135deg, #0ea5e9, #6366f1)'}}>📨 Send Email</button>}
         <button onClick={() => { const note = prompt('Visit notes / ملاحظات الزيارة:'); if(note) logContact('visit', note); }}
           className="px-3 py-1.5 bg-cyan-500 text-white rounded-lg text-xs font-semibold">🚗 Visit</button>
       </div>
