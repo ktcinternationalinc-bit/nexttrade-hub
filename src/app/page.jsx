@@ -45,6 +45,95 @@ const TABS = [
 ];
 
 // ============================================
+// PAYMENT FORM (isolated state to prevent focus loss)
+// ============================================
+function PaymentForm({ invoice, categories, existingSubcats, onSave, onCancel, formData, setFormData }) {
+  const [pf, setPf] = useState({ date: formData.date || new Date().toISOString().substring(0, 10), amount: formData.amount || '', payMethod: formData.payMethod || 'cash', desc: formData.desc || '', category: formData.category || 'مبيعات', subcategory: formData.subcategory || '' });
+
+  const handleSave = () => {
+    setFormData({ ...formData, ...pf });
+    setTimeout(() => onSave(pf), 50);
+  };
+
+  return (
+    <div className="bg-blue-50 rounded-lg p-4 border border-blue-200">
+      <div className="grid grid-cols-2 gap-3">
+        <div>
+          <label className="text-xs font-semibold text-slate-600">Date / تاريخ</label>
+          <input type="date" value={pf.date}
+            onChange={e => setPf({ ...pf, date: e.target.value })}
+            className="w-full px-3 py-2 rounded-lg border border-slate-200 text-sm" />
+        </div>
+        <div>
+          <label className="text-xs font-semibold text-slate-600">Amount / المبلغ</label>
+          <input type="number" value={pf.amount}
+            onChange={e => setPf({ ...pf, amount: e.target.value })}
+            className="w-full px-3 py-2 rounded-lg border border-slate-200 text-sm"
+            placeholder={invoice ? 'Remaining: ' + (Number(invoice.outstanding || 0)).toLocaleString() : ''} />
+        </div>
+      </div>
+
+      {/* Payment Method — Radio Buttons */}
+      <div className="mt-3">
+        <label className="text-xs font-semibold text-slate-600 block mb-1.5">Payment Method / طريقة الدفع</label>
+        <div className="flex gap-2 flex-wrap">
+          {[
+            { v: 'cash', l: '💵 Cash', sub: 'Adds to treasury' },
+            { v: 'bank_transfer', l: '🏦 Bank Transfer', sub: 'Invoice only' },
+            { v: 'check', l: '📝 Check', sub: 'Check record' },
+          ].map(m => (
+            <label key={m.v} onClick={() => setPf({ ...pf, payMethod: m.v })}
+              className={'flex items-center gap-2 px-3 py-2 rounded-lg border-2 cursor-pointer transition text-xs ' +
+                (pf.payMethod === m.v ? 'bg-blue-100 border-blue-400 font-bold text-blue-700' : 'bg-white border-slate-200 text-slate-600 hover:border-blue-200')}>
+              <input type="radio" name="payMethod" checked={pf.payMethod === m.v} onChange={() => {}} className="w-3.5 h-3.5" />
+              <div><div>{m.l}</div><div className="text-[9px] font-normal text-slate-400">{m.sub}</div></div>
+            </label>
+          ))}
+        </div>
+        {pf.payMethod === 'bank_transfer' && <div className="text-[10px] text-blue-600 mt-1">ℹ️ Bank transfers update the invoice but do NOT create a treasury entry</div>}
+      </div>
+
+      {/* Category & Subcategory */}
+      <div className="grid grid-cols-2 gap-3 mt-3">
+        <div>
+          <label className="text-xs font-semibold text-slate-600">Category / التصنيف</label>
+          <select value={pf.category || ''} onChange={e => setPf({ ...pf, category: e.target.value })}
+            className="w-full px-3 py-2 rounded-lg border border-slate-200 text-sm">
+            <option value="">Select...</option>
+            {categories.map(([ar, en]) => <option key={ar} value={ar}>{en} / {ar}</option>)}
+          </select>
+        </div>
+        <div>
+          <label className="text-xs font-semibold text-slate-600">Subcategory / تصنيف فرعي</label>
+          <input list="pay-subcats" value={pf.subcategory || ''}
+            onChange={e => setPf({ ...pf, subcategory: e.target.value })}
+            className="w-full px-3 py-2 rounded-lg border border-slate-200 text-sm"
+            placeholder="Type or select..." />
+          <datalist id="pay-subcats">
+            {existingSubcats.map(s => <option key={s} value={s} />)}
+          </datalist>
+        </div>
+      </div>
+
+      <div className="mt-3">
+        <label className="text-xs font-semibold text-slate-600">Description / الوصف</label>
+        <input value={pf.desc}
+          onChange={e => setPf({ ...pf, desc: e.target.value })}
+          className="w-full px-3 py-2 rounded-lg border border-slate-200 text-sm"
+          placeholder="Optional notes..." />
+      </div>
+
+      <div className="flex gap-2 mt-3">
+        <button onClick={handleSave}
+          className="px-4 py-2 bg-blue-500 text-white rounded-lg font-semibold text-sm">Save / حفظ ✓</button>
+        <button onClick={onCancel}
+          className="px-4 py-2 border border-slate-200 rounded-lg font-semibold text-sm">Cancel / إلغاء</button>
+      </div>
+    </div>
+  );
+}
+
+// ============================================
 // MAIN APP
 // ============================================
 export default function App() {
@@ -372,20 +461,29 @@ export default function App() {
     window.location.href = '/login';
   };
 
-  const handleAddPayment = async () => {
-    if (!formData.amount || !formData.date || !selectedInvoice) return;
+  const handleAddPayment = async (pf) => {
+    var pd = pf || formData;
+    if (!pd.amount || !pd.date || !selectedInvoice) return;
     try {
-      await dbInsert('treasury', {
-        transaction_date: formData.date,
-        order_number: selectedInvoice.order_number,
-        description: formData.desc || 'Payment',
-        cash_in: Number(formData.amount),
-        cash_out: 0,
-      }, user?.id);
+      const isBankTransfer = pd.payMethod === 'bank_transfer';
+      // Bank transfers don't go in treasury (cash register) - they go directly to bank
+      if (!isBankTransfer) {
+        await dbInsert('treasury', {
+          transaction_date: pd.date,
+          order_number: selectedInvoice.order_number,
+          description: pd.desc || 'Payment',
+          cash_in: Number(pd.amount),
+          cash_out: 0,
+          category: pd.category || 'مبيعات',
+          subcategory: pd.subcategory || '',
+        }, user?.id);
+      }
       // Update invoice collected
-      const newCollected = Number(selectedInvoice.total_collected) + Number(formData.amount);
+      const newCollected = Number(selectedInvoice.total_collected) + Number(pd.amount);
       await dbUpdate('invoices', selectedInvoice.id, {
         total_collected: newCollected,
+        outstanding: Math.max(0, Number(selectedInvoice.total_amount) - newCollected),
+        notes: (selectedInvoice.notes || '') + (isBankTransfer ? '\nBank transfer: ' + fE(Number(pd.amount)) + ' on ' + pd.date : ''),
       }, user?.id);
       setShowAddPayment(false);
       setFormData({});
@@ -628,18 +726,25 @@ export default function App() {
     }
   };
 
-  const handleLinkTreasury = async (txn) => {
+  const handleLinkTreasury = async (txn, isProofOnly) => {
     if (!selectedInvoice) return;
     try {
       await dbUpdate('treasury', txn.id, { order_number: selectedInvoice.order_number }, user?.id);
-      // Recalculate collected from ALL treasury entries now linked to this order
-      const linked = treasury.filter(t => t.order_number === selectedInvoice.order_number);
-      const newCollected = linked.reduce((a, t) => a + Number(t.cash_in || 0), 0) + Number(txn.cash_in || 0);
-      await dbUpdate('invoices', selectedInvoice.id, {
-        total_collected: newCollected,
-        outstanding: Math.max(0, Number(selectedInvoice.total_amount) - newCollected),
-        notes: (selectedInvoice.notes || '').replace('UNVERIFIED:', 'RECONCILED:'),
-      }, user?.id);
+      if (!isProofOnly) {
+        // New payment: recalculate collected from ALL linked treasury entries
+        const linked = treasury.filter(t => t.order_number === selectedInvoice.order_number);
+        const newCollected = linked.reduce((a, t) => a + Number(t.cash_in || 0), 0) + Number(txn.cash_in || 0);
+        await dbUpdate('invoices', selectedInvoice.id, {
+          total_collected: newCollected,
+          outstanding: Math.max(0, Number(selectedInvoice.total_amount) - newCollected),
+          notes: (selectedInvoice.notes || '').replace('UNVERIFIED:', 'RECONCILED:'),
+        }, user?.id);
+      } else {
+        // Proof only: just mark as reconciled, don't change amounts
+        await dbUpdate('invoices', selectedInvoice.id, {
+          notes: (selectedInvoice.notes || '').replace('UNVERIFIED:', 'RECONCILED:') || 'RECONCILED: Linked to treasury',
+        }, user?.id);
+      }
       setLinkSearch('');
       setShowLinkSearch(false);
       await loadAllData();
@@ -1104,6 +1209,18 @@ export default function App() {
               <div className="bg-emerald-50 rounded-lg p-3">
                 <div className="text-[10px] text-emerald-700">Collected / المحصّل</div>
                 <div className="text-xl font-extrabold text-emerald-500">{fE(selectedInvoice.total_collected)}</div>
+                {Number(selectedInvoice.total_collected) > Number(selectedInvoice.total_amount) && (
+                  <div className="text-[9px] text-red-500 font-bold mt-1">⚠️ OVERPAID — may be doubled</div>
+                )}
+                <button onClick={async () => {
+                  const newAmt = prompt('Correct collected amount for this invoice:\n\nCurrent: ' + fE(selectedInvoice.total_collected) + '\nInvoiced: ' + fE(selectedInvoice.total_amount) + '\n\nEnter correct amount:', selectedInvoice.total_collected);
+                  if (newAmt === null) return;
+                  const n = Number(newAmt);
+                  try {
+                    await dbUpdate('invoices', selectedInvoice.id, { total_collected: n, outstanding: Math.max(0, Number(selectedInvoice.total_amount) - n) }, user?.id);
+                    await loadAllData();
+                  } catch(err) { alert('Error: ' + err.message); }
+                }} className="text-[9px] text-blue-500 underline mt-1 block">✏️ Fix amount</button>
               </div>
               <div className={`rounded-lg p-3 ${selectedInvoice.outstanding > 0 ? 'bg-red-50' : 'bg-green-50'}`}>
                 <div className="text-[10px]">Outstanding / المتبقّي</div>
@@ -1289,7 +1406,15 @@ export default function App() {
               </button>
             ) : (
               <div className="bg-purple-50 rounded-lg p-4 border border-purple-200 mb-3">
-                <h4 className="text-sm font-bold text-purple-800 mb-2">Search Treasury to Link / بحث للربط</h4>
+                <h4 className="text-sm font-bold text-purple-800 mb-1">Search Treasury to Link / بحث للربط</h4>
+                <div className="text-[10px] text-purple-600 mb-2">
+                  <strong>📎 Proof Only</strong> = Payment was already counted (e.g. bank transfer). Just links for verification — no amount change.<br/>
+                  <strong>💰 New Payment</strong> = This is uncounted money. Will ADD to collected amount.
+                </div>
+                <div className="text-[10px] text-purple-600 mb-2 bg-purple-100 rounded p-2">
+                  <strong>📎 Proof Only</strong> — Payment was already counted in collected amount. Just linking for verification (e.g. bank transfer proof).<br/>
+                  <strong>💰 New Payment</strong> — This is a new payment not yet reflected. Will increase collected amount.
+                </div>
                 <input value={linkSearch} onChange={e => setLinkSearch(e.target.value)}
                   placeholder="Search name, date, amount, order # / بحث"
                   className="w-full px-3 py-2 rounded-lg border border-purple-200 text-sm mb-2" autoFocus />
@@ -1309,10 +1434,18 @@ export default function App() {
                             <div className="text-xs font-semibold" style={{ direction: lang === 'ar' ? 'rtl' : 'ltr' }}>{tx(txn.description, txn.description_en)}</div>
                             <div className="text-[10px] text-slate-500">{txn.transaction_date} | {fE(txn.cash_in)}</div>
                           </div>
-                          <button onClick={() => handleLinkTreasury(txn)}
-                            className="px-3 py-1 bg-purple-600 text-white rounded text-[10px] font-semibold ml-2 hover:bg-purple-700">
-                            Link / ربط
-                          </button>
+                          <div className="flex flex-col gap-1 ml-2">
+                            <button onClick={() => handleLinkTreasury(txn, true)}
+                              className="px-3 py-1 bg-blue-600 text-white rounded text-[10px] font-semibold hover:bg-blue-700"
+                              title="Links for verification only — collected amount stays the same">
+                              📎 Proof Only (already counted)
+                            </button>
+                            <button onClick={() => handleLinkTreasury(txn, false)}
+                              className="px-3 py-1 bg-purple-600 text-white rounded text-[10px] font-semibold hover:bg-purple-700"
+                              title="This is a NEW payment not yet counted — will add to collected">
+                              💰 New Payment (add to collected)
+                            </button>
+                          </div>
                         </div>
                       ))}
                     {treasury.filter(t => (!t.order_number || t.order_number === '') && Number(t.cash_in) > 0).filter(t => {
@@ -1336,34 +1469,15 @@ export default function App() {
                 + Add Payment / إضافة دفعة
               </button>
             ) : (
-              <div className="bg-blue-50 rounded-lg p-4 border border-blue-200">
-                <div className="grid grid-cols-2 gap-3">
-                  <div>
-                    <label className="text-xs font-semibold text-slate-600">Date / تاريخ</label>
-                    <input type="date" value={formData.date || ''}
-                      onChange={e => setFormData({ ...formData, date: e.target.value })}
-                      className="w-full px-3 py-2 rounded-lg border border-slate-200 text-sm" />
-                  </div>
-                  <div>
-                    <label className="text-xs font-semibold text-slate-600">Amount / المبلغ</label>
-                    <input type="number" value={formData.amount || ''}
-                      onChange={e => setFormData({ ...formData, amount: e.target.value })}
-                      className="w-full px-3 py-2 rounded-lg border border-slate-200 text-sm" />
-                  </div>
-                  <div className="col-span-2">
-                    <label className="text-xs font-semibold text-slate-600">Description / الوصف</label>
-                    <input value={formData.desc || ''}
-                      onChange={e => setFormData({ ...formData, desc: e.target.value })}
-                      className="w-full px-3 py-2 rounded-lg border border-slate-200 text-sm" />
-                  </div>
-                </div>
-                <div className="flex gap-2 mt-3">
-                  <button onClick={handleAddPayment}
-                    className="px-4 py-2 bg-blue-500 text-white rounded-lg font-semibold text-sm">Save / حفظ ✓</button>
-                  <button onClick={() => { setShowAddPayment(false); setFormData({}); }}
-                    className="px-4 py-2 border border-slate-200 rounded-lg font-semibold text-sm">Cancel / إلغاء</button>
-                </div>
-              </div>
+              <PaymentForm
+                invoice={selectedInvoice}
+                categories={Object.entries(EXPENSE_CATS)}
+                existingSubcats={[...new Set(treasury.map(t=>t.subcategory).filter(Boolean))].sort()}
+                onSave={handleAddPayment}
+                onCancel={() => { setShowAddPayment(false); setFormData({}); }}
+                formData={formData}
+                setFormData={setFormData}
+              />
             )}
           </Modal>
         )}

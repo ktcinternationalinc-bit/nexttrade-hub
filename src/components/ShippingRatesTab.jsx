@@ -302,7 +302,20 @@ export default function ShippingRatesTab({ user, userProfile, isAdmin, customers
     try { if (editingRate) await dbUpdate('shipping_rates', editingRate.id, record, myId); else await dbInsert('shipping_rates', record, myId); await logActivity(myId, (editingRate ? 'Updated' : 'Created') + ' ' + (f.rateType || 'shipping') + ' rate: ' + f.origin + ' → ' + f.destination + ' (' + f.vendorName + ', ' + (f.currency || 'USD') + ' ' + (f.rateAmount || 0) + ')', 'shipping'); setF({}); setEditingRate(null); setView(selectedRoute ? 'route_detail' : 'routes'); await loadData(); } catch (err) { alert('Error: ' + err.message); }
   };
 
-  const handleMarkBooked = async (rate) => { const ref = prompt('Shipment reference #:'); if (ref === null || !ref.trim()) return; const cust = prompt('Customer name (optional):') || ''; try { await dbInsert('shipping_bookings', { rate_id: rate.id, shipment_reference: ref, customer_name: cust, booking_date: new Date().toISOString().substring(0,10) }, myId); await dbUpdate('shipping_rates', rate.id, { booked: true }, myId); await loadData(); } catch (err) { alert(err.message); } };
+  const [bookingModal, setBookingModal] = useState(null);
+  const handleMarkBooked = async (rate) => { setBookingModal(rate); };
+  const confirmBooking = async () => {
+    if (!bookingModal || !f.bookRef) return;
+    try {
+      await dbInsert('shipping_bookings', { rate_id: bookingModal.id, shipment_reference: f.bookRef, customer_name: f.bookCustomer || '', order_number: f.bookOrder || '', booking_date: new Date().toISOString().substring(0,10), notes: f.bookNotes || '', booked_by: myId }, myId);
+      await dbUpdate('shipping_rates', bookingModal.id, { booked: true, shipment_reference: f.bookRef, booking_date: new Date().toISOString().substring(0,10), booking_notes: (f.bookCustomer ? 'Customer: ' + f.bookCustomer + ' | ' : '') + (f.bookOrder ? 'Order: ' + f.bookOrder : '') }, myId);
+      await logActivity(myId, 'Booked rate: ' + bookingModal.vendor_name + ' ' + bookingModal.origin + '→' + bookingModal.destination + ' Ref: ' + f.bookRef + (f.bookCustomer ? ' for ' + f.bookCustomer : ''), 'shipping');
+      setBookingModal(null); setF(prev => ({...prev, bookRef:'', bookCustomer:'', bookOrder:'', bookNotes:''})); await loadData();
+    } catch (err) { alert(err.message); }
+  };
+  const [rateHistoryMode, setRateHistoryMode] = useState('active');
+  const [rateHistoryDf, setRateHistoryDf] = useState('');
+  const [rateHistoryDt, setRateHistoryDt] = useState('');
 
   const handleSaveQuote = async () => {
     if (!f.qCustomer || !f.qOrigin || !f.qDest) { alert('Fill Customer, Origin, Destination'); return; }
@@ -654,9 +667,79 @@ Date: ${today}`;
       {Object.keys(byVL).length>0&&(<div className="bg-white rounded-xl p-4 mb-4 border border-slate-200"><h3 className="text-sm font-bold mb-2">🏆 Vendor Comparison</h3><div className="overflow-auto"><table className="w-full border-collapse text-xs"><thead><tr className="bg-slate-50"><th className="px-3 py-2 text-left text-[10px]">Vendor / Line</th><th className="px-3 py-2 text-right text-[10px]">Best Rate</th><th className="px-3 py-2 text-right text-[10px]">Transit</th><th className="px-3 py-2 text-right text-[10px]">Free Days</th><th className="px-3 py-2 text-[10px]">Expiry</th></tr></thead><tbody>{Object.entries(byVL).sort((a,b)=>(a[1][0]?.rate_amount||Infinity)-(b[1][0]?.rate_amount||Infinity)).map(([key,vr],i)=>{const best=vr.reduce((a,b)=>(a.rate_amount||Infinity)<(b.rate_amount||Infinity)?a:b); return (<tr key={key} className={'border-b border-slate-50 '+(i===0?'bg-emerald-50':'')}><td className="px-3 py-2 font-semibold">{i===0&&<span className="text-emerald-500 mr-1">★</span>}{key}</td><td className="px-3 py-2 text-right font-bold text-blue-600">{fCur(best.rate_amount,best.currency)}</td><td className="px-3 py-2 text-right">{best.transit_days?best.transit_days+'d':'—'}</td><td className="px-3 py-2 text-right">{best.free_days||'—'}</td><td className="px-3 py-2"><ExpiryBadge date={best.expiry_date}/></td></tr>);})}</tbody></table></div></div>)}
       {routeQuotes.length>0&&(<div className="bg-white rounded-xl p-4 mt-4 border border-slate-200"><h3 className="text-sm font-bold mb-2">📋 Quotes ({routeQuotes.length})</h3>{routeQuotes.map(qt=>(<div key={qt.id} className="flex justify-between items-center py-2 border-b border-slate-50"><div><div className="text-xs font-semibold">{qt.quote_number} — {qt.customer_name}</div><div className="text-[10px] text-slate-500">{qt.quote_date} • {qt.status}</div></div><div className="flex items-center gap-3"><div className="text-right"><div className="text-xs">Client: <span className="font-bold">{fCur(qt.client_total,qt.currency)}</span></div><div className="text-[10px]" style={{color:qt.profit>0?'#10b981':'#ef4444'}}>Profit: {fCur(qt.profit,qt.currency)}</div></div><button onClick={()=>setPreviewQuote(qt)} className="px-2 py-1 rounded border border-purple-300 text-purple-600 text-[10px]">📄</button></div></div>))}</div>)}
       <div className="bg-white rounded-xl p-4 border border-slate-200 mt-4"><div className="flex justify-between items-center mb-2"><h3 className="text-sm font-bold">All Rates</h3><div className="flex gap-1"><button onClick={()=>{const matchVendors=vendorContacts.filter(v=>!v.origin_regions||(v.origin_regions||'').toLowerCase().includes((selectedRoute.origin||'').toLowerCase().substring(0,4)));if(matchVendors.length>0)setRequestQuoteData({vendor:matchVendors[0],origin:selectedRoute.origin,destination:selectedRoute.destination,container:'40ft'});else alert('No vendor contacts found. Add vendors first (📇 Vendors).');}} className="px-3 py-1 bg-cyan-500 text-white rounded text-[10px] font-semibold">📋 Request Rate</button><button onClick={()=>{setF({origin:selectedRoute.origin,destination:selectedRoute.destination});setView('add_rate');}} className="px-3 py-1 bg-blue-500 text-white rounded text-[10px] font-semibold">+ Add Rate</button></div></div>
-      <div className="overflow-auto max-h-[400px] rounded-lg border border-slate-200"><table className="w-full border-collapse text-xs"><thead className="sticky top-0"><tr className="bg-slate-50"><th className="px-2 py-2 text-[10px] text-left">Date</th><th className="px-2 py-2 text-[10px] text-left">Vendor</th><th className="px-2 py-2 text-[10px] text-left">Line</th><th className="px-2 py-2 text-[10px]">Container</th><th className="px-2 py-2 text-[10px] text-right">Rate</th><th className="px-2 py-2 text-[10px] text-right">Total</th><th className="px-2 py-2 text-[10px]">Expiry</th><th className="px-2 py-2 text-[10px]"></th></tr></thead><tbody>{routeHistory.map(r=>{const exp=isExpired(r.expiry_date); return (<tr key={r.id} className={'border-b border-slate-50 '+(exp?'bg-red-50/50':'')+(r.booked?' bg-green-50/50':'')}><td className="px-2 py-1.5">{r.effective_date}</td><td className="px-2 py-1.5 font-semibold">{r.vendor_name}</td><td className="px-2 py-1.5">{r.shipping_line||'—'}</td><td className="px-2 py-1.5 text-center"><span className="px-1.5 py-0.5 bg-blue-100 text-blue-700 rounded text-[9px]">{r.container_type}</span></td><td className={'px-2 py-1.5 text-right font-bold '+(exp?'text-red-400 line-through':'text-blue-600')}>{fCur(r.rate_amount,r.currency)}</td><td className="px-2 py-1.5 text-right font-bold text-amber-600">{fCur(r.total_cost,r.currency)}</td><td className="px-2 py-1.5"><ExpiryBadge date={r.expiry_date}/></td><td className="px-2 py-1.5 flex gap-1">{!exp&&<button onClick={()=>handleMarkBooked(r)} className="px-2 py-0.5 rounded border border-green-300 text-green-600 text-[10px]">Book</button>}<button onClick={()=>{setEditingRate(r);setF({origin:r.origin,destination:r.destination,vendorName:r.vendor_name,shippingLine:r.shipping_line,transportMode:r.transport_mode,rateType:r.rate_type||'',containerType:r.container_type,rateAmount:r.rate_amount,currency:r.currency,transitDays:r.transit_days,freeDays:r.free_days,portFees:r.port_fees,thcFees:r.thc_fees,docFees:r.documentation_fees,customsFees:r.customs_fees,otherFees:r.other_fees,otherFeesDesc:r.other_fees_desc,effectiveDate:r.effective_date,expiryDate:r.expiry_date,pol:r.port_of_loading,pod:r.port_of_discharge,notes:r.notes,booked:r.booked,shipmentRef:r.shipment_reference,bookingDate:r.booking_date,bookingNotes:r.booking_notes});setView('add_rate');}} className="px-2 py-0.5 rounded border border-blue-300 text-blue-600 text-[10px]">Edit</button>{isAdmin&&<button onClick={()=>handleDeleteRate(r)} className="px-2 py-0.5 rounded border border-red-300 text-red-500 text-[10px]">Del</button>}</td></tr>);})}</tbody></table></div></div>
+      <div className="flex gap-1 mb-2 flex-wrap items-center">
+        <span className="text-[10px] text-slate-500 mr-1">Filter:</span>
+        {[['active','✅ Active'],['3m','3 Months'],['1y','1 Year'],['3y','3 Years'],['all','All Time'],['custom','Custom']].map(([v,l])=>(
+          <button key={v} onClick={()=>{setRateHistoryMode(v); if(v==='3m'){setRateHistoryDf(new Date(Date.now()-90*86400000).toISOString().substring(0,10));setRateHistoryDt('');} else if(v==='1y'){setRateHistoryDf(new Date(Date.now()-365*86400000).toISOString().substring(0,10));setRateHistoryDt('');} else if(v==='3y'){setRateHistoryDf(new Date(Date.now()-1095*86400000).toISOString().substring(0,10));setRateHistoryDt('');} else {setRateHistoryDf('');setRateHistoryDt('');}}}
+            className={'px-2 py-1 rounded text-[10px] font-semibold '+(rateHistoryMode===v?'bg-blue-500 text-white':'bg-slate-100 text-slate-600')}>{l}</button>
+        ))}
+        {rateHistoryMode==='custom'&&(<><input type="date" value={rateHistoryDf} onChange={e=>setRateHistoryDf(e.target.value)} className="px-2 py-1 border rounded text-[10px] w-28" /><span className="text-[10px]">→</span><input type="date" value={rateHistoryDt} onChange={e=>setRateHistoryDt(e.target.value)} className="px-2 py-1 border rounded text-[10px] w-28" /></>)}
+      </div>
+      {(() => {
+        var filtered = routeHistory;
+        if (rateHistoryMode === 'active') filtered = filtered.filter(r => !isExpired(r.expiry_date));
+        else if (rateHistoryDf) filtered = filtered.filter(r => (r.effective_date || '') >= rateHistoryDf);
+        if (rateHistoryDt) filtered = filtered.filter(r => (r.effective_date || '') <= rateHistoryDt);
+        var bestRate = filtered.length > 0 ? filtered.reduce((a,b) => (a.rate_amount||Infinity) < (b.rate_amount||Infinity) ? a : b) : null;
+        return (<>
+        {bestRate && rateHistoryMode !== 'active' && <div className="bg-emerald-50 rounded-lg px-3 py-2 mb-2 border border-emerald-200 flex justify-between items-center">
+          <span className="text-[10px] font-bold text-emerald-700">🏆 Best rate in period: {bestRate.vendor_name} {bestRate.shipping_line ? '/ '+bestRate.shipping_line : ''}</span>
+          <span className="text-sm font-extrabold text-emerald-600">{fCur(bestRate.rate_amount, bestRate.currency)} <span className="text-[10px] font-normal">({bestRate.effective_date})</span></span>
+        </div>}
+      <div className="overflow-auto max-h-[400px] rounded-lg border border-slate-200"><table className="w-full border-collapse text-xs"><thead className="sticky top-0"><tr className="bg-slate-50"><th className="px-2 py-2 text-[10px] text-left">Date</th><th className="px-2 py-2 text-[10px] text-left">Vendor</th><th className="px-2 py-2 text-[10px] text-left">Line</th><th className="px-2 py-2 text-[10px]">Container</th><th className="px-2 py-2 text-[10px] text-right">Rate</th><th className="px-2 py-2 text-[10px] text-right">Total</th><th className="px-2 py-2 text-[10px]">Expiry</th><th className="px-2 py-2 text-[10px]"></th></tr></thead><tbody>{filtered.map(r=>{const exp=isExpired(r.expiry_date); const isBest=bestRate&&r.id===bestRate.id; return (<tr key={r.id} className={'border-b border-slate-50 '+(isBest?'bg-emerald-50/80 ':exp?'bg-red-50/50 ':'')+(r.booked?' bg-green-50/50':'')}><td className="px-2 py-1.5">{r.effective_date}</td><td className="px-2 py-1.5 font-semibold">{isBest&&<span className="text-emerald-500 mr-1">★</span>}{r.vendor_name}</td><td className="px-2 py-1.5">{r.shipping_line||'—'}</td><td className="px-2 py-1.5 text-center"><span className="px-1.5 py-0.5 bg-blue-100 text-blue-700 rounded text-[9px]">{r.container_type}</span></td><td className={'px-2 py-1.5 text-right font-bold '+(exp?'text-red-400 line-through':'text-blue-600')}>{fCur(r.rate_amount,r.currency)}</td><td className="px-2 py-1.5 text-right font-bold text-amber-600">{fCur(r.total_cost,r.currency)}</td><td className="px-2 py-1.5"><ExpiryBadge date={r.expiry_date}/></td><td className="px-2 py-1.5 flex gap-1">{!exp&&<button onClick={()=>handleMarkBooked(r)} className="px-2 py-0.5 rounded border border-green-300 text-green-600 text-[10px]">Book</button>}<button onClick={()=>{setEditingRate(r);setF({origin:r.origin,destination:r.destination,vendorName:r.vendor_name,shippingLine:r.shipping_line,transportMode:r.transport_mode,rateType:r.rate_type||'',containerType:r.container_type,rateAmount:r.rate_amount,currency:r.currency,transitDays:r.transit_days,freeDays:r.free_days,portFees:r.port_fees,thcFees:r.thc_fees,docFees:r.documentation_fees,customsFees:r.customs_fees,otherFees:r.other_fees,otherFeesDesc:r.other_fees_desc,effectiveDate:r.effective_date,expiryDate:r.expiry_date,pol:r.port_of_loading,pod:r.port_of_discharge,notes:r.notes,booked:r.booked,shipmentRef:r.shipment_reference,bookingDate:r.booking_date,bookingNotes:r.booking_notes});setView('add_rate');}} className="px-2 py-0.5 rounded border border-blue-300 text-blue-600 text-[10px]">Edit</button>{isAdmin&&<button onClick={()=>handleDeleteRate(r)} className="px-2 py-0.5 rounded border border-red-300 text-red-500 text-[10px]">Del</button>}</td></tr>);})}</tbody></table></div>
+      <div className="text-[10px] text-slate-400 mt-1">Showing {filtered.length} of {routeHistory.length} rates</div>
+      </>); })()}</div>
       {previewQuote && <QuotePrintView quote={previewQuote} onClose={() => setPreviewQuote(null)} />}
       {requestQuoteData && <RequestQuoteModal data={requestQuoteData} onClose={()=>setRequestQuoteData(null)} origins={origins} destinations={destinations} openWhatsApp={openWhatsApp} openEmail={openEmail} generateQuoteRequest={generateQuoteRequest} />}
+
+      {/* Booking Modal */}
+      {bookingModal && (
+        <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4" onClick={()=>setBookingModal(null)}>
+          <div className="bg-white rounded-2xl p-6 max-w-md w-full" onClick={e=>e.stopPropagation()}>
+            <h3 className="text-sm font-bold mb-3">📦 Book Rate — {bookingModal.vendor_name} ({fCur(bookingModal.total_cost||bookingModal.rate_amount, bookingModal.currency)})</h3>
+            <div className="space-y-3">
+              <div><label className="text-[10px] font-semibold">Shipment Reference # *</label>
+                <input value={f.bookRef||''} onChange={e=>setF({...f,bookRef:e.target.value})} className="w-full px-3 py-2 rounded border text-sm" placeholder="BL# / Container# / Ref#" /></div>
+              <div><label className="text-[10px] font-semibold">Customer Name</label>
+                <input value={f.bookCustomer||''} onChange={e=>setF({...f,bookCustomer:e.target.value})} className="w-full px-3 py-2 rounded border text-sm" placeholder="Who is this booking for?" /></div>
+              <div><label className="text-[10px] font-semibold">Order Number</label>
+                <input value={f.bookOrder||''} onChange={e=>setF({...f,bookOrder:e.target.value})} className="w-full px-3 py-2 rounded border text-sm" placeholder="PO# / Order#" /></div>
+              <div><label className="text-[10px] font-semibold">Notes</label>
+                <input value={f.bookNotes||''} onChange={e=>setF({...f,bookNotes:e.target.value})} className="w-full px-3 py-2 rounded border text-sm" placeholder="Optional notes" /></div>
+            </div>
+            <div className="flex gap-2 mt-4">
+              <button onClick={confirmBooking} disabled={!f.bookRef} className="px-4 py-2 bg-emerald-500 text-white rounded-lg text-sm font-semibold disabled:opacity-50">✅ Confirm Booking</button>
+              <button onClick={()=>setBookingModal(null)} className="px-4 py-2 border border-slate-200 rounded-lg text-sm">Cancel</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Bookings List */}
+      {bookings.filter(b => routeHistory.some(r => r.id === b.rate_id)).length > 0 && (
+        <div className="bg-white rounded-xl p-4 mt-4 border border-slate-200">
+          <h3 className="text-sm font-bold mb-2">📦 Bookings for this route ({bookings.filter(b => routeHistory.some(r => r.id === b.rate_id)).length})</h3>
+          <div className="space-y-2">
+            {bookings.filter(b => routeHistory.some(r => r.id === b.rate_id)).map(b => {
+              const rate = rates.find(r => r.id === b.rate_id);
+              return (
+                <div key={b.id} className="flex justify-between items-center py-2 px-3 rounded-lg bg-emerald-50 border border-emerald-200">
+                  <div>
+                    <div className="text-xs font-bold">📦 {b.shipment_reference}</div>
+                    <div className="text-[10px] text-slate-500">
+                      {b.customer_name && <span className="font-semibold text-purple-600">{b.customer_name} </span>}
+                      {b.order_number && <span>• Order: {b.order_number} </span>}
+                      • {b.booking_date} • {rate ? rate.vendor_name : 'Unknown vendor'}
+                    </div>
+                    {b.notes && <div className="text-[10px] text-slate-400">{b.notes}</div>}
+                  </div>
+                  {rate && <div className="text-sm font-bold text-emerald-600">{fCur(rate.total_cost || rate.rate_amount, rate.currency)}</div>}
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
     </div>);
   }
 
