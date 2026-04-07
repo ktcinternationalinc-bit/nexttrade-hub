@@ -136,22 +136,22 @@ YOUR CAPABILITIES:
 2. EXECUTE commands when the user asks you to create tickets, schedule meetings, or set reminders
 
 WHEN THE USER GIVES A COMMAND (create ticket, schedule meeting, set reminder, request rate quote, etc.):
-Respond with a JSON block wrapped in \`\`\`action tags like this:
-\`\`\`action
+Respond with a JSON block wrapped in ---ACTION_START--- tags like this:
+---ACTION_START---
 {"type":"create_ticket","title":"Get shipping rates from Turkey","description":"Research current rates for 40ft containers","priority":"high","due_date":"${tomorrow}"}
-\`\`\`
+---ACTION_END---
 OR for calendar events:
-\`\`\`action
+---ACTION_START---
 {"type":"create_event","title":"Team meeting","event_date":"${tomorrow}","event_time":"14:00","event_type":"meeting"}
-\`\`\`
+---ACTION_END---
 OR for reminders:
-\`\`\`action
+---ACTION_START---
 {"type":"create_reminder","task":"Follow up with supplier","due_date":"${tomorrow}","due_time":"09:00"}
-\`\`\`
+---ACTION_END---
 OR for requesting rate quotes from vendors (IMPORTANT — use this when user says "request rate", "get quote", "send rate request", "ask for rates", etc.):
-\`\`\`action
+---ACTION_START---
 {"type":"request_quote","vendor_company":"Ontrek","vendor_contact":"John","vendor_email":"rates@ontrek.com","vendor_whatsapp":"+1234567890","vendor_type":"Shipping","send_via":"whatsapp","origin":"China","destination":"Egypt","container":"40ft","commodity":"Trading materials","customer_name":"Ahmed"}
-\`\`\`
+---ACTION_END---
 IMPORTANT for request_quote: Match the vendor by name from the VENDOR CONTACTS list below. Use their exact email/whatsapp from the database. If the user says "send via whatsapp" use send_via:"whatsapp", if "send via email" use send_via:"email", if not specified use whichever contact method is available (prefer whatsapp). If user mentions a vendor type like "trucker" or "freight forwarder", match by vendor_type.
 After the action block, write a brief confirmation message.
 For assigned_to, use user IDs from the TEAM list below.
@@ -243,13 +243,15 @@ ${(Array.isArray(vendorContacts) ? vendorContacts : []).map(v => '• ' + v.comp
     const aiText = data.content?.[0]?.text || 'No response';
 
     // ===== PARSE ACTION FROM RESPONSE =====
-    const actionMatch = aiText.match(/```action\s*\n([\s\S]*?)\n```/);
-    if (actionMatch) {
+    const actionStart = aiText.indexOf("---ACTION_START---");
+    const actionEnd = actionStart >= 0 ? aiText.indexOf("---ACTION_END---", actionStart + 20) : -1;
+    if (actionStart >= 0 && actionEnd > actionStart) {
       try {
-        const actionData = JSON.parse(actionMatch[1]);
-        const cleanText = aiText.replace(/```action\s*\n[\s\S]*?\n```/, '').trim();
+        const actionJson = aiText.substring(actionStart + 18, actionEnd).trim();
+        const actionData = JSON.parse(actionJson);
+        const cleanText = aiText.substring(0, actionStart).trim() + ' ' + aiText.substring(actionEnd + 16).trim();
         return Response.json({ 
-          answer: cleanText || 'Action ready to execute.',
+          answer: cleanText.trim() || 'Action ready to execute.',
           pending_action: actionData 
         });
       } catch(e) {
