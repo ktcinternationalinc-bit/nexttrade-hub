@@ -47,12 +47,12 @@ const TABS = [
 // ============================================
 // PAYMENT FORM (isolated state to prevent focus loss)
 // ============================================
-function PaymentForm({ invoice, categories, existingSubcats, onSave, onCancel, formData, setFormData }) {
-  const [pf, setPf] = useState({ date: formData.date || new Date().toISOString().substring(0, 10), amount: formData.amount || '', payMethod: formData.payMethod || 'cash', desc: formData.desc || '', category: formData.category || 'مبيعات', subcategory: formData.subcategory || '' });
+function PaymentForm({ invoice, categories, existingSubcats, onSave, onCancel }) {
+  const [pf, setPf] = useState({ date: new Date().toISOString().substring(0, 10), amount: '', payMethod: 'cash', desc: '', category: 'مبيعات', subcategory: '' });
 
   const handleSave = () => {
-    setFormData({ ...formData, ...pf });
-    setTimeout(() => onSave(pf), 50);
+    if (!pf.amount || !pf.date) { alert('Date and amount are required'); return; }
+    onSave(pf);
   };
 
   return (
@@ -72,15 +72,15 @@ function PaymentForm({ invoice, categories, existingSubcats, onSave, onCancel, f
             placeholder={invoice ? 'Remaining: ' + (Number(invoice.outstanding || 0)).toLocaleString() : ''} />
         </div>
       </div>
-
-      {/* Payment Method — Radio Buttons */}
       <div className="mt-3">
         <label className="text-xs font-semibold text-slate-600 block mb-1.5">Payment Method / طريقة الدفع</label>
         <div className="flex gap-2 flex-wrap">
           {[
             { v: 'cash', l: '💵 Cash', sub: 'Adds to treasury' },
             { v: 'bank_transfer', l: '🏦 Bank Transfer', sub: 'Invoice only' },
-            { v: 'check', l: '📝 Check', sub: 'Check record' },
+            { v: 'check', l: '📝 Check', sub: 'Invoice only' },
+            { v: 'vodafone', l: '📱 Vodafone Cash', sub: 'Invoice only' },
+            { v: 'other', l: '📋 Other', sub: 'Invoice only' },
           ].map(m => (
             <label key={m.v} onClick={() => setPf({ ...pf, payMethod: m.v })}
               className={'flex items-center gap-2 px-3 py-2 rounded-lg border-2 cursor-pointer transition text-xs ' +
@@ -90,10 +90,8 @@ function PaymentForm({ invoice, categories, existingSubcats, onSave, onCancel, f
             </label>
           ))}
         </div>
-        {pf.payMethod === 'bank_transfer' && <div className="text-[10px] text-blue-600 mt-1">ℹ️ Bank transfers update the invoice but do NOT create a treasury entry</div>}
+        {pf.payMethod !== 'cash' && <div className="text-[10px] text-blue-600 mt-1">ℹ️ Only cash payments are added to the treasury register</div>}
       </div>
-
-      {/* Category & Subcategory */}
       <div className="grid grid-cols-2 gap-3 mt-3">
         <div>
           <label className="text-xs font-semibold text-slate-600">Category / التصنيف</label>
@@ -105,16 +103,12 @@ function PaymentForm({ invoice, categories, existingSubcats, onSave, onCancel, f
         </div>
         <div>
           <label className="text-xs font-semibold text-slate-600">Subcategory / تصنيف فرعي</label>
-          <input list="pay-subcats" value={pf.subcategory || ''}
+          <input value={pf.subcategory || ''}
             onChange={e => setPf({ ...pf, subcategory: e.target.value })}
             className="w-full px-3 py-2 rounded-lg border border-slate-200 text-sm"
-            placeholder="Type or select..." />
-          <datalist id="pay-subcats">
-            {existingSubcats.map(s => <option key={s} value={s} />)}
-          </datalist>
+            placeholder="Type subcategory..." />
         </div>
       </div>
-
       <div className="mt-3">
         <label className="text-xs font-semibold text-slate-600">Description / الوصف</label>
         <input value={pf.desc}
@@ -122,7 +116,6 @@ function PaymentForm({ invoice, categories, existingSubcats, onSave, onCancel, f
           className="w-full px-3 py-2 rounded-lg border border-slate-200 text-sm"
           placeholder="Optional notes..." />
       </div>
-
       <div className="flex gap-2 mt-3">
         <button onClick={handleSave}
           className="px-4 py-2 bg-blue-500 text-white rounded-lg font-semibold text-sm">Save / حفظ ✓</button>
@@ -334,6 +327,7 @@ export default function App() {
   const totalCollected = useMemo(() => filteredInvoices.reduce((a, r) => a + Number(r.total_collected || 0), 0), [filteredInvoices]);
   const totalOutstanding = useMemo(() => filteredInvoices.reduce((a, r) => a + Number(r.outstanding || 0), 0), [filteredInvoices]);
   const totalDebt = useMemo(() => debts.reduce((a, d) => a + Number(d.total_debt || 0), 0), [debts]);
+  const uniqueSubcats = useMemo(() => [...new Set(treasury.map(t=>t.subcategory).filter(Boolean))].sort().slice(0, 80), [treasury]);
 
   const filteredTreasury = useMemo(() =>
     treasury.filter(t => inRange(t.transaction_date, mode, df, dt)),
@@ -465,13 +459,13 @@ export default function App() {
     var pd = pf || formData;
     if (!pd.amount || !pd.date || !selectedInvoice) return;
     try {
-      const isBankTransfer = pd.payMethod === 'bank_transfer';
-      // Bank transfers don't go in treasury (cash register) - they go directly to bank
-      if (!isBankTransfer) {
+      const isCash = pd.payMethod === 'cash';
+      // Only CASH goes to treasury
+      if (isCash) {
         await dbInsert('treasury', {
           transaction_date: pd.date,
           order_number: selectedInvoice.order_number,
-          description: pd.desc || 'Payment',
+          description: pd.desc || selectedInvoice.customer_name + ' payment',
           cash_in: Number(pd.amount),
           cash_out: 0,
           category: pd.category || 'مبيعات',
@@ -483,7 +477,7 @@ export default function App() {
       await dbUpdate('invoices', selectedInvoice.id, {
         total_collected: newCollected,
         outstanding: Math.max(0, Number(selectedInvoice.total_amount) - newCollected),
-        notes: (selectedInvoice.notes || '') + (isBankTransfer ? '\nBank transfer: ' + fE(Number(pd.amount)) + ' on ' + pd.date : ''),
+        notes: (selectedInvoice.notes || '') + (!isCash ? '\n' + pd.payMethod + ': ' + fE(Number(pd.amount)) + ' on ' + pd.date : ''),
       }, user?.id);
       setShowAddPayment(false);
       setFormData({});
@@ -569,18 +563,31 @@ export default function App() {
   };
 
   const handleAddInvoice = async () => {
-    if (!formData.orderNumber || !formData.customerName || !formData.amount) return;
+    var orderNum = document.getElementById('inv-order')?.value || formData.orderNumber;
+    var custName = document.getElementById('inv-customer')?.value || formData.customerName;
+    var invDate = document.getElementById('inv-date')?.value || formData.date || today();
+    var salesRep = document.getElementById('inv-rep')?.value || formData.salesRep || '';
+    var notes = document.getElementById('inv-notes')?.value || formData.notes || '';
+    var amount = formData.amount || (formData.invoiceItems || []).reduce((a, it) => a + (it.inv_total || 0), 0);
+    if (!orderNum || !custName || !amount) { alert('Order #, Customer, and Amount are required'); return; }
     try {
-      await dbInsert('invoices', {
-        order_number: formData.orderNumber,
-        customer_name: formData.customerName,
-        invoice_date: formData.date || today(),
-        total_amount: Number(formData.amount),
+      var invResult = await dbInsert('invoices', {
+        order_number: orderNum,
+        customer_name: custName,
+        invoice_date: invDate,
+        total_amount: Number(amount),
         total_collected: 0,
-        sales_rep: formData.salesRep || '',
-        notes: formData.notes || '',
+        sales_rep: salesRep,
+        notes: notes,
         source: 'manual',
       }, user?.id);
+      // Link to customer if exists
+      if (invResult) {
+        var matchCust = customers.find(c => c.name === custName || c.name_en === custName);
+        if (matchCust && invResult.id) {
+          await dbUpdate('invoices', invResult.id, { customer_id: matchCust.id }, user?.id);
+        }
+      }
       setShowAddInvoice(false);
       setFormData({});
       await loadAllData();
@@ -1355,7 +1362,7 @@ export default function App() {
                               onChange={e => setFormData({...formData, subcategory: e.target.value})}
                               className="w-full px-2 py-1 rounded border border-slate-200 text-xs bg-orange-50" />
                             <datalist id="inv-subcats">
-                              {[...new Set(treasury.map(t=>t.subcategory).filter(Boolean))].sort().map(s => <option key={s} value={s}/>)}
+                              {uniqueSubcats.map(s => <option key={s} value={s}/>)}
                             </datalist>
                           </div>
                         </div>
@@ -1472,11 +1479,9 @@ export default function App() {
               <PaymentForm
                 invoice={selectedInvoice}
                 categories={Object.entries(EXPENSE_CATS)}
-                existingSubcats={[...new Set(treasury.map(t=>t.subcategory).filter(Boolean))].sort()}
+                existingSubcats={[...new Set(treasury.map(t=>t.subcategory).filter(Boolean))].sort().slice(0, 50)}
                 onSave={handleAddPayment}
-                onCancel={() => { setShowAddPayment(false); setFormData({}); }}
-                formData={formData}
-                setFormData={setFormData}
+                onCancel={() => { setShowAddPayment(false); }}
               />
             )}
           </Modal>
@@ -1579,7 +1584,7 @@ export default function App() {
                                 placeholder="Subcategory / تصنيف فرعي (optional)"
                                 className="w-full text-[10px] border rounded px-1 py-0.5 mt-1 bg-orange-50" />
                               <datalist id="all-subcats">
-                                {[...new Set(treasury.map(t=>t.subcategory).filter(Boolean))].sort().map(s => <option key={s} value={s}/>)}
+                                {uniqueSubcats.map(s => <option key={s} value={s}/>)}
                               </datalist>
                             </td>
                             <td className="px-2 py-1.5"><input type="number" defaultValue={txn.cash_in || 0}
@@ -1841,7 +1846,7 @@ export default function App() {
                                   </div>
                                 )}
                                 <datalist id="subs-all">
-                                  {[...new Set(treasury.map(t=>t.subcategory).filter(Boolean))].sort().map(s => <option key={s} value={s}/>)}
+                                  {uniqueSubcats.map(s => <option key={s} value={s}/>)}
                                 </datalist>
                               </td>
                             </tr>
@@ -1915,7 +1920,7 @@ export default function App() {
             CHECK RECONCILE MODAL
         ========================================== */}
         {reconcileCheck && (
-          <Modal onClose={() => { setReconcileCheck(null); setFormData({}); }} title="Reconcile Check / تسوية شيك">
+          <Modal onClose={() => { setReconcileCheck(null); }} title="Reconcile Check / تسوية شيك">
             <div style={{ direction: 'rtl' }} className="text-lg font-bold mb-1">{reconcileCheck.customer_name}</div>
             <div className="text-sm mb-2">{fE(reconcileCheck.amount)} | {reconcileCheck.check_date}</div>
             {reconcileCheck.order_number && (
@@ -1924,25 +1929,30 @@ export default function App() {
             <div className="grid grid-cols-2 gap-3">
               <div>
                 <label className="text-xs font-semibold text-slate-600">Collection Date / تاريخ التحصيل</label>
-                <input type="date" value={formData.collectionDate || ''}
-                  onChange={e => setFormData({ ...formData, collectionDate: e.target.value })}
+                <input type="date" id="reconcile-date" defaultValue={new Date().toISOString().substring(0,10)}
                   className="w-full px-3 py-2 rounded-lg border border-slate-200 text-sm" />
               </div>
               <div>
                 <label className="text-xs font-semibold text-slate-600">Method / طريقة</label>
-                <select value={formData.paymentMethod || 'check'}
-                  onChange={e => setFormData({ ...formData, paymentMethod: e.target.value })}
+                <select id="reconcile-method" defaultValue="check"
                   className="w-full px-3 py-2 rounded-lg border border-slate-200 text-sm">
                   <option value="cash">Cash / نقداً</option>
                   <option value="check">Check / شيك</option>
                   <option value="bank_transfer">Bank Transfer / تحويل بنكي</option>
                   <option value="deposit">Bank Deposit / إيداع</option>
+                  <option value="vodafone">Vodafone Cash</option>
                   <option value="other">Other / أخرى</option>
                 </select>
               </div>
             </div>
-            <p className="text-[10px] text-slate-400 mt-2">Cash/Check: marks as collected only (treasury entry already exists) — نقد/شيك: يتم تسجيلها كمحصّلة فقط (المعاملة موجودة بالفعل في الخزنة)<br/>Bank transfer/Deposit/Other: also creates a treasury entry and updates invoice — تحويل بنكي/إيداع/أخرى: يتم إنشاء معاملة في الخزنة وتحديث الفاتورة</p>
-            <button onClick={handleCollectCheck}
+            <p className="text-[10px] text-slate-400 mt-2">Cash/Check: marks as collected only — Bank transfer/Deposit/Other: also creates a treasury entry and updates invoice</p>
+            <button onClick={() => {
+              var dt = document.getElementById('reconcile-date').value;
+              var method = document.getElementById('reconcile-method').value;
+              if (!dt) { alert('Please enter collection date'); return; }
+              setFormData({ collectionDate: dt, paymentMethod: method });
+              setTimeout(() => handleCollectCheck(), 100);
+            }}
               className="mt-3 px-4 py-2 bg-emerald-500 text-white rounded-lg font-semibold w-full">Reconcile / تسوية ✓</button>
           </Modal>
         )}
@@ -1955,32 +1965,31 @@ export default function App() {
             <div className="grid grid-cols-2 gap-3 mb-3">
               <div>
                 <label className="text-xs font-semibold text-slate-600">Order # / رقم الأمر</label>
-                <input value={formData.orderNumber || ''}
-                  onChange={e => setFormData({ ...formData, orderNumber: e.target.value })}
+                <input id="inv-order" defaultValue={formData.orderNumber || ''}
                   className="w-full px-3 py-2 rounded-lg border border-slate-200 text-sm" />
               </div>
               <div>
-                <label className="text-xs font-semibold text-slate-600">Date / التاريخ <span className="text-[9px] text-slate-400">(mm/dd/yyyy)</span></label>
-                <input type="date" value={formData.date || today()}
-                  onChange={e => setFormData({ ...formData, date: e.target.value })}
+                <label className="text-xs font-semibold text-slate-600">Date / التاريخ</label>
+                <input type="date" id="inv-date" defaultValue={formData.date || today()}
                   className="w-full px-3 py-2 rounded-lg border border-slate-200 text-sm" />
               </div>
               <div className="col-span-2">
                 <label className="text-xs font-semibold text-slate-600">Customer / العميل</label>
-                <input value={formData.customerName || ''}
-                  onChange={e => setFormData({ ...formData, customerName: e.target.value })}
-                  className="w-full px-3 py-2 rounded-lg border border-slate-200 text-sm" />
+                <input id="inv-customer" list="cust-list" defaultValue={formData.customerName || ''}
+                  className="w-full px-3 py-2 rounded-lg border border-slate-200 text-sm"
+                  placeholder="Search customer or type new..." />
+                <datalist id="cust-list">
+                  {customers.slice(0, 100).map(c => <option key={c.id} value={c.name_en || c.name}>{c.name}</option>)}
+                </datalist>
               </div>
               <div>
                 <label className="text-xs font-semibold text-slate-600">Sales Rep / المندوب</label>
-                <input value={formData.salesRep || ''}
-                  onChange={e => setFormData({ ...formData, salesRep: e.target.value })}
+                <input id="inv-rep" defaultValue={formData.salesRep || ''}
                   className="w-full px-3 py-2 rounded-lg border border-slate-200 text-sm" />
               </div>
               <div>
                 <label className="text-xs font-semibold text-slate-600">Notes / ملاحظات</label>
-                <input value={formData.notes || ''}
-                  onChange={e => setFormData({ ...formData, notes: e.target.value })}
+                <input id="inv-notes" defaultValue={formData.notes || ''}
                   className="w-full px-3 py-2 rounded-lg border border-slate-200 text-sm" />
               </div>
             </div>
@@ -2192,7 +2201,7 @@ export default function App() {
                     onChange={e => setFormData({ ...formData, subcategory: e.target.value })}
                     className="w-full px-3 py-2 rounded-lg border border-slate-200 text-sm mt-1 bg-orange-50" />
                   <datalist id="add-subcats">
-                    {[...new Set(treasury.map(t=>t.subcategory).filter(Boolean))].sort().map(s => <option key={s} value={s}/>)}
+                    {uniqueSubcats.map(s => <option key={s} value={s}/>)}
                   </datalist>
                 </div>
               )}
