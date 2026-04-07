@@ -25,11 +25,23 @@ function RatePicker({ rates, label, rateType, origin, destination, selected, onS
   const [expanded, setExpanded] = useState(false);
   const available = useMemo(() => {
     let arr = rates.filter(r => !isExpired(r.expiry_date));
-    if (rateType) arr = arr.filter(r => (r.rate_type || '').toLowerCase() === rateType.toLowerCase());
-    if (origin) arr = arr.filter(r => r.origin === origin);
-    if (destination) arr = arr.filter(r => r.destination === destination);
-    if (search) { const s = search.toLowerCase(); arr = arr.filter(r => [r.vendor_name, r.shipping_line, r.origin, r.destination, r.container_type].filter(Boolean).join(' ').toLowerCase().includes(s)); }
-    return arr.sort((a, b) => (a.rate_amount || Infinity) - (b.rate_amount || Infinity));
+    // Filter by rate_type but also include rates with no rate_type set
+    if (rateType) arr = arr.filter(r => {
+      var rt = (r.rate_type || '').toLowerCase();
+      var target = rateType.toLowerCase();
+      return rt === target || rt === '' || !r.rate_type;
+    });
+    // Sort: matching origin+destination first, then origin only, then rest
+    if (origin || destination) {
+      arr = arr.sort((a, b) => {
+        var aMatch = (origin && a.origin === origin ? 2 : 0) + (destination && a.destination === destination ? 2 : 0);
+        var bMatch = (origin && b.origin === origin ? 2 : 0) + (destination && b.destination === destination ? 2 : 0);
+        if (bMatch !== aMatch) return bMatch - aMatch;
+        return (a.rate_amount || Infinity) - (b.rate_amount || Infinity);
+      });
+    }
+    if (search) { const s = search.toLowerCase(); arr = arr.filter(r => [r.vendor_name, r.shipping_line, r.origin, r.destination, r.container_type, r.rate_type].filter(Boolean).join(' ').toLowerCase().includes(s)); }
+    return arr;
   }, [rates, rateType, origin, destination, search]);
 
   if (selected) {
@@ -57,12 +69,14 @@ function RatePicker({ rates, label, rateType, origin, destination, selected, onS
     </div>
     {expanded && (<div className="p-2 bg-white">
       <input value={search} onChange={e => setSearch(e.target.value)} placeholder="Search vendor, line..." className="w-full px-3 py-1.5 border rounded text-xs mb-2" />
-      {available.length === 0 ? <div className="text-center text-xs text-slate-400 py-3">No rates found{origin ? ` for ${origin} → ${destination}` : '. Set origin & destination first.'}</div> : (
-        <div className="max-h-[180px] overflow-auto space-y-1">{available.map(r => (
+      {available.length === 0 ? <div className="text-center text-xs text-slate-400 py-3">No matching rates found. Add rates in the Rates tab first.</div> : (
+        <div className="max-h-[180px] overflow-auto space-y-1">{available.map(r => {
+          var routeMatch = (origin && r.origin === origin && destination && r.destination === destination);
+          return (
           <div key={r.id} onClick={() => { onSelect(r); setExpanded(false); setSearch(''); }}
-            className="flex justify-between items-center p-2 rounded hover:bg-blue-50 cursor-pointer border border-transparent hover:border-blue-200">
+            className={'flex justify-between items-center p-2 rounded cursor-pointer border ' + (routeMatch ? 'bg-emerald-50 border-emerald-200 hover:bg-emerald-100' : 'border-transparent hover:bg-blue-50 hover:border-blue-200')}>
             <div>
-              <div className="text-xs font-semibold">{r.vendor_name} {r.shipping_line ? '/ ' + r.shipping_line : ''}</div>
+              <div className="text-xs font-semibold">{r.vendor_name} {r.shipping_line ? '/ ' + r.shipping_line : ''} {routeMatch && <span className="text-[9px] text-emerald-600 font-bold ml-1">✓ Route Match</span>}</div>
               <div className="text-[10px] text-slate-500">{r.origin}→{r.destination} • {r.container_type} • <span className="font-semibold text-indigo-600">{r.rate_type || r.transport_mode}</span>{r.transit_days ? ' • ' + r.transit_days + 'd' : ''}</div>
             </div>
             <div className="text-right">
@@ -70,7 +84,7 @@ function RatePicker({ rates, label, rateType, origin, destination, selected, onS
               <ExpiryBadge date={r.expiry_date} />
             </div>
           </div>
-        ))}</div>
+        ); })}</div>
       )}
       <div className="text-center mt-2"><button onClick={() => { onSelect(null); setExpanded(false); }} className="text-[10px] text-slate-400 underline">Enter manually instead</button></div>
     </div>)}
