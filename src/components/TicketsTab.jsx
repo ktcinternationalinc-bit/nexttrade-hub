@@ -76,7 +76,6 @@ export default function TicketsTab({ customers, user, userProfile, users, onRelo
       const creatorName = getUserName(myId);
       await dbInsert('tickets', { ticket_number: ticketNum, title: f.title, description: f.description || '', priority: f.priority || 'medium', order_number: f.orderNumber || '', due_date: f.dueDate || null, customer_id: f.customerId || null, client_name: f.clientName || '', status: 'New', assigned_to: f.assignedTo || null, created_by: myId || null }, myId || null);
       await logActivity(myId, 'Created ' + ticketNum + ': ' + f.title + (assignedName ? ' → ' + assignedName : ''), 'ticket');
-      if (f.assignedTo && f.assignedTo !== myId) await logActivity(f.assignedTo, 'Ticket assigned to you by ' + creatorName + ': ' + ticketNum + ' ' + f.title, 'ticket');
       if (f.assignedTo) notifyTicketAssigned([f.assignedTo], ticketNum + ' ' + f.title, myId);
       setShowAdd(false); setF({}); loadTickets();
     } catch (err) { alert('Error: ' + err.message); }
@@ -103,7 +102,6 @@ export default function TicketsTab({ customers, user, userProfile, users, onRelo
       const myName = getUserName(myId);
       await dbInsert('ticket_comments', { ticket_id: ticket.id, comment_text: '👤 Reassigned to ' + newName + ' by ' + myName, is_system: true, created_by: myId }, myId);
       await logActivity(myId, 'Reassigned ticket to ' + newName + ': ' + ticket.title, 'ticket');
-      if (newUserId !== myId) await logActivity(newUserId, 'Ticket reassigned to you by ' + myName + ': ' + ticket.title, 'ticket');
       if (newUserId) notifyTicketReassigned([newUserId], ticket.title, myId);
       loadTickets();
       if (sel && sel.id === ticket.id) { setSel({...sel, assigned_to: newUserId}); loadComments(ticket.id); }

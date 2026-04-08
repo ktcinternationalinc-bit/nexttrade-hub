@@ -41,6 +41,11 @@ export default function SettingsTab({ user, users, onReload, isAdmin }) {
   const [permissions, setPermissions] = useState({});
   const [notifPrefs, setNotifPrefs] = useState({});
   const [rules, setRules] = useState([]);
+  const [expDescs, setExpDescs] = useState([]);
+  const [expSearch, setExpSearch] = useState('');
+  const [expCatFilter, setExpCatFilter] = useState('all');
+  const [mergeMode, setMergeMode] = useState(null);
+  const [mergeTargets, setMergeTargets] = useState([]);
   const [loaded, setLoaded] = useState(false);
 
   useEffect(() => {
@@ -53,6 +58,30 @@ export default function SettingsTab({ user, users, onReload, isAdmin }) {
       supabase.from('notification_prefs').select('*'),
       supabase.from('expense_rules').select('*').order('created_at', { ascending: false }),
     ]);
+    // Load unique expense descriptions from treasury
+    try {
+      let allTreasury = []; let from = 0;
+      while (true) {
+        const { data } = await supabase.from('treasury').select('description, category, subcategory, cash_in, cash_out').order('description').range(from, from + 999);
+        if (!data || data.length === 0) break;
+        allTreasury = allTreasury.concat(data);
+        if (data.length < 1000) break;
+        from += 1000;
+      }
+      const descMap = {};
+      allTreasury.forEach(t => {
+        const desc = (t.description || '').trim();
+        if (!desc) return;
+        const isExpense = Number(t.cash_out || 0) > 0;
+        if (!isExpense) return; // only expenses
+        if (!descMap[desc]) descMap[desc] = { description: desc, category: '', subcategory: '', count: 0, total: 0 };
+        descMap[desc].count++;
+        descMap[desc].total += Number(t.cash_out || 0);
+        if (t.category && !descMap[desc].category) descMap[desc].category = t.category;
+        if (t.subcategory && !descMap[desc].subcategory) descMap[desc].subcategory = t.subcategory;
+      });
+      setExpDescs(Object.values(descMap).sort((a, b) => b.total - a.total));
+    } catch(e) { console.log('Expense desc load error:', e); }
     const pMap = {};
     (perms.data || []).forEach(p => {
       if (!pMap[p.user_id]) pMap[p.user_id] = {};
@@ -164,7 +193,7 @@ export default function SettingsTab({ user, users, onReload, isAdmin }) {
 
       {/* Section Tabs */}
       <div className="flex gap-1 mb-3 flex-wrap">
-        {[['roles', 'Team & Roles'], ['permissions', 'Module Access'], ['notifications', 'Notifications'], ['comms', '📬 Communications'], ['rules', 'Category Rules / قواعد'], ['translation', '🌐 Translation / ترجمة']].map(([v, l]) => (
+        {[['roles', 'Team & Roles'], ['permissions', 'Module Access'], ['notifications', 'Notifications'], ['comms', '📬 Communications'], ['rules', 'Category Rules / قواعد'], ['expenses', '📋 Expense Descriptions'], ['translation', '🌐 Translation / ترجمة']].map(([v, l]) => (
           <button key={v} onClick={() => setSection(v)}
             className={'px-3 py-1.5 rounded-lg text-xs font-semibold transition ' + (section === v ? 'bg-slate-900 text-white' : 'bg-slate-100 text-slate-500')}>
             {l}
@@ -531,6 +560,181 @@ export default function SettingsTab({ user, users, onReload, isAdmin }) {
             }} className="px-4 py-2 bg-blue-500 text-white rounded-lg text-xs font-bold hover:bg-blue-600 transition">
               ▶ Run Now / تشغيل الآن
             </button>
+          </div>
+        </div>
+      )}
+
+      {/* ===== EXPENSE DESCRIPTIONS ===== */}
+      {section === 'expenses' && (
+        <div>
+          <div className="bg-white rounded-xl p-4 mb-3">
+            <div className="flex justify-between items-center flex-wrap gap-2 mb-3">
+              <div>
+                <h3 className="text-sm font-bold">📋 Expense Descriptions ({expDescs.length} unique)</h3>
+                <p className="text-[10px] text-slate-400">Every unique expense description. Update category/subcategory here — changes apply to ALL matching treasury entries and create rules for future entries.</p>
+              </div>
+              <div className="flex gap-2 items-center">
+                <input value={expSearch} onChange={e => setExpSearch(e.target.value)} placeholder="Search..."
+                  className="px-3 py-1.5 rounded-lg border text-xs w-32" />
+                <select value={expCatFilter} onChange={e => setExpCatFilter(e.target.value)} className="px-2 py-1.5 rounded border text-xs">
+                  <option value="all">All Categories</option>
+                  <option value="uncategorized">⚠️ Uncategorized</option>
+                  {Object.entries(EXPENSE_CATS).map(([ar, en]) => <option key={ar} value={ar}>{en}</option>)}
+                </select>
+                {!mergeMode ? (
+                  <button onClick={() => { setMergeMode(true); setMergeTargets([]); }}
+                    className="px-3 py-1.5 bg-purple-500 text-white rounded-lg text-xs font-bold">🔀 Merge</button>
+                ) : (
+                  <div className="flex gap-1">
+                    <span className="text-xs text-purple-600 font-bold self-center">Select items to merge ({mergeTargets.length})</span>
+                    <button onClick={() => { setMergeMode(null); setMergeTargets([]); }}
+                      className="px-2 py-1 border border-slate-200 rounded text-xs">Cancel</button>
+                  </div>
+                )}
+              </div>
+            </div>
+
+            {/* Merge bar */}
+            {mergeMode && mergeTargets.length >= 2 && (
+              <div className="bg-purple-50 rounded-lg p-3 mb-3 border border-purple-200">
+                <div className="text-xs font-bold text-purple-800 mb-2">Merge {mergeTargets.length} descriptions into one:</div>
+                <div className="text-[10px] text-purple-600 mb-2 space-y-0.5">
+                  {mergeTargets.map((d, i) => <div key={i}>• {d} <button onClick={() => setMergeTargets(mergeTargets.filter(t => t !== d))} className="text-red-500 ml-1">✕</button></div>)}
+                </div>
+                <div className="flex gap-2 items-center">
+                  <input id="merge-name" defaultValue={mergeTargets[0]} placeholder="Final description name..."
+                    className="flex-1 px-3 py-2 rounded border text-sm" style={{ direction: 'rtl' }} />
+                  <button onClick={async () => {
+                    const newName = document.getElementById('merge-name')?.value?.trim();
+                    if (!newName) return;
+                    if (!confirm('Merge ' + mergeTargets.length + ' descriptions into:\n\n"' + newName + '"\n\nThis will rename ALL treasury entries matching these descriptions. Continue?')) return;
+                    try {
+                      for (const desc of mergeTargets) {
+                        if (desc === newName) continue;
+                        // Update all treasury entries
+                        let from = 0;
+                        while (true) {
+                          const { data } = await supabase.from('treasury').select('id').eq('description', desc).range(from, from + 499);
+                          if (!data || data.length === 0) break;
+                          for (const t of data) {
+                            await supabase.from('treasury').update({ description: newName }).eq('id', t.id);
+                          }
+                          if (data.length < 500) break;
+                          from += 500;
+                        }
+                        // Delete old rules for merged description
+                        await supabase.from('expense_rules').delete().eq('description_match', desc);
+                      }
+                      alert('Merged ' + mergeTargets.length + ' descriptions into "' + newName + '"');
+                      setMergeMode(null); setMergeTargets([]); loadPrefs(); onReload();
+                    } catch (err) { alert('Error: ' + err.message); }
+                  }} className="px-4 py-2 bg-purple-600 text-white rounded-lg text-xs font-bold">
+                    ✅ Merge All
+                  </button>
+                </div>
+              </div>
+            )}
+
+            {/* Description list */}
+            <div className="overflow-auto max-h-[600px]">
+              <table className="w-full border-collapse text-xs">
+                <thead className="sticky top-0 z-10"><tr className="bg-slate-50">
+                  {mergeMode && <th className="px-2 py-2 w-8"></th>}
+                  <th className="px-3 py-2 text-left">Description / الوصف</th>
+                  <th className="px-3 py-2 text-center w-16">Count</th>
+                  <th className="px-3 py-2 text-right w-24">Total</th>
+                  <th className="px-3 py-2 text-left w-36">Category</th>
+                  <th className="px-3 py-2 text-left w-36">Subcategory</th>
+                </tr></thead>
+                <tbody>
+                  {expDescs
+                    .filter(d => {
+                      if (expSearch && !(d.description || '').includes(expSearch) && !(d.description || '').toLowerCase().includes(expSearch.toLowerCase())) return false;
+                      if (expCatFilter === 'uncategorized' && d.category) return false;
+                      if (expCatFilter !== 'all' && expCatFilter !== 'uncategorized' && d.category !== expCatFilter) return false;
+                      return true;
+                    })
+                    .map(d => (
+                      <tr key={d.description} className={'border-b border-slate-50 hover:bg-slate-50 ' + (mergeTargets.includes(d.description) ? 'bg-purple-50' : '')}>
+                        {mergeMode && (
+                          <td className="px-2 py-2 text-center">
+                            <input type="checkbox" checked={mergeTargets.includes(d.description)}
+                              onChange={() => {
+                                if (mergeTargets.includes(d.description)) setMergeTargets(mergeTargets.filter(t => t !== d.description));
+                                else setMergeTargets([...mergeTargets, d.description]);
+                              }} className="w-4 h-4" />
+                          </td>
+                        )}
+                        <td className="px-3 py-2 font-semibold" style={{ direction: 'rtl', maxWidth: 250, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                          {d.description}
+                        </td>
+                        <td className="px-3 py-2 text-center text-slate-500">{d.count}</td>
+                        <td className="px-3 py-2 text-right font-bold text-purple-600">{Number(d.total).toLocaleString()}</td>
+                        <td className="px-3 py-2">
+                          <select defaultValue={d.category || ''} key={d.description + '-cat-' + d.category}
+                            onChange={async (e) => {
+                              const newCat = e.target.value;
+                              try {
+                                // Update ALL treasury entries with this description
+                                let from = 0;
+                                while (true) {
+                                  const { data } = await supabase.from('treasury').select('id').eq('description', d.description).range(from, from + 499);
+                                  if (!data || data.length === 0) break;
+                                  for (const t of data) {
+                                    await supabase.from('treasury').update({ category: newCat }).eq('id', t.id);
+                                  }
+                                  if (data.length < 500) break;
+                                  from += 500;
+                                }
+                                // Create/update rule
+                                const existing = rules.find(r => r.description_match === d.description);
+                                if (existing) await dbUpdate('expense_rules', existing.id, { category: newCat }, user?.id);
+                                else await dbInsert('expense_rules', { description_match: d.description, category: newCat, subcategory: d.subcategory || '', rule_type: 'expense' }, user?.id);
+                                loadPrefs(); onReload();
+                              } catch (err) { alert('Error: ' + err.message); }
+                            }}
+                            className="w-full text-[10px] border rounded px-1 py-1 bg-amber-50">
+                            <option value="">Uncategorized</option>
+                            {Object.entries(EXPENSE_CATS).map(([ar, en]) => <option key={ar} value={ar}>{en}</option>)}
+                          </select>
+                        </td>
+                        <td className="px-3 py-2">
+                          <input defaultValue={d.subcategory || ''} key={d.description + '-sub-' + d.subcategory} placeholder="Subcategory..."
+                            onBlur={async (e) => {
+                              const newSub = e.target.value.trim();
+                              if (newSub === (d.subcategory || '')) return;
+                              try {
+                                let from = 0;
+                                while (true) {
+                                  const { data } = await supabase.from('treasury').select('id').eq('description', d.description).range(from, from + 499);
+                                  if (!data || data.length === 0) break;
+                                  for (const t of data) {
+                                    await supabase.from('treasury').update({ subcategory: newSub }).eq('id', t.id);
+                                  }
+                                  if (data.length < 500) break;
+                                  from += 500;
+                                }
+                                const existing = rules.find(r => r.description_match === d.description);
+                                if (existing) await dbUpdate('expense_rules', existing.id, { subcategory: newSub }, user?.id);
+                                else await dbInsert('expense_rules', { description_match: d.description, category: d.category || '', subcategory: newSub, rule_type: 'expense' }, user?.id);
+                                loadPrefs(); onReload();
+                              } catch (err) { alert('Error: ' + err.message); }
+                            }}
+                            className="w-full text-[10px] border rounded px-1 py-1 bg-orange-50" />
+                        </td>
+                      </tr>
+                    ))}
+                </tbody>
+              </table>
+            </div>
+            <div className="mt-2 text-[10px] text-slate-400">
+              Showing {expDescs.filter(d => {
+                if (expSearch && !(d.description || '').includes(expSearch) && !(d.description || '').toLowerCase().includes(expSearch.toLowerCase())) return false;
+                if (expCatFilter === 'uncategorized' && d.category) return false;
+                if (expCatFilter !== 'all' && expCatFilter !== 'uncategorized' && d.category !== expCatFilter) return false;
+                return true;
+              }).length} of {expDescs.length} descriptions
+            </div>
           </div>
         </div>
       )}
