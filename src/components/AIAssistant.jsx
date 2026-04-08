@@ -51,9 +51,6 @@ export default function AIAssistant({ user, userProfile }) {
       recognition.lang = 'en-US';
       
       recognition.onresult = (event) => {
-        // Stop AI speech immediately when user starts talking
-        if (audioRef.current) { audioRef.current.pause(); audioRef.current = null; } if ('speechSynthesis' in window) window.speechSynthesis.cancel(); speakingRef.current = false; setSpeaking(false);
-        
         // Build full transcript from all results
         let finalText = '';
         let interimText = '';
@@ -65,40 +62,63 @@ export default function AIAssistant({ user, userProfile }) {
           }
         }
         const displayText = (finalText + interimText).trim();
+        const lower = displayText.toLowerCase().replace(/[.,!?]/g, '').trim();
+        const wordCount = lower.split(/\s+/).filter(w => w.length > 1).length;
+        
+        // If AI is speaking, only interrupt for "break" or 2+ real words
+        if (speakingRef.current) {
+          if (lower === 'break' || lower === 'stop') {
+            // Hard interrupt — stop AI, clear input, stay listening
+            if (audioRef.current) { audioRef.current.pause(); audioRef.current = null; }
+            if ('speechSynthesis' in window) window.speechSynthesis.cancel();
+            speakingRef.current = false; setSpeaking(false);
+            setInput('');
+            if (silenceTimerRef.current) clearTimeout(silenceTimerRef.current);
+            if (autoSendRef.current) clearTimeout(autoSendRef.current);
+            try { recognition.stop(); } catch(e) {}
+            setTimeout(() => { if (conversationModeRef.current) { try { recognition.start(); setListening(true); } catch(e) {} } }, 500);
+            return;
+          }
+          if (wordCount >= 2) {
+            // User is actually talking — stop AI and let them speak
+            if (audioRef.current) { audioRef.current.pause(); audioRef.current = null; }
+            if ('speechSynthesis' in window) window.speechSynthesis.cancel();
+            speakingRef.current = false; setSpeaking(false);
+            // Fall through to normal processing below
+          } else {
+            // Just a sound or single short word — ignore, let AI keep talking
+            return;
+          }
+        }
+        
         setInput(displayText);
         
-        // "Break" command — hard interrupt
-        const lower = displayText.toLowerCase().replace(/[.,!?]/g, '').trim();
+        // "Break" command when not speaking
         if (lower === 'break' || lower === 'stop') {
           setInput('');
           if (silenceTimerRef.current) clearTimeout(silenceTimerRef.current);
           if (autoSendRef.current) clearTimeout(autoSendRef.current);
           try { recognition.stop(); } catch(e) {}
-          // Restart fresh after a moment
           setTimeout(() => { if (conversationModeRef.current) { try { recognition.start(); setListening(true); } catch(e) {} } }, 500);
           return;
         }
         
-        // Reset silence timer on EVERY result (interim or final)
-        // This ensures we keep listening as long as the user is speaking
+        // Reset silence timer on EVERY result
         if (silenceTimerRef.current) clearTimeout(silenceTimerRef.current);
         if (autoSendRef.current) clearTimeout(autoSendRef.current);
         
-        // Only start the send timer when we have final text and user has paused
+        // Only send after 3 seconds of total silence
         silenceTimerRef.current = setTimeout(() => {
           const textToSend = displayText.trim();
           if (!textToSend) return;
-          
-          // Stop recognition, send, then restart fresh
           try { recognition.stop(); } catch(e) {}
           pendingTextRef.current = textToSend;
           setInput('');
-          
           autoSendRef.current = setTimeout(() => {
             const btn = document.getElementById('ai-send-btn-hidden');
             if (btn) btn.click();
           }, 100);
-        }, 3000); // 3 seconds of total silence before sending
+        }, 3000);
       };
       recognition.onerror = (e) => { 
         if (e.error !== 'aborted' && e.error !== 'no-speech') { setListening(false); }
