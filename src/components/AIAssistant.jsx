@@ -46,63 +46,72 @@ export default function AIAssistant({ user, userProfile }) {
     if (SR) {
       setVoiceSupported(true);
       const recognition = new SR();
-      recognition.continuous = false; // Non-continuous — restart after each utterance
+      recognition.continuous = true;
       recognition.interimResults = true;
       recognition.lang = 'en-US';
-      
-      var currentTranscript = '';
       
       recognition.onresult = (event) => {
         // Stop AI speech immediately when user starts talking
         if (audioRef.current) { audioRef.current.pause(); audioRef.current = null; } if ('speechSynthesis' in window) window.speechSynthesis.cancel(); speakingRef.current = false; setSpeaking(false);
         
-        currentTranscript = '';
+        // Build full transcript from all results
+        let finalText = '';
+        let interimText = '';
         for (let i = 0; i < event.results.length; i++) {
-          currentTranscript += event.results[i][0].transcript;
+          if (event.results[i].isFinal) {
+            finalText += event.results[i][0].transcript;
+          } else {
+            interimText += event.results[i][0].transcript;
+          }
         }
+        const displayText = (finalText + interimText).trim();
+        setInput(displayText);
         
-        // "Break" command — hard interrupt, enter listening mode
-        const lower = currentTranscript.trim().toLowerCase();
-        if (lower === 'break' || lower === 'stop' || lower === 'break.' || lower === 'stop.') {
+        // "Break" command — hard interrupt
+        const lower = displayText.toLowerCase().replace(/[.,!?]/g, '').trim();
+        if (lower === 'break' || lower === 'stop') {
           setInput('');
-          currentTranscript = '';
           if (silenceTimerRef.current) clearTimeout(silenceTimerRef.current);
           if (autoSendRef.current) clearTimeout(autoSendRef.current);
-          return; // Stay in listening mode, don't send anything
+          try { recognition.stop(); } catch(e) {}
+          // Restart fresh after a moment
+          setTimeout(() => { if (conversationModeRef.current) { try { recognition.start(); setListening(true); } catch(e) {} } }, 500);
+          return;
         }
         
-        setInput(currentTranscript);
+        // Reset silence timer on EVERY result (interim or final)
+        // This ensures we keep listening as long as the user is speaking
+        if (silenceTimerRef.current) clearTimeout(silenceTimerRef.current);
+        if (autoSendRef.current) clearTimeout(autoSendRef.current);
         
-        // Check if we have a final result
-        const lastResult = event.results[event.results.length - 1];
-        if (lastResult.isFinal) {
-          if (silenceTimerRef.current) clearTimeout(silenceTimerRef.current);
-          if (autoSendRef.current) clearTimeout(autoSendRef.current);
-          // Wait 2 seconds after final result to ensure user is done
-          silenceTimerRef.current = setTimeout(() => {
-            const textToSend = currentTranscript.trim();
-            if (textToSend) {
-              pendingTextRef.current = textToSend;
-              setInput('');
-              currentTranscript = '';
-              autoSendRef.current = setTimeout(() => {
-                const btn = document.getElementById('ai-send-btn-hidden');
-                if (btn) btn.click();
-              }, 100);
-            }
-          }, 2000);
-        } else {
-          if (silenceTimerRef.current) clearTimeout(silenceTimerRef.current);
-        }
+        // Only start the send timer when we have final text and user has paused
+        silenceTimerRef.current = setTimeout(() => {
+          const textToSend = displayText.trim();
+          if (!textToSend) return;
+          
+          // Stop recognition, send, then restart fresh
+          try { recognition.stop(); } catch(e) {}
+          pendingTextRef.current = textToSend;
+          setInput('');
+          
+          autoSendRef.current = setTimeout(() => {
+            const btn = document.getElementById('ai-send-btn-hidden');
+            if (btn) btn.click();
+          }, 100);
+        }, 3000); // 3 seconds of total silence before sending
       };
       recognition.onerror = (e) => { 
         if (e.error !== 'aborted' && e.error !== 'no-speech') { setListening(false); }
         if (silenceTimerRef.current) clearTimeout(silenceTimerRef.current); 
       };
       recognition.onend = () => { 
-        // In conversation mode, auto-restart to listen for next utterance
+        // In conversation mode, auto-restart if not currently sending
         if (conversationModeRef.current && !speakingRef.current) {
-          try { setTimeout(() => { if (conversationModeRef.current) { recognition.start(); setListening(true); } }, 300); } catch(e) {}
+          setTimeout(() => {
+            if (conversationModeRef.current && !speakingRef.current) {
+              try { recognition.start(); setListening(true); } catch(e) {}
+            }
+          }, 500);
         } else if (!conversationModeRef.current) {
           setListening(false); 
         }
@@ -167,10 +176,7 @@ export default function AIAssistant({ user, userProfile }) {
     speakingRef.current = true;
     setSpeaking(true);
 
-    // Pause recognition while AI speaks to avoid feedback
-    if (recognitionRef.current && listening) {
-      try { recognitionRef.current.stop(); } catch(e) {}
-    }
+    // Keep recognition running so user can say "break" to interrupt
 
     // Try TTS API first (ElevenLabs / server)
     try {
@@ -652,7 +658,7 @@ ${today}`;
           <div className="text-center mt-2 py-2">
             <div className="text-xs font-bold animate-pulse" style={{color:'#f87171'}}>🔴 Listening — speak naturally...</div>
             <div className="text-[10px] mt-1" style={{color:'var(--text-muted)'}}>
-              Sends after 2s pause • Say "Break" to interrupt • Tap ⏹️ to end
+              Sends after 3s of silence • Say "Break" to interrupt • Tap ⏹️ to end
               <button onClick={() => { toggleVoice(); }} className="ml-2 px-2 py-0.5 rounded text-[10px] font-bold" style={{background:'rgba(248,113,113,0.2)', color:'#f87171'}}>End Session</button>
             </div>
           </div>

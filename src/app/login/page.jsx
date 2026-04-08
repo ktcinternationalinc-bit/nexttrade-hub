@@ -37,9 +37,9 @@ export default function LoginPage() {
         <div className="text-center mb-8">
           <h1 className="text-3xl font-black tracking-tight"
             style={{background:'linear-gradient(135deg, #38bdf8, #818cf8, #a78bfa)',WebkitBackgroundClip:'text',WebkitTextFillColor:'transparent'}}>
-            NEXTTRADE HUB
+            KTC EGYPT USA
           </h1>
-          <p style={{color:'rgba(148,163,184,0.5)'}} className="text-sm mt-1 tracking-widest uppercase">KTC Trading Operations</p>
+          <p style={{color:'rgba(148,163,184,0.5)'}} className="text-sm mt-1 tracking-widest uppercase">Operational HUB</p>
         </div>
         <div onSubmit={handleLogin}>
           <div className="mb-4">

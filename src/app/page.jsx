@@ -2893,13 +2893,31 @@ export default function App() {
                 <div className="text-lg font-extrabold">{fE(totalCashIn - totalCashOut)}</div>
               </div>
             </div>
-            {query && (
+            {query && (() => {
+              const searchResults = filteredTreasury.filter(t => {
+                const words = query.split(/\s+/).filter(w => w.length > 0);
+                const hay = [t.order_number || '', t.description || '', t.transaction_date || '', String(t.cash_in || 0), String(t.cash_out || 0), t.category || '', t.subcategory || ''].join(' ');
+                return words.every(w => hay.includes(w));
+              });
+              const srIn = searchResults.reduce((a, t) => a + Number(t.cash_in || 0), 0);
+              const srOut = searchResults.reduce((a, t) => a + Number(t.cash_out || 0), 0);
+              return (
               <div className="bg-white rounded-xl p-4 mb-3">
-                <h3 className="text-sm font-bold mb-2">Search Results ({filteredTreasury.filter(t => {
-                  const words = query.split(/\s+/).filter(w => w.length > 0);
-                  const hay = [t.order_number || '', t.description || '', t.transaction_date || '', String(t.cash_in || 0), String(t.cash_out || 0)].join(' ');
-                  return words.every(w => hay.includes(w));
-                }).length})</h3>
+                <h3 className="text-sm font-bold mb-2">Search Results ({searchResults.length})</h3>
+                <div className="grid grid-cols-3 gap-2 mb-3">
+                  <div className="bg-emerald-50 rounded-lg p-2 text-center">
+                    <div className="text-[9px] text-emerald-600 font-bold">Total In</div>
+                    <div className="text-sm font-extrabold text-emerald-700">{fE(srIn)}</div>
+                  </div>
+                  <div className="bg-red-50 rounded-lg p-2 text-center">
+                    <div className="text-[9px] text-red-500 font-bold">Total Out</div>
+                    <div className="text-sm font-extrabold text-red-600">{fE(srOut)}</div>
+                  </div>
+                  <div className="rounded-lg p-2 text-center" style={{background: srIn >= srOut ? '#ecfdf5' : '#fef2f2'}}>
+                    <div className="text-[9px] text-slate-500 font-bold">Net</div>
+                    <div className={'text-sm font-extrabold ' + (srIn >= srOut ? 'text-emerald-700' : 'text-red-600')}>{fE(srIn - srOut)}</div>
+                  </div>
+                </div>
                 <div className="overflow-auto max-h-[400px] rounded-lg border border-slate-200">
                   <table className="w-full border-collapse">
                     <thead><tr className="bg-slate-50 sticky top-0">
@@ -2910,11 +2928,7 @@ export default function App() {
                       <th className="px-2 py-2 text-xs text-right">Out</th>
                     </tr></thead>
                     <tbody>
-                      {filteredTreasury.filter(t => {
-                        const words = query.split(/\s+/).filter(w => w.length > 0);
-                        const hay = [t.order_number || '', t.description || '', t.transaction_date || '', String(t.cash_in || 0), String(t.cash_out || 0)].join(' ');
-                        return words.every(w => hay.includes(w));
-                      }).slice(0, 200).map(txn => (
+                      {searchResults.slice(0, 200).map(txn => (
                         <tr key={txn.id} className="border-b border-slate-50">
                           <td className="px-2 py-1.5 text-xs">{txn.transaction_date}</td>
                           <td className="px-2 py-1.5 text-xs font-semibold text-center">{txn.order_number || ''}</td>
@@ -2930,8 +2944,8 @@ export default function App() {
                     </tbody>
                   </table>
                 </div>
-              </div>
-            )}
+              </div>);
+            })()}
             {incomeBuckets.length > 0 && (
               <div className="bg-white rounded-xl p-4 mb-3">
                 <h3 className="text-sm font-bold mb-2 text-emerald-700">Income Buckets / تصنيف الإيرادات</h3>
