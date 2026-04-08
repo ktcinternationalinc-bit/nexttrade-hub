@@ -9,7 +9,9 @@ export default function AIAssistant({ user, userProfile }) {
   const [listening, setListening] = useState(false);
   const [speaking, setSpeaking] = useState(false);
   const [voiceSupported, setVoiceSupported] = useState(false);
-  const [pendingAction, setPendingAction] = useState(null);
+  const [pendingAction, _setPendingAction] = useState(null);
+  const pendingActionRef = useRef(null);
+  const setPendingAction = (val) => { _setPendingAction(val); pendingActionRef.current = val; };
   const recognitionRef = useRef(null);
   const chatEndRef = useRef(null);
   const silenceTimerRef = useRef(null);
@@ -58,6 +60,17 @@ export default function AIAssistant({ user, userProfile }) {
         for (let i = 0; i < event.results.length; i++) {
           currentTranscript += event.results[i][0].transcript;
         }
+        
+        // "Break" command — hard interrupt, enter listening mode
+        const lower = currentTranscript.trim().toLowerCase();
+        if (lower === 'break' || lower === 'stop' || lower === 'break.' || lower === 'stop.') {
+          setInput('');
+          currentTranscript = '';
+          if (silenceTimerRef.current) clearTimeout(silenceTimerRef.current);
+          if (autoSendRef.current) clearTimeout(autoSendRef.current);
+          return; // Stay in listening mode, don't send anything
+        }
+        
         setInput(currentTranscript);
         
         // Check if we have a final result
@@ -65,22 +78,20 @@ export default function AIAssistant({ user, userProfile }) {
         if (lastResult.isFinal) {
           if (silenceTimerRef.current) clearTimeout(silenceTimerRef.current);
           if (autoSendRef.current) clearTimeout(autoSendRef.current);
-          // Wait 1.5s after final result, then send
+          // Wait 2 seconds after final result to ensure user is done
           silenceTimerRef.current = setTimeout(() => {
             const textToSend = currentTranscript.trim();
             if (textToSend) {
               pendingTextRef.current = textToSend;
               setInput('');
               currentTranscript = '';
-              // Trigger send
               autoSendRef.current = setTimeout(() => {
                 const btn = document.getElementById('ai-send-btn-hidden');
                 if (btn) btn.click();
               }, 100);
             }
-          }, 1500);
+          }, 2000);
         } else {
-          // Interim result — reset silence timer
           if (silenceTimerRef.current) clearTimeout(silenceTimerRef.current);
         }
       };
@@ -221,24 +232,30 @@ export default function AIAssistant({ user, userProfile }) {
   };
 
   const askQuestion = useCallback(async (overrideText) => {
-    // Check for pending voice text first
     const voiceText = pendingTextRef.current;
     pendingTextRef.current = null;
     const question = (overrideText || voiceText || input).trim();
     if (!question || loading) return;
-    setInput(''); // Clear immediately
+    setInput('');
     
-    // If there's a pending action and user says execute/yes/confirm — run it
-    if (pendingAction) {
-      const cmd = question.toLowerCase().replace(/[.,!?]/g, '');
+    // Check "break" command
+    const lowerQ = question.toLowerCase().replace(/[.,!?]/g, '').trim();
+    if (lowerQ === 'break' || lowerQ === 'stop') {
+      stopSpeaking();
+      return;
+    }
+    
+    // Use ref for pending action to avoid stale closure
+    const currentPending = pendingActionRef.current;
+    
+    if (currentPending) {
+      const cmd = lowerQ;
       const confirmWords = ['execute', 'yes', 'yeah', 'yep', 'yup', 'ok', 'okay', 'do it', 'go ahead', 'confirm', 'send it', 'go', 'sure', 'approve', 'proceed', 'نعم', 'نفذ', 'تنفيذ', 'موافق'];
       if (confirmWords.some(w => cmd === w || cmd.startsWith(w + ' '))) {
-;
         setMessages(prev => [...prev, { role: 'user', text: '✅ ' + question }]);
         // Execute inline
-        if (pendingAction.type === 'request_quote') {
-          // Build and open quote request directly
-          const a = pendingAction;
+        if (currentPending.type === 'request_quote') {
+          const a = currentPending;
           const todayStr = new Date().toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: 'numeric' });
           const msg = `Dear ${a.vendor_contact || a.vendor_company || 'Team'},\n\nWe are requesting your best rates:\n\nOrigin: ${a.origin || '[Origin]'}\nDestination: ${a.destination || 'Egypt'}\nContainer: ${a.container || '40ft'}\nCommodity: ${a.commodity || 'Trading materials'}${a.customer_name ? '\nClient: ' + a.customer_name : ''}\n\nPlease include freight rate, transit time, free days, fees, and validity.\n\nBest regards,\nKTC International\n${todayStr}`;
           const subj = 'Rate Request — ' + (a.origin||'') + ' to ' + (a.destination||'Egypt') + ' — KTC';
@@ -260,7 +277,7 @@ export default function AIAssistant({ user, userProfile }) {
         } else {
           setLoading(true);
           try {
-            const res = await fetch('/api/ask', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ action: pendingAction, userId: myId }) });
+            const res = await fetch('/api/ask', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ action: currentPending, userId: myId }) });
             const data = await res.json();
             setMessages(prev => [...prev, { role: 'ai', text: data.answer || 'Done.' }]);
             speak(data.answer || 'Done');
@@ -270,9 +287,8 @@ export default function AIAssistant({ user, userProfile }) {
         }
         return;
       }
-      const cancelWords = ['cancel', 'no', 'nah', 'never mind', 'skip', 'stop', 'لا', 'إلغاء'];
+      const cancelWords = ['cancel', 'no', 'nah', 'never mind', 'skip', 'لا', 'إلغاء'];
       if (cancelWords.some(w => cmd === w || cmd.startsWith(w + ' '))) {
-;
         setMessages(prev => [...prev, { role: 'user', text: '❌ ' + question }]);
         setMessages(prev => [...prev, { role: 'ai', text: 'Cancelled.' }]);
         setPendingAction(null);
@@ -281,7 +297,6 @@ export default function AIAssistant({ user, userProfile }) {
       }
     }
     
-;
     const newMsg = { role: 'user', text: question };
     setMessages(prev => [...prev, newMsg]);
     setLoading(true);
@@ -637,7 +652,7 @@ ${today}`;
           <div className="text-center mt-2 py-2">
             <div className="text-xs font-bold animate-pulse" style={{color:'#f87171'}}>🔴 Listening — speak naturally...</div>
             <div className="text-[10px] mt-1" style={{color:'var(--text-muted)'}}>
-              Auto-sends after 3s silence • Tap ⏹️ to stop
+              Sends after 2s pause • Say "Break" to interrupt • Tap ⏹️ to end
               <button onClick={() => { toggleVoice(); }} className="ml-2 px-2 py-0.5 rounded text-[10px] font-bold" style={{background:'rgba(248,113,113,0.2)', color:'#f87171'}}>End Session</button>
             </div>
           </div>

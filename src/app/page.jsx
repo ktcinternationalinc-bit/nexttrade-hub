@@ -178,6 +178,7 @@ export default function App() {
   const [checkView, setCheckView] = useState('pending');
   const [reconcileCheck, setReconcileCheck] = useState(null);
   const [expenseDrill, setExpenseDrill] = useState(null);
+  const [tSearch, setTSearch] = useState({ show: false, type: 'all', cat: '', subcat: '', desc: '', dateFrom: '', dateTo: '' });
   const [bucketSub, setBucketSub] = useState(null);
   const [bucketSearch, setBucketSearch] = useState('');
   const [editSubTxnId, setEditSubTxnId] = useState(null);
@@ -2720,6 +2721,163 @@ export default function App() {
               <input value={query} onChange={e => setQuery(e.target.value)}
                 placeholder="Search order #, description, date / بحث"
                 className="w-full px-3 py-2 rounded-lg border border-slate-200 text-sm" />
+            </div>
+            {/* Advanced Search */}
+            <div className="mb-3">
+              <button onClick={() => setTSearch(prev => ({...prev, show: !prev.show}))}
+                className="text-xs font-bold text-blue-600 hover:underline mb-2">
+                {tSearch.show ? '▼ Hide Advanced Search' : '▶ Advanced Search / بحث متقدم'}
+              </button>
+              {tSearch.show && (() => {
+                const allCats = [...new Set(treasury.map(t => t.category).filter(Boolean))].sort();
+                const allSubcats = [...new Set(treasury.map(t => t.subcategory).filter(Boolean))].sort();
+                // Compute filtered results
+                const searchResults = treasury.filter(t => {
+                  if (tSearch.type === 'income' && !(Number(t.cash_in) > 0)) return false;
+                  if (tSearch.type === 'expense' && !(Number(t.cash_out) > 0)) return false;
+                  if (tSearch.cat && t.category !== tSearch.cat) return false;
+                  if (tSearch.subcat && !(t.subcategory || '').toLowerCase().includes(tSearch.subcat.toLowerCase())) return false;
+                  if (tSearch.desc && !(t.description || '').includes(tSearch.desc) && !(t.description_en || '').toLowerCase().includes(tSearch.desc.toLowerCase())) return false;
+                  if (tSearch.dateFrom && (t.transaction_date || '') < tSearch.dateFrom) return false;
+                  if (tSearch.dateTo && (t.transaction_date || '') > tSearch.dateTo) return false;
+                  return true;
+                });
+                const srIn = searchResults.reduce((a, t) => a + Number(t.cash_in || 0), 0);
+                const srOut = searchResults.reduce((a, t) => a + Number(t.cash_out || 0), 0);
+                // Group by category
+                const byCat = {};
+                searchResults.forEach(t => {
+                  const c = (EXPENSE_CATS[t.category] || t.category || 'Uncategorized');
+                  if (!byCat[c]) byCat[c] = { in: 0, out: 0, count: 0, subs: {} };
+                  byCat[c].in += Number(t.cash_in || 0);
+                  byCat[c].out += Number(t.cash_out || 0);
+                  byCat[c].count++;
+                  if (t.subcategory) {
+                    if (!byCat[c].subs[t.subcategory]) byCat[c].subs[t.subcategory] = { in: 0, out: 0, count: 0 };
+                    byCat[c].subs[t.subcategory].in += Number(t.cash_in || 0);
+                    byCat[c].subs[t.subcategory].out += Number(t.cash_out || 0);
+                    byCat[c].subs[t.subcategory].count++;
+                  }
+                });
+                const hasFilters = tSearch.type !== 'all' || tSearch.cat || tSearch.subcat || tSearch.desc || tSearch.dateFrom || tSearch.dateTo;
+                return (
+                  <div className="bg-white rounded-xl p-4 border border-blue-100">
+                    <div className="grid grid-cols-2 md:grid-cols-3 gap-2 mb-3">
+                      <div>
+                        <label className="text-[10px] font-bold text-slate-500">Type</label>
+                        <select value={tSearch.type} onChange={e => setTSearch({...tSearch, type: e.target.value})}
+                          className="w-full px-2 py-1.5 rounded border text-xs">
+                          <option value="all">All</option>
+                          <option value="income">💰 Income Only</option>
+                          <option value="expense">📤 Expense Only</option>
+                        </select>
+                      </div>
+                      <div>
+                        <label className="text-[10px] font-bold text-slate-500">Category</label>
+                        <select value={tSearch.cat} onChange={e => setTSearch({...tSearch, cat: e.target.value})}
+                          className="w-full px-2 py-1.5 rounded border text-xs">
+                          <option value="">All Categories</option>
+                          {allCats.map(c => <option key={c} value={c}>{EXPENSE_CATS[c] || c}</option>)}
+                        </select>
+                      </div>
+                      <div>
+                        <label className="text-[10px] font-bold text-slate-500">Subcategory</label>
+                        <input list="tsearch-subs" value={tSearch.subcat} onChange={e => setTSearch({...tSearch, subcat: e.target.value})}
+                          placeholder="Type to filter..." className="w-full px-2 py-1.5 rounded border text-xs" />
+                        <datalist id="tsearch-subs">{allSubcats.map(s => <option key={s} value={s} />)}</datalist>
+                      </div>
+                      <div>
+                        <label className="text-[10px] font-bold text-slate-500">Description</label>
+                        <input value={tSearch.desc} onChange={e => setTSearch({...tSearch, desc: e.target.value})}
+                          placeholder="Search text..." className="w-full px-2 py-1.5 rounded border text-xs" />
+                      </div>
+                      <div>
+                        <label className="text-[10px] font-bold text-slate-500">From Date</label>
+                        <input type="date" value={tSearch.dateFrom} onChange={e => setTSearch({...tSearch, dateFrom: e.target.value})}
+                          className="w-full px-2 py-1.5 rounded border text-xs" />
+                      </div>
+                      <div>
+                        <label className="text-[10px] font-bold text-slate-500">To Date</label>
+                        <input type="date" value={tSearch.dateTo} onChange={e => setTSearch({...tSearch, dateTo: e.target.value})}
+                          className="w-full px-2 py-1.5 rounded border text-xs" />
+                      </div>
+                    </div>
+                    <button onClick={() => setTSearch({ show: true, type: 'all', cat: '', subcat: '', desc: '', dateFrom: '', dateTo: '' })}
+                      className="text-[10px] text-slate-400 hover:text-red-500 mb-3">Clear All Filters</button>
+
+                    {hasFilters && (
+                      <div>
+                        {/* Totals */}
+                        <div className="grid grid-cols-3 gap-2 mb-3">
+                          <div className="bg-emerald-50 rounded-lg p-2.5 text-center">
+                            <div className="text-[9px] text-emerald-600 font-bold">Total In</div>
+                            <div className="text-sm font-extrabold text-emerald-700">{fE(srIn)}</div>
+                          </div>
+                          <div className="bg-red-50 rounded-lg p-2.5 text-center">
+                            <div className="text-[9px] text-red-500 font-bold">Total Out</div>
+                            <div className="text-sm font-extrabold text-red-600">{fE(srOut)}</div>
+                          </div>
+                          <div className="bg-blue-50 rounded-lg p-2.5 text-center">
+                            <div className="text-[9px] text-blue-500 font-bold">Transactions</div>
+                            <div className="text-sm font-extrabold text-blue-700">{searchResults.length}</div>
+                          </div>
+                        </div>
+                        {/* Breakdown by category */}
+                        <div className="mb-3">
+                          <h4 className="text-[10px] font-bold text-slate-500 mb-1">BREAKDOWN BY CATEGORY</h4>
+                          {Object.entries(byCat).sort((a,b) => (b[1].out + b[1].in) - (a[1].out + a[1].in)).map(([cat, data]) => (
+                            <div key={cat} className="mb-1">
+                              <div className="flex justify-between py-1 text-xs border-b border-slate-50">
+                                <span className="font-semibold">{cat} <span className="text-slate-400 font-normal">({data.count})</span></span>
+                                <div className="flex gap-3">
+                                  {data.in > 0 && <span className="text-emerald-600">{fE(data.in)}</span>}
+                                  {data.out > 0 && <span className="text-red-500">{fE(data.out)}</span>}
+                                </div>
+                              </div>
+                              {Object.entries(data.subs).sort((a,b) => (b[1].out+b[1].in)-(a[1].out+a[1].in)).map(([sub, sd]) => (
+                                <div key={sub} className="flex justify-between py-0.5 pl-4 text-[10px] text-slate-500">
+                                  <span>↳ {sub} ({sd.count})</span>
+                                  <div className="flex gap-3">
+                                    {sd.in > 0 && <span className="text-emerald-500">{fE(sd.in)}</span>}
+                                    {sd.out > 0 && <span className="text-red-400">{fE(sd.out)}</span>}
+                                  </div>
+                                </div>
+                              ))}
+                            </div>
+                          ))}
+                        </div>
+                        {/* Transaction list */}
+                        <details className="text-xs">
+                          <summary className="cursor-pointer text-blue-600 font-bold mb-1">Show {searchResults.length} transactions</summary>
+                          <div className="overflow-auto max-h-[300px] rounded-lg border border-slate-200 mt-1">
+                            <table className="w-full border-collapse text-xs">
+                              <thead className="sticky top-0"><tr className="bg-slate-50">
+                                <th className="px-2 py-1.5 text-left">Date</th>
+                                <th className="px-2 py-1.5" style={{direction:'rtl'}}>Description</th>
+                                <th className="px-2 py-1.5 text-xs">Category</th>
+                                <th className="px-2 py-1.5 text-right">In</th>
+                                <th className="px-2 py-1.5 text-right">Out</th>
+                              </tr></thead>
+                              <tbody>
+                                {searchResults.sort((a,b) => (b.transaction_date||'').localeCompare(a.transaction_date||'')).slice(0, 300).map(t => (
+                                  <tr key={t.id} className="border-b border-slate-50">
+                                    <td className="px-2 py-1 text-[10px]">{t.transaction_date}</td>
+                                    <td className="px-2 py-1 text-[10px]" style={{direction:'rtl'}}>{t.description}</td>
+                                    <td className="px-2 py-1 text-[10px] text-amber-600">{EXPENSE_CATS[t.category] || t.category || ''}{t.subcategory ? ' / ' + t.subcategory : ''}</td>
+                                    <td className="px-2 py-1 text-[10px] text-right text-emerald-600 font-semibold">{Number(t.cash_in) > 0 ? fE(t.cash_in) : ''}</td>
+                                    <td className="px-2 py-1 text-[10px] text-right text-red-500 font-semibold">{Number(t.cash_out) > 0 ? fE(t.cash_out) : ''}</td>
+                                  </tr>
+                                ))}
+                              </tbody>
+                            </table>
+                          </div>
+                        </details>
+                      </div>
+                    )}
+                    {!hasFilters && <div className="text-xs text-slate-400 text-center py-3">Set filters above to see aggregated results</div>}
+                  </div>
+                );
+              })()}
             </div>
             <div className="grid grid-cols-3 gap-3 mb-3">
               <div onClick={() => setTreasuryDrill('in')} className="bg-white rounded-lg p-3 cursor-pointer hover:shadow-md" style={{ borderLeftWidth: 3, borderLeftColor: '#10b981' }}>

@@ -347,9 +347,11 @@ export async function POST(request) {
     }
 
     context += '\nSAFETY RULES:\n';
-    context += '- ALWAYS draft first (draft_only:true) before sending any email or WhatsApp. NEVER auto-send.\n';
+    context += '- Tickets, events, and reminders execute IMMEDIATELY — do NOT say "shall I create this?" just create it. Say "Creating ticket..." then include the action JSON.\n';
+    context += '- For emails and WhatsApp: ALWAYS draft first (draft_only:true). Say "Here is the draft, say Execute to send."\n';
     context += '- When user says "reply to X" — first read the email, THEN draft a reply for approval.\n';
     context += '- For assigned_to on tickets: use user ID from TEAM list.\n';
+    context += '- NEVER claim an action is done unless the action JSON is included. If you include an action, say "Done" or "Created" confidently.\n';
     context += '- Answer concisely. Use EGP currency. Format numbers with commas.\n\n';
 
     context += '===== LIVE DATA =====\n';
@@ -622,10 +624,51 @@ export async function POST(request) {
         // For send actions with draft_only, show draft for approval
         if ((actionData.type === 'send_email' || actionData.type === 'send_whatsapp') && actionData.draft_only) {
           actionData.draft_only = false;
-          return Response.json({ answer: cleanText.trim() || 'Draft ready for approval.', pending_action: actionData });
+          return Response.json({ answer: cleanText.trim() || 'Draft ready. Say "Execute" or "Cancel".', pending_action: actionData });
         }
 
-        return Response.json({ answer: cleanText.trim() || 'Action ready.', pending_action: actionData });
+        // Auto-execute safe actions immediately (tickets, events, reminders)
+        var autoExecTypes = ['create_ticket', 'update_ticket', 'create_event', 'create_reminder'];
+        if (autoExecTypes.indexOf(actionData.type) >= 0) {
+          try {
+            var execResult = null;
+            if (actionData.type === 'create_ticket') {
+              var tc = await supabase.from('tickets').select('*', { count: 'exact', head: true });
+              var tn = 'TKT-' + String(((tc.count || 0) + 1)).padStart(4, '0');
+              var tr = await supabase.from('tickets').insert({ ticket_number: tn, title: actionData.title, description: actionData.description || '', priority: actionData.priority || 'medium', status: 'New', assigned_to: actionData.assigned_to || null, due_date: actionData.due_date || null, created_by: userId || null }).select().single();
+              if (tr.error) throw tr.error;
+              if (userId) await supabase.from('daily_log').insert({ user_id: userId, entry_text: 'AI created ' + tn + ': ' + actionData.title, auto_generated: true, log_date: new Date().toISOString().substring(0, 10), log_category: 'ticket' });
+              execResult = '✅ ' + tn + ' created: ' + actionData.title + (actionData.priority ? ' [' + actionData.priority + ']' : '') + (actionData.due_date ? ' Due: ' + actionData.due_date : '');
+            } else if (actionData.type === 'update_ticket') {
+              var fq = null;
+              if (actionData.ticket_number) fq = await supabase.from('tickets').select('*').eq('ticket_number', actionData.ticket_number).maybeSingle();
+              else if (actionData.title) fq = await supabase.from('tickets').select('*').ilike('title', '%' + actionData.title + '%').limit(1).maybeSingle();
+              if (!fq || !fq.data) throw new Error('Ticket not found: ' + (actionData.ticket_number || actionData.title));
+              var tk = fq.data; var up = {}; var ch = [];
+              if (actionData.status) { up.status = actionData.status; ch.push('Status → ' + actionData.status); }
+              if (actionData.priority) { up.priority = actionData.priority; ch.push('Priority → ' + actionData.priority); }
+              if (actionData.assigned_to) { up.assigned_to = actionData.assigned_to; ch.push('Reassigned'); }
+              if (actionData.due_date !== undefined) { up.due_date = actionData.due_date || null; ch.push('Due → ' + (actionData.due_date || 'removed')); }
+              up.updated_at = new Date().toISOString();
+              await supabase.from('tickets').update(up).eq('id', tk.id);
+              await supabase.from('ticket_comments').insert({ ticket_id: tk.id, comment_text: '🤖 AI: ' + ch.join(', '), is_system: true, created_by: userId });
+              execResult = '✅ Updated ' + tk.ticket_number + ': ' + ch.join(', ');
+            } else if (actionData.type === 'create_event') {
+              await supabase.from('calendar_events').insert({ title: actionData.title, event_date: actionData.event_date, event_time: actionData.event_time || null, event_type: actionData.event_type || 'task', assigned_to: userId });
+              execResult = '✅ Event created: ' + actionData.title + ' on ' + actionData.event_date;
+            } else if (actionData.type === 'create_reminder') {
+              await supabase.from('calendar_events').insert({ title: actionData.task || actionData.title, event_date: actionData.due_date, event_time: actionData.due_time || '09:00', event_type: 'reminder', assigned_to: userId });
+              execResult = '✅ Reminder set: ' + (actionData.task || actionData.title) + ' on ' + actionData.due_date;
+            }
+            var finalAnswer = (cleanText.trim() ? cleanText.trim() + '\n\n' : '') + (execResult || 'Done.');
+            return Response.json({ answer: finalAnswer, action_result: 'success' });
+          } catch(execErr) {
+            return Response.json({ answer: (cleanText.trim() || '') + '\n\n❌ Execution failed: ' + execErr.message, pending_action: actionData });
+          }
+        }
+
+        // Quote requests and non-draft sends need approval
+        return Response.json({ answer: cleanText.trim() || 'Ready. Say "Execute" to confirm or "Cancel".', pending_action: actionData });
       } catch(parseErr) {
         return Response.json({ answer: aiText });
       }
