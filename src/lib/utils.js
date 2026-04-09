@@ -22,6 +22,7 @@ export const EXPENSE_CATS = {
   'تحويلات بنكية': 'Banking',
   'زكاة وصدقات': 'Charity',
   'شحن وجمارك': 'Shipping',
+  'جمارك': 'Customs',
   'عينات': 'Samples',
   'ضرائب': 'Taxes',
   'مصروفات تشغيل': 'Operations',

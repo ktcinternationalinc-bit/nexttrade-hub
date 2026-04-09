@@ -328,7 +328,7 @@ export async function POST(request) {
     context += '- create_ticket: {type:"create_ticket", title, description, priority, due_date, assigned_to}\n';
     context += '- update_ticket: {type:"update_ticket", ticket_number:"TKT-0001", status:"In Progress", priority:"high", assigned_to:"user-id", due_date:"2026-04-15", description:"new details"}\n';
     context += '  Find ticket by ticket_number (preferred) or title. Only include fields being changed.\n';
-    context += '  Valid statuses: New, Acknowledged, In Progress, Waiting, Review, Testing, Ready, Closed, Reopened\n';
+    context += '  Valid statuses: New, Acknowledged, In Progress, Blocked, On Hold, Review, Closed, Reopened\n';
     context += '  Valid priorities: high, medium, low\n';
     context += '- create_event: {type:"create_event", title, event_date, event_time, event_type}\n';
     context += '- create_reminder: {type:"create_reminder", task, due_date, due_time}\n';
@@ -353,6 +353,14 @@ export async function POST(request) {
     context += '- For assigned_to on tickets: use user ID from TEAM list.\n';
     context += '- NEVER claim an action is done unless the action JSON is included. If you include an action, say "Done" or "Created" confidently.\n';
     context += '- Answer concisely. Use EGP currency. Format numbers with commas.\n\n';
+
+    context += 'BILINGUAL / ثنائي اللغة:\n';
+    context += '- You are fluent in both English and Arabic.\n';
+    context += '- When user says "translate", "bilingual", "in Arabic", "in both languages", "بالعربي", or "ثنائي" — write content in BOTH English and Arabic.\n';
+    context += '- For tickets: title = "English Title / العنوان بالعربي", description = English paragraph then Arabic paragraph.\n';
+    context += '  Example: {type:"create_ticket", title:"Fix login bug / إصلاح خلل تسجيل الدخول", description:"The login page is not loading properly.\\n\\nصفحة تسجيل الدخول لا تعمل بشكل صحيح."}\n';
+    context += '- If user speaks in Arabic, respond in Arabic. If English, respond in English. If they ask for both, give both.\n';
+    context += '- For emails/WhatsApp drafts: if user says bilingual, write the message in both languages.\n\n';
 
     context += '===== LIVE DATA =====\n';
     context += '[Loaded: ' + invoices.length + ' invoices, ' + invoiceItems.length + ' line items, ' + treasury.length + ' treasury, ' + checks.length + ' checks, ' + customers.length + ' customers, ' + tickets.length + ' tickets, ' + vendorContacts.length + ' vendors]\n\n';

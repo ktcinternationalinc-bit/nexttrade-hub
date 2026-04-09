@@ -178,7 +178,7 @@ export default function App() {
   const [checkView, setCheckView] = useState('pending');
   const [reconcileCheck, setReconcileCheck] = useState(null);
   const [expenseDrill, setExpenseDrill] = useState(null);
-  const [tSearch, setTSearch] = useState({ show: false, type: 'all', cat: '', subcat: '', desc: '', dateFrom: '', dateTo: '' });
+  const [tSearch, setTSearch] = useState({ show: false, type: 'all', cat: '', subcat: '', desc: '', dateFrom: '', dateTo: '', inboundRef: '' });
   const [bucketSub, setBucketSub] = useState(null);
   const [bucketSearch, setBucketSearch] = useState('');
   const [editSubTxnId, setEditSubTxnId] = useState(null);
@@ -268,12 +268,33 @@ export default function App() {
         // Find current user's profile
         const authUser = (await supabase.auth.getUser())?.data?.user;
         if (authUser && usrs) {
-          const profile = usrs.find(u => u.email === authUser.email);
-          if (profile) setUserProfile(profile);
+          const authEmail = (authUser.email || '').toLowerCase();
+          const profile = usrs.find(u => (u.email || '').toLowerCase() === authEmail);
+          if (profile) {
+            setUserProfile(profile);
+            // Log first login of the day
+            try {
+              const todayStr = new Date().toISOString().substring(0, 10);
+              const loginTime = new Date().toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' });
+              const { data: existing } = await supabase.from('daily_log')
+                .select('id').eq('user_id', profile.id).eq('log_date', todayStr)
+                .ilike('entry_text', '%logged in%').limit(1);
+              if (!existing || existing.length === 0) {
+                await supabase.from('daily_log').insert({
+                  user_id: profile.id,
+                  entry_text: '🟢 Logged in at ' + loginTime,
+                  auto_generated: true,
+                  log_date: todayStr,
+                  log_category: 'login',
+                });
+              }
+            } catch(e) { /* non-fatal */ }
+          }
         }
         // Load module permissions for current user
         if (authUser) {
-          const currentProfile = (usrs || []).find(u => u.email === authUser.email);
+          const authEmail = (authUser.email || '').toLowerCase();
+          const currentProfile = (usrs || []).find(u => (u.email || '').toLowerCase() === authEmail);
           const currentUserId = currentProfile?.id;
           if (currentUserId) {
             const { data: perms } = await supabase.from('module_permissions').select('*').eq('user_id', currentUserId);
@@ -1224,6 +1245,36 @@ export default function App() {
               )}
             </div>
             <div className="grid grid-cols-3 gap-3 mb-4">
+              {/* Division / Category */}
+              <div className="col-span-3 flex items-center gap-2 mb-1">
+                <span className="text-[10px] font-bold text-slate-500">Division / القسم:</span>
+                <select defaultValue={selectedInvoice.division || ''} key={selectedInvoice.id + '-div'}
+                  onChange={async (e) => {
+                    let val = e.target.value;
+                    if (val === '__custom') {
+                      const custom = prompt('Enter custom division name:');
+                      if (!custom) { e.target.value = selectedInvoice.division || ''; return; }
+                      val = custom.trim();
+                    }
+                    try {
+                      await dbUpdate('invoices', selectedInvoice.id, { division: val || null }, user?.id);
+                      await loadAllData();
+                    } catch(err) { alert('Error: ' + err.message); }
+                  }}
+                  className="px-2 py-1 rounded border text-xs bg-indigo-50 min-w-[140px]">
+                  <option value="">Default (from CRM group)</option>
+                  {[...new Set([
+                    ...customers.map(c => c.group_name).filter(Boolean),
+                    ...invoices.map(i => i.division).filter(Boolean)
+                  ])].sort().map(g => <option key={g} value={g}>{g}</option>)}
+                  <option value="__custom">+ Custom...</option>
+                </select>
+                {(() => {
+                  const cust = customers.find(c => c.id === selectedInvoice.customer_id || c.name === selectedInvoice.customer_name);
+                  const effective = selectedInvoice.division || cust?.group_name || 'Unassigned';
+                  return <span className="text-[10px] text-indigo-600 font-semibold">→ {effective}</span>;
+                })()}
+              </div>
               <div className="bg-blue-50 rounded-lg p-3">
                 <div className="text-[10px] text-blue-700">Invoiced / الفاتورة</div>
                 <div className="text-xl font-extrabold text-blue-500">{fE(selectedInvoice.total_amount)}</div>
@@ -1359,12 +1410,12 @@ export default function App() {
                           </div>
                           <div>
                             <label className="text-[10px] font-semibold text-slate-600">Category / التصنيف</label>
-                            <select id="tx-cat" defaultValue={txn.category || ''}
-                              className="w-full px-2 py-1 rounded border border-slate-200 text-xs bg-amber-50">
-                              <option value="">Uncategorized</option>
-                              {Object.entries(EXPENSE_CATS).map(([ar, en]) => <option key={ar} value={ar}>{en} / {ar}</option>)}
-                              {txn.category && !EXPENSE_CATS[txn.category] && <option value={txn.category}>{txn.category}</option>}
-                            </select>
+                            <input list="tx-cat-list" id="tx-cat" defaultValue={txn.category || ''} placeholder="Select or type..."
+                              className="w-full px-2 py-1 rounded border border-slate-200 text-xs bg-amber-50" />
+                            <datalist id="tx-cat-list">
+                              {Object.entries(EXPENSE_CATS).map(([ar, en]) => <option key={ar} value={ar}>{en + ' / ' + ar}</option>)}
+                              {[...new Set(treasury.map(t=>t.category).filter(c=>c&&!EXPENSE_CATS[c]))].map(c => <option key={c} value={c} />)}
+                            </datalist>
                           </div>
                           <div>
                             <label className="text-[10px] font-semibold text-slate-600">Subcategory / فرعي</label>
@@ -1554,17 +1605,14 @@ export default function App() {
                             <td className="px-2 py-1.5">
                               <input id="tx-desc" defaultValue={txn.description}
                                 className="w-full text-xs border rounded px-1 py-1 mb-1" style={{ direction: 'rtl' }} />
-                              <select id="tx-cat" defaultValue={txn.category || ''}
-                                className="w-full text-[10px] border rounded px-1 py-0.5 bg-amber-50">
-                                <option value="">Uncategorized</option>
+                              <input list="tx-cat-list2" id="tx-cat" defaultValue={txn.category || ''} placeholder="Type or select..."
+                                className="w-full text-[10px] border rounded px-1 py-0.5 bg-amber-50" />
+                              <datalist id="tx-cat-list2">
                                 {Object.entries(EXPENSE_CATS).map(([ar, en]) => (
-                                  <option key={ar} value={ar}>{en} / {ar}</option>
+                                  <option key={ar} value={ar}>{en + ' / ' + ar}</option>
                                 ))}
-                                {txn.category && !EXPENSE_CATS[txn.category] && txn.category !== '' && (
-                                  <option value={txn.category}>{txn.category}</option>
-                                )}
-                                <option value="_new">+ New Category...</option>
-                              </select>
+                                {[...new Set(treasury.map(t=>t.category).filter(c=>c&&!EXPENSE_CATS[c]))].map(c => <option key={c} value={c} />)}
+                              </datalist>
                               <input list="all-subcats" id="tx-subcat" defaultValue={txn.subcategory || ''}
                                 placeholder="Subcategory / تصنيف فرعي (optional)"
                                 className="w-full text-[10px] border rounded px-1 py-0.5 mt-1 bg-orange-50" />
@@ -2078,7 +2126,16 @@ export default function App() {
                       await dbInsert('invoice_items', {
                         invoice_id: newInv.id, description: item.inv_desc,
                         quantity: item.inv_qty, unit_price: item.inv_price, line_total: item.inv_total,
+                        product_id: item.product_id || null,
                       }, user?.id);
+                      // Auto-deduct from inventory if product linked
+                      if (item.product_id) {
+                        const prod = inventory.find(p => p.id === item.product_id);
+                        if (prod) {
+                          const newQty = Math.max(0, Number(prod.current_quantity || prod.roll_count || 0) - Number(item.inv_qty || 0));
+                          await dbUpdate('inventory', prod.id, { current_quantity: newQty, stock_status: newQty <= 0 ? 'out_of_stock' : newQty < 5 ? 'low' : 'in_stock' }, user?.id);
+                        }
+                      }
                     }
                   }
                   setShowAddInvoice(false); setFormData({}); await loadAllData();
@@ -2160,20 +2217,15 @@ export default function App() {
               {(formData.type === 'out' || formData.type === 'in' || !formData.type) && (
                 <div className="col-span-2">
                   <label className="text-xs font-semibold text-slate-600">Category / تصنيف {(formData.type || 'in') === 'in' ? '(Income / إيرادات)' : '(Expense / منصرفات)'}</label>
-                  <select value={formData.category || ''}
+                  <input list="add-cats" value={formData.category || ''} placeholder="Select or type category / اختر أو اكتب التصنيف"
                     onChange={e => setFormData({ ...formData, category: e.target.value })}
-                    className="w-full px-3 py-2 rounded-lg border border-slate-200 text-sm bg-amber-50">
-                    <option value="">Select category / اختر التصنيف...</option>
+                    className="w-full px-3 py-2 rounded-lg border border-slate-200 text-sm bg-amber-50" />
+                  <datalist id="add-cats">
                     {Object.entries(EXPENSE_CATS).map(([ar, en]) => (
-                      <option key={ar} value={ar}>{en} / {ar}</option>
+                      <option key={ar} value={ar}>{en + ' / ' + ar}</option>
                     ))}
-                    <option value="_new">+ New Category / تصنيف جديد...</option>
-                  </select>
-                  {formData.category === '_new' && (
-                    <input placeholder="New category name / اسم التصنيف الجديد"
-                      onChange={e => setFormData({ ...formData, category: e.target.value })}
-                      className="w-full px-3 py-2 rounded-lg border border-slate-200 text-sm mt-1" />
-                  )}
+                    {[...new Set(treasury.map(t=>t.category).filter(c=>c&&!EXPENSE_CATS[c]))].map(c => <option key={c} value={c} />)}
+                  </datalist>
                   <input list="add-subcats" value={formData.subcategory || ''} placeholder="Subcategory / تصنيف فرعي (optional)"
                     onChange={e => setFormData({ ...formData, subcategory: e.target.value })}
                     className="w-full px-3 py-2 rounded-lg border border-slate-200 text-sm mt-1 bg-orange-50" />
@@ -2507,7 +2559,7 @@ export default function App() {
               const divisionData = {};
               filteredInvoices.forEach(inv => {
                 const cust = customers.find(c => c.id === inv.customer_id || c.name === inv.customer_name);
-                const div = cust?.group_name || 'Unassigned / غير مصنف';
+                const div = inv.division || cust?.group_name || 'Unassigned / غير مصنف';
                 if (!divisionData[div]) divisionData[div] = { sales: 0, collected: 0, outstanding: 0, count: 0 };
                 divisionData[div].sales += Number(inv.total_amount || 0);
                 divisionData[div].collected += Number(inv.total_collected || 0);
@@ -2740,6 +2792,7 @@ export default function App() {
                   if (tSearch.desc && !(t.description || '').includes(tSearch.desc) && !(t.description_en || '').toLowerCase().includes(tSearch.desc.toLowerCase())) return false;
                   if (tSearch.dateFrom && (t.transaction_date || '') < tSearch.dateFrom) return false;
                   if (tSearch.dateTo && (t.transaction_date || '') > tSearch.dateTo) return false;
+                  if (tSearch.inboundRef && !(t.inbound_ref || '').toLowerCase().includes(tSearch.inboundRef.toLowerCase())) return false;
                   return true;
                 });
                 const srIn = searchResults.reduce((a, t) => a + Number(t.cash_in || 0), 0);
@@ -2759,7 +2812,7 @@ export default function App() {
                     byCat[c].subs[t.subcategory].count++;
                   }
                 });
-                const hasFilters = tSearch.type !== 'all' || tSearch.cat || tSearch.subcat || tSearch.desc || tSearch.dateFrom || tSearch.dateTo;
+                const hasFilters = tSearch.type !== 'all' || tSearch.cat || tSearch.subcat || tSearch.desc || tSearch.dateFrom || tSearch.dateTo || tSearch.inboundRef;
                 return (
                   <div className="bg-white rounded-xl p-4 border border-blue-100">
                     <div className="grid grid-cols-2 md:grid-cols-3 gap-2 mb-3">
@@ -2792,6 +2845,11 @@ export default function App() {
                           placeholder="Search text..." className="w-full px-2 py-1.5 rounded border text-xs" />
                       </div>
                       <div>
+                        <label className="text-[10px] font-bold text-slate-500">Inbound Ref #</label>
+                        <input value={tSearch.inboundRef} onChange={e => setTSearch({...tSearch, inboundRef: e.target.value})}
+                          placeholder="Shipment ref..." className="w-full px-2 py-1.5 rounded border text-xs bg-blue-50" />
+                      </div>
+                      <div>
                         <label className="text-[10px] font-bold text-slate-500">From Date</label>
                         <input type="date" value={tSearch.dateFrom} onChange={e => setTSearch({...tSearch, dateFrom: e.target.value})}
                           className="w-full px-2 py-1.5 rounded border text-xs" />
@@ -2802,7 +2860,7 @@ export default function App() {
                           className="w-full px-2 py-1.5 rounded border text-xs" />
                       </div>
                     </div>
-                    <button onClick={() => setTSearch({ show: true, type: 'all', cat: '', subcat: '', desc: '', dateFrom: '', dateTo: '' })}
+                    <button onClick={() => setTSearch({ show: true, type: 'all', cat: '', subcat: '', desc: '', dateFrom: '', dateTo: '', inboundRef: '' })}
                       className="text-[10px] text-slate-400 hover:text-red-500 mb-3">Clear All Filters</button>
 
                     {hasFilters && (
@@ -3088,18 +3146,67 @@ export default function App() {
             <div className="flex justify-between flex-wrap gap-2 mb-3">
               <h2 className="text-xl font-extrabold">Warehouse / عهدة المخزن</h2>
               <div className="flex gap-2 items-center flex-wrap">
-                <input value={formData.whSearch||''} onChange={e=>setFormData({...formData,whSearch:e.target.value})}
-                  placeholder="Search / بحث" className="px-3 py-1.5 rounded-lg border border-slate-200 text-xs w-32" />
                 <ModeBar />
               </div>
+            </div>
+            {/* Advanced Search */}
+            <div className="mb-3">
+              <button onClick={() => setFormData({...formData, whAdvanced: !formData.whAdvanced})}
+                className="text-xs font-bold text-purple-600 hover:underline mb-2">
+                {formData.whAdvanced ? '▼ Hide Advanced Search' : '▶ Advanced Search / بحث متقدم'}
+              </button>
+              {formData.whAdvanced && (
+                <div className="bg-white rounded-xl p-4 border border-purple-100">
+                  <div className="grid grid-cols-2 md:grid-cols-3 gap-2 mb-3">
+                    <div>
+                      <label className="text-[10px] font-bold text-slate-500">Description</label>
+                      <input value={formData.whSearch||''} onChange={e=>setFormData({...formData,whSearch:e.target.value})}
+                        placeholder="Arabic or English..." className="w-full px-2 py-1.5 rounded border text-xs" />
+                    </div>
+                    <div>
+                      <label className="text-[10px] font-bold text-slate-500">Inbound Ref #</label>
+                      <input value={formData.whInboundRef||''} onChange={e=>setFormData({...formData,whInboundRef:e.target.value})}
+                        placeholder="Shipment ref..." className="w-full px-2 py-1.5 rounded border text-xs bg-blue-50" />
+                    </div>
+                    <div>
+                      <label className="text-[10px] font-bold text-slate-500">Subcategory</label>
+                      <input value={formData.whSubSearch||''} onChange={e=>setFormData({...formData,whSubSearch:e.target.value})}
+                        placeholder="Filter..." className="w-full px-2 py-1.5 rounded border text-xs" />
+                    </div>
+                    <div>
+                      <label className="text-[10px] font-bold text-slate-500">From Date</label>
+                      <input type="date" value={formData.whDateFrom||''} onChange={e=>setFormData({...formData,whDateFrom:e.target.value})}
+                        className="w-full px-2 py-1.5 rounded border text-xs" />
+                    </div>
+                    <div>
+                      <label className="text-[10px] font-bold text-slate-500">To Date</label>
+                      <input type="date" value={formData.whDateTo||''} onChange={e=>setFormData({...formData,whDateTo:e.target.value})}
+                        className="w-full px-2 py-1.5 rounded border text-xs" />
+                    </div>
+                    <div>
+                      <label className="text-[10px] font-bold text-slate-500">Category</label>
+                      <input value={formData.whCatSearch||''} onChange={e=>setFormData({...formData,whCatSearch:e.target.value})}
+                        placeholder="Category..." className="w-full px-2 py-1.5 rounded border text-xs" />
+                    </div>
+                  </div>
+                  <button onClick={() => setFormData({...formData, whSearch:'', whInboundRef:'', whSubSearch:'', whDateFrom:'', whDateTo:'', whCatSearch:''})}
+                    className="text-[10px] text-slate-400 hover:text-red-500">Clear All Filters</button>
+                </div>
+              )}
             </div>
             {(() => {
               const filtered = warehouse.filter(w => {
                 if (!inRange(w.expense_date, mode, df, dt)) return false;
                 if (formData.whSearch && !(w.description||'').includes(formData.whSearch) && !(w.description_en||'').toLowerCase().includes((formData.whSearch||'').toLowerCase())) return false;
+                if (formData.whInboundRef && !(w.inbound_ref||'').toLowerCase().includes((formData.whInboundRef||'').toLowerCase())) return false;
+                if (formData.whSubSearch && !(w.subcategory||'').toLowerCase().includes((formData.whSubSearch||'').toLowerCase())) return false;
+                if (formData.whDateFrom && (w.expense_date||'') < formData.whDateFrom) return false;
+                if (formData.whDateTo && (w.expense_date||'') > formData.whDateTo) return false;
+                if (formData.whCatSearch && !(getWarehouseCat(w.description)||'').toLowerCase().includes((formData.whCatSearch||'').toLowerCase())) return false;
                 return true;
               });
               const total = filtered.reduce((a, w) => a + Number(w.amount), 0);
+              const hasWhFilters = formData.whSearch || formData.whInboundRef || formData.whSubSearch || formData.whDateFrom || formData.whDateTo || formData.whCatSearch;
 
               // Build category → description → entries hierarchy
               const catMap = {};
@@ -3163,11 +3270,64 @@ export default function App() {
 
               return (
                 <div>
-                  {/* Summary Card */}
-                  <div className="bg-white rounded-xl p-4 mb-3" style={{ borderLeftWidth: 3, borderLeftColor: '#8b5cf6' }}>
-                    <div className="text-[10px] text-slate-500">Total / الإجمالي ({filtered.length} entries)</div>
-                    <div className="text-2xl font-extrabold text-purple-600">{fE(total)}</div>
+                  {/* Summary Cards */}
+                  <div className="grid grid-cols-3 gap-3 mb-3">
+                    <div className="bg-white rounded-xl p-3" style={{ borderLeftWidth: 3, borderLeftColor: '#8b5cf6' }}>
+                      <div className="text-[10px] text-slate-500">Total Expenses</div>
+                      <div className="text-lg font-extrabold text-purple-600">{fE(total)}</div>
+                    </div>
+                    <div className="bg-white rounded-xl p-3" style={{ borderLeftWidth: 3, borderLeftColor: '#6366f1' }}>
+                      <div className="text-[10px] text-slate-500">Entries</div>
+                      <div className="text-lg font-extrabold text-indigo-600">{filtered.length}</div>
+                    </div>
+                    <div className="bg-white rounded-xl p-3" style={{ borderLeftWidth: 3, borderLeftColor: '#0ea5e9' }}>
+                      <div className="text-[10px] text-slate-500">Categories</div>
+                      <div className="text-lg font-extrabold text-sky-600">{sortedCats.length}</div>
+                    </div>
                   </div>
+
+                  {/* Aggregation breakdown when filters active */}
+                  {hasWhFilters && filtered.length > 0 && (
+                    <div className="bg-white rounded-xl p-4 mb-3 border border-purple-100">
+                      <h4 className="text-[10px] font-bold text-slate-500 mb-2">FILTERED BREAKDOWN</h4>
+                      {sortedCats.map(([cat, data], i) => (
+                        <div key={cat} className="mb-1">
+                          <div className="flex justify-between py-1 text-xs border-b border-slate-50">
+                            <span className="font-semibold">{cat} <span className="text-slate-400 font-normal">({data.count})</span></span>
+                            <span className="font-bold text-purple-600">{fE(data.total)}</span>
+                          </div>
+                          {Object.entries(data.descs).sort((a,b) => b[1].total - a[1].total).slice(0, 5).map(([desc, dd]) => (
+                            <div key={desc} className="flex justify-between py-0.5 pl-4 text-[10px] text-slate-500">
+                              <span className="truncate max-w-[60%]" style={{direction:'rtl'}}>↳ {dd.descEn || desc} ({dd.count})</span>
+                              <span className="text-purple-500">{fE(dd.total)}</span>
+                            </div>
+                          ))}
+                        </div>
+                      ))}
+                      {/* By inbound ref */}
+                      {(() => {
+                        const byRef = {};
+                        filtered.forEach(w => {
+                          const ref = w.inbound_ref || 'No Ref';
+                          if (!byRef[ref]) byRef[ref] = { total: 0, count: 0 };
+                          byRef[ref].total += Number(w.amount); byRef[ref].count++;
+                        });
+                        const refs = Object.entries(byRef).sort((a,b) => b[1].total - a[1].total);
+                        if (refs.length <= 1 && refs[0]?.[0] === 'No Ref') return null;
+                        return (
+                          <div className="mt-3 pt-2 border-t border-slate-100">
+                            <h4 className="text-[10px] font-bold text-blue-500 mb-1">BY INBOUND REF</h4>
+                            {refs.map(([ref, rd]) => (
+                              <div key={ref} className="flex justify-between py-0.5 text-xs">
+                                <span className={'font-medium ' + (ref === 'No Ref' ? 'text-slate-400 italic' : 'text-blue-700')}>{ref} <span className="text-slate-400 font-normal">({rd.count})</span></span>
+                                <span className="font-bold text-purple-600">{fE(rd.total)}</span>
+                              </div>
+                            ))}
+                          </div>
+                        );
+                      })()}
+                    </div>
+                  )}
 
                   {/* Breadcrumb */}
                   {(drillCat || drillDesc) && (
@@ -3278,6 +3438,7 @@ export default function App() {
                           <thead className="sticky top-0"><tr className="bg-slate-50">
                             <th className="px-2 py-2 text-xs text-left">Date</th>
                             <th className="px-2 py-2 text-xs" style={{ direction: 'rtl' }}>Description</th>
+                            <th className="px-2 py-2 text-xs">Inbound Ref</th>
                             <th className="px-2 py-2 text-xs text-right">Amount</th>
                           </tr></thead>
                           <tbody>
@@ -3287,6 +3448,15 @@ export default function App() {
                                 <tr key={w.id} className="border-b border-slate-50">
                                   <td className="px-2 py-1.5 text-xs">{w.expense_date}</td>
                                   <td className="px-2 py-1.5 text-xs" style={{ direction: 'rtl' }}>{w.description}</td>
+                                  <td className="px-2 py-1.5">
+                                    <input defaultValue={w.inbound_ref || ''} placeholder="—"
+                                      className="text-xs border rounded px-1.5 py-0.5 w-24 text-center bg-blue-50"
+                                      onBlur={async (e) => {
+                                        const val = e.target.value.trim();
+                                        if (val === (w.inbound_ref || '')) return;
+                                        await supabase.from('warehouse_expenses').update({ inbound_ref: val || null }).eq('id', w.id);
+                                      }} />
+                                  </td>
                                   <td className="px-2 py-1.5 text-xs text-right font-semibold text-purple-600">{fE(w.amount)}</td>
                                 </tr>
                               ))}
@@ -3311,251 +3481,521 @@ export default function App() {
               <div className="flex gap-2 items-center flex-wrap">
                 <input value={query} onChange={e => setQuery(e.target.value)}
                   placeholder="Search / بحث" className="px-3 py-1.5 rounded-lg border border-slate-200 text-xs w-32" />
-                <select value={formData.invTypeFilter || 'all'} onChange={e => setFormData({...formData, invTypeFilter: e.target.value})}
+                <select value={formData.invTypeFilter || 'all'} onChange={e => setFormData({...formData, invTypeFilter: e.target.value, invSubFilter: 'all'})}
                   className="px-2 py-1.5 rounded border text-xs">
-                  <option value="all">All Types / كل الأنواع</option>
+                  <option value="all">All Categories</option>
                   {[...new Set(inventory.map(p => p.product_type).filter(Boolean))].sort().map(t =>
                     <option key={t} value={t}>{t}</option>)}
                 </select>
+                <select value={formData.invSubFilter || 'all'} onChange={e => setFormData({...formData, invSubFilter: e.target.value})}
+                  className="px-2 py-1.5 rounded border text-xs">
+                  <option value="all">All Subcategories</option>
+                  {[...new Set(inventory
+                    .filter(p => !formData.invTypeFilter || formData.invTypeFilter === 'all' || p.product_type === formData.invTypeFilter)
+                    .map(p => p.subcategory).filter(Boolean))].sort().map(s =>
+                    <option key={s} value={s}>{s}</option>)}
+                </select>
+                <select value={formData.invView || 'cards'} onChange={e => setFormData({...formData, invView: e.target.value})}
+                  className="px-2 py-1.5 rounded border text-xs">
+                  <option value="cards">📷 Cards</option>
+                  <option value="table">📋 Table</option>
+                </select>
                 <button onClick={() => setFormData({...formData, showAddProduct: true})}
-                  className="px-3 py-1.5 bg-blue-500 text-white rounded-lg text-xs font-semibold hover:bg-blue-600">
-                  + Add Product / إضافة منتج
+                  className="px-3 py-1.5 bg-gradient-to-r from-blue-500 to-indigo-600 text-white rounded-lg text-xs font-bold shadow-sm">
+                  + Add Product
                 </button>
               </div>
             </div>
 
             {/* Summary */}
-            <div className="grid grid-cols-3 gap-3 mb-3">
-              <div className="bg-white rounded-lg p-3" style={{ borderLeftWidth: 3, borderLeftColor: '#8b5cf6' }}>
-                <div className="text-[10px] text-slate-500">Total Products / إجمالي المنتجات</div>
-                <div className="text-lg font-extrabold">{inventory.length}</div>
+            {(() => {
+              const filtered = inventory.filter(p => {
+                if (formData.invTypeFilter && formData.invTypeFilter !== 'all' && p.product_type !== formData.invTypeFilter) return false;
+                if (formData.invSubFilter && formData.invSubFilter !== 'all' && p.subcategory !== formData.invSubFilter) return false;
+                if (query) return (p.product_id||'').includes(query)||(p.reference_number||'').includes(query)||(p.description||'').includes(query)||(p.description_en||'').toLowerCase().includes(query.toLowerCase())||(p.color||'').includes(query)||(p.product_type||'').toLowerCase().includes(query.toLowerCase())||(p.subcategory||'').toLowerCase().includes(query.toLowerCase());
+                return true;
+              });
+              const totalOriginal = filtered.reduce((a, p) => a + Number(p.original_quantity || p.roll_count || 0), 0);
+              const totalCurrent = filtered.reduce((a, p) => a + Number(p.current_quantity || p.roll_count || 0), 0);
+              const totalWeight = filtered.reduce((a, p) => a + Number(p.net_weight || 0), 0);
+              const totalValue = filtered.reduce((a, p) => a + (Number(p.current_quantity || p.roll_count || 0) * Number(p.unit_price || 0)), 0);
+
+              return (<>
+              <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-4">
+                <div className="bg-white rounded-xl p-3 border border-slate-100">
+                  <div className="text-[9px] text-slate-400 uppercase tracking-wide">Products</div>
+                  <div className="text-xl font-extrabold">{filtered.length}</div>
+                </div>
+                <div className="bg-white rounded-xl p-3 border border-slate-100">
+                  <div className="text-[9px] text-slate-400 uppercase tracking-wide">Original Qty</div>
+                  <div className="text-xl font-extrabold text-blue-600">{totalOriginal.toLocaleString()}</div>
+                </div>
+                <div className="bg-white rounded-xl p-3 border border-slate-100">
+                  <div className="text-[9px] text-slate-400 uppercase tracking-wide">Current Qty</div>
+                  <div className="text-xl font-extrabold text-emerald-600">{totalCurrent.toLocaleString()}</div>
+                </div>
+                <div className="bg-white rounded-xl p-3 border border-slate-100">
+                  <div className="text-[9px] text-slate-400 uppercase tracking-wide">Est. Value</div>
+                  <div className="text-xl font-extrabold text-purple-600">{fE(totalValue)}</div>
+                </div>
               </div>
-              <div className="bg-white rounded-lg p-3" style={{ borderLeftWidth: 3, borderLeftColor: '#0ea5e9' }}>
-                <div className="text-[10px] text-slate-500">Total Rolls / إجمالي اللفات</div>
-                <div className="text-lg font-extrabold">{inventory.reduce((a, p) => a + Number(p.roll_count || 0), 0).toLocaleString()}</div>
-              </div>
-              <div className="bg-white rounded-lg p-3" style={{ borderLeftWidth: 3, borderLeftColor: '#10b981' }}>
-                <div className="text-[10px] text-slate-500">Total Net Weight / الوزن الصافي</div>
-                <div className="text-lg font-extrabold">{inventory.reduce((a, p) => a + Number(p.net_weight || 0), 0).toLocaleString()} kg</div>
-              </div>
-            </div>
+
+              {/* Cards View */}
+              {(formData.invView || 'cards') === 'cards' && (
+                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
+                  {filtered.map(p => {
+                    const origQty = Number(p.original_quantity || p.roll_count || 0);
+                    const currQty = Number(p.current_quantity || p.roll_count || 0);
+                    const usedPct = origQty > 0 ? Math.round(((origQty - currQty) / origQty) * 100) : 0;
+                    return (
+                      <div key={p.id} onClick={() => setFormData({...formData, selectedProduct: p})}
+                        className="bg-white rounded-2xl overflow-hidden border border-slate-100 hover:border-slate-300 hover:shadow-lg transition cursor-pointer group">
+                        {/* Photo */}
+                        {p.photo_url ? (
+                          <div className="h-40 bg-slate-100 overflow-hidden">
+                            <img src={p.photo_url} alt={p.description_en || p.description} className="w-full h-full object-cover group-hover:scale-105 transition-transform" />
+                          </div>
+                        ) : (
+                          <div className="h-24 bg-gradient-to-br from-slate-100 to-slate-50 flex items-center justify-center">
+                            <span className="text-3xl opacity-30">📦</span>
+                          </div>
+                        )}
+                        <div className="p-3">
+                          {/* Category pills */}
+                          <div className="flex gap-1 mb-2 flex-wrap">
+                            {p.product_type && <span className="px-2 py-0.5 bg-indigo-50 text-indigo-700 rounded-md text-[9px] font-bold">{p.product_type}</span>}
+                            {p.subcategory && <span className="px-2 py-0.5 bg-amber-50 text-amber-700 rounded-md text-[9px] font-medium">{p.subcategory}</span>}
+                            <span className={'px-2 py-0.5 rounded-md text-[9px] font-bold ' +
+                              (p.stock_status === 'in_stock' ? 'bg-green-50 text-green-700' :
+                               p.stock_status === 'low' ? 'bg-amber-50 text-amber-700' :
+                               p.stock_status === 'reserved' ? 'bg-blue-50 text-blue-700' : 'bg-red-50 text-red-700')}>
+                              {p.stock_status === 'in_stock' ? 'In Stock' : p.stock_status === 'low' ? 'Low' : p.stock_status === 'reserved' ? 'Reserved' : p.stock_status === 'out_of_stock' ? 'Out' : 'Available'}
+                            </span>
+                          </div>
+                          {/* Name */}
+                          <div className="text-sm font-bold truncate">{p.reference_number || p.product_id}</div>
+                          <div className="text-[11px] text-slate-500 truncate" style={{direction:'rtl'}}>{lang === 'en' && p.description_en ? p.description_en : p.description}</div>
+                          {p.color && <div className="text-[10px] text-slate-400 mt-0.5">🎨 {lang === 'en' && p.color_en ? p.color_en : p.color}</div>}
+                          {/* Quantity bar */}
+                          <div className="mt-2">
+                            <div className="flex justify-between text-[9px] mb-0.5">
+                              <span className="text-slate-400">Qty: {currQty.toLocaleString()} / {origQty.toLocaleString()}</span>
+                              <span className="font-bold text-emerald-600">{fE(p.unit_price)}</span>
+                            </div>
+                            <div className="h-1.5 bg-slate-100 rounded-full overflow-hidden">
+                              <div className="h-full rounded-full" style={{width: Math.max(5, 100 - usedPct) + '%', background: usedPct > 80 ? '#ef4444' : usedPct > 50 ? '#f59e0b' : '#10b981'}} />
+                            </div>
+                          </div>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+
+              {/* Table View */}
+              {formData.invView === 'table' && (
+                <div className="overflow-auto rounded-xl border border-slate-200 max-h-[450px]">
+                  <table className="w-full border-collapse">
+                    <thead className="sticky top-0"><tr className="bg-slate-50">
+                      <th className="px-2 py-2 text-[10px] text-left">Photo</th>
+                      <th className="px-2 py-2 text-[10px] text-left">Product</th>
+                      <th className="px-2 py-2 text-[10px]">Category</th>
+                      <th className="px-2 py-2 text-[10px]">Subcategory</th>
+                      <th className="px-2 py-2 text-[10px] text-right">Original</th>
+                      <th className="px-2 py-2 text-[10px] text-right">Current</th>
+                      <th className="px-2 py-2 text-[10px] text-right">Weight</th>
+                      <th className="px-2 py-2 text-[10px] text-right">Price</th>
+                      <th className="px-2 py-2 text-[10px]">Status</th>
+                    </tr></thead>
+                    <tbody>
+                      {filtered.map(p => (
+                        <tr key={p.id} className="border-b border-slate-50 hover:bg-slate-50 cursor-pointer"
+                          onClick={() => setFormData({...formData, selectedProduct: p})}>
+                          <td className="px-2 py-1.5">
+                            {p.photo_url ? <img src={p.photo_url} className="w-10 h-10 rounded object-cover" /> : <span className="text-slate-300 text-lg">📦</span>}
+                          </td>
+                          <td className="px-2 py-1.5">
+                            <div className="text-xs font-bold text-blue-600">{p.reference_number || p.product_id}</div>
+                            <div className="text-[10px] text-slate-500">{lang === 'en' && p.description_en ? p.description_en : p.description}</div>
+                          </td>
+                          <td className="px-2 py-1.5">{p.product_type && <span className="px-1.5 py-0.5 bg-indigo-100 text-indigo-700 rounded text-[9px]">{p.product_type}</span>}</td>
+                          <td className="px-2 py-1.5">{p.subcategory && <span className="px-1.5 py-0.5 bg-amber-100 text-amber-700 rounded text-[9px]">{p.subcategory}</span>}</td>
+                          <td className="px-2 py-1.5 text-xs text-right">{Number(p.original_quantity || p.roll_count || 0).toLocaleString()}</td>
+                          <td className="px-2 py-1.5 text-xs text-right font-bold text-emerald-600">{Number(p.current_quantity || p.roll_count || 0).toLocaleString()}</td>
+                          <td className="px-2 py-1.5 text-xs text-right">{fmt(p.net_weight)} kg</td>
+                          <td className="px-2 py-1.5 text-xs text-right font-semibold text-emerald-600">{fE(p.unit_price)}</td>
+                          <td className="px-2 py-1.5">
+                            <span className={'px-1.5 py-0.5 rounded-full text-[9px] font-semibold ' +
+                              (p.stock_status === 'in_stock' ? 'bg-green-100 text-green-700' :
+                               p.stock_status === 'low' ? 'bg-amber-100 text-amber-700' :
+                               p.stock_status === 'reserved' ? 'bg-blue-100 text-blue-700' : 'bg-red-100 text-red-700')}>
+                              {p.stock_status === 'in_stock' ? 'In Stock' : p.stock_status === 'low' ? 'Low' : p.stock_status === 'reserved' ? 'Reserved' : 'Out'}
+                            </span>
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+              </>);
+            })()}
 
             {/* Add Product Form */}
             {formData.showAddProduct && (
-              <div className="bg-blue-50 rounded-xl p-4 mb-3 border border-blue-200">
-                <h3 className="text-sm font-bold text-blue-800 mb-3">New Product / منتج جديد</h3>
-                <div className="grid grid-cols-2 gap-3">
-                  <div>
-                    <label className="text-[10px] font-semibold text-slate-600">Product ID / رقم المنتج</label>
-                    <input value={formData.prodId || ''} onChange={e => setFormData({...formData, prodId: e.target.value})}
-                      className="w-full px-3 py-2 rounded-lg border border-slate-200 text-sm" />
+              <div className="fixed inset-0 bg-black/60 z-50 flex items-start justify-center overflow-auto p-4" onClick={e => { if (e.target === e.currentTarget) setFormData({}); }}>
+                <div className="bg-white rounded-2xl shadow-2xl w-full max-w-[600px] my-8 overflow-hidden">
+                  <div className="bg-gradient-to-r from-indigo-600 to-purple-600 px-5 py-4">
+                    <h3 className="text-white font-bold text-base">📦 New Product / منتج جديد</h3>
                   </div>
-                  <div>
-                    <label className="text-[10px] font-semibold text-slate-600">Reference # / رقم المرجع</label>
-                    <input value={formData.prodRef || ''} onChange={e => setFormData({...formData, prodRef: e.target.value})}
-                      className="w-full px-3 py-2 rounded-lg border border-slate-200 text-sm" />
-                  </div>
-                  <div className="col-span-2">
-                    <label className="text-[10px] font-semibold text-slate-600">Shipment Reference / مرجع الشحنة</label>
-                    <input value={formData.prodShipment || ''} onChange={e => setFormData({...formData, prodShipment: e.target.value})}
-                      className="w-full px-3 py-2 rounded-lg border border-slate-200 text-sm" />
-                  </div>
-                  <div className="col-span-2">
-                    <label className="text-[10px] font-semibold text-slate-600">Product Type / نوع المنتج</label>
-                    <div className="flex gap-2">
-                      <select value={formData.prodType || ''} onChange={e => { if (e.target.value === '_new') { const n = prompt('New product type / نوع جديد:'); if (n) setFormData({...formData, prodType: n}); } else { setFormData({...formData, prodType: e.target.value}); }}}
-                        className="flex-1 px-3 py-2 rounded-lg border border-slate-200 text-sm">
-                        <option value="">Select type... / اختر النوع</option>
-                        {['Pool', 'Leather', 'Roofing', 'Fabrics', 'PVC', 'Chemicals', 'Headliner', 'Boat Flooring', 'Upholstery',
-                          ...new Set(inventory.map(p => p.product_type).filter(Boolean))].filter((v, i, a) => v && a.indexOf(v) === i).sort().map(t =>
-                          <option key={t} value={t}>{t}</option>)}
-                        <option value="_new">+ Add New Type / إضافة نوع جديد</option>
-                      </select>
+                  <div className="p-5 space-y-3 max-h-[70vh] overflow-auto">
+                    <div className="grid grid-cols-2 gap-3">
+                      <div><label className="text-[10px] font-bold text-slate-500">Product ID</label>
+                        <input value={formData.prodId || ''} onChange={e => setFormData({...formData, prodId: e.target.value})} className="w-full px-3 py-2 rounded-lg border text-sm" /></div>
+                      <div><label className="text-[10px] font-bold text-slate-500">Reference #</label>
+                        <input value={formData.prodRef || ''} onChange={e => setFormData({...formData, prodRef: e.target.value})} className="w-full px-3 py-2 rounded-lg border text-sm" /></div>
+                      <div><label className="text-[10px] font-bold text-slate-500">Category / النوع</label>
+                        <select value={formData.prodType || ''} onChange={e => { if (e.target.value === '_new') { const n = prompt('New category:'); if (n) setFormData({...formData, prodType: n}); } else setFormData({...formData, prodType: e.target.value}); }}
+                          className="w-full px-3 py-2 rounded-lg border text-sm">
+                          <option value="">Select...</option>
+                          {['Pool','Leather','Roofing','Fabrics','PVC','Chemicals','Headliner','Boat Flooring','Upholstery',
+                            ...new Set(inventory.map(p => p.product_type).filter(Boolean))].filter((v,i,a) => v && a.indexOf(v)===i).sort().map(t =>
+                            <option key={t} value={t}>{t}</option>)}
+                          <option value="_new">+ New Category</option>
+                        </select></div>
+                      <div><label className="text-[10px] font-bold text-slate-500">Subcategory / تصنيف فرعي</label>
+                        <input list="inv-subcats-add" value={formData.prodSubcat || ''} onChange={e => setFormData({...formData, prodSubcat: e.target.value})}
+                          placeholder="e.g. Mosaic Liner, Looks..." className="w-full px-3 py-2 rounded-lg border text-sm" />
+                        <datalist id="inv-subcats-add">{[...new Set(inventory.map(p => p.subcategory).filter(Boolean))].sort().map(s => <option key={s} value={s} />)}</datalist></div>
+                      <div className="col-span-2"><label className="text-[10px] font-bold text-slate-500">Shipment Reference</label>
+                        <input value={formData.prodShipment || ''} onChange={e => setFormData({...formData, prodShipment: e.target.value})} className="w-full px-3 py-2 rounded-lg border text-sm" /></div>
+                      <div><label className="text-[10px] font-bold text-slate-500">Description (Arabic)</label>
+                        <input value={formData.prodDesc || ''} onChange={e => setFormData({...formData, prodDesc: e.target.value})} className="w-full px-3 py-2 rounded-lg border text-sm" style={{direction:'rtl'}} /></div>
+                      <div><label className="text-[10px] font-bold text-slate-500">Description (English)</label>
+                        <input value={formData.prodDescEn || ''} onChange={e => setFormData({...formData, prodDescEn: e.target.value})} className="w-full px-3 py-2 rounded-lg border text-sm" /></div>
+                      <div><label className="text-[10px] font-bold text-slate-500">Color (Arabic)</label>
+                        <input value={formData.prodColor || ''} onChange={e => setFormData({...formData, prodColor: e.target.value})} className="w-full px-3 py-2 rounded-lg border text-sm" style={{direction:'rtl'}} /></div>
+                      <div><label className="text-[10px] font-bold text-slate-500">Color (English)</label>
+                        <input value={formData.prodColorEn || ''} onChange={e => setFormData({...formData, prodColorEn: e.target.value})} className="w-full px-3 py-2 rounded-lg border text-sm" /></div>
+                      <div><label className="text-[10px] font-bold text-slate-500">Original Quantity</label>
+                        <input type="number" value={formData.prodOrigQty || ''} onChange={e => setFormData({...formData, prodOrigQty: e.target.value})} className="w-full px-3 py-2 rounded-lg border text-sm" /></div>
+                      <div><label className="text-[10px] font-bold text-slate-500">Current Quantity</label>
+                        <input type="number" value={formData.prodCurrQty || ''} onChange={e => setFormData({...formData, prodCurrQty: e.target.value || formData.prodOrigQty})} placeholder="Same as original if blank" className="w-full px-3 py-2 rounded-lg border text-sm" /></div>
+                      <div><label className="text-[10px] font-bold text-slate-500">Gross Weight (kg)</label>
+                        <input type="number" value={formData.prodGross || ''} onChange={e => setFormData({...formData, prodGross: e.target.value})} className="w-full px-3 py-2 rounded-lg border text-sm" /></div>
+                      <div><label className="text-[10px] font-bold text-slate-500">Net Weight (kg)</label>
+                        <input type="number" value={formData.prodNet || ''} onChange={e => setFormData({...formData, prodNet: e.target.value})} className="w-full px-3 py-2 rounded-lg border text-sm" /></div>
+                      <div><label className="text-[10px] font-bold text-slate-500">Unit Price</label>
+                        <input type="number" value={formData.prodPrice || ''} onChange={e => setFormData({...formData, prodPrice: e.target.value})} className="w-full px-3 py-2 rounded-lg border text-sm" /></div>
+                      <div><label className="text-[10px] font-bold text-slate-500">Roll Count</label>
+                        <input type="number" value={formData.prodRolls || ''} onChange={e => setFormData({...formData, prodRolls: e.target.value})} className="w-full px-3 py-2 rounded-lg border text-sm" /></div>
+                      <div className="col-span-2">
+                        <label className="text-[10px] font-bold text-slate-500">Product Photo / صورة المنتج</label>
+                        <input type="file" accept="image/*" id="prod-photo" className="w-full px-3 py-2 rounded-lg border text-sm" />
+                        <div className="text-[9px] text-slate-400 mt-1">JPEG or PNG. Stored in Supabase Storage.</div>
+                      </div>
+                      {(userProfile?.role === 'super_admin' || modulePerms?.['View Costs'] === true) && (<>
+                        <div className="col-span-2 mt-2 pt-2 border-t border-red-200">
+                          <div className="text-[10px] font-bold text-red-700">🔒 Cost Fields (Internal)</div>
+                        </div>
+                        <div><label className="text-[9px] font-bold text-slate-500">Purchase Cost</label>
+                          <div className="flex gap-1">
+                            <input type="number" value={formData.prodPurchaseCost || ''} onChange={e => setFormData({...formData, prodPurchaseCost: e.target.value})} placeholder="0.00" className="flex-1 px-2 py-1.5 rounded border text-sm" />
+                            <select value={formData.prodPurchaseCurr || 'USD'} onChange={e => setFormData({...formData, prodPurchaseCurr: e.target.value})} className="px-1 py-1 rounded border text-xs w-16"><option value="USD">USD</option><option value="EGP">EGP</option></select>
+                          </div></div>
+                        <div><label className="text-[9px] font-bold text-slate-500">Customs / Duties</label>
+                          <div className="flex gap-1">
+                            <input type="number" value={formData.prodCustomsCost || ''} onChange={e => setFormData({...formData, prodCustomsCost: e.target.value})} placeholder="0.00" className="flex-1 px-2 py-1.5 rounded border text-sm" />
+                            <select value={formData.prodCustomsCurr || 'EGP'} onChange={e => setFormData({...formData, prodCustomsCurr: e.target.value})} className="px-1 py-1 rounded border text-xs w-16"><option value="USD">USD</option><option value="EGP">EGP</option></select>
+                          </div></div>
+                        <div><label className="text-[9px] font-bold text-slate-500">Shipping & Freight</label>
+                          <div className="flex gap-1">
+                            <input type="number" value={formData.prodShippingCost || ''} onChange={e => setFormData({...formData, prodShippingCost: e.target.value})} placeholder="0.00" className="flex-1 px-2 py-1.5 rounded border text-sm" />
+                            <select value={formData.prodShippingCurr || 'USD'} onChange={e => setFormData({...formData, prodShippingCurr: e.target.value})} className="px-1 py-1 rounded border text-xs w-16"><option value="USD">USD</option><option value="EGP">EGP</option></select>
+                          </div></div>
+                        <div><label className="text-[9px] font-bold text-slate-500">Other Charges</label>
+                          <div className="flex gap-1">
+                            <input type="number" value={formData.prodOtherCost || ''} onChange={e => setFormData({...formData, prodOtherCost: e.target.value})} placeholder="0.00" className="flex-1 px-2 py-1.5 rounded border text-sm" />
+                            <select value={formData.prodOtherCurr || 'EGP'} onChange={e => setFormData({...formData, prodOtherCurr: e.target.value})} className="px-1 py-1 rounded border text-xs w-16"><option value="USD">USD</option><option value="EGP">EGP</option></select>
+                          </div></div>
+                        <div><label className="text-[9px] font-bold text-slate-500">FX Rate (USD→EGP)</label>
+                          <input type="number" value={formData.prodFxRate || 50} onChange={e => setFormData({...formData, prodFxRate: e.target.value})} step="0.01" className="w-full px-2 py-1.5 rounded border text-sm" /></div>
+                      </>)}
+                    </div>
+                    <div className="flex gap-2 pt-2">
+                      <button onClick={async () => {
+                        try {
+                          const origQty = Number(formData.prodOrigQty) || Number(formData.prodRolls) || 0;
+                          const currQty = Number(formData.prodCurrQty) || origQty;
+                          const record = {
+                            product_id: formData.prodId || '', reference_number: formData.prodRef || '',
+                            shipment_reference: formData.prodShipment || '', product_type: formData.prodType || '',
+                            subcategory: formData.prodSubcat || '',
+                            description: formData.prodDesc || '', description_en: formData.prodDescEn || '',
+                            color: formData.prodColor || '', color_en: formData.prodColorEn || '',
+                            roll_count: Number(formData.prodRolls) || 0, gross_weight: Number(formData.prodGross) || 0,
+                            net_weight: Number(formData.prodNet) || 0, unit_price: Number(formData.prodPrice) || 0,
+                            original_quantity: origQty, current_quantity: currQty,
+                            purchase_cost: Number(formData.prodPurchaseCost) || 0, purchase_currency: formData.prodPurchaseCurr || 'USD',
+                            customs_cost: Number(formData.prodCustomsCost) || 0, customs_currency: formData.prodCustomsCurr || 'EGP',
+                            shipping_cost: Number(formData.prodShippingCost) || 0, shipping_currency: formData.prodShippingCurr || 'USD',
+                            other_cost: Number(formData.prodOtherCost) || 0, other_currency: formData.prodOtherCurr || 'EGP',
+                            fx_rate: Number(formData.prodFxRate) || 50,
+                          };
+                          // Upload photo if selected
+                          const fileInput = document.getElementById('prod-photo');
+                          if (fileInput && fileInput.files && fileInput.files[0]) {
+                            const file = fileInput.files[0];
+                            const ext = file.name.split('.').pop();
+                            const fileName = 'product-' + Date.now() + '.' + ext;
+                            const { data: uploadData, error: uploadErr } = await supabase.storage.from('product-photos').upload(fileName, file);
+                            if (!uploadErr && uploadData) {
+                              const { data: urlData } = supabase.storage.from('product-photos').getPublicUrl(fileName);
+                              record.photo_url = urlData?.publicUrl || '';
+                            }
+                          }
+                          await dbInsert('inventory', record, user?.id);
+                          setFormData({});
+                          await loadAllData();
+                        } catch (err) { alert('Error: ' + err.message); }
+                      }} className="flex-1 py-3 rounded-xl text-sm font-bold text-white"
+                        style={{background:'linear-gradient(135deg, #10b981, #059669)'}}>
+                        Save / حفظ
+                      </button>
+                      <button onClick={() => setFormData({})} className="px-5 py-3 rounded-xl text-sm border border-slate-200">Cancel</button>
                     </div>
                   </div>
-                  <div>
-                    <label className="text-[10px] font-semibold text-slate-600">Color / اللون</label>
-                    <input value={formData.prodColor || ''} onChange={e => setFormData({...formData, prodColor: e.target.value})}
-                      placeholder="Arabic" className="w-full px-3 py-1.5 rounded-lg border border-slate-200 text-sm" style={{ direction: 'rtl' }} />
-                    <input value={formData.prodColorEn || ''} onChange={e => setFormData({...formData, prodColorEn: e.target.value})}
-                      placeholder="English" className="w-full px-3 py-1.5 rounded-lg border border-slate-200 text-sm mt-1" />
-                  </div>
-                  <div>
-                    <label className="text-[10px] font-semibold text-slate-600">Description / الوصف</label>
-                    <input value={formData.prodDesc || ''} onChange={e => setFormData({...formData, prodDesc: e.target.value})}
-                      placeholder="Arabic" className="w-full px-3 py-1.5 rounded-lg border border-slate-200 text-sm" style={{ direction: 'rtl' }} />
-                    <input value={formData.prodDescEn || ''} onChange={e => setFormData({...formData, prodDescEn: e.target.value})}
-                      placeholder="English" className="w-full px-3 py-1.5 rounded-lg border border-slate-200 text-sm mt-1" />
-                  </div>
-                  <div>
-                    <label className="text-[10px] font-semibold text-slate-600">Roll Count / عدد اللفات</label>
-                    <input type="number" value={formData.prodRolls || ''} onChange={e => setFormData({...formData, prodRolls: e.target.value})}
-                      className="w-full px-3 py-2 rounded-lg border border-slate-200 text-sm" />
-                  </div>
-                  <div>
-                    <label className="text-[10px] font-semibold text-slate-600">Gross Weight / الوزن الإجمالي (kg)</label>
-                    <input type="number" value={formData.prodGross || ''} onChange={e => setFormData({...formData, prodGross: e.target.value})}
-                      className="w-full px-3 py-2 rounded-lg border border-slate-200 text-sm" />
-                  </div>
-                  <div>
-                    <label className="text-[10px] font-semibold text-slate-600">Net Weight / الوزن الصافي (kg)</label>
-                    <input type="number" value={formData.prodNet || ''} onChange={e => setFormData({...formData, prodNet: e.target.value})}
-                      className="w-full px-3 py-2 rounded-lg border border-slate-200 text-sm" />
-                  </div>
-                  <div>
-                    <label className="text-[10px] font-semibold text-slate-600">Unit Price / سعر الوحدة</label>
-                    <input type="number" value={formData.prodPrice || ''} onChange={e => setFormData({...formData, prodPrice: e.target.value})}
-                      className="w-full px-3 py-2 rounded-lg border border-slate-200 text-sm" />
-                  </div>
-                </div>
-                <div className="flex gap-2 mt-3">
-                  <button onClick={async () => {
-                    try {
-                      await dbInsert('inventory', {
-                        product_id: formData.prodId || '',
-                        reference_number: formData.prodRef || '',
-                        shipment_reference: formData.prodShipment || '',
-                        product_type: formData.prodType || '',
-                        description: formData.prodDesc || '',
-                        description_en: formData.prodDescEn || '',
-                        color: formData.prodColor || '',
-                        color_en: formData.prodColorEn || '',
-                        roll_count: Number(formData.prodRolls) || 0,
-                        gross_weight: Number(formData.prodGross) || 0,
-                        net_weight: Number(formData.prodNet) || 0,
-                        unit_price: Number(formData.prodPrice) || 0,
-                      }, user?.id);
-                      setFormData({});
-                      await loadAllData();
-                    } catch (err) { alert('Error / خطأ: ' + err.message); }
-                  }} className="px-4 py-2 bg-emerald-500 text-white rounded-lg font-semibold text-sm">Save / حفظ</button>
-                  <button onClick={() => setFormData({})} className="px-4 py-2 border border-slate-200 rounded-lg text-sm">Cancel / إلغاء</button>
                 </div>
               </div>
             )}
 
-            {/* Product List */}
-            <div className="overflow-auto rounded-lg border border-slate-200 max-h-[450px]">
-              <table className="w-full border-collapse">
-                <thead className="sticky top-0"><tr className="bg-slate-50">
-                  <th className="px-2 py-2 text-[10px] text-left">Product ID / المنتج</th>
-                  <th className="px-2 py-2 text-[10px] text-left">Ref# / المرجع</th>
-                  <th className="px-2 py-2 text-[10px]">Type / النوع</th>
-                  <th className="px-2 py-2 text-[10px]">Shipment / الشحنة</th>
-                  <th className="px-2 py-2 text-[10px]">Description / الوصف</th>
-                  <th className="px-2 py-2 text-[10px]">Color / اللون</th>
-                  <th className="px-2 py-2 text-[10px] text-right">Rolls / لفات</th>
-                  <th className="px-2 py-2 text-[10px] text-right">Net / صافي</th>
-                  <th className="px-2 py-2 text-[10px] text-right">Price / سعر</th>
-                  <th className="px-2 py-2 text-[10px]">Status</th>
-                </tr></thead>
-                <tbody>
-                  {inventory
-                    .filter(p => {
-                      if (formData.invTypeFilter && formData.invTypeFilter !== 'all' && p.product_type !== formData.invTypeFilter) return false;
-                      if (!query) return true;
-                      return (p.product_id || '').includes(query) || (p.reference_number || '').includes(query) || (p.shipment_reference || '').includes(query) || (p.description || '').includes(query) || (p.description_en || '').toLowerCase().includes(query.toLowerCase()) || (p.color || '').includes(query) || (p.product_type || '').toLowerCase().includes(query.toLowerCase());
-                    })
-                    .map(p => (
-                    <tr key={p.id} className="border-b border-slate-50 hover:bg-slate-50 cursor-pointer"
-                      onClick={() => setFormData({...formData, selectedProduct: p})}>
-                      <td className="px-2 py-1.5 text-xs font-bold text-blue-600">{p.product_id || '—'}</td>
-                      <td className="px-2 py-1.5 text-xs font-semibold">{p.reference_number}</td>
-                      <td className="px-2 py-1.5">{p.product_type ? <span className="px-1.5 py-0.5 bg-indigo-100 text-indigo-700 rounded text-[9px]">{p.product_type}</span> : <span className="text-[9px] text-slate-300">—</span>}</td>
-                      <td className="px-2 py-1.5 text-[10px] text-slate-500">{p.shipment_reference || '—'}</td>
-                      <td className="px-2 py-1.5">
-                        <div className="text-xs" style={{ direction: lang === 'ar' ? 'rtl' : 'ltr' }}>{lang === 'en' && p.description_en ? p.description_en : p.description}</div>
-                        {lang === 'ar' && p.description_en && <div className="text-[10px] text-blue-500">{p.description_en}</div>}
-                      </td>
-                      <td className="px-2 py-1.5">
-                        <div className="text-xs" style={{ direction: lang === 'ar' ? 'rtl' : 'ltr' }}>{lang === 'en' && p.color_en ? p.color_en : p.color}</div>
-                        {lang === 'ar' && p.color_en && <div className="text-[10px] text-blue-500">{p.color_en}</div>}
-                      </td>
-                      <td className="px-2 py-1.5 text-xs text-right font-semibold">{p.roll_count}</td>
-                      <td className="px-2 py-1.5 text-xs text-right">{fmt(p.net_weight)} kg</td>
-                      <td className="px-2 py-1.5 text-xs text-right font-semibold text-emerald-600">{fE(p.unit_price)}</td>
-                      <td className="px-2 py-1.5">
-                        <span className={'px-1.5 py-0.5 rounded-full text-[9px] font-semibold ' +
-                          (p.stock_status === 'in_stock' ? 'bg-green-100 text-green-700' :
-                           p.stock_status === 'low' ? 'bg-amber-100 text-amber-700' :
-                           p.stock_status === 'reserved' ? 'bg-blue-100 text-blue-700' :
-                           'bg-red-100 text-red-700')}>
-                          {p.stock_status === 'in_stock' ? 'In Stock' : p.stock_status === 'low' ? 'Low' : p.stock_status === 'reserved' ? 'Reserved' : 'Out'}
-                        </span>
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-
-            {/* Product Detail */}
-            {formData.selectedProduct && (
-              <Modal onClose={() => setFormData({...formData, selectedProduct: null})}
-                title={'Product / منتج: ' + formData.selectedProduct.reference_number}>
-                <div className="space-y-3">
-                  <div className="grid grid-cols-2 gap-3">
-                    <div className="bg-slate-50 rounded-lg p-3">
-                      <div className="text-[10px] text-slate-500">Description / الوصف</div>
-                      <div className="text-sm font-bold" style={{ direction: 'rtl' }}>{formData.selectedProduct.description}</div>
-                      {formData.selectedProduct.description_en && <div className="text-xs text-blue-500">{formData.selectedProduct.description_en}</div>}
-                    </div>
-                    <div className="bg-slate-50 rounded-lg p-3">
-                      <div className="text-[10px] text-slate-500">Color / اللون</div>
-                      <div className="text-sm font-bold" style={{ direction: 'rtl' }}>{formData.selectedProduct.color}</div>
-                      {formData.selectedProduct.color_en && <div className="text-xs text-blue-500">{formData.selectedProduct.color_en}</div>}
-                    </div>
-                  </div>
-                  <div className="grid grid-cols-4 gap-2">
-                    <div className="bg-purple-50 rounded-lg p-2 text-center">
-                      <div className="text-[9px] text-slate-500">Rolls / لفات</div>
-                      <div className="text-lg font-bold text-purple-600">{formData.selectedProduct.roll_count}</div>
-                    </div>
-                    <div className="bg-blue-50 rounded-lg p-2 text-center">
-                      <div className="text-[9px] text-slate-500">Gross / إجمالي</div>
-                      <div className="text-sm font-bold">{fmt(formData.selectedProduct.gross_weight)} kg</div>
-                    </div>
-                    <div className="bg-emerald-50 rounded-lg p-2 text-center">
-                      <div className="text-[9px] text-slate-500">Net / صافي</div>
-                      <div className="text-sm font-bold">{fmt(formData.selectedProduct.net_weight)} kg</div>
-                    </div>
-                    <div className="bg-amber-50 rounded-lg p-2 text-center">
-                      <div className="text-[9px] text-slate-500">Price / سعر</div>
-                      <div className="text-sm font-bold text-emerald-600">{fE(formData.selectedProduct.unit_price)}</div>
-                    </div>
-                  </div>
-                  <h4 className="text-xs font-bold mt-2">Linked Invoices / الفواتير المرتبطة</h4>
-                  <div className="overflow-auto max-h-[200px] rounded border border-slate-200">
-                    {invoiceItems.filter(it => (it.description || '').includes(formData.selectedProduct.description) || (it.description || '').includes(formData.selectedProduct.reference_number)).length > 0 ? (
-                      <table className="w-full border-collapse">
-                        <thead><tr className="bg-slate-50">
-                          <th className="px-2 py-1 text-[10px] text-left">Invoice</th>
-                          <th className="px-2 py-1 text-[10px] text-right">Qty</th>
-                          <th className="px-2 py-1 text-[10px] text-right">Price</th>
-                          <th className="px-2 py-1 text-[10px] text-right">Total</th>
-                        </tr></thead>
-                        <tbody>
-                          {invoiceItems.filter(it => (it.description || '').includes(formData.selectedProduct.description) || (it.description || '').includes(formData.selectedProduct.reference_number)).map(it => {
-                            const inv = invoices.find(i => i.id === it.invoice_id);
-                            return (
-                              <tr key={it.id} className="border-b border-slate-50 cursor-pointer hover:bg-blue-50"
-                                onClick={() => { if (inv) { setFormData({...formData, selectedProduct: null}); setSelectedInvoice(inv); } }}>
-                                <td className="px-2 py-1 text-xs font-semibold">{inv ? '#' + inv.order_number : '—'}</td>
-                                <td className="px-2 py-1 text-xs text-right">{fmt(it.quantity)}</td>
-                                <td className="px-2 py-1 text-xs text-right">{fmt(it.unit_price)}</td>
-                                <td className="px-2 py-1 text-xs text-right font-semibold">{fE(it.line_total)}</td>
-                              </tr>
-                            );
-                          })}
-                        </tbody>
-                      </table>
+            {/* Product Detail Modal */}
+            {formData.selectedProduct && (() => {
+              const p = formData.selectedProduct;
+              const origQty = Number(p.original_quantity || p.roll_count || 0);
+              const currQty = Number(p.current_quantity || p.roll_count || 0);
+              const usedPct = origQty > 0 ? Math.round(((origQty - currQty) / origQty) * 100) : 0;
+              return (
+                <div className="fixed inset-0 bg-black/60 z-50 flex items-start justify-center overflow-auto p-4" onClick={e => { if (e.target === e.currentTarget) setFormData({...formData, selectedProduct: null}); }}>
+                  <div className="bg-white rounded-2xl shadow-2xl w-full max-w-[600px] my-8 overflow-hidden">
+                    {/* Photo header */}
+                    {p.photo_url ? (
+                      <div className="h-48 overflow-hidden relative">
+                        <img src={p.photo_url} alt="" className="w-full h-full object-cover" />
+                        <button onClick={() => setFormData({...formData, selectedProduct: null})}
+                          className="absolute top-3 right-3 w-8 h-8 bg-black/50 rounded-full text-white flex items-center justify-center">✕</button>
+                      </div>
                     ) : (
-                      <div className="px-3 py-4 text-xs text-slate-400 text-center">No linked invoices / لا توجد فواتير مرتبطة</div>
+                      <div className="bg-gradient-to-r from-indigo-600 to-purple-600 px-5 py-4 flex justify-between items-center">
+                        <h3 className="text-white font-bold">{p.reference_number || p.product_id}</h3>
+                        <button onClick={() => setFormData({...formData, selectedProduct: null})} className="text-white/70 text-xl">✕</button>
+                      </div>
                     )}
+                    <div className="p-5 space-y-3">
+                      {/* Upload photo for existing product */}
+                      {!p.photo_url && (
+                        <div className="flex gap-2 items-center">
+                          <input type="file" accept="image/*" id="prod-photo-edit" className="text-xs flex-1" />
+                          <button onClick={async () => {
+                            const fi = document.getElementById('prod-photo-edit');
+                            if (!fi?.files?.[0]) return;
+                            const file = fi.files[0];
+                            const fileName = 'product-' + Date.now() + '.' + file.name.split('.').pop();
+                            const { data: ud, error: ue } = await supabase.storage.from('product-photos').upload(fileName, file);
+                            if (!ue && ud) {
+                              const { data: url } = supabase.storage.from('product-photos').getPublicUrl(fileName);
+                              await dbUpdate('inventory', p.id, { photo_url: url?.publicUrl || '' }, user?.id);
+                              setFormData({...formData, selectedProduct: {...p, photo_url: url?.publicUrl}});
+                              await loadAllData();
+                            } else { alert('Upload error: ' + (ue?.message || 'unknown')); }
+                          }} className="px-3 py-1.5 bg-blue-500 text-white rounded text-xs font-bold">📷 Upload</button>
+                        </div>
+                      )}
+                      {/* Category pills */}
+                      <div className="flex gap-2 flex-wrap">
+                        {p.product_type && <span className="px-2 py-1 bg-indigo-100 text-indigo-700 rounded-lg text-xs font-bold">{p.product_type}</span>}
+                        {p.subcategory && <span className="px-2 py-1 bg-amber-100 text-amber-700 rounded-lg text-xs font-bold">{p.subcategory}</span>}
+                      </div>
+                      <div>
+                        <div className="text-lg font-bold">{p.reference_number || p.product_id}</div>
+                        <div className="text-sm text-slate-600" style={{direction:'rtl'}}>{p.description}</div>
+                        {p.description_en && <div className="text-sm text-blue-600">{p.description_en}</div>}
+                        {p.color && <div className="text-xs text-slate-400 mt-1">🎨 {p.color}{p.color_en ? ' / ' + p.color_en : ''}</div>}
+                      </div>
+                      {/* Quantity tracking */}
+                      <div className="bg-slate-50 rounded-xl p-4">
+                        <div className="flex justify-between mb-2">
+                          <div><div className="text-[9px] text-slate-400">Original</div><div className="text-lg font-bold text-blue-600">{origQty.toLocaleString()}</div></div>
+                          <div className="text-center"><div className="text-[9px] text-slate-400">Used</div><div className="text-lg font-bold text-red-500">{(origQty - currQty).toLocaleString()}</div></div>
+                          <div className="text-right"><div className="text-[9px] text-slate-400">Remaining</div><div className="text-lg font-bold text-emerald-600">{currQty.toLocaleString()}</div></div>
+                        </div>
+                        <div className="h-3 bg-slate-200 rounded-full overflow-hidden">
+                          <div className="h-full rounded-full transition-all" style={{width: Math.max(3, 100 - usedPct) + '%', background: usedPct > 80 ? '#ef4444' : usedPct > 50 ? '#f59e0b' : '#10b981'}} />
+                        </div>
+                        <div className="text-[10px] text-slate-400 text-center mt-1">{usedPct}% used</div>
+                      </div>
+                      <div className="grid grid-cols-3 gap-2">
+                        <div className="bg-blue-50 rounded-lg p-2 text-center"><div className="text-[9px] text-slate-500">Rolls</div><div className="text-sm font-bold">{p.roll_count}</div></div>
+                        <div className="bg-emerald-50 rounded-lg p-2 text-center"><div className="text-[9px] text-slate-500">Net Weight</div><div className="text-sm font-bold">{fmt(p.net_weight)} kg</div></div>
+                        <div className="bg-purple-50 rounded-lg p-2 text-center"><div className="text-[9px] text-slate-500">Unit Price</div><div className="text-sm font-bold text-emerald-600">{fE(p.unit_price)}</div></div>
+                      </div>
+                      {/* Update current quantity */}
+                      <div className="flex gap-2 items-center bg-amber-50 rounded-lg p-3">
+                        <span className="text-xs font-bold text-amber-700">Update Qty:</span>
+                        <input type="number" id="update-qty" defaultValue={currQty} className="flex-1 px-2 py-1.5 rounded border text-sm" />
+                        <button onClick={async () => {
+                          const val = Number(document.getElementById('update-qty')?.value);
+                          if (isNaN(val)) return;
+                          await dbUpdate('inventory', p.id, { current_quantity: val }, user?.id);
+                          setFormData({...formData, selectedProduct: {...p, current_quantity: val}});
+                          await loadAllData();
+                        }} className="px-3 py-1.5 bg-amber-500 text-white rounded text-xs font-bold">Save</button>
+                      </div>
+                      {/* ===== COST & PROFIT (Super Admin / View Costs permission) ===== */}
+                      {(userProfile?.role === 'super_admin' || modulePerms?.['View Costs'] === true) && (
+                        <div className="bg-red-50/50 rounded-xl p-4 border border-red-200/50">
+                          <h4 className="text-xs font-bold text-red-800 mb-2">🔒 Cost & Profit (Internal)</h4>
+                          <div className="grid grid-cols-2 gap-2 mb-3">
+                            <div>
+                              <label className="text-[9px] font-bold text-slate-500">Purchase Cost</label>
+                              <div className="flex gap-1">
+                                <input type="number" id="cost-purchase" defaultValue={p.purchase_cost || ''} placeholder="0.00" className="flex-1 px-2 py-1.5 rounded border text-sm" />
+                                <select id="cost-purchase-curr" defaultValue={p.purchase_currency || 'USD'} className="px-2 py-1.5 rounded border text-xs w-16">
+                                  <option value="USD">USD</option><option value="EGP">EGP</option></select>
+                              </div>
+                            </div>
+                            <div>
+                              <label className="text-[9px] font-bold text-slate-500">Customs / Duties</label>
+                              <div className="flex gap-1">
+                                <input type="number" id="cost-customs" defaultValue={p.customs_cost || ''} placeholder="0.00" className="flex-1 px-2 py-1.5 rounded border text-sm" />
+                                <select id="cost-customs-curr" defaultValue={p.customs_currency || 'EGP'} className="px-2 py-1.5 rounded border text-xs w-16">
+                                  <option value="USD">USD</option><option value="EGP">EGP</option></select>
+                              </div>
+                            </div>
+                            <div>
+                              <label className="text-[9px] font-bold text-slate-500">Shipping & Freight</label>
+                              <div className="flex gap-1">
+                                <input type="number" id="cost-shipping" defaultValue={p.shipping_cost || ''} placeholder="0.00" className="flex-1 px-2 py-1.5 rounded border text-sm" />
+                                <select id="cost-shipping-curr" defaultValue={p.shipping_currency || 'USD'} className="px-2 py-1.5 rounded border text-xs w-16">
+                                  <option value="USD">USD</option><option value="EGP">EGP</option></select>
+                              </div>
+                            </div>
+                            <div>
+                              <label className="text-[9px] font-bold text-slate-500">Other Charges</label>
+                              <div className="flex gap-1">
+                                <input type="number" id="cost-other" defaultValue={p.other_cost || ''} placeholder="0.00" className="flex-1 px-2 py-1.5 rounded border text-sm" />
+                                <select id="cost-other-curr" defaultValue={p.other_currency || 'EGP'} className="px-2 py-1.5 rounded border text-xs w-16">
+                                  <option value="USD">USD</option><option value="EGP">EGP</option></select>
+                              </div>
+                            </div>
+                            <div>
+                              <label className="text-[9px] font-bold text-slate-500">FX Rate (USD→EGP)</label>
+                              <input type="number" id="cost-fx" defaultValue={p.fx_rate || 50} step="0.01" className="w-full px-2 py-1.5 rounded border text-sm" />
+                            </div>
+                            <div>
+                              <label className="text-[9px] font-bold text-slate-500">Sale Price (per unit)</label>
+                              <div className="flex gap-1">
+                                <input type="number" id="cost-sale" defaultValue={p.unit_price || ''} className="flex-1 px-2 py-1.5 rounded border text-sm bg-emerald-50" disabled />
+                                <span className="px-2 py-1.5 text-xs text-slate-500">EGP</span>
+                              </div>
+                            </div>
+                          </div>
+                          <button onClick={async () => {
+                            const costs = {
+                              purchase_cost: Number(document.getElementById('cost-purchase')?.value) || 0,
+                              purchase_currency: document.getElementById('cost-purchase-curr')?.value || 'USD',
+                              customs_cost: Number(document.getElementById('cost-customs')?.value) || 0,
+                              customs_currency: document.getElementById('cost-customs-curr')?.value || 'EGP',
+                              shipping_cost: Number(document.getElementById('cost-shipping')?.value) || 0,
+                              shipping_currency: document.getElementById('cost-shipping-curr')?.value || 'USD',
+                              other_cost: Number(document.getElementById('cost-other')?.value) || 0,
+                              other_currency: document.getElementById('cost-other-curr')?.value || 'EGP',
+                              fx_rate: Number(document.getElementById('cost-fx')?.value) || 50,
+                            };
+                            try {
+                              await dbUpdate('inventory', p.id, costs, user?.id);
+                              setFormData({...formData, selectedProduct: {...p, ...costs}});
+                              await loadAllData();
+                            } catch (err) { alert('Error: ' + err.message); }
+                          }} className="px-4 py-2 bg-red-600 text-white rounded-lg text-xs font-bold w-full mb-3">Save Costs</button>
+
+                          {/* Profit Calculation */}
+                          {(() => {
+                            const fx = Number(p.fx_rate) || 50;
+                            const toEGP = (amt, curr) => curr === 'USD' ? amt * fx : amt;
+                            const toUSD = (amt, curr) => curr === 'EGP' ? amt / fx : amt;
+                            const purchaseEGP = toEGP(Number(p.purchase_cost || 0), p.purchase_currency || 'USD');
+                            const customsEGP = toEGP(Number(p.customs_cost || 0), p.customs_currency || 'EGP');
+                            const shippingEGP = toEGP(Number(p.shipping_cost || 0), p.shipping_currency || 'USD');
+                            const otherEGP = toEGP(Number(p.other_cost || 0), p.other_currency || 'EGP');
+                            const totalCostEGP = purchaseEGP + customsEGP + shippingEGP + otherEGP;
+                            const totalCostUSD = totalCostEGP / fx;
+                            const salesEGP = Number(p.unit_price || 0) * origQty;
+                            const linkedInvs = invoiceItems.filter(it => (it.description||'').includes(p.description)||(it.description||'').includes(p.reference_number));
+                            const actualSalesEGP = linkedInvs.reduce((a, it) => a + Number(it.line_total || 0), 0);
+                            const profitEGP = (actualSalesEGP || salesEGP) - totalCostEGP;
+                            const profitUSD = profitEGP / fx;
+                            const margin = (actualSalesEGP || salesEGP) > 0 ? (profitEGP / (actualSalesEGP || salesEGP) * 100).toFixed(1) : 0;
+                            return (
+                              <div className="bg-white rounded-lg p-3 border">
+                                <div className="grid grid-cols-2 gap-2 mb-2">
+                                  <div className="text-center"><div className="text-[9px] text-slate-400">Total Cost</div>
+                                    <div className="text-sm font-bold text-red-600">{fE(totalCostEGP)}</div>
+                                    <div className="text-[9px] text-slate-400">${totalCostUSD.toLocaleString(undefined,{maximumFractionDigits:2})} USD</div></div>
+                                  <div className="text-center"><div className="text-[9px] text-slate-400">Revenue</div>
+                                    <div className="text-sm font-bold text-blue-600">{fE(actualSalesEGP || salesEGP)}</div>
+                                    <div className="text-[9px] text-slate-400">{actualSalesEGP > 0 ? 'From invoices' : 'Estimated'}</div></div>
+                                </div>
+                                <div className={'rounded-lg p-3 text-center ' + (profitEGP >= 0 ? 'bg-emerald-50' : 'bg-red-50')}>
+                                  <div className="text-[9px] text-slate-400">Profit / الربح</div>
+                                  <div className={'text-lg font-extrabold ' + (profitEGP >= 0 ? 'text-emerald-600' : 'text-red-600')}>{fE(profitEGP)}</div>
+                                  <div className="text-xs text-slate-500">${profitUSD.toLocaleString(undefined,{maximumFractionDigits:2})} USD · {margin}% margin</div>
+                                </div>
+                                <div className="grid grid-cols-4 gap-1 mt-2 text-center">
+                                  <div><div className="text-[8px] text-slate-400">Purchase</div><div className="text-[10px] font-bold">{fE(purchaseEGP)}</div></div>
+                                  <div><div className="text-[8px] text-slate-400">Customs</div><div className="text-[10px] font-bold">{fE(customsEGP)}</div></div>
+                                  <div><div className="text-[8px] text-slate-400">Shipping</div><div className="text-[10px] font-bold">{fE(shippingEGP)}</div></div>
+                                  <div><div className="text-[8px] text-slate-400">Other</div><div className="text-[10px] font-bold">{fE(otherEGP)}</div></div>
+                                </div>
+                              </div>
+                            );
+                          })()}
+                        </div>
+                      )}
+                      {/* Linked Invoices */}
+                      <h4 className="text-xs font-bold">Linked Invoices</h4>
+                      <div className="overflow-auto max-h-[200px] rounded border border-slate-200">
+                        {invoiceItems.filter(it => (it.description||'').includes(p.description)||(it.description||'').includes(p.reference_number)).length > 0 ? (
+                          <table className="w-full border-collapse">
+                            <thead><tr className="bg-slate-50">
+                              <th className="px-2 py-1 text-[10px] text-left">Invoice</th>
+                              <th className="px-2 py-1 text-[10px] text-right">Qty</th>
+                              <th className="px-2 py-1 text-[10px] text-right">Price</th>
+                              <th className="px-2 py-1 text-[10px] text-right">Total</th>
+                            </tr></thead>
+                            <tbody>
+                              {invoiceItems.filter(it => (it.description||'').includes(p.description)||(it.description||'').includes(p.reference_number)).map(it => {
+                                const inv = invoices.find(i => i.id === it.invoice_id);
+                                return (
+                                  <tr key={it.id} className="border-b border-slate-50 cursor-pointer hover:bg-blue-50"
+                                    onClick={() => { if (inv) { setFormData({...formData, selectedProduct: null}); setSelectedInvoice(inv); } }}>
+                                    <td className="px-2 py-1 text-xs font-semibold">{inv ? '#'+inv.order_number : '—'}</td>
+                                    <td className="px-2 py-1 text-xs text-right">{fmt(it.quantity)}</td>
+                                    <td className="px-2 py-1 text-xs text-right">{fmt(it.unit_price)}</td>
+                                    <td className="px-2 py-1 text-xs text-right font-semibold">{fE(it.line_total)}</td>
+                                  </tr>
+                                );
+                              })}
+                            </tbody>
+                          </table>
+                        ) : (<div className="px-3 py-4 text-xs text-slate-400 text-center">No linked invoices</div>)}
+                      </div>
+                    </div>
                   </div>
                 </div>
-              </Modal>
-            )}
+              );
+            })()}
           </div>
         )}
 
@@ -3570,7 +4010,7 @@ export default function App() {
             TICKETS TAB
         ========================================== */}
         {tab === 'tickets' && (
-          <TicketsTab customers={customers} user={user} userProfile={userProfile} users={teamUsers} onReload={loadAllData} lang={lang} isAdmin={isAdmin} />
+          <TicketsTab customers={customers} user={user} userProfile={userProfile} users={teamUsers} onReload={loadAllData} lang={lang} isAdmin={isAdmin} modulePerms={modulePerms} />
         )}
 
         {/* ==========================================
@@ -3612,7 +4052,7 @@ export default function App() {
             AI ASSISTANT TAB
         ========================================== */}
         {tab === 'ai' && (
-          <AIAssistant user={user} userProfile={userProfile} />
+          <AIAssistant user={user} userProfile={userProfile} users={teamUsers} customers={customers} />
         )}
 
         {tab === 'comms' && (

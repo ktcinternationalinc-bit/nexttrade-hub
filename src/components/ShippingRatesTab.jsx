@@ -247,7 +247,7 @@ function RequestQuoteModal({ data, onClose, origins, destinations, openWhatsApp,
 }
 
 export default function ShippingRatesTab({ user, userProfile, isAdmin, customers }) {
-  const myId = userProfile?.id || user?.id;
+  const myId = userProfile?.id;
   const [rates, setRates] = useState([]);
   const [quotes, setQuotes] = useState([]);
   const [bookings, setBookings] = useState([]);

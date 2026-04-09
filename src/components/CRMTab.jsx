@@ -19,7 +19,7 @@ const PIPELINE_STAGES = [
 ];
 
 export default function CRMTab({ customers, invoices, user, userProfile, users, onReload, isAdmin, onSelectInvoice, lang, modulePerms }) {
-  const myId = userProfile?.id || user?.id;
+  const myId = userProfile?.id;
   const canViewAll = isAdmin || modulePerms?.['CRM View All'] === true;
   const [sel, setSel] = useState(null);
   const [q, setQ] = useState('');

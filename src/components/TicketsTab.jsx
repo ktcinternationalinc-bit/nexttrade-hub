@@ -1,16 +1,19 @@
 'use client';
 import { useState, useMemo } from 'react';
-import { supabase, dbInsert, dbUpdate, logActivity } from '../lib/supabase';
+import { supabase, dbInsert, dbUpdate, dbDelete, logActivity } from '../lib/supabase';
 import { notifyTicketAssigned, notifyTicketStatus, notifyTicketComment, notifyTicketReassigned } from '../lib/notify';
 
-const STATUSES = ['New','Acknowledged','In Progress','Waiting','Review','Testing','Ready','Closed','Reopened'];
+const STATUSES = ['New','Acknowledged','In Progress','Blocked','On Hold','Review','Closed','Reopened'];
 const PRIORITIES = [{v:'high',l:'High / عالي',c:'#ef4444'},{v:'medium',l:'Medium / متوسط',c:'#f59e0b'},{v:'low',l:'Low / منخفض',c:'#10b981'}];
-const STATUS_COLORS = {New:'#3b82f6',Acknowledged:'#8b5cf6','In Progress':'#f59e0b',Waiting:'#6b7280',Review:'#ec4899',Testing:'#14b8a6',Ready:'#10b981',Closed:'#374151',Reopened:'#ef4444'};
+const STATUS_COLORS = {New:'#3b82f6',Acknowledged:'#8b5cf6','In Progress':'#eab308',Blocked:'#ef4444','On Hold':'#f97316',Review:'#06b6d4',Closed:'#10b981',Reopened:'#eab308'};
+const STATUS_DESC = {New:'Just created — nobody has looked at it yet',Acknowledged:'Assigned person has seen and accepted it','In Progress':'Actively being worked on',Blocked:'Cannot proceed — waiting on something external',
+  'On Hold':'Paused intentionally — not urgent right now',Review:'Work done — needs someone to check/approve',Closed:'Complete — no more action needed',Reopened:'Was closed but needs more work'};
 const USER_COLORS = ['#8b5cf6','#0ea5e9','#f59e0b','#10b981','#ec4899','#ef4444','#6366f1','#14b8a6','#f97316','#06b6d4','#a855f7','#84cc16'];
 
-export default function TicketsTab({ customers, user, userProfile, users, onReload, lang, isAdmin }) {
-  const myId = userProfile?.id || user?.id;
+export default function TicketsTab({ customers, user, userProfile, users, onReload, lang, isAdmin, modulePerms }) {
+  const myId = userProfile?.id;
   const canManage = isAdmin || userProfile?.role === 'super_admin' || userProfile?.role === 'admin';
+  const canDelete = userProfile?.role === 'super_admin' || modulePerms?.['Delete Tickets'] === true;
   // Stable color per user
   const userColorMap = useMemo(() => {
     const map = {};
@@ -119,6 +122,17 @@ export default function TicketsTab({ customers, user, userProfile, users, onRelo
     } catch (err) { alert('Error: ' + err.message); }
   };
 
+  const deleteTicket = async (ticket) => {
+    if (!confirm('Permanently delete ' + (ticket.ticket_number || '') + ' "' + ticket.title + '"?\n\nThis cannot be undone.')) return;
+    try {
+      // Delete comments first (foreign key)
+      await supabase.from('ticket_comments').delete().eq('ticket_id', ticket.id);
+      await dbDelete('tickets', ticket.id, myId);
+      await logActivity(myId, 'Deleted ticket: ' + (ticket.ticket_number || '') + ' ' + ticket.title, 'ticket');
+      setSel(null); setComments([]); loadTickets();
+    } catch (err) { alert('Error: ' + err.message); }
+  };
+
   // ===== TICKET DETAIL VIEW =====
   if (sel) {
     const priInfo = PRIORITIES.find(p => p.v === sel.priority) || PRIORITIES[1];
@@ -129,7 +143,15 @@ export default function TicketsTab({ customers, user, userProfile, users, onRelo
     const userComments = comments.filter(c => !c.is_system);
 
     return (<div>
-      <button onClick={() => { setSel(null); setComments([]); }} className="px-3 py-1 rounded border border-slate-200 text-xs font-semibold mb-3">← Back</button>
+      <div className="flex justify-between items-center mb-3">
+        <button onClick={() => { setSel(null); setComments([]); }} className="px-3 py-1 rounded border border-slate-200 text-xs font-semibold">← Back</button>
+        {canDelete && (
+          <button onClick={() => deleteTicket(sel)}
+            className="px-3 py-1 rounded border border-red-300 text-red-600 text-xs font-semibold hover:bg-red-50 transition">
+            🗑 Delete Ticket
+          </button>
+        )}
+      </div>
 
       {/* TICKET HEADER */}
       <div className={'bg-white rounded-xl p-5 mb-3 border-l-4'} style={{ borderLeftColor: STATUS_COLORS[sel.status] || '#6b7280' }}>
@@ -316,6 +338,22 @@ export default function TicketsTab({ customers, user, userProfile, users, onRelo
       <div className="bg-white rounded-lg p-3" style={{borderLeftWidth:3,borderLeftColor:'#f59e0b'}}><div className="text-[10px] text-slate-500">High Priority</div><div className="text-lg font-extrabold text-amber-500">{tickets.filter(t=>t.priority==='high'&&t.status!=='Closed').length}</div></div>
       <div className="bg-white rounded-lg p-3" style={{borderLeftWidth:3,borderLeftColor:'#10b981'}}><div className="text-[10px] text-slate-500">Closed</div><div className="text-lg font-extrabold">{tickets.filter(t=>t.status==='Closed').length}</div></div>
     </div>
+
+    {/* Status Legend — collapsible */}
+    <details className="mb-3">
+      <summary className="text-[10px] text-blue-500 font-bold cursor-pointer hover:underline">ℹ️ Status Guide — what each status means</summary>
+      <div className="bg-white rounded-xl p-3 mt-1 grid grid-cols-2 md:grid-cols-4 gap-2">
+        {STATUSES.map(s => (
+          <div key={s} className="rounded-lg p-2 border border-slate-100">
+            <div className="flex items-center gap-1.5 mb-0.5">
+              <div className="w-2.5 h-2.5 rounded-full" style={{background: STATUS_COLORS[s]}} />
+              <span className="text-xs font-bold">{s}</span>
+            </div>
+            <div className="text-[9px] text-slate-500 leading-tight">{STATUS_DESC[s]}</div>
+          </div>
+        ))}
+      </div>
+    </details>
 
     {/* Add Ticket Form */}
     {showAdd && (<div className="bg-blue-50 rounded-xl p-4 mb-3 border border-blue-200">

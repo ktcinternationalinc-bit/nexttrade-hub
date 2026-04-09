@@ -1,13 +1,17 @@
 'use client';
-import { useState, useRef, useEffect, useCallback } from 'react';
+import { useState, useRef, useEffect, useCallback, useMemo } from 'react';
 
-export default function AIAssistant({ user, userProfile }) {
+export default function AIAssistant({ user, userProfile, users, customers }) {
   const myId = userProfile?.id || user?.id;
   const [messages, setMessages] = useState([]);
   const [input, setInput] = useState('');
   const [loading, setLoading] = useState(false);
   const [listening, setListening] = useState(false);
   const [speaking, setSpeaking] = useState(false);
+  const [recording, setRecording] = useState(false);
+  const [recordingTime, setRecordingTime] = useState(0);
+  const recordingTimerRef = useRef(null);
+  const recordingRecRef = useRef(null);
   const [voiceSupported, setVoiceSupported] = useState(false);
   const [pendingAction, _setPendingAction] = useState(null);
   const pendingActionRef = useRef(null);
@@ -138,7 +142,7 @@ export default function AIAssistant({ user, userProfile }) {
       };
       recognitionRef.current = recognition;
     }
-    return () => { if (silenceTimerRef.current) clearTimeout(silenceTimerRef.current); if (autoSendRef.current) clearTimeout(autoSendRef.current); if (maxTimeoutRef.current) clearTimeout(maxTimeoutRef.current); };
+    return () => { if (silenceTimerRef.current) clearTimeout(silenceTimerRef.current); if (autoSendRef.current) clearTimeout(autoSendRef.current); if (maxTimeoutRef.current) clearTimeout(maxTimeoutRef.current); if (recordingTimerRef.current) clearInterval(recordingTimerRef.current); };
   }, []);
 
   useEffect(() => { chatEndRef.current?.scrollIntoView({ behavior: 'smooth' }); }, [messages, loading]);
@@ -154,6 +158,7 @@ export default function AIAssistant({ user, userProfile }) {
 
   const toggleVoice = () => {
     if (!recognitionRef.current) return;
+    if (recording) { stopRecording(); return; } // If recording voice note, stop it
     if (audioRef.current) { audioRef.current.pause(); audioRef.current = null; } if ('speechSynthesis' in window) window.speechSynthesis.cancel(); speakingRef.current = false; setSpeaking(false);
     if (listening || conversationModeRef.current) {
       // Stop everything
@@ -184,10 +189,100 @@ export default function AIAssistant({ user, userProfile }) {
 
   const stopSpeaking = () => {
     speakingRef.current = false; setSpeaking(false);
-    setSpeaking(false);
     if (audioRef.current) { audioRef.current.pause(); audioRef.current = null; }
     if ('speechSynthesis' in window) window.speechSynthesis.cancel();
   };
+
+  // Build known names for correction
+  const knownNames = useMemo(() => {
+    const names = [];
+    (users || []).forEach(u => {
+      if (u.name) names.push(u.name);
+      if (u.name_ar) names.push(u.name_ar);
+      // Add first names and last names separately
+      const parts = (u.name || '').split(/\s+/);
+      parts.forEach(p => { if (p.length > 2) names.push(p); });
+    });
+    (customers || []).slice(0, 100).forEach(c => {
+      if (c.name) names.push(c.name);
+      if (c.name_en) names.push(c.name_en);
+    });
+    return [...new Set(names)];
+  }, [users, customers]);
+
+  // Correct names in transcribed text using similarity matching
+  const correctNames = (text) => {
+    if (!text || knownNames.length === 0) return text;
+    let corrected = text;
+    const words = text.split(/\s+/);
+    // Check 1-word and 2-word combinations
+    for (let i = 0; i < words.length; i++) {
+      const w1 = words[i];
+      const w2 = i < words.length - 1 ? words[i] + ' ' + words[i + 1] : '';
+      for (const name of knownNames) {
+        const nameLower = name.toLowerCase();
+        // Exact match (case-insensitive) — skip
+        if (w1.toLowerCase() === nameLower) break;
+        // Close match for single word (Levenshtein-like: differ by 1-2 chars)
+        if (w1.length >= 3 && nameLower.length >= 3 && Math.abs(w1.length - nameLower.length) <= 2) {
+          let matches = 0;
+          const shorter = w1.length <= nameLower.length ? w1.toLowerCase() : nameLower;
+          const longer = w1.length > nameLower.length ? w1.toLowerCase() : nameLower;
+          for (let c = 0; c < shorter.length; c++) { if (longer.includes(shorter[c])) matches++; }
+          if (matches / longer.length > 0.75 && matches >= 3) {
+            corrected = corrected.replace(new RegExp('\\b' + w1.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '\\b', 'gi'), name);
+            break;
+          }
+        }
+        // Two-word name match
+        if (w2 && w2.length >= 4) {
+          const w2Lower = w2.toLowerCase();
+          if (w2Lower === nameLower) { corrected = corrected.replace(w2, name); break; }
+        }
+      }
+    }
+    return corrected;
+  };
+
+  // ===== VOICE NOTE RECORDING =====
+  const startRecording = () => {
+    if (!recognitionRef.current || listening || conversationModeRef.current) return;
+    stopSpeaking();
+    const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+    const rec = new SR();
+    rec.continuous = true;
+    rec.interimResults = true;
+    rec.lang = 'en-US';
+    let transcript = '';
+    rec.onresult = (event) => {
+      transcript = '';
+      for (let i = 0; i < event.results.length; i++) {
+        transcript += event.results[i][0].transcript;
+      }
+      setInput(correctNames(transcript));
+    };
+    rec.onerror = () => {};
+    rec.onend = () => {
+      // If still in recording mode, restart
+      if (recording) { try { rec.start(); } catch(e) {} }
+    };
+    recordingRecRef.current = rec;
+    rec.start();
+    setRecording(true);
+    setRecordingTime(0);
+    recordingTimerRef.current = setInterval(() => {
+      setRecordingTime(prev => prev + 1);
+    }, 1000);
+  };
+
+  const stopRecording = () => {
+    setRecording(false);
+    if (recordingTimerRef.current) { clearInterval(recordingTimerRef.current); recordingTimerRef.current = null; }
+    if (recordingRecRef.current) { try { recordingRecRef.current.stop(); } catch(e) {} recordingRecRef.current = null; }
+    // Text stays in input for user to review and send
+  };
+
+  const formatTime = (s) => Math.floor(s / 60) + ':' + String(s % 60).padStart(2, '0');
 
   const speak = async (text) => {
     stopSpeaking();
@@ -260,8 +355,9 @@ export default function AIAssistant({ user, userProfile }) {
   const askQuestion = useCallback(async (overrideText) => {
     const voiceText = pendingTextRef.current;
     pendingTextRef.current = null;
-    const question = (overrideText || voiceText || input).trim();
-    if (!question || loading) return;
+    const rawQuestion = (overrideText || voiceText || input).trim();
+    if (!rawQuestion || loading) return;
+    const question = correctNames(rawQuestion);
     setInput('');
     
     // Check "break" command
@@ -621,30 +717,49 @@ ${today}`;
         border: '1px solid rgba(255,255,255,0.08)',
       }}>
         <div className="flex gap-2">
-          {voiceSupported && (
+          {voiceSupported && !recording && (
             <button onClick={toggleVoice}
               className="rounded-xl text-2xl transition flex-shrink-0"
               style={listening ? {
                 background: 'linear-gradient(135deg, #ef4444, #dc2626)',
                 boxShadow: '0 0 25px rgba(248,113,113,0.5)',
-                color: 'white', width: 56, height: 56,
+                color: 'white', width: 48, height: 56,
                 display: 'flex', alignItems: 'center', justifyContent: 'center',
               } : {
                 background: 'linear-gradient(135deg, rgba(56,189,248,0.15), rgba(167,139,250,0.15))',
                 border: '2px solid rgba(56,189,248,0.3)',
-                color: '#38bdf8', width: 56, height: 56,
+                color: '#38bdf8', width: 48, height: 56,
                 display: 'flex', alignItems: 'center', justifyContent: 'center',
               }}>
               {listening ? '⏹️' : '🎤'}
             </button>
           )}
-          {/* Stop Speaking button — visible when AI is talking */}
+          {/* Voice Note button */}
+          {voiceSupported && !listening && (
+            <button onClick={recording ? stopRecording : startRecording}
+              className="rounded-xl text-lg transition flex-shrink-0"
+              style={recording ? {
+                background: 'linear-gradient(135deg, #ef4444, #dc2626)',
+                boxShadow: '0 0 20px rgba(248,113,113,0.4)',
+                color: 'white', width: 48, height: 56,
+                display: 'flex', alignItems: 'center', justifyContent: 'center',
+              } : {
+                background: 'linear-gradient(135deg, rgba(16,185,129,0.15), rgba(5,150,105,0.15))',
+                border: '2px solid rgba(16,185,129,0.3)',
+                color: '#10b981', width: 48, height: 56,
+                display: 'flex', alignItems: 'center', justifyContent: 'center',
+              }}
+              title={recording ? 'Stop recording' : 'Record voice note'}>
+              {recording ? '⏹' : '🎙️'}
+            </button>
+          )}
+          {/* Stop Speaking button */}
           {speaking && (
             <button onClick={() => { stopSpeaking(); if (conversationModeRef.current) startListeningAgain(); }}
               className="rounded-xl text-lg transition flex-shrink-0 animate-pulse"
               style={{
                 background: 'linear-gradient(135deg, #f59e0b, #d97706)',
-                color: 'white', width: 56, height: 56,
+                color: 'white', width: 48, height: 56,
                 display: 'flex', alignItems: 'center', justifyContent: 'center',
                 boxShadow: '0 0 15px rgba(245,158,11,0.4)',
               }}>
@@ -652,24 +767,35 @@ ${today}`;
             </button>
           )}
           <input value={input} onChange={e => setInput(e.target.value)}
-            onKeyDown={e => e.key === 'Enter' && askQuestion()}
-            placeholder={speaking ? 'AI is speaking... tap 🔇 to stop' : listening ? 'Listening...' : 'Ask anything or give a command...'}
+            onKeyDown={e => e.key === 'Enter' && !recording && askQuestion()}
+            placeholder={recording ? 'Recording... tap ⏹ when done' : speaking ? 'AI speaking... tap 🔇' : listening ? 'Listening...' : 'Ask anything or give a command...'}
             className="flex-1 px-4 py-3 rounded-xl text-sm"
             style={{
-              background: speaking ? 'rgba(245,158,11,0.06)' : listening ? 'rgba(248,113,113,0.06)' : 'rgba(255,255,255,0.04)',
-              border: '1px solid ' + (speaking ? 'rgba(245,158,11,0.2)' : listening ? 'rgba(248,113,113,0.2)' : 'rgba(255,255,255,0.08)'),
+              background: recording ? 'rgba(16,185,129,0.06)' : speaking ? 'rgba(245,158,11,0.06)' : listening ? 'rgba(248,113,113,0.06)' : 'rgba(255,255,255,0.04)',
+              border: '1px solid ' + (recording ? 'rgba(16,185,129,0.3)' : speaking ? 'rgba(245,158,11,0.2)' : listening ? 'rgba(248,113,113,0.2)' : 'rgba(255,255,255,0.08)'),
               color: 'var(--text-primary)',
               fontSize: '16px',
             }} />
-          <button id="ai-send-btn" onClick={() => askQuestion()} disabled={loading || !input.trim()}
+          <button id="ai-send-btn" onClick={() => { if (recording) stopRecording(); askQuestion(); }} disabled={loading || !input.trim()}
             className="rounded-xl text-sm font-bold disabled:opacity-40 transition flex-shrink-0 px-5"
             style={{background:'linear-gradient(135deg, #0ea5e9, #6366f1)', boxShadow:'0 2px 12px rgba(56,189,248,0.3)', color:'white', height: 56}}>
             {loading ? '...' : '→'}
           </button>
-          {/* Hidden button for voice auto-send — not disabled, uses pendingTextRef */}
           <button id="ai-send-btn-hidden" onClick={() => askQuestion()} style={{display:'none'}} />
         </div>
-        {speaking && (
+        {/* Recording indicator */}
+        {recording && (
+          <div className="text-center mt-2 py-2">
+            <div className="flex items-center justify-center gap-2">
+              <span className="w-3 h-3 rounded-full bg-red-500 animate-pulse" />
+              <span className="text-xs font-bold" style={{color:'#10b981'}}>Recording voice note — {formatTime(recordingTime)}</span>
+            </div>
+            <div className="text-[10px] mt-1" style={{color:'var(--text-muted)'}}>
+              Speak freely. Tap ⏹ when done. Review text, then tap → to send.
+            </div>
+          </div>
+        )}
+        {speaking && !recording && (
           <div className="text-center mt-2 py-1">
             <div className="text-xs font-bold" style={{color:'#f59e0b'}}>🔊 AI Speaking... <button onClick={stopSpeaking} className="ml-2 px-2 py-0.5 rounded bg-amber-600 text-white text-[10px] font-bold">Stop</button></div>
           </div>

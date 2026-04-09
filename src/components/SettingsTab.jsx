@@ -13,7 +13,7 @@ const ROLES = [
 
 const MODULES = [
   'Dashboard', 'Sales', 'Customers', 'Treasury', 'Checks', 'Debts',
-  'Warehouse', 'Inventory', 'CRM', 'CRM View All', 'Tickets', 'Calendar', 'Customs',
+  'Warehouse', 'Inventory', 'CRM', 'CRM View All', 'Tickets', 'Delete Tickets', 'View Costs', 'Calendar', 'Customs',
   'Shipping Rates', 'Daily Log', 'Admin', 'AI Assistant', 'Communications', 'Settings', 'Import'
 ];
 
@@ -671,11 +671,11 @@ export default function SettingsTab({ user, users, onReload, isAdmin }) {
                         <td className="px-3 py-2 text-center text-slate-500">{d.count}</td>
                         <td className="px-3 py-2 text-right font-bold text-purple-600">{Number(d.total).toLocaleString()}</td>
                         <td className="px-3 py-2">
-                          <select defaultValue={d.category || ''} key={d.description + '-cat-' + d.category}
-                            onChange={async (e) => {
-                              const newCat = e.target.value;
+                          <input list={'exp-cat-list-' + d.description.replace(/\s/g,'')} defaultValue={d.category || ''} key={d.description + '-cat-' + d.category} placeholder="Type or select..."
+                            onBlur={async (e) => {
+                              const newCat = e.target.value.trim();
+                              if (newCat === (d.category || '')) return;
                               try {
-                                // Update ALL treasury entries with this description
                                 let from = 0;
                                 while (true) {
                                   const { data } = await supabase.from('treasury').select('id').eq('description', d.description).range(from, from + 499);
@@ -686,17 +686,16 @@ export default function SettingsTab({ user, users, onReload, isAdmin }) {
                                   if (data.length < 500) break;
                                   from += 500;
                                 }
-                                // Create/update rule
                                 const existing = rules.find(r => r.description_match === d.description);
                                 if (existing) await dbUpdate('expense_rules', existing.id, { category: newCat }, user?.id);
                                 else await dbInsert('expense_rules', { description_match: d.description, category: newCat, subcategory: d.subcategory || '', rule_type: 'expense' }, user?.id);
                                 loadPrefs(); onReload();
                               } catch (err) { alert('Error: ' + err.message); }
                             }}
-                            className="w-full text-[10px] border rounded px-1 py-1 bg-amber-50">
-                            <option value="">Uncategorized</option>
+                            className="w-full text-[10px] border rounded px-1 py-1 bg-amber-50" />
+                          <datalist id={'exp-cat-list-' + d.description.replace(/\s/g,'')}>
                             {Object.entries(EXPENSE_CATS).map(([ar, en]) => <option key={ar} value={ar}>{en}</option>)}
-                          </select>
+                          </datalist>
                         </td>
                         <td className="px-3 py-2">
                           <input defaultValue={d.subcategory || ''} key={d.description + '-sub-' + d.subcategory} placeholder="Subcategory..."

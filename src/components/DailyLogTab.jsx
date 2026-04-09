@@ -25,7 +25,7 @@ export default function DailyLogTab({ user, userProfile, users, isAdmin }) {
   const [editingId, setEditingId] = useState(null);
   const [editText, setEditText] = useState('');
 
-  const myId = userProfile?.id || user?.id;
+  const myId = userProfile?.id;
   const today = new Date().toISOString().substring(0, 10);
 
   const loadLogs = useCallback(async () => {

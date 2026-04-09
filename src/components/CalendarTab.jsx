@@ -17,7 +17,7 @@ export default function CalendarTab({ customers, user, userProfile, users, onRel
   const [f, setF] = useState({});
   const [selectedUsers, setSelectedUsers] = useState([]);
   const [calView, setCalView] = useState('my'); // my | team
-  const myId = userProfile?.id || user?.id;
+  const myId = userProfile?.id;
 
   const loadEvents = async () => {
     const { data } = await supabase.from('calendar_events').select('*').order('event_date');
