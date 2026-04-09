@@ -24,6 +24,7 @@ export default function DailyLogTab({ user, userProfile, users, isAdmin }) {
   const [archiveDates, setArchiveDates] = useState([]);
   const [editingId, setEditingId] = useState(null);
   const [editText, setEditText] = useState('');
+  const [selCat, setSelCat] = useState(null);
 
   const myId = userProfile?.id;
   const today = new Date().toISOString().substring(0, 10);
@@ -227,19 +228,19 @@ export default function DailyLogTab({ user, userProfile, users, isAdmin }) {
             )}
           </div>
 
-          {/* Category Summary */}
+          {/* Category Summary — clickable buckets */}
           {catSummary.length > 0 && (
             <div className="flex gap-2 mb-3 flex-wrap">
+              <div onClick={() => setFormData && setSelCat && setSelCat(null)} className={'flex items-center gap-1 px-3 py-1.5 rounded-lg text-xs font-bold cursor-pointer transition ' + (!selCat ? 'bg-slate-900 text-white' : 'bg-slate-100 text-slate-500 hover:bg-slate-200')}>
+                All ({filtered.length})
+              </div>
               {catSummary.map(([cat, count]) => (
-                <div key={cat} className="flex items-center gap-1 px-3 py-1.5 rounded-lg text-xs font-semibold"
-                  style={{ background: CAT_COLORS[cat] + '15', border: '1px solid ' + CAT_COLORS[cat] + '30', color: CAT_COLORS[cat] }}>
+                <div key={cat} onClick={() => setSelCat(selCat === cat ? null : cat)}
+                  className={'flex items-center gap-1 px-3 py-1.5 rounded-lg text-xs font-semibold cursor-pointer transition ' + (selCat === cat ? 'ring-2 ring-offset-1' : '')}
+                  style={{ background: CAT_COLORS[cat] + '15', border: '1px solid ' + CAT_COLORS[cat] + '30', color: CAT_COLORS[cat], ...(selCat === cat ? {ringColor: CAT_COLORS[cat]} : {}) }}>
                   {CAT_ICONS[cat] || '⚡'} {getCatLabel(cat)} <span className="font-bold ml-1">{count}</span>
                 </div>
               ))}
-              <div className="flex items-center gap-1 px-3 py-1.5 rounded-lg text-xs font-bold"
-                style={{ background: '#f1f5f9', color: '#475569' }}>
-                Total: {filtered.length}
-              </div>
             </div>
           )}
 
@@ -276,11 +277,39 @@ export default function DailyLogTab({ user, userProfile, users, isAdmin }) {
             <h3 className="text-sm font-bold mb-3">
               {viewMode === 'my' ? 'My Activity' : selUser ? (getUserName(selUser) || 'User') + "'s Activity" : 'All Team Activity'}
               <span className="text-slate-400 font-normal ml-2">({selDate}{selDate === today ? ' — Today' : ''})</span>
-              <span className="text-slate-400 font-normal ml-2">({filtered.length} entries)</span>
+              {selCat && <span className="ml-2 px-2 py-0.5 rounded-full text-[10px] font-semibold" style={{background: CAT_COLORS[selCat] + '20', color: CAT_COLORS[selCat]}}>{CAT_ICONS[selCat]} {getCatLabel(selCat)} ({filtered.filter(l => (l.log_category || (l.auto_generated ? 'other' : 'manual')) === selCat).length})</span>}
             </h3>
-            {filtered.length > 0 ? (
-              <div className="space-y-1">
-                {filtered.map(l => {
+            {!selCat && filtered.length > 0 ? (
+              /* Bucketed view — group by category */
+              <div className="space-y-2">
+                {catSummary.map(([cat, count]) => {
+                  const catEntries = filtered.filter(l => (l.log_category || (l.auto_generated ? 'other' : 'manual')) === cat);
+                  return (
+                    <div key={cat} className="rounded-lg border" style={{borderColor: CAT_COLORS[cat] + '40'}}>
+                      <div onClick={() => setSelCat(cat)}
+                        className="flex items-center justify-between px-3 py-2.5 cursor-pointer hover:bg-slate-50 rounded-lg transition">
+                        <div className="flex items-center gap-2">
+                          <span className="text-lg">{CAT_ICONS[cat] || '⚡'}</span>
+                          <div>
+                            <div className="text-xs font-bold" style={{color: CAT_COLORS[cat]}}>{getCatLabel(cat)}</div>
+                            <div className="text-[10px] text-slate-400">{catEntries.slice(0, 2).map(l => l.entry_text.substring(0, 40) + (l.entry_text.length > 40 ? '...' : '')).join(' · ')}</div>
+                          </div>
+                        </div>
+                        <div className="flex items-center gap-2">
+                          <span className="text-sm font-extrabold" style={{color: CAT_COLORS[cat]}}>{count}</span>
+                          <span className="text-slate-400 text-xs">→</span>
+                        </div>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            ) : filtered.length > 0 ? (
+              /* Filtered/drill-down view — individual entries */
+              <div>
+                {selCat && <button onClick={() => setSelCat(null)} className="text-xs text-blue-600 font-bold mb-2 hover:underline">← All categories</button>}
+                <div className="space-y-1">
+                {filtered.filter(l => !selCat || (l.log_category || (l.auto_generated ? 'other' : 'manual')) === selCat).map(l => {
                   const userName = getUserName(l.user_id);
                   const isEdited = l.edited_historical || (l.edited_at && l.log_date !== today);
                   const isEditMode = editingId === l.id;
@@ -325,6 +354,7 @@ export default function DailyLogTab({ user, userProfile, users, isAdmin }) {
                     </div>
                   );
                 })}
+                </div>
               </div>
             ) : (
               <div className="text-center text-slate-400 text-sm py-6">No entries for this date</div>

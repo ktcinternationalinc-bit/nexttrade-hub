@@ -18,7 +18,7 @@ const PIPELINE_STAGES = [
   { v: 'lost', l: 'Lost', c: '#ef4444', icon: '❌' },
 ];
 
-export default function CRMTab({ customers, invoices, user, userProfile, users, onReload, isAdmin, onSelectInvoice, lang, modulePerms }) {
+export default function CRMTab({ customers, invoices, user, userProfile, users, onReload, isAdmin, onSelectInvoice, lang, modulePerms, initialClient }) {
   const myId = userProfile?.id;
   const canViewAll = isAdmin || modulePerms?.['CRM View All'] === true;
   const [sel, setSel] = useState(null);
@@ -214,10 +214,16 @@ export default function CRMTab({ customers, invoices, user, userProfile, users, 
     if (!sel) return;
     try {
       await dbUpdate('customers', sel.id, {
-        name: f.name || sel.name, name_ar: f.nameAr || sel.name_ar, name_en: f.nameEn || sel.name_en,
-        phone: f.phone || sel.phone, email: f.email || sel.email, address: f.address || sel.address,
-        city: f.city || sel.city, group_name: f.group || sel.group_name, industry: f.industry !== undefined ? f.industry : sel.industry,
-        lead_source: f.leadSource || sel.lead_source,
+        name: f.name !== undefined ? f.name : sel.name,
+        name_ar: f.nameAr !== undefined ? f.nameAr : sel.name_ar,
+        name_en: f.nameEn !== undefined ? f.nameEn : sel.name_en,
+        phone: f.phone !== undefined ? f.phone : sel.phone,
+        email: f.email !== undefined ? f.email : sel.email,
+        address: f.address !== undefined ? f.address : sel.address,
+        city: f.city !== undefined ? f.city : sel.city,
+        group_name: f.group !== undefined ? f.group : sel.group_name,
+        industry: f.industry !== undefined ? f.industry : sel.industry,
+        lead_source: f.leadSource !== undefined ? f.leadSource : sel.lead_source,
         assigned_rep: f.assignedRep !== undefined ? (f.assignedRep || null) : sel.assigned_rep,
       }, myId);
       await logActivity(myId, 'Edited client: ' + (f.name || sel.name), 'crm');

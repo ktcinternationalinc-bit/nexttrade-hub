@@ -3,6 +3,9 @@ import { useState, useMemo, useEffect } from 'react';
 import { supabase } from '../lib/supabase';
 
 const STATUS_COLORS = {New:'#3b82f6',Acknowledged:'#8b5cf6','In Progress':'#f59e0b',Waiting:'#6b7280',Review:'#ec4899',Testing:'#14b8a6',Ready:'#10b981',Closed:'#374151',Reopened:'#ef4444'};
+const CAT_ICONS = { ticket:'🎫', crm:'🤝', shipping:'🛳️', customs:'🚢', calendar:'📅', finance:'💰', inventory:'📦', communication:'📬', ai:'🤖', manual:'✏️', other:'⚡', login:'🟢' };
+const CAT_COLORS = { ticket:'#8b5cf6', crm:'#0ea5e9', shipping:'#10b981', customs:'#f59e0b', calendar:'#ec4899', finance:'#6366f1', inventory:'#14b8a6', communication:'#38bdf8', ai:'#a78bfa', manual:'#3b82f6', other:'#94a3b8', login:'#22c55e' };
+const CAT_LABELS = { ticket:'Tickets', crm:'CRM', shipping:'Shipping', customs:'Customs', calendar:'Calendar', finance:'Finance', inventory:'Inventory', communication:'Comms', ai:'AI', manual:'Notes', other:'System', login:'Logins' };
 const PIPELINE_STAGES = [
   { v: 'lead', l: 'Lead', c: '#94a3b8', icon: '🔘' },
   { v: 'contacted', l: 'Contacted', c: '#3b82f6', icon: '📞' },
@@ -97,10 +100,18 @@ export default function AdminTab({ user, userProfile, users, isAdmin, customers 
         quotesCompleted = quotes.filter(function(q) { return q.created_by === u.id; }).length;
       } catch(e) {}
 
+      // Category breakdown
+      const catCounts = {};
+      uLogs.forEach(l => {
+        const c = l.log_category || (l.auto_generated ? 'other' : 'manual');
+        catCounts[c] = (catCounts[c] || 0) + 1;
+      });
+      const topCats = Object.entries(catCounts).sort((a, b) => b[1] - a[1]);
+
       return {
         ...u, totalActivities: uLogs.length, autoCount, manualCount, uniqueDays,
         openT, closedT, createdT, overdueCount, totalTimesOverdue, avgOverdueDays,
-        ratesCompleted, quotesCompleted
+        ratesCompleted, quotesCompleted, topCats
       };
     }).sort((a, b) => b.totalActivities - a.totalActivities);
   }, [visibleUsers, logs, tickets, quotes, auditLogs, todayStr]);
@@ -204,11 +215,18 @@ export default function AdminTab({ user, userProfile, users, isAdmin, customers 
               </span>
             </div>
 
-            {/* Activity breakdown */}
-            <div className="flex gap-3 text-[10px] border-t border-slate-100 pt-2">
-              <span className="text-amber-600">⚡ {u.autoCount} auto</span>
-              <span className="text-blue-600">✏️ {u.manualCount} manual</span>
-              <span className="text-slate-500">📅 {u.uniqueDays}d active</span>
+            {/* Activity breakdown by category */}
+            <div className="border-t border-slate-100 pt-2 mb-2">
+              <div className="text-[9px] font-bold text-slate-400 mb-1.5">Activity Breakdown</div>
+              <div className="flex gap-1.5 flex-wrap">
+                {(u.topCats || []).map(([cat, count]) => (
+                  <div key={cat} className="flex items-center gap-1 px-2 py-1 rounded-md text-[10px] font-semibold"
+                    style={{ background: (CAT_COLORS[cat] || '#94a3b8') + '15', color: CAT_COLORS[cat] || '#94a3b8' }}>
+                    {CAT_ICONS[cat] || '⚡'} {CAT_LABELS[cat] || cat} <span className="font-extrabold ml-0.5">{count}</span>
+                  </div>
+                ))}
+                {(u.topCats || []).length === 0 && <span className="text-[10px] text-slate-400">No activity</span>}
+              </div>
             </div>
 
             {/* Performance indicator */}

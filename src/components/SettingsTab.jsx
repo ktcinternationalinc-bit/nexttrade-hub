@@ -13,7 +13,7 @@ const ROLES = [
 
 const MODULES = [
   'Dashboard', 'Sales', 'Customers', 'Treasury', 'Checks', 'Debts',
-  'Warehouse', 'Inventory', 'CRM', 'CRM View All', 'Tickets', 'Delete Tickets', 'View Costs', 'Calendar', 'Customs',
+  'Warehouse', 'Inventory', 'CRM', 'CRM View All', 'Tickets', 'Delete Tickets', 'Delete Invoices', 'View Costs', 'Calendar', 'Customs',
   'Shipping Rates', 'Daily Log', 'Admin', 'AI Assistant', 'Communications', 'Settings', 'Import'
 ];
 
@@ -103,7 +103,7 @@ export default function SettingsTab({ user, users, onReload, isAdmin }) {
     const newVal = !current;
     try {
       const { data: existing } = await supabase.from('module_permissions')
-        .select('id').eq('user_id', userId).eq('module_name', module).single();
+        .select('id').eq('user_id', userId).eq('module_name', module).maybeSingle();
       if (existing) {
         await supabase.from('module_permissions').update({ has_access: newVal }).eq('id', existing.id);
       } else {
@@ -611,22 +611,12 @@ export default function SettingsTab({ user, users, onReload, isAdmin }) {
                     try {
                       for (const desc of mergeTargets) {
                         if (desc === newName) continue;
-                        // Update all treasury entries
-                        let from = 0;
-                        while (true) {
-                          const { data } = await supabase.from('treasury').select('id').eq('description', desc).range(from, from + 499);
-                          if (!data || data.length === 0) break;
-                          for (const t of data) {
-                            await supabase.from('treasury').update({ description: newName }).eq('id', t.id);
-                          }
-                          if (data.length < 500) break;
-                          from += 500;
-                        }
-                        // Delete old rules for merged description
+                        // Batch update — single query per description
+                        await supabase.from('treasury').update({ description: newName }).eq('description', desc);
                         await supabase.from('expense_rules').delete().eq('description_match', desc);
                       }
                       alert('Merged ' + mergeTargets.length + ' descriptions into "' + newName + '"');
-                      setMergeMode(null); setMergeTargets([]); loadPrefs(); onReload();
+                      setMergeMode(null); setMergeTargets([]); setTimeout(() => { loadPrefs(); onReload(); }, 800);
                     } catch (err) { alert('Error: ' + err.message); }
                   }} className="px-4 py-2 bg-purple-600 text-white rounded-lg text-xs font-bold">
                     ✅ Merge All
@@ -671,31 +661,22 @@ export default function SettingsTab({ user, users, onReload, isAdmin }) {
                         <td className="px-3 py-2 text-center text-slate-500">{d.count}</td>
                         <td className="px-3 py-2 text-right font-bold text-purple-600">{Number(d.total).toLocaleString()}</td>
                         <td className="px-3 py-2">
-                          <input list={'exp-cat-list-' + d.description.replace(/\s/g,'')} defaultValue={d.category || ''} key={d.description + '-cat-' + d.category} placeholder="Type or select..."
-                            onBlur={async (e) => {
-                              const newCat = e.target.value.trim();
-                              if (newCat === (d.category || '')) return;
+                          <select defaultValue={d.category || ''} key={d.description + '-cat-' + d.category}
+                            onChange={async (e) => {
+                              const newCat = e.target.value;
                               try {
-                                let from = 0;
-                                while (true) {
-                                  const { data } = await supabase.from('treasury').select('id').eq('description', d.description).range(from, from + 499);
-                                  if (!data || data.length === 0) break;
-                                  for (const t of data) {
-                                    await supabase.from('treasury').update({ category: newCat }).eq('id', t.id);
-                                  }
-                                  if (data.length < 500) break;
-                                  from += 500;
-                                }
+                                // Single batch update
+                                await supabase.from('treasury').update({ category: newCat }).eq('description', d.description);
                                 const existing = rules.find(r => r.description_match === d.description);
                                 if (existing) await dbUpdate('expense_rules', existing.id, { category: newCat }, user?.id);
                                 else await dbInsert('expense_rules', { description_match: d.description, category: newCat, subcategory: d.subcategory || '', rule_type: 'expense' }, user?.id);
-                                loadPrefs(); onReload();
+                                setTimeout(() => { loadPrefs(); onReload(); }, 800);
                               } catch (err) { alert('Error: ' + err.message); }
                             }}
-                            className="w-full text-[10px] border rounded px-1 py-1 bg-amber-50" />
-                          <datalist id={'exp-cat-list-' + d.description.replace(/\s/g,'')}>
+                            className="w-full text-[10px] border rounded px-1 py-1 bg-amber-50">
+                            <option value="">Uncategorized</option>
                             {Object.entries(EXPENSE_CATS).map(([ar, en]) => <option key={ar} value={ar}>{en}</option>)}
-                          </datalist>
+                          </select>
                         </td>
                         <td className="px-3 py-2">
                           <input defaultValue={d.subcategory || ''} key={d.description + '-sub-' + d.subcategory} placeholder="Subcategory..."
@@ -703,20 +684,12 @@ export default function SettingsTab({ user, users, onReload, isAdmin }) {
                               const newSub = e.target.value.trim();
                               if (newSub === (d.subcategory || '')) return;
                               try {
-                                let from = 0;
-                                while (true) {
-                                  const { data } = await supabase.from('treasury').select('id').eq('description', d.description).range(from, from + 499);
-                                  if (!data || data.length === 0) break;
-                                  for (const t of data) {
-                                    await supabase.from('treasury').update({ subcategory: newSub }).eq('id', t.id);
-                                  }
-                                  if (data.length < 500) break;
-                                  from += 500;
-                                }
+                                // Single batch update
+                                await supabase.from('treasury').update({ subcategory: newSub }).eq('description', d.description);
                                 const existing = rules.find(r => r.description_match === d.description);
                                 if (existing) await dbUpdate('expense_rules', existing.id, { subcategory: newSub }, user?.id);
                                 else await dbInsert('expense_rules', { description_match: d.description, category: d.category || '', subcategory: newSub, rule_type: 'expense' }, user?.id);
-                                loadPrefs(); onReload();
+                                setTimeout(() => { loadPrefs(); onReload(); }, 800);
                               } catch (err) { alert('Error: ' + err.message); }
                             }}
                             className="w-full text-[10px] border rounded px-1 py-1 bg-orange-50" />

@@ -245,10 +245,21 @@ export default function AIAssistant({ user, userProfile, users, customers }) {
   };
 
   // ===== VOICE NOTE RECORDING =====
+  const recordingRef = useRef(false);
+  
   const startRecording = () => {
-    if (!recognitionRef.current || listening || conversationModeRef.current) return;
+    // Stop any ongoing conversation/listening
     stopSpeaking();
+    if (conversationModeRef.current) {
+      conversationModeRef.current = false;
+      try { recognitionRef.current?.stop(); } catch(e) {}
+      setListening(false);
+    }
+    if (silenceTimerRef.current) clearTimeout(silenceTimerRef.current);
+    if (autoSendRef.current) clearTimeout(autoSendRef.current);
+    
     const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+    if (!SR) return;
     const rec = new SR();
     rec.continuous = true;
     rec.interimResults = true;
@@ -261,14 +272,15 @@ export default function AIAssistant({ user, userProfile, users, customers }) {
       }
       setInput(correctNames(transcript));
     };
-    rec.onerror = () => {};
+    rec.onerror = (e) => { console.log('Recording error:', e.error); };
     rec.onend = () => {
-      // If still in recording mode, restart
-      if (recording) { try { rec.start(); } catch(e) {} }
+      // Use ref (not state) to check if still recording
+      if (recordingRef.current) { try { rec.start(); } catch(e) {} }
     };
     recordingRecRef.current = rec;
-    rec.start();
+    try { rec.start(); } catch(e) { alert('Microphone access denied'); return; }
     setRecording(true);
+    recordingRef.current = true;
     setRecordingTime(0);
     recordingTimerRef.current = setInterval(() => {
       setRecordingTime(prev => prev + 1);
@@ -277,6 +289,7 @@ export default function AIAssistant({ user, userProfile, users, customers }) {
 
   const stopRecording = () => {
     setRecording(false);
+    recordingRef.current = false;
     if (recordingTimerRef.current) { clearInterval(recordingTimerRef.current); recordingTimerRef.current = null; }
     if (recordingRecRef.current) { try { recordingRecRef.current.stop(); } catch(e) {} recordingRecRef.current = null; }
     // Text stays in input for user to review and send

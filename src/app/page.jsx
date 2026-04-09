@@ -13,6 +13,19 @@ import CustomsTab from '../components/CustomsTab';
 import PersonalDashboard from '../components/PersonalDashboard';
 import AIAssistant from '../components/AIAssistant';
 import ShippingRatesTab from '../components/ShippingRatesTab';
+
+// Modal must be outside main component to prevent re-mounting on every render
+const Modal = ({ onClose, title, children }) => (
+  <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-3" onClick={onClose}>
+    <div className="bg-white rounded-2xl p-6 max-w-2xl w-full max-h-[85vh] overflow-auto" onClick={e => e.stopPropagation()}>
+      <div className="flex justify-between items-center mb-4">
+        <h3 className="text-lg font-bold">{title}</h3>
+        <button onClick={onClose} className="text-2xl text-slate-400 hover:text-slate-600">×</button>
+      </div>
+      {children}
+    </div>
+  </div>
+);
 import CommunicationsTab from '../components/CommunicationsTab';
 import {
   BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip,
@@ -159,6 +172,7 @@ export default function App() {
   const [invoiceItems, setInvoiceItems] = useState([]);
   const [expenseRules, setExpenseRules] = useState([]);
   const [inventory, setInventory] = useState([]);
+  const [invInbounds, setInvInbounds] = useState([]);
   const [teamUsers, setTeamUsers] = useState([]);
   const [userProfile, setUserProfile] = useState(null);
   const [modulePerms, setModulePerms] = useState({});
@@ -177,12 +191,16 @@ export default function App() {
   const [selectedMonth, setSelectedMonth] = useState(null);
   const [checkView, setCheckView] = useState('pending');
   const [reconcileCheck, setReconcileCheck] = useState(null);
+  const [reconcileDate, setReconcileDate] = useState('');
+  const [reconcileMethod, setReconcileMethod] = useState('check');
   const [expenseDrill, setExpenseDrill] = useState(null);
   const [tSearch, setTSearch] = useState({ show: false, type: 'all', cat: '', subcat: '', desc: '', dateFrom: '', dateTo: '', inboundRef: '' });
   const [bucketSub, setBucketSub] = useState(null);
   const [bucketSearch, setBucketSearch] = useState('');
   const [editSubTxnId, setEditSubTxnId] = useState(null);
   const [editSubValue, setEditSubValue] = useState('');
+  const [editCatValue, setEditCatValue] = useState('');
+  const [divisionDrill, setDivisionDrill] = useState(null);
   const [renamingBucket, setRenamingBucket] = useState(null);
   const [renameValue, setRenameValue] = useState('');
   const [warehouseDrill, setWarehouseDrill] = useState(null);
@@ -313,6 +331,11 @@ export default function App() {
       setInvoiceItems(items);
       setExpenseRules(rules);
       setInventory(stock);
+      // Load inbounds (may not exist yet)
+      try {
+        const ib = await fetchAll('inventory_inbounds', 'inbound_date', true);
+        setInvInbounds(ib || []);
+      } catch(e) { setInvInbounds([]); }
     } catch (err) {
       console.error('Load error:', err);
     }
@@ -601,6 +624,7 @@ export default function App() {
       await dbInsert('invoices', {
         order_number: formData.orderNumber,
         customer_name: formData.customerName,
+        customer_id: formData.customerId || null,
         invoice_date: formData.date || today(),
         total_amount: Number(formData.amount),
         total_collected: 0,
@@ -677,12 +701,11 @@ export default function App() {
             t.category !== fd.category
           );
           if (matching.length > 0 && confirm('Apply "' + (EXPENSE_CATS[fd.category] || fd.category) + '" to ' + matching.length + ' transactions with exact same description?\n\n"' + desc + '"\n\nتطبيق على جميع المعاملات بنفس الوصف بالضبط؟')) {
-            for (const m of matching) {
-              await dbUpdate('treasury', m.id, {
-                category: fd.category,
-                subcategory: fd.subcategory || '',
-              }, user?.id);
-            }
+            // Batch update — single query instead of per-row
+            await supabase.from('treasury').update({
+              category: fd.category,
+              subcategory: fd.subcategory || '',
+            }).eq('description', desc);
           }
           // Save/update rule with full description
           const ruleType = Number(txn.cash_in || 0) > 0 ? 'income' : 'expense';
@@ -706,7 +729,7 @@ export default function App() {
 
       setEditingTxn(null);
       setFormData({});
-      await loadAllData();
+      setTimeout(() => loadAllData(), 800);
     } catch (err) {
       alert('Error / خطأ: ' + err.message);
     }
@@ -1007,21 +1030,20 @@ export default function App() {
   };
 
   const handleCollectCheck = async () => {
-    const collectionDate = document.getElementById('reconcile-date')?.value;
-    const payMethod = document.getElementById('reconcile-method')?.value || 'check';
-    if (!reconcileCheck || !collectionDate) return;
+    if (!reconcileCheck || !reconcileDate) { alert('Please select a collection date'); return; }
+    const payMethod = reconcileMethod || 'check';
     try {
       // 1. Mark check as collected
       await dbUpdate('checks', reconcileCheck.id, {
         status: 'collected',
-        collection_date: collectionDate,
+        collection_date: reconcileDate,
       }, user?.id);
       // 2. Only create treasury entry for bank transfer/deposit/other
       // Cash and check payments already have treasury entries created by the accountant
       if (payMethod !== 'cash' && payMethod !== 'check') {
         const desc = reconcileCheck.customer_name + ' (' + payMethod + ' - check reconciled)';
         await dbInsert('treasury', {
-          transaction_date: collectionDate,
+          transaction_date: reconcileDate,
           order_number: reconcileCheck.order_number || '',
           description: desc,
           cash_in: Number(reconcileCheck.amount),
@@ -1041,7 +1063,8 @@ export default function App() {
         }
       }
       setReconcileCheck(null);
-      setFormData({});
+      setReconcileDate('');
+      setReconcileMethod('check');
       await loadAllData();
     } catch (err) {
       alert('Error / خطأ: ' + err.message);
@@ -1078,18 +1101,6 @@ export default function App() {
       {titleAr && <div className="text-sm font-bold text-slate-900 mt-0.5" style={{ direction: 'rtl' }}>{titleAr}</div>}
       <div className="text-3xl font-extrabold mt-2">{value}</div>
       {sub && <div className="text-xs text-slate-500 mt-1.5">{sub}</div>}
-    </div>
-  );
-
-  const Modal = ({ onClose, title, children }) => (
-    <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-3" onClick={onClose}>
-      <div className="bg-white rounded-2xl p-6 max-w-2xl w-full max-h-[85vh] overflow-auto" onClick={e => e.stopPropagation()}>
-        <div className="flex justify-between items-center mb-4">
-          <h3 className="text-lg font-bold">{title}</h3>
-          <button onClick={onClose} className="text-2xl text-slate-400 hover:text-slate-600">×</button>
-        </div>
-        {children}
-      </div>
     </div>
   );
 
@@ -1244,6 +1255,32 @@ export default function App() {
                 </div>
               )}
             </div>
+            {/* Delete Invoice */}
+            {(() => {
+              const createdAt = new Date(selectedInvoice.created_at || 0);
+              const hourAgo = Date.now() - 60 * 60 * 1000;
+              const isCreator = selectedInvoice.created_by === userProfile?.id;
+              const withinHour = createdAt.getTime() > hourAgo;
+              const hasDeletePerm = userProfile?.role === 'super_admin' || modulePerms?.['Delete Invoices'] === true;
+              const canDelete = (isCreator && withinHour) || hasDeletePerm;
+              if (!canDelete) return null;
+              return (
+                <div className="flex justify-end mb-2">
+                  <button onClick={async () => {
+                    if (!confirm('Delete invoice #' + selectedInvoice.order_number + '?\n\nحذف الفاتورة #' + selectedInvoice.order_number + '؟\n\nThis cannot be undone.')) return;
+                    try {
+                      // Delete line items first
+                      await supabase.from('invoice_items').delete().eq('invoice_id', selectedInvoice.id);
+                      await supabase.from('invoices').delete().eq('id', selectedInvoice.id);
+                      setSelectedInvoice(null);
+                      await loadAllData();
+                    } catch(err) { alert('Error: ' + err.message); }
+                  }} className="px-3 py-1 bg-red-500 text-white rounded-lg text-[10px] font-bold hover:bg-red-600">
+                    🗑️ Delete Invoice {isCreator && withinHour && !hasDeletePerm ? '(within 1hr)' : ''}
+                  </button>
+                </div>
+              );
+            })()}
             <div className="grid grid-cols-3 gap-3 mb-4">
               {/* Division / Category */}
               <div className="col-span-3 flex items-center gap-2 mb-1">
@@ -1362,19 +1399,127 @@ export default function App() {
                         <span className="text-xs font-bold">Items Total</span>
                         <span className="text-sm font-extrabold text-blue-600">{fE(items.reduce((a, it) => a + Number(it.line_total || 0), 0))}</span>
                       </div>
+                      <button onClick={() => setFormData({...formData, addingItems: true, newItems: [], prodSearch: ''})}
+                        className="mt-2 px-3 py-1 bg-blue-100 text-blue-700 rounded text-[10px] font-bold hover:bg-blue-200">
+                        + Add More Items / إضافة بنود
+                      </button>
                     </div>
                   ) : (
-                    <div className="text-center py-3">
-                      <div className="text-xs text-slate-400 mb-1">No item breakdown available for this order / لا يوجد تفاصيل بنود لهذا الأمر</div>
-                      <div className="text-[10px] text-slate-400">Import merchandiser Excel via the Import tab to load product details / استيراد ملف Excel من تبويب الاستيراد لتحميل تفاصيل المنتجات</div>
-                      <div className="bg-white rounded-lg p-3 mt-2 border border-blue-100">
-                        <div className="flex justify-between text-xs">
-                          <span className="font-semibold">Invoice Total / إجمالي الفاتورة</span>
-                          <span className="font-extrabold text-blue-600">{fE(selectedInvoice.total_amount)}</span>
+                    <div>
+                      <div className="text-xs text-slate-400 mb-2 text-center">No item breakdown available / لا يوجد تفاصيل بنود</div>
+                      {!formData.addingItems && (
+                        <div className="text-center">
+                          <button onClick={() => setFormData({...formData, addingItems: true, newItems: [], prodSearch: ''})}
+                            className="px-4 py-2 bg-blue-500 text-white rounded-lg text-xs font-bold">
+                            + Add Breakdown / إضافة تفاصيل
+                          </button>
                         </div>
-                      </div>
+                      )}
                     </div>
                   )}
+                  {/* Add Items Form — shared for both cases */}
+                  {formData.addingItems && (
+                        <div className="bg-white rounded-lg p-3 border border-blue-200">
+                          {/* Search inventory or add custom */}
+                          <div className="mb-2">
+                            <input value={formData.prodSearch || ''} onChange={e => setFormData({...formData, prodSearch: e.target.value})}
+                              placeholder="Search inventory / بحث في المخزون..." className="w-full px-2 py-1.5 border rounded text-xs" />
+                            {formData.prodSearch && (
+                              <div className="max-h-[120px] overflow-auto border rounded mt-1 bg-white">
+                                {inventory.filter(p => {
+                                  const sq = (formData.prodSearch || '').toLowerCase();
+                                  return (p.reference_number || '').toLowerCase().includes(sq) || (p.description || '').includes(formData.prodSearch) || (p.description_en || '').toLowerCase().includes(sq);
+                                }).slice(0, 8).map(p => (
+                                  <div key={p.id} onClick={() => {
+                                    const items = [...(formData.newItems || [])];
+                                    items.push({ description: (p.reference_number || '') + ' - ' + (p.description || ''), quantity: 1, unit_price: Number(p.unit_price) || 0, line_total: Number(p.unit_price) || 0, product_id: p.id });
+                                    setFormData({...formData, newItems: items, prodSearch: ''});
+                                  }} className="px-2 py-1.5 text-[10px] cursor-pointer hover:bg-blue-50 border-b border-slate-50">
+                                    <span className="font-bold">{p.reference_number}</span> — {p.description}
+                                    <span className="text-emerald-600 ml-1">{fE(p.unit_price)}</span>
+                                  </div>
+                                ))}
+                              </div>
+                            )}
+                          </div>
+                          {/* Custom item row */}
+                          <div className="flex gap-1 mb-2">
+                            <input value={formData.customDesc || ''} onChange={e => setFormData({...formData, customDesc: e.target.value})}
+                              placeholder="Custom item description" className="flex-1 px-2 py-1 border rounded text-[10px]" />
+                            <input type="number" value={formData.customQty || ''} onChange={e => setFormData({...formData, customQty: e.target.value})}
+                              placeholder="Qty" className="w-14 px-1 py-1 border rounded text-[10px]" />
+                            <input type="number" value={formData.customPrice || ''} onChange={e => setFormData({...formData, customPrice: e.target.value})}
+                              placeholder="Price" className="w-20 px-1 py-1 border rounded text-[10px]" />
+                            <button onClick={() => {
+                              if (!formData.customDesc) return;
+                              const qty = Number(formData.customQty) || 1;
+                              const price = Number(formData.customPrice) || 0;
+                              const items = [...(formData.newItems || [])];
+                              items.push({ description: formData.customDesc, quantity: qty, unit_price: price, line_total: qty * price });
+                              setFormData({...formData, newItems: items, customDesc: '', customQty: '', customPrice: ''});
+                            }} className="px-2 py-1 bg-emerald-500 text-white rounded text-[10px]">+</button>
+                          </div>
+                          {/* Pending items list */}
+                          {(formData.newItems || []).length > 0 && (
+                            <div className="mb-2">
+                              <table className="w-full border-collapse text-[10px]">
+                                <thead><tr className="bg-blue-50">
+                                  <th className="px-1 py-1 text-left">Item</th>
+                                  <th className="px-1 py-1 text-right">Qty</th>
+                                  <th className="px-1 py-1 text-right">Price</th>
+                                  <th className="px-1 py-1 text-right">Total</th>
+                                  <th className="px-1 py-1 w-6"></th>
+                                </tr></thead>
+                                <tbody>
+                                  {(formData.newItems || []).map((item, idx) => (
+                                    <tr key={idx} className="border-b border-slate-50">
+                                      <td className="px-1 py-1">{item.description}</td>
+                                      <td className="px-1 py-1 text-right">{item.quantity}</td>
+                                      <td className="px-1 py-1 text-right">{fE(item.unit_price)}</td>
+                                      <td className="px-1 py-1 text-right font-bold">{fE(item.line_total)}</td>
+                                      <td className="px-1 py-1 text-center">
+                                        <button onClick={() => {
+                                          const items = (formData.newItems || []).filter((_, i) => i !== idx);
+                                          setFormData({...formData, newItems: items});
+                                        }} className="text-red-400 hover:text-red-600">✕</button>
+                                      </td>
+                                    </tr>
+                                  ))}
+                                </tbody>
+                              </table>
+                              <div className="flex justify-between pt-1 mt-1 border-t border-blue-200 text-xs">
+                                <span className="font-bold">Total</span>
+                                <span className="font-extrabold text-blue-600">{fE((formData.newItems || []).reduce((a, i) => a + (i.line_total || 0), 0))}</span>
+                              </div>
+                            </div>
+                          )}
+                          {/* Save / Cancel */}
+                          <div className="flex gap-2">
+                            <button onClick={async () => {
+                              const items = formData.newItems || [];
+                              if (items.length === 0) return;
+                              try {
+                                for (const item of items) {
+                                  await dbInsert('invoice_items', {
+                                    invoice_id: selectedInvoice.id,
+                                    description: item.description,
+                                    quantity: item.quantity || 1,
+                                    unit_price: item.unit_price || 0,
+                                    line_total: item.line_total || 0,
+                                    product_id: item.product_id || null,
+                                  }, user?.id);
+                                }
+                                setFormData({...formData, addingItems: false, newItems: []});
+                                await loadAllData();
+                              } catch(err) { alert('Error: ' + err.message); }
+                            }} className="px-3 py-1.5 bg-blue-500 text-white rounded text-xs font-bold" disabled={(formData.newItems || []).length === 0}>
+                              💾 Save {(formData.newItems || []).length} Items
+                            </button>
+                            <button onClick={() => setFormData({...formData, addingItems: false, newItems: []})}
+                              className="px-3 py-1.5 border rounded text-xs">Cancel</button>
+                          </div>
+                        </div>
+                      )}
                 </div>
               );
             })()}
@@ -1819,61 +1964,50 @@ export default function App() {
                               <td className="px-2 py-1 text-[10px]" style={{ direction: lang === 'ar' ? 'rtl' : 'ltr' }}>{tx(txn.description, txn.description_en)}</td>
                               <td className="px-2 py-1 text-[10px] text-right font-semibold" style={{ color: color }}>{fE(txn[amtField])}</td>
                               <td className="px-1 py-1">
-                                <select defaultValue={txn.category || ''} onChange={async (e) => {
-                                    const newCat = e.target.value;
-                                    try {
-                                      await dbUpdate('treasury', txn.id, { category: newCat }, user?.id);
-                                      const desc = (txn.description || '').trim();
-                                      if (desc) {
-                                        const similar = treasury.filter(t => t.id !== txn.id && (t.description || '').trim() === desc && t.category !== newCat);
-                                        if (similar.length > 0 && confirm('Apply to ' + similar.length + ' transactions with exact same description?\n"' + desc + '"')) {
-                                          for (const s of similar) { await dbUpdate('treasury', s.id, { category: newCat }, user?.id); }
-                                        }
-                                        const existing = expenseRules.find(r => r.description_match === desc);
-                                        if (existing) { await dbUpdate('expense_rules', existing.id, { category: newCat }, user?.id); }
-                                        else { await dbInsert('expense_rules', { description_match: desc, category: newCat, subcategory: txn.subcategory || '' }, user?.id); }
-                                      }
-                                      await loadAllData();
-                                    } catch(err) { alert('Error: ' + err.message); }
-                                  }} className="w-full text-[9px] border rounded px-1 py-0.5 bg-amber-50">
-                                  <option value="">None</option>
-                                  {Object.entries(EXPENSE_CATS).map(([ar, en]) => <option key={ar} value={ar}>{en}</option>)}
-                                  {[...new Set(treasury.map(t=>t.category).filter(c=>c&&!EXPENSE_CATS[c]))].map(c => <option key={c} value={c}>{c}</option>)}
-                                </select>
                                 {editSubTxnId === txn.id ? (
-                                  <div className="flex gap-1 mt-0.5">
-                                    <input list="subs-all" autoFocus value={editSubValue}
+                                  <div className="space-y-1">
+                                    <select value={editCatValue} onChange={e => setEditCatValue(e.target.value)}
+                                      className="w-full text-[9px] border-2 border-blue-400 rounded px-1 py-0.5 bg-amber-50">
+                                      <option value="">None</option>
+                                      {Object.entries(EXPENSE_CATS).map(([ar, en]) => <option key={ar} value={ar}>{en}</option>)}
+                                      {[...new Set(treasury.map(t=>t.category).filter(c=>c&&!EXPENSE_CATS[c]))].map(c => <option key={c} value={c}>{c}</option>)}
+                                    </select>
+                                    <input list="subs-all" value={editSubValue}
                                       onChange={e => setEditSubValue(e.target.value)}
-                                      onKeyDown={async (e) => {
-                                        if (e.key === 'Enter') {
-                                          e.preventDefault();
-                                          try {
-                                            await dbUpdate('treasury', txn.id, { subcategory: editSubValue }, user?.id);
-                                            const desc = (txn.description || '').trim();
-                                            if (desc) {
-                                              const similar = treasury.filter(t => t.id !== txn.id && (t.description || '').trim() === desc && t.category === (txn.category || '') && t.subcategory !== editSubValue);
-                                              if (similar.length > 0 && confirm('Apply "' + editSubValue + '" to ' + similar.length + ' exact matches?')) {
-                                                for (const s of similar) { await dbUpdate('treasury', s.id, { subcategory: editSubValue }, user?.id); }
-                                              }
-                                              const existing = expenseRules.find(r => r.description_match === desc);
-                                              if (existing) { await dbUpdate('expense_rules', existing.id, { subcategory: editSubValue }, user?.id); }
-                                              else { await dbInsert('expense_rules', { description_match: desc, category: txn.category || '', subcategory: editSubValue }, user?.id); }
-                                            }
-                                            setEditSubTxnId(null); setEditSubValue('');
-                                            await loadAllData();
-                                          } catch(err) { alert('Error: ' + err.message); }
-                                        }
-                                        if (e.key === 'Escape') { setEditSubTxnId(null); setEditSubValue(''); }
-                                      }}
-                                      placeholder="Type & press Enter..."
-                                      className="flex-1 text-[9px] border-2 border-blue-400 rounded px-1 py-0.5 bg-blue-50 focus:outline-none" />
-                                    <button onClick={() => { setEditSubTxnId(null); setEditSubValue(''); }}
-                                      className="text-[9px] text-red-500 px-1">✕</button>
+                                      placeholder="Subcategory..."
+                                      className="w-full text-[9px] border-2 border-blue-400 rounded px-1 py-0.5 bg-orange-50" />
+                                    <div className="flex gap-1">
+                                      <button onClick={async () => {
+                                        try {
+                                          const desc = (txn.description || '').trim();
+                                          const updates = {};
+                                          if (editCatValue !== (txn.category || '')) updates.category = editCatValue;
+                                          if (editSubValue !== (txn.subcategory || '')) updates.subcategory = editSubValue;
+                                          if (Object.keys(updates).length === 0) { setEditSubTxnId(null); return; }
+                                          if (desc) {
+                                            await supabase.from('treasury').update(updates).eq('description', desc);
+                                            const existing = expenseRules.find(r => r.description_match === desc);
+                                            const ruleUpdates = {};
+                                            if (updates.category !== undefined) ruleUpdates.category = editCatValue;
+                                            if (updates.subcategory !== undefined) ruleUpdates.subcategory = editSubValue;
+                                            if (existing) { await dbUpdate('expense_rules', existing.id, ruleUpdates, user?.id); }
+                                            else { await dbInsert('expense_rules', { description_match: desc, category: editCatValue || txn.category || '', subcategory: editSubValue || txn.subcategory || '', rule_type: Number(txn.cash_in || 0) > 0 ? 'income' : 'expense' }, user?.id); }
+                                          } else {
+                                            await dbUpdate('treasury', txn.id, updates, user?.id);
+                                          }
+                                          setEditSubTxnId(null); setEditSubValue(''); setEditCatValue('');
+                                          setTimeout(() => loadAllData(), 800);
+                                        } catch(err) { alert('Error: ' + err.message); }
+                                      }} className="px-2 py-0.5 bg-blue-500 text-white rounded text-[9px] font-bold">Save</button>
+                                      <button onClick={() => { setEditSubTxnId(null); setEditSubValue(''); setEditCatValue(''); }}
+                                        className="px-2 py-0.5 border rounded text-[9px]">Cancel</button>
+                                    </div>
                                   </div>
                                 ) : (
-                                  <div onClick={() => { setEditSubTxnId(txn.id); setEditSubValue(txn.subcategory || ''); }}
-                                    className="text-[9px] mt-0.5 px-1 py-0.5 rounded cursor-pointer hover:bg-orange-100 bg-orange-50 border border-orange-200 min-h-[18px]">
-                                    {txn.subcategory || <span className="text-slate-300 italic">+ subcategory</span>}
+                                  <div onClick={() => { setEditSubTxnId(txn.id); setEditCatValue(txn.category || ''); setEditSubValue(txn.subcategory || ''); }}
+                                    className="cursor-pointer hover:bg-slate-100 rounded px-1 py-0.5">
+                                    <div className="text-[9px] font-semibold text-amber-700">{EXPENSE_CATS[txn.category] || txn.category || <span className="text-slate-300 italic">+ category</span>}</div>
+                                    <div className="text-[9px] text-orange-500">{txn.subcategory || <span className="text-slate-300 italic">+ subcategory</span>}</div>
                                   </div>
                                 )}
                                 <datalist id="subs-all">
@@ -1951,7 +2085,7 @@ export default function App() {
             CHECK RECONCILE MODAL
         ========================================== */}
         {reconcileCheck && (
-          <Modal onClose={() => { setReconcileCheck(null); setFormData({}); }} title="Reconcile Check / تسوية شيك">
+          <Modal onClose={() => { setReconcileCheck(null); setReconcileDate(''); setReconcileMethod('check'); }} title="Reconcile Check / تسوية شيك">
             <div style={{ direction: 'rtl' }} className="text-lg font-bold mb-1">{reconcileCheck.customer_name}</div>
             <div className="text-sm mb-2">{fE(reconcileCheck.amount)} | {reconcileCheck.check_date}</div>
             {reconcileCheck.order_number && (
@@ -1960,12 +2094,14 @@ export default function App() {
             <div className="grid grid-cols-2 gap-3">
               <div>
                 <label className="text-xs font-semibold text-slate-600">Collection Date / تاريخ التحصيل</label>
-                <input type="date" id="reconcile-date" defaultValue=""
+                <input type="date" value={reconcileDate}
+                  onChange={e => setReconcileDate(e.target.value)}
                   className="w-full px-3 py-2 rounded-lg border border-slate-200 text-sm" />
               </div>
               <div>
                 <label className="text-xs font-semibold text-slate-600">Method / طريقة</label>
-                <select id="reconcile-method" defaultValue="check"
+                <select value={reconcileMethod}
+                  onChange={e => setReconcileMethod(e.target.value)}
                   className="w-full px-3 py-2 rounded-lg border border-slate-200 text-sm">
                   <option value="cash">Cash / نقداً</option>
                   <option value="check">Check / شيك</option>
@@ -2001,9 +2137,99 @@ export default function App() {
               </div>
               <div className="col-span-2">
                 <label className="text-xs font-semibold text-slate-600">Customer / العميل</label>
-                <input value={formData.customerName || ''}
-                  onChange={e => setFormData({ ...formData, customerName: e.target.value })}
-                  className="w-full px-3 py-2 rounded-lg border border-slate-200 text-sm" />
+                {formData.showNewCustomer ? (
+                  <div className="bg-emerald-50 rounded-lg p-3 border border-emerald-200 mt-1 space-y-2">
+                    <div className="flex justify-between items-center">
+                      <span className="text-xs font-bold text-emerald-700">New Customer / عميل جديد</span>
+                      <button onClick={() => setFormData({...formData, showNewCustomer: false})} className="text-xs text-slate-400">Cancel</button>
+                    </div>
+                    <div className="grid grid-cols-2 gap-2">
+                      <input value={formData.newCustName || ''} onChange={e => setFormData({...formData, newCustName: e.target.value})}
+                        placeholder="Name (English)" className="px-2 py-1.5 border rounded text-xs" />
+                      <input value={formData.newCustNameAr || ''} onChange={e => setFormData({...formData, newCustNameAr: e.target.value})}
+                        placeholder="الاسم بالعربي" className="px-2 py-1.5 border rounded text-xs" style={{direction:'rtl'}} />
+                      <input value={formData.newCustPhone || ''} onChange={e => setFormData({...formData, newCustPhone: e.target.value})}
+                        placeholder="Phone / هاتف" className="px-2 py-1.5 border rounded text-xs" />
+                      <input value={formData.newCustEmail || ''} onChange={e => setFormData({...formData, newCustEmail: e.target.value})}
+                        placeholder="Email / بريد" className="px-2 py-1.5 border rounded text-xs" />
+                      <input value={formData.newCustAddress || ''} onChange={e => setFormData({...formData, newCustAddress: e.target.value})}
+                        placeholder="Address / عنوان" className="col-span-2 px-2 py-1.5 border rounded text-xs" />
+                    </div>
+                    <button onClick={async () => {
+                      if (!formData.newCustName && !formData.newCustNameAr) return;
+                      try {
+                        const { data: newCust, error } = await supabase.from('customers').insert({
+                          name: formData.newCustName || formData.newCustNameAr || '',
+                          name_ar: formData.newCustNameAr || '',
+                          phone: formData.newCustPhone || '',
+                          email: formData.newCustEmail || '',
+                          address: formData.newCustAddress || '',
+                          created_by: userProfile?.id,
+                        }).select().single();
+                        if (error) throw error;
+                        // Refresh customers and select the new one
+                        const { data: updatedCusts } = await supabase.from('customers').select('*').order('name');
+                        if (updatedCusts) setCustomers(updatedCusts);
+                        setFormData({...formData,
+                          customerId: newCust.id,
+                          customerName: newCust.name,
+                          showNewCustomer: false,
+                          newCustName: '', newCustNameAr: '', newCustPhone: '', newCustEmail: '', newCustAddress: ''
+                        });
+                      } catch(err) { alert('Error creating customer: ' + err.message); }
+                    }} className="px-3 py-1.5 bg-emerald-500 text-white rounded text-xs font-bold w-full">
+                      ✅ Create & Select
+                    </button>
+                  </div>
+                ) : (
+                  <div className="flex gap-2 mt-1">
+                    <div className="flex-1 relative">
+                      <input value={formData.custSearch !== undefined ? formData.custSearch : (formData.customerName || '')}
+                        onChange={e => setFormData({...formData, custSearch: e.target.value, showCustDropdown: true})}
+                        onFocus={() => setFormData({...formData, showCustDropdown: true})}
+                        placeholder="Search or select customer..."
+                        className="w-full px-3 py-2 rounded-lg border border-slate-200 text-sm" />
+                      {formData.showCustDropdown && (
+                        <>
+                        <div className="fixed inset-0 z-10" onClick={() => setFormData({...formData, showCustDropdown: false})} />
+                        <div className="absolute z-20 top-full left-0 right-0 bg-white border border-slate-200 rounded-lg shadow-lg max-h-[200px] overflow-auto mt-1">
+                          {customers.filter(c => {
+                            const sq = (formData.custSearch || '').toLowerCase();
+                            if (!sq) return true;
+                            return (c.name || '').toLowerCase().includes(sq) || (c.name_ar || '').includes(formData.custSearch || '') || (c.phone || '').includes(sq);
+                          }).slice(0, 20).map(c => (
+                            <div key={c.id} onClick={() => {
+                              setFormData({...formData,
+                                customerId: c.id,
+                                customerName: c.name || c.name_ar,
+                                custSearch: undefined,
+                                showCustDropdown: false,
+                                salesRep: formData.salesRep || c.assigned_rep || '',
+                              });
+                            }} className="px-3 py-2 text-xs cursor-pointer hover:bg-blue-50 border-b border-slate-50">
+                              <span className="font-bold">{c.name}</span>
+                              {c.name_ar && <span className="text-slate-400 ml-2" style={{direction:'rtl'}}>{c.name_ar}</span>}
+                              {c.phone && <span className="text-blue-400 ml-2">{c.phone}</span>}
+                            </div>
+                          ))}
+                          {customers.filter(c => {
+                            const sq = (formData.custSearch || '').toLowerCase();
+                            if (!sq) return true;
+                            return (c.name || '').toLowerCase().includes(sq) || (c.name_ar || '').includes(formData.custSearch || '');
+                          }).length === 0 && (
+                            <div className="px-3 py-2 text-xs text-slate-400 italic">No customers found</div>
+                          )}
+                        </div>
+                        </>
+                      )}
+                    </div>
+                    {formData.customerName && (
+                      <span className="self-center text-xs text-emerald-600 font-bold whitespace-nowrap">✓ {formData.customerName}</span>
+                    )}
+                    <button onClick={() => setFormData({...formData, showNewCustomer: true, showCustDropdown: false})}
+                      className="px-3 py-2 bg-emerald-500 text-white rounded-lg text-xs font-bold whitespace-nowrap">+ New</button>
+                  </div>
+                )}
               </div>
               <div>
                 <label className="text-xs font-semibold text-slate-600">Sales Rep / المندوب</label>
@@ -2420,7 +2646,7 @@ export default function App() {
                             <td className="px-2 py-1.5 text-xs text-center">{c.order_number || '—'}</td>
                             <td className="px-2 py-1.5 text-xs text-right font-bold text-amber-600">{fE(c.amount)}</td>
                             <td className="px-2 py-1.5">
-                              <button onClick={() => { setReconcileCheck(c); setFormData({}); }}
+                              <button onClick={() => { setReconcileCheck(c); setReconcileDate(''); setReconcileMethod('check'); }}
                                 className="px-2 py-0.5 rounded bg-amber-500 text-white text-[10px]">Reconcile / تسوية</button>
                             </td>
                           </tr>
@@ -2557,45 +2783,92 @@ export default function App() {
             {/* Sales by Division / المبيعات حسب القسم */}
             {(() => {
               const divisionData = {};
+              const divisionInvoices = {};
               filteredInvoices.forEach(inv => {
                 const cust = customers.find(c => c.id === inv.customer_id || c.name === inv.customer_name);
                 const div = inv.division || cust?.group_name || 'Unassigned / غير مصنف';
-                if (!divisionData[div]) divisionData[div] = { sales: 0, collected: 0, outstanding: 0, count: 0 };
+                if (!divisionData[div]) { divisionData[div] = { sales: 0, collected: 0, outstanding: 0, count: 0 }; divisionInvoices[div] = []; }
                 divisionData[div].sales += Number(inv.total_amount || 0);
                 divisionData[div].collected += Number(inv.total_collected || 0);
                 divisionData[div].outstanding += Number(inv.outstanding || 0);
                 divisionData[div].count++;
+                divisionInvoices[div].push(inv);
               });
               const sorted = Object.entries(divisionData).sort((a, b) => b[1].sales - a[1].sales);
-              if (sorted.length <= 1) return null;
+              if (sorted.length <= 1 && !divisionDrill) return null;
               return (
                 <div className="bg-white rounded-xl p-4 mb-3">
                   <h3 className="text-sm font-bold mb-2">Sales by Division / المبيعات حسب القسم</h3>
-                  <div className="overflow-auto">
-                    <table className="w-full border-collapse text-xs">
-                      <thead><tr className="bg-slate-50">
-                        <th className="px-2 py-1.5 text-left">Division / القسم</th>
-                        <th className="px-2 py-1.5 text-right">Orders</th>
-                        <th className="px-2 py-1.5 text-right">Sales</th>
-                        <th className="px-2 py-1.5 text-right">Collected</th>
-                        <th className="px-2 py-1.5 text-right">Outstanding</th>
-                      </tr></thead>
-                      <tbody>
-                        {sorted.map(([div, d], i) => (
-                          <tr key={div} className="border-b border-slate-50">
-                            <td className="px-2 py-1.5 font-semibold">
-                              <span className="inline-block w-2 h-2 rounded-full mr-1.5" style={{background: COLORS[i % COLORS.length]}}></span>
-                              {div}
-                            </td>
-                            <td className="px-2 py-1.5 text-right text-slate-500">{d.count}</td>
-                            <td className="px-2 py-1.5 text-right font-bold text-blue-600">{fE(d.sales)}</td>
-                            <td className="px-2 py-1.5 text-right text-emerald-600">{fE(d.collected)}</td>
-                            <td className="px-2 py-1.5 text-right text-red-500">{d.outstanding > 0 ? fE(d.outstanding) : '✓'}</td>
-                          </tr>
-                        ))}
-                      </tbody>
-                    </table>
-                  </div>
+                  {!divisionDrill ? (
+                    <div className="overflow-auto">
+                      <table className="w-full border-collapse text-xs">
+                        <thead><tr className="bg-slate-50">
+                          <th className="px-2 py-1.5 text-left">Division / القسم</th>
+                          <th className="px-2 py-1.5 text-right">Orders</th>
+                          <th className="px-2 py-1.5 text-right">Sales</th>
+                          <th className="px-2 py-1.5 text-right">Collected</th>
+                          <th className="px-2 py-1.5 text-right">Outstanding</th>
+                        </tr></thead>
+                        <tbody>
+                          {sorted.map(([div, d], i) => (
+                            <tr key={div} className="border-b border-slate-50 cursor-pointer hover:bg-blue-50" onClick={() => setDivisionDrill(div)}>
+                              <td className="px-2 py-1.5 font-semibold">
+                                <span className="inline-block w-2 h-2 rounded-full mr-1.5" style={{background: COLORS[i % COLORS.length]}}></span>
+                                {div} <span className="text-blue-400">→</span>
+                              </td>
+                              <td className="px-2 py-1.5 text-right text-slate-500">{d.count}</td>
+                              <td className="px-2 py-1.5 text-right font-bold text-blue-600">{fE(d.sales)}</td>
+                              <td className="px-2 py-1.5 text-right text-emerald-600">{fE(d.collected)}</td>
+                              <td className="px-2 py-1.5 text-right text-red-500">{d.outstanding > 0 ? fE(d.outstanding) : '✓'}</td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  ) : (
+                    <div>
+                      <button onClick={() => setDivisionDrill(null)} className="text-xs text-blue-600 font-bold mb-2 hover:underline">← Back to all divisions</button>
+                      <div className="text-sm font-bold mb-2">{divisionDrill} — {divisionData[divisionDrill]?.count || 0} orders</div>
+                      <div className="grid grid-cols-3 gap-2 mb-3">
+                        <div className="bg-blue-50 rounded-lg p-2 text-center">
+                          <div className="text-[9px] text-blue-600 font-bold">Sales</div>
+                          <div className="text-sm font-extrabold text-blue-700">{fE(divisionData[divisionDrill]?.sales || 0)}</div>
+                        </div>
+                        <div className="bg-emerald-50 rounded-lg p-2 text-center">
+                          <div className="text-[9px] text-emerald-600 font-bold">Collected</div>
+                          <div className="text-sm font-extrabold text-emerald-700">{fE(divisionData[divisionDrill]?.collected || 0)}</div>
+                        </div>
+                        <div className="bg-red-50 rounded-lg p-2 text-center">
+                          <div className="text-[9px] text-red-500 font-bold">Outstanding</div>
+                          <div className="text-sm font-extrabold text-red-600">{fE(divisionData[divisionDrill]?.outstanding || 0)}</div>
+                        </div>
+                      </div>
+                      <div className="overflow-auto max-h-[400px] rounded-lg border border-slate-200">
+                        <table className="w-full border-collapse text-xs">
+                          <thead className="sticky top-0"><tr className="bg-slate-50">
+                            <th className="px-2 py-1.5 text-left">Order#</th>
+                            <th className="px-2 py-1.5 text-left">Date</th>
+                            <th className="px-2 py-1.5" style={{direction:'rtl'}}>Customer</th>
+                            <th className="px-2 py-1.5 text-right">Amount</th>
+                            <th className="px-2 py-1.5 text-right">Collected</th>
+                            <th className="px-2 py-1.5 text-right">Outstanding</th>
+                          </tr></thead>
+                          <tbody>
+                            {(divisionInvoices[divisionDrill] || []).sort((a,b) => (b.invoice_date||'').localeCompare(a.invoice_date||'')).map(inv => (
+                              <tr key={inv.id} className="border-b border-slate-50 cursor-pointer hover:bg-blue-50" onClick={() => { setSelectedInvoice(inv); setDivisionDrill(null); }}>
+                                <td className="px-2 py-1.5 font-bold text-blue-600">{inv.order_number}</td>
+                                <td className="px-2 py-1.5">{inv.invoice_date}</td>
+                                <td className="px-2 py-1.5" style={{direction:'rtl'}}>{inv.customer_name}</td>
+                                <td className="px-2 py-1.5 text-right font-bold">{fE(inv.total_amount)}</td>
+                                <td className="px-2 py-1.5 text-right text-emerald-600">{fE(inv.total_collected)}</td>
+                                <td className="px-2 py-1.5 text-right text-red-500">{Number(inv.outstanding) > 0 ? fE(inv.outstanding) : '✓'}</td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      </div>
+                    </div>
+                  )}
                 </div>
               );
             })()}
@@ -2633,8 +2906,72 @@ export default function App() {
                 <ModeBar />
                 <input value={query} onChange={e => setQuery(e.target.value)}
                   placeholder="بحث / Search" className="px-3 py-1.5 rounded-lg border border-slate-200 text-xs w-32" />
+                {!formData.mergeMode ? (
+                  <button onClick={() => setFormData({...formData, mergeMode: true, mergeTargets: []})}
+                    className="px-3 py-1.5 bg-purple-500 text-white rounded-lg text-xs font-bold">🔀 Merge</button>
+                ) : (
+                  <button onClick={() => setFormData({...formData, mergeMode: false, mergeTargets: []})}
+                    className="px-3 py-1.5 border border-slate-300 rounded-lg text-xs">Cancel Merge</button>
+                )}
               </div>
             </div>
+            {/* Merge bar */}
+            {formData.mergeMode && (formData.mergeTargets || []).length >= 2 && (
+              <div className="bg-purple-50 rounded-xl p-4 mb-3 border border-purple-200">
+                <div className="text-xs font-bold text-purple-800 mb-2">Merge {(formData.mergeTargets || []).length} customers into one:</div>
+                <div className="flex flex-wrap gap-1 mb-2">
+                  {(formData.mergeTargets || []).map(name => (
+                    <span key={name} className="px-2 py-0.5 bg-purple-100 rounded text-[10px] font-semibold">
+                      {name}
+                      <button onClick={() => setFormData({...formData, mergeTargets: (formData.mergeTargets || []).filter(t => t !== name)})}
+                        className="ml-1 text-red-500">✕</button>
+                    </span>
+                  ))}
+                </div>
+                <div className="flex gap-2 items-center">
+                  <input id="merge-cust-name" defaultValue={(formData.mergeTargets || [])[0] || ''} placeholder="Final customer name..."
+                    className="flex-1 px-3 py-2 rounded border text-sm" style={{direction:'rtl'}} />
+                  <button onClick={async () => {
+                    const finalName = document.getElementById('merge-cust-name')?.value?.trim();
+                    if (!finalName) return;
+                    const targets = formData.mergeTargets || [];
+                    if (!confirm('Merge ' + targets.length + ' customers into:\n\n"' + finalName + '"\n\nThis will update ALL invoices, checks, and treasury entries. Continue?')) return;
+                    try {
+                      // Find or create the target customer record
+                      let targetCust = customers.find(c => c.name === finalName || c.name_ar === finalName);
+                      if (!targetCust) {
+                        const { data } = await supabase.from('customers').insert({ name: finalName, created_by: userProfile?.id }).select().single();
+                        targetCust = data;
+                      }
+                      for (const name of targets) {
+                        if (name === finalName) continue;
+                        // Update invoices
+                        await supabase.from('invoices').update({ customer_name: finalName, customer_id: targetCust?.id || null }).eq('customer_name', name);
+                        // Update checks
+                        await supabase.from('checks').update({ customer_name: finalName }).eq('customer_name', name);
+                        // Update treasury descriptions that reference this customer
+                        // Delete the old customer record
+                        const oldCust = customers.find(c => c.name === name || c.name_ar === name);
+                        if (oldCust && oldCust.id !== targetCust?.id) {
+                          // Move any CRM data (notes, contacts) to target
+                          await supabase.from('customers').delete().eq('id', oldCust.id);
+                        }
+                      }
+                      alert('Merged ' + targets.length + ' customers into "' + finalName + '"');
+                      setFormData({...formData, mergeMode: false, mergeTargets: []});
+                      await loadAllData();
+                    } catch(err) { alert('Error: ' + err.message); }
+                  }} className="px-4 py-2 bg-purple-600 text-white rounded-lg text-xs font-bold">
+                    ✅ Merge All
+                  </button>
+                </div>
+              </div>
+            )}
+            {formData.mergeMode && (formData.mergeTargets || []).length < 2 && (
+              <div className="bg-purple-50 rounded-lg p-3 mb-3 text-xs text-purple-600 font-semibold text-center">
+                Select 2 or more customers to merge / اختر ٢ أو أكثر للدمج
+              </div>
+            )}
             <div className="flex gap-2 mb-3 flex-wrap">
               {[['all', 'All'], ['owing', 'Owing / مدين'], ['paid', 'Paid / مسدد'], ['top', 'Top Sales']].map(([v, l]) => (
                 <button key={v} onClick={() => setCustomerGroup(v)}
@@ -2664,9 +3001,25 @@ export default function App() {
                 return custList.map(c => {
                   const custRecord = customers.find(cr => cr.name === c.name || cr.name_ar === c.name);
                   const enName = custRecord ? custRecord.name_en : '';
+                  const isSelected = (formData.mergeTargets || []).includes(c.name);
                   return (
-                  <div key={c.name} onClick={() => setSelectedCustomer(c.name)}
-                    className="bg-white rounded-lg p-3 cursor-pointer border border-slate-200 hover:shadow-md transition">
+                  <div key={c.name} onClick={() => {
+                    if (formData.mergeMode) {
+                      const targets = formData.mergeTargets || [];
+                      if (isSelected) setFormData({...formData, mergeTargets: targets.filter(t => t !== c.name)});
+                      else setFormData({...formData, mergeTargets: [...targets, c.name]});
+                    } else {
+                      setSelectedCustomer(c.name);
+                    }
+                  }}
+                    className={'bg-white rounded-lg p-3 cursor-pointer border transition hover:shadow-md ' + (isSelected ? 'border-purple-400 bg-purple-50 ring-2 ring-purple-300' : 'border-slate-200')}>
+                    {formData.mergeMode && (
+                      <div className="flex justify-end mb-1">
+                        <div className={'w-5 h-5 rounded border-2 flex items-center justify-center text-[10px] ' + (isSelected ? 'bg-purple-500 border-purple-500 text-white' : 'border-slate-300')}>
+                          {isSelected && '✓'}
+                        </div>
+                      </div>
+                    )}
                     <div className="text-sm font-bold" style={{ direction: lang === 'ar' ? 'rtl' : 'ltr' }}>{lang === 'en' && enName ? enName : c.name}</div>
                     {lang === 'ar' && enName && <div className="text-[10px] text-blue-500">{enName}</div>}
                     <div className="text-[9px] text-slate-400 mt-1">{c.count} invoices</div>
@@ -3085,7 +3438,7 @@ export default function App() {
                       <td className="px-3 py-2 text-xs">{c.check_date}</td>
                       <td className="px-3 py-2">
                         {checkView === 'pending' ? (
-                          <button onClick={() => { setReconcileCheck(c); setFormData({}); }}
+                          <button onClick={() => { setReconcileCheck(c); setReconcileDate(''); setReconcileMethod('check'); }}
                             className="px-3 py-1 bg-blue-500 text-white rounded text-[10px] font-semibold">
                             Reconcile / تسوية
                           </button>
@@ -3147,8 +3500,108 @@ export default function App() {
               <h2 className="text-xl font-extrabold">Warehouse / عهدة المخزن</h2>
               <div className="flex gap-2 items-center flex-wrap">
                 <ModeBar />
+                <button onClick={() => setFormData({...formData, showAddWarehouse: true, whType: 'general'})}
+                  className="px-3 py-1.5 bg-purple-500 text-white rounded-lg text-xs font-semibold hover:bg-purple-600">
+                  + New Expense / مصروف جديد
+                </button>
               </div>
             </div>
+            {/* Add Warehouse Expense Modal */}
+            {formData.showAddWarehouse && (
+              <Modal onClose={() => setFormData({...formData, showAddWarehouse: false})} title="New Warehouse Expense / مصروف مخزن جديد">
+                <div className="grid grid-cols-2 gap-3 mb-3">
+                  <div>
+                    <label className="text-xs font-semibold text-slate-600">Date / التاريخ</label>
+                    <input type="date" value={formData.whExpDate || today()}
+                      onChange={e => setFormData({...formData, whExpDate: e.target.value})}
+                      className="w-full px-3 py-2 rounded-lg border border-slate-200 text-sm" />
+                  </div>
+                  <div>
+                    <label className="text-xs font-semibold text-slate-600">Amount / المبلغ</label>
+                    <input type="number" value={formData.whExpAmount || ''}
+                      onChange={e => setFormData({...formData, whExpAmount: e.target.value})}
+                      placeholder="0.00" className="w-full px-3 py-2 rounded-lg border border-slate-200 text-sm" />
+                  </div>
+                  <div className="col-span-2">
+                    <label className="text-xs font-semibold text-slate-600">Description / الوصف</label>
+                    <input value={formData.whExpDesc || ''}
+                      onChange={e => setFormData({...formData, whExpDesc: e.target.value})}
+                      placeholder="Expense description..." className="w-full px-3 py-2 rounded-lg border border-slate-200 text-sm" style={{direction:'rtl'}} />
+                  </div>
+                  <div>
+                    <label className="text-xs font-semibold text-slate-600">Category / التصنيف</label>
+                    <select value={formData.whExpCat || ''} onChange={e => setFormData({...formData, whExpCat: e.target.value})}
+                      className="w-full px-3 py-2 rounded-lg border border-slate-200 text-sm">
+                      <option value="">Select category...</option>
+                      {[...new Set(warehouse.map(w => w.category).filter(Boolean))].sort().map(c => (
+                        <option key={c} value={c}>{c}</option>
+                      ))}
+                      <option value="__custom">+ Custom...</option>
+                    </select>
+                  </div>
+                  <div>
+                    <label className="text-xs font-semibold text-slate-600">Subcategory / فرعي</label>
+                    <input list="wh-subcats" value={formData.whExpSub || ''}
+                      onChange={e => setFormData({...formData, whExpSub: e.target.value})}
+                      placeholder="Optional..." className="w-full px-3 py-2 rounded-lg border border-slate-200 text-sm" />
+                    <datalist id="wh-subcats">
+                      {[...new Set(warehouse.map(w => w.subcategory).filter(Boolean))].sort().map(s => <option key={s} value={s} />)}
+                    </datalist>
+                  </div>
+                </div>
+                {/* Reference Type */}
+                <div className="bg-slate-50 rounded-lg p-3 mb-3">
+                  <label className="text-xs font-semibold text-slate-600 mb-2 block">Reference Type / نوع المرجع</label>
+                  <div className="flex gap-3 mb-2">
+                    {[['general', '🏭 General / عام'], ['shipment', '🚢 Shipment / شحنة']].map(([v, l]) => (
+                      <button key={v} onClick={() => setFormData({...formData, whType: v})}
+                        className={'px-3 py-1.5 rounded-lg text-xs font-bold transition ' + (formData.whType === v ? 'bg-purple-500 text-white' : 'bg-white border border-slate-200')}>
+                        {l}
+                      </button>
+                    ))}
+                  </div>
+                  {formData.whType === 'shipment' && (
+                    <div>
+                      <label className="text-[10px] font-semibold text-slate-500">Order # / رقم الأمر</label>
+                      <input list="wh-orders" value={formData.whExpRef || ''}
+                        onChange={e => setFormData({...formData, whExpRef: e.target.value})}
+                        placeholder="Type or select order number..."
+                        className="w-full px-3 py-2 rounded-lg border border-slate-200 text-sm bg-blue-50" />
+                      <datalist id="wh-orders">
+                        {[...new Set(invoices.map(i => i.order_number).filter(Boolean))].sort().map(o => <option key={o} value={o} />)}
+                      </datalist>
+                    </div>
+                  )}
+                  {formData.whType === 'general' && (
+                    <div className="text-[10px] text-slate-400">This expense is for general warehouse operations, not tied to a specific shipment.</div>
+                  )}
+                </div>
+                <button onClick={async () => {
+                  if (!formData.whExpDesc || !formData.whExpAmount) { alert('Please fill in description and amount'); return; }
+                  let cat = formData.whExpCat || '';
+                  if (cat === '__custom') {
+                    const custom = prompt('Enter custom category name:');
+                    if (!custom) return;
+                    cat = custom.trim();
+                  }
+                  try {
+                    await dbInsert('warehouse_expenses', {
+                      expense_date: formData.whExpDate || today(),
+                      description: formData.whExpDesc,
+                      amount: Number(formData.whExpAmount),
+                      category: cat,
+                      subcategory: formData.whExpSub || '',
+                      america_ref: formData.whType === 'shipment' ? (formData.whExpRef || '') : 'GENERAL',
+                      created_by: userProfile?.id,
+                    }, userProfile?.id);
+                    setFormData({...formData, showAddWarehouse: false, whExpDate: '', whExpDesc: '', whExpAmount: '', whExpCat: '', whExpSub: '', whExpRef: '', whType: 'general'});
+                    await loadAllData();
+                  } catch(err) { alert('Error: ' + err.message); }
+                }} className="w-full px-4 py-2 bg-purple-500 text-white rounded-lg font-semibold">
+                  💾 Save Expense / حفظ المصروف
+                </button>
+              </Modal>
+            )}
             {/* Advanced Search */}
             <div className="mb-3">
               <button onClick={() => setFormData({...formData, whAdvanced: !formData.whAdvanced})}
@@ -3670,6 +4123,13 @@ export default function App() {
                         <datalist id="inv-subcats-add">{[...new Set(inventory.map(p => p.subcategory).filter(Boolean))].sort().map(s => <option key={s} value={s} />)}</datalist></div>
                       <div className="col-span-2"><label className="text-[10px] font-bold text-slate-500">Shipment Reference</label>
                         <input value={formData.prodShipment || ''} onChange={e => setFormData({...formData, prodShipment: e.target.value})} className="w-full px-3 py-2 rounded-lg border text-sm" /></div>
+                      <div><label className="text-[10px] font-bold text-slate-500">Inbound Date</label>
+                        <input type="date" value={formData.prodDate || today()} onChange={e => setFormData({...formData, prodDate: e.target.value})} className="w-full px-3 py-2 rounded-lg border text-sm" /></div>
+                      {formData.prodId && inventory.find(p => p.product_id === formData.prodId) && (
+                        <div className="col-span-2 bg-amber-50 rounded-lg p-2 border border-amber-200">
+                          <div className="text-[10px] font-bold text-amber-700">⚠️ Product ID "{formData.prodId}" already exists — this will be added as a new inbound and quantities/costs will be aggregated.</div>
+                        </div>
+                      )}
                       <div><label className="text-[10px] font-bold text-slate-500">Description (Arabic)</label>
                         <input value={formData.prodDesc || ''} onChange={e => setFormData({...formData, prodDesc: e.target.value})} className="w-full px-3 py-2 rounded-lg border text-sm" style={{direction:'rtl'}} /></div>
                       <div><label className="text-[10px] font-bold text-slate-500">Description (English)</label>
@@ -3728,22 +4188,19 @@ export default function App() {
                         try {
                           const origQty = Number(formData.prodOrigQty) || Number(formData.prodRolls) || 0;
                           const currQty = Number(formData.prodCurrQty) || origQty;
-                          const record = {
-                            product_id: formData.prodId || '', reference_number: formData.prodRef || '',
-                            shipment_reference: formData.prodShipment || '', product_type: formData.prodType || '',
-                            subcategory: formData.prodSubcat || '',
-                            description: formData.prodDesc || '', description_en: formData.prodDescEn || '',
-                            color: formData.prodColor || '', color_en: formData.prodColorEn || '',
-                            roll_count: Number(formData.prodRolls) || 0, gross_weight: Number(formData.prodGross) || 0,
-                            net_weight: Number(formData.prodNet) || 0, unit_price: Number(formData.prodPrice) || 0,
-                            original_quantity: origQty, current_quantity: currQty,
+                          const costData = {
                             purchase_cost: Number(formData.prodPurchaseCost) || 0, purchase_currency: formData.prodPurchaseCurr || 'USD',
                             customs_cost: Number(formData.prodCustomsCost) || 0, customs_currency: formData.prodCustomsCurr || 'EGP',
                             shipping_cost: Number(formData.prodShippingCost) || 0, shipping_currency: formData.prodShippingCurr || 'USD',
                             other_cost: Number(formData.prodOtherCost) || 0, other_currency: formData.prodOtherCurr || 'EGP',
                             fx_rate: Number(formData.prodFxRate) || 50,
                           };
+                          
+                          // Check if product_id already exists — aggregate if so
+                          const existingProduct = formData.prodId ? inventory.find(p => p.product_id === formData.prodId) : null;
+                          
                           // Upload photo if selected
+                          let photoUrl = '';
                           const fileInput = document.getElementById('prod-photo');
                           if (fileInput && fileInput.files && fileInput.files[0]) {
                             const file = fileInput.files[0];
@@ -3752,10 +4209,69 @@ export default function App() {
                             const { data: uploadData, error: uploadErr } = await supabase.storage.from('product-photos').upload(fileName, file);
                             if (!uploadErr && uploadData) {
                               const { data: urlData } = supabase.storage.from('product-photos').getPublicUrl(fileName);
-                              record.photo_url = urlData?.publicUrl || '';
+                              photoUrl = urlData?.publicUrl || '';
                             }
                           }
-                          await dbInsert('inventory', record, user?.id);
+                          
+                          // Record inbound
+                          await dbInsert('inventory_inbounds', {
+                            product_id: formData.prodId || '',
+                            reference_number: formData.prodRef || '',
+                            shipment_reference: formData.prodShipment || '',
+                            inbound_date: formData.prodDate || today(),
+                            quantity: origQty,
+                            unit_price: Number(formData.prodPrice) || 0,
+                            ...costData,
+                            notes: formData.prodDescEn || formData.prodDesc || '',
+                          }, userProfile?.id);
+                          
+                          if (existingProduct) {
+                            // AGGREGATE: update existing product
+                            const oldQty = Number(existingProduct.original_quantity || 0);
+                            const oldCurr = Number(existingProduct.current_quantity || 0);
+                            const newOrigQty = oldQty + origQty;
+                            const newCurrQty = oldCurr + currQty;
+                            // Weighted average costs
+                            const toEgp = (amt, curr, fx) => curr === 'USD' ? amt * fx : amt;
+                            const oldFx = Number(existingProduct.fx_rate) || 50;
+                            const newFx = costData.fx_rate;
+                            const oldTotal = toEgp(Number(existingProduct.purchase_cost)||0, existingProduct.purchase_currency, oldFx);
+                            const newTotal = toEgp(costData.purchase_cost, costData.purchase_currency, newFx);
+                            const avgPurchase = oldQty + origQty > 0 ? (oldTotal + newTotal) / 2 : 0;
+                            const oldCustoms = toEgp(Number(existingProduct.customs_cost)||0, existingProduct.customs_currency, oldFx);
+                            const newCustoms = toEgp(costData.customs_cost, costData.customs_currency, newFx);
+                            const avgCustoms = oldQty + origQty > 0 ? (oldCustoms + newCustoms) / 2 : 0;
+                            
+                            await dbUpdate('inventory', existingProduct.id, {
+                              original_quantity: newOrigQty,
+                              current_quantity: newCurrQty,
+                              purchase_cost: Math.round(avgPurchase * 100) / 100,
+                              purchase_currency: 'EGP',
+                              customs_cost: Math.round(avgCustoms * 100) / 100,
+                              customs_currency: 'EGP',
+                              shipping_cost: (Number(existingProduct.shipping_cost)||0) + costData.shipping_cost,
+                              other_cost: (Number(existingProduct.other_cost)||0) + costData.other_cost,
+                              fx_rate: newFx,
+                              shipment_reference: (existingProduct.shipment_reference || '') + (formData.prodShipment ? ', ' + formData.prodShipment : ''),
+                              ...(photoUrl ? { photo_url: photoUrl } : {}),
+                            }, userProfile?.id);
+                            alert('✅ Added ' + origQty + ' to existing product ' + formData.prodId + ' (now ' + newCurrQty + ' total)');
+                          } else {
+                            // NEW product
+                            const record = {
+                              product_id: formData.prodId || '', reference_number: formData.prodRef || '',
+                              shipment_reference: formData.prodShipment || '', product_type: formData.prodType || '',
+                              subcategory: formData.prodSubcat || '',
+                              description: formData.prodDesc || '', description_en: formData.prodDescEn || '',
+                              color: formData.prodColor || '', color_en: formData.prodColorEn || '',
+                              roll_count: Number(formData.prodRolls) || 0, gross_weight: Number(formData.prodGross) || 0,
+                              net_weight: Number(formData.prodNet) || 0, unit_price: Number(formData.prodPrice) || 0,
+                              original_quantity: origQty, current_quantity: currQty,
+                              ...costData,
+                              ...(photoUrl ? { photo_url: photoUrl } : {}),
+                            };
+                            await dbInsert('inventory', record, user?.id);
+                          }
                           setFormData({});
                           await loadAllData();
                         } catch (err) { alert('Error: ' + err.message); }
@@ -3952,6 +4468,49 @@ export default function App() {
                                   <div className={'text-lg font-extrabold ' + (profitEGP >= 0 ? 'text-emerald-600' : 'text-red-600')}>{fE(profitEGP)}</div>
                                   <div className="text-xs text-slate-500">${profitUSD.toLocaleString(undefined,{maximumFractionDigits:2})} USD · {margin}% margin</div>
                                 </div>
+                                {/* Customs Cost/kg per Inbound Reference */}
+                                {(() => {
+                                  const shipRefs = [...new Set([p.shipment_reference, ...invInbounds.filter(ib => ib.product_id === p.product_id).map(ib => ib.shipment_reference)].filter(Boolean).flatMap(s => s.split(',').map(x => x.trim())).filter(Boolean))];
+                                  if (shipRefs.length === 0) return null;
+                                  return (
+                                    <div className="mt-2 pt-2 border-t border-slate-200">
+                                      <div className="text-[9px] font-bold text-slate-500 mb-1">Customs Cost/kg per Inbound Reference</div>
+                                      {shipRefs.map(ref => {
+                                        // All products with this shipment reference
+                                        const prodsInShipment = inventory.filter(pr => (pr.shipment_reference || '').includes(ref));
+                                        const inboundsInShipment = invInbounds.filter(ib => (ib.shipment_reference || '').includes(ref));
+                                        // Total customs from inventory records
+                                        const totalCustomsInv = prodsInShipment.reduce((a, pr) => {
+                                          const f = Number(pr.fx_rate) || 50;
+                                          return a + ((pr.customs_currency || 'EGP') === 'USD' ? Number(pr.customs_cost || 0) * f : Number(pr.customs_cost || 0));
+                                        }, 0);
+                                        // Total customs from inbounds
+                                        const totalCustomsIb = inboundsInShipment.reduce((a, ib) => {
+                                          const f = Number(ib.fx_rate) || 50;
+                                          return a + ((ib.customs_currency || 'EGP') === 'USD' ? Number(ib.customs_cost || 0) * f : Number(ib.customs_cost || 0));
+                                        }, 0);
+                                        const totalCustoms = Math.max(totalCustomsInv, totalCustomsIb);
+                                        // Total weight from products
+                                        const totalKg = prodsInShipment.reduce((a, pr) => a + Number(pr.net_weight || pr.gross_weight || 0), 0);
+                                        const costPerKg = totalKg > 0 ? totalCustoms / totalKg : 0;
+                                        // This product's weight
+                                        const thisKg = Number(p.net_weight || p.gross_weight || 0);
+                                        const thisCustomsShare = thisKg > 0 ? costPerKg * thisKg : 0;
+                                        return (
+                                          <div key={ref} className="flex justify-between text-[10px] py-1 border-b border-slate-50">
+                                            <span className="font-semibold text-blue-600">{ref}</span>
+                                            <div className="flex gap-3 text-right">
+                                              <span className="text-slate-500">{totalKg.toLocaleString()} kg</span>
+                                              <span className="text-amber-600">Customs: {fE(totalCustoms)}</span>
+                                              <span className="font-bold text-purple-600">{fE(costPerKg)}/kg</span>
+                                              {thisKg > 0 && <span className="text-red-500">This: {fE(thisCustomsShare)}</span>}
+                                            </div>
+                                          </div>
+                                        );
+                                      })}
+                                    </div>
+                                  );
+                                })()}
                                 <div className="grid grid-cols-4 gap-1 mt-2 text-center">
                                   <div><div className="text-[8px] text-slate-400">Purchase</div><div className="text-[10px] font-bold">{fE(purchaseEGP)}</div></div>
                                   <div><div className="text-[8px] text-slate-400">Customs</div><div className="text-[10px] font-bold">{fE(customsEGP)}</div></div>
@@ -3991,6 +4550,122 @@ export default function App() {
                           </table>
                         ) : (<div className="px-3 py-4 text-xs text-slate-400 text-center">No linked invoices</div>)}
                       </div>
+                      
+                      {/* Inbound History */}
+                      {(() => {
+                        const inbounds = invInbounds.filter(ib => ib.product_id === p.product_id);
+                        if (inbounds.length === 0) return null;
+                        return (
+                          <div className="mt-3 pt-3 border-t border-slate-200">
+                            <h4 className="text-xs font-bold mb-2">📥 Inbound History ({inbounds.length})</h4>
+                            <div className="overflow-auto max-h-[200px] rounded border border-slate-200">
+                              <table className="w-full border-collapse text-[10px]">
+                                <thead className="sticky top-0"><tr className="bg-slate-50">
+                                  <th className="px-2 py-1 text-left">Date</th>
+                                  <th className="px-2 py-1 text-left">Shipment</th>
+                                  <th className="px-2 py-1 text-right">Qty</th>
+                                  <th className="px-2 py-1 text-right">Purchase</th>
+                                  <th className="px-2 py-1 text-right">Customs</th>
+                                  <th className="px-2 py-1 text-right">Customs/kg</th>
+                                  <th className="px-2 py-1 text-right">Total Cost</th>
+                                </tr></thead>
+                                <tbody>
+                                  {inbounds.sort((a,b) => (b.inbound_date||'').localeCompare(a.inbound_date||'')).map(ib => {
+                                    const fx = Number(ib.fx_rate) || 50;
+                                    const toEgp = (amt, curr) => curr === 'USD' ? amt * fx : amt;
+                                    const total = toEgp(Number(ib.purchase_cost)||0, ib.purchase_currency) + toEgp(Number(ib.customs_cost)||0, ib.customs_currency) + toEgp(Number(ib.shipping_cost)||0, ib.shipping_currency) + toEgp(Number(ib.other_cost)||0, ib.other_currency);
+                                    return (
+                                      <tr key={ib.id} className="border-b border-slate-50">
+                                        <td className="px-2 py-1">{ib.inbound_date}</td>
+                                        <td className="px-2 py-1 text-blue-600 font-semibold">{ib.shipment_reference || '—'}</td>
+                                        <td className="px-2 py-1 text-right font-bold">{fmt(ib.quantity)}</td>
+                                        <td className="px-2 py-1 text-right">{fE(toEgp(Number(ib.purchase_cost)||0, ib.purchase_currency))}</td>
+                                        <td className="px-2 py-1 text-right">{fE(toEgp(Number(ib.customs_cost)||0, ib.customs_currency))}</td>
+                                        <td className="px-2 py-1 text-right text-purple-600 font-semibold">{(() => {
+                                          const shipRef = ib.shipment_reference;
+                                          if (!shipRef) return '—';
+                                          const prodsInShip = inventory.filter(pr => (pr.shipment_reference || '').includes(shipRef));
+                                          const totalKg = prodsInShip.reduce((a, pr) => a + Number(pr.net_weight || pr.gross_weight || 0), 0);
+                                          const ibsInShip = invInbounds.filter(i2 => (i2.shipment_reference || '').includes(shipRef));
+                                          const totalCustoms = ibsInShip.reduce((a, i2) => { const f2 = Number(i2.fx_rate)||50; return a + ((i2.customs_currency||'EGP')==='USD'?Number(i2.customs_cost||0)*f2:Number(i2.customs_cost||0)); }, 0);
+                                          return totalKg > 0 ? fE(totalCustoms / totalKg) + '/kg' : '—';
+                                        })()}</td>
+                                        <td className="px-2 py-1 text-right font-bold text-red-600">{fE(total)}</td>
+                                      </tr>
+                                    );
+                                  })}
+                                </tbody>
+                              </table>
+                            </div>
+                          </div>
+                        );
+                      })()}
+                      
+                      {/* P&L Summary */}
+                      {(userProfile?.role === 'super_admin' || modulePerms?.['View Costs'] === true) && (() => {
+                        const fx = Number(p.fx_rate) || 50;
+                        const toEgp = (amt, curr) => curr === 'USD' ? amt * fx : amt;
+                        const totalCost = toEgp(Number(p.purchase_cost)||0, p.purchase_currency) + toEgp(Number(p.customs_cost)||0, p.customs_currency) + toEgp(Number(p.shipping_cost)||0, p.shipping_currency) + toEgp(Number(p.other_cost)||0, p.other_currency);
+                        const linkedItems = invoiceItems.filter(it => it.product_id === p.id);
+                        const totalRevenue = linkedItems.reduce((a, it) => a + Number(it.line_total || 0), 0);
+                        const profit = totalRevenue - totalCost;
+                        const margin = totalRevenue > 0 ? Math.round((profit / totalRevenue) * 100) : 0;
+                        const inbounds = invInbounds.filter(ib => ib.product_id === p.product_id);
+                        const shipments = [...new Set([p.shipment_reference, ...inbounds.map(ib => ib.shipment_reference)].filter(Boolean).flatMap(s => s.split(',').map(x => x.trim())).filter(Boolean))];
+                        
+                        return (
+                          <div className="mt-3 pt-3 border-t border-red-200">
+                            <h4 className="text-xs font-bold text-red-700 mb-2">📊 P&L Summary</h4>
+                            <div className="grid grid-cols-4 gap-2 mb-2">
+                              <div className="bg-red-50 rounded p-2 text-center">
+                                <div className="text-[8px] text-red-500">Total Cost</div>
+                                <div className="text-xs font-extrabold text-red-600">{fE(totalCost)}</div>
+                              </div>
+                              <div className="bg-blue-50 rounded p-2 text-center">
+                                <div className="text-[8px] text-blue-500">Revenue</div>
+                                <div className="text-xs font-extrabold text-blue-600">{fE(totalRevenue)}</div>
+                              </div>
+                              <div className={'rounded p-2 text-center ' + (profit >= 0 ? 'bg-emerald-50' : 'bg-red-50')}>
+                                <div className="text-[8px] text-slate-500">Profit</div>
+                                <div className={'text-xs font-extrabold ' + (profit >= 0 ? 'text-emerald-600' : 'text-red-600')}>{fE(profit)}</div>
+                              </div>
+                              <div className={'rounded p-2 text-center ' + (margin >= 0 ? 'bg-emerald-50' : 'bg-red-50')}>
+                                <div className="text-[8px] text-slate-500">Margin</div>
+                                <div className={'text-xs font-extrabold ' + (margin >= 0 ? 'text-emerald-600' : 'text-red-600')}>{margin}%</div>
+                              </div>
+                            </div>
+                            {shipments.length > 0 && (
+                              <div>
+                                <h5 className="text-[10px] font-bold text-slate-500 mb-1">Per Shipment</h5>
+                                {shipments.map(ship => {
+                                  const ibsForShip = inbounds.filter(ib => (ib.shipment_reference || '').includes(ship));
+                                  const shipCost = ibsForShip.reduce((a, ib) => {
+                                    const f = Number(ib.fx_rate) || 50;
+                                    const te = (amt, c) => c === 'USD' ? amt * f : amt;
+                                    return a + te(Number(ib.purchase_cost)||0, ib.purchase_currency) + te(Number(ib.customs_cost)||0, ib.customs_currency) + te(Number(ib.shipping_cost)||0, ib.shipping_currency) + te(Number(ib.other_cost)||0, ib.other_currency);
+                                  }, 0);
+                                  const shipRevItems = linkedItems.filter(it => {
+                                    const inv = invoices.find(i => i.id === it.invoice_id);
+                                    return inv && (inv.order_number || '').includes(ship);
+                                  });
+                                  const shipRev = shipRevItems.reduce((a, it) => a + Number(it.line_total || 0), 0);
+                                  const shipProfit = shipRev - shipCost;
+                                  return (
+                                    <div key={ship} className="flex justify-between text-[10px] py-0.5 border-b border-slate-50">
+                                      <span className="font-semibold text-blue-600">{ship}</span>
+                                      <div className="flex gap-3">
+                                        <span className="text-red-500">Cost: {fE(shipCost)}</span>
+                                        <span className="text-blue-500">Rev: {fE(shipRev)}</span>
+                                        <span className={shipProfit >= 0 ? 'text-emerald-600 font-bold' : 'text-red-600 font-bold'}>{fE(shipProfit)}</span>
+                                      </div>
+                                    </div>
+                                  );
+                                })}
+                              </div>
+                            )}
+                          </div>
+                        );
+                      })()}
                     </div>
                   </div>
                 </div>

@@ -164,27 +164,36 @@ function QuotePrintView({ quote, onClose }) {
 }
 
 // ========== REQUEST QUOTE MODAL ==========
-function RequestQuoteModal({ data, onClose, origins, destinations, openWhatsApp, openEmail, generateQuoteRequest, userId }) {
+function RequestQuoteModal({ data, onClose, origins, destinations, openWhatsApp, openEmail, generateQuoteRequest, userId, allVendors }) {
   const [origin, setOrigin] = useState(data.origin || '');
   const [dest, setDest] = useState(data.destination || 'Egypt');
   const [container, setContainer] = useState(data.container || '40ft');
   const [commodity, setCommodity] = useState('General cargo / Trading materials');
-  const [showComposer, setShowComposer] = useState(false);
-  const vendor = data.vendor;
-  const { subject, body } = generateQuoteRequest(vendor, origin, dest, container);
-  // Custom body with commodity
-  const customBody = body.replace('General cargo / Trading materials', commodity);
+  const [selectedVendors, setSelectedVendors] = useState(data.vendor ? [data.vendor.id] : []);
+  const [sendingTo, setSendingTo] = useState(null); // current vendor being sent to
+  const [sent, setSent] = useState([]); // vendor ids already sent
+  const [showComposer, setShowComposer] = useState(null); // vendor for email composer
+  const vendors = allVendors || [];
+  const shippingVendors = vendors.filter(v => v.vendor_type === 'Shipping' || !v.vendor_type);
+  
+  const toggleVendor = (id) => {
+    if (selectedVendors.includes(id)) setSelectedVendors(selectedVendors.filter(x => x !== id));
+    else setSelectedVendors([...selectedVendors, id]);
+  };
+  const selectAll = () => setSelectedVendors(shippingVendors.map(v => v.id));
+  const selectNone = () => setSelectedVendors([]);
 
   return (<div className="fixed inset-0 bg-black/60 z-50 flex items-start justify-center overflow-auto p-4" onClick={e=>{if(e.target===e.currentTarget)onClose();}}>
-    <div className="bg-white rounded-xl shadow-2xl w-full max-w-[600px] my-8">
+    <div className="bg-white rounded-xl shadow-2xl w-full max-w-[650px] my-8">
       <div className="p-4 border-b flex justify-between items-center">
         <div>
           <h3 className="text-lg font-bold">📋 Request Rate Quote</h3>
-          <p className="text-xs text-slate-500">From: {vendor.company_name}{vendor.contact_name ? ' — ' + vendor.contact_name : ''}</p>
+          <p className="text-xs text-slate-500">{selectedVendors.length} vendor{selectedVendors.length !== 1 ? 's' : ''} selected</p>
         </div>
         <button onClick={onClose} className="text-2xl text-slate-400">×</button>
       </div>
       <div className="p-4">
+        {/* Route Details */}
         <div className="grid grid-cols-2 gap-3 mb-4">
           <div><label className="text-[10px] font-semibold">Origin</label><input list="rq-origins" value={origin} onChange={e=>setOrigin(e.target.value)} className="w-full px-3 py-2 rounded-lg border text-sm" placeholder="e.g. China, Turkey..." /><datalist id="rq-origins">{origins.map(o=><option key={o} value={o}/>)}</datalist></div>
           <div><label className="text-[10px] font-semibold">Destination</label><input list="rq-dests" value={dest} onChange={e=>setDest(e.target.value)} className="w-full px-3 py-2 rounded-lg border text-sm" /><datalist id="rq-dests">{destinations.map(d=><option key={d} value={d}/>)}</datalist></div>
@@ -192,57 +201,83 @@ function RequestQuoteModal({ data, onClose, origins, destinations, openWhatsApp,
           <div><label className="text-[10px] font-semibold">Commodity</label><input value={commodity} onChange={e=>setCommodity(e.target.value)} className="w-full px-3 py-2 rounded-lg border text-sm" /></div>
         </div>
 
-        {/* Preview */}
-        <div className="bg-slate-50 rounded-lg p-3 mb-4 border max-h-[200px] overflow-auto">
-          <div className="text-[10px] font-semibold text-slate-500 mb-1">Message Preview:</div>
-          <pre className="text-xs whitespace-pre-wrap text-slate-700" style={{fontFamily:'inherit'}}>{customBody}</pre>
+        {/* Vendor Selection */}
+        <div className="mb-4">
+          <div className="flex justify-between items-center mb-2">
+            <label className="text-xs font-bold">Select Vendors</label>
+            <div className="flex gap-2">
+              <button onClick={selectAll} className="text-[10px] text-blue-600 font-bold hover:underline">Select All</button>
+              <button onClick={selectNone} className="text-[10px] text-slate-400 hover:underline">Clear</button>
+            </div>
+          </div>
+          <div className="max-h-[200px] overflow-auto rounded-lg border border-slate-200">
+            {shippingVendors.map(v => {
+              const isSel = selectedVendors.includes(v.id);
+              const isSent = sent.includes(v.id);
+              return (
+                <div key={v.id} onClick={() => !isSent && toggleVendor(v.id)}
+                  className={'flex items-center gap-3 px-3 py-2 border-b border-slate-50 cursor-pointer transition ' + (isSent ? 'bg-emerald-50 ' : isSel ? 'bg-blue-50 ' : 'hover:bg-slate-50 ')}>
+                  <div className={'w-5 h-5 rounded border-2 flex items-center justify-center text-[10px] flex-shrink-0 ' + (isSent ? 'bg-emerald-500 border-emerald-500 text-white' : isSel ? 'bg-blue-500 border-blue-500 text-white' : 'border-slate-300')}>
+                    {isSent ? '✓' : isSel ? '✓' : ''}
+                  </div>
+                  <div className="flex-1 min-w-0">
+                    <div className="text-xs font-semibold truncate">{v.company_name}{v.contact_name ? ' — ' + v.contact_name : ''}</div>
+                    <div className="text-[10px] text-slate-400 flex gap-2">
+                      {v.email && <span>📧 {v.email}</span>}
+                      {v.whatsapp && <span>💬 WhatsApp</span>}
+                    </div>
+                  </div>
+                  {isSent && <span className="text-[10px] text-emerald-600 font-bold">Sent ✓</span>}
+                </div>
+              );
+            })}
+            {shippingVendors.length === 0 && <div className="p-4 text-xs text-slate-400 text-center">No vendor contacts. Add vendors first (📇 Vendors).</div>}
+          </div>
         </div>
 
-        {/* Action Buttons — BIG for mobile */}
-        <div className="space-y-2">
-          {vendor.whatsapp && (
-            <button onClick={()=>{openWhatsApp(vendor.whatsapp, customBody);onClose();}}
-              className="w-full py-4 rounded-xl text-base font-bold bg-emerald-500 text-white flex items-center justify-center gap-2 hover:bg-emerald-600 transition"
-              style={{boxShadow:'0 4px 15px rgba(52,211,153,0.3)'}}>
-              💬 Send via WhatsApp
+        {/* Send Buttons */}
+        {selectedVendors.length > 0 && (
+          <div className="space-y-2">
+            <button onClick={() => {
+              const toSend = selectedVendors.filter(id => !sent.includes(id));
+              toSend.forEach(id => {
+                const v = vendors.find(x => x.id === id);
+                if (!v) return;
+                const { body } = generateQuoteRequest(v, origin, dest, container);
+                const customBody = body.replace('General cargo / Trading materials', commodity);
+                if (v.whatsapp) openWhatsApp(v.whatsapp, customBody);
+                else if (v.email) openEmail(v.email, 'Rate Request — ' + origin + ' to ' + dest + ' — KTC', customBody);
+              });
+              setSent([...sent, ...toSend]);
+            }} className="w-full py-3 rounded-xl text-sm font-bold bg-emerald-500 text-white hover:bg-emerald-600 transition">
+              💬 Send All via WhatsApp/Email ({selectedVendors.filter(id => !sent.includes(id)).length} vendors)
             </button>
-          )}
-          {vendor.email && (
-            <button onClick={()=>setShowComposer(true)}
-              className="w-full py-4 rounded-xl text-base font-bold text-white flex items-center justify-center gap-2 transition"
-              style={{background:'linear-gradient(135deg, #0ea5e9, #6366f1)', boxShadow:'0 4px 15px rgba(56,189,248,0.3)'}}>
-              📨 Send Direct from @ktcus.com
-            </button>
-          )}
-          {vendor.email && (
-            <button onClick={()=>{openEmail(vendor.email, subject, customBody);onClose();}}
-              className="w-full py-3 rounded-xl text-sm font-bold border-2 border-blue-200 text-blue-600 flex items-center justify-center gap-2 hover:bg-blue-50 transition">
-              📧 Open in Email Client
-            </button>
-          )}
-          {vendor.phone && (
-            <a href={'tel:'+vendor.phone}
-              className="w-full py-3 rounded-xl text-sm font-bold border-2 border-slate-200 text-slate-600 flex items-center justify-center gap-2 hover:bg-slate-50 transition block text-center">
-              📞 Call {vendor.contact_name || vendor.company_name}
-            </a>
-          )}
-          {!vendor.whatsapp && !vendor.email && (
-            <div className="text-center text-sm text-red-500 py-4">No email or WhatsApp on file for this vendor. Edit the vendor to add contact info.</div>
-          )}
-        </div>
+            {selectedVendors.filter(id => !sent.includes(id)).map(id => {
+              const v = vendors.find(x => x.id === id);
+              if (!v) return null;
+              const { subject, body } = generateQuoteRequest(v, origin, dest, container);
+              const customBody = body.replace('General cargo / Trading materials', commodity);
+              return (
+                <div key={id} className="flex gap-1">
+                  {v.whatsapp && <button onClick={() => { openWhatsApp(v.whatsapp, customBody); setSent([...sent, id]); }}
+                    className="flex-1 py-2 rounded-lg text-[10px] font-bold bg-emerald-100 text-emerald-700 hover:bg-emerald-200">💬 {v.company_name}</button>}
+                  {v.email && <button onClick={() => setShowComposer(v)}
+                    className="flex-1 py-2 rounded-lg text-[10px] font-bold bg-blue-100 text-blue-700 hover:bg-blue-200">📧 {v.company_name}</button>}
+                </div>
+              );
+            })}
+          </div>
+        )}
+        {sent.length > 0 && <div className="mt-3 text-center text-xs text-emerald-600 font-bold">✅ Sent to {sent.length} vendor{sent.length !== 1 ? 's' : ''}</div>}
       </div>
     </div>
-    {showComposer && (
-      <EmailComposer
-        to={vendor.email}
-        subject={subject}
-        body={customBody}
-        userId={userId}
-        senderName="KTC International"
-        onClose={() => setShowComposer(false)}
-        onSent={() => { setShowComposer(false); onClose(); }}
-      />
-    )}
+    {showComposer && (() => {
+      const v = showComposer;
+      const { subject, body } = generateQuoteRequest(v, origin, dest, container);
+      const customBody = body.replace('General cargo / Trading materials', commodity);
+      return <EmailComposer to={v.email} subject={subject} body={customBody} userId={userId} senderName="KTC International"
+        onClose={() => setShowComposer(null)} onSent={() => { setShowComposer(null); setSent([...sent, v.id]); }} />;
+    })()}
   </div>);
 }
 
@@ -457,7 +492,7 @@ Date: ${today}`;
       ))}
       {vendorContacts.length === 0 && <div className="text-center py-8 text-slate-400 text-sm">No vendor contacts yet. Add your freight forwarders, truckers, and brokers.</div>}
     </div>
-    {requestQuoteData && <RequestQuoteModal data={requestQuoteData} onClose={()=>setRequestQuoteData(null)} origins={origins} destinations={destinations} openWhatsApp={openWhatsApp} openEmail={openEmail} generateQuoteRequest={generateQuoteRequest} userId={myId} />}
+    {requestQuoteData && <RequestQuoteModal data={requestQuoteData} onClose={()=>setRequestQuoteData(null)} origins={origins} destinations={destinations} openWhatsApp={openWhatsApp} openEmail={openEmail} generateQuoteRequest={generateQuoteRequest} userId={myId} allVendors={vendorContacts} />}
   </div>);
 
   // ========== ADD/EDIT VENDOR ==========
@@ -687,7 +722,7 @@ Date: ${today}`;
       {chartSorted.length>1&&(<div className="bg-white rounded-xl p-4 mb-4 border border-slate-200"><h3 className="text-sm font-bold mb-2">📈 Rate Trend</h3><div className="flex items-end gap-1 h-[120px]">{chartSorted.map((d,i)=>{const mx=Math.max(...chartSorted.map(x=>x.max)); const h=mx>0?(d.avg/mx)*100:0; return (<div key={d.month} className="flex-1 flex flex-col items-center" title={d.month+': avg $'+d.avg}><div className="text-[8px] text-slate-400 mb-1">${d.avg}</div><div className="w-full rounded-t" style={{height:h+'%',background:i===chartSorted.length-1?'#0ea5e9':'#cbd5e1',minHeight:4}}></div><div className="text-[8px] text-slate-400 mt-1 -rotate-45">{d.month.substring(5)}</div></div>);})}</div></div>)}
       {Object.keys(byVL).length>0&&(<div className="bg-white rounded-xl p-4 mb-4 border border-slate-200"><h3 className="text-sm font-bold mb-2">🏆 Vendor Comparison</h3><div className="overflow-auto"><table className="w-full border-collapse text-xs"><thead><tr className="bg-slate-50"><th className="px-3 py-2 text-left text-[10px]">Vendor / Line</th><th className="px-3 py-2 text-right text-[10px]">Best Rate</th><th className="px-3 py-2 text-right text-[10px]">Transit</th><th className="px-3 py-2 text-right text-[10px]">Free Days</th><th className="px-3 py-2 text-[10px]">Expiry</th></tr></thead><tbody>{Object.entries(byVL).sort((a,b)=>(a[1][0]?.rate_amount||Infinity)-(b[1][0]?.rate_amount||Infinity)).map(([key,vr],i)=>{const best=vr.reduce((a,b)=>(a.rate_amount||Infinity)<(b.rate_amount||Infinity)?a:b); return (<tr key={key} className={'border-b border-slate-50 '+(i===0?'bg-emerald-50':'')}><td className="px-3 py-2 font-semibold">{i===0&&<span className="text-emerald-500 mr-1">★</span>}{key}</td><td className="px-3 py-2 text-right font-bold text-blue-600">{fCur(best.rate_amount,best.currency)}</td><td className="px-3 py-2 text-right">{best.transit_days?best.transit_days+'d':'—'}</td><td className="px-3 py-2 text-right">{best.free_days||'—'}</td><td className="px-3 py-2"><ExpiryBadge date={best.expiry_date}/></td></tr>);})}</tbody></table></div></div>)}
       {routeQuotes.length>0&&(<div className="bg-white rounded-xl p-4 mt-4 border border-slate-200"><h3 className="text-sm font-bold mb-2">📋 Quotes ({routeQuotes.length})</h3>{routeQuotes.map(qt=>(<div key={qt.id} className="flex justify-between items-center py-2 border-b border-slate-50"><div><div className="text-xs font-semibold">{qt.quote_number} — {qt.customer_name}</div><div className="text-[10px] text-slate-500">{qt.quote_date} • {qt.status}</div></div><div className="flex items-center gap-3"><div className="text-right"><div className="text-xs">Client: <span className="font-bold">{fCur(qt.client_total,qt.currency)}</span></div><div className="text-[10px]" style={{color:qt.profit>0?'#10b981':'#ef4444'}}>Profit: {fCur(qt.profit,qt.currency)}</div></div><button onClick={()=>setPreviewQuote(qt)} className="px-2 py-1 rounded border border-purple-300 text-purple-600 text-[10px]">📄</button></div></div>))}</div>)}
-      <div className="bg-white rounded-xl p-4 border border-slate-200 mt-4"><div className="flex justify-between items-center mb-2"><h3 className="text-sm font-bold">All Rates</h3><div className="flex gap-1"><button onClick={()=>{const matchVendors=vendorContacts.filter(v=>!v.origin_regions||(v.origin_regions||'').toLowerCase().includes((selectedRoute.origin||'').toLowerCase().substring(0,4)));if(matchVendors.length>0)setRequestQuoteData({vendor:matchVendors[0],origin:selectedRoute.origin,destination:selectedRoute.destination,container:'40ft'});else alert('No vendor contacts found. Add vendors first (📇 Vendors).');}} className="px-3 py-1 bg-cyan-500 text-white rounded text-[10px] font-semibold">📋 Request Rate</button><button onClick={()=>{setF({origin:selectedRoute.origin,destination:selectedRoute.destination});setView('add_rate');}} className="px-3 py-1 bg-blue-500 text-white rounded text-[10px] font-semibold">+ Add Rate</button></div></div>
+      <div className="bg-white rounded-xl p-4 border border-slate-200 mt-4"><div className="flex justify-between items-center mb-2"><h3 className="text-sm font-bold">All Rates</h3><div className="flex gap-1"><button onClick={()=>{setRequestQuoteData({vendor:null,origin:selectedRoute.origin,destination:selectedRoute.destination,container:'40ft'});}} className="px-3 py-1 bg-cyan-500 text-white rounded text-[10px] font-semibold">📋 Request Rate</button><button onClick={()=>{setF({origin:selectedRoute.origin,destination:selectedRoute.destination});setView('add_rate');}} className="px-3 py-1 bg-blue-500 text-white rounded text-[10px] font-semibold">+ Add Rate</button></div></div>
       <div className="flex gap-1 mb-2 flex-wrap items-center">
         <span className="text-[10px] text-slate-500 mr-1">Filter:</span>
         {[['active','✅ Active'],['3m','3 Months'],['1y','1 Year'],['3y','3 Years'],['all','All Time'],['custom','Custom']].map(([v,l])=>(
@@ -707,11 +742,11 @@ Date: ${today}`;
           <span className="text-[10px] font-bold text-emerald-700">🏆 Best rate in period: {bestRate.vendor_name} {bestRate.shipping_line ? '/ '+bestRate.shipping_line : ''}</span>
           <span className="text-sm font-extrabold text-emerald-600">{fCur(bestRate.rate_amount, bestRate.currency)} <span className="text-[10px] font-normal">({bestRate.effective_date})</span></span>
         </div>}
-      <div className="overflow-auto max-h-[400px] rounded-lg border border-slate-200"><table className="w-full border-collapse text-xs"><thead className="sticky top-0"><tr className="bg-slate-50"><th className="px-2 py-2 text-[10px] text-left">Date</th><th className="px-2 py-2 text-[10px] text-left">Vendor</th><th className="px-2 py-2 text-[10px] text-left">Line</th><th className="px-2 py-2 text-[10px]">Container</th><th className="px-2 py-2 text-[10px] text-right">Rate</th><th className="px-2 py-2 text-[10px] text-right">Total</th><th className="px-2 py-2 text-[10px]">Expiry</th><th className="px-2 py-2 text-[10px]"></th></tr></thead><tbody>{filtered.map(r=>{const exp=isExpired(r.expiry_date); const isBest=bestRate&&r.id===bestRate.id; return (<tr key={r.id} className={'border-b border-slate-50 '+(isBest?'bg-emerald-50/80 ':exp?'bg-red-50/50 ':'')+(r.booked?' bg-green-50/50':'')}><td className="px-2 py-1.5">{r.effective_date}</td><td className="px-2 py-1.5 font-semibold">{isBest&&<span className="text-emerald-500 mr-1">★</span>}{r.vendor_name}</td><td className="px-2 py-1.5">{r.shipping_line||'—'}</td><td className="px-2 py-1.5 text-center"><span className="px-1.5 py-0.5 bg-blue-100 text-blue-700 rounded text-[9px]">{r.container_type}</span></td><td className={'px-2 py-1.5 text-right font-bold '+(exp?'text-red-400 line-through':'text-blue-600')}>{fCur(r.rate_amount,r.currency)}</td><td className="px-2 py-1.5 text-right font-bold text-amber-600">{fCur(r.total_cost,r.currency)}</td><td className="px-2 py-1.5"><ExpiryBadge date={r.expiry_date}/></td><td className="px-2 py-1.5 flex gap-1">{!exp&&<button onClick={()=>handleMarkBooked(r)} className="px-2 py-0.5 rounded border border-green-300 text-green-600 text-[10px]">Book</button>}<button onClick={()=>{setEditingRate(r);setF({origin:r.origin,destination:r.destination,vendorName:r.vendor_name,shippingLine:r.shipping_line,transportMode:r.transport_mode,rateType:r.rate_type||'',containerType:r.container_type,rateAmount:r.rate_amount,currency:r.currency,transitDays:r.transit_days,freeDays:r.free_days,portFees:r.port_fees,thcFees:r.thc_fees,docFees:r.documentation_fees,customsFees:r.customs_fees,otherFees:r.other_fees,otherFeesDesc:r.other_fees_desc,effectiveDate:r.effective_date,expiryDate:r.expiry_date,pol:r.port_of_loading,pod:r.port_of_discharge,notes:r.notes,booked:r.booked,shipmentRef:r.shipment_reference,bookingDate:r.booking_date,bookingNotes:r.booking_notes});setView('add_rate');}} className="px-2 py-0.5 rounded border border-blue-300 text-blue-600 text-[10px]">Edit</button>{isAdmin&&<button onClick={()=>handleDeleteRate(r)} className="px-2 py-0.5 rounded border border-red-300 text-red-500 text-[10px]">Del</button>}</td></tr>);})}</tbody></table></div>
+      <div className="overflow-auto max-h-[400px] rounded-lg border border-slate-200"><table className="w-full border-collapse text-xs"><thead className="sticky top-0"><tr className="bg-slate-50"><th className="px-2 py-2 text-[10px] text-left">Date</th><th className="px-2 py-2 text-[10px] text-left">Vendor</th><th className="px-2 py-2 text-[10px] text-left">Line</th><th className="px-2 py-2 text-[10px]">Container</th><th className="px-2 py-2 text-[10px] text-right">Rate</th><th className="px-2 py-2 text-[10px] text-right">Total</th><th className="px-2 py-2 text-[10px]">Expiry</th><th className="px-2 py-2 text-[10px]"></th></tr></thead><tbody>{filtered.map(r=>{const exp=isExpired(r.expiry_date); const isBest=bestRate&&r.id===bestRate.id; return (<tr key={r.id} className={'border-b border-slate-50 '+(isBest?'bg-emerald-50 ':exp?'bg-red-50 ':'')+(r.booked?' bg-green-50':'')}><td className="px-2 py-1.5">{r.effective_date}</td><td className="px-2 py-1.5 font-semibold">{isBest&&<span className="text-emerald-500 mr-1">★</span>}{r.vendor_name}</td><td className="px-2 py-1.5">{r.shipping_line||'—'}</td><td className="px-2 py-1.5 text-center"><span className="px-1.5 py-0.5 bg-blue-100 text-blue-700 rounded text-[9px]">{r.container_type}</span></td><td className={'px-2 py-1.5 text-right font-bold '+(exp?'text-red-400 line-through':'text-blue-600')}>{fCur(r.rate_amount,r.currency)}</td><td className="px-2 py-1.5 text-right font-bold text-amber-600">{fCur(r.total_cost,r.currency)}</td><td className="px-2 py-1.5"><ExpiryBadge date={r.expiry_date}/></td><td className="px-2 py-1.5 flex gap-1">{!exp&&<button onClick={()=>handleMarkBooked(r)} className="px-2 py-0.5 rounded border border-green-300 text-green-600 text-[10px]">Book</button>}<button onClick={()=>{setEditingRate(r);setF({origin:r.origin,destination:r.destination,vendorName:r.vendor_name,shippingLine:r.shipping_line,transportMode:r.transport_mode,rateType:r.rate_type||'',containerType:r.container_type,rateAmount:r.rate_amount,currency:r.currency,transitDays:r.transit_days,freeDays:r.free_days,portFees:r.port_fees,thcFees:r.thc_fees,docFees:r.documentation_fees,customsFees:r.customs_fees,otherFees:r.other_fees,otherFeesDesc:r.other_fees_desc,effectiveDate:r.effective_date,expiryDate:r.expiry_date,pol:r.port_of_loading,pod:r.port_of_discharge,notes:r.notes,booked:r.booked,shipmentRef:r.shipment_reference,bookingDate:r.booking_date,bookingNotes:r.booking_notes});setView('add_rate');}} className="px-2 py-0.5 rounded border border-blue-300 text-blue-600 text-[10px]">Edit</button>{isAdmin&&<button onClick={()=>handleDeleteRate(r)} className="px-2 py-0.5 rounded border border-red-300 text-red-500 text-[10px]">Del</button>}</td></tr>);})}</tbody></table></div>
       <div className="text-[10px] text-slate-400 mt-1">Showing {filtered.length} of {routeHistory.length} rates</div>
       </>); })()}</div>
       {previewQuote && <QuotePrintView quote={previewQuote} onClose={() => setPreviewQuote(null)} />}
-      {requestQuoteData && <RequestQuoteModal data={requestQuoteData} onClose={()=>setRequestQuoteData(null)} origins={origins} destinations={destinations} openWhatsApp={openWhatsApp} openEmail={openEmail} generateQuoteRequest={generateQuoteRequest} userId={myId} />}
+      {requestQuoteData && <RequestQuoteModal data={requestQuoteData} onClose={()=>setRequestQuoteData(null)} origins={origins} destinations={destinations} openWhatsApp={openWhatsApp} openEmail={openEmail} generateQuoteRequest={generateQuoteRequest} userId={myId} allVendors={vendorContacts} />}
 
       {/* Booking Modal */}
       {bookingModal && (
@@ -794,7 +829,7 @@ Date: ${today}`;
         <button onClick={()=>setView('import')} className="px-3 py-1.5 bg-amber-500 text-white rounded-lg text-xs font-semibold">📥 Import</button>
         <button onClick={()=>setView('ai')} className="px-3 py-1.5 bg-emerald-500 text-white rounded-lg text-xs font-semibold">🤖 AI</button>
         <button onClick={()=>setView('vendors')} className="px-3 py-1.5 bg-indigo-500 text-white rounded-lg text-xs font-semibold">📇 Vendors</button>
-        <button onClick={()=>{if(vendorContacts.length===0){alert('Add vendor contacts first (📇 Vendors button)');return;}setRequestQuoteData({vendor:vendorContacts[0],origin:'',destination:'Egypt',container:'40ft'});}} className="px-3 py-1.5 bg-cyan-500 text-white rounded-lg text-xs font-semibold">📋 Request Rate</button>
+        <button onClick={()=>{setRequestQuoteData({vendor:null,origin:'',destination:'Egypt',container:'40ft'});}} className="px-3 py-1.5 bg-cyan-500 text-white rounded-lg text-xs font-semibold">📋 Request Rate</button>
       </div>
     </div>
     <div className="grid grid-cols-5 gap-3 mb-4">
@@ -817,6 +852,6 @@ Date: ${today}`;
       <div className="flex justify-between text-[10px] text-slate-500 border-t border-slate-100 pt-2"><span>{rg.activeCount} active{rg.expiredCount>0&&<span className="text-red-400 ml-1">({rg.expiredCount} exp)</span>}</span><span>{[...rg.vendors].length} vendors</span>{(() => { const rb = routeBookings(rg.origin,rg.destination); return rb.length > 0 && <span className="text-emerald-600">✓ {rb.length}x</span>; })()}</div>
     </div>);})}</div>)}
     {previewQuote && <QuotePrintView quote={previewQuote} onClose={() => setPreviewQuote(null)} />}
-    {requestQuoteData && <RequestQuoteModal data={requestQuoteData} onClose={()=>setRequestQuoteData(null)} origins={origins} destinations={destinations} openWhatsApp={openWhatsApp} openEmail={openEmail} generateQuoteRequest={generateQuoteRequest} userId={myId} />}
+    {requestQuoteData && <RequestQuoteModal data={requestQuoteData} onClose={()=>setRequestQuoteData(null)} origins={origins} destinations={destinations} openWhatsApp={openWhatsApp} openEmail={openEmail} generateQuoteRequest={generateQuoteRequest} userId={myId} allVendors={vendorContacts} />}
   </div>);
 }
