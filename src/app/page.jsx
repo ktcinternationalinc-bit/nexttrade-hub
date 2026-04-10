@@ -41,22 +41,22 @@ const TABS = [
   { id: 'dashboard', label: 'Dashboard / لوحة', icon: '📊' },
   { id: 'sales', label: 'Sales / المبيعات', icon: '💰' },
   { id: 'customers', label: 'Customers / العملاء', icon: '👥' },
+  { id: 'quotes', label: 'Quotes / عروض', icon: '📋' },
   { id: 'treasury', label: 'Treasury / الخزنة', icon: '🏦' },
+  { id: 'bank', label: 'Bank / البنك', icon: '🏛️' },
   { id: 'checks', label: 'Checks / شيكات', icon: '📝' },
   { id: 'debts', label: 'Debts / المديونية', icon: '⚠️' },
   { id: 'warehouse', label: 'Warehouse / المخزن', icon: '🏭' },
   { id: 'inventory', label: 'Inventory / المخزون', icon: '📦' },
-  { id: 'crm', label: 'CRM', icon: '🤝' },
-  { id: 'tickets', label: 'Tickets / تذاكر', icon: '🎫' },
-  { id: 'calendar', label: 'Calendar / تقويم', icon: '📅' },
   { id: 'customs', label: 'Customs / جمارك', icon: '🚢' },
   { id: 'shipping', label: 'Shipping Rates / شحن', icon: '🛳️' },
-  { id: 'bank', label: 'Bank / البنك', icon: '🏦' },
-  { id: 'quotes', label: 'Quotes / عروض', icon: '📋' },
+  { id: 'crm', label: 'CRM', icon: '🤝' },
+  { id: 'tickets', label: 'Tickets / تذاكر', icon: '🎫' },
+  { id: 'comms', label: 'Communications / رسائل', icon: '📬' },
+  { id: 'calendar', label: 'Calendar / تقويم', icon: '📅' },
   { id: 'dailylog', label: 'Daily Log / يومي', icon: '📓' },
   { id: 'admin', label: 'Admin / إدارة', icon: '👑' },
   { id: 'ai', label: 'AI Assistant / ذكي', icon: '🤖' },
-  { id: 'comms', label: 'Communications / رسائل', icon: '📬' },
   { id: 'settings', label: 'Settings / إعدادات', icon: '⚙️' },
   { id: 'import', label: 'Import / استيراد', icon: '📥' },
 ];
@@ -225,6 +225,8 @@ export default function App() {
   const [showLinkSearch, setShowLinkSearch] = useState(false);
   const [formData, setFormData] = useState({});
   const [hideSections, setHideSections] = useState({});
+  const [announcements, setAnnouncements] = useState([]);
+  const [showAddAnnouncement, setShowAddAnnouncement] = useState(false);
   const [reminders, setReminders] = useState([]);
   const [showReminderForm, setShowReminderForm] = useState(false);
   const [showReminderArchive, setShowReminderArchive] = useState(false);
@@ -304,7 +306,35 @@ export default function App() {
       else setUser(session.user);
     });
 
-    return () => subscription?.unsubscribe();
+    // Heartbeat: update last_seen every 5 min
+    const heartbeat = setInterval(async () => {
+      const { data: { session: s } } = await supabase.auth.getSession();
+      if (s?.user) {
+        const today = new Date().toISOString().split('T')[0];
+        await supabase.from('user_sessions')
+          .update({ last_seen: new Date().toISOString() })
+          .eq('user_id', s.user.id)
+          .eq('date', today)
+          .order('login_at', { ascending: false })
+          .limit(1);
+      }
+    }, 5 * 60 * 1000);
+
+    // Record last_seen on page close
+    const handleUnload = () => {
+      const uid = user?.id;
+      if (uid) {
+        const today = new Date().toISOString().split('T')[0];
+        navigator.sendBeacon('/api/plaid/link', ''); // no-op, just to keep alive
+        supabase.from('user_sessions')
+          .update({ last_seen: new Date().toISOString(), logout_at: new Date().toISOString() })
+          .eq('user_id', uid).eq('date', today)
+          .order('login_at', { ascending: false }).limit(1).then(() => {});
+      }
+    };
+    window.addEventListener('beforeunload', handleUnload);
+
+    return () => { subscription?.unsubscribe(); clearInterval(heartbeat); window.removeEventListener('beforeunload', handleUnload); };
   }, []);
 
   // ==========================================
@@ -399,6 +429,11 @@ export default function App() {
         const { data: rems } = await supabase.from('team_reminders').select('*').order('created_at', { ascending: false }).limit(200);
         setReminders(rems || []);
       } catch(e) { setReminders([]); }
+      // Load announcements
+      try {
+        const { data: ann } = await supabase.from('announcements').select('*').order('created_at', { ascending: false }).limit(20);
+        setAnnouncements(ann || []);
+      } catch(e) { setAnnouncements([]); }
     } catch (err) {
       console.error('Load error:', err);
     }
@@ -571,6 +606,13 @@ export default function App() {
   };
 
   const handleSignOut = async () => {
+    if (user?.id) {
+      const today = new Date().toISOString().split('T')[0];
+      await supabase.from('user_sessions')
+        .update({ logout_at: new Date().toISOString(), last_seen: new Date().toISOString() })
+        .eq('user_id', user.id).eq('date', today)
+        .order('login_at', { ascending: false }).limit(1);
+    }
     await supabase.auth.signOut();
     window.location.href = '/login';
   };
@@ -2792,6 +2834,154 @@ export default function App() {
               <h2 className="text-xl font-extrabold">Dashboard / لوحة التحكم</h2>
               {isAdmin && <ModeBar />}
             </div>
+
+            {/* ===== ANNOUNCEMENTS / URGENT MESSAGES ===== */}
+            {isAdmin && (
+              <button onClick={() => setShowAddAnnouncement(true)}
+                className="px-4 py-2 bg-red-500 text-white rounded-lg text-sm font-bold mb-3 shadow-lg">📢 Send Message to Team / إرسال رسالة للفريق</button>
+            )}
+            {showAddAnnouncement && (
+              <div className="bg-red-50 rounded-xl p-5 mb-4 border-2 border-red-400 shadow-lg">
+                <h4 className="text-lg font-extrabold text-red-800 mb-3">📢 New Message / رسالة جديدة</h4>
+                <input id="ann-title" placeholder="Subject / الموضوع *" className="w-full px-4 py-3 rounded-lg border-2 border-red-200 text-base font-bold mb-3" />
+                <textarea id="ann-body" placeholder="Message details / تفاصيل الرسالة" rows={4} className="w-full px-4 py-3 rounded-lg border-2 border-red-200 text-sm mb-3" />
+                <div className="grid grid-cols-2 gap-3 mb-3">
+                  <div>
+                    <label className="text-xs font-bold text-red-800 block mb-1">Priority / الأهمية</label>
+                    <select id="ann-priority" className="w-full px-3 py-2 rounded-lg border text-sm">
+                      <option value="urgent">🚨 URGENT / عاجل</option>
+                      <option value="warning">⚠️ Important / مهم</option>
+                      <option value="info">ℹ️ Info / معلومة</option>
+                    </select>
+                  </div>
+                  <div>
+                    <label className="text-xs font-bold text-red-800 block mb-1">Send To / إرسال إلى</label>
+                    <select id="ann-target" className="w-full px-3 py-2 rounded-lg border text-sm">
+                      <option value="all">👥 Everyone / الجميع</option>
+                      {teamUsers.map(u => <option key={u.id} value={u.id}>👤 {u.name}</option>)}
+                    </select>
+                  </div>
+                </div>
+                <div className="flex gap-3 items-center mb-3">
+                  <label className="flex items-center gap-2 text-xs font-bold"><input type="checkbox" id="ann-pin" defaultChecked className="w-4 h-4" /> 📌 Pin to top / تثبيت</label>
+                  <label className="flex items-center gap-2 text-xs font-bold"><input type="checkbox" id="ann-email" defaultChecked className="w-4 h-4" /> 📧 Email notify / إشعار بريد</label>
+                  <label className="flex items-center gap-2 text-xs font-bold"><input type="checkbox" id="ann-whatsapp" className="w-4 h-4" /> 💬 WhatsApp</label>
+                </div>
+                <div className="flex gap-2">
+                  <button onClick={async () => {
+                    var title = document.getElementById('ann-title').value;
+                    var body = document.getElementById('ann-body').value;
+                    var priority = document.getElementById('ann-priority').value;
+                    var pinned = document.getElementById('ann-pin').checked;
+                    var sendEmail = document.getElementById('ann-email').checked;
+                    var sendWhatsapp = document.getElementById('ann-whatsapp').checked;
+                    var target = document.getElementById('ann-target').value;
+                    if (!title) { alert('Subject is required / الموضوع مطلوب'); return; }
+                    try {
+                      await dbInsert('announcements', {
+                        title, body, priority, pinned,
+                        target_user: target === 'all' ? null : target,
+                        posted_by: userProfile?.id || user?.id,
+                        active: true, send_email: sendEmail, send_whatsapp: sendWhatsapp
+                      }, user?.id);
+                      if (sendEmail) {
+                        try {
+                          var recipients = target === 'all' ? teamUsers : teamUsers.filter(u => u.id === target);
+                          for (var r of recipients) {
+                            if (r.email) {
+                              await fetch('/api/notify', {
+                                method: 'POST', headers: {'Content-Type':'application/json'},
+                                body: JSON.stringify({ to: r.email, subject: (priority === 'urgent' ? '🚨 URGENT: ' : priority === 'warning' ? '⚠️ ':'') + title, html: '<div style="font-family:sans-serif;padding:20px;'+(priority==='urgent'?'background:#fef2f2;border:3px solid #ef4444;':priority==='warning'?'background:#fffbeb;border:2px solid #f59e0b;':'background:#eff6ff;border:1px solid #3b82f6;')+'border-radius:12px;"><h2 style="margin:0 0 10px;font-size:18px;">'+(priority==='urgent'?'🚨':'⚠️')+' '+title+'</h2>'+(body?'<p style="font-size:14px;color:#333;">'+body.replace(/\n/g,'<br/>')+'</p>':'')+'<hr style="margin:15px 0;border-color:#eee;"/><p style="font-size:11px;color:#999;">From KTC Hub — '+(userProfile?.name||'Admin')+'</p></div>' })
+                              });
+                            }
+                          }
+                        } catch(emailErr) { console.error('Email send error:', emailErr); }
+                      }
+                      setShowAddAnnouncement(false);
+                      await loadAllData();
+                    } catch(err) { alert('Error: ' + err.message); }
+                  }} className="px-6 py-3 bg-red-600 text-white rounded-lg text-sm font-extrabold shadow-lg">📢 SEND NOW / أرسل الآن</button>
+                  <button onClick={() => setShowAddAnnouncement(false)} className="px-4 py-3 border-2 border-slate-300 rounded-lg text-sm font-bold">Cancel</button>
+                </div>
+              </div>
+            )}
+            {/* Active Announcements — BIG and highlighted */}
+            {(() => {
+              var myId = userProfile?.id;
+              var today = new Date().toISOString().substring(0, 10);
+              var active = announcements.filter(a => a.active !== false && (!a.target_user || a.target_user === myId));
+              var todayMsgs = active.filter(a => (a.created_at || '').substring(0, 10) === today);
+              var olderMsgs = active.filter(a => (a.created_at || '').substring(0, 10) !== today);
+              var pinnedMsgs = active.filter(a => a.pinned);
+              var showMsgs = [...pinnedMsgs, ...todayMsgs.filter(a => !a.pinned)].filter((a, i, arr) => arr.findIndex(x => x.id === a.id) === i);
+              if (showMsgs.length === 0 && olderMsgs.length === 0) return null;
+              return (<div className="mb-4">
+                {showMsgs.length > 0 && showMsgs.map(a => {
+                  var styles = a.priority === 'urgent'
+                    ? { border: '3px solid #ef4444', shadow: '0 4px 20px rgba(239,68,68,0.25)' }
+                    : a.priority === 'warning'
+                    ? { border: '2px solid #f59e0b', shadow: '0 4px 15px rgba(245,158,11,0.2)' }
+                    : { border: '2px solid #3b82f6', shadow: '0 4px 15px rgba(59,130,246,0.15)' };
+                  var icon = a.priority === 'urgent' ? '🚨' : a.priority === 'warning' ? '⚠️' : 'ℹ️';
+                  var poster = teamUsers.find(u => u.id === a.posted_by);
+                  var isTargeted = a.target_user === myId;
+                  return (
+                    <div key={a.id} className="rounded-2xl p-5 mb-3" style={{ background: a.priority === 'urgent' ? 'linear-gradient(135deg,#fef2f2,#fee2e2)' : a.priority === 'warning' ? 'linear-gradient(135deg,#fffbeb,#fef3c7)' : 'linear-gradient(135deg,#eff6ff,#dbeafe)', border: styles.border, boxShadow: styles.shadow }}>
+                      <div className="flex justify-between items-start">
+                        <div className="flex-1">
+                          <div style={{ fontSize: '1.1rem', fontWeight: 900, lineHeight: 1.3, color: a.priority === 'urgent' ? '#dc2626' : a.priority === 'warning' ? '#b45309' : '#1d4ed8' }}>
+                            {icon} {a.pinned && '📌 '}{isTargeted && '👤 '}{a.title}
+                          </div>
+                          {a.body && <div style={{ fontSize: '0.95rem', marginTop: '0.5rem', lineHeight: 1.6, color: '#1e293b', whiteSpace: 'pre-wrap' }}>{a.body}</div>}
+                          <div style={{ fontSize: '0.7rem', marginTop: '0.5rem', color: '#94a3b8' }}>
+                            {poster ? poster.name : 'Admin'} • {new Date(a.created_at).toLocaleDateString()} {new Date(a.created_at).toLocaleTimeString([], {hour:'2-digit',minute:'2-digit'})}
+                            {isTargeted && <span style={{ color: '#7c3aed', fontWeight: 700, marginLeft: 8 }}>📩 Sent to you directly</span>}
+                          </div>
+                        </div>
+                        {isAdmin && (
+                          <div className="flex flex-col gap-1 ml-3">
+                            <button onClick={async () => { await dbUpdate('announcements', a.id, { active: false }, user?.id); await loadAllData(); }}
+                              style={{ fontSize: '0.65rem', color: '#ef4444', cursor: 'pointer', background: 'rgba(239,68,68,0.1)', padding: '4px 8px', borderRadius: 6, border: '1px solid rgba(239,68,68,0.3)' }}>Archive ✕</button>
+                            <button onClick={async () => { await dbUpdate('announcements', a.id, { pinned: !a.pinned }, user?.id); await loadAllData(); }}
+                              style={{ fontSize: '0.65rem', color: '#6b7280', cursor: 'pointer', background: 'rgba(0,0,0,0.05)', padding: '4px 8px', borderRadius: 6 }}>{a.pinned ? 'Unpin' : '📌 Pin'}</button>
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  );
+                })}
+                {olderMsgs.length > 0 && !hideSections.archivedMsgs && (
+                  <button onClick={() => setHideSections({...hideSections, archivedMsgs: true})}
+                    style={{ fontSize: '0.75rem', color: '#6b7280', cursor: 'pointer', background: 'rgba(0,0,0,0.03)', padding: '6px 12px', borderRadius: 8, border: '1px solid rgba(0,0,0,0.08)', display: 'block', width: '100%', textAlign: 'center' }}>
+                    📂 View {olderMsgs.length} older message{olderMsgs.length > 1 ? 's' : ''} / عرض الرسائل السابقة
+                  </button>
+                )}
+                {hideSections.archivedMsgs && olderMsgs.length > 0 && (
+                  <div className="mt-2">
+                    <div className="flex justify-between items-center mb-2">
+                      <span style={{ fontSize: '0.8rem', fontWeight: 700, color: '#64748b' }}>📂 Archived Messages</span>
+                      <button onClick={() => setHideSections({...hideSections, archivedMsgs: false})}
+                        style={{ fontSize: '0.65rem', color: '#94a3b8', cursor: 'pointer' }}>Hide ▲</button>
+                    </div>
+                    <div className="space-y-2 max-h-[300px] overflow-auto">
+                      {olderMsgs.map(a => {
+                        var icon = a.priority === 'urgent' ? '🚨' : a.priority === 'warning' ? '⚠️' : 'ℹ️';
+                        var poster = teamUsers.find(u => u.id === a.posted_by);
+                        return (
+                          <div key={a.id} style={{ padding: '10px 14px', borderRadius: 10, background: 'rgba(0,0,0,0.02)', border: '1px solid rgba(0,0,0,0.06)' }}>
+                            <div style={{ fontSize: '0.85rem', fontWeight: 700 }}>{icon} {a.title}</div>
+                            {a.body && <div style={{ fontSize: '0.75rem', color: '#475569', marginTop: 4 }}>{a.body}</div>}
+                            <div style={{ fontSize: '0.6rem', color: '#94a3b8', marginTop: 4 }}>
+                              {poster ? poster.name : 'Admin'} • {new Date(a.created_at).toLocaleDateString()}
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </div>
+                )}
+              </div>);
+            })()}
 
             {/* ===== FINANCIAL DASHBOARD (shown first for users with access) ===== */}
             {(isAdmin || modulePerms['Sales'] || modulePerms['Treasury']) && (<>
