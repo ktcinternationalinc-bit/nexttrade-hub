@@ -1554,8 +1554,12 @@ export default function App() {
                             <select id="tx-cat" defaultValue={txn.category || ''} onChange={e => {
                               if (e.target.value === '__custom') {
                                 const custom = prompt('New category name / اسم التصنيف الجديد:');
-                                if (custom) e.target.value = custom.trim();
-                                else e.target.value = txn.category || '';
+                                if (custom) {
+                                  const opt = document.createElement('option');
+                                  opt.value = custom.trim(); opt.text = '✨ ' + custom.trim();
+                                  e.target.insertBefore(opt, e.target.querySelector('[value="__custom"]'));
+                                  e.target.value = custom.trim();
+                                } else e.target.value = txn.category || '';
                               }
                             }} className="w-full px-2 py-1 rounded border border-slate-200 text-xs bg-amber-50">
                               <option value="">None</option>
@@ -1569,8 +1573,12 @@ export default function App() {
                             <select id="tx-subcat" defaultValue={txn.subcategory || ''} onChange={e => {
                               if (e.target.value === '__custom') {
                                 const custom = prompt('New subcategory / تصنيف فرعي جديد:');
-                                if (custom) e.target.value = custom.trim();
-                                else e.target.value = txn.subcategory || '';
+                                if (custom) {
+                                  const opt = document.createElement('option');
+                                  opt.value = custom.trim(); opt.text = '✨ ' + custom.trim();
+                                  e.target.insertBefore(opt, e.target.querySelector('[value="__custom"]'));
+                                  e.target.value = custom.trim();
+                                } else e.target.value = txn.subcategory || '';
                               }
                             }} className="w-full px-2 py-1 rounded border border-slate-200 text-xs bg-orange-50">
                               <option value="">None</option>
@@ -1761,7 +1769,7 @@ export default function App() {
                               <select id="tx-cat" defaultValue={txn.category || ''} onChange={e => {
                                 if (e.target.value === '__custom') {
                                   const custom = prompt('New category name / اسم التصنيف الجديد:');
-                                  if (custom) { const opt = document.createElement('option'); opt.value = custom.trim(); opt.text = custom.trim(); e.target.add(opt, e.target.options.length - 1); e.target.value = custom.trim(); }
+                                  if (custom) { const opt = document.createElement('option'); opt.value = custom.trim(); opt.text = '✨ ' + custom.trim(); e.target.insertBefore(opt, e.target.querySelector('[value="__custom"]')); e.target.value = custom.trim(); }
                                   else e.target.value = txn.category || '';
                                 }
                               }} className="w-full text-[10px] border rounded px-1 py-0.5 bg-amber-50">
@@ -1773,7 +1781,7 @@ export default function App() {
                               <select id="tx-subcat" defaultValue={txn.subcategory || ''} onChange={e => {
                                 if (e.target.value === '__custom') {
                                   const custom = prompt('New subcategory / تصنيف فرعي جديد:');
-                                  if (custom) { const opt = document.createElement('option'); opt.value = custom.trim(); opt.text = custom.trim(); e.target.add(opt, e.target.options.length - 1); e.target.value = custom.trim(); }
+                                  if (custom) { const opt = document.createElement('option'); opt.value = custom.trim(); opt.text = '✨ ' + custom.trim(); e.target.insertBefore(opt, e.target.querySelector('[value="__custom"]')); e.target.value = custom.trim(); }
                                   else e.target.value = txn.subcategory || '';
                                 }
                               }} className="w-full text-[10px] border rounded px-1 py-0.5 mt-1 bg-orange-50">
@@ -1987,9 +1995,13 @@ export default function App() {
                                       if (e.target.value === '__custom') {
                                         const custom = prompt('New category name / اسم التصنيف الجديد:');
                                         if (custom) setEditCatValue(custom.trim());
+                                        else e.target.value = editCatValue;
                                       } else setEditCatValue(e.target.value);
                                     }} className="w-full text-[9px] border-2 border-blue-400 rounded px-1 py-0.5 bg-amber-50">
                                       <option value="">None</option>
+                                      {editCatValue && !EXPENSE_CATS[editCatValue] && !customCats.includes(editCatValue) && editCatValue !== '__custom' && (
+                                        <option value={editCatValue}>✨ {editCatValue}</option>
+                                      )}
                                       {Object.entries(EXPENSE_CATS).map(([ar, en]) => <option key={ar} value={ar}>{en}</option>)}
                                       {customCats.map(c => <option key={c} value={c}>{c}</option>)}
                                       <option value="__custom">+ New Category</option>
@@ -1998,9 +2010,13 @@ export default function App() {
                                       if (e.target.value === '__custom') {
                                         const custom = prompt('New subcategory / تصنيف فرعي جديد:');
                                         if (custom) setEditSubValue(custom.trim());
+                                        else e.target.value = editSubValue;
                                       } else setEditSubValue(e.target.value);
                                     }} className="w-full text-[9px] border-2 border-blue-400 rounded px-1 py-0.5 bg-orange-50">
                                       <option value="">No subcategory</option>
+                                      {editSubValue && !uniqueSubcats.includes(editSubValue) && editSubValue !== '__custom' && (
+                                        <option value={editSubValue}>✨ {editSubValue}</option>
+                                      )}
                                       {uniqueSubcats.map(s => <option key={s} value={s}>{s}</option>)}
                                       <option value="__custom">+ New Subcategory</option>
                                     </select>
@@ -2481,13 +2497,16 @@ export default function App() {
                     }
                   }} className="w-full px-3 py-2 rounded-lg border border-slate-200 text-sm bg-amber-50">
                     <option value="">Select category...</option>
+                    {formData.category && !EXPENSE_CATS[formData.category] && !customCats.includes(formData.category) && formData.category !== '__custom' && (
+                      <option value={formData.category}>✨ {formData.category}</option>
+                    )}
                     {Object.entries(EXPENSE_CATS).map(([ar, en]) => (
                       <option key={ar} value={ar}>{en} / {ar}</option>
                     ))}
                     {customCats.map(c => <option key={c} value={c}>{c}</option>)}
                     <option value="__custom">+ Add New Category / إضافة تصنيف جديد</option>
                   </select>
-                  {formData.category && !EXPENSE_CATS[formData.category] && ![...new Set(treasury.map(t=>t.category).filter(Boolean))].includes(formData.category) && (
+                  {formData.category && !EXPENSE_CATS[formData.category] && !customCats.includes(formData.category) && (
                     <div className="text-[10px] text-emerald-600 font-semibold mt-1">✓ New category: "{formData.category}"</div>
                   )}
                   <select value={formData.subcategory || ''} onChange={e => {
@@ -2500,6 +2519,9 @@ export default function App() {
                     }
                   }} className="w-full px-3 py-2 rounded-lg border border-slate-200 text-sm mt-1 bg-orange-50">
                     <option value="">Subcategory (optional)...</option>
+                    {formData.subcategory && !uniqueSubcats.includes(formData.subcategory) && formData.subcategory !== '__custom' && (
+                      <option value={formData.subcategory}>✨ {formData.subcategory}</option>
+                    )}
                     {uniqueSubcats.map(s => <option key={s} value={s}>{s}</option>)}
                     <option value="__custom">+ Add New Subcategory / إضافة فرعي جديد</option>
                   </select>
