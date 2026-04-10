@@ -680,6 +680,9 @@ export default function App() {
         category: document.getElementById('tx-cat')?.value,
         subcategory: document.getElementById('tx-subcat')?.value,
       };
+      // Guard against placeholder values
+      if (fd.category === '__custom') fd.category = txn.category || '';
+      if (fd.subcategory === '__custom') fd.subcategory = txn.subcategory || '';
       const updates = {
         transaction_date: fd.date || txn.transaction_date,
         description: fd.desc || txn.description,
@@ -691,38 +694,30 @@ export default function App() {
       };
       await dbUpdate('treasury', txn.id, updates, user?.id);
 
-      // Smart categorization: if category changed, offer to apply to all with EXACT same description
-      if (fd.category && fd.category !== txn.category) {
+      // Auto-apply category/subcategory to ALL entries with same description + create rule
+      const catChanged = fd.category && fd.category !== txn.category;
+      const subChanged = fd.subcategory !== undefined && fd.subcategory !== (txn.subcategory || '');
+      if ((catChanged || subChanged) && (fd.category || fd.subcategory)) {
         const desc = (txn.description || '').trim();
         if (desc) {
-          const matching = treasury.filter(t =>
-            t.id !== txn.id &&
-            (t.description || '').trim() === desc &&
-            t.category !== fd.category
-          );
-          if (matching.length > 0 && confirm('Apply "' + (EXPENSE_CATS[fd.category] || fd.category) + '" to ' + matching.length + ' transactions with exact same description?\n\n"' + desc + '"\n\nتطبيق على جميع المعاملات بنفس الوصف بالضبط؟')) {
-            // Batch update — single query instead of per-row
-            await supabase.from('treasury').update({
-              category: fd.category,
-              subcategory: fd.subcategory || '',
-            }).eq('description', desc);
-          }
-          // Save/update rule with full description
+          // Batch update all matching descriptions
+          const batchUpdates = {};
+          if (catChanged) batchUpdates.category = fd.category;
+          if (subChanged) batchUpdates.subcategory = fd.subcategory;
+          await supabase.from('treasury').update(batchUpdates).eq('description', desc);
+          
+          // Create/update rule
           const ruleType = Number(txn.cash_in || 0) > 0 ? 'income' : 'expense';
           const existing = expenseRules.find(r => r.description_match === desc && (r.rule_type === ruleType || (!r.rule_type && ruleType === 'expense')));
+          const ruleData = {
+            category: fd.category || txn.category || '',
+            subcategory: fd.subcategory !== undefined ? fd.subcategory : (txn.subcategory || ''),
+            rule_type: ruleType,
+          };
           if (existing) {
-            await dbUpdate('expense_rules', existing.id, {
-              category: fd.category,
-              subcategory: fd.subcategory || '',
-              rule_type: ruleType,
-            }, user?.id);
+            await dbUpdate('expense_rules', existing.id, ruleData, user?.id);
           } else {
-            await dbInsert('expense_rules', {
-              description_match: desc,
-              category: fd.category,
-              subcategory: fd.subcategory || '',
-              rule_type: ruleType,
-            }, user?.id);
+            await dbInsert('expense_rules', { description_match: desc, ...ruleData }, user?.id);
           }
         }
       }
@@ -1555,20 +1550,32 @@ export default function App() {
                           </div>
                           <div>
                             <label className="text-[10px] font-semibold text-slate-600">Category / التصنيف</label>
-                            <input list="tx-cat-list" id="tx-cat" defaultValue={txn.category || ''} placeholder="Select or type..."
-                              className="w-full px-2 py-1 rounded border border-slate-200 text-xs bg-amber-50" />
-                            <datalist id="tx-cat-list">
-                              {Object.entries(EXPENSE_CATS).map(([ar, en]) => <option key={ar} value={ar}>{en + ' / ' + ar}</option>)}
-                              {[...new Set(treasury.map(t=>t.category).filter(c=>c&&!EXPENSE_CATS[c]))].map(c => <option key={c} value={c} />)}
-                            </datalist>
+                            <select id="tx-cat" defaultValue={txn.category || ''} onChange={e => {
+                              if (e.target.value === '__custom') {
+                                const custom = prompt('New category name / اسم التصنيف الجديد:');
+                                if (custom) e.target.value = custom.trim();
+                                else e.target.value = txn.category || '';
+                              }
+                            }} className="w-full px-2 py-1 rounded border border-slate-200 text-xs bg-amber-50">
+                              <option value="">None</option>
+                              {Object.entries(EXPENSE_CATS).map(([ar, en]) => <option key={ar} value={ar}>{en} / {ar}</option>)}
+                              {[...new Set(treasury.map(t=>t.category).filter(c=>c&&!EXPENSE_CATS[c]))].map(c => <option key={c} value={c}>{c}</option>)}
+                              <option value="__custom">+ New Category</option>
+                            </select>
                           </div>
                           <div>
                             <label className="text-[10px] font-semibold text-slate-600">Subcategory / فرعي</label>
-                            <input list="inv-subcats" id="tx-subcat" defaultValue={txn.subcategory || ''}
-                              className="w-full px-2 py-1 rounded border border-slate-200 text-xs bg-orange-50" />
-                            <datalist id="inv-subcats">
-                              {uniqueSubcats.map(s => <option key={s} value={s}/>)}
-                            </datalist>
+                            <select id="tx-subcat" defaultValue={txn.subcategory || ''} onChange={e => {
+                              if (e.target.value === '__custom') {
+                                const custom = prompt('New subcategory / تصنيف فرعي جديد:');
+                                if (custom) e.target.value = custom.trim();
+                                else e.target.value = txn.subcategory || '';
+                              }
+                            }} className="w-full px-2 py-1 rounded border border-slate-200 text-xs bg-orange-50">
+                              <option value="">None</option>
+                              {uniqueSubcats.map(s => <option key={s} value={s}>{s}</option>)}
+                              <option value="__custom">+ New Subcategory</option>
+                            </select>
                           </div>
                         </div>
                         <div className="flex gap-2 mt-2">
@@ -1750,20 +1757,29 @@ export default function App() {
                             <td className="px-2 py-1.5">
                               <input id="tx-desc" defaultValue={txn.description}
                                 className="w-full text-xs border rounded px-1 py-1 mb-1" style={{ direction: 'rtl' }} />
-                              <input list="tx-cat-list2" id="tx-cat" defaultValue={txn.category || ''} placeholder="Type or select..."
-                                className="w-full text-[10px] border rounded px-1 py-0.5 bg-amber-50" />
-                              <datalist id="tx-cat-list2">
-                                {Object.entries(EXPENSE_CATS).map(([ar, en]) => (
-                                  <option key={ar} value={ar}>{en + ' / ' + ar}</option>
-                                ))}
-                                {[...new Set(treasury.map(t=>t.category).filter(c=>c&&!EXPENSE_CATS[c]))].map(c => <option key={c} value={c} />)}
-                              </datalist>
-                              <input list="all-subcats" id="tx-subcat" defaultValue={txn.subcategory || ''}
-                                placeholder="Subcategory / تصنيف فرعي (optional)"
-                                className="w-full text-[10px] border rounded px-1 py-0.5 mt-1 bg-orange-50" />
-                              <datalist id="all-subcats">
-                                {uniqueSubcats.map(s => <option key={s} value={s}/>)}
-                              </datalist>
+                              <select id="tx-cat" defaultValue={txn.category || ''} onChange={e => {
+                                if (e.target.value === '__custom') {
+                                  const custom = prompt('New category name / اسم التصنيف الجديد:');
+                                  if (custom) { const opt = document.createElement('option'); opt.value = custom.trim(); opt.text = custom.trim(); e.target.add(opt, e.target.options.length - 1); e.target.value = custom.trim(); }
+                                  else e.target.value = txn.category || '';
+                                }
+                              }} className="w-full text-[10px] border rounded px-1 py-0.5 bg-amber-50">
+                                <option value="">None</option>
+                                {Object.entries(EXPENSE_CATS).map(([ar, en]) => <option key={ar} value={ar}>{en}</option>)}
+                                {[...new Set(treasury.map(t=>t.category).filter(c=>c&&!EXPENSE_CATS[c]))].map(c => <option key={c} value={c}>{c}</option>)}
+                                <option value="__custom">+ New Category</option>
+                              </select>
+                              <select id="tx-subcat" defaultValue={txn.subcategory || ''} onChange={e => {
+                                if (e.target.value === '__custom') {
+                                  const custom = prompt('New subcategory / تصنيف فرعي جديد:');
+                                  if (custom) { const opt = document.createElement('option'); opt.value = custom.trim(); opt.text = custom.trim(); e.target.add(opt, e.target.options.length - 1); e.target.value = custom.trim(); }
+                                  else e.target.value = txn.subcategory || '';
+                                }
+                              }} className="w-full text-[10px] border rounded px-1 py-0.5 mt-1 bg-orange-50">
+                                <option value="">No subcategory</option>
+                                {uniqueSubcats.map(s => <option key={s} value={s}>{s}</option>)}
+                                <option value="__custom">+ New Subcategory</option>
+                              </select>
                             </td>
                             <td className="px-2 py-1.5"><input type="number" id="tx-in" defaultValue={txn.cash_in || 0}
                               className="w-20 text-xs border rounded px-1 py-1" /></td>
@@ -1966,16 +1982,27 @@ export default function App() {
                               <td className="px-1 py-1">
                                 {editSubTxnId === txn.id ? (
                                   <div className="space-y-1">
-                                    <select value={editCatValue} onChange={e => setEditCatValue(e.target.value)}
-                                      className="w-full text-[9px] border-2 border-blue-400 rounded px-1 py-0.5 bg-amber-50">
+                                    <select value={editCatValue} onChange={e => {
+                                      if (e.target.value === '__custom') {
+                                        const custom = prompt('New category name / اسم التصنيف الجديد:');
+                                        if (custom) setEditCatValue(custom.trim());
+                                      } else setEditCatValue(e.target.value);
+                                    }} className="w-full text-[9px] border-2 border-blue-400 rounded px-1 py-0.5 bg-amber-50">
                                       <option value="">None</option>
                                       {Object.entries(EXPENSE_CATS).map(([ar, en]) => <option key={ar} value={ar}>{en}</option>)}
                                       {[...new Set(treasury.map(t=>t.category).filter(c=>c&&!EXPENSE_CATS[c]))].map(c => <option key={c} value={c}>{c}</option>)}
+                                      <option value="__custom">+ New Category</option>
                                     </select>
-                                    <input list="subs-all" value={editSubValue}
-                                      onChange={e => setEditSubValue(e.target.value)}
-                                      placeholder="Subcategory..."
-                                      className="w-full text-[9px] border-2 border-blue-400 rounded px-1 py-0.5 bg-orange-50" />
+                                    <select value={editSubValue} onChange={e => {
+                                      if (e.target.value === '__custom') {
+                                        const custom = prompt('New subcategory / تصنيف فرعي جديد:');
+                                        if (custom) setEditSubValue(custom.trim());
+                                      } else setEditSubValue(e.target.value);
+                                    }} className="w-full text-[9px] border-2 border-blue-400 rounded px-1 py-0.5 bg-orange-50">
+                                      <option value="">No subcategory</option>
+                                      {uniqueSubcats.map(s => <option key={s} value={s}>{s}</option>)}
+                                      <option value="__custom">+ New Subcategory</option>
+                                    </select>
                                     <div className="flex gap-1">
                                       <button onClick={async () => {
                                         try {
@@ -2443,21 +2470,41 @@ export default function App() {
               {(formData.type === 'out' || formData.type === 'in' || !formData.type) && (
                 <div className="col-span-2">
                   <label className="text-xs font-semibold text-slate-600">Category / تصنيف {(formData.type || 'in') === 'in' ? '(Income / إيرادات)' : '(Expense / منصرفات)'}</label>
-                  <input list="add-cats" value={formData.category || ''} placeholder="Select or type category / اختر أو اكتب التصنيف"
-                    onChange={e => setFormData({ ...formData, category: e.target.value })}
-                    className="w-full px-3 py-2 rounded-lg border border-slate-200 text-sm bg-amber-50" />
-                  <datalist id="add-cats">
+                  <select value={formData.category || ''} onChange={e => {
+                    if (e.target.value === '__custom') {
+                      const custom = prompt('Enter new category name / أدخل اسم التصنيف الجديد:');
+                      if (custom) setFormData({ ...formData, category: custom.trim() });
+                      else e.target.value = formData.category || '';
+                    } else {
+                      setFormData({ ...formData, category: e.target.value });
+                    }
+                  }} className="w-full px-3 py-2 rounded-lg border border-slate-200 text-sm bg-amber-50">
+                    <option value="">Select category...</option>
                     {Object.entries(EXPENSE_CATS).map(([ar, en]) => (
-                      <option key={ar} value={ar}>{en + ' / ' + ar}</option>
+                      <option key={ar} value={ar}>{en} / {ar}</option>
                     ))}
-                    {[...new Set(treasury.map(t=>t.category).filter(c=>c&&!EXPENSE_CATS[c]))].map(c => <option key={c} value={c} />)}
-                  </datalist>
-                  <input list="add-subcats" value={formData.subcategory || ''} placeholder="Subcategory / تصنيف فرعي (optional)"
-                    onChange={e => setFormData({ ...formData, subcategory: e.target.value })}
-                    className="w-full px-3 py-2 rounded-lg border border-slate-200 text-sm mt-1 bg-orange-50" />
-                  <datalist id="add-subcats">
-                    {uniqueSubcats.map(s => <option key={s} value={s}/>)}
-                  </datalist>
+                    {[...new Set(treasury.map(t=>t.category).filter(c=>c&&!EXPENSE_CATS[c]))].map(c => <option key={c} value={c}>{c}</option>)}
+                    <option value="__custom">+ Add New Category / إضافة تصنيف جديد</option>
+                  </select>
+                  {formData.category && !EXPENSE_CATS[formData.category] && ![...new Set(treasury.map(t=>t.category).filter(Boolean))].includes(formData.category) && (
+                    <div className="text-[10px] text-emerald-600 font-semibold mt-1">✓ New category: "{formData.category}"</div>
+                  )}
+                  <select value={formData.subcategory || ''} onChange={e => {
+                    if (e.target.value === '__custom') {
+                      const custom = prompt('Enter new subcategory / أدخل تصنيف فرعي جديد:');
+                      if (custom) setFormData({ ...formData, subcategory: custom.trim() });
+                      else e.target.value = formData.subcategory || '';
+                    } else {
+                      setFormData({ ...formData, subcategory: e.target.value });
+                    }
+                  }} className="w-full px-3 py-2 rounded-lg border border-slate-200 text-sm mt-1 bg-orange-50">
+                    <option value="">Subcategory (optional)...</option>
+                    {uniqueSubcats.map(s => <option key={s} value={s}>{s}</option>)}
+                    <option value="__custom">+ Add New Subcategory / إضافة فرعي جديد</option>
+                  </select>
+                  {formData.subcategory && !uniqueSubcats.includes(formData.subcategory) && (
+                    <div className="text-[10px] text-emerald-600 font-semibold mt-1">✓ New subcategory: "{formData.subcategory}"</div>
+                  )}
                 </div>
               )}
             </div>
@@ -4106,8 +4153,8 @@ export default function App() {
                     <div className="grid grid-cols-2 gap-3">
                       <div><label className="text-[10px] font-bold text-slate-500">Product ID</label>
                         <input value={formData.prodId || ''} onChange={e => setFormData({...formData, prodId: e.target.value})} className="w-full px-3 py-2 rounded-lg border text-sm" /></div>
-                      <div><label className="text-[10px] font-bold text-slate-500">Reference #</label>
-                        <input value={formData.prodRef || ''} onChange={e => setFormData({...formData, prodRef: e.target.value})} className="w-full px-3 py-2 rounded-lg border text-sm" /></div>
+                      <div><label className="text-[10px] font-bold text-slate-500">Shipment Reference #</label>
+                        <input value={formData.prodShipment || ''} onChange={e => setFormData({...formData, prodShipment: e.target.value})} className="w-full px-3 py-2 rounded-lg border text-sm" /></div>
                       <div><label className="text-[10px] font-bold text-slate-500">Category / النوع</label>
                         <select value={formData.prodType || ''} onChange={e => { if (e.target.value === '_new') { const n = prompt('New category:'); if (n) setFormData({...formData, prodType: n}); } else setFormData({...formData, prodType: e.target.value}); }}
                           className="w-full px-3 py-2 rounded-lg border text-sm">
@@ -4121,8 +4168,6 @@ export default function App() {
                         <input list="inv-subcats-add" value={formData.prodSubcat || ''} onChange={e => setFormData({...formData, prodSubcat: e.target.value})}
                           placeholder="e.g. Mosaic Liner, Looks..." className="w-full px-3 py-2 rounded-lg border text-sm" />
                         <datalist id="inv-subcats-add">{[...new Set(inventory.map(p => p.subcategory).filter(Boolean))].sort().map(s => <option key={s} value={s} />)}</datalist></div>
-                      <div className="col-span-2"><label className="text-[10px] font-bold text-slate-500">Shipment Reference</label>
-                        <input value={formData.prodShipment || ''} onChange={e => setFormData({...formData, prodShipment: e.target.value})} className="w-full px-3 py-2 rounded-lg border text-sm" /></div>
                       <div><label className="text-[10px] font-bold text-slate-500">Inbound Date</label>
                         <input type="date" value={formData.prodDate || today()} onChange={e => setFormData({...formData, prodDate: e.target.value})} className="w-full px-3 py-2 rounded-lg border text-sm" /></div>
                       {formData.prodId && inventory.find(p => p.product_id === formData.prodId) && (
@@ -4216,7 +4261,7 @@ export default function App() {
                           // Record inbound
                           await dbInsert('inventory_inbounds', {
                             product_id: formData.prodId || '',
-                            reference_number: formData.prodRef || '',
+                            reference_number: formData.prodShipment || '',
                             shipment_reference: formData.prodShipment || '',
                             inbound_date: formData.prodDate || today(),
                             quantity: origQty,
@@ -4259,7 +4304,7 @@ export default function App() {
                           } else {
                             // NEW product
                             const record = {
-                              product_id: formData.prodId || '', reference_number: formData.prodRef || '',
+                              product_id: formData.prodId || '', reference_number: formData.prodShipment || '',
                               shipment_reference: formData.prodShipment || '', product_type: formData.prodType || '',
                               subcategory: formData.prodSubcat || '',
                               description: formData.prodDesc || '', description_en: formData.prodDescEn || '',

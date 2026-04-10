@@ -260,23 +260,44 @@ export default function AIAssistant({ user, userProfile, users, customers }) {
     
     const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
     if (!SR) return;
-    const rec = new SR();
-    rec.continuous = true;
-    rec.interimResults = true;
-    rec.lang = 'en-US';
-    let transcript = '';
-    rec.onresult = (event) => {
-      transcript = '';
-      for (let i = 0; i < event.results.length; i++) {
-        transcript += event.results[i][0].transcript;
-      }
-      setInput(correctNames(transcript));
+    
+    // Accumulated transcript across restarts
+    const fullRef = { text: '' };
+    
+    const createRec = () => {
+      const rec = new SR();
+      rec.continuous = true;
+      rec.interimResults = true;
+      rec.lang = 'en-US';
+      let lastFinal = '';
+      rec.onresult = (event) => {
+        let finalText = '';
+        let interimText = '';
+        for (let i = 0; i < event.results.length; i++) {
+          if (event.results[i].isFinal) {
+            finalText += event.results[i][0].transcript;
+          } else {
+            interimText += event.results[i][0].transcript;
+          }
+        }
+        lastFinal = finalText;
+        setInput(correctNames(fullRef.text + finalText + interimText));
+      };
+      rec.onerror = (e) => { console.log('Recording error:', e.error); };
+      rec.onend = () => {
+        if (!recordingRef.current) return;
+        // Save finalized text before restarting
+        if (lastFinal) fullRef.text += lastFinal;
+        try {
+          const newRec = createRec();
+          recordingRecRef.current = newRec;
+          newRec.start();
+        } catch(e) {}
+      };
+      return rec;
     };
-    rec.onerror = (e) => { console.log('Recording error:', e.error); };
-    rec.onend = () => {
-      // Use ref (not state) to check if still recording
-      if (recordingRef.current) { try { rec.start(); } catch(e) {} }
-    };
+    
+    const rec = createRec();
     recordingRecRef.current = rec;
     try { rec.start(); } catch(e) { alert('Microphone access denied'); return; }
     setRecording(true);
