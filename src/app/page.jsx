@@ -226,7 +226,9 @@ export default function App() {
   const [formData, setFormData] = useState({});
   const [hideSections, setHideSections] = useState({});
   const [announcements, setAnnouncements] = useState([]);
+  const [announcementAcks, setAnnouncementAcks] = useState([]);
   const [showAddAnnouncement, setShowAddAnnouncement] = useState(false);
+  const annAlarmRef = useRef(null);
   const [reminders, setReminders] = useState([]);
   const [showReminderForm, setShowReminderForm] = useState(false);
   const [showReminderArchive, setShowReminderArchive] = useState(false);
@@ -278,6 +280,56 @@ export default function App() {
       } catch(e) {}
     }, 60000);
     return () => clearInterval(pollReminders);
+  }, []);
+
+  // Announcement alarm for unacknowledged messages
+  useEffect(() => {
+    if (!announcements.length || !userProfile) return;
+    const myId = userProfile?.id;
+    const active = announcements.filter(a => a.active !== false && (!a.target_user || a.target_user === myId));
+    const myAcks = new Set(announcementAcks.filter(a => a.user_id === myId).map(a => a.announcement_id));
+    const unacked = active.filter(a => !myAcks.has(a.id));
+    if (!annAlarmRef.current) annAlarmRef.current = new Set();
+    const newUnacked = unacked.filter(a => !annAlarmRef.current.has(a.id));
+    if (newUnacked.length > 0) {
+      newUnacked.forEach(a => annAlarmRef.current.add(a.id));
+      console.log('🔔 New unacknowledged announcements:', newUnacked.length);
+      const playAlarm = async () => {
+        try {
+          const ctx = new (window.AudioContext || window.webkitAudioContext)();
+          if (ctx.state === 'suspended') await ctx.resume();
+          const playTone = (freq, start, dur) => {
+            const osc = ctx.createOscillator();
+            const gain = ctx.createGain();
+            osc.connect(gain); gain.connect(ctx.destination);
+            osc.frequency.value = freq; osc.type = 'square';
+            gain.gain.setValueAtTime(0.4, ctx.currentTime + start);
+            gain.gain.exponentialRampToValueAtTime(0.01, ctx.currentTime + start + dur);
+            osc.start(ctx.currentTime + start); osc.stop(ctx.currentTime + start + dur);
+          };
+          const hasUrgent = newUnacked.some(a => a.priority === 'urgent');
+          if (hasUrgent) {
+            for (let i = 0; i < 12; i++) { playTone(900 + (i % 2) * 500, i * 0.4, 0.35); }
+          } else {
+            for (let i = 0; i < 6; i++) { playTone(700, i * 0.7, 0.25); playTone(900, i * 0.7 + 0.25, 0.25); }
+          }
+        } catch(e) { console.log('Alarm error:', e); }
+      };
+      playAlarm();
+    }
+  }, [announcements, announcementAcks, userProfile]);
+
+  // Poll announcements every 60 seconds
+  useEffect(() => {
+    const pollAnn = setInterval(async () => {
+      try {
+        const { data: ann } = await supabase.from('announcements').select('*').order('created_at', { ascending: false }).limit(20);
+        if (ann) setAnnouncements(ann);
+        const { data: acks } = await supabase.from('announcement_acks').select('*');
+        if (acks) setAnnouncementAcks(acks);
+      } catch(e) {}
+    }, 60000);
+    return () => clearInterval(pollAnn);
   }, []);
 
   // Import
@@ -429,10 +481,12 @@ export default function App() {
         const { data: rems } = await supabase.from('team_reminders').select('*').order('created_at', { ascending: false }).limit(200);
         setReminders(rems || []);
       } catch(e) { setReminders([]); }
-      // Load announcements
+      // Load announcements + acks
       try {
         const { data: ann } = await supabase.from('announcements').select('*').order('created_at', { ascending: false }).limit(20);
         setAnnouncements(ann || []);
+        const { data: acks } = await supabase.from('announcement_acks').select('*');
+        setAnnouncementAcks(acks || []);
       } catch(e) { setAnnouncements([]); }
     } catch (err) {
       console.error('Load error:', err);
@@ -2925,6 +2979,11 @@ export default function App() {
                   var icon = a.priority === 'urgent' ? '🚨' : a.priority === 'warning' ? '⚠️' : 'ℹ️';
                   var poster = teamUsers.find(u => u.id === a.posted_by);
                   var isTargeted = a.target_user === myId;
+                  var thisAcks = announcementAcks.filter(ak => ak.announcement_id === a.id);
+                  var myAck = thisAcks.find(ak => ak.user_id === myId);
+                  var targetUsers = a.target_user ? teamUsers.filter(u => u.id === a.target_user) : teamUsers;
+                  var ackedUsers = targetUsers.filter(u => thisAcks.some(ak => ak.user_id === u.id));
+                  var unackedUsers = targetUsers.filter(u => !thisAcks.some(ak => ak.user_id === u.id));
                   return (
                     <div key={a.id} className="rounded-2xl p-5 mb-3" style={{ background: a.priority === 'urgent' ? 'linear-gradient(135deg,#fef2f2,#fee2e2)' : a.priority === 'warning' ? 'linear-gradient(135deg,#fffbeb,#fef3c7)' : 'linear-gradient(135deg,#eff6ff,#dbeafe)', border: styles.border, boxShadow: styles.shadow }}>
                       <div className="flex justify-between items-start">
@@ -2937,12 +2996,37 @@ export default function App() {
                             {poster ? poster.name : 'Admin'} • {new Date(a.created_at).toLocaleDateString()} {new Date(a.created_at).toLocaleTimeString([], {hour:'2-digit',minute:'2-digit'})}
                             {isTargeted && <span style={{ color: '#7c3aed', fontWeight: 700, marginLeft: 8 }}>📩 Sent to you directly</span>}
                           </div>
+                          {/* Acknowledge button */}
+                          <div style={{ marginTop: '0.75rem' }}>
+                            {myAck ? (
+                              <span style={{ fontSize: '0.75rem', color: '#16a34a', fontWeight: 700, background: '#f0fdf4', padding: '4px 12px', borderRadius: 8, border: '1px solid #bbf7d0' }}>✅ Acknowledged {new Date(myAck.acked_at).toLocaleTimeString([], {hour:'2-digit',minute:'2-digit'})}</span>
+                            ) : (
+                              <button onClick={async () => {
+                                await dbInsert('announcement_acks', { announcement_id: a.id, user_id: myId, acked_at: new Date().toISOString() }, myId);
+                                await loadAllData();
+                              }} style={{ fontSize: '0.8rem', fontWeight: 800, color: '#fff', background: a.priority === 'urgent' ? '#dc2626' : '#2563eb', padding: '6px 16px', borderRadius: 8, cursor: 'pointer', border: 'none', boxShadow: '0 2px 8px rgba(0,0,0,0.15)' }}>
+                                👋 Acknowledge / تأكيد الاستلام
+                              </button>
+                            )}
+                          </div>
+                          {/* Admin: who acknowledged / who didn't */}
+                          {isAdmin && (
+                            <div style={{ marginTop: '0.5rem', fontSize: '0.65rem' }}>
+                              {ackedUsers.length > 0 && (
+                                <div style={{ color: '#16a34a' }}>✅ {ackedUsers.map(u => u.name).join(', ')}</div>
+                              )}
+                              {unackedUsers.length > 0 && (
+                                <div style={{ color: '#dc2626', fontWeight: 700 }}>⏳ Not acknowledged: {unackedUsers.map(u => u.name).join(', ')}</div>
+                              )}
+                              <div style={{ color: '#94a3b8' }}>{ackedUsers.length}/{targetUsers.length} acknowledged</div>
+                            </div>
+                          )}
                         </div>
                         {isAdmin && (
                           <div className="flex flex-col gap-1 ml-3">
-                            <button onClick={async () => { await dbUpdate('announcements', a.id, { active: false }, user?.id); await loadAllData(); }}
+                            <button onClick={async () => { try { await dbUpdate('announcements', a.id, { active: false }, user?.id); await loadAllData(); } catch(err) { alert('Archive error: ' + err.message); } }}
                               style={{ fontSize: '0.65rem', color: '#ef4444', cursor: 'pointer', background: 'rgba(239,68,68,0.1)', padding: '4px 8px', borderRadius: 6, border: '1px solid rgba(239,68,68,0.3)' }}>Archive ✕</button>
-                            <button onClick={async () => { await dbUpdate('announcements', a.id, { pinned: !a.pinned }, user?.id); await loadAllData(); }}
+                            <button onClick={async () => { try { await dbUpdate('announcements', a.id, { pinned: !a.pinned }, user?.id); await loadAllData(); } catch(err) { alert('Pin error: ' + err.message); } }}
                               style={{ fontSize: '0.65rem', color: '#6b7280', cursor: 'pointer', background: 'rgba(0,0,0,0.05)', padding: '4px 8px', borderRadius: 6 }}>{a.pinned ? 'Unpin' : '📌 Pin'}</button>
                           </div>
                         )}
