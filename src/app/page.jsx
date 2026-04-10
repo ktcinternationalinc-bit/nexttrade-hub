@@ -13,6 +13,8 @@ import CustomsTab from '../components/CustomsTab';
 import PersonalDashboard from '../components/PersonalDashboard';
 import AIAssistant from '../components/AIAssistant';
 import ShippingRatesTab from '../components/ShippingRatesTab';
+import BankTab from '../components/BankTab';
+import QuotesTab from '../components/QuotesTab';
 
 // Modal must be outside main component to prevent re-mounting on every render
 const Modal = ({ onClose, title, children }) => (
@@ -49,6 +51,8 @@ const TABS = [
   { id: 'calendar', label: 'Calendar / تقويم', icon: '📅' },
   { id: 'customs', label: 'Customs / جمارك', icon: '🚢' },
   { id: 'shipping', label: 'Shipping Rates / شحن', icon: '🛳️' },
+  { id: 'bank', label: 'Bank / البنك', icon: '🏦' },
+  { id: 'quotes', label: 'Quotes / عروض', icon: '📋' },
   { id: 'dailylog', label: 'Daily Log / يومي', icon: '📓' },
   { id: 'admin', label: 'Admin / إدارة', icon: '👑' },
   { id: 'ai', label: 'AI Assistant / ذكي', icon: '🤖' },
@@ -93,7 +97,9 @@ function PaymentForm({ invoice, categories, existingSubcats, onSave, onCancel, f
           {[
             { v: 'cash', l: '💵 Cash', sub: 'Adds to treasury' },
             { v: 'bank_transfer', l: '🏦 Bank Transfer', sub: 'Invoice only' },
-            { v: 'check', l: '📝 Check', sub: 'Check record' },
+            { v: 'check', l: '📝 Check', sub: 'Invoice only' },
+            { v: 'vodafone', l: '📱 Vodafone Cash', sub: 'Invoice only' },
+            { v: 'other', l: '📋 Other', sub: 'Invoice only' },
           ].map(m => (
             <label key={m.v} onClick={() => setPf({ ...pf, payMethod: m.v })}
               className={'flex items-center gap-2 px-3 py-2 rounded-lg border-2 cursor-pointer transition text-xs ' +
@@ -103,7 +109,7 @@ function PaymentForm({ invoice, categories, existingSubcats, onSave, onCancel, f
             </label>
           ))}
         </div>
-        {pf.payMethod === 'bank_transfer' && <div className="text-[10px] text-blue-600 mt-1">ℹ️ Bank transfers update the invoice but do NOT create a treasury entry</div>}
+        {pf.payMethod !== 'cash' && <div className="text-[10px] text-blue-600 mt-1">ℹ️ Only cash adds to treasury register. {pf.payMethod === 'bank_transfer' ? 'Bank transfer' : pf.payMethod === 'check' ? 'Check' : pf.payMethod === 'vodafone' ? 'Vodafone Cash' : 'This method'} updates the invoice only.</div>}
       </div>
 
       {/* Category & Subcategory */}
@@ -219,6 +225,58 @@ export default function App() {
   const [showLinkSearch, setShowLinkSearch] = useState(false);
   const [formData, setFormData] = useState({});
   const [hideSections, setHideSections] = useState({});
+  const [reminders, setReminders] = useState([]);
+  const [showReminderForm, setShowReminderForm] = useState(false);
+  const [showReminderArchive, setShowReminderArchive] = useState(false);
+  const seenRemindersRef = useRef(new Set());
+  
+  // Emergency sound for new reminders
+  useEffect(() => {
+    if (!reminders.length || !userProfile) return;
+    const todayStr = new Date().toISOString().substring(0, 10);
+    const myActive = reminders.filter(r => {
+      const isForMe = !r.target_users || r.target_users === 'all' || (r.target_users || '').includes(userProfile?.id);
+      const isToday = r.reminder_date === todayStr || (!r.reminder_date && r.created_at && r.created_at.substring(0, 10) === todayStr);
+      return isForMe && isToday;
+    });
+    const newOnes = myActive.filter(r => !seenRemindersRef.current.has(r.id));
+    if (newOnes.length > 0) {
+      newOnes.forEach(r => seenRemindersRef.current.add(r.id));
+      // Play emergency alert sound using Web Audio API
+      try {
+        const ctx = new (window.AudioContext || window.webkitAudioContext)();
+        const playTone = (freq, start, dur) => {
+          const osc = ctx.createOscillator();
+          const gain = ctx.createGain();
+          osc.connect(gain); gain.connect(ctx.destination);
+          osc.frequency.value = freq;
+          osc.type = 'square';
+          gain.gain.setValueAtTime(0.3, ctx.currentTime + start);
+          gain.gain.exponentialRampToValueAtTime(0.01, ctx.currentTime + start + dur);
+          osc.start(ctx.currentTime + start);
+          osc.stop(ctx.currentTime + start + dur);
+        };
+        // 5-second alert pattern: urgent ascending tones
+        const urgent = newOnes.some(r => r.priority === 'urgent');
+        if (urgent) {
+          for (let i = 0; i < 10; i++) { playTone(800 + (i % 2) * 400, i * 0.5, 0.4); }
+        } else {
+          for (let i = 0; i < 6; i++) { playTone(600, i * 0.8, 0.3); playTone(800, i * 0.8 + 0.3, 0.3); }
+        }
+      } catch(e) {}
+    }
+  }, [reminders, userProfile]);
+  
+  // Poll for new reminders every 60 seconds
+  useEffect(() => {
+    const pollReminders = setInterval(async () => {
+      try {
+        const { data: rems } = await supabase.from('team_reminders').select('*').order('created_at', { ascending: false }).limit(50);
+        if (rems) setReminders(rems);
+      } catch(e) {}
+    }, 60000);
+    return () => clearInterval(pollReminders);
+  }, []);
 
   // Import
   const [importStep, setImportStep] = useState('select'); // select, preview, importing, done
@@ -336,6 +394,11 @@ export default function App() {
         const ib = await fetchAll('inventory_inbounds', 'inbound_date', true);
         setInvInbounds(ib || []);
       } catch(e) { setInvInbounds([]); }
+      // Load reminders
+      try {
+        const { data: rems } = await supabase.from('team_reminders').select('*').order('created_at', { ascending: false }).limit(200);
+        setReminders(rems || []);
+      } catch(e) { setReminders([]); }
     } catch (err) {
       console.error('Load error:', err);
     }
@@ -351,7 +414,7 @@ export default function App() {
     dashboard: 'Dashboard', sales: 'Sales', customers: 'Customers', treasury: 'Treasury',
     checks: 'Checks', debts: 'Debts', warehouse: 'Warehouse', inventory: 'Inventory',
     crm: 'CRM', tickets: 'Tickets', calendar: 'Calendar', customs: 'Customs', shipping: 'Shipping Rates',
-    dailylog: 'Daily Log', admin: 'Admin', ai: 'AI Assistant', settings: 'Settings', import: 'Import',
+    dailylog: 'Daily Log', admin: 'Admin', ai: 'AI Assistant', settings: 'Settings', import: 'Import', bank: 'Bank', quotes: 'Quotes',
   };
 
   const visibleTabs = useMemo(() => {
@@ -364,7 +427,7 @@ export default function App() {
       // Admin with no explicit permission: see everything
       if (userProfile.role === 'admin') return true;
       // Team/viewer with no explicit permission: hide financial + admin tabs
-      if (['treasury', 'checks', 'debts', 'sales', 'warehouse', 'inventory', 'admin', 'settings', 'import'].includes(t.id)) return false;
+      if (['treasury', 'checks', 'debts', 'sales', 'warehouse', 'inventory', 'admin', 'settings', 'import', 'bank'].includes(t.id)) return false;
       return true;
     });
   }, [userProfile, modulePerms]);
@@ -516,13 +579,13 @@ export default function App() {
     var pd = pf || formData;
     if (!pd.amount || !pd.date || !selectedInvoice) return;
     try {
-      const isBankTransfer = pd.payMethod === 'bank_transfer';
-      // Bank transfers don't go in treasury (cash register) - they go directly to bank
-      if (!isBankTransfer) {
+      const isCash = pd.payMethod === 'cash';
+      // Only CASH goes to treasury (cash register). Check, bank transfer, vodafone, other = invoice only
+      if (isCash) {
         await dbInsert('treasury', {
           transaction_date: pd.date,
           order_number: selectedInvoice.order_number,
-          description: pd.desc || 'Payment',
+          description: pd.desc || selectedInvoice.customer_name + ' payment',
           cash_in: Number(pd.amount),
           cash_out: 0,
           category: pd.category || 'مبيعات',
@@ -534,7 +597,7 @@ export default function App() {
       await dbUpdate('invoices', selectedInvoice.id, {
         total_collected: newCollected,
         outstanding: Math.max(0, Number(selectedInvoice.total_amount) - newCollected),
-        notes: (selectedInvoice.notes || '') + (isBankTransfer ? '\nBank transfer: ' + fE(Number(pd.amount)) + ' on ' + pd.date : ''),
+        notes: (selectedInvoice.notes || '') + (!isCash ? '\n' + pd.payMethod + ': ' + fE(Number(pd.amount)) + ' on ' + pd.date : ''),
       }, user?.id);
       setShowAddPayment(false);
       setFormData({});
@@ -2540,11 +2603,191 @@ export default function App() {
           </Modal>
         )}
 
+        {/* ===== FLOATING REMINDER BANNER (all tabs) ===== */}
+        {tab !== 'dashboard' && (() => {
+          const todayStr = new Date().toISOString().substring(0, 10);
+          const myActive = reminders.filter(r => {
+            const isForMe = !r.target_users || r.target_users === 'all' || (r.target_users || '').includes(userProfile?.id);
+            const isToday = r.reminder_date === todayStr;
+            return isForMe && isToday;
+          });
+          if (myActive.length === 0) return null;
+          return (
+            <div className="mb-3 rounded-xl p-3 border-2 border-amber-400 cursor-pointer"
+              onClick={() => { setTab('dashboard'); }}
+              style={{ background: 'linear-gradient(135deg, #fef3c7, #fde68a)' }}>
+              <div className="text-sm font-extrabold text-amber-900">
+                📢 {myActive.length} active reminder{myActive.length > 1 ? 's' : ''} — {myActive[0].message.substring(0, 80)}{myActive[0].message.length > 80 ? '...' : ''}
+                {myActive.length > 1 && <span className="text-amber-600 font-normal"> +{myActive.length - 1} more</span>}
+                <span className="text-xs text-amber-500 font-normal ml-2">Tap to view →</span>
+              </div>
+            </div>
+          );
+        })()}
+
         {/* ==========================================
             DASHBOARD TAB
         ========================================== */}
         {tab === 'dashboard' && (
           <div>
+            {/* ===== TEAM REMINDERS ===== */}
+            {(() => {
+              const todayStr = new Date().toISOString().substring(0, 10);
+              const myReminders = reminders.filter(r => {
+                const isForMe = !r.target_users || r.target_users === 'all' || (r.target_users || '').includes(userProfile?.id);
+                return isForMe;
+              });
+              const activeReminders = myReminders.filter(r => r.reminder_date === todayStr || (!r.reminder_date && r.created_at && r.created_at.substring(0, 10) === todayStr));
+              const archivedReminders = myReminders.filter(r => (r.reminder_date || r.created_at?.substring(0, 10)) < todayStr);
+              const getUserName = (id) => (teamUsers || []).find(u => u.id === id)?.name || '';
+              
+              return (
+                <div className="mb-4">
+                  {/* Active reminders — prominent display */}
+                  {activeReminders.length > 0 && (
+                    <div className="space-y-2 mb-3">
+                      {activeReminders.map(r => (
+                        <div key={r.id} className="rounded-xl p-4 border-2 border-amber-400"
+                          style={{ background: 'linear-gradient(135deg, #fef3c7, #fde68a)', boxShadow: '0 4px 15px rgba(245,158,11,0.2)' }}>
+                          <div className="flex justify-between items-start">
+                            <div className="flex-1">
+                              <div className="text-base font-extrabold text-amber-900" style={{ fontSize: '16pt', lineHeight: '1.4' }}>
+                                📢 {r.message}
+                              </div>
+                              <div className="flex gap-3 mt-2 text-[10px] text-amber-700">
+                                <span>From: {getUserName(r.created_by) || 'Admin'}</span>
+                                <span>{r.reminder_date || r.created_at?.substring(0, 10)}</span>
+                                {r.target_users === 'all' ? <span className="font-bold">👥 All Team</span> : <span>👤 Targeted</span>}
+                              </div>
+                            </div>
+                            {r.priority === 'urgent' && (
+                              <span className="px-2 py-1 bg-red-500 text-white rounded-lg text-[10px] font-bold animate-pulse">URGENT</span>
+                            )}
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                  
+                  {/* Admin/permitted create + archive link */}
+                  <div className="flex justify-between items-center mb-2">
+                    {(isAdmin || modulePerms?.['Post Reminders']) && (
+                      <button onClick={() => setShowReminderForm(!showReminderForm)}
+                        className="px-3 py-1.5 bg-amber-500 text-white rounded-lg text-xs font-bold hover:bg-amber-600">
+                        📢 {showReminderForm ? 'Close' : 'Post Reminder'}
+                      </button>
+                    )}
+                    {archivedReminders.length > 0 && (
+                      <button onClick={() => setShowReminderArchive(!showReminderArchive)}
+                        className="text-[10px] text-slate-400 hover:text-blue-500 hover:underline">
+                        📋 {showReminderArchive ? 'Hide' : 'View'} past reminders ({archivedReminders.length})
+                      </button>
+                    )}
+                  </div>
+
+                  {/* Create reminder form */}
+                  {showReminderForm && (isAdmin || modulePerms?.['Post Reminders']) && (
+                    <div className="bg-white rounded-xl p-4 border border-amber-200 mb-3">
+                      <h4 className="text-sm font-bold mb-2">📢 Post Team Reminder</h4>
+                      <textarea value={formData.reminderMsg || ''} onChange={e => setFormData({...formData, reminderMsg: e.target.value})}
+                        placeholder="Type your reminder message..."
+                        rows={3} className="w-full px-3 py-2 rounded-lg border text-sm mb-2" />
+                      <div className="flex gap-2 flex-wrap items-center mb-3">
+                        <div>
+                          <label className="text-[9px] text-slate-500">Date</label>
+                          <input type="date" value={formData.reminderDate || todayStr} onChange={e => setFormData({...formData, reminderDate: e.target.value})}
+                            className="px-2 py-1.5 border rounded text-xs" />
+                        </div>
+                        <div>
+                          <label className="text-[9px] text-slate-500">Priority</label>
+                          <select value={formData.reminderPriority || 'normal'} onChange={e => setFormData({...formData, reminderPriority: e.target.value})}
+                            className="px-2 py-1.5 border rounded text-xs">
+                            <option value="normal">Normal</option>
+                            <option value="urgent">🔴 Urgent</option>
+                          </select>
+                        </div>
+                        <div>
+                          <label className="text-[9px] text-slate-500">Send To</label>
+                          <select value={formData.reminderTarget || 'all'} onChange={e => setFormData({...formData, reminderTarget: e.target.value})}
+                            className="px-2 py-1.5 border rounded text-xs">
+                            <option value="all">👥 All Team</option>
+                            {(teamUsers || []).map(u => <option key={u.id} value={u.id}>👤 {u.name}</option>)}
+                          </select>
+                        </div>
+                      </div>
+                      <button onClick={async () => {
+                        if (!formData.reminderMsg?.trim()) { alert('Enter a message'); return; }
+                        try {
+                          await dbInsert('team_reminders', {
+                            message: formData.reminderMsg.trim(),
+                            reminder_date: formData.reminderDate || todayStr,
+                            priority: formData.reminderPriority || 'normal',
+                            target_users: formData.reminderTarget || 'all',
+                            created_by: userProfile?.id,
+                          }, userProfile?.id);
+                          // Send email notification
+                          try {
+                            const targetIds = formData.reminderTarget === 'all'
+                              ? (teamUsers || []).map(u => u.id)
+                              : [formData.reminderTarget];
+                            await fetch('/api/notify', {
+                              method: 'POST', headers: { 'Content-Type': 'application/json' },
+                              body: JSON.stringify({
+                                type: 'reminder', recipientIds: targetIds,
+                                subject: (formData.reminderPriority === 'urgent' ? '🔴 URGENT: ' : '📢 ') + formData.reminderMsg.trim().substring(0, 60),
+                                triggeredBy: userProfile?.id,
+                              })
+                            });
+                          } catch(e) {}
+                          // Send WhatsApp to targeted users
+                          try {
+                            const targetUsers = formData.reminderTarget === 'all'
+                              ? (teamUsers || [])
+                              : (teamUsers || []).filter(u => u.id === formData.reminderTarget);
+                            const whatsappMsg = (formData.reminderPriority === 'urgent' ? '🔴 URGENT REMINDER\n\n' : '📢 Team Reminder\n\n')
+                              + formData.reminderMsg.trim()
+                              + '\n\n— ' + (userProfile?.name || 'Admin') + ' via KTC Hub';
+                            for (const u of targetUsers) {
+                              const phone = u.whatsapp_number || u.phone;
+                              if (phone) {
+                                await fetch('/api/whatsapp/send', {
+                                  method: 'POST', headers: { 'Content-Type': 'application/json' },
+                                  body: JSON.stringify({ to: phone, body: whatsappMsg })
+                                }).catch(() => {});
+                              }
+                            }
+                          } catch(e) {}
+                          setFormData({...formData, reminderMsg: '', reminderPriority: 'normal'});
+                          setShowReminderForm(false);
+                          await loadAllData();
+                        } catch(err) { alert('Error: ' + err.message); }
+                      }} className="px-4 py-2 bg-amber-500 text-white rounded-lg text-sm font-bold w-full">
+                        📢 Post Reminder
+                      </button>
+                    </div>
+                  )}
+
+                  {/* Archive */}
+                  {showReminderArchive && archivedReminders.length > 0 && (
+                    <div className="bg-white rounded-xl p-3 mb-3 border border-slate-200 max-h-[250px] overflow-auto">
+                      <h4 className="text-xs font-bold text-slate-500 mb-2">📋 Past Reminders</h4>
+                      {archivedReminders.slice(0, 30).map(r => (
+                        <div key={r.id} className="flex justify-between py-1.5 border-b border-slate-50 text-xs">
+                          <div className="flex-1">
+                            <span className="font-semibold">{r.message}</span>
+                            {r.priority === 'urgent' && <span className="ml-1 text-red-500 text-[9px] font-bold">URGENT</span>}
+                          </div>
+                          <div className="text-[10px] text-slate-400 ml-2 whitespace-nowrap">
+                            {r.reminder_date || r.created_at?.substring(0, 10)} · {getUserName(r.created_by)}
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              );
+            })()}
+
             <div className="flex justify-between flex-wrap gap-2 mb-4">
               <h2 className="text-xl font-extrabold">Dashboard / لوحة التحكم</h2>
               {isAdmin && <ModeBar />}
@@ -4775,6 +5018,14 @@ export default function App() {
         ========================================== */}
         {tab === 'shipping' && (
           <ShippingRatesTab user={user} userProfile={userProfile} isAdmin={isAdmin} customers={customers} />
+        )}
+
+        {tab === 'bank' && (
+          <BankTab user={user} supabase={supabase} />
+        )}
+
+        {tab === 'quotes' && (
+          <QuotesTab user={user} userProfile={userProfile} isAdmin={isAdmin} />
         )}
 
         {/* ==========================================
