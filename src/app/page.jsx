@@ -416,7 +416,8 @@ export default function App() {
   }, [filteredTreasury]);
 
   // Expense/Income buckets (dual-level for both Cash In and Cash Out)
-  const uniqueSubcats = useMemo(() => [...new Set(treasury.map(t=>t.subcategory).filter(Boolean))].sort().slice(0, 80), [treasury]);
+  const uniqueSubcats = useMemo(() => [...new Set([...treasury.map(t=>t.subcategory), ...expenseRules.map(r=>r.subcategory)].filter(Boolean))].sort().slice(0, 100), [treasury, expenseRules]);
+  const customCats = useMemo(() => [...new Set([...treasury.map(t=>t.category), ...expenseRules.map(r=>r.category)].filter(c=>c&&!EXPENSE_CATS[c]&&!c.startsWith('__')))].sort(), [treasury, expenseRules]);
 
   const expenseBuckets = useMemo(() => {
     const cats = {};
@@ -1559,7 +1560,7 @@ export default function App() {
                             }} className="w-full px-2 py-1 rounded border border-slate-200 text-xs bg-amber-50">
                               <option value="">None</option>
                               {Object.entries(EXPENSE_CATS).map(([ar, en]) => <option key={ar} value={ar}>{en} / {ar}</option>)}
-                              {[...new Set(treasury.map(t=>t.category).filter(c=>c&&!EXPENSE_CATS[c]))].map(c => <option key={c} value={c}>{c}</option>)}
+                              {customCats.map(c => <option key={c} value={c}>{c}</option>)}
                               <option value="__custom">+ New Category</option>
                             </select>
                           </div>
@@ -1766,7 +1767,7 @@ export default function App() {
                               }} className="w-full text-[10px] border rounded px-1 py-0.5 bg-amber-50">
                                 <option value="">None</option>
                                 {Object.entries(EXPENSE_CATS).map(([ar, en]) => <option key={ar} value={ar}>{en}</option>)}
-                                {[...new Set(treasury.map(t=>t.category).filter(c=>c&&!EXPENSE_CATS[c]))].map(c => <option key={c} value={c}>{c}</option>)}
+                                {customCats.map(c => <option key={c} value={c}>{c}</option>)}
                                 <option value="__custom">+ New Category</option>
                               </select>
                               <select id="tx-subcat" defaultValue={txn.subcategory || ''} onChange={e => {
@@ -1990,7 +1991,7 @@ export default function App() {
                                     }} className="w-full text-[9px] border-2 border-blue-400 rounded px-1 py-0.5 bg-amber-50">
                                       <option value="">None</option>
                                       {Object.entries(EXPENSE_CATS).map(([ar, en]) => <option key={ar} value={ar}>{en}</option>)}
-                                      {[...new Set(treasury.map(t=>t.category).filter(c=>c&&!EXPENSE_CATS[c]))].map(c => <option key={c} value={c}>{c}</option>)}
+                                      {customCats.map(c => <option key={c} value={c}>{c}</option>)}
                                       <option value="__custom">+ New Category</option>
                                     </select>
                                     <select value={editSubValue} onChange={e => {
@@ -2483,7 +2484,7 @@ export default function App() {
                     {Object.entries(EXPENSE_CATS).map(([ar, en]) => (
                       <option key={ar} value={ar}>{en} / {ar}</option>
                     ))}
-                    {[...new Set(treasury.map(t=>t.category).filter(c=>c&&!EXPENSE_CATS[c]))].map(c => <option key={c} value={c}>{c}</option>)}
+                    {customCats.map(c => <option key={c} value={c}>{c}</option>)}
                     <option value="__custom">+ Add New Category / إضافة تصنيف جديد</option>
                   </select>
                   {formData.category && !EXPENSE_CATS[formData.category] && ![...new Set(treasury.map(t=>t.category).filter(Boolean))].includes(formData.category) && (

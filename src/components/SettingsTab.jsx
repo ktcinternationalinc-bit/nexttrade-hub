@@ -12,9 +12,13 @@ const ROLES = [
 ];
 
 const MODULES = [
-  'Dashboard', 'Sales', 'Customers', 'Treasury', 'Checks', 'Debts',
-  'Warehouse', 'Inventory', 'CRM', 'CRM View All', 'Tickets', 'Delete Tickets', 'Delete Invoices', 'View Costs', 'Calendar', 'Customs',
-  'Shipping Rates', 'Daily Log', 'Admin', 'AI Assistant', 'Communications', 'Settings', 'Import'
+  'Dashboard', 'Personal Dashboard', 'Sales', 'Customers', 'Treasury', 'Checks', 'Debts',
+  'Warehouse', 'Inventory', 'CRM', 'CRM View All', 'Tickets', 'Calendar', 'Customs',
+  'Shipping Rates', 'Daily Log', 'Admin', 'AI Assistant', 'Communications', 'Settings', 'Import',
+  // Granular permissions
+  'Edit Treasury', 'Edit Invoices', 'Delete Invoices', 'Edit Inventory', 'Edit Warehouse',
+  'Edit CRM', 'View Costs', 'Delete Tickets', 'Assign Tickets', 'Merge Customers',
+  'Manage Categories', 'Export Data',
 ];
 
 const NOTIF_TYPES = [
@@ -193,7 +197,7 @@ export default function SettingsTab({ user, users, onReload, isAdmin }) {
 
       {/* Section Tabs */}
       <div className="flex gap-1 mb-3 flex-wrap">
-        {[['roles', 'Team & Roles'], ['permissions', 'Module Access'], ['notifications', 'Notifications'], ['comms', '📬 Communications'], ['rules', 'Category Rules / قواعد'], ['expenses', '📋 Expense Descriptions'], ['translation', '🌐 Translation / ترجمة']].map(([v, l]) => (
+        {[['roles', 'Team & Roles'], ['permissions', 'Module Access'], ['notifications', 'Notifications'], ['comms', '📬 Communications'], ['categories', '🏷️ Categories'], ['rules', 'Category Rules / قواعد'], ['expenses', '📋 Expense Descriptions'], ['translation', '🌐 Translation / ترجمة']].map(([v, l]) => (
           <button key={v} onClick={() => setSection(v)}
             className={'px-3 py-1.5 rounded-lg text-xs font-semibold transition ' + (section === v ? 'bg-slate-900 text-white' : 'bg-slate-100 text-slate-500')}>
             {l}
@@ -367,18 +371,38 @@ export default function SettingsTab({ user, users, onReload, isAdmin }) {
           <table className="w-full border-collapse text-xs">
             <thead>
               <tr className="bg-slate-50">
-                <th className="px-2 py-1.5 text-left text-[10px] font-bold">Module</th>
+                <th className="px-2 py-1.5 text-left text-[10px] font-bold">Module / Permission</th>
                 {nonSuperUsers.map(u => (
                   <th key={u.id} className="px-2 py-1.5 text-center text-[10px] font-bold">{u.name}</th>
                 ))}
               </tr>
             </thead>
             <tbody>
-              {MODULES.map(mod => (
+              {/* Tab Access */}
+              <tr><td colSpan={nonSuperUsers.length + 1} className="px-2 py-2 bg-blue-50 text-[10px] font-bold text-blue-700 border-b border-blue-200">📑 TAB ACCESS — which tabs the user can see</td></tr>
+              {['Dashboard', 'Personal Dashboard', 'Sales', 'Customers', 'Treasury', 'Checks', 'Debts', 'Warehouse', 'Inventory', 'CRM', 'Tickets', 'Calendar', 'Customs', 'Shipping Rates', 'Daily Log', 'Admin', 'AI Assistant', 'Communications', 'Settings', 'Import'].map(mod => (
                 <tr key={mod} className="border-b border-slate-50">
                   <td className="px-2 py-1.5 text-[10px] font-semibold">{mod}</td>
                   {nonSuperUsers.map(u => {
                     const hasAccess = permissions[u.id]?.[mod] ?? true;
+                    return (
+                      <td key={u.id} className="px-2 py-1 text-center">
+                        <button onClick={() => togglePermission(u.id, mod)}
+                          className={'px-2 py-0.5 rounded text-[9px] font-bold ' + (hasAccess ? 'bg-emerald-100 text-emerald-700' : 'bg-red-100 text-red-600')}>
+                          {hasAccess ? 'ON' : 'OFF'}
+                        </button>
+                      </td>
+                    );
+                  })}
+                </tr>
+              ))}
+              {/* Action Permissions */}
+              <tr><td colSpan={nonSuperUsers.length + 1} className="px-2 py-2 bg-amber-50 text-[10px] font-bold text-amber-700 border-b border-amber-200 mt-2">🔐 ACTION PERMISSIONS — what the user can do</td></tr>
+              {['Edit Treasury', 'Edit Invoices', 'Delete Invoices', 'Edit Inventory', 'Edit Warehouse', 'Edit CRM', 'View Costs', 'CRM View All', 'Delete Tickets', 'Assign Tickets', 'Merge Customers', 'Manage Categories', 'Export Data'].map(mod => (
+                <tr key={mod} className="border-b border-slate-50">
+                  <td className="px-2 py-1.5 text-[10px] font-semibold text-amber-700">{mod}</td>
+                  {nonSuperUsers.map(u => {
+                    const hasAccess = permissions[u.id]?.[mod] ?? false;
                     return (
                       <td key={u.id} className="px-2 py-1 text-center">
                         <button onClick={() => togglePermission(u.id, mod)}
@@ -464,6 +488,133 @@ export default function SettingsTab({ user, users, onReload, isAdmin }) {
               <div>• Create tickets from messages: <em>&quot;Create a ticket from that email&quot;</em></div>
             </div>
             <p className="text-[10px] text-slate-400 mt-2">All sends require your approval first. Full audit log in Communications tab.</p>
+          </div>
+        </div>
+      )}
+
+      {/* ===== CATEGORIES MANAGER ===== */}
+      {section === 'categories' && (
+        <div className="bg-white rounded-xl p-4">
+          <div className="flex justify-between items-center mb-4">
+            <div>
+              <h3 className="text-sm font-bold">🏷️ Manage Categories & Subcategories</h3>
+              <p className="text-[10px] text-slate-400">Add, view, and organize income & expense categories. New categories appear in all dropdowns immediately.</p>
+            </div>
+          </div>
+          {/* Add New Category */}
+          <div className="bg-blue-50 rounded-lg p-3 mb-4 border border-blue-200">
+            <div className="text-xs font-bold text-blue-700 mb-2">+ Add New Category</div>
+            <div className="flex gap-2 items-end flex-wrap">
+              <div>
+                <label className="text-[9px] text-slate-500">Arabic Name</label>
+                <input value={f.newCatAr || ''} onChange={e => setF({...f, newCatAr: e.target.value})}
+                  placeholder="e.g. مصروفات جديدة" className="px-2 py-1.5 border rounded text-xs w-40" style={{direction:'rtl'}} />
+              </div>
+              <div>
+                <label className="text-[9px] text-slate-500">English Name</label>
+                <input value={f.newCatEn || ''} onChange={e => setF({...f, newCatEn: e.target.value})}
+                  placeholder="e.g. New Expenses" className="px-2 py-1.5 border rounded text-xs w-40" />
+              </div>
+              <div>
+                <label className="text-[9px] text-slate-500">Type</label>
+                <select value={f.newCatType || 'expense'} onChange={e => setF({...f, newCatType: e.target.value})}
+                  className="px-2 py-1.5 border rounded text-xs">
+                  <option value="expense">Expense / منصرفات</option>
+                  <option value="income">Income / إيرادات</option>
+                </select>
+              </div>
+              <button onClick={async () => {
+                const ar = (f.newCatAr || '').trim();
+                const en = (f.newCatEn || '').trim();
+                if (!ar && !en) { alert('Enter a category name'); return; }
+                const catName = ar || en;
+                try {
+                  // Create a rule with this category so it persists
+                  await dbInsert('expense_rules', {
+                    description_match: '__CATEGORY__' + catName,
+                    category: catName,
+                    subcategory: '',
+                    rule_type: f.newCatType || 'expense',
+                  }, user?.id);
+                  setF({...f, newCatAr: '', newCatEn: ''});
+                  loadPrefs();
+                  alert('Category "' + catName + '" added! It will now appear in all dropdowns.');
+                } catch(err) { alert('Error: ' + err.message); }
+              }} className="px-3 py-1.5 bg-blue-500 text-white rounded text-xs font-bold">+ Add</button>
+            </div>
+          </div>
+          {/* Add New Subcategory */}
+          <div className="bg-orange-50 rounded-lg p-3 mb-4 border border-orange-200">
+            <div className="text-xs font-bold text-orange-700 mb-2">+ Add New Subcategory</div>
+            <div className="flex gap-2 items-end flex-wrap">
+              <div>
+                <label className="text-[9px] text-slate-500">Parent Category</label>
+                <select value={f.subParent || ''} onChange={e => setF({...f, subParent: e.target.value})}
+                  className="px-2 py-1.5 border rounded text-xs w-40">
+                  <option value="">Select...</option>
+                  {Object.entries(EXPENSE_CATS).map(([ar, en]) => <option key={ar} value={ar}>{en} / {ar}</option>)}
+                  {[...new Set(rules.map(r => r.category).filter(c => c && !EXPENSE_CATS[c] && !c.startsWith('__')))].map(c => <option key={c} value={c}>{c}</option>)}
+                </select>
+              </div>
+              <div>
+                <label className="text-[9px] text-slate-500">Subcategory Name</label>
+                <input value={f.newSubName || ''} onChange={e => setF({...f, newSubName: e.target.value})}
+                  placeholder="e.g. Fuel, Office..." className="px-2 py-1.5 border rounded text-xs w-40" />
+              </div>
+              <button onClick={async () => {
+                if (!f.subParent || !f.newSubName?.trim()) { alert('Select parent category and enter subcategory name'); return; }
+                try {
+                  await dbInsert('expense_rules', {
+                    description_match: '__SUBCAT__' + f.newSubName.trim(),
+                    category: f.subParent,
+                    subcategory: f.newSubName.trim(),
+                    rule_type: 'expense',
+                  }, user?.id);
+                  setF({...f, newSubName: ''});
+                  loadPrefs();
+                  alert('Subcategory "' + f.newSubName.trim() + '" added under ' + f.subParent);
+                } catch(err) { alert('Error: ' + err.message); }
+              }} className="px-3 py-1.5 bg-orange-500 text-white rounded text-xs font-bold">+ Add</button>
+            </div>
+          </div>
+          {/* Current Categories */}
+          <div>
+            <h4 className="text-xs font-bold mb-2">Current Categories</h4>
+            {(() => {
+              // Build category map from EXPENSE_CATS + rules + treasury
+              const allCats = {};
+              Object.entries(EXPENSE_CATS).forEach(([ar, en]) => {
+                allCats[ar] = { en, type: 'built-in', subcats: new Set() };
+              });
+              rules.forEach(r => {
+                if (r.category && !allCats[r.category]) allCats[r.category] = { en: r.category, type: r.rule_type || 'expense', subcats: new Set() };
+                if (r.subcategory && allCats[r.category]) allCats[r.category].subcats.add(r.subcategory);
+              });
+              // Get subcats from treasury data via expDescs
+              expDescs.forEach(d => {
+                if (d.category && allCats[d.category] && d.subcategory) allCats[d.category].subcats.add(d.subcategory);
+              });
+              return Object.entries(allCats).sort((a,b) => a[0].localeCompare(b[0])).map(([cat, data]) => (
+                <div key={cat} className="border-b border-slate-100 py-2">
+                  <div className="flex items-center justify-between">
+                    <div className="flex items-center gap-2">
+                      <span className="text-xs font-bold">{data.en !== cat ? data.en + ' / ' : ''}{cat}</span>
+                      <span className={'text-[9px] px-1.5 py-0.5 rounded-full ' + (data.type === 'built-in' ? 'bg-slate-100 text-slate-500' : data.type === 'income' ? 'bg-emerald-100 text-emerald-600' : 'bg-red-100 text-red-500')}>
+                        {data.type === 'built-in' ? 'System' : data.type}
+                      </span>
+                    </div>
+                    <span className="text-[10px] text-slate-400">{data.subcats.size} subcategories</span>
+                  </div>
+                  {data.subcats.size > 0 && (
+                    <div className="flex gap-1 mt-1 flex-wrap pl-4">
+                      {[...data.subcats].sort().map(sub => (
+                        <span key={sub} className="text-[9px] px-2 py-0.5 bg-orange-50 text-orange-600 rounded border border-orange-200">{sub}</span>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              ));
+            })()}
           </div>
         </div>
       )}
