@@ -17,6 +17,7 @@ import BankTab from '../components/BankTab';
 import QuotesTab from '../components/QuotesTab';
 import EgyptBankTab from '../components/EgyptBankTab';
 import PhoneWidget from '../components/PhoneWidget';
+import ReportsTab from '../components/ReportsTab';
 
 // Modal must be outside main component to prevent re-mounting on every render
 const Modal = ({ onClose, title, children }) => (
@@ -45,11 +46,12 @@ const TABS = [
   { id: 'customers', label: 'Customers / العملاء', icon: '👥' },
   { id: 'quotes', label: 'Quotes / عروض', icon: '📋' },
   { id: 'treasury', label: 'Treasury / الخزنة', icon: '🏦' },
+  { id: 'egyptbank', label: 'Egypt Bank / بنوك مصر', icon: '🇪🇬' },
   { id: 'bank', label: 'Bank / البنك', icon: '🏛️' },
   { id: 'checks', label: 'Checks / شيكات', icon: '📝' },
   { id: 'debts', label: 'Debts / المديونية', icon: '⚠️' },
+  { id: 'reports', label: 'Reports / تقارير', icon: '📊' },
   { id: 'warehouse', label: 'Warehouse / المخزن', icon: '🏭' },
-  { id: 'egyptbank', label: 'Egypt Bank / بنوك مصر', icon: '🇪🇬' },
   { id: 'inventory', label: 'Inventory / المخزون', icon: '📦' },
   { id: 'customs', label: 'Customs / جمارك', icon: '🚢' },
   { id: 'shipping', label: 'Shipping Rates / شحن', icon: '🛳️' },
@@ -232,6 +234,28 @@ export default function App() {
   const [announcementAcks, setAnnouncementAcks] = useState([]);
   const [showAddAnnouncement, setShowAddAnnouncement] = useState(false);
   const annAlarmRef = useRef(null);
+
+  // Reusable alarm sound function
+  const playAlarmSound = async (isUrgent) => {
+    try {
+      const ctx = new (window.AudioContext || window.webkitAudioContext)();
+      if (ctx.state === 'suspended') await ctx.resume();
+      const playTone = (freq, start, dur) => {
+        const osc = ctx.createOscillator();
+        const gain = ctx.createGain();
+        osc.connect(gain); gain.connect(ctx.destination);
+        osc.frequency.value = freq; osc.type = 'square';
+        gain.gain.setValueAtTime(0.4, ctx.currentTime + start);
+        gain.gain.exponentialRampToValueAtTime(0.01, ctx.currentTime + start + dur);
+        osc.start(ctx.currentTime + start); osc.stop(ctx.currentTime + start + dur);
+      };
+      if (isUrgent) {
+        for (let i = 0; i < 12; i++) { playTone(900 + (i % 2) * 500, i * 0.4, 0.35); }
+      } else {
+        for (let i = 0; i < 6; i++) { playTone(700, i * 0.7, 0.25); playTone(900, i * 0.7 + 0.25, 0.25); }
+      }
+    } catch(e) { console.log('Alarm error:', e); }
+  };
   const [reminders, setReminders] = useState([]);
   const [showReminderForm, setShowReminderForm] = useState(false);
   const [showReminderArchive, setShowReminderArchive] = useState(false);
@@ -285,40 +309,16 @@ export default function App() {
     return () => clearInterval(pollReminders);
   }, []);
 
-  // Announcement alarm for unacknowledged messages
+  // Announcement alarm for unacknowledged messages — plays on new AND replays every poll
   useEffect(() => {
     if (!announcements.length || !userProfile) return;
     const myId = userProfile?.id;
     const active = announcements.filter(a => a.active !== false && (!a.target_user || a.target_user === myId));
     const myAcks = new Set(announcementAcks.filter(a => a.user_id === myId).map(a => a.announcement_id));
     const unacked = active.filter(a => !myAcks.has(a.id));
-    if (!annAlarmRef.current) annAlarmRef.current = new Set();
-    const newUnacked = unacked.filter(a => !annAlarmRef.current.has(a.id));
-    if (newUnacked.length > 0) {
-      newUnacked.forEach(a => annAlarmRef.current.add(a.id));
-      console.log('🔔 New unacknowledged announcements:', newUnacked.length);
-      const playAlarm = async () => {
-        try {
-          const ctx = new (window.AudioContext || window.webkitAudioContext)();
-          if (ctx.state === 'suspended') await ctx.resume();
-          const playTone = (freq, start, dur) => {
-            const osc = ctx.createOscillator();
-            const gain = ctx.createGain();
-            osc.connect(gain); gain.connect(ctx.destination);
-            osc.frequency.value = freq; osc.type = 'square';
-            gain.gain.setValueAtTime(0.4, ctx.currentTime + start);
-            gain.gain.exponentialRampToValueAtTime(0.01, ctx.currentTime + start + dur);
-            osc.start(ctx.currentTime + start); osc.stop(ctx.currentTime + start + dur);
-          };
-          const hasUrgent = newUnacked.some(a => a.priority === 'urgent');
-          if (hasUrgent) {
-            for (let i = 0; i < 12; i++) { playTone(900 + (i % 2) * 500, i * 0.4, 0.35); }
-          } else {
-            for (let i = 0; i < 6; i++) { playTone(700, i * 0.7, 0.25); playTone(900, i * 0.7 + 0.25, 0.25); }
-          }
-        } catch(e) { console.log('Alarm error:', e); }
-      };
-      playAlarm();
+    if (unacked.length > 0) {
+      const hasUrgent = unacked.some(a => a.priority === 'urgent');
+      playAlarmSound(hasUrgent);
     }
   }, [announcements, announcementAcks, userProfile]);
 
@@ -506,7 +506,7 @@ export default function App() {
     dashboard: 'Dashboard', sales: 'Sales', customers: 'Customers', treasury: 'Treasury',
     checks: 'Checks', debts: 'Debts', warehouse: 'Warehouse', inventory: 'Inventory',
     crm: 'CRM', tickets: 'Tickets', calendar: 'Calendar', customs: 'Customs', shipping: 'Shipping Rates',
-    dailylog: 'Daily Log', admin: 'Admin', ai: 'AI Assistant', settings: 'Settings', import: 'Import', bank: 'Bank', quotes: 'Quotes', egyptbank: 'Egypt Bank',
+    dailylog: 'Daily Log', admin: 'Admin', ai: 'AI Assistant', settings: 'Settings', import: 'Import', bank: 'Bank', quotes: 'Quotes', egyptbank: 'Egypt Bank', reports: 'Reports',
   };
 
   const visibleTabs = useMemo(() => {
@@ -519,7 +519,7 @@ export default function App() {
       // Admin with no explicit permission: see everything
       if (userProfile.role === 'admin') return true;
       // Team/viewer with no explicit permission: hide financial + admin tabs
-      if (['treasury', 'checks', 'debts', 'sales', 'warehouse', 'inventory', 'admin', 'settings', 'import', 'bank', 'egyptbank'].includes(t.id)) return false;
+      if (['treasury', 'checks', 'debts', 'sales', 'warehouse', 'inventory', 'admin', 'settings', 'import', 'bank', 'egyptbank', 'reports'].includes(t.id)) return false;
       return true;
     });
   }, [userProfile, modulePerms]);
@@ -2818,6 +2818,7 @@ export default function App() {
                         if (!formData.reminderMsg?.trim()) { alert('Enter a message'); return; }
                         try {
                           await dbInsert('team_reminders', {
+                            title: formData.reminderMsg.trim(),
                             message: formData.reminderMsg.trim(),
                             reminder_date: formData.reminderDate || todayStr,
                             priority: formData.reminderPriority || 'normal',
@@ -2955,6 +2956,7 @@ export default function App() {
                         } catch(emailErr) { console.error('Email send error:', emailErr); }
                       }
                       setShowAddAnnouncement(false);
+                      playAlarmSound(priority === 'urgent');
                       await loadAllData();
                     } catch(err) { alert('Error: ' + err.message); }
                   }} className="px-6 py-3 bg-red-600 text-white rounded-lg text-sm font-extrabold shadow-lg">📢 SEND NOW / أرسل الآن</button>
@@ -3016,7 +3018,10 @@ export default function App() {
                           {isAdmin && (
                             <div style={{ marginTop: '0.5rem', fontSize: '0.65rem' }}>
                               {ackedUsers.length > 0 && (
-                                <div style={{ color: '#16a34a' }}>✅ {ackedUsers.map(u => u.name).join(', ')}</div>
+                                <div style={{ color: '#16a34a' }}>✅ {ackedUsers.map(u => {
+                                  var ack = thisAcks.find(ak => ak.user_id === u.id);
+                                  return u.name + (ack ? ' (' + new Date(ack.acked_at).toLocaleString([], {month:'short',day:'numeric',hour:'2-digit',minute:'2-digit'}) + ')' : '');
+                                }).join(', ')}</div>
                               )}
                               {unackedUsers.length > 0 && (
                                 <div style={{ color: '#dc2626', fontWeight: 700 }}>⏳ Not acknowledged: {unackedUsers.map(u => u.name).join(', ')}</div>
@@ -3092,21 +3097,32 @@ export default function App() {
                           var icon = a.priority === 'urgent' ? '🚨' : a.priority === 'warning' ? '⚠️' : 'ℹ️';
                           var poster = teamUsers.find(u => u.id === a.posted_by);
                           var thisAcks = announcementAcks.filter(ak => ak.announcement_id === a.id);
-                          var targetCount = a.target_user ? 1 : teamUsers.length;
+                          var targetUsers2 = a.target_user ? teamUsers.filter(u => u.id === a.target_user) : teamUsers;
+                          var ackedNames = targetUsers2.filter(u => thisAcks.some(ak => ak.user_id === u.id));
+                          var unackedNames = targetUsers2.filter(u => !thisAcks.some(ak => ak.user_id === u.id));
                           return (
                             <div key={a.id} style={{ padding: '10px 14px', borderRadius: 10, background: 'rgba(0,0,0,0.02)', border: '1px solid rgba(0,0,0,0.06)' }}>
                               <div className="flex justify-between items-start">
-                                <div>
+                                <div className="flex-1">
                                   <div style={{ fontSize: '0.85rem', fontWeight: 700 }}>{icon} {a.title}</div>
-                                  {a.body && <div style={{ fontSize: '0.75rem', color: '#475569', marginTop: 4 }}>{a.body}</div>}
+                                  {a.body && <div style={{ fontSize: '0.75rem', color: '#475569', marginTop: 4, whiteSpace: 'pre-wrap' }}>{a.body}</div>}
                                   <div style={{ fontSize: '0.6rem', color: '#94a3b8', marginTop: 4 }}>
                                     {poster ? poster.name : 'Admin'} • {new Date(a.created_at).toLocaleDateString()}
-                                    <span style={{ marginLeft: 8, color: '#16a34a' }}>✅ {thisAcks.length}/{targetCount} acknowledged</span>
                                   </div>
+                                  {isAdmin && (
+                                    <div style={{ fontSize: '0.6rem', marginTop: 4 }}>
+                                      {ackedNames.length > 0 && <div style={{ color: '#16a34a' }}>✅ {ackedNames.map(u => {
+                                        var ack = thisAcks.find(ak => ak.user_id === u.id);
+                                        return u.name + (ack ? ' (' + new Date(ack.acked_at).toLocaleString([], {month:'short',day:'numeric',hour:'2-digit',minute:'2-digit'}) + ')' : '');
+                                      }).join(', ')}</div>}
+                                      {unackedNames.length > 0 && <div style={{ color: '#dc2626', fontWeight: 700 }}>⏳ {unackedNames.map(u => u.name).join(', ')}</div>}
+                                      <div style={{ color: '#94a3b8' }}>{ackedNames.length}/{targetUsers2.length} acknowledged</div>
+                                    </div>
+                                  )}
                                 </div>
                                 {isAdmin && (
                                   <button onClick={async () => { try { await dbUpdate('announcements', a.id, { active: true }, user?.id); setAnnouncements(prev => prev.map(x => x.id === a.id ? {...x, active: true} : x)); } catch(err) { alert(err.message); } }}
-                                    style={{ fontSize: '0.6rem', color: '#2563eb', background: '#eff6ff', padding: '3px 8px', borderRadius: 6, border: '1px solid #bfdbfe', cursor: 'pointer' }}>Restore</button>
+                                    className="px-3 py-1.5 bg-blue-500 text-white rounded-lg text-[10px] font-bold ml-2 hover:bg-blue-600">🔄 Restore</button>
                                 )}
                               </div>
                             </div>
@@ -3221,7 +3237,7 @@ export default function App() {
                       className="flex justify-between py-1 border-b border-slate-50 text-xs cursor-pointer hover:bg-emerald-50">
                       <div className="flex items-center gap-1.5">
                         <div className="w-2 h-2 rounded-full" style={{ background: COLORS[i % COLORS.length] }} />
-                        <span>{e.eng}</span>
+                        <span>{e.eng}{e.eng !== e.cat && <span className="text-slate-400 text-[10px] ml-1">({e.cat})</span>}</span>
                         <span className="text-slate-400">({e.count})</span>
                       </div>
                       <span className="font-bold text-emerald-600">{fE(e.total)} →</span>
@@ -3246,7 +3262,7 @@ export default function App() {
                     className="flex justify-between py-1 border-b border-slate-50 text-xs cursor-pointer hover:bg-red-50">
                     <div className="flex items-center gap-1.5">
                       <div className="w-2 h-2 rounded-full" style={{ background: COLORS[i % COLORS.length] }} />
-                      <span>{e.eng}</span>
+                      <span>{e.eng}{e.eng !== e.cat && <span className="text-slate-400 text-[10px] ml-1">({e.cat})</span>}</span>
                       <span className="text-slate-400">({e.count})</span>
                     </div>
                     <span className="font-bold text-red-500">{fE(e.total)} →</span>
@@ -4005,7 +4021,7 @@ export default function App() {
                       className="flex justify-between py-1 border-b border-slate-50 text-xs cursor-pointer hover:bg-emerald-50">
                       <div className="flex items-center gap-1.5">
                         <div className="w-2 h-2 rounded-full" style={{ background: COLORS[i % COLORS.length] }} />
-                        <span>{e.eng}</span>
+                        <span>{e.eng}{e.eng !== e.cat && <span className="text-slate-400 text-[10px] ml-1">({e.cat})</span>}</span>
                         <span className="text-slate-400">({e.count})</span>
                       </div>
                       <span className="font-bold text-emerald-600">{fE(e.total)} →</span>
@@ -4028,7 +4044,7 @@ export default function App() {
                     className="flex justify-between py-1 border-b border-slate-50 text-xs cursor-pointer hover:bg-red-50">
                     <div className="flex items-center gap-1.5">
                       <div className="w-2 h-2 rounded-full" style={{ background: COLORS[i % COLORS.length] }} />
-                      <span>{e.eng}</span>
+                      <span>{e.eng}{e.eng !== e.cat && <span className="text-slate-400 text-[10px] ml-1">({e.cat})</span>}</span>
                       <span className="text-slate-400">({e.count})</span>
                     </div>
                     <span className="font-bold text-red-500">{fE(e.total)} →</span>
@@ -5352,6 +5368,10 @@ export default function App() {
 
         {tab === 'egyptbank' && (
           <EgyptBankTab user={user} userProfile={userProfile} isAdmin={isAdmin} invoices={invoices} />
+        )}
+
+        {tab === 'reports' && (
+          <ReportsTab treasury={treasury} invoices={invoices} warehouseExpenses={warehouse} />
         )}
 
         {tab === 'quotes' && (

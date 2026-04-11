@@ -11,7 +11,7 @@ const STATUS_DESC = {New:'Just created — nobody has looked at it yet',Acknowle
 const USER_COLORS = ['#8b5cf6','#0ea5e9','#f59e0b','#10b981','#ec4899','#ef4444','#6366f1','#14b8a6','#f97316','#06b6d4','#a855f7','#84cc16'];
 
 export default function TicketsTab({ customers, user, userProfile, users, onReload, lang, isAdmin, modulePerms }) {
-  const myId = userProfile?.id;
+  const myId = userProfile?.id || user?.id;
   const canManage = isAdmin || userProfile?.role === 'super_admin' || userProfile?.role === 'admin';
   const isSuperAdmin = userProfile?.role === 'super_admin';
   const isAdminRole = userProfile?.role === 'admin' || userProfile?.role === 'super_admin';
@@ -343,32 +343,33 @@ export default function TicketsTab({ customers, user, userProfile, users, onRelo
     {/* Filters */}
     <div className="flex gap-2 mb-3 flex-wrap">
       {[['open','Open'],['mine','Assigned to Me'],['team','Assigned to Team'],['created','Created by Me'],['overdue','Overdue'],['all','All'],...STATUSES.map(s=>[s,s])].map(([v,l]) => (
-        <button key={v} onClick={() => setStatusF(v)}
+        <button key={v} onClick={() => { setStatusF(v); setOwnerF('all'); setAssignedF('all'); setPriorityF('all'); }}
           className={'px-3 py-1 rounded-md text-xs font-semibold transition ' + (statusF === v ? 'bg-slate-900 text-white' : 'bg-slate-100 text-slate-500')}>{l}</button>
       ))}
     </div>
 
     {/* Sort + Filters */}
     <div className="flex gap-2 mb-3 items-center flex-wrap">
-      <select value={ownerF} onChange={e => setOwnerF(e.target.value)} className="px-2 py-1 rounded-lg border text-xs font-semibold">
+      <select value={ownerF} onChange={e => { setOwnerF(e.target.value); if (e.target.value !== 'all') setStatusF('all'); }} className="px-2 py-1 rounded-lg border text-xs font-semibold">
         <option value="all">👤 Owner: All</option>
         {(users || []).map(u => <option key={u.id} value={u.id}>{u.name}</option>)}
       </select>
-      <select value={assignedF} onChange={e => setAssignedF(e.target.value)} className="px-2 py-1 rounded-lg border text-xs font-semibold">
+      <select value={assignedF} onChange={e => { setAssignedF(e.target.value); if (e.target.value !== 'all') setStatusF('all'); }} className="px-2 py-1 rounded-lg border text-xs font-semibold">
         <option value="all">🎯 Assigned: All</option>
         <option value="unassigned">Unassigned</option>
         {(users || []).map(u => <option key={u.id} value={u.id}>{u.name}</option>)}
       </select>
-      <select value={priorityF} onChange={e => setPriorityF(e.target.value)} className="px-2 py-1 rounded-lg border text-xs font-semibold">
+      <select value={priorityF} onChange={e => { setPriorityF(e.target.value); if (e.target.value !== 'all') setStatusF('all'); }} className="px-2 py-1 rounded-lg border text-xs font-semibold">
         <option value="all">⚡ Priority: All</option>
         <option value="high">🔴 High</option>
         <option value="medium">🟡 Medium</option>
         <option value="low">🟢 Low</option>
       </select>
       {(ownerF !== 'all' || assignedF !== 'all' || priorityF !== 'all') && (
-        <button onClick={() => { setOwnerF('all'); setAssignedF('all'); setPriorityF('all'); }}
-          className="px-2 py-1 rounded-lg text-[10px] font-semibold text-red-500 bg-red-50 border border-red-200">✕ Clear</button>
+        <button onClick={() => { setOwnerF('all'); setAssignedF('all'); setPriorityF('all'); setStatusF('open'); }}
+          className="px-2 py-1 rounded-lg text-[10px] font-semibold text-red-500 bg-red-50 border border-red-200">✕ Clear filters</button>
       )}
+      <span className="text-[10px] text-slate-400 font-semibold">{filtered.length} result{filtered.length !== 1 ? 's' : ''}</span>
     </div>
 
     {/* Sort */}

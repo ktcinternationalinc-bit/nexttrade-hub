@@ -192,7 +192,7 @@ export async function POST(request) {
           return Response.json({ answer: 'Event created: ' + action.title + '\nDate: ' + action.event_date, action_result: 'success' });
         }
         if (action.type === 'create_reminder') {
-          var remResult = await supabase.from('follow_ups').insert({ task: action.task, due_date: action.due_date, due_time: action.due_time || '09:00', assigned_to: userId || null, created_by: userId || null });
+          var remResult = await supabase.from('team_reminders').insert({ title: action.task, message: action.task, reminder_date: action.due_date, priority: action.priority || 'normal', target_users: 'all', created_by: userId || null });
           if (remResult.error) throw remResult.error;
           return Response.json({ answer: 'Reminder set: ' + action.task + '\nDue: ' + action.due_date, action_result: 'success' });
         }
@@ -675,7 +675,7 @@ export async function POST(request) {
               await supabase.from('calendar_events').insert({ title: actionData.title, event_date: actionData.event_date, event_time: actionData.event_time || null, event_type: actionData.event_type || 'task', assigned_to: userId });
               execResult = '✅ Event created: ' + actionData.title + ' on ' + actionData.event_date;
             } else if (actionData.type === 'create_reminder') {
-              await supabase.from('calendar_events').insert({ title: actionData.task || actionData.title, event_date: actionData.due_date, event_time: actionData.due_time || '09:00', event_type: 'reminder', assigned_to: userId });
+              await supabase.from('team_reminders').insert({ title: actionData.task || actionData.title, message: actionData.task || actionData.title, reminder_date: actionData.due_date, priority: actionData.priority || 'normal', target_users: 'all', created_by: userId });
               execResult = '✅ Reminder set: ' + (actionData.task || actionData.title) + ' on ' + actionData.due_date;
             }
             var finalAnswer = (cleanText.trim() ? cleanText.trim() + '\n\n' : '') + (execResult || 'Done.');

@@ -246,9 +246,9 @@ export default function AIAssistant({ user, userProfile, users, customers }) {
 
   // ===== VOICE NOTE RECORDING =====
   const recordingRef = useRef(false);
+  const accumulatedTextRef = useRef('');
   
   const startRecording = () => {
-    // Stop any ongoing conversation/listening
     stopSpeaking();
     if (conversationModeRef.current) {
       conversationModeRef.current = false;
@@ -259,77 +259,71 @@ export default function AIAssistant({ user, userProfile, users, customers }) {
     if (autoSendRef.current) clearTimeout(autoSendRef.current);
     
     const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
-    if (!SR) return;
+    if (!SR) { alert('Speech recognition not supported in this browser'); return; }
     
-    // Accumulated transcript across restarts
-    const fullRef = { text: '' };
-    let restartCount = 0;
+    accumulatedTextRef.current = '';
+    setInput('');
     
-    const createRec = () => {
+    const startNewSession = () => {
+      if (!recordingRef.current) return;
+      
       const rec = new SR();
-      rec.continuous = true;
+      rec.continuous = false;  // Single result mode - more reliable
       rec.interimResults = true;
       rec.lang = 'en-US';
-      rec.maxAlternatives = 1;
-      let lastFinal = '';
+      
       rec.onresult = (event) => {
         let finalText = '';
         let interimText = '';
         for (let i = 0; i < event.results.length; i++) {
           if (event.results[i].isFinal) {
-            finalText += event.results[i][0].transcript;
+            finalText += event.results[i][0].transcript + ' ';
           } else {
             interimText += event.results[i][0].transcript;
           }
         }
-        lastFinal = finalText;
-        setInput(correctNames(fullRef.text + finalText + interimText));
+        
+        if (finalText.trim()) {
+          accumulatedTextRef.current += finalText;
+        }
+        
+        const display = accumulatedTextRef.current + interimText;
+        setInput(correctNames(display.trim()));
       };
-      rec.onerror = (e) => {
-        console.log('Recording error:', e.error);
-        // Auto-restart on network errors
-        if (e.error === 'network' && recordingRef.current && restartCount < 50) {
-          restartCount++;
-          setTimeout(() => {
-            if (!recordingRef.current) return;
-            try { const nr = createRec(); recordingRecRef.current = nr; nr.start(); } catch(ex) {}
-          }, 500);
+      
+      rec.onend = () => {
+        // Always restart if still recording
+        if (recordingRef.current) {
+          setTimeout(startNewSession, 50);
         }
       };
-      rec.onend = () => {
-        if (!recordingRef.current) return;
-        // Save finalized text before restarting
-        if (lastFinal) { fullRef.text += lastFinal; lastFinal = ''; }
-        restartCount++;
-        if (restartCount > 100) { stopRecording(); return; } // safety limit
-        // Restart immediately to keep listening
-        setTimeout(() => {
-          if (!recordingRef.current) return;
-          try {
-            const newRec = createRec();
-            recordingRecRef.current = newRec;
-            newRec.start();
-          } catch(e) {
-            // If restart fails, try again after a short delay
-            setTimeout(() => {
-              if (!recordingRef.current) return;
-              try { const nr = createRec(); recordingRecRef.current = nr; nr.start(); } catch(ex) {}
-            }, 1000);
-          }
-        }, 100);
+      
+      rec.onerror = (e) => {
+        console.log('Voice error:', e.error);
+        if (e.error === 'no-speech' && recordingRef.current) {
+          // No speech detected - just restart
+          setTimeout(startNewSession, 100);
+        } else if (e.error === 'aborted' && recordingRef.current) {
+          setTimeout(startNewSession, 200);
+        } else if (recordingRef.current) {
+          setTimeout(startNewSession, 500);
+        }
       };
-      return rec;
+      
+      recordingRecRef.current = rec;
+      try { rec.start(); } catch(e) {
+        if (recordingRef.current) setTimeout(startNewSession, 300);
+      }
     };
     
-    const rec = createRec();
-    recordingRecRef.current = rec;
-    try { rec.start(); } catch(e) { alert('Microphone access denied'); return; }
     setRecording(true);
     recordingRef.current = true;
     setRecordingTime(0);
     recordingTimerRef.current = setInterval(() => {
       setRecordingTime(prev => prev + 1);
     }, 1000);
+    
+    startNewSession();
   };
 
   const stopRecording = () => {
@@ -846,10 +840,11 @@ ${today}`;
           <div className="text-center mt-2 py-2">
             <div className="flex items-center justify-center gap-2">
               <span className="w-3 h-3 rounded-full bg-red-500 animate-pulse" />
-              <span className="text-xs font-bold" style={{color:'#10b981'}}>Recording voice note — {formatTime(recordingTime)}</span>
+              <span className="text-xs font-bold" style={{color:'#10b981'}}>Recording — {formatTime(recordingTime)}</span>
+              <span className="text-[10px] px-2 py-0.5 rounded-full" style={{background:'rgba(16,185,129,0.15)', color:'#10b981', fontWeight:700}}>{(input || '').split(/\s+/).filter(w => w).length} words</span>
             </div>
             <div className="text-[10px] mt-1" style={{color:'var(--text-muted)'}}>
-              Speak freely. Tap ⏹ when done. Review text, then tap → to send.
+              🎙️ Keep talking — picks up every phrase. Tap ⏹ when done.
             </div>
           </div>
         )}
