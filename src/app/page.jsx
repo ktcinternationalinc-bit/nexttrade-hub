@@ -15,6 +15,8 @@ import AIAssistant from '../components/AIAssistant';
 import ShippingRatesTab from '../components/ShippingRatesTab';
 import BankTab from '../components/BankTab';
 import QuotesTab from '../components/QuotesTab';
+import EgyptBankTab from '../components/EgyptBankTab';
+import PhoneWidget from '../components/PhoneWidget';
 
 // Modal must be outside main component to prevent re-mounting on every render
 const Modal = ({ onClose, title, children }) => (
@@ -47,6 +49,7 @@ const TABS = [
   { id: 'checks', label: 'Checks / شيكات', icon: '📝' },
   { id: 'debts', label: 'Debts / المديونية', icon: '⚠️' },
   { id: 'warehouse', label: 'Warehouse / المخزن', icon: '🏭' },
+  { id: 'egyptbank', label: 'Egypt Bank / بنوك مصر', icon: '🇪🇬' },
   { id: 'inventory', label: 'Inventory / المخزون', icon: '📦' },
   { id: 'customs', label: 'Customs / جمارك', icon: '🚢' },
   { id: 'shipping', label: 'Shipping Rates / شحن', icon: '🛳️' },
@@ -503,7 +506,7 @@ export default function App() {
     dashboard: 'Dashboard', sales: 'Sales', customers: 'Customers', treasury: 'Treasury',
     checks: 'Checks', debts: 'Debts', warehouse: 'Warehouse', inventory: 'Inventory',
     crm: 'CRM', tickets: 'Tickets', calendar: 'Calendar', customs: 'Customs', shipping: 'Shipping Rates',
-    dailylog: 'Daily Log', admin: 'Admin', ai: 'AI Assistant', settings: 'Settings', import: 'Import', bank: 'Bank', quotes: 'Quotes',
+    dailylog: 'Daily Log', admin: 'Admin', ai: 'AI Assistant', settings: 'Settings', import: 'Import', bank: 'Bank', quotes: 'Quotes', egyptbank: 'Egypt Bank',
   };
 
   const visibleTabs = useMemo(() => {
@@ -516,7 +519,7 @@ export default function App() {
       // Admin with no explicit permission: see everything
       if (userProfile.role === 'admin') return true;
       // Team/viewer with no explicit permission: hide financial + admin tabs
-      if (['treasury', 'checks', 'debts', 'sales', 'warehouse', 'inventory', 'admin', 'settings', 'import', 'bank'].includes(t.id)) return false;
+      if (['treasury', 'checks', 'debts', 'sales', 'warehouse', 'inventory', 'admin', 'settings', 'import', 'bank', 'egyptbank'].includes(t.id)) return false;
       return true;
     });
   }, [userProfile, modulePerms]);
@@ -3003,7 +3006,7 @@ export default function App() {
                             ) : (
                               <button onClick={async () => {
                                 await dbInsert('announcement_acks', { announcement_id: a.id, user_id: myId, acked_at: new Date().toISOString() }, myId);
-                                await loadAllData();
+                                setAnnouncementAcks(prev => [...prev, { announcement_id: a.id, user_id: myId, acked_at: new Date().toISOString() }]);
                               }} style={{ fontSize: '0.8rem', fontWeight: 800, color: '#fff', background: a.priority === 'urgent' ? '#dc2626' : '#2563eb', padding: '6px 16px', borderRadius: 8, cursor: 'pointer', border: 'none', boxShadow: '0 2px 8px rgba(0,0,0,0.15)' }}>
                                 👋 Acknowledge / تأكيد الاستلام
                               </button>
@@ -3024,9 +3027,9 @@ export default function App() {
                         </div>
                         {isAdmin && (
                           <div className="flex flex-col gap-1 ml-3">
-                            <button onClick={async () => { try { await dbUpdate('announcements', a.id, { active: false }, user?.id); await loadAllData(); } catch(err) { alert('Archive error: ' + err.message); } }}
+                            <button onClick={async () => { try { await dbUpdate('announcements', a.id, { active: false }, user?.id); setAnnouncements(prev => prev.map(x => x.id === a.id ? {...x, active: false} : x)); } catch(err) { alert('Archive error: ' + err.message); } }}
                               style={{ fontSize: '0.65rem', color: '#ef4444', cursor: 'pointer', background: 'rgba(239,68,68,0.1)', padding: '4px 8px', borderRadius: 6, border: '1px solid rgba(239,68,68,0.3)' }}>Archive ✕</button>
-                            <button onClick={async () => { try { await dbUpdate('announcements', a.id, { pinned: !a.pinned }, user?.id); await loadAllData(); } catch(err) { alert('Pin error: ' + err.message); } }}
+                            <button onClick={async () => { try { await dbUpdate('announcements', a.id, { pinned: !a.pinned }, user?.id); setAnnouncements(prev => prev.map(x => x.id === a.id ? {...x, pinned: !x.pinned} : x)); } catch(err) { alert('Pin error: ' + err.message); } }}
                               style={{ fontSize: '0.65rem', color: '#6b7280', cursor: 'pointer', background: 'rgba(0,0,0,0.05)', padding: '4px 8px', borderRadius: 6 }}>{a.pinned ? 'Unpin' : '📌 Pin'}</button>
                           </div>
                         )}
@@ -3065,6 +3068,55 @@ export default function App() {
                   </div>
                 )}
               </div>);
+            })()}
+            {/* Archived Messages */}
+            {(() => {
+              var archived = announcements.filter(a => a.active === false);
+              if (archived.length === 0) return null;
+              return (
+                <div className="mb-4">
+                  {!hideSections.archivedAnn ? (
+                    <button onClick={() => setHideSections({...hideSections, archivedAnn: true})}
+                      style={{ fontSize: '0.75rem', color: '#6b7280', cursor: 'pointer', background: 'rgba(0,0,0,0.03)', padding: '6px 12px', borderRadius: 8, border: '1px solid rgba(0,0,0,0.08)', display: 'block', width: '100%', textAlign: 'center' }}>
+                      🗄️ View {archived.length} archived message{archived.length > 1 ? 's' : ''} / عرض الرسائل المؤرشفة
+                    </button>
+                  ) : (
+                    <div>
+                      <div className="flex justify-between items-center mb-2">
+                        <span style={{ fontSize: '0.8rem', fontWeight: 700, color: '#64748b' }}>🗄️ Archived Messages</span>
+                        <button onClick={() => setHideSections({...hideSections, archivedAnn: false})}
+                          style={{ fontSize: '0.65rem', color: '#94a3b8', cursor: 'pointer' }}>Hide ▲</button>
+                      </div>
+                      <div className="space-y-2 max-h-[300px] overflow-auto">
+                        {archived.map(a => {
+                          var icon = a.priority === 'urgent' ? '🚨' : a.priority === 'warning' ? '⚠️' : 'ℹ️';
+                          var poster = teamUsers.find(u => u.id === a.posted_by);
+                          var thisAcks = announcementAcks.filter(ak => ak.announcement_id === a.id);
+                          var targetCount = a.target_user ? 1 : teamUsers.length;
+                          return (
+                            <div key={a.id} style={{ padding: '10px 14px', borderRadius: 10, background: 'rgba(0,0,0,0.02)', border: '1px solid rgba(0,0,0,0.06)' }}>
+                              <div className="flex justify-between items-start">
+                                <div>
+                                  <div style={{ fontSize: '0.85rem', fontWeight: 700 }}>{icon} {a.title}</div>
+                                  {a.body && <div style={{ fontSize: '0.75rem', color: '#475569', marginTop: 4 }}>{a.body}</div>}
+                                  <div style={{ fontSize: '0.6rem', color: '#94a3b8', marginTop: 4 }}>
+                                    {poster ? poster.name : 'Admin'} • {new Date(a.created_at).toLocaleDateString()}
+                                    <span style={{ marginLeft: 8, color: '#16a34a' }}>✅ {thisAcks.length}/{targetCount} acknowledged</span>
+                                  </div>
+                                </div>
+                                {isAdmin && (
+                                  <button onClick={async () => { try { await dbUpdate('announcements', a.id, { active: true }, user?.id); setAnnouncements(prev => prev.map(x => x.id === a.id ? {...x, active: true} : x)); } catch(err) { alert(err.message); } }}
+                                    style={{ fontSize: '0.6rem', color: '#2563eb', background: '#eff6ff', padding: '3px 8px', borderRadius: 6, border: '1px solid #bfdbfe', cursor: 'pointer' }}>Restore</button>
+                                )}
+                              </div>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    </div>
+                  )}
+                </div>
+              );
             })()}
 
             {/* ===== FINANCIAL DASHBOARD (shown first for users with access) ===== */}
@@ -5298,6 +5350,10 @@ export default function App() {
           <BankTab user={user} supabase={supabase} />
         )}
 
+        {tab === 'egyptbank' && (
+          <EgyptBankTab user={user} userProfile={userProfile} isAdmin={isAdmin} invoices={invoices} />
+        )}
+
         {tab === 'quotes' && (
           <QuotesTab user={user} userProfile={userProfile} isAdmin={isAdmin} />
         )}
@@ -5451,6 +5507,8 @@ export default function App() {
         )}
 
       </div>
+      {/* Phone Widget - floating on all tabs */}
+      <PhoneWidget user={user} userProfile={userProfile} users={teamUsers} customers={customers} />
     </div>
   );
 }

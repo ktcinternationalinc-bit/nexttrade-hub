@@ -1,6 +1,6 @@
 'use client';
 import { useState, useMemo, useEffect } from 'react';
-import { supabase } from '../lib/supabase';
+import { supabase, dbUpdate, dbDelete } from '../lib/supabase';
 
 const STATUS_COLORS = {New:'#3b82f6',Acknowledged:'#8b5cf6','In Progress':'#f59e0b',Waiting:'#6b7280',Review:'#ec4899',Testing:'#14b8a6',Ready:'#10b981',Closed:'#374151',Reopened:'#ef4444'};
 const CAT_ICONS = { ticket:'🎫', crm:'🤝', shipping:'🛳️', customs:'🚢', calendar:'📅', finance:'💰', inventory:'📦', communication:'📬', ai:'🤖', manual:'✏️', other:'⚡', login:'🟢' };
@@ -22,6 +22,9 @@ export default function AdminTab({ user, userProfile, users, isAdmin, customers 
   const [rates, setRates] = useState([]);
   const [quotes, setQuotes] = useState([]);
   const [auditLogs, setAuditLogs] = useState([]);
+  const [announcements, setAnnouncements] = useState([]);
+  const [annAcks, setAnnAcks] = useState([]);
+  const [msgFilter, setMsgFilter] = useState('all');
   const [loaded, setLoaded] = useState(false);
   const [selUser, setSelUser] = useState('all');
   const [section, setSection] = useState('scorecards');
@@ -48,6 +51,8 @@ export default function AdminTab({ user, userProfile, users, isAdmin, customers 
     try { const { data } = await supabase.from('shipping_rates').select('id, vendor_name, origin, destination, rate_amount, currency, created_at').order('created_at', { ascending: false }).limit(500); setRates(data || []); } catch(e) {}
     try { const { data } = await supabase.from('shipping_quotes').select('id, quote_number, customer_name, total_amount, created_at, created_by').order('created_at', { ascending: false }).limit(500); setQuotes(data || []); } catch(e) {}
     try { const { data } = await supabase.from('audit_log').select('*').gte('created_at', dateFrom + 'T00:00:00').order('created_at', { ascending: false }).limit(300); setAuditLogs(data || []); } catch(e) {}
+    try { const { data } = await supabase.from('announcements').select('*').order('created_at', { ascending: false }).limit(100); setAnnouncements(data || []); } catch(e) {}
+    try { const { data } = await supabase.from('announcement_acks').select('*'); setAnnAcks(data || []); } catch(e) {}
     setLoaded(true);
   };
 
@@ -139,7 +144,7 @@ export default function AdminTab({ user, userProfile, users, isAdmin, customers 
 
     {/* Section tabs */}
     <div className="flex gap-1 mb-3 flex-wrap">
-      {[['scorecards','📊 Scorecards'],['pipeline','🏆 Sales Pipeline'],['activity','📋 Activity'],['tickets','🎫 Tickets'],['audit','🔍 Audit']].map(([v,l]) => (
+      {[['scorecards','📊 Scorecards'],['pipeline','🏆 Sales Pipeline'],['messages','📢 Messages'],['activity','📋 Activity'],['tickets','🎫 Tickets'],['audit','🔍 Audit']].map(([v,l]) => (
         <button key={v} onClick={() => setSection(v)}
           className={'px-3 py-1.5 rounded-lg text-xs font-semibold transition ' + (section === v ? 'bg-slate-900 text-white' : 'bg-slate-100 text-slate-500')}>{l}</button>
       ))}
@@ -344,6 +349,89 @@ export default function AdminTab({ user, userProfile, users, isAdmin, customers 
     </div>)}
 
     {/* ===== ACTIVITY FEED ===== */}
+    {section === 'messages' && (<div>
+      <div className="bg-white rounded-xl p-4">
+        <h3 className="text-sm font-bold mb-3">📢 All Announcements / Messages ({announcements.length})</h3>
+        <div className="flex gap-1 mb-3">
+          {['all', 'active', 'archived'].map(f => (
+            <button key={f} onClick={() => setMsgFilter(f)}
+              className={'px-2.5 py-1 rounded-lg text-[10px] font-semibold ' + (msgFilter === f ? 'bg-slate-900 text-white' : 'bg-slate-100 text-slate-500')}>
+              {f === 'all' ? 'All (' + announcements.length + ')' : f === 'active' ? 'Active (' + announcements.filter(a => a.active !== false).length + ')' : 'Archived (' + announcements.filter(a => a.active === false).length + ')'}
+            </button>
+          ))}
+        </div>
+        <div className="space-y-2 max-h-[600px] overflow-auto">
+          {announcements.filter(a => {
+            if (msgFilter === 'active') return a.active !== false;
+            if (msgFilter === 'archived') return a.active === false;
+            return true;
+          }).map(a => {
+            var poster = getUserName(a.posted_by);
+            var thisAcks = annAcks.filter(ak => ak.announcement_id === a.id);
+            var targetUsers = a.target_user ? (users || []).filter(u => u.id === a.target_user) : (users || []);
+            var ackedUsers = targetUsers.filter(u => thisAcks.some(ak => ak.user_id === u.id));
+            var unackedUsers = targetUsers.filter(u => !thisAcks.some(ak => ak.user_id === u.id));
+            var priorityStyle = a.priority === 'urgent' ? { bg: '#fef2f2', border: '#ef4444', color: '#dc2626', icon: '🚨' }
+              : a.priority === 'warning' ? { bg: '#fffbeb', border: '#f59e0b', color: '#b45309', icon: '⚠️' }
+              : { bg: '#eff6ff', border: '#3b82f6', color: '#1d4ed8', icon: 'ℹ️' };
+            return (
+              <div key={a.id} className="rounded-xl p-4" style={{ background: priorityStyle.bg, border: '1px solid ' + priorityStyle.border }}>
+                <div className="flex justify-between items-start">
+                  <div className="flex-1">
+                    <div className="flex items-center gap-2">
+                      <span style={{ fontSize: '0.95rem', fontWeight: 800, color: priorityStyle.color }}>{priorityStyle.icon} {a.title}</span>
+                      {a.pinned && <span className="text-[9px] bg-amber-100 text-amber-700 px-1.5 py-0.5 rounded font-bold">📌 PINNED</span>}
+                      {a.active === false && <span className="text-[9px] bg-slate-200 text-slate-600 px-1.5 py-0.5 rounded font-bold">ARCHIVED</span>}
+                    </div>
+                    {a.body && <div style={{ fontSize: '0.8rem', marginTop: '0.3rem', color: '#475569', whiteSpace: 'pre-wrap' }}>{a.body}</div>}
+                    <div style={{ fontSize: '0.65rem', marginTop: '0.3rem', color: '#94a3b8' }}>
+                      By {poster || 'Admin'} • {new Date(a.created_at).toLocaleString()}
+                      {a.target_user ? ' • 👤 Direct to: ' + getUserName(a.target_user) : ' • 👥 Everyone'}
+                      {a.send_email && ' • 📧'}{a.send_whatsapp && ' • 💬'}
+                    </div>
+                    {/* Acknowledgment status */}
+                    <div style={{ marginTop: '0.5rem', padding: '6px 10px', background: 'rgba(255,255,255,0.7)', borderRadius: 8 }}>
+                      <div className="text-[10px] font-bold text-slate-600 mb-1">
+                        Acknowledgments: {ackedUsers.length}/{targetUsers.length}
+                        {ackedUsers.length === targetUsers.length && targetUsers.length > 0 && <span className="text-green-600 ml-2">✅ ALL ACKNOWLEDGED</span>}
+                      </div>
+                      {ackedUsers.length > 0 && (
+                        <div className="text-[10px] text-green-600 mb-0.5">
+                          ✅ {ackedUsers.map(u => {
+                            var ack = thisAcks.find(ak => ak.user_id === u.id);
+                            return u.name + (ack ? ' (' + new Date(ack.acked_at).toLocaleTimeString([], {hour:'2-digit',minute:'2-digit'}) + ')' : '');
+                          }).join(', ')}
+                        </div>
+                      )}
+                      {unackedUsers.length > 0 && (
+                        <div className="text-[10px] text-red-600 font-bold">
+                          ⏳ Not acknowledged: {unackedUsers.map(u => u.name).join(', ')}
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                  <div className="flex flex-col gap-1 ml-3">
+                    {a.active !== false ? (
+                      <button onClick={async () => { try { await dbUpdate('announcements', a.id, { active: false }, user?.id); loadData(); } catch(err) { alert(err.message); } }}
+                        className="text-[10px] text-red-500 bg-red-50 px-2 py-1 rounded font-semibold border border-red-200">Archive</button>
+                    ) : (
+                      <button onClick={async () => { try { await dbUpdate('announcements', a.id, { active: true }, user?.id); loadData(); } catch(err) { alert(err.message); } }}
+                        className="text-[10px] text-green-600 bg-green-50 px-2 py-1 rounded font-semibold border border-green-200">Restore</button>
+                    )}
+                    <button onClick={async () => { try { await dbUpdate('announcements', a.id, { pinned: !a.pinned }, user?.id); loadData(); } catch(err) { alert(err.message); } }}
+                      className="text-[10px] text-slate-500 bg-slate-50 px-2 py-1 rounded font-semibold">{a.pinned ? 'Unpin' : '📌 Pin'}</button>
+                    <button onClick={async () => { if (!confirm('Delete this message permanently?')) return; try { await dbDelete('announcements', a.id, user?.id); loadData(); } catch(err) { alert(err.message); } }}
+                      className="text-[10px] text-red-400 bg-red-50 px-2 py-1 rounded font-semibold">🗑️ Delete</button>
+                  </div>
+                </div>
+              </div>
+            );
+          })}
+          {announcements.length === 0 && <div className="text-center text-slate-400 text-sm py-6">No messages sent yet</div>}
+        </div>
+      </div>
+    </div>)}
+
     {section === 'activity' && (<div>
       <div className="grid grid-cols-3 gap-3 mb-3">
         <div className="bg-white rounded-lg p-3" style={{borderLeftWidth:3,borderLeftColor:'#3b82f6'}}><div className="text-[10px] text-slate-500">Activities</div><div className="text-lg font-extrabold">{filteredLogs.length}</div></div>

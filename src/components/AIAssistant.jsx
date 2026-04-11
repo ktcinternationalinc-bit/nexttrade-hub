@@ -263,12 +263,14 @@ export default function AIAssistant({ user, userProfile, users, customers }) {
     
     // Accumulated transcript across restarts
     const fullRef = { text: '' };
+    let restartCount = 0;
     
     const createRec = () => {
       const rec = new SR();
       rec.continuous = true;
       rec.interimResults = true;
       rec.lang = 'en-US';
+      rec.maxAlternatives = 1;
       let lastFinal = '';
       rec.onresult = (event) => {
         let finalText = '';
@@ -283,16 +285,38 @@ export default function AIAssistant({ user, userProfile, users, customers }) {
         lastFinal = finalText;
         setInput(correctNames(fullRef.text + finalText + interimText));
       };
-      rec.onerror = (e) => { console.log('Recording error:', e.error); };
+      rec.onerror = (e) => {
+        console.log('Recording error:', e.error);
+        // Auto-restart on network errors
+        if (e.error === 'network' && recordingRef.current && restartCount < 50) {
+          restartCount++;
+          setTimeout(() => {
+            if (!recordingRef.current) return;
+            try { const nr = createRec(); recordingRecRef.current = nr; nr.start(); } catch(ex) {}
+          }, 500);
+        }
+      };
       rec.onend = () => {
         if (!recordingRef.current) return;
         // Save finalized text before restarting
-        if (lastFinal) fullRef.text += lastFinal;
-        try {
-          const newRec = createRec();
-          recordingRecRef.current = newRec;
-          newRec.start();
-        } catch(e) {}
+        if (lastFinal) { fullRef.text += lastFinal; lastFinal = ''; }
+        restartCount++;
+        if (restartCount > 100) { stopRecording(); return; } // safety limit
+        // Restart immediately to keep listening
+        setTimeout(() => {
+          if (!recordingRef.current) return;
+          try {
+            const newRec = createRec();
+            recordingRecRef.current = newRec;
+            newRec.start();
+          } catch(e) {
+            // If restart fails, try again after a short delay
+            setTimeout(() => {
+              if (!recordingRef.current) return;
+              try { const nr = createRec(); recordingRecRef.current = nr; nr.start(); } catch(ex) {}
+            }, 1000);
+          }
+        }, 100);
       };
       return rec;
     };
