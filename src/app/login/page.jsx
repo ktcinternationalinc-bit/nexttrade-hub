@@ -13,8 +13,17 @@ export default function LoginPage() {
     setLoading(true);
     setError('');
     try {
-      const { error } = await supabase.auth.signInWithPassword({ email, password });
+      const { data, error } = await supabase.auth.signInWithPassword({ email, password });
       if (error) throw error;
+      // Record login session
+      if (data?.user) {
+        await supabase.from('user_sessions').insert({
+          user_id: data.user.id,
+          login_at: new Date().toISOString(),
+          last_seen: new Date().toISOString(),
+          date: new Date().toISOString().split('T')[0],
+        });
+      }
       window.location.href = '/';
     } catch (err) {
       setError(err.message);

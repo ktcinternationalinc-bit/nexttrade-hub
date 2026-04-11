@@ -143,6 +143,11 @@ export async function POST(request) {
     if (action) {
       try {
         if (action.type === 'create_ticket') {
+          // Duplicate check: look for similar ticket created in last 10 minutes
+          var recentDup = await supabase.from('tickets').select('ticket_number, title').ilike('title', '%' + (action.title || '').split(' ').slice(0, 3).join('%') + '%').gte('created_at', new Date(Date.now() - 600000).toISOString()).limit(1).maybeSingle();
+          if (recentDup && recentDup.data) {
+            return Response.json({ answer: '⚠️ A similar ticket already exists: ' + recentDup.data.ticket_number + ' — "' + recentDup.data.title + '". Use update_ticket to modify it instead.', action_result: 'skipped' });
+          }
           var tktCount = await supabase.from('tickets').select('*', { count: 'exact', head: true });
           var tktNum = 'TKT-' + String(((tktCount.count || 0) + 1)).padStart(4, '0');
           var result = await supabase.from('tickets').insert({ ticket_number: tktNum, title: action.title, description: action.description || '', priority: action.priority || 'medium', status: 'New', assigned_to: action.assigned_to || null, due_date: action.due_date || null, created_by: userId || null }).select().single();
@@ -168,7 +173,7 @@ export async function POST(request) {
           if (action.priority && action.priority !== ticket.priority) { updates.priority = action.priority; changes.push('Priority → ' + action.priority); }
           if (action.assigned_to && action.assigned_to !== ticket.assigned_to) { updates.assigned_to = action.assigned_to; var aName = ''; var aUser = users.find(function(u) { return u.id === action.assigned_to; }); if (aUser) aName = aUser.name; changes.push('Assigned → ' + (aName || action.assigned_to)); }
           if (action.due_date !== undefined) { updates.due_date = action.due_date || null; changes.push('Due date → ' + (action.due_date || 'removed')); }
-          if (action.description) { updates.description = action.description; changes.push('Description updated'); }
+          if (action.description) { updates.description = (ticket.description ? ticket.description + '\n\n' : '') + action.description; changes.push('Description updated'); }
           if (action.status === 'Closed') { updates.closed_at = new Date().toISOString(); updates.closed_by = userId; }
           updates.updated_at = new Date().toISOString();
           if (Object.keys(updates).length === 0) return Response.json({ answer: 'No changes to make on ' + (ticket.ticket_number || ticket.title), action_result: 'success' });
@@ -187,7 +192,7 @@ export async function POST(request) {
           return Response.json({ answer: 'Event created: ' + action.title + '\nDate: ' + action.event_date, action_result: 'success' });
         }
         if (action.type === 'create_reminder') {
-          var remResult = await supabase.from('follow_ups').insert({ task: action.task, due_date: action.due_date, due_time: action.due_time || '09:00', assigned_to: userId || null, created_by: userId || null });
+          var remResult = await supabase.from('team_reminders').insert({ title: action.task, message: action.task, reminder_date: action.due_date, priority: action.priority || 'normal', target_users: 'all', created_by: userId || null });
           if (remResult.error) throw remResult.error;
           return Response.json({ answer: 'Reminder set: ' + action.task + '\nDue: ' + action.due_date, action_result: 'success' });
         }
@@ -330,6 +335,11 @@ export async function POST(request) {
     context += '  Find ticket by ticket_number (preferred) or title. Only include fields being changed.\n';
     context += '  Valid statuses: New, Acknowledged, In Progress, Blocked, On Hold, Review, Closed, Reopened\n';
     context += '  Valid priorities: high, medium, low\n';
+    context += '\nCRITICAL TICKET RULES:\n';
+    context += '- NEVER create a new ticket if one already exists with the same or similar topic. Use update_ticket instead.\n';
+    context += '- If you created a ticket earlier in this conversation, ALWAYS use update_ticket with its ticket_number for follow-up requests.\n';
+    context += '- When the user says "update it", "change it", "add to it", "also", "and", or refers to a ticket by context (not by number), check the conversation history for the most recently discussed ticket and use update_ticket.\n';
+    context += '- Only use create_ticket when the user explicitly asks to create a NEW/DIFFERENT ticket about a clearly different topic.\n';
     context += '- create_event: {type:"create_event", title, event_date, event_time, event_type}\n';
     context += '- create_reminder: {type:"create_reminder", task, due_date, due_time}\n';
     context += '- request_quote: {type:"request_quote", vendor_company, vendor_contact, vendor_email, vendor_whatsapp, vendor_type, send_via, origin, destination, container, commodity, customer_name}\n';
@@ -665,7 +675,7 @@ export async function POST(request) {
               await supabase.from('calendar_events').insert({ title: actionData.title, event_date: actionData.event_date, event_time: actionData.event_time || null, event_type: actionData.event_type || 'task', assigned_to: userId });
               execResult = '✅ Event created: ' + actionData.title + ' on ' + actionData.event_date;
             } else if (actionData.type === 'create_reminder') {
-              await supabase.from('calendar_events').insert({ title: actionData.task || actionData.title, event_date: actionData.due_date, event_time: actionData.due_time || '09:00', event_type: 'reminder', assigned_to: userId });
+              await supabase.from('team_reminders').insert({ title: actionData.task || actionData.title, message: actionData.task || actionData.title, reminder_date: actionData.due_date, priority: actionData.priority || 'normal', target_users: 'all', created_by: userId });
               execResult = '✅ Reminder set: ' + (actionData.task || actionData.title) + ' on ' + actionData.due_date;
             }
             var finalAnswer = (cleanText.trim() ? cleanText.trim() + '\n\n' : '') + (execResult || 'Done.');
