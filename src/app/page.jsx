@@ -1,5 +1,5 @@
 'use client';
-import { useState, useEffect, useMemo, useCallback, useRef } from 'react';
+import { useState, useEffect, useMemo, useCallback } from 'react';
 import { supabase, dbInsert, dbUpdate, dbDelete } from '../lib/supabase';
 import { fmt, fE, COLORS, EXPENSE_CATS, getReconStatus, STATUS_STYLES, today, inRange, monthOf, getWarehouseCat } from '../lib/utils';
 import * as XLSX from 'xlsx';
@@ -13,11 +13,6 @@ import CustomsTab from '../components/CustomsTab';
 import PersonalDashboard from '../components/PersonalDashboard';
 import AIAssistant from '../components/AIAssistant';
 import ShippingRatesTab from '../components/ShippingRatesTab';
-import BankTab from '../components/BankTab';
-import QuotesTab from '../components/QuotesTab';
-import EgyptBankTab from '../components/EgyptBankTab';
-import PhoneWidget from '../components/PhoneWidget';
-import ReportsTab from '../components/ReportsTab';
 
 // Modal must be outside main component to prevent re-mounting on every render
 const Modal = ({ onClose, title, children }) => (
@@ -44,24 +39,20 @@ const TABS = [
   { id: 'dashboard', label: 'Dashboard / لوحة', icon: '📊' },
   { id: 'sales', label: 'Sales / المبيعات', icon: '💰' },
   { id: 'customers', label: 'Customers / العملاء', icon: '👥' },
-  { id: 'quotes', label: 'Quotes / عروض', icon: '📋' },
   { id: 'treasury', label: 'Treasury / الخزنة', icon: '🏦' },
-  { id: 'egyptbank', label: 'Egypt Bank / بنوك مصر', icon: '🇪🇬' },
-  { id: 'bank', label: 'Bank / البنك', icon: '🏛️' },
   { id: 'checks', label: 'Checks / شيكات', icon: '📝' },
   { id: 'debts', label: 'Debts / المديونية', icon: '⚠️' },
-  { id: 'reports', label: 'Reports / تقارير', icon: '📊' },
   { id: 'warehouse', label: 'Warehouse / المخزن', icon: '🏭' },
   { id: 'inventory', label: 'Inventory / المخزون', icon: '📦' },
-  { id: 'customs', label: 'Customs / جمارك', icon: '🚢' },
-  { id: 'shipping', label: 'Shipping Rates / شحن', icon: '🛳️' },
   { id: 'crm', label: 'CRM', icon: '🤝' },
   { id: 'tickets', label: 'Tickets / تذاكر', icon: '🎫' },
-  { id: 'comms', label: 'Communications / رسائل', icon: '📬' },
   { id: 'calendar', label: 'Calendar / تقويم', icon: '📅' },
+  { id: 'customs', label: 'Customs / جمارك', icon: '🚢' },
+  { id: 'shipping', label: 'Shipping Rates / شحن', icon: '🛳️' },
   { id: 'dailylog', label: 'Daily Log / يومي', icon: '📓' },
   { id: 'admin', label: 'Admin / إدارة', icon: '👑' },
   { id: 'ai', label: 'AI Assistant / ذكي', icon: '🤖' },
+  { id: 'comms', label: 'Communications / رسائل', icon: '📬' },
   { id: 'settings', label: 'Settings / إعدادات', icon: '⚙️' },
   { id: 'import', label: 'Import / استيراد', icon: '📥' },
 ];
@@ -230,32 +221,6 @@ export default function App() {
   const [showLinkSearch, setShowLinkSearch] = useState(false);
   const [formData, setFormData] = useState({});
   const [hideSections, setHideSections] = useState({});
-  const [announcements, setAnnouncements] = useState([]);
-  const [announcementAcks, setAnnouncementAcks] = useState([]);
-  const [showAddAnnouncement, setShowAddAnnouncement] = useState(false);
-  const annAlarmRef = useRef(null);
-
-  // Reusable alarm sound function
-  const playAlarmSound = async (isUrgent) => {
-    try {
-      const ctx = new (window.AudioContext || window.webkitAudioContext)();
-      if (ctx.state === 'suspended') await ctx.resume();
-      const playTone = (freq, start, dur) => {
-        const osc = ctx.createOscillator();
-        const gain = ctx.createGain();
-        osc.connect(gain); gain.connect(ctx.destination);
-        osc.frequency.value = freq; osc.type = 'square';
-        gain.gain.setValueAtTime(0.4, ctx.currentTime + start);
-        gain.gain.exponentialRampToValueAtTime(0.01, ctx.currentTime + start + dur);
-        osc.start(ctx.currentTime + start); osc.stop(ctx.currentTime + start + dur);
-      };
-      if (isUrgent) {
-        for (let i = 0; i < 12; i++) { playTone(900 + (i % 2) * 500, i * 0.4, 0.35); }
-      } else {
-        for (let i = 0; i < 6; i++) { playTone(700, i * 0.7, 0.25); playTone(900, i * 0.7 + 0.25, 0.25); }
-      }
-    } catch(e) { console.log('Alarm error:', e); }
-  };
   const [reminders, setReminders] = useState([]);
   const [showReminderForm, setShowReminderForm] = useState(false);
   const [showReminderArchive, setShowReminderArchive] = useState(false);
@@ -302,37 +267,11 @@ export default function App() {
   useEffect(() => {
     const pollReminders = setInterval(async () => {
       try {
-        const { data: rems } = await supabase.from('team_reminders').select('*').or('completed.is.null,completed.eq.false').order('created_at', { ascending: false }).limit(50);
+        const { data: rems } = await supabase.from('team_reminders').select('*').order('created_at', { ascending: false }).limit(50);
         if (rems) setReminders(rems);
       } catch(e) {}
     }, 60000);
     return () => clearInterval(pollReminders);
-  }, []);
-
-  // Announcement alarm for unacknowledged messages — plays on new AND replays every poll
-  useEffect(() => {
-    if (!announcements.length || !userProfile) return;
-    const myId = userProfile?.id;
-    const active = announcements.filter(a => a.active !== false && (!a.target_user || a.target_user === myId));
-    const myAcks = new Set(announcementAcks.filter(a => a.user_id === myId).map(a => a.announcement_id));
-    const unacked = active.filter(a => !myAcks.has(a.id));
-    if (unacked.length > 0) {
-      const hasUrgent = unacked.some(a => a.priority === 'urgent');
-      playAlarmSound(hasUrgent);
-    }
-  }, [announcements, announcementAcks, userProfile]);
-
-  // Poll announcements every 60 seconds
-  useEffect(() => {
-    const pollAnn = setInterval(async () => {
-      try {
-        const { data: ann } = await supabase.from('announcements').select('*').order('created_at', { ascending: false }).limit(20);
-        if (ann) setAnnouncements(ann);
-        const { data: acks } = await supabase.from('announcement_acks').select('*');
-        if (acks) setAnnouncementAcks(acks);
-      } catch(e) {}
-    }, 60000);
-    return () => clearInterval(pollAnn);
   }, []);
 
   // Import
@@ -361,35 +300,7 @@ export default function App() {
       else setUser(session.user);
     });
 
-    // Heartbeat: update last_seen every 5 min
-    const heartbeat = setInterval(async () => {
-      const { data: { session: s } } = await supabase.auth.getSession();
-      if (s?.user) {
-        const today = new Date().toISOString().split('T')[0];
-        await supabase.from('user_sessions')
-          .update({ last_seen: new Date().toISOString() })
-          .eq('user_id', s.user.id)
-          .eq('date', today)
-          .order('login_at', { ascending: false })
-          .limit(1);
-      }
-    }, 5 * 60 * 1000);
-
-    // Record last_seen on page close
-    const handleUnload = () => {
-      const uid = user?.id;
-      if (uid) {
-        const today = new Date().toISOString().split('T')[0];
-        navigator.sendBeacon('/api/plaid/link', ''); // no-op, just to keep alive
-        supabase.from('user_sessions')
-          .update({ last_seen: new Date().toISOString(), logout_at: new Date().toISOString() })
-          .eq('user_id', uid).eq('date', today)
-          .order('login_at', { ascending: false }).limit(1).then(() => {});
-      }
-    };
-    window.addEventListener('beforeunload', handleUnload);
-
-    return () => { subscription?.unsubscribe(); clearInterval(heartbeat); window.removeEventListener('beforeunload', handleUnload); };
+    return () => subscription?.unsubscribe();
   }, []);
 
   // ==========================================
@@ -481,16 +392,9 @@ export default function App() {
       } catch(e) { setInvInbounds([]); }
       // Load reminders
       try {
-        const { data: rems } = await supabase.from('team_reminders').select('*').or('completed.is.null,completed.eq.false').order('created_at', { ascending: false }).limit(200);
+        const { data: rems } = await supabase.from('team_reminders').select('*').order('created_at', { ascending: false }).limit(200);
         setReminders(rems || []);
       } catch(e) { setReminders([]); }
-      // Load announcements + acks
-      try {
-        const { data: ann } = await supabase.from('announcements').select('*').order('created_at', { ascending: false }).limit(20);
-        setAnnouncements(ann || []);
-        const { data: acks } = await supabase.from('announcement_acks').select('*');
-        setAnnouncementAcks(acks || []);
-      } catch(e) { setAnnouncements([]); }
     } catch (err) {
       console.error('Load error:', err);
     }
@@ -506,7 +410,7 @@ export default function App() {
     dashboard: 'Dashboard', sales: 'Sales', customers: 'Customers', treasury: 'Treasury',
     checks: 'Checks', debts: 'Debts', warehouse: 'Warehouse', inventory: 'Inventory',
     crm: 'CRM', tickets: 'Tickets', calendar: 'Calendar', customs: 'Customs', shipping: 'Shipping Rates',
-    dailylog: 'Daily Log', admin: 'Admin', ai: 'AI Assistant', settings: 'Settings', import: 'Import', bank: 'Bank', quotes: 'Quotes', egyptbank: 'Egypt Bank', reports: 'Reports',
+    dailylog: 'Daily Log', admin: 'Admin', ai: 'AI Assistant', settings: 'Settings', import: 'Import',
   };
 
   const visibleTabs = useMemo(() => {
@@ -519,7 +423,7 @@ export default function App() {
       // Admin with no explicit permission: see everything
       if (userProfile.role === 'admin') return true;
       // Team/viewer with no explicit permission: hide financial + admin tabs
-      if (['treasury', 'checks', 'debts', 'sales', 'warehouse', 'inventory', 'admin', 'settings', 'import', 'bank', 'egyptbank', 'reports'].includes(t.id)) return false;
+      if (['treasury', 'checks', 'debts', 'sales', 'warehouse', 'inventory', 'admin', 'settings', 'import'].includes(t.id)) return false;
       return true;
     });
   }, [userProfile, modulePerms]);
@@ -663,13 +567,6 @@ export default function App() {
   };
 
   const handleSignOut = async () => {
-    if (user?.id) {
-      const today = new Date().toISOString().split('T')[0];
-      await supabase.from('user_sessions')
-        .update({ logout_at: new Date().toISOString(), last_seen: new Date().toISOString() })
-        .eq('user_id', user.id).eq('date', today)
-        .order('login_at', { ascending: false }).limit(1);
-    }
     await supabase.auth.signOut();
     window.location.href = '/login';
   };
@@ -2712,13 +2609,13 @@ export default function App() {
           });
           if (myActive.length === 0) return null;
           return (
-            <div className="mb-3 rounded-xl p-3 cursor-pointer"
+            <div className="mb-3 rounded-xl p-3 border-2 border-amber-400 cursor-pointer"
               onClick={() => { setTab('dashboard'); }}
-              style={{ background: '#1e40af', border: '2px solid #60a5fa', boxShadow: '0 4px 15px rgba(30,64,175,0.3)' }}>
-              <div style={{ fontSize: '13px', fontWeight: 800, color: '#ffffff' }}>
-                📢 {myActive.length} active reminder{myActive.length > 1 ? 's' : ''} — {(myActive[0].message || myActive[0].title || '').substring(0, 80)}{(myActive[0].message || myActive[0].title || '').length > 80 ? '...' : ''}
-                {myActive.length > 1 && <span style={{ color: 'rgba(255,255,255,0.6)', fontWeight: 400 }}> +{myActive.length - 1} more</span>}
-                <span style={{ fontSize: '11px', color: 'rgba(255,255,255,0.5)', fontWeight: 400, marginLeft: 8 }}>Tap to view →</span>
+              style={{ background: 'linear-gradient(135deg, #fef3c7, #fde68a)' }}>
+              <div className="text-sm font-extrabold text-amber-900">
+                📢 {myActive.length} active reminder{myActive.length > 1 ? 's' : ''} — {myActive[0].message.substring(0, 80)}{myActive[0].message.length > 80 ? '...' : ''}
+                {myActive.length > 1 && <span className="text-amber-600 font-normal"> +{myActive.length - 1} more</span>}
+                <span className="text-xs text-amber-500 font-normal ml-2">Tap to view →</span>
               </div>
             </div>
           );
@@ -2745,39 +2642,26 @@ export default function App() {
                   {/* Active reminders — prominent display */}
                   {activeReminders.length > 0 && (
                     <div className="space-y-2 mb-3">
-                      {activeReminders.map(r => {
-                        const isUrgent = r.priority === 'urgent';
-                        const bgStyle = isUrgent
-                          ? { background: '#dc2626', border: '3px solid #fca5a5', boxShadow: '0 4px 20px rgba(220,38,38,0.4)' }
-                          : { background: '#1e40af', border: '3px solid #93c5fd', boxShadow: '0 4px 20px rgba(30,64,175,0.3)' };
-                        return (
-                        <div key={r.id} className="rounded-xl p-4" style={bgStyle}>
+                      {activeReminders.map(r => (
+                        <div key={r.id} className="rounded-xl p-4 border-2 border-amber-400"
+                          style={{ background: 'linear-gradient(135deg, #fef3c7, #fde68a)', boxShadow: '0 4px 15px rgba(245,158,11,0.2)' }}>
                           <div className="flex justify-between items-start">
                             <div className="flex-1">
-                              <div style={{ fontSize: '15px', lineHeight: '1.4', fontWeight: 900, color: '#ffffff' }}>
-                                📢 {r.message || r.title}
+                              <div className="text-base font-extrabold text-amber-900" style={{ fontSize: '16pt', lineHeight: '1.4' }}>
+                                📢 {r.message}
                               </div>
-                              <div className="flex gap-3 mt-2" style={{ fontSize: '10px', color: 'rgba(255,255,255,0.7)' }}>
+                              <div className="flex gap-3 mt-2 text-[10px] text-amber-700">
                                 <span>From: {getUserName(r.created_by) || 'Admin'}</span>
                                 <span>{r.reminder_date || r.created_at?.substring(0, 10)}</span>
-                                {r.target_users === 'all' ? <span style={{fontWeight:700}}>👥 All Team</span> : <span>👤 Targeted</span>}
+                                {r.target_users === 'all' ? <span className="font-bold">👥 All Team</span> : <span>👤 Targeted</span>}
                               </div>
                             </div>
-                            <div className="flex flex-col gap-1.5 ml-2">
-                              {isUrgent && (
-                                <span className="px-2 py-1 rounded-lg text-[10px] font-bold animate-pulse" style={{background:'#fff',color:'#dc2626'}}>🚨 URGENT</span>
-                              )}
-                              <button onClick={async (e) => { e.stopPropagation(); try { await dbUpdate('team_reminders', r.id, { completed: true }, userProfile?.id); setReminders(prev => prev.filter(x => x.id !== r.id)); } catch(err) { alert(err.message); } }}
-                                style={{ background: '#ffffff', color: '#1e40af', border: 'none', padding: '8px 16px', borderRadius: 10, fontSize: '12px', fontWeight: 800, cursor: 'pointer', boxShadow: '0 2px 8px rgba(0,0,0,0.2)' }}>✓ Dismiss</button>
-                              {isAdmin && (
-                                <button onClick={async (e) => { e.stopPropagation(); if (!confirm('Delete this reminder?')) return; try { await dbDelete('team_reminders', r.id, userProfile?.id); setReminders(prev => prev.filter(x => x.id !== r.id)); } catch(err) { alert(err.message); } }}
-                                  style={{ background: 'rgba(255,255,255,0.15)', color: '#fff', border: '1px solid rgba(255,255,255,0.3)', padding: '4px 10px', borderRadius: 6, fontSize: '10px', cursor: 'pointer' }}>🗑️ Delete</button>
-                              )}
-                            </div>
+                            {r.priority === 'urgent' && (
+                              <span className="px-2 py-1 bg-red-500 text-white rounded-lg text-[10px] font-bold animate-pulse">URGENT</span>
+                            )}
                           </div>
                         </div>
-                        );
-                      })}
+                      ))}
                     </div>
                   )}
                   
@@ -2831,7 +2715,6 @@ export default function App() {
                         if (!formData.reminderMsg?.trim()) { alert('Enter a message'); return; }
                         try {
                           await dbInsert('team_reminders', {
-                            title: formData.reminderMsg.trim(),
                             message: formData.reminderMsg.trim(),
                             reminder_date: formData.reminderDate || todayStr,
                             priority: formData.reminderPriority || 'normal',
@@ -2905,219 +2788,6 @@ export default function App() {
               <h2 className="text-xl font-extrabold">Dashboard / لوحة التحكم</h2>
               {isAdmin && <ModeBar />}
             </div>
-
-            {/* ===== ANNOUNCEMENTS / URGENT MESSAGES ===== */}
-            {isAdmin && (
-              <button onClick={() => setShowAddAnnouncement(true)}
-                className="px-4 py-2 bg-red-500 text-white rounded-lg text-sm font-bold mb-3 shadow-lg">📢 Send Message to Team / إرسال رسالة للفريق</button>
-            )}
-            {showAddAnnouncement && (
-              <div className="bg-red-50 rounded-xl p-5 mb-4 border-2 border-red-400 shadow-lg">
-                <h4 className="text-lg font-extrabold text-red-800 mb-3">📢 New Message / رسالة جديدة</h4>
-                <input id="ann-title" placeholder="Subject / الموضوع *" className="w-full px-4 py-3 rounded-lg border-2 border-red-200 text-base font-bold mb-3" />
-                <textarea id="ann-body" placeholder="Message details / تفاصيل الرسالة" rows={4} className="w-full px-4 py-3 rounded-lg border-2 border-red-200 text-sm mb-3" />
-                <div className="grid grid-cols-2 gap-3 mb-3">
-                  <div>
-                    <label className="text-xs font-bold text-red-800 block mb-1">Priority / الأهمية</label>
-                    <select id="ann-priority" className="w-full px-3 py-2 rounded-lg border text-sm">
-                      <option value="urgent">🚨 URGENT / عاجل</option>
-                      <option value="warning">⚠️ Important / مهم</option>
-                      <option value="info">ℹ️ Info / معلومة</option>
-                    </select>
-                  </div>
-                  <div>
-                    <label className="text-xs font-bold text-red-800 block mb-1">Send To / إرسال إلى</label>
-                    <select id="ann-target" className="w-full px-3 py-2 rounded-lg border text-sm">
-                      <option value="all">👥 Everyone / الجميع</option>
-                      {teamUsers.map(u => <option key={u.id} value={u.id}>👤 {u.name}</option>)}
-                    </select>
-                  </div>
-                </div>
-                <div className="flex gap-3 items-center mb-3">
-                  <label className="flex items-center gap-2 text-xs font-bold"><input type="checkbox" id="ann-pin" defaultChecked className="w-4 h-4" /> 📌 Pin to top / تثبيت</label>
-                  <label className="flex items-center gap-2 text-xs font-bold"><input type="checkbox" id="ann-email" defaultChecked className="w-4 h-4" /> 📧 Email notify / إشعار بريد</label>
-                  <label className="flex items-center gap-2 text-xs font-bold"><input type="checkbox" id="ann-whatsapp" className="w-4 h-4" /> 💬 WhatsApp</label>
-                </div>
-                <div className="flex gap-2">
-                  <button onClick={async () => {
-                    var title = document.getElementById('ann-title').value;
-                    var body = document.getElementById('ann-body').value;
-                    var priority = document.getElementById('ann-priority').value;
-                    var pinned = document.getElementById('ann-pin').checked;
-                    var sendEmail = document.getElementById('ann-email').checked;
-                    var sendWhatsapp = document.getElementById('ann-whatsapp').checked;
-                    var target = document.getElementById('ann-target').value;
-                    if (!title) { alert('Subject is required / الموضوع مطلوب'); return; }
-                    try {
-                      await dbInsert('announcements', {
-                        title, body, priority, pinned,
-                        target_user: target === 'all' ? null : target,
-                        posted_by: userProfile?.id || user?.id,
-                        active: true, send_email: sendEmail, send_whatsapp: sendWhatsapp
-                      }, user?.id);
-                      if (sendEmail) {
-                        try {
-                          var recipients = target === 'all' ? teamUsers : teamUsers.filter(u => u.id === target);
-                          for (var r of recipients) {
-                            if (r.email) {
-                              await fetch('/api/notify', {
-                                method: 'POST', headers: {'Content-Type':'application/json'},
-                                body: JSON.stringify({ to: r.email, subject: (priority === 'urgent' ? '🚨 URGENT: ' : priority === 'warning' ? '⚠️ ':'') + title, html: '<div style="font-family:sans-serif;padding:20px;'+(priority==='urgent'?'background:#fef2f2;border:3px solid #ef4444;':priority==='warning'?'background:#fffbeb;border:2px solid #f59e0b;':'background:#eff6ff;border:1px solid #3b82f6;')+'border-radius:12px;"><h2 style="margin:0 0 10px;font-size:18px;">'+(priority==='urgent'?'🚨':'⚠️')+' '+title+'</h2>'+(body?'<p style="font-size:14px;color:#333;">'+body.replace(/\n/g,'<br/>')+'</p>':'')+'<hr style="margin:15px 0;border-color:#eee;"/><p style="font-size:11px;color:#999;">From KTC Hub — '+(userProfile?.name||'Admin')+'</p></div>' })
-                              });
-                            }
-                          }
-                        } catch(emailErr) { console.error('Email send error:', emailErr); }
-                      }
-                      setShowAddAnnouncement(false);
-                      playAlarmSound(priority === 'urgent');
-                      await loadAllData();
-                    } catch(err) { alert('Error: ' + err.message); }
-                  }} className="px-6 py-3 bg-red-600 text-white rounded-lg text-sm font-extrabold shadow-lg">📢 SEND NOW / أرسل الآن</button>
-                  <button onClick={() => setShowAddAnnouncement(false)} className="px-4 py-3 border-2 border-slate-300 rounded-lg text-sm font-bold">Cancel</button>
-                </div>
-              </div>
-            )}
-            {/* Active Announcements */}
-            {(() => {
-              var myId = userProfile?.id;
-              var active = announcements.filter(a => a.active !== false && (!a.target_user || a.target_user === myId));
-              // Sort: pinned first, then by date descending
-              var sorted = [...active].sort((a, b) => {
-                if (a.pinned && !b.pinned) return -1;
-                if (!a.pinned && b.pinned) return 1;
-                return (b.created_at || '').localeCompare(a.created_at || '');
-              });
-              if (sorted.length === 0) return null;
-              return (<div className="mb-4">
-                {sorted.map(a => {
-                  var styles = a.priority === 'urgent'
-                    ? { border: '3px solid #ef4444', shadow: '0 4px 20px rgba(239,68,68,0.25)' }
-                    : a.priority === 'warning'
-                    ? { border: '2px solid #f59e0b', shadow: '0 4px 15px rgba(245,158,11,0.2)' }
-                    : { border: '2px solid #3b82f6', shadow: '0 4px 15px rgba(59,130,246,0.15)' };
-                  var icon = a.priority === 'urgent' ? '🚨' : a.priority === 'warning' ? '⚠️' : 'ℹ️';
-                  var poster = teamUsers.find(u => u.id === a.posted_by);
-                  var isTargeted = a.target_user === myId;
-                  var thisAcks = announcementAcks.filter(ak => ak.announcement_id === a.id);
-                  var myAck = thisAcks.find(ak => ak.user_id === myId);
-                  var targetUsers = a.target_user ? teamUsers.filter(u => u.id === a.target_user) : teamUsers;
-                  var ackedUsers = targetUsers.filter(u => thisAcks.some(ak => ak.user_id === u.id));
-                  var unackedUsers = targetUsers.filter(u => !thisAcks.some(ak => ak.user_id === u.id));
-                  return (
-                    <div key={a.id} className="rounded-2xl p-5 mb-3" style={{ background: a.priority === 'urgent' ? 'linear-gradient(135deg,#fef2f2,#fee2e2)' : a.priority === 'warning' ? 'linear-gradient(135deg,#fffbeb,#fef3c7)' : 'linear-gradient(135deg,#eff6ff,#dbeafe)', border: styles.border, boxShadow: styles.shadow }}>
-                      <div className="flex justify-between items-start">
-                        <div className="flex-1">
-                          <div style={{ fontSize: '1.1rem', fontWeight: 900, lineHeight: 1.3, color: a.priority === 'urgent' ? '#dc2626' : a.priority === 'warning' ? '#b45309' : '#1d4ed8' }}>
-                            {icon} {a.pinned && '📌 '}{isTargeted && '👤 '}{a.title}
-                          </div>
-                          {a.body && <div style={{ fontSize: '0.95rem', marginTop: '0.5rem', lineHeight: 1.6, color: '#1e293b', whiteSpace: 'pre-wrap' }}>{a.body}</div>}
-                          <div style={{ fontSize: '0.7rem', marginTop: '0.5rem', color: '#94a3b8' }}>
-                            {poster ? poster.name : 'Admin'} • {new Date(a.created_at).toLocaleDateString()} {new Date(a.created_at).toLocaleTimeString([], {hour:'2-digit',minute:'2-digit'})}
-                            {isTargeted && <span style={{ color: '#7c3aed', fontWeight: 700, marginLeft: 8 }}>📩 Sent to you directly</span>}
-                          </div>
-                          {/* Acknowledge button */}
-                          <div style={{ marginTop: '0.75rem' }}>
-                            {myAck ? (
-                              <span style={{ fontSize: '0.75rem', color: '#16a34a', fontWeight: 700, background: '#f0fdf4', padding: '4px 12px', borderRadius: 8, border: '1px solid #bbf7d0' }}>✅ Acknowledged {new Date(myAck.acked_at).toLocaleTimeString([], {hour:'2-digit',minute:'2-digit'})}</span>
-                            ) : (
-                              <button onClick={async () => {
-                                await dbInsert('announcement_acks', { announcement_id: a.id, user_id: myId, acked_at: new Date().toISOString() }, myId);
-                                setAnnouncementAcks(prev => [...prev, { announcement_id: a.id, user_id: myId, acked_at: new Date().toISOString() }]);
-                              }} style={{ fontSize: '0.8rem', fontWeight: 800, color: '#fff', background: a.priority === 'urgent' ? '#dc2626' : '#2563eb', padding: '6px 16px', borderRadius: 8, cursor: 'pointer', border: 'none', boxShadow: '0 2px 8px rgba(0,0,0,0.15)' }}>
-                                👋 Acknowledge / تأكيد الاستلام
-                              </button>
-                            )}
-                          </div>
-                          {/* Admin: who acknowledged / who didn't */}
-                          {isAdmin && (
-                            <div style={{ marginTop: '0.5rem', fontSize: '0.65rem' }}>
-                              {ackedUsers.length > 0 && (
-                                <div style={{ color: '#16a34a' }}>✅ {ackedUsers.map(u => {
-                                  var ack = thisAcks.find(ak => ak.user_id === u.id);
-                                  return u.name + (ack ? ' (' + new Date(ack.acked_at).toLocaleString([], {month:'short',day:'numeric',hour:'2-digit',minute:'2-digit'}) + ')' : '');
-                                }).join(', ')}</div>
-                              )}
-                              {unackedUsers.length > 0 && (
-                                <div style={{ color: '#dc2626', fontWeight: 700 }}>⏳ Not acknowledged: {unackedUsers.map(u => u.name).join(', ')}</div>
-                              )}
-                              <div style={{ color: '#94a3b8' }}>{ackedUsers.length}/{targetUsers.length} acknowledged</div>
-                            </div>
-                          )}
-                        </div>
-                        {isAdmin && (
-                          <div className="flex flex-col gap-1 ml-3">
-                            <button onClick={async () => { try { await dbUpdate('announcements', a.id, { active: false }, user?.id); setAnnouncements(prev => prev.map(x => x.id === a.id ? {...x, active: false} : x)); } catch(err) { alert('Archive error: ' + err.message); } }}
-                              style={{ fontSize: '0.65rem', color: '#ef4444', cursor: 'pointer', background: 'rgba(239,68,68,0.1)', padding: '4px 8px', borderRadius: 6, border: '1px solid rgba(239,68,68,0.3)' }}>Archive ✕</button>
-                            <button onClick={async () => { try { await dbUpdate('announcements', a.id, { pinned: !a.pinned }, user?.id); setAnnouncements(prev => prev.map(x => x.id === a.id ? {...x, pinned: !x.pinned} : x)); } catch(err) { alert('Pin error: ' + err.message); } }}
-                              style={{ fontSize: '0.65rem', color: '#6b7280', cursor: 'pointer', background: 'rgba(0,0,0,0.05)', padding: '4px 8px', borderRadius: 6 }}>{a.pinned ? 'Unpin' : '📌 Pin'}</button>
-                          </div>
-                        )}
-                      </div>
-                    </div>
-                  );
-                })}
-              </div>);
-            })()}
-            {/* Archived Messages */}
-            {(() => {
-              var archived = announcements.filter(a => a.active === false);
-              if (archived.length === 0) return null;
-              return (
-                <div className="mb-4">
-                  {!hideSections.archivedAnn ? (
-                    <button onClick={() => setHideSections({...hideSections, archivedAnn: true})}
-                      style={{ fontSize: '0.75rem', color: '#6b7280', cursor: 'pointer', background: 'rgba(0,0,0,0.03)', padding: '6px 12px', borderRadius: 8, border: '1px solid rgba(0,0,0,0.08)', display: 'block', width: '100%', textAlign: 'center' }}>
-                      🗄️ View {archived.length} archived message{archived.length > 1 ? 's' : ''} / عرض الرسائل المؤرشفة
-                    </button>
-                  ) : (
-                    <div>
-                      <div className="flex justify-between items-center mb-2">
-                        <span style={{ fontSize: '0.8rem', fontWeight: 700, color: '#64748b' }}>🗄️ Archived Messages</span>
-                        <button onClick={() => setHideSections({...hideSections, archivedAnn: false})}
-                          style={{ fontSize: '0.65rem', color: '#94a3b8', cursor: 'pointer' }}>Hide ▲</button>
-                      </div>
-                      <div className="space-y-2 max-h-[300px] overflow-auto">
-                        {archived.map(a => {
-                          var icon = a.priority === 'urgent' ? '🚨' : a.priority === 'warning' ? '⚠️' : 'ℹ️';
-                          var poster = teamUsers.find(u => u.id === a.posted_by);
-                          var thisAcks = announcementAcks.filter(ak => ak.announcement_id === a.id);
-                          var targetUsers2 = a.target_user ? teamUsers.filter(u => u.id === a.target_user) : teamUsers;
-                          var ackedNames = targetUsers2.filter(u => thisAcks.some(ak => ak.user_id === u.id));
-                          var unackedNames = targetUsers2.filter(u => !thisAcks.some(ak => ak.user_id === u.id));
-                          return (
-                            <div key={a.id} style={{ padding: '10px 14px', borderRadius: 10, background: 'rgba(0,0,0,0.02)', border: '1px solid rgba(0,0,0,0.06)' }}>
-                              <div className="flex justify-between items-start">
-                                <div className="flex-1">
-                                  <div style={{ fontSize: '0.85rem', fontWeight: 700 }}>{icon} {a.title}</div>
-                                  {a.body && <div style={{ fontSize: '0.75rem', color: '#475569', marginTop: 4, whiteSpace: 'pre-wrap' }}>{a.body}</div>}
-                                  <div style={{ fontSize: '0.6rem', color: '#94a3b8', marginTop: 4 }}>
-                                    {poster ? poster.name : 'Admin'} • {new Date(a.created_at).toLocaleDateString()}
-                                  </div>
-                                  {isAdmin && (
-                                    <div style={{ fontSize: '0.6rem', marginTop: 4 }}>
-                                      {ackedNames.length > 0 && <div style={{ color: '#16a34a' }}>✅ {ackedNames.map(u => {
-                                        var ack = thisAcks.find(ak => ak.user_id === u.id);
-                                        return u.name + (ack ? ' (' + new Date(ack.acked_at).toLocaleString([], {month:'short',day:'numeric',hour:'2-digit',minute:'2-digit'}) + ')' : '');
-                                      }).join(', ')}</div>}
-                                      {unackedNames.length > 0 && <div style={{ color: '#dc2626', fontWeight: 700 }}>⏳ {unackedNames.map(u => u.name).join(', ')}</div>}
-                                      <div style={{ color: '#94a3b8' }}>{ackedNames.length}/{targetUsers2.length} acknowledged</div>
-                                    </div>
-                                  )}
-                                </div>
-                                {isAdmin && (
-                                  <button onClick={async () => { try { await dbUpdate('announcements', a.id, { active: true }, user?.id); setAnnouncements(prev => prev.map(x => x.id === a.id ? {...x, active: true} : x)); } catch(err) { alert(err.message); } }}
-                                    className="px-3 py-1.5 bg-blue-500 text-white rounded-lg text-[10px] font-bold ml-2 hover:bg-blue-600">🔄 Restore</button>
-                                )}
-                              </div>
-                            </div>
-                          );
-                        })}
-                      </div>
-                    </div>
-                  )}
-                </div>
-              );
-            })()}
 
             {/* ===== FINANCIAL DASHBOARD (shown first for users with access) ===== */}
             {(isAdmin || modulePerms['Sales'] || modulePerms['Treasury']) && (<>
@@ -3221,7 +2891,7 @@ export default function App() {
                       className="flex justify-between py-1 border-b border-slate-50 text-xs cursor-pointer hover:bg-emerald-50">
                       <div className="flex items-center gap-1.5">
                         <div className="w-2 h-2 rounded-full" style={{ background: COLORS[i % COLORS.length] }} />
-                        <span>{e.eng}{e.eng !== e.cat && <span className="text-slate-400 text-[10px] ml-1">({e.cat})</span>}</span>
+                        <span>{e.eng}</span>
                         <span className="text-slate-400">({e.count})</span>
                       </div>
                       <span className="font-bold text-emerald-600">{fE(e.total)} →</span>
@@ -3246,7 +2916,7 @@ export default function App() {
                     className="flex justify-between py-1 border-b border-slate-50 text-xs cursor-pointer hover:bg-red-50">
                     <div className="flex items-center gap-1.5">
                       <div className="w-2 h-2 rounded-full" style={{ background: COLORS[i % COLORS.length] }} />
-                      <span>{e.eng}{e.eng !== e.cat && <span className="text-slate-400 text-[10px] ml-1">({e.cat})</span>}</span>
+                      <span>{e.eng}</span>
                       <span className="text-slate-400">({e.count})</span>
                     </div>
                     <span className="font-bold text-red-500">{fE(e.total)} →</span>
@@ -4005,7 +3675,7 @@ export default function App() {
                       className="flex justify-between py-1 border-b border-slate-50 text-xs cursor-pointer hover:bg-emerald-50">
                       <div className="flex items-center gap-1.5">
                         <div className="w-2 h-2 rounded-full" style={{ background: COLORS[i % COLORS.length] }} />
-                        <span>{e.eng}{e.eng !== e.cat && <span className="text-slate-400 text-[10px] ml-1">({e.cat})</span>}</span>
+                        <span>{e.eng}</span>
                         <span className="text-slate-400">({e.count})</span>
                       </div>
                       <span className="font-bold text-emerald-600">{fE(e.total)} →</span>
@@ -4028,7 +3698,7 @@ export default function App() {
                     className="flex justify-between py-1 border-b border-slate-50 text-xs cursor-pointer hover:bg-red-50">
                     <div className="flex items-center gap-1.5">
                       <div className="w-2 h-2 rounded-full" style={{ background: COLORS[i % COLORS.length] }} />
-                      <span>{e.eng}{e.eng !== e.cat && <span className="text-slate-400 text-[10px] ml-1">({e.cat})</span>}</span>
+                      <span>{e.eng}</span>
                       <span className="text-slate-400">({e.count})</span>
                     </div>
                     <span className="font-bold text-red-500">{fE(e.total)} →</span>
@@ -5346,22 +5016,6 @@ export default function App() {
           <ShippingRatesTab user={user} userProfile={userProfile} isAdmin={isAdmin} customers={customers} />
         )}
 
-        {tab === 'bank' && (
-          <BankTab user={user} supabase={supabase} />
-        )}
-
-        {tab === 'egyptbank' && (
-          <EgyptBankTab user={user} userProfile={userProfile} isAdmin={isAdmin} invoices={invoices} />
-        )}
-
-        {tab === 'reports' && (
-          <ReportsTab treasury={treasury} invoices={invoices} warehouseExpenses={warehouse} />
-        )}
-
-        {tab === 'quotes' && (
-          <QuotesTab user={user} userProfile={userProfile} isAdmin={isAdmin} />
-        )}
-
         {/* ==========================================
             DAILY LOG TAB
         ========================================== */}
@@ -5511,8 +5165,6 @@ export default function App() {
         )}
 
       </div>
-      {/* Phone Widget - floating on all tabs */}
-      <PhoneWidget user={user} userProfile={userProfile} users={teamUsers} customers={customers} />
     </div>
   );
 }

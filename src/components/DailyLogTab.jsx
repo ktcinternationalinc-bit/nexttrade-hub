@@ -25,20 +25,15 @@ export default function DailyLogTab({ user, userProfile, users, isAdmin }) {
   const [editingId, setEditingId] = useState(null);
   const [editText, setEditText] = useState('');
   const [selCat, setSelCat] = useState(null);
-  const [sessions, setSessions] = useState([]);
 
   const myId = userProfile?.id;
   const today = new Date().toISOString().substring(0, 10);
 
   const loadLogs = useCallback(async () => {
-    const [{ data }, { data: sess }] = await Promise.all([
-      supabase.from('daily_log').select('*').order('created_at', { ascending: false }).limit(2000),
-      supabase.from('user_sessions').select('*').order('login_at', { ascending: false }).limit(500),
-    ]);
+    const { data } = await supabase.from('daily_log').select('*').order('created_at', { ascending: false }).limit(2000);
     setLogs(data || []);
-    setSessions(sess || []);
     setLoaded(true);
-    const dates = [...new Set((data || []).map(l => (l.log_date || '').substring(0, 10)).filter(Boolean))].sort().reverse();
+    const dates = [...new Set((data || []).map(l => l.log_date).filter(Boolean))].sort().reverse();
     setArchiveDates(dates);
   }, []);
 
@@ -48,7 +43,7 @@ export default function DailyLogTab({ user, userProfile, users, isAdmin }) {
     let arr = logs;
     if (viewMode === 'my') arr = arr.filter(l => l.user_id === myId);
     else if (selUser) arr = arr.filter(l => l.user_id === selUser);
-    if (selDate) arr = arr.filter(l => (l.log_date || '').substring(0, 10) === selDate);
+    if (selDate) arr = arr.filter(l => l.log_date === selDate);
     return arr;
   }, [logs, viewMode, selUser, selDate, myId]);
 
@@ -96,29 +91,19 @@ export default function DailyLogTab({ user, userProfile, users, isAdmin }) {
   const teamSummary = useMemo(() => {
     if (!users) return [];
     return users.map(u => {
-      const userLogs = logs.filter(l => l.user_id === u.id && (l.log_date || '').substring(0, 10) === selDate);
+      const userLogs = logs.filter(l => l.user_id === u.id && l.log_date === selDate);
       const autoCount = userLogs.filter(l => l.auto_generated).length;
       const manualCount = userLogs.filter(l => !l.auto_generated).length;
       const cats = {};
       userLogs.forEach(l => { const c = l.log_category || 'other'; cats[c] = (cats[c] || 0) + 1; });
-      // Session data for selected date
-      const userSessions = sessions.filter(s => s.user_id === u.id && (s.date || '').substring(0, 10) === selDate);
-      const firstLogin = userSessions.length > 0 ? userSessions[userSessions.length - 1]?.login_at : null;
-      const lastSeen = userSessions.length > 0 ? userSessions[0]?.last_seen : null;
-      const lastLogout = userSessions.length > 0 ? userSessions[0]?.logout_at : null;
-      let totalMinutes = 0;
-      userSessions.forEach(s => {
-        const end = s.logout_at || s.last_seen || s.login_at;
-        if (s.login_at && end) totalMinutes += Math.max(0, (new Date(end) - new Date(s.login_at)) / 60000);
-      });
-      return { ...u, logCount: userLogs.length, autoCount, manualCount, cats, firstLogin, lastSeen, lastLogout, totalMinutes, sessionCount: userSessions.length };
+      return { ...u, logCount: userLogs.length, autoCount, manualCount, cats };
     });
-  }, [users, logs, sessions, selDate]);
+  }, [users, logs, selDate]);
 
   const archiveData = useMemo(() => {
     if (!archiveView) return [];
     return archiveDates.slice(0, 60).map(date => {
-      const dayLogs = logs.filter(l => (l.log_date || '').substring(0, 10) === date);
+      const dayLogs = logs.filter(l => l.log_date === date);
       const uniqueUsers = [...new Set(dayLogs.map(l => l.user_id))];
       const autoCount = dayLogs.filter(l => l.auto_generated).length;
       const editedCount = dayLogs.filter(l => l.edited_historical).length;
@@ -262,30 +247,11 @@ export default function DailyLogTab({ user, userProfile, users, isAdmin }) {
           {/* Team View */}
           {viewMode === 'team' && isAdmin && (
             <div className="grid grid-cols-2 md:grid-cols-4 gap-2 mb-3">
-              {teamSummary.map(u => {
-                const fmtTime = (iso) => iso ? new Date(iso).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : null;
-                const hrs = Math.floor(u.totalMinutes / 60);
-                const mins = Math.round(u.totalMinutes % 60);
-                const durStr = u.totalMinutes > 0 ? (hrs > 0 ? hrs + 'h ' : '') + mins + 'm' : null;
-                return (
+              {teamSummary.map(u => (
                 <div key={u.id} onClick={() => setSelUser(selUser === u.id ? null : u.id)}
                   className={'bg-white rounded-lg p-3 cursor-pointer border-2 transition ' + (selUser === u.id ? 'border-blue-500 shadow-md' : 'border-slate-200 hover:border-slate-300')}>
                   <div className="text-sm font-bold">{u.name}</div>
                   <div className="text-[10px] text-slate-500">{u.role}</div>
-                  {/* Session info */}
-                  {u.firstLogin ? (
-                    <div className="mt-1 p-1.5 bg-blue-50 rounded text-[10px] space-y-0.5">
-                      <div>🟢 In: <span className="font-bold text-blue-700">{fmtTime(u.firstLogin)}</span></div>
-                      {u.lastLogout ? (
-                        <div>🔴 Out: <span className="font-bold text-red-600">{fmtTime(u.lastLogout)}</span></div>
-                      ) : u.lastSeen ? (
-                        <div>👁️ Last: <span className="font-bold text-slate-600">{fmtTime(u.lastSeen)}</span></div>
-                      ) : null}
-                      {durStr && <div>⏱️ <span className="font-bold text-emerald-600">{durStr}</span>{u.sessionCount > 1 ? ` (${u.sessionCount} sessions)` : ''}</div>}
-                    </div>
-                  ) : (
-                    <div className="mt-1 text-[10px] text-slate-400">No login today</div>
-                  )}
                   {u.logCount > 0 ? (
                     <div className="mt-1">
                       <span className="text-xs font-bold text-emerald-600">{u.logCount} entries</span>
@@ -302,8 +268,7 @@ export default function DailyLogTab({ user, userProfile, users, isAdmin }) {
                     <div className="text-xs font-bold text-red-500 mt-1">No log</div>
                   )}
                 </div>
-                );
-              })}
+              ))}
             </div>
           )}
 

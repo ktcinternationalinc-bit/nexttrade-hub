@@ -11,23 +11,9 @@ const STATUS_DESC = {New:'Just created — nobody has looked at it yet',Acknowle
 const USER_COLORS = ['#8b5cf6','#0ea5e9','#f59e0b','#10b981','#ec4899','#ef4444','#6366f1','#14b8a6','#f97316','#06b6d4','#a855f7','#84cc16'];
 
 export default function TicketsTab({ customers, user, userProfile, users, onReload, lang, isAdmin, modulePerms }) {
-  const myId = userProfile?.id || user?.id;
+  const myId = userProfile?.id;
   const canManage = isAdmin || userProfile?.role === 'super_admin' || userProfile?.role === 'admin';
-  const isSuperAdmin = userProfile?.role === 'super_admin';
-  const isAdminRole = userProfile?.role === 'admin' || userProfile?.role === 'super_admin';
-  const hasDeletePerm = modulePerms?.['Delete Tickets'] === true;
-
-  const canDeleteTicket = (ticket) => {
-    if (!ticket) return false;
-    if (isSuperAdmin) return true; // super admin: delete anything
-    const isOwner = ticket.created_by === myId;
-    const ageMs = Date.now() - new Date(ticket.created_at).getTime();
-    const within3Days = ageMs < 3 * 24 * 60 * 60 * 1000;
-    if (isOwner && within3Days) return true; // owner: within 3 days
-    if ((isAdminRole || hasDeletePerm) && !isOwner) return true; // admin/perm: others' tickets anytime
-    if ((isAdminRole || hasDeletePerm) && isOwner && within3Days) return true; // admin/perm: own tickets within 3 days
-    return false;
-  };
+  const canDelete = userProfile?.role === 'super_admin' || modulePerms?.['Delete Tickets'] === true;
   // Stable color per user
   const userColorMap = useMemo(() => {
     const map = {};
@@ -38,10 +24,7 @@ export default function TicketsTab({ customers, user, userProfile, users, onRelo
   const [comments, setComments] = useState([]);
   const [sel, setSel] = useState(null);
   const [q, setQ] = useState('');
-  const [statusF, setStatusF] = useState(() => isAdmin ? 'all' : 'open');
-  const [ownerF, setOwnerF] = useState('all');
-  const [assignedF, setAssignedF] = useState('all');
-  const [priorityF, setPriorityF] = useState('all');
+  const [statusF, setStatusF] = useState('open');
   const [showAdd, setShowAdd] = useState(false);
   const [f, setF] = useState({});
   const [sortBy, setSortBy] = useState('date');
@@ -77,9 +60,6 @@ export default function TicketsTab({ customers, user, userProfile, users, onRelo
     else if (statusF === 'overdue') arr = arr.filter(t => t.due_date && t.due_date < todayStr && t.status !== 'Closed');
     else if (statusF !== 'all') arr = arr.filter(t => t.status === statusF);
     if (q) arr = arr.filter(t => (t.title||'').toLowerCase().includes(q.toLowerCase()) || (t.description||'').includes(q) || (t.order_number||'').includes(q) || (t.ticket_number||'').toLowerCase().includes(q.toLowerCase()));
-    if (ownerF !== 'all') arr = arr.filter(t => t.created_by === ownerF);
-    if (assignedF !== 'all') arr = arr.filter(t => assignedF === 'unassigned' ? !t.assigned_to : t.assigned_to === assignedF);
-    if (priorityF !== 'all') arr = arr.filter(t => t.priority === priorityF);
     // Sort
     const priOrder = { high: 0, medium: 1, low: 2 };
     if (sortBy === 'priority') arr = [...arr].sort((a, b) => (priOrder[a.priority] ?? 1) - (priOrder[b.priority] ?? 1));
@@ -87,7 +67,7 @@ export default function TicketsTab({ customers, user, userProfile, users, onRelo
     else if (sortBy === 'due') arr = [...arr].sort((a, b) => (a.due_date || '9999').localeCompare(b.due_date || '9999'));
     else arr = [...arr].sort((a, b) => (b.created_at || '').localeCompare(a.created_at || ''));
     return arr;
-  }, [tickets, statusF, q, user, sortBy, ownerF, assignedF, priorityF]);
+  }, [tickets, statusF, q, user, sortBy]);
 
   const handleAddTicket = async () => {
     if (!f.title) return;
@@ -143,12 +123,6 @@ export default function TicketsTab({ customers, user, userProfile, users, onRelo
   };
 
   const deleteTicket = async (ticket) => {
-    if (!canDeleteTicket(ticket)) {
-      const isOwner = ticket.created_by === myId;
-      if (isOwner) alert('You can only delete your own tickets within 3 days of creation.\n\nيمكنك حذف تذاكرك فقط خلال 3 أيام من الإنشاء.');
-      else alert('You cannot delete other users\' tickets.\n\nلا يمكنك حذف تذاكر المستخدمين الآخرين.');
-      return;
-    }
     if (!confirm('Permanently delete ' + (ticket.ticket_number || '') + ' "' + ticket.title + '"?\n\nThis cannot be undone.')) return;
     try {
       // Delete comments first (foreign key)
@@ -171,7 +145,7 @@ export default function TicketsTab({ customers, user, userProfile, users, onRelo
     return (<div>
       <div className="flex justify-between items-center mb-3">
         <button onClick={() => { setSel(null); setComments([]); }} className="px-3 py-1 rounded border border-slate-200 text-xs font-semibold">← Back</button>
-        {canDeleteTicket(sel) && (
+        {canDelete && (
           <button onClick={() => deleteTicket(sel)}
             className="px-3 py-1 rounded border border-red-300 text-red-600 text-xs font-semibold hover:bg-red-50 transition">
             🗑 Delete Ticket
@@ -343,33 +317,9 @@ export default function TicketsTab({ customers, user, userProfile, users, onRelo
     {/* Filters */}
     <div className="flex gap-2 mb-3 flex-wrap">
       {[['open','Open'],['mine','Assigned to Me'],['team','Assigned to Team'],['created','Created by Me'],['overdue','Overdue'],['all','All'],...STATUSES.map(s=>[s,s])].map(([v,l]) => (
-        <button key={v} onClick={() => { setStatusF(v); setOwnerF('all'); setAssignedF('all'); setPriorityF('all'); }}
+        <button key={v} onClick={() => setStatusF(v)}
           className={'px-3 py-1 rounded-md text-xs font-semibold transition ' + (statusF === v ? 'bg-slate-900 text-white' : 'bg-slate-100 text-slate-500')}>{l}</button>
       ))}
-    </div>
-
-    {/* Sort + Filters */}
-    <div className="flex gap-2 mb-3 items-center flex-wrap">
-      <select value={ownerF} onChange={e => { setOwnerF(e.target.value); if (e.target.value !== 'all') setStatusF('all'); }} className="px-2 py-1 rounded-lg border text-xs font-semibold">
-        <option value="all">👤 Owner: All</option>
-        {(users || []).map(u => <option key={u.id} value={u.id}>{u.name}</option>)}
-      </select>
-      <select value={assignedF} onChange={e => { setAssignedF(e.target.value); if (e.target.value !== 'all') setStatusF('all'); }} className="px-2 py-1 rounded-lg border text-xs font-semibold">
-        <option value="all">🎯 Assigned: All</option>
-        <option value="unassigned">Unassigned</option>
-        {(users || []).map(u => <option key={u.id} value={u.id}>{u.name}</option>)}
-      </select>
-      <select value={priorityF} onChange={e => { setPriorityF(e.target.value); if (e.target.value !== 'all') setStatusF('all'); }} className="px-2 py-1 rounded-lg border text-xs font-semibold">
-        <option value="all">⚡ Priority: All</option>
-        <option value="high">🔴 High</option>
-        <option value="medium">🟡 Medium</option>
-        <option value="low">🟢 Low</option>
-      </select>
-      {(ownerF !== 'all' || assignedF !== 'all' || priorityF !== 'all') && (
-        <button onClick={() => { setOwnerF('all'); setAssignedF('all'); setPriorityF('all'); setStatusF('open'); }}
-          className="px-2 py-1 rounded-lg text-[10px] font-semibold text-red-500 bg-red-50 border border-red-200">✕ Clear filters</button>
-      )}
-      <span className="text-[10px] text-slate-400 font-semibold">{filtered.length} result{filtered.length !== 1 ? 's' : ''}</span>
     </div>
 
     {/* Sort */}
