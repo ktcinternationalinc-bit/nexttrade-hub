@@ -2712,13 +2712,13 @@ export default function App() {
           });
           if (myActive.length === 0) return null;
           return (
-            <div className="mb-3 rounded-xl p-3 border-2 border-amber-400 cursor-pointer"
+            <div className="mb-3 rounded-xl p-3 cursor-pointer"
               onClick={() => { setTab('dashboard'); }}
-              style={{ background: 'linear-gradient(135deg, #fef3c7, #fde68a)' }}>
-              <div className="text-sm font-extrabold text-amber-900">
-                📢 {myActive.length} active reminder{myActive.length > 1 ? 's' : ''} — {myActive[0].message.substring(0, 80)}{myActive[0].message.length > 80 ? '...' : ''}
-                {myActive.length > 1 && <span className="text-amber-600 font-normal"> +{myActive.length - 1} more</span>}
-                <span className="text-xs text-amber-500 font-normal ml-2">Tap to view →</span>
+              style={{ background: '#1e40af', border: '2px solid #60a5fa', boxShadow: '0 4px 15px rgba(30,64,175,0.3)' }}>
+              <div style={{ fontSize: '13px', fontWeight: 800, color: '#ffffff' }}>
+                📢 {myActive.length} active reminder{myActive.length > 1 ? 's' : ''} — {(myActive[0].message || myActive[0].title || '').substring(0, 80)}{(myActive[0].message || myActive[0].title || '').length > 80 ? '...' : ''}
+                {myActive.length > 1 && <span style={{ color: 'rgba(255,255,255,0.6)', fontWeight: 400 }}> +{myActive.length - 1} more</span>}
+                <span style={{ fontSize: '11px', color: 'rgba(255,255,255,0.5)', fontWeight: 400, marginLeft: 8 }}>Tap to view →</span>
               </div>
             </div>
           );
@@ -2745,26 +2745,41 @@ export default function App() {
                   {/* Active reminders — prominent display */}
                   {activeReminders.length > 0 && (
                     <div className="space-y-2 mb-3">
-                      {activeReminders.map(r => (
-                        <div key={r.id} className="rounded-xl p-4 border-2 border-amber-400"
-                          style={{ background: 'linear-gradient(135deg, #fef3c7, #fde68a)', boxShadow: '0 4px 15px rgba(245,158,11,0.2)' }}>
+                      {activeReminders.map(r => {
+                        const isUrgent = r.priority === 'urgent';
+                        const bgStyle = isUrgent
+                          ? { background: '#dc2626', border: '3px solid #fca5a5', boxShadow: '0 4px 20px rgba(220,38,38,0.4)' }
+                          : { background: '#1e40af', border: '3px solid #93c5fd', boxShadow: '0 4px 20px rgba(30,64,175,0.3)' };
+                        return (
+                        <div key={r.id} className="rounded-xl p-4" style={bgStyle}>
                           <div className="flex justify-between items-start">
                             <div className="flex-1">
-                              <div className="text-base font-extrabold text-amber-900" style={{ fontSize: '16pt', lineHeight: '1.4' }}>
-                                📢 {r.message}
+                              <div style={{ fontSize: '15px', lineHeight: '1.4', fontWeight: 900, color: '#ffffff' }}>
+                                📢 {r.message || r.title}
                               </div>
-                              <div className="flex gap-3 mt-2 text-[10px] text-amber-700">
+                              <div className="flex gap-3 mt-2" style={{ fontSize: '10px', color: 'rgba(255,255,255,0.7)' }}>
                                 <span>From: {getUserName(r.created_by) || 'Admin'}</span>
                                 <span>{r.reminder_date || r.created_at?.substring(0, 10)}</span>
-                                {r.target_users === 'all' ? <span className="font-bold">👥 All Team</span> : <span>👤 Targeted</span>}
+                                {r.target_users === 'all' ? <span style={{fontWeight:700}}>👥 All Team</span> : <span>👤 Targeted</span>}
                               </div>
                             </div>
-                            {r.priority === 'urgent' && (
-                              <span className="px-2 py-1 bg-red-500 text-white rounded-lg text-[10px] font-bold animate-pulse">URGENT</span>
-                            )}
+                            <div className="flex flex-col gap-1 ml-2">
+                              {isUrgent && (
+                                <span className="px-2 py-1 rounded-lg text-[10px] font-bold animate-pulse" style={{background:'#fff',color:'#dc2626'}}>🚨 URGENT</span>
+                              )}
+                              <button onClick={async (e) => { e.stopPropagation(); try { await dbUpdate('team_reminders', r.id, { completed: true }, userProfile?.id); setReminders(prev => prev.filter(x => x.id !== r.id)); } catch(err) { alert(err.message); } }}
+                                style={{ background: 'rgba(255,255,255,0.25)', color: '#fff', border: '1px solid rgba(255,255,255,0.4)', padding: '4px 10px', borderRadius: 8, fontSize: '10px', fontWeight: 700, cursor: 'pointer' }}>✓ Dismiss</button>
+                              {isAdmin && (
+                                <button onClick={async (e) => { e.stopPropagation(); if (!confirm('Delete this reminder?')) return; try { await dbDelete('team_reminders', r.id, userProfile?.id); setReminders(prev => prev.filter(x => x.id !== r.id)); } catch(err) { alert(err.message); } }}
+                                  style={{ background: 'rgba(255,255,255,0.1)', color: 'rgba(255,255,255,0.6)', border: '1px solid rgba(255,255,255,0.2)', padding: '3px 8px', borderRadius: 6, fontSize: '9px', cursor: 'pointer' }}>🗑️ Delete</button>
+                              )}
+                            </div>
                           </div>
                         </div>
-                      ))}
+                          </div>
+                        </div>
+                        );
+                      })}
                     </div>
                   )}
                   
@@ -2964,18 +2979,19 @@ export default function App() {
                 </div>
               </div>
             )}
-            {/* Active Announcements — BIG and highlighted */}
+            {/* Active Announcements */}
             {(() => {
               var myId = userProfile?.id;
-              var today = new Date().toISOString().substring(0, 10);
               var active = announcements.filter(a => a.active !== false && (!a.target_user || a.target_user === myId));
-              var todayMsgs = active.filter(a => (a.created_at || '').substring(0, 10) === today);
-              var olderMsgs = active.filter(a => (a.created_at || '').substring(0, 10) !== today);
-              var pinnedMsgs = active.filter(a => a.pinned);
-              var showMsgs = [...pinnedMsgs, ...todayMsgs.filter(a => !a.pinned)].filter((a, i, arr) => arr.findIndex(x => x.id === a.id) === i);
-              if (showMsgs.length === 0 && olderMsgs.length === 0) return null;
+              // Sort: pinned first, then by date descending
+              var sorted = [...active].sort((a, b) => {
+                if (a.pinned && !b.pinned) return -1;
+                if (!a.pinned && b.pinned) return 1;
+                return (b.created_at || '').localeCompare(a.created_at || '');
+              });
+              if (sorted.length === 0) return null;
               return (<div className="mb-4">
-                {showMsgs.length > 0 && showMsgs.map(a => {
+                {sorted.map(a => {
                   var styles = a.priority === 'urgent'
                     ? { border: '3px solid #ef4444', shadow: '0 4px 20px rgba(239,68,68,0.25)' }
                     : a.priority === 'warning'
@@ -3042,36 +3058,6 @@ export default function App() {
                     </div>
                   );
                 })}
-                {olderMsgs.length > 0 && !hideSections.archivedMsgs && (
-                  <button onClick={() => setHideSections({...hideSections, archivedMsgs: true})}
-                    style={{ fontSize: '0.75rem', color: '#6b7280', cursor: 'pointer', background: 'rgba(0,0,0,0.03)', padding: '6px 12px', borderRadius: 8, border: '1px solid rgba(0,0,0,0.08)', display: 'block', width: '100%', textAlign: 'center' }}>
-                    📂 View {olderMsgs.length} older message{olderMsgs.length > 1 ? 's' : ''} / عرض الرسائل السابقة
-                  </button>
-                )}
-                {hideSections.archivedMsgs && olderMsgs.length > 0 && (
-                  <div className="mt-2">
-                    <div className="flex justify-between items-center mb-2">
-                      <span style={{ fontSize: '0.8rem', fontWeight: 700, color: '#64748b' }}>📂 Archived Messages</span>
-                      <button onClick={() => setHideSections({...hideSections, archivedMsgs: false})}
-                        style={{ fontSize: '0.65rem', color: '#94a3b8', cursor: 'pointer' }}>Hide ▲</button>
-                    </div>
-                    <div className="space-y-2 max-h-[300px] overflow-auto">
-                      {olderMsgs.map(a => {
-                        var icon = a.priority === 'urgent' ? '🚨' : a.priority === 'warning' ? '⚠️' : 'ℹ️';
-                        var poster = teamUsers.find(u => u.id === a.posted_by);
-                        return (
-                          <div key={a.id} style={{ padding: '10px 14px', borderRadius: 10, background: 'rgba(0,0,0,0.02)', border: '1px solid rgba(0,0,0,0.06)' }}>
-                            <div style={{ fontSize: '0.85rem', fontWeight: 700 }}>{icon} {a.title}</div>
-                            {a.body && <div style={{ fontSize: '0.75rem', color: '#475569', marginTop: 4 }}>{a.body}</div>}
-                            <div style={{ fontSize: '0.6rem', color: '#94a3b8', marginTop: 4 }}>
-                              {poster ? poster.name : 'Admin'} • {new Date(a.created_at).toLocaleDateString()}
-                            </div>
-                          </div>
-                        );
-                      })}
-                    </div>
-                  </div>
-                )}
               </div>);
             })()}
             {/* Archived Messages */}

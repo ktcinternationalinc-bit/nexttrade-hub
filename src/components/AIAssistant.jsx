@@ -142,7 +142,7 @@ export default function AIAssistant({ user, userProfile, users, customers }) {
       };
       recognitionRef.current = recognition;
     }
-    return () => { if (silenceTimerRef.current) clearTimeout(silenceTimerRef.current); if (autoSendRef.current) clearTimeout(autoSendRef.current); if (maxTimeoutRef.current) clearTimeout(maxTimeoutRef.current); if (recordingTimerRef.current) clearInterval(recordingTimerRef.current); };
+    return () => { if (silenceTimerRef.current) clearTimeout(silenceTimerRef.current); if (autoSendRef.current) clearTimeout(autoSendRef.current); if (maxTimeoutRef.current) clearTimeout(maxTimeoutRef.current); if (recordingTimerRef.current) clearInterval(recordingTimerRef.current); if (watchdogRef.current) clearInterval(watchdogRef.current); };
   }, []);
 
   useEffect(() => { chatEndRef.current?.scrollIntoView({ behavior: 'smooth' }); }, [messages, loading]);
@@ -247,6 +247,8 @@ export default function AIAssistant({ user, userProfile, users, customers }) {
   // ===== VOICE NOTE RECORDING =====
   const recordingRef = useRef(false);
   const accumulatedTextRef = useRef('');
+  const watchdogRef = useRef(null);
+  const lastResultTimeRef = useRef(0);
   
   const startRecording = () => {
     stopSpeaking();
@@ -259,79 +261,89 @@ export default function AIAssistant({ user, userProfile, users, customers }) {
     if (autoSendRef.current) clearTimeout(autoSendRef.current);
     
     const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
-    if (!SR) { alert('Speech recognition not supported in this browser'); return; }
+    if (!SR) { alert('Speech recognition not supported'); return; }
     
     accumulatedTextRef.current = '';
+    lastResultTimeRef.current = Date.now();
     setInput('');
-    
-    const startNewSession = () => {
-      if (!recordingRef.current) return;
-      
-      const rec = new SR();
-      rec.continuous = false;  // Single result mode - more reliable
-      rec.interimResults = true;
-      rec.lang = 'en-US';
-      
-      rec.onresult = (event) => {
-        let finalText = '';
-        let interimText = '';
-        for (let i = 0; i < event.results.length; i++) {
-          if (event.results[i].isFinal) {
-            finalText += event.results[i][0].transcript + ' ';
-          } else {
-            interimText += event.results[i][0].transcript;
-          }
-        }
-        
-        if (finalText.trim()) {
-          accumulatedTextRef.current += finalText;
-        }
-        
-        const display = accumulatedTextRef.current + interimText;
-        setInput(correctNames(display.trim()));
-      };
-      
-      rec.onend = () => {
-        // Always restart if still recording
-        if (recordingRef.current) {
-          setTimeout(startNewSession, 50);
-        }
-      };
-      
-      rec.onerror = (e) => {
-        console.log('Voice error:', e.error);
-        if (e.error === 'no-speech' && recordingRef.current) {
-          // No speech detected - just restart
-          setTimeout(startNewSession, 100);
-        } else if (e.error === 'aborted' && recordingRef.current) {
-          setTimeout(startNewSession, 200);
-        } else if (recordingRef.current) {
-          setTimeout(startNewSession, 500);
-        }
-      };
-      
-      recordingRecRef.current = rec;
-      try { rec.start(); } catch(e) {
-        if (recordingRef.current) setTimeout(startNewSession, 300);
-      }
-    };
-    
     setRecording(true);
     recordingRef.current = true;
     setRecordingTime(0);
-    recordingTimerRef.current = setInterval(() => {
-      setRecordingTime(prev => prev + 1);
-    }, 1000);
+    recordingTimerRef.current = setInterval(() => setRecordingTime(prev => prev + 1), 1000);
     
-    startNewSession();
+    const launchRecognition = () => {
+      if (!recordingRef.current) return;
+      
+      try {
+        const rec = new SR();
+        rec.continuous = true;
+        rec.interimResults = true;
+        rec.lang = 'en-US';
+        
+        let sessionFinal = '';
+        
+        rec.onresult = (event) => {
+          lastResultTimeRef.current = Date.now();
+          let finalText = '';
+          let interimText = '';
+          for (let i = 0; i < event.results.length; i++) {
+            if (event.results[i].isFinal) {
+              finalText += event.results[i][0].transcript + ' ';
+            } else {
+              interimText += event.results[i][0].transcript;
+            }
+          }
+          sessionFinal = finalText;
+          setInput((accumulatedTextRef.current + finalText + interimText).trim());
+        };
+        
+        rec.onend = () => {
+          // Save this session's final text
+          if (sessionFinal.trim()) {
+            accumulatedTextRef.current += sessionFinal;
+            setInput(accumulatedTextRef.current.trim());
+          }
+          // Restart if still recording
+          if (recordingRef.current) {
+            setTimeout(launchRecognition, 200);
+          }
+        };
+        
+        rec.onerror = (e) => {
+          // Restart on any error if still recording
+          if (recordingRef.current && e.error !== 'not-allowed') {
+            setTimeout(launchRecognition, 300);
+          }
+        };
+        
+        recordingRecRef.current = rec;
+        rec.start();
+      } catch(e) {
+        // Retry launch
+        if (recordingRef.current) setTimeout(launchRecognition, 500);
+      }
+    };
+    
+    // Watchdog: if no result for 8 seconds, force restart recognition
+    watchdogRef.current = setInterval(() => {
+      if (!recordingRef.current) { clearInterval(watchdogRef.current); return; }
+      const silentMs = Date.now() - lastResultTimeRef.current;
+      if (silentMs > 8000 && recordingRecRef.current) {
+        try { recordingRecRef.current.stop(); } catch(e) {}
+        // onend will trigger restart
+      }
+    }, 3000);
+    
+    launchRecognition();
   };
 
   const stopRecording = () => {
     setRecording(false);
     recordingRef.current = false;
     if (recordingTimerRef.current) { clearInterval(recordingTimerRef.current); recordingTimerRef.current = null; }
+    if (watchdogRef.current) { clearInterval(watchdogRef.current); watchdogRef.current = null; }
     if (recordingRecRef.current) { try { recordingRecRef.current.stop(); } catch(e) {} recordingRecRef.current = null; }
-    // Text stays in input for user to review and send
+    // Final text stays in input for review
   };
 
   const formatTime = (s) => Math.floor(s / 60) + ':' + String(s % 60).padStart(2, '0');
