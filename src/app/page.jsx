@@ -1919,8 +1919,6 @@ export default function App() {
                         </div>
                         );
                       })}
-                        </div>
-                      ))}
                       {treasuryResults.length === 0 && egyptResults.length === 0 && (
                         <div className="px-3 py-3 text-xs text-slate-400 text-center">No matching transactions found</div>
                       )}
