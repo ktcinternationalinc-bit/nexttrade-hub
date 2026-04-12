@@ -3441,180 +3441,118 @@ export default function App() {
               const getUserName = (id) => (teamUsers || []).find(u => u.id === id)?.name || '';
               const priColor = (p) => p === 'high' ? '#ef4444' : p === 'low' ? '#10b981' : '#f59e0b';
               const timeAgo = (d) => { const m = Math.floor((Date.now() - new Date(d).getTime()) / 60000); if (m < 60) return m + 'm'; const h = Math.floor(m/60); if (h < 24) return h + 'h'; return Math.floor(h/24) + 'd'; };
-              const isMyTicket = (t) => t.assigned_to === myId || t.created_by === myId;
 
-              const allOpen = dashTickets.filter(t => t.status !== 'Closed');
-              const myOpen = allOpen.filter(t => isMyTicket(t));
-              const teamOpen = allOpen.filter(t => !isMyTicket(t));
-              const myNew = myOpen.filter(t => t.created_at >= twoDaysAgo);
-              const teamNew = teamOpen.filter(t => t.created_at >= twoDaysAgo);
-              const myUpdates = recentTicketUpdates.filter(c => c.tickets && isMyTicket(c.tickets));
-              const teamUpdates = recentTicketUpdates.filter(c => c.tickets && !isMyTicket(c.tickets));
-              const showAll = hideSections.ticketShowAll;
+              const myTickets = dashTickets.filter(t => (t.assigned_to === myId || t.created_by === myId) && t.status !== 'Closed');
+              const newlyAssigned = myTickets.filter(t => t.assigned_to === myId && t.created_at >= twoDaysAgo);
+              const myUpdates = recentTicketUpdates.filter(c => c.tickets && (c.tickets.assigned_to === myId || c.tickets.created_by === myId));
+              const overdueTickets = myTickets.filter(t => t.due_date && t.due_date < todayStr);
 
-              const TicketRow = ({ t, highlight }) => (
-                <div className="rounded-lg p-2.5 border cursor-pointer hover:shadow-sm transition" onClick={() => { setOpenTicketId(t.id); setTab('tickets'); }}
-                  style={{ background: highlight ? 'rgba(59,130,246,0.06)' : 'rgba(255,255,255,0.6)', borderColor: highlight ? 'rgba(59,130,246,0.2)' : 'rgba(0,0,0,0.06)' }}>
-                  <div className="flex items-center gap-2">
-                    <div className="w-2 h-2 rounded-full flex-shrink-0" style={{ background: priColor(t.priority) }} />
-                    <span style={{ fontSize: '10px', fontWeight: 800, color: '#8b5cf6' }}>{t.ticket_number}</span>
-                    <span style={{ fontSize: '11px', fontWeight: 600, color: '#1e293b' }} className="truncate flex-1">{t.title}</span>
-                    <span style={{ fontSize: '9px', color: '#94a3b8', flexShrink: 0 }}>{timeAgo(t.created_at)}</span>
-                  </div>
-                  <div className="flex gap-2 mt-1 items-center" style={{ fontSize: '9px', color: '#64748b' }}>
-                    <span className="px-1.5 py-0.5 rounded" style={{ background: t.status === 'New' ? '#dbeafe' : t.status === 'In Progress' ? '#fef3c7' : t.status === 'Closed' ? '#f1f5f9' : '#f3e8ff', color: t.status === 'New' ? '#1d4ed8' : t.status === 'In Progress' ? '#b45309' : '#6b21a8', fontWeight: 700 }}>{t.status}</span>
-                    {t.assigned_to && <span>→ {getUserName(t.assigned_to)}</span>}
-                    {t.due_date && t.due_date < todayStr && <span style={{ color: '#dc2626', fontWeight: 700 }}>⚠️ OVERDUE</span>}
-                    {t.due_date && t.due_date >= todayStr && <span>Due: {t.due_date}</span>}
-                    {highlight && <span style={{ color: '#2563eb', fontWeight: 700 }}>✨ NEW</span>}
-                  </div>
+              const sectionStyle = { background: '#fff', borderRadius: 14, border: '1px solid #e8ecf1', marginBottom: 10, overflow: 'hidden' };
+              const sectionHeaderStyle = (color, bgColor) => ({ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '10px 14px', borderBottom: '1px solid #f1f5f9', background: bgColor });
+              const sectionLabel = (icon, text, count, color) => (
+                <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                  <span style={{ fontSize: 14 }}>{icon}</span>
+                  <span style={{ fontSize: 12, fontWeight: 800, color: color, letterSpacing: '0.03em' }}>{text}</span>
+                  <span style={{ fontSize: 10, fontWeight: 800, color: '#fff', background: color, borderRadius: 10, padding: '1px 8px', minWidth: 20, textAlign: 'center' }}>{count}</span>
                 </div>
               );
 
-              const UpdateRow = ({ c }) => {
+              const TicketCard = ({ t, accent }) => (
+                <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '10px 14px', borderBottom: '1px solid #f8fafc', cursor: 'pointer', transition: 'background 0.15s' }}
+                  className="hover:bg-slate-50" onClick={() => { setOpenTicketId(t.id); setTab('tickets'); }}>
+                  <div style={{ width: 6, height: 6, borderRadius: '50%', background: priColor(t.priority), flexShrink: 0 }} />
+                  <div style={{ flex: 1, minWidth: 0 }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                      <span style={{ fontSize: 10, fontWeight: 800, color: '#8b5cf6', fontFamily: 'monospace' }}>{t.ticket_number}</span>
+                      <span style={{ fontSize: 12, fontWeight: 600, color: '#1e293b', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{t.title}</span>
+                    </div>
+                    <div style={{ display: 'flex', gap: 8, marginTop: 3, fontSize: 10, color: '#94a3b8', alignItems: 'center' }}>
+                      <span style={{ padding: '1px 6px', borderRadius: 4, fontWeight: 700, fontSize: 9,
+                        background: t.status === 'New' ? '#dbeafe' : t.status === 'In Progress' ? '#fef3c7' : '#f3e8ff',
+                        color: t.status === 'New' ? '#1d4ed8' : t.status === 'In Progress' ? '#b45309' : '#6b21a8' }}>{t.status}</span>
+                      {t.assigned_to && <span style={{ color: '#64748b' }}>→ {getUserName(t.assigned_to)}</span>}
+                      {t.due_date && t.due_date < todayStr && <span style={{ color: '#dc2626', fontWeight: 700 }}>⚠ OVERDUE</span>}
+                      {t.due_date && t.due_date >= todayStr && <span>Due: {t.due_date}</span>}
+                    </div>
+                  </div>
+                  <span style={{ fontSize: 10, color: '#cbd5e1', flexShrink: 0 }}>{timeAgo(t.created_at)}</span>
+                </div>
+              );
+
+              const UpdateCard = ({ c }) => {
                 const ticket = c.tickets;
                 if (!ticket) return null;
                 const commenter = (teamUsers || []).find(u => u.id === c.created_by);
                 return (
-                  <div className="rounded-lg p-2.5 border cursor-pointer hover:shadow-sm" onClick={() => { setOpenTicketId(ticket.id); setTab('tickets'); }}
-                    style={{ background: 'rgba(139,92,246,0.04)', borderColor: 'rgba(139,92,246,0.12)' }}>
-                    <div className="flex items-center gap-1.5">
-                      <span style={{ fontSize: '10px', fontWeight: 800, color: '#8b5cf6' }}>{ticket.ticket_number}</span>
-                      <span style={{ fontSize: '11px', fontWeight: 600, color: '#1e293b' }} className="truncate flex-1">{ticket.title}</span>
-                      <span style={{ fontSize: '9px', color: '#94a3b8' }}>{timeAgo(c.created_at)}</span>
+                  <div style={{ display: 'flex', gap: 10, padding: '10px 14px', borderBottom: '1px solid #f8fafc', cursor: 'pointer', transition: 'background 0.15s' }}
+                    className="hover:bg-slate-50" onClick={() => { setOpenTicketId(ticket.id); setTab('tickets'); }}>
+                    <div style={{ width: 28, height: 28, borderRadius: '50%', background: '#f3e8ff', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 12, flexShrink: 0 }}>
+                      {c.is_system ? '🤖' : '💬'}
                     </div>
-                    <div style={{ fontSize: '10px', color: '#475569', marginTop: '2px' }}>
-                      {c.is_system ? '🤖' : '💬'} <span style={{ fontWeight: 700, color: '#6d28d9' }}>{commenter?.name || 'System'}</span>: {(c.comment_text || '').substring(0, 120)}{(c.comment_text || '').length > 120 ? '...' : ''}
+                    <div style={{ flex: 1, minWidth: 0 }}>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                        <span style={{ fontSize: 10, fontWeight: 800, color: '#8b5cf6', fontFamily: 'monospace' }}>{ticket.ticket_number}</span>
+                        <span style={{ fontSize: 11, fontWeight: 600, color: '#1e293b', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{ticket.title}</span>
+                      </div>
+                      <div style={{ fontSize: 11, color: '#475569', marginTop: 2 }}>
+                        <span style={{ fontWeight: 700, color: '#6d28d9' }}>{commenter?.name || 'System'}</span>: {(c.comment_text || '').substring(0, 100)}{(c.comment_text || '').length > 100 ? '…' : ''}
+                      </div>
                     </div>
-                  </div>
-                );
-              };
-
-              const ExpandableList = ({ items, renderItem, max, id }) => {
-                const expanded = hideSections['tktExp_' + id];
-                const limit = max || 5;
-                const show = expanded ? items : items.slice(0, limit);
-                const hasMore = items.length > limit;
-                return (
-                  <div>
-                    <div className="space-y-1">{show.map(renderItem)}</div>
-                    {hasMore && (
-                      <button className="w-full mt-1.5 py-2 rounded-lg text-xs font-bold transition"
-                        style={{ background: expanded ? '#fef2f2' : '#f3e8ff', color: expanded ? '#dc2626' : '#7c3aed', border: expanded ? '1px solid #fecaca' : '1px solid #e9d5ff' }}
-                        onClick={(e) => { e.stopPropagation(); setHideSections(prev => ({...prev, ['tktExp_' + id]: !expanded})); }}>
-                        {expanded ? `✕ Collapse (showing ${items.length})` : `▼ Show all ${items.length} (+${items.length - limit} more)`}
-                      </button>
-                    )}
+                    <span style={{ fontSize: 10, color: '#cbd5e1', flexShrink: 0, marginTop: 2 }}>{timeAgo(c.created_at)}</span>
                   </div>
                 );
               };
 
               return (
-                <div className="mb-4">
-                  <div className="flex justify-between items-center mb-2">
-                    <div className="flex items-center gap-2 cursor-pointer" onClick={() => setHideSections({...hideSections, ticketDash: !hideSections.ticketDash})}>
-                      <h3 className="text-sm font-bold" style={{ color: '#8b5cf6' }}>🎫 Tickets — {myOpen.length} mine open{isAdmin ? `, ${allOpen.length} total` : ''}</h3>
-                      <span className="text-xs text-slate-400">{hideSections.ticketDash ? '👁️' : '🙈'}</span>
+                <div style={{ marginBottom: 16 }}>
+                  {/* ── 1. NEWLY ASSIGNED ── */}
+                  {newlyAssigned.length > 0 && (
+                    <div style={sectionStyle}>
+                      <div style={sectionHeaderStyle('#2563eb', '#eff6ff')}>
+                        {sectionLabel('✨', 'Newly Assigned to You', newlyAssigned.length, '#2563eb')}
+                      </div>
+                      {newlyAssigned.slice(0, 8).map(t => <TicketCard key={t.id} t={t} accent="#2563eb" />)}
+                      {newlyAssigned.length > 8 && <div style={{ padding: '8px 14px', fontSize: 11, color: '#2563eb', fontWeight: 700, textAlign: 'center', cursor: 'pointer' }} onClick={() => setTab('tickets')}>View all {newlyAssigned.length} →</div>}
                     </div>
-                    {!hideSections.ticketDash && isAdmin && (
-                      <button onClick={() => setHideSections({...hideSections, ticketShowAll: !showAll})}
-                        className="px-2.5 py-1 rounded-lg text-[10px] font-semibold"
-                        style={{ background: showAll ? '#8b5cf6' : '#f3e8ff', color: showAll ? '#fff' : '#8b5cf6' }}>
-                        {showAll ? '👥 Showing All' : '👤 My Tickets'}
-                      </button>
-                    )}
-                  </div>
+                  )}
 
-                  {!hideSections.ticketDash && (<div>
-                    {/* MY NEW TICKETS */}
-                    {myNew.length > 0 && (
-                      <div className="mb-3">
-                        <div className="text-[10px] font-bold text-blue-600 mb-1 uppercase tracking-wider">✨ My New Tickets ({myNew.length})</div>
-                        <ExpandableList items={myNew} max={5} id="myNew" renderItem={(t) => <TicketRow key={t.id} t={t} highlight={true} />} />
+                  {/* ── 2. RECENT UPDATES / COMMENTS ── */}
+                  {myUpdates.length > 0 && (
+                    <div style={sectionStyle}>
+                      <div style={sectionHeaderStyle('#7c3aed', '#faf5ff')}>
+                        {sectionLabel('💬', 'Recent Updates on Your Tickets', myUpdates.length, '#7c3aed')}
                       </div>
-                    )}
+                      {myUpdates.slice(0, 8).map(c => <UpdateCard key={c.id} c={c} />)}
+                      {myUpdates.length > 8 && <div style={{ padding: '8px 14px', fontSize: 11, color: '#7c3aed', fontWeight: 700, textAlign: 'center', cursor: 'pointer' }} onClick={() => setTab('tickets')}>View all {myUpdates.length} →</div>}
+                    </div>
+                  )}
 
-                    {/* MY RECENT UPDATES */}
-                    {myUpdates.length > 0 && (
-                      <div className="mb-3">
-                        <div className="text-[10px] font-bold text-purple-600 mb-1 uppercase tracking-wider">💬 My Recent Updates ({myUpdates.length})</div>
-                        <ExpandableList items={myUpdates} max={5} id="myUpd" renderItem={(c) => <UpdateRow key={c.id} c={c} />} />
+                  {/* ── 3. OVERDUE TICKETS ── */}
+                  {overdueTickets.length > 0 && (
+                    <div style={{ ...sectionStyle, border: '1px solid #fecaca' }}>
+                      <div style={sectionHeaderStyle('#dc2626', '#fef2f2')}>
+                        {sectionLabel('🚨', 'Overdue Tickets', overdueTickets.length, '#dc2626')}
                       </div>
-                    )}
+                      {overdueTickets.map(t => <TicketCard key={t.id} t={t} accent="#dc2626" />)}
+                    </div>
+                  )}
 
-                    {/* MY OPEN TICKETS */}
-                    {myOpen.length > 0 && (
-                      <div className="mb-3">
-                        <div className="text-[10px] font-bold text-slate-600 mb-1 uppercase tracking-wider">📋 My Open Tickets ({myOpen.length})</div>
-                        <ExpandableList items={myOpen} max={5} id="myOpen" renderItem={(t) => <TicketRow key={t.id} t={t} highlight={false} />} />
+                  {/* ── 4. ALL YOUR TICKETS ── */}
+                  {myTickets.length > 0 && (
+                    <div style={sectionStyle}>
+                      <div style={sectionHeaderStyle('#475569', '#f8fafc')}>
+                        {sectionLabel('📋', 'All My Open Tickets', myTickets.length, '#475569')}
+                        <button onClick={() => setTab('tickets')} style={{ fontSize: 10, fontWeight: 700, color: '#8b5cf6', background: '#f3e8ff', border: '1px solid #e9d5ff', borderRadius: 6, padding: '4px 12px', cursor: 'pointer' }}>
+                          Open Full View →
+                        </button>
                       </div>
-                    )}
-
-                    {/* ADMIN: TEAM SECTION */}
-                    {isAdmin && showAll && teamOpen.length > 0 && (
-                      <div className="mb-3 pt-2" style={{ borderTop: '2px solid rgba(139,92,246,0.15)' }}>
-                        {teamNew.length > 0 && (
-                          <div className="mb-3">
-                            <div className="text-[10px] font-bold text-blue-600 mb-1 uppercase tracking-wider">✨ Team New Tickets ({teamNew.length})</div>
-                            <ExpandableList items={teamNew} max={5} id="teamNew" renderItem={(t) => <TicketRow key={t.id} t={t} highlight={true} />} />
-                          </div>
-                        )}
-
-                        {teamUpdates.length > 0 && (
-                          <div className="mb-3">
-                            <div className="text-[10px] font-bold text-purple-600 mb-1 uppercase tracking-wider">💬 Team Recent Updates ({teamUpdates.length})</div>
-                            <ExpandableList items={teamUpdates} max={5} id="teamUpd" renderItem={(c) => <UpdateRow key={c.id} c={c} />} />
-                          </div>
-                        )}
-
-                        <div className="mb-3">
-                          <div className="text-[10px] font-bold text-slate-500 mb-1 uppercase tracking-wider">📋 Team Open Tickets ({teamOpen.length})</div>
-                          <ExpandableList items={teamOpen} max={5} id="teamOpen" renderItem={(t) => <TicketRow key={t.id} t={t} highlight={false} />} />
-                        </div>
-                      </div>
-                    )}
-
-                    <button onClick={() => setTab('tickets')} className="w-full py-2 text-center text-xs font-bold text-purple-600 bg-purple-50 rounded-lg hover:bg-purple-100 transition">
-                      Open Tickets Tab →
-                    </button>
-                  </div>)}
+                      {myTickets.slice(0, 10).map(t => <TicketCard key={t.id} t={t} accent="#475569" />)}
+                      {myTickets.length > 10 && <div style={{ padding: '8px 14px', fontSize: 11, color: '#475569', fontWeight: 700, textAlign: 'center', cursor: 'pointer' }} onClick={() => setTab('tickets')}>+{myTickets.length - 10} more tickets →</div>}
+                    </div>
+                  )}
                 </div>
               );
             })()}
-
-
-            {/* ===== OVERDUE INVOICES ALERT ===== */}
-            {isAdmin && (() => {
-              const todayD = new Date();
-              const overdue = filteredInvoices.filter(i => {
-                if (!i.outstanding || i.outstanding <= 0) return false;
-                const invDate = new Date(i.invoice_date || i.created_at);
-                const daysSince = Math.floor((todayD - invDate) / 86400000);
-                return daysSince > 30;
-              }).map(i => ({ ...i, daysOverdue: Math.floor((todayD - new Date(i.invoice_date || i.created_at)) / 86400000) }))
-                .sort((a, b) => b.daysOverdue - a.daysOverdue).slice(0, 10);
-              if (overdue.length === 0) return null;
-              return (
-                <div className="bg-white rounded-xl p-4 border-l-4 border-l-red-500 mb-4">
-                  <h3 className="text-sm font-extrabold text-red-600 mb-2">⚠️ Overdue Invoices ({overdue.length})</h3>
-                  <div className="space-y-1.5">
-                    {overdue.map(i => (
-                      <div key={i.id} className="flex items-center justify-between py-1.5 border-b border-slate-50 last:border-0 cursor-pointer hover:bg-red-50 rounded px-2 -mx-2" onClick={() => { setSelectedInvoice(i); setTab('sales'); }}>
-                        <div>
-                          <div className="text-xs font-semibold">{i.customer || i.customer_name} — {i.invoice_number || i.order_number}</div>
-                          <div className="text-[10px] text-slate-400">{i.invoice_date} · <span className="text-red-500 font-bold">{i.daysOverdue} days overdue</span></div>
-                        </div>
-                        <div className="text-right">
-                          <div className="text-sm font-bold text-red-600">{fE(i.outstanding)}</div>
-                          <div className="text-[9px] text-slate-400">of {fE(i.amount || i.total_amount)}</div>
-                        </div>
-                      </div>
-                    ))}
-                  </div>
-                </div>
-              );
-            })()}
-
 
 
             {/* ===== TEAM ACTIVITY FEED ===== */}
@@ -3656,6 +3594,41 @@ export default function App() {
                     );
                   })}
                 </div>
+
+
+            {/* ===== OVERDUE INVOICES ALERT ===== */}
+            {isAdmin && (() => {
+              const todayD = new Date();
+              const overdue = filteredInvoices.filter(i => {
+                if (!i.outstanding || i.outstanding <= 0) return false;
+                const invDate = new Date(i.invoice_date || i.created_at);
+                const daysSince = Math.floor((todayD - invDate) / 86400000);
+                return daysSince > 30;
+              }).map(i => ({ ...i, daysOverdue: Math.floor((todayD - new Date(i.invoice_date || i.created_at)) / 86400000) }))
+                .sort((a, b) => b.daysOverdue - a.daysOverdue).slice(0, 10);
+              if (overdue.length === 0) return null;
+              return (
+                <div className="bg-white rounded-xl p-4 border-l-4 border-l-red-500 mb-4">
+                  <h3 className="text-sm font-extrabold text-red-600 mb-2">⚠️ Overdue Invoices ({overdue.length})</h3>
+                  <div className="space-y-1.5">
+                    {overdue.map(i => (
+                      <div key={i.id} className="flex items-center justify-between py-1.5 border-b border-slate-50 last:border-0 cursor-pointer hover:bg-red-50 rounded px-2 -mx-2" onClick={() => { setSelectedInvoice(i); setTab('sales'); }}>
+                        <div>
+                          <div className="text-xs font-semibold">{i.customer || i.customer_name} — {i.invoice_number || i.order_number}</div>
+                          <div className="text-[10px] text-slate-400">{i.invoice_date} · <span className="text-red-500 font-bold">{i.daysOverdue} days overdue</span></div>
+                        </div>
+                        <div className="text-right">
+                          <div className="text-sm font-bold text-red-600">{fE(i.outstanding)}</div>
+                          <div className="text-[9px] text-slate-400">of {fE(i.amount || i.total_amount)}</div>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              );
+            })()}
+
+
 
             {/* ===== FINANCIAL DASHBOARD (shown first for users with access) ===== */}
             {(isAdmin || modulePerms['Sales'] || modulePerms['Treasury']) && (<>
