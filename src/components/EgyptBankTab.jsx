@@ -13,6 +13,8 @@ export default function EgyptBankTab({ user, userProfile, isAdmin, invoices, onR
   const [matchFilter, setMatchFilter] = useState('all'); // all | unmatched | matched
   const [search, setSearch] = useState('');
   const [catFilter, setCatFilter] = useState('all');
+  const [selectedTxns, setSelectedTxns] = useState(new Set());
+  const [showHidden, setShowHidden] = useState(false);
   const [dateFrom, setDateFrom] = useState('');
   const [dateTo, setDateTo] = useState('');
   const [matchingTxn, setMatchingTxn] = useState(null);
@@ -25,6 +27,7 @@ export default function EgyptBankTab({ user, userProfile, isAdmin, invoices, onR
   const [importStats, setImportStats] = useState(null);
 
   const myId = userProfile?.id || user?.id;
+  const isSuperAdmin = userProfile?.role === 'super_admin';
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -342,6 +345,9 @@ export default function EgyptBankTab({ user, userProfile, isAdmin, invoices, onR
   // ───── Filters ─────
   const filtered = useMemo(() => {
     let arr = transactions;
+    // Hide restricted transactions unless super admin + showHidden
+    if (!isSuperAdmin) arr = arr.filter(t => !t.hidden);
+    else if (!showHidden) arr = arr.filter(t => !t.hidden);
     if (selAccount !== 'all') arr = arr.filter(t => t.account_id === selAccount);
     if (matchFilter === 'matched') arr = arr.filter(t => t.matched_invoice_id);
     if (matchFilter === 'unmatched') arr = arr.filter(t => !t.matched_invoice_id);
@@ -354,7 +360,7 @@ export default function EgyptBankTab({ user, userProfile, isAdmin, invoices, onR
     if (dateFrom) arr = arr.filter(t => t.date >= dateFrom);
     if (dateTo) arr = arr.filter(t => t.date <= dateTo);
     return arr;
-  }, [transactions, selAccount, matchFilter, catFilter, search, dateFrom, dateTo]);
+  }, [transactions, selAccount, matchFilter, catFilter, search, dateFrom, dateTo, isSuperAdmin, showHidden]);
 
   const totalIn = filtered.filter(t => t.amount > 0).reduce((s, t) => s + t.amount, 0);
   const totalOut = filtered.filter(t => t.amount < 0).reduce((s, t) => s + Math.abs(t.amount), 0);
@@ -495,7 +501,7 @@ export default function EgyptBankTab({ user, userProfile, isAdmin, invoices, onR
                       <tr key={i} className={r._include ? '' : 'opacity-30'}>
                         <td className="px-2 py-1.5"><input type="checkbox" checked={r._include} onChange={() => { const d = [...importData]; d[i]._include = !d[i]._include; setImportData(d); }} /></td>
                         <td className="px-2 py-1.5">{r.date}</td>
-                        <td className="px-2 py-1.5 max-w-[300px] truncate">{r.description}</td>
+                        <td className="px-2 py-1.5 max-w-[300px]" style={{ wordBreak: 'break-word' }}>{r.description}</td>
                         <td className={'px-2 py-1.5 text-right font-bold ' + (r.amount >= 0 ? 'text-green-600' : 'text-red-600')}>{r.amount >= 0 ? '+' : ''}{r.amount.toLocaleString(undefined, { minimumFractionDigits: 2 })}</td>
                       </tr>
                     ))}
@@ -623,6 +629,46 @@ export default function EgyptBankTab({ user, userProfile, isAdmin, invoices, onR
           </div>
 
           {/* Transaction List */}
+          {/* Bulk Action Bar (Super Admin) */}
+          {isSuperAdmin && selectedTxns.size > 0 && (
+            <div className="bg-red-50 rounded-xl p-3 mb-2 border border-red-200 flex items-center justify-between flex-wrap gap-2">
+              <span className="text-xs font-bold text-red-800">{selectedTxns.size} selected</span>
+              <div className="flex gap-2">
+                <button onClick={async () => {
+                  if (!confirm(`Delete ${selectedTxns.size} transactions permanently?`)) return;
+                  for (const id of selectedTxns) { try { await dbDelete('egypt_bank_transactions', id, myId); } catch(e) {} }
+                  setTransactions(prev => prev.filter(t => !selectedTxns.has(t.id)));
+                  setSelectedTxns(new Set());
+                }} className="px-3 py-1.5 bg-red-500 text-white rounded-lg text-xs font-bold">🗑️ Delete Selected</button>
+                <button onClick={async () => {
+                  for (const id of selectedTxns) { try { await dbUpdate('egypt_bank_transactions', id, { hidden: true }, myId); } catch(e) {} }
+                  setTransactions(prev => prev.map(t => selectedTxns.has(t.id) ? {...t, hidden: true} : t));
+                  setSelectedTxns(new Set());
+                }} className="px-3 py-1.5 bg-slate-700 text-white rounded-lg text-xs font-bold">🔒 Hide Selected</button>
+                <button onClick={() => setSelectedTxns(new Set())} className="px-3 py-1.5 border rounded-lg text-xs font-semibold">✕ Clear</button>
+              </div>
+            </div>
+          )}
+
+          {/* Super Admin: Show Hidden toggle */}
+          {isSuperAdmin && (
+            <div className="flex items-center gap-2 mb-2">
+              <button onClick={() => { setShowHidden(!showHidden); setSelectedTxns(new Set()); }}
+                className={'px-3 py-1 rounded-lg text-[10px] font-semibold ' + (showHidden ? 'bg-slate-700 text-white' : 'bg-slate-100 text-slate-500')}>
+                {showHidden ? '🔓 Showing Hidden' : '🔒 Show Hidden'}
+              </button>
+              {showHidden && <span className="text-[10px] text-slate-400">{transactions.filter(t => t.hidden).length} hidden transactions</span>}
+              {filtered.length > 0 && (
+                <button onClick={() => {
+                  if (selectedTxns.size === filtered.length) setSelectedTxns(new Set());
+                  else setSelectedTxns(new Set(filtered.map(t => t.id)));
+                }} className="text-[10px] text-blue-500 font-semibold ml-auto">
+                  {selectedTxns.size === filtered.length ? '☐ Deselect All' : '☑ Select All'}
+                </button>
+              )}
+            </div>
+          )}
+
           {filtered.length === 0 ? (
             <div className="text-center py-8 text-slate-400 text-xs">
               {transactions.length === 0 ? 'No transactions yet. Import a bank statement.' : 'No transactions match your filters.'}
@@ -633,13 +679,24 @@ export default function EgyptBankTab({ user, userProfile, isAdmin, invoices, onR
                 const isDeposit = t.amount > 0;
                 const matchedInv = t.matched_invoice_id ? (invoices || []).find(i => i.id === t.matched_invoice_id) : null;
                 const accName = getAccName(t.account_id);
+                const isSelected = selectedTxns.has(t.id);
+                const isHidden = t.hidden;
                 return (
-                  <div key={t.id} className="bg-white rounded-xl p-3 shadow-sm border">
-                    <div className="flex items-start justify-between">
+                  <div key={t.id} className="bg-white rounded-xl p-3 shadow-sm border" style={{ opacity: isHidden ? 0.5 : 1, borderColor: isSelected ? '#3b82f6' : isHidden ? '#fca5a5' : undefined, borderWidth: isSelected ? 2 : 1 }}>
+                    <div className="flex items-start gap-2">
+                      {/* Checkbox (Super Admin) */}
+                      {isSuperAdmin && (
+                        <input type="checkbox" checked={isSelected} onChange={() => {
+                          const next = new Set(selectedTxns);
+                          if (isSelected) next.delete(t.id); else next.add(t.id);
+                          setSelectedTxns(next);
+                        }} className="mt-1 flex-shrink-0" />
+                      )}
                       <div className="flex-1 min-w-0">
-                        <div className="font-semibold text-sm truncate">{t.description || '—'}</div>
+                        {/* Full description — no truncate */}
+                        <div className="font-semibold text-sm" style={{ wordBreak: 'break-word' }}>{t.description || '—'}</div>
                         <div className="text-[10px] text-slate-400">
-                          {t.date} {accName ? `• ${accName}` : ''}
+                          {t.date} {accName ? `• ${accName}` : ''}{isHidden ? ' • 🔒 Hidden' : ''}
                         </div>
                         {/* Category / Subcategory */}
                         <div className="flex items-center gap-1 mt-1">
@@ -669,12 +726,21 @@ export default function EgyptBankTab({ user, userProfile, isAdmin, invoices, onR
                           </div>
                         )}
                       </div>
-                      <div className="text-right ml-2">
+                      <div className="text-right ml-2 flex-shrink-0">
                         <div className={'font-bold text-sm ' + (isDeposit ? 'text-green-600' : 'text-red-600')}>
                           {isDeposit ? '+' : ''}{fmtE(t.amount)}
                         </div>
                         {!t.matched_invoice_id && (
                           <button onClick={() => { setMatchingTxn(t); setSearchInv(''); }} className="text-[10px] text-blue-500 font-semibold mt-1">🔗 Match</button>
+                        )}
+                        {/* Hide/Unhide (Super Admin) */}
+                        {isSuperAdmin && (
+                          <button onClick={async () => {
+                            await dbUpdate('egypt_bank_transactions', t.id, { hidden: !isHidden }, myId);
+                            setTransactions(prev => prev.map(x => x.id === t.id ? {...x, hidden: !isHidden} : x));
+                          }} className={'text-[10px] font-semibold mt-1 block ' + (isHidden ? 'text-green-500' : 'text-slate-400')}>
+                            {isHidden ? '🔓 Unhide' : '🔒 Hide'}
+                          </button>
                         )}
                       </div>
                     </div>
