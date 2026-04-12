@@ -20,6 +20,10 @@ export default function EgyptBankTab({ user, userProfile, isAdmin, invoices, onR
   const [filterMonth, setFilterMonth] = useState('');
   const [filterYear, setFilterYear] = useState('');
   const [matchingTxn, setMatchingTxn] = useState(null);
+  const [amtTolerance, setAmtTolerance] = useState(0); // 0 = exact, or percentage
+  const [dayFrom, setDayFrom] = useState('');
+  const [dayTo, setDayTo] = useState('');
+  const [showSmartConfig, setShowSmartConfig] = useState(false);
   const [searchInv, setSearchInv] = useState('');
   const [showAddAccount, setShowAddAccount] = useState(false);
   const [accForm, setAccForm] = useState({ bank_name: '', account_number: '', account_name: '', currency: 'EGP' });
@@ -332,29 +336,141 @@ export default function EgyptBankTab({ user, userProfile, isAdmin, invoices, onR
     await autoCategorizeTxns();
   };
 
-  // ───── Auto-categorize based on matching descriptions ─────
-  const normalizeDesc = (d) => (d || '').replace(/FT\w+|TT\w+|CK\d+|LCO\d+|\d{10,}|\\\\[A-Z]+/gi, '').replace(/\s+/g, ' ').trim().toLowerCase().substring(0, 40);
-  
-  const autoCategorizeTxns = async () => {
-    // Build rules from already-categorized transactions
-    const rules = {};
-    transactions.filter(t => t.category).forEach(t => {
-      const key = normalizeDesc(t.description);
-      if (key.length >= 5) {
-        rules[key] = { category: t.category, subcategory: t.subcategory || '' };
-      }
-    });
+  // ───── Smart Auto-categorize (amount-first + keywords + timing patterns + direction) ─────
+  const extractKeywords = (d) => (d || '').replace(/FT\w+|TT\w+|CK\d+|LCO\d+|\d{6,}|\\\\[A-Z]+/gi, '')
+    .toLowerCase().split(/\s+/).filter(w => w.length >= 3 && !/^\d+$/.test(w));
+
+  const detectTimingPattern = (days) => {
+    if (days.length < 2) return { type: 'none' };
+    const sorted = [...days].sort((a, b) => a - b);
+    const intervals = [];
+    for (let i = 1; i < sorted.length; i++) intervals.push(sorted[i] - sorted[i - 1]);
+    const avgInterval = intervals.reduce((s, v) => s + v, 0) / intervals.length;
+    const spread = Math.max(...sorted) - Math.min(...sorted);
     
-    // Find uncategorized and try to match — batch by category
-    const uncategorized = transactions.filter(t => !t.category);
-    const batches = {}; // { "cat|subcat": [id1, id2, ...] }
-    for (const t of uncategorized) {
-      const key = normalizeDesc(t.description);
-      if (rules[key]) {
-        const batchKey = rules[key].category + '|' + (rules[key].subcategory || '');
-        if (!batches[batchKey]) batches[batchKey] = { ids: [], category: rules[key].category, subcategory: rules[key].subcategory || '' };
-        batches[batchKey].ids.push(t.id);
+    if (spread <= 5) return { type: 'monthly-fixed', center: Math.round(sorted.reduce((s, v) => s + v, 0) / sorted.length), spread };
+    if (avgInterval >= 5 && avgInterval <= 9) return { type: 'weekly', interval: 7 };
+    if (avgInterval >= 12 && avgInterval <= 16) return { type: 'biweekly', interval: 14 };
+    if (spread <= 12) return { type: 'monthly-range', min: sorted[0], max: sorted[sorted.length - 1] };
+    return { type: 'scattered', min: sorted[0], max: sorted[sorted.length - 1] };
+  };
+
+  const autoCategorizeTxns = async () => {
+    const categorized = transactions.filter(t => t.category);
+    if (categorized.length === 0) return 0;
+    const tolerance = amtTolerance / 100;
+    const dFrom = dayFrom ? parseInt(dayFrom) : 0;
+    const dTo = dayTo ? parseInt(dayTo) : 31;
+
+    // Build profiles per category (group by category, pick best subcategory)
+    const profiles = {};
+    categorized.forEach(t => {
+      const key = t.category;
+      if (!profiles[key]) profiles[key] = { category: t.category, subcategories: {}, keywords: {}, amounts: [], days: [], dates: [], directions: [] };
+      const p = profiles[key];
+      // Track subcategory frequency to pick the best one
+      const sub = t.subcategory || '';
+      p.subcategories[sub] = (p.subcategories[sub] || 0) + 1;
+      extractKeywords(t.description).forEach(w => { p.keywords[w] = (p.keywords[w] || 0) + 1; });
+      p.amounts.push(Math.abs(t.amount));
+      if (t.date) {
+        p.days.push(parseInt(t.date.substring(8, 10)) || 0);
+        p.dates.push(t.date);
       }
+      p.directions.push(t.amount > 0 ? 'in' : 'out');
+    });
+
+    // Resolve best subcategory per profile (most recent non-empty wins)
+    for (const p of Object.values(profiles)) {
+      const subs = Object.entries(p.subcategories).filter(([s]) => s.length > 0).sort((a, b) => b[1] - a[1]);
+      p.bestSubcategory = subs.length > 0 ? subs[0][0] : '';
+      p.timing = detectTimingPattern(p.days);
+    }
+
+    // Score each uncategorized transaction
+    const uncategorized = transactions.filter(t => !t.category && !t.hidden);
+    const assignments = [];
+
+    for (const t of uncategorized) {
+      const tDay = t.date ? parseInt(t.date.substring(8, 10)) || 0 : 0;
+      if (dFrom > 0 && tDay < dFrom) continue;
+      if (dTo < 31 && tDay > dTo) continue;
+
+      const tWords = new Set(extractKeywords(t.description));
+      const tAmt = Math.abs(t.amount);
+      const tDir = t.amount > 0 ? 'in' : 'out';
+      let bestScore = 0, bestProfile = null;
+
+      for (const [key, p] of Object.entries(profiles)) {
+        let score = 0;
+
+        // 1. AMOUNT (0-40 pts) — highest weight
+        if (p.amounts.length > 0) {
+          if (tolerance === 0) {
+            if (p.amounts.some(a => Math.abs(a - tAmt) < 0.01)) score += 40;
+          } else {
+            const avgAmt = p.amounts.reduce((s, v) => s + v, 0) / p.amounts.length;
+            const diff = Math.abs(tAmt - avgAmt) / (avgAmt || 1);
+            if (diff <= tolerance) score += (1 - diff / tolerance) * 40;
+          }
+        }
+
+        // 2. KEYWORDS (0-25 pts) — description patterns
+        const topWords = Object.entries(p.keywords).sort((a, b) => b[1] - a[1]).slice(0, 10).map(([w]) => w);
+        if (topWords.length > 0) {
+          const matches = topWords.filter(w => tWords.has(w)).length;
+          score += (matches / topWords.length) * 25;
+        }
+
+        // 3. TIMING PATTERN (0-25 pts) — weekly/monthly/recurring detection
+        if (p.timing.type !== 'none' && tDay > 0) {
+          if (p.timing.type === 'monthly-fixed') {
+            const dist = Math.abs(tDay - p.timing.center);
+            if (dist <= 3) score += 25;
+            else if (dist <= 5) score += 15;
+          } else if (p.timing.type === 'weekly') {
+            // Check if tDay fits any multiple of 7 from known days
+            const fits = p.days.some(d => Math.abs((tDay - d) % 7) <= 1 || Math.abs((tDay - d) % 7) >= 6);
+            if (fits) score += 25;
+          } else if (p.timing.type === 'biweekly') {
+            const fits = p.days.some(d => Math.abs((tDay - d) % 14) <= 2 || Math.abs((tDay - d) % 14) >= 12);
+            if (fits) score += 20;
+          } else if (p.timing.type === 'monthly-range') {
+            if (tDay >= p.timing.min - 2 && tDay <= p.timing.max + 2) score += 20;
+          } else {
+            if (tDay >= p.timing.min - 3 && tDay <= p.timing.max + 3) score += 10;
+          }
+        }
+
+        // 4. DIRECTION (0-10 pts)
+        if (p.directions.length > 0) {
+          const mainDir = p.directions.filter(d => d === 'in').length > p.directions.length / 2 ? 'in' : 'out';
+          if (tDir === mainDir) score += 10;
+        }
+
+        if (score > bestScore) { bestScore = score; bestProfile = p; }
+      }
+
+      if (bestScore >= 50 && bestProfile) {
+        assignments.push({ id: t.id, category: bestProfile.category, subcategory: bestProfile.bestSubcategory, score: bestScore });
+      }
+    }
+
+    // Also propagate subcategory to existing transactions that have category but no subcategory
+    const subPropagations = [];
+    for (const p of Object.values(profiles)) {
+      if (p.bestSubcategory) {
+        const missing = transactions.filter(t => t.category === p.category && !t.subcategory);
+        missing.forEach(t => subPropagations.push({ id: t.id, subcategory: p.bestSubcategory }));
+      }
+    }
+
+    // Batch update assignments
+    const batches = {};
+    for (const a of assignments) {
+      const bk = a.category + '|' + a.subcategory;
+      if (!batches[bk]) batches[bk] = { ids: [], category: a.category, subcategory: a.subcategory };
+      batches[bk].ids.push(a.id);
     }
     let matched = 0;
     for (const batch of Object.values(batches)) {
@@ -363,16 +479,35 @@ export default function EgyptBankTab({ user, userProfile, isAdmin, invoices, onR
         matched += batch.ids.length;
       } catch(e) {}
     }
-    if (matched > 0) {
+
+    // Batch propagate subcategories
+    let propagated = 0;
+    if (subPropagations.length > 0) {
+      const subBatches = {};
+      subPropagations.forEach(s => {
+        if (!subBatches[s.subcategory]) subBatches[s.subcategory] = [];
+        subBatches[s.subcategory].push(s.id);
+      });
+      for (const [sub, ids] of Object.entries(subBatches)) {
+        try {
+          await supabase.from('egypt_bank_transactions').update({ subcategory: sub }).in('id', ids);
+          propagated += ids.length;
+        } catch(e) {}
+      }
+    }
+
+    if (matched > 0 || propagated > 0) {
+      const assignMap = {};
+      assignments.forEach(a => { assignMap[a.id] = a; });
+      const subMap = {};
+      subPropagations.forEach(s => { subMap[s.id] = s.subcategory; });
       setTransactions(prev => prev.map(t => {
-        if (!t.category) {
-          const key = normalizeDesc(t.description);
-          if (rules[key]) return { ...t, category: rules[key].category, subcategory: rules[key].subcategory || '' };
-        }
+        if (assignMap[t.id]) return { ...t, category: assignMap[t.id].category, subcategory: assignMap[t.id].subcategory };
+        if (subMap[t.id]) return { ...t, subcategory: subMap[t.id] };
         return t;
       }));
     }
-    return matched;
+    return { matched, propagated };
   };
 
   // ───── Match ─────
@@ -704,14 +839,73 @@ export default function EgyptBankTab({ user, userProfile, isAdmin, invoices, onR
               {Object.entries(EXPENSE_CATS).map(([ar, en]) => <option key={ar} value={ar}>{en}</option>)}
             </select>
             {transactions.filter(t => !t.category && !t.hidden).length > 0 && (
-              <button onClick={async () => {
-                const count = await autoCategorizeTxns();
-                alert(count > 0 ? `Auto-categorized ${count} transactions based on matching descriptions` : 'No matches found. Categorize a few transactions manually first — future ones with similar descriptions will auto-match.');
-              }} className="px-2 py-1.5 bg-amber-100 text-amber-700 rounded-lg text-[10px] font-bold border border-amber-200 hover:bg-amber-200">
-                🤖 Auto-categorize
-              </button>
+              <div className="flex items-center gap-1">
+                <button onClick={() => setShowSmartConfig(!showSmartConfig)}
+                  className="px-2 py-1.5 bg-amber-100 text-amber-700 rounded-lg text-[10px] font-bold border border-amber-200 hover:bg-amber-200">
+                  🤖 Smart Categorize ▾
+                </button>
+              </div>
             )}
           </div>
+
+          {/* Smart Categorize Config Panel */}
+          {showSmartConfig && (
+            <div className="bg-amber-50 rounded-xl p-3 mb-3 border border-amber-200">
+              <div className="flex items-center justify-between mb-2">
+                <span className="text-xs font-bold text-amber-800">🤖 Smart Categorize Settings</span>
+                <button onClick={() => setShowSmartConfig(false)} className="text-[10px] text-slate-400">✕</button>
+              </div>
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-3 mb-3">
+                <div>
+                  <label className="text-[10px] font-bold text-slate-600 block mb-1">Amount Tolerance</label>
+                  <select value={amtTolerance} onChange={e => setAmtTolerance(parseInt(e.target.value))} className="border rounded-lg px-2 py-1.5 text-xs w-full">
+                    <option value="0">Exact match (0%)</option>
+                    <option value="5">±5%</option>
+                    <option value="10">±10%</option>
+                    <option value="20">±20%</option>
+                    <option value="50">±50%</option>
+                  </select>
+                  <div className="text-[9px] text-slate-400 mt-0.5">0% = amount must match exactly</div>
+                </div>
+                <div>
+                  <label className="text-[10px] font-bold text-slate-600 block mb-1">Day of Month Range</label>
+                  <div className="flex items-center gap-1">
+                    <input type="number" min="1" max="31" value={dayFrom} onChange={e => setDayFrom(e.target.value)} placeholder="1" className="border rounded-lg px-2 py-1.5 text-xs w-16" />
+                    <span className="text-[10px] text-slate-400">to</span>
+                    <input type="number" min="1" max="31" value={dayTo} onChange={e => setDayTo(e.target.value)} placeholder="31" className="border rounded-lg px-2 py-1.5 text-xs w-16" />
+                  </div>
+                  <div className="text-[9px] text-slate-400 mt-0.5">Only categorize transactions within these days</div>
+                </div>
+                <div>
+                  <label className="text-[10px] font-bold text-slate-600 block mb-1">Scoring</label>
+                  <div className="text-[9px] text-slate-500 leading-relaxed">
+                    Amount: 40pts | Keywords: 25pts<br/>
+                    Timing pattern: 25pts | Direction: 10pts<br/>
+                    Min 50pts to assign. Detects weekly,<br/>
+                    biweekly & monthly-fixed patterns.
+                  </div>
+                </div>
+              </div>
+              <div className="flex items-center gap-2">
+                <button onClick={async () => {
+                  const result = await autoCategorizeTxns();
+                  const { matched, propagated } = result || { matched: 0, propagated: 0 };
+                  let msg = '';
+                  if (matched > 0) msg += `✅ Categorized ${matched} transactions`;
+                  if (propagated > 0) msg += (msg ? '\n' : '') + `📋 Updated ${propagated} subcategories`;
+                  if (!msg) msg = 'No confident matches found. Categorize a few transactions manually first — the engine learns from your examples.';
+                  else msg += `\n\nSettings: tolerance ${amtTolerance}%, days ${dayFrom||1}-${dayTo||31}`;
+                  alert(msg);
+                }} className="px-4 py-2 bg-amber-500 text-white rounded-lg text-xs font-bold hover:bg-amber-600">
+                  ▶ Run Smart Categorize
+                </button>
+                <span className="text-[10px] text-slate-400">
+                  {transactions.filter(t => t.category).length} categorized → {transactions.filter(t => !t.category && !t.hidden).length} uncategorized
+                </span>
+              </div>
+            </div>
+          )}
+
           <div className="flex gap-2 mb-3 items-center flex-wrap">
             <select value={filterYear} onChange={e => setFilterYear(e.target.value)} className="border rounded-lg px-2 py-1.5 text-xs font-semibold">
               <option value="">All Years</option>
@@ -761,6 +955,12 @@ export default function EgyptBankTab({ user, userProfile, isAdmin, invoices, onR
                   setTransactions(prev => prev.map(t => selectedTxns.has(t.id) ? {...t, ...updates} : t));
                   setSelectedTxns(new Set());
                 }} className="px-3 py-1 bg-blue-500 text-white rounded-lg text-[10px] font-bold">Apply</button>
+                <button onClick={async () => {
+                  const ids = [...selectedTxns];
+                  await supabase.from('egypt_bank_transactions').update({ category: null, subcategory: null }).in('id', ids);
+                  setTransactions(prev => prev.map(t => selectedTxns.has(t.id) ? {...t, category: '', subcategory: ''} : t));
+                  setSelectedTxns(new Set());
+                }} className="px-3 py-1 bg-amber-100 text-amber-700 border border-amber-300 rounded-lg text-[10px] font-bold">✕ Clear Category</button>
               </div>
               {/* Super Admin: Delete + Hide */}
               {isSuperAdmin && (
