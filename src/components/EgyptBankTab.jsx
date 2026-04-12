@@ -121,7 +121,12 @@ export default function EgyptBankTab({ user, userProfile, isAdmin, invoices, onR
     };
 
     // Strategy 1: Detect sparse bank statement format (dates scattered, amounts in various columns)
-    // Find which column has dates by scanning first 30 rows
+    // Helper: is this a formatted number like "280,000.00" or "15,171,688.70"?
+    const looksLikeNumber = (v) => /^[\d,.\s\-]+$/.test(String(v).trim()) && parseAmt(v) !== 0;
+    // Helper: does this contain letters (actual text)?
+    const hasLetters = (v) => /[a-zA-Z\u0600-\u06FF]/.test(String(v));
+
+    // Find which column has dates by scanning first 50 rows
     let sparseDateCol = -1;
     for (let c = 0; c < Math.min(10, grid[0]?.length || 0); c++) {
       let dateCount = 0;
@@ -132,39 +137,39 @@ export default function EgyptBankTab({ user, userProfile, isAdmin, invoices, onR
     }
 
     if (sparseDateCol >= 0) {
-      // Sparse bank statement format detected
       console.log('📊 Detected sparse bank statement, date column:', sparseDateCol);
       
-      // Find description column (column with most text content)
+      // Find description column (column with most cells containing LETTERS)
       let sparseDescCol = -1, maxText = 0;
       for (let c = 0; c < (grid[0]?.length || 0); c++) {
         if (c === sparseDateCol) continue;
         let textCount = 0;
-        for (let r = 0; r < Math.min(50, grid.length); r++) {
-          if (grid[r][c] && grid[r][c].length > 5 && isNaN(parseAmt(grid[r][c]))) textCount++;
+        for (let r = 0; r < Math.min(80, grid.length); r++) {
+          const v = grid[r][c];
+          if (v && v.length > 3 && hasLetters(v)) textCount++;
         }
         if (textCount > maxText) { maxText = textCount; sparseDescCol = c; }
       }
       
-      // Detect which columns have amounts by scanning all rows
+      // Detect amount columns (cells that look like formatted numbers, NOT in date or desc columns)
       const amtCols = {};
-      grid.forEach(row => {
-        row.forEach((v, c) => {
-          if (c !== sparseDateCol && c !== sparseDescCol && parseAmt(v) > 0) {
+      for (let r = 0; r < grid.length; r++) {
+        for (let c = 0; c < grid[r].length; c++) {
+          if (c === sparseDateCol || c === sparseDescCol) continue;
+          const v = grid[r][c];
+          if (v && looksLikeNumber(v)) {
             amtCols[c] = (amtCols[c] || 0) + 1;
           }
-        });
-      });
+        }
+      }
       
-      // Find debit, credit, balance columns (most frequent amount columns)
-      const sortedAmtCols = Object.entries(amtCols).filter(([c, n]) => n >= 2).sort((a, b) => b[1] - a[1]).map(([c]) => parseInt(c));
+      // Sort by column position — typically: debit (leftmost), credit (middle), balance (rightmost)
+      const sortedAmtCols = Object.entries(amtCols).filter(([c, n]) => n >= 2).map(([c]) => parseInt(c)).sort((a, b) => a - b);
       let balCol = -1, creditCol = -1, debitCol = -1;
       if (sortedAmtCols.length >= 3) {
-        const sorted = [...sortedAmtCols].sort((a, b) => a - b);
-        debitCol = sorted[0]; creditCol = sorted[1]; balCol = sorted[2];
+        debitCol = sortedAmtCols[0]; creditCol = sortedAmtCols[1]; balCol = sortedAmtCols[2];
       } else if (sortedAmtCols.length >= 2) {
-        const sorted = [...sortedAmtCols].sort((a, b) => a - b);
-        creditCol = sorted[0]; balCol = sorted[1];
+        creditCol = sortedAmtCols[0]; balCol = sortedAmtCols[1];
       } else if (sortedAmtCols.length >= 1) {
         creditCol = sortedAmtCols[0];
       }
