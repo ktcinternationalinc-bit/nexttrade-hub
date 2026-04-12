@@ -3616,6 +3616,47 @@ export default function App() {
             })()}
 
 
+
+            {/* ===== TEAM ACTIVITY FEED ===== */}
+            {activityFeed.length > 0 && (
+              <div className="bg-white rounded-xl p-5 border mt-4">
+                <h3 className="text-sm font-extrabold mb-3 flex items-center gap-2">
+                  <span className="w-2 h-2 rounded-full bg-green-400 animate-pulse" />
+                  Team Activity / نشاط الفريق
+                </h3>
+                <div className="space-y-0.5 max-h-[350px] overflow-auto">
+                  {activityFeed.map((a, i) => {
+                    const who = (teamUsers || []).find(u => u.id === a.user_id);
+                    const name = who?.name || 'System';
+                    const initials = name.split(' ').map(w => w[0]).join('').toUpperCase().substring(0, 2);
+                    const colors = ['bg-blue-500','bg-purple-500','bg-emerald-500','bg-amber-500','bg-rose-500','bg-cyan-500'];
+                    const color = colors[(name.charCodeAt(0) || 0) % colors.length];
+                    const timeAgo = (() => {
+                      const diff = Date.now() - new Date(a.created_at).getTime();
+                      const mins = Math.floor(diff / 60000);
+                      if (mins < 1) return 'just now';
+                      if (mins < 60) return mins + 'm ago';
+                      const hrs = Math.floor(mins / 60);
+                      if (hrs < 24) return hrs + 'h ago';
+                      const days = Math.floor(hrs / 24);
+                      return days + 'd ago';
+                    })();
+                    const icon = a.log_category === 'finance' ? '💰' : a.log_category === 'crm' ? '🤝' : a.log_category === 'ticket' ? '🎫' : a.log_category === 'shipping' ? '🚢' : a.log_category === 'admin' ? '⚙️' : '📋';
+                    return (
+                      <div key={a.id || i} className="flex items-start gap-2.5 py-2 border-b border-slate-50 last:border-0">
+                        <div className={`w-7 h-7 rounded-full ${color} text-white text-[10px] font-bold flex items-center justify-center flex-shrink-0 mt-0.5`}>{initials}</div>
+                        <div className="flex-1 min-w-0">
+                          <div className="text-xs">
+                            <span className="font-bold text-slate-800">{name}</span>
+                            <span className="text-slate-500 ml-1.5">{a.entry_text}</span>
+                          </div>
+                          <div className="text-[10px] text-slate-400 mt-0.5">{icon} {a.log_category || 'general'} · {timeAgo}</div>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+
             {/* ===== FINANCIAL DASHBOARD (shown first for users with access) ===== */}
             {(isAdmin || modulePerms['Sales'] || modulePerms['Treasury']) && (<>
             <div className="bg-blue-100 rounded-lg px-3 py-2 mb-3 flex justify-between items-center cursor-pointer" onClick={() => setHideSections({...hideSections, invoices: !hideSections.invoices})}>
@@ -3981,45 +4022,6 @@ export default function App() {
               invoices={invoices} customers={customers} navigate={navigate} fE={fE} users={teamUsers} />
 
 
-            {/* ===== TEAM ACTIVITY FEED ===== */}
-            {activityFeed.length > 0 && (
-              <div className="bg-white rounded-xl p-5 border mt-4">
-                <h3 className="text-sm font-extrabold mb-3 flex items-center gap-2">
-                  <span className="w-2 h-2 rounded-full bg-green-400 animate-pulse" />
-                  Team Activity / نشاط الفريق
-                </h3>
-                <div className="space-y-0.5 max-h-[350px] overflow-auto">
-                  {activityFeed.map((a, i) => {
-                    const who = (teamUsers || []).find(u => u.id === a.user_id);
-                    const name = who?.name || 'System';
-                    const initials = name.split(' ').map(w => w[0]).join('').toUpperCase().substring(0, 2);
-                    const colors = ['bg-blue-500','bg-purple-500','bg-emerald-500','bg-amber-500','bg-rose-500','bg-cyan-500'];
-                    const color = colors[(name.charCodeAt(0) || 0) % colors.length];
-                    const timeAgo = (() => {
-                      const diff = Date.now() - new Date(a.created_at).getTime();
-                      const mins = Math.floor(diff / 60000);
-                      if (mins < 1) return 'just now';
-                      if (mins < 60) return mins + 'm ago';
-                      const hrs = Math.floor(mins / 60);
-                      if (hrs < 24) return hrs + 'h ago';
-                      const days = Math.floor(hrs / 24);
-                      return days + 'd ago';
-                    })();
-                    const icon = a.log_category === 'finance' ? '💰' : a.log_category === 'crm' ? '🤝' : a.log_category === 'ticket' ? '🎫' : a.log_category === 'shipping' ? '🚢' : a.log_category === 'admin' ? '⚙️' : '📋';
-                    return (
-                      <div key={a.id || i} className="flex items-start gap-2.5 py-2 border-b border-slate-50 last:border-0">
-                        <div className={`w-7 h-7 rounded-full ${color} text-white text-[10px] font-bold flex items-center justify-center flex-shrink-0 mt-0.5`}>{initials}</div>
-                        <div className="flex-1 min-w-0">
-                          <div className="text-xs">
-                            <span className="font-bold text-slate-800">{name}</span>
-                            <span className="text-slate-500 ml-1.5">{a.entry_text}</span>
-                          </div>
-                          <div className="text-[10px] text-slate-400 mt-0.5">{icon} {a.log_category || 'general'} · {timeAgo}</div>
-                        </div>
-                      </div>
-                    );
-                  })}
-                </div>
               </div>
             )}
 

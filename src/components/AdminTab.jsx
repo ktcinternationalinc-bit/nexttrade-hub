@@ -488,12 +488,28 @@ export default function AdminTab({ user, userProfile, users, isAdmin, customers 
           {filteredLogs.map(l => {
             var userName = getUserName(l.user_id);
             var cat = l.log_category || 'other';
-            var icons = {ticket:'🎫',crm:'🤝',shipping:'🛳️',customs:'🚢',calendar:'📅',finance:'💰',manual:'✏️',other:'⚡'};
+            var icons = {ticket:'🎫',crm:'🤝',shipping:'🛳️',customs:'🚢',calendar:'📅',finance:'💰',manual:'✏️',other:'⚡',login:'🟢'};
+
+            // Make ticket numbers clickable in entry_text
+            var resolvedText = resolveIds(l.entry_text || '');
+            var textParts = resolvedText.split(/(TKT-\d+)/g);
+
             return (
               <div key={l.id} className="flex items-start gap-2 py-2 border-b border-slate-50">
                 <span className="text-sm mt-0.5">{icons[cat] || (l.auto_generated ? '⚡' : '✏️')}</span>
                 <div className="flex-1">
-                  <div className="text-xs">{resolveIds(l.entry_text)}</div>
+                  <div className="text-xs">
+                    {textParts.map(function(part, idx) {
+                      if (/^TKT-\d+$/.test(part)) {
+                        var matchedTicket = tickets.find(function(t) { return t.ticket_number === part; });
+                        if (matchedTicket) {
+                          return <span key={idx} className="text-blue-600 font-bold cursor-pointer hover:underline" onClick={function() { openTicketDetail(matchedTicket); }}>{part}</span>;
+                        }
+                        return <span key={idx} className="text-blue-500 font-bold">{part}</span>;
+                      }
+                      return <span key={idx}>{part}</span>;
+                    })}
+                  </div>
                   <div className="text-[10px] text-slate-400 mt-0.5">
                     <span className="text-blue-500 font-semibold mr-2">{userName}</span>
                     {l.log_date} {l.log_time ? l.log_time.substring(0, 5) : ''}
@@ -560,19 +576,69 @@ export default function AdminTab({ user, userProfile, users, isAdmin, customers 
             var userName = getUserName(a.changed_by);
             var actionColors = { create: 'text-emerald-600', update: 'text-blue-600', delete: 'text-red-600' };
             var actionIcons = { create: '✨', update: '✏️', delete: '🗑️' };
+
+            // Resolve ticket reference
+            var linkedTicket = null;
+            var friendlyTarget = a.table_name || '';
+            if (a.table_name === 'tickets' && a.record_id) {
+              linkedTicket = tickets.find(t => t.id === a.record_id);
+              if (linkedTicket) friendlyTarget = (linkedTicket.ticket_number || 'Ticket') + ' — ' + (linkedTicket.title || '').substring(0, 40);
+            } else if (a.table_name === 'ticket_comments' && a.new_values) {
+              var ticketId = typeof a.new_values === 'object' ? a.new_values.ticket_id : null;
+              if (ticketId) linkedTicket = tickets.find(t => t.id === ticketId);
+              if (linkedTicket) friendlyTarget = 'Comment on ' + (linkedTicket.ticket_number || 'Ticket') + ' — ' + (linkedTicket.title || '').substring(0, 30);
+              else friendlyTarget = 'Ticket Comment';
+            }
+
+            // Build user-friendly change summary for updates
+            var changeSummary = null;
+            if (a.action === 'update' && a.new_values && typeof a.new_values === 'object') {
+              var parts = [];
+              Object.entries(a.new_values).forEach(function(entry) {
+                var key = entry[0]; var val = entry[1];
+                if (['updated_at','last_seen','created_at'].includes(key)) return;
+                var label = key.replace(/_/g, ' ').replace(/\b\w/g, function(c) { return c.toUpperCase(); });
+                var resolved = resolveAuditValue(key, val);
+                parts.push({ label: label, value: resolved });
+              });
+              if (parts.length > 0) changeSummary = parts;
+            }
+
             return (
-              <div key={a.id} className="py-2 border-b border-slate-50">
-                <div className="flex items-center gap-2 text-xs">
+              <div key={a.id} className="py-2.5 border-b border-slate-50">
+                <div className="flex items-center gap-2 text-xs flex-wrap">
                   <span>{actionIcons[a.action] || '📋'}</span>
                   <span className={'font-bold ' + (actionColors[a.action] || '')}>{(a.action||'').toUpperCase()}</span>
-                  <span className="text-slate-500">{a.table_name}</span>
+                  {linkedTicket ? (
+                    <span className="text-blue-600 font-semibold cursor-pointer hover:underline" onClick={() => openTicketDetail(linkedTicket)}>
+                      🎫 {friendlyTarget}
+                    </span>
+                  ) : (
+                    <span className="text-slate-500">{friendlyTarget}</span>
+                  )}
                   <span className="text-blue-500 font-semibold ml-auto">{userName}</span>
-                  <span className="text-slate-400">{a.created_at ? new Date(a.created_at).toLocaleString() : ''}</span>
+                  <span className="text-slate-400">{a.created_at ? new Date(a.created_at).toLocaleString([], { month:'short', day:'numeric', hour:'2-digit', minute:'2-digit' }) : ''}</span>
                 </div>
-                {a.new_values && (
+
+                {/* User-friendly change details */}
+                {changeSummary && (
+                  <div className="mt-1.5 flex gap-2 flex-wrap">
+                    {changeSummary.slice(0, 5).map(function(ch, idx) {
+                      return (
+                        <span key={idx} className="inline-flex items-center gap-1 px-2 py-1 bg-slate-50 rounded text-[10px]">
+                          <span className="text-slate-400">{ch.label}:</span>
+                          <span className="font-bold text-slate-700">{ch.value}</span>
+                        </span>
+                      );
+                    })}
+                  </div>
+                )}
+
+                {/* Fallback for create actions — show key fields */}
+                {a.action === 'create' && a.new_values && !changeSummary && (
                   <div className="text-[10px] text-slate-500 mt-1 bg-slate-50 rounded p-1.5 max-h-[60px] overflow-auto">
-                    {typeof a.new_values === 'object' ? Object.entries(a.new_values).slice(0, 5).map(function(entry) {
-                      return <span key={entry[0]} className="mr-2"><span className="text-slate-400">{entry[0]}:</span> <span className="font-semibold">{resolveAuditValue(entry[0], entry[1])}</span></span>;
+                    {typeof a.new_values === 'object' ? Object.entries(a.new_values).filter(function(e) { return !['id','created_at','updated_at'].includes(e[0]); }).slice(0, 4).map(function(entry) {
+                      return <span key={entry[0]} className="mr-2"><span className="text-slate-400">{entry[0].replace(/_/g,' ')}:</span> <span className="font-semibold">{resolveAuditValue(entry[0], entry[1])}</span></span>;
                     }) : resolveIds(String(a.new_values).substring(0, 200))}
                   </div>
                 )}

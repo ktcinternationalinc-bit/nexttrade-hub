@@ -161,6 +161,14 @@ export default function CRMTab({ customers, invoices, user, userProfile, users, 
     });
     if (sortBy === 'alpha') arr.sort((a, b) => (a.name || '').localeCompare(b.name || ''));
     if (sortBy === 'alpha_rev') arr.sort((a, b) => (b.name || '').localeCompare(a.name || ''));
+    if (sortBy === 'recently_added') arr.sort((a, b) => (b.created_at || '').localeCompare(a.created_at || ''));
+    if (sortBy === 'recently_contacted') arr.sort((a, b) => (b.last_contact_date || '').localeCompare(a.last_contact_date || ''));
+    if (sortBy === 'not_contacted') arr.sort((a, b) => {
+      if (!a.last_contact_date && !b.last_contact_date) return 0;
+      if (!a.last_contact_date) return -1;
+      if (!b.last_contact_date) return 1;
+      return (a.last_contact_date || '').localeCompare(b.last_contact_date || '');
+    });
     if (sortBy === 'most_orders') arr.sort((a, b) => custInvoices(b).length - custInvoices(a).length);
     if (sortBy === 'top_sales') arr.sort((a, b) => {
       const aT = custInvoices(a).reduce((s, i) => s + Number(i.total_amount || 0), 0);
@@ -191,7 +199,7 @@ export default function CRMTab({ customers, invoices, user, userProfile, users, 
       return 0;
     });
     return arr;
-  }, [customers, q, groupF, catF, sortBy, invoices, allNotes]);
+  }, [customers, q, groupF, catF, sortBy, invoices, allNotes, repF, stageF]);
 
   const groups = [...new Set(customers.map(c => c.group_name).filter(Boolean))].sort();
 
@@ -348,21 +356,42 @@ export default function CRMTab({ customers, invoices, user, userProfile, users, 
         </select>
         <select value={sortBy} onChange={e => setSortBy(e.target.value)} className="px-3 py-1.5 rounded-lg border border-slate-200 text-[11px] bg-white">
           <option value="alpha">A → Z</option><option value="alpha_rev">Z → A</option>
+          <option value="recently_added">🆕 Recently Added</option><option value="recently_contacted">📞 Recently Contacted</option>
+          <option value="not_contacted">⚠️ Not Contacted (oldest first)</option>
           <option value="most_orders">Most Orders</option><option value="top_sales">Top Sales</option>
           <option value="latest_note">Latest Note</option><option value="no_notes">No Notes</option>
         </select>
         <span className="text-[10px] text-slate-400 ml-auto">{filtered.length} results</span>
       </div>
 
+      {/* Quick Filters */}
+      <div className="grid grid-cols-3 gap-2 mb-3">
+        <div className={'bg-white rounded-lg p-2.5 cursor-pointer transition hover:shadow-md border ' + (sortBy === 'recently_added' ? 'ring-2 ring-blue-400 border-blue-200' : 'border-slate-100')} onClick={() => setSortBy('recently_added')}>
+          <div className="text-[9px] text-slate-400 uppercase">🆕 Recently Added</div>
+          <div className="text-lg font-extrabold text-blue-600">{customers.filter(c => c.created_at && (Date.now() - new Date(c.created_at).getTime()) < 30 * 86400000).length}</div>
+          <div className="text-[9px] text-slate-400">last 30 days</div>
+        </div>
+        <div className={'bg-white rounded-lg p-2.5 cursor-pointer transition hover:shadow-md border ' + (sortBy === 'recently_contacted' ? 'ring-2 ring-emerald-400 border-emerald-200' : 'border-slate-100')} onClick={() => setSortBy('recently_contacted')}>
+          <div className="text-[9px] text-slate-400 uppercase">📞 Recently Contacted</div>
+          <div className="text-lg font-extrabold text-emerald-600">{customers.filter(c => c.last_contact_date && (Date.now() - new Date(c.last_contact_date).getTime()) < 14 * 86400000).length}</div>
+          <div className="text-[9px] text-slate-400">last 14 days</div>
+        </div>
+        <div className={'bg-white rounded-lg p-2.5 cursor-pointer transition hover:shadow-md border ' + (sortBy === 'not_contacted' ? 'ring-2 ring-red-400 border-red-200' : 'border-slate-100')} onClick={() => setSortBy('not_contacted')}>
+          <div className="text-[9px] text-slate-400 uppercase">⚠️ Not Contacted</div>
+          <div className="text-lg font-extrabold text-red-500">{customers.filter(c => !c.last_contact_date || (Date.now() - new Date(c.last_contact_date).getTime()) > 30 * 86400000).length}</div>
+          <div className="text-[9px] text-slate-400">30+ days</div>
+        </div>
+      </div>
+
       {/* Stats Row */}
       <div className="grid grid-cols-4 gap-3 mb-4">
-        <div className="bg-white rounded-xl p-3 border border-slate-100"><div className="text-[9px] text-slate-400 uppercase tracking-wide">Total</div>
+        <div className={'bg-white rounded-xl p-3 cursor-pointer transition hover:shadow-md border ' + (stageF === 'all' ? 'ring-2 ring-slate-300 border-slate-200' : 'border-slate-100')} onClick={() => setStageF('all')}><div className="text-[9px] text-slate-400 uppercase tracking-wide">Total</div>
           <div className="text-xl font-extrabold">{filtered.length}</div></div>
-        <div className="bg-white rounded-xl p-3 border border-slate-100"><div className="text-[9px] text-slate-400 uppercase tracking-wide">Active</div>
+        <div className={'bg-white rounded-xl p-3 cursor-pointer transition hover:shadow-md border ' + (stageF === 'active' ? 'ring-2 ring-blue-400 border-blue-200' : 'border-slate-100')} onClick={() => setStageF(stageF === 'active' ? 'all' : 'active')}><div className="text-[9px] text-slate-400 uppercase tracking-wide">Active</div>
           <div className="text-xl font-extrabold text-blue-600">{filtered.filter(c=>!['won','lost'].includes(c.pipeline_stage||'lead')).length}</div></div>
-        <div className="bg-white rounded-xl p-3 border border-slate-100"><div className="text-[9px] text-emerald-500 uppercase tracking-wide">Won</div>
+        <div className={'bg-white rounded-xl p-3 cursor-pointer transition hover:shadow-md border ' + (stageF === 'won' ? 'ring-2 ring-emerald-400 border-emerald-200' : 'border-slate-100')} onClick={() => setStageF(stageF === 'won' ? 'all' : 'won')}><div className="text-[9px] text-emerald-500 uppercase tracking-wide">Won</div>
           <div className="text-xl font-extrabold text-emerald-600">{filtered.filter(c=>(c.pipeline_stage)==='won').length}</div></div>
-        <div className="bg-white rounded-xl p-3 border border-slate-100"><div className="text-[9px] text-red-400 uppercase tracking-wide">Lost</div>
+        <div className={'bg-white rounded-xl p-3 cursor-pointer transition hover:shadow-md border ' + (stageF === 'lost' ? 'ring-2 ring-red-400 border-red-200' : 'border-slate-100')} onClick={() => setStageF(stageF === 'lost' ? 'all' : 'lost')}><div className="text-[9px] text-red-400 uppercase tracking-wide">Lost</div>
           <div className="text-xl font-extrabold text-red-500">{filtered.filter(c=>(c.pipeline_stage)==='lost').length}</div></div>
       </div>
 
