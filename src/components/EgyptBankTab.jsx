@@ -173,29 +173,60 @@ export default function EgyptBankTab({ user, userProfile, isAdmin, invoices, onR
         if (textCount > maxText) { maxText = textCount; sparseDescCol = c; }
       }
       
-      // Detect amount columns (cells that look like formatted numbers, NOT in date or desc columns)
+      // Detect amount columns
       const amtCols = {};
+      const amtSums = {};
       for (let r = 0; r < grid.length; r++) {
         for (let c = 0; c < grid[r].length; c++) {
           if (c === sparseDateCol || c === sparseDescCol) continue;
           const v = grid[r][c];
           if (v && looksLikeNumber(v)) {
             amtCols[c] = (amtCols[c] || 0) + 1;
+            amtSums[c] = (amtSums[c] || 0) + parseAmt(v);
           }
         }
       }
       
-      // Sort by column position — typically: debit (leftmost), credit (middle), balance (rightmost)
       const sortedAmtCols = Object.entries(amtCols).filter(([c, n]) => n >= 2).map(([c]) => parseInt(c)).sort((a, b) => a - b);
-      let balCol = -1, creditCol = -1, debitCol = -1;
-      if (sortedAmtCols.length >= 3) {
-        debitCol = sortedAmtCols[0]; creditCol = sortedAmtCols[1]; balCol = sortedAmtCols[2];
-      } else if (sortedAmtCols.length >= 2) {
-        creditCol = sortedAmtCols[0]; balCol = sortedAmtCols[1];
-      } else if (sortedAmtCols.length >= 1) {
-        creditCol = sortedAmtCols[0];
+      // Balance = column with highest average value (running total is always largest)
+      let balCol = -1, maxAvg = 0;
+      for (const c of sortedAmtCols) {
+        const avg = (amtSums[c] || 0) / (amtCols[c] || 1);
+        if (avg > maxAvg) { maxAvg = avg; balCol = c; }
       }
-      console.log('Columns — date:', sparseDateCol, 'desc:', sparseDescCol, 'debit:', debitCol, 'credit:', creditCol, 'balance:', balCol);
+      const nonBalCols = sortedAmtCols.filter(c => c !== balCol);
+      
+      // Determine which non-balance column is credit vs debit by checking balance changes
+      const colDirection = {};
+      let prevBal = 0;
+      for (let r = 0; r < grid.length; r++) {
+        const bal = balCol >= 0 ? parseAmt(grid[r][balCol]) : 0;
+        if (bal > 0 && prevBal > 0) {
+          const change = bal - prevBal;
+          for (const c of nonBalCols) {
+            const v = parseAmt(grid[r][c]);
+            if (v > 0) {
+              if (!colDirection[c]) colDirection[c] = { up: 0, down: 0 };
+              if (change > 0) colDirection[c].up++;
+              else if (change < 0) colDirection[c].down++;
+            }
+          }
+        }
+        if (bal > 0) prevBal = bal;
+      }
+      
+      // Credit column = appears when balance goes UP; Debit = appears when balance goes DOWN
+      const creditCols = new Set();
+      const debitCols = new Set();
+      for (const [c, dir] of Object.entries(colDirection)) {
+        if (dir.up > dir.down) creditCols.add(parseInt(c));
+        else debitCols.add(parseInt(c));
+      }
+      // If we couldn't determine, assume all are credits
+      if (creditCols.size === 0 && debitCols.size === 0) {
+        nonBalCols.forEach(c => creditCols.add(c));
+      }
+      console.log('Columns — date:', sparseDateCol, 'desc:', sparseDescCol, 'credit:', [...creditCols], 'debit:', [...debitCols], 'balance:', balCol);
 
       // Group rows into transactions
       const transactions = [];
@@ -204,15 +235,23 @@ export default function EgyptBankTab({ user, userProfile, isAdmin, invoices, onR
         const row = grid[r];
         const dateStr = parseBankDate(row[sparseDateCol]);
         const desc = sparseDescCol >= 0 ? (row[sparseDescCol] || '').trim() : '';
-        const debit = debitCol >= 0 ? parseAmt(row[debitCol]) : 0;
-        const credit = creditCol >= 0 ? parseAmt(row[creditCol]) : 0;
+        
+        // Get credit and debit amounts from detected columns
+        let creditAmt = 0, debitAmt = 0;
+        for (const c of creditCols) { const v = parseAmt(row[c]); if (v > 0) creditAmt += v; }
+        for (const c of debitCols) { const v = parseAmt(row[c]); if (v > 0) debitAmt += v; }
 
         if (dateStr) {
           if (current) transactions.push(current);
-          const amount = credit > 0 ? credit : (debit > 0 ? -debit : 0);
+          const amount = creditAmt > 0 ? creditAmt : (debitAmt > 0 ? -debitAmt : 0);
           current = { date: dateStr, description: desc, amount, _include: true };
         } else if (current && desc && !desc.includes('OPENING BALANCE') && !desc.includes('CLOSING BALANCE')) {
           current.description += ' ' + desc;
+          // Pick up amounts from continuation rows too
+          if (current.amount === 0) {
+            const amt = creditAmt > 0 ? creditAmt : (debitAmt > 0 ? -debitAmt : 0);
+            if (amt !== 0) current.amount = amt;
+          }
         }
       }
       if (current) transactions.push(current);
