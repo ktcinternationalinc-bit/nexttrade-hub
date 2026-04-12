@@ -3140,12 +3140,17 @@ export default function App() {
               const twoDaysAgo = new Date(Date.now() - 48 * 3600000).toISOString();
               const getUserName = (id) => (teamUsers || []).find(u => u.id === id)?.name || '';
               const priColor = (p) => p === 'high' ? '#ef4444' : p === 'low' ? '#10b981' : '#f59e0b';
-              const priIcon = (p) => p === 'high' ? '🔴' : p === 'low' ? '🟢' : '🟡';
               const timeAgo = (d) => { const m = Math.floor((Date.now() - new Date(d).getTime()) / 60000); if (m < 60) return m + 'm'; const h = Math.floor(m/60); if (h < 24) return h + 'h'; return Math.floor(h/24) + 'd'; };
+              const isMyTicket = (t) => t.assigned_to === myId || t.created_by === myId;
 
-              const newTickets = dashTickets.filter(t => t.created_at >= twoDaysAgo && t.status !== 'Closed');
-              const myTickets = dashTickets.filter(t => t.assigned_to === myId && t.status !== 'Closed');
-              const overdueTickets = dashTickets.filter(t => t.due_date && t.due_date < todayStr && t.status !== 'Closed');
+              const allOpen = dashTickets.filter(t => t.status !== 'Closed');
+              const myOpen = allOpen.filter(t => isMyTicket(t));
+              const teamOpen = allOpen.filter(t => !isMyTicket(t));
+              const myNew = myOpen.filter(t => t.created_at >= twoDaysAgo);
+              const teamNew = teamOpen.filter(t => t.created_at >= twoDaysAgo);
+              const myUpdates = recentTicketUpdates.filter(c => c.tickets && isMyTicket(c.tickets));
+              const teamUpdates = recentTicketUpdates.filter(c => c.tickets && !isMyTicket(c.tickets));
+              const showAll = hideSections.ticketShowAll;
 
               const TicketRow = ({ t, highlight }) => (
                 <div className="rounded-lg p-2.5 border cursor-pointer hover:shadow-sm transition" onClick={() => { setOpenTicketId(t.id); setTab('tickets'); }}
@@ -3159,82 +3164,116 @@ export default function App() {
                   <div className="flex gap-2 mt-1 items-center" style={{ fontSize: '9px', color: '#64748b' }}>
                     <span className="px-1.5 py-0.5 rounded" style={{ background: t.status === 'New' ? '#dbeafe' : t.status === 'In Progress' ? '#fef3c7' : t.status === 'Closed' ? '#f1f5f9' : '#f3e8ff', color: t.status === 'New' ? '#1d4ed8' : t.status === 'In Progress' ? '#b45309' : '#6b21a8', fontWeight: 700 }}>{t.status}</span>
                     {t.assigned_to && <span>→ {getUserName(t.assigned_to)}</span>}
-                    {t.due_date && <span style={{ color: t.due_date < todayStr ? '#dc2626' : '#64748b', fontWeight: t.due_date < todayStr ? 700 : 400 }}>Due: {t.due_date}{t.due_date < todayStr ? ' ⚠️' : ''}</span>}
+                    {t.due_date && t.due_date < todayStr && <span style={{ color: '#dc2626', fontWeight: 700 }}>⚠️ OVERDUE</span>}
+                    {t.due_date && t.due_date >= todayStr && <span>Due: {t.due_date}</span>}
                     {highlight && <span style={{ color: '#2563eb', fontWeight: 700 }}>✨ NEW</span>}
                   </div>
                 </div>
               );
 
+              const UpdateRow = ({ c }) => {
+                const ticket = c.tickets;
+                if (!ticket) return null;
+                const commenter = (teamUsers || []).find(u => u.id === c.created_by);
+                return (
+                  <div className="rounded-lg p-2.5 border cursor-pointer hover:shadow-sm" onClick={() => { setOpenTicketId(ticket.id); setTab('tickets'); }}
+                    style={{ background: 'rgba(139,92,246,0.04)', borderColor: 'rgba(139,92,246,0.12)' }}>
+                    <div className="flex items-center gap-1.5">
+                      <span style={{ fontSize: '10px', fontWeight: 800, color: '#8b5cf6' }}>{ticket.ticket_number}</span>
+                      <span style={{ fontSize: '11px', fontWeight: 600, color: '#1e293b' }} className="truncate flex-1">{ticket.title}</span>
+                      <span style={{ fontSize: '9px', color: '#94a3b8' }}>{timeAgo(c.created_at)}</span>
+                    </div>
+                    <div style={{ fontSize: '10px', color: '#475569', marginTop: '2px' }}>
+                      {c.is_system ? '🤖' : '💬'} <span style={{ fontWeight: 700, color: '#6d28d9' }}>{commenter?.name || 'System'}</span>: {(c.comment_text || '').substring(0, 120)}{(c.comment_text || '').length > 120 ? '...' : ''}
+                    </div>
+                  </div>
+                );
+              };
+
+              const ExpandableList = ({ items, renderItem, max, id }) => {
+                const expanded = hideSections['tktExp_' + id];
+                const show = expanded ? items : items.slice(0, max || 5);
+                return (
+                  <div className="space-y-1">
+                    {show.map(renderItem)}
+                    {items.length > (max || 5) && (
+                      <div className="text-[10px] font-semibold text-center py-1 cursor-pointer rounded-lg hover:bg-slate-50"
+                        style={{ color: '#8b5cf6' }}
+                        onClick={(e) => { e.stopPropagation(); setHideSections(prev => ({...prev, ['tktExp_' + id]: !expanded})); }}>
+                        {expanded ? '▲ Show less' : `▼ Show all ${items.length}`}
+                      </div>
+                    )}
+                  </div>
+                );
+              };
+
               return (
                 <div className="mb-4">
-                  <div className="flex justify-between items-center mb-2 cursor-pointer" onClick={() => setHideSections({...hideSections, ticketDash: !hideSections.ticketDash})}>
-                    <h3 className="text-sm font-bold" style={{ color: '#8b5cf6' }}>🎫 Tickets — {dashTickets.filter(t => t.status !== 'Closed').length} open{overdueTickets.length > 0 ? ` • ${overdueTickets.length} overdue` : ''}</h3>
-                    <span className="text-xs text-slate-400">{hideSections.ticketDash ? '👁️ Show' : '🙈 Hide'}</span>
+                  <div className="flex justify-between items-center mb-2">
+                    <div className="flex items-center gap-2 cursor-pointer" onClick={() => setHideSections({...hideSections, ticketDash: !hideSections.ticketDash})}>
+                      <h3 className="text-sm font-bold" style={{ color: '#8b5cf6' }}>🎫 Tickets — {myOpen.length} mine open{isAdmin ? `, ${allOpen.length} total` : ''}</h3>
+                      <span className="text-xs text-slate-400">{hideSections.ticketDash ? '👁️' : '🙈'}</span>
+                    </div>
+                    {!hideSections.ticketDash && isAdmin && (
+                      <button onClick={() => setHideSections({...hideSections, ticketShowAll: !showAll})}
+                        className="px-2.5 py-1 rounded-lg text-[10px] font-semibold"
+                        style={{ background: showAll ? '#8b5cf6' : '#f3e8ff', color: showAll ? '#fff' : '#8b5cf6' }}>
+                        {showAll ? '👥 Showing All' : '👤 My Tickets'}
+                      </button>
+                    )}
                   </div>
 
                   {!hideSections.ticketDash && (<div>
-                    {/* NEW TICKETS — highlighted */}
-                    {newTickets.length > 0 && (
+                    {/* MY NEW TICKETS */}
+                    {myNew.length > 0 && (
                       <div className="mb-3">
-                        <div className="text-[10px] font-bold text-blue-600 mb-1 uppercase tracking-wider">✨ New Tickets (last 48h)</div>
-                        <div className="space-y-1">
-                          {newTickets.slice(0, 5).map(t => <TicketRow key={t.id} t={t} highlight={true} />)}
-                          {newTickets.length > 5 && <div className="text-[10px] text-blue-500 font-semibold text-center py-1 cursor-pointer" onClick={() => setTab('tickets')}>+{newTickets.length - 5} more new tickets →</div>}
-                        </div>
+                        <div className="text-[10px] font-bold text-blue-600 mb-1 uppercase tracking-wider">✨ My New Tickets ({myNew.length})</div>
+                        <ExpandableList items={myNew} max={5} id="myNew" renderItem={(t) => <TicketRow key={t.id} t={t} highlight={true} />} />
                       </div>
                     )}
 
-                    {/* RECENT UPDATES — comments */}
-                    {recentTicketUpdates.length > 0 && (
+                    {/* MY RECENT UPDATES */}
+                    {myUpdates.length > 0 && (
                       <div className="mb-3">
-                        <div className="text-[10px] font-bold text-purple-600 mb-1 uppercase tracking-wider">💬 Recent Updates</div>
-                        <div className="space-y-1">
-                          {recentTicketUpdates.slice(0, 5).map(c => {
-                            const ticket = c.tickets;
-                            if (!ticket) return null;
-                            const commenter = (teamUsers || []).find(u => u.id === c.created_by);
-                            return (
-                              <div key={c.id} className="rounded-lg p-2.5 border cursor-pointer hover:shadow-sm" onClick={() => { setOpenTicketId(ticket.id); setTab('tickets'); }}
-                                style={{ background: 'rgba(139,92,246,0.04)', borderColor: 'rgba(139,92,246,0.12)' }}>
-                                <div className="flex items-center gap-1.5">
-                                  <span style={{ fontSize: '10px', fontWeight: 800, color: '#8b5cf6' }}>{ticket.ticket_number}</span>
-                                  <span style={{ fontSize: '11px', fontWeight: 600, color: '#1e293b' }} className="truncate flex-1">{ticket.title}</span>
-                                  <span style={{ fontSize: '9px', color: '#94a3b8' }}>{timeAgo(c.created_at)}</span>
-                                </div>
-                                <div style={{ fontSize: '10px', color: '#475569', marginTop: '2px' }}>
-                                  {c.is_system ? '🤖' : '💬'} <span style={{ fontWeight: 700, color: '#6d28d9' }}>{commenter?.name || 'System'}</span>: {(c.comment_text || '').substring(0, 120)}{(c.comment_text || '').length > 120 ? '...' : ''}
-                                </div>
-                              </div>
-                            );
-                          })}
-                          {recentTicketUpdates.length > 5 && <div className="text-[10px] text-purple-500 font-semibold text-center py-1 cursor-pointer" onClick={() => setTab('tickets')}>+{recentTicketUpdates.length - 5} more updates →</div>}
-                        </div>
+                        <div className="text-[10px] font-bold text-purple-600 mb-1 uppercase tracking-wider">💬 My Recent Updates ({myUpdates.length})</div>
+                        <ExpandableList items={myUpdates} max={5} id="myUpd" renderItem={(c) => <UpdateRow key={c.id} c={c} />} />
                       </div>
                     )}
 
                     {/* MY OPEN TICKETS */}
-                    {myTickets.length > 0 && (
+                    {myOpen.length > 0 && (
                       <div className="mb-3">
-                        <div className="text-[10px] font-bold text-slate-600 mb-1 uppercase tracking-wider">📋 My Open Tickets ({myTickets.length})</div>
-                        <div className="space-y-1">
-                          {myTickets.slice(0, 5).map(t => <TicketRow key={t.id} t={t} highlight={false} />)}
-                          {myTickets.length > 5 && <div className="text-[10px] text-slate-500 font-semibold text-center py-1 cursor-pointer" onClick={() => setTab('tickets')}>View all {myTickets.length} tickets →</div>}
-                        </div>
+                        <div className="text-[10px] font-bold text-slate-600 mb-1 uppercase tracking-wider">📋 My Open Tickets ({myOpen.length})</div>
+                        <ExpandableList items={myOpen} max={5} id="myOpen" renderItem={(t) => <TicketRow key={t.id} t={t} highlight={false} />} />
                       </div>
                     )}
 
-                    {/* OVERDUE */}
-                    {overdueTickets.length > 0 && (
-                      <div className="mb-3">
-                        <div className="text-[10px] font-bold text-red-600 mb-1 uppercase tracking-wider">⚠️ Overdue ({overdueTickets.length})</div>
-                        <div className="space-y-1">
-                          {overdueTickets.slice(0, 3).map(t => <TicketRow key={t.id} t={t} highlight={false} />)}
+                    {/* ADMIN: TEAM SECTION */}
+                    {isAdmin && showAll && teamOpen.length > 0 && (
+                      <div className="mb-3 pt-2" style={{ borderTop: '2px solid rgba(139,92,246,0.15)' }}>
+                        {teamNew.length > 0 && (
+                          <div className="mb-3">
+                            <div className="text-[10px] font-bold text-blue-600 mb-1 uppercase tracking-wider">✨ Team New Tickets ({teamNew.length})</div>
+                            <ExpandableList items={teamNew} max={5} id="teamNew" renderItem={(t) => <TicketRow key={t.id} t={t} highlight={true} />} />
+                          </div>
+                        )}
+
+                        {teamUpdates.length > 0 && (
+                          <div className="mb-3">
+                            <div className="text-[10px] font-bold text-purple-600 mb-1 uppercase tracking-wider">💬 Team Recent Updates ({teamUpdates.length})</div>
+                            <ExpandableList items={teamUpdates} max={5} id="teamUpd" renderItem={(c) => <UpdateRow key={c.id} c={c} />} />
+                          </div>
+                        )}
+
+                        <div className="mb-3">
+                          <div className="text-[10px] font-bold text-slate-500 mb-1 uppercase tracking-wider">📋 Team Open Tickets ({teamOpen.length})</div>
+                          <ExpandableList items={teamOpen} max={5} id="teamOpen" renderItem={(t) => <TicketRow key={t.id} t={t} highlight={false} />} />
                         </div>
                       </div>
                     )}
 
                     <button onClick={() => setTab('tickets')} className="w-full py-2 text-center text-xs font-bold text-purple-600 bg-purple-50 rounded-lg hover:bg-purple-100 transition">
-                      View All Tickets →
+                      Open Tickets Tab →
                     </button>
                   </div>)}
                 </div>

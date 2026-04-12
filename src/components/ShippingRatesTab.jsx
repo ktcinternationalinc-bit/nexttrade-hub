@@ -305,6 +305,7 @@ export default function ShippingRatesTab({ user, userProfile, isAdmin, customers
   const [importData, setImportData] = useState([]);
   const [importStep, setImportStep] = useState('select');
   const [importProgress, setImportProgress] = useState(0);
+  const [importColMap, setImportColMap] = useState({});
   const [previewQuote, setPreviewQuote] = useState(null);
   const [pickedShipRate, setPickedShipRate] = useState(null);
   const [pickedTruckRate, setPickedTruckRate] = useState(null);
@@ -383,7 +384,116 @@ export default function ShippingRatesTab({ user, userProfile, isAdmin, customers
   };
 
   const handleDeleteRate = async (rate) => { if (!confirm('Delete this rate?')) return; try { await dbDelete('shipping_rates', rate.id, myId); await loadData(); } catch (err) { alert(err.message); } };
-  const processImportFile = async (file) => { const d = await file.arrayBuffer(); const wb = XLSX.read(d); const rows = XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]]); if (!rows.length) { alert('Empty'); return; } const parsed = rows.map(row => { const get = (...keys) => { for (const k of keys) { const v = row[k]||row[k?.toLowerCase?.()]||row[k?.toUpperCase?.()]; if (v!=null&&v!=='') return String(v).trim(); } return ''; }; const getNum = (...keys) => { const v = get(...keys); return v ? Number(v.replace(/[^0-9.-]/g,''))||0 : 0; }; const r = { origin:get('Origin','From','المنشأ'), destination:get('Destination','To','الوجهة'), vendor_name:get('Vendor','Forwarder','المورد'), shipping_line:get('Shipping Line','Line','Carrier','الناقل'), transport_mode:get('Mode','Transport')||'Ocean', container_type:get('Container','Size')||'40ft', rate_amount:getNum('Rate','Amount','Freight'), currency:get('Currency','Cur')||'USD', transit_days:getNum('Transit','Transit Days')||null, free_days:getNum('Free Days','Free')||null, port_fees:getNum('Port Fees'), thc_fees:getNum('THC'), documentation_fees:getNum('Doc Fees'), customs_fees:getNum('Customs'), other_fees:getNum('Other Fees'), effective_date:get('Date','Effective')||new Date().toISOString().substring(0,10), expiry_date:get('Expiry','Valid Until')||null, port_of_loading:get('POL','Loading Port'), port_of_discharge:get('POD','Discharge Port'), notes:get('Notes','Remarks') }; r.total_cost=(r.rate_amount||0)+(r.port_fees||0)+(r.thc_fees||0)+(r.documentation_fees||0)+(r.customs_fees||0)+(r.other_fees||0); return r; }).filter(r=>r.origin&&r.destination); setImportData(parsed); setImportStep('preview'); };
+  const processImportFile = async (file) => {
+    const d = await file.arrayBuffer();
+    const wb = XLSX.read(d);
+    const rows = XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]]);
+    if (!rows.length) { alert('No data found'); return; }
+    
+    // Smart column detection — fuzzy match column headers
+    const headers = Object.keys(rows[0]);
+    const findCol = (keywords) => {
+      const kws = keywords.map(k => k.toLowerCase());
+      return headers.find(h => {
+        const hl = h.toLowerCase().replace(/[_\-\.]/g, ' ');
+        return kws.some(k => hl.includes(k));
+      }) || null;
+    };
+    
+    const colMap = {
+      origin: findCol(['origin', 'from', 'المنشأ', 'loading country', 'pol country', 'departure']),
+      destination: findCol(['destination', 'dest', 'الوجهة', 'pod country', 'arrival', 'consignee country']),
+      vendor: findCol(['vendor', 'forwarder', 'freight forwarder', 'agent', 'المورد', 'supplier', 'company']),
+      line: findCol(['shipping line', 'line', 'carrier', 'الناقل', 'steamship', 'ssl']),
+      container: findCol(['container', 'size', 'type', 'cntr', 'equipment', 'حاوية', 'container type', 'container size']),
+      rate: findCol(['rate', 'price', 'amount', 'freight', 'cost', 'charge', 'السعر', 'ocean freight', 'total']),
+      currency: findCol(['currency', 'cur', 'ccy', 'العملة']),
+      transit: findCol(['transit', 'transit time', 'transit days', 'days', 'مدة', 'tt']),
+      free: findCol(['free days', 'free time', 'demurrage free', 'detention free', 'freedays']),
+      pol: findCol(['pol', 'port of loading', 'loading port', 'load port', 'port loading', 'ميناء التحميل']),
+      pod: findCol(['pod', 'port of discharge', 'discharge port', 'port discharge', 'ميناء التفريغ', 'unloading']),
+      date: findCol(['date', 'effective', 'valid from', 'start', 'rate date', 'التاريخ']),
+      expiry: findCol(['expiry', 'expiration', 'valid until', 'valid to', 'validity', 'end date', 'الصلاحية']),
+      portFees: findCol(['port fees', 'port charges', 'port cost', 'local charges']),
+      thc: findCol(['thc', 'terminal', 'terminal handling']),
+      docFees: findCol(['doc', 'documentation', 'bl fee', 'bill of lading']),
+      customsFees: findCol(['customs', 'duty', 'جمارك']),
+      otherFees: findCol(['other', 'surcharge', 'baf', 'caf', 'isps']),
+      notes: findCol(['notes', 'remarks', 'comment', 'ملاحظات']),
+      mode: findCol(['transport mode', 'shipping mode', 'mode of transport', 'ship type']),
+    };
+    
+    console.log('📊 Column mapping:', colMap);
+    
+    const getVal = (row, col) => col ? String(row[col] || '').trim() : '';
+    const getNum = (row, col) => { const v = getVal(row, col); return v ? Number(v.replace(/[^0-9.\-]/g, '')) || 0 : 0; };
+    const parseDate = (row, col) => {
+      const v = getVal(row, col);
+      if (!v) return '';
+      // Handle Excel serial dates
+      if (!isNaN(v) && Number(v) > 40000) {
+        const d = new Date((Number(v) - 25569) * 86400000);
+        return d.toISOString().substring(0, 10);
+      }
+      // Handle common date formats
+      const d = new Date(v);
+      return isNaN(d.getTime()) ? '' : d.toISOString().substring(0, 10);
+    };
+    
+    // Detect container type from value
+    const normalizeContainer = (v) => {
+      if (!v) return '40ft';
+      v = v.toString().toLowerCase().replace(/[^a-z0-9]/g, '');
+      if (v.includes('20') && v.includes('gp') || v === '20' || v.includes('20ft') || v.includes('20st')) return "20' GP";
+      if (v.includes('40') && v.includes('hc') || v.includes('40hc') || v.includes('40hq')) return "40' HC";
+      if (v.includes('40') && v.includes('gp') || v === '40' || v.includes('40ft') || v.includes('40st')) return "40' GP";
+      if (v.includes('45')) return "45' HC";
+      if (v.includes('20') && v.includes('rf') || v.includes('20reefer')) return "20' RF";
+      if (v.includes('40') && v.includes('rf') || v.includes('40reefer')) return "40' RF";
+      return v.length > 0 ? v : '40ft';
+    };
+    
+    const parsed = rows.map(row => {
+      const origin = getVal(row, colMap.origin) || getVal(row, colMap.pol);
+      const dest = getVal(row, colMap.destination) || getVal(row, colMap.pod);
+      if (!origin && !dest) return null; // skip empty rows
+      
+      const r = {
+        origin: origin,
+        destination: dest,
+        vendor_name: getVal(row, colMap.vendor),
+        shipping_line: getVal(row, colMap.line),
+        transport_mode: getVal(row, colMap.mode) || 'Ocean',
+        container_type: normalizeContainer(getVal(row, colMap.container)),
+        rate_amount: getNum(row, colMap.rate),
+        currency: getVal(row, colMap.currency) || 'USD',
+        transit_days: getNum(row, colMap.transit) || null,
+        free_days: getNum(row, colMap.free) || null,
+        port_fees: getNum(row, colMap.portFees),
+        thc_fees: getNum(row, colMap.thc),
+        documentation_fees: getNum(row, colMap.docFees),
+        customs_fees: getNum(row, colMap.customsFees),
+        other_fees: getNum(row, colMap.otherFees),
+        effective_date: parseDate(row, colMap.date) || new Date().toISOString().substring(0, 10),
+        expiry_date: parseDate(row, colMap.expiry) || null,
+        port_of_loading: getVal(row, colMap.pol),
+        port_of_discharge: getVal(row, colMap.pod),
+        notes: getVal(row, colMap.notes),
+      };
+      r.total_cost = (r.rate_amount || 0) + (r.port_fees || 0) + (r.thc_fees || 0) + (r.documentation_fees || 0) + (r.customs_fees || 0) + (r.other_fees || 0);
+      return r;
+    }).filter(Boolean);
+    
+    if (!parsed.length) { alert('No valid rates found. Make sure columns include Origin/Destination or POL/POD.'); return; }
+    
+    // Show detected columns
+    const detected = Object.entries(colMap).filter(([k, v]) => v).map(([k, v]) => `${k}→${v}`).join(', ');
+    console.log('✅ Detected:', detected);
+    
+    setImportData(parsed);
+    setImportStep('preview');
+    setImportColMap(colMap);
+  };
   const executeImport = async () => { setImportStep('importing'); setImportProgress(0); for (let i=0;i<importData.length;i++) { try { await dbInsert('shipping_rates',importData[i],myId); } catch(e){} if(i%10===0) setImportProgress(Math.round((i/importData.length)*100)); } setImportProgress(100); setImportStep('done'); await loadData(); };
   const handleAiQuery = async () => { if (!aiQuery.trim()) return; setAiLoading(true); setAiAnswer(''); try { const summary = routeGroups.slice(0,50).map(rg => { const c=rg.cheapest; return rg.key+': '+rg.count+' quotes ('+rg.activeCount+' active), best: '+(c?'$'+c.rate_amount+' '+c.vendor_name+'/'+(c.shipping_line||'N/A'):'none'); }).join('\n'); const res = await fetch('/api/ask',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({question:aiQuery,context:'Shipping rates assistant for KTC.\n\nROUTES:\n'+summary+'\n\nAnswer concisely.'})}); const data = await res.json(); setAiAnswer(data.answer||'No response'); } catch(err) { setAiAnswer('Error: '+err.message); } setAiLoading(false); };
   const resetQuoteForm = () => { setF({}); setEditingQuote(null); setPickedShipRate(null); setPickedTruckRate(null); setPickedBrokerRate(null); setManualShip(false); setManualTruck(false); setManualBroker(false); };
@@ -803,8 +913,73 @@ Date: ${today}`;
   if (view === 'import') return (<div>
     <button onClick={()=>{setView('routes');setImportData([]);setImportStep('select');}} className="px-3 py-1 rounded border border-slate-200 text-xs font-semibold mb-3">← Back</button>
     <h2 className="text-xl font-extrabold mb-3">Import Shipping Rates</h2>
-    {importStep==='select'&&<div className="bg-white rounded-xl p-6 text-center border-2 border-dashed border-blue-300"><div className="text-4xl mb-2">📁</div><p className="text-xs text-slate-400 mb-3">Columns: Origin, Destination, Vendor, Shipping Line, Rate, Container, Transit, Free Days, Expiry...</p><label className="px-6 py-3 bg-blue-500 text-white rounded-lg text-sm font-semibold cursor-pointer inline-block">Select File<input type="file" accept=".xlsx,.xls,.csv" className="hidden" onChange={async(e)=>{if(e.target.files[0])await processImportFile(e.target.files[0]);}}/></label></div>}
-    {importStep==='preview'&&importData.length>0&&<div><div className="bg-emerald-50 rounded-xl p-4 mb-3 border border-emerald-200 flex justify-between items-center"><span className="text-sm font-bold text-emerald-800">Found {importData.length} rates</span><div className="flex gap-2"><button onClick={()=>{setImportStep('select');setImportData([]);}} className="px-3 py-1.5 border rounded-lg text-xs">Cancel</button><button onClick={executeImport} className="px-4 py-1.5 bg-emerald-500 text-white rounded-lg text-xs font-semibold">Import</button></div></div><div className="overflow-auto max-h-[350px] rounded-lg border bg-white text-xs"><table className="w-full border-collapse"><thead><tr className="bg-slate-50"><th className="px-2 py-1.5 text-[10px]">Origin</th><th className="px-2 py-1.5 text-[10px]">Dest</th><th className="px-2 py-1.5 text-[10px]">Vendor</th><th className="px-2 py-1.5 text-[10px]">Line</th><th className="px-2 py-1.5 text-[10px] text-right">Rate</th><th className="px-2 py-1.5 text-[10px]">Expiry</th></tr></thead><tbody>{importData.slice(0,30).map((r,i)=>(<tr key={i} className="border-b border-slate-50"><td className="px-2 py-1">{r.origin}</td><td className="px-2 py-1">{r.destination}</td><td className="px-2 py-1">{r.vendor_name}</td><td className="px-2 py-1">{r.shipping_line}</td><td className="px-2 py-1 text-right font-bold">{fCur(r.rate_amount,r.currency)}</td><td className="px-2 py-1">{r.expiry_date||'—'}</td></tr>))}</tbody></table></div></div>}
+    {importStep==='select'&&<div className="bg-white rounded-xl p-6 text-center border-2 border-dashed border-blue-300">
+      <div className="text-4xl mb-2">📁</div>
+      <p className="text-sm font-bold mb-2">Upload shipping rates spreadsheet</p>
+      <p className="text-[10px] text-slate-400 mb-1">Auto-detects columns by name (any order). Supports:</p>
+      <div className="text-[9px] text-slate-400 mb-3 leading-relaxed">
+        <span className="font-semibold text-slate-500">Origin/Destination:</span> Origin, From, Destination, To, POL, POD, Port of Loading, Port of Discharge<br/>
+        <span className="font-semibold text-slate-500">Shipping:</span> Vendor, Forwarder, Shipping Line, Carrier, Container, Container Type/Size<br/>
+        <span className="font-semibold text-slate-500">Pricing:</span> Rate, Price, Amount, Freight, Port Fees, THC, Doc Fees, Customs<br/>
+        <span className="font-semibold text-slate-500">Timing:</span> Transit Days, Free Days, Date, Effective, Expiry, Valid Until
+      </div>
+      <label className="px-6 py-3 bg-blue-500 text-white rounded-lg text-sm font-semibold cursor-pointer inline-block">Select File<input type="file" accept=".xlsx,.xls,.csv" className="hidden" onChange={async(e)=>{if(e.target.files[0])await processImportFile(e.target.files[0]);}}/></label>
+    </div>}
+    {importStep==='preview'&&importData.length>0&&<div>
+      <div className="bg-emerald-50 rounded-xl p-4 mb-3 border border-emerald-200">
+        <div className="flex justify-between items-center mb-2">
+          <span className="text-sm font-bold text-emerald-800">Found {importData.length} rates</span>
+          <div className="flex gap-2">
+            <button onClick={()=>{setImportStep('select');setImportData([]);}} className="px-3 py-1.5 border rounded-lg text-xs">Cancel</button>
+            <button onClick={executeImport} className="px-4 py-1.5 bg-emerald-500 text-white rounded-lg text-xs font-semibold">✅ Import All</button>
+          </div>
+        </div>
+        <div className="text-[9px] text-emerald-700">
+          <span className="font-bold">Detected columns: </span>
+          {Object.entries(importColMap).filter(([k,v])=>v).map(([k,v])=>(
+            <span key={k} className="inline-block px-1.5 py-0.5 bg-emerald-100 rounded mr-1 mb-1">{k}: <b>{v}</b></span>
+          ))}
+          {Object.entries(importColMap).filter(([k,v])=>!v).length > 0 && (
+            <div className="mt-1 text-amber-600">Not found: {Object.entries(importColMap).filter(([k,v])=>!v).map(([k])=>k).join(', ')}</div>
+          )}
+        </div>
+      </div>
+      <div className="overflow-auto max-h-[400px] rounded-lg border bg-white text-xs">
+        <table className="w-full border-collapse">
+          <thead><tr className="bg-slate-50 sticky top-0">
+            <th className="px-2 py-1.5 text-[10px]">Origin</th>
+            <th className="px-2 py-1.5 text-[10px]">Dest</th>
+            <th className="px-2 py-1.5 text-[10px]">POL</th>
+            <th className="px-2 py-1.5 text-[10px]">POD</th>
+            <th className="px-2 py-1.5 text-[10px]">Vendor</th>
+            <th className="px-2 py-1.5 text-[10px]">Line</th>
+            <th className="px-2 py-1.5 text-[10px]">Container</th>
+            <th className="px-2 py-1.5 text-[10px] text-right">Rate</th>
+            <th className="px-2 py-1.5 text-[10px]">Transit</th>
+            <th className="px-2 py-1.5 text-[10px]">Free</th>
+            <th className="px-2 py-1.5 text-[10px]">Date</th>
+            <th className="px-2 py-1.5 text-[10px]">Expiry</th>
+          </tr></thead>
+          <tbody>{importData.slice(0,50).map((r,i)=>(
+            <tr key={i} className="border-b border-slate-50 hover:bg-slate-50">
+              <td className="px-2 py-1">{r.origin}</td>
+              <td className="px-2 py-1">{r.destination}</td>
+              <td className="px-2 py-1 text-slate-400">{r.port_of_loading||'—'}</td>
+              <td className="px-2 py-1 text-slate-400">{r.port_of_discharge||'—'}</td>
+              <td className="px-2 py-1">{r.vendor_name||'—'}</td>
+              <td className="px-2 py-1">{r.shipping_line||'—'}</td>
+              <td className="px-2 py-1 font-semibold">{r.container_type}</td>
+              <td className="px-2 py-1 text-right font-bold">{fCur(r.rate_amount,r.currency)}</td>
+              <td className="px-2 py-1">{r.transit_days ? r.transit_days+'d' : '—'}</td>
+              <td className="px-2 py-1">{r.free_days ? r.free_days+'d' : '—'}</td>
+              <td className="px-2 py-1">{r.effective_date}</td>
+              <td className="px-2 py-1">{r.expiry_date||'—'}</td>
+            </tr>
+          ))}</tbody>
+        </table>
+        {importData.length>50&&<div className="text-center py-2 text-[10px] text-slate-400">Showing 50 of {importData.length}</div>}
+      </div>
+    </div>}
     {importStep==='importing'&&<div className="bg-white rounded-xl p-8 text-center"><div className="text-4xl mb-3">⏳</div><div className="w-full bg-slate-200 rounded-full h-3"><div className="bg-blue-500 h-3 rounded-full" style={{width:importProgress+'%'}}></div></div><p className="text-sm mt-2">{importProgress}%</p></div>}
     {importStep==='done'&&<div className="bg-white rounded-xl p-8 text-center"><div className="text-4xl mb-3">✅</div><h3 className="text-lg font-bold text-emerald-700">Done!</h3><button onClick={()=>{setView('routes');setImportData([]);setImportStep('select');}} className="mt-3 px-6 py-2 bg-blue-500 text-white rounded-lg font-semibold">Done</button></div>}
   </div>);
