@@ -62,17 +62,19 @@ export default function EgyptBankTab({ user, userProfile, isAdmin, invoices, onR
     const file = e.target.files[0];
     if (!file) return;
     const data = await file.arrayBuffer();
-    const wb = XLSX.read(data);
+    const wb = XLSX.read(data, { cellText: true, cellDates: false });
     const ws = wb.Sheets[wb.SheetNames[0]];
 
-    // Read raw grid (not sheet_to_json which fails on sparse layouts)
+    // Read raw grid - use formatted text (cell.w) when available, fall back to value (cell.v)
     const range = XLSX.utils.decode_range(ws['!ref'] || 'A1');
     const grid = [];
     for (let r = range.s.r; r <= range.e.r; r++) {
       const row = [];
       for (let c = range.s.c; c <= range.e.c; c++) {
         const cell = ws[XLSX.utils.encode_cell({ r, c })];
-        row.push(cell ? (cell.v != null ? String(cell.v).trim() : '') : '');
+        // Prefer formatted text (w) for dates, fall back to raw value (v)
+        const val = cell ? (cell.w || (cell.v != null ? String(cell.v) : '')) : '';
+        row.push(val.trim());
       }
       grid.push(row);
     }
@@ -81,20 +83,36 @@ export default function EgyptBankTab({ user, userProfile, isAdmin, invoices, onR
     const MONTHS = { JAN: '01', FEB: '02', MAR: '03', APR: '04', MAY: '05', JUN: '06', JUL: '07', AUG: '08', SEP: '09', OCT: '10', NOV: '11', DEC: '12' };
     const parseBankDate = (v) => {
       if (!v) return '';
-      const m = String(v).match(/(\d{1,2})([A-Z]{3})(\d{2,4})/i);
-      if (m) {
-        const day = m[1].padStart(2, '0');
-        const mon = MONTHS[(m[2] || '').toUpperCase()] || '01';
-        let yr = m[3]; if (yr.length === 2) yr = (parseInt(yr) > 50 ? '19' : '20') + yr;
+      const s = String(v).trim();
+      // DDMonYY/DDMONYYYY (03FEB25, 03FEB2025)
+      const m1 = s.match(/(\d{1,2})([A-Z]{3})(\d{2,4})/i);
+      if (m1) {
+        const day = m1[1].padStart(2, '0');
+        const mon = MONTHS[(m1[2] || '').toUpperCase()] || '01';
+        let yr = m1[3]; if (yr.length === 2) yr = (parseInt(yr) > 50 ? '19' : '20') + yr;
         return `${yr}-${mon}-${day}`;
       }
-      // Try standard date
-      if (typeof v === 'number' && v > 30000) {
-        const d = new Date((v - 25569) * 86400000);
+      // YYYY-MM-DD
+      const m2 = s.match(/^(\d{4})-(\d{1,2})-(\d{1,2})/);
+      if (m2) return `${m2[1]}-${m2[2].padStart(2,'0')}-${m2[3].padStart(2,'0')}`;
+      // DD/MM/YYYY or DD-MM-YYYY or DD.MM.YYYY
+      const m3 = s.match(/^(\d{1,2})[\/\-\.](\d{1,2})[\/\-\.](\d{4})$/);
+      if (m3) return `${m3[3]}-${m3[2].padStart(2,'0')}-${m3[1].padStart(2,'0')}`;
+      // MM/DD/YYYY (American format — detect by month > 12)
+      const m4 = s.match(/^(\d{1,2})[\/\-](\d{1,2})[\/\-](\d{4})$/);
+      if (m4 && parseInt(m4[1]) <= 12 && parseInt(m4[2]) > 12) return `${m4[3]}-${m4[1].padStart(2,'0')}-${m4[2].padStart(2,'0')}`;
+      // Excel serial number
+      const num = parseFloat(s);
+      if (!isNaN(num) && num > 30000 && num < 60000) {
+        const d = new Date((num - 25569) * 86400000);
         return isNaN(d.getTime()) ? '' : d.toISOString().substring(0, 10);
       }
-      const d = new Date(v);
-      return isNaN(d.getTime()) ? '' : d.toISOString().substring(0, 10);
+      // Try native Date parse
+      const d = new Date(s);
+      if (!isNaN(d.getTime()) && d.getFullYear() > 2000 && d.getFullYear() < 2100) {
+        return d.toISOString().substring(0, 10);
+      }
+      return '';
     };
 
     const parseAmt = (v) => {
@@ -102,27 +120,44 @@ export default function EgyptBankTab({ user, userProfile, isAdmin, invoices, onR
       return parseFloat(String(v).replace(/,/g, '').replace(/[^0-9.\-]/g, '')) || 0;
     };
 
-    // Strategy 1: Detect CIB-style sparse format (date in early column, description in middle, amounts in later columns)
-    // Look for rows with bank dates in column 2
-    const bankDateRows = grid.filter(row => row[2] && parseBankDate(row[2]));
+    // Strategy 1: Detect sparse bank statement format (dates scattered, amounts in various columns)
+    // Find which column has dates by scanning first 30 rows
+    let dateCol = -1;
+    for (let c = 0; c < Math.min(10, grid[0]?.length || 0); c++) {
+      let dateCount = 0;
+      for (let r = 0; r < Math.min(50, grid.length); r++) {
+        if (grid[r][c] && parseBankDate(grid[r][c])) dateCount++;
+      }
+      if (dateCount >= 3) { dateCol = c; break; }
+    }
 
-    if (bankDateRows.length >= 3) {
-      // CIB bank statement format
-      console.log('📊 Detected CIB bank statement format');
+    if (dateCol >= 0) {
+      // Sparse bank statement format detected
+      console.log('📊 Detected sparse bank statement, date column:', dateCol);
+      
+      // Find description column (column with most text content)
+      let descCol = -1, maxText = 0;
+      for (let c = 0; c < (grid[0]?.length || 0); c++) {
+        if (c === dateCol) continue;
+        let textCount = 0;
+        for (let r = 0; r < Math.min(50, grid.length); r++) {
+          if (grid[r][c] && grid[r][c].length > 5 && isNaN(parseAmt(grid[r][c]))) textCount++;
+        }
+        if (textCount > maxText) { maxText = textCount; descCol = c; }
+      }
       
       // Detect which columns have amounts by scanning all rows
       const amtCols = {};
       grid.forEach(row => {
         row.forEach((v, c) => {
-          if (c >= 10 && parseAmt(v) > 0) {
+          if (c !== dateCol && c !== descCol && parseAmt(v) > 0) {
             amtCols[c] = (amtCols[c] || 0) + 1;
           }
         });
       });
       
       // Find debit, credit, balance columns (most frequent amount columns)
-      const sortedAmtCols = Object.entries(amtCols).sort((a, b) => b[1] - a[1]).map(([c]) => parseInt(c));
-      // Last amount column is usually balance, before that credit, before that debit
+      const sortedAmtCols = Object.entries(amtCols).filter(([c, n]) => n >= 2).sort((a, b) => b[1] - a[1]).map(([c]) => parseInt(c));
       let balCol = -1, creditCol = -1, debitCol = -1;
       if (sortedAmtCols.length >= 3) {
         const sorted = [...sortedAmtCols].sort((a, b) => a - b);
@@ -130,41 +165,41 @@ export default function EgyptBankTab({ user, userProfile, isAdmin, invoices, onR
       } else if (sortedAmtCols.length >= 2) {
         const sorted = [...sortedAmtCols].sort((a, b) => a - b);
         creditCol = sorted[0]; balCol = sorted[1];
+      } else if (sortedAmtCols.length >= 1) {
+        creditCol = sortedAmtCols[0];
       }
-      console.log('Columns — debit:', debitCol, 'credit:', creditCol, 'balance:', balCol);
+      console.log('Columns — date:', dateCol, 'desc:', descCol, 'debit:', debitCol, 'credit:', creditCol, 'balance:', balCol);
 
-      // Group rows into transactions (each transaction starts with a date in col 2)
+      // Group rows into transactions
       const transactions = [];
       let current = null;
       for (let r = 0; r < grid.length; r++) {
         const row = grid[r];
-        const dateStr = parseBankDate(row[2]);
-        const desc = (row[9] || '').trim();
+        const dateStr = parseBankDate(row[dateCol]);
+        const desc = descCol >= 0 ? (row[descCol] || '').trim() : '';
         const debit = debitCol >= 0 ? parseAmt(row[debitCol]) : 0;
         const credit = creditCol >= 0 ? parseAmt(row[creditCol]) : 0;
 
         if (dateStr) {
-          // New transaction
           if (current) transactions.push(current);
           const amount = credit > 0 ? credit : (debit > 0 ? -debit : 0);
           current = { date: dateStr, description: desc, amount, _include: true };
         } else if (current && desc && !desc.includes('OPENING BALANCE') && !desc.includes('CLOSING BALANCE')) {
-          // Continuation of description
           current.description += ' ' + desc;
         }
       }
       if (current) transactions.push(current);
 
-      // Filter out opening/closing balance rows and empty amounts
       const parsed = transactions
         .filter(t => !t.description.includes('OPENING BALANCE') && !t.description.includes('CLOSING BALANCE'))
         .filter(t => t.amount !== 0)
         .map((t, i) => ({ ...t, _row: i + 1, description: t.description.replace(/\s+/g, ' ').trim() }));
 
-      if (parsed.length === 0) { alert('No transactions found'); return; }
-      setImportData(parsed);
-      setImportStep('preview');
-      return;
+      if (parsed.length > 0) {
+        setImportData(parsed);
+        setImportStep('preview');
+        return;
+      }
     }
 
     // Strategy 2: Regular tabular format with headers
@@ -175,9 +210,19 @@ export default function EgyptBankTab({ user, userProfile, isAdmin, invoices, onR
     const find = (keywords) => cols.find(c => keywords.some(k => c.toLowerCase().includes(k.toLowerCase())));
     const dateCol = find(['date', 'تاريخ', 'DATE', 'Transaction Date', 'Value Date']) || cols[0];
     const descCol = find(['desc', 'بيان', 'narr', 'detail', 'memo', 'reference', 'الوصف', 'البيان', 'particular', 'transaction']) || cols[1];
-    const amountCol = find(['amount', 'مبلغ', 'value', 'المبلغ', 'net']);
-    const creditColName = find(['credit', 'دائن', 'إيداع', 'deposit', 'cr']);
-    const debitColName = find(['debit', 'مدين', 'سحب', 'withdrawal', 'dr']);
+    const amountCol = find(['amount', 'مبلغ', 'value', 'المبلغ', 'net', 'total']);
+    const creditColName = find(['credit', 'دائن', 'إيداع', 'deposit', 'cr', 'in']);
+    const debitColName = find(['debit', 'مدين', 'سحب', 'withdrawal', 'dr', 'out']);
+
+    // Fallback: if no amount column found, find any column with numbers
+    let fallbackAmtCol = null;
+    if (!amountCol && !creditColName && !debitColName) {
+      for (const c of cols) {
+        if (c === dateCol || c === descCol) continue;
+        const hasNums = rows.filter(r => parseAmt(r[c]) !== 0).length;
+        if (hasNums >= rows.length * 0.3) { fallbackAmtCol = c; break; }
+      }
+    }
 
     const parsed = rows.map((r, i) => {
       let date = parseBankDate(r[dateCol]);
@@ -193,6 +238,8 @@ export default function EgyptBankTab({ user, userProfile, isAdmin, invoices, onR
         amount = parseAmt(r[creditColName]);
       } else if (debitColName) {
         amount = -parseAmt(r[debitColName]);
+      } else if (fallbackAmtCol) {
+        amount = parseAmt(r[fallbackAmtCol]);
       }
 
       return {
@@ -202,21 +249,44 @@ export default function EgyptBankTab({ user, userProfile, isAdmin, invoices, onR
         amount,
         _include: true,
       };
-    }).filter(r => r.date && (r.description || r.amount));
+    }).filter(r => r.date && r.amount !== 0);
+
+    if (parsed.length === 0) {
+      // Show diagnostic: what columns were found and sample data
+      const sample = rows.slice(0, 3).map(r => JSON.stringify(r).substring(0, 200));
+      alert(
+        'No transactions detected.\n\n' +
+        'Columns found: ' + cols.join(', ') + '\n\n' +
+        'Date column: ' + (dateCol || 'none') + '\n' +
+        'Description column: ' + (descCol || 'none') + '\n' +
+        'Amount column: ' + (amountCol || creditColName || debitColName || 'none') + '\n\n' +
+        'Sample row: ' + (sample[0] || 'empty') + '\n\n' +
+        'Tip: Make sure your file has columns named Date, Description, and Amount (or Credit/Debit).'
+      );
+      return;
+    }
 
     setImportData(parsed);
     setImportStep('preview');
   };
 
   const doImport = async () => {
-    if (!importAccount) { alert('Select an account first'); return; }
+    let accId = importAccount;
+    if (!accId && accounts.length > 0) { accId = accounts[0].id; setImportAccount(accId); }
+    if (!accId) {
+      try {
+        const { data: newAcc } = await dbInsert('egypt_bank_accounts', { bank_name: 'Default Bank', account_number: 'AUTO-001', currency: 'EGP' }, myId);
+        if (newAcc) { accId = newAcc.id; setImportAccount(accId); }
+      } catch(err) { alert('Create an account first'); return; }
+    }
+    if (!accId) { alert('Select an account first'); return; }
     const toImport = importData.filter(r => r._include);
     if (toImport.length === 0) { alert('No rows selected'); return; }
     setImportStep('importing');
     let imported = 0, skipped = 0, duplicates = 0;
     
     // Load existing transactions for duplicate detection
-    const { data: existing } = await supabase.from('egypt_bank_transactions').select('date, description, amount').eq('account_id', importAccount);
+    const { data: existing } = await supabase.from('egypt_bank_transactions').select('date, description, amount').eq('account_id', accId);
     const existingSet = new Set((existing || []).map(e => `${e.date}|${e.amount}|${(e.description || '').substring(0, 30)}`));
     
     for (const row of toImport) {
@@ -224,7 +294,7 @@ export default function EgyptBankTab({ user, userProfile, isAdmin, invoices, onR
       if (existingSet.has(key)) { duplicates++; skipped++; continue; }
       try {
         const { error } = await supabase.from('egypt_bank_transactions').insert({
-          account_id: importAccount,
+          account_id: accId,
           date: row.date,
           description: row.description,
           amount: row.amount,
@@ -365,23 +435,33 @@ export default function EgyptBankTab({ user, userProfile, isAdmin, invoices, onR
               <div className="text-4xl mb-2">📁</div>
               <h3 className="font-bold text-sm mb-1">Upload Bank Statement / رفع كشف حساب</h3>
               <p className="text-[10px] text-slate-400 mb-3">Supports CIB bank statements, and any Excel/CSV with Date/Description/Amount columns.<br/>يدعم كشوف حسابات CIB وأي ملف Excel أو CSV بأعمدة التاريخ والوصف والمبلغ</p>
-              {accounts.length === 0 ? (
-                <p className="text-xs text-red-500 font-semibold">Add a bank account first (🏛️ Accounts tab)</p>
-              ) : (
-                <>
-                  <div className="mb-3">
-                    <label className="text-[10px] text-slate-500 font-bold block mb-1">Select Account / اختر الحساب</label>
-                    <select value={importAccount} onChange={e => setImportAccount(e.target.value)} className="border rounded-lg px-3 py-2 text-xs">
-                      <option value="">Select account...</option>
-                      {accounts.map(a => <option key={a.id} value={a.id}>{a.bank_name} - {a.account_number}</option>)}
-                    </select>
-                  </div>
-                  <label className="px-6 py-3 bg-blue-500 text-white rounded-lg text-sm font-semibold cursor-pointer hover:bg-blue-600 inline-block">
-                    Select File / اختر ملف
-                    <input type="file" accept=".xlsx,.xls,.csv" className="hidden" onChange={handleFile} />
-                  </label>
-                </>
+              {accounts.length > 0 && (
+                <div className="mb-3">
+                  <label className="text-[10px] text-slate-500 font-bold block mb-1">Select Account / اختر الحساب</label>
+                  <select value={importAccount} onChange={e => setImportAccount(e.target.value)} className="border rounded-lg px-3 py-2 text-xs">
+                    <option value="">Select account...</option>
+                    {accounts.map(a => <option key={a.id} value={a.id}>{a.bank_name} - {a.account_number}</option>)}
+                  </select>
+                </div>
               )}
+              {accounts.length === 0 && (
+                <p className="text-[10px] text-amber-600 font-semibold mb-3">⚠️ No accounts — a default account will be auto-created on import</p>
+              )}
+              <label className="px-6 py-3 bg-blue-500 text-white rounded-lg text-sm font-semibold cursor-pointer hover:bg-blue-600 inline-block">
+                Select File / اختر ملف
+                <input type="file" accept=".xlsx,.xls,.csv" className="hidden" onChange={async (e) => {
+                  if (!e.target.files[0]) return;
+                  let accId = importAccount;
+                  if (!accId && accounts.length === 0) {
+                    try {
+                      const { data: newAcc } = await dbInsert('egypt_bank_accounts', { bank_name: 'Default Bank', account_number: 'AUTO-001', currency: 'EGP' }, myId);
+                      if (newAcc) { accId = newAcc.id; setImportAccount(accId); await load(); }
+                    } catch(err) {}
+                  }
+                  if (!accId && accounts.length > 0) { accId = accounts[0].id; setImportAccount(accId); }
+                  handleFile(e);
+                }} />
+              </label>
             </div>
           )}
 
@@ -441,6 +521,56 @@ export default function EgyptBankTab({ user, userProfile, isAdmin, invoices, onR
       {/* ===== TRANSACTIONS ===== */}
       {view === 'transactions' && (
         <div>
+          {/* Quick Import Bar */}
+          <div className="bg-blue-50 rounded-xl p-3 mb-3 border border-blue-200 flex items-center justify-between flex-wrap gap-2">
+            <div className="flex items-center gap-2 flex-wrap">
+              <span className="text-sm font-bold text-blue-800">📥 Import Bank Statement</span>
+              {accounts.length > 0 ? (
+                <select value={importAccount} onChange={e => setImportAccount(e.target.value)} className="border rounded-lg px-2 py-1 text-xs">
+                  <option value="">Select account...</option>
+                  {accounts.map(a => <option key={a.id} value={a.id}>{a.bank_name} - {a.account_number}</option>)}
+                </select>
+              ) : (
+                <span className="text-[10px] text-amber-600 font-semibold">⚠️ No accounts yet — one will be created automatically</span>
+              )}
+            </div>
+            <div className="flex gap-2">
+              <label className="px-4 py-2 bg-blue-500 text-white rounded-lg text-xs font-bold cursor-pointer hover:bg-blue-600">
+                📁 Select Excel/CSV File
+                <input type="file" accept=".xlsx,.xls,.csv" className="hidden" onChange={async (e) => {
+                  if (e.target.files[0]) {
+                    // Auto-create default account if none exist
+                    let accId = importAccount;
+                    if (!accId && accounts.length === 0) {
+                      try {
+                        const { data: newAcc } = await dbInsert('egypt_bank_accounts', { bank_name: 'Default Bank', account_number: 'AUTO-001', currency: 'EGP' }, myId);
+                        if (newAcc) { accId = newAcc.id; setImportAccount(accId); await load(); }
+                      } catch(err) { alert('Could not create account: ' + err.message); return; }
+                    }
+                    if (!accId && accounts.length > 0) { accId = accounts[0].id; setImportAccount(accId); }
+                    if (!accId) { alert('Select or create an account first'); e.target.value = ''; return; }
+                    handleFile(e);
+                    setView('import');
+                  }
+                }} />
+              </label>
+              <button onClick={() => {
+                const ws = XLSX.utils.aoa_to_sheet([
+                  ['Date', 'Description', 'Credit (In)', 'Debit (Out)', 'Balance', 'Reference', 'Notes'],
+                  ['التاريخ', 'الوصف / البيان', 'إيداع (دائن)', 'سحب (مدين)', 'الرصيد', 'المرجع', 'ملاحظات'],
+                  ['2025-02-03', 'Online Transfer - payment', 280000, '', 15451688.70, 'FT250347', ''],
+                  ['2025-02-05', 'Account Transfer Fee', '', 20, 16284653.70, '', 'Bank fee'],
+                ]);
+                ws['!cols'] = [{wch:14},{wch:40},{wch:16},{wch:16},{wch:16},{wch:16},{wch:20}];
+                const twb = XLSX.utils.book_new();
+                XLSX.utils.book_append_sheet(twb, ws, 'Template');
+                XLSX.writeFile(twb, 'Egypt-Bank-Import-Template.xlsx');
+              }} className="px-3 py-2 bg-slate-100 text-slate-600 rounded-lg text-xs font-semibold hover:bg-slate-200">
+                📄 Template
+              </button>
+            </div>
+          </div>
+
           {/* Summary */}
           <div className="grid grid-cols-2 md:grid-cols-4 gap-2 mb-3">
             <div className="bg-green-50 rounded-xl p-3 border border-green-200">

@@ -924,6 +924,17 @@ Date: ${today}`;
         <span className="font-semibold text-slate-500">Timing:</span> Transit Days, Free Days, Date, Effective, Expiry, Valid Until
       </div>
       <label className="px-6 py-3 bg-blue-500 text-white rounded-lg text-sm font-semibold cursor-pointer inline-block">Select File<input type="file" accept=".xlsx,.xls,.csv" className="hidden" onChange={async(e)=>{if(e.target.files[0])await processImportFile(e.target.files[0]);}}/></label>
+      <button onClick={() => {
+        const ws = XLSX.utils.aoa_to_sheet([
+          ['Origin', 'Destination', 'Port of Loading (POL)', 'Port of Discharge (POD)', 'Vendor / Forwarder', 'Shipping Line', 'Container Type', 'Rate / Freight', 'Currency', 'Transit Days', 'Free Days', 'Effective Date', 'Expiry Date', 'Notes'],
+          ['China', 'Egypt', 'Shanghai', 'Alexandria', 'MSC Egypt', 'MSC', "40' HC", 2850, 'USD', 28, 14, '2025-03-01', '2025-04-30', ''],
+          ['Turkey', 'Egypt', 'Mersin', 'Alexandria', 'ZIM', 'ZIM', "40' HC", 1200, 'USD', 8, 14, '2025-03-15', '2025-06-15', 'Weekly'],
+        ]);
+        ws['!cols'] = [{wch:12},{wch:12},{wch:18},{wch:18},{wch:18},{wch:15},{wch:14},{wch:14},{wch:10},{wch:12},{wch:12},{wch:14},{wch:14},{wch:20}];
+        const twb = XLSX.utils.book_new();
+        XLSX.utils.book_append_sheet(twb, ws, 'Rates Template');
+        XLSX.writeFile(twb, 'Shipping-Rates-Import-Template.xlsx');
+      }} className="ml-2 px-4 py-3 bg-slate-100 text-slate-600 rounded-lg text-sm font-semibold cursor-pointer inline-block hover:bg-slate-200">📄 Download Template</button>
     </div>}
     {importStep==='preview'&&importData.length>0&&<div>
       <div className="bg-emerald-50 rounded-xl p-4 mb-3 border border-emerald-200">
