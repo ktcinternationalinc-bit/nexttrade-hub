@@ -3192,16 +3192,18 @@ export default function App() {
 
               const ExpandableList = ({ items, renderItem, max, id }) => {
                 const expanded = hideSections['tktExp_' + id];
-                const show = expanded ? items : items.slice(0, max || 5);
+                const limit = max || 5;
+                const show = expanded ? items : items.slice(0, limit);
+                const hasMore = items.length > limit;
                 return (
-                  <div className="space-y-1">
-                    {show.map(renderItem)}
-                    {items.length > (max || 5) && (
-                      <div className="text-[10px] font-semibold text-center py-1 cursor-pointer rounded-lg hover:bg-slate-50"
-                        style={{ color: '#8b5cf6' }}
+                  <div>
+                    <div className="space-y-1">{show.map(renderItem)}</div>
+                    {hasMore && (
+                      <button className="w-full mt-1.5 py-2 rounded-lg text-xs font-bold transition"
+                        style={{ background: expanded ? '#fef2f2' : '#f3e8ff', color: expanded ? '#dc2626' : '#7c3aed', border: expanded ? '1px solid #fecaca' : '1px solid #e9d5ff' }}
                         onClick={(e) => { e.stopPropagation(); setHideSections(prev => ({...prev, ['tktExp_' + id]: !expanded})); }}>
-                        {expanded ? '▲ Show less' : `▼ Show all ${items.length}`}
-                      </div>
+                        {expanded ? `✕ Collapse (showing ${items.length})` : `▼ Show all ${items.length} (+${items.length - limit} more)`}
+                      </button>
                     )}
                   </div>
                 );
