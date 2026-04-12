@@ -925,6 +925,20 @@ export default function EgyptBankTab({ user, userProfile, isAdmin, invoices, onR
             <input type="date" value={dateTo} onChange={e => setDateTo(e.target.value)} className="border rounded-lg px-2 py-1 text-xs" />
             {(dateFrom || dateTo || filterMonth || filterYear) && <button onClick={() => { setDateFrom(''); setDateTo(''); setFilterMonth(''); setFilterYear(''); }} className="text-[10px] text-red-500 font-semibold">✕ Clear</button>}
             <span className="text-[10px] text-slate-400 ml-auto">{filtered.length} transactions</span>
+            <button onClick={() => {
+              const rows = filtered.map(t => ({
+                Date: t.date, Description: t.description,
+                Deposit: t.amount > 0 ? t.amount : '',
+                Withdrawal: t.amount < 0 ? Math.abs(t.amount) : '',
+                Category: t.category || '', Subcategory: t.subcategory || '',
+                Matched: t.matched_invoice_id ? 'Yes' : 'No',
+              }));
+              const ws = XLSX.utils.json_to_sheet(rows);
+              ws['!cols'] = [{wch:12},{wch:50},{wch:14},{wch:14},{wch:16},{wch:16},{wch:8}];
+              const wb = XLSX.utils.book_new();
+              XLSX.utils.book_append_sheet(wb, ws, 'Egypt Bank');
+              XLSX.writeFile(wb, `Egypt-Bank-Export-${new Date().toISOString().substring(0,10)}.xlsx`);
+            }} className="text-[10px] text-blue-500 font-semibold">📥 Export Excel</button>
           </div>
 
           {/* Transaction List */}

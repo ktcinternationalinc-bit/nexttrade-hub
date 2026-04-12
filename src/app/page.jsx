@@ -13,6 +13,9 @@ import CustomsTab from '../components/CustomsTab';
 import PersonalDashboard from '../components/PersonalDashboard';
 import AIAssistant from '../components/AIAssistant';
 import ShippingRatesTab from '../components/ShippingRatesTab';
+import ErrorBoundary, { SafeSection } from '../components/ErrorBoundary';
+import { DashboardSkeleton, TableSkeleton, CardGridSkeleton } from '../components/LoadingSkeleton';
+import NotificationBell from '../components/NotificationBell';
 import BankTab from '../components/BankTab';
 import QuotesTab from '../components/QuotesTab';
 import EgyptBankTab from '../components/EgyptBankTab';
@@ -259,6 +262,13 @@ export default function App() {
   const [reminders, setReminders] = useState([]);
   const [recentTicketUpdates, setRecentTicketUpdates] = useState([]);
   const [dashTickets, setDashTickets] = useState([]);
+  const [activityFeed, setActivityFeed] = useState([]);
+  const [fxRate, setFxRate] = useState(null);
+  const [globalSearch, setGlobalSearch] = useState('');
+  const [showGlobalSearch, setShowGlobalSearch] = useState(false);
+  const [showNotifBell, setShowNotifBell] = useState(false);
+  const [showFAB, setShowFAB] = useState(false);
+  const [lastLoaded, setLastLoaded] = useState(null);
   const [openTicketId, setOpenTicketId] = useState(null);
   const [egyptBankTxns, setEgyptBankTxns] = useState([]);
   const [showReminderForm, setShowReminderForm] = useState(false);
@@ -379,6 +389,30 @@ export default function App() {
       }
     }, 5 * 60 * 1000);
 
+    // Global search shortcut: Ctrl+K / ⌘+K
+    const handleKey = (e) => { if ((e.metaKey || e.ctrlKey) && e.key === 'k') { e.preventDefault(); setShowGlobalSearch(true); } if (e.key === 'Escape') { setShowGlobalSearch(false); setShowNotifBell(false); setShowFAB(false); } };
+    window.addEventListener('keydown', handleKey);
+    const handleClickOutside = (e) => { if (!e.target.closest('.notif-bell-wrap')) setShowNotifBell(false); if (!e.target.closest('.fab-wrap')) setShowFAB(false); };
+    document.addEventListener('click', handleClickOutside);
+
+    // Session timeout: auto-logout after 30 min of inactivity (except super_admin)
+    let idleTimer;
+    const IDLE_TIMEOUT = 30 * 60 * 1000;
+    const resetIdle = () => {
+      clearTimeout(idleTimer);
+      idleTimer = setTimeout(async () => {
+        try {
+          const { data: { session: s } } = await supabase.auth.getSession();
+          if (!s?.user) return;
+          const { data: profile } = await supabase.from('users').select('role').eq('id', s.user.id).single();
+          if (profile?.role === 'super_admin') return; // super admins stay logged in
+          await supabase.auth.signOut(); window.location.href = '/login';
+        } catch(e) {}
+      }, IDLE_TIMEOUT);
+    };
+    ['mousedown', 'keydown', 'touchstart', 'scroll'].forEach(evt => window.addEventListener(evt, resetIdle, { passive: true }));
+    resetIdle();
+
     // Record last_seen on page close
     const handleUnload = () => {
       const uid = user?.id;
@@ -393,7 +427,7 @@ export default function App() {
     };
     window.addEventListener('beforeunload', handleUnload);
 
-    return () => { subscription?.unsubscribe(); clearInterval(heartbeat); window.removeEventListener('beforeunload', handleUnload); };
+    return () => { subscription?.unsubscribe(); clearInterval(heartbeat); clearTimeout(idleTimer); ['mousedown','keydown','touchstart','scroll'].forEach(evt => window.removeEventListener(evt, resetIdle)); window.removeEventListener('beforeunload', handleUnload); window.removeEventListener('keydown', handleKey); document.removeEventListener('click', handleClickOutside); };
   }, []);
 
   // ==========================================
@@ -511,6 +545,18 @@ export default function App() {
         const { data: ebt } = await supabase.from('egypt_bank_transactions').select('*').order('date', { ascending: false }).limit(500);
         setEgyptBankTxns(ebt || []);
       } catch(e) { setEgyptBankTxns([]); }
+      // Load activity feed (recent auto-generated log entries)
+      try {
+        const { data: feed } = await supabase.from('daily_log').select('*').eq('auto_generated', true).order('created_at', { ascending: false }).limit(50);
+        setActivityFeed(feed || []);
+      } catch(e) { setActivityFeed([]); }
+      // Fetch USD/EGP exchange rate
+      try {
+        const fxRes = await fetch('https://open.er-api.com/v6/latest/USD');
+        const fxData = await fxRes.json();
+        if (fxData?.rates?.EGP) setFxRate({ rate: fxData.rates.EGP, updated: fxData.time_last_update_utc });
+      } catch(e) {}
+      setLastLoaded(new Date());
     } catch (err) {
       console.error('Load error:', err);
     }
@@ -564,6 +610,17 @@ export default function App() {
   );
   const totalCashIn = useMemo(() => filteredTreasury.reduce((a, t) => a + Number(t.cash_in || 0), 0), [filteredTreasury]);
   const totalCashOut = useMemo(() => filteredTreasury.reduce((a, t) => a + Number(t.cash_out || 0), 0), [filteredTreasury]);
+
+  // Sparkline data: daily totals for last 30 days
+  const sparkData = useMemo(() => {
+    const days = 30;
+    const dates = Array.from({ length: days }, (_, i) => { const d = new Date(); d.setDate(d.getDate() - (days - 1 - i)); return d.toISOString().substring(0, 10); });
+    const invByDay = dates.map(d => invoices.filter(i => (i.invoice_date || '').substring(0, 10) === d).reduce((a, i) => a + Number(i.amount || i.total_amount || 0), 0));
+    const colByDay = dates.map(d => invoices.filter(i => (i.invoice_date || '').substring(0, 10) === d).reduce((a, i) => a + Number(i.total_collected || 0), 0));
+    const cinByDay = dates.map(d => treasury.filter(t => (t.transaction_date || '').substring(0, 10) === d).reduce((a, t) => a + Number(t.cash_in || 0), 0));
+    const coutByDay = dates.map(d => treasury.filter(t => (t.transaction_date || '').substring(0, 10) === d).reduce((a, t) => a + Number(t.cash_out || 0), 0));
+    return { inv: invByDay, col: colByDay, cin: cinByDay, cout: coutByDay };
+  }, [invoices, treasury]);
 
   // Treasury by order for reconciliation
   const treasuryByOrder = useMemo(() => {
@@ -1270,14 +1327,24 @@ export default function App() {
     </div>
   );
 
-  const Card = ({ title, titleAr, value, sub, color, onClick }) => (
+  const Sparkline = ({ data, color, w = 80, h = 24 }) => {
+    if (!data || data.length < 2) return null;
+    const max = Math.max(...data), min = Math.min(...data), range = max - min || 1;
+    const pts = data.map((v, i) => `${(i / (data.length - 1)) * w},${h - ((v - min) / range) * (h - 2) - 1}`).join(' ');
+    return <svg width={w} height={h} className="mt-1"><polyline points={pts} fill="none" stroke={color || '#94a3b8'} strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" /><circle cx={(w)} cy={parseFloat(pts.split(' ').pop().split(',')[1])} r="2" fill={color || '#94a3b8'} /></svg>;
+  };
+
+  const Card = ({ title, titleAr, value, sub, color, onClick, spark }) => (
     <div onClick={onClick}
       className={`bg-white rounded-xl p-5 border-l-4 ${onClick ? 'cursor-pointer hover:shadow-lg hover:-translate-y-0.5 transition-all' : ''}`}
       style={{ borderLeftColor: color || '#0ea5e9' }}
     >
       <div className="text-xs font-semibold text-slate-500 uppercase tracking-wide">{title}</div>
       {titleAr && <div className="text-sm font-bold text-slate-900 mt-0.5" style={{ direction: 'rtl' }}>{titleAr}</div>}
-      <div className="text-3xl font-extrabold mt-2">{value}</div>
+      <div className="flex items-end justify-between">
+        <div className="text-3xl font-extrabold mt-2">{value}</div>
+        {spark && <Sparkline data={spark} color={color} />}
+      </div>
       {sub && <div className="text-xs text-slate-500 mt-1.5">{sub}</div>}
     </div>
   );
@@ -1338,11 +1405,15 @@ export default function App() {
   // LOADING
   // ==========================================
   if (loading) return (
-    <div className="min-h-screen flex items-center justify-center" style={{background:'#0a0e1a'}}>
-      <div className="text-center">
-        <div className="text-2xl font-black mb-2" style={{background:'linear-gradient(135deg, #38bdf8, #a78bfa)',WebkitBackgroundClip:'text',WebkitTextFillColor:'transparent'}}>KANDIL KTC EGYPT HUB</div>
-        <div className="text-sm" style={{color:'rgba(148,163,184,0.5)'}}>Loading...</div>
+    <div className="min-h-screen" style={{background:'#0a0e1a'}}>
+      <div style={{background:'linear-gradient(135deg, #0f172a 0%, #1e1b4b 50%, #0f172a 100%)', borderBottom:'1px solid rgba(56,189,248,0.15)'}} className="px-5 py-4 flex justify-between items-center">
+        <div>
+          <div className="text-2xl font-black" style={{background:'linear-gradient(135deg, #38bdf8, #a78bfa)',WebkitBackgroundClip:'text',WebkitTextFillColor:'transparent'}}>KANDIL KTC EGYPT HUB</div>
+          <div className="text-xs mt-1" style={{color:'rgba(148,163,184,0.4)'}}>Initializing system / جاري التحميل...</div>
+        </div>
+        <div className="w-6 h-6 border-2 border-blue-400 border-t-transparent rounded-full animate-spin" />
       </div>
+      <DashboardSkeleton />
     </div>
   );
 
@@ -1350,6 +1421,7 @@ export default function App() {
   // RENDER
   // ==========================================
   return (
+    <ErrorBoundary label="KTC Hub encountered an error" showDetails>
     <div className="min-h-screen" style={{background:'var(--bg-primary)'}}>
       {/* Header */}
       <div style={{background:'linear-gradient(135deg, #0f172a 0%, #1e1b4b 50%, #0f172a 100%)', borderBottom:'1px solid rgba(56,189,248,0.15)'}} className="px-5 py-4 flex justify-between items-center">
@@ -1371,11 +1443,119 @@ export default function App() {
               {lang === 'ar' ? '🌐 EN' : '🌐 AR'}
             </button>
           )}
+          <button onClick={() => setShowGlobalSearch(true)} style={{background:'rgba(255,255,255,0.06)', border:'1px solid rgba(255,255,255,0.1)', color:'rgba(255,255,255,0.6)'}} className="px-3 py-1.5 text-xs rounded-lg font-medium hover:bg-white/10 transition flex items-center gap-1.5">
+            🔍 <span className="hidden sm:inline">Search</span> <kbd className="text-[9px] bg-white/10 px-1 rounded">⌘K</kbd>
+          </button>
+          <NotificationBell userId={userProfile?.id || user?.id} users={teamUsers} />
+          {/* Notification Bell */}
+          {(() => {
+            const overdueCount = invoices.filter(i => i.outstanding > 0 && i.invoice_date && (Date.now() - new Date(i.invoice_date).getTime()) > 30 * 86400000).length;
+            const openTickets = dashTickets.filter(t => t.status !== 'Closed' && t.status !== 'Resolved').length;
+            const pendingCount = pendingChecks?.length || 0;
+            const total = overdueCount + openTickets;
+            return (
+              <div className="relative notif-bell-wrap">
+                <button onClick={() => setShowNotifBell(!showNotifBell)} style={{background:'rgba(255,255,255,0.06)', border:'1px solid rgba(255,255,255,0.1)', color:'rgba(255,255,255,0.6)'}} className="px-2.5 py-1.5 text-sm rounded-lg hover:bg-white/10 transition relative">
+                  🔔
+                  {total > 0 && <span className="absolute -top-1 -right-1 w-4 h-4 bg-red-500 text-white text-[8px] font-bold rounded-full flex items-center justify-center">{total > 9 ? '9+' : total}</span>}
+                </button>
+                {showNotifBell && (
+                  <div className="absolute right-0 top-10 w-72 bg-white rounded-xl shadow-2xl border z-50 overflow-hidden">
+                    <div className="px-3 py-2 bg-slate-50 border-b text-xs font-bold text-slate-700">Notifications</div>
+                    <div className="max-h-[300px] overflow-auto">
+                      {overdueCount > 0 && (
+                        <div className="px-3 py-2.5 border-b border-slate-50 hover:bg-red-50 cursor-pointer" onClick={() => { setTab('sales'); setShowNotifBell(false); }}>
+                          <div className="text-xs font-semibold text-red-600">⚠️ {overdueCount} overdue invoices</div>
+                          <div className="text-[10px] text-slate-400">30+ days past invoice date</div>
+                        </div>
+                      )}
+                      {openTickets > 0 && (
+                        <div className="px-3 py-2.5 border-b border-slate-50 hover:bg-blue-50 cursor-pointer" onClick={() => { setTab('tickets'); setShowNotifBell(false); }}>
+                          <div className="text-xs font-semibold text-blue-600">🎫 {openTickets} open tickets</div>
+                          <div className="text-[10px] text-slate-400">Awaiting resolution</div>
+                        </div>
+                      )}
+                      {pendingCount > 0 && (
+                        <div className="px-3 py-2.5 border-b border-slate-50 hover:bg-amber-50 cursor-pointer" onClick={() => { setTab('checks'); setShowNotifBell(false); }}>
+                          <div className="text-xs font-semibold text-amber-600">📋 {pendingCount} pending checks</div>
+                          <div className="text-[10px] text-slate-400">Under collection</div>
+                        </div>
+                      )}
+                      {total === 0 && <div className="px-3 py-6 text-center text-xs text-slate-400">All clear! ✨</div>}
+                    </div>
+                  </div>
+                )}
+              </div>
+            );
+          })()}
           <button onClick={handleSignOut} style={{background:'rgba(255,255,255,0.06)', border:'1px solid rgba(255,255,255,0.1)', color:'rgba(255,255,255,0.7)'}} className="px-3 py-1.5 text-xs rounded-lg font-medium hover:bg-white/10 transition">
             Sign Out
           </button>
         </div>
       </div>
+
+      {/* Global Search Modal */}
+      {showGlobalSearch && (
+        <div className="fixed inset-0 bg-black/60 z-[200] flex items-start justify-center pt-[15vh] px-4" onClick={() => setShowGlobalSearch(false)}>
+          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-lg overflow-hidden" onClick={e => e.stopPropagation()}>
+            <div className="flex items-center gap-3 px-4 py-3 border-b">
+              <span className="text-lg">🔍</span>
+              <input autoFocus value={globalSearch} onChange={e => setGlobalSearch(e.target.value)} placeholder="Search invoices, customers, tickets, bank..." className="flex-1 outline-none text-sm" />
+              <button onClick={() => setShowGlobalSearch(false)} className="text-xs text-slate-400 bg-slate-100 px-2 py-1 rounded">ESC</button>
+            </div>
+            {globalSearch.length >= 2 && (() => {
+              const q = globalSearch.toLowerCase();
+              const invResults = (invoices || []).filter(i => [i.invoice_number, i.order_number, i.customer, i.customer_name, i.customer_name_en].filter(Boolean).join(' ').toLowerCase().includes(q)).slice(0, 5);
+              const custResults = (customers || []).filter(c => [c.name, c.customer_name, c.phone, c.email].filter(Boolean).join(' ').toLowerCase().includes(q)).slice(0, 5);
+              const tickResults = (dashTickets || []).filter(t => [t.title, t.ticket_number, t.description].filter(Boolean).join(' ').toLowerCase().includes(q)).slice(0, 5);
+              const bankResults = (egyptBankTxns || []).filter(t => [t.description, t.date, String(t.amount||'')].filter(Boolean).join(' ').toLowerCase().includes(q)).slice(0, 5);
+              const tresResults = (treasury || []).filter(t => [t.description, t.order_number, t.transaction_date].filter(Boolean).join(' ').toLowerCase().includes(q)).slice(0, 5);
+              const total = invResults.length + custResults.length + tickResults.length + bankResults.length + tresResults.length;
+              return (
+                <div className="max-h-[50vh] overflow-auto">
+                  {invResults.length > 0 && <div className="px-3 py-1.5 bg-slate-50 text-[9px] font-bold text-slate-500 uppercase sticky top-0">💰 Invoices</div>}
+                  {invResults.map(i => (
+                    <div key={i.id} className="px-4 py-2.5 border-b border-slate-50 hover:bg-blue-50 cursor-pointer" onClick={() => { setTab('sales'); setSelectedInvoice(i); setShowGlobalSearch(false); setGlobalSearch(''); }}>
+                      <div className="text-xs font-semibold">{i.invoice_number || i.order_number} — {i.customer || i.customer_name}</div>
+                      <div className="text-[10px] text-slate-400">{i.invoice_date} · {fE(i.amount || i.total_amount)}</div>
+                    </div>
+                  ))}
+                  {custResults.length > 0 && <div className="px-3 py-1.5 bg-slate-50 text-[9px] font-bold text-slate-500 uppercase sticky top-0">👥 Customers</div>}
+                  {custResults.map(c => (
+                    <div key={c.id} className="px-4 py-2.5 border-b border-slate-50 hover:bg-blue-50 cursor-pointer" onClick={() => { setTab('customers'); setShowGlobalSearch(false); setGlobalSearch(''); }}>
+                      <div className="text-xs font-semibold">{c.name || c.customer_name}</div>
+                      <div className="text-[10px] text-slate-400">{c.phone || ''} {c.email || ''}</div>
+                    </div>
+                  ))}
+                  {tickResults.length > 0 && <div className="px-3 py-1.5 bg-slate-50 text-[9px] font-bold text-slate-500 uppercase sticky top-0">🎫 Tickets</div>}
+                  {tickResults.map(t => (
+                    <div key={t.id} className="px-4 py-2.5 border-b border-slate-50 hover:bg-blue-50 cursor-pointer" onClick={() => { setTab('tickets'); setShowGlobalSearch(false); setGlobalSearch(''); }}>
+                      <div className="text-xs font-semibold">#{t.ticket_number} {t.title}</div>
+                      <div className="text-[10px] text-slate-400">{t.status} · {t.priority}</div>
+                    </div>
+                  ))}
+                  {bankResults.length > 0 && <div className="px-3 py-1.5 bg-slate-50 text-[9px] font-bold text-slate-500 uppercase sticky top-0">🏦 Egypt Bank</div>}
+                  {bankResults.map(t => (
+                    <div key={t.id} className="px-4 py-2.5 border-b border-slate-50 hover:bg-blue-50 cursor-pointer" onClick={() => { setTab('egyptbank'); setShowGlobalSearch(false); setGlobalSearch(''); }}>
+                      <div className="text-xs font-semibold">{t.description}</div>
+                      <div className="text-[10px] text-slate-400">{t.date} · {fE(t.amount)}</div>
+                    </div>
+                  ))}
+                  {tresResults.length > 0 && <div className="px-3 py-1.5 bg-slate-50 text-[9px] font-bold text-slate-500 uppercase sticky top-0">💵 Treasury</div>}
+                  {tresResults.map(t => (
+                    <div key={t.id} className="px-4 py-2.5 border-b border-slate-50 hover:bg-blue-50 cursor-pointer" onClick={() => { setTab('treasury'); setShowGlobalSearch(false); setGlobalSearch(''); }}>
+                      <div className="text-xs font-semibold">{t.description}</div>
+                      <div className="text-[10px] text-slate-400">{t.transaction_date} · {fE(t.cash_in || t.cash_out)}</div>
+                    </div>
+                  ))}
+                  {total === 0 && <div className="px-4 py-8 text-center text-sm text-slate-400">No results for "{globalSearch}"</div>}
+                </div>
+              );
+            })()}
+            {globalSearch.length < 2 && <div className="px-4 py-6 text-center text-xs text-slate-400">Type at least 2 characters to search</div>}
+          </div>
+        </div>
+      )}
 
       {/* Tab Navigation */}
       <div className="tab-nav px-1 overflow-x-auto flex" style={{background:'linear-gradient(to bottom, #ffffff, #f8fafc)'}}>
@@ -1433,7 +1613,7 @@ export default function App() {
                 </div>
               )}
             </div>
-            {/* Delete Invoice */}
+            {/* Delete + PDF Export */}
             {(() => {
               const createdAt = new Date(selectedInvoice.created_at || 0);
               const hourAgo = Date.now() - 60 * 60 * 1000;
@@ -1441,21 +1621,43 @@ export default function App() {
               const withinHour = createdAt.getTime() > hourAgo;
               const hasDeletePerm = userProfile?.role === 'super_admin' || modulePerms?.['Delete Invoices'] === true;
               const canDelete = (isCreator && withinHour) || hasDeletePerm;
-              if (!canDelete) return null;
+              const exportPDF = () => {
+                const inv = selectedInvoice;
+                const items = invoiceItems.filter(it => it.invoice_id === inv.id || it.order_number === inv.order_number);
+                const w = window.open('', '_blank');
+                w.document.write('<html><head><style>body{font-family:Arial,sans-serif;padding:40px;color:#1e293b}h1{font-size:24px;color:#0ea5e9;margin:0}table{width:100%;border-collapse:collapse;margin:16px 0}th,td{border:1px solid #e2e8f0;padding:8px 12px;font-size:13px}th{background:#f1f5f9;font-weight:600;text-align:left}.r{text-align:right}.lg{font-size:18px;font-weight:700}.meta{color:#64748b;font-size:12px;margin:3px 0}</style></head><body>'
+                  + '<h1>KTC Trading Operations</h1><p class="meta">Invoice / فاتورة</p><hr style="border-color:#e2e8f0;margin:12px 0"/>'
+                  + '<table><tr><td><strong>Invoice #</strong><br/>' + (inv.invoice_number || inv.order_number) + '</td>'
+                  + '<td><strong>Date</strong><br/>' + (inv.invoice_date || '') + '</td>'
+                  + '<td><strong>Customer</strong><br/>' + (inv.customer_name || inv.customer || '') + '</td></tr></table>'
+                  + (items.length > 0 ? '<table><tr><th>Item</th><th>Qty</th><th class="r">Rate</th><th class="r">Amount</th></tr>'
+                    + items.map(function(it) { return '<tr><td>' + (it.description || it.item_name || '') + '</td><td>' + (it.quantity || '') + '</td><td class="r">' + Number(it.unit_price || 0).toLocaleString() + '</td><td class="r">' + Number(it.total || it.amount || 0).toLocaleString() + '</td></tr>'; }).join('')
+                    + '</table>' : '')
+                  + '<table><tr><td><strong>Total</strong></td><td class="r lg">EGP ' + Number(inv.amount || inv.total_amount || 0).toLocaleString() + '</td></tr>'
+                  + '<tr><td>Collected</td><td class="r">EGP ' + Number(inv.total_collected || 0).toLocaleString() + '</td></tr>'
+                  + '<tr><td><strong>Outstanding</strong></td><td class="r" style="color:#ef4444;font-weight:700">EGP ' + Number(inv.outstanding || 0).toLocaleString() + '</td></tr></table>'
+                  + '<p class="meta" style="margin-top:30px">Generated by KTC NextTrade Hub — ' + new Date().toLocaleDateString() + '</p></body></html>');
+                w.document.close();
+                setTimeout(function() { w.print(); }, 500);
+              };
               return (
-                <div className="flex justify-end mb-2">
-                  <button onClick={async () => {
-                    if (!confirm('Delete invoice #' + selectedInvoice.order_number + '?\n\nحذف الفاتورة #' + selectedInvoice.order_number + '؟\n\nThis cannot be undone.')) return;
-                    try {
-                      // Delete line items first
-                      await supabase.from('invoice_items').delete().eq('invoice_id', selectedInvoice.id);
-                      await supabase.from('invoices').delete().eq('id', selectedInvoice.id);
-                      setSelectedInvoice(null);
-                      await loadAllData();
-                    } catch(err) { alert('Error: ' + err.message); }
-                  }} className="px-3 py-1 bg-red-500 text-white rounded-lg text-[10px] font-bold hover:bg-red-600">
-                    🗑️ Delete Invoice {isCreator && withinHour && !hasDeletePerm ? '(within 1hr)' : ''}
+                <div className="flex justify-end gap-2 mb-2">
+                  <button onClick={exportPDF} className="px-3 py-1 bg-blue-500 text-white rounded-lg text-[10px] font-bold hover:bg-blue-600">
+                    📄 Print / PDF
                   </button>
+                  {canDelete && (
+                    <button onClick={async () => {
+                      if (!confirm('Delete invoice #' + selectedInvoice.order_number + '?\n\nThis cannot be undone.')) return;
+                      try {
+                        await supabase.from('invoice_items').delete().eq('invoice_id', selectedInvoice.id);
+                        await supabase.from('invoices').delete().eq('id', selectedInvoice.id);
+                        setSelectedInvoice(null);
+                        await loadAllData();
+                      } catch(err) { alert('Error: ' + err.message); }
+                    }} className="px-3 py-1 bg-red-500 text-white rounded-lg text-[10px] font-bold hover:bg-red-600">
+                      🗑️ Delete
+                    </button>
+                  )}
                 </div>
               );
             })()}
@@ -2998,6 +3200,13 @@ export default function App() {
             <div className="flex justify-between flex-wrap gap-2 mb-4">
               <h2 className="text-xl font-extrabold">Dashboard / لوحة التحكم</h2>
               {isAdmin && <ModeBar />}
+              {fxRate && (
+                <div className="flex items-center gap-2 px-3 py-1.5 bg-slate-800 rounded-lg border border-slate-700">
+                  <span className="text-[10px] text-slate-400">USD/EGP</span>
+                  <span className="text-sm font-black text-emerald-400">{fxRate.rate.toFixed(2)}</span>
+                  <span className="text-[9px] text-slate-500">💱</span>
+                </div>
+              )}
             </div>
 
             {/* ===== ANNOUNCEMENTS / URGENT MESSAGES ===== */}
@@ -3214,6 +3423,100 @@ export default function App() {
             })()}
 
             {/* ===== TICKETS DASHBOARD ===== */}
+            {/* ===== SALES BY DIVISION + TREASURY CATEGORIES (side by side) ===== */}
+            {isAdmin && (() => {
+              const divData = {};
+              filteredInvoices.forEach(inv => {
+                const cust = customers.find(c => c.id === inv.customer_id || c.name === inv.customer_name);
+                const div = inv.division || cust?.group_name || 'Other';
+                divData[div] = (divData[div] || 0) + Number(inv.total_amount || 0);
+              });
+              const divSorted = Object.entries(divData).sort((a, b) => b[1] - a[1]).slice(0, 8);
+              const divMax = divSorted[0]?.[1] || 1;
+
+              const catData = {};
+              filteredTreasury.forEach(t => {
+                const cat = t.expense_category || 'Uncategorized';
+                if (Number(t.cash_out || 0) > 0) catData[cat] = (catData[cat] || 0) + Number(t.cash_out);
+              });
+              const catSorted = Object.entries(catData).sort((a, b) => b[1] - a[1]).slice(0, 8);
+              const catMax = catSorted[0]?.[1] || 1;
+
+              if (divSorted.length <= 1 && catSorted.length <= 1) return null;
+              return (
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-3 mb-4">
+                  {divSorted.length > 1 && (
+                    <div className="bg-white rounded-xl p-4">
+                      <h3 className="text-xs font-extrabold text-slate-700 mb-3">📊 Sales by Division</h3>
+                      <div className="space-y-2">
+                        {divSorted.map(([div, amt], i) => (
+                          <div key={div}>
+                            <div className="flex justify-between text-[10px] mb-0.5">
+                              <span className="font-semibold text-slate-700 truncate max-w-[60%]">{div}</span>
+                              <span className="font-bold text-blue-600">{fE(amt)}</span>
+                            </div>
+                            <div className="h-2 bg-slate-100 rounded-full overflow-hidden">
+                              <div className="h-full rounded-full transition-all" style={{ width: (amt / divMax * 100) + '%', background: COLORS[i % COLORS.length] }} />
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+                  {catSorted.length > 1 && (
+                    <div className="bg-white rounded-xl p-4">
+                      <h3 className="text-xs font-extrabold text-slate-700 mb-3">💸 Treasury Categories</h3>
+                      <div className="space-y-2">
+                        {catSorted.map(([cat, amt], i) => (
+                          <div key={cat}>
+                            <div className="flex justify-between text-[10px] mb-0.5">
+                              <span className="font-semibold text-slate-700 truncate max-w-[60%]">{cat}</span>
+                              <span className="font-bold text-red-500">{fE(amt)}</span>
+                            </div>
+                            <div className="h-2 bg-slate-100 rounded-full overflow-hidden">
+                              <div className="h-full rounded-full transition-all" style={{ width: (amt / catMax * 100) + '%', background: ['#ef4444','#f97316','#eab308','#22c55e','#06b6d4','#8b5cf6','#ec4899','#64748b'][i % 8] }} />
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+                </div>
+              );
+            })()}
+
+            {/* ===== OVERDUE INVOICES ALERT ===== */}
+            {isAdmin && (() => {
+              const todayD = new Date();
+              const overdue = filteredInvoices.filter(i => {
+                if (!i.outstanding || i.outstanding <= 0) return false;
+                const invDate = new Date(i.invoice_date || i.created_at);
+                const daysSince = Math.floor((todayD - invDate) / 86400000);
+                return daysSince > 30;
+              }).map(i => ({ ...i, daysOverdue: Math.floor((todayD - new Date(i.invoice_date || i.created_at)) / 86400000) }))
+                .sort((a, b) => b.daysOverdue - a.daysOverdue).slice(0, 10);
+              if (overdue.length === 0) return null;
+              return (
+                <div className="bg-white rounded-xl p-4 border-l-4 border-l-red-500 mb-4">
+                  <h3 className="text-sm font-extrabold text-red-600 mb-2">⚠️ Overdue Invoices ({overdue.length})</h3>
+                  <div className="space-y-1.5">
+                    {overdue.map(i => (
+                      <div key={i.id} className="flex items-center justify-between py-1.5 border-b border-slate-50 last:border-0 cursor-pointer hover:bg-red-50 rounded px-2 -mx-2" onClick={() => { setSelectedInvoice(i); setTab('sales'); }}>
+                        <div>
+                          <div className="text-xs font-semibold">{i.customer || i.customer_name} — {i.invoice_number || i.order_number}</div>
+                          <div className="text-[10px] text-slate-400">{i.invoice_date} · <span className="text-red-500 font-bold">{i.daysOverdue} days overdue</span></div>
+                        </div>
+                        <div className="text-right">
+                          <div className="text-sm font-bold text-red-600">{fE(i.outstanding)}</div>
+                          <div className="text-[9px] text-slate-400">of {fE(i.amount || i.total_amount)}</div>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              );
+            })()}
+
             {dashTickets.length > 0 && (() => {
               const myId = userProfile?.id;
               const todayStr = new Date().toISOString().substring(0, 10);
@@ -3422,8 +3725,8 @@ export default function App() {
               <span className="text-xs text-blue-600">{hideSections.invoices ? '👁️ Show' : '🙈 Hide'}</span>
             </div>
             {!hideSections.invoices && <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-5">
-              <Card title="Invoiced" titleAr="الفواتير" value={fE(totalInvoiced)} sub={`${filteredInvoices.length} inv`} color="#0ea5e9" onClick={() => setDrillType('invoiced')} />
-              <Card title="Collected" titleAr="المحصّل" value={fE(totalCollected)} color="#10b981" onClick={() => setDrillType('collected')} />
+              <Card title="Invoiced" titleAr="الفواتير" value={fE(totalInvoiced)} sub={`${filteredInvoices.length} inv`} color="#0ea5e9" onClick={() => setDrillType('invoiced')} spark={sparkData.inv} />
+              <Card title="Collected" titleAr="المحصّل" value={fE(totalCollected)} color="#10b981" onClick={() => setDrillType('collected')} spark={sparkData.col} />
               <Card title="Outstanding" titleAr="المتبقّي" value={fE(totalOutstanding)} sub={`${filteredInvoices.filter(s => s.outstanding > 0).length} open`} color="#ef4444" onClick={() => setDrillType('outstanding')} />
               <Card title="Debt" titleAr="المديونية" value={fE(totalDebt)} sub={`${debts.length} debtors`} color="#dc2626" onClick={() => navigate('debts')} />
             </div>}
@@ -3436,8 +3739,8 @@ export default function App() {
               <span className="text-xs text-emerald-600">{hideSections.cash ? '👁️ Show' : '🙈 Hide'}</span>
             </div>
             {!hideSections.cash && <><div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-5">
-              <Card title="Cash In" titleAr="وارد" value={fE(totalCashIn)} sub="Tap / اضغط" color="#10b981" onClick={() => setTreasuryDrill('in')} />
-              <Card title="Cash Out" titleAr="منصرف" value={fE(totalCashOut)} sub="Tap / اضغط" color="#ef4444" onClick={() => setTreasuryDrill('out')} />
+              <Card title="Cash In" titleAr="وارد" value={fE(totalCashIn)} sub="Tap / اضغط" color="#10b981" onClick={() => setTreasuryDrill('in')} spark={sparkData.cin} />
+              <Card title="Cash Out" titleAr="منصرف" value={fE(totalCashOut)} sub="Tap / اضغط" color="#ef4444" onClick={() => setTreasuryDrill('out')} spark={sparkData.cout} />
               <Card title="Net" titleAr="صافي" value={fE(totalCashIn - totalCashOut)} sub="Tap / اضغط" color={totalCashIn > totalCashOut ? '#10b981' : '#ef4444'} onClick={() => setTreasuryDrill('net')} />
               <Card title="Checks" titleAr="شيكات" value={fE(pendingChecks.reduce((a, c) => a + Number(c.amount), 0))} sub={`${pendingChecks.length} pending`} color="#f59e0b" onClick={() => navigate('checks')} />
             </div>
@@ -3660,6 +3963,48 @@ export default function App() {
             {/* ===== PERSONAL DASHBOARD (tickets, reminders, calendar — after financial for admins, first for team) ===== */}
             <PersonalDashboard user={user} userProfile={userProfile} isAdmin={isAdmin}
               invoices={invoices} customers={customers} navigate={navigate} fE={fE} users={teamUsers} />
+
+            {/* ===== TEAM ACTIVITY FEED ===== */}
+            {activityFeed.length > 0 && (
+              <div className="bg-white rounded-xl p-5 border mt-4">
+                <h3 className="text-sm font-extrabold mb-3 flex items-center gap-2">
+                  <span className="w-2 h-2 rounded-full bg-green-400 animate-pulse" />
+                  Team Activity / نشاط الفريق
+                </h3>
+                <div className="space-y-0.5 max-h-[350px] overflow-auto">
+                  {activityFeed.map((a, i) => {
+                    const who = (teamUsers || []).find(u => u.id === a.user_id);
+                    const name = who?.name || 'System';
+                    const initials = name.split(' ').map(w => w[0]).join('').toUpperCase().substring(0, 2);
+                    const colors = ['bg-blue-500','bg-purple-500','bg-emerald-500','bg-amber-500','bg-rose-500','bg-cyan-500'];
+                    const color = colors[(name.charCodeAt(0) || 0) % colors.length];
+                    const timeAgo = (() => {
+                      const diff = Date.now() - new Date(a.created_at).getTime();
+                      const mins = Math.floor(diff / 60000);
+                      if (mins < 1) return 'just now';
+                      if (mins < 60) return mins + 'm ago';
+                      const hrs = Math.floor(mins / 60);
+                      if (hrs < 24) return hrs + 'h ago';
+                      const days = Math.floor(hrs / 24);
+                      return days + 'd ago';
+                    })();
+                    const icon = a.log_category === 'finance' ? '💰' : a.log_category === 'crm' ? '🤝' : a.log_category === 'ticket' ? '🎫' : a.log_category === 'shipping' ? '🚢' : a.log_category === 'admin' ? '⚙️' : '📋';
+                    return (
+                      <div key={a.id || i} className="flex items-start gap-2.5 py-2 border-b border-slate-50 last:border-0">
+                        <div className={`w-7 h-7 rounded-full ${color} text-white text-[10px] font-bold flex items-center justify-center flex-shrink-0 mt-0.5`}>{initials}</div>
+                        <div className="flex-1 min-w-0">
+                          <div className="text-xs">
+                            <span className="font-bold text-slate-800">{name}</span>
+                            <span className="text-slate-500 ml-1.5">{a.entry_text}</span>
+                          </div>
+                          <div className="text-[10px] text-slate-400 mt-0.5">{icon} {a.log_category || 'general'} · {timeAgo}</div>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
           </div>
         )}
 
@@ -3698,6 +4043,21 @@ export default function App() {
                 <button onClick={() => generateReconReport()}
                   className="px-3 py-1.5 bg-red-500 text-white rounded-lg text-xs font-semibold hover:bg-red-600">
                   📊 Recon Report
+                </button>
+                <button onClick={() => {
+                  const rows = filteredInvoices.map(i => ({
+                    'Invoice #': i.invoice_number || i.order_number || '', Customer: i.customer || i.customer_name || '',
+                    Date: i.invoice_date || '', Amount: i.amount || i.total_amount || '',
+                    Paid: i.total_collected || 0, Outstanding: i.outstanding || 0,
+                    Status: getReconStatus(i)?.label || '', Division: i.product_type || '',
+                  }));
+                  const ws = XLSX.utils.json_to_sheet(rows);
+                  ws['!cols'] = [{wch:14},{wch:30},{wch:12},{wch:14},{wch:14},{wch:14},{wch:14},{wch:14}];
+                  const wb = XLSX.utils.book_new();
+                  XLSX.utils.book_append_sheet(wb, ws, 'Sales');
+                  XLSX.writeFile(wb, `Sales-Export-${new Date().toISOString().substring(0,10)}.xlsx`);
+                }} className="px-3 py-1.5 bg-slate-100 text-slate-600 rounded-lg text-xs font-semibold hover:bg-slate-200">
+                  📥 Export
                 </button>
               </div>
             </div>
@@ -3937,6 +4297,10 @@ export default function App() {
                   const custRecord = customers.find(cr => cr.name === c.name || cr.name_ar === c.name);
                   const enName = custRecord ? custRecord.name_en : '';
                   const isSelected = (formData.mergeTargets || []).includes(c.name);
+                  const lastInvDate = filteredInvoices.filter(x => x.customer_name === c.name).map(x => x.invoice_date).sort().reverse()[0];
+                  const daysSince = lastInvDate ? Math.floor((new Date() - new Date(lastInvDate)) / 86400000) : 999;
+                  const followColor = daysSince <= 30 ? '#10b981' : daysSince <= 90 ? '#f59e0b' : daysSince <= 180 ? '#ef4444' : '#94a3b8';
+                  const followLabel = daysSince <= 30 ? 'Active' : daysSince <= 90 ? daysSince + 'd ago' : daysSince <= 365 ? daysSince + 'd ago' : '1yr+';
                   return (
                   <div key={c.name} onClick={() => {
                     if (formData.mergeMode) {
@@ -3955,9 +4319,15 @@ export default function App() {
                         </div>
                       </div>
                     )}
-                    <div className="text-sm font-bold" style={{ direction: lang === 'ar' ? 'rtl' : 'ltr' }}>{lang === 'en' && enName ? enName : c.name}</div>
-                    {lang === 'ar' && enName && <div className="text-[10px] text-blue-500">{enName}</div>}
-                    <div className="text-[9px] text-slate-400 mt-1">{c.count} invoices</div>
+                    <div className="flex items-center gap-1.5">
+                      <span className="w-2 h-2 rounded-full flex-shrink-0" style={{ background: followColor }} />
+                      <div className="text-sm font-bold flex-1 min-w-0 truncate" style={{ direction: lang === 'ar' ? 'rtl' : 'ltr' }}>{lang === 'en' && enName ? enName : c.name}</div>
+                    </div>
+                    {lang === 'ar' && enName && <div className="text-[10px] text-blue-500 ml-3.5">{enName}</div>}
+                    <div className="flex items-center gap-1.5 mt-1">
+                      <span className="text-[9px] text-slate-400">{c.count} invoices</span>
+                      <span className="text-[9px] font-semibold ml-auto" style={{ color: followColor }}>{followLabel}</span>
+                    </div>
                     <div className="flex justify-between mt-1">
                       <div>
                         <div className="text-[9px] text-slate-400">Sales</div>
@@ -4054,6 +4424,21 @@ export default function App() {
                 <button onClick={() => setShowAddTreasury(true)}
                   className="px-3 py-1.5 bg-blue-500 text-white rounded-lg text-xs font-semibold hover:bg-blue-600">
                   + New Transaction
+                </button>
+                <button onClick={() => {
+                  const ft = treasury.filter(t => inRange(t.transaction_date, mode, df, dt));
+                  const rows = ft.map(t => ({
+                    Date: t.transaction_date, Order: t.order_number || '',
+                    Description: t.description || '', 'Cash In': t.cash_in || '',
+                    'Cash Out': t.cash_out || '', Category: t.expense_category || '',
+                  }));
+                  const ws = XLSX.utils.json_to_sheet(rows);
+                  ws['!cols'] = [{wch:12},{wch:12},{wch:40},{wch:14},{wch:14},{wch:16}];
+                  const wb = XLSX.utils.book_new();
+                  XLSX.utils.book_append_sheet(wb, ws, 'Treasury');
+                  XLSX.writeFile(wb, `Treasury-Export-${new Date().toISOString().substring(0,10)}.xlsx`);
+                }} className="px-3 py-1.5 bg-slate-100 text-slate-600 rounded-lg text-xs font-semibold hover:bg-slate-200">
+                  📥 Export
                 </button>
               </div>
             </div>
@@ -4429,15 +4814,35 @@ export default function App() {
         {/* ==========================================
             WAREHOUSE TAB
         ========================================== */}
-        {tab === 'warehouse' && (
+        {tab === 'warehouse' && (() => {
+          const whYears = [...new Set(warehouse.map(w => (w.expense_date || '').substring(0, 4)).filter(y => y.length === 4))].sort().reverse();
+          return (
           <div>
             <div className="flex justify-between flex-wrap gap-2 mb-3">
-              <h2 className="text-xl font-extrabold">Warehouse / عهدة المخزن</h2>
+              <div>
+                <h2 className="text-xl font-extrabold">Warehouse / عهدة المخزن</h2>
+                <span className="text-[10px] text-slate-400">{warehouse.length} total records · {whYears[whYears.length-1] || '?'}–{whYears[0] || '?'}</span>
+              </div>
               <div className="flex gap-2 items-center flex-wrap">
                 <ModeBar />
+                <select value={formData.whYear || ''} onChange={e => setFormData({...formData, whYear: e.target.value})} className="border rounded-lg px-2 py-1 text-xs font-semibold">
+                  <option value="">All Years</option>
+                  {whYears.map(y => <option key={y} value={y}>{y} ({warehouse.filter(w => (w.expense_date||'').startsWith(y)).length})</option>)}
+                </select>
                 <button onClick={() => setFormData({...formData, showAddWarehouse: true, whType: 'general'})}
                   className="px-3 py-1.5 bg-purple-500 text-white rounded-lg text-xs font-semibold hover:bg-purple-600">
                   + New Expense / مصروف جديد
+                </button>
+                <button onClick={() => {
+                  const wf = warehouse.filter(w => formData.whYear ? (w.expense_date||'').startsWith(formData.whYear) : inRange(w.expense_date, mode, df, dt));
+                  const rows = wf.map(w => ({ Date: w.expense_date, Description: w.description || '', Amount: w.amount || 0, Category: getWarehouseCat(w.description) || '', Subcategory: w.subcategory || '' }));
+                  const ws = XLSX.utils.json_to_sheet(rows);
+                  ws['!cols'] = [{wch:12},{wch:50},{wch:14},{wch:20},{wch:20}];
+                  const wb = XLSX.utils.book_new();
+                  XLSX.utils.book_append_sheet(wb, ws, 'Warehouse');
+                  XLSX.writeFile(wb, `Warehouse-Export-${formData.whYear || 'All'}-${new Date().toISOString().substring(0,10)}.xlsx`);
+                }} className="px-3 py-1.5 bg-slate-100 text-slate-600 rounded-lg text-xs font-semibold hover:bg-slate-200">
+                  📥 Export
                 </button>
               </div>
             </div>
@@ -4584,7 +4989,8 @@ export default function App() {
             </div>
             {(() => {
               const filtered = warehouse.filter(w => {
-                if (!inRange(w.expense_date, mode, df, dt)) return false;
+                if (formData.whYear && !(w.expense_date||'').startsWith(formData.whYear)) return false;
+                if (!formData.whYear && !inRange(w.expense_date, mode, df, dt)) return false;
                 if (formData.whSearch && !(w.description||'').includes(formData.whSearch) && !(w.description_en||'').toLowerCase().includes((formData.whSearch||'').toLowerCase())) return false;
                 if (formData.whInboundRef && !(w.inbound_ref||'').toLowerCase().includes((formData.whInboundRef||'').toLowerCase())) return false;
                 if (formData.whSubSearch && !(w.subcategory||'').toLowerCase().includes((formData.whSubSearch||'').toLowerCase())) return false;
@@ -4857,7 +5263,8 @@ export default function App() {
               );
             })()}
           </div>
-        )}
+          );
+        })()}
 
         {/* ==========================================
             INVENTORY TAB
@@ -5807,8 +6214,45 @@ export default function App() {
         )}
 
       </div>
+
+      {/* Quick Add FAB */}
+      <div className="fixed bottom-20 right-4 z-40 fab-wrap">
+        {showFAB && (
+          <div className="absolute bottom-14 right-0 bg-white rounded-xl shadow-2xl border w-52 overflow-hidden mb-2">
+            {[
+              ['💰 New Invoice', () => { setTab('sales'); setShowAddInvoice(true); }],
+              ['🎫 New Ticket', () => setTab('tickets')],
+              ['📋 Daily Log', () => setTab('log')],
+              ['📢 Announcement', () => setTab('admin')],
+              ['🏭 Warehouse Expense', () => { setTab('warehouse'); setFormData({...formData, showAddWarehouse: true, whType: 'general'}); }],
+            ].map(([label, action]) => (
+              <button key={label} onClick={() => { action(); setShowFAB(false); }} className="w-full text-left px-4 py-2.5 text-xs font-semibold hover:bg-blue-50 border-b border-slate-50 last:border-0 transition">
+                {label}
+              </button>
+            ))}
+          </div>
+        )}
+        <button onClick={() => setShowFAB(!showFAB)}
+          className="w-12 h-12 rounded-full bg-gradient-to-br from-blue-500 to-indigo-600 text-white shadow-lg hover:shadow-xl transition-all flex items-center justify-center text-xl"
+          style={{ transform: showFAB ? 'rotate(45deg)' : 'none', transition: 'transform 0.2s' }}>
+          +
+        </button>
+      </div>
+
+      {/* Data Freshness Indicator */}
+      {lastLoaded && (
+        <div className="fixed bottom-4 left-4 z-30 flex items-center gap-2">
+          <button onClick={() => loadAllData()} className="px-2.5 py-1 bg-white/90 border border-slate-200 rounded-lg shadow-sm text-[10px] text-slate-500 hover:bg-slate-50 transition flex items-center gap-1.5">
+            <span className="w-1.5 h-1.5 rounded-full bg-green-400" />
+            Synced {Math.floor((Date.now() - lastLoaded.getTime()) / 60000)}m ago
+            <span className="text-slate-300">↻</span>
+          </button>
+        </div>
+      )}
+
       {/* Phone Widget - floating on all tabs */}
       <PhoneWidget user={user} userProfile={userProfile} users={teamUsers} customers={customers} />
     </div>
+    </ErrorBoundary>
   );
 }

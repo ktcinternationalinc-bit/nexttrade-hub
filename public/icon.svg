@@ -1,0 +1,6 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
+  <rect width="512" height="512" rx="96" fill="#0f172a"/>
+  <text x="256" y="200" font-family="Arial Black" font-size="160" fill="#38bdf8" text-anchor="middle" font-weight="900">KTC</text>
+  <text x="256" y="340" font-family="Arial" font-size="72" fill="#818cf8" text-anchor="middle" font-weight="700">HUB</text>
+  <rect x="100" y="380" width="312" height="4" rx="2" fill="#38bdf8" opacity="0.3"/>
+</svg>
