@@ -1351,7 +1351,7 @@ export default function App() {
       <div className="text-xs font-semibold text-slate-500 uppercase tracking-wide">{title}</div>
       {titleAr && <div className="text-sm font-bold text-slate-900 mt-0.5" style={{ direction: 'rtl' }}>{titleAr}</div>}
       <div className="flex items-end justify-between">
-        <div className="text-3xl font-extrabold mt-2">{value}</div>
+        <div className="text-3xl font-extrabold mt-2" style={{ color: color || '#e2e8f0' }}>{value}</div>
         {spark && <Sparkline data={spark} color={color} />}
       </div>
       {sub && <div className="text-xs text-slate-500 mt-1.5">{sub}</div>}
@@ -3513,127 +3513,153 @@ export default function App() {
                 );
               };
 
+              const recentlyUpdated = myTickets.filter(t => t.updated_at && t.updated_at >= twoDaysAgo).sort((a,b) => (b.updated_at||'').localeCompare(a.updated_at||''));
+
+              const toggleSection = (key) => setHideSections(prev => ({...prev, [key]: !prev[key]}));
+              const isExpanded = (key) => hideSections[key] === true;
+
+              const CollapsibleSection = ({ id, icon, title, count, color, bgColor, borderColor, items, renderItem, defaultShow }) => {
+                const show = defaultShow || 5;
+                const expanded = isExpanded('dash_' + id);
+                const visible = expanded ? items : items.slice(0, show);
+                if (items.length === 0) return null;
+                return (
+                  <div style={{ ...sectionStyle, ...(borderColor ? { border: '1px solid ' + borderColor } : {}) }}>
+                    <div style={sectionHeaderStyle(color, bgColor)} className="cursor-pointer" onClick={() => toggleSection('dash_' + id)}>
+                      {sectionLabel(icon, title, count, color)}
+                      <span style={{ fontSize: 10, color: '#64748b' }}>{expanded ? '▲ Collapse' : '▼ Show All'}</span>
+                    </div>
+                    {visible.map(renderItem)}
+                    {!expanded && items.length > show && (
+                      <div style={{ padding: '8px 14px', fontSize: 11, color: color, fontWeight: 700, textAlign: 'center', cursor: 'pointer', background: 'rgba(255,255,255,0.02)' }}
+                        onClick={() => toggleSection('dash_' + id)}>
+                        Show all {items.length} (+{items.length - show} more) ▼
+                      </div>
+                    )}
+                  </div>
+                );
+              };
+
               return (
                 <div style={{ marginBottom: 16 }}>
                   {/* ── 1. NEWLY ASSIGNED ── */}
-                  {newlyAssigned.length > 0 && (
-                    <div style={sectionStyle}>
-                      <div style={sectionHeaderStyle('#60a5fa', 'rgba(59,130,246,0.08)')}>
-                        {sectionLabel('✨', 'Newly Assigned to You', newlyAssigned.length, '#60a5fa')}
-                      </div>
-                      {newlyAssigned.slice(0, 8).map(t => <TicketCard key={t.id} t={t} accent="#60a5fa" />)}
-                      {newlyAssigned.length > 8 && <div style={{ padding: '8px 14px', fontSize: 11, color: '#60a5fa', fontWeight: 700, textAlign: 'center', cursor: 'pointer' }} onClick={() => setTab('tickets')}>View all {newlyAssigned.length} →</div>}
-                    </div>
-                  )}
+                  <CollapsibleSection id="newAssign" icon="✨" title="Newly Assigned to You" count={newlyAssigned.length}
+                    color="#60a5fa" bgColor="rgba(59,130,246,0.08)" items={newlyAssigned}
+                    renderItem={(t) => <TicketCard key={t.id} t={t} accent="#60a5fa" />} />
 
-                  {/* ── 2. RECENT UPDATES / COMMENTS ── */}
+                  {/* ── 2. OVERDUE TICKETS ── */}
+                  <CollapsibleSection id="overdue" icon="🚨" title="Overdue Tickets" count={overdueTickets.length}
+                    color="#f87171" bgColor="rgba(239,68,68,0.1)" borderColor="rgba(239,68,68,0.3)" items={overdueTickets}
+                    renderItem={(t) => <TicketCard key={t.id} t={t} accent="#f87171" />} />
+
+                  {/* ── 3. RECENTLY UPDATED ── */}
                   {myUpdates.length > 0 && (
-                    <div style={sectionStyle}>
-                      <div style={sectionHeaderStyle('#a78bfa', 'rgba(139,92,246,0.08)')}>
-                        {sectionLabel('💬', 'Recent Updates on Your Tickets', myUpdates.length, '#a78bfa')}
-                      </div>
-                      {myUpdates.slice(0, 8).map(c => <UpdateCard key={c.id} c={c} />)}
-                      {myUpdates.length > 8 && <div style={{ padding: '8px 14px', fontSize: 11, color: '#a78bfa', fontWeight: 700, textAlign: 'center', cursor: 'pointer' }} onClick={() => setTab('tickets')}>View all {myUpdates.length} →</div>}
-                    </div>
+                    <CollapsibleSection id="recentUpd" icon="💬" title="Recently Updated" count={myUpdates.length}
+                      color="#a78bfa" bgColor="rgba(139,92,246,0.08)" items={myUpdates}
+                      renderItem={(c) => <UpdateCard key={c.id} c={c} />} />
+                  )}
+                  {recentlyUpdated.length > 0 && myUpdates.length === 0 && (
+                    <CollapsibleSection id="recentUpd2" icon="🔄" title="Recently Updated Tickets" count={recentlyUpdated.length}
+                      color="#a78bfa" bgColor="rgba(139,92,246,0.08)" items={recentlyUpdated}
+                      renderItem={(t) => <TicketCard key={t.id} t={t} accent="#a78bfa" />} />
                   )}
 
-                  {/* ── 3. OVERDUE TICKETS ── */}
-                  {overdueTickets.length > 0 && (
-                    <div style={{ ...sectionStyle, border: '1px solid rgba(239,68,68,0.3)' }}>
-                      <div style={sectionHeaderStyle('#f87171', 'rgba(239,68,68,0.1)')}>
-                        {sectionLabel('🚨', 'Overdue Tickets', overdueTickets.length, '#f87171')}
-                      </div>
-                      {overdueTickets.map(t => <TicketCard key={t.id} t={t} accent="#f87171" />)}
-                    </div>
-                  )}
-
-                  {/* ── 4. ALL YOUR TICKETS ── */}
-                  {myTickets.length > 0 && (
-                    <div style={sectionStyle}>
-                      <div style={sectionHeaderStyle('#94a3b8', 'rgba(255,255,255,0.03)')}>
-                        {sectionLabel('📋', 'All My Open Tickets', myTickets.length, '#94a3b8')}
-                        <button onClick={() => setTab('tickets')} style={{ fontSize: 10, fontWeight: 700, color: '#a78bfa', background: 'rgba(139,92,246,0.15)', border: '1px solid rgba(139,92,246,0.25)', borderRadius: 6, padding: '4px 12px', cursor: 'pointer' }}>
-                          Open Full View →
-                        </button>
-                      </div>
-                      {myTickets.slice(0, 10).map(t => <TicketCard key={t.id} t={t} accent="#94a3b8" />)}
-                      {myTickets.length > 10 && <div style={{ padding: '8px 14px', fontSize: 11, color: '#94a3b8', fontWeight: 700, textAlign: 'center', cursor: 'pointer' }} onClick={() => setTab('tickets')}>+{myTickets.length - 10} more tickets →</div>}
-                    </div>
-                  )}
+                  {/* ── 4. ALL MY OPEN TICKETS ── */}
+                  <CollapsibleSection id="allOpen" icon="📋" title="All My Open Tickets" count={myTickets.length}
+                    color="#94a3b8" bgColor="rgba(255,255,255,0.03)" items={myTickets}
+                    renderItem={(t) => <TicketCard key={t.id} t={t} accent="#94a3b8" />} />
                 </div>
               );
             })()}
 
 
             {/* ===== TEAM ACTIVITY FEED ===== */}
-            {activityFeed.length > 0 && (
-              <div className="bg-white rounded-xl p-5 border mt-4">
-                <h3 className="text-sm font-extrabold mb-3 flex items-center gap-2">
-                  <span className="w-2 h-2 rounded-full bg-green-400 animate-pulse" />
-                  Team Activity / نشاط الفريق
-                </h3>
-                <div className="space-y-0.5 max-h-[350px] overflow-auto">
-                  {activityFeed.map((a, i) => {
-                    const who = (teamUsers || []).find(u => u.id === a.user_id);
-                    const name = who?.name || 'System';
-                    const initials = name.split(' ').map(w => w[0]).join('').toUpperCase().substring(0, 2);
-                    const colors = ['bg-blue-500','bg-purple-500','bg-emerald-500','bg-amber-500','bg-rose-500','bg-cyan-500'];
-                    const color = colors[(name.charCodeAt(0) || 0) % colors.length];
-                    const timeAgo = (() => {
-                      const diff = Date.now() - new Date(a.created_at).getTime();
-                      const mins = Math.floor(diff / 60000);
-                      if (mins < 1) return 'just now';
-                      if (mins < 60) return mins + 'm ago';
-                      const hrs = Math.floor(mins / 60);
-                      if (hrs < 24) return hrs + 'h ago';
-                      const days = Math.floor(hrs / 24);
-                      return days + 'd ago';
-                    })();
-                    const icon = a.log_category === 'finance' ? '💰' : a.log_category === 'crm' ? '🤝' : a.log_category === 'ticket' ? '🎫' : a.log_category === 'shipping' ? '🚢' : a.log_category === 'admin' ? '⚙️' : '📋';
-                    return (
-                      <div key={a.id || i} className="flex items-start gap-2.5 py-2 border-b border-slate-50 last:border-0">
-                        <div className={`w-7 h-7 rounded-full ${color} text-white text-[10px] font-bold flex items-center justify-center flex-shrink-0 mt-0.5`}>{initials}</div>
-                        <div className="flex-1 min-w-0">
-                          <div className="text-xs">
-                            <span className="font-bold text-slate-800">{name}</span>
-                            <span className="text-slate-500 ml-1.5">{a.entry_text}</span>
-                          </div>
-                          <div className="text-[10px] text-slate-400 mt-0.5">{icon} {a.log_category || 'general'} · {timeAgo}</div>
-                        </div>
-                      </div>
-                    );
-                  })}
-                </div>
-
-
-            {/* ===== OVERDUE INVOICES ALERT ===== */}
-            {isAdmin && (() => {
-              const todayD = new Date();
-              const overdue = filteredInvoices.filter(i => {
-                if (!i.outstanding || i.outstanding <= 0) return false;
-                const invDate = new Date(i.invoice_date || i.created_at);
-                const daysSince = Math.floor((todayD - invDate) / 86400000);
-                return daysSince > 30;
-              }).map(i => ({ ...i, daysOverdue: Math.floor((todayD - new Date(i.invoice_date || i.created_at)) / 86400000) }))
-                .sort((a, b) => b.daysOverdue - a.daysOverdue).slice(0, 10);
-              if (overdue.length === 0) return null;
+            {activityFeed.length > 0 && (() => {
+              const expanded = hideSections.dash_teamFeed;
+              const visible = expanded ? activityFeed.slice(0, 100) : activityFeed.slice(0, 5);
               return (
-                <div className="bg-white rounded-xl p-4 border-l-4 border-l-red-500 mb-4">
-                  <h3 className="text-sm font-extrabold text-red-600 mb-2">⚠️ Overdue Invoices ({overdue.length})</h3>
-                  <div className="space-y-1.5">
-                    {overdue.map(i => (
-                      <div key={i.id} className="flex items-center justify-between py-1.5 border-b border-slate-50 last:border-0 cursor-pointer hover:bg-red-50 rounded px-2 -mx-2" onClick={() => { setSelectedInvoice(i); setTab('sales'); }}>
-                        <div>
-                          <div className="text-xs font-semibold">{i.customer || i.customer_name} — {i.invoice_number || i.order_number}</div>
-                          <div className="text-[10px] text-slate-400">{i.invoice_date} · <span className="text-red-500 font-bold">{i.daysOverdue} days overdue</span></div>
-                        </div>
-                        <div className="text-right">
-                          <div className="text-sm font-bold text-red-600">{fE(i.outstanding)}</div>
-                          <div className="text-[9px] text-slate-400">of {fE(i.amount || i.total_amount)}</div>
-                        </div>
-                      </div>
-                    ))}
+              <div style={{ background: 'rgba(17,24,39,0.7)', borderRadius: 14, border: '1px solid rgba(255,255,255,0.08)', marginBottom: 16, overflow: 'hidden' }}>
+                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '10px 14px', borderBottom: '1px solid rgba(255,255,255,0.06)', background: 'rgba(52,211,153,0.06)', cursor: 'pointer' }}
+                  onClick={() => setHideSections(prev => ({...prev, dash_teamFeed: !prev.dash_teamFeed}))}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                    <span style={{ width: 8, height: 8, borderRadius: '50%', background: '#34d399', boxShadow: '0 0 8px rgba(52,211,153,0.5)', animation: 'pulse 2s infinite' }} />
+                    <span style={{ fontSize: 12, fontWeight: 800, color: '#34d399', letterSpacing: '0.03em' }}>Team Activity</span>
+                    <span style={{ fontSize: 10, fontWeight: 800, color: '#fff', background: '#34d399', borderRadius: 10, padding: '1px 8px' }}>{activityFeed.length}</span>
                   </div>
+                  <span style={{ fontSize: 10, color: '#64748b' }}>{expanded ? '▲ Collapse' : '▼ Show All'}</span>
+                </div>
+                {visible.map((a, i) => {
+                  const who = (teamUsers || []).find(u => u.id === a.user_id);
+                  const name = who?.name || 'System';
+                  const initials = name.split(' ').map(w => w[0]).join('').toUpperCase().substring(0, 2);
+                  const colors = ['bg-blue-500','bg-purple-500','bg-emerald-500','bg-amber-500','bg-rose-500','bg-cyan-500'];
+                  const color = colors[(name.charCodeAt(0) || 0) % colors.length];
+                  const timeAgo = (() => {
+                    const diff = Date.now() - new Date(a.created_at).getTime();
+                    const mins = Math.floor(diff / 60000);
+                    if (mins < 1) return 'just now';
+                    if (mins < 60) return mins + 'm ago';
+                    const hrs = Math.floor(mins / 60);
+                    if (hrs < 24) return hrs + 'h ago';
+                    return Math.floor(hrs / 24) + 'd ago';
+                  })();
+                  const icon = a.log_category === 'finance' ? '💰' : a.log_category === 'crm' ? '🤝' : a.log_category === 'ticket' ? '🎫' : a.log_category === 'shipping' ? '🚢' : a.log_category === 'admin' ? '⚙️' : a.log_category === 'login' ? '🟢' : '📋';
+                  return (
+                    <div key={a.id || i} style={{ display: 'flex', alignItems: 'flex-start', gap: 10, padding: '8px 14px', borderBottom: '1px solid rgba(255,255,255,0.04)' }}>
+                      <div className={`w-7 h-7 rounded-full ${color} text-white text-[10px] font-bold flex items-center justify-center flex-shrink-0 mt-0.5`}>{initials}</div>
+                      <div style={{ flex: 1, minWidth: 0 }}>
+                        <div style={{ fontSize: 12 }}>
+                          <span style={{ fontWeight: 700, color: '#e2e8f0' }}>{name}</span>
+                          <span style={{ color: '#94a3b8', marginLeft: 6 }}>{a.entry_text}</span>
+                        </div>
+                        <div style={{ fontSize: 10, color: '#475569', marginTop: 2 }}>{icon} {a.log_category || 'general'} · {timeAgo}</div>
+                      </div>
+                    </div>
+                  );
+                })}
+                {!expanded && activityFeed.length > 5 && (
+                  <div style={{ padding: '8px 14px', fontSize: 11, color: '#34d399', fontWeight: 700, textAlign: 'center', cursor: 'pointer', background: 'rgba(255,255,255,0.02)' }}
+                    onClick={() => setHideSections(prev => ({...prev, dash_teamFeed: true}))}>
+                    Show all ({Math.min(activityFeed.length, 100)}) ▼
+                  </div>
+                )}
+              </div>
+              );
+            })()}
+
+            {/* ===== PENDING CHECKS ===== */}
+            {pendingChecks && pendingChecks.length > 0 && (isAdmin || modulePerms['Treasury']) && (() => {
+              const expanded = hideSections.dash_pendChecks;
+              const sorted = [...pendingChecks].sort((a,b) => (a.check_date || a.date || '').localeCompare(b.check_date || b.date || ''));
+              const visible = expanded ? sorted : sorted.slice(0, 5);
+              const total = sorted.reduce((a, c) => a + Number(c.amount || 0), 0);
+              return (
+                <div style={{ background: 'rgba(17,24,39,0.7)', borderRadius: 14, border: '1px solid rgba(251,191,36,0.2)', marginBottom: 16, overflow: 'hidden' }}>
+                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '10px 14px', borderBottom: '1px solid rgba(255,255,255,0.06)', background: 'rgba(251,191,36,0.06)', cursor: 'pointer' }}
+                    onClick={() => setHideSections(prev => ({...prev, dash_pendChecks: !prev.dash_pendChecks}))}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                      <span style={{ fontSize: 14 }}>🧾</span>
+                      <span style={{ fontSize: 12, fontWeight: 800, color: '#fbbf24', letterSpacing: '0.03em' }}>Pending Checks</span>
+                      <span style={{ fontSize: 10, fontWeight: 800, color: '#fff', background: '#f59e0b', borderRadius: 10, padding: '1px 8px' }}>{sorted.length}</span>
+                      <span style={{ fontSize: 11, fontWeight: 700, color: '#fbbf24', marginLeft: 8 }}>{fE(total)}</span>
+                    </div>
+                    <span style={{ fontSize: 10, color: '#64748b' }}>{expanded ? '▲ Collapse' : '▼ Show All'}</span>
+                  </div>
+                  {visible.map((c, i) => (
+                    <div key={c.id || i} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '8px 14px', borderBottom: '1px solid rgba(255,255,255,0.04)' }}>
+                      <div>
+                        <div style={{ fontSize: 12, fontWeight: 600, color: '#e2e8f0' }}>{c.payee || c.description || 'Check #' + (c.check_number || i+1)}</div>
+                        <div style={{ fontSize: 10, color: '#64748b' }}>{c.check_date || c.date || '—'} {c.check_number ? '· #' + c.check_number : ''}</div>
+                      </div>
+                      <span style={{ fontSize: 13, fontWeight: 800, color: '#fbbf24', fontFamily: 'monospace' }}>{fE(Number(c.amount || 0))}</span>
+                    </div>
+                  ))}
+                  {!expanded && sorted.length > 5 && (
+                    <div style={{ padding: '8px 14px', fontSize: 11, color: '#fbbf24', fontWeight: 700, textAlign: 'center', cursor: 'pointer', background: 'rgba(255,255,255,0.02)' }}
+                      onClick={() => setHideSections(prev => ({...prev, dash_pendChecks: true}))}>
+                      Show all {sorted.length} ▼
+                    </div>
+                  )}
                 </div>
               );
             })()}
