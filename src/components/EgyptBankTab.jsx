@@ -143,7 +143,7 @@ export default function EgyptBankTab({ user, userProfile, isAdmin, invoices, onR
         for (let r = 0; r < Math.min(50, grid.length); r++) {
           if (grid[r][c] && grid[r][c].length > 5 && isNaN(parseAmt(grid[r][c]))) textCount++;
         }
-        if (textCount > maxText) { maxText = textCount; descCol = c; }
+        if (textCount > maxText) { maxText = textCount; sparseDescCol = c; }
       }
       
       // Detect which columns have amounts by scanning all rows
@@ -207,25 +207,25 @@ export default function EgyptBankTab({ user, userProfile, isAdmin, invoices, onR
     if (rows.length === 0) { alert('No data found'); return; }
 
     const cols = Object.keys(rows[0]);
-    const find = (keywords) => cols.find(c => keywords.some(k => c.toLowerCase().includes(k.toLowerCase())));
-    const dateCol = find(['date', 'تاريخ', 'DATE', 'Transaction Date', 'Value Date']) || cols[0];
-    const descCol = find(['desc', 'بيان', 'narr', 'detail', 'memo', 'reference', 'الوصف', 'البيان', 'particular', 'transaction']) || cols[1];
-    const amountCol = find(['amount', 'مبلغ', 'value', 'المبلغ', 'net', 'total']);
-    const creditColName = find(['credit', 'دائن', 'إيداع', 'deposit', 'cr', 'in']);
-    const debitColName = find(['debit', 'مدين', 'سحب', 'withdrawal', 'dr', 'out']);
+    const find2 = (keywords) => cols.find(c => keywords.some(k => c.toLowerCase().includes(k.toLowerCase())));
+    const tblDateCol = find2(['date', 'تاريخ', 'DATE', 'Transaction Date', 'Value Date']) || cols[0];
+    const tblDescCol = find2(['desc', 'بيان', 'narr', 'detail', 'memo', 'reference', 'الوصف', 'البيان', 'particular', 'transaction']) || cols[1];
+    const amountCol = find2(['amount', 'مبلغ', 'value', 'المبلغ', 'net', 'total']);
+    const creditColName = find2(['credit', 'دائن', 'إيداع', 'deposit', 'cr', 'in']);
+    const debitColName = find2(['debit', 'مدين', 'سحب', 'withdrawal', 'dr', 'out']);
 
     // Fallback: if no amount column found, find any column with numbers
     let fallbackAmtCol = null;
     if (!amountCol && !creditColName && !debitColName) {
       for (const c of cols) {
-        if (c === dateCol || c === descCol) continue;
+        if (c === tblDateCol || c === tblDescCol) continue;
         const hasNums = rows.filter(r => parseAmt(r[c]) !== 0).length;
         if (hasNums >= rows.length * 0.3) { fallbackAmtCol = c; break; }
       }
     }
 
     const parsed = rows.map((r, i) => {
-      let date = parseBankDate(r[dateCol]);
+      let date = parseBankDate(r[tblDateCol]);
 
       let amount = 0;
       if (amountCol) {
@@ -245,7 +245,7 @@ export default function EgyptBankTab({ user, userProfile, isAdmin, invoices, onR
       return {
         _row: i + 1,
         date,
-        description: String(r[descCol] || '').trim(),
+        description: String(r[tblDescCol] || '').trim(),
         amount,
         _include: true,
       };
@@ -257,8 +257,8 @@ export default function EgyptBankTab({ user, userProfile, isAdmin, invoices, onR
       alert(
         'No transactions detected.\n\n' +
         'Columns found: ' + cols.join(', ') + '\n\n' +
-        'Date column: ' + (dateCol || 'none') + '\n' +
-        'Description column: ' + (descCol || 'none') + '\n' +
+        'Date column: ' + (tblDateCol || 'none') + '\n' +
+        'Description column: ' + (tblDescCol || 'none') + '\n' +
         'Amount column: ' + (amountCol || creditColName || debitColName || 'none') + '\n\n' +
         'Sample row: ' + (sample[0] || 'empty') + '\n\n' +
         'Tip: Make sure your file has columns named Date, Description, and Amount (or Credit/Debit).'
