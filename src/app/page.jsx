@@ -3034,6 +3034,16 @@ export default function App() {
         ========================================== */}
         {tab === 'dashboard' && (
           <div>
+            {/* ===== COMMAND CENTER HEADER ===== */}
+            <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 16, padding: '14px 0' }}>
+              <div style={{ width: 4, height: 32, borderRadius: 2, background: 'linear-gradient(180deg, #38bdf8, #a78bfa)' }} />
+              <div>
+                <h2 style={{ fontSize: 18, fontWeight: 900, color: '#e2e8f0', letterSpacing: '0.04em', margin: 0 }}>COMMAND CENTER</h2>
+                <p style={{ fontSize: 10, color: '#64748b', letterSpacing: '0.1em', textTransform: 'uppercase', margin: 0 }}>Reminders · Messages · Alerts</p>
+              </div>
+              <div style={{ flex: 1, height: 1, background: 'linear-gradient(90deg, rgba(56,189,248,0.2), transparent)' }} />
+            </div>
+
             {/* ===== TEAM REMINDERS ===== */}
             {(() => {
               const todayStr = new Date().toISOString().substring(0, 10);
@@ -3447,8 +3457,8 @@ export default function App() {
               const myUpdates = recentTicketUpdates.filter(c => c.tickets && (c.tickets.assigned_to === myId || c.tickets.created_by === myId));
               const overdueTickets = myTickets.filter(t => t.due_date && t.due_date < todayStr);
 
-              const sectionStyle = { background: '#fff', borderRadius: 14, border: '1px solid #e8ecf1', marginBottom: 10, overflow: 'hidden' };
-              const sectionHeaderStyle = (color, bgColor) => ({ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '10px 14px', borderBottom: '1px solid #f1f5f9', background: bgColor });
+              const sectionStyle = { background: 'rgba(17,24,39,0.7)', borderRadius: 14, border: '1px solid rgba(255,255,255,0.08)', marginBottom: 10, overflow: 'hidden' };
+              const sectionHeaderStyle = (color, bgColor) => ({ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '10px 14px', borderBottom: '1px solid rgba(255,255,255,0.06)', background: bgColor });
               const sectionLabel = (icon, text, count, color) => (
                 <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
                   <span style={{ fontSize: 14 }}>{icon}</span>
@@ -3458,24 +3468,24 @@ export default function App() {
               );
 
               const TicketCard = ({ t, accent }) => (
-                <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '10px 14px', borderBottom: '1px solid #f8fafc', cursor: 'pointer', transition: 'background 0.15s' }}
-                  className="hover:bg-slate-50" onClick={() => { setOpenTicketId(t.id); setTab('tickets'); }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '10px 14px', borderBottom: '1px solid rgba(255,255,255,0.04)', cursor: 'pointer', transition: 'background 0.15s' }}
+                  className="hover:bg-white/5" onClick={() => { setOpenTicketId(t.id); setTab('tickets'); }}>
                   <div style={{ width: 6, height: 6, borderRadius: '50%', background: priColor(t.priority), flexShrink: 0 }} />
                   <div style={{ flex: 1, minWidth: 0 }}>
                     <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-                      <span style={{ fontSize: 10, fontWeight: 800, color: '#8b5cf6', fontFamily: 'monospace' }}>{t.ticket_number}</span>
-                      <span style={{ fontSize: 12, fontWeight: 600, color: '#1e293b', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{t.title}</span>
+                      <span style={{ fontSize: 10, fontWeight: 800, color: '#818cf8', fontFamily: 'monospace' }}>{t.ticket_number}</span>
+                      <span style={{ fontSize: 12, fontWeight: 600, color: '#e2e8f0', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{t.title}</span>
                     </div>
-                    <div style={{ display: 'flex', gap: 8, marginTop: 3, fontSize: 10, color: '#94a3b8', alignItems: 'center' }}>
+                    <div style={{ display: 'flex', gap: 8, marginTop: 3, fontSize: 10, color: '#64748b', alignItems: 'center' }}>
                       <span style={{ padding: '1px 6px', borderRadius: 4, fontWeight: 700, fontSize: 9,
-                        background: t.status === 'New' ? '#dbeafe' : t.status === 'In Progress' ? '#fef3c7' : '#f3e8ff',
-                        color: t.status === 'New' ? '#1d4ed8' : t.status === 'In Progress' ? '#b45309' : '#6b21a8' }}>{t.status}</span>
-                      {t.assigned_to && <span style={{ color: '#64748b' }}>→ {getUserName(t.assigned_to)}</span>}
-                      {t.due_date && t.due_date < todayStr && <span style={{ color: '#dc2626', fontWeight: 700 }}>⚠ OVERDUE</span>}
+                        background: t.status === 'New' ? 'rgba(59,130,246,0.2)' : t.status === 'In Progress' ? 'rgba(234,179,8,0.2)' : 'rgba(139,92,246,0.2)',
+                        color: t.status === 'New' ? '#60a5fa' : t.status === 'In Progress' ? '#fbbf24' : '#a78bfa' }}>{t.status}</span>
+                      {t.assigned_to && <span style={{ color: '#94a3b8' }}>→ {getUserName(t.assigned_to)}</span>}
+                      {t.due_date && t.due_date < todayStr && <span style={{ color: '#f87171', fontWeight: 700 }}>⚠ OVERDUE</span>}
                       {t.due_date && t.due_date >= todayStr && <span>Due: {t.due_date}</span>}
                     </div>
                   </div>
-                  <span style={{ fontSize: 10, color: '#cbd5e1', flexShrink: 0 }}>{timeAgo(t.created_at)}</span>
+                  <span style={{ fontSize: 10, color: '#475569', flexShrink: 0 }}>{timeAgo(t.created_at)}</span>
                 </div>
               );
 
@@ -3484,21 +3494,21 @@ export default function App() {
                 if (!ticket) return null;
                 const commenter = (teamUsers || []).find(u => u.id === c.created_by);
                 return (
-                  <div style={{ display: 'flex', gap: 10, padding: '10px 14px', borderBottom: '1px solid #f8fafc', cursor: 'pointer', transition: 'background 0.15s' }}
-                    className="hover:bg-slate-50" onClick={() => { setOpenTicketId(ticket.id); setTab('tickets'); }}>
-                    <div style={{ width: 28, height: 28, borderRadius: '50%', background: '#f3e8ff', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 12, flexShrink: 0 }}>
+                  <div style={{ display: 'flex', gap: 10, padding: '10px 14px', borderBottom: '1px solid rgba(255,255,255,0.04)', cursor: 'pointer', transition: 'background 0.15s' }}
+                    className="hover:bg-white/5" onClick={() => { setOpenTicketId(ticket.id); setTab('tickets'); }}>
+                    <div style={{ width: 28, height: 28, borderRadius: '50%', background: 'rgba(139,92,246,0.15)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 12, flexShrink: 0 }}>
                       {c.is_system ? '🤖' : '💬'}
                     </div>
                     <div style={{ flex: 1, minWidth: 0 }}>
                       <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-                        <span style={{ fontSize: 10, fontWeight: 800, color: '#8b5cf6', fontFamily: 'monospace' }}>{ticket.ticket_number}</span>
-                        <span style={{ fontSize: 11, fontWeight: 600, color: '#1e293b', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{ticket.title}</span>
+                        <span style={{ fontSize: 10, fontWeight: 800, color: '#818cf8', fontFamily: 'monospace' }}>{ticket.ticket_number}</span>
+                        <span style={{ fontSize: 11, fontWeight: 600, color: '#e2e8f0', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{ticket.title}</span>
                       </div>
-                      <div style={{ fontSize: 11, color: '#475569', marginTop: 2 }}>
-                        <span style={{ fontWeight: 700, color: '#6d28d9' }}>{commenter?.name || 'System'}</span>: {(c.comment_text || '').substring(0, 100)}{(c.comment_text || '').length > 100 ? '…' : ''}
+                      <div style={{ fontSize: 11, color: '#94a3b8', marginTop: 2 }}>
+                        <span style={{ fontWeight: 700, color: '#a78bfa' }}>{commenter?.name || 'System'}</span>: {(c.comment_text || '').substring(0, 100)}{(c.comment_text || '').length > 100 ? '…' : ''}
                       </div>
                     </div>
-                    <span style={{ fontSize: 10, color: '#cbd5e1', flexShrink: 0, marginTop: 2 }}>{timeAgo(c.created_at)}</span>
+                    <span style={{ fontSize: 10, color: '#475569', flexShrink: 0, marginTop: 2 }}>{timeAgo(c.created_at)}</span>
                   </div>
                 );
               };
@@ -3508,46 +3518,46 @@ export default function App() {
                   {/* ── 1. NEWLY ASSIGNED ── */}
                   {newlyAssigned.length > 0 && (
                     <div style={sectionStyle}>
-                      <div style={sectionHeaderStyle('#2563eb', '#eff6ff')}>
-                        {sectionLabel('✨', 'Newly Assigned to You', newlyAssigned.length, '#2563eb')}
+                      <div style={sectionHeaderStyle('#60a5fa', 'rgba(59,130,246,0.08)')}>
+                        {sectionLabel('✨', 'Newly Assigned to You', newlyAssigned.length, '#60a5fa')}
                       </div>
-                      {newlyAssigned.slice(0, 8).map(t => <TicketCard key={t.id} t={t} accent="#2563eb" />)}
-                      {newlyAssigned.length > 8 && <div style={{ padding: '8px 14px', fontSize: 11, color: '#2563eb', fontWeight: 700, textAlign: 'center', cursor: 'pointer' }} onClick={() => setTab('tickets')}>View all {newlyAssigned.length} →</div>}
+                      {newlyAssigned.slice(0, 8).map(t => <TicketCard key={t.id} t={t} accent="#60a5fa" />)}
+                      {newlyAssigned.length > 8 && <div style={{ padding: '8px 14px', fontSize: 11, color: '#60a5fa', fontWeight: 700, textAlign: 'center', cursor: 'pointer' }} onClick={() => setTab('tickets')}>View all {newlyAssigned.length} →</div>}
                     </div>
                   )}
 
                   {/* ── 2. RECENT UPDATES / COMMENTS ── */}
                   {myUpdates.length > 0 && (
                     <div style={sectionStyle}>
-                      <div style={sectionHeaderStyle('#7c3aed', '#faf5ff')}>
-                        {sectionLabel('💬', 'Recent Updates on Your Tickets', myUpdates.length, '#7c3aed')}
+                      <div style={sectionHeaderStyle('#a78bfa', 'rgba(139,92,246,0.08)')}>
+                        {sectionLabel('💬', 'Recent Updates on Your Tickets', myUpdates.length, '#a78bfa')}
                       </div>
                       {myUpdates.slice(0, 8).map(c => <UpdateCard key={c.id} c={c} />)}
-                      {myUpdates.length > 8 && <div style={{ padding: '8px 14px', fontSize: 11, color: '#7c3aed', fontWeight: 700, textAlign: 'center', cursor: 'pointer' }} onClick={() => setTab('tickets')}>View all {myUpdates.length} →</div>}
+                      {myUpdates.length > 8 && <div style={{ padding: '8px 14px', fontSize: 11, color: '#a78bfa', fontWeight: 700, textAlign: 'center', cursor: 'pointer' }} onClick={() => setTab('tickets')}>View all {myUpdates.length} →</div>}
                     </div>
                   )}
 
                   {/* ── 3. OVERDUE TICKETS ── */}
                   {overdueTickets.length > 0 && (
-                    <div style={{ ...sectionStyle, border: '1px solid #fecaca' }}>
-                      <div style={sectionHeaderStyle('#dc2626', '#fef2f2')}>
-                        {sectionLabel('🚨', 'Overdue Tickets', overdueTickets.length, '#dc2626')}
+                    <div style={{ ...sectionStyle, border: '1px solid rgba(239,68,68,0.3)' }}>
+                      <div style={sectionHeaderStyle('#f87171', 'rgba(239,68,68,0.1)')}>
+                        {sectionLabel('🚨', 'Overdue Tickets', overdueTickets.length, '#f87171')}
                       </div>
-                      {overdueTickets.map(t => <TicketCard key={t.id} t={t} accent="#dc2626" />)}
+                      {overdueTickets.map(t => <TicketCard key={t.id} t={t} accent="#f87171" />)}
                     </div>
                   )}
 
                   {/* ── 4. ALL YOUR TICKETS ── */}
                   {myTickets.length > 0 && (
                     <div style={sectionStyle}>
-                      <div style={sectionHeaderStyle('#475569', '#f8fafc')}>
-                        {sectionLabel('📋', 'All My Open Tickets', myTickets.length, '#475569')}
-                        <button onClick={() => setTab('tickets')} style={{ fontSize: 10, fontWeight: 700, color: '#8b5cf6', background: '#f3e8ff', border: '1px solid #e9d5ff', borderRadius: 6, padding: '4px 12px', cursor: 'pointer' }}>
+                      <div style={sectionHeaderStyle('#94a3b8', 'rgba(255,255,255,0.03)')}>
+                        {sectionLabel('📋', 'All My Open Tickets', myTickets.length, '#94a3b8')}
+                        <button onClick={() => setTab('tickets')} style={{ fontSize: 10, fontWeight: 700, color: '#a78bfa', background: 'rgba(139,92,246,0.15)', border: '1px solid rgba(139,92,246,0.25)', borderRadius: 6, padding: '4px 12px', cursor: 'pointer' }}>
                           Open Full View →
                         </button>
                       </div>
-                      {myTickets.slice(0, 10).map(t => <TicketCard key={t.id} t={t} accent="#475569" />)}
-                      {myTickets.length > 10 && <div style={{ padding: '8px 14px', fontSize: 11, color: '#475569', fontWeight: 700, textAlign: 'center', cursor: 'pointer' }} onClick={() => setTab('tickets')}>+{myTickets.length - 10} more tickets →</div>}
+                      {myTickets.slice(0, 10).map(t => <TicketCard key={t.id} t={t} accent="#94a3b8" />)}
+                      {myTickets.length > 10 && <div style={{ padding: '8px 14px', fontSize: 11, color: '#94a3b8', fontWeight: 700, textAlign: 'center', cursor: 'pointer' }} onClick={() => setTab('tickets')}>+{myTickets.length - 10} more tickets →</div>}
                     </div>
                   )}
                 </div>
@@ -3630,8 +3640,14 @@ export default function App() {
 
 
 
-            {/* ===== FINANCIAL DASHBOARD (shown first for users with access) ===== */}
+            {/* ===== FINANCIAL DASHBOARD — COMMAND CENTER ===== */}
             {(isAdmin || modulePerms['Sales'] || modulePerms['Treasury']) && (<>
+            <div className="financial-command">
+            <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 16 }}>
+              <div style={{ width: 4, height: 28, borderRadius: 2, background: 'linear-gradient(180deg, #38bdf8, #818cf8)' }} />
+              <h2 style={{ fontSize: 16, fontWeight: 900, color: '#e2e8f0', letterSpacing: '0.05em' }}>💰 FINANCIAL CONTROL</h2>
+              <div style={{ flex: 1, height: 1, background: 'rgba(255,255,255,0.06)' }} />
+            </div>
             <div className="bg-blue-100 rounded-lg px-3 py-2 mb-3 flex justify-between items-center cursor-pointer" onClick={() => setHideSections({...hideSections, invoices: !hideSections.invoices})}>
               <span className="text-sm font-bold text-blue-800">📋 INVOICES / فواتير العملاء</span>
               <span className="text-xs text-blue-600">{hideSections.invoices ? '👁️ Show' : '🙈 Hide'}</span>
@@ -3812,6 +3828,7 @@ export default function App() {
               );
             })()}
             </>}
+            </div>{/* end financial-command */}
             </>)}
 
             {/* ===== EGYPT BANK TRANSACTIONS DASHBOARD ===== */}
