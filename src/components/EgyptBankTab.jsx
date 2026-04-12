@@ -175,58 +175,31 @@ export default function EgyptBankTab({ user, userProfile, isAdmin, invoices, onR
       
       // Detect amount columns
       const amtCols = {};
-      const amtSums = {};
       for (let r = 0; r < grid.length; r++) {
         for (let c = 0; c < grid[r].length; c++) {
           if (c === sparseDateCol || c === sparseDescCol) continue;
-          const v = grid[r][c];
-          if (v && looksLikeNumber(v)) {
+          const v = String(grid[r][c]).trim().replace(/\s*(CR|DR)\s*$/i, '');
+          if (v && /^[\d,.\s\-]+$/.test(v) && parseAmt(v) !== 0) {
             amtCols[c] = (amtCols[c] || 0) + 1;
-            amtSums[c] = (amtSums[c] || 0) + parseAmt(v);
           }
         }
       }
       
-      const sortedAmtCols = Object.entries(amtCols).filter(([c, n]) => n >= 2).map(([c]) => parseInt(c)).sort((a, b) => a - b);
-      // Balance = column with highest average value (running total is always largest)
-      let balCol = -1, maxAvg = 0;
-      for (const c of sortedAmtCols) {
-        const avg = (amtSums[c] || 0) / (amtCols[c] || 1);
-        if (avg > maxAvg) { maxAvg = avg; balCol = c; }
+      // Sort amount columns by position (left to right)
+      const sortedAmtCols = Object.entries(amtCols).filter(([c, n]) => n >= 1).map(([c]) => parseInt(c)).sort((a, b) => a - b);
+      // Standard bank layout: DEBIT (left) | CREDIT (middle) | BALANCE (right)
+      let debitCol = -1, creditCol = -1, balCol = -1;
+      if (sortedAmtCols.length >= 3) {
+        debitCol = sortedAmtCols[0];
+        creditCol = sortedAmtCols[1];
+        balCol = sortedAmtCols[2];
+      } else if (sortedAmtCols.length === 2) {
+        creditCol = sortedAmtCols[0];
+        balCol = sortedAmtCols[1];
+      } else if (sortedAmtCols.length === 1) {
+        creditCol = sortedAmtCols[0];
       }
-      const nonBalCols = sortedAmtCols.filter(c => c !== balCol);
-      
-      // Determine which non-balance column is credit vs debit by checking balance changes
-      const colDirection = {};
-      let prevBal = 0;
-      for (let r = 0; r < grid.length; r++) {
-        const bal = balCol >= 0 ? parseAmt(grid[r][balCol]) : 0;
-        if (bal > 0 && prevBal > 0) {
-          const change = bal - prevBal;
-          for (const c of nonBalCols) {
-            const v = parseAmt(grid[r][c]);
-            if (v > 0) {
-              if (!colDirection[c]) colDirection[c] = { up: 0, down: 0 };
-              if (change > 0) colDirection[c].up++;
-              else if (change < 0) colDirection[c].down++;
-            }
-          }
-        }
-        if (bal > 0) prevBal = bal;
-      }
-      
-      // Credit column = appears when balance goes UP; Debit = appears when balance goes DOWN
-      const creditCols = new Set();
-      const debitCols = new Set();
-      for (const [c, dir] of Object.entries(colDirection)) {
-        if (dir.up > dir.down) creditCols.add(parseInt(c));
-        else debitCols.add(parseInt(c));
-      }
-      // If we couldn't determine, assume all are credits
-      if (creditCols.size === 0 && debitCols.size === 0) {
-        nonBalCols.forEach(c => creditCols.add(c));
-      }
-      console.log('Columns — date:', sparseDateCol, 'desc:', sparseDescCol, 'credit:', [...creditCols], 'debit:', [...debitCols], 'balance:', balCol);
+      console.log('Columns — date:', sparseDateCol, 'desc:', sparseDescCol, 'debit:', debitCol, 'credit:', creditCol, 'balance:', balCol);
 
       // Group rows into transactions
       const transactions = [];
@@ -235,23 +208,16 @@ export default function EgyptBankTab({ user, userProfile, isAdmin, invoices, onR
         const row = grid[r];
         const dateStr = parseBankDate(row[sparseDateCol]);
         const desc = sparseDescCol >= 0 ? (row[sparseDescCol] || '').trim() : '';
-        
-        // Get credit and debit amounts from detected columns
-        let creditAmt = 0, debitAmt = 0;
-        for (const c of creditCols) { const v = parseAmt(row[c]); if (v > 0) creditAmt += v; }
-        for (const c of debitCols) { const v = parseAmt(row[c]); if (v > 0) debitAmt += v; }
+        const cr = creditCol >= 0 ? parseAmt(row[creditCol]) : 0;
+        const dr = debitCol >= 0 ? parseAmt(row[debitCol]) : 0;
+        const amount = cr > 0 ? cr : (dr > 0 ? -dr : 0);
 
         if (dateStr) {
           if (current) transactions.push(current);
-          const amount = creditAmt > 0 ? creditAmt : (debitAmt > 0 ? -debitAmt : 0);
           current = { date: dateStr, description: desc, amount, _include: true };
         } else if (current && desc && !desc.includes('OPENING BALANCE') && !desc.includes('CLOSING BALANCE')) {
           current.description += ' ' + desc;
-          // Pick up amounts from continuation rows too
-          if (current.amount === 0) {
-            const amt = creditAmt > 0 ? creditAmt : (debitAmt > 0 ? -debitAmt : 0);
-            if (amt !== 0) current.amount = amt;
-          }
+          if (current.amount === 0 && amount !== 0) current.amount = amount;
         }
       }
       if (current) transactions.push(current);
@@ -352,19 +318,21 @@ export default function EgyptBankTab({ user, userProfile, isAdmin, invoices, onR
     const { data: existing } = await supabase.from('egypt_bank_transactions').select('date, description, amount').eq('account_id', accId);
     const existingSet = new Set((existing || []).map(e => `${e.date}|${e.amount}|${(e.description || '').substring(0, 30)}`));
     
+    // Filter out duplicates
+    const newRows = [];
     for (const row of toImport) {
       const key = `${row.date}|${row.amount}|${(row.description || '').substring(0, 30)}`;
-      if (existingSet.has(key)) { duplicates++; skipped++; continue; }
+      if (existingSet.has(key)) { duplicates++; skipped++; }
+      else { newRows.push({ account_id: accId, date: row.date, description: row.description, amount: row.amount, imported_by: myId }); existingSet.add(key); }
+    }
+    
+    // Batch insert in chunks of 100
+    for (let i = 0; i < newRows.length; i += 100) {
+      const chunk = newRows.slice(i, i + 100);
       try {
-        const { error } = await supabase.from('egypt_bank_transactions').insert({
-          account_id: accId,
-          date: row.date,
-          description: row.description,
-          amount: row.amount,
-          imported_by: myId,
-        });
-        if (error) { skipped++; } else { imported++; existingSet.add(key); }
-      } catch (e) { skipped++; }
+        const { error } = await supabase.from('egypt_bank_transactions').insert(chunk);
+        if (error) skipped += chunk.length; else imported += chunk.length;
+      } catch(e) { skipped += chunk.length; }
     }
     setImportStats({ imported, skipped, duplicates, total: toImport.length });
     setImportStep('done');
@@ -387,17 +355,23 @@ export default function EgyptBankTab({ user, userProfile, isAdmin, invoices, onR
       }
     });
     
-    // Find uncategorized and try to match
+    // Find uncategorized and try to match — batch by category
     const uncategorized = transactions.filter(t => !t.category);
-    let matched = 0;
+    const batches = {}; // { "cat|subcat": [id1, id2, ...] }
     for (const t of uncategorized) {
       const key = normalizeDesc(t.description);
       if (rules[key]) {
-        try {
-          await dbUpdate('egypt_bank_transactions', t.id, { category: rules[key].category, subcategory: rules[key].subcategory || null }, myId);
-          matched++;
-        } catch(e) {}
+        const batchKey = rules[key].category + '|' + (rules[key].subcategory || '');
+        if (!batches[batchKey]) batches[batchKey] = { ids: [], category: rules[key].category, subcategory: rules[key].subcategory || '' };
+        batches[batchKey].ids.push(t.id);
       }
+    }
+    let matched = 0;
+    for (const batch of Object.values(batches)) {
+      try {
+        await supabase.from('egypt_bank_transactions').update({ category: batch.category, subcategory: batch.subcategory || null }).in('id', batch.ids);
+        matched += batch.ids.length;
+      } catch(e) {}
     }
     if (matched > 0) {
       setTransactions(prev => prev.map(t => {
@@ -792,7 +766,8 @@ export default function EgyptBankTab({ user, userProfile, isAdmin, invoices, onR
                   const updates = {};
                   if (cat) updates.category = cat;
                   if (sub) updates.subcategory = sub;
-                  for (const id of selectedTxns) { try { await dbUpdate('egypt_bank_transactions', id, updates, myId); } catch(e) {} }
+                  const ids = [...selectedTxns];
+                  await supabase.from('egypt_bank_transactions').update(updates).in('id', ids);
                   setTransactions(prev => prev.map(t => selectedTxns.has(t.id) ? {...t, ...updates} : t));
                   setSelectedTxns(new Set());
                 }} className="px-3 py-1 bg-blue-500 text-white rounded-lg text-[10px] font-bold">Apply</button>
@@ -802,12 +777,14 @@ export default function EgyptBankTab({ user, userProfile, isAdmin, invoices, onR
                 <div className="flex gap-2">
                   <button onClick={async () => {
                     if (!confirm(`Delete ${selectedTxns.size} transactions permanently?`)) return;
-                    for (const id of selectedTxns) { try { await dbDelete('egypt_bank_transactions', id, myId); } catch(e) {} }
+                    const ids = [...selectedTxns];
+                    await supabase.from('egypt_bank_transactions').delete().in('id', ids);
                     setTransactions(prev => prev.filter(t => !selectedTxns.has(t.id)));
                     setSelectedTxns(new Set());
                   }} className="px-3 py-1.5 bg-red-500 text-white rounded-lg text-xs font-bold">🗑️ Delete</button>
                   <button onClick={async () => {
-                    for (const id of selectedTxns) { try { await dbUpdate('egypt_bank_transactions', id, { hidden: true }, myId); } catch(e) {} }
+                    const ids = [...selectedTxns];
+                    await supabase.from('egypt_bank_transactions').update({ hidden: true }).in('id', ids);
                     setTransactions(prev => prev.map(t => selectedTxns.has(t.id) ? {...t, hidden: true} : t));
                     setSelectedTxns(new Set());
                   }} className="px-3 py-1.5 bg-slate-700 text-white rounded-lg text-xs font-bold">🔒 Hide</button>
