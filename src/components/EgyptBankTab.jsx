@@ -62,38 +62,135 @@ export default function EgyptBankTab({ user, userProfile, isAdmin, invoices }) {
     const data = await file.arrayBuffer();
     const wb = XLSX.read(data);
     const ws = wb.Sheets[wb.SheetNames[0]];
+
+    // Read raw grid (not sheet_to_json which fails on sparse layouts)
+    const range = XLSX.utils.decode_range(ws['!ref'] || 'A1');
+    const grid = [];
+    for (let r = range.s.r; r <= range.e.r; r++) {
+      const row = [];
+      for (let c = range.s.c; c <= range.e.c; c++) {
+        const cell = ws[XLSX.utils.encode_cell({ r, c })];
+        row.push(cell ? (cell.v != null ? String(cell.v).trim() : '') : '');
+      }
+      grid.push(row);
+    }
+
+    // Parse bank date format: 03FEB25 → 2025-02-03
+    const MONTHS = { JAN: '01', FEB: '02', MAR: '03', APR: '04', MAY: '05', JUN: '06', JUL: '07', AUG: '08', SEP: '09', OCT: '10', NOV: '11', DEC: '12' };
+    const parseBankDate = (v) => {
+      if (!v) return '';
+      const m = String(v).match(/(\d{1,2})([A-Z]{3})(\d{2,4})/i);
+      if (m) {
+        const day = m[1].padStart(2, '0');
+        const mon = MONTHS[(m[2] || '').toUpperCase()] || '01';
+        let yr = m[3]; if (yr.length === 2) yr = (parseInt(yr) > 50 ? '19' : '20') + yr;
+        return `${yr}-${mon}-${day}`;
+      }
+      // Try standard date
+      if (typeof v === 'number' && v > 30000) {
+        const d = new Date((v - 25569) * 86400000);
+        return isNaN(d.getTime()) ? '' : d.toISOString().substring(0, 10);
+      }
+      const d = new Date(v);
+      return isNaN(d.getTime()) ? '' : d.toISOString().substring(0, 10);
+    };
+
+    const parseAmt = (v) => {
+      if (!v) return 0;
+      return parseFloat(String(v).replace(/,/g, '').replace(/[^0-9.\-]/g, '')) || 0;
+    };
+
+    // Strategy 1: Detect CIB-style sparse format (date in early column, description in middle, amounts in later columns)
+    // Look for rows with bank dates in column 2
+    const bankDateRows = grid.filter(row => row[2] && parseBankDate(row[2]));
+
+    if (bankDateRows.length >= 3) {
+      // CIB bank statement format
+      console.log('📊 Detected CIB bank statement format');
+      
+      // Detect which columns have amounts by scanning all rows
+      const amtCols = {};
+      grid.forEach(row => {
+        row.forEach((v, c) => {
+          if (c >= 10 && parseAmt(v) > 0) {
+            amtCols[c] = (amtCols[c] || 0) + 1;
+          }
+        });
+      });
+      
+      // Find debit, credit, balance columns (most frequent amount columns)
+      const sortedAmtCols = Object.entries(amtCols).sort((a, b) => b[1] - a[1]).map(([c]) => parseInt(c));
+      // Last amount column is usually balance, before that credit, before that debit
+      let balCol = -1, creditCol = -1, debitCol = -1;
+      if (sortedAmtCols.length >= 3) {
+        const sorted = [...sortedAmtCols].sort((a, b) => a - b);
+        debitCol = sorted[0]; creditCol = sorted[1]; balCol = sorted[2];
+      } else if (sortedAmtCols.length >= 2) {
+        const sorted = [...sortedAmtCols].sort((a, b) => a - b);
+        creditCol = sorted[0]; balCol = sorted[1];
+      }
+      console.log('Columns — debit:', debitCol, 'credit:', creditCol, 'balance:', balCol);
+
+      // Group rows into transactions (each transaction starts with a date in col 2)
+      const transactions = [];
+      let current = null;
+      for (let r = 0; r < grid.length; r++) {
+        const row = grid[r];
+        const dateStr = parseBankDate(row[2]);
+        const desc = (row[9] || '').trim();
+        const debit = debitCol >= 0 ? parseAmt(row[debitCol]) : 0;
+        const credit = creditCol >= 0 ? parseAmt(row[creditCol]) : 0;
+
+        if (dateStr) {
+          // New transaction
+          if (current) transactions.push(current);
+          const amount = credit > 0 ? credit : (debit > 0 ? -debit : 0);
+          current = { date: dateStr, description: desc, amount, _include: true };
+        } else if (current && desc && !desc.includes('OPENING BALANCE') && !desc.includes('CLOSING BALANCE')) {
+          // Continuation of description
+          current.description += ' ' + desc;
+        }
+      }
+      if (current) transactions.push(current);
+
+      // Filter out opening/closing balance rows and empty amounts
+      const parsed = transactions
+        .filter(t => !t.description.includes('OPENING BALANCE') && !t.description.includes('CLOSING BALANCE'))
+        .filter(t => t.amount !== 0)
+        .map((t, i) => ({ ...t, _row: i + 1, description: t.description.replace(/\s+/g, ' ').trim() }));
+
+      if (parsed.length === 0) { alert('No transactions found'); return; }
+      setImportData(parsed);
+      setImportStep('preview');
+      return;
+    }
+
+    // Strategy 2: Regular tabular format with headers
     const rows = XLSX.utils.sheet_to_json(ws, { defval: '' });
     if (rows.length === 0) { alert('No data found'); return; }
 
-    // Auto-detect columns
     const cols = Object.keys(rows[0]);
-    const dateCol = cols.find(c => /date|تاريخ|DATE/i.test(c)) || cols[0];
-    const descCol = cols.find(c => /desc|بيان|narr|detail|memo|reference|الوصف|البيان/i.test(c)) || cols[1];
-    const amountCol = cols.find(c => /amount|مبلغ|value|credit|debit|المبلغ/i.test(c));
-    const creditCol = cols.find(c => /credit|دائن|إيداع|deposit/i.test(c));
-    const debitCol = cols.find(c => /debit|مدين|سحب|withdrawal/i.test(c));
+    const find = (keywords) => cols.find(c => keywords.some(k => c.toLowerCase().includes(k.toLowerCase())));
+    const dateCol = find(['date', 'تاريخ', 'DATE', 'Transaction Date', 'Value Date']) || cols[0];
+    const descCol = find(['desc', 'بيان', 'narr', 'detail', 'memo', 'reference', 'الوصف', 'البيان', 'particular', 'transaction']) || cols[1];
+    const amountCol = find(['amount', 'مبلغ', 'value', 'المبلغ', 'net']);
+    const creditColName = find(['credit', 'دائن', 'إيداع', 'deposit', 'cr']);
+    const debitColName = find(['debit', 'مدين', 'سحب', 'withdrawal', 'dr']);
 
     const parsed = rows.map((r, i) => {
-      let rawDate = r[dateCol];
-      let date = '';
-      if (rawDate) {
-        if (typeof rawDate === 'number') {
-          const d = XLSX.SSF.parse_date_code(rawDate);
-          date = `${d.y}-${String(d.m).padStart(2,'0')}-${String(d.d).padStart(2,'0')}`;
-        } else {
-          const d = new Date(rawDate);
-          if (!isNaN(d)) date = d.toISOString().substring(0, 10);
-          else date = String(rawDate);
-        }
-      }
+      let date = parseBankDate(r[dateCol]);
 
       let amount = 0;
       if (amountCol) {
-        amount = parseFloat(String(r[amountCol]).replace(/[^0-9.\-]/g, '')) || 0;
-      } else if (creditCol && debitCol) {
-        const cr = parseFloat(String(r[creditCol]).replace(/[^0-9.\-]/g, '')) || 0;
-        const db = parseFloat(String(r[debitCol]).replace(/[^0-9.\-]/g, '')) || 0;
+        amount = parseAmt(r[amountCol]);
+      } else if (creditColName && debitColName) {
+        const cr = parseAmt(r[creditColName]);
+        const db = parseAmt(r[debitColName]);
         amount = cr > 0 ? cr : -db;
+      } else if (creditColName) {
+        amount = parseAmt(r[creditColName]);
+      } else if (debitColName) {
+        amount = -parseAmt(r[debitColName]);
       }
 
       return {
@@ -101,7 +198,6 @@ export default function EgyptBankTab({ user, userProfile, isAdmin, invoices }) {
         date,
         description: String(r[descCol] || '').trim(),
         amount,
-        _raw: r,
         _include: true,
       };
     }).filter(r => r.date && (r.description || r.amount));
@@ -243,7 +339,7 @@ export default function EgyptBankTab({ user, userProfile, isAdmin, invoices }) {
             <div className="bg-white rounded-xl p-6 text-center border-2 border-dashed border-blue-300">
               <div className="text-4xl mb-2">📁</div>
               <h3 className="font-bold text-sm mb-1">Upload Bank Statement / رفع كشف حساب</h3>
-              <p className="text-[10px] text-slate-400 mb-3">Excel or CSV. System auto-detects Date, Description, Amount columns.<br/>يكتشف تلقائياً أعمدة التاريخ والوصف والمبلغ</p>
+              <p className="text-[10px] text-slate-400 mb-3">Supports CIB bank statements, and any Excel/CSV with Date/Description/Amount columns.<br/>يدعم كشوف حسابات CIB وأي ملف Excel أو CSV بأعمدة التاريخ والوصف والمبلغ</p>
               {accounts.length === 0 ? (
                 <p className="text-xs text-red-500 font-semibold">Add a bank account first (🏛️ Accounts tab)</p>
               ) : (
