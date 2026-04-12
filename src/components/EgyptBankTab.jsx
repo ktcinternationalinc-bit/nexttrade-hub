@@ -2,8 +2,9 @@
 import { useState, useEffect, useCallback, useMemo } from 'react';
 import { supabase, dbInsert, dbUpdate, dbDelete, logActivity } from '../lib/supabase';
 import * as XLSX from 'xlsx';
+import { EXPENSE_CATS } from '../lib/utils';
 
-export default function EgyptBankTab({ user, userProfile, isAdmin, invoices }) {
+export default function EgyptBankTab({ user, userProfile, isAdmin, invoices, onReload }) {
   const [accounts, setAccounts] = useState([]);
   const [transactions, setTransactions] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -11,6 +12,7 @@ export default function EgyptBankTab({ user, userProfile, isAdmin, invoices }) {
   const [selAccount, setSelAccount] = useState('all');
   const [matchFilter, setMatchFilter] = useState('all'); // all | unmatched | matched
   const [search, setSearch] = useState('');
+  const [catFilter, setCatFilter] = useState('all');
   const [dateFrom, setDateFrom] = useState('');
   const [dateTo, setDateTo] = useState('');
   const [matchingTxn, setMatchingTxn] = useState(null);
@@ -211,8 +213,15 @@ export default function EgyptBankTab({ user, userProfile, isAdmin, invoices }) {
     const toImport = importData.filter(r => r._include);
     if (toImport.length === 0) { alert('No rows selected'); return; }
     setImportStep('importing');
-    let imported = 0, skipped = 0;
+    let imported = 0, skipped = 0, duplicates = 0;
+    
+    // Load existing transactions for duplicate detection
+    const { data: existing } = await supabase.from('egypt_bank_transactions').select('date, description, amount').eq('account_id', importAccount);
+    const existingSet = new Set((existing || []).map(e => `${e.date}|${e.amount}|${(e.description || '').substring(0, 30)}`));
+    
     for (const row of toImport) {
+      const key = `${row.date}|${row.amount}|${(row.description || '').substring(0, 30)}`;
+      if (existingSet.has(key)) { duplicates++; skipped++; continue; }
       try {
         const { error } = await supabase.from('egypt_bank_transactions').insert({
           account_id: importAccount,
@@ -221,23 +230,37 @@ export default function EgyptBankTab({ user, userProfile, isAdmin, invoices }) {
           amount: row.amount,
           imported_by: myId,
         });
-        if (error) { skipped++; } else { imported++; }
+        if (error) { skipped++; } else { imported++; existingSet.add(key); }
       } catch (e) { skipped++; }
     }
-    setImportStats({ imported, skipped, total: toImport.length });
+    setImportStats({ imported, skipped, duplicates, total: toImport.length });
     setImportStep('done');
-    await logActivity(myId, `Imported ${imported} Egypt bank transactions`, 'finance');
+    await logActivity(myId, `Imported ${imported} Egypt bank transactions (${duplicates} duplicates skipped)`, 'finance');
     load();
   };
 
   // ───── Match ─────
   const matchToInvoice = async (txnId, invoiceId) => {
+    const txn = transactions.find(t => t.id === txnId);
+    const inv = (invoices || []).find(i => i.id === invoiceId);
     await dbUpdate('egypt_bank_transactions', txnId, { matched_invoice_id: invoiceId, matched_at: new Date().toISOString(), matched_by: myId }, myId);
+    // Update invoice total_collected
+    if (inv && txn && txn.amount > 0) {
+      const newCollected = Number(inv.total_collected || 0) + Number(txn.amount);
+      await dbUpdate('invoices', invoiceId, { total_collected: newCollected }, myId);
+    }
     setMatchingTxn(null);
     setTransactions(prev => prev.map(t => t.id === txnId ? { ...t, matched_invoice_id: invoiceId, matched_at: new Date().toISOString() } : t));
   };
   const unmatch = async (txnId) => {
+    const txn = transactions.find(t => t.id === txnId);
+    const inv = txn?.matched_invoice_id ? (invoices || []).find(i => i.id === txn.matched_invoice_id) : null;
     await dbUpdate('egypt_bank_transactions', txnId, { matched_invoice_id: null, matched_at: null, matched_by: null }, myId);
+    // Reduce invoice total_collected
+    if (inv && txn && txn.amount > 0) {
+      const newCollected = Math.max(0, Number(inv.total_collected || 0) - Number(txn.amount));
+      await dbUpdate('invoices', inv.id, { total_collected: newCollected }, myId);
+    }
     setTransactions(prev => prev.map(t => t.id === txnId ? { ...t, matched_invoice_id: null, matched_at: null } : t));
   };
 
@@ -247,6 +270,8 @@ export default function EgyptBankTab({ user, userProfile, isAdmin, invoices }) {
     if (selAccount !== 'all') arr = arr.filter(t => t.account_id === selAccount);
     if (matchFilter === 'matched') arr = arr.filter(t => t.matched_invoice_id);
     if (matchFilter === 'unmatched') arr = arr.filter(t => !t.matched_invoice_id);
+    if (catFilter === 'uncategorized') arr = arr.filter(t => !t.category);
+    else if (catFilter !== 'all') arr = arr.filter(t => t.category === catFilter);
     if (search) {
       const s = search.toLowerCase();
       arr = arr.filter(t => (t.description || '').toLowerCase().includes(s) || String(t.amount).includes(s));
@@ -254,7 +279,7 @@ export default function EgyptBankTab({ user, userProfile, isAdmin, invoices }) {
     if (dateFrom) arr = arr.filter(t => t.date >= dateFrom);
     if (dateTo) arr = arr.filter(t => t.date <= dateTo);
     return arr;
-  }, [transactions, selAccount, matchFilter, search, dateFrom, dateTo]);
+  }, [transactions, selAccount, matchFilter, catFilter, search, dateFrom, dateTo]);
 
   const totalIn = filtered.filter(t => t.amount > 0).reduce((s, t) => s + t.amount, 0);
   const totalOut = filtered.filter(t => t.amount < 0).reduce((s, t) => s + Math.abs(t.amount), 0);
@@ -406,7 +431,7 @@ export default function EgyptBankTab({ user, userProfile, isAdmin, invoices }) {
             <div className="bg-green-50 rounded-xl p-6 text-center border border-green-200">
               <div className="text-3xl mb-2">✅</div>
               <h3 className="font-bold text-lg text-green-800">Import Complete!</h3>
-              <p className="text-sm mt-2">{importStats.imported} imported{importStats.skipped > 0 ? `, ${importStats.skipped} skipped` : ''}</p>
+              <p className="text-sm mt-2">{importStats.imported} imported{importStats.duplicates > 0 ? `, ${importStats.duplicates} duplicates skipped` : ''}{importStats.skipped > importStats.duplicates ? `, ${importStats.skipped - (importStats.duplicates||0)} errors` : ''}</p>
               <button onClick={() => { setImportStep('select'); setImportData([]); setImportStats(null); setView('transactions'); }} className="mt-3 px-4 py-2 bg-blue-500 text-white rounded-lg text-xs font-semibold">View Transactions</button>
             </div>
           )}
@@ -448,6 +473,11 @@ export default function EgyptBankTab({ user, userProfile, isAdmin, invoices }) {
               </button>
             ))}
             <input value={search} onChange={e => setSearch(e.target.value)} placeholder="Search..." className="border rounded-lg px-2 py-1.5 text-xs flex-1 min-w-[100px]" />
+            <select value={catFilter} onChange={e => setCatFilter(e.target.value)} className="border rounded-lg px-2 py-1.5 text-xs">
+              <option value="all">All Categories</option>
+              <option value="uncategorized">⚠️ Uncategorized</option>
+              {Object.entries(EXPENSE_CATS).map(([ar, en]) => <option key={ar} value={ar}>{en}</option>)}
+            </select>
           </div>
           <div className="flex gap-2 mb-3 items-center">
             <span className="text-[10px] text-slate-500">Date:</span>
@@ -475,6 +505,27 @@ export default function EgyptBankTab({ user, userProfile, isAdmin, invoices }) {
                         <div className="font-semibold text-sm truncate">{t.description || '—'}</div>
                         <div className="text-[10px] text-slate-400">
                           {t.date} {accName ? `• ${accName}` : ''}
+                        </div>
+                        {/* Category / Subcategory */}
+                        <div className="flex items-center gap-1 mt-1">
+                          <select value={t.category || ''} onChange={async (e) => {
+                            const v = e.target.value;
+                            await dbUpdate('egypt_bank_transactions', t.id, { category: v }, myId);
+                            setTransactions(prev => prev.map(x => x.id === t.id ? {...x, category: v} : x));
+                          }} className="text-[10px] border rounded px-1.5 py-0.5 bg-slate-50" style={{ maxWidth: 120 }}>
+                            <option value="">+ Category</option>
+                            {Object.entries(EXPENSE_CATS).map(([ar, en]) => <option key={ar} value={ar}>{en} ({ar})</option>)}
+                          </select>
+                          <input value={t.subcategory || ''} placeholder="subcategory"
+                            onBlur={async (e) => {
+                              const v = e.target.value.trim();
+                              if (v !== (t.subcategory || '')) {
+                                await dbUpdate('egypt_bank_transactions', t.id, { subcategory: v }, myId);
+                                setTransactions(prev => prev.map(x => x.id === t.id ? {...x, subcategory: v} : x));
+                              }
+                            }}
+                            onChange={(e) => setTransactions(prev => prev.map(x => x.id === t.id ? {...x, subcategory: e.target.value} : x))}
+                            className="text-[10px] border rounded px-1.5 py-0.5 bg-slate-50" style={{ maxWidth: 100 }} />
                         </div>
                         {matchedInv && (
                           <div className="text-[10px] text-green-600 mt-0.5">

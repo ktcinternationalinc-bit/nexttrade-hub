@@ -260,6 +260,7 @@ export default function App() {
   const [recentTicketUpdates, setRecentTicketUpdates] = useState([]);
   const [dashTickets, setDashTickets] = useState([]);
   const [openTicketId, setOpenTicketId] = useState(null);
+  const [egyptBankTxns, setEgyptBankTxns] = useState([]);
   const [showReminderForm, setShowReminderForm] = useState(false);
   const [showReminderArchive, setShowReminderArchive] = useState(false);
   const seenRemindersRef = useRef(new Set());
@@ -505,6 +506,11 @@ export default function App() {
         const { data: tix } = await supabase.from('tickets').select('*').order('created_at', { ascending: false }).limit(200);
         setDashTickets(tix || []);
       } catch(e) { setDashTickets([]); }
+      // Load Egypt bank transactions
+      try {
+        const { data: ebt } = await supabase.from('egypt_bank_transactions').select('*').order('date', { ascending: false }).limit(500);
+        setEgyptBankTxns(ebt || []);
+      } catch(e) { setEgyptBankTxns([]); }
     } catch (err) {
       console.error('Load error:', err);
     }
@@ -1802,6 +1808,41 @@ export default function App() {
               </div>
             )}
 
+            {/* Egypt Bank Linked Entries */}
+            {(() => {
+              const ebLinked = egyptBankTxns.filter(t => t.matched_invoice_id === selectedInvoice.id);
+              if (ebLinked.length === 0) return null;
+              return (
+                <div className="bg-emerald-50 rounded-lg p-4 mb-4 border border-emerald-200">
+                  <h4 className="text-sm font-bold text-emerald-800 mb-2">🇪🇬 Egypt Bank Payments / مدفوعات بنكية</h4>
+                  {ebLinked.map(txn => (
+                    <div key={txn.id} className="flex justify-between items-center py-1.5 border-b border-emerald-100">
+                      <div className="flex-1">
+                        <div className="text-xs font-semibold">{txn.description}</div>
+                        <div className="text-[10px] text-slate-500">{txn.date}</div>
+                      </div>
+                      <div className="text-right flex items-center gap-2">
+                        <span className="text-sm font-bold text-emerald-600">{fE(txn.amount)}</span>
+                        <button onClick={async () => {
+                          try {
+                            await dbUpdate('egypt_bank_transactions', txn.id, { matched_invoice_id: null, matched_at: null, matched_by: null }, userProfile?.id);
+                            const newCollected = Math.max(0, Number(selectedInvoice.total_collected || 0) - Number(txn.amount));
+                            await dbUpdate('invoices', selectedInvoice.id, { total_collected: newCollected }, userProfile?.id);
+                            setSelectedInvoice({...selectedInvoice, total_collected: newCollected});
+                            setEgyptBankTxns(prev => prev.map(t => t.id === txn.id ? {...t, matched_invoice_id: null} : t));
+                          } catch(err) { alert(err.message); }
+                        }} className="text-[10px] text-red-400 underline">unlink</button>
+                      </div>
+                    </div>
+                  ))}
+                  <div className="flex justify-between pt-2 mt-1 border-t-2 border-emerald-300">
+                    <span className="text-xs font-bold">Egypt Bank Total</span>
+                    <span className="text-sm font-extrabold text-emerald-600">{fE(ebLinked.reduce((a, t) => a + Number(t.amount), 0))}</span>
+                  </div>
+                </div>
+              );
+            })()}
+
             {/* Link Existing Transaction */}
             {!showLinkSearch ? (
               <button onClick={() => { setShowLinkSearch(true); setLinkSearch(''); }}
@@ -1810,21 +1851,30 @@ export default function App() {
               </button>
             ) : (
               <div className="bg-purple-50 rounded-lg p-4 border border-purple-200 mb-3">
-                <h4 className="text-sm font-bold text-purple-800 mb-1">Search Treasury to Link / بحث للربط</h4>
+                <h4 className="text-sm font-bold text-purple-800 mb-1">Search Treasury & Bank to Link / بحث للربط</h4>
                 <input value={linkSearch} onChange={e => setLinkSearch(e.target.value)}
                   placeholder="Search name, date, amount / بحث"
                   className="w-full px-3 py-2 rounded-lg border border-purple-200 text-sm mb-2" autoFocus />
-                {linkSearch.length >= 2 && (
-                  <div className="max-h-[200px] overflow-auto rounded border border-purple-200 bg-white">
-                    {treasury
-                      .filter(t => (!t.order_number || t.order_number === '') && Number(t.cash_in) > 0)
-                      .filter(t => {
-                        const words = linkSearch.split(/\s+/).filter(w => w.length > 0);
-                        const haystack = [t.description || '', t.transaction_date || '', String(t.cash_in || 0)].join(' ');
-                        return words.every(w => haystack.includes(w));
-                      })
-                      .slice(0, 20)
-                      .map(txn => (
+                {linkSearch.length >= 2 && (() => {
+                  const words = linkSearch.split(/\s+/).filter(w => w.length > 0);
+                  const treasuryResults = treasury
+                    .filter(t => (!t.order_number || t.order_number === '') && Number(t.cash_in) > 0)
+                    .filter(t => {
+                      const haystack = [t.description || '', t.transaction_date || '', String(t.cash_in || 0)].join(' ');
+                      return words.every(w => haystack.includes(w));
+                    }).slice(0, 15);
+                  const egyptResults = egyptBankTxns
+                    .filter(t => !t.matched_invoice_id && Number(t.amount) > 0)
+                    .filter(t => {
+                      const haystack = [t.description || '', t.date || '', String(t.amount || 0)].join(' ');
+                      return words.every(w => haystack.includes(w));
+                    }).slice(0, 15);
+                  return (
+                    <div className="max-h-[300px] overflow-auto rounded border border-purple-200 bg-white">
+                      {treasuryResults.length > 0 && (
+                        <div className="px-2 py-1 bg-slate-100 text-[9px] font-bold text-slate-500 uppercase sticky top-0">💰 Treasury / الخزنة</div>
+                      )}
+                      {treasuryResults.map(txn => (
                         <div key={txn.id} className="flex justify-between items-center px-3 py-2 border-b border-slate-50 hover:bg-purple-50">
                           <div className="flex-1">
                             <div className="text-xs font-semibold" style={{ direction: lang === 'ar' ? 'rtl' : 'ltr' }}>{tx(txn.description, txn.description_en)}</div>
@@ -1836,15 +1886,36 @@ export default function App() {
                           </button>
                         </div>
                       ))}
-                    {treasury.filter(t => (!t.order_number || t.order_number === '') && Number(t.cash_in) > 0).filter(t => {
-                      const words = linkSearch.split(/\s+/).filter(w => w.length > 0);
-                      const haystack = [t.description || '', t.transaction_date || '', String(t.cash_in || 0)].join(' ');
-                      return words.every(w => haystack.includes(w));
-                    }).length === 0 && (
-                      <div className="px-3 py-3 text-xs text-slate-400 text-center">No unlinked cash-in transactions found</div>
-                    )}
-                  </div>
-                )}
+                      {egyptResults.length > 0 && (
+                        <div className="px-2 py-1 bg-emerald-100 text-[9px] font-bold text-emerald-700 uppercase sticky top-0">🇪🇬 Egypt Bank / بنك مصر</div>
+                      )}
+                      {egyptResults.map(txn => (
+                        <div key={'eb_'+txn.id} className="flex justify-between items-center px-3 py-2 border-b border-slate-50 hover:bg-emerald-50">
+                          <div className="flex-1">
+                            <div className="text-xs font-semibold">{txn.description}</div>
+                            <div className="text-[10px] text-emerald-600">{txn.date} | {fE(txn.amount)} 🇪🇬</div>
+                          </div>
+                          <button onClick={async () => {
+                            try {
+                              await dbUpdate('egypt_bank_transactions', txn.id, { matched_invoice_id: selectedInvoice.id, matched_at: new Date().toISOString(), matched_by: userProfile?.id }, userProfile?.id);
+                              const newCollected = Number(selectedInvoice.total_collected || 0) + Number(txn.amount);
+                              await dbUpdate('invoices', selectedInvoice.id, { total_collected: newCollected }, userProfile?.id);
+                              setSelectedInvoice({...selectedInvoice, total_collected: newCollected});
+                              setEgyptBankTxns(prev => prev.map(t => t.id === txn.id ? {...t, matched_invoice_id: selectedInvoice.id} : t));
+                              setShowLinkSearch(false); setLinkSearch('');
+                            } catch(err) { alert('Error: ' + err.message); }
+                          }}
+                            className="px-3 py-1.5 bg-emerald-600 text-white rounded text-xs font-semibold hover:bg-emerald-700 ml-2">
+                            🔗 Link
+                          </button>
+                        </div>
+                      ))}
+                      {treasuryResults.length === 0 && egyptResults.length === 0 && (
+                        <div className="px-3 py-3 text-xs text-slate-400 text-center">No unlinked transactions found</div>
+                      )}
+                    </div>
+                  );
+                })()}
                 <button onClick={() => { setShowLinkSearch(false); setLinkSearch(''); }}
                   className="mt-2 px-3 py-1 border border-slate-200 rounded text-xs">Cancel / إلغاء</button>
               </div>
@@ -3278,6 +3349,59 @@ export default function App() {
                       Open Tickets Tab →
                     </button>
                   </div>)}
+                </div>
+              );
+            })()}
+
+            {/* ===== EGYPT BANK TRANSACTIONS DASHBOARD ===== */}
+            {egyptBankTxns.length > 0 && (isAdmin || modulePerms['Egypt Bank']) && (() => {
+              const recent = egyptBankTxns.slice(0, 20);
+              const totalIn = egyptBankTxns.filter(t => t.amount > 0).reduce((s, t) => s + Number(t.amount), 0);
+              const totalOut = egyptBankTxns.filter(t => t.amount < 0).reduce((s, t) => s + Math.abs(Number(t.amount)), 0);
+              const unmatched = egyptBankTxns.filter(t => !t.matched_invoice_id).length;
+              const uncategorized = egyptBankTxns.filter(t => !t.category).length;
+              return (
+                <div className="mb-4">
+                  <div className="flex justify-between items-center mb-2 cursor-pointer" onClick={() => setHideSections({...hideSections, egyptBankDash: !hideSections.egyptBankDash})}>
+                    <h3 className="text-sm font-bold" style={{ color: '#059669' }}>🇪🇬 Egypt Bank — {egyptBankTxns.length} transactions</h3>
+                    <span className="text-xs text-slate-400">{hideSections.egyptBankDash ? '👁️' : '🙈'}</span>
+                  </div>
+                  {!hideSections.egyptBankDash && (
+                    <div>
+                      <div className="grid grid-cols-4 gap-2 mb-2">
+                        <div className="bg-green-50 rounded-lg p-2 border border-green-200 text-center">
+                          <div className="text-[9px] text-green-600 font-bold">Deposits</div>
+                          <div className="text-xs font-black text-green-700">{fE(totalIn)}</div>
+                        </div>
+                        <div className="bg-red-50 rounded-lg p-2 border border-red-200 text-center">
+                          <div className="text-[9px] text-red-600 font-bold">Withdrawals</div>
+                          <div className="text-xs font-black text-red-700">{fE(totalOut)}</div>
+                        </div>
+                        <div className="bg-amber-50 rounded-lg p-2 border border-amber-200 text-center">
+                          <div className="text-[9px] text-amber-600 font-bold">Unmatched</div>
+                          <div className="text-xs font-black text-amber-700">{unmatched}</div>
+                        </div>
+                        <div className="bg-slate-50 rounded-lg p-2 border border-slate-200 text-center">
+                          <div className="text-[9px] text-slate-600 font-bold">No Category</div>
+                          <div className="text-xs font-black text-slate-700">{uncategorized}</div>
+                        </div>
+                      </div>
+                      <div className="space-y-1 max-h-[250px] overflow-auto">
+                        {recent.map(t => (
+                          <div key={t.id} className="flex items-center justify-between bg-white rounded-lg p-2 border text-xs cursor-pointer hover:bg-slate-50" onClick={() => setTab('egyptbank')}>
+                            <div className="flex-1 min-w-0">
+                              <div className="font-semibold truncate">{t.description || '—'}</div>
+                              <div className="text-[9px] text-slate-400">{t.date} {t.category ? '• ' + (EXPENSE_CATS[t.category] || t.category) : ''}{t.matched_invoice_id ? ' ✅' : ''}</div>
+                            </div>
+                            <div className={'font-bold ml-2 ' + (t.amount > 0 ? 'text-green-600' : 'text-red-600')}>{t.amount > 0 ? '+' : ''}{fE(t.amount)}</div>
+                          </div>
+                        ))}
+                      </div>
+                      <button onClick={() => setTab('egyptbank')} className="w-full mt-2 py-2 text-center text-xs font-bold text-emerald-600 bg-emerald-50 rounded-lg hover:bg-emerald-100 transition">
+                        Open Egypt Bank →
+                      </button>
+                    </div>
+                  )}
                 </div>
               );
             })()}
@@ -5514,11 +5638,11 @@ export default function App() {
         )}
 
         {tab === 'egyptbank' && (
-          <EgyptBankTab user={user} userProfile={userProfile} isAdmin={isAdmin} invoices={invoices} />
+          <EgyptBankTab user={user} userProfile={userProfile} isAdmin={isAdmin} invoices={invoices} onReload={loadAllData} />
         )}
 
         {tab === 'reports' && (
-          <ReportsTab treasury={treasury} invoices={invoices} warehouseExpenses={warehouse} />
+          <ReportsTab treasury={treasury} invoices={invoices} warehouseExpenses={warehouse} egyptBankTxns={egyptBankTxns} />
         )}
 
         {tab === 'quotes' && (

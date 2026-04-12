@@ -4,7 +4,7 @@ import { EXPENSE_CATS, COLORS } from '../lib/utils';
 
 const MONTHS = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
 
-export default function ReportsTab({ treasury, invoices, warehouseExpenses }) {
+export default function ReportsTab({ treasury, invoices, warehouseExpenses, egyptBankTxns }) {
   const [dateFrom, setDateFrom] = useState(() => { const d = new Date(); d.setFullYear(d.getFullYear() - 1); return d.toISOString().substring(0, 10); });
   const [dateTo, setDateTo] = useState(new Date().toISOString().substring(0, 10));
   const [view, setView] = useState('overview'); // overview | income | expenses | categories | comparison
@@ -15,8 +15,9 @@ export default function ReportsTab({ treasury, invoices, warehouseExpenses }) {
   const filteredTreasury = useMemo(() => treasury.filter(t => t.transaction_date >= dateFrom && t.transaction_date <= dateTo), [treasury, dateFrom, dateTo]);
   const filteredInvoices = useMemo(() => invoices.filter(i => i.date >= dateFrom && i.date <= dateTo), [invoices, dateFrom, dateTo]);
   const filteredWarehouse = useMemo(() => (warehouseExpenses || []).filter(w => w.date >= dateFrom && w.date <= dateTo), [warehouseExpenses, dateFrom, dateTo]);
+  const filteredEgyptBank = useMemo(() => (egyptBankTxns || []).filter(t => t.date >= dateFrom && t.date <= dateTo && t.category), [egyptBankTxns, dateFrom, dateTo]);
 
-  // Monthly data
+  // Monthly data (treasury + categorized Egypt bank)
   const monthlyData = useMemo(() => {
     const months = {};
     filteredTreasury.forEach(t => {
@@ -28,10 +29,20 @@ export default function ReportsTab({ treasury, invoices, warehouseExpenses }) {
       months[m].net += Number(t.cash_in || 0) - Number(t.cash_out || 0);
       months[m].txnCount++;
     });
+    // Add categorized Egypt bank transactions
+    filteredEgyptBank.forEach(t => {
+      const m = t.date ? t.date.substring(0, 7) : null;
+      if (!m) return;
+      if (!months[m]) months[m] = { month: m, income: 0, expenses: 0, net: 0, txnCount: 0 };
+      if (t.amount > 0) { months[m].income += Number(t.amount); }
+      else { months[m].expenses += Math.abs(Number(t.amount)); }
+      months[m].net += Number(t.amount);
+      months[m].txnCount++;
+    });
     return Object.values(months).sort((a, b) => a.month.localeCompare(b.month));
-  }, [filteredTreasury]);
+  }, [filteredTreasury, filteredEgyptBank]);
 
-  // Category breakdown (expenses)
+  // Category breakdown (expenses) — treasury + Egypt bank
   const expenseByCategory = useMemo(() => {
     const cats = {};
     filteredTreasury.filter(t => Number(t.cash_out || 0) > 0).forEach(t => {
@@ -43,8 +54,18 @@ export default function ReportsTab({ treasury, invoices, warehouseExpenses }) {
       if (!cats[cat].subcats[sub]) cats[cat].subcats[sub] = 0;
       cats[cat].subcats[sub] += Number(t.cash_out || 0);
     });
+    // Add categorized Egypt bank expenses
+    filteredEgyptBank.filter(t => Number(t.amount) < 0).forEach(t => {
+      const cat = EXPENSE_CATS[t.category] || t.category || 'Uncategorized';
+      if (!cats[cat]) cats[cat] = { category: cat, total: 0, count: 0, subcats: {} };
+      cats[cat].total += Math.abs(Number(t.amount));
+      cats[cat].count++;
+      const sub = t.subcategory || 'General';
+      if (!cats[cat].subcats[sub]) cats[cat].subcats[sub] = 0;
+      cats[cat].subcats[sub] += Math.abs(Number(t.amount));
+    });
     return Object.values(cats).sort((a, b) => b.total - a.total);
-  }, [filteredTreasury]);
+  }, [filteredTreasury, filteredEgyptBank]);
 
   // Category breakdown (income)
   const incomeByCategory = useMemo(() => {
@@ -55,8 +76,15 @@ export default function ReportsTab({ treasury, invoices, warehouseExpenses }) {
       cats[cat].total += Number(t.cash_in || 0);
       cats[cat].count++;
     });
+    // Add categorized Egypt bank income
+    filteredEgyptBank.filter(t => Number(t.amount) > 0).forEach(t => {
+      const cat = EXPENSE_CATS[t.category] || t.category || 'Bank Deposit';
+      if (!cats[cat]) cats[cat] = { category: cat, total: 0, count: 0 };
+      cats[cat].total += Number(t.amount);
+      cats[cat].count++;
+    });
     return Object.values(cats).sort((a, b) => b.total - a.total);
-  }, [filteredTreasury]);
+  }, [filteredTreasury, filteredEgyptBank]);
 
   // Subcategory detail for selected category
   const subcatDetail = useMemo(() => {
@@ -76,12 +104,21 @@ export default function ReportsTab({ treasury, invoices, warehouseExpenses }) {
       years[y].income += Number(t.cash_in || 0);
       years[y].expenses += Number(t.cash_out || 0);
     });
+    filteredEgyptBank.forEach(t => {
+      const y = t.date ? t.date.substring(0, 4) : null;
+      if (!y) return;
+      if (!years[y]) years[y] = { year: y, income: 0, expenses: 0 };
+      if (t.amount > 0) years[y].income += Number(t.amount);
+      else years[y].expenses += Math.abs(Number(t.amount));
+    });
     return Object.values(years).sort((a, b) => a.year.localeCompare(b.year));
-  }, [filteredTreasury]);
+  }, [filteredTreasury, filteredEgyptBank]);
 
-  // Totals
-  const totalIncome = filteredTreasury.reduce((s, t) => s + Number(t.cash_in || 0), 0);
-  const totalExpenses = filteredTreasury.reduce((s, t) => s + Number(t.cash_out || 0), 0);
+  // Totals (treasury + categorized Egypt bank)
+  const ebIncome = filteredEgyptBank.filter(t => t.amount > 0).reduce((s, t) => s + Number(t.amount), 0);
+  const ebExpenses = filteredEgyptBank.filter(t => t.amount < 0).reduce((s, t) => s + Math.abs(Number(t.amount)), 0);
+  const totalIncome = filteredTreasury.reduce((s, t) => s + Number(t.cash_in || 0), 0) + ebIncome;
+  const totalExpenses = filteredTreasury.reduce((s, t) => s + Number(t.cash_out || 0), 0) + ebExpenses;
   const totalInvoiced = filteredInvoices.reduce((s, i) => s + Number(i.amount || i.total || 0), 0);
   const netCash = totalIncome - totalExpenses;
 
@@ -384,6 +421,13 @@ export default function ReportsTab({ treasury, invoices, warehouseExpenses }) {
                 if (!m || !topCats.find(c => c.category === cat)) return;
                 if (!catMonthly[m]) catMonthly[m] = { month: m };
                 catMonthly[m][cat] = (catMonthly[m][cat] || 0) + Number(t.cash_out || 0);
+              });
+              filteredEgyptBank.filter(t => Number(t.amount) < 0).forEach(t => {
+                const m = t.date ? t.date.substring(0, 7) : null;
+                const cat = EXPENSE_CATS[t.category] || t.category || 'Uncategorized';
+                if (!m || !topCats.find(c => c.category === cat)) return;
+                if (!catMonthly[m]) catMonthly[m] = { month: m };
+                catMonthly[m][cat] = (catMonthly[m][cat] || 0) + Math.abs(Number(t.amount));
               });
               const data = Object.values(catMonthly).sort((a, b) => a.month.localeCompare(b.month));
               const bars = topCats.map((c, i) => ({ key: c.category, label: c.category, color: COLORS[i] }));
