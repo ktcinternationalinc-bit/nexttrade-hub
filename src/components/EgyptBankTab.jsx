@@ -84,22 +84,12 @@ export default function EgyptBankTab({ user, userProfile, isAdmin, invoices, onR
 
   const parseOneFile = async (file) => {
     const data = await file.arrayBuffer();
-    const wb = XLSX.read(data, { cellText: true, cellDates: false });
+    const wb = XLSX.read(data);
     const ws = wb.Sheets[wb.SheetNames[0]];
 
-    // Read raw grid - use formatted text (cell.w) when available, fall back to value (cell.v)
-    const range = XLSX.utils.decode_range(ws['!ref'] || 'A1');
-    const grid = [];
-    for (let r = range.s.r; r <= range.e.r; r++) {
-      const row = [];
-      for (let c = range.s.c; c <= range.e.c; c++) {
-        const cell = ws[XLSX.utils.encode_cell({ r, c })];
-        // Prefer formatted text (w) for dates, fall back to raw value (v)
-        const val = cell ? (cell.w || (cell.v != null ? String(cell.v) : '')) : '';
-        row.push(val.trim());
-      }
-      grid.push(row);
-    }
+    // Read as 2D array — works reliably for both .xls and .xlsx
+    const rawGrid = XLSX.utils.sheet_to_json(ws, { header: 1, defval: '', raw: false });
+    const grid = rawGrid.map(row => (row || []).map(v => String(v ?? '').trim()));
 
     // Parse bank date format: 03FEB25 → 2025-02-03
     const MONTHS = { JAN: '01', FEB: '02', MAR: '03', APR: '04', MAY: '05', JUN: '06', JUL: '07', AUG: '08', SEP: '09', OCT: '10', NOV: '11', DEC: '12' };
@@ -186,7 +176,7 @@ export default function EgyptBankTab({ user, userProfile, isAdmin, invoices, onR
       }
       
       // Sort amount columns by position (left to right)
-      const sortedAmtCols = Object.entries(amtCols).filter(([c, n]) => n >= 1).map(([c]) => parseInt(c)).sort((a, b) => a - b);
+      const sortedAmtCols = Object.entries(amtCols).filter(([c, n]) => n >= 3).map(([c]) => parseInt(c)).sort((a, b) => a - b);
       // Standard bank layout: DEBIT (left) | CREDIT (middle) | BALANCE (right)
       let debitCol = -1, creditCol = -1, balCol = -1;
       if (sortedAmtCols.length >= 3) {
