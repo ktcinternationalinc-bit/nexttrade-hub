@@ -263,6 +263,8 @@ export default function App() {
   const [recentTicketUpdates, setRecentTicketUpdates] = useState([]);
   const [dashTickets, setDashTickets] = useState([]);
   const [activityFeed, setActivityFeed] = useState([]);
+  const [dashEvents, setDashEvents] = useState([]);
+  const [dashFollowUps, setDashFollowUps] = useState([]);
   const [fxRate, setFxRate] = useState(null);
   const [globalSearch, setGlobalSearch] = useState('');
   const [showGlobalSearch, setShowGlobalSearch] = useState(false);
@@ -558,6 +560,17 @@ export default function App() {
         const { data: feed } = await supabase.from('daily_log').select('*').eq('auto_generated', true).order('created_at', { ascending: false }).limit(50);
         setActivityFeed(feed || []);
       } catch(e) { setActivityFeed([]); }
+      // Load calendar events for dashboard
+      try {
+        const todayStr = new Date().toISOString().substring(0, 10);
+        const { data: evts } = await supabase.from('calendar_events').select('*').gte('event_date', todayStr).order('event_date').order('event_time').limit(30);
+        setDashEvents(evts || []);
+      } catch(e) { setDashEvents([]); }
+      // Load follow-ups for dashboard
+      try {
+        const { data: fups } = await supabase.from('follow_ups').select('*, customers(name, name_en)').eq('completed', false).order('due_date').limit(50);
+        setDashFollowUps(fups || []);
+      } catch(e) { setDashFollowUps([]); }
       // Fetch USD/EGP exchange rate
       try {
         const fxRes = await fetch('https://open.er-api.com/v6/latest/USD');
@@ -3043,6 +3056,55 @@ export default function App() {
               </div>
               <div style={{ flex: 1, height: 1, background: 'linear-gradient(90deg, rgba(56,189,248,0.2), transparent)' }} />
             </div>
+
+            {/* ===== SCORECARD + TODAY'S EVENTS ===== */}
+            {(() => {
+              const myId = userProfile?.id;
+              const todayStr = new Date().toISOString().substring(0, 10);
+              const myTicketsCount = dashTickets.filter(t => t.assigned_to === myId && t.status !== 'Closed').length;
+              const assignedByMe = dashTickets.filter(t => t.created_by === myId && t.assigned_to !== myId && t.status !== 'Closed').length;
+              const teamTicketsCount = dashTickets.filter(t => t.status !== 'Closed' && t.assigned_to !== myId && t.created_by !== myId).length;
+              const todayEvents = dashEvents.filter(e => e.event_date === todayStr && (e.assigned_to === myId || e.created_by === myId || !e.assigned_to));
+              const myFollowUps = dashFollowUps.filter(fu => fu.assigned_to === myId || fu.created_by === myId);
+              return (
+                <div style={{ marginBottom: 16 }}>
+                  {/* Scorecard row */}
+                  <div style={{ display: 'grid', gridTemplateColumns: 'repeat(5, 1fr)', gap: 8, marginBottom: 10 }}>
+                    {[
+                      { label: 'My Tickets', value: myTicketsCount, color: '#60a5fa', icon: '🎫', click: () => setTab('tickets') },
+                      { label: 'Assigned by Me', value: assignedByMe, color: '#a78bfa', icon: '📤', click: () => setTab('tickets') },
+                      { label: 'Team Tickets', value: teamTicketsCount, color: '#38bdf8', icon: '👥', click: () => setTab('tickets') },
+                      { label: "Today's Events", value: todayEvents.length, color: '#34d399', icon: '📅', click: () => setTab('calendar') },
+                      { label: 'Follow-ups', value: myFollowUps.length, color: '#fbbf24', icon: '🔔', click: () => setTab('crm') },
+                    ].map((s, i) => (
+                      <div key={i} onClick={s.click}
+                        style={{ background: 'rgba(17,24,39,0.7)', border: '1px solid rgba(255,255,255,0.08)', borderRadius: 12, padding: '12px 10px', textAlign: 'center', cursor: 'pointer', transition: 'all 0.2s' }}
+                        className="hover:border-blue-500/30">
+                        <div style={{ fontSize: 24, fontWeight: 900, color: s.color, fontFamily: 'monospace' }}>{s.value}</div>
+                        <div style={{ fontSize: 9, color: '#64748b', textTransform: 'uppercase', letterSpacing: '0.08em', marginTop: 2 }}>{s.icon} {s.label}</div>
+                      </div>
+                    ))}
+                  </div>
+
+                  {/* Today's events row */}
+                  {todayEvents.length > 0 && (
+                    <div style={{ background: 'rgba(17,24,39,0.7)', border: '1px solid rgba(255,255,255,0.08)', borderRadius: 12, padding: 12, marginBottom: 10 }}>
+                      <div style={{ fontSize: 11, fontWeight: 800, color: '#34d399', marginBottom: 8, letterSpacing: '0.05em' }}>📅 TODAY'S SCHEDULE</div>
+                      <div style={{ display: 'flex', gap: 8, overflowX: 'auto', paddingBottom: 4 }}>
+                        {todayEvents.slice(0, 6).map(ev => (
+                          <div key={ev.id} onClick={() => setTab('calendar')}
+                            style={{ flexShrink: 0, background: 'rgba(52,211,153,0.08)', border: '1px solid rgba(52,211,153,0.15)', borderRadius: 8, padding: '8px 12px', cursor: 'pointer', minWidth: 180 }}>
+                            <div style={{ fontSize: 11, fontWeight: 700, color: '#34d399', fontFamily: 'monospace' }}>{ev.event_time ? ev.event_time.substring(0,5) : 'All day'}</div>
+                            <div style={{ fontSize: 12, fontWeight: 600, color: '#e2e8f0', marginTop: 2 }}>{ev.title}</div>
+                            {ev.event_type && <div style={{ fontSize: 9, color: '#64748b', marginTop: 2 }}>{ev.event_type}</div>}
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+                </div>
+              );
+            })()}
 
             {/* ===== TEAM REMINDERS ===== */}
             {(() => {

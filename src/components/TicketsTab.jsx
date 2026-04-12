@@ -197,6 +197,54 @@ export default function TicketsTab({ customers, user, userProfile, users, onRelo
 
         {sel.description && <p className="text-sm text-slate-600 mb-4 bg-slate-50 rounded-lg p-3">{sel.description}</p>}
 
+        {/* ATTACHMENTS */}
+        <div className="mb-4">
+          <div className="flex items-center justify-between mb-2">
+            <h4 className="text-[10px] font-bold text-slate-500 uppercase tracking-wider">📎 Attachments ({(sel.attachments || []).length})</h4>
+            <label className="px-3 py-1.5 bg-blue-50 text-blue-600 rounded-lg text-[10px] font-bold cursor-pointer hover:bg-blue-100 border border-blue-200 transition">
+              + Add File
+              <input type="file" className="hidden" onChange={async (e) => {
+                const file = e.target.files?.[0];
+                if (!file) return;
+                try {
+                  const ext = file.name.split('.').pop();
+                  const path = `tickets/${sel.id}/${Date.now()}_${file.name}`;
+                  const { data: uploadData, error: uploadErr } = await supabase.storage.from('attachments').upload(path, file);
+                  if (uploadErr) throw uploadErr;
+                  const { data: urlData } = supabase.storage.from('attachments').getPublicUrl(path);
+                  const attachment = { name: file.name, url: urlData.publicUrl, size: file.size, type: file.type, uploaded_at: new Date().toISOString(), uploaded_by: myId };
+                  const existing = Array.isArray(sel.attachments) ? sel.attachments : [];
+                  const updated = [...existing, attachment];
+                  await dbUpdate('tickets', sel.id, { attachments: updated }, myId);
+                  sel.attachments = updated;
+                  setSel({ ...sel, attachments: updated });
+                  await dbInsert('ticket_comments', { ticket_id: sel.id, comment_text: '📎 Attached file: ' + file.name, is_system: true, created_by: myId }, myId);
+                  loadComments(sel.id);
+                  await logActivity(myId, 'Attached file to ' + (sel.ticket_number || sel.title) + ': ' + file.name, 'ticket');
+                } catch(err) { alert('Upload failed: ' + err.message); }
+                e.target.value = '';
+              }} />
+            </label>
+          </div>
+          {(sel.attachments || []).length > 0 ? (
+            <div className="space-y-1.5">
+              {(sel.attachments || []).map((att, i) => (
+                <a key={i} href={att.url} target="_blank" rel="noopener noreferrer"
+                  className="flex items-center gap-2 px-3 py-2 bg-slate-50 rounded-lg border border-slate-100 hover:border-blue-200 hover:bg-blue-50 transition text-xs">
+                  <span className="text-lg">{att.type?.includes('pdf') ? '📄' : att.type?.includes('image') ? '🖼️' : att.type?.includes('sheet') || att.type?.includes('excel') ? '📊' : '📁'}</span>
+                  <div className="flex-1">
+                    <div className="font-semibold text-blue-600">{att.name}</div>
+                    <div className="text-[10px] text-slate-400">{att.size ? (att.size / 1024).toFixed(0) + ' KB' : ''} {att.uploaded_at ? '· ' + new Date(att.uploaded_at).toLocaleDateString() : ''} {att.uploaded_by ? '· ' + getUserName(att.uploaded_by) : ''}</div>
+                  </div>
+                  <span className="text-blue-400 text-[10px] font-semibold">Open ↗</span>
+                </a>
+              ))}
+            </div>
+          ) : (
+            <div className="text-[10px] text-slate-400 py-1">No attachments yet</div>
+          )}
+        </div>
+
         {/* KEY DETAILS GRID */}
         <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-4">
           <div className="bg-slate-50 rounded-lg p-3">
