@@ -122,23 +122,23 @@ export default function EgyptBankTab({ user, userProfile, isAdmin, invoices, onR
 
     // Strategy 1: Detect sparse bank statement format (dates scattered, amounts in various columns)
     // Find which column has dates by scanning first 30 rows
-    let dateCol = -1;
+    let sparseDateCol = -1;
     for (let c = 0; c < Math.min(10, grid[0]?.length || 0); c++) {
       let dateCount = 0;
       for (let r = 0; r < Math.min(50, grid.length); r++) {
         if (grid[r][c] && parseBankDate(grid[r][c])) dateCount++;
       }
-      if (dateCount >= 3) { dateCol = c; break; }
+      if (dateCount >= 3) { sparseDateCol = c; break; }
     }
 
-    if (dateCol >= 0) {
+    if (sparseDateCol >= 0) {
       // Sparse bank statement format detected
-      console.log('📊 Detected sparse bank statement, date column:', dateCol);
+      console.log('📊 Detected sparse bank statement, date column:', sparseDateCol);
       
       // Find description column (column with most text content)
-      let descCol = -1, maxText = 0;
+      let sparseDescCol = -1, maxText = 0;
       for (let c = 0; c < (grid[0]?.length || 0); c++) {
-        if (c === dateCol) continue;
+        if (c === sparseDateCol) continue;
         let textCount = 0;
         for (let r = 0; r < Math.min(50, grid.length); r++) {
           if (grid[r][c] && grid[r][c].length > 5 && isNaN(parseAmt(grid[r][c]))) textCount++;
@@ -150,7 +150,7 @@ export default function EgyptBankTab({ user, userProfile, isAdmin, invoices, onR
       const amtCols = {};
       grid.forEach(row => {
         row.forEach((v, c) => {
-          if (c !== dateCol && c !== descCol && parseAmt(v) > 0) {
+          if (c !== sparseDateCol && c !== sparseDescCol && parseAmt(v) > 0) {
             amtCols[c] = (amtCols[c] || 0) + 1;
           }
         });
@@ -168,15 +168,15 @@ export default function EgyptBankTab({ user, userProfile, isAdmin, invoices, onR
       } else if (sortedAmtCols.length >= 1) {
         creditCol = sortedAmtCols[0];
       }
-      console.log('Columns — date:', dateCol, 'desc:', descCol, 'debit:', debitCol, 'credit:', creditCol, 'balance:', balCol);
+      console.log('Columns — date:', sparseDateCol, 'desc:', sparseDescCol, 'debit:', debitCol, 'credit:', creditCol, 'balance:', balCol);
 
       // Group rows into transactions
       const transactions = [];
       let current = null;
       for (let r = 0; r < grid.length; r++) {
         const row = grid[r];
-        const dateStr = parseBankDate(row[dateCol]);
-        const desc = descCol >= 0 ? (row[descCol] || '').trim() : '';
+        const dateStr = parseBankDate(row[sparseDateCol]);
+        const desc = sparseDescCol >= 0 ? (row[sparseDescCol] || '').trim() : '';
         const debit = debitCol >= 0 ? parseAmt(row[debitCol]) : 0;
         const credit = creditCol >= 0 ? parseAmt(row[creditCol]) : 0;
 
