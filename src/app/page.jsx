@@ -4037,10 +4037,6 @@ export default function App() {
             <PersonalDashboard user={user} userProfile={userProfile} isAdmin={isAdmin}
               invoices={invoices} customers={customers} navigate={navigate} fE={fE} users={teamUsers} />
 
-
-              </div>
-            )}
-
           </div>
         )}
 
