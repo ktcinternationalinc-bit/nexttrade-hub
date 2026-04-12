@@ -406,6 +406,14 @@ export default function App() {
           if (!s?.user) return;
           const { data: profile } = await supabase.from('users').select('role').eq('id', s.user.id).single();
           if (profile?.role === 'super_admin') return; // super admins stay logged in
+          // Record auto-logout in session
+          const today = new Date().toISOString().split('T')[0];
+          await supabase.from('user_sessions')
+            .update({ logout_at: new Date().toISOString(), logout_reason: 'auto_timeout' })
+            .eq('user_id', s.user.id).eq('date', today)
+            .order('login_at', { ascending: false }).limit(1);
+          // Log it
+          try { await supabase.from('daily_log').insert({ user_id: s.user.id, entry_text: 'Auto-logged out after 30 min inactivity', log_category: 'login', log_date: today, log_time: new Date().toTimeString().substring(0,8), auto_generated: true }); } catch(e) {}
           await supabase.auth.signOut(); window.location.href = '/login';
         } catch(e) {}
       }, IDLE_TIMEOUT);
@@ -743,9 +751,10 @@ export default function App() {
     if (user?.id) {
       const today = new Date().toISOString().split('T')[0];
       await supabase.from('user_sessions')
-        .update({ logout_at: new Date().toISOString(), last_seen: new Date().toISOString() })
+        .update({ logout_at: new Date().toISOString(), last_seen: new Date().toISOString(), logout_reason: 'manual' })
         .eq('user_id', user.id).eq('date', today)
         .order('login_at', { ascending: false }).limit(1);
+      try { await supabase.from('daily_log').insert({ user_id: user.id, entry_text: 'Clocked out (manual)', log_category: 'login', log_date: today, log_time: new Date().toTimeString().substring(0,8), auto_generated: true }); } catch(e) {}
     }
     await supabase.auth.signOut();
     window.location.href = '/login';
@@ -3209,6 +3218,7 @@ export default function App() {
               )}
             </div>
 
+
             {/* ===== ANNOUNCEMENTS / URGENT MESSAGES ===== */}
             {isAdmin && (
               <button onClick={() => setShowAddAnnouncement(true)}
@@ -3422,101 +3432,8 @@ export default function App() {
               );
             })()}
 
+
             {/* ===== TICKETS DASHBOARD ===== */}
-            {/* ===== SALES BY DIVISION + TREASURY CATEGORIES (side by side) ===== */}
-            {isAdmin && (() => {
-              const divData = {};
-              filteredInvoices.forEach(inv => {
-                const cust = customers.find(c => c.id === inv.customer_id || c.name === inv.customer_name);
-                const div = inv.division || cust?.group_name || 'Other';
-                divData[div] = (divData[div] || 0) + Number(inv.total_amount || 0);
-              });
-              const divSorted = Object.entries(divData).sort((a, b) => b[1] - a[1]).slice(0, 8);
-              const divMax = divSorted[0]?.[1] || 1;
-
-              const catData = {};
-              filteredTreasury.forEach(t => {
-                const cat = t.expense_category || 'Uncategorized';
-                if (Number(t.cash_out || 0) > 0) catData[cat] = (catData[cat] || 0) + Number(t.cash_out);
-              });
-              const catSorted = Object.entries(catData).sort((a, b) => b[1] - a[1]).slice(0, 8);
-              const catMax = catSorted[0]?.[1] || 1;
-
-              if (divSorted.length <= 1 && catSorted.length <= 1) return null;
-              return (
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-3 mb-4">
-                  {divSorted.length > 1 && (
-                    <div className="bg-white rounded-xl p-4">
-                      <h3 className="text-xs font-extrabold text-slate-700 mb-3">📊 Sales by Division</h3>
-                      <div className="space-y-2">
-                        {divSorted.map(([div, amt], i) => (
-                          <div key={div}>
-                            <div className="flex justify-between text-[10px] mb-0.5">
-                              <span className="font-semibold text-slate-700 truncate max-w-[60%]">{div}</span>
-                              <span className="font-bold text-blue-600">{fE(amt)}</span>
-                            </div>
-                            <div className="h-2 bg-slate-100 rounded-full overflow-hidden">
-                              <div className="h-full rounded-full transition-all" style={{ width: (amt / divMax * 100) + '%', background: COLORS[i % COLORS.length] }} />
-                            </div>
-                          </div>
-                        ))}
-                      </div>
-                    </div>
-                  )}
-                  {catSorted.length > 1 && (
-                    <div className="bg-white rounded-xl p-4">
-                      <h3 className="text-xs font-extrabold text-slate-700 mb-3">💸 Treasury Categories</h3>
-                      <div className="space-y-2">
-                        {catSorted.map(([cat, amt], i) => (
-                          <div key={cat}>
-                            <div className="flex justify-between text-[10px] mb-0.5">
-                              <span className="font-semibold text-slate-700 truncate max-w-[60%]">{cat}</span>
-                              <span className="font-bold text-red-500">{fE(amt)}</span>
-                            </div>
-                            <div className="h-2 bg-slate-100 rounded-full overflow-hidden">
-                              <div className="h-full rounded-full transition-all" style={{ width: (amt / catMax * 100) + '%', background: ['#ef4444','#f97316','#eab308','#22c55e','#06b6d4','#8b5cf6','#ec4899','#64748b'][i % 8] }} />
-                            </div>
-                          </div>
-                        ))}
-                      </div>
-                    </div>
-                  )}
-                </div>
-              );
-            })()}
-
-            {/* ===== OVERDUE INVOICES ALERT ===== */}
-            {isAdmin && (() => {
-              const todayD = new Date();
-              const overdue = filteredInvoices.filter(i => {
-                if (!i.outstanding || i.outstanding <= 0) return false;
-                const invDate = new Date(i.invoice_date || i.created_at);
-                const daysSince = Math.floor((todayD - invDate) / 86400000);
-                return daysSince > 30;
-              }).map(i => ({ ...i, daysOverdue: Math.floor((todayD - new Date(i.invoice_date || i.created_at)) / 86400000) }))
-                .sort((a, b) => b.daysOverdue - a.daysOverdue).slice(0, 10);
-              if (overdue.length === 0) return null;
-              return (
-                <div className="bg-white rounded-xl p-4 border-l-4 border-l-red-500 mb-4">
-                  <h3 className="text-sm font-extrabold text-red-600 mb-2">⚠️ Overdue Invoices ({overdue.length})</h3>
-                  <div className="space-y-1.5">
-                    {overdue.map(i => (
-                      <div key={i.id} className="flex items-center justify-between py-1.5 border-b border-slate-50 last:border-0 cursor-pointer hover:bg-red-50 rounded px-2 -mx-2" onClick={() => { setSelectedInvoice(i); setTab('sales'); }}>
-                        <div>
-                          <div className="text-xs font-semibold">{i.customer || i.customer_name} — {i.invoice_number || i.order_number}</div>
-                          <div className="text-[10px] text-slate-400">{i.invoice_date} · <span className="text-red-500 font-bold">{i.daysOverdue} days overdue</span></div>
-                        </div>
-                        <div className="text-right">
-                          <div className="text-sm font-bold text-red-600">{fE(i.outstanding)}</div>
-                          <div className="text-[9px] text-slate-400">of {fE(i.amount || i.total_amount)}</div>
-                        </div>
-                      </div>
-                    ))}
-                  </div>
-                </div>
-              );
-            })()}
-
             {dashTickets.length > 0 && (() => {
               const myId = userProfile?.id;
               const todayStr = new Date().toISOString().substring(0, 10);
@@ -3665,58 +3582,39 @@ export default function App() {
               );
             })()}
 
-            {/* ===== EGYPT BANK TRANSACTIONS DASHBOARD ===== */}
-            {egyptBankTxns.length > 0 && (isAdmin || modulePerms['Egypt Bank']) && (() => {
-              const recent = egyptBankTxns.slice(0, 20);
-              const totalIn = egyptBankTxns.filter(t => t.amount > 0).reduce((s, t) => s + Number(t.amount), 0);
-              const totalOut = egyptBankTxns.filter(t => t.amount < 0).reduce((s, t) => s + Math.abs(Number(t.amount)), 0);
-              const unmatched = egyptBankTxns.filter(t => !t.matched_invoice_id).length;
-              const uncategorized = egyptBankTxns.filter(t => !t.category).length;
+
+            {/* ===== OVERDUE INVOICES ALERT ===== */}
+            {isAdmin && (() => {
+              const todayD = new Date();
+              const overdue = filteredInvoices.filter(i => {
+                if (!i.outstanding || i.outstanding <= 0) return false;
+                const invDate = new Date(i.invoice_date || i.created_at);
+                const daysSince = Math.floor((todayD - invDate) / 86400000);
+                return daysSince > 30;
+              }).map(i => ({ ...i, daysOverdue: Math.floor((todayD - new Date(i.invoice_date || i.created_at)) / 86400000) }))
+                .sort((a, b) => b.daysOverdue - a.daysOverdue).slice(0, 10);
+              if (overdue.length === 0) return null;
               return (
-                <div className="mb-4">
-                  <div className="flex justify-between items-center mb-2 cursor-pointer" onClick={() => setHideSections({...hideSections, egyptBankDash: !hideSections.egyptBankDash})}>
-                    <h3 className="text-sm font-bold" style={{ color: '#059669' }}>🇪🇬 Egypt Bank — {egyptBankTxns.length} transactions</h3>
-                    <span className="text-xs text-slate-400">{hideSections.egyptBankDash ? '👁️' : '🙈'}</span>
+                <div className="bg-white rounded-xl p-4 border-l-4 border-l-red-500 mb-4">
+                  <h3 className="text-sm font-extrabold text-red-600 mb-2">⚠️ Overdue Invoices ({overdue.length})</h3>
+                  <div className="space-y-1.5">
+                    {overdue.map(i => (
+                      <div key={i.id} className="flex items-center justify-between py-1.5 border-b border-slate-50 last:border-0 cursor-pointer hover:bg-red-50 rounded px-2 -mx-2" onClick={() => { setSelectedInvoice(i); setTab('sales'); }}>
+                        <div>
+                          <div className="text-xs font-semibold">{i.customer || i.customer_name} — {i.invoice_number || i.order_number}</div>
+                          <div className="text-[10px] text-slate-400">{i.invoice_date} · <span className="text-red-500 font-bold">{i.daysOverdue} days overdue</span></div>
+                        </div>
+                        <div className="text-right">
+                          <div className="text-sm font-bold text-red-600">{fE(i.outstanding)}</div>
+                          <div className="text-[9px] text-slate-400">of {fE(i.amount || i.total_amount)}</div>
+                        </div>
+                      </div>
+                    ))}
                   </div>
-                  {!hideSections.egyptBankDash && (
-                    <div>
-                      <div className="grid grid-cols-4 gap-2 mb-2">
-                        <div className="bg-green-50 rounded-lg p-2 border border-green-200 text-center">
-                          <div className="text-[9px] text-green-600 font-bold">Deposits</div>
-                          <div className="text-xs font-black text-green-700">{fE(totalIn)}</div>
-                        </div>
-                        <div className="bg-red-50 rounded-lg p-2 border border-red-200 text-center">
-                          <div className="text-[9px] text-red-600 font-bold">Withdrawals</div>
-                          <div className="text-xs font-black text-red-700">{fE(totalOut)}</div>
-                        </div>
-                        <div className="bg-amber-50 rounded-lg p-2 border border-amber-200 text-center">
-                          <div className="text-[9px] text-amber-600 font-bold">Unmatched</div>
-                          <div className="text-xs font-black text-amber-700">{unmatched}</div>
-                        </div>
-                        <div className="bg-slate-50 rounded-lg p-2 border border-slate-200 text-center">
-                          <div className="text-[9px] text-slate-600 font-bold">No Category</div>
-                          <div className="text-xs font-black text-slate-700">{uncategorized}</div>
-                        </div>
-                      </div>
-                      <div className="space-y-1 max-h-[250px] overflow-auto">
-                        {recent.map(t => (
-                          <div key={t.id} className="flex items-center justify-between bg-white rounded-lg p-2 border text-xs cursor-pointer hover:bg-slate-50" onClick={() => setTab('egyptbank')}>
-                            <div className="flex-1 min-w-0">
-                              <div className="font-semibold truncate">{t.description || '—'}</div>
-                              <div className="text-[9px] text-slate-400">{t.date} {t.category ? '• ' + (EXPENSE_CATS[t.category] || t.category) : ''}{t.matched_invoice_id ? ' ✅' : ''}</div>
-                            </div>
-                            <div className={'font-bold ml-2 ' + (t.amount > 0 ? 'text-green-600' : 'text-red-600')}>{t.amount > 0 ? '+' : ''}{fE(t.amount)}</div>
-                          </div>
-                        ))}
-                      </div>
-                      <button onClick={() => setTab('egyptbank')} className="w-full mt-2 py-2 text-center text-xs font-bold text-emerald-600 bg-emerald-50 rounded-lg hover:bg-emerald-100 transition">
-                        Open Egypt Bank →
-                      </button>
-                    </div>
-                  )}
                 </div>
               );
             })()}
+
 
             {/* ===== FINANCIAL DASHBOARD (shown first for users with access) ===== */}
             {(isAdmin || modulePerms['Sales'] || modulePerms['Treasury']) && (<>
@@ -3902,6 +3800,60 @@ export default function App() {
             </>}
             </>)}
 
+            {/* ===== EGYPT BANK TRANSACTIONS DASHBOARD ===== */}
+            {egyptBankTxns.length > 0 && (isAdmin || modulePerms['Egypt Bank']) && (() => {
+              const recent = egyptBankTxns.slice(0, 20);
+              const totalIn = egyptBankTxns.filter(t => t.amount > 0).reduce((s, t) => s + Number(t.amount), 0);
+              const totalOut = egyptBankTxns.filter(t => t.amount < 0).reduce((s, t) => s + Math.abs(Number(t.amount)), 0);
+              const unmatched = egyptBankTxns.filter(t => !t.matched_invoice_id).length;
+              const uncategorized = egyptBankTxns.filter(t => !t.category).length;
+              return (
+                <div className="mb-4">
+                  <div className="flex justify-between items-center mb-2 cursor-pointer" onClick={() => setHideSections({...hideSections, egyptBankDash: !hideSections.egyptBankDash})}>
+                    <h3 className="text-sm font-bold" style={{ color: '#059669' }}>🇪🇬 Egypt Bank — {egyptBankTxns.length} transactions</h3>
+                    <span className="text-xs text-slate-400">{hideSections.egyptBankDash ? '👁️' : '🙈'}</span>
+                  </div>
+                  {!hideSections.egyptBankDash && (
+                    <div>
+                      <div className="grid grid-cols-4 gap-2 mb-2">
+                        <div className="bg-green-50 rounded-lg p-2 border border-green-200 text-center">
+                          <div className="text-[9px] text-green-600 font-bold">Deposits</div>
+                          <div className="text-xs font-black text-green-700">{fE(totalIn)}</div>
+                        </div>
+                        <div className="bg-red-50 rounded-lg p-2 border border-red-200 text-center">
+                          <div className="text-[9px] text-red-600 font-bold">Withdrawals</div>
+                          <div className="text-xs font-black text-red-700">{fE(totalOut)}</div>
+                        </div>
+                        <div className="bg-amber-50 rounded-lg p-2 border border-amber-200 text-center">
+                          <div className="text-[9px] text-amber-600 font-bold">Unmatched</div>
+                          <div className="text-xs font-black text-amber-700">{unmatched}</div>
+                        </div>
+                        <div className="bg-slate-50 rounded-lg p-2 border border-slate-200 text-center">
+                          <div className="text-[9px] text-slate-600 font-bold">No Category</div>
+                          <div className="text-xs font-black text-slate-700">{uncategorized}</div>
+                        </div>
+                      </div>
+                      <div className="space-y-1 max-h-[250px] overflow-auto">
+                        {recent.map(t => (
+                          <div key={t.id} className="flex items-center justify-between bg-white rounded-lg p-2 border text-xs cursor-pointer hover:bg-slate-50" onClick={() => setTab('egyptbank')}>
+                            <div className="flex-1 min-w-0">
+                              <div className="font-semibold truncate">{t.description || '—'}</div>
+                              <div className="text-[9px] text-slate-400">{t.date} {t.category ? '• ' + (EXPENSE_CATS[t.category] || t.category) : ''}{t.matched_invoice_id ? ' ✅' : ''}</div>
+                            </div>
+                            <div className={'font-bold ml-2 ' + (t.amount > 0 ? 'text-green-600' : 'text-red-600')}>{t.amount > 0 ? '+' : ''}{fE(t.amount)}</div>
+                          </div>
+                        ))}
+                      </div>
+                      <button onClick={() => setTab('egyptbank')} className="w-full mt-2 py-2 text-center text-xs font-bold text-emerald-600 bg-emerald-50 rounded-lg hover:bg-emerald-100 transition">
+                        Open Egypt Bank →
+                      </button>
+                    </div>
+                  )}
+                </div>
+              );
+            })()}
+
+
             {/* ===== USD DOLLAR LEDGER ===== */}
             {(isAdmin || modulePerms['Treasury']) && (() => {
               const usdIn = filteredTreasury.reduce((a, t) => a + Number(t.usd_in || 0), 0);
@@ -3960,9 +3912,74 @@ export default function App() {
               );
             })()}
 
+
+            {/* ===== SALES BY DIVISION + TREASURY CATEGORIES (side by side) ===== */}
+            {isAdmin && (() => {
+              const divData = {};
+              filteredInvoices.forEach(inv => {
+                const cust = customers.find(c => c.id === inv.customer_id || c.name === inv.customer_name);
+                const div = inv.division || cust?.group_name || 'Other';
+                divData[div] = (divData[div] || 0) + Number(inv.total_amount || 0);
+              });
+              const divSorted = Object.entries(divData).sort((a, b) => b[1] - a[1]).slice(0, 8);
+              const divMax = divSorted[0]?.[1] || 1;
+
+              const catData = {};
+              filteredTreasury.forEach(t => {
+                const cat = t.expense_category || 'Uncategorized';
+                if (Number(t.cash_out || 0) > 0) catData[cat] = (catData[cat] || 0) + Number(t.cash_out);
+              });
+              const catSorted = Object.entries(catData).sort((a, b) => b[1] - a[1]).slice(0, 8);
+              const catMax = catSorted[0]?.[1] || 1;
+
+              if (divSorted.length <= 1 && catSorted.length <= 1) return null;
+              return (
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-3 mb-4">
+                  {divSorted.length > 1 && (
+                    <div className="bg-white rounded-xl p-4">
+                      <h3 className="text-xs font-extrabold text-slate-700 mb-3">📊 Sales by Division</h3>
+                      <div className="space-y-2">
+                        {divSorted.map(([div, amt], i) => (
+                          <div key={div}>
+                            <div className="flex justify-between text-[10px] mb-0.5">
+                              <span className="font-semibold text-slate-700 truncate max-w-[60%]">{div}</span>
+                              <span className="font-bold text-blue-600">{fE(amt)}</span>
+                            </div>
+                            <div className="h-2 bg-slate-100 rounded-full overflow-hidden">
+                              <div className="h-full rounded-full transition-all" style={{ width: (amt / divMax * 100) + '%', background: COLORS[i % COLORS.length] }} />
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+                  {catSorted.length > 1 && (
+                    <div className="bg-white rounded-xl p-4">
+                      <h3 className="text-xs font-extrabold text-slate-700 mb-3">💸 Treasury Categories</h3>
+                      <div className="space-y-2">
+                        {catSorted.map(([cat, amt], i) => (
+                          <div key={cat}>
+                            <div className="flex justify-between text-[10px] mb-0.5">
+                              <span className="font-semibold text-slate-700 truncate max-w-[60%]">{cat}</span>
+                              <span className="font-bold text-red-500">{fE(amt)}</span>
+                            </div>
+                            <div className="h-2 bg-slate-100 rounded-full overflow-hidden">
+                              <div className="h-full rounded-full transition-all" style={{ width: (amt / catMax * 100) + '%', background: ['#ef4444','#f97316','#eab308','#22c55e','#06b6d4','#8b5cf6','#ec4899','#64748b'][i % 8] }} />
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+                </div>
+              );
+            })()}
+
+
             {/* ===== PERSONAL DASHBOARD (tickets, reminders, calendar — after financial for admins, first for team) ===== */}
             <PersonalDashboard user={user} userProfile={userProfile} isAdmin={isAdmin}
               invoices={invoices} customers={customers} navigate={navigate} fE={fE} users={teamUsers} />
+
 
             {/* ===== TEAM ACTIVITY FEED ===== */}
             {activityFeed.length > 0 && (
@@ -4005,6 +4022,7 @@ export default function App() {
                 </div>
               </div>
             )}
+
           </div>
         )}
 
