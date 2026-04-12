@@ -1864,11 +1864,11 @@ export default function App() {
                       return words.every(w => haystack.includes(w));
                     }).slice(0, 15);
                   const egyptResults = egyptBankTxns
-                    .filter(t => !t.matched_invoice_id && Number(t.amount) > 0)
+                    .filter(t => Number(t.amount) > 0 && !t.hidden)
                     .filter(t => {
                       const haystack = [t.description || '', t.date || '', String(t.amount || 0)].join(' ');
                       return words.every(w => haystack.includes(w));
-                    }).slice(0, 15);
+                    }).slice(0, 20);
                   return (
                     <div className="max-h-[300px] overflow-auto rounded border border-purple-200 bg-white">
                       {treasuryResults.length > 0 && (
@@ -1889,12 +1889,19 @@ export default function App() {
                       {egyptResults.length > 0 && (
                         <div className="px-2 py-1 bg-emerald-100 text-[9px] font-bold text-emerald-700 uppercase sticky top-0">🇪🇬 Egypt Bank / بنك مصر</div>
                       )}
-                      {egyptResults.map(txn => (
-                        <div key={'eb_'+txn.id} className="flex justify-between items-center px-3 py-2 border-b border-slate-50 hover:bg-emerald-50">
+                      {egyptResults.map(txn => {
+                        const alreadyLinked = txn.matched_invoice_id;
+                        const linkedToThis = txn.matched_invoice_id === selectedInvoice.id;
+                        const linkedInv = alreadyLinked ? (invoices || []).find(i => i.id === txn.matched_invoice_id) : null;
+                        return (
+                        <div key={'eb_'+txn.id} className="flex justify-between items-center px-3 py-2 border-b border-slate-50 hover:bg-emerald-50" style={{ opacity: alreadyLinked && !linkedToThis ? 0.6 : 1 }}>
                           <div className="flex-1">
-                            <div className="text-xs font-semibold">{txn.description}</div>
+                            <div className="text-xs font-semibold" style={{ wordBreak: 'break-word' }}>{txn.description}</div>
                             <div className="text-[10px] text-emerald-600">{txn.date} | {fE(txn.amount)} 🇪🇬</div>
+                            {linkedToThis && <div className="text-[10px] text-green-600 font-bold">✅ Linked to this invoice</div>}
+                            {alreadyLinked && !linkedToThis && <div className="text-[10px] text-amber-500">⚠️ Linked to {linkedInv?.customer || linkedInv?.invoice_number || 'another invoice'}</div>}
                           </div>
+                          {!alreadyLinked && (
                           <button onClick={async () => {
                             try {
                               await dbUpdate('egypt_bank_transactions', txn.id, { matched_invoice_id: selectedInvoice.id, matched_at: new Date().toISOString(), matched_by: userProfile?.id }, userProfile?.id);
@@ -1908,10 +1915,14 @@ export default function App() {
                             className="px-3 py-1.5 bg-emerald-600 text-white rounded text-xs font-semibold hover:bg-emerald-700 ml-2">
                             🔗 Link
                           </button>
+                          )}
+                        </div>
+                        );
+                      })}
                         </div>
                       ))}
                       {treasuryResults.length === 0 && egyptResults.length === 0 && (
-                        <div className="px-3 py-3 text-xs text-slate-400 text-center">No unlinked transactions found</div>
+                        <div className="px-3 py-3 text-xs text-slate-400 text-center">No matching transactions found</div>
                       )}
                     </div>
                   );

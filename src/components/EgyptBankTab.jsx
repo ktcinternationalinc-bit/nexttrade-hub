@@ -17,6 +17,8 @@ export default function EgyptBankTab({ user, userProfile, isAdmin, invoices, onR
   const [showHidden, setShowHidden] = useState(false);
   const [dateFrom, setDateFrom] = useState('');
   const [dateTo, setDateTo] = useState('');
+  const [filterMonth, setFilterMonth] = useState('');
+  const [filterYear, setFilterYear] = useState('');
   const [matchingTxn, setMatchingTxn] = useState(null);
   const [searchInv, setSearchInv] = useState('');
   const [showAddAccount, setShowAddAccount] = useState(false);
@@ -62,8 +64,25 @@ export default function EgyptBankTab({ user, userProfile, isAdmin, invoices, onR
 
   // ───── Import ─────
   const handleFile = async (e) => {
-    const file = e.target.files[0];
-    if (!file) return;
+    const files = Array.from(e.target.files || []);
+    if (files.length === 0) return;
+    
+    let allParsed = [];
+    for (const file of files) {
+      const parsed = await parseOneFile(file);
+      allParsed = [...allParsed, ...parsed];
+    }
+    if (allParsed.length === 0) {
+      alert('No transactions found in ' + files.length + ' file(s). Check column format.');
+      return;
+    }
+    // Re-number rows
+    allParsed = allParsed.map((t, i) => ({ ...t, _row: i + 1 }));
+    setImportData(allParsed);
+    setImportStep('preview');
+  };
+
+  const parseOneFile = async (file) => {
     const data = await file.arrayBuffer();
     const wb = XLSX.read(data, { cellText: true, cellDates: false });
     const ws = wb.Sheets[wb.SheetNames[0]];
@@ -204,9 +223,7 @@ export default function EgyptBankTab({ user, userProfile, isAdmin, invoices, onR
         .map((t, i) => ({ ...t, _row: i + 1, description: t.description.replace(/\s+/g, ' ').trim() }));
 
       if (parsed.length > 0) {
-        setImportData(parsed);
-        setImportStep('preview');
-        return;
+        return parsed;
       }
     }
 
@@ -271,11 +288,10 @@ export default function EgyptBankTab({ user, userProfile, isAdmin, invoices, onR
         'Sample row: ' + (sample[0] || 'empty') + '\n\n' +
         'Tip: Make sure your file has columns named Date, Description, and Amount (or Credit/Debit).'
       );
-      return;
+      return [];
     }
 
-    setImportData(parsed);
-    setImportStep('preview');
+    return parsed;
   };
 
   const doImport = async () => {
@@ -314,7 +330,46 @@ export default function EgyptBankTab({ user, userProfile, isAdmin, invoices, onR
     setImportStats({ imported, skipped, duplicates, total: toImport.length });
     setImportStep('done');
     await logActivity(myId, `Imported ${imported} Egypt bank transactions (${duplicates} duplicates skipped)`, 'finance');
-    load();
+    await load();
+    // Auto-categorize new transactions based on existing patterns
+    await autoCategorizeTxns();
+  };
+
+  // ───── Auto-categorize based on matching descriptions ─────
+  const normalizeDesc = (d) => (d || '').replace(/FT\w+|TT\w+|CK\d+|LCO\d+|\d{10,}|\\\\[A-Z]+/gi, '').replace(/\s+/g, ' ').trim().toLowerCase().substring(0, 40);
+  
+  const autoCategorizeTxns = async () => {
+    // Build rules from already-categorized transactions
+    const rules = {};
+    transactions.filter(t => t.category).forEach(t => {
+      const key = normalizeDesc(t.description);
+      if (key.length >= 5) {
+        rules[key] = { category: t.category, subcategory: t.subcategory || '' };
+      }
+    });
+    
+    // Find uncategorized and try to match
+    const uncategorized = transactions.filter(t => !t.category);
+    let matched = 0;
+    for (const t of uncategorized) {
+      const key = normalizeDesc(t.description);
+      if (rules[key]) {
+        try {
+          await dbUpdate('egypt_bank_transactions', t.id, { category: rules[key].category, subcategory: rules[key].subcategory || null }, myId);
+          matched++;
+        } catch(e) {}
+      }
+    }
+    if (matched > 0) {
+      setTransactions(prev => prev.map(t => {
+        if (!t.category) {
+          const key = normalizeDesc(t.description);
+          if (rules[key]) return { ...t, category: rules[key].category, subcategory: rules[key].subcategory || '' };
+        }
+        return t;
+      }));
+    }
+    return matched;
   };
 
   // ───── Match ─────
@@ -359,8 +414,10 @@ export default function EgyptBankTab({ user, userProfile, isAdmin, invoices, onR
     }
     if (dateFrom) arr = arr.filter(t => t.date >= dateFrom);
     if (dateTo) arr = arr.filter(t => t.date <= dateTo);
+    if (filterYear) arr = arr.filter(t => t.date && t.date.substring(0, 4) === filterYear);
+    if (filterMonth) arr = arr.filter(t => t.date && t.date.substring(5, 7) === filterMonth);
     return arr;
-  }, [transactions, selAccount, matchFilter, catFilter, search, dateFrom, dateTo, isSuperAdmin, showHidden]);
+  }, [transactions, selAccount, matchFilter, catFilter, search, dateFrom, dateTo, filterMonth, filterYear, isSuperAdmin, showHidden]);
 
   const totalIn = filtered.filter(t => t.amount > 0).reduce((s, t) => s + t.amount, 0);
   const totalOut = filtered.filter(t => t.amount < 0).reduce((s, t) => s + Math.abs(t.amount), 0);
@@ -459,8 +516,8 @@ export default function EgyptBankTab({ user, userProfile, isAdmin, invoices, onR
                 <p className="text-[10px] text-amber-600 font-semibold mb-3">⚠️ No accounts — a default account will be auto-created on import</p>
               )}
               <label className="px-6 py-3 bg-blue-500 text-white rounded-lg text-sm font-semibold cursor-pointer hover:bg-blue-600 inline-block">
-                Select File / اختر ملف
-                <input type="file" accept=".xlsx,.xls,.csv" className="hidden" onChange={async (e) => {
+                Select File(s) / اختر ملفات
+                <input type="file" accept=".xlsx,.xls,.csv" multiple className="hidden" onChange={async (e) => {
                   if (!e.target.files[0]) return;
                   let accId = importAccount;
                   if (!accId && accounts.length === 0) {
@@ -476,16 +533,37 @@ export default function EgyptBankTab({ user, userProfile, isAdmin, invoices, onR
             </div>
           )}
 
-          {importStep === 'preview' && (
+          {importStep === 'preview' && (() => {
+            const included = importData.filter(r => r._include);
+            const totalDeposits = included.filter(r => r.amount > 0).reduce((s, r) => s + r.amount, 0);
+            const totalWithdrawals = included.filter(r => r.amount < 0).reduce((s, r) => s + Math.abs(r.amount), 0);
+            return (
             <div>
-              <div className="flex justify-between items-center mb-3">
-                <h3 className="font-bold text-sm">Preview — {importData.filter(r => r._include).length} of {importData.length} rows</h3>
+              <div className="flex justify-between items-center mb-3 flex-wrap gap-2">
+                <h3 className="font-bold text-sm">Preview — {included.length} of {importData.length} rows</h3>
                 <div className="flex gap-2">
                   <button onClick={() => { setImportStep('select'); setImportData([]); }} className="px-3 py-1.5 bg-slate-100 rounded-lg text-xs font-semibold">← Back</button>
-                  <button onClick={doImport} disabled={!importAccount} className="px-4 py-2 bg-green-500 text-white rounded-lg text-xs font-semibold disabled:opacity-50">✅ Import {importData.filter(r => r._include).length} rows</button>
+                  <button onClick={doImport} disabled={!importAccount} className="px-4 py-2 bg-green-500 text-white rounded-lg text-xs font-semibold disabled:opacity-50">✅ Import {included.length} rows</button>
                 </div>
               </div>
               {!importAccount && <p className="text-xs text-red-500 font-semibold mb-2">⚠️ Select an account above first</p>}
+              {/* Summary */}
+              <div className="grid grid-cols-3 gap-2 mb-3">
+                <div className="bg-green-50 rounded-lg p-2 border border-green-200 text-center">
+                  <div className="text-[9px] text-green-600 font-bold">Deposits</div>
+                  <div className="text-sm font-black text-green-700">+{totalDeposits.toLocaleString(undefined, {minimumFractionDigits:2})}</div>
+                  <div className="text-[9px] text-green-500">{included.filter(r => r.amount > 0).length} transactions</div>
+                </div>
+                <div className="bg-red-50 rounded-lg p-2 border border-red-200 text-center">
+                  <div className="text-[9px] text-red-600 font-bold">Withdrawals</div>
+                  <div className="text-sm font-black text-red-700">-{totalWithdrawals.toLocaleString(undefined, {minimumFractionDigits:2})}</div>
+                  <div className="text-[9px] text-red-500">{included.filter(r => r.amount < 0).length} transactions</div>
+                </div>
+                <div className="bg-blue-50 rounded-lg p-2 border border-blue-200 text-center">
+                  <div className="text-[9px] text-blue-600 font-bold">Net</div>
+                  <div className={'text-sm font-black ' + ((totalDeposits - totalWithdrawals) >= 0 ? 'text-blue-700' : 'text-red-700')}>{(totalDeposits - totalWithdrawals).toLocaleString(undefined, {minimumFractionDigits:2})}</div>
+                </div>
+              </div>
               <div className="overflow-auto max-h-[500px] bg-white rounded-xl border">
                 <table className="w-full border-collapse text-xs">
                   <thead className="sticky top-0 bg-slate-50">
@@ -493,7 +571,8 @@ export default function EgyptBankTab({ user, userProfile, isAdmin, invoices, onR
                       <th className="px-2 py-2 text-left">✓</th>
                       <th className="px-2 py-2 text-left">Date</th>
                       <th className="px-2 py-2 text-left">Description</th>
-                      <th className="px-2 py-2 text-right">Amount</th>
+                      <th className="px-2 py-2 text-right text-green-600">Deposit</th>
+                      <th className="px-2 py-2 text-right text-red-600">Withdrawal</th>
                     </tr>
                   </thead>
                   <tbody>
@@ -501,15 +580,17 @@ export default function EgyptBankTab({ user, userProfile, isAdmin, invoices, onR
                       <tr key={i} className={r._include ? '' : 'opacity-30'}>
                         <td className="px-2 py-1.5"><input type="checkbox" checked={r._include} onChange={() => { const d = [...importData]; d[i]._include = !d[i]._include; setImportData(d); }} /></td>
                         <td className="px-2 py-1.5">{r.date}</td>
-                        <td className="px-2 py-1.5 max-w-[300px]" style={{ wordBreak: 'break-word' }}>{r.description}</td>
-                        <td className={'px-2 py-1.5 text-right font-bold ' + (r.amount >= 0 ? 'text-green-600' : 'text-red-600')}>{r.amount >= 0 ? '+' : ''}{r.amount.toLocaleString(undefined, { minimumFractionDigits: 2 })}</td>
+                        <td className="px-2 py-1.5" style={{ wordBreak: 'break-word' }}>{r.description}</td>
+                        <td className="px-2 py-1.5 text-right font-bold text-green-600">{r.amount > 0 ? '+' + r.amount.toLocaleString(undefined, {minimumFractionDigits:2}) : ''}</td>
+                        <td className="px-2 py-1.5 text-right font-bold text-red-600">{r.amount < 0 ? Math.abs(r.amount).toLocaleString(undefined, {minimumFractionDigits:2}) : ''}</td>
                       </tr>
                     ))}
                   </tbody>
                 </table>
               </div>
             </div>
-          )}
+            );
+          })()}
 
           {importStep === 'importing' && (
             <div className="text-center py-12">
@@ -547,8 +628,8 @@ export default function EgyptBankTab({ user, userProfile, isAdmin, invoices, onR
             </div>
             <div className="flex gap-2">
               <label className="px-4 py-2 bg-blue-500 text-white rounded-lg text-xs font-bold cursor-pointer hover:bg-blue-600">
-                📁 Select Excel/CSV File
-                <input type="file" accept=".xlsx,.xls,.csv" className="hidden" onChange={async (e) => {
+                📁 Select File(s)
+                <input type="file" accept=".xlsx,.xls,.csv" multiple className="hidden" onChange={async (e) => {
                   if (e.target.files[0]) {
                     // Auto-create default account if none exist
                     let accId = importAccount;
@@ -616,58 +697,104 @@ export default function EgyptBankTab({ user, userProfile, isAdmin, invoices, onR
             <input value={search} onChange={e => setSearch(e.target.value)} placeholder="Search..." className="border rounded-lg px-2 py-1.5 text-xs flex-1 min-w-[100px]" />
             <select value={catFilter} onChange={e => setCatFilter(e.target.value)} className="border rounded-lg px-2 py-1.5 text-xs">
               <option value="all">All Categories</option>
-              <option value="uncategorized">⚠️ Uncategorized</option>
+              <option value="uncategorized">⚠️ Uncategorized ({transactions.filter(t => !t.category && !t.hidden).length})</option>
               {Object.entries(EXPENSE_CATS).map(([ar, en]) => <option key={ar} value={ar}>{en}</option>)}
             </select>
+            {transactions.filter(t => !t.category && !t.hidden).length > 0 && (
+              <button onClick={async () => {
+                const count = await autoCategorizeTxns();
+                alert(count > 0 ? `Auto-categorized ${count} transactions based on matching descriptions` : 'No matches found. Categorize a few transactions manually first — future ones with similar descriptions will auto-match.');
+              }} className="px-2 py-1.5 bg-amber-100 text-amber-700 rounded-lg text-[10px] font-bold border border-amber-200 hover:bg-amber-200">
+                🤖 Auto-categorize
+              </button>
+            )}
           </div>
-          <div className="flex gap-2 mb-3 items-center">
-            <span className="text-[10px] text-slate-500">Date:</span>
+          <div className="flex gap-2 mb-3 items-center flex-wrap">
+            <select value={filterYear} onChange={e => setFilterYear(e.target.value)} className="border rounded-lg px-2 py-1.5 text-xs font-semibold">
+              <option value="">All Years</option>
+              {[...new Set(transactions.map(t => t.date ? t.date.substring(0, 4) : null).filter(Boolean))].sort().reverse().map(y => (
+                <option key={y} value={y}>{y}</option>
+              ))}
+            </select>
+            <select value={filterMonth} onChange={e => setFilterMonth(e.target.value)} className="border rounded-lg px-2 py-1.5 text-xs font-semibold">
+              <option value="">All Months</option>
+              {['01','02','03','04','05','06','07','08','09','10','11','12'].map(m => (
+                <option key={m} value={m}>{['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'][parseInt(m)-1]}</option>
+              ))}
+            </select>
+            <span className="text-[10px] text-slate-400">or</span>
             <input type="date" value={dateFrom} onChange={e => setDateFrom(e.target.value)} className="border rounded-lg px-2 py-1 text-xs" />
             <span className="text-[10px] text-slate-400">→</span>
             <input type="date" value={dateTo} onChange={e => setDateTo(e.target.value)} className="border rounded-lg px-2 py-1 text-xs" />
-            {(dateFrom || dateTo) && <button onClick={() => { setDateFrom(''); setDateTo(''); }} className="text-[10px] text-red-500 font-semibold">✕ Clear</button>}
+            {(dateFrom || dateTo || filterMonth || filterYear) && <button onClick={() => { setDateFrom(''); setDateTo(''); setFilterMonth(''); setFilterYear(''); }} className="text-[10px] text-red-500 font-semibold">✕ Clear</button>}
+            <span className="text-[10px] text-slate-400 ml-auto">{filtered.length} transactions</span>
           </div>
 
           {/* Transaction List */}
-          {/* Bulk Action Bar (Super Admin) */}
-          {isSuperAdmin && selectedTxns.size > 0 && (
-            <div className="bg-red-50 rounded-xl p-3 mb-2 border border-red-200 flex items-center justify-between flex-wrap gap-2">
-              <span className="text-xs font-bold text-red-800">{selectedTxns.size} selected</span>
-              <div className="flex gap-2">
-                <button onClick={async () => {
-                  if (!confirm(`Delete ${selectedTxns.size} transactions permanently?`)) return;
-                  for (const id of selectedTxns) { try { await dbDelete('egypt_bank_transactions', id, myId); } catch(e) {} }
-                  setTransactions(prev => prev.filter(t => !selectedTxns.has(t.id)));
-                  setSelectedTxns(new Set());
-                }} className="px-3 py-1.5 bg-red-500 text-white rounded-lg text-xs font-bold">🗑️ Delete Selected</button>
-                <button onClick={async () => {
-                  for (const id of selectedTxns) { try { await dbUpdate('egypt_bank_transactions', id, { hidden: true }, myId); } catch(e) {} }
-                  setTransactions(prev => prev.map(t => selectedTxns.has(t.id) ? {...t, hidden: true} : t));
-                  setSelectedTxns(new Set());
-                }} className="px-3 py-1.5 bg-slate-700 text-white rounded-lg text-xs font-bold">🔒 Hide Selected</button>
-                <button onClick={() => setSelectedTxns(new Set())} className="px-3 py-1.5 border rounded-lg text-xs font-semibold">✕ Clear</button>
+          {/* Bulk Action Bar */}
+          {selectedTxns.size > 0 && (
+            <div className="bg-blue-50 rounded-xl p-3 mb-2 border border-blue-200">
+              <div className="flex items-center justify-between flex-wrap gap-2 mb-2">
+                <span className="text-xs font-bold text-blue-800">{selectedTxns.size} selected</span>
+                <button onClick={() => setSelectedTxns(new Set())} className="text-[10px] text-slate-500 font-semibold">✕ Clear</button>
               </div>
+              {/* Bulk Categorize */}
+              <div className="flex items-center gap-2 mb-2 flex-wrap">
+                <span className="text-[10px] font-bold text-slate-600">Bulk Category:</span>
+                <select id="bulkCat" className="text-[10px] border rounded px-2 py-1 bg-white" defaultValue="">
+                  <option value="">Select...</option>
+                  {Object.entries(EXPENSE_CATS).map(([ar, en]) => <option key={ar} value={ar}>{en}</option>)}
+                </select>
+                <input id="bulkSub" placeholder="Subcategory" className="text-[10px] border rounded px-2 py-1 bg-white" style={{ maxWidth: 100 }} />
+                <button onClick={async () => {
+                  const cat = document.getElementById('bulkCat').value;
+                  const sub = document.getElementById('bulkSub').value.trim();
+                  if (!cat && !sub) { alert('Select a category or enter subcategory'); return; }
+                  const updates = {};
+                  if (cat) updates.category = cat;
+                  if (sub) updates.subcategory = sub;
+                  for (const id of selectedTxns) { try { await dbUpdate('egypt_bank_transactions', id, updates, myId); } catch(e) {} }
+                  setTransactions(prev => prev.map(t => selectedTxns.has(t.id) ? {...t, ...updates} : t));
+                  setSelectedTxns(new Set());
+                }} className="px-3 py-1 bg-blue-500 text-white rounded-lg text-[10px] font-bold">Apply</button>
+              </div>
+              {/* Super Admin: Delete + Hide */}
+              {isSuperAdmin && (
+                <div className="flex gap-2">
+                  <button onClick={async () => {
+                    if (!confirm(`Delete ${selectedTxns.size} transactions permanently?`)) return;
+                    for (const id of selectedTxns) { try { await dbDelete('egypt_bank_transactions', id, myId); } catch(e) {} }
+                    setTransactions(prev => prev.filter(t => !selectedTxns.has(t.id)));
+                    setSelectedTxns(new Set());
+                  }} className="px-3 py-1.5 bg-red-500 text-white rounded-lg text-xs font-bold">🗑️ Delete</button>
+                  <button onClick={async () => {
+                    for (const id of selectedTxns) { try { await dbUpdate('egypt_bank_transactions', id, { hidden: true }, myId); } catch(e) {} }
+                    setTransactions(prev => prev.map(t => selectedTxns.has(t.id) ? {...t, hidden: true} : t));
+                    setSelectedTxns(new Set());
+                  }} className="px-3 py-1.5 bg-slate-700 text-white rounded-lg text-xs font-bold">🔒 Hide</button>
+                </div>
+              )}
             </div>
           )}
 
-          {/* Super Admin: Show Hidden toggle */}
-          {isSuperAdmin && (
-            <div className="flex items-center gap-2 mb-2">
+          {/* Show Hidden toggle (Super Admin) + Select All (Everyone) */}
+          <div className="flex items-center gap-2 mb-2 flex-wrap">
+            {isSuperAdmin && (
               <button onClick={() => { setShowHidden(!showHidden); setSelectedTxns(new Set()); }}
                 className={'px-3 py-1 rounded-lg text-[10px] font-semibold ' + (showHidden ? 'bg-slate-700 text-white' : 'bg-slate-100 text-slate-500')}>
                 {showHidden ? '🔓 Showing Hidden' : '🔒 Show Hidden'}
               </button>
-              {showHidden && <span className="text-[10px] text-slate-400">{transactions.filter(t => t.hidden).length} hidden transactions</span>}
-              {filtered.length > 0 && (
-                <button onClick={() => {
-                  if (selectedTxns.size === filtered.length) setSelectedTxns(new Set());
-                  else setSelectedTxns(new Set(filtered.map(t => t.id)));
-                }} className="text-[10px] text-blue-500 font-semibold ml-auto">
-                  {selectedTxns.size === filtered.length ? '☐ Deselect All' : '☑ Select All'}
-                </button>
-              )}
-            </div>
-          )}
+            )}
+            {isSuperAdmin && showHidden && <span className="text-[10px] text-slate-400">{transactions.filter(t => t.hidden).length} hidden</span>}
+            {filtered.length > 0 && (
+              <button onClick={() => {
+                if (selectedTxns.size === filtered.length) setSelectedTxns(new Set());
+                else setSelectedTxns(new Set(filtered.map(t => t.id)));
+              }} className="text-[10px] text-blue-500 font-semibold ml-auto">
+                {selectedTxns.size === filtered.length ? '☐ Deselect All' : '☑ Select All'}
+              </button>
+            )}
+          </div>
 
           {filtered.length === 0 ? (
             <div className="text-center py-8 text-slate-400 text-xs">
@@ -684,14 +811,12 @@ export default function EgyptBankTab({ user, userProfile, isAdmin, invoices, onR
                 return (
                   <div key={t.id} className="bg-white rounded-xl p-3 shadow-sm border" style={{ opacity: isHidden ? 0.5 : 1, borderColor: isSelected ? '#3b82f6' : isHidden ? '#fca5a5' : undefined, borderWidth: isSelected ? 2 : 1 }}>
                     <div className="flex items-start gap-2">
-                      {/* Checkbox (Super Admin) */}
-                      {isSuperAdmin && (
-                        <input type="checkbox" checked={isSelected} onChange={() => {
-                          const next = new Set(selectedTxns);
-                          if (isSelected) next.delete(t.id); else next.add(t.id);
-                          setSelectedTxns(next);
-                        }} className="mt-1 flex-shrink-0" />
-                      )}
+                      {/* Checkbox */}
+                      <input type="checkbox" checked={isSelected} onChange={() => {
+                        const next = new Set(selectedTxns);
+                        if (isSelected) next.delete(t.id); else next.add(t.id);
+                        setSelectedTxns(next);
+                      }} className="mt-1 flex-shrink-0" />
                       <div className="flex-1 min-w-0">
                         {/* Full description — no truncate */}
                         <div className="font-semibold text-sm" style={{ wordBreak: 'break-word' }}>{t.description || '—'}</div>
