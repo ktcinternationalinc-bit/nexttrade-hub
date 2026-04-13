@@ -24,19 +24,60 @@ export default function AdminTab({ user, userProfile, users, isAdmin, customers 
   const [auditLogs, setAuditLogs] = useState([]);
   const [announcements, setAnnouncements] = useState([]);
   const [annAcks, setAnnAcks] = useState([]);
+  const [sessions, setSessions] = useState([]);
   const [msgFilter, setMsgFilter] = useState('all');
   const [loaded, setLoaded] = useState(false);
   const [selUser, setSelUser] = useState('all');
   const [section, setSection] = useState('scorecards');
-  const [auditFilter, setAuditFilter] = useState('all');
   const [drillStage, setDrillStage] = useState(null);
   const [drillUser, setDrillUser] = useState(null);
+  const [viewTicket, setViewTicket] = useState(null);
+  const [ticketComments, setTicketComments] = useState([]);
   const [dateFrom, setDateFrom] = useState(() => { const d = new Date(); d.setDate(d.getDate() - 30); return d.toISOString().substring(0, 10); });
   const [dateTo, setDateTo] = useState(new Date().toISOString().substring(0, 10));
 
   const myId = userProfile?.id || user?.id;
   const isSuperAdmin = userProfile?.role === 'super_admin';
   const getUserName = (id) => (users || []).find(u => u.id === id)?.name || '';
+
+  // Helper: resolve UUIDs in text to human-readable names
+  const resolveIds = (text) => {
+    if (!text || typeof text !== 'string') return text || '';
+    let resolved = text;
+    (users || []).forEach(u => {
+      if (u.id && u.name) resolved = resolved.replaceAll(u.id, u.name);
+    });
+    return resolved;
+  };
+
+  // Helper: resolve UUID values in audit log objects
+  const resolveAuditValue = (key, val) => {
+    if (!val) return String(val);
+    const s = String(val);
+    const idFields = ['assigned_to', 'created_by', 'updated_by', 'user_id', 'changed_by', 'sales_rep', 'posted_by'];
+    if (idFields.includes(key)) {
+      const name = getUserName(s);
+      return name || s.substring(0, 8) + '…';
+    }
+    // If value looks like a UUID, try to resolve
+    if (s.match(/^[0-9a-f]{8}-[0-9a-f]{4}-/i)) {
+      const name = getUserName(s);
+      if (name) return name;
+      // Try to find ticket
+      const ticket = tickets.find(t => t.id === s);
+      if (ticket) return ticket.ticket_number || ticket.title?.substring(0, 30);
+    }
+    return s.substring(0, 50);
+  };
+
+  // Open ticket detail popup with comments
+  const openTicketDetail = async (ticket) => {
+    setViewTicket(ticket);
+    try {
+      const { data } = await supabase.from('ticket_comments').select('*').eq('ticket_id', ticket.id).order('created_at', { ascending: true });
+      setTicketComments(data || []);
+    } catch(e) { setTicketComments([]); }
+  };
 
   // Filter visible team members based on role
   const visibleUsers = useMemo(() => {
@@ -54,6 +95,7 @@ export default function AdminTab({ user, userProfile, users, isAdmin, customers 
     try { const { data } = await supabase.from('audit_log').select('*').gte('created_at', dateFrom + 'T00:00:00').order('created_at', { ascending: false }).limit(300); setAuditLogs(data || []); } catch(e) {}
     try { const { data } = await supabase.from('announcements').select('*').order('created_at', { ascending: false }).limit(100); setAnnouncements(data || []); } catch(e) {}
     try { const { data } = await supabase.from('announcement_acks').select('*'); setAnnAcks(data || []); } catch(e) {}
+    try { const { data } = await supabase.from('user_sessions').select('*').gte('date', dateFrom).lte('date', dateTo).order('login_at', { ascending: false }).limit(500); setSessions(data || []); } catch(e) {}
     setLoaded(true);
   };
 
@@ -126,6 +168,7 @@ export default function AdminTab({ user, userProfile, users, isAdmin, customers 
   const filteredLogs = useMemo(() => { let arr = logs; if (selUser !== 'all') arr = arr.filter(l => l.user_id === selUser); return arr; }, [logs, selUser]);
   const filteredTickets = useMemo(() => { let arr = tickets; if (selUser !== 'all') arr = arr.filter(t => t.assigned_to === selUser || t.created_by === selUser); return arr; }, [tickets, selUser]);
   const filteredAudit = useMemo(() => { let arr = auditLogs; if (selUser !== 'all') arr = arr.filter(a => a.changed_by === selUser); return arr; }, [auditLogs, selUser]);
+  const filteredSessions = useMemo(() => { let arr = sessions; if (selUser !== 'all') arr = arr.filter(s => s.user_id === selUser); return arr; }, [sessions, selUser]);
   const selUserName = selUser !== 'all' ? getUserName(selUser) : 'All Team';
 
   return (<div>
@@ -145,7 +188,7 @@ export default function AdminTab({ user, userProfile, users, isAdmin, customers 
 
     {/* Section tabs */}
     <div className="flex gap-1 mb-3 flex-wrap">
-      {[['scorecards','📊 Scorecards'],['pipeline','🏆 Sales Pipeline'],['messages','📢 Messages'],['activity','📋 Activity'],['tickets','🎫 Tickets'],['audit','🔍 Audit']].map(([v,l]) => (
+      {[['scorecards','📊 Scorecards'],['pipeline','🏆 Sales Pipeline'],['logins','🕐 Logins'],['messages','📢 Messages'],['activity','📋 Activity'],['tickets','🎫 Tickets'],['audit','🔍 Audit']].map(([v,l]) => (
         <button key={v} onClick={() => setSection(v)}
           className={'px-3 py-1.5 rounded-lg text-xs font-semibold transition ' + (section === v ? 'bg-slate-900 text-white' : 'bg-slate-100 text-slate-500')}>{l}</button>
       ))}
@@ -445,12 +488,28 @@ export default function AdminTab({ user, userProfile, users, isAdmin, customers 
           {filteredLogs.map(l => {
             var userName = getUserName(l.user_id);
             var cat = l.log_category || 'other';
-            var icons = {ticket:'🎫',crm:'🤝',shipping:'🛳️',customs:'🚢',calendar:'📅',finance:'💰',manual:'✏️',other:'⚡'};
+            var icons = {ticket:'🎫',crm:'🤝',shipping:'🛳️',customs:'🚢',calendar:'📅',finance:'💰',manual:'✏️',other:'⚡',login:'🟢'};
+
+            // Make ticket numbers clickable in entry_text
+            var resolvedText = resolveIds(l.entry_text || '');
+            var textParts = resolvedText.split(/(TKT-\d+)/g);
+
             return (
               <div key={l.id} className="flex items-start gap-2 py-2 border-b border-slate-50">
                 <span className="text-sm mt-0.5">{icons[cat] || (l.auto_generated ? '⚡' : '✏️')}</span>
                 <div className="flex-1">
-                  <div className="text-xs">{l.entry_text}</div>
+                  <div className="text-xs">
+                    {textParts.map(function(part, idx) {
+                      if (/^TKT-\d+$/.test(part)) {
+                        var matchedTicket = tickets.find(function(t) { return t.ticket_number === part; });
+                        if (matchedTicket) {
+                          return <span key={idx} className="text-blue-600 font-bold cursor-pointer hover:underline" onClick={function() { openTicketDetail(matchedTicket); }}>{part}</span>;
+                        }
+                        return <span key={idx} className="text-blue-500 font-bold">{part}</span>;
+                      }
+                      return <span key={idx}>{part}</span>;
+                    })}
+                  </div>
                   <div className="text-[10px] text-slate-400 mt-0.5">
                     <span className="text-blue-500 font-semibold mr-2">{userName}</span>
                     {l.log_date} {l.log_time ? l.log_time.substring(0, 5) : ''}
@@ -483,18 +542,21 @@ export default function AdminTab({ user, userProfile, users, isAdmin, customers 
               <th className="px-2 py-2 text-[10px]">Status</th>
               <th className="px-2 py-2 text-[10px]">Priority</th>
               <th className="px-2 py-2 text-[10px] text-left">Assigned</th>
+              <th className="px-2 py-2 text-[10px] text-left">Created By</th>
               <th className="px-2 py-2 text-[10px]">Due</th>
             </tr></thead>
             <tbody>
               {filteredTickets.filter(t=>t.status!=='Closed').concat(filteredTickets.filter(t=>t.status==='Closed').slice(0,20)).map(t => {
                 var isOverdue = t.due_date && t.due_date < todayStr && t.status !== 'Closed';
                 return (
-                  <tr key={t.id} className={'border-b border-slate-50 ' + (isOverdue ? 'bg-red-50' : t.status === 'Closed' ? 'opacity-50' : '')}>
+                  <tr key={t.id} className={'border-b border-slate-50 cursor-pointer hover:bg-blue-50 ' + (isOverdue ? 'bg-red-50' : t.status === 'Closed' ? 'opacity-50' : '')}
+                    onClick={() => openTicketDetail(t)}>
                     <td className="px-2 py-2 text-blue-500 font-mono text-[10px]">{t.ticket_number || '—'}</td>
                     <td className="px-2 py-2 font-semibold max-w-[200px] truncate">{t.title}</td>
                     <td className="px-2 py-2 text-center"><span className="px-2 py-0.5 rounded-full text-[9px] font-bold text-white" style={{background:STATUS_COLORS[t.status]||'#6b7280'}}>{t.status}</span></td>
                     <td className="px-2 py-2 text-center"><span className={'font-bold ' + (t.priority==='high'?'text-red-500':t.priority==='low'?'text-green-500':'text-amber-500')}>{t.priority}</span></td>
                     <td className="px-2 py-2"><span className={t.assigned_to ? 'text-purple-600 font-semibold' : 'text-red-400'}>{t.assigned_to ? getUserName(t.assigned_to) : 'UNASSIGNED'}</span></td>
+                    <td className="px-2 py-2 text-[10px]">{getUserName(t.created_by) || '—'}</td>
                     <td className={'px-2 py-2 text-center ' + (isOverdue ? 'text-red-600 font-bold' : '')}>{t.due_date || '—'}</td>
                   </tr>
                 );
@@ -507,93 +569,79 @@ export default function AdminTab({ user, userProfile, users, isAdmin, customers 
 
     {/* ===== AUDIT LOG ===== */}
     {section === 'audit' && (<div>
-      <div className="bg-white rounded-xl p-4 mb-3">
-        <div className="flex items-center justify-between mb-3">
-          <h3 className="text-sm font-bold">{selUserName} — Audit Log ({filteredAudit.length})</h3>
-          <div className="flex gap-1">
-            <button onClick={() => setAuditFilter('all')} className={'px-2 py-1 rounded text-[10px] font-semibold ' + (auditFilter === 'all' ? 'bg-slate-800 text-white' : 'bg-slate-100')}>All</button>
-            <button onClick={() => setAuditFilter('late')} className={'px-2 py-1 rounded text-[10px] font-semibold ' + (auditFilter === 'late' ? 'bg-red-600 text-white' : 'bg-red-50 text-red-600')}>🚨 Late Edits (24h+)</button>
-            <button onClick={() => setAuditFilter('sensitive')} className={'px-2 py-1 rounded text-[10px] font-semibold ' + (auditFilter === 'sensitive' ? 'bg-amber-600 text-white' : 'bg-amber-50 text-amber-600')}>⚠️ Sensitive</button>
-            <button onClick={() => setAuditFilter('delete')} className={'px-2 py-1 rounded text-[10px] font-semibold ' + (auditFilter === 'delete' ? 'bg-red-600 text-white' : 'bg-slate-100')}>🗑️ Deletes</button>
-          </div>
-        </div>
-
-        {/* Late edit summary */}
-        {(() => {
-          var lateEdits = filteredAudit.filter(a => a.is_late_edit && a.action === 'update');
-          if (lateEdits.length > 0) return (
-            <div className="bg-red-50 border-2 border-red-200 rounded-xl p-3 mb-3">
-              <div className="text-sm font-extrabold text-red-700 mb-1">🚨 {lateEdits.length} Late Edit{lateEdits.length > 1 ? 's' : ''} Detected</div>
-              <div className="text-[10px] text-red-600">Changes made 24+ hours after original entry — review required</div>
-            </div>
-          );
-          return null;
-        })()}
-
-        <div className="space-y-1.5 max-h-[600px] overflow-auto">
-          {filteredAudit
-            .filter(a => {
-              if (auditFilter === 'late') return a.is_late_edit;
-              if (auditFilter === 'sensitive') return a.sensitive_fields_changed && a.sensitive_fields_changed.length > 0;
-              if (auditFilter === 'delete') return a.action === 'delete';
-              return true;
-            })
-            .map(a => {
+      <div className="bg-white rounded-xl p-4">
+        <h3 className="text-sm font-bold mb-3">{selUserName} — Audit Log ({filteredAudit.length})</h3>
+        <div className="space-y-1 max-h-[600px] overflow-auto">
+          {filteredAudit.map(a => {
             var userName = getUserName(a.changed_by);
-            var actionColors = { create: 'text-emerald-600 bg-emerald-50', update: 'text-blue-600 bg-blue-50', delete: 'text-red-600 bg-red-50' };
+            var actionColors = { create: 'text-emerald-600', update: 'text-blue-600', delete: 'text-red-600' };
             var actionIcons = { create: '✨', update: '✏️', delete: '🗑️' };
-            var isLate = a.is_late_edit;
-            var hasSensitive = a.sensitive_fields_changed && a.sensitive_fields_changed.length > 0;
-            var oldVals = typeof a.old_values === 'object' ? a.old_values : {};
-            var newVals = typeof a.new_values === 'object' ? a.new_values : {};
+
+            // Resolve ticket reference
+            var linkedTicket = null;
+            var friendlyTarget = a.table_name || '';
+            if (a.table_name === 'tickets' && a.record_id) {
+              linkedTicket = tickets.find(t => t.id === a.record_id);
+              if (linkedTicket) friendlyTarget = (linkedTicket.ticket_number || 'Ticket') + ' — ' + (linkedTicket.title || '').substring(0, 40);
+            } else if (a.table_name === 'ticket_comments' && a.new_values) {
+              var ticketId = typeof a.new_values === 'object' ? a.new_values.ticket_id : null;
+              if (ticketId) linkedTicket = tickets.find(t => t.id === ticketId);
+              if (linkedTicket) friendlyTarget = 'Comment on ' + (linkedTicket.ticket_number || 'Ticket') + ' — ' + (linkedTicket.title || '').substring(0, 30);
+              else friendlyTarget = 'Ticket Comment';
+            }
+
+            // Build user-friendly change summary for updates
+            var changeSummary = null;
+            if (a.action === 'update' && a.new_values && typeof a.new_values === 'object') {
+              var parts = [];
+              Object.entries(a.new_values).forEach(function(entry) {
+                var key = entry[0]; var val = entry[1];
+                if (['updated_at','last_seen','created_at'].includes(key)) return;
+                var label = key.replace(/_/g, ' ').replace(/\b\w/g, function(c) { return c.toUpperCase(); });
+                var resolved = resolveAuditValue(key, val);
+                parts.push({ label: label, value: resolved });
+              });
+              if (parts.length > 0) changeSummary = parts;
+            }
 
             return (
-              <div key={a.id} className={'py-3 px-3 rounded-lg border ' + (isLate ? 'border-red-300 bg-red-50/50' : hasSensitive ? 'border-amber-200 bg-amber-50/30' : 'border-slate-100')}>
+              <div key={a.id} className="py-2.5 border-b border-slate-50">
                 <div className="flex items-center gap-2 text-xs flex-wrap">
                   <span>{actionIcons[a.action] || '📋'}</span>
-                  <span className={'font-bold px-1.5 py-0.5 rounded ' + (actionColors[a.action] || '')}>{(a.action||'').toUpperCase()}</span>
-                  <span className="text-slate-500 font-semibold">{a.table_name}</span>
-                  {isLate && <span className="px-1.5 py-0.5 rounded bg-red-100 text-red-700 text-[9px] font-extrabold">🚨 LATE EDIT ({a.hours_since_creation || '24+'}h after creation)</span>}
-                  {hasSensitive && <span className="px-1.5 py-0.5 rounded bg-amber-100 text-amber-700 text-[9px] font-bold">⚠️ {a.sensitive_fields_changed.join(', ')}</span>}
-                  <span className="text-blue-600 font-bold ml-auto">{userName}</span>
-                  <span className="text-slate-400">{a.created_at ? new Date(a.created_at).toLocaleString() : ''}</span>
+                  <span className={'font-bold ' + (actionColors[a.action] || '')}>{(a.action||'').toUpperCase()}</span>
+                  {linkedTicket ? (
+                    <span className="text-blue-600 font-semibold cursor-pointer hover:underline" onClick={() => openTicketDetail(linkedTicket)}>
+                      🎫 {friendlyTarget}
+                    </span>
+                  ) : (
+                    <span className="text-slate-500">{friendlyTarget}</span>
+                  )}
+                  <span className="text-blue-500 font-semibold ml-auto">{userName}</span>
+                  <span className="text-slate-400">{a.created_at ? new Date(a.created_at).toLocaleString([], { month:'short', day:'numeric', hour:'2-digit', minute:'2-digit' }) : ''}</span>
                 </div>
 
-                {/* Show before → after for updates */}
-                {a.action === 'update' && hasSensitive && (
-                  <div className="mt-2 bg-white rounded-lg p-2 border">
-                    <div className="text-[9px] font-bold text-slate-500 uppercase mb-1">Changes:</div>
-                    {(a.sensitive_fields_changed || []).map(f => (
-                      <div key={f} className="flex items-center gap-2 text-[10px] py-0.5">
-                        <span className="font-bold text-slate-600 w-20">{f}:</span>
-                        <span className="text-red-500 line-through">{oldVals[f] !== undefined ? String(oldVals[f]) : '—'}</span>
-                        <span className="text-slate-400">→</span>
-                        <span className="text-emerald-600 font-bold">{newVals[f] !== undefined ? String(newVals[f]) : '—'}</span>
-                      </div>
-                    ))}
-                    {/* Show non-sensitive changed fields too */}
-                    {Object.keys(newVals).filter(k => !(a.sensitive_fields_changed || []).includes(k) && k !== 'id' && k !== 'created_at' && k !== 'updated_at' && oldVals[k] !== newVals[k]).slice(0, 5).map(f => (
-                      <div key={f} className="flex items-center gap-2 text-[10px] py-0.5 opacity-60">
-                        <span className="font-semibold text-slate-500 w-20">{f}:</span>
-                        <span className="text-slate-400">{oldVals[f] !== undefined ? String(oldVals[f]).substring(0, 40) : '—'}</span>
-                        <span className="text-slate-300">→</span>
-                        <span className="text-slate-600">{String(newVals[f]).substring(0, 40)}</span>
-                      </div>
-                    ))}
+                {/* User-friendly change details */}
+                {changeSummary && (
+                  <div className="mt-1.5 flex gap-2 flex-wrap">
+                    {changeSummary.slice(0, 5).map(function(ch, idx) {
+                      return (
+                        <span key={idx} className="inline-flex items-center gap-1 px-2 py-1 bg-slate-50 rounded text-[10px]">
+                          <span className="text-slate-400">{ch.label}:</span>
+                          <span className="font-bold text-slate-700">{ch.value}</span>
+                        </span>
+                      );
+                    })}
                   </div>
                 )}
 
-                {/* Basic info for non-sensitive updates and creates */}
-                {(!hasSensitive || a.action !== 'update') && a.new_values && (
+                {/* Fallback for create actions — show key fields */}
+                {a.action === 'create' && a.new_values && !changeSummary && (
                   <div className="text-[10px] text-slate-500 mt-1 bg-slate-50 rounded p-1.5 max-h-[60px] overflow-auto">
-                    {typeof a.new_values === 'object' ? Object.entries(a.new_values).slice(0, 5).map(function(entry) {
-                      return <span key={entry[0]} className="mr-2"><span className="text-slate-400">{entry[0]}:</span> <span className="font-semibold">{String(entry[1]).substring(0, 50)}</span></span>;
-                    }) : String(a.new_values).substring(0, 200)}
+                    {typeof a.new_values === 'object' ? Object.entries(a.new_values).filter(function(e) { return !['id','created_at','updated_at'].includes(e[0]); }).slice(0, 4).map(function(entry) {
+                      return <span key={entry[0]} className="mr-2"><span className="text-slate-400">{entry[0].replace(/_/g,' ')}:</span> <span className="font-semibold">{resolveAuditValue(entry[0], entry[1])}</span></span>;
+                    }) : resolveIds(String(a.new_values).substring(0, 200))}
                   </div>
                 )}
-
-                {/* Record reference */}
-                {a.record_id && <div className="text-[9px] text-slate-300 mt-1">ID: {a.record_id}</div>}
               </div>
             );
           })}
@@ -601,5 +649,191 @@ export default function AdminTab({ user, userProfile, users, isAdmin, customers 
         </div>
       </div>
     </div>)}
+
+    {/* ===== LOGIN HISTORY ===== */}
+    {section === 'logins' && (<div>
+      {(() => {
+        // Group sessions by date
+        const byDate = {};
+        filteredSessions.forEach(s => {
+          const d = s.date || (s.login_at ? s.login_at.substring(0, 10) : 'unknown');
+          if (!byDate[d]) byDate[d] = [];
+          byDate[d].push(s);
+        });
+        const dates = Object.keys(byDate).sort((a, b) => b.localeCompare(a));
+
+        // Summary stats
+        const totalLogins = filteredSessions.length;
+        const autoLogouts = filteredSessions.filter(s => s.logout_reason === 'auto_timeout').length;
+        const manualLogouts = filteredSessions.filter(s => s.logout_reason === 'manual').length;
+        const avgSessionMins = (() => {
+          const durations = filteredSessions.filter(s => s.login_at && s.logout_at).map(s => (new Date(s.logout_at) - new Date(s.login_at)) / 60000);
+          return durations.length > 0 ? Math.round(durations.reduce((a, b) => a + b, 0) / durations.length) : 0;
+        })();
+
+        return (<>
+          <div className="grid grid-cols-4 gap-3 mb-3">
+            <div className="bg-white rounded-lg p-3" style={{borderLeftWidth:3,borderLeftColor:'#10b981'}}><div className="text-[10px] text-slate-500">Total Logins</div><div className="text-lg font-extrabold text-emerald-600">{totalLogins}</div></div>
+            <div className="bg-white rounded-lg p-3" style={{borderLeftWidth:3,borderLeftColor:'#3b82f6'}}><div className="text-[10px] text-slate-500">Manual Logouts</div><div className="text-lg font-extrabold">{manualLogouts}</div></div>
+            <div className="bg-white rounded-lg p-3" style={{borderLeftWidth:3,borderLeftColor:'#ef4444'}}><div className="text-[10px] text-slate-500">Auto Timeouts</div><div className="text-lg font-extrabold text-red-500">{autoLogouts}</div></div>
+            <div className="bg-white rounded-lg p-3" style={{borderLeftWidth:3,borderLeftColor:'#f59e0b'}}><div className="text-[10px] text-slate-500">Avg Session</div><div className="text-lg font-extrabold">{avgSessionMins}m</div></div>
+          </div>
+
+          {/* Per-user daily breakdown */}
+          {selUser === 'all' && (
+            <div className="bg-white rounded-xl p-4 mb-3">
+              <h3 className="text-sm font-bold mb-3">👥 Team Login Summary</h3>
+              <div className="overflow-auto max-h-[300px] rounded-lg border border-slate-200">
+                <table className="w-full border-collapse text-xs">
+                  <thead className="sticky top-0"><tr className="bg-slate-50">
+                    <th className="px-3 py-2 text-[10px] text-left">Team Member</th>
+                    <th className="px-3 py-2 text-[10px] text-center">Logins</th>
+                    <th className="px-3 py-2 text-[10px] text-center">Days Active</th>
+                    <th className="px-3 py-2 text-[10px] text-center">Auto Timeouts</th>
+                    <th className="px-3 py-2 text-[10px] text-center">Avg Session</th>
+                    <th className="px-3 py-2 text-[10px] text-left">Last Login</th>
+                  </tr></thead>
+                  <tbody>
+                    {visibleUsers.map(u => {
+                      const uSess = sessions.filter(s => s.user_id === u.id);
+                      const uAuto = uSess.filter(s => s.logout_reason === 'auto_timeout').length;
+                      const uDays = [...new Set(uSess.map(s => s.date))].length;
+                      const uDurations = uSess.filter(s => s.login_at && s.logout_at).map(s => (new Date(s.logout_at) - new Date(s.login_at)) / 60000);
+                      const uAvg = uDurations.length > 0 ? Math.round(uDurations.reduce((a, b) => a + b, 0) / uDurations.length) : 0;
+                      const lastLogin = uSess[0]?.login_at ? new Date(uSess[0].login_at).toLocaleString([], { month:'short', day:'numeric', hour:'2-digit', minute:'2-digit' }) : '—';
+                      return (
+                        <tr key={u.id} className="border-b border-slate-50 hover:bg-blue-50 cursor-pointer" onClick={() => setSelUser(u.id)}>
+                          <td className="px-3 py-2 font-semibold">{u.name}</td>
+                          <td className="px-3 py-2 text-center font-bold text-emerald-600">{uSess.length}</td>
+                          <td className="px-3 py-2 text-center">{uDays}</td>
+                          <td className="px-3 py-2 text-center"><span className={uAuto > 0 ? 'text-red-500 font-bold' : 'text-slate-400'}>{uAuto}</span></td>
+                          <td className="px-3 py-2 text-center">{uAvg}m</td>
+                          <td className="px-3 py-2 text-slate-500">{lastLogin}</td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          )}
+
+          {/* Daily session log */}
+          <div className="bg-white rounded-xl p-4">
+            <h3 className="text-sm font-bold mb-3">🕐 {selUserName} — Daily Login Archive</h3>
+            <div className="space-y-3 max-h-[500px] overflow-auto">
+              {dates.map(date => {
+                const daySessions = byDate[date];
+                const dayAutoLogouts = daySessions.filter(s => s.logout_reason === 'auto_timeout').length;
+                return (
+                  <div key={date} className="border border-slate-100 rounded-lg overflow-hidden">
+                    <div className="bg-slate-50 px-3 py-2 flex justify-between items-center">
+                      <span className="text-xs font-bold text-slate-700">📅 {date} <span className="text-slate-400 font-normal">({new Date(date + 'T12:00:00').toLocaleDateString('en-US', { weekday: 'short' })})</span></span>
+                      <div className="flex gap-3 text-[10px]">
+                        <span className="text-emerald-600 font-semibold">🟢 {daySessions.length} login{daySessions.length !== 1 ? 's' : ''}</span>
+                        {dayAutoLogouts > 0 && <span className="text-red-500 font-bold">⏱️ {dayAutoLogouts} auto-timeout{dayAutoLogouts !== 1 ? 's' : ''}</span>}
+                      </div>
+                    </div>
+                    <div className="divide-y divide-slate-50">
+                      {daySessions.map((s, i) => {
+                        const loginTime = s.login_at ? new Date(s.login_at).toLocaleTimeString([], { hour:'2-digit', minute:'2-digit' }) : '—';
+                        const logoutTime = s.logout_at ? new Date(s.logout_at).toLocaleTimeString([], { hour:'2-digit', minute:'2-digit' }) : '—';
+                        const duration = s.login_at && s.logout_at ? Math.round((new Date(s.logout_at) - new Date(s.login_at)) / 60000) : null;
+                        const isTimeout = s.logout_reason === 'auto_timeout';
+                        return (
+                          <div key={s.id || i} className="px-3 py-2 flex items-center gap-3 text-xs">
+                            <span className="text-blue-600 font-semibold min-w-[80px]">{getUserName(s.user_id) || 'Unknown'}</span>
+                            <span className="text-emerald-600 font-mono">🟢 {loginTime}</span>
+                            <span className="text-slate-300">→</span>
+                            <span className={isTimeout ? 'text-red-500 font-bold font-mono' : 'text-slate-500 font-mono'}>
+                              {isTimeout ? '⏱️' : '🔴'} {logoutTime}
+                            </span>
+                            {duration !== null && <span className="text-slate-400 text-[10px]">({duration}m)</span>}
+                            {isTimeout && <span className="px-1.5 py-0.5 bg-red-50 text-red-600 rounded text-[9px] font-bold">AUTO TIMEOUT</span>}
+                            {s.logout_reason === 'manual' && <span className="px-1.5 py-0.5 bg-blue-50 text-blue-600 rounded text-[9px] font-bold">CLOCKED OUT</span>}
+                            {!s.logout_at && <span className="px-1.5 py-0.5 bg-emerald-50 text-emerald-600 rounded text-[9px] font-bold animate-pulse">ACTIVE</span>}
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </div>
+                );
+              })}
+              {dates.length === 0 && <div className="text-center text-slate-400 text-sm py-6">No login records found</div>}
+            </div>
+          </div>
+        </>);
+      })()}
+    </div>)}
+
+    {/* ===== TICKET DETAIL POPUP ===== */}
+    {viewTicket && (
+      <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4" onClick={() => setViewTicket(null)}>
+        <div className="bg-white rounded-2xl w-full max-w-lg max-h-[85vh] overflow-hidden shadow-2xl" onClick={e => e.stopPropagation()}>
+          <div className="p-4 border-b border-slate-100 flex justify-between items-start">
+            <div>
+              <div className="text-xs font-mono text-blue-500 font-bold mb-0.5">{viewTicket.ticket_number || '—'}</div>
+              <h3 className="text-base font-extrabold">{viewTicket.title}</h3>
+            </div>
+            <button onClick={() => setViewTicket(null)} className="w-8 h-8 rounded-lg bg-slate-100 flex items-center justify-center text-slate-400 hover:text-red-500 hover:bg-red-50 text-lg font-bold">✕</button>
+          </div>
+
+          <div className="p-4 overflow-auto" style={{ maxHeight: 'calc(85vh - 120px)' }}>
+            {/* Status / Priority / Dates */}
+            <div className="grid grid-cols-2 gap-3 mb-4">
+              <div><div className="text-[9px] text-slate-400 uppercase font-semibold">Status</div><span className="px-2 py-0.5 rounded-full text-[10px] font-bold text-white" style={{background:STATUS_COLORS[viewTicket.status]||'#6b7280'}}>{viewTicket.status}</span></div>
+              <div><div className="text-[9px] text-slate-400 uppercase font-semibold">Priority</div><span className={'text-sm font-bold ' + (viewTicket.priority==='high'?'text-red-500':viewTicket.priority==='low'?'text-green-500':'text-amber-500')}>{viewTicket.priority || '—'}</span></div>
+              <div><div className="text-[9px] text-slate-400 uppercase font-semibold">Assigned To</div><div className="text-xs font-semibold text-purple-600">{getUserName(viewTicket.assigned_to) || 'Unassigned'}</div></div>
+              <div><div className="text-[9px] text-slate-400 uppercase font-semibold">Created By</div><div className="text-xs font-semibold">{getUserName(viewTicket.created_by) || '—'}</div></div>
+              <div><div className="text-[9px] text-slate-400 uppercase font-semibold">Due Date</div><div className={'text-xs font-semibold ' + (viewTicket.due_date && viewTicket.due_date < todayStr ? 'text-red-600' : '')}>{viewTicket.due_date || '—'}</div></div>
+              <div><div className="text-[9px] text-slate-400 uppercase font-semibold">Created</div><div className="text-xs text-slate-500">{viewTicket.created_at ? new Date(viewTicket.created_at).toLocaleDateString() : '—'}</div></div>
+            </div>
+
+            {/* Description */}
+            {viewTicket.description && (
+              <div className="mb-4">
+                <div className="text-[9px] text-slate-400 uppercase font-semibold mb-1">Description</div>
+                <div className="text-xs text-slate-600 bg-slate-50 rounded-lg p-3 whitespace-pre-wrap">{viewTicket.description}</div>
+              </div>
+            )}
+
+            {/* Attachments */}
+            {viewTicket.attachments && viewTicket.attachments.length > 0 && (
+              <div className="mb-4">
+                <div className="text-[9px] text-slate-400 uppercase font-semibold mb-1">📎 Attachments</div>
+                <div className="space-y-1">
+                  {(Array.isArray(viewTicket.attachments) ? viewTicket.attachments : []).map((att, i) => (
+                    <a key={i} href={att.url || att} target="_blank" rel="noopener noreferrer"
+                      className="flex items-center gap-2 px-3 py-2 bg-blue-50 rounded-lg text-xs text-blue-600 font-semibold hover:bg-blue-100">
+                      📄 {att.name || att.filename || `Attachment ${i + 1}`}
+                    </a>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {/* Comments / Notes */}
+            <div>
+              <div className="text-[9px] text-slate-400 uppercase font-semibold mb-2">💬 Notes & Updates ({ticketComments.length})</div>
+              {ticketComments.length > 0 ? (
+                <div className="space-y-2 max-h-[250px] overflow-auto">
+                  {ticketComments.map(c => (
+                    <div key={c.id} className={'rounded-lg p-3 text-xs ' + (c.is_system ? 'bg-slate-50 border border-slate-100' : 'bg-blue-50 border border-blue-100')}>
+                      <div className="flex justify-between mb-1">
+                        <span className="font-bold" style={{ color: c.is_system ? '#64748b' : '#2563eb' }}>
+                          {c.is_system ? '🤖 System' : '💬 ' + (getUserName(c.created_by) || 'User')}
+                        </span>
+                        <span className="text-[10px] text-slate-400">{c.created_at ? new Date(c.created_at).toLocaleString([], { month:'short', day:'numeric', hour:'2-digit', minute:'2-digit' }) : ''}</span>
+                      </div>
+                      <div className="text-slate-600 whitespace-pre-wrap">{c.comment_text}</div>
+                    </div>
+                  ))}
+                </div>
+              ) : <div className="text-xs text-slate-400 py-3 text-center">No notes yet</div>}
+            </div>
+          </div>
+        </div>
+      </div>
+    )}
   </div>);
 }
