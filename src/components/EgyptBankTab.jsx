@@ -522,8 +522,6 @@ export default function EgyptBankTab({ user, userProfile, isAdmin, invoices, onR
     }
     setMatchingTxn(null);
     setTransactions(prev => prev.map(t => t.id === txnId ? { ...t, matched_invoice_id: invoiceId, matched_at: new Date().toISOString() } : t));
-    // Refresh dashboard data so collected amounts update everywhere
-    if (onReload) setTimeout(() => onReload(), 500);
   };
   const unmatch = async (txnId) => {
     const txn = transactions.find(t => t.id === txnId);
@@ -535,8 +533,6 @@ export default function EgyptBankTab({ user, userProfile, isAdmin, invoices, onR
       await dbUpdate('invoices', inv.id, { total_collected: newCollected }, myId);
     }
     setTransactions(prev => prev.map(t => t.id === txnId ? { ...t, matched_invoice_id: null, matched_at: null } : t));
-    // Refresh dashboard data
-    if (onReload) setTimeout(() => onReload(), 500);
   };
 
   // ───── Filters ─────
@@ -570,25 +566,11 @@ export default function EgyptBankTab({ user, userProfile, isAdmin, invoices, onR
   const getAccName = (id) => { const a = accounts.find(a => a.id === id); return a ? `${a.bank_name} - ${a.account_number}` : ''; };
 
   // Invoice search for matching
-  const matchableInvoices = useMemo(() => {
-    const txnAmt = matchingTxn ? Math.abs(matchingTxn.amount || 0) : 0;
-    return (invoices || []).filter(inv => {
-      if (!searchInv) return true;
-      const q = searchInv.toLowerCase();
-      const haystack = [
-        inv.customer || '', inv.customer_name || '', inv.customer_name_en || '',
-        inv.invoice_number || '', inv.order_number || '',
-        String(inv.amount || inv.total_amount || ''), inv.invoice_date || inv.date || ''
-      ].join(' ').toLowerCase();
-      return haystack.includes(q);
-    }).sort((a, b) => {
-      // Smart sort: closest amount match first
-      const aDiff = Math.abs(Number(a.amount || a.total_amount || 0) - txnAmt);
-      const bDiff = Math.abs(Number(b.amount || b.total_amount || 0) - txnAmt);
-      if (aDiff !== bDiff) return aDiff - bDiff;
-      return ((b.invoice_date || b.date || '')).localeCompare(a.invoice_date || a.date || '');
-    }).slice(0, 30);
-  }, [invoices, searchInv, matchingTxn]);
+  const matchableInvoices = (invoices || []).filter(inv => {
+    if (!searchInv) return true;
+    const q = searchInv.toLowerCase();
+    return (inv.customer || '').toLowerCase().includes(q) || (inv.invoice_number || '').toLowerCase().includes(q) || String(inv.amount || inv.total || '').includes(q);
+  }).slice(0, 20);
 
   if (loading) return <div className="text-center py-12 text-slate-400">Loading...</div>;
 
@@ -1117,65 +1099,39 @@ export default function EgyptBankTab({ user, userProfile, isAdmin, invoices, onR
       )}
 
       {/* ===== MATCH MODAL ===== */}
-      {matchingTxn && (() => {
-        const txnAmt = Math.abs(matchingTxn.amount || 0);
-        return (
+      {matchingTxn && (
         <div className="fixed inset-0 bg-black/50 z-50 flex items-end sm:items-center justify-center p-0 sm:p-4" onClick={() => setMatchingTxn(null)}>
-          <div className="bg-white rounded-t-2xl sm:rounded-2xl w-full sm:max-w-lg max-h-[85vh] overflow-hidden" onClick={e => e.stopPropagation()}>
-            <div className="p-4 border-b bg-gradient-to-r from-blue-50 to-white">
+          <div className="bg-white rounded-t-2xl sm:rounded-2xl w-full sm:max-w-lg max-h-[80vh] overflow-hidden" onClick={e => e.stopPropagation()}>
+            <div className="p-4 border-b">
               <div className="flex justify-between items-start">
                 <div>
-                  <h3 className="font-bold text-sm">🔗 Link to Invoice / ربط بفاتورة</h3>
-                  <p className="text-[10px] text-slate-500 mt-0.5">
-                    {matchingTxn.description} — {matchingTxn.date}
+                  <h3 className="font-bold text-sm">Match Transaction / مطابقة</h3>
+                  <p className="text-[10px] text-slate-400 mt-0.5">
+                    {matchingTxn.description} — {fmtE(matchingTxn.amount)} on {matchingTxn.date}
                   </p>
-                  <span className="inline-block mt-1 px-2 py-0.5 bg-blue-100 text-blue-700 rounded text-xs font-bold">
-                    {matchingTxn.amount > 0 ? 'Deposit' : 'Withdrawal'}: {fmtE(matchingTxn.amount)}
-                  </span>
                 </div>
-                <button onClick={() => setMatchingTxn(null)} className="text-slate-400 text-lg hover:text-slate-600">✕</button>
+                <button onClick={() => setMatchingTxn(null)} className="text-slate-400 text-lg">✕</button>
               </div>
-              <input type="text" value={searchInv} onChange={e => setSearchInv(e.target.value)}
-                placeholder="Search by customer, order #, amount, date... / بحث"
-                className="w-full border rounded-lg px-3 py-2 text-xs mt-3" autoFocus />
+              <input type="text" value={searchInv} onChange={e => setSearchInv(e.target.value)} placeholder="Search invoices by customer, number, amount..." className="w-full border rounded-lg px-3 py-2 text-xs mt-2" />
             </div>
-            <div className="overflow-y-auto max-h-[55vh] p-2">
+            <div className="overflow-y-auto max-h-[50vh] p-2">
               {matchableInvoices.length === 0 ? (
-                <p className="text-center text-slate-400 text-xs py-8">No invoices found / لم يتم العثور على فواتير</p>
-              ) : matchableInvoices.map(inv => {
-                const invAmt = Number(inv.amount || inv.total_amount || inv.total || 0);
-                const isExactMatch = Math.abs(invAmt - txnAmt) < 1;
-                const outstanding = Number(inv.outstanding || 0);
-                const collected = Number(inv.total_collected || 0);
-                return (
-                  <button key={inv.id} onClick={() => matchToInvoice(matchingTxn.id, inv.id)}
-                    className={'w-full text-left p-3 rounded-lg hover:bg-blue-50 border-b last:border-0 transition ' + (isExactMatch ? 'bg-emerald-50/50 border-emerald-100' : '')}>
-                    <div className="flex justify-between items-start">
-                      <div className="flex-1 min-w-0">
-                        <div className="flex items-center gap-1.5">
-                          <span className="font-semibold text-xs truncate">{inv.customer || inv.customer_name || inv.customer_name_en || 'N/A'}</span>
-                          {isExactMatch && <span className="px-1 py-0.5 bg-emerald-200 text-emerald-800 rounded text-[8px] font-bold flex-shrink-0">EXACT MATCH</span>}
-                        </div>
-                        <div className="text-[10px] text-slate-400 mt-0.5">
-                          #{inv.invoice_number || inv.order_number || '—'} • {inv.invoice_date || inv.date || '—'}
-                        </div>
-                      </div>
-                      <div className="text-right flex-shrink-0 ml-2">
-                        <div className="font-bold text-sm text-blue-600">{fmtE(invAmt)}</div>
-                        <div className="text-[10px]">
-                          <span className="text-emerald-600">Paid: {fmtE(collected)}</span>
-                          {outstanding > 0 && <span className="text-red-500 ml-1">Owed: {fmtE(outstanding)}</span>}
-                        </div>
-                      </div>
+                <p className="text-center text-slate-400 text-xs py-4">No invoices found</p>
+              ) : matchableInvoices.map(inv => (
+                <button key={inv.id} onClick={() => matchToInvoice(matchingTxn.id, inv.id)} className="w-full text-left p-3 rounded-lg hover:bg-blue-50 border-b last:border-0">
+                  <div className="flex justify-between items-center">
+                    <div>
+                      <div className="font-semibold text-xs">{inv.customer || 'N/A'}</div>
+                      <div className="text-[10px] text-slate-400">#{inv.invoice_number || '—'} • {inv.date}</div>
                     </div>
-                  </button>
-                );
-              })}
+                    <div className="font-bold text-sm text-blue-600">{fmtE(inv.amount || inv.total)}</div>
+                  </div>
+                </button>
+              ))}
             </div>
           </div>
         </div>
-        );
-      })()}
+      )}
     </div>
   );
 }

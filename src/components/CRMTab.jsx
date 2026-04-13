@@ -21,6 +21,11 @@ const PIPELINE_STAGES = [
 export default function CRMTab({ customers, invoices, user, userProfile, users, onReload, isAdmin, onSelectInvoice, lang, modulePerms, initialClient }) {
   const myId = userProfile?.id;
   const canViewAll = isAdmin || modulePerms?.['CRM View All'] === true;
+  const canViewContacts = isAdmin || modulePerms?.['CRM View Contacts'] === true;
+  // Can see contact info if: admin, has CRM View Contacts perm, or is the assigned rep
+  const canSeeContact = (c) => canViewContacts || (c && c.assigned_rep === myId);
+  const maskPhone = (ph) => { if (!ph) return '—'; return ph.substring(0, 3) + '•••••' + ph.substring(ph.length - 2); };
+  const maskEmail = (em) => { if (!em) return '—'; const [u, d] = em.split('@'); return u.substring(0, 2) + '•••@' + (d || ''); };
   const [sel, setSel] = useState(null);
   const [q, setQ] = useState('');
   const [groupF, setGroupF] = useState('all');
@@ -161,14 +166,6 @@ export default function CRMTab({ customers, invoices, user, userProfile, users, 
     });
     if (sortBy === 'alpha') arr.sort((a, b) => (a.name || '').localeCompare(b.name || ''));
     if (sortBy === 'alpha_rev') arr.sort((a, b) => (b.name || '').localeCompare(a.name || ''));
-    if (sortBy === 'recently_added') arr.sort((a, b) => (b.created_at || '').localeCompare(a.created_at || ''));
-    if (sortBy === 'recently_contacted') arr.sort((a, b) => (b.last_contact_date || '').localeCompare(a.last_contact_date || ''));
-    if (sortBy === 'not_contacted') arr.sort((a, b) => {
-      if (!a.last_contact_date && !b.last_contact_date) return 0;
-      if (!a.last_contact_date) return -1;
-      if (!b.last_contact_date) return 1;
-      return (a.last_contact_date || '').localeCompare(b.last_contact_date || '');
-    });
     if (sortBy === 'most_orders') arr.sort((a, b) => custInvoices(b).length - custInvoices(a).length);
     if (sortBy === 'top_sales') arr.sort((a, b) => {
       const aT = custInvoices(a).reduce((s, i) => s + Number(i.total_amount || 0), 0);
@@ -199,7 +196,7 @@ export default function CRMTab({ customers, invoices, user, userProfile, users, 
       return 0;
     });
     return arr;
-  }, [customers, q, groupF, catF, sortBy, invoices, allNotes, repF, stageF]);
+  }, [customers, q, groupF, catF, sortBy, invoices, allNotes]);
 
   const groups = [...new Set(customers.map(c => c.group_name).filter(Boolean))].sort();
 
@@ -356,42 +353,21 @@ export default function CRMTab({ customers, invoices, user, userProfile, users, 
         </select>
         <select value={sortBy} onChange={e => setSortBy(e.target.value)} className="px-3 py-1.5 rounded-lg border border-slate-200 text-[11px] bg-white">
           <option value="alpha">A → Z</option><option value="alpha_rev">Z → A</option>
-          <option value="recently_added">🆕 Recently Added</option><option value="recently_contacted">📞 Recently Contacted</option>
-          <option value="not_contacted">⚠️ Not Contacted (oldest first)</option>
           <option value="most_orders">Most Orders</option><option value="top_sales">Top Sales</option>
           <option value="latest_note">Latest Note</option><option value="no_notes">No Notes</option>
         </select>
         <span className="text-[10px] text-slate-400 ml-auto">{filtered.length} results</span>
       </div>
 
-      {/* Quick Filters */}
-      <div className="grid grid-cols-3 gap-2 mb-3">
-        <div className={'bg-white rounded-lg p-2.5 cursor-pointer transition hover:shadow-md border ' + (sortBy === 'recently_added' ? 'ring-2 ring-blue-400 border-blue-200' : 'border-slate-100')} onClick={() => setSortBy('recently_added')}>
-          <div className="text-[9px] text-slate-400 uppercase">🆕 Recently Added</div>
-          <div className="text-lg font-extrabold text-blue-600">{customers.filter(c => c.created_at && (Date.now() - new Date(c.created_at).getTime()) < 30 * 86400000).length}</div>
-          <div className="text-[9px] text-slate-400">last 30 days</div>
-        </div>
-        <div className={'bg-white rounded-lg p-2.5 cursor-pointer transition hover:shadow-md border ' + (sortBy === 'recently_contacted' ? 'ring-2 ring-emerald-400 border-emerald-200' : 'border-slate-100')} onClick={() => setSortBy('recently_contacted')}>
-          <div className="text-[9px] text-slate-400 uppercase">📞 Recently Contacted</div>
-          <div className="text-lg font-extrabold text-emerald-600">{customers.filter(c => c.last_contact_date && (Date.now() - new Date(c.last_contact_date).getTime()) < 14 * 86400000).length}</div>
-          <div className="text-[9px] text-slate-400">last 14 days</div>
-        </div>
-        <div className={'bg-white rounded-lg p-2.5 cursor-pointer transition hover:shadow-md border ' + (sortBy === 'not_contacted' ? 'ring-2 ring-red-400 border-red-200' : 'border-slate-100')} onClick={() => setSortBy('not_contacted')}>
-          <div className="text-[9px] text-slate-400 uppercase">⚠️ Not Contacted</div>
-          <div className="text-lg font-extrabold text-red-500">{customers.filter(c => !c.last_contact_date || (Date.now() - new Date(c.last_contact_date).getTime()) > 30 * 86400000).length}</div>
-          <div className="text-[9px] text-slate-400">30+ days</div>
-        </div>
-      </div>
-
       {/* Stats Row */}
       <div className="grid grid-cols-4 gap-3 mb-4">
-        <div className={'bg-white rounded-xl p-3 cursor-pointer transition hover:shadow-md border ' + (stageF === 'all' ? 'ring-2 ring-slate-300 border-slate-200' : 'border-slate-100')} onClick={() => setStageF('all')}><div className="text-[9px] text-slate-400 uppercase tracking-wide">Total</div>
+        <div className="bg-white rounded-xl p-3 border border-slate-100"><div className="text-[9px] text-slate-400 uppercase tracking-wide">Total</div>
           <div className="text-xl font-extrabold">{filtered.length}</div></div>
-        <div className={'bg-white rounded-xl p-3 cursor-pointer transition hover:shadow-md border ' + (stageF === 'active' ? 'ring-2 ring-blue-400 border-blue-200' : 'border-slate-100')} onClick={() => setStageF(stageF === 'active' ? 'all' : 'active')}><div className="text-[9px] text-slate-400 uppercase tracking-wide">Active</div>
+        <div className="bg-white rounded-xl p-3 border border-slate-100"><div className="text-[9px] text-slate-400 uppercase tracking-wide">Active</div>
           <div className="text-xl font-extrabold text-blue-600">{filtered.filter(c=>!['won','lost'].includes(c.pipeline_stage||'lead')).length}</div></div>
-        <div className={'bg-white rounded-xl p-3 cursor-pointer transition hover:shadow-md border ' + (stageF === 'won' ? 'ring-2 ring-emerald-400 border-emerald-200' : 'border-slate-100')} onClick={() => setStageF(stageF === 'won' ? 'all' : 'won')}><div className="text-[9px] text-emerald-500 uppercase tracking-wide">Won</div>
+        <div className="bg-white rounded-xl p-3 border border-slate-100"><div className="text-[9px] text-emerald-500 uppercase tracking-wide">Won</div>
           <div className="text-xl font-extrabold text-emerald-600">{filtered.filter(c=>(c.pipeline_stage)==='won').length}</div></div>
-        <div className={'bg-white rounded-xl p-3 cursor-pointer transition hover:shadow-md border ' + (stageF === 'lost' ? 'ring-2 ring-red-400 border-red-200' : 'border-slate-100')} onClick={() => setStageF(stageF === 'lost' ? 'all' : 'lost')}><div className="text-[9px] text-red-400 uppercase tracking-wide">Lost</div>
+        <div className="bg-white rounded-xl p-3 border border-slate-100"><div className="text-[9px] text-red-400 uppercase tracking-wide">Lost</div>
           <div className="text-xl font-extrabold text-red-500">{filtered.filter(c=>(c.pipeline_stage)==='lost').length}</div></div>
       </div>
 
@@ -569,7 +545,11 @@ export default function CRMTab({ customers, invoices, user, userProfile, users, 
               <select value={f.leadSource!==undefined?f.leadSource:(sel.lead_source||'')} onChange={e=>setF({...f,leadSource:e.target.value})} className="w-full px-2 py-1.5 border rounded text-sm">
                 <option value="">None</option>{LEAD_SOURCES.map(s=><option key={s} value={s}>{s}</option>)}</select></div>
             <div><label className="text-[10px] font-semibold">Phone</label>
-              <input value={f.phone!==undefined?f.phone:(sel.phone||'')} onChange={e=>setF({...f,phone:e.target.value})} className="w-full px-2 py-1.5 border rounded text-sm" /></div>
+              {canSeeContact(sel) ? (
+                <input value={f.phone!==undefined?f.phone:(sel.phone||'')} onChange={e=>setF({...f,phone:e.target.value})} className="w-full px-2 py-1.5 border rounded text-sm" />
+              ) : (
+                <div className="w-full px-2 py-1.5 border rounded text-sm bg-slate-50 text-slate-400">🔒 {maskPhone(sel.phone)}</div>
+              )}</div>
             <div><label className="text-[10px] font-semibold">City</label>
               <input value={f.city!==undefined?f.city:(sel.city||'')} onChange={e=>setF({...f,city:e.target.value})} className="w-full px-2 py-1.5 border rounded text-sm" /></div>
             <div><label className="text-[10px] font-semibold">Assigned Rep / الممثل</label>
@@ -608,7 +588,7 @@ export default function CRMTab({ customers, invoices, user, userProfile, users, 
             }} className={'mt-2 px-3 py-1.5 rounded-lg text-xs font-bold border-2 transition ' + (sel.important ? 'border-amber-400 bg-amber-50 text-amber-700' : 'border-slate-200 text-slate-400')}>
               {sel.important ? '⭐ Important Client / عميل مهم' : '☆ Mark as Important / تعيين كمهم'}
             </button>
-            {sel.phone && <div className="text-xs text-slate-500 mt-2">Phone: {sel.phone}</div>}
+            {sel.phone && <div className="text-xs text-slate-500 mt-2">Phone: {canSeeContact(sel) ? sel.phone : maskPhone(sel.phone)}</div>}
             {sel.assigned_rep && (() => { const rep = users?.find(u => u.id === sel.assigned_rep); return rep ? <div className="text-xs text-indigo-600 font-semibold mt-1">👤 Assigned Rep / الممثل: {rep.name}</div> : null; })()}
 
             {/* Pipeline Stage */}
@@ -658,6 +638,7 @@ export default function CRMTab({ customers, invoices, user, userProfile, users, 
       <div className="flex gap-2 mb-3 flex-wrap">
         <button onClick={()=>{setShowNote(true);setF({});}} className="px-3 py-1.5 bg-blue-500 text-white rounded-lg text-xs font-semibold">+ Note / ملاحظة</button>
         <button onClick={()=>{setShowFollowUp(true);setF({});}} className="px-3 py-1.5 bg-amber-500 text-white rounded-lg text-xs font-semibold">+ Follow-up / متابعة</button>
+        {canSeeContact(sel) ? (<>
         <button onClick={() => openWhatsApp(sel.phone)} className="px-3 py-1.5 bg-green-500 text-white rounded-lg text-xs font-semibold">💬 WhatsApp</button>
         <button onClick={() => { if(sel.phone) { logContact('phone', 'Phone call'); window.open('tel:'+sel.phone); } else alert('No phone'); }}
           className="px-3 py-1.5 bg-purple-500 text-white rounded-lg text-xs font-semibold">📞 Call</button>
@@ -668,6 +649,9 @@ export default function CRMTab({ customers, invoices, user, userProfile, users, 
           style={{background:'linear-gradient(135deg, #0ea5e9, #6366f1)'}}>📨 Send Email</button>}
         <button onClick={() => { const note = prompt('Visit notes / ملاحظات الزيارة:'); if(note) logContact('visit', note); }}
           className="px-3 py-1.5 bg-cyan-500 text-white rounded-lg text-xs font-semibold">🚗 Visit</button>
+        </>) : (
+          <span className="text-[10px] text-slate-400 bg-slate-100 px-3 py-1.5 rounded-lg">🔒 Contact info restricted — assigned reps only</span>
+        )}
       </div>
       {showNote && (
         <div className="bg-blue-50 rounded-lg p-3 mb-3 border border-blue-200">

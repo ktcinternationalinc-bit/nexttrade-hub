@@ -231,8 +231,6 @@ export default function App() {
   const [splits, setSplits] = useState([{ order: '', amount: 0 }, { order: '', amount: 0 }]);
   const [linkSearch, setLinkSearch] = useState('');
   const [showLinkSearch, setShowLinkSearch] = useState(false);
-  const [linkingTreasuryTxn, setLinkingTreasuryTxn] = useState(null);
-  const [treasuryInvSearch, setTreasuryInvSearch] = useState('');
   const [formData, setFormData] = useState({});
   const [hideSections, setHideSections] = useState({});
   const [announcements, setAnnouncements] = useState([]);
@@ -265,8 +263,6 @@ export default function App() {
   const [recentTicketUpdates, setRecentTicketUpdates] = useState([]);
   const [dashTickets, setDashTickets] = useState([]);
   const [activityFeed, setActivityFeed] = useState([]);
-  const [dashEvents, setDashEvents] = useState([]);
-  const [dashFollowUps, setDashFollowUps] = useState([]);
   const [fxRate, setFxRate] = useState(null);
   const [globalSearch, setGlobalSearch] = useState('');
   const [showGlobalSearch, setShowGlobalSearch] = useState(false);
@@ -410,14 +406,6 @@ export default function App() {
           if (!s?.user) return;
           const { data: profile } = await supabase.from('users').select('role').eq('id', s.user.id).single();
           if (profile?.role === 'super_admin') return; // super admins stay logged in
-          // Record auto-logout in session
-          const today = new Date().toISOString().split('T')[0];
-          await supabase.from('user_sessions')
-            .update({ logout_at: new Date().toISOString(), logout_reason: 'auto_timeout' })
-            .eq('user_id', s.user.id).eq('date', today)
-            .order('login_at', { ascending: false }).limit(1);
-          // Log it
-          try { await supabase.from('daily_log').insert({ user_id: s.user.id, entry_text: 'Auto-logged out after 30 min inactivity', log_category: 'login', log_date: today, log_time: new Date().toTimeString().substring(0,8), auto_generated: true }); } catch(e) {}
           await supabase.auth.signOut(); window.location.href = '/login';
         } catch(e) {}
       }, IDLE_TIMEOUT);
@@ -562,17 +550,6 @@ export default function App() {
         const { data: feed } = await supabase.from('daily_log').select('*').eq('auto_generated', true).order('created_at', { ascending: false }).limit(50);
         setActivityFeed(feed || []);
       } catch(e) { setActivityFeed([]); }
-      // Load calendar events for dashboard
-      try {
-        const todayStr = new Date().toISOString().substring(0, 10);
-        const { data: evts } = await supabase.from('calendar_events').select('*').gte('event_date', todayStr).order('event_date').order('event_time').limit(30);
-        setDashEvents(evts || []);
-      } catch(e) { setDashEvents([]); }
-      // Load follow-ups for dashboard
-      try {
-        const { data: fups } = await supabase.from('follow_ups').select('*, customers(name, name_en)').eq('completed', false).order('due_date').limit(50);
-        setDashFollowUps(fups || []);
-      } catch(e) { setDashFollowUps([]); }
       // Fetch USD/EGP exchange rate
       try {
         const fxRes = await fetch('https://open.er-api.com/v6/latest/USD');
@@ -589,6 +566,12 @@ export default function App() {
   // COMPUTED VALUES
   // ==========================================
   const isAdmin = userProfile?.role === 'super_admin' || userProfile?.role === 'admin';
+  const canEditTreasury = userProfile?.role === 'super_admin' || isAdmin || modulePerms?.['Edit Treasury'] === true;
+  const canEditInvoices = userProfile?.role === 'super_admin' || isAdmin || modulePerms?.['Edit Invoices'] === true;
+  const canEditInventory = userProfile?.role === 'super_admin' || isAdmin || modulePerms?.['Edit Inventory'] === true;
+  const canEditWarehouse = userProfile?.role === 'super_admin' || isAdmin || modulePerms?.['Edit Warehouse'] === true;
+  const canExportData = userProfile?.role === 'super_admin' || isAdmin || modulePerms?.['Export Data'] === true;
+  const canManageCategories = userProfile?.role === 'super_admin' || isAdmin || modulePerms?.['Manage Categories'] === true;
 
   // Tab-to-module mapping for permission filtering
   const TAB_MODULE_MAP = {
@@ -766,16 +749,16 @@ export default function App() {
     if (user?.id) {
       const today = new Date().toISOString().split('T')[0];
       await supabase.from('user_sessions')
-        .update({ logout_at: new Date().toISOString(), last_seen: new Date().toISOString(), logout_reason: 'manual' })
+        .update({ logout_at: new Date().toISOString(), last_seen: new Date().toISOString() })
         .eq('user_id', user.id).eq('date', today)
         .order('login_at', { ascending: false }).limit(1);
-      try { await supabase.from('daily_log').insert({ user_id: user.id, entry_text: 'Clocked out (manual)', log_category: 'login', log_date: today, log_time: new Date().toTimeString().substring(0,8), auto_generated: true }); } catch(e) {}
     }
     await supabase.auth.signOut();
     window.location.href = '/login';
   };
 
   const handleAddPayment = async (pf) => {
+    if (!canEditInvoices) { alert('You do not have permission to edit invoices.'); return; }
     var pd = pf || formData;
     if (!pd.amount || !pd.date || !selectedInvoice) return;
     try {
@@ -905,6 +888,7 @@ export default function App() {
   };
 
   const handleAddTreasury = async () => {
+    if (!canEditTreasury) { alert('You do not have permission to add treasury entries.'); return; }
     if (!formData.amount || !formData.date) return;
     try {
       const isIncome = formData.type === 'in';
@@ -934,6 +918,7 @@ export default function App() {
   };
 
   const handleEditTreasury = async (txn) => {
+    if (!canEditTreasury) { alert('You do not have permission to edit treasury entries.'); return; }
     try {
       const fd = {
         date: document.getElementById('tx-date')?.value,
@@ -994,55 +979,8 @@ export default function App() {
     }
   };
 
-  // ── Treasury ↔ Invoice Linking ──
-  const linkTreasuryToInvoice = async (txnId, invoiceId) => {
-    try {
-      const txn = treasury.find(t => t.id === txnId);
-      const inv = invoices.find(i => i.id === invoiceId);
-      if (!txn || !inv) return;
-      await dbUpdate('treasury', txnId, { linked_invoice_id: invoiceId }, userProfile?.id || user?.id);
-      // Only add to collected if this is a cash-in transaction
-      if (Number(txn.cash_in) > 0) {
-        const newCollected = Number(inv.total_collected || 0) + Number(txn.cash_in);
-        await dbUpdate('invoices', invoiceId, { total_collected: newCollected }, userProfile?.id || user?.id);
-      }
-      setLinkingTreasuryTxn(null);
-      setTreasuryInvSearch('');
-      // Update local state immediately
-      setTreasury(prev => prev.map(t => t.id === txnId ? { ...t, linked_invoice_id: invoiceId } : t));
-      setInvoices(prev => prev.map(i => i.id === invoiceId ? {
-        ...i,
-        total_collected: Number(i.total_collected || 0) + Number(txn.cash_in || 0),
-        outstanding: Math.max(0, Number(i.total_amount || 0) - Number(i.total_collected || 0) - Number(txn.cash_in || 0)),
-      } : i));
-    } catch (err) { alert('Link error: ' + err.message); }
-  };
-
-  const unlinkTreasury = async (txnId) => {
-    try {
-      const txn = treasury.find(t => t.id === txnId);
-      if (!txn || !txn.linked_invoice_id) return;
-      const inv = invoices.find(i => i.id === txn.linked_invoice_id);
-      await dbUpdate('treasury', txnId, { linked_invoice_id: null }, userProfile?.id || user?.id);
-      // Subtract from collected if this was a cash-in transaction
-      if (inv && Number(txn.cash_in) > 0) {
-        const newCollected = Math.max(0, Number(inv.total_collected || 0) - Number(txn.cash_in));
-        await dbUpdate('invoices', inv.id, { total_collected: newCollected }, userProfile?.id || user?.id);
-      }
-      // Update local state immediately
-      const invId = txn.linked_invoice_id;
-      setTreasury(prev => prev.map(t => t.id === txnId ? { ...t, linked_invoice_id: null } : t));
-      if (inv) {
-        setInvoices(prev => prev.map(i => i.id === invId ? {
-          ...i,
-          total_collected: Math.max(0, Number(i.total_collected || 0) - Number(txn.cash_in || 0)),
-          outstanding: Number(i.total_amount || 0) - Math.max(0, Number(i.total_collected || 0) - Number(txn.cash_in || 0)),
-        } : i));
-      }
-    } catch (err) { alert('Unlink error: ' + err.message); }
-  };
-
   const handleSplitTreasury = async () => {
+    if (!canEditTreasury) { alert('You do not have permission to edit treasury entries.'); return; }
     if (!splittingTxn) return;
     const txn = splittingTxn;
     const isIn = Number(txn.cash_in) > 0;
@@ -1084,6 +1022,7 @@ export default function App() {
   };
 
   const handleUnlinkTreasury = async (txn) => {
+    if (!canEditTreasury) { alert('You do not have permission to edit treasury entries.'); return; }
     if (!confirm('Unlink this transaction from order / إلغاء ربط المعاملة من الأمر ' + (selectedInvoice?.order_number || '') + '?')) return;
     try {
       await dbUpdate('treasury', txn.id, { order_number: '' }, user?.id);
@@ -1414,7 +1353,7 @@ export default function App() {
       <div className="text-xs font-semibold text-slate-500 uppercase tracking-wide">{title}</div>
       {titleAr && <div className="text-sm font-bold text-slate-900 mt-0.5" style={{ direction: 'rtl' }}>{titleAr}</div>}
       <div className="flex items-end justify-between">
-        <div className="text-3xl font-extrabold mt-2" style={{ color: color || '#e2e8f0' }}>{value}</div>
+        <div className="text-3xl font-extrabold mt-2">{value}</div>
         {spark && <Sparkline data={spark} color={color} />}
       </div>
       {sub && <div className="text-xs text-slate-500 mt-1.5">{sub}</div>}
@@ -2057,7 +1996,7 @@ export default function App() {
                           <div className="text-[10px] text-slate-500">{txn.transaction_date}</div>
                         </div>
                         <div className="text-sm font-bold text-emerald-600 mr-2">{fE(txn.cash_in)}</div>
-                        <button onClick={() => { setEditingTxn(txn.id); setFormData({}); }}
+                        {canEditTreasury && <><button onClick={() => { setEditingTxn(txn.id); setFormData({}); }}
                           className="px-2 py-0.5 rounded border border-blue-300 text-blue-600 text-[10px] mr-1 hover:bg-blue-50">
                           Edit
                         </button>
@@ -2068,7 +2007,7 @@ export default function App() {
                         <button onClick={() => handleUnlinkTreasury(txn)}
                           className="px-2 py-0.5 rounded border border-red-300 text-red-500 text-[10px] hover:bg-red-50">
                           Unlink
-                        </button>
+                        </button></>}
                       </div>
                     )}
                   </div>
@@ -2117,15 +2056,15 @@ export default function App() {
               );
             })()}
 
-            {/* Link Existing Transaction */}
-            {!showLinkSearch ? (
-              <button onClick={() => { setShowLinkSearch(true); setLinkSearch(''); }}
+            {/* Link to Treasury */}
+            {showLinkSearch !== 'treasury' ? (
+              <button onClick={() => { setShowLinkSearch('treasury'); setLinkSearch(''); }}
                 className="px-4 py-2 bg-purple-500 text-white rounded-lg font-semibold text-sm hover:bg-purple-600 transition mb-3 mr-2">
-                🔗 Link Transaction / ربط معاملة
+                🏦 Link Treasury / ربط الخزنة
               </button>
             ) : (
               <div className="bg-purple-50 rounded-lg p-4 border border-purple-200 mb-3">
-                <h4 className="text-sm font-bold text-purple-800 mb-1">Search Treasury & Bank to Link / بحث للربط</h4>
+                <h4 className="text-sm font-bold text-purple-800 mb-1">Search Treasury / بحث الخزنة</h4>
                 <input value={linkSearch} onChange={e => setLinkSearch(e.target.value)}
                   placeholder="Search name, date, amount / بحث"
                   className="w-full px-3 py-2 rounded-lg border border-purple-200 text-sm mb-2" autoFocus />
@@ -2137,17 +2076,8 @@ export default function App() {
                       const haystack = [t.description || '', t.transaction_date || '', String(t.cash_in || 0)].join(' ');
                       return words.every(w => haystack.includes(w));
                     }).slice(0, 15);
-                  const egyptResults = egyptBankTxns
-                    .filter(t => Number(t.amount) > 0 && !t.hidden)
-                    .filter(t => {
-                      const haystack = [t.description || '', t.date || '', String(t.amount || 0)].join(' ');
-                      return words.every(w => haystack.includes(w));
-                    }).slice(0, 20);
                   return (
                     <div className="max-h-[300px] overflow-auto rounded border border-purple-200 bg-white">
-                      {treasuryResults.length > 0 && (
-                        <div className="px-2 py-1 bg-slate-100 text-[9px] font-bold text-slate-500 uppercase sticky top-0">💰 Treasury / الخزنة</div>
-                      )}
                       {treasuryResults.map(txn => (
                         <div key={txn.id} className="flex justify-between items-center px-3 py-2 border-b border-slate-50 hover:bg-purple-50">
                           <div className="flex-1">
@@ -2160,9 +2090,39 @@ export default function App() {
                           </button>
                         </div>
                       ))}
-                      {egyptResults.length > 0 && (
-                        <div className="px-2 py-1 bg-emerald-100 text-[9px] font-bold text-emerald-700 uppercase sticky top-0">🇪🇬 Egypt Bank / بنك مصر</div>
+                      {treasuryResults.length === 0 && (
+                        <div className="px-3 py-3 text-xs text-slate-400 text-center">No matching treasury transactions</div>
                       )}
+                    </div>
+                  );
+                })()}
+                <button onClick={() => { setShowLinkSearch(false); setLinkSearch(''); }}
+                  className="mt-2 px-3 py-1 border border-slate-200 rounded text-xs">Cancel / إلغاء</button>
+              </div>
+            )}
+
+            {/* Link to Egypt Bank */}
+            {showLinkSearch !== 'egypt' ? (
+              <button onClick={() => { setShowLinkSearch('egypt'); setLinkSearch(''); }}
+                className="px-4 py-2 bg-emerald-500 text-white rounded-lg font-semibold text-sm hover:bg-emerald-600 transition mb-3 mr-2">
+                🇪🇬 Link Egypt Bank / ربط بنك مصر
+              </button>
+            ) : (
+              <div className="bg-emerald-50 rounded-lg p-4 border border-emerald-200 mb-3">
+                <h4 className="text-sm font-bold text-emerald-800 mb-1">Search Egypt Bank / بحث بنك مصر</h4>
+                <input value={linkSearch} onChange={e => setLinkSearch(e.target.value)}
+                  placeholder="Search description, date, amount / بحث"
+                  className="w-full px-3 py-2 rounded-lg border border-emerald-200 text-sm mb-2" autoFocus />
+                {linkSearch.length >= 2 && (() => {
+                  const words = linkSearch.split(/\s+/).filter(w => w.length > 0);
+                  const egyptResults = egyptBankTxns
+                    .filter(t => Number(t.amount) > 0 && !t.hidden)
+                    .filter(t => {
+                      const haystack = [t.description || '', t.date || '', String(t.amount || 0)].join(' ');
+                      return words.every(w => haystack.includes(w));
+                    }).slice(0, 20);
+                  return (
+                    <div className="max-h-[300px] overflow-auto rounded border border-emerald-200 bg-white">
                       {egyptResults.map(txn => {
                         const alreadyLinked = txn.matched_invoice_id;
                         const linkedToThis = txn.matched_invoice_id === selectedInvoice.id;
@@ -2193,8 +2153,8 @@ export default function App() {
                         </div>
                         );
                       })}
-                      {treasuryResults.length === 0 && egyptResults.length === 0 && (
-                        <div className="px-3 py-3 text-xs text-slate-400 text-center">No matching transactions found</div>
+                      {egyptResults.length === 0 && (
+                        <div className="px-3 py-3 text-xs text-slate-400 text-center">No matching Egypt Bank transactions</div>
                       )}
                     </div>
                   );
@@ -2343,16 +2303,6 @@ export default function App() {
                                 {txn.subcategory && (' > ' + txn.subcategory)}
                               </div>
                             )}
-                            {txn.linked_invoice_id && (() => {
-                              const linkedInv = invoices.find(i => i.id === txn.linked_invoice_id);
-                              return linkedInv ? (
-                                <div className="text-[9px] text-emerald-600 mt-0.5 flex items-center gap-1">
-                                  <span>✅ Linked → {linkedInv.customer_name || linkedInv.order_number} ({fE(linkedInv.total_amount)})</span>
-                                  <button onClick={(e) => { e.stopPropagation(); unlinkTreasury(txn.id); }}
-                                    className="text-red-400 hover:text-red-600 underline ml-1">unlink</button>
-                                </div>
-                              ) : null;
-                            })()}
                           </td>
                           <td className="px-3 py-2 text-xs text-right text-emerald-600 font-semibold">
                             {txn.cash_in > 0 ? fE(txn.cash_in) : ''}
@@ -2360,15 +2310,11 @@ export default function App() {
                           <td className="px-3 py-2 text-xs text-right text-red-500 font-semibold">
                             {txn.cash_out > 0 ? fE(txn.cash_out) : ''}
                           </td>
-                          <td className="px-3 py-2 flex gap-1 flex-wrap">
-                            <button onClick={() => { setEditingTxn(txn.id); setFormData({}); }}
+                          <td className="px-3 py-2 flex gap-1">
+                            {canEditTreasury && <><button onClick={() => { setEditingTxn(txn.id); setFormData({}); }}
                               className="px-2 py-0.5 rounded border border-blue-300 text-blue-600 text-[10px]">Edit</button>
                             <button onClick={() => { setSplittingTxn(txn); const isIn = Number(txn.cash_in) > 0; const total = isIn ? Number(txn.cash_in) : Number(txn.cash_out); setSplits([{ order: txn.order_number || '', amount: total }, { order: '', amount: 0 }]); }}
-                              className="px-2 py-0.5 rounded border border-purple-300 text-purple-600 text-[10px]">Split</button>
-                            {Number(txn.cash_in) > 0 && !txn.linked_invoice_id && (
-                              <button onClick={() => { setLinkingTreasuryTxn(txn); setTreasuryInvSearch(''); }}
-                                className="px-2 py-0.5 rounded border border-emerald-300 text-emerald-600 text-[10px]">🔗 Link</button>
-                            )}
+                              className="px-2 py-0.5 rounded border border-purple-300 text-purple-600 text-[10px]">Split</button></>}
                           </td>
                         </tr>
                         )
@@ -2380,91 +2326,6 @@ export default function App() {
             )}
           </Modal>
         )}
-
-        {/* TREASURY → INVOICE LINK MODAL */}
-        {linkingTreasuryTxn && (() => {
-          const txn = linkingTreasuryTxn;
-          const txnAmount = Number(txn.cash_in || 0);
-          const linkableInvoices = invoices.filter(inv => {
-            if (treasuryInvSearch) {
-              const q = treasuryInvSearch.toLowerCase();
-              const haystack = [inv.customer_name || '', inv.customer_name_en || '', inv.order_number || '', String(inv.total_amount || ''), inv.invoice_date || ''].join(' ').toLowerCase();
-              if (!haystack.includes(q)) return false;
-            }
-            return true;
-          }).sort((a, b) => {
-            // Smart sort: closest amount match first, then by date
-            const aDiff = Math.abs(Number(a.total_amount || 0) - txnAmount);
-            const bDiff = Math.abs(Number(b.total_amount || 0) - txnAmount);
-            if (aDiff !== bDiff) return aDiff - bDiff;
-            return (b.invoice_date || '').localeCompare(a.invoice_date || '');
-          }).slice(0, 30);
-          return (
-            <div className="fixed inset-0 bg-black/50 z-50 flex items-end sm:items-center justify-center p-0 sm:p-4" onClick={() => setLinkingTreasuryTxn(null)}>
-              <div className="bg-white rounded-t-2xl sm:rounded-2xl w-full sm:max-w-lg max-h-[85vh] overflow-hidden" onClick={e => e.stopPropagation()}>
-                <div className="p-4 border-b bg-gradient-to-r from-emerald-50 to-white">
-                  <div className="flex justify-between items-start">
-                    <div>
-                      <h3 className="font-bold text-sm">🔗 Link Treasury → Invoice / ربط بفاتورة</h3>
-                      <p className="text-[10px] text-slate-500 mt-0.5" style={{direction:'rtl'}}>
-                        {txn.transaction_date} — {txn.description}
-                      </p>
-                      <div className="mt-1 flex items-center gap-2">
-                        <span className="px-2 py-0.5 bg-emerald-100 text-emerald-700 rounded text-xs font-bold">
-                          Cash In: {fE(txnAmount)}
-                        </span>
-                        {txn.order_number && (
-                          <span className="px-2 py-0.5 bg-blue-100 text-blue-700 rounded text-[10px] font-semibold">
-                            Order: {txn.order_number}
-                          </span>
-                        )}
-                      </div>
-                    </div>
-                    <button onClick={() => setLinkingTreasuryTxn(null)} className="text-slate-400 text-lg hover:text-slate-600">✕</button>
-                  </div>
-                  <input type="text" value={treasuryInvSearch}
-                    onChange={e => setTreasuryInvSearch(e.target.value)}
-                    placeholder="Search by customer, order #, amount, date... / بحث"
-                    className="w-full border rounded-lg px-3 py-2 text-xs mt-3" autoFocus />
-                </div>
-                <div className="overflow-y-auto max-h-[55vh] p-2">
-                  {linkableInvoices.length === 0 ? (
-                    <p className="text-center text-slate-400 text-xs py-8">No invoices found / لم يتم العثور على فواتير</p>
-                  ) : linkableInvoices.map(inv => {
-                    const isExactMatch = Math.abs(Number(inv.total_amount || 0) - txnAmount) < 1;
-                    const isOrderMatch = txn.order_number && inv.order_number === txn.order_number;
-                    return (
-                      <button key={inv.id} onClick={() => linkTreasuryToInvoice(txn.id, inv.id)}
-                        className={'w-full text-left p-3 rounded-lg hover:bg-emerald-50 border-b last:border-0 transition ' + (isExactMatch || isOrderMatch ? 'bg-emerald-50/50 border-emerald-100' : '')}>
-                        <div className="flex justify-between items-start">
-                          <div className="flex-1 min-w-0">
-                            <div className="flex items-center gap-1.5">
-                              <span className="font-semibold text-xs truncate">{inv.customer_name_en || inv.customer_name || 'N/A'}</span>
-                              {isExactMatch && <span className="px-1 py-0.5 bg-emerald-200 text-emerald-800 rounded text-[8px] font-bold flex-shrink-0">EXACT MATCH</span>}
-                              {isOrderMatch && <span className="px-1 py-0.5 bg-blue-200 text-blue-800 rounded text-[8px] font-bold flex-shrink-0">ORDER MATCH</span>}
-                            </div>
-                            <div className="text-[10px] text-slate-400 mt-0.5">
-                              #{inv.order_number || '—'} • {inv.invoice_date || '—'}
-                            </div>
-                          </div>
-                          <div className="text-right flex-shrink-0 ml-2">
-                            <div className="font-bold text-sm text-blue-600">{fE(inv.total_amount)}</div>
-                            <div className="text-[10px]">
-                              <span className="text-emerald-600">Paid: {fE(inv.total_collected || 0)}</span>
-                              {Number(inv.outstanding || 0) > 0 && (
-                                <span className="text-red-500 ml-1">Owed: {fE(inv.outstanding)}</span>
-                              )}
-                            </div>
-                          </div>
-                        </div>
-                      </button>
-                    );
-                  })}
-                </div>
-              </div>
-            </div>
-          );
-        })()}
 
         {/* SPLIT PAYMENT MODAL */}
         {splittingTxn && (
@@ -3196,65 +3057,6 @@ export default function App() {
         ========================================== */}
         {tab === 'dashboard' && (
           <div>
-            {/* ===== COMMAND CENTER HEADER ===== */}
-            <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 16, padding: '14px 0' }}>
-              <div style={{ width: 4, height: 32, borderRadius: 2, background: 'linear-gradient(180deg, #38bdf8, #a78bfa)' }} />
-              <div>
-                <h2 style={{ fontSize: 18, fontWeight: 900, color: '#e2e8f0', letterSpacing: '0.04em', margin: 0 }}>COMMAND CENTER</h2>
-                <p style={{ fontSize: 10, color: '#64748b', letterSpacing: '0.1em', textTransform: 'uppercase', margin: 0 }}>Reminders · Messages · Alerts</p>
-              </div>
-              <div style={{ flex: 1, height: 1, background: 'linear-gradient(90deg, rgba(56,189,248,0.2), transparent)' }} />
-            </div>
-
-            {/* ===== TODAY'S EVENTS + SCORECARD ===== */}
-            {(() => {
-              const myId = userProfile?.id;
-              const todayStr = new Date().toISOString().substring(0, 10);
-              const myTicketsCount = dashTickets.filter(t => t.assigned_to === myId && t.status !== 'Closed').length;
-              const assignedByMe = dashTickets.filter(t => t.created_by === myId && t.assigned_to !== myId && t.status !== 'Closed').length;
-              const teamTicketsCount = dashTickets.filter(t => t.status !== 'Closed' && t.assigned_to !== myId && t.created_by !== myId).length;
-              const todayEvents = dashEvents.filter(e => e.event_date === todayStr && (e.assigned_to === myId || e.created_by === myId || !e.assigned_to));
-              const myFollowUps = dashFollowUps.filter(fu => fu.assigned_to === myId || fu.created_by === myId);
-              return (
-                <div style={{ marginBottom: 16 }}>
-                  {/* ── TODAY'S EVENTS — first thing you see ── */}
-                  {todayEvents.length > 0 && (
-                    <div style={{ background: 'rgba(17,24,39,0.7)', border: '1px solid rgba(52,211,153,0.15)', borderRadius: 12, padding: 12, marginBottom: 10 }}>
-                      <div style={{ fontSize: 11, fontWeight: 800, color: '#34d399', marginBottom: 8, letterSpacing: '0.05em' }}>📅 TODAY'S SCHEDULE</div>
-                      <div style={{ display: 'flex', gap: 8, overflowX: 'auto', paddingBottom: 4 }}>
-                        {todayEvents.slice(0, 6).map(ev => (
-                          <div key={ev.id} onClick={() => setTab('calendar')}
-                            style={{ flexShrink: 0, background: 'rgba(52,211,153,0.08)', border: '1px solid rgba(52,211,153,0.15)', borderRadius: 8, padding: '8px 12px', cursor: 'pointer', minWidth: 180 }}>
-                            <div style={{ fontSize: 11, fontWeight: 700, color: '#34d399', fontFamily: 'monospace' }}>{ev.event_time ? ev.event_time.substring(0,5) : 'All day'}</div>
-                            <div style={{ fontSize: 12, fontWeight: 600, color: '#e2e8f0', marginTop: 2 }}>{ev.title}</div>
-                            {ev.event_type && <div style={{ fontSize: 9, color: '#64748b', marginTop: 2 }}>{ev.event_type}</div>}
-                          </div>
-                        ))}
-                      </div>
-                    </div>
-                  )}
-
-                  {/* ── SCORECARD ── */}
-                  <div style={{ display: 'grid', gridTemplateColumns: 'repeat(5, 1fr)', gap: 8, marginBottom: 10 }}>
-                    {[
-                      { label: 'My Tickets', value: myTicketsCount, color: '#60a5fa', icon: '🎫', click: () => setTab('tickets') },
-                      { label: 'Assigned by Me', value: assignedByMe, color: '#a78bfa', icon: '📤', click: () => setTab('tickets') },
-                      { label: 'Team Tickets', value: teamTicketsCount, color: '#38bdf8', icon: '👥', click: () => setTab('tickets') },
-                      { label: "Today's Events", value: todayEvents.length, color: '#34d399', icon: '📅', click: () => setTab('calendar') },
-                      { label: 'Follow-ups', value: myFollowUps.length, color: '#fbbf24', icon: '🔔', click: () => setTab('crm') },
-                    ].map((s, i) => (
-                      <div key={i} onClick={s.click}
-                        style={{ background: 'rgba(17,24,39,0.7)', border: '1px solid rgba(255,255,255,0.08)', borderRadius: 12, padding: '12px 10px', textAlign: 'center', cursor: 'pointer', transition: 'all 0.2s' }}
-                        className="hover:border-blue-500/30">
-                        <div style={{ fontSize: 24, fontWeight: 900, color: s.color, fontFamily: 'monospace' }}>{s.value}</div>
-                        <div style={{ fontSize: 9, color: '#64748b', textTransform: 'uppercase', letterSpacing: '0.08em', marginTop: 2 }}>{s.icon} {s.label}</div>
-                      </div>
-                    ))}
-                  </div>
-                </div>
-              );
-            })()}
-
             {/* ===== TEAM REMINDERS ===== */}
             {(() => {
               const todayStr = new Date().toISOString().substring(0, 10);
@@ -3438,7 +3240,6 @@ export default function App() {
                 </div>
               )}
             </div>
-
 
             {/* ===== ANNOUNCEMENTS / URGENT MESSAGES ===== */}
             {isAdmin && (
@@ -3653,8 +3454,101 @@ export default function App() {
               );
             })()}
 
-
             {/* ===== TICKETS DASHBOARD ===== */}
+            {/* ===== SALES BY DIVISION + TREASURY CATEGORIES (side by side) ===== */}
+            {isAdmin && (() => {
+              const divData = {};
+              filteredInvoices.forEach(inv => {
+                const cust = customers.find(c => c.id === inv.customer_id || c.name === inv.customer_name);
+                const div = inv.division || cust?.group_name || 'Other';
+                divData[div] = (divData[div] || 0) + Number(inv.total_amount || 0);
+              });
+              const divSorted = Object.entries(divData).sort((a, b) => b[1] - a[1]).slice(0, 8);
+              const divMax = divSorted[0]?.[1] || 1;
+
+              const catData = {};
+              filteredTreasury.forEach(t => {
+                const cat = t.expense_category || 'Uncategorized';
+                if (Number(t.cash_out || 0) > 0) catData[cat] = (catData[cat] || 0) + Number(t.cash_out);
+              });
+              const catSorted = Object.entries(catData).sort((a, b) => b[1] - a[1]).slice(0, 8);
+              const catMax = catSorted[0]?.[1] || 1;
+
+              if (divSorted.length <= 1 && catSorted.length <= 1) return null;
+              return (
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-3 mb-4">
+                  {divSorted.length > 1 && (
+                    <div className="bg-white rounded-xl p-4">
+                      <h3 className="text-xs font-extrabold text-slate-700 mb-3">📊 Sales by Division</h3>
+                      <div className="space-y-2">
+                        {divSorted.map(([div, amt], i) => (
+                          <div key={div}>
+                            <div className="flex justify-between text-[10px] mb-0.5">
+                              <span className="font-semibold text-slate-700 truncate max-w-[60%]">{div}</span>
+                              <span className="font-bold text-blue-600">{fE(amt)}</span>
+                            </div>
+                            <div className="h-2 bg-slate-100 rounded-full overflow-hidden">
+                              <div className="h-full rounded-full transition-all" style={{ width: (amt / divMax * 100) + '%', background: COLORS[i % COLORS.length] }} />
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+                  {catSorted.length > 1 && (
+                    <div className="bg-white rounded-xl p-4">
+                      <h3 className="text-xs font-extrabold text-slate-700 mb-3">💸 Treasury Categories</h3>
+                      <div className="space-y-2">
+                        {catSorted.map(([cat, amt], i) => (
+                          <div key={cat}>
+                            <div className="flex justify-between text-[10px] mb-0.5">
+                              <span className="font-semibold text-slate-700 truncate max-w-[60%]">{cat}</span>
+                              <span className="font-bold text-red-500">{fE(amt)}</span>
+                            </div>
+                            <div className="h-2 bg-slate-100 rounded-full overflow-hidden">
+                              <div className="h-full rounded-full transition-all" style={{ width: (amt / catMax * 100) + '%', background: ['#ef4444','#f97316','#eab308','#22c55e','#06b6d4','#8b5cf6','#ec4899','#64748b'][i % 8] }} />
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+                </div>
+              );
+            })()}
+
+            {/* ===== OVERDUE INVOICES ALERT ===== */}
+            {isAdmin && (() => {
+              const todayD = new Date();
+              const overdue = filteredInvoices.filter(i => {
+                if (!i.outstanding || i.outstanding <= 0) return false;
+                const invDate = new Date(i.invoice_date || i.created_at);
+                const daysSince = Math.floor((todayD - invDate) / 86400000);
+                return daysSince > 30;
+              }).map(i => ({ ...i, daysOverdue: Math.floor((todayD - new Date(i.invoice_date || i.created_at)) / 86400000) }))
+                .sort((a, b) => b.daysOverdue - a.daysOverdue).slice(0, 10);
+              if (overdue.length === 0) return null;
+              return (
+                <div className="bg-white rounded-xl p-4 border-l-4 border-l-red-500 mb-4">
+                  <h3 className="text-sm font-extrabold text-red-600 mb-2">⚠️ Overdue Invoices ({overdue.length})</h3>
+                  <div className="space-y-1.5">
+                    {overdue.map(i => (
+                      <div key={i.id} className="flex items-center justify-between py-1.5 border-b border-slate-50 last:border-0 cursor-pointer hover:bg-red-50 rounded px-2 -mx-2" onClick={() => { setSelectedInvoice(i); setTab('sales'); }}>
+                        <div>
+                          <div className="text-xs font-semibold">{i.customer || i.customer_name} — {i.invoice_number || i.order_number}</div>
+                          <div className="text-[10px] text-slate-400">{i.invoice_date} · <span className="text-red-500 font-bold">{i.daysOverdue} days overdue</span></div>
+                        </div>
+                        <div className="text-right">
+                          <div className="text-sm font-bold text-red-600">{fE(i.outstanding)}</div>
+                          <div className="text-[9px] text-slate-400">of {fE(i.amount || i.total_amount)}</div>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              );
+            })()}
+
             {dashTickets.length > 0 && (() => {
               const myId = userProfile?.id;
               const todayStr = new Date().toISOString().substring(0, 10);
@@ -3662,229 +3556,202 @@ export default function App() {
               const getUserName = (id) => (teamUsers || []).find(u => u.id === id)?.name || '';
               const priColor = (p) => p === 'high' ? '#ef4444' : p === 'low' ? '#10b981' : '#f59e0b';
               const timeAgo = (d) => { const m = Math.floor((Date.now() - new Date(d).getTime()) / 60000); if (m < 60) return m + 'm'; const h = Math.floor(m/60); if (h < 24) return h + 'h'; return Math.floor(h/24) + 'd'; };
+              const isMyTicket = (t) => t.assigned_to === myId || t.created_by === myId;
 
-              const myTickets = dashTickets.filter(t => (t.assigned_to === myId || t.created_by === myId) && t.status !== 'Closed');
-              const newlyAssigned = myTickets.filter(t => t.assigned_to === myId && t.created_at >= twoDaysAgo);
-              const myUpdates = recentTicketUpdates.filter(c => c.tickets && (c.tickets.assigned_to === myId || c.tickets.created_by === myId));
-              const overdueTickets = myTickets.filter(t => t.due_date && t.due_date < todayStr);
+              const allOpen = dashTickets.filter(t => t.status !== 'Closed');
+              const myOpen = allOpen.filter(t => isMyTicket(t));
+              const teamOpen = allOpen.filter(t => !isMyTicket(t));
+              const myNew = myOpen.filter(t => t.created_at >= twoDaysAgo);
+              const teamNew = teamOpen.filter(t => t.created_at >= twoDaysAgo);
+              const myUpdates = recentTicketUpdates.filter(c => c.tickets && isMyTicket(c.tickets));
+              const teamUpdates = recentTicketUpdates.filter(c => c.tickets && !isMyTicket(c.tickets));
+              const showAll = hideSections.ticketShowAll;
 
-              const sectionStyle = { background: 'rgba(17,24,39,0.7)', borderRadius: 14, border: '1px solid rgba(255,255,255,0.08)', marginBottom: 10, overflow: 'hidden' };
-              const sectionHeaderStyle = (color, bgColor) => ({ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '10px 14px', borderBottom: '1px solid rgba(255,255,255,0.06)', background: bgColor });
-              const sectionLabel = (icon, text, count, color) => (
-                <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                  <span style={{ fontSize: 14 }}>{icon}</span>
-                  <span style={{ fontSize: 12, fontWeight: 800, color: color, letterSpacing: '0.03em' }}>{text}</span>
-                  <span style={{ fontSize: 10, fontWeight: 800, color: '#fff', background: color, borderRadius: 10, padding: '1px 8px', minWidth: 20, textAlign: 'center' }}>{count}</span>
-                </div>
-              );
-
-              const TicketCard = ({ t, accent }) => (
-                <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '10px 14px', borderBottom: '1px solid rgba(255,255,255,0.04)', cursor: 'pointer', transition: 'background 0.15s' }}
-                  className="hover:bg-white/5" onClick={() => { setOpenTicketId(t.id); setTab('tickets'); }}>
-                  <div style={{ width: 6, height: 6, borderRadius: '50%', background: priColor(t.priority), flexShrink: 0 }} />
-                  <div style={{ flex: 1, minWidth: 0 }}>
-                    <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-                      <span style={{ fontSize: 10, fontWeight: 800, color: '#818cf8', fontFamily: 'monospace' }}>{t.ticket_number}</span>
-                      <span style={{ fontSize: 12, fontWeight: 600, color: '#e2e8f0', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{t.title}</span>
-                    </div>
-                    <div style={{ display: 'flex', gap: 8, marginTop: 3, fontSize: 10, color: '#64748b', alignItems: 'center' }}>
-                      <span style={{ padding: '1px 6px', borderRadius: 4, fontWeight: 700, fontSize: 9,
-                        background: t.status === 'New' ? 'rgba(59,130,246,0.2)' : t.status === 'In Progress' ? 'rgba(234,179,8,0.2)' : 'rgba(139,92,246,0.2)',
-                        color: t.status === 'New' ? '#60a5fa' : t.status === 'In Progress' ? '#fbbf24' : '#a78bfa' }}>{t.status}</span>
-                      {t.assigned_to && <span style={{ color: '#94a3b8' }}>→ {getUserName(t.assigned_to)}</span>}
-                      {t.due_date && t.due_date < todayStr && <span style={{ color: '#f87171', fontWeight: 700 }}>⚠ OVERDUE</span>}
-                      {t.due_date && t.due_date >= todayStr && <span>Due: {t.due_date}</span>}
-                    </div>
+              const TicketRow = ({ t, highlight }) => (
+                <div className="rounded-lg p-2.5 border cursor-pointer hover:shadow-sm transition" onClick={() => { setOpenTicketId(t.id); setTab('tickets'); }}
+                  style={{ background: highlight ? 'rgba(59,130,246,0.06)' : 'rgba(255,255,255,0.6)', borderColor: highlight ? 'rgba(59,130,246,0.2)' : 'rgba(0,0,0,0.06)' }}>
+                  <div className="flex items-center gap-2">
+                    <div className="w-2 h-2 rounded-full flex-shrink-0" style={{ background: priColor(t.priority) }} />
+                    <span style={{ fontSize: '10px', fontWeight: 800, color: '#8b5cf6' }}>{t.ticket_number}</span>
+                    <span style={{ fontSize: '11px', fontWeight: 600, color: '#1e293b' }} className="truncate flex-1">{t.title}</span>
+                    <span style={{ fontSize: '9px', color: '#94a3b8', flexShrink: 0 }}>{timeAgo(t.created_at)}</span>
                   </div>
-                  <span style={{ fontSize: 10, color: '#475569', flexShrink: 0 }}>{timeAgo(t.created_at)}</span>
+                  <div className="flex gap-2 mt-1 items-center" style={{ fontSize: '9px', color: '#64748b' }}>
+                    <span className="px-1.5 py-0.5 rounded" style={{ background: t.status === 'New' ? '#dbeafe' : t.status === 'In Progress' ? '#fef3c7' : t.status === 'Closed' ? '#f1f5f9' : '#f3e8ff', color: t.status === 'New' ? '#1d4ed8' : t.status === 'In Progress' ? '#b45309' : '#6b21a8', fontWeight: 700 }}>{t.status}</span>
+                    {t.assigned_to && <span>→ {getUserName(t.assigned_to)}</span>}
+                    {t.due_date && t.due_date < todayStr && <span style={{ color: '#dc2626', fontWeight: 700 }}>⚠️ OVERDUE</span>}
+                    {t.due_date && t.due_date >= todayStr && <span>Due: {t.due_date}</span>}
+                    {highlight && <span style={{ color: '#2563eb', fontWeight: 700 }}>✨ NEW</span>}
+                  </div>
                 </div>
               );
 
-              const UpdateCard = ({ c }) => {
+              const UpdateRow = ({ c }) => {
                 const ticket = c.tickets;
                 if (!ticket) return null;
                 const commenter = (teamUsers || []).find(u => u.id === c.created_by);
                 return (
-                  <div style={{ display: 'flex', gap: 10, padding: '10px 14px', borderBottom: '1px solid rgba(255,255,255,0.04)', cursor: 'pointer', transition: 'background 0.15s' }}
-                    className="hover:bg-white/5" onClick={() => { setOpenTicketId(ticket.id); setTab('tickets'); }}>
-                    <div style={{ width: 28, height: 28, borderRadius: '50%', background: 'rgba(139,92,246,0.15)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 12, flexShrink: 0 }}>
-                      {c.is_system ? '🤖' : '💬'}
+                  <div className="rounded-lg p-2.5 border cursor-pointer hover:shadow-sm" onClick={() => { setOpenTicketId(ticket.id); setTab('tickets'); }}
+                    style={{ background: 'rgba(139,92,246,0.04)', borderColor: 'rgba(139,92,246,0.12)' }}>
+                    <div className="flex items-center gap-1.5">
+                      <span style={{ fontSize: '10px', fontWeight: 800, color: '#8b5cf6' }}>{ticket.ticket_number}</span>
+                      <span style={{ fontSize: '11px', fontWeight: 600, color: '#1e293b' }} className="truncate flex-1">{ticket.title}</span>
+                      <span style={{ fontSize: '9px', color: '#94a3b8' }}>{timeAgo(c.created_at)}</span>
                     </div>
-                    <div style={{ flex: 1, minWidth: 0 }}>
-                      <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-                        <span style={{ fontSize: 10, fontWeight: 800, color: '#818cf8', fontFamily: 'monospace' }}>{ticket.ticket_number}</span>
-                        <span style={{ fontSize: 11, fontWeight: 600, color: '#e2e8f0', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{ticket.title}</span>
-                      </div>
-                      <div style={{ fontSize: 11, color: '#94a3b8', marginTop: 2 }}>
-                        <span style={{ fontWeight: 700, color: '#a78bfa' }}>{commenter?.name || 'System'}</span>: {(c.comment_text || '').substring(0, 100)}{(c.comment_text || '').length > 100 ? '…' : ''}
-                      </div>
+                    <div style={{ fontSize: '10px', color: '#475569', marginTop: '2px' }}>
+                      {c.is_system ? '🤖' : '💬'} <span style={{ fontWeight: 700, color: '#6d28d9' }}>{commenter?.name || 'System'}</span>: {(c.comment_text || '').substring(0, 120)}{(c.comment_text || '').length > 120 ? '...' : ''}
                     </div>
-                    <span style={{ fontSize: 10, color: '#475569', flexShrink: 0, marginTop: 2 }}>{timeAgo(c.created_at)}</span>
                   </div>
                 );
               };
 
-              const recentlyUpdated = myTickets.filter(t => t.updated_at && t.updated_at >= twoDaysAgo).sort((a,b) => (b.updated_at||'').localeCompare(a.updated_at||''));
-
-              const toggleSection = (key) => setHideSections(prev => ({...prev, [key]: !prev[key]}));
-              const isExpanded = (key) => hideSections[key] === true;
-
-              const CollapsibleSection = ({ id, icon, title, count, color, bgColor, borderColor, items, renderItem, defaultShow }) => {
-                const show = defaultShow || 5;
-                const expanded = isExpanded('dash_' + id);
-                const visible = expanded ? items : items.slice(0, show);
-                if (items.length === 0) return null;
+              const ExpandableList = ({ items, renderItem, max, id }) => {
+                const expanded = hideSections['tktExp_' + id];
+                const limit = max || 5;
+                const show = expanded ? items : items.slice(0, limit);
+                const hasMore = items.length > limit;
                 return (
-                  <div style={{ ...sectionStyle, ...(borderColor ? { border: '1px solid ' + borderColor } : {}) }}>
-                    <div style={sectionHeaderStyle(color, bgColor)} className="cursor-pointer" onClick={() => toggleSection('dash_' + id)}>
-                      {sectionLabel(icon, title, count, color)}
-                      <span style={{ fontSize: 10, color: '#64748b' }}>{expanded ? '▲ Collapse' : '▼ Show All'}</span>
-                    </div>
-                    {visible.map(renderItem)}
-                    {!expanded && items.length > show && (
-                      <div style={{ padding: '8px 14px', fontSize: 11, color: color, fontWeight: 700, textAlign: 'center', cursor: 'pointer', background: 'rgba(255,255,255,0.02)' }}
-                        onClick={() => toggleSection('dash_' + id)}>
-                        Show all {items.length} (+{items.length - show} more) ▼
-                      </div>
+                  <div>
+                    <div className="space-y-1">{show.map(renderItem)}</div>
+                    {hasMore && (
+                      <button className="w-full mt-1.5 py-2 rounded-lg text-xs font-bold transition"
+                        style={{ background: expanded ? '#fef2f2' : '#f3e8ff', color: expanded ? '#dc2626' : '#7c3aed', border: expanded ? '1px solid #fecaca' : '1px solid #e9d5ff' }}
+                        onClick={(e) => { e.stopPropagation(); setHideSections(prev => ({...prev, ['tktExp_' + id]: !expanded})); }}>
+                        {expanded ? `✕ Collapse (showing ${items.length})` : `▼ Show all ${items.length} (+${items.length - limit} more)`}
+                      </button>
                     )}
                   </div>
                 );
               };
 
               return (
-                <div style={{ marginBottom: 16 }}>
-                  {/* ── 1. NEWLY ASSIGNED ── */}
-                  <CollapsibleSection id="newAssign" icon="✨" title="Newly Assigned to You" count={newlyAssigned.length}
-                    color="#60a5fa" bgColor="rgba(59,130,246,0.08)" items={newlyAssigned}
-                    renderItem={(t) => <TicketCard key={t.id} t={t} accent="#60a5fa" />} />
-
-                  {/* ── 2. OVERDUE TICKETS ── */}
-                  <CollapsibleSection id="overdue" icon="🚨" title="Overdue Tickets" count={overdueTickets.length}
-                    color="#f87171" bgColor="rgba(239,68,68,0.1)" borderColor="rgba(239,68,68,0.3)" items={overdueTickets}
-                    renderItem={(t) => <TicketCard key={t.id} t={t} accent="#f87171" />} />
-
-                  {/* ── 3. RECENTLY UPDATED ── */}
-                  {myUpdates.length > 0 && (
-                    <CollapsibleSection id="recentUpd" icon="💬" title="Recently Updated" count={myUpdates.length}
-                      color="#a78bfa" bgColor="rgba(139,92,246,0.08)" items={myUpdates}
-                      renderItem={(c) => <UpdateCard key={c.id} c={c} />} />
-                  )}
-                  {recentlyUpdated.length > 0 && myUpdates.length === 0 && (
-                    <CollapsibleSection id="recentUpd2" icon="🔄" title="Recently Updated Tickets" count={recentlyUpdated.length}
-                      color="#a78bfa" bgColor="rgba(139,92,246,0.08)" items={recentlyUpdated}
-                      renderItem={(t) => <TicketCard key={t.id} t={t} accent="#a78bfa" />} />
-                  )}
-
-                  {/* ── 4. ALL MY OPEN TICKETS ── */}
-                  <CollapsibleSection id="allOpen" icon="📋" title="All My Open Tickets" count={myTickets.length}
-                    color="#94a3b8" bgColor="rgba(255,255,255,0.03)" items={myTickets}
-                    renderItem={(t) => <TicketCard key={t.id} t={t} accent="#94a3b8" />} />
-                </div>
-              );
-            })()}
-
-
-            {/* ===== TEAM ACTIVITY FEED ===== */}
-            {activityFeed.length > 0 && (() => {
-              const expanded = hideSections.dash_teamFeed;
-              const visible = expanded ? activityFeed.slice(0, 100) : activityFeed.slice(0, 5);
-              return (
-              <div style={{ background: 'rgba(17,24,39,0.7)', borderRadius: 14, border: '1px solid rgba(255,255,255,0.08)', marginBottom: 16, overflow: 'hidden' }}>
-                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '10px 14px', borderBottom: '1px solid rgba(255,255,255,0.06)', background: 'rgba(52,211,153,0.06)', cursor: 'pointer' }}
-                  onClick={() => setHideSections(prev => ({...prev, dash_teamFeed: !prev.dash_teamFeed}))}>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                    <span style={{ width: 8, height: 8, borderRadius: '50%', background: '#34d399', boxShadow: '0 0 8px rgba(52,211,153,0.5)', animation: 'pulse 2s infinite' }} />
-                    <span style={{ fontSize: 12, fontWeight: 800, color: '#34d399', letterSpacing: '0.03em' }}>Team Activity</span>
-                    <span style={{ fontSize: 10, fontWeight: 800, color: '#fff', background: '#34d399', borderRadius: 10, padding: '1px 8px' }}>{activityFeed.length}</span>
+                <div className="mb-4">
+                  <div className="flex justify-between items-center mb-2">
+                    <div className="flex items-center gap-2 cursor-pointer" onClick={() => setHideSections({...hideSections, ticketDash: !hideSections.ticketDash})}>
+                      <h3 className="text-sm font-bold" style={{ color: '#8b5cf6' }}>🎫 Tickets — {myOpen.length} mine open{isAdmin ? `, ${allOpen.length} total` : ''}</h3>
+                      <span className="text-xs text-slate-400">{hideSections.ticketDash ? '👁️' : '🙈'}</span>
+                    </div>
+                    {!hideSections.ticketDash && isAdmin && (
+                      <button onClick={() => setHideSections({...hideSections, ticketShowAll: !showAll})}
+                        className="px-2.5 py-1 rounded-lg text-[10px] font-semibold"
+                        style={{ background: showAll ? '#8b5cf6' : '#f3e8ff', color: showAll ? '#fff' : '#8b5cf6' }}>
+                        {showAll ? '👥 Showing All' : '👤 My Tickets'}
+                      </button>
+                    )}
                   </div>
-                  <span style={{ fontSize: 10, color: '#64748b' }}>{expanded ? '▲ Collapse' : '▼ Show All'}</span>
-                </div>
-                {visible.map((a, i) => {
-                  const who = (teamUsers || []).find(u => u.id === a.user_id);
-                  const name = who?.name || 'System';
-                  const initials = name.split(' ').map(w => w[0]).join('').toUpperCase().substring(0, 2);
-                  const colors = ['bg-blue-500','bg-purple-500','bg-emerald-500','bg-amber-500','bg-rose-500','bg-cyan-500'];
-                  const color = colors[(name.charCodeAt(0) || 0) % colors.length];
-                  const timeAgo = (() => {
-                    const diff = Date.now() - new Date(a.created_at).getTime();
-                    const mins = Math.floor(diff / 60000);
-                    if (mins < 1) return 'just now';
-                    if (mins < 60) return mins + 'm ago';
-                    const hrs = Math.floor(mins / 60);
-                    if (hrs < 24) return hrs + 'h ago';
-                    return Math.floor(hrs / 24) + 'd ago';
-                  })();
-                  const icon = a.log_category === 'finance' ? '💰' : a.log_category === 'crm' ? '🤝' : a.log_category === 'ticket' ? '🎫' : a.log_category === 'shipping' ? '🚢' : a.log_category === 'admin' ? '⚙️' : a.log_category === 'login' ? '🟢' : '📋';
-                  return (
-                    <div key={a.id || i} style={{ display: 'flex', alignItems: 'flex-start', gap: 10, padding: '8px 14px', borderBottom: '1px solid rgba(255,255,255,0.04)' }}>
-                      <div className={`w-7 h-7 rounded-full ${color} text-white text-[10px] font-bold flex items-center justify-center flex-shrink-0 mt-0.5`}>{initials}</div>
-                      <div style={{ flex: 1, minWidth: 0 }}>
-                        <div style={{ fontSize: 12 }}>
-                          <span style={{ fontWeight: 700, color: '#e2e8f0' }}>{name}</span>
-                          <span style={{ color: '#94a3b8', marginLeft: 6 }}>{a.entry_text}</span>
+
+                  {!hideSections.ticketDash && (<div>
+                    {/* MY NEW TICKETS */}
+                    {myNew.length > 0 && (
+                      <div className="mb-3">
+                        <div className="text-[10px] font-bold text-blue-600 mb-1 uppercase tracking-wider">✨ My New Tickets ({myNew.length})</div>
+                        <ExpandableList items={myNew} max={5} id="myNew" renderItem={(t) => <TicketRow key={t.id} t={t} highlight={true} />} />
+                      </div>
+                    )}
+
+                    {/* MY RECENT UPDATES */}
+                    {myUpdates.length > 0 && (
+                      <div className="mb-3">
+                        <div className="text-[10px] font-bold text-purple-600 mb-1 uppercase tracking-wider">💬 My Recent Updates ({myUpdates.length})</div>
+                        <ExpandableList items={myUpdates} max={5} id="myUpd" renderItem={(c) => <UpdateRow key={c.id} c={c} />} />
+                      </div>
+                    )}
+
+                    {/* MY OPEN TICKETS */}
+                    {myOpen.length > 0 && (
+                      <div className="mb-3">
+                        <div className="text-[10px] font-bold text-slate-600 mb-1 uppercase tracking-wider">📋 My Open Tickets ({myOpen.length})</div>
+                        <ExpandableList items={myOpen} max={5} id="myOpen" renderItem={(t) => <TicketRow key={t.id} t={t} highlight={false} />} />
+                      </div>
+                    )}
+
+                    {/* ADMIN: TEAM SECTION */}
+                    {isAdmin && showAll && teamOpen.length > 0 && (
+                      <div className="mb-3 pt-2" style={{ borderTop: '2px solid rgba(139,92,246,0.15)' }}>
+                        {teamNew.length > 0 && (
+                          <div className="mb-3">
+                            <div className="text-[10px] font-bold text-blue-600 mb-1 uppercase tracking-wider">✨ Team New Tickets ({teamNew.length})</div>
+                            <ExpandableList items={teamNew} max={5} id="teamNew" renderItem={(t) => <TicketRow key={t.id} t={t} highlight={true} />} />
+                          </div>
+                        )}
+
+                        {teamUpdates.length > 0 && (
+                          <div className="mb-3">
+                            <div className="text-[10px] font-bold text-purple-600 mb-1 uppercase tracking-wider">💬 Team Recent Updates ({teamUpdates.length})</div>
+                            <ExpandableList items={teamUpdates} max={5} id="teamUpd" renderItem={(c) => <UpdateRow key={c.id} c={c} />} />
+                          </div>
+                        )}
+
+                        <div className="mb-3">
+                          <div className="text-[10px] font-bold text-slate-500 mb-1 uppercase tracking-wider">📋 Team Open Tickets ({teamOpen.length})</div>
+                          <ExpandableList items={teamOpen} max={5} id="teamOpen" renderItem={(t) => <TicketRow key={t.id} t={t} highlight={false} />} />
                         </div>
-                        <div style={{ fontSize: 10, color: '#475569', marginTop: 2 }}>{icon} {a.log_category || 'general'} · {timeAgo}</div>
                       </div>
-                    </div>
-                  );
-                })}
-                {!expanded && activityFeed.length > 5 && (
-                  <div style={{ padding: '8px 14px', fontSize: 11, color: '#34d399', fontWeight: 700, textAlign: 'center', cursor: 'pointer', background: 'rgba(255,255,255,0.02)' }}
-                    onClick={() => setHideSections(prev => ({...prev, dash_teamFeed: true}))}>
-                    Show all ({Math.min(activityFeed.length, 100)}) ▼
-                  </div>
-                )}
-              </div>
+                    )}
+
+                    <button onClick={() => setTab('tickets')} className="w-full py-2 text-center text-xs font-bold text-purple-600 bg-purple-50 rounded-lg hover:bg-purple-100 transition">
+                      Open Tickets Tab →
+                    </button>
+                  </div>)}
+                </div>
               );
             })()}
 
-            {/* ===== PENDING CHECKS ===== */}
-            {pendingChecks && pendingChecks.length > 0 && (isAdmin || modulePerms['Treasury']) && (() => {
-              const expanded = hideSections.dash_pendChecks;
-              const sorted = [...pendingChecks].sort((a,b) => (a.check_date || a.date || '').localeCompare(b.check_date || b.date || ''));
-              const visible = expanded ? sorted : sorted.slice(0, 5);
-              const total = sorted.reduce((a, c) => a + Number(c.amount || 0), 0);
+            {/* ===== EGYPT BANK TRANSACTIONS DASHBOARD ===== */}
+            {egyptBankTxns.length > 0 && (isAdmin || modulePerms['Egypt Bank']) && (() => {
+              const recent = egyptBankTxns.slice(0, 20);
+              const totalIn = egyptBankTxns.filter(t => t.amount > 0).reduce((s, t) => s + Number(t.amount), 0);
+              const totalOut = egyptBankTxns.filter(t => t.amount < 0).reduce((s, t) => s + Math.abs(Number(t.amount)), 0);
+              const unmatched = egyptBankTxns.filter(t => !t.matched_invoice_id).length;
+              const uncategorized = egyptBankTxns.filter(t => !t.category).length;
               return (
-                <div style={{ background: 'rgba(17,24,39,0.7)', borderRadius: 14, border: '1px solid rgba(251,191,36,0.2)', marginBottom: 16, overflow: 'hidden' }}>
-                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '10px 14px', borderBottom: '1px solid rgba(255,255,255,0.06)', background: 'rgba(251,191,36,0.06)', cursor: 'pointer' }}
-                    onClick={() => setHideSections(prev => ({...prev, dash_pendChecks: !prev.dash_pendChecks}))}>
-                    <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                      <span style={{ fontSize: 14 }}>🧾</span>
-                      <span style={{ fontSize: 12, fontWeight: 800, color: '#fbbf24', letterSpacing: '0.03em' }}>Pending Checks</span>
-                      <span style={{ fontSize: 10, fontWeight: 800, color: '#fff', background: '#f59e0b', borderRadius: 10, padding: '1px 8px' }}>{sorted.length}</span>
-                      <span style={{ fontSize: 11, fontWeight: 700, color: '#fbbf24', marginLeft: 8 }}>{fE(total)}</span>
-                    </div>
-                    <span style={{ fontSize: 10, color: '#64748b' }}>{expanded ? '▲ Collapse' : '▼ Show All'}</span>
+                <div className="mb-4">
+                  <div className="flex justify-between items-center mb-2 cursor-pointer" onClick={() => setHideSections({...hideSections, egyptBankDash: !hideSections.egyptBankDash})}>
+                    <h3 className="text-sm font-bold" style={{ color: '#059669' }}>🇪🇬 Egypt Bank — {egyptBankTxns.length} transactions</h3>
+                    <span className="text-xs text-slate-400">{hideSections.egyptBankDash ? '👁️' : '🙈'}</span>
                   </div>
-                  {visible.map((c, i) => (
-                    <div key={c.id || i} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '8px 14px', borderBottom: '1px solid rgba(255,255,255,0.04)' }}>
-                      <div>
-                        <div style={{ fontSize: 12, fontWeight: 600, color: '#e2e8f0' }}>{c.payee || c.description || 'Check #' + (c.check_number || i+1)}</div>
-                        <div style={{ fontSize: 10, color: '#64748b' }}>{c.check_date || c.date || '—'} {c.check_number ? '· #' + c.check_number : ''}</div>
+                  {!hideSections.egyptBankDash && (
+                    <div>
+                      <div className="grid grid-cols-4 gap-2 mb-2">
+                        <div className="bg-green-50 rounded-lg p-2 border border-green-200 text-center">
+                          <div className="text-[9px] text-green-600 font-bold">Deposits</div>
+                          <div className="text-xs font-black text-green-700">{fE(totalIn)}</div>
+                        </div>
+                        <div className="bg-red-50 rounded-lg p-2 border border-red-200 text-center">
+                          <div className="text-[9px] text-red-600 font-bold">Withdrawals</div>
+                          <div className="text-xs font-black text-red-700">{fE(totalOut)}</div>
+                        </div>
+                        <div className="bg-amber-50 rounded-lg p-2 border border-amber-200 text-center">
+                          <div className="text-[9px] text-amber-600 font-bold">Unmatched</div>
+                          <div className="text-xs font-black text-amber-700">{unmatched}</div>
+                        </div>
+                        <div className="bg-slate-50 rounded-lg p-2 border border-slate-200 text-center">
+                          <div className="text-[9px] text-slate-600 font-bold">No Category</div>
+                          <div className="text-xs font-black text-slate-700">{uncategorized}</div>
+                        </div>
                       </div>
-                      <span style={{ fontSize: 13, fontWeight: 800, color: '#fbbf24', fontFamily: 'monospace' }}>{fE(Number(c.amount || 0))}</span>
-                    </div>
-                  ))}
-                  {!expanded && sorted.length > 5 && (
-                    <div style={{ padding: '8px 14px', fontSize: 11, color: '#fbbf24', fontWeight: 700, textAlign: 'center', cursor: 'pointer', background: 'rgba(255,255,255,0.02)' }}
-                      onClick={() => setHideSections(prev => ({...prev, dash_pendChecks: true}))}>
-                      Show all {sorted.length} ▼
+                      <div className="space-y-1 max-h-[250px] overflow-auto">
+                        {recent.map(t => (
+                          <div key={t.id} className="flex items-center justify-between bg-white rounded-lg p-2 border text-xs cursor-pointer hover:bg-slate-50" onClick={() => setTab('egyptbank')}>
+                            <div className="flex-1 min-w-0">
+                              <div className="font-semibold truncate">{t.description || '—'}</div>
+                              <div className="text-[9px] text-slate-400">{t.date} {t.category ? '• ' + (EXPENSE_CATS[t.category] || t.category) : ''}{t.matched_invoice_id ? ' ✅' : ''}</div>
+                            </div>
+                            <div className={'font-bold ml-2 ' + (t.amount > 0 ? 'text-green-600' : 'text-red-600')}>{t.amount > 0 ? '+' : ''}{fE(t.amount)}</div>
+                          </div>
+                        ))}
+                      </div>
+                      <button onClick={() => setTab('egyptbank')} className="w-full mt-2 py-2 text-center text-xs font-bold text-emerald-600 bg-emerald-50 rounded-lg hover:bg-emerald-100 transition">
+                        Open Egypt Bank →
+                      </button>
                     </div>
                   )}
                 </div>
               );
             })()}
 
-
-
-            {/* ===== FINANCIAL DASHBOARD — COMMAND CENTER ===== */}
+            {/* ===== FINANCIAL DASHBOARD (shown first for users with access) ===== */}
             {(isAdmin || modulePerms['Sales'] || modulePerms['Treasury']) && (<>
-            <div className="financial-command">
-            <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 16 }}>
-              <div style={{ width: 4, height: 28, borderRadius: 2, background: 'linear-gradient(180deg, #38bdf8, #818cf8)' }} />
-              <h2 style={{ fontSize: 16, fontWeight: 900, color: '#e2e8f0', letterSpacing: '0.05em' }}>💰 FINANCIAL CONTROL</h2>
-              <div style={{ flex: 1, height: 1, background: 'rgba(255,255,255,0.06)' }} />
-            </div>
             <div className="bg-blue-100 rounded-lg px-3 py-2 mb-3 flex justify-between items-center cursor-pointer" onClick={() => setHideSections({...hideSections, invoices: !hideSections.invoices})}>
               <span className="text-sm font-bold text-blue-800">📋 INVOICES / فواتير العملاء</span>
               <span className="text-xs text-blue-600">{hideSections.invoices ? '👁️ Show' : '🙈 Hide'}</span>
@@ -4065,62 +3932,7 @@ export default function App() {
               );
             })()}
             </>}
-            </div>{/* end financial-command */}
             </>)}
-
-            {/* ===== EGYPT BANK TRANSACTIONS DASHBOARD ===== */}
-            {egyptBankTxns.length > 0 && (isAdmin || modulePerms['Egypt Bank']) && (() => {
-              const recent = egyptBankTxns.slice(0, 20);
-              const totalIn = egyptBankTxns.filter(t => t.amount > 0).reduce((s, t) => s + Number(t.amount), 0);
-              const totalOut = egyptBankTxns.filter(t => t.amount < 0).reduce((s, t) => s + Math.abs(Number(t.amount)), 0);
-              const unmatched = egyptBankTxns.filter(t => !t.matched_invoice_id).length;
-              const uncategorized = egyptBankTxns.filter(t => !t.category).length;
-              return (
-                <div className="mb-4">
-                  <div className="flex justify-between items-center mb-2 cursor-pointer" onClick={() => setHideSections({...hideSections, egyptBankDash: !hideSections.egyptBankDash})}>
-                    <h3 className="text-sm font-bold" style={{ color: '#059669' }}>🇪🇬 Egypt Bank — {egyptBankTxns.length} transactions</h3>
-                    <span className="text-xs text-slate-400">{hideSections.egyptBankDash ? '👁️' : '🙈'}</span>
-                  </div>
-                  {!hideSections.egyptBankDash && (
-                    <div>
-                      <div className="grid grid-cols-4 gap-2 mb-2">
-                        <div className="bg-green-50 rounded-lg p-2 border border-green-200 text-center">
-                          <div className="text-[9px] text-green-600 font-bold">Deposits</div>
-                          <div className="text-xs font-black text-green-700">{fE(totalIn)}</div>
-                        </div>
-                        <div className="bg-red-50 rounded-lg p-2 border border-red-200 text-center">
-                          <div className="text-[9px] text-red-600 font-bold">Withdrawals</div>
-                          <div className="text-xs font-black text-red-700">{fE(totalOut)}</div>
-                        </div>
-                        <div className="bg-amber-50 rounded-lg p-2 border border-amber-200 text-center">
-                          <div className="text-[9px] text-amber-600 font-bold">Unmatched</div>
-                          <div className="text-xs font-black text-amber-700">{unmatched}</div>
-                        </div>
-                        <div className="bg-slate-50 rounded-lg p-2 border border-slate-200 text-center">
-                          <div className="text-[9px] text-slate-600 font-bold">No Category</div>
-                          <div className="text-xs font-black text-slate-700">{uncategorized}</div>
-                        </div>
-                      </div>
-                      <div className="space-y-1 max-h-[250px] overflow-auto">
-                        {recent.map(t => (
-                          <div key={t.id} className="flex items-center justify-between bg-white rounded-lg p-2 border text-xs cursor-pointer hover:bg-slate-50" onClick={() => setTab('egyptbank')}>
-                            <div className="flex-1 min-w-0">
-                              <div className="font-semibold truncate">{t.description || '—'}</div>
-                              <div className="text-[9px] text-slate-400">{t.date} {t.category ? '• ' + (EXPENSE_CATS[t.category] || t.category) : ''}{t.matched_invoice_id ? ' ✅' : ''}</div>
-                            </div>
-                            <div className={'font-bold ml-2 ' + (t.amount > 0 ? 'text-green-600' : 'text-red-600')}>{t.amount > 0 ? '+' : ''}{fE(t.amount)}</div>
-                          </div>
-                        ))}
-                      </div>
-                      <button onClick={() => setTab('egyptbank')} className="w-full mt-2 py-2 text-center text-xs font-bold text-emerald-600 bg-emerald-50 rounded-lg hover:bg-emerald-100 transition">
-                        Open Egypt Bank →
-                      </button>
-                    </div>
-                  )}
-                </div>
-              );
-            })()}
-
 
             {/* ===== USD DOLLAR LEDGER ===== */}
             {(isAdmin || modulePerms['Treasury']) && (() => {
@@ -4180,74 +3992,51 @@ export default function App() {
               );
             })()}
 
-
-            {/* ===== SALES BY DIVISION + TREASURY CATEGORIES (side by side) ===== */}
-            {isAdmin && (() => {
-              const divData = {};
-              filteredInvoices.forEach(inv => {
-                const cust = customers.find(c => c.id === inv.customer_id || c.name === inv.customer_name);
-                const div = inv.division || cust?.group_name || 'Other';
-                divData[div] = (divData[div] || 0) + Number(inv.total_amount || 0);
-              });
-              const divSorted = Object.entries(divData).sort((a, b) => b[1] - a[1]).slice(0, 8);
-              const divMax = divSorted[0]?.[1] || 1;
-
-              const catData = {};
-              filteredTreasury.forEach(t => {
-                const cat = t.expense_category || 'Uncategorized';
-                if (Number(t.cash_out || 0) > 0) catData[cat] = (catData[cat] || 0) + Number(t.cash_out);
-              });
-              const catSorted = Object.entries(catData).sort((a, b) => b[1] - a[1]).slice(0, 8);
-              const catMax = catSorted[0]?.[1] || 1;
-
-              if (divSorted.length <= 1 && catSorted.length <= 1) return null;
-              return (
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-3 mb-4">
-                  {divSorted.length > 1 && (
-                    <div className="bg-white rounded-xl p-4">
-                      <h3 className="text-xs font-extrabold text-slate-700 mb-3">📊 Sales by Division</h3>
-                      <div className="space-y-2">
-                        {divSorted.map(([div, amt], i) => (
-                          <div key={div}>
-                            <div className="flex justify-between text-[10px] mb-0.5">
-                              <span className="font-semibold text-slate-700 truncate max-w-[60%]">{div}</span>
-                              <span className="font-bold text-blue-600">{fE(amt)}</span>
-                            </div>
-                            <div className="h-2 bg-slate-100 rounded-full overflow-hidden">
-                              <div className="h-full rounded-full transition-all" style={{ width: (amt / divMax * 100) + '%', background: COLORS[i % COLORS.length] }} />
-                            </div>
-                          </div>
-                        ))}
-                      </div>
-                    </div>
-                  )}
-                  {catSorted.length > 1 && (
-                    <div className="bg-white rounded-xl p-4">
-                      <h3 className="text-xs font-extrabold text-slate-700 mb-3">💸 Treasury Categories</h3>
-                      <div className="space-y-2">
-                        {catSorted.map(([cat, amt], i) => (
-                          <div key={cat}>
-                            <div className="flex justify-between text-[10px] mb-0.5">
-                              <span className="font-semibold text-slate-700 truncate max-w-[60%]">{cat}</span>
-                              <span className="font-bold text-red-500">{fE(amt)}</span>
-                            </div>
-                            <div className="h-2 bg-slate-100 rounded-full overflow-hidden">
-                              <div className="h-full rounded-full transition-all" style={{ width: (amt / catMax * 100) + '%', background: ['#ef4444','#f97316','#eab308','#22c55e','#06b6d4','#8b5cf6','#ec4899','#64748b'][i % 8] }} />
-                            </div>
-                          </div>
-                        ))}
-                      </div>
-                    </div>
-                  )}
-                </div>
-              );
-            })()}
-
-
             {/* ===== PERSONAL DASHBOARD (tickets, reminders, calendar — after financial for admins, first for team) ===== */}
             <PersonalDashboard user={user} userProfile={userProfile} isAdmin={isAdmin}
               invoices={invoices} customers={customers} navigate={navigate} fE={fE} users={teamUsers} />
 
+            {/* ===== TEAM ACTIVITY FEED ===== */}
+            {activityFeed.length > 0 && (
+              <div className="bg-white rounded-xl p-5 border mt-4">
+                <h3 className="text-sm font-extrabold mb-3 flex items-center gap-2">
+                  <span className="w-2 h-2 rounded-full bg-green-400 animate-pulse" />
+                  Team Activity / نشاط الفريق
+                </h3>
+                <div className="space-y-0.5 max-h-[350px] overflow-auto">
+                  {activityFeed.map((a, i) => {
+                    const who = (teamUsers || []).find(u => u.id === a.user_id);
+                    const name = who?.name || 'System';
+                    const initials = name.split(' ').map(w => w[0]).join('').toUpperCase().substring(0, 2);
+                    const colors = ['bg-blue-500','bg-purple-500','bg-emerald-500','bg-amber-500','bg-rose-500','bg-cyan-500'];
+                    const color = colors[(name.charCodeAt(0) || 0) % colors.length];
+                    const timeAgo = (() => {
+                      const diff = Date.now() - new Date(a.created_at).getTime();
+                      const mins = Math.floor(diff / 60000);
+                      if (mins < 1) return 'just now';
+                      if (mins < 60) return mins + 'm ago';
+                      const hrs = Math.floor(mins / 60);
+                      if (hrs < 24) return hrs + 'h ago';
+                      const days = Math.floor(hrs / 24);
+                      return days + 'd ago';
+                    })();
+                    const icon = a.log_category === 'finance' ? '💰' : a.log_category === 'crm' ? '🤝' : a.log_category === 'ticket' ? '🎫' : a.log_category === 'shipping' ? '🚢' : a.log_category === 'admin' ? '⚙️' : '📋';
+                    return (
+                      <div key={a.id || i} className="flex items-start gap-2.5 py-2 border-b border-slate-50 last:border-0">
+                        <div className={`w-7 h-7 rounded-full ${color} text-white text-[10px] font-bold flex items-center justify-center flex-shrink-0 mt-0.5`}>{initials}</div>
+                        <div className="flex-1 min-w-0">
+                          <div className="text-xs">
+                            <span className="font-bold text-slate-800">{name}</span>
+                            <span className="text-slate-500 ml-1.5">{a.entry_text}</span>
+                          </div>
+                          <div className="text-[10px] text-slate-400 mt-0.5">{icon} {a.log_category || 'general'} · {timeAgo}</div>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
           </div>
         )}
 
@@ -4307,15 +4096,15 @@ export default function App() {
             <div className="grid grid-cols-3 gap-3 mb-3">
               <div className="bg-white rounded-lg p-3 border-l-3" style={{ borderLeftWidth: 3, borderLeftColor: '#0ea5e9' }}>
                 <div className="text-[10px] text-slate-500">Invoiced</div>
-                <div className="text-lg font-extrabold text-sky-600">{fE(totalInvoiced)}</div>
+                <div className="text-lg font-extrabold">{fE(totalInvoiced)}</div>
               </div>
               <div className="bg-white rounded-lg p-3" style={{ borderLeftWidth: 3, borderLeftColor: '#10b981' }}>
                 <div className="text-[10px] text-slate-500">Collected</div>
-                <div className="text-lg font-extrabold text-emerald-600">{fE(totalCollected)}</div>
+                <div className="text-lg font-extrabold">{fE(totalCollected)}</div>
               </div>
               <div className="bg-white rounded-lg p-3" style={{ borderLeftWidth: 3, borderLeftColor: '#ef4444' }}>
                 <div className="text-[10px] text-slate-500">Outstanding</div>
-                <div className="text-lg font-extrabold text-red-500">{fE(totalOutstanding)}</div>
+                <div className="text-lg font-extrabold">{fE(totalOutstanding)}</div>
               </div>
             </div>
             {/* Sales by Division / المبيعات حسب القسم */}
@@ -4664,10 +4453,10 @@ export default function App() {
               <h2 className="text-xl font-extrabold">Treasury / الخزنة</h2>
               <div className="flex gap-2 items-center flex-wrap">
                 <ModeBar />
-                <button onClick={() => setShowAddTreasury(true)}
+                {canEditTreasury && <button onClick={() => setShowAddTreasury(true)}
                   className="px-3 py-1.5 bg-blue-500 text-white rounded-lg text-xs font-semibold hover:bg-blue-600">
                   + New Transaction
-                </button>
+                </button>}
                 <button onClick={() => {
                   const ft = treasury.filter(t => inRange(t.transaction_date, mode, df, dt));
                   const rows = ft.map(t => ({
@@ -4831,32 +4620,15 @@ export default function App() {
                                 <th className="px-2 py-1.5 text-xs">Category</th>
                                 <th className="px-2 py-1.5 text-right">In</th>
                                 <th className="px-2 py-1.5 text-right">Out</th>
-                                <th className="px-2 py-1.5"></th>
                               </tr></thead>
                               <tbody>
                                 {searchResults.sort((a,b) => (b.transaction_date||'').localeCompare(a.transaction_date||'')).slice(0, 300).map(t => (
                                   <tr key={t.id} className="border-b border-slate-50">
                                     <td className="px-2 py-1 text-[10px]">{t.transaction_date}</td>
-                                    <td className="px-2 py-1 text-[10px]" style={{direction:'rtl'}}>
-                                      {t.description}
-                                      {t.linked_invoice_id && (() => {
-                                        const li = invoices.find(i => i.id === t.linked_invoice_id);
-                                        return li ? <div className="text-[9px] text-emerald-600">✅ → {li.customer_name || li.order_number}</div> : null;
-                                      })()}
-                                    </td>
+                                    <td className="px-2 py-1 text-[10px]" style={{direction:'rtl'}}>{t.description}</td>
                                     <td className="px-2 py-1 text-[10px] text-amber-600">{EXPENSE_CATS[t.category] || t.category || ''}{t.subcategory ? ' / ' + t.subcategory : ''}</td>
                                     <td className="px-2 py-1 text-[10px] text-right text-emerald-600 font-semibold">{Number(t.cash_in) > 0 ? fE(t.cash_in) : ''}</td>
                                     <td className="px-2 py-1 text-[10px] text-right text-red-500 font-semibold">{Number(t.cash_out) > 0 ? fE(t.cash_out) : ''}</td>
-                                    <td className="px-2 py-1 text-[10px]">
-                                      {Number(t.cash_in) > 0 && !t.linked_invoice_id && (
-                                        <button onClick={() => { setLinkingTreasuryTxn(t); setTreasuryInvSearch(''); }}
-                                          className="text-blue-500 font-semibold">🔗</button>
-                                      )}
-                                      {t.linked_invoice_id && (
-                                        <button onClick={() => unlinkTreasury(t.id)}
-                                          className="text-red-400 text-[9px] underline">unlink</button>
-                                      )}
-                                    </td>
                                   </tr>
                                 ))}
                               </tbody>
@@ -4873,15 +4645,15 @@ export default function App() {
             <div className="grid grid-cols-3 gap-3 mb-3">
               <div onClick={() => setTreasuryDrill('in')} className="bg-white rounded-lg p-3 cursor-pointer hover:shadow-md" style={{ borderLeftWidth: 3, borderLeftColor: '#10b981' }}>
                 <div className="text-[10px] text-slate-500">Cash In / وارد</div>
-                <div className="text-lg font-extrabold text-emerald-600">{fE(totalCashIn)}</div>
+                <div className="text-lg font-extrabold">{fE(totalCashIn)}</div>
               </div>
               <div onClick={() => setTreasuryDrill('out')} className="bg-white rounded-lg p-3 cursor-pointer hover:shadow-md" style={{ borderLeftWidth: 3, borderLeftColor: '#ef4444' }}>
                 <div className="text-[10px] text-slate-500">Cash Out / منصرف</div>
-                <div className="text-lg font-extrabold text-red-500">{fE(totalCashOut)}</div>
+                <div className="text-lg font-extrabold">{fE(totalCashOut)}</div>
               </div>
               <div onClick={() => setTreasuryDrill('net')} className="bg-white rounded-lg p-3 cursor-pointer hover:shadow-md" style={{ borderLeftWidth: 3, borderLeftColor: totalCashIn > totalCashOut ? '#10b981' : '#ef4444' }}>
                 <div className="text-[10px] text-slate-500">Net / صافي</div>
-                <div className={'text-lg font-extrabold ' + (totalCashIn >= totalCashOut ? 'text-emerald-600' : 'text-red-500')}>{fE(totalCashIn - totalCashOut)}</div>
+                <div className="text-lg font-extrabold">{fE(totalCashIn - totalCashOut)}</div>
               </div>
             </div>
             {query && (() => {
@@ -4917,36 +4689,18 @@ export default function App() {
                       <th className="px-2 py-2 text-xs" style={{ direction: 'rtl' }}>Description</th>
                       <th className="px-2 py-2 text-xs text-right">In</th>
                       <th className="px-2 py-2 text-xs text-right">Out</th>
-                      <th className="px-2 py-2 text-xs"></th>
                     </tr></thead>
                     <tbody>
                       {searchResults.slice(0, 200).map(txn => (
                         <tr key={txn.id} className="border-b border-slate-50">
                           <td className="px-2 py-1.5 text-xs">{txn.transaction_date}</td>
                           <td className="px-2 py-1.5 text-xs font-semibold text-center">{txn.order_number || ''}</td>
-                          <td className="px-2 py-1.5 text-xs" style={{ direction: lang === 'ar' ? 'rtl' : 'ltr' }}>
-                            {tx(txn.description, txn.description_en)}
-                            {txn.linked_invoice_id && (() => {
-                              const linkedInv = invoices.find(i => i.id === txn.linked_invoice_id);
-                              return linkedInv ? (
-                                <div className="text-[9px] text-emerald-600 mt-0.5">
-                                  ✅ → {linkedInv.customer_name || linkedInv.order_number}
-                                  <button onClick={() => unlinkTreasury(txn.id)} className="text-red-400 underline ml-1">unlink</button>
-                                </div>
-                              ) : null;
-                            })()}
-                          </td>
+                          <td className="px-2 py-1.5 text-xs" style={{ direction: lang === 'ar' ? 'rtl' : 'ltr' }}>{tx(txn.description, txn.description_en)}</td>
                           <td className="px-2 py-1.5 text-xs text-right text-emerald-600 font-semibold">
                             {txn.cash_in > 0 ? fE(txn.cash_in) : ''}
                           </td>
                           <td className="px-2 py-1.5 text-xs text-right text-red-500 font-semibold">
                             {txn.cash_out > 0 ? fE(txn.cash_out) : ''}
-                          </td>
-                          <td className="px-2 py-1.5 text-xs">
-                            {Number(txn.cash_in) > 0 && !txn.linked_invoice_id && (
-                              <button onClick={() => { setLinkingTreasuryTxn(txn); setTreasuryInvSearch(''); }}
-                                className="text-[10px] text-blue-500 font-semibold">🔗</button>
-                            )}
                           </td>
                         </tr>
                       ))}
