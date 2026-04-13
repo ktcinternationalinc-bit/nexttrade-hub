@@ -231,6 +231,8 @@ export default function App() {
   const [splits, setSplits] = useState([{ order: '', amount: 0 }, { order: '', amount: 0 }]);
   const [linkSearch, setLinkSearch] = useState('');
   const [showLinkSearch, setShowLinkSearch] = useState(false);
+  const [linkingTreasuryTxn, setLinkingTreasuryTxn] = useState(null);
+  const [treasuryInvSearch, setTreasuryInvSearch] = useState('');
   const [formData, setFormData] = useState({});
   const [hideSections, setHideSections] = useState({});
   const [announcements, setAnnouncements] = useState([]);
@@ -990,6 +992,54 @@ export default function App() {
     } catch (err) {
       alert('Error / خطأ: ' + err.message);
     }
+  };
+
+  // ── Treasury ↔ Invoice Linking ──
+  const linkTreasuryToInvoice = async (txnId, invoiceId) => {
+    try {
+      const txn = treasury.find(t => t.id === txnId);
+      const inv = invoices.find(i => i.id === invoiceId);
+      if (!txn || !inv) return;
+      await dbUpdate('treasury', txnId, { linked_invoice_id: invoiceId }, userProfile?.id || user?.id);
+      // Only add to collected if this is a cash-in transaction
+      if (Number(txn.cash_in) > 0) {
+        const newCollected = Number(inv.total_collected || 0) + Number(txn.cash_in);
+        await dbUpdate('invoices', invoiceId, { total_collected: newCollected }, userProfile?.id || user?.id);
+      }
+      setLinkingTreasuryTxn(null);
+      setTreasuryInvSearch('');
+      // Update local state immediately
+      setTreasury(prev => prev.map(t => t.id === txnId ? { ...t, linked_invoice_id: invoiceId } : t));
+      setInvoices(prev => prev.map(i => i.id === invoiceId ? {
+        ...i,
+        total_collected: Number(i.total_collected || 0) + Number(txn.cash_in || 0),
+        outstanding: Math.max(0, Number(i.total_amount || 0) - Number(i.total_collected || 0) - Number(txn.cash_in || 0)),
+      } : i));
+    } catch (err) { alert('Link error: ' + err.message); }
+  };
+
+  const unlinkTreasury = async (txnId) => {
+    try {
+      const txn = treasury.find(t => t.id === txnId);
+      if (!txn || !txn.linked_invoice_id) return;
+      const inv = invoices.find(i => i.id === txn.linked_invoice_id);
+      await dbUpdate('treasury', txnId, { linked_invoice_id: null }, userProfile?.id || user?.id);
+      // Subtract from collected if this was a cash-in transaction
+      if (inv && Number(txn.cash_in) > 0) {
+        const newCollected = Math.max(0, Number(inv.total_collected || 0) - Number(txn.cash_in));
+        await dbUpdate('invoices', inv.id, { total_collected: newCollected }, userProfile?.id || user?.id);
+      }
+      // Update local state immediately
+      const invId = txn.linked_invoice_id;
+      setTreasury(prev => prev.map(t => t.id === txnId ? { ...t, linked_invoice_id: null } : t));
+      if (inv) {
+        setInvoices(prev => prev.map(i => i.id === invId ? {
+          ...i,
+          total_collected: Math.max(0, Number(i.total_collected || 0) - Number(txn.cash_in || 0)),
+          outstanding: Number(i.total_amount || 0) - Math.max(0, Number(i.total_collected || 0) - Number(txn.cash_in || 0)),
+        } : i));
+      }
+    } catch (err) { alert('Unlink error: ' + err.message); }
   };
 
   const handleSplitTreasury = async () => {
@@ -2293,6 +2343,16 @@ export default function App() {
                                 {txn.subcategory && (' > ' + txn.subcategory)}
                               </div>
                             )}
+                            {txn.linked_invoice_id && (() => {
+                              const linkedInv = invoices.find(i => i.id === txn.linked_invoice_id);
+                              return linkedInv ? (
+                                <div className="text-[9px] text-emerald-600 mt-0.5 flex items-center gap-1">
+                                  <span>✅ Linked → {linkedInv.customer_name || linkedInv.order_number} ({fE(linkedInv.total_amount)})</span>
+                                  <button onClick={(e) => { e.stopPropagation(); unlinkTreasury(txn.id); }}
+                                    className="text-red-400 hover:text-red-600 underline ml-1">unlink</button>
+                                </div>
+                              ) : null;
+                            })()}
                           </td>
                           <td className="px-3 py-2 text-xs text-right text-emerald-600 font-semibold">
                             {txn.cash_in > 0 ? fE(txn.cash_in) : ''}
@@ -2300,11 +2360,15 @@ export default function App() {
                           <td className="px-3 py-2 text-xs text-right text-red-500 font-semibold">
                             {txn.cash_out > 0 ? fE(txn.cash_out) : ''}
                           </td>
-                          <td className="px-3 py-2 flex gap-1">
+                          <td className="px-3 py-2 flex gap-1 flex-wrap">
                             <button onClick={() => { setEditingTxn(txn.id); setFormData({}); }}
                               className="px-2 py-0.5 rounded border border-blue-300 text-blue-600 text-[10px]">Edit</button>
                             <button onClick={() => { setSplittingTxn(txn); const isIn = Number(txn.cash_in) > 0; const total = isIn ? Number(txn.cash_in) : Number(txn.cash_out); setSplits([{ order: txn.order_number || '', amount: total }, { order: '', amount: 0 }]); }}
                               className="px-2 py-0.5 rounded border border-purple-300 text-purple-600 text-[10px]">Split</button>
+                            {Number(txn.cash_in) > 0 && !txn.linked_invoice_id && (
+                              <button onClick={() => { setLinkingTreasuryTxn(txn); setTreasuryInvSearch(''); }}
+                                className="px-2 py-0.5 rounded border border-emerald-300 text-emerald-600 text-[10px]">🔗 Link</button>
+                            )}
                           </td>
                         </tr>
                         )
@@ -2316,6 +2380,91 @@ export default function App() {
             )}
           </Modal>
         )}
+
+        {/* TREASURY → INVOICE LINK MODAL */}
+        {linkingTreasuryTxn && (() => {
+          const txn = linkingTreasuryTxn;
+          const txnAmount = Number(txn.cash_in || 0);
+          const linkableInvoices = invoices.filter(inv => {
+            if (treasuryInvSearch) {
+              const q = treasuryInvSearch.toLowerCase();
+              const haystack = [inv.customer_name || '', inv.customer_name_en || '', inv.order_number || '', String(inv.total_amount || ''), inv.invoice_date || ''].join(' ').toLowerCase();
+              if (!haystack.includes(q)) return false;
+            }
+            return true;
+          }).sort((a, b) => {
+            // Smart sort: closest amount match first, then by date
+            const aDiff = Math.abs(Number(a.total_amount || 0) - txnAmount);
+            const bDiff = Math.abs(Number(b.total_amount || 0) - txnAmount);
+            if (aDiff !== bDiff) return aDiff - bDiff;
+            return (b.invoice_date || '').localeCompare(a.invoice_date || '');
+          }).slice(0, 30);
+          return (
+            <div className="fixed inset-0 bg-black/50 z-50 flex items-end sm:items-center justify-center p-0 sm:p-4" onClick={() => setLinkingTreasuryTxn(null)}>
+              <div className="bg-white rounded-t-2xl sm:rounded-2xl w-full sm:max-w-lg max-h-[85vh] overflow-hidden" onClick={e => e.stopPropagation()}>
+                <div className="p-4 border-b bg-gradient-to-r from-emerald-50 to-white">
+                  <div className="flex justify-between items-start">
+                    <div>
+                      <h3 className="font-bold text-sm">🔗 Link Treasury → Invoice / ربط بفاتورة</h3>
+                      <p className="text-[10px] text-slate-500 mt-0.5" style={{direction:'rtl'}}>
+                        {txn.transaction_date} — {txn.description}
+                      </p>
+                      <div className="mt-1 flex items-center gap-2">
+                        <span className="px-2 py-0.5 bg-emerald-100 text-emerald-700 rounded text-xs font-bold">
+                          Cash In: {fE(txnAmount)}
+                        </span>
+                        {txn.order_number && (
+                          <span className="px-2 py-0.5 bg-blue-100 text-blue-700 rounded text-[10px] font-semibold">
+                            Order: {txn.order_number}
+                          </span>
+                        )}
+                      </div>
+                    </div>
+                    <button onClick={() => setLinkingTreasuryTxn(null)} className="text-slate-400 text-lg hover:text-slate-600">✕</button>
+                  </div>
+                  <input type="text" value={treasuryInvSearch}
+                    onChange={e => setTreasuryInvSearch(e.target.value)}
+                    placeholder="Search by customer, order #, amount, date... / بحث"
+                    className="w-full border rounded-lg px-3 py-2 text-xs mt-3" autoFocus />
+                </div>
+                <div className="overflow-y-auto max-h-[55vh] p-2">
+                  {linkableInvoices.length === 0 ? (
+                    <p className="text-center text-slate-400 text-xs py-8">No invoices found / لم يتم العثور على فواتير</p>
+                  ) : linkableInvoices.map(inv => {
+                    const isExactMatch = Math.abs(Number(inv.total_amount || 0) - txnAmount) < 1;
+                    const isOrderMatch = txn.order_number && inv.order_number === txn.order_number;
+                    return (
+                      <button key={inv.id} onClick={() => linkTreasuryToInvoice(txn.id, inv.id)}
+                        className={'w-full text-left p-3 rounded-lg hover:bg-emerald-50 border-b last:border-0 transition ' + (isExactMatch || isOrderMatch ? 'bg-emerald-50/50 border-emerald-100' : '')}>
+                        <div className="flex justify-between items-start">
+                          <div className="flex-1 min-w-0">
+                            <div className="flex items-center gap-1.5">
+                              <span className="font-semibold text-xs truncate">{inv.customer_name_en || inv.customer_name || 'N/A'}</span>
+                              {isExactMatch && <span className="px-1 py-0.5 bg-emerald-200 text-emerald-800 rounded text-[8px] font-bold flex-shrink-0">EXACT MATCH</span>}
+                              {isOrderMatch && <span className="px-1 py-0.5 bg-blue-200 text-blue-800 rounded text-[8px] font-bold flex-shrink-0">ORDER MATCH</span>}
+                            </div>
+                            <div className="text-[10px] text-slate-400 mt-0.5">
+                              #{inv.order_number || '—'} • {inv.invoice_date || '—'}
+                            </div>
+                          </div>
+                          <div className="text-right flex-shrink-0 ml-2">
+                            <div className="font-bold text-sm text-blue-600">{fE(inv.total_amount)}</div>
+                            <div className="text-[10px]">
+                              <span className="text-emerald-600">Paid: {fE(inv.total_collected || 0)}</span>
+                              {Number(inv.outstanding || 0) > 0 && (
+                                <span className="text-red-500 ml-1">Owed: {fE(inv.outstanding)}</span>
+                              )}
+                            </div>
+                          </div>
+                        </div>
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+            </div>
+          );
+        })()}
 
         {/* SPLIT PAYMENT MODAL */}
         {splittingTxn && (
@@ -3057,7 +3206,7 @@ export default function App() {
               <div style={{ flex: 1, height: 1, background: 'linear-gradient(90deg, rgba(56,189,248,0.2), transparent)' }} />
             </div>
 
-            {/* ===== SCORECARD + TODAY'S EVENTS ===== */}
+            {/* ===== TODAY'S EVENTS + SCORECARD ===== */}
             {(() => {
               const myId = userProfile?.id;
               const todayStr = new Date().toISOString().substring(0, 10);
@@ -3068,7 +3217,24 @@ export default function App() {
               const myFollowUps = dashFollowUps.filter(fu => fu.assigned_to === myId || fu.created_by === myId);
               return (
                 <div style={{ marginBottom: 16 }}>
-                  {/* Scorecard row */}
+                  {/* ── TODAY'S EVENTS — first thing you see ── */}
+                  {todayEvents.length > 0 && (
+                    <div style={{ background: 'rgba(17,24,39,0.7)', border: '1px solid rgba(52,211,153,0.15)', borderRadius: 12, padding: 12, marginBottom: 10 }}>
+                      <div style={{ fontSize: 11, fontWeight: 800, color: '#34d399', marginBottom: 8, letterSpacing: '0.05em' }}>📅 TODAY'S SCHEDULE</div>
+                      <div style={{ display: 'flex', gap: 8, overflowX: 'auto', paddingBottom: 4 }}>
+                        {todayEvents.slice(0, 6).map(ev => (
+                          <div key={ev.id} onClick={() => setTab('calendar')}
+                            style={{ flexShrink: 0, background: 'rgba(52,211,153,0.08)', border: '1px solid rgba(52,211,153,0.15)', borderRadius: 8, padding: '8px 12px', cursor: 'pointer', minWidth: 180 }}>
+                            <div style={{ fontSize: 11, fontWeight: 700, color: '#34d399', fontFamily: 'monospace' }}>{ev.event_time ? ev.event_time.substring(0,5) : 'All day'}</div>
+                            <div style={{ fontSize: 12, fontWeight: 600, color: '#e2e8f0', marginTop: 2 }}>{ev.title}</div>
+                            {ev.event_type && <div style={{ fontSize: 9, color: '#64748b', marginTop: 2 }}>{ev.event_type}</div>}
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+
+                  {/* ── SCORECARD ── */}
                   <div style={{ display: 'grid', gridTemplateColumns: 'repeat(5, 1fr)', gap: 8, marginBottom: 10 }}>
                     {[
                       { label: 'My Tickets', value: myTicketsCount, color: '#60a5fa', icon: '🎫', click: () => setTab('tickets') },
@@ -3085,23 +3251,6 @@ export default function App() {
                       </div>
                     ))}
                   </div>
-
-                  {/* Today's events row */}
-                  {todayEvents.length > 0 && (
-                    <div style={{ background: 'rgba(17,24,39,0.7)', border: '1px solid rgba(255,255,255,0.08)', borderRadius: 12, padding: 12, marginBottom: 10 }}>
-                      <div style={{ fontSize: 11, fontWeight: 800, color: '#34d399', marginBottom: 8, letterSpacing: '0.05em' }}>📅 TODAY'S SCHEDULE</div>
-                      <div style={{ display: 'flex', gap: 8, overflowX: 'auto', paddingBottom: 4 }}>
-                        {todayEvents.slice(0, 6).map(ev => (
-                          <div key={ev.id} onClick={() => setTab('calendar')}
-                            style={{ flexShrink: 0, background: 'rgba(52,211,153,0.08)', border: '1px solid rgba(52,211,153,0.15)', borderRadius: 8, padding: '8px 12px', cursor: 'pointer', minWidth: 180 }}>
-                            <div style={{ fontSize: 11, fontWeight: 700, color: '#34d399', fontFamily: 'monospace' }}>{ev.event_time ? ev.event_time.substring(0,5) : 'All day'}</div>
-                            <div style={{ fontSize: 12, fontWeight: 600, color: '#e2e8f0', marginTop: 2 }}>{ev.title}</div>
-                            {ev.event_type && <div style={{ fontSize: 9, color: '#64748b', marginTop: 2 }}>{ev.event_type}</div>}
-                          </div>
-                        ))}
-                      </div>
-                    </div>
-                  )}
                 </div>
               );
             })()}
@@ -4158,15 +4307,15 @@ export default function App() {
             <div className="grid grid-cols-3 gap-3 mb-3">
               <div className="bg-white rounded-lg p-3 border-l-3" style={{ borderLeftWidth: 3, borderLeftColor: '#0ea5e9' }}>
                 <div className="text-[10px] text-slate-500">Invoiced</div>
-                <div className="text-lg font-extrabold">{fE(totalInvoiced)}</div>
+                <div className="text-lg font-extrabold text-sky-600">{fE(totalInvoiced)}</div>
               </div>
               <div className="bg-white rounded-lg p-3" style={{ borderLeftWidth: 3, borderLeftColor: '#10b981' }}>
                 <div className="text-[10px] text-slate-500">Collected</div>
-                <div className="text-lg font-extrabold">{fE(totalCollected)}</div>
+                <div className="text-lg font-extrabold text-emerald-600">{fE(totalCollected)}</div>
               </div>
               <div className="bg-white rounded-lg p-3" style={{ borderLeftWidth: 3, borderLeftColor: '#ef4444' }}>
                 <div className="text-[10px] text-slate-500">Outstanding</div>
-                <div className="text-lg font-extrabold">{fE(totalOutstanding)}</div>
+                <div className="text-lg font-extrabold text-red-500">{fE(totalOutstanding)}</div>
               </div>
             </div>
             {/* Sales by Division / المبيعات حسب القسم */}
@@ -4682,15 +4831,32 @@ export default function App() {
                                 <th className="px-2 py-1.5 text-xs">Category</th>
                                 <th className="px-2 py-1.5 text-right">In</th>
                                 <th className="px-2 py-1.5 text-right">Out</th>
+                                <th className="px-2 py-1.5"></th>
                               </tr></thead>
                               <tbody>
                                 {searchResults.sort((a,b) => (b.transaction_date||'').localeCompare(a.transaction_date||'')).slice(0, 300).map(t => (
                                   <tr key={t.id} className="border-b border-slate-50">
                                     <td className="px-2 py-1 text-[10px]">{t.transaction_date}</td>
-                                    <td className="px-2 py-1 text-[10px]" style={{direction:'rtl'}}>{t.description}</td>
+                                    <td className="px-2 py-1 text-[10px]" style={{direction:'rtl'}}>
+                                      {t.description}
+                                      {t.linked_invoice_id && (() => {
+                                        const li = invoices.find(i => i.id === t.linked_invoice_id);
+                                        return li ? <div className="text-[9px] text-emerald-600">✅ → {li.customer_name || li.order_number}</div> : null;
+                                      })()}
+                                    </td>
                                     <td className="px-2 py-1 text-[10px] text-amber-600">{EXPENSE_CATS[t.category] || t.category || ''}{t.subcategory ? ' / ' + t.subcategory : ''}</td>
                                     <td className="px-2 py-1 text-[10px] text-right text-emerald-600 font-semibold">{Number(t.cash_in) > 0 ? fE(t.cash_in) : ''}</td>
                                     <td className="px-2 py-1 text-[10px] text-right text-red-500 font-semibold">{Number(t.cash_out) > 0 ? fE(t.cash_out) : ''}</td>
+                                    <td className="px-2 py-1 text-[10px]">
+                                      {Number(t.cash_in) > 0 && !t.linked_invoice_id && (
+                                        <button onClick={() => { setLinkingTreasuryTxn(t); setTreasuryInvSearch(''); }}
+                                          className="text-blue-500 font-semibold">🔗</button>
+                                      )}
+                                      {t.linked_invoice_id && (
+                                        <button onClick={() => unlinkTreasury(t.id)}
+                                          className="text-red-400 text-[9px] underline">unlink</button>
+                                      )}
+                                    </td>
                                   </tr>
                                 ))}
                               </tbody>
@@ -4707,15 +4873,15 @@ export default function App() {
             <div className="grid grid-cols-3 gap-3 mb-3">
               <div onClick={() => setTreasuryDrill('in')} className="bg-white rounded-lg p-3 cursor-pointer hover:shadow-md" style={{ borderLeftWidth: 3, borderLeftColor: '#10b981' }}>
                 <div className="text-[10px] text-slate-500">Cash In / وارد</div>
-                <div className="text-lg font-extrabold">{fE(totalCashIn)}</div>
+                <div className="text-lg font-extrabold text-emerald-600">{fE(totalCashIn)}</div>
               </div>
               <div onClick={() => setTreasuryDrill('out')} className="bg-white rounded-lg p-3 cursor-pointer hover:shadow-md" style={{ borderLeftWidth: 3, borderLeftColor: '#ef4444' }}>
                 <div className="text-[10px] text-slate-500">Cash Out / منصرف</div>
-                <div className="text-lg font-extrabold">{fE(totalCashOut)}</div>
+                <div className="text-lg font-extrabold text-red-500">{fE(totalCashOut)}</div>
               </div>
               <div onClick={() => setTreasuryDrill('net')} className="bg-white rounded-lg p-3 cursor-pointer hover:shadow-md" style={{ borderLeftWidth: 3, borderLeftColor: totalCashIn > totalCashOut ? '#10b981' : '#ef4444' }}>
                 <div className="text-[10px] text-slate-500">Net / صافي</div>
-                <div className="text-lg font-extrabold">{fE(totalCashIn - totalCashOut)}</div>
+                <div className={'text-lg font-extrabold ' + (totalCashIn >= totalCashOut ? 'text-emerald-600' : 'text-red-500')}>{fE(totalCashIn - totalCashOut)}</div>
               </div>
             </div>
             {query && (() => {
@@ -4751,18 +4917,36 @@ export default function App() {
                       <th className="px-2 py-2 text-xs" style={{ direction: 'rtl' }}>Description</th>
                       <th className="px-2 py-2 text-xs text-right">In</th>
                       <th className="px-2 py-2 text-xs text-right">Out</th>
+                      <th className="px-2 py-2 text-xs"></th>
                     </tr></thead>
                     <tbody>
                       {searchResults.slice(0, 200).map(txn => (
                         <tr key={txn.id} className="border-b border-slate-50">
                           <td className="px-2 py-1.5 text-xs">{txn.transaction_date}</td>
                           <td className="px-2 py-1.5 text-xs font-semibold text-center">{txn.order_number || ''}</td>
-                          <td className="px-2 py-1.5 text-xs" style={{ direction: lang === 'ar' ? 'rtl' : 'ltr' }}>{tx(txn.description, txn.description_en)}</td>
+                          <td className="px-2 py-1.5 text-xs" style={{ direction: lang === 'ar' ? 'rtl' : 'ltr' }}>
+                            {tx(txn.description, txn.description_en)}
+                            {txn.linked_invoice_id && (() => {
+                              const linkedInv = invoices.find(i => i.id === txn.linked_invoice_id);
+                              return linkedInv ? (
+                                <div className="text-[9px] text-emerald-600 mt-0.5">
+                                  ✅ → {linkedInv.customer_name || linkedInv.order_number}
+                                  <button onClick={() => unlinkTreasury(txn.id)} className="text-red-400 underline ml-1">unlink</button>
+                                </div>
+                              ) : null;
+                            })()}
+                          </td>
                           <td className="px-2 py-1.5 text-xs text-right text-emerald-600 font-semibold">
                             {txn.cash_in > 0 ? fE(txn.cash_in) : ''}
                           </td>
                           <td className="px-2 py-1.5 text-xs text-right text-red-500 font-semibold">
                             {txn.cash_out > 0 ? fE(txn.cash_out) : ''}
+                          </td>
+                          <td className="px-2 py-1.5 text-xs">
+                            {Number(txn.cash_in) > 0 && !txn.linked_invoice_id && (
+                              <button onClick={() => { setLinkingTreasuryTxn(txn); setTreasuryInvSearch(''); }}
+                                className="text-[10px] text-blue-500 font-semibold">🔗</button>
+                            )}
                           </td>
                         </tr>
                       ))}

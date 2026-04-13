@@ -63,3 +63,12 @@ CREATE INDEX IF NOT EXISTS idx_audit_record ON audit_log(table_name, record_id);
 -- SELECT column_name FROM information_schema.columns WHERE table_name = 'calendar_events' AND column_name = 'meeting_notes';
 -- SELECT column_name FROM information_schema.columns WHERE table_name = 'invoices' AND column_name = 'linked_egypt_bank_id';
 -- SELECT column_name FROM information_schema.columns WHERE table_name = 'audit_log' AND column_name = 'record_id';
+-- SELECT column_name FROM information_schema.columns WHERE table_name = 'treasury' AND column_name = 'linked_invoice_id';
+
+
+-- ─── 7. TREASURY: invoice linking ───
+ALTER TABLE treasury ADD COLUMN IF NOT EXISTS linked_invoice_id UUID;
+
+COMMENT ON COLUMN treasury.linked_invoice_id IS 'FK to invoices — links this treasury cash-in entry to a specific invoice';
+
+CREATE INDEX IF NOT EXISTS idx_treasury_linked_invoice ON treasury(linked_invoice_id);
