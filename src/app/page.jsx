@@ -953,7 +953,8 @@ export default function App() {
 
   const handleAddTreasury = async () => {
     if (!canEditTreasury) { alert('You do not have permission to add treasury entries.'); return; }
-    if (!formData.amount || !formData.date) return;
+    const txDate = formData.date || today();
+    if (!formData.amount) { alert('Please enter an amount / الرجاء إدخال المبلغ'); return; }
     try {
       const isIncome = formData.type === 'in';
       let cat = formData.category || '';
@@ -965,7 +966,7 @@ export default function App() {
         if (rule) { cat = rule.category; subcat = rule.subcategory || ''; }
       }
       await dbInsert('treasury', {
-        transaction_date: formData.date,
+        transaction_date: txDate,
         order_number: formData.orderNumber || '',
         description: formData.desc || '',
         cash_in: isIncome ? Number(formData.amount) : 0,
@@ -976,7 +977,7 @@ export default function App() {
       // Instant local update so entry appears immediately in Recent Transactions
       const tempEntry = {
         id: 'temp-' + Date.now(),
-        transaction_date: formData.date,
+        transaction_date: txDate,
         order_number: formData.orderNumber || '',
         description: formData.desc || '',
         cash_in: isIncome ? Number(formData.amount) : 0,
@@ -4355,7 +4356,7 @@ export default function App() {
                 </select>
                 <input value={query} onChange={e => setQuery(e.target.value)}
                   placeholder="بحث / Search" className="px-3 py-1.5 rounded-lg border border-slate-200 text-xs w-32" />
-                <button onClick={() => setShowAddInvoice(true)}
+                <button onClick={() => { setShowAddInvoice(true); setFormData({ date: today() }); }}
                   className="px-3 py-1.5 bg-blue-500 text-white rounded-lg text-xs font-semibold hover:bg-blue-600">
                   + New Invoice
                 </button>
@@ -4744,7 +4745,7 @@ export default function App() {
                   className="px-2 py-1 rounded-lg border border-slate-200 text-xs font-semibold hover:bg-slate-100">
                   {treasurySort === 'newest' ? '↓ Newest' : '↑ Oldest'}
                 </button>
-                <button onClick={() => setShowAddTreasury(true)}
+                <button onClick={() => { setShowAddTreasury(true); setFormData({ date: today() }); }}
                   className="px-3 py-1.5 bg-blue-500 text-white rounded-lg text-xs font-semibold hover:bg-blue-600">
                   + New Transaction
                 </button>
@@ -6629,7 +6630,7 @@ export default function App() {
         {showFAB && (
           <div className="absolute bottom-14 right-0 bg-white rounded-xl shadow-2xl border w-52 overflow-hidden mb-2">
             {[
-              ['💰 New Invoice', () => { setTab('sales'); setShowAddInvoice(true); }],
+              ['💰 New Invoice', () => { setTab('sales'); setFormData({ date: today() }); setShowAddInvoice(true); }],
               ['🎫 New Ticket', () => setTab('tickets')],
               ['📋 Daily Log', () => setTab('log')],
               ['📢 Announcement', () => setTab('admin')],
