@@ -70,43 +70,6 @@ const TABS = [
 ];
 
 // ============================================
-// DATE PICKER WITH YEAR/MONTH/DAY DROPDOWNS (mobile-friendly)
-// ============================================
-function DatePickerSelect({ value, onChange, className }) {
-  const d = value ? new Date(value + 'T00:00:00') : new Date();
-  const yr = d.getFullYear(), mo = d.getMonth() + 1, dy = d.getDate();
-  const curYear = new Date().getFullYear();
-  const years = [];
-  for (let y = curYear + 1; y >= 2014; y--) years.push(y);
-  const months = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
-  const daysInMonth = new Date(yr, mo, 0).getDate();
-  const days = [];
-  for (let dd = 1; dd <= daysInMonth; dd++) days.push(dd);
-  const emit = (y, m, day) => {
-    const maxD = new Date(y, m, 0).getDate();
-    const safeD = Math.min(day, maxD);
-    const val = y + '-' + String(m).padStart(2,'0') + '-' + String(safeD).padStart(2,'0');
-    onChange(val);
-  };
-  return (
-    <div className={'flex gap-1 ' + (className || '')}>
-      <select value={yr} onChange={e => emit(Number(e.target.value), mo, dy)}
-        className="flex-1 px-1.5 py-2 rounded-lg border border-slate-200 text-sm font-semibold bg-white">
-        {years.map(y => <option key={y} value={y}>{y}</option>)}
-      </select>
-      <select value={mo} onChange={e => emit(yr, Number(e.target.value), dy)}
-        className="flex-1 px-1.5 py-2 rounded-lg border border-slate-200 text-sm bg-white">
-        {months.map((m, i) => <option key={i} value={i + 1}>{m}</option>)}
-      </select>
-      <select value={dy} onChange={e => emit(yr, mo, Number(e.target.value))}
-        className="w-16 px-1.5 py-2 rounded-lg border border-slate-200 text-sm bg-white">
-        {days.map(d => <option key={d} value={d}>{d}</option>)}
-      </select>
-    </div>
-  );
-}
-
-// ============================================
 // PAYMENT FORM (isolated state to prevent focus loss)
 // ============================================
 function PaymentForm({ invoice, categories, existingSubcats, onSave, onCancel, formData, setFormData }) {
@@ -122,7 +85,9 @@ function PaymentForm({ invoice, categories, existingSubcats, onSave, onCancel, f
       <div className="grid grid-cols-2 gap-3">
         <div>
           <label className="text-xs font-semibold text-slate-600">Date / تاريخ</label>
-          <DatePickerSelect value={pf.date} onChange={v => setPf({ ...pf, date: v })} />
+          <input type="date" value={pf.date}
+            onChange={e => setPf({ ...pf, date: e.target.value })}
+            className="w-full px-3 py-2 rounded-lg border border-slate-200 text-sm" />
         </div>
         <div>
           <label className="text-xs font-semibold text-slate-600">Amount / المبلغ</label>
@@ -140,7 +105,7 @@ function PaymentForm({ invoice, categories, existingSubcats, onSave, onCancel, f
           {[
             { v: 'cash', l: '💵 Cash', sub: 'Adds to treasury' },
             { v: 'bank_transfer', l: '🏦 Bank Transfer', sub: 'Invoice only' },
-            { v: 'check', l: '📝 Post-dated Check', sub: 'Goes to Checks (pending)' },
+            { v: 'check', l: '📝 Check', sub: 'Invoice only' },
             { v: 'vodafone', l: '📱 Vodafone Cash', sub: 'Invoice only' },
             { v: 'other', l: '📋 Other', sub: 'Invoice only' },
           ].map(m => (
@@ -152,28 +117,7 @@ function PaymentForm({ invoice, categories, existingSubcats, onSave, onCancel, f
             </label>
           ))}
         </div>
-        {pf.payMethod === 'check' && (
-          <div className="mt-2 bg-amber-50 rounded-lg p-3 border border-amber-200">
-            <div className="text-[10px] text-amber-700 font-bold mb-2">📝 Post-dated check — NOT added to treasury until collected</div>
-            <div className="grid grid-cols-2 gap-2">
-              <div>
-                <label className="text-[9px] font-bold text-slate-500">Due Date / تاريخ الاستحقاق</label>
-                <DatePickerSelect value={pf.checkDueDate || ''} onChange={v => setPf({...pf, checkDueDate: v})} />
-              </div>
-              <div>
-                <label className="text-[9px] font-bold text-slate-500">Check # / رقم الشيك</label>
-                <input value={pf.checkNumber || ''} onChange={e => setPf({...pf, checkNumber: e.target.value})}
-                  className="w-full px-2 py-2 rounded border text-xs" placeholder="Optional" />
-              </div>
-              <div className="col-span-2">
-                <label className="text-[9px] font-bold text-slate-500">Bank / البنك</label>
-                <input value={pf.checkBank || ''} onChange={e => setPf({...pf, checkBank: e.target.value})}
-                  className="w-full px-2 py-2 rounded border text-xs" placeholder="Issuing bank name..." />
-              </div>
-            </div>
-          </div>
-        )}
-        {pf.payMethod !== 'cash' && pf.payMethod !== 'check' && <div className="text-[10px] text-blue-600 mt-1">ℹ️ Only cash adds to treasury register. {pf.payMethod === 'bank_transfer' ? 'Bank transfer' : pf.payMethod === 'vodafone' ? 'Vodafone Cash' : 'This method'} updates the invoice only.</div>}
+        {pf.payMethod !== 'cash' && <div className="text-[10px] text-blue-600 mt-1">ℹ️ Only cash adds to treasury register. {pf.payMethod === 'bank_transfer' ? 'Bank transfer' : pf.payMethod === 'check' ? 'Check' : pf.payMethod === 'vodafone' ? 'Vodafone Cash' : 'This method'} updates the invoice only.</div>}
       </div>
 
       {/* Category & Subcategory */}
@@ -277,8 +221,6 @@ export default function App() {
   const [whDescDrill, setWhDescDrill] = useState(null);
   const [whSubFilter, setWhSubFilter] = useState('all');
   const [customerGroup, setCustomerGroup] = useState('all');
-  const [invoiceSort, setInvoiceSort] = useState('newest'); // newest | oldest
-  const [treasurySort, setTreasurySort] = useState('newest'); // newest | oldest
 
   // Forms
   const [showAddPayment, setShowAddPayment] = useState(false);
@@ -291,7 +233,6 @@ export default function App() {
   const [showLinkSearch, setShowLinkSearch] = useState(false);
   const [linkingTreasuryTxn, setLinkingTreasuryTxn] = useState(null);
   const [treasuryInvSearch, setTreasuryInvSearch] = useState('');
-  const [editTreasuryModal, setEditTreasuryModal] = useState(null);
   const [formData, setFormData] = useState({});
   const [hideSections, setHideSections] = useState({});
   const [announcements, setAnnouncements] = useState([]);
@@ -648,12 +589,6 @@ export default function App() {
   // COMPUTED VALUES
   // ==========================================
   const isAdmin = userProfile?.role === 'super_admin' || userProfile?.role === 'admin';
-  const canEditTreasury = userProfile?.role === 'super_admin' || isAdmin || modulePerms?.['Edit Treasury'] === true;
-  const canEditInvoices = userProfile?.role === 'super_admin' || isAdmin || modulePerms?.['Edit Invoices'] === true;
-  const canEditInventory = userProfile?.role === 'super_admin' || isAdmin || modulePerms?.['Edit Inventory'] === true;
-  const canEditWarehouse = userProfile?.role === 'super_admin' || isAdmin || modulePerms?.['Edit Warehouse'] === true;
-  const canExportData = userProfile?.role === 'super_admin' || isAdmin || modulePerms?.['Export Data'] === true;
-  const canManageCategories = userProfile?.role === 'super_admin' || isAdmin || modulePerms?.['Manage Categories'] === true;
 
   // Tab-to-module mapping for permission filtering
   const TAB_MODULE_MAP = {
@@ -684,24 +619,20 @@ export default function App() {
     if (query) arr = arr.filter(s =>
       (s.customer_name || '').includes(query) || (s.customer_name_en || '').toLowerCase().includes(query.toLowerCase()) || (s.order_number || '').includes(query)
     );
-    const dir = invoiceSort === 'oldest' ? 1 : -1;
-    arr.sort((a, b) => dir * ((a.invoice_date || '').localeCompare(b.invoice_date || '')));
     return arr;
-  }, [invoices, mode, df, dt, query, customerFilter, invoiceSort]);
+  }, [invoices, mode, df, dt, query, customerFilter]);
 
   const totalInvoiced = useMemo(() => filteredInvoices.reduce((a, r) => a + Number(r.total_amount || 0), 0), [filteredInvoices]);
   const totalCollected = useMemo(() => filteredInvoices.reduce((a, r) => a + Number(r.total_collected || 0), 0), [filteredInvoices]);
   const totalOutstanding = useMemo(() => filteredInvoices.reduce((a, r) => a + Number(r.outstanding || 0), 0), [filteredInvoices]);
   const totalDebt = useMemo(() => debts.reduce((a, d) => a + Number(d.total_debt || 0), 0), [debts]);
 
-  const filteredTreasury = useMemo(() => {
-    const dir = treasurySort === 'oldest' ? 1 : -1;
-    return treasury.filter(t => inRange(t.transaction_date, mode, df, dt))
-      .sort((a, b) => dir * ((a.transaction_date || '').localeCompare(b.transaction_date || '')));
-  }, [treasury, mode, df, dt, treasurySort]);
+  const filteredTreasury = useMemo(() =>
+    treasury.filter(t => inRange(t.transaction_date, mode, df, dt)),
+    [treasury, mode, df, dt]
+  );
   const totalCashIn = useMemo(() => filteredTreasury.reduce((a, t) => a + Number(t.cash_in || 0), 0), [filteredTreasury]);
   const totalCashOut = useMemo(() => filteredTreasury.reduce((a, t) => a + Number(t.cash_out || 0), 0), [filteredTreasury]);
-  const allTimeNet = useMemo(() => treasury.reduce((a, t) => a + Number(t.cash_in || 0) - Number(t.cash_out || 0), 0), [treasury]);
 
   // Sparkline data: daily totals for last 30 days
   const sparkData = useMemo(() => {
@@ -845,53 +776,29 @@ export default function App() {
   };
 
   const handleAddPayment = async (pf) => {
-    if (!canEditInvoices) { alert('You do not have permission to edit invoices.'); return; }
     var pd = pf || formData;
     if (!pd.amount || !pd.date || !selectedInvoice) return;
     try {
       const isCash = pd.payMethod === 'cash';
-      const isCheck = pd.payMethod === 'check';
-
-      if (isCheck) {
-        // POST-DATED CHECK → goes to checks table, does NOT update collected
-        await dbInsert('checks', {
-          customer_name: selectedInvoice.customer_name,
-          customer_id: selectedInvoice.customer_id || null,
+      // Only CASH goes to treasury (cash register). Check, bank transfer, vodafone, other = invoice only
+      if (isCash) {
+        await dbInsert('treasury', {
+          transaction_date: pd.date,
           order_number: selectedInvoice.order_number,
-          invoice_id: selectedInvoice.id,
-          amount: Number(pd.amount),
-          check_date: pd.checkDueDate || pd.date,
-          due_date: pd.checkDueDate || pd.date,
-          check_number: pd.checkNumber || '',
-          bank_name: pd.checkBank || '',
-          status: 'pending',
-          notes: pd.desc || '',
-        }, user?.id);
-        // Add note to invoice but do NOT update collected
-        await dbUpdate('invoices', selectedInvoice.id, {
-          notes: (selectedInvoice.notes || '') + '\n📝 Post-dated check: ' + fE(Number(pd.amount)) + ' due ' + (pd.checkDueDate || pd.date) + (pd.checkNumber ? ' #' + pd.checkNumber : ''),
-        }, user?.id);
-      } else {
-        // CASH → goes to treasury
-        if (isCash) {
-          await dbInsert('treasury', {
-            transaction_date: pd.date,
-            order_number: selectedInvoice.order_number,
-            description: pd.desc || selectedInvoice.customer_name + ' payment',
-            cash_in: Number(pd.amount),
-            cash_out: 0,
-            category: pd.category || 'مبيعات',
-            subcategory: pd.subcategory || '',
-          }, user?.id);
-        }
-        // ALL NON-CHECK methods update invoice collected immediately
-        const newCollected = Number(selectedInvoice.total_collected) + Number(pd.amount);
-        await dbUpdate('invoices', selectedInvoice.id, {
-          total_collected: newCollected,
-          outstanding: Math.max(0, Number(selectedInvoice.total_amount) - newCollected),
-          notes: (selectedInvoice.notes || '') + (!isCash ? '\n' + pd.payMethod + ': ' + fE(Number(pd.amount)) + ' on ' + pd.date : ''),
+          description: pd.desc || selectedInvoice.customer_name + ' payment',
+          cash_in: Number(pd.amount),
+          cash_out: 0,
+          category: pd.category || 'مبيعات',
+          subcategory: pd.subcategory || '',
         }, user?.id);
       }
+      // Update invoice collected
+      const newCollected = Number(selectedInvoice.total_collected) + Number(pd.amount);
+      await dbUpdate('invoices', selectedInvoice.id, {
+        total_collected: newCollected,
+        outstanding: Math.max(0, Number(selectedInvoice.total_amount) - newCollected),
+        notes: (selectedInvoice.notes || '') + (!isCash ? '\n' + pd.payMethod + ': ' + fE(Number(pd.amount)) + ' on ' + pd.date : ''),
+      }, user?.id);
       setShowAddPayment(false);
       setFormData({});
       await loadAllData();
@@ -998,9 +905,7 @@ export default function App() {
   };
 
   const handleAddTreasury = async () => {
-    if (!canEditTreasury) { alert('You do not have permission to add treasury entries.'); return; }
-    const txDate = formData.date || today();
-    if (!formData.amount) { alert('Please enter an amount / الرجاء إدخال المبلغ'); return; }
+    if (!formData.amount || !formData.date) return;
     try {
       const isIncome = formData.type === 'in';
       let cat = formData.category || '';
@@ -1012,7 +917,7 @@ export default function App() {
         if (rule) { cat = rule.category; subcat = rule.subcategory || ''; }
       }
       await dbInsert('treasury', {
-        transaction_date: txDate,
+        transaction_date: formData.date,
         order_number: formData.orderNumber || '',
         description: formData.desc || '',
         cash_in: isIncome ? Number(formData.amount) : 0,
@@ -1020,22 +925,9 @@ export default function App() {
         category: cat,
         subcategory: subcat,
       }, user?.id);
-      // Instant local update so entry appears immediately in Recent Transactions
-      const tempEntry = {
-        id: 'temp-' + Date.now(),
-        transaction_date: txDate,
-        order_number: formData.orderNumber || '',
-        description: formData.desc || '',
-        cash_in: isIncome ? Number(formData.amount) : 0,
-        cash_out: !isIncome ? Number(formData.amount) : 0,
-        category: cat,
-        subcategory: subcat,
-      };
-      setTreasury(prev => [tempEntry, ...prev]);
       setShowAddTreasury(false);
       setFormData({});
-      // Full refresh in background to get real ID + server-side triggers
-      setTimeout(() => loadAllData(), 500);
+      await loadAllData();
     } catch (err) {
       alert('Error / خطأ: ' + err.message);
     }
@@ -1044,7 +936,7 @@ export default function App() {
   const handleEditTreasury = async (txn) => {
     try {
       const fd = {
-        date: formData.txEditDate || txn.transaction_date,
+        date: document.getElementById('tx-date')?.value,
         desc: document.getElementById('tx-desc')?.value,
         cashIn: document.getElementById('tx-in')?.value,
         cashOut: document.getElementById('tx-out')?.value,
@@ -1148,34 +1040,6 @@ export default function App() {
         } : i));
       }
     } catch (err) { alert('Unlink error: ' + err.message); }
-  };
-
-  // ── Delete Treasury Transaction ──
-  const handleDeleteTreasury = async (txnId) => {
-    try {
-      const txn = treasury.find(t => t.id === txnId);
-      if (!txn) return;
-      // If linked to an invoice, undo the collected amount first
-      if (txn.linked_invoice_id && Number(txn.cash_in) > 0) {
-        const inv = invoices.find(i => i.id === txn.linked_invoice_id);
-        if (inv) {
-          const newCollected = Math.max(0, Number(inv.total_collected || 0) - Number(txn.cash_in));
-          await dbUpdate('invoices', inv.id, { total_collected: newCollected }, userProfile?.id || user?.id);
-        }
-      }
-      await dbDelete('treasury', txnId, userProfile?.id || user?.id);
-      setTreasury(prev => prev.filter(t => t.id !== txnId));
-      setEditTreasuryModal(null);
-    } catch (err) { alert('Delete error / خطأ حذف: ' + err.message); }
-  };
-
-  // ── Save Treasury Edit from Modal ──
-  const handleSaveTreasuryEdit = async (txnId, updates) => {
-    try {
-      await dbUpdate('treasury', txnId, updates, userProfile?.id || user?.id);
-      setTreasury(prev => prev.map(t => t.id === txnId ? { ...t, ...updates } : t));
-      setEditTreasuryModal(null);
-    } catch (err) { alert('Save error / خطأ حفظ: ' + err.message); }
   };
 
   const handleSplitTreasury = async () => {
@@ -1637,12 +1501,7 @@ export default function App() {
           <h1 className="text-2xl font-black tracking-tight" style={{background:'linear-gradient(135deg, #38bdf8, #818cf8, #a78bfa)',WebkitBackgroundClip:'text',WebkitTextFillColor:'transparent'}}>KANDIL KTC EGYPT HUB</h1>
           <p style={{color:'rgba(148,163,184,0.5)'}} className="text-xs font-medium tracking-widest uppercase">{lang === 'en' ? 'KTC Trading Operations' : 'KTC — لوحة التحكم المالية'}</p>
         </div>
-        <div className="flex items-center gap-2">
-          {/* Treasury Net — always visible */}
-          <div onClick={() => setTab('treasury')} className="cursor-pointer px-2 sm:px-3 py-1.5 rounded-lg" style={{background:'rgba(255,255,255,0.04)', border:'1px solid rgba(255,255,255,0.08)'}}>
-            <div style={{color:'rgba(148,163,184,0.5)'}} className="text-[7px] sm:text-[8px] font-bold uppercase tracking-wider">Treasury Net</div>
-            <div className={'text-xs sm:text-sm font-black'} style={{color: allTimeNet >= 0 ? '#34d399' : '#f87171'}}>{fE(allTimeNet)}</div>
-          </div>
+        <div className="flex items-center gap-3">
           {userProfile && (
             <div className="text-right">
               <div className="text-sm font-bold" style={{color:'#f1f5f9'}}>{userProfile.name}</div>
@@ -1665,12 +1524,7 @@ export default function App() {
             const overdueCount = invoices.filter(i => i.outstanding > 0 && i.invoice_date && (Date.now() - new Date(i.invoice_date).getTime()) > 30 * 86400000).length;
             const openTickets = dashTickets.filter(t => t.status !== 'Closed' && t.status !== 'Resolved').length;
             const pendingCount = pendingChecks?.length || 0;
-            const todayN = new Date().toISOString().substring(0, 10);
-            const tomorrowN = new Date(Date.now() + 86400000).toISOString().substring(0, 10);
-            const overdueChecks = pendingChecks.filter(c => (c.due_date || c.check_date || '') < todayN && (c.due_date || c.check_date));
-            const dueTomorrowChecks = pendingChecks.filter(c => (c.due_date || c.check_date || '') === tomorrowN);
-            const thisMonthChecks = pendingChecks.filter(c => (c.due_date || c.check_date || '').substring(0, 7) === todayN.substring(0, 7));
-            const total = overdueCount + openTickets + overdueChecks.length + dueTomorrowChecks.length;
+            const total = overdueCount + openTickets;
             return (
               <div className="relative notif-bell-wrap">
                 <button onClick={() => setShowNotifBell(!showNotifBell)} style={{background:'rgba(255,255,255,0.06)', border:'1px solid rgba(255,255,255,0.1)', color:'rgba(255,255,255,0.6)'}} className="px-2.5 py-1.5 text-sm rounded-lg hover:bg-white/10 transition relative">
@@ -1681,24 +1535,6 @@ export default function App() {
                   <div className="absolute right-0 top-10 w-72 bg-white rounded-xl shadow-2xl border z-50 overflow-hidden">
                     <div className="px-3 py-2 bg-slate-50 border-b text-xs font-bold text-slate-700">Notifications</div>
                     <div className="max-h-[300px] overflow-auto">
-                      {overdueChecks.length > 0 && (
-                        <div className="px-3 py-2.5 border-b border-slate-50 hover:bg-red-50 cursor-pointer" onClick={() => { setTab('checks'); setShowNotifBell(false); }}>
-                          <div className="text-xs font-semibold text-red-600">🚨 {overdueChecks.length} OVERDUE checks — {fE(overdueChecks.reduce((a,c) => a + Number(c.amount||0), 0))}</div>
-                          <div className="text-[10px] text-slate-400">Past due date, not collected</div>
-                        </div>
-                      )}
-                      {dueTomorrowChecks.length > 0 && (
-                        <div className="px-3 py-2.5 border-b border-slate-50 hover:bg-amber-50 cursor-pointer" onClick={() => { setTab('checks'); setShowNotifBell(false); }}>
-                          <div className="text-xs font-semibold text-amber-600">⏰ {dueTomorrowChecks.length} checks due TOMORROW — {fE(dueTomorrowChecks.reduce((a,c) => a + Number(c.amount||0), 0))}</div>
-                          <div className="text-[10px] text-slate-400">Collect these tomorrow</div>
-                        </div>
-                      )}
-                      {thisMonthChecks.length > 0 && (
-                        <div className="px-3 py-2.5 border-b border-slate-50 hover:bg-blue-50 cursor-pointer" onClick={() => { setTab('checks'); setShowNotifBell(false); }}>
-                          <div className="text-xs font-semibold text-blue-600">📅 {thisMonthChecks.length} checks due this month — {fE(thisMonthChecks.reduce((a,c) => a + Number(c.amount||0), 0))}</div>
-                          <div className="text-[10px] text-slate-400">Expected income this month</div>
-                        </div>
-                      )}
                       {overdueCount > 0 && (
                         <div className="px-3 py-2.5 border-b border-slate-50 hover:bg-red-50 cursor-pointer" onClick={() => { setTab('sales'); setShowNotifBell(false); }}>
                           <div className="text-xs font-semibold text-red-600">⚠️ {overdueCount} overdue invoices</div>
@@ -1711,7 +1547,13 @@ export default function App() {
                           <div className="text-[10px] text-slate-400">Awaiting resolution</div>
                         </div>
                       )}
-                      {total === 0 && pendingCount === 0 && <div className="px-3 py-6 text-center text-xs text-slate-400">All clear! ✨</div>}
+                      {pendingCount > 0 && (
+                        <div className="px-3 py-2.5 border-b border-slate-50 hover:bg-amber-50 cursor-pointer" onClick={() => { setTab('checks'); setShowNotifBell(false); }}>
+                          <div className="text-xs font-semibold text-amber-600">📋 {pendingCount} pending checks</div>
+                          <div className="text-[10px] text-slate-400">Under collection</div>
+                        </div>
+                      )}
+                      {total === 0 && <div className="px-3 py-6 text-center text-xs text-slate-400">All clear! ✨</div>}
                     </div>
                   </div>
                 )}
@@ -1843,9 +1685,14 @@ export default function App() {
                 </div>
               )}
             </div>
-            {/* Edit Fields + Delete + PDF Export */}
+            {/* Delete + PDF Export */}
             {(() => {
-              const hasDeletePerm = userProfile?.role === 'super_admin' || ((selectedInvoice.created_by === (userProfile?.id || user?.id)) && (Date.now() - new Date(selectedInvoice.created_at || 0).getTime()) < 86400000);
+              const createdAt = new Date(selectedInvoice.created_at || 0);
+              const hourAgo = Date.now() - 60 * 60 * 1000;
+              const isCreator = selectedInvoice.created_by === userProfile?.id;
+              const withinHour = createdAt.getTime() > hourAgo;
+              const hasDeletePerm = userProfile?.role === 'super_admin' || modulePerms?.['Delete Invoices'] === true;
+              const canDelete = (isCreator && withinHour) || hasDeletePerm;
               const exportPDF = () => {
                 const inv = selectedInvoice;
                 const items = invoiceItems.filter(it => it.invoice_id === inv.id || it.order_number === inv.order_number);
@@ -1866,97 +1713,22 @@ export default function App() {
                 setTimeout(function() { w.print(); }, 500);
               };
               return (
-                <div className="mb-3">
-                  {/* Action buttons */}
-                  <div className="flex justify-end gap-2 mb-3">
-                    <button onClick={exportPDF} className="px-3 py-1 bg-blue-500 text-white rounded-lg text-[10px] font-bold hover:bg-blue-600">
-                      📄 Print / PDF
+                <div className="flex justify-end gap-2 mb-2">
+                  <button onClick={exportPDF} className="px-3 py-1 bg-blue-500 text-white rounded-lg text-[10px] font-bold hover:bg-blue-600">
+                    📄 Print / PDF
+                  </button>
+                  {canDelete && (
+                    <button onClick={async () => {
+                      if (!confirm('Delete invoice #' + selectedInvoice.order_number + '?\n\nThis cannot be undone.')) return;
+                      try {
+                        await supabase.from('invoice_items').delete().eq('invoice_id', selectedInvoice.id);
+                        await supabase.from('invoices').delete().eq('id', selectedInvoice.id);
+                        setSelectedInvoice(null);
+                        await loadAllData();
+                      } catch(err) { alert('Error: ' + err.message); }
+                    }} className="px-3 py-1 bg-red-500 text-white rounded-lg text-[10px] font-bold hover:bg-red-600">
+                      🗑️ Delete
                     </button>
-                    <button onClick={() => setFormData({...formData, editingInvoice: !formData.editingInvoice})}
-                      className="px-3 py-1 bg-amber-500 text-white rounded-lg text-[10px] font-bold hover:bg-amber-600">
-                      {formData.editingInvoice ? '✕ Close Edit' : '✏️ Edit Invoice'}
-                    </button>
-                    {hasDeletePerm && !formData.confirmDeleteInv && (
-                      <button onClick={() => setFormData({...formData, confirmDeleteInv: true})}
-                        className="px-3 py-1 bg-red-500 text-white rounded-lg text-[10px] font-bold hover:bg-red-600">
-                        🗑️ Delete
-                      </button>
-                    )}
-                  </div>
-                  {/* Delete confirmation */}
-                  {formData.confirmDeleteInv && (
-                    <div className="bg-red-50 border border-red-200 rounded-lg p-4 mb-3">
-                      <div className="text-sm font-bold text-red-700 mb-2">Delete invoice #{selectedInvoice.order_number}? / حذف الفاتورة؟</div>
-                      <div className="text-xs text-red-600 mb-3">This cannot be undone. All line items will also be deleted.</div>
-                      <div className="flex gap-2">
-                        <button onClick={async () => {
-                          try {
-                            await supabase.from('invoice_items').delete().eq('invoice_id', selectedInvoice.id);
-                            await supabase.from('invoices').delete().eq('id', selectedInvoice.id);
-                            setSelectedInvoice(null); setFormData({});
-                            await loadAllData();
-                          } catch(err) { alert('Error: ' + err.message); }
-                        }} className="px-4 py-2 bg-red-500 text-white rounded-lg text-xs font-bold">Yes, Delete / نعم، حذف</button>
-                        <button onClick={() => setFormData({...formData, confirmDeleteInv: false})}
-                          className="px-4 py-2 border border-slate-200 rounded-lg text-xs font-semibold">Cancel / إلغاء</button>
-                      </div>
-                    </div>
-                  )}
-                  {/* Edit fields */}
-                  {formData.editingInvoice && (
-                    <div className="bg-amber-50 border border-amber-200 rounded-lg p-4 mb-3">
-                      <h4 className="text-xs font-bold text-amber-800 mb-3">Edit Invoice Details / تعديل الفاتورة</h4>
-                      <div className="grid grid-cols-2 gap-3 mb-3">
-                        <div>
-                          <label className="text-[10px] font-bold text-slate-500">Order # / رقم الأمر</label>
-                          <input defaultValue={selectedInvoice.order_number || ''} id="inv-edit-order"
-                            className="w-full px-3 py-2 rounded-lg border text-sm" />
-                        </div>
-                        <div>
-                          <label className="text-[10px] font-bold text-slate-500">Date / التاريخ</label>
-                          <DatePickerSelect value={formData.invEditDate || selectedInvoice.invoice_date || today()}
-                            onChange={v => setFormData({...formData, invEditDate: v})} />
-                        </div>
-                        <div>
-                          <label className="text-[10px] font-bold text-slate-500">Total Amount / المبلغ</label>
-                          <input type="number" defaultValue={selectedInvoice.total_amount || 0} id="inv-edit-amount"
-                            className="w-full px-3 py-2 rounded-lg border text-sm font-semibold" />
-                        </div>
-                        <div>
-                          <label className="text-[10px] font-bold text-slate-500">Sales Rep / المندوب</label>
-                          <input defaultValue={selectedInvoice.sales_rep || ''} id="inv-edit-rep"
-                            className="w-full px-3 py-2 rounded-lg border text-sm" />
-                        </div>
-                        <div className="col-span-2">
-                          <label className="text-[10px] font-bold text-slate-500">Notes / ملاحظات</label>
-                          <input defaultValue={selectedInvoice.notes || ''} id="inv-edit-notes"
-                            className="w-full px-3 py-2 rounded-lg border text-sm" />
-                        </div>
-                      </div>
-                      <button onClick={async () => {
-                        try {
-                          const newOrder = document.getElementById('inv-edit-order')?.value?.trim();
-                          const newAmount = Number(document.getElementById('inv-edit-amount')?.value) || selectedInvoice.total_amount;
-                          const newDate = formData.invEditDate || selectedInvoice.invoice_date;
-                          const newRep = document.getElementById('inv-edit-rep')?.value?.trim();
-                          const newNotes = document.getElementById('inv-edit-notes')?.value?.trim();
-                          const updates = {
-                            order_number: newOrder || selectedInvoice.order_number,
-                            invoice_date: newDate,
-                            total_amount: newAmount,
-                            outstanding: Math.max(0, newAmount - Number(selectedInvoice.total_collected || 0)),
-                            sales_rep: newRep || '',
-                            notes: newNotes || '',
-                          };
-                          await dbUpdate('invoices', selectedInvoice.id, updates, userProfile?.id || user?.id);
-                          setSelectedInvoice({...selectedInvoice, ...updates});
-                          setFormData({...formData, editingInvoice: false, invEditDate: null});
-                          setTimeout(() => loadAllData(), 500);
-                        } catch(err) { alert('Error: ' + err.message); }
-                      }} className="px-4 py-2 bg-amber-500 text-white rounded-lg text-xs font-bold hover:bg-amber-600">
-                        💾 Save Changes / حفظ التعديلات
-                      </button>
-                    </div>
                   )}
                 </div>
               );
@@ -2215,8 +1987,8 @@ export default function App() {
                         <div className="grid grid-cols-2 gap-2">
                           <div>
                             <label className="text-[10px] font-semibold text-slate-600">Date / تاريخ</label>
-                            <DatePickerSelect value={formData.txEditDate || txn.transaction_date || today()}
-                              onChange={v => setFormData({...formData, txEditDate: v})} />
+                            <input type="date" id="tx-date" defaultValue={txn.transaction_date}
+                              className="w-full px-2 py-1 rounded border border-slate-200 text-xs" />
                           </div>
                           <div>
                             <label className="text-[10px] font-semibold text-slate-600">Amount / مبلغ</label>
@@ -2285,7 +2057,7 @@ export default function App() {
                           <div className="text-[10px] text-slate-500">{txn.transaction_date}</div>
                         </div>
                         <div className="text-sm font-bold text-emerald-600 mr-2">{fE(txn.cash_in)}</div>
-                        <button onClick={() => { setEditingTxn(txn.id); setFormData({ txEditDate: txn.transaction_date }); }}
+                        <button onClick={() => { setEditingTxn(txn.id); setFormData({}); }}
                           className="px-2 py-0.5 rounded border border-blue-300 text-blue-600 text-[10px] mr-1 hover:bg-blue-50">
                           Edit
                         </button>
@@ -2517,8 +2289,8 @@ export default function App() {
                       {monthTransactions.map(txn => (
                         editingTxn === txn.id ? (
                           <tr key={txn.id} className="bg-blue-50">
-                            <td className="px-2 py-1.5"><DatePickerSelect value={formData.txEditDate || txn.transaction_date || today()}
-                              onChange={v => setFormData({...formData, txEditDate: v})} /></td>
+                            <td className="px-2 py-1.5"><input type="date" id="tx-date" defaultValue={txn.transaction_date}
+                              className="w-full text-xs border rounded px-1 py-1" /></td>
                             <td className="px-2 py-1.5"><input id="tx-order" defaultValue={txn.order_number || ''}
                               className="w-16 text-xs border rounded px-1 py-1" /></td>
                             <td className="px-2 py-1.5">
@@ -2589,7 +2361,7 @@ export default function App() {
                             {txn.cash_out > 0 ? fE(txn.cash_out) : ''}
                           </td>
                           <td className="px-3 py-2 flex gap-1 flex-wrap">
-                            <button onClick={() => { setEditingTxn(txn.id); setFormData({ txEditDate: txn.transaction_date }); }}
+                            <button onClick={() => { setEditingTxn(txn.id); setFormData({}); }}
                               className="px-2 py-0.5 rounded border border-blue-300 text-blue-600 text-[10px]">Edit</button>
                             <button onClick={() => { setSplittingTxn(txn); const isIn = Number(txn.cash_in) > 0; const total = isIn ? Number(txn.cash_in) : Number(txn.cash_out); setSplits([{ order: txn.order_number || '', amount: total }, { order: '', amount: 0 }]); }}
                               className="px-2 py-0.5 rounded border border-purple-300 text-purple-600 text-[10px]">Split</button>
@@ -2608,132 +2380,6 @@ export default function App() {
             )}
           </Modal>
         )}
-
-        {/* EDIT / DELETE TREASURY MODAL */}
-        {editTreasuryModal && (() => {
-          const txn = editTreasuryModal;
-          const isDelete = txn.confirmDelete;
-          const isSuperAdmin = userProfile?.role === 'super_admin';
-          const isCreator = txn.created_by === (userProfile?.id || user?.id);
-          const within24h = (Date.now() - new Date(txn.created_at || 0).getTime()) < 24 * 60 * 60 * 1000;
-          const canDeleteTxn = isSuperAdmin || (isCreator && within24h);
-          return (
-            <div className="fixed inset-0 bg-black/50 z-50 flex items-end sm:items-center justify-center p-0 sm:p-4" onClick={() => setEditTreasuryModal(null)}>
-              <div className="bg-white rounded-t-2xl sm:rounded-2xl w-full sm:max-w-md max-h-[85vh] overflow-auto" onClick={e => e.stopPropagation()}>
-                <div className="p-4 border-b">
-                  <div className="flex justify-between items-center">
-                    <h3 className="font-bold text-sm">{isDelete ? '🗑 Delete Transaction / حذف' : '✏️ Edit Transaction / تعديل'}</h3>
-                    <button onClick={() => setEditTreasuryModal(null)} className="text-slate-400 text-lg hover:text-slate-600">✕</button>
-                  </div>
-                </div>
-                {isDelete ? (
-                  <div className="p-4">
-                    {canDeleteTxn ? (
-                    <div>
-                    <div className="bg-red-50 rounded-lg p-4 mb-4 border border-red-200">
-                      <div className="text-sm font-bold text-red-700 mb-2">Are you sure? / هل أنت متأكد؟</div>
-                      <div className="text-xs text-slate-600 space-y-1">
-                        <div><span className="font-semibold">Date:</span> {txn.transaction_date}</div>
-                        <div style={{direction:'rtl'}}><span className="font-semibold">Description:</span> {txn.description}</div>
-                        {Number(txn.cash_in) > 0 && <div><span className="font-semibold text-emerald-600">Cash In:</span> {fE(txn.cash_in)}</div>}
-                        {Number(txn.cash_out) > 0 && <div><span className="font-semibold text-red-500">Cash Out:</span> {fE(txn.cash_out)}</div>}
-                      </div>
-                      {txn.linked_invoice_id && (
-                        <div className="text-[10px] text-amber-600 mt-2 font-semibold">⚠️ This is linked to an invoice — unlinking will also adjust the collected amount.</div>
-                      )}
-                    </div>
-                    <div className="flex gap-2">
-                      <button onClick={() => handleDeleteTreasury(txn.id)}
-                        className="flex-1 px-4 py-2.5 bg-red-500 text-white rounded-lg font-bold text-sm hover:bg-red-600">
-                        Delete / حذف
-                      </button>
-                      <button onClick={() => setEditTreasuryModal(null)}
-                        className="flex-1 px-4 py-2.5 border border-slate-200 rounded-lg font-semibold text-sm">
-                        Cancel / إلغاء
-                      </button>
-                    </div>
-                    </div>
-                    ) : (
-                    <div className="bg-slate-50 rounded-lg p-4 text-center">
-                      <div className="text-sm font-bold text-slate-500 mb-2">🔒 Cannot delete / لا يمكن الحذف</div>
-                      <div className="text-xs text-slate-400">Only super admins or the creator (within 24 hours) can delete.</div>
-                      <button onClick={() => setEditTreasuryModal(null)}
-                        className="mt-3 px-4 py-2 border border-slate-200 rounded-lg text-xs font-semibold">OK</button>
-                    </div>
-                    )}
-                  </div>
-                ) : (
-                  <div className="p-4 space-y-3">
-                    <div>
-                      <label className="text-[10px] font-bold text-slate-500">Date / التاريخ</label>
-                      <DatePickerSelect value={txn.transaction_date || today()} onChange={v => setEditTreasuryModal({...txn, transaction_date: v})} />
-                    </div>
-                    <div>
-                      <label className="text-[10px] font-bold text-slate-500">Order # / رقم الأمر</label>
-                      <input value={txn.order_number || ''} onChange={e => setEditTreasuryModal({...txn, order_number: e.target.value})}
-                        className="w-full px-3 py-2 rounded-lg border text-sm" />
-                    </div>
-                    <div>
-                      <label className="text-[10px] font-bold text-slate-500">Description / الوصف</label>
-                      <input value={txn.description || ''} onChange={e => setEditTreasuryModal({...txn, description: e.target.value})}
-                        className="w-full px-3 py-2 rounded-lg border text-sm" style={{direction:'rtl'}} />
-                    </div>
-                    <div className="grid grid-cols-2 gap-2">
-                      <div>
-                        <label className="text-[10px] font-bold text-emerald-600">Cash In / وارد</label>
-                        <input type="number" value={txn.cash_in || 0} onChange={e => setEditTreasuryModal({...txn, cash_in: Number(e.target.value) || 0})}
-                          className="w-full px-3 py-2 rounded-lg border text-sm text-emerald-600 font-semibold" />
-                      </div>
-                      <div>
-                        <label className="text-[10px] font-bold text-red-500">Cash Out / منصرف</label>
-                        <input type="number" value={txn.cash_out || 0} onChange={e => setEditTreasuryModal({...txn, cash_out: Number(e.target.value) || 0})}
-                          className="w-full px-3 py-2 rounded-lg border text-sm text-red-500 font-semibold" />
-                      </div>
-                    </div>
-                    <div>
-                      <label className="text-[10px] font-bold text-slate-500">Category / التصنيف</label>
-                      <select value={txn.category || ''} onChange={e => setEditTreasuryModal({...txn, category: e.target.value})}
-                        className="w-full px-3 py-2 rounded-lg border text-sm bg-amber-50">
-                        <option value="">None</option>
-                        {Object.entries(EXPENSE_CATS).map(([ar, en]) => <option key={ar} value={ar}>{en}</option>)}
-                        {customCats.map(c => <option key={c} value={c}>{c}</option>)}
-                      </select>
-                    </div>
-                    <div>
-                      <label className="text-[10px] font-bold text-slate-500">Subcategory / فرعي</label>
-                      <input list="edit-subcats" value={txn.subcategory || ''} onChange={e => setEditTreasuryModal({...txn, subcategory: e.target.value})}
-                        className="w-full px-3 py-2 rounded-lg border text-sm" placeholder="Type or select..." />
-                      <datalist id="edit-subcats">{uniqueSubcats.map(s => <option key={s} value={s} />)}</datalist>
-                    </div>
-                    <div className="flex gap-2 pt-2">
-                      <button onClick={() => handleSaveTreasuryEdit(txn.id, {
-                        transaction_date: txn.transaction_date,
-                        order_number: txn.order_number || '',
-                        description: txn.description || '',
-                        cash_in: Number(txn.cash_in) || 0,
-                        cash_out: Number(txn.cash_out) || 0,
-                        category: txn.category || null,
-                        subcategory: txn.subcategory || null,
-                      })} className="flex-1 px-4 py-2.5 bg-blue-500 text-white rounded-lg font-bold text-sm hover:bg-blue-600">
-                        Save / حفظ
-                      </button>
-                      {canDeleteTxn && (
-                        <button onClick={() => setEditTreasuryModal({...txn, confirmDelete: true})}
-                          className="px-4 py-2.5 bg-red-50 text-red-600 rounded-lg font-bold text-sm hover:bg-red-100 border border-red-200">
-                          🗑 Delete
-                        </button>
-                      )}
-                      <button onClick={() => setEditTreasuryModal(null)}
-                        className="px-4 py-2.5 border border-slate-200 rounded-lg font-semibold text-sm">
-                        Cancel
-                      </button>
-                    </div>
-                  </div>
-                )}
-              </div>
-            </div>
-          );
-        })()}
 
         {/* TREASURY → INVOICE LINK MODAL */}
         {linkingTreasuryTxn && (() => {
@@ -3121,7 +2767,9 @@ export default function App() {
             <div className="grid grid-cols-2 gap-3">
               <div>
                 <label className="text-xs font-semibold text-slate-600">Collection Date / تاريخ التحصيل</label>
-                <DatePickerSelect value={reconcileDate || today()} onChange={v => setReconcileDate(v)} />
+                <input type="date" value={reconcileDate}
+                  onChange={e => setReconcileDate(e.target.value)}
+                  className="w-full px-3 py-2 rounded-lg border border-slate-200 text-sm" />
               </div>
               <div>
                 <label className="text-xs font-semibold text-slate-600">Method / طريقة</label>
@@ -3155,8 +2803,10 @@ export default function App() {
                   className="w-full px-3 py-2 rounded-lg border border-slate-200 text-sm" />
               </div>
               <div>
-                <label className="text-xs font-semibold text-slate-600">Date / التاريخ</label>
-                <DatePickerSelect value={formData.date || today()} onChange={v => setFormData({ ...formData, date: v })} />
+                <label className="text-xs font-semibold text-slate-600">Date / التاريخ <span className="text-[9px] text-slate-400">(mm/dd/yyyy)</span></label>
+                <input type="date" value={formData.date || today()}
+                  onChange={e => setFormData({ ...formData, date: e.target.value })}
+                  className="w-full px-3 py-2 rounded-lg border border-slate-200 text-sm" />
               </div>
               <div className="col-span-2">
                 <label className="text-xs font-semibold text-slate-600">Customer / العميل</label>
@@ -3305,17 +2955,13 @@ export default function App() {
                     <div className="flex gap-1">
                       <input value={formData.customDesc || ''} onChange={e => setFormData({...formData, customDesc: e.target.value})}
                         placeholder="Description" className="flex-1 px-2 py-1 border rounded text-[10px]" />
-                      <input type="number" value={formData.customQty || ''} onChange={e => setFormData({...formData, customQty: e.target.value})}
-                        placeholder="Qty" className="w-14 px-2 py-1 border rounded text-[10px]" min="1" />
                       <input type="number" value={formData.customPrice || ''} onChange={e => setFormData({...formData, customPrice: e.target.value})}
                         placeholder="Price" className="w-20 px-2 py-1 border rounded text-[10px]" />
                       <button onClick={() => {
                         if (!formData.customDesc) return;
                         const items = formData.invoiceItems || [];
-                        const qty = Number(formData.customQty) || 1;
-                        const price = Number(formData.customPrice) || 0;
-                        items.push({ inv_desc: formData.customDesc, inv_qty: qty, inv_price: price, inv_total: qty * price });
-                        setFormData({...formData, invoiceItems: items, showProductPicker: false, customDesc: '', customQty: '', customPrice: ''});
+                        items.push({ inv_desc: formData.customDesc, inv_qty: 1, inv_price: Number(formData.customPrice) || 0, inv_total: Number(formData.customPrice) || 0 });
+                        setFormData({...formData, invoiceItems: items, showProductPicker: false, customDesc: '', customPrice: ''});
                       }} className="px-2 py-1 bg-emerald-500 text-white rounded text-[10px]">Add</button>
                     </div>
                   </div>
@@ -3391,18 +3037,7 @@ export default function App() {
                       }
                     }
                   }
-                  // Instant local update so new invoice appears at top immediately
-                  const tempInv = {
-                    id: newInv?.id || 'temp-' + Date.now(),
-                    order_number: formData.orderNumber, customer_name: formData.customerName,
-                    invoice_date: formData.date || today(), total_amount: totalAmt,
-                    total_collected: 0, outstanding: totalAmt, sales_rep: formData.salesRep || '',
-                    notes: formData.notes || '', source: 'manual',
-                  };
-                  setInvoices(prev => [tempInv, ...prev]);
-                  setShowAddInvoice(false); setFormData({});
-                  // Full refresh in background
-                  setTimeout(() => loadAllData(), 500);
+                  setShowAddInvoice(false); setFormData({}); await loadAllData();
                 } catch (err) { alert('Error / خطأ: ' + err.message); }
               }} className="px-4 py-2 bg-blue-500 text-white rounded-lg font-semibold">Create Invoice / إنشاء ✓</button>
               <button onClick={() => { setShowAddInvoice(false); setFormData({}); }}
@@ -3427,8 +3062,10 @@ export default function App() {
                 </select>
               </div>
               <div>
-                <label className="text-xs font-semibold text-slate-600">Date / التاريخ</label>
-                <DatePickerSelect value={formData.date || today()} onChange={v => setFormData({ ...formData, date: v })} />
+                <label className="text-xs font-semibold text-slate-600">Date / التاريخ <span className="text-[9px] text-slate-400">(mm/dd/yyyy)</span></label>
+                <input type="date" value={formData.date || today()}
+                  onChange={e => setFormData({ ...formData, date: e.target.value })}
+                  className="w-full px-3 py-2 rounded-lg border border-slate-200 text-sm" />
               </div>
               <div>
                 <label className="text-xs font-semibold text-slate-600">Amount / المبلغ</label>
@@ -4623,10 +4260,6 @@ export default function App() {
               <h2 className="text-xl font-extrabold">Sales / المبيعات ({filteredInvoices.length})</h2>
               <div className="flex gap-2 items-center flex-wrap">
                 <ModeBar />
-                <button onClick={() => setInvoiceSort(invoiceSort === 'newest' ? 'oldest' : 'newest')}
-                  className="px-2 py-1 rounded-lg border border-slate-200 text-xs font-semibold hover:bg-slate-100">
-                  {invoiceSort === 'newest' ? '↓ Newest' : '↑ Oldest'}
-                </button>
                 <select value={formData.statusFilter || 'all'}
                   onChange={e => setFormData({...formData, statusFilter: e.target.value})}
                   className="px-2 py-1 rounded-lg border border-slate-200 text-xs">
@@ -4646,7 +4279,7 @@ export default function App() {
                 </select>
                 <input value={query} onChange={e => setQuery(e.target.value)}
                   placeholder="بحث / Search" className="px-3 py-1.5 rounded-lg border border-slate-200 text-xs w-32" />
-                <button onClick={() => { setShowAddInvoice(true); setFormData({ date: today() }); }}
+                <button onClick={() => setShowAddInvoice(true)}
                   className="px-3 py-1.5 bg-blue-500 text-white rounded-lg text-xs font-semibold hover:bg-blue-600">
                   + New Invoice
                 </button>
@@ -5031,11 +4664,7 @@ export default function App() {
               <h2 className="text-xl font-extrabold">Treasury / الخزنة</h2>
               <div className="flex gap-2 items-center flex-wrap">
                 <ModeBar />
-                <button onClick={() => setTreasurySort(treasurySort === 'newest' ? 'oldest' : 'newest')}
-                  className="px-2 py-1 rounded-lg border border-slate-200 text-xs font-semibold hover:bg-slate-100">
-                  {treasurySort === 'newest' ? '↓ Newest' : '↑ Oldest'}
-                </button>
-                <button onClick={() => { setShowAddTreasury(true); setFormData({ date: today() }); }}
+                <button onClick={() => setShowAddTreasury(true)}
                   className="px-3 py-1.5 bg-blue-500 text-white rounded-lg text-xs font-semibold hover:bg-blue-600">
                   + New Transaction
                 </button>
@@ -5191,9 +4820,10 @@ export default function App() {
                             </div>
                           ))}
                         </div>
-                        {/* Transaction list — shown directly */}
-                        <div className="text-xs font-bold text-slate-600 mb-1 mt-2">{searchResults.length} Transactions</div>
-                          <div className="overflow-auto max-h-[350px] rounded-lg border border-slate-200">
+                        {/* Transaction list */}
+                        <details className="text-xs">
+                          <summary className="cursor-pointer text-blue-600 font-bold mb-1">Show {searchResults.length} transactions</summary>
+                          <div className="overflow-auto max-h-[300px] rounded-lg border border-slate-200 mt-1">
                             <table className="w-full border-collapse text-xs">
                               <thead className="sticky top-0"><tr className="bg-slate-50">
                                 <th className="px-2 py-1.5 text-left">Date</th>
@@ -5232,6 +4862,7 @@ export default function App() {
                               </tbody>
                             </table>
                           </div>
+                        </details>
                       </div>
                     )}
                     {!hasFilters && <div className="text-xs text-slate-400 text-center py-3">Set filters above to see aggregated results</div>}
@@ -5324,67 +4955,6 @@ export default function App() {
                 </div>
               </div>);
             })()}
-            {/* ── RECENT TRANSACTIONS — always visible ── */}
-            <div className="bg-white rounded-xl p-4 mb-3">
-              <div className="flex justify-between items-center mb-2">
-                <h3 className="text-sm font-bold">Recent Transactions / المعاملات الأخيرة ({filteredTreasury.length})</h3>
-                <button onClick={() => setTreasurySort(treasurySort === 'newest' ? 'oldest' : 'newest')}
-                  className="text-[10px] text-blue-600 font-semibold hover:underline">
-                  {treasurySort === 'newest' ? '↓ Newest First' : '↑ Oldest First'}
-                </button>
-              </div>
-              <div className="overflow-auto max-h-[420px] rounded-lg border border-slate-200">
-                <table className="w-full border-collapse">
-                  <thead className="sticky top-0 z-10"><tr className="bg-slate-50">
-                    <th className="px-2 py-2 text-xs text-left">Date</th>
-                    <th className="px-2 py-2 text-xs">Order</th>
-                    <th className="px-2 py-2 text-xs" style={{direction:'rtl'}}>Description</th>
-                    <th className="px-2 py-2 text-xs text-right">In</th>
-                    <th className="px-2 py-2 text-xs text-right">Out</th>
-                    <th className="px-2 py-2 text-xs"></th>
-                  </tr></thead>
-                  <tbody>
-                    {filteredTreasury.slice(0, 100).map(txn => (
-                      <tr key={txn.id} className="border-b border-slate-50 hover:bg-blue-50/30">
-                        <td className="px-2 py-1.5 text-[10px] whitespace-nowrap">{txn.transaction_date}</td>
-                        <td className="px-2 py-1.5 text-[10px] font-semibold text-center">{txn.order_number || ''}</td>
-                        <td className="px-2 py-1.5 text-[10px]" style={{direction: lang === 'ar' ? 'rtl' : 'ltr'}}>
-                          {tx(txn.description, txn.description_en)}
-                          {txn.cash_out > 0 && txn.category && (
-                            <span className="text-[8px] text-amber-600 ml-1">({txCat(txn.category)}{txn.subcategory ? ' > ' + txn.subcategory : ''})</span>
-                          )}
-                          {txn.linked_invoice_id && (() => {
-                            const li = invoices.find(i => i.id === txn.linked_invoice_id);
-                            return li ? <div className="text-[8px] text-emerald-600">✅ → {li.customer_name || li.order_number}</div> : null;
-                          })()}
-                        </td>
-                        <td className="px-2 py-1.5 text-[10px] text-right text-emerald-600 font-semibold">{Number(txn.cash_in) > 0 ? fE(txn.cash_in) : ''}</td>
-                        <td className="px-2 py-1.5 text-[10px] text-right text-red-500 font-semibold">{Number(txn.cash_out) > 0 ? fE(txn.cash_out) : ''}</td>
-                        <td className="px-2 py-1.5 text-[10px] whitespace-nowrap">
-                          <div className="flex gap-1 items-center">
-                            <button onClick={() => setEditTreasuryModal({...txn})}
-                              className="text-blue-500 hover:text-blue-700" title="Edit">✏️</button>
-                            {(userProfile?.role === 'super_admin' || (txn.created_by === (userProfile?.id || user?.id) && (Date.now() - new Date(txn.created_at || 0).getTime()) < 86400000)) && (
-                              <button onClick={() => setEditTreasuryModal({...txn, confirmDelete: true})}
-                                className="text-red-400 hover:text-red-600" title="Delete">🗑</button>
-                            )}
-                            {Number(txn.cash_in) > 0 && !txn.linked_invoice_id && (
-                              <button onClick={() => { setLinkingTreasuryTxn(txn); setTreasuryInvSearch(''); }}
-                                className="text-blue-500 font-semibold">🔗</button>
-                            )}
-                            {txn.linked_invoice_id && (
-                              <button onClick={() => unlinkTreasury(txn.id)}
-                                className="text-red-400 text-[8px] underline">unlink</button>
-                            )}
-                          </div>
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-              {filteredTreasury.length > 100 && <p className="text-center text-[10px] text-slate-400 mt-1">Showing 100 of {filteredTreasury.length} — use search to narrow</p>}
-            </div>
             {incomeBuckets.length > 0 && (
               <div className="bg-white rounded-xl p-4 mb-3">
                 <h3 className="text-sm font-bold mb-2 text-emerald-700">Income Buckets / تصنيف الإيرادات</h3>
@@ -5437,129 +5007,9 @@ export default function App() {
         {/* ==========================================
             CHECKS TAB
         ========================================== */}
-        {tab === 'checks' && (() => {
-          const todayStr = new Date().toISOString().substring(0, 10);
-          const thisMonth = todayStr.substring(0, 7);
-          const tomorrowStr = new Date(Date.now() + 86400000).toISOString().substring(0, 10);
-          const dueThisMonth = pendingChecks.filter(c => (c.due_date || c.check_date || '').substring(0, 7) === thisMonth);
-          const dueTomorrow = pendingChecks.filter(c => (c.due_date || c.check_date || '') === tomorrowStr);
-          const overdue = pendingChecks.filter(c => (c.due_date || c.check_date || '') < todayStr && (c.due_date || c.check_date));
-          const dueThisMonthTotal = dueThisMonth.reduce((a, c) => a + Number(c.amount || 0), 0);
-          const totalPending = pendingChecks.reduce((a, c) => a + Number(c.amount || 0), 0);
-          return (
+        {tab === 'checks' && (
           <div>
-            <div className="flex justify-between flex-wrap gap-2 mb-3">
-              <h2 className="text-xl font-extrabold">Checks / شيكات</h2>
-              <button onClick={() => setFormData({...formData, showAddCheck: true})}
-                className="px-3 py-1.5 bg-blue-500 text-white rounded-lg text-xs font-semibold hover:bg-blue-600">
-                + New Check / شيك جديد
-              </button>
-            </div>
-
-            {/* Alerts */}
-            {overdue.length > 0 && (
-              <div className="bg-red-50 border border-red-200 rounded-lg p-3 mb-3">
-                <div className="text-xs font-bold text-red-700">🚨 {overdue.length} OVERDUE check{overdue.length > 1 ? 's' : ''} — {fE(overdue.reduce((a,c) => a + Number(c.amount||0), 0))}</div>
-                {overdue.map(c => (
-                  <div key={c.id} className="text-[10px] text-red-600 mt-1">• {c.customer_name} — {fE(c.amount)} — was due {c.due_date || c.check_date}</div>
-                ))}
-              </div>
-            )}
-            {dueTomorrow.length > 0 && (
-              <div className="bg-amber-50 border border-amber-200 rounded-lg p-3 mb-3">
-                <div className="text-xs font-bold text-amber-700">⏰ {dueTomorrow.length} check{dueTomorrow.length > 1 ? 's' : ''} due TOMORROW — {fE(dueTomorrow.reduce((a,c) => a + Number(c.amount||0), 0))}</div>
-                {dueTomorrow.map(c => (
-                  <div key={c.id} className="text-[10px] text-amber-600 mt-1">• {c.customer_name} — {fE(c.amount)}{c.check_number ? ' #' + c.check_number : ''}</div>
-                ))}
-              </div>
-            )}
-
-            {/* Summary cards */}
-            <div className="grid grid-cols-3 gap-3 mb-3">
-              <div className="bg-white rounded-lg p-3" style={{borderLeftWidth:3, borderLeftColor:'#f59e0b'}}>
-                <div className="text-[10px] text-slate-500">Total Pending / معلقة</div>
-                <div className="text-lg font-extrabold text-amber-600">{fE(totalPending)}</div>
-                <div className="text-[9px] text-slate-400">{pendingChecks.length} checks</div>
-              </div>
-              <div className="bg-white rounded-lg p-3" style={{borderLeftWidth:3, borderLeftColor:'#3b82f6'}}>
-                <div className="text-[10px] text-slate-500">Due This Month / هذا الشهر</div>
-                <div className="text-lg font-extrabold text-blue-600">{fE(dueThisMonthTotal)}</div>
-                <div className="text-[9px] text-slate-400">{dueThisMonth.length} checks</div>
-              </div>
-              <div className="bg-white rounded-lg p-3" style={{borderLeftWidth:3, borderLeftColor:'#10b981'}}>
-                <div className="text-[10px] text-slate-500">Collected / محصّلة</div>
-                <div className="text-lg font-extrabold text-emerald-600">{fE(collectedChecks.reduce((a,c) => a + Number(c.amount||0), 0))}</div>
-                <div className="text-[9px] text-slate-400">{collectedChecks.length} checks</div>
-              </div>
-            </div>
-
-            {/* Add Check Modal */}
-            {formData.showAddCheck && (
-              <div className="bg-blue-50 rounded-xl p-4 mb-3 border border-blue-200">
-                <h4 className="text-xs font-bold text-blue-800 mb-3">New Post-dated Check / شيك آجل جديد</h4>
-                <div className="grid grid-cols-2 gap-3 mb-3">
-                  <div className="col-span-2">
-                    <label className="text-[10px] font-bold text-slate-500">Customer / العميل</label>
-                    <input value={formData.chkCustomer || ''} onChange={e => setFormData({...formData, chkCustomer: e.target.value})}
-                      list="chk-custs" className="w-full px-3 py-2 rounded-lg border text-sm" style={{direction:'rtl'}} />
-                    <datalist id="chk-custs">{customers.map(c => <option key={c.id} value={c.name} />)}</datalist>
-                  </div>
-                  <div>
-                    <label className="text-[10px] font-bold text-slate-500">Amount / المبلغ</label>
-                    <input type="number" value={formData.chkAmount || ''} onChange={e => setFormData({...formData, chkAmount: e.target.value})}
-                      className="w-full px-3 py-2 rounded-lg border text-sm" />
-                  </div>
-                  <div>
-                    <label className="text-[10px] font-bold text-slate-500">Due Date / تاريخ الاستحقاق</label>
-                    <DatePickerSelect value={formData.chkDueDate || today()} onChange={v => setFormData({...formData, chkDueDate: v})} />
-                  </div>
-                  <div>
-                    <label className="text-[10px] font-bold text-slate-500">Check # / رقم الشيك</label>
-                    <input value={formData.chkNumber || ''} onChange={e => setFormData({...formData, chkNumber: e.target.value})}
-                      className="w-full px-3 py-2 rounded-lg border text-sm" />
-                  </div>
-                  <div>
-                    <label className="text-[10px] font-bold text-slate-500">Order # / رقم الأمر</label>
-                    <input value={formData.chkOrder || ''} onChange={e => setFormData({...formData, chkOrder: e.target.value})}
-                      className="w-full px-3 py-2 rounded-lg border text-sm" />
-                  </div>
-                  <div>
-                    <label className="text-[10px] font-bold text-slate-500">Bank / البنك</label>
-                    <input value={formData.chkBank || ''} onChange={e => setFormData({...formData, chkBank: e.target.value})}
-                      className="w-full px-3 py-2 rounded-lg border text-sm" />
-                  </div>
-                  <div>
-                    <label className="text-[10px] font-bold text-slate-500">Notes / ملاحظات</label>
-                    <input value={formData.chkNotes || ''} onChange={e => setFormData({...formData, chkNotes: e.target.value})}
-                      className="w-full px-3 py-2 rounded-lg border text-sm" />
-                  </div>
-                </div>
-                <div className="flex gap-2">
-                  <button onClick={async () => {
-                    if (!formData.chkCustomer || !formData.chkAmount) { alert('Customer and amount required'); return; }
-                    try {
-                      await dbInsert('checks', {
-                        customer_name: formData.chkCustomer,
-                        order_number: formData.chkOrder || '',
-                        amount: Number(formData.chkAmount),
-                        check_date: formData.chkDueDate || today(),
-                        due_date: formData.chkDueDate || today(),
-                        check_number: formData.chkNumber || '',
-                        bank_name: formData.chkBank || '',
-                        status: 'pending',
-                        notes: formData.chkNotes || '',
-                      }, user?.id);
-                      setFormData({...formData, showAddCheck: false, chkCustomer:'', chkAmount:'', chkDueDate:'', chkNumber:'', chkOrder:'', chkBank:'', chkNotes:''});
-                      await loadAllData();
-                    } catch(err) { alert('Error: ' + err.message); }
-                  }} className="px-4 py-2 bg-blue-500 text-white rounded-lg text-xs font-bold">Add Check / إضافة ✓</button>
-                  <button onClick={() => setFormData({...formData, showAddCheck: false})}
-                    className="px-4 py-2 border border-slate-200 rounded-lg text-xs">Cancel</button>
-                </div>
-              </div>
-            )}
-
-            {/* Tab toggle */}
+            <h2 className="text-xl font-extrabold mb-2">Checks / شيكات</h2>
             <div className="flex gap-2 mb-3">
               <button onClick={() => setCheckView('pending')}
                 className={`px-4 py-2 rounded-lg font-semibold text-xs transition ${checkView === 'pending' ? 'bg-amber-500 text-white' : 'bg-slate-100 text-slate-500'}`}>
@@ -5575,56 +5025,32 @@ export default function App() {
                 <thead><tr className="bg-slate-50">
                   <th className="px-3 py-2 text-xs" style={{ direction: 'rtl' }}>Customer</th>
                   <th className="px-3 py-2 text-xs text-right">Amount</th>
-                  <th className="px-3 py-2 text-xs">Due Date</th>
-                  <th className="px-3 py-2 text-xs">Check #</th>
-                  <th className="px-3 py-2 text-xs">{checkView === 'done' ? 'Collected' : 'Actions'}</th>
+                  <th className="px-3 py-2 text-xs">Check</th>
+                  <th className="px-3 py-2 text-xs">{checkView === 'done' ? 'Collected' : ''}</th>
                 </tr></thead>
                 <tbody>
-                  {(checkView === 'pending' ? pendingChecks.sort((a,b) => (a.due_date||a.check_date||'').localeCompare(b.due_date||b.check_date||'')) : collectedChecks).map(c => {
-                    const dueStr = c.due_date || c.check_date || '';
-                    const isOverdue = checkView === 'pending' && dueStr && dueStr < todayStr;
-                    const isDueSoon = checkView === 'pending' && dueStr && dueStr >= todayStr && dueStr <= tomorrowStr;
-                    return (
-                    <tr key={c.id} className={'border-b border-slate-50 ' + (isOverdue ? 'bg-red-50' : isDueSoon ? 'bg-amber-50' : '')}>
-                      <td className="px-3 py-2 text-xs font-semibold" style={{ direction: lang === 'ar' ? 'rtl' : 'ltr' }}>
-                        {tx(c.customer_name, c.customer_name_en)}
-                        {c.order_number && <div className="text-[9px] text-slate-400">Order: {c.order_number}</div>}
-                        {c.bank_name && <div className="text-[9px] text-blue-400">{c.bank_name}</div>}
-                      </td>
+                  {(checkView === 'pending' ? pendingChecks : collectedChecks).map(c => (
+                    <tr key={c.id} className="border-b border-slate-50">
+                      <td className="px-3 py-2 text-xs font-semibold" style={{ direction: lang === 'ar' ? 'rtl' : 'ltr' }}>{tx(c.customer_name, c.customer_name_en)}</td>
                       <td className="px-3 py-2 text-xs text-right font-semibold">{fE(c.amount)}</td>
-                      <td className="px-3 py-2 text-xs">
-                        {dueStr}
-                        {isOverdue && <div className="text-[9px] text-red-600 font-bold">OVERDUE</div>}
-                        {isDueSoon && <div className="text-[9px] text-amber-600 font-bold">DUE SOON</div>}
-                      </td>
-                      <td className="px-3 py-2 text-xs text-slate-500">{c.check_number || '—'}</td>
+                      <td className="px-3 py-2 text-xs">{c.check_date}</td>
                       <td className="px-3 py-2">
                         {checkView === 'pending' ? (
-                          <div className="flex gap-1 flex-wrap">
-                            <button onClick={() => { setReconcileCheck(c); setReconcileDate(today()); setReconcileMethod('check'); }}
-                              className="px-2 py-1 bg-emerald-500 text-white rounded text-[10px] font-semibold">
-                              ✓ Collect
-                            </button>
-                            {(userProfile?.role === 'super_admin' || (c.created_by === (userProfile?.id || user?.id) && (Date.now() - new Date(c.created_at || 0).getTime()) < 86400000)) && (
-                              <button onClick={async () => {
-                                if (!window.confirm('Delete this check?')) return;
-                                try { await dbDelete('checks', c.id, user?.id); await loadAllData(); } catch(err) { alert(err.message); }
-                              }} className="px-2 py-1 bg-red-50 text-red-500 rounded text-[10px] border border-red-200">🗑</button>
-                            )}
-                          </div>
+                          <button onClick={() => { setReconcileCheck(c); setReconcileDate(''); setReconcileMethod('check'); }}
+                            className="px-3 py-1 bg-blue-500 text-white rounded text-[10px] font-semibold">
+                            Reconcile / تسوية
+                          </button>
                         ) : (
                           <span className="text-emerald-500 text-xs">{c.collection_date} ✓</span>
                         )}
                       </td>
                     </tr>
-                    );
-                  })}
+                  ))}
                 </tbody>
               </table>
             </div>
           </div>
-          );
-        })()}
+        )}
 
         {/* ==========================================
             DEBTS TAB
@@ -5704,7 +5130,9 @@ export default function App() {
                 <div className="grid grid-cols-2 gap-3 mb-3">
                   <div>
                     <label className="text-xs font-semibold text-slate-600">Date / التاريخ</label>
-                    <DatePickerSelect value={formData.whExpDate || today()} onChange={v => setFormData({...formData, whExpDate: v})} />
+                    <input type="date" value={formData.whExpDate || today()}
+                      onChange={e => setFormData({...formData, whExpDate: e.target.value})}
+                      className="w-full px-3 py-2 rounded-lg border border-slate-200 text-sm" />
                   </div>
                   <div>
                     <label className="text-xs font-semibold text-slate-600">Amount / المبلغ</label>
@@ -6314,7 +5742,7 @@ export default function App() {
                           placeholder="e.g. Mosaic Liner, Looks..." className="w-full px-3 py-2 rounded-lg border text-sm" />
                         <datalist id="inv-subcats-add">{[...new Set(inventory.map(p => p.subcategory).filter(Boolean))].sort().map(s => <option key={s} value={s} />)}</datalist></div>
                       <div><label className="text-[10px] font-bold text-slate-500">Inbound Date</label>
-                        <DatePickerSelect value={formData.prodDate || today()} onChange={v => setFormData({...formData, prodDate: v})} /></div>
+                        <input type="date" value={formData.prodDate || today()} onChange={e => setFormData({...formData, prodDate: e.target.value})} className="w-full px-3 py-2 rounded-lg border text-sm" /></div>
                       {formData.prodId && inventory.find(p => p.product_id === formData.prodId) && (
                         <div className="col-span-2 bg-amber-50 rounded-lg p-2 border border-amber-200">
                           <div className="text-[10px] font-bold text-amber-700">⚠️ Product ID "{formData.prodId}" already exists — this will be added as a new inbound and quantities/costs will be aggregated.</div>
@@ -7070,7 +6498,7 @@ export default function App() {
         {showFAB && (
           <div className="absolute bottom-14 right-0 bg-white rounded-xl shadow-2xl border w-52 overflow-hidden mb-2">
             {[
-              ['💰 New Invoice', () => { setTab('sales'); setFormData({ date: today() }); setShowAddInvoice(true); }],
+              ['💰 New Invoice', () => { setTab('sales'); setShowAddInvoice(true); }],
               ['🎫 New Ticket', () => setTab('tickets')],
               ['📋 Daily Log', () => setTab('log')],
               ['📢 Announcement', () => setTab('admin')],

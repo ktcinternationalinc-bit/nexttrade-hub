@@ -261,30 +261,3 @@ EXCEPTION WHEN others THEN NULL; END $$;
 DO $$ BEGIN
   CREATE POLICY "Allow all notification_settings" ON notification_settings FOR ALL USING (true);
 EXCEPTION WHEN duplicate_object THEN NULL; END $$;
-
--- ===== AUDIT LOG ENHANCEMENTS =====
-DO $$ BEGIN
-  ALTER TABLE audit_log ADD COLUMN IF NOT EXISTS is_late_edit BOOLEAN DEFAULT false;
-  ALTER TABLE audit_log ADD COLUMN IF NOT EXISTS hours_since_creation INTEGER;
-  ALTER TABLE audit_log ADD COLUMN IF NOT EXISTS sensitive_fields_changed TEXT[];
-EXCEPTION WHEN others THEN NULL; END $$;
-CREATE INDEX IF NOT EXISTS idx_audit_late ON audit_log(is_late_edit) WHERE is_late_edit = true;
-
--- ===== NOTIFICATION LOG =====
-CREATE TABLE IF NOT EXISTS notification_log (
-  id UUID DEFAULT gen_random_uuid() PRIMARY KEY,
-  user_id UUID,
-  notif_type TEXT,
-  subject TEXT,
-  sent BOOLEAN DEFAULT false,
-  triggered_by UUID,
-  error_msg TEXT,
-  created_at TIMESTAMPTZ DEFAULT now()
-);
-CREATE INDEX IF NOT EXISTS idx_notif_log_date ON notification_log(created_at DESC);
-DO $$ BEGIN
-  ALTER TABLE notification_log ENABLE ROW LEVEL SECURITY;
-EXCEPTION WHEN others THEN NULL; END $$;
-DO $$ BEGIN
-  CREATE POLICY "Allow all notification_log" ON notification_log FOR ALL USING (true);
-EXCEPTION WHEN duplicate_object THEN NULL; END $$;
