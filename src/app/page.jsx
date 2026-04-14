@@ -536,7 +536,7 @@ export default function App() {
       ]);
       // Load team users separately (may not exist yet)
       try {
-        const { data: usrs } = await supabase.from('users').select('*').eq('active', true).order('name');
+        const { data: usrs } = await supabase.from('users').select('*').order('name');
         setTeamUsers(usrs || []);
         // Find current user's profile
         const authUser = (await supabase.auth.getUser())?.data?.user;
@@ -651,6 +651,7 @@ export default function App() {
   // COMPUTED VALUES
   // ==========================================
   const isAdmin = userProfile?.role === 'super_admin' || userProfile?.role === 'admin';
+  const activeTeamUsers = useMemo(() => teamUsers.filter(u => u.active !== false), [teamUsers]);
   const canEditTreasury = userProfile?.role === 'super_admin' || isAdmin || modulePerms?.['Edit Treasury'] === true;
   const canEditInvoices = userProfile?.role === 'super_admin' || isAdmin || modulePerms?.['Edit Invoices'] === true;
   const canEditInventory = userProfile?.role === 'super_admin' || isAdmin || modulePerms?.['Edit Inventory'] === true;
@@ -3970,7 +3971,7 @@ export default function App() {
                     <label className="text-xs font-bold text-red-800 block mb-1">Send To / إرسال إلى</label>
                     <select id="ann-target" className="w-full px-3 py-2 rounded-lg border text-sm">
                       <option value="all">👥 Everyone / الجميع</option>
-                      {teamUsers.map(u => <option key={u.id} value={u.id}>👤 {u.name}</option>)}
+                      {activeTeamUsers.map(u => <option key={u.id} value={u.id}>👤 {u.name}</option>)}
                     </select>
                   </div>
                 </div>

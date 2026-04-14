@@ -36,8 +36,9 @@ export async function POST(request) {
       return Response.json({ error: 'Auth creation failed: ' + authResult.error.message }, { status: 400 });
     }
 
-    // Step 2: Create users table entry
+    // Step 2: Create users table entry with SAME ID as auth user
     var userRecord = {
+      id: authResult.data.user.id,
       email: email,
       name: name,
       name_ar: nameAr,
