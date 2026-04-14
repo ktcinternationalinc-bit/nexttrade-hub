@@ -1,7 +1,7 @@
 'use client';
 import { useState, useMemo } from 'react';
 import { supabase, dbInsert, dbUpdate, logActivity } from '../lib/supabase';
-import { notifyClientAssigned, notifyFollowUp } from '../lib/notify';
+import { notifyClientAssigned, notifyFollowUp, notifyCRMStatus } from '../lib/notify';
 import EmailComposer from './EmailComposer';
 import { fE, fmt } from '../lib/utils';
 
@@ -243,6 +243,11 @@ export default function CRMTab({ customers, invoices, user, userProfile, users, 
     try {
       await dbInsert('client_notes', { customer_id: sel.id, note_text: f.noteText }, myId);
       await logActivity(myId, 'Added note to client: ' + sel.name, 'crm');
+      if (sel.assigned_rep && sel.assigned_rep !== myId) {
+        const { notify } = await import('../lib/notify');
+        notify('crm_note_added', [sel.assigned_rep], `New Note: ${sel.name}`,
+          `<p>A note was added to client <strong>${sel.name}</strong>:</p><p style="color:#64748b;font-style:italic;">"${(f.noteText || '').slice(0, 200)}"</p>`, myId);
+      }
       setShowNote(false); setF({}); loadClientData(sel); loadAllNotes();
     } catch (err) { alert('Error / خطأ: ' + err.message); }
   };
@@ -290,6 +295,7 @@ export default function CRMTab({ customers, invoices, user, userProfile, users, 
       const stageName = PIPELINE_STAGES.find(s => s.v === newStage)?.l || newStage;
       await logActivity(myId, 'Pipeline: ' + (client.name_en || client.name) + ' → ' + stageName, 'crm');
       await dbInsert('client_notes', { customer_id: client.id, note_text: '📊 Pipeline stage changed: ' + oldStage + ' → ' + newStage + ' by ' + (users?.find(u => u.id === myId)?.name || '') }, myId);
+      if (client.assigned_rep && client.assigned_rep !== myId) notifyCRMStatus([client.assigned_rep], client.name, stageName, myId);
       if (sel && sel.id === client.id) { setSel({...sel, pipeline_stage: newStage}); loadClientData({...sel, pipeline_stage: newStage}); }
       onReload();
     } catch (err) { alert('Error: ' + err.message); }

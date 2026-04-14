@@ -226,7 +226,7 @@ export default function App() {
 
   // Navigation
   const [tab, setTab] = useState('dashboard');
-  const [mode, setMode] = useState('1yr');
+  const [mode, setMode] = useState('ytd');
   const [df, setDf] = useState(() => { const d = new Date(); d.setMonth(d.getMonth() - 1); return d.toISOString().substring(0, 10); });
   const [dt, setDt] = useState(today());
   const [query, setQuery] = useState('');
@@ -280,6 +280,8 @@ export default function App() {
   const [customerGroup, setCustomerGroup] = useState('all');
   const [invoiceSort, setInvoiceSort] = useState('newest'); // newest | oldest
   const [treasurySort, setTreasurySort] = useState('newest'); // newest | oldest
+  const [treasuryVisible, setTreasuryVisible] = useState(50);
+  const [invoiceVisible, setInvoiceVisible] = useState(50);
 
   // Forms
   const [showAddPayment, setShowAddPayment] = useState(false);
@@ -686,7 +688,7 @@ export default function App() {
       (s.customer_name || '').includes(query) || (s.customer_name_en || '').toLowerCase().includes(query.toLowerCase()) || (s.order_number || '').includes(query)
     );
     const dir = invoiceSort === 'oldest' ? 1 : -1;
-    arr.sort((a, b) => dir * ((a.invoice_date || '').localeCompare(b.invoice_date || '')));
+    arr.sort((a, b) => dir * ((a.created_at || '').localeCompare(b.created_at || '')));
     return arr;
   }, [invoices, mode, df, dt, query, customerFilter, invoiceSort]);
 
@@ -698,11 +700,14 @@ export default function App() {
   const filteredTreasury = useMemo(() => {
     const dir = treasurySort === 'oldest' ? 1 : -1;
     return treasury.filter(t => inRange(t.transaction_date, mode, df, dt))
-      .sort((a, b) => dir * ((a.transaction_date || '').localeCompare(b.transaction_date || '')));
+      .sort((a, b) => dir * ((a.created_at || '').localeCompare(b.created_at || '')));
   }, [treasury, mode, df, dt, treasurySort]);
   const totalCashIn = useMemo(() => filteredTreasury.reduce((a, t) => a + Number(t.cash_in || 0), 0), [filteredTreasury]);
   const totalCashOut = useMemo(() => filteredTreasury.reduce((a, t) => a + Number(t.cash_out || 0), 0), [filteredTreasury]);
   const allTimeNet = useMemo(() => treasury.reduce((a, t) => a + Number(t.cash_in || 0) - Number(t.cash_out || 0), 0), [treasury]);
+
+  // Reset visible counts when filter changes
+  useEffect(() => { setTreasuryVisible(50); setInvoiceVisible(50); }, [mode, df, dt]);
 
   // Sparkline data: daily totals for last 30 days
   const sparkData = useMemo(() => {
@@ -1521,7 +1526,7 @@ export default function App() {
   // ==========================================
   const ModeBar = () => (
     <div className="flex gap-1 items-center flex-wrap">
-      {[['all', 'All / الكل'], ['1mo', '1 Month'], ['1yr', '1 Year'], ['3yr', '3 Years'], ['custom', 'Custom / مخصص']].map(([v, l]) => (
+      {[['all', 'All / الكل'], ['ytd', 'This Year'], ['1mo', '1 Month'], ['1yr', '1 Year'], ['3yr', '3 Years'], ['custom', 'Custom / مخصص']].map(([v, l]) => (
         <button key={v} onClick={() => setMode(v)}
           className={`px-3 py-1 rounded-md text-xs font-semibold transition ${mode === v ? 'bg-slate-900 text-white' : 'bg-slate-100 text-slate-500 hover:bg-slate-200'}`}
         >{l}</button>
@@ -1640,8 +1645,8 @@ export default function App() {
         </div>
         <div className="flex items-center gap-2">
           {/* Treasury Net — always visible */}
-          <div onClick={() => setTab('treasury')} className="cursor-pointer px-2 sm:px-3 py-1.5 rounded-lg" style={{background:'rgba(255,255,255,0.04)', border:'1px solid rgba(255,255,255,0.08)'}}>
-            <div style={{color:'rgba(148,163,184,0.5)'}} className="text-[7px] sm:text-[8px] font-bold uppercase tracking-wider">Treasury Net</div>
+          <div onClick={() => { setTab('treasury'); setMode('all'); }} className="cursor-pointer px-2 sm:px-3 py-1.5 rounded-lg" style={{background:'rgba(255,255,255,0.04)', border:'1px solid rgba(255,255,255,0.08)'}}>
+            <div style={{color:'rgba(148,163,184,0.5)'}} className="text-[7px] sm:text-[8px] font-bold uppercase tracking-wider">Treasury Net (All Time)</div>
             <div className={'text-xs sm:text-sm font-black'} style={{color: allTimeNet >= 0 ? '#34d399' : '#f87171'}}>{fE(allTimeNet)}</div>
           </div>
           {userProfile && (
@@ -3610,20 +3615,43 @@ export default function App() {
               const assignedByMe = dashTickets.filter(t => t.created_by === myId && t.assigned_to !== myId && t.status !== 'Closed').length;
               const teamTicketsCount = dashTickets.filter(t => t.status !== 'Closed' && t.assigned_to !== myId && t.created_by !== myId).length;
               const todayEvents = dashEvents.filter(e => e.event_date === todayStr && (e.assigned_to === myId || e.created_by === myId || !e.assigned_to));
+              // Check due reminders (today + tomorrow) — for treasury-access users
+              const hasTreasuryAccess = userProfile?.role === 'super_admin' || userProfile?.role === 'admin' || modulePerms?.['Treasury'] === true;
+              const tomorrowStr = new Date(Date.now() + 86400000).toISOString().substring(0, 10);
+              const checksDueToday = hasTreasuryAccess ? pendingChecks.filter(c => (c.due_date || c.check_date || '') === todayStr) : [];
+              const checksDueTomorrow = hasTreasuryAccess ? pendingChecks.filter(c => (c.due_date || c.check_date || '') === tomorrowStr) : [];
+              const checksOverdue = hasTreasuryAccess ? pendingChecks.filter(c => (c.due_date || c.check_date || '') < todayStr && (c.due_date || c.check_date)) : [];
               const myFollowUps = dashFollowUps.filter(fu => fu.assigned_to === myId || fu.created_by === myId);
               return (
                 <div style={{ marginBottom: 16 }}>
-                  {/* ── TODAY'S EVENTS — first thing you see ── */}
-                  {todayEvents.length > 0 && (
+                  {/* ── TODAY'S EVENTS + CHECK REMINDERS ── */}
+                  {(todayEvents.length > 0 || checksDueToday.length > 0 || checksDueTomorrow.length > 0) && (
                     <div style={{ background: 'rgba(17,24,39,0.7)', border: '1px solid rgba(52,211,153,0.15)', borderRadius: 12, padding: 12, marginBottom: 10 }}>
                       <div style={{ fontSize: 11, fontWeight: 800, color: '#34d399', marginBottom: 8, letterSpacing: '0.05em' }}>📅 TODAY'S SCHEDULE</div>
-                      <div style={{ display: 'flex', gap: 8, overflowX: 'auto', paddingBottom: 4 }}>
+                      <div style={{ display: 'flex', gap: 8, overflowX: 'auto', paddingBottom: 4, flexWrap: 'wrap' }}>
                         {todayEvents.slice(0, 6).map(ev => (
                           <div key={ev.id} onClick={() => setTab('calendar')}
                             style={{ flexShrink: 0, background: 'rgba(52,211,153,0.08)', border: '1px solid rgba(52,211,153,0.15)', borderRadius: 8, padding: '8px 12px', cursor: 'pointer', minWidth: 180 }}>
                             <div style={{ fontSize: 11, fontWeight: 700, color: '#34d399', fontFamily: 'monospace' }}>{ev.event_time ? ev.event_time.substring(0,5) : 'All day'}</div>
                             <div style={{ fontSize: 12, fontWeight: 600, color: '#e2e8f0', marginTop: 2 }}>{ev.title}</div>
                             {ev.event_type && <div style={{ fontSize: 9, color: '#64748b', marginTop: 2 }}>{ev.event_type}</div>}
+                          </div>
+                        ))}
+                        {/* Check reminders as events */}
+                        {checksDueToday.map(c => (
+                          <div key={'chk-today-'+c.id} onClick={() => setTab('checks')}
+                            style={{ flexShrink: 0, background: 'rgba(239,68,68,0.12)', border: '2px solid rgba(239,68,68,0.4)', borderRadius: 8, padding: '8px 12px', cursor: 'pointer', minWidth: 180, animation: 'pulse 2s infinite' }}>
+                            <div style={{ fontSize: 11, fontWeight: 700, color: '#ef4444', fontFamily: 'monospace' }}>📝 CHECK DUE TODAY</div>
+                            <div style={{ fontSize: 12, fontWeight: 600, color: '#e2e8f0', marginTop: 2 }}>{c.customer_name}</div>
+                            <div style={{ fontSize: 10, color: '#f59e0b', marginTop: 1 }}>{c.order_number ? 'Order #' + c.order_number + ' — ' : ''}{fE(c.amount)}</div>
+                          </div>
+                        ))}
+                        {checksDueTomorrow.map(c => (
+                          <div key={'chk-tmrw-'+c.id} onClick={() => setTab('checks')}
+                            style={{ flexShrink: 0, background: 'rgba(245,158,11,0.1)', border: '1px solid rgba(245,158,11,0.3)', borderRadius: 8, padding: '8px 12px', cursor: 'pointer', minWidth: 180 }}>
+                            <div style={{ fontSize: 11, fontWeight: 700, color: '#f59e0b', fontFamily: 'monospace' }}>📝 CHECK DUE TOMORROW</div>
+                            <div style={{ fontSize: 12, fontWeight: 600, color: '#e2e8f0', marginTop: 2 }}>{c.customer_name}</div>
+                            <div style={{ fontSize: 10, color: '#94a3b8', marginTop: 1 }}>{c.order_number ? 'Order #' + c.order_number + ' — ' : ''}{fE(c.amount)}</div>
                           </div>
                         ))}
                       </div>
@@ -3650,26 +3678,68 @@ export default function App() {
                   {/* ── CHECKS CASH FLOW ── */}
                   {pendingChecks.length > 0 && (() => {
                     const todayD = new Date().toISOString().substring(0, 10);
+                    const tmrwD = new Date(Date.now() + 86400000).toISOString().substring(0, 10);
                     const thisMonthD = todayD.substring(0, 7);
                     const pendingTotal = pendingChecks.reduce((a, c) => a + Number(c.amount || 0), 0);
-                    const thisMonthTotal = pendingChecks.filter(c => (c.due_date || c.check_date || '').substring(0, 7) === thisMonthD).reduce((a, c) => a + Number(c.amount || 0), 0);
-                    const overdueTotal = pendingChecks.filter(c => (c.due_date || c.check_date || '') < todayD && (c.due_date || c.check_date)).reduce((a, c) => a + Number(c.amount || 0), 0);
+                    const thisMonthChecks = pendingChecks.filter(c => (c.due_date || c.check_date || '').substring(0, 7) === thisMonthD);
+                    const thisMonthTotal = thisMonthChecks.reduce((a, c) => a + Number(c.amount || 0), 0);
+                    const overdueList = pendingChecks.filter(c => (c.due_date || c.check_date || '') < todayD && (c.due_date || c.check_date));
+                    const overdueTotal = overdueList.reduce((a, c) => a + Number(c.amount || 0), 0);
+                    // Show upcoming checks (next 5 soonest)
+                    const upcoming5 = [...pendingChecks].sort((a,b) => (a.due_date||a.check_date||'').localeCompare(b.due_date||b.check_date||'')).slice(0, 5);
                     return (
-                      <div onClick={() => setTab('checks')} style={{ background: 'rgba(17,24,39,0.7)', border: '1px solid rgba(245,158,11,0.2)', borderRadius: 12, padding: 12, marginBottom: 10, cursor: 'pointer' }}>
-                        <div style={{ fontSize: 11, fontWeight: 800, color: '#f59e0b', marginBottom: 8, letterSpacing: '0.05em' }}>📝 CHECKS OVERVIEW</div>
-                        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 8 }}>
-                          <div style={{ textAlign: 'center' }}>
-                            <div style={{ fontSize: 16, fontWeight: 900, color: '#f59e0b', fontFamily: 'monospace' }}>{fE(pendingTotal)}</div>
-                            <div style={{ fontSize: 8, color: '#64748b', textTransform: 'uppercase' }}>Total Outstanding</div>
+                      <div style={{ background: 'rgba(17,24,39,0.7)', border: '1px solid rgba(245,158,11,0.2)', borderRadius: 12, padding: 12, marginBottom: 10 }}>
+                        <div onClick={() => setTab('checks')} style={{ cursor: 'pointer' }}>
+                          <div style={{ fontSize: 11, fontWeight: 800, color: '#f59e0b', marginBottom: 8, letterSpacing: '0.05em' }}>📝 CHECKS OVERVIEW</div>
+                          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 8, marginBottom: 10 }}>
+                            <div style={{ textAlign: 'center' }}>
+                              <div style={{ fontSize: 16, fontWeight: 900, color: '#f59e0b', fontFamily: 'monospace' }}>{fE(pendingTotal)}</div>
+                              <div style={{ fontSize: 8, color: '#64748b', textTransform: 'uppercase' }}>Total Outstanding</div>
+                            </div>
+                            <div style={{ textAlign: 'center' }}>
+                              <div style={{ fontSize: 16, fontWeight: 900, color: '#3b82f6', fontFamily: 'monospace' }}>{fE(thisMonthTotal)}</div>
+                              <div style={{ fontSize: 8, color: '#64748b', textTransform: 'uppercase' }}>Expected This Month</div>
+                            </div>
+                            <div style={{ textAlign: 'center' }}>
+                              <div style={{ fontSize: 16, fontWeight: 900, color: overdueTotal > 0 ? '#ef4444' : '#10b981', fontFamily: 'monospace' }}>{overdueTotal > 0 ? fE(overdueTotal) : '✓'}</div>
+                              <div style={{ fontSize: 8, color: '#64748b', textTransform: 'uppercase' }}>{overdueTotal > 0 ? 'Overdue' : 'None Overdue'}</div>
+                            </div>
                           </div>
-                          <div style={{ textAlign: 'center' }}>
-                            <div style={{ fontSize: 16, fontWeight: 900, color: '#3b82f6', fontFamily: 'monospace' }}>{fE(thisMonthTotal)}</div>
-                            <div style={{ fontSize: 8, color: '#64748b', textTransform: 'uppercase' }}>Expected This Month</div>
-                          </div>
-                          <div style={{ textAlign: 'center' }}>
-                            <div style={{ fontSize: 16, fontWeight: 900, color: overdueTotal > 0 ? '#ef4444' : '#10b981', fontFamily: 'monospace' }}>{overdueTotal > 0 ? fE(overdueTotal) : '✓'}</div>
-                            <div style={{ fontSize: 8, color: '#64748b', textTransform: 'uppercase' }}>{overdueTotal > 0 ? 'Overdue' : 'None Overdue'}</div>
-                          </div>
+                        </div>
+                        {/* Individual upcoming checks */}
+                        <div style={{ borderTop: '1px solid rgba(255,255,255,0.06)', paddingTop: 8 }}>
+                          <div style={{ fontSize: 9, color: '#64748b', marginBottom: 4, textTransform: 'uppercase', letterSpacing: '0.05em' }}>Upcoming Checks</div>
+                          {upcoming5.map(c => {
+                            const dd = c.due_date || c.check_date || '';
+                            const isOD = dd < todayD && dd;
+                            const isDT = dd === todayD;
+                            const isTmrw = dd === tmrwD;
+                            const borderColor = isOD ? '#ef4444' : isDT ? '#ef4444' : isTmrw ? '#f59e0b' : 'rgba(255,255,255,0.06)';
+                            const bgColor = isOD ? 'rgba(239,68,68,0.08)' : isDT ? 'rgba(239,68,68,0.12)' : isTmrw ? 'rgba(245,158,11,0.08)' : 'transparent';
+                            return (
+                              <div key={c.id} onClick={() => setTab('checks')}
+                                style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '6px 8px', borderRadius: 6, marginBottom: 3, cursor: 'pointer', border: '1px solid ' + borderColor, background: bgColor }}>
+                                <div>
+                                  <div style={{ fontSize: 11, fontWeight: 600, color: '#e2e8f0' }}>{c.customer_name}</div>
+                                  <div style={{ fontSize: 9, color: '#94a3b8' }}>
+                                    {c.order_number ? 'Order #' + c.order_number : ''}
+                                    {c.order_number && c.check_number ? ' · ' : ''}{c.check_number ? 'Check #' + c.check_number : ''}
+                                  </div>
+                                </div>
+                                <div style={{ textAlign: 'right' }}>
+                                  <div style={{ fontSize: 12, fontWeight: 700, color: '#f59e0b', fontFamily: 'monospace' }}>{fE(c.amount)}</div>
+                                  <div style={{ fontSize: 9, color: isOD ? '#ef4444' : isDT ? '#ef4444' : isTmrw ? '#f59e0b' : '#64748b', fontWeight: isOD || isDT || isTmrw ? 700 : 400 }}>
+                                    {isOD ? 'OVERDUE' : isDT ? 'TODAY' : isTmrw ? 'TOMORROW' : dd}
+                                  </div>
+                                </div>
+                              </div>
+                            );
+                          })}
+                          {pendingChecks.length > 5 && (
+                            <div onClick={() => setTab('checks')} style={{ fontSize: 10, color: '#3b82f6', textAlign: 'center', padding: 4, cursor: 'pointer' }}>
+                              View all {pendingChecks.length} checks →
+                            </div>
+                          )}
                         </div>
                       </div>
                     );
@@ -5384,16 +5454,23 @@ export default function App() {
                 </div>
               </div>);
             })()}
-            {/* ── RECENT TRANSACTIONS — always visible ── */}
+            {/* ── TRANSACTIONS — infinite scroll ── */}
             <div className="bg-white rounded-xl p-4 mb-3">
               <div className="flex justify-between items-center mb-2">
-                <h3 className="text-sm font-bold">Recent Transactions / المعاملات الأخيرة ({filteredTreasury.length})</h3>
+                <h3 className="text-sm font-bold">Transactions / المعاملات ({filteredTreasury.length})</h3>
                 <button onClick={() => setTreasurySort(treasurySort === 'newest' ? 'oldest' : 'newest')}
                   className="text-[10px] text-blue-600 font-semibold hover:underline">
                   {treasurySort === 'newest' ? '↓ Newest First' : '↑ Oldest First'}
                 </button>
               </div>
-              <div className="overflow-auto max-h-[420px] rounded-lg border border-slate-200">
+              <div className="overflow-auto rounded-lg border border-slate-200"
+                style={{ maxHeight: '70vh' }}
+                onScroll={e => {
+                  const el = e.target;
+                  if (el.scrollTop + el.clientHeight >= el.scrollHeight - 100 && treasuryVisible < filteredTreasury.length) {
+                    setTreasuryVisible(v => Math.min(v + 50, filteredTreasury.length));
+                  }
+                }}>
                 <table className="w-full border-collapse">
                   <thead className="sticky top-0 z-10"><tr className="bg-slate-50">
                     <th className="px-2 py-2 text-xs text-left">Date</th>
@@ -5404,7 +5481,7 @@ export default function App() {
                     <th className="px-2 py-2 text-xs"></th>
                   </tr></thead>
                   <tbody>
-                    {filteredTreasury.slice(0, 100).map(txn => (
+                    {filteredTreasury.slice(0, treasuryVisible).map(txn => (
                       <tr key={txn.id} className="border-b border-slate-50 hover:bg-blue-50/30">
                         <td className="px-2 py-1.5 text-[10px] whitespace-nowrap">{txn.transaction_date}</td>
                         <td className="px-2 py-1.5 text-[10px] font-semibold text-center">{txn.order_number || ''}</td>
@@ -5442,8 +5519,18 @@ export default function App() {
                     ))}
                   </tbody>
                 </table>
+                {treasuryVisible < filteredTreasury.length && (
+                  <div className="py-3 text-center">
+                    <button onClick={() => setTreasuryVisible(v => Math.min(v + 50, filteredTreasury.length))}
+                      className="text-blue-500 text-xs font-semibold hover:underline">
+                      Load more ({treasuryVisible} of {filteredTreasury.length}) ↓
+                    </button>
+                  </div>
+                )}
+                {treasuryVisible >= filteredTreasury.length && filteredTreasury.length > 50 && (
+                  <div className="py-2 text-center text-[10px] text-slate-400">All {filteredTreasury.length} transactions loaded ✓</div>
+                )}
               </div>
-              {filteredTreasury.length > 100 && <p className="text-center text-[10px] text-slate-400 mt-1">Showing 100 of {filteredTreasury.length} — use search to narrow</p>}
             </div>
             {incomeBuckets.length > 0 && (
               <div className="bg-white rounded-xl p-4 mb-3">
@@ -5633,44 +5720,62 @@ export default function App() {
               </div>
             </div>
 
-            {/* Monthly grouped checks */}
+            {/* Grouped checks — by month (date sort) or by customer */}
             {(() => {
               const list = checkView === 'pending' ? pendingChecks : collectedChecks;
-              // Sort
-              const sorted = [...list].sort((a, b) => {
-                if (checkSort === 'customer') return (a.customer_name || '').localeCompare(b.customer_name || '');
-                if (checkSort === 'order') return (a.order_number || '').localeCompare(b.order_number || '');
+              // Sort within groups
+              const dateSorter = (a, b) => {
                 const ad = checkView === 'done' ? (a.collection_date || '') : (a.due_date || a.check_date || '');
                 const bd = checkView === 'done' ? (b.collection_date || '') : (b.due_date || b.check_date || '');
                 return checkView === 'done' ? bd.localeCompare(ad) : ad.localeCompare(bd);
-              });
-              // Group by month
+              };
+              const sorted = [...list].sort(dateSorter);
+
+              // Group key depends on sort mode
               const groups = {};
               sorted.forEach(c => {
-                const d = checkView === 'done' ? (c.collection_date || '') : (c.due_date || c.check_date || '');
-                const month = d.substring(0, 7) || 'Unknown';
-                if (!groups[month]) groups[month] = [];
-                groups[month].push(c);
+                let key;
+                if (checkSort === 'customer') {
+                  key = c.customer_name || 'Unknown';
+                } else if (checkSort === 'order') {
+                  key = c.order_number || 'No Order #';
+                } else {
+                  const d = checkView === 'done' ? (c.collection_date || '') : (c.due_date || c.check_date || '');
+                  key = d.substring(0, 7) || 'Unknown';
+                }
+                if (!groups[key]) groups[key] = [];
+                groups[key].push(c);
               });
-              const monthKeys = Object.keys(groups).sort((a, b) => checkView === 'done' ? b.localeCompare(a) : a.localeCompare(b));
-              // For pending, put overdue month first
-              if (checkView === 'pending') {
-                const overdueMonths = monthKeys.filter(m => m < todayStr.substring(0, 7));
-                const futureMonths = monthKeys.filter(m => m >= todayStr.substring(0, 7));
-                monthKeys.length = 0;
-                monthKeys.push(...overdueMonths, ...futureMonths);
+
+              let groupKeys = Object.keys(groups);
+              if (checkSort === 'customer' || checkSort === 'order') {
+                groupKeys.sort((a, b) => a.localeCompare(b));
+              } else {
+                groupKeys.sort((a, b) => checkView === 'done' ? b.localeCompare(a) : a.localeCompare(b));
+                if (checkView === 'pending') {
+                  const overdueKeys = groupKeys.filter(m => m < todayStr.substring(0, 7));
+                  const futureKeys = groupKeys.filter(m => m >= todayStr.substring(0, 7));
+                  groupKeys = [...overdueKeys, ...futureKeys];
+                }
               }
 
-              return monthKeys.map(month => {
-                const items = groups[month];
-                const monthTotal = items.reduce((a, c) => a + Number(c.amount || 0), 0);
-                const monthLabel = month === 'Unknown' ? 'No Date' : new Date(month + '-01').toLocaleDateString('en-US', { year: 'numeric', month: 'long' });
-                const isOverdueMonth = checkView === 'pending' && month < todayStr.substring(0, 7);
+              return groupKeys.map(gKey => {
+                const items = groups[gKey];
+                const groupTotal = items.reduce((a, c) => a + Number(c.amount || 0), 0);
+                let groupLabel, isOverdueGroup = false;
+                if (checkSort === 'customer') {
+                  groupLabel = '👤 ' + gKey;
+                } else if (checkSort === 'order') {
+                  groupLabel = '📦 Order #' + gKey;
+                } else {
+                  groupLabel = gKey === 'Unknown' ? 'No Date' : new Date(gKey + '-01').toLocaleDateString('en-US', { year: 'numeric', month: 'long' });
+                  isOverdueGroup = checkView === 'pending' && gKey < todayStr.substring(0, 7);
+                }
                 return (
-                  <div key={month} className="mb-3">
-                    <div className={'flex justify-between items-center px-3 py-2 rounded-t-lg text-xs font-bold ' + (isOverdueMonth ? 'bg-red-100 text-red-800' : 'bg-slate-100 text-slate-700')}>
-                      <span>{isOverdueMonth && '⚠️ '}{monthLabel}</span>
-                      <span>{items.length} checks — {fE(monthTotal)}</span>
+                  <div key={gKey} className="mb-3">
+                    <div className={'flex justify-between items-center px-3 py-2 rounded-t-lg text-xs font-bold ' + (isOverdueGroup ? 'bg-red-100 text-red-800' : 'bg-slate-100 text-slate-700')}>
+                      <span>{isOverdueGroup && '⚠️ '}{groupLabel}</span>
+                      <span>{items.length} checks — {fE(groupTotal)}</span>
                     </div>
                     <div className="overflow-auto border border-t-0 border-slate-200 rounded-b-lg">
                       <table className="w-full border-collapse">

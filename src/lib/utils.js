@@ -88,6 +88,10 @@ export const yearOf = (d) => d ? parseInt(d.substring(0, 4)) : 0;
 export const inRange = (d, mode, df, dt) => {
   if (!d || d.length < 4) return mode === 'all';
   if (mode === 'all') return true;
+  if (mode === 'ytd') {
+    const year = new Date().getFullYear();
+    return d >= year + '-01-01';
+  }
   if (mode === '1mo') {
     const oneMonthAgo = new Date();
     oneMonthAgo.setMonth(oneMonthAgo.getMonth() - 1);

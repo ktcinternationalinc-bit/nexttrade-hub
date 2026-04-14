@@ -122,6 +122,7 @@ export default function TicketsTab({ customers, user, userProfile, users, onRelo
       await dbInsert('ticket_comments', { ticket_id: ticket.id, comment_text: '📋 Status changed to ' + newStatus + ' by ' + myName, is_system: true, created_by: myId }, myId);
       await logActivity(myId, 'Ticket status → ' + newStatus + ': ' + ticket.title, 'ticket');
       if (ticket.assigned_to && ticket.assigned_to !== myId) notifyTicketStatus([ticket.assigned_to], ticket.title, newStatus, myId);
+      if (ticket.created_by && ticket.created_by !== myId && ticket.created_by !== ticket.assigned_to) notifyTicketStatus([ticket.created_by], ticket.title, newStatus, myId);
       loadTickets();
       if (sel && sel.id === ticket.id) { setSel({...sel, ...updates}); loadComments(ticket.id); }
     } catch (err) { alert('Error: ' + err.message); }
@@ -135,6 +136,8 @@ export default function TicketsTab({ customers, user, userProfile, users, onRelo
       await dbInsert('ticket_comments', { ticket_id: ticket.id, comment_text: '👤 Reassigned to ' + newName + ' by ' + myName, is_system: true, created_by: myId }, myId);
       await logActivity(myId, 'Reassigned ticket to ' + newName + ': ' + ticket.title, 'ticket');
       if (newUserId) notifyTicketReassigned([newUserId], ticket.title, myId);
+      if (ticket.assigned_to && ticket.assigned_to !== newUserId && ticket.assigned_to !== myId) notifyTicketReassigned([ticket.assigned_to], ticket.title, myId);
+      if (ticket.created_by && ticket.created_by !== myId && ticket.created_by !== newUserId && ticket.created_by !== ticket.assigned_to) notifyTicketReassigned([ticket.created_by], ticket.title, myId);
       loadTickets();
       if (sel && sel.id === ticket.id) { setSel({...sel, assigned_to: newUserId}); loadComments(ticket.id); }
     } catch (err) { alert('Error: ' + err.message); }
@@ -147,6 +150,7 @@ export default function TicketsTab({ customers, user, userProfile, users, onRelo
       await dbUpdate('tickets', sel.id, { updated_by: myId }, myId);
       await logActivity(myId, 'Comment on ticket: ' + sel.title, 'ticket');
       if (sel.assigned_to && sel.assigned_to !== myId) notifyTicketComment([sel.assigned_to], sel.title, f.comment, myId);
+      if (sel.created_by && sel.created_by !== myId && sel.created_by !== sel.assigned_to) notifyTicketComment([sel.created_by], sel.title, f.comment, myId);
       setF({...f, comment: ''}); loadComments(sel.id);
     } catch (err) { alert('Error: ' + err.message); }
   };
