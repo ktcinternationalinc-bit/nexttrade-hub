@@ -245,6 +245,7 @@ export default function App() {
   const [invInbounds, setInvInbounds] = useState([]);
   const [teamUsers, setTeamUsers] = useState([]);
   const [userProfile, setUserProfile] = useState(null);
+  const profileIdRef = useRef(null);
   const [modulePerms, setModulePerms] = useState({});
   const [lang, setLang] = useState('ar'); // 'ar' or 'en'
 
@@ -446,9 +447,10 @@ export default function App() {
       const { data: { session: s } } = await supabase.auth.getSession();
       if (s?.user) {
         const today = new Date().toISOString().split('T')[0];
+        const uid = profileIdRef.current || s.user.id;
         await supabase.from('user_sessions')
           .update({ last_seen: new Date().toISOString() })
-          .eq('user_id', s.user.id)
+          .eq('user_id', uid)
           .eq('date', today)
           .order('login_at', { ascending: false })
           .limit(1);
@@ -470,16 +472,17 @@ export default function App() {
         try {
           const { data: { session: s } } = await supabase.auth.getSession();
           if (!s?.user) return;
-          const { data: profile } = await supabase.from('users').select('role').eq('id', s.user.id).single();
+          const { data: profile } = await supabase.from('users').select('role').eq('email', s.user.email).single();
           if (profile?.role === 'super_admin') return; // super admins stay logged in
           // Record auto-logout in session
           const today = new Date().toISOString().split('T')[0];
+          const uid = profileIdRef.current || s.user.id;
           await supabase.from('user_sessions')
             .update({ logout_at: new Date().toISOString(), logout_reason: 'auto_timeout' })
-            .eq('user_id', s.user.id).eq('date', today)
+            .eq('user_id', uid).eq('date', today)
             .order('login_at', { ascending: false }).limit(1);
           // Log it
-          try { await supabase.from('daily_log').insert({ user_id: s.user.id, entry_text: 'Auto-logged out after 30 min inactivity', log_category: 'login', log_date: today, log_time: new Date().toTimeString().substring(0,8), auto_generated: true }); } catch(e) {}
+          try { await supabase.from('daily_log').insert({ user_id: uid, entry_text: 'Auto-logged out after 30 min inactivity', log_category: 'login', log_date: today, log_time: new Date().toTimeString().substring(0,8), auto_generated: true }); } catch(e) {}
           await supabase.auth.signOut(); window.location.href = '/login';
         } catch(e) {}
       }, IDLE_TIMEOUT);
@@ -489,7 +492,7 @@ export default function App() {
 
     // Record last_seen on page close
     const handleUnload = () => {
-      const uid = user?.id;
+      const uid = profileIdRef.current || user?.id;
       if (uid) {
         const today = new Date().toISOString().split('T')[0];
         navigator.sendBeacon('/api/plaid/link', ''); // no-op, just to keep alive
@@ -545,6 +548,7 @@ export default function App() {
           const profile = usrs.find(u => (u.email || '').toLowerCase() === authEmail);
           if (profile) {
             setUserProfile(profile);
+            profileIdRef.current = profile.id;
             // Log first login of the day
             try {
               const todayStr = new Date().toISOString().substring(0, 10);
@@ -841,13 +845,14 @@ export default function App() {
   };
 
   const handleSignOut = async () => {
-    if (user?.id) {
+    const uid = profileIdRef.current || user?.id;
+    if (uid) {
       const today = new Date().toISOString().split('T')[0];
       await supabase.from('user_sessions')
         .update({ logout_at: new Date().toISOString(), last_seen: new Date().toISOString(), logout_reason: 'manual' })
-        .eq('user_id', user.id).eq('date', today)
+        .eq('user_id', uid).eq('date', today)
         .order('login_at', { ascending: false }).limit(1);
-      try { await supabase.from('daily_log').insert({ user_id: user.id, entry_text: 'Clocked out (manual)', log_category: 'login', log_date: today, log_time: new Date().toTimeString().substring(0,8), auto_generated: true }); } catch(e) {}
+      try { await supabase.from('daily_log').insert({ user_id: uid, entry_text: 'Clocked out (manual)', log_category: 'login', log_date: today, log_time: new Date().toTimeString().substring(0,8), auto_generated: true }); } catch(e) {}
     }
     await supabase.auth.signOut();
     window.location.href = '/login';

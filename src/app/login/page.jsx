@@ -95,10 +95,11 @@ export default function LoginPage() {
       if (error) throw error;
       let name = email.split('@')[0];
       if (data?.user) {
-        const { data: profile } = await supabase.from('team_members').select('name').eq('auth_id', data.user.id).single();
+        const { data: profile } = await supabase.from('users').select('id, name').eq('email', email.toLowerCase().trim()).single();
         if (profile?.name) name = profile.name;
+        var sessionUserId = profile?.id || data.user.id;
         await supabase.from('user_sessions').insert({
-          user_id: data.user.id, login_at: new Date().toISOString(),
+          user_id: sessionUserId, login_at: new Date().toISOString(),
           last_seen: new Date().toISOString(), date: new Date().toISOString().split('T')[0],
         });
       }

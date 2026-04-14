@@ -90,29 +90,32 @@ export async function PUT(request) {
     if (body.active !== undefined) updates.active = body.active;
     if (body.phone !== undefined) updates.phone = body.phone;
 
-    if (Object.keys(updates).length === 0) {
+    if (Object.keys(updates).length === 0 && !body.new_password) {
       return Response.json({ error: 'No updates provided' }, { status: 400 });
     }
 
-    updates.updated_at = new Date().toISOString();
-
-    var result = await supabase.from('users').update(updates).eq('id', userId).select().single();
-    if (result.error) return Response.json({ error: result.error.message }, { status: 400 });
+    if (Object.keys(updates).length > 0) {
+      updates.updated_at = new Date().toISOString();
+      var result = await supabase.from('users').update(updates).eq('id', userId).select().single();
+      if (result.error) return Response.json({ error: result.error.message }, { status: 400 });
+    }
 
     // Update password if provided
     if (body.new_password) {
-      // Find auth user by email
-      var userEmail = result.data.email;
-      var listResult = await supabase.auth.admin.listUsers();
-      if (listResult.data && listResult.data.users) {
-        var authUser = listResult.data.users.find(function(u) { return u.email === userEmail; });
-        if (authUser) {
-          await supabase.auth.admin.updateUserById(authUser.id, { password: body.new_password });
+      var userRow = await supabase.from('users').select('email').eq('id', userId).single();
+      var userEmail = userRow.data ? userRow.data.email : null;
+      if (userEmail) {
+        var listResult = await supabase.auth.admin.listUsers();
+        if (listResult.data && listResult.data.users) {
+          var authUser = listResult.data.users.find(function(u) { return u.email === userEmail; });
+          if (authUser) {
+            await supabase.auth.admin.updateUserById(authUser.id, { password: body.new_password });
+          }
         }
       }
     }
 
-    return Response.json({ success: true, user: result.data });
+    return Response.json({ success: true });
   } catch (err) {
     return Response.json({ error: err.message }, { status: 500 });
   }
