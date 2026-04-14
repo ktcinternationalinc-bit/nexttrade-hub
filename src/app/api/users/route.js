@@ -62,7 +62,8 @@ export async function POST(request) {
     // Step 3: Set module permissions for ALL modules
     var allModules = ['Dashboard', 'Sales', 'Customers', 'Treasury', 'Checks', 'Debts',
       'Warehouse', 'Inventory', 'CRM', 'Tickets', 'Calendar', 'Customs',
-      'Shipping Rates', 'Daily Log', 'Admin', 'AI Assistant', 'Communications', 'Settings', 'Import'];
+      'Shipping Rates', 'Daily Log', 'Admin', 'AI Assistant', 'Communications', 'Settings', 'Import',
+      'Bank', 'Egypt Bank', 'Quotes', 'Reports'];
     var selectedMods = body.modules && Array.isArray(body.modules) ? body.modules : [];
     var permRecords = allModules.map(function(mod) {
       return { user_id: dbResult.data.id, module_name: mod, has_access: selectedMods.includes(mod) };

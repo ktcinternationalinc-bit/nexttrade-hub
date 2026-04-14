@@ -14,7 +14,8 @@ const ROLES = [
 const MODULES = [
   'Dashboard', 'Personal Dashboard', 'Sales', 'Customers', 'Treasury', 'Checks', 'Debts',
   'Warehouse', 'Inventory', 'CRM', 'CRM View All', 'Tickets', 'Calendar', 'Customs',
-  'Shipping Rates', 'Daily Log', 'Admin', 'AI Assistant', 'Communications', 'Settings', 'Import',
+  'Shipping Rates', 'Quotes', 'Bank', 'Egypt Bank', 'Reports',
+  'Daily Log', 'Admin', 'AI Assistant', 'Communications', 'Settings', 'Import',
   // Granular permissions
   'Edit Treasury', 'Edit Invoices', 'Delete Invoices', 'Edit Inventory', 'Edit Warehouse',
   'Edit CRM', 'View Costs', 'Delete Tickets', 'Assign Tickets', 'Merge Customers',
@@ -381,7 +382,7 @@ export default function SettingsTab({ user, users, onReload, isAdmin }) {
             <tbody>
               {/* Tab Access */}
               <tr><td colSpan={nonSuperUsers.length + 1} className="px-2 py-2 bg-blue-50 text-[10px] font-bold text-blue-700 border-b border-blue-200">📑 TAB ACCESS — which tabs the user can see</td></tr>
-              {['Dashboard', 'Personal Dashboard', 'Sales', 'Customers', 'Treasury', 'Checks', 'Debts', 'Warehouse', 'Inventory', 'CRM', 'Tickets', 'Calendar', 'Customs', 'Shipping Rates', 'Quotes', 'Bank', 'Daily Log', 'Admin', 'AI Assistant', 'Communications', 'Settings', 'Import'].map(mod => (
+              {['Dashboard', 'Personal Dashboard', 'Sales', 'Customers', 'Treasury', 'Checks', 'Debts', 'Warehouse', 'Inventory', 'CRM', 'Tickets', 'Calendar', 'Customs', 'Shipping Rates', 'Quotes', 'Bank', 'Egypt Bank', 'Reports', 'Daily Log', 'Admin', 'AI Assistant', 'Communications', 'Settings', 'Import'].map(mod => (
                 <tr key={mod} className="border-b border-slate-50">
                   <td className="px-2 py-1.5 text-[10px] font-semibold">{mod}</td>
                   {nonSuperUsers.map(u => {
