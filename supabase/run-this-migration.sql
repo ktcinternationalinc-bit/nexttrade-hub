@@ -26,3 +26,6 @@ WHERE table_name = 'checks' AND column_name IN ('due_date','check_number','bank_
 UNION ALL
 SELECT 'treasury', column_name FROM information_schema.columns 
 WHERE table_name = 'treasury' AND column_name = 'linked_invoice_id';
+
+-- Check → Treasury link on collection
+ALTER TABLE checks ADD COLUMN IF NOT EXISTS linked_treasury_id UUID;

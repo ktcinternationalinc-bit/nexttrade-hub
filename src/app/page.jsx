@@ -226,8 +226,8 @@ export default function App() {
 
   // Navigation
   const [tab, setTab] = useState('dashboard');
-  const [mode, setMode] = useState('all');
-  const [df, setDf] = useState('2010-01-01');
+  const [mode, setMode] = useState('1yr');
+  const [df, setDf] = useState(() => { const d = new Date(); d.setMonth(d.getMonth() - 1); return d.toISOString().substring(0, 10); });
   const [dt, setDt] = useState(today());
   const [query, setQuery] = useState('');
   const [customerFilter, setCustomerFilter] = useState('');
@@ -260,6 +260,7 @@ export default function App() {
   const [treasuryDrill, setTreasuryDrill] = useState(null);
   const [selectedMonth, setSelectedMonth] = useState(null);
   const [checkView, setCheckView] = useState('pending');
+  const [checkSort, setCheckSort] = useState('date'); // date | customer | order
   const [reconcileCheck, setReconcileCheck] = useState(null);
   const [reconcileDate, setReconcileDate] = useState('');
   const [reconcileMethod, setReconcileMethod] = useState('check');
@@ -658,7 +659,7 @@ export default function App() {
   // Tab-to-module mapping for permission filtering
   const TAB_MODULE_MAP = {
     dashboard: 'Dashboard', sales: 'Sales', customers: 'Customers', treasury: 'Treasury',
-    checks: 'Checks', debts: 'Debts', warehouse: 'Warehouse', inventory: 'Inventory',
+    checks: 'Treasury', debts: 'Debts', warehouse: 'Warehouse', inventory: 'Inventory',
     crm: 'CRM', tickets: 'Tickets', calendar: 'Calendar', customs: 'Customs', shipping: 'Shipping Rates',
     dailylog: 'Daily Log', admin: 'Admin', ai: 'AI Assistant', settings: 'Settings', import: 'Import', bank: 'Bank', quotes: 'Quotes', egyptbank: 'Egypt Bank', reports: 'Reports',
   };
@@ -1473,41 +1474,42 @@ export default function App() {
   };
 
   const handleCollectCheck = async () => {
-    if (!reconcileCheck || !reconcileDate) { alert('Please select a collection date'); return; }
-    const payMethod = reconcileMethod || 'check';
+    if (!reconcileCheck || !reconcileDate) { alert('Please select a collection date / الرجاء تحديد تاريخ التحصيل'); return; }
     try {
-      // 1. Mark check as collected
+      // 1. Create treasury entry for the collected check
+      const desc = reconcileCheck.customer_name + ' — شيك محصّل' + (reconcileCheck.check_number ? ' #' + reconcileCheck.check_number : '');
+      const { data: newTxn } = await supabase.from('treasury').insert({
+        transaction_date: reconcileDate,
+        order_number: reconcileCheck.order_number || '',
+        description: desc,
+        cash_in: Number(reconcileCheck.amount),
+        cash_out: 0,
+        source: 'main',
+        category: 'مبيعات',
+        linked_invoice_id: reconcileCheck.invoice_id || null,
+      }).select('id').single();
+
+      // 2. Mark check as collected + link to the treasury entry
       await dbUpdate('checks', reconcileCheck.id, {
         status: 'collected',
         collection_date: reconcileDate,
+        linked_treasury_id: newTxn?.id || null,
       }, user?.id);
-      // 2. Only create treasury entry for bank transfer/deposit/other
-      // Cash and check payments already have treasury entries created by the accountant
-      if (payMethod !== 'cash' && payMethod !== 'check') {
-        const desc = reconcileCheck.customer_name + ' (' + payMethod + ' - check reconciled)';
-        await dbInsert('treasury', {
-          transaction_date: reconcileDate,
-          order_number: reconcileCheck.order_number || '',
-          description: desc,
-          cash_in: Number(reconcileCheck.amount),
-          cash_out: 0,
-          source: 'check',
+
+      // 3. Update invoice collected amount
+      const orderNum = reconcileCheck.order_number;
+      const invId = reconcileCheck.invoice_id;
+      const inv = invId ? invoices.find(i => i.id === invId) : (orderNum ? invoices.find(i => i.order_number === orderNum) : null);
+      if (inv) {
+        const newCollected = Number(inv.total_collected || 0) + Number(reconcileCheck.amount);
+        await dbUpdate('invoices', inv.id, {
+          total_collected: newCollected,
+          outstanding: Math.max(0, Number(inv.total_amount) - newCollected),
         }, user?.id);
-        // Update invoice collected amount
-        if (reconcileCheck.order_number) {
-          const inv = invoices.find(i => i.order_number === reconcileCheck.order_number);
-          if (inv) {
-            const newCollected = Number(inv.total_collected) + Number(reconcileCheck.amount);
-            await dbUpdate('invoices', inv.id, {
-              total_collected: newCollected,
-              outstanding: Math.max(0, Number(inv.total_amount) - newCollected),
-            }, user?.id);
-          }
-        }
       }
+
       setReconcileCheck(null);
       setReconcileDate('');
-      setReconcileMethod('check');
       await loadAllData();
     } catch (err) {
       alert('Error / خطأ: ' + err.message);
@@ -1519,17 +1521,16 @@ export default function App() {
   // ==========================================
   const ModeBar = () => (
     <div className="flex gap-1 items-center flex-wrap">
-      {[['all', 'All / الكل'], ['1yr', '1 Year'], ['3yr', '3 Years'], ['custom', 'Custom / مخصص']].map(([v, l]) => (
+      {[['all', 'All / الكل'], ['1mo', '1 Month'], ['1yr', '1 Year'], ['3yr', '3 Years'], ['custom', 'Custom / مخصص']].map(([v, l]) => (
         <button key={v} onClick={() => setMode(v)}
           className={`px-3 py-1 rounded-md text-xs font-semibold transition ${mode === v ? 'bg-slate-900 text-white' : 'bg-slate-100 text-slate-500 hover:bg-slate-200'}`}
         >{l}</button>
       ))}
       {mode === 'custom' && (
-        <span className="flex gap-1">
-          <input type="date" value={df} onChange={e => setDf(e.target.value)}
-            className="px-2 py-1 rounded border border-slate-200 text-xs" />
-          <input type="date" value={dt} onChange={e => setDt(e.target.value)}
-            className="px-2 py-1 rounded border border-slate-200 text-xs" />
+        <span className="flex gap-1 items-center">
+          <DatePickerSelect value={df} onChange={v => setDf(v)} />
+          <span className="text-xs text-slate-400">→</span>
+          <DatePickerSelect value={dt} onChange={v => setDt(v)} />
         </span>
       )}
     </div>
@@ -2041,6 +2042,47 @@ export default function App() {
                       {status === 'unverified'
                         ? 'Use "Link Transaction" to find the matching payment / استخدم "ربط معاملة" للبحث عن الدفعة المطابقة'
                         : 'Treasury differs from sales record. Link/unlink to correct / الخزنة تختلف عن سجل المبيعات. ربط أو إلغاء الربط للتصحيح'}
+                    </div>
+                  )}
+                </div>
+              );
+            })()}
+
+            {/* Post-dated Checks for this order */}
+            {(() => {
+              const orderChecks = checks.filter(c => c.order_number === selectedInvoice.order_number || c.invoice_id === selectedInvoice.id);
+              const pendingOC = orderChecks.filter(c => c.status === 'pending');
+              const collectedOC = orderChecks.filter(c => c.status === 'collected');
+              if (orderChecks.length === 0) return null;
+              return (
+                <div className="bg-amber-50 rounded-lg p-4 mb-4 border border-amber-200">
+                  <h4 className="text-sm font-bold text-amber-800 mb-2">📝 Post-dated Checks / شيكات آجلة ({orderChecks.length})</h4>
+                  {pendingOC.length > 0 && (
+                    <div className="mb-2">
+                      <div className="text-[10px] font-bold text-amber-600 mb-1">Pending / معلقة ({pendingOC.length}) — {fE(pendingOC.reduce((a,c) => a + Number(c.amount||0), 0))}</div>
+                      {pendingOC.map(c => (
+                        <div key={c.id} className="flex justify-between items-center py-1.5 border-b border-amber-100 text-xs">
+                          <div>
+                            <span className="font-semibold">{fE(c.amount)}</span>
+                            <span className="text-slate-400 ml-2">Due: {c.due_date || c.check_date}</span>
+                            {c.check_number && <span className="text-slate-400 ml-2">#{c.check_number}</span>}
+                            {c.bank_name && <span className="text-blue-400 ml-2">{c.bank_name}</span>}
+                          </div>
+                          <button onClick={() => { setReconcileCheck(c); setReconcileDate(today()); }}
+                            className="px-2 py-0.5 bg-emerald-500 text-white rounded text-[10px] font-semibold">✓ Collect</button>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                  {collectedOC.length > 0 && (
+                    <div>
+                      <div className="text-[10px] font-bold text-emerald-600 mb-1">Collected / محصّلة ({collectedOC.length}) — {fE(collectedOC.reduce((a,c) => a + Number(c.amount||0), 0))}</div>
+                      {collectedOC.map(c => (
+                        <div key={c.id} className="flex justify-between py-1 text-xs text-emerald-600">
+                          <span>{fE(c.amount)}{c.check_number ? ' #' + c.check_number : ''}</span>
+                          <span>Collected {c.collection_date} ✓</span>
+                        </div>
+                      ))}
                     </div>
                   )}
                 </div>
@@ -3112,33 +3154,24 @@ export default function App() {
             CHECK RECONCILE MODAL
         ========================================== */}
         {reconcileCheck && (
-          <Modal onClose={() => { setReconcileCheck(null); setReconcileDate(''); setReconcileMethod('check'); }} title="Reconcile Check / تسوية شيك">
-            <div style={{ direction: 'rtl' }} className="text-lg font-bold mb-1">{reconcileCheck.customer_name}</div>
-            <div className="text-sm mb-2">{fE(reconcileCheck.amount)} | {reconcileCheck.check_date}</div>
-            {reconcileCheck.order_number && (
-              <div className="text-xs text-blue-600 mb-3">Order #{reconcileCheck.order_number}</div>
-            )}
-            <div className="grid grid-cols-2 gap-3">
-              <div>
-                <label className="text-xs font-semibold text-slate-600">Collection Date / تاريخ التحصيل</label>
-                <DatePickerSelect value={reconcileDate || today()} onChange={v => setReconcileDate(v)} />
-              </div>
-              <div>
-                <label className="text-xs font-semibold text-slate-600">Method / طريقة</label>
-                <select value={reconcileMethod}
-                  onChange={e => setReconcileMethod(e.target.value)}
-                  className="w-full px-3 py-2 rounded-lg border border-slate-200 text-sm">
-                  <option value="cash">Cash / نقداً</option>
-                  <option value="check">Check / شيك</option>
-                  <option value="bank_transfer">Bank Transfer / تحويل بنكي</option>
-                  <option value="deposit">Bank Deposit / إيداع</option>
-                  <option value="other">Other / أخرى</option>
-                </select>
+          <Modal onClose={() => { setReconcileCheck(null); setReconcileDate(''); }} title="✅ Collect Check / تحصيل شيك">
+            <div className="bg-emerald-50 rounded-lg p-4 mb-4 border border-emerald-200">
+              <div style={{ direction: 'rtl' }} className="text-lg font-bold text-emerald-800">{reconcileCheck.customer_name}</div>
+              <div className="text-2xl font-extrabold text-emerald-600 mt-1">{fE(reconcileCheck.amount)}</div>
+              <div className="flex gap-3 mt-2 text-xs text-slate-500">
+                {reconcileCheck.order_number && <span>Order #{reconcileCheck.order_number}</span>}
+                {reconcileCheck.check_number && <span>Check #{reconcileCheck.check_number}</span>}
+                {reconcileCheck.bank_name && <span>{reconcileCheck.bank_name}</span>}
+                <span>Due: {reconcileCheck.due_date || reconcileCheck.check_date}</span>
               </div>
             </div>
-            <p className="text-[10px] text-slate-400 mt-2">Cash/Check: marks as collected only (treasury entry already exists) — نقد/شيك: يتم تسجيلها كمحصّلة فقط (المعاملة موجودة بالفعل في الخزنة)<br/>Bank transfer/Deposit/Other: also creates a treasury entry and updates invoice — تحويل بنكي/إيداع/أخرى: يتم إنشاء معاملة في الخزنة وتحديث الفاتورة</p>
+            <div className="mb-4">
+              <label className="text-xs font-semibold text-slate-600 mb-1 block">Collection Date / تاريخ التحصيل</label>
+              <DatePickerSelect value={reconcileDate || today()} onChange={v => setReconcileDate(v)} />
+              <p className="text-[10px] text-slate-400 mt-2">This will create a treasury cash-in entry and update the invoice collected amount / سيتم إنشاء معاملة وارد في الخزنة وتحديث المبلغ المحصّل في الفاتورة</p>
+            </div>
             <button onClick={handleCollectCheck}
-              className="mt-3 px-4 py-2 bg-emerald-500 text-white rounded-lg font-semibold w-full">Reconcile / تسوية ✓</button>
+              className="px-4 py-3 bg-emerald-500 text-white rounded-lg font-bold w-full text-sm hover:bg-emerald-600">✅ Collect & Add to Treasury / تحصيل وإضافة للخزنة</button>
           </Modal>
         )}
 
@@ -3598,13 +3631,12 @@ export default function App() {
                   )}
 
                   {/* ── SCORECARD ── */}
-                  <div style={{ display: 'grid', gridTemplateColumns: 'repeat(5, 1fr)', gap: 8, marginBottom: 10 }}>
+                  <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 8, marginBottom: 10 }}>
                     {[
                       { label: 'My Tickets', value: myTicketsCount, color: '#60a5fa', icon: '🎫', click: () => setTab('tickets') },
-                      { label: 'Assigned by Me', value: assignedByMe, color: '#a78bfa', icon: '📤', click: () => setTab('tickets') },
-                      { label: 'Team Tickets', value: teamTicketsCount, color: '#38bdf8', icon: '👥', click: () => setTab('tickets') },
                       { label: "Today's Events", value: todayEvents.length, color: '#34d399', icon: '📅', click: () => setTab('calendar') },
                       { label: 'Follow-ups', value: myFollowUps.length, color: '#fbbf24', icon: '🔔', click: () => setTab('crm') },
+                      { label: 'Pending Checks', value: pendingChecks.length, color: '#f59e0b', icon: '📝', click: () => setTab('checks') },
                     ].map((s, i) => (
                       <div key={i} onClick={s.click}
                         style={{ background: 'rgba(17,24,39,0.7)', border: '1px solid rgba(255,255,255,0.08)', borderRadius: 12, padding: '12px 10px', textAlign: 'center', cursor: 'pointer', transition: 'all 0.2s' }}
@@ -3614,6 +3646,34 @@ export default function App() {
                       </div>
                     ))}
                   </div>
+
+                  {/* ── CHECKS CASH FLOW ── */}
+                  {pendingChecks.length > 0 && (() => {
+                    const todayD = new Date().toISOString().substring(0, 10);
+                    const thisMonthD = todayD.substring(0, 7);
+                    const pendingTotal = pendingChecks.reduce((a, c) => a + Number(c.amount || 0), 0);
+                    const thisMonthTotal = pendingChecks.filter(c => (c.due_date || c.check_date || '').substring(0, 7) === thisMonthD).reduce((a, c) => a + Number(c.amount || 0), 0);
+                    const overdueTotal = pendingChecks.filter(c => (c.due_date || c.check_date || '') < todayD && (c.due_date || c.check_date)).reduce((a, c) => a + Number(c.amount || 0), 0);
+                    return (
+                      <div onClick={() => setTab('checks')} style={{ background: 'rgba(17,24,39,0.7)', border: '1px solid rgba(245,158,11,0.2)', borderRadius: 12, padding: 12, marginBottom: 10, cursor: 'pointer' }}>
+                        <div style={{ fontSize: 11, fontWeight: 800, color: '#f59e0b', marginBottom: 8, letterSpacing: '0.05em' }}>📝 CHECKS OVERVIEW</div>
+                        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 8 }}>
+                          <div style={{ textAlign: 'center' }}>
+                            <div style={{ fontSize: 16, fontWeight: 900, color: '#f59e0b', fontFamily: 'monospace' }}>{fE(pendingTotal)}</div>
+                            <div style={{ fontSize: 8, color: '#64748b', textTransform: 'uppercase' }}>Total Outstanding</div>
+                          </div>
+                          <div style={{ textAlign: 'center' }}>
+                            <div style={{ fontSize: 16, fontWeight: 900, color: '#3b82f6', fontFamily: 'monospace' }}>{fE(thisMonthTotal)}</div>
+                            <div style={{ fontSize: 8, color: '#64748b', textTransform: 'uppercase' }}>Expected This Month</div>
+                          </div>
+                          <div style={{ textAlign: 'center' }}>
+                            <div style={{ fontSize: 16, fontWeight: 900, color: overdueTotal > 0 ? '#ef4444' : '#10b981', fontFamily: 'monospace' }}>{overdueTotal > 0 ? fE(overdueTotal) : '✓'}</div>
+                            <div style={{ fontSize: 8, color: '#64748b', textTransform: 'uppercase' }}>{overdueTotal > 0 ? 'Overdue' : 'None Overdue'}</div>
+                          </div>
+                        </div>
+                      </div>
+                    );
+                  })()}
                 </div>
               );
             })()}
@@ -5442,10 +5502,11 @@ export default function App() {
           const thisMonth = todayStr.substring(0, 7);
           const tomorrowStr = new Date(Date.now() + 86400000).toISOString().substring(0, 10);
           const dueThisMonth = pendingChecks.filter(c => (c.due_date || c.check_date || '').substring(0, 7) === thisMonth);
-          const dueTomorrow = pendingChecks.filter(c => (c.due_date || c.check_date || '') === tomorrowStr);
           const overdue = pendingChecks.filter(c => (c.due_date || c.check_date || '') < todayStr && (c.due_date || c.check_date));
-          const dueThisMonthTotal = dueThisMonth.reduce((a, c) => a + Number(c.amount || 0), 0);
+          const upcoming = pendingChecks.filter(c => !overdue.includes(c));
           const totalPending = pendingChecks.reduce((a, c) => a + Number(c.amount || 0), 0);
+          const dueThisMonthTotal = dueThisMonth.reduce((a, c) => a + Number(c.amount || 0), 0);
+          const overdueTotal = overdue.reduce((a, c) => a + Number(c.amount || 0), 0);
           return (
           <div>
             <div className="flex justify-between flex-wrap gap-2 mb-3">
@@ -5456,35 +5517,22 @@ export default function App() {
               </button>
             </div>
 
-            {/* Alerts */}
-            {overdue.length > 0 && (
-              <div className="bg-red-50 border border-red-200 rounded-lg p-3 mb-3">
-                <div className="text-xs font-bold text-red-700">🚨 {overdue.length} OVERDUE check{overdue.length > 1 ? 's' : ''} — {fE(overdue.reduce((a,c) => a + Number(c.amount||0), 0))}</div>
-                {overdue.map(c => (
-                  <div key={c.id} className="text-[10px] text-red-600 mt-1">• {c.customer_name} — {fE(c.amount)} — was due {c.due_date || c.check_date}</div>
-                ))}
-              </div>
-            )}
-            {dueTomorrow.length > 0 && (
-              <div className="bg-amber-50 border border-amber-200 rounded-lg p-3 mb-3">
-                <div className="text-xs font-bold text-amber-700">⏰ {dueTomorrow.length} check{dueTomorrow.length > 1 ? 's' : ''} due TOMORROW — {fE(dueTomorrow.reduce((a,c) => a + Number(c.amount||0), 0))}</div>
-                {dueTomorrow.map(c => (
-                  <div key={c.id} className="text-[10px] text-amber-600 mt-1">• {c.customer_name} — {fE(c.amount)}{c.check_number ? ' #' + c.check_number : ''}</div>
-                ))}
-              </div>
-            )}
-
             {/* Summary cards */}
-            <div className="grid grid-cols-3 gap-3 mb-3">
+            <div className="grid grid-cols-4 gap-3 mb-3">
               <div className="bg-white rounded-lg p-3" style={{borderLeftWidth:3, borderLeftColor:'#f59e0b'}}>
                 <div className="text-[10px] text-slate-500">Total Pending / معلقة</div>
                 <div className="text-lg font-extrabold text-amber-600">{fE(totalPending)}</div>
                 <div className="text-[9px] text-slate-400">{pendingChecks.length} checks</div>
               </div>
               <div className="bg-white rounded-lg p-3" style={{borderLeftWidth:3, borderLeftColor:'#3b82f6'}}>
-                <div className="text-[10px] text-slate-500">Due This Month / هذا الشهر</div>
+                <div className="text-[10px] text-slate-500">Expected This Month</div>
                 <div className="text-lg font-extrabold text-blue-600">{fE(dueThisMonthTotal)}</div>
                 <div className="text-[9px] text-slate-400">{dueThisMonth.length} checks</div>
+              </div>
+              <div className="bg-white rounded-lg p-3" style={{borderLeftWidth:3, borderLeftColor: overdueTotal > 0 ? '#ef4444' : '#10b981'}}>
+                <div className="text-[10px] text-slate-500">{overdueTotal > 0 ? 'Overdue / متأخرة' : 'None Overdue'}</div>
+                <div className={'text-lg font-extrabold ' + (overdueTotal > 0 ? 'text-red-500' : 'text-emerald-600')}>{overdueTotal > 0 ? fE(overdueTotal) : '✓'}</div>
+                <div className="text-[9px] text-slate-400">{overdue.length} checks</div>
               </div>
               <div className="bg-white rounded-lg p-3" style={{borderLeftWidth:3, borderLeftColor:'#10b981'}}>
                 <div className="text-[10px] text-slate-500">Collected / محصّلة</div>
@@ -5493,7 +5541,7 @@ export default function App() {
               </div>
             </div>
 
-            {/* Add Check Modal */}
+            {/* Add Check Form */}
             {formData.showAddCheck && (
               <div className="bg-blue-50 rounded-xl p-4 mb-3 border border-blue-200">
                 <h4 className="text-xs font-bold text-blue-800 mb-3">New Post-dated Check / شيك آجل جديد</h4>
@@ -5521,7 +5569,8 @@ export default function App() {
                   <div>
                     <label className="text-[10px] font-bold text-slate-500">Order # / رقم الأمر</label>
                     <input value={formData.chkOrder || ''} onChange={e => setFormData({...formData, chkOrder: e.target.value})}
-                      className="w-full px-3 py-2 rounded-lg border text-sm" />
+                      list="chk-orders" className="w-full px-3 py-2 rounded-lg border text-sm" />
+                    <datalist id="chk-orders">{invoices.slice(0,50).map(i => <option key={i.id} value={i.order_number} />)}</datalist>
                   </div>
                   <div>
                     <label className="text-[10px] font-bold text-slate-500">Bank / البنك</label>
@@ -5538,9 +5587,12 @@ export default function App() {
                   <button onClick={async () => {
                     if (!formData.chkCustomer || !formData.chkAmount) { alert('Customer and amount required'); return; }
                     try {
+                      const orderNum = formData.chkOrder || '';
+                      const matchInv = orderNum ? invoices.find(i => i.order_number === orderNum) : null;
                       await dbInsert('checks', {
                         customer_name: formData.chkCustomer,
-                        order_number: formData.chkOrder || '',
+                        order_number: orderNum,
+                        invoice_id: matchInv?.id || null,
                         amount: Number(formData.chkAmount),
                         check_date: formData.chkDueDate || today(),
                         due_date: formData.chkDueDate || today(),
@@ -5559,69 +5611,137 @@ export default function App() {
               </div>
             )}
 
-            {/* Tab toggle */}
-            <div className="flex gap-2 mb-3">
-              <button onClick={() => setCheckView('pending')}
-                className={`px-4 py-2 rounded-lg font-semibold text-xs transition ${checkView === 'pending' ? 'bg-amber-500 text-white' : 'bg-slate-100 text-slate-500'}`}>
-                Pending / معلقة ({pendingChecks.length})
-              </button>
-              <button onClick={() => setCheckView('done')}
-                className={`px-4 py-2 rounded-lg font-semibold text-xs transition ${checkView === 'done' ? 'bg-emerald-500 text-white' : 'bg-slate-100 text-slate-500'}`}>
-                Collected / محصّلة ({collectedChecks.length})
-              </button>
+            {/* Tab toggle + Sort */}
+            <div className="flex justify-between items-center flex-wrap gap-2 mb-3">
+              <div className="flex gap-2">
+                <button onClick={() => setCheckView('pending')}
+                  className={`px-4 py-2 rounded-lg font-semibold text-xs transition ${checkView === 'pending' ? 'bg-amber-500 text-white' : 'bg-slate-100 text-slate-500'}`}>
+                  Pending / معلقة ({pendingChecks.length})
+                </button>
+                <button onClick={() => setCheckView('done')}
+                  className={`px-4 py-2 rounded-lg font-semibold text-xs transition ${checkView === 'done' ? 'bg-emerald-500 text-white' : 'bg-slate-100 text-slate-500'}`}>
+                  Collected / محصّلة ({collectedChecks.length})
+                </button>
+              </div>
+              <div className="flex gap-1">
+                {[['date', '📅 Date'], ['customer', '👤 Customer'], ['order', '📦 Order']].map(([v, l]) => (
+                  <button key={v} onClick={() => setCheckSort(v)}
+                    className={`px-2.5 py-1 rounded text-[10px] font-semibold transition ${checkSort === v ? 'bg-slate-800 text-white' : 'bg-slate-100 text-slate-500'}`}>
+                    {l}
+                  </button>
+                ))}
+              </div>
             </div>
-            <div className="overflow-auto rounded-lg border border-slate-200">
-              <table className="w-full border-collapse">
-                <thead><tr className="bg-slate-50">
-                  <th className="px-3 py-2 text-xs" style={{ direction: 'rtl' }}>Customer</th>
-                  <th className="px-3 py-2 text-xs text-right">Amount</th>
-                  <th className="px-3 py-2 text-xs">Due Date</th>
-                  <th className="px-3 py-2 text-xs">Check #</th>
-                  <th className="px-3 py-2 text-xs">{checkView === 'done' ? 'Collected' : 'Actions'}</th>
-                </tr></thead>
-                <tbody>
-                  {(checkView === 'pending' ? pendingChecks.sort((a,b) => (a.due_date||a.check_date||'').localeCompare(b.due_date||b.check_date||'')) : collectedChecks).map(c => {
-                    const dueStr = c.due_date || c.check_date || '';
-                    const isOverdue = checkView === 'pending' && dueStr && dueStr < todayStr;
-                    const isDueSoon = checkView === 'pending' && dueStr && dueStr >= todayStr && dueStr <= tomorrowStr;
-                    return (
-                    <tr key={c.id} className={'border-b border-slate-50 ' + (isOverdue ? 'bg-red-50' : isDueSoon ? 'bg-amber-50' : '')}>
-                      <td className="px-3 py-2 text-xs font-semibold" style={{ direction: lang === 'ar' ? 'rtl' : 'ltr' }}>
-                        {tx(c.customer_name, c.customer_name_en)}
-                        {c.order_number && <div className="text-[9px] text-slate-400">Order: {c.order_number}</div>}
-                        {c.bank_name && <div className="text-[9px] text-blue-400">{c.bank_name}</div>}
-                      </td>
-                      <td className="px-3 py-2 text-xs text-right font-semibold">{fE(c.amount)}</td>
-                      <td className="px-3 py-2 text-xs">
-                        {dueStr}
-                        {isOverdue && <div className="text-[9px] text-red-600 font-bold">OVERDUE</div>}
-                        {isDueSoon && <div className="text-[9px] text-amber-600 font-bold">DUE SOON</div>}
-                      </td>
-                      <td className="px-3 py-2 text-xs text-slate-500">{c.check_number || '—'}</td>
-                      <td className="px-3 py-2">
-                        {checkView === 'pending' ? (
-                          <div className="flex gap-1 flex-wrap">
-                            <button onClick={() => { setReconcileCheck(c); setReconcileDate(today()); setReconcileMethod('check'); }}
-                              className="px-2 py-1 bg-emerald-500 text-white rounded text-[10px] font-semibold">
-                              ✓ Collect
-                            </button>
-                            {(userProfile?.role === 'super_admin' || (c.created_by === (userProfile?.id || user?.id) && (Date.now() - new Date(c.created_at || 0).getTime()) < 86400000)) && (
-                              <button onClick={async () => {
-                                if (!window.confirm('Delete this check?')) return;
-                                try { await dbDelete('checks', c.id, user?.id); await loadAllData(); } catch(err) { alert(err.message); }
-                              }} className="px-2 py-1 bg-red-50 text-red-500 rounded text-[10px] border border-red-200">🗑</button>
-                            )}
-                          </div>
-                        ) : (
-                          <span className="text-emerald-500 text-xs">{c.collection_date} ✓</span>
-                        )}
-                      </td>
-                    </tr>
-                    );
-                  })}
-                </tbody>
-              </table>
-            </div>
+
+            {/* Monthly grouped checks */}
+            {(() => {
+              const list = checkView === 'pending' ? pendingChecks : collectedChecks;
+              // Sort
+              const sorted = [...list].sort((a, b) => {
+                if (checkSort === 'customer') return (a.customer_name || '').localeCompare(b.customer_name || '');
+                if (checkSort === 'order') return (a.order_number || '').localeCompare(b.order_number || '');
+                const ad = checkView === 'done' ? (a.collection_date || '') : (a.due_date || a.check_date || '');
+                const bd = checkView === 'done' ? (b.collection_date || '') : (b.due_date || b.check_date || '');
+                return checkView === 'done' ? bd.localeCompare(ad) : ad.localeCompare(bd);
+              });
+              // Group by month
+              const groups = {};
+              sorted.forEach(c => {
+                const d = checkView === 'done' ? (c.collection_date || '') : (c.due_date || c.check_date || '');
+                const month = d.substring(0, 7) || 'Unknown';
+                if (!groups[month]) groups[month] = [];
+                groups[month].push(c);
+              });
+              const monthKeys = Object.keys(groups).sort((a, b) => checkView === 'done' ? b.localeCompare(a) : a.localeCompare(b));
+              // For pending, put overdue month first
+              if (checkView === 'pending') {
+                const overdueMonths = monthKeys.filter(m => m < todayStr.substring(0, 7));
+                const futureMonths = monthKeys.filter(m => m >= todayStr.substring(0, 7));
+                monthKeys.length = 0;
+                monthKeys.push(...overdueMonths, ...futureMonths);
+              }
+
+              return monthKeys.map(month => {
+                const items = groups[month];
+                const monthTotal = items.reduce((a, c) => a + Number(c.amount || 0), 0);
+                const monthLabel = month === 'Unknown' ? 'No Date' : new Date(month + '-01').toLocaleDateString('en-US', { year: 'numeric', month: 'long' });
+                const isOverdueMonth = checkView === 'pending' && month < todayStr.substring(0, 7);
+                return (
+                  <div key={month} className="mb-3">
+                    <div className={'flex justify-between items-center px-3 py-2 rounded-t-lg text-xs font-bold ' + (isOverdueMonth ? 'bg-red-100 text-red-800' : 'bg-slate-100 text-slate-700')}>
+                      <span>{isOverdueMonth && '⚠️ '}{monthLabel}</span>
+                      <span>{items.length} checks — {fE(monthTotal)}</span>
+                    </div>
+                    <div className="overflow-auto border border-t-0 border-slate-200 rounded-b-lg">
+                      <table className="w-full border-collapse">
+                        <thead><tr className="bg-slate-50/50">
+                          <th className="px-2 py-1.5 text-[10px] text-left">Status</th>
+                          <th className="px-2 py-1.5 text-[10px]" style={{direction:'rtl'}}>Customer</th>
+                          <th className="px-2 py-1.5 text-[10px]">Order #</th>
+                          <th className="px-2 py-1.5 text-[10px] text-right">Amount</th>
+                          <th className="px-2 py-1.5 text-[10px]">{checkView === 'done' ? 'Due → Collected' : 'Due Date'}</th>
+                          <th className="px-2 py-1.5 text-[10px]">Check #</th>
+                          <th className="px-2 py-1.5 text-[10px]">Actions</th>
+                        </tr></thead>
+                        <tbody>
+                          {items.map(c => {
+                            const dueStr = c.due_date || c.check_date || '';
+                            const isOD = checkView === 'pending' && dueStr && dueStr < todayStr;
+                            const isDueSoon = checkView === 'pending' && dueStr === tomorrowStr;
+                            const isDueThisMonth = checkView === 'pending' && dueStr.substring(0,7) === thisMonth && !isOD && !isDueSoon;
+                            return (
+                            <tr key={c.id} className="border-b border-slate-50 hover:bg-slate-50/50">
+                              <td className="px-2 py-1.5">
+                                {checkView === 'done' ? (
+                                  <span className="px-2 py-0.5 bg-emerald-100 text-emerald-700 rounded-full text-[8px] font-bold">✓</span>
+                                ) : isOD ? (
+                                  <span className="px-2 py-0.5 bg-red-100 text-red-700 rounded-full text-[8px] font-bold">OVERDUE</span>
+                                ) : isDueSoon ? (
+                                  <span className="px-2 py-0.5 bg-amber-100 text-amber-700 rounded-full text-[8px] font-bold">TOMORROW</span>
+                                ) : isDueThisMonth ? (
+                                  <span className="px-2 py-0.5 bg-blue-100 text-blue-700 rounded-full text-[8px] font-bold">THIS MONTH</span>
+                                ) : (
+                                  <span className="px-2 py-0.5 bg-slate-100 text-slate-500 rounded-full text-[8px] font-bold">PENDING</span>
+                                )}
+                              </td>
+                              <td className="px-2 py-1.5 text-xs font-semibold" style={{direction: lang==='ar'?'rtl':'ltr'}}>
+                                {tx(c.customer_name, c.customer_name_en)}
+                                {c.bank_name && <div className="text-[8px] text-slate-400">{c.bank_name}</div>}
+                              </td>
+                              <td className="px-2 py-1.5 text-xs font-bold text-blue-600">{c.order_number || '—'}</td>
+                              <td className="px-2 py-1.5 text-xs text-right font-bold">{fE(c.amount)}</td>
+                              <td className="px-2 py-1.5 text-[10px]">
+                                {checkView === 'done' ? (
+                                  <span>{dueStr} → <span className="text-emerald-600 font-semibold">{c.collection_date}</span></span>
+                                ) : dueStr}
+                              </td>
+                              <td className="px-2 py-1.5 text-[10px] text-slate-500">{c.check_number || '—'}</td>
+                              <td className="px-2 py-1.5">
+                                {checkView === 'pending' ? (
+                                  <div className="flex gap-1">
+                                    <button onClick={() => { setReconcileCheck(c); setReconcileDate(today()); }}
+                                      className="px-2 py-0.5 bg-emerald-500 text-white rounded text-[9px] font-semibold hover:bg-emerald-600">✓ Collect</button>
+                                    {(userProfile?.role === 'super_admin' || (c.created_by === (userProfile?.id || user?.id) && (Date.now() - new Date(c.created_at || 0).getTime()) < 86400000)) && (
+                                      <button onClick={async () => {
+                                        if (!window.confirm('Delete this check?')) return;
+                                        try { await dbDelete('checks', c.id, user?.id); await loadAllData(); } catch(err) { alert(err.message); }
+                                      }} className="px-1.5 py-0.5 bg-red-50 text-red-500 rounded text-[9px] border border-red-200">🗑</button>
+                                    )}
+                                  </div>
+                                ) : (
+                                  <span className="text-emerald-500 text-[10px]">✓</span>
+                                )}
+                              </td>
+                            </tr>
+                            );
+                          })}
+                        </tbody>
+                      </table>
+                    </div>
+                  </div>
+                );
+              });
+            })()}
           </div>
           );
         })()}

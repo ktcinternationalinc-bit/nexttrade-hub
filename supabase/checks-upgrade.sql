@@ -31,3 +31,6 @@ CREATE INDEX IF NOT EXISTS idx_treasury_linked_invoice ON treasury(linked_invoic
 SELECT column_name, data_type FROM information_schema.columns 
 WHERE table_name = 'checks' AND column_name IN ('due_date','check_number','bank_name','invoice_id')
 ORDER BY column_name;
+
+-- Link check to treasury entry on collection
+ALTER TABLE checks ADD COLUMN IF NOT EXISTS linked_treasury_id UUID;
