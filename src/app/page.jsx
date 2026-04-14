@@ -835,6 +835,8 @@ export default function App() {
   const navigate = (t) => {
     setTab(t); setQuery(''); setCustomerFilter(''); setSelectedCustomer(null); setSelectedDebtor(null);
     setSelectedInvoice(null); setDrillType(null); setTreasuryDrill(null); setSelectedMonth(null);
+    if (t === 'treasury') setMode('all');
+    else if (t === 'sales' || t === 'checks') setMode('ytd');
   };
 
   const handleSignOut = async () => {
@@ -1644,11 +1646,13 @@ export default function App() {
           <p style={{color:'rgba(148,163,184,0.5)'}} className="text-xs font-medium tracking-widest uppercase">{lang === 'en' ? 'KTC Trading Operations' : 'KTC — لوحة التحكم المالية'}</p>
         </div>
         <div className="flex items-center gap-2">
-          {/* Treasury Net — always visible */}
+          {/* Treasury Net — treasury access only */}
+          {(userProfile?.role === 'super_admin' || userProfile?.role === 'admin' || modulePerms?.['Treasury']) && (
           <div onClick={() => { setTab('treasury'); setMode('all'); }} className="cursor-pointer px-2 sm:px-3 py-1.5 rounded-lg" style={{background:'rgba(255,255,255,0.04)', border:'1px solid rgba(255,255,255,0.08)'}}>
             <div style={{color:'rgba(148,163,184,0.5)'}} className="text-[7px] sm:text-[8px] font-bold uppercase tracking-wider">Treasury Net (All Time)</div>
             <div className={'text-xs sm:text-sm font-black'} style={{color: allTimeNet >= 0 ? '#34d399' : '#f87171'}}>{fE(allTimeNet)}</div>
           </div>
+          )}
           {userProfile && (
             <div className="text-right">
               <div className="text-sm font-bold" style={{color:'#f1f5f9'}}>{userProfile.name}</div>
@@ -3659,24 +3663,34 @@ export default function App() {
                   )}
 
                   {/* ── SCORECARD ── */}
-                  <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 8, marginBottom: 10 }}>
-                    {[
-                      { label: 'My Tickets', value: myTicketsCount, color: '#60a5fa', icon: '🎫', click: () => setTab('tickets') },
+                  {(() => {
+                    const openTickets = dashTickets.filter(t => t.status !== 'Closed' && t.status !== 'Resolved').length;
+                    const overdueTickets = dashTickets.filter(t => t.status !== 'Closed' && t.status !== 'Resolved' && t.due_date && t.due_date < todayStr).length;
+                    const teamTickets = dashTickets.filter(t => t.status !== 'Closed' && t.assigned_to !== myId && t.created_by !== myId).length;
+                    const cards = [
+                      { label: 'Open Tickets', value: openTickets, color: '#60a5fa', icon: '🎫', click: () => setTab('tickets') },
+                      { label: 'Overdue Tickets', value: overdueTickets, color: '#ef4444', icon: '⚠️', click: () => setTab('tickets') },
+                      { label: 'Team Tickets', value: teamTickets, color: '#38bdf8', icon: '👥', click: () => setTab('tickets') },
                       { label: "Today's Events", value: todayEvents.length, color: '#34d399', icon: '📅', click: () => setTab('calendar') },
                       { label: 'Follow-ups', value: myFollowUps.length, color: '#fbbf24', icon: '🔔', click: () => setTab('crm') },
-                      { label: 'Pending Checks', value: pendingChecks.length, color: '#f59e0b', icon: '📝', click: () => setTab('checks') },
-                    ].map((s, i) => (
-                      <div key={i} onClick={s.click}
-                        style={{ background: 'rgba(17,24,39,0.7)', border: '1px solid rgba(255,255,255,0.08)', borderRadius: 12, padding: '12px 10px', textAlign: 'center', cursor: 'pointer', transition: 'all 0.2s' }}
-                        className="hover:border-blue-500/30">
-                        <div style={{ fontSize: 24, fontWeight: 900, color: s.color, fontFamily: 'monospace' }}>{s.value}</div>
-                        <div style={{ fontSize: 9, color: '#64748b', textTransform: 'uppercase', letterSpacing: '0.08em', marginTop: 2 }}>{s.icon} {s.label}</div>
-                      </div>
-                    ))}
-                  </div>
+                    ];
+                    if (hasTreasuryAccess) cards.push({ label: 'Pending Checks', value: pendingChecks.length, color: '#f59e0b', icon: '📝', click: () => setTab('checks') });
+                    return (
+                    <div style={{ display: 'grid', gridTemplateColumns: `repeat(${cards.length}, 1fr)`, gap: 8, marginBottom: 10 }}>
+                      {cards.map((s, i) => (
+                        <div key={i} onClick={s.click}
+                          style={{ background: 'rgba(17,24,39,0.7)', border: s.color === '#ef4444' && s.value > 0 ? '2px solid rgba(239,68,68,0.5)' : '1px solid rgba(255,255,255,0.08)', borderRadius: 12, padding: '12px 10px', textAlign: 'center', cursor: 'pointer', transition: 'all 0.2s' }}
+                          className="hover:border-blue-500/30">
+                          <div style={{ fontSize: 22, fontWeight: 900, color: s.color, fontFamily: 'monospace' }}>{s.value}</div>
+                          <div style={{ fontSize: 8, color: '#64748b', textTransform: 'uppercase', letterSpacing: '0.08em', marginTop: 2 }}>{s.icon} {s.label}</div>
+                        </div>
+                      ))}
+                    </div>
+                    );
+                  })()}
 
-                  {/* ── CHECKS CASH FLOW ── */}
-                  {pendingChecks.length > 0 && (() => {
+                  {/* ── CHECKS CASH FLOW — treasury access only ── */}
+                  {hasTreasuryAccess && pendingChecks.length > 0 && (() => {
                     const todayD = new Date().toISOString().substring(0, 10);
                     const tmrwD = new Date(Date.now() + 86400000).toISOString().substring(0, 10);
                     const thisMonthD = todayD.substring(0, 7);
@@ -4371,13 +4385,15 @@ export default function App() {
 
 
             {/* ===== FINANCIAL DASHBOARD — COMMAND CENTER ===== */}
-            {(isAdmin || modulePerms['Sales'] || modulePerms['Treasury']) && (<>
             <div className="financial-command">
             <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 16 }}>
               <div style={{ width: 4, height: 28, borderRadius: 2, background: 'linear-gradient(180deg, #38bdf8, #818cf8)' }} />
               <h2 style={{ fontSize: 16, fontWeight: 900, color: '#e2e8f0', letterSpacing: '0.05em' }}>💰 FINANCIAL CONTROL</h2>
               <div style={{ flex: 1, height: 1, background: 'rgba(255,255,255,0.06)' }} />
             </div>
+
+            {/* Invoices — Sales or Treasury access */}
+            {(isAdmin || modulePerms['Sales'] || modulePerms['Treasury']) && (<>
             <div className="bg-blue-100 rounded-lg px-3 py-2 mb-3 flex justify-between items-center cursor-pointer" onClick={() => setHideSections({...hideSections, invoices: !hideSections.invoices})}>
               <span className="text-sm font-bold text-blue-800">📋 INVOICES / فواتير العملاء</span>
               <span className="text-xs text-blue-600">{hideSections.invoices ? '👁️ Show' : '🙈 Hide'}</span>
@@ -4388,7 +4404,10 @@ export default function App() {
               <Card title="Outstanding" titleAr="المتبقّي" value={fE(totalOutstanding)} sub={`${filteredInvoices.filter(s => s.outstanding > 0).length} open`} color="#ef4444" onClick={() => setDrillType('outstanding')} />
               <Card title="Debt" titleAr="المديونية" value={fE(totalDebt)} sub={`${debts.length} debtors`} color="#dc2626" onClick={() => navigate('debts')} />
             </div>}
+            </>)}
 
+            {/* Cash Register — Treasury access ONLY */}
+            {(isAdmin || modulePerms['Treasury']) && (<>
             <div className="bg-emerald-100 rounded-lg px-3 py-2 mb-3 flex justify-between items-center cursor-pointer" onClick={() => setHideSections({...hideSections, cash: !hideSections.cash})}>
               <div>
                 <span className="text-sm font-bold text-emerald-800">🏦 CASH REGISTER / الخزنة</span>
@@ -4420,13 +4439,18 @@ export default function App() {
               </ResponsiveContainer>
             </div>
 
-            {/* Monthly Sales Tracking */}
+            </>}{/* end cash register gate */}
+            </>)}{/* end treasury gate */}
+
+            {/* Monthly Sales — visible to ALL users, current year only */}
             <div className="bg-white rounded-xl p-4 mb-4">
-              <h3 className="text-sm font-bold mb-2">Monthly Sales / المبيعات الشهرية</h3>
+              <h3 className="text-sm font-bold mb-2">📊 Monthly Sales — {new Date().getFullYear()} / المبيعات الشهرية</h3>
               {(() => {
+                const currentYear = String(new Date().getFullYear());
+                const ytdInvoices = invoices.filter(inv => (inv.invoice_date || '').startsWith(currentYear));
                 const months = {};
                 let running = 0;
-                filteredInvoices.forEach(inv => {
+                ytdInvoices.forEach(inv => {
                   const m = (inv.invoice_date || '').substring(0, 7);
                   if (!m) return;
                   if (!months[m]) months[m] = { month: m, invoiced: 0, collected: 0, outstanding: 0, count: 0 };
@@ -4468,6 +4492,8 @@ export default function App() {
               })()}
             </div>
 
+            {/* Income/Expense Buckets + USD — Treasury access only */}
+            {(isAdmin || modulePerms['Treasury']) && (<>
             {/* Income Buckets */}
             {incomeBuckets.length > 0 && (
               <div className="bg-white rounded-xl p-4 mb-4">
@@ -4557,9 +4583,8 @@ export default function App() {
                 </div>
               );
             })()}
-            </>}
+            </>)}{/* end treasury gate for buckets */}
             </div>{/* end financial-command */}
-            </>)}
 
             {/* ===== EGYPT BANK TRANSACTIONS DASHBOARD ===== */}
             {egyptBankTxns.length > 0 && (isAdmin || modulePerms['Egypt Bank']) && (() => {
