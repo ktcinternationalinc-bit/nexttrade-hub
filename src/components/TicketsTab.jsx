@@ -197,54 +197,6 @@ export default function TicketsTab({ customers, user, userProfile, users, onRelo
 
         {sel.description && <p className="text-sm text-slate-600 mb-4 bg-slate-50 rounded-lg p-3">{sel.description}</p>}
 
-        {/* ATTACHMENTS */}
-        <div className="mb-4">
-          <div className="flex items-center justify-between mb-2">
-            <h4 className="text-[10px] font-bold text-slate-500 uppercase tracking-wider">📎 Attachments ({(sel.attachments || []).length})</h4>
-            <label className="px-3 py-1.5 bg-blue-50 text-blue-600 rounded-lg text-[10px] font-bold cursor-pointer hover:bg-blue-100 border border-blue-200 transition">
-              + Add File
-              <input type="file" className="hidden" onChange={async (e) => {
-                const file = e.target.files?.[0];
-                if (!file) return;
-                try {
-                  const ext = file.name.split('.').pop();
-                  const path = `tickets/${sel.id}/${Date.now()}_${file.name}`;
-                  const { data: uploadData, error: uploadErr } = await supabase.storage.from('attachments').upload(path, file);
-                  if (uploadErr) throw uploadErr;
-                  const { data: urlData } = supabase.storage.from('attachments').getPublicUrl(path);
-                  const attachment = { name: file.name, url: urlData.publicUrl, size: file.size, type: file.type, uploaded_at: new Date().toISOString(), uploaded_by: myId };
-                  const existing = Array.isArray(sel.attachments) ? sel.attachments : [];
-                  const updated = [...existing, attachment];
-                  await dbUpdate('tickets', sel.id, { attachments: updated }, myId);
-                  sel.attachments = updated;
-                  setSel({ ...sel, attachments: updated });
-                  await dbInsert('ticket_comments', { ticket_id: sel.id, comment_text: '📎 Attached file: ' + file.name, is_system: true, created_by: myId }, myId);
-                  loadComments(sel.id);
-                  await logActivity(myId, 'Attached file to ' + (sel.ticket_number || sel.title) + ': ' + file.name, 'ticket');
-                } catch(err) { alert('Upload failed: ' + err.message); }
-                e.target.value = '';
-              }} />
-            </label>
-          </div>
-          {(sel.attachments || []).length > 0 ? (
-            <div className="space-y-1.5">
-              {(sel.attachments || []).map((att, i) => (
-                <a key={i} href={att.url} target="_blank" rel="noopener noreferrer"
-                  className="flex items-center gap-2 px-3 py-2 bg-slate-50 rounded-lg border border-slate-100 hover:border-blue-200 hover:bg-blue-50 transition text-xs">
-                  <span className="text-lg">{att.type?.includes('pdf') ? '📄' : att.type?.includes('image') ? '🖼️' : att.type?.includes('sheet') || att.type?.includes('excel') ? '📊' : '📁'}</span>
-                  <div className="flex-1">
-                    <div className="font-semibold text-blue-600">{att.name}</div>
-                    <div className="text-[10px] text-slate-400">{att.size ? (att.size / 1024).toFixed(0) + ' KB' : ''} {att.uploaded_at ? '· ' + new Date(att.uploaded_at).toLocaleDateString() : ''} {att.uploaded_by ? '· ' + getUserName(att.uploaded_by) : ''}</div>
-                  </div>
-                  <span className="text-blue-400 text-[10px] font-semibold">Open ↗</span>
-                </a>
-              ))}
-            </div>
-          ) : (
-            <div className="text-[10px] text-slate-400 py-1">No attachments yet</div>
-          )}
-        </div>
-
         {/* KEY DETAILS GRID */}
         <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-4">
           <div className="bg-slate-50 rounded-lg p-3">
@@ -440,16 +392,10 @@ export default function TicketsTab({ customers, user, userProfile, users, onRelo
 
     {/* Stats */}
     <div className="grid grid-cols-4 gap-3 mb-3">
-      <div className={'bg-white rounded-lg p-3 cursor-pointer transition hover:shadow-md ' + (statusF === 'open' && priorityF === 'all' ? 'ring-2 ring-blue-400' : '')} style={{borderLeftWidth:3,borderLeftColor:'#3b82f6'}} onClick={() => { setStatusF('open'); setPriorityF('all'); }}><div className="text-[10px] text-slate-500">Open</div><div className="text-lg font-extrabold">{tickets.filter(t=>t.status!=='Closed').length}</div></div>
-      <div className={'bg-white rounded-lg p-3 cursor-pointer transition hover:shadow-md ' + (statusF === 'overdue' ? 'ring-2 ring-red-400' : '')} style={{borderLeftWidth:3,borderLeftColor:'#ef4444'}} onClick={() => { setStatusF('overdue'); setPriorityF('all'); }}><div className="text-[10px] text-slate-500">Overdue</div><div className="text-lg font-extrabold text-red-500">{tickets.filter(t=>t.due_date&&t.due_date<todayStr&&t.status!=='Closed').length}</div></div>
-      <div className={'bg-white rounded-lg p-3 cursor-pointer transition hover:shadow-md ' + (priorityF === 'high' ? 'ring-2 ring-amber-400' : '')} style={{borderLeftWidth:3,borderLeftColor:'#f59e0b'}} onClick={() => { setStatusF('open'); setPriorityF('high'); }}><div className="text-[10px] text-slate-500">High Priority</div><div className="text-lg font-extrabold text-amber-500">{tickets.filter(t=>t.priority==='high'&&t.status!=='Closed').length}</div></div>
-      <div className={'bg-white rounded-lg p-3 cursor-pointer transition hover:shadow-md ' + (statusF === 'Closed' ? 'ring-2 ring-emerald-400' : '')} style={{borderLeftWidth:3,borderLeftColor:'#10b981'}} onClick={() => { setStatusF('Closed'); setPriorityF('all'); }}><div className="text-[10px] text-slate-500">Closed</div><div className="text-lg font-extrabold">{tickets.filter(t=>t.status==='Closed').length}</div></div>
-    </div>
-
-    <div className="grid grid-cols-3 gap-3 mb-3">
-      <div className={'bg-white rounded-lg p-3 cursor-pointer transition hover:shadow-md ' + (statusF === 'mine' ? 'ring-2 ring-purple-400' : '')} style={{borderLeftWidth:3,borderLeftColor:'#8b5cf6'}} onClick={() => { setStatusF('mine'); setPriorityF('all'); }}><div className="text-[10px] text-slate-500">Assigned to Me</div><div className="text-lg font-extrabold text-purple-600">{tickets.filter(t=>t.assigned_to===myId&&t.status!=='Closed').length}</div></div>
-      <div className={'bg-white rounded-lg p-3 cursor-pointer transition hover:shadow-md ' + (statusF === 'team' ? 'ring-2 ring-cyan-400' : '')} style={{borderLeftWidth:3,borderLeftColor:'#06b6d4'}} onClick={() => { setStatusF('team'); setPriorityF('all'); }}><div className="text-[10px] text-slate-500">Team</div><div className="text-lg font-extrabold text-cyan-600">{tickets.filter(t=>t.status!=='Closed'&&t.assigned_to&&t.assigned_to!==myId).length}</div></div>
-      <div className={'bg-white rounded-lg p-3 cursor-pointer transition hover:shadow-md ' + (assignedF === 'unassigned' ? 'ring-2 ring-orange-400' : '')} style={{borderLeftWidth:3,borderLeftColor:'#f97316'}} onClick={() => { setStatusF('open'); setPriorityF('all'); setAssignedF(assignedF === 'unassigned' ? 'all' : 'unassigned'); }}><div className="text-[10px] text-slate-500">Unassigned</div><div className="text-lg font-extrabold text-orange-500">{tickets.filter(t=>!t.assigned_to&&t.status!=='Closed').length}</div></div>
+      <div className="bg-white rounded-lg p-3" style={{borderLeftWidth:3,borderLeftColor:'#3b82f6'}}><div className="text-[10px] text-slate-500">Open</div><div className="text-lg font-extrabold">{tickets.filter(t=>t.status!=='Closed').length}</div></div>
+      <div className="bg-white rounded-lg p-3" style={{borderLeftWidth:3,borderLeftColor:'#ef4444'}}><div className="text-[10px] text-slate-500">Overdue</div><div className="text-lg font-extrabold text-red-500">{tickets.filter(t=>t.due_date&&t.due_date<todayStr&&t.status!=='Closed').length}</div></div>
+      <div className="bg-white rounded-lg p-3" style={{borderLeftWidth:3,borderLeftColor:'#f59e0b'}}><div className="text-[10px] text-slate-500">High Priority</div><div className="text-lg font-extrabold text-amber-500">{tickets.filter(t=>t.priority==='high'&&t.status!=='Closed').length}</div></div>
+      <div className="bg-white rounded-lg p-3" style={{borderLeftWidth:3,borderLeftColor:'#10b981'}}><div className="text-[10px] text-slate-500">Closed</div><div className="text-lg font-extrabold">{tickets.filter(t=>t.status==='Closed').length}</div></div>
     </div>
 
     {/* Status Legend — collapsible */}
