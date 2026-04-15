@@ -17,6 +17,16 @@ export default function TicketsTab({ customers, user, userProfile, users, onRelo
   const isAdminRole = userProfile?.role === 'admin' || userProfile?.role === 'super_admin';
   const hasDeletePerm = modulePerms?.['Delete Tickets'] === true;
 
+  // Multi-assign helpers
+  const parseAssignees = (t) => {
+    const list = [t.assigned_to].filter(Boolean);
+    try { const extra = JSON.parse(t.additional_assignees || '[]'); if (Array.isArray(extra)) extra.forEach(id => { if (id && !list.includes(id)) list.push(id); }); } catch(e) {}
+    return list;
+  };
+  const isAssignedToMe = (t) => parseAssignees(t).includes(myId);
+  const allAssigneeNames = (t) => parseAssignees(t).map(id => getUserName(id)).filter(Boolean);
+  const [uploading, setUploading] = useState(false);
+
   const canDeleteTicket = (ticket) => {
     if (!ticket) return false;
     if (isSuperAdmin) return true; // super admin: delete anything
@@ -80,12 +90,15 @@ export default function TicketsTab({ customers, user, userProfile, users, onRelo
   const filtered = useMemo(() => {
     let arr = tickets;
     if (statusF === 'open') arr = arr.filter(t => t.status !== 'Closed');
-    else if (statusF === 'mine') arr = arr.filter(t => t.assigned_to === myId && t.status !== 'Closed');
-    else if (statusF === 'team') arr = arr.filter(t => t.status !== 'Closed' && t.assigned_to && t.assigned_to !== myId);
+    else if (statusF === 'mine') arr = arr.filter(t => isAssignedToMe(t) && t.status !== 'Closed');
+    else if (statusF === 'team') arr = arr.filter(t => t.status !== 'Closed' && (t.assigned_to || t.additional_assignees) && !isAssignedToMe(t));
     else if (statusF === 'created') arr = arr.filter(t => t.created_by === myId && t.status !== 'Closed');
     else if (statusF === 'overdue') arr = arr.filter(t => t.due_date && t.due_date < todayStr && t.status !== 'Closed');
     else if (statusF !== 'all') arr = arr.filter(t => t.status === statusF);
-    if (q) arr = arr.filter(t => (t.title||'').toLowerCase().includes(q.toLowerCase()) || (t.description||'').includes(q) || (t.order_number||'').includes(q) || (t.ticket_number||'').toLowerCase().includes(q.toLowerCase()));
+    if (q) arr = arr.filter(t => {
+      const ql = q.toLowerCase();
+      return (t.title||'').toLowerCase().includes(ql) || (t.description||'').toLowerCase().includes(ql) || (t.order_number||'').toLowerCase().includes(ql) || (t.ticket_number||'').toLowerCase().includes(ql) || (t.client_name||'').toLowerCase().includes(ql) || (getUserName(t.assigned_to)||'').toLowerCase().includes(ql) || (getUserName(t.created_by)||'').toLowerCase().includes(ql);
+    });
     if (ownerF !== 'all') arr = arr.filter(t => t.created_by === ownerF);
     if (assignedF !== 'all') arr = arr.filter(t => assignedF === 'unassigned' ? !t.assigned_to : t.assigned_to === assignedF);
     if (priorityF !== 'all') arr = arr.filter(t => t.priority === priorityF);
@@ -106,9 +119,11 @@ export default function TicketsTab({ customers, user, userProfile, users, onRelo
       const ticketNum = 'TKT-' + String((count || 0) + 1).padStart(4, '0');
       const assignedName = getUserName(f.assignedTo);
       const creatorName = getUserName(myId);
-      await dbInsert('tickets', { ticket_number: ticketNum, title: f.title, description: f.description || '', priority: f.priority || 'medium', order_number: f.orderNumber || '', due_date: f.dueDate || null, customer_id: f.customerId || null, client_name: f.clientName || '', status: 'New', assigned_to: f.assignedTo || null, created_by: myId || null }, myId || null);
+      const extraAssignees = (f.extraAssignees || []).filter(id => id !== f.assignedTo);
+      await dbInsert('tickets', { ticket_number: ticketNum, title: f.title, description: f.description || '', priority: f.priority || 'medium', order_number: f.orderNumber || '', due_date: f.dueDate || null, customer_id: f.customerId || null, client_name: f.clientName || '', status: 'New', assigned_to: f.assignedTo || null, additional_assignees: extraAssignees.length ? JSON.stringify(extraAssignees) : null, created_by: myId || null }, myId || null);
       await logActivity(myId, 'Created ' + ticketNum + ': ' + f.title + (assignedName ? ' → ' + assignedName : ''), 'ticket');
-      if (f.assignedTo) notifyTicketAssigned([f.assignedTo], ticketNum + ' ' + f.title, myId);
+      const allToNotify = [f.assignedTo, ...extraAssignees].filter(id => id && id !== myId);
+      if (allToNotify.length) notifyTicketAssigned(allToNotify, ticketNum + ' ' + f.title, myId);
       setShowAdd(false); setF({}); loadTickets();
     } catch (err) { alert('Error: ' + err.message); }
   };
@@ -123,6 +138,8 @@ export default function TicketsTab({ customers, user, userProfile, users, onRelo
       await logActivity(myId, 'Ticket status → ' + newStatus + ': ' + ticket.title, 'ticket');
       if (ticket.assigned_to && ticket.assigned_to !== myId) notifyTicketStatus([ticket.assigned_to], ticket.title, newStatus, myId);
       if (ticket.created_by && ticket.created_by !== myId && ticket.created_by !== ticket.assigned_to) notifyTicketStatus([ticket.created_by], ticket.title, newStatus, myId);
+      const extras = parseAssignees(ticket).filter(id => id !== myId && id !== ticket.assigned_to && id !== ticket.created_by);
+      if (extras.length) notifyTicketStatus(extras, ticket.title, newStatus, myId);
       loadTickets();
       if (sel && sel.id === ticket.id) { setSel({...sel, ...updates}); loadComments(ticket.id); }
     } catch (err) { alert('Error: ' + err.message); }
@@ -151,6 +168,8 @@ export default function TicketsTab({ customers, user, userProfile, users, onRelo
       await logActivity(myId, 'Comment on ticket: ' + sel.title, 'ticket');
       if (sel.assigned_to && sel.assigned_to !== myId) notifyTicketComment([sel.assigned_to], sel.title, f.comment, myId);
       if (sel.created_by && sel.created_by !== myId && sel.created_by !== sel.assigned_to) notifyTicketComment([sel.created_by], sel.title, f.comment, myId);
+      const extras = parseAssignees(sel).filter(id => id !== myId && id !== sel.assigned_to && id !== sel.created_by);
+      if (extras.length) notifyTicketComment(extras, sel.title, f.comment, myId);
       setF({...f, comment: ''}); loadComments(sel.id);
     } catch (err) { alert('Error: ' + err.message); }
   };
@@ -178,6 +197,7 @@ export default function TicketsTab({ customers, user, userProfile, users, onRelo
     const isOverdue = sel.due_date && sel.due_date < todayStr && sel.status !== 'Closed';
     const createdByName = getUserName(sel.created_by) || 'Unknown';
     const assignedName = getUserName(sel.assigned_to) || 'UNASSIGNED';
+    const allAssignees = parseAssignees(sel);
     const systemComments = comments.filter(c => c.is_system);
     const userComments = comments.filter(c => !c.is_system);
 
@@ -210,15 +230,35 @@ export default function TicketsTab({ customers, user, userProfile, users, onRelo
           </div>
           <div className="bg-purple-50 rounded-lg p-3">
             <div className="text-[10px] text-slate-500 font-semibold">Assigned To / معيّن إلى</div>
-            <div className={'text-sm font-bold ' + (sel.assigned_to ? 'text-purple-600' : 'text-red-500')}>{assignedName}</div>
-            {canManage ? (
-              <select value={sel.assigned_to || ''} onChange={e => reassignTicket(sel, e.target.value)}
-                className="mt-1 w-full px-2 py-1 rounded border border-purple-200 text-[10px] bg-white">
-                <option value="">Unassigned</option>
-                {(users || []).map(u => <option key={u.id} value={u.id}>{u.name}</option>)}
+            <div className="flex flex-wrap gap-1 mt-1 mb-1">
+              {allAssignees.length > 0 ? allAssignees.map(uid => (
+                <span key={uid} className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-bold text-white" style={{ background: userColorMap[uid] || '#8b5cf6' }}>
+                  {getUserName(uid) || '?'}
+                  {canManage && <button onClick={async () => {
+                    const newExtras = parseAssignees(sel).filter(id => id !== uid);
+                    const primary = uid === sel.assigned_to ? (newExtras[0] || null) : sel.assigned_to;
+                    const extras = newExtras.filter(id => id !== primary);
+                    await dbUpdate('tickets', sel.id, { assigned_to: primary, additional_assignees: extras.length ? JSON.stringify(extras) : null, updated_by: myId }, myId);
+                    loadTickets(); setSel({...sel, assigned_to: primary, additional_assignees: extras.length ? JSON.stringify(extras) : null});
+                  }} className="ml-0.5 text-white/70 hover:text-white">✕</button>}
+                </span>
+              )) : <span className="text-[10px] text-red-500 font-bold">UNASSIGNED</span>}
+            </div>
+            {canManage && (
+              <select value="" onChange={async (e) => {
+                const newId = e.target.value; if (!newId) return;
+                if (parseAssignees(sel).includes(newId)) return;
+                const current = parseAssignees(sel);
+                const primary = sel.assigned_to || newId;
+                const extras = [...current, newId].filter(id => id !== primary);
+                await dbUpdate('tickets', sel.id, { assigned_to: primary, additional_assignees: extras.length ? JSON.stringify(extras) : null, updated_by: myId }, myId);
+                await dbInsert('ticket_comments', { ticket_id: sel.id, comment_text: '👤 ' + getUserName(newId) + ' added as assignee by ' + (getUserName(myId) || ''), is_system: true, created_by: myId }, myId);
+                notifyTicketAssigned([newId], sel.title, myId);
+                loadTickets(); loadComments(sel.id); setSel({...sel, assigned_to: primary, additional_assignees: extras.length ? JSON.stringify(extras) : null});
+              }} className="w-full px-2 py-1 rounded border border-purple-200 text-[10px] bg-white mt-1">
+                <option value="">+ Add assignee...</option>
+                {(users || []).filter(u => !parseAssignees(sel).includes(u.id)).map(u => <option key={u.id} value={u.id}>{u.name}</option>)}
               </select>
-            ) : (
-              <div className="text-[9px] text-slate-400 mt-1">Only managers can reassign</div>
             )}
           </div>
           <div className={'rounded-lg p-3 ' + (isOverdue ? 'bg-red-50 border border-red-200' : 'bg-slate-50')}>
@@ -313,7 +353,7 @@ export default function TicketsTab({ customers, user, userProfile, users, onRelo
 
       {/* COMMENTS / NOTES */}
       <div className="bg-white rounded-xl p-4 mb-3 border border-slate-200">
-        <h4 className="text-sm font-bold mb-2">💬 Comments ({userComments.length})</h4>
+        <h4 className="text-sm font-bold mb-2">💬 Comments & Attachments ({userComments.length})</h4>
         {userComments.length > 0 && (
           <div className="space-y-2 max-h-[300px] overflow-auto mb-3">
             {userComments.map(c => {
@@ -322,6 +362,12 @@ export default function TicketsTab({ customers, user, userProfile, users, onRelo
               return (
                 <div key={c.id} className={'rounded-lg p-3 ' + (isMe ? 'bg-blue-50 ml-8' : 'bg-slate-50 mr-8')}>
                   <div className="text-xs">{c.comment_text}</div>
+                  {c.attachment_url && (
+                    <a href={c.attachment_url} target="_blank" rel="noopener noreferrer"
+                      className="inline-flex items-center gap-1 mt-1 px-2 py-1 bg-white rounded border border-slate-200 text-[10px] text-blue-600 font-semibold hover:bg-blue-50">
+                      📎 {c.attachment_name || 'Attachment'}
+                    </a>
+                  )}
                   <div className="text-[10px] text-slate-400 mt-1">
                     <span className={'font-semibold ' + (isMe ? 'text-blue-500' : 'text-purple-500')}>{authorName}</span>
                     <span className="ml-2">{fmtDate(c.created_at)}</span>
@@ -333,8 +379,28 @@ export default function TicketsTab({ customers, user, userProfile, users, onRelo
         )}
         <div className="flex gap-2">
           <input value={f.comment || ''} onChange={e => setF({...f, comment: e.target.value})}
-            onKeyDown={e => e.key === 'Enter' && addComment()}
+            onKeyDown={e => e.key === 'Enter' && !e.shiftKey && addComment()}
             placeholder="Add comment..." className="flex-1 px-3 py-2 border rounded-lg text-sm" />
+          <label className={'px-3 py-2 rounded-lg text-xs font-semibold cursor-pointer transition ' + (uploading ? 'bg-slate-200 text-slate-400' : 'bg-slate-100 text-slate-600 hover:bg-slate-200')}>
+            {uploading ? '⏳' : '📎'}
+            <input type="file" className="hidden" disabled={uploading} onChange={async (e) => {
+              const file = e.target.files?.[0]; if (!file || !sel) return;
+              setUploading(true);
+              try {
+                const ext = file.name.split('.').pop();
+                const fileName = sel.ticket_number + '_' + Date.now() + '.' + ext;
+                const { data: upData, error: upErr } = await supabase.storage.from('ticket-attachments').upload(fileName, file);
+                if (upErr) throw upErr;
+                const { data: urlData } = supabase.storage.from('ticket-attachments').getPublicUrl(fileName);
+                const url = urlData?.publicUrl || '';
+                await dbInsert('ticket_comments', { ticket_id: sel.id, comment_text: '📎 Attached: ' + file.name, attachment_url: url, attachment_name: file.name, is_system: false, created_by: myId }, myId);
+                await dbUpdate('tickets', sel.id, { updated_by: myId }, myId);
+                loadComments(sel.id);
+              } catch (err) { alert('Upload failed: ' + err.message); }
+              setUploading(false);
+              e.target.value = '';
+            }} />
+          </label>
           <button onClick={addComment} className="px-4 py-2 bg-blue-500 text-white rounded-lg text-xs font-semibold">Send</button>
         </div>
       </div>
@@ -346,7 +412,10 @@ export default function TicketsTab({ customers, user, userProfile, users, onRelo
     <div className="flex justify-between flex-wrap gap-2 mb-3">
       <h2 className="text-xl font-extrabold">Tickets / التذاكر</h2>
       <div className="flex gap-2 items-center">
-        <input value={q} onChange={e => setQ(e.target.value)} placeholder="Search..." className="px-3 py-1.5 rounded-lg border text-xs w-28" />
+        <div className="relative">
+          <input value={q} onChange={e => setQ(e.target.value)} placeholder="Search tickets... / بحث" className="px-3 py-1.5 rounded-lg border text-xs w-48 pr-6" />
+          {q && <button onClick={() => setQ('')} className="absolute right-2 top-1/2 -translate-y-1/2 text-slate-400 text-xs">✕</button>}
+        </div>
         <button onClick={() => { setShowAdd(true); setF({}); }} className="px-3 py-1.5 bg-blue-500 text-white rounded-lg text-xs font-semibold">+ Ticket</button>
         <button onClick={startVoice} className={'px-3 py-1.5 rounded-lg text-xs font-semibold ' + (listening ? 'bg-red-500 text-white animate-pulse' : 'bg-amber-500 text-white')}>
           {listening ? '🎙 Listening...' : '🎤 Voice'}</button>
@@ -394,12 +463,12 @@ export default function TicketsTab({ customers, user, userProfile, users, onRelo
       ))}
     </div>
 
-    {/* Stats */}
+    {/* Stats — click to filter */}
     <div className="grid grid-cols-4 gap-3 mb-3">
-      <div className="bg-white rounded-lg p-3" style={{borderLeftWidth:3,borderLeftColor:'#3b82f6'}}><div className="text-[10px] text-slate-500">Open</div><div className="text-lg font-extrabold">{tickets.filter(t=>t.status!=='Closed').length}</div></div>
-      <div className="bg-white rounded-lg p-3" style={{borderLeftWidth:3,borderLeftColor:'#ef4444'}}><div className="text-[10px] text-slate-500">Overdue</div><div className="text-lg font-extrabold text-red-500">{tickets.filter(t=>t.due_date&&t.due_date<todayStr&&t.status!=='Closed').length}</div></div>
-      <div className="bg-white rounded-lg p-3" style={{borderLeftWidth:3,borderLeftColor:'#f59e0b'}}><div className="text-[10px] text-slate-500">High Priority</div><div className="text-lg font-extrabold text-amber-500">{tickets.filter(t=>t.priority==='high'&&t.status!=='Closed').length}</div></div>
-      <div className="bg-white rounded-lg p-3" style={{borderLeftWidth:3,borderLeftColor:'#10b981'}}><div className="text-[10px] text-slate-500">Closed</div><div className="text-lg font-extrabold">{tickets.filter(t=>t.status==='Closed').length}</div></div>
+      <div onClick={() => setStatusF('open')} className="bg-white rounded-lg p-3 cursor-pointer hover:shadow transition" style={{borderLeftWidth:3,borderLeftColor:'#3b82f6'}}><div className="text-[10px] text-slate-500">Open</div><div className="text-lg font-extrabold">{tickets.filter(t=>t.status!=='Closed').length}</div></div>
+      <div onClick={() => setStatusF('overdue')} className="bg-white rounded-lg p-3 cursor-pointer hover:shadow transition" style={{borderLeftWidth:3,borderLeftColor:'#ef4444'}}><div className="text-[10px] text-slate-500">Overdue</div><div className="text-lg font-extrabold text-red-500">{tickets.filter(t=>t.due_date&&t.due_date<todayStr&&t.status!=='Closed').length}</div></div>
+      <div onClick={() => { setPriorityF('high'); setStatusF('all'); }} className="bg-white rounded-lg p-3 cursor-pointer hover:shadow transition" style={{borderLeftWidth:3,borderLeftColor:'#f59e0b'}}><div className="text-[10px] text-slate-500">High Priority</div><div className="text-lg font-extrabold text-amber-500">{tickets.filter(t=>t.priority==='high'&&t.status!=='Closed').length}</div></div>
+      <div onClick={() => setStatusF('Closed')} className="bg-white rounded-lg p-3 cursor-pointer hover:shadow transition" style={{borderLeftWidth:3,borderLeftColor:'#10b981'}}><div className="text-[10px] text-slate-500">Closed</div><div className="text-lg font-extrabold">{tickets.filter(t=>t.status==='Closed').length}</div></div>
     </div>
 
     {/* Status Legend — collapsible */}
@@ -407,10 +476,11 @@ export default function TicketsTab({ customers, user, userProfile, users, onRelo
       <summary className="text-[10px] text-blue-500 font-bold cursor-pointer hover:underline">ℹ️ Status Guide — what each status means</summary>
       <div className="bg-white rounded-xl p-3 mt-1 grid grid-cols-2 md:grid-cols-4 gap-2">
         {STATUSES.map(s => (
-          <div key={s} className="rounded-lg p-2 border border-slate-100">
+          <div key={s} className="rounded-lg p-2 border border-slate-100 cursor-pointer hover:shadow transition" onClick={() => { setStatusF(s); }}>
             <div className="flex items-center gap-1.5 mb-0.5">
               <div className="w-2.5 h-2.5 rounded-full" style={{background: STATUS_COLORS[s]}} />
               <span className="text-xs font-bold">{s}</span>
+              <span className="text-[9px] text-slate-400 ml-auto">{tickets.filter(t => t.status === s).length}</span>
             </div>
             <div className="text-[9px] text-slate-500 leading-tight">{STATUS_DESC[s]}</div>
           </div>
@@ -433,7 +503,21 @@ export default function TicketsTab({ customers, user, userProfile, users, onRelo
           <input type="date" value={f.dueDate||''} onChange={e=>setF({...f,dueDate:e.target.value})} className="w-full px-3 py-2 rounded border text-sm" /></div>
         <div><label className="text-[10px] font-semibold">Assign To</label>
           <select value={f.assignedTo||''} onChange={e=>setF({...f,assignedTo:e.target.value})} className="w-full px-3 py-2 rounded border text-sm">
-            <option value="">Unassigned</option>{(users||[]).map(u=><option key={u.id} value={u.id}>{u.name}</option>)}</select></div>
+            <option value="">Unassigned</option>{(users||[]).map(u=><option key={u.id} value={u.id}>{u.name}</option>)}</select>
+          {f.assignedTo && (<div className="mt-1">
+            <div className="text-[9px] text-slate-500 font-semibold mb-1">Additional assignees:</div>
+            <div className="flex flex-wrap gap-1">
+              {(users||[]).filter(u => u.id !== f.assignedTo).map(u => {
+                const checked = (f.extraAssignees || []).includes(u.id);
+                return <label key={u.id} className={'inline-flex items-center gap-1 px-2 py-0.5 rounded border text-[10px] cursor-pointer ' + (checked ? 'bg-purple-100 border-purple-300 text-purple-700 font-bold' : 'bg-white border-slate-200 text-slate-500')}>
+                  <input type="checkbox" className="w-3 h-3" checked={checked} onChange={() => {
+                    const cur = f.extraAssignees || [];
+                    setF({...f, extraAssignees: checked ? cur.filter(id => id !== u.id) : [...cur, u.id]});
+                  }} />{u.name}</label>;
+              })}
+            </div>
+          </div>)}
+        </div>
         <div><label className="text-[10px] font-semibold">Order #</label>
           <input value={f.orderNumber||''} onChange={e=>setF({...f,orderNumber:e.target.value})} className="w-full px-3 py-2 rounded border text-sm" /></div>
         <div className="col-span-2"><label className="text-[10px] font-semibold">Client</label>
@@ -450,10 +534,10 @@ export default function TicketsTab({ customers, user, userProfile, users, onRelo
     <div className="space-y-2">
       {filtered.map(t => {
         const priColor = PRIORITIES.find(p=>p.v===t.priority)?.c||'#f59e0b';
-        const assignedName = getUserName(t.assigned_to);
+        const tAssignees = parseAssignees(t);
         const createdName = getUserName(t.created_by);
         const isOverdue = t.due_date && t.due_date < todayStr && t.status !== 'Closed';
-        const needsAck = t.status === 'New' && t.assigned_to === myId;
+        const needsAck = t.status === 'New' && isAssignedToMe(t);
         return (
           <div key={t.id} onClick={()=>{setSel(t);loadComments(t.id);}}
             className="bg-white rounded-xl border border-slate-200 hover:border-slate-300 hover:shadow-sm transition cursor-pointer overflow-hidden">
@@ -473,9 +557,12 @@ export default function TicketsTab({ customers, user, userProfile, users, onRelo
               <div className="flex items-center gap-2 flex-wrap">
                 <span className="inline-flex items-center gap-1 text-[10px] bg-slate-50 text-slate-600 px-2 py-0.5 rounded">
                   <span className="w-1.5 h-1.5 rounded-full bg-blue-400" />{createdName || '?'}</span>
-                <span className={'inline-flex items-center gap-1 text-[10px] px-2 py-0.5 rounded font-semibold ' + (assignedName ? '' : 'bg-red-50 text-red-600')}
-                  style={assignedName ? { background: (userColorMap[t.assigned_to] || '#8b5cf6') + '18', color: userColorMap[t.assigned_to] || '#8b5cf6' } : {}}>
-                  <span className="w-1.5 h-1.5 rounded-full" style={{ background: assignedName ? (userColorMap[t.assigned_to] || '#8b5cf6') : '#ef4444' }} />{assignedName || 'Unassigned'}</span>
+                {tAssignees.length > 0 ? tAssignees.map(uid => (
+                  <span key={uid} className="inline-flex items-center gap-1 text-[10px] px-2 py-0.5 rounded font-semibold"
+                    style={{ background: (userColorMap[uid] || '#8b5cf6') + '18', color: userColorMap[uid] || '#8b5cf6' }}>
+                    <span className="w-1.5 h-1.5 rounded-full" style={{ background: userColorMap[uid] || '#8b5cf6' }} />{getUserName(uid) || '?'}</span>
+                )) : <span className="inline-flex items-center gap-1 text-[10px] px-2 py-0.5 rounded font-semibold bg-red-50 text-red-600">
+                  <span className="w-1.5 h-1.5 rounded-full bg-red-500" />Unassigned</span>}
                 {t.due_date && <span className={'inline-flex items-center gap-1 text-[10px] px-2 py-0.5 rounded ' + (isOverdue ? 'bg-red-100 text-red-700 font-bold' : 'bg-slate-50 text-slate-600')}>📅 {t.due_date}{isOverdue ? ' OVERDUE' : ''}</span>}
                 {t.order_number && <span className="text-[10px] bg-slate-50 text-slate-500 px-2 py-0.5 rounded">#{t.order_number}</span>}
                 <span className="text-[10px] text-slate-400 ml-auto">{new Date(t.created_at).toLocaleDateString()}</span>
