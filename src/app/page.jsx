@@ -338,6 +338,7 @@ export default function App() {
   const [lastLoaded, setLastLoaded] = useState(null);
   const [openTicketId, setOpenTicketId] = useState(null);
   const [egyptBankTxns, setEgyptBankTxns] = useState([]);
+  const [egyptBankAccounts, setEgyptBankAccounts] = useState([]);
   const [showReminderForm, setShowReminderForm] = useState(false);
   const [showReminderArchive, setShowReminderArchive] = useState(false);
   const seenRemindersRef = useRef(new Set());
@@ -623,6 +624,10 @@ export default function App() {
         const { data: ebt } = await supabase.from('egypt_bank_transactions').select('*').order('date', { ascending: false }).limit(500);
         setEgyptBankTxns(ebt || []);
       } catch(e) { setEgyptBankTxns([]); }
+      try {
+        const { data: eba } = await supabase.from('egypt_bank_accounts').select('*').order('bank_name');
+        setEgyptBankAccounts(eba || []);
+      } catch(e) { setEgyptBankAccounts([]); }
       // Load activity feed (recent auto-generated log entries)
       try {
         const { data: feed } = await supabase.from('daily_log').select('*').eq('auto_generated', true).order('created_at', { ascending: false }).limit(50);
@@ -655,13 +660,14 @@ export default function App() {
   // COMPUTED VALUES
   // ==========================================
   const isAdmin = userProfile?.role === 'super_admin' || userProfile?.role === 'admin';
+  const isSuperAdmin = userProfile?.role === 'super_admin';
   const activeTeamUsers = useMemo(() => teamUsers.filter(u => u.active !== false), [teamUsers]);
-  const canEditTreasury = userProfile?.role === 'super_admin' || isAdmin || modulePerms?.['Edit Treasury'] === true;
-  const canEditInvoices = userProfile?.role === 'super_admin' || isAdmin || modulePerms?.['Edit Invoices'] === true;
-  const canEditInventory = userProfile?.role === 'super_admin' || isAdmin || modulePerms?.['Edit Inventory'] === true;
-  const canEditWarehouse = userProfile?.role === 'super_admin' || isAdmin || modulePerms?.['Edit Warehouse'] === true;
-  const canExportData = userProfile?.role === 'super_admin' || isAdmin || modulePerms?.['Export Data'] === true;
-  const canManageCategories = userProfile?.role === 'super_admin' || isAdmin || modulePerms?.['Manage Categories'] === true;
+  const canEditTreasury = isSuperAdmin || modulePerms?.['Edit Treasury'] === true || modulePerms?.['Treasury'] === true;
+  const canEditInvoices = isSuperAdmin || modulePerms?.['Edit Invoices'] === true || modulePerms?.['Sales'] === true;
+  const canEditInventory = isSuperAdmin || modulePerms?.['Edit Inventory'] === true || modulePerms?.['Inventory'] === true;
+  const canEditWarehouse = isSuperAdmin || modulePerms?.['Edit Warehouse'] === true || modulePerms?.['Warehouse'] === true;
+  const canExportData = isSuperAdmin || modulePerms?.['Export Data'] === true;
+  const canManageCategories = isSuperAdmin || modulePerms?.['Manage Categories'] === true;
 
   // Tab-to-module mapping for permission filtering
   const TAB_MODULE_MAP = {
@@ -678,10 +684,8 @@ export default function App() {
       const moduleName = TAB_MODULE_MAP[t.id];
       // If permission explicitly set, use it
       if (moduleName && modulePerms[moduleName] !== undefined) return modulePerms[moduleName];
-      // Admin with no explicit permission: see everything
-      if (userProfile.role === 'admin') return true;
-      // Team/viewer with no explicit permission: hide financial + admin tabs
-      if (['treasury', 'checks', 'debts', 'sales', 'warehouse', 'inventory', 'admin', 'settings', 'import', 'bank', 'egyptbank', 'reports'].includes(t.id)) return false;
+      // No explicit permission: hide all financial + admin tabs (even for admin/manager role)
+      if (['treasury', 'checks', 'debts', 'sales', 'warehouse', 'inventory', 'admin', 'settings', 'import', 'bank', 'egyptbank', 'reports', 'customs', 'customers'].includes(t.id)) return false;
       return true;
     });
   }, [userProfile, modulePerms]);
@@ -710,6 +714,98 @@ export default function App() {
   const totalCashIn = useMemo(() => filteredTreasury.reduce((a, t) => a + Number(t.cash_in || 0), 0), [filteredTreasury]);
   const totalCashOut = useMemo(() => filteredTreasury.reduce((a, t) => a + Number(t.cash_out || 0), 0), [filteredTreasury]);
   const allTimeNet = useMemo(() => treasury.reduce((a, t) => a + Number(t.cash_in || 0) - Number(t.cash_out || 0), 0), [treasury]);
+
+  // ==========================================
+  // AUTO-MATCH BANK PLACEHOLDERS to imported bank transactions
+  // Runs whenever treasury or egyptBankTxns change
+  // Tolerance: 1% amount, 2 days date, order# exact match (priority)
+  // ==========================================
+  useEffect(() => {
+    if (!treasury.length || !egyptBankTxns.length) return;
+    const placeholders = treasury.filter(t => t.is_bank_placeholder && !t.matched_bank_txn_id);
+    if (!placeholders.length) return;
+
+    const unmatchedBank = egyptBankTxns.filter(b => !b.matched_treasury_id);
+    if (!unmatchedBank.length) return;
+
+    const matches = [];
+    placeholders.forEach(ph => {
+      const expAmt = Number(ph.expected_amount || 0);
+      const expDir = ph.expected_direction; // 'in' or 'out'
+      const phDate = new Date(ph.transaction_date);
+      const tolAmt = Math.max(expAmt * 0.01, 1); // 1% or min 1
+      const twoDays = 2 * 86400000;
+
+      const candidates = unmatchedBank.filter(b => {
+        // Same direction: bank amount sign matches expected direction
+        const bankAmt = Number(b.amount);
+        const bankIsIn = bankAmt > 0;
+        if (expDir === 'in' && !bankIsIn) return false;
+        if (expDir === 'out' && bankIsIn) return false;
+
+        // Same bank account if placeholder specified one
+        if (ph.bank_account_id && b.account_id && ph.bank_account_id !== b.account_id) return false;
+
+        // Amount within 1% tolerance
+        if (Math.abs(Math.abs(bankAmt) - expAmt) > tolAmt) return false;
+
+        // Date within 2 days
+        const bDate = new Date(b.date);
+        if (Math.abs(bDate - phDate) > twoDays) return false;
+
+        return true;
+      });
+
+      if (!candidates.length) return;
+
+      // Score: order# match > amount closeness > date closeness
+      const scored = candidates.map(b => {
+        let score = 0;
+        if (ph.order_number && (b.description || '').includes(ph.order_number)) score += 1000;
+        score -= Math.abs(Math.abs(Number(b.amount)) - expAmt); // smaller diff = higher
+        score -= Math.abs(new Date(b.date) - phDate) / 86400000; // days diff
+        return { b, score };
+      }).sort((a, b) => b.score - a.score);
+
+      matches.push({ placeholder: ph, bank: scored[0].b });
+    });
+
+    if (!matches.length) return;
+
+    // Process matches
+    (async () => {
+      for (const m of matches) {
+        const { placeholder, bank } = m;
+        const expAmt = Number(placeholder.expected_amount || 0);
+        const isIn = placeholder.expected_direction === 'in';
+
+        // Update treasury: convert from placeholder to real entry
+        const updates = {
+          is_bank_placeholder: false,
+          matched_bank_txn_id: bank.id,
+          cash_in: isIn ? expAmt : 0,
+          cash_out: !isIn ? expAmt : 0,
+          description: (placeholder.description || '').replace(' [awaiting bank confirmation]', '') + ' ✅ matched bank ' + bank.date,
+        };
+
+        // Find invoice to link (by order_number if placeholder has one)
+        if (placeholder.order_number && !placeholder.linked_invoice_id) {
+          const inv = invoices.find(i => i.order_number === placeholder.order_number);
+          if (inv) updates.linked_invoice_id = inv.id;
+        }
+
+        try {
+          await supabase.from('treasury').update(updates).eq('id', placeholder.id);
+          await supabase.from('egypt_bank_transactions').update({
+            matched_treasury_id: placeholder.id,
+            matched_invoice_id: updates.linked_invoice_id || bank.matched_invoice_id || null,
+            matched_at: new Date().toISOString(),
+          }).eq('id', bank.id);
+        } catch (e) { console.log('Auto-match error:', e.message); }
+      }
+      loadAllData();
+    })();
+  }, [treasury, egyptBankTxns]);
 
   // Reset visible counts when filter changes
   useEffect(() => { setTreasuryVisible(50); setInvoiceVisible(50); }, [mode, df, dt]);
@@ -1015,40 +1111,50 @@ export default function App() {
     if (!canEditTreasury) { alert('You do not have permission to add treasury entries.'); return; }
     const txDate = formData.date || today();
     if (!formData.amount) { alert('Please enter an amount / الرجاء إدخال المبلغ'); return; }
+    const isBankPlaceholder = formData.type === 'bank_in' || formData.type === 'bank_out';
+    if (isBankPlaceholder && !formData.bankAccountId) { alert('Please select a bank account / الرجاء اختيار الحساب البنكي'); return; }
     try {
-      const isIncome = formData.type === 'in';
+      const isIncome = formData.type === 'in' || formData.type === 'bank_in';
+      const currency = formData.currency || 'EGP';
+      const amt = Number(formData.amount);
       let cat = formData.category || '';
       let subcat = formData.subcategory || '';
-      // Auto-apply rule if no category manually set
       if (!cat && formData.desc) {
         const ruleType = isIncome ? 'income' : 'expense';
         const rule = expenseRules.find(r => (formData.desc || '').includes(r.description_match) && (r.rule_type === ruleType || (!r.rule_type && ruleType === 'expense')));
         if (rule) { cat = rule.category; subcat = rule.subcategory || ''; }
       }
-      await dbInsert('treasury', {
+      const record = {
         transaction_date: txDate,
         order_number: formData.orderNumber || '',
         description: formData.desc || '',
-        cash_in: isIncome ? Number(formData.amount) : 0,
-        cash_out: !isIncome ? Number(formData.amount) : 0,
+        cash_in: 0, cash_out: 0,
+        usd_in: 0, usd_out: 0,
         category: cat,
         subcategory: subcat,
-      }, user?.id);
-      // Instant local update so entry appears immediately in Recent Transactions
-      const tempEntry = {
-        id: 'temp-' + Date.now(),
-        transaction_date: txDate,
-        order_number: formData.orderNumber || '',
-        description: formData.desc || '',
-        cash_in: isIncome ? Number(formData.amount) : 0,
-        cash_out: !isIncome ? Number(formData.amount) : 0,
-        category: cat,
-        subcategory: subcat,
+        currency: currency,
       };
+      if (isBankPlaceholder) {
+        // PLACEHOLDER — expected amount stored separately, $0 in cash columns so doesn't affect net
+        record.is_bank_placeholder = true;
+        record.expected_amount = amt;
+        record.expected_direction = isIncome ? 'in' : 'out';
+        record.bank_account_id = formData.bankAccountId;
+        record.description = (record.description || '') + ' [awaiting bank confirmation]';
+      } else if (currency === 'EGP') {
+        if (isIncome) record.cash_in = amt; else record.cash_out = amt;
+      } else if (currency === 'USD') {
+        if (isIncome) record.usd_in = amt; else record.usd_out = amt;
+      } else {
+        record.foreign_amount = amt;
+        record.foreign_currency = currency;
+        record.foreign_direction = isIncome ? 'in' : 'out';
+      }
+      await dbInsert('treasury', record, user?.id);
+      const tempEntry = { id: 'temp-' + Date.now(), ...record };
       setTreasury(prev => [tempEntry, ...prev]);
       setShowAddTreasury(false);
       setFormData({});
-      // Full refresh in background to get real ID + server-side triggers
       setTimeout(() => loadAllData(), 500);
     } catch (err) {
       alert('Error / خطأ: ' + err.message);
@@ -1653,7 +1759,7 @@ export default function App() {
         </div>
         <div className="flex items-center gap-2">
           {/* Treasury Net — treasury access only */}
-          {(userProfile?.role === 'super_admin' || userProfile?.role === 'admin' || modulePerms?.['Treasury']) && (
+          {(isSuperAdmin || modulePerms?.['Treasury']) && (
           <div onClick={() => { setTab('treasury'); setMode('all'); }} className="cursor-pointer px-2 sm:px-3 py-1.5 rounded-lg" style={{background:'rgba(255,255,255,0.04)', border:'1px solid rgba(255,255,255,0.08)'}}>
             <div style={{color:'rgba(148,163,184,0.5)'}} className="text-[7px] sm:text-[8px] font-bold uppercase tracking-wider">Treasury Net (All Time)</div>
             <div className={'text-xs sm:text-sm font-black'} style={{color: allTimeNet >= 0 ? '#34d399' : '#f87171'}}>{fE(allTimeNet)}</div>
@@ -3468,11 +3574,18 @@ export default function App() {
               <div>
                 <label className="text-xs font-semibold text-slate-600">Type / النوع</label>
                 <select value={formData.type || 'in'}
-                  onChange={e => setFormData({ ...formData, type: e.target.value })}
+                  onChange={e => setFormData({ ...formData, type: e.target.value, bankAccountId: '' })}
                   className="w-full px-3 py-2 rounded-lg border border-slate-200 text-sm">
-                  <option value="in">Cash In / وارد</option>
-                  <option value="out">Cash Out / منصرف</option>
+                  <option value="in">💵 Cash In / وارد</option>
+                  <option value="out">💸 Cash Out / منصرف</option>
+                  <option value="bank_in">🏦 Bank Payment Received (placeholder)</option>
+                  <option value="bank_out">🏦 Bank Payment Sent (placeholder)</option>
                 </select>
+                {(formData.type === 'bank_in' || formData.type === 'bank_out') && (
+                  <div className="mt-2 p-2 bg-indigo-50 border border-indigo-200 rounded text-[10px] text-indigo-800">
+                    ℹ️ Placeholder: won't affect cash net. Auto-matches to your next Egypt Bank import by amount + date + order #.
+                  </div>
+                )}
               </div>
               <div>
                 <label className="text-xs font-semibold text-slate-600">Date / التاريخ</label>
@@ -3497,6 +3610,24 @@ export default function App() {
                   <option value="AED">AED - UAE Dirham</option>
                 </select>
               </div>
+              {(formData.type === 'bank_in' || formData.type === 'bank_out') && (
+                <div className="col-span-2">
+                  <label className="text-xs font-semibold text-slate-600">Bank Account / الحساب البنكي *</label>
+                  <select value={formData.bankAccountId || ''}
+                    onChange={e => setFormData({ ...formData, bankAccountId: e.target.value })}
+                    className="w-full px-3 py-2 rounded-lg border border-indigo-300 text-sm bg-indigo-50">
+                    <option value="">Select bank account...</option>
+                    {egyptBankAccounts.map(a => (
+                      <option key={a.id} value={a.id}>
+                        🏦 {a.bank_name}{a.account_name ? ' — ' + a.account_name : ''}{a.account_number ? ' (' + a.account_number + ')' : ''}
+                      </option>
+                    ))}
+                  </select>
+                  {egyptBankAccounts.length === 0 && (
+                    <div className="text-[10px] text-red-500 mt-1">⚠️ No bank accounts configured. Add them in Egypt Bank tab first.</div>
+                  )}
+                </div>
+              )}
               <div>
                 <label className="text-xs font-semibold text-slate-600">Order # / رقم</label>
                 <input value={formData.orderNumber || ''}
@@ -4352,7 +4483,7 @@ export default function App() {
             })()}
 
             {/* ===== PENDING CHECKS ===== */}
-            {pendingChecks && pendingChecks.length > 0 && (isAdmin || modulePerms['Treasury']) && (() => {
+            {pendingChecks && pendingChecks.length > 0 && (isSuperAdmin || modulePerms['Treasury']) && (() => {
               const expanded = hideSections.dash_pendChecks;
               const sorted = [...pendingChecks].sort((a,b) => (a.check_date || a.date || '').localeCompare(b.check_date || b.date || ''));
               const visible = expanded ? sorted : sorted.slice(0, 5);
@@ -4399,7 +4530,7 @@ export default function App() {
             </div>
 
             {/* Invoices — Sales or Treasury access */}
-            {(isAdmin || modulePerms['Sales'] || modulePerms['Treasury']) && (<>
+            {(isSuperAdmin || modulePerms['Sales'] || modulePerms['Treasury']) && (<>
             <div className="bg-blue-100 rounded-lg px-3 py-2 mb-3 flex justify-between items-center cursor-pointer" onClick={() => setHideSections({...hideSections, invoices: !hideSections.invoices})}>
               <span className="text-sm font-bold text-blue-800">📋 INVOICES / فواتير العملاء</span>
               <span className="text-xs text-blue-600">{hideSections.invoices ? '👁️ Show' : '🙈 Hide'}</span>
@@ -4413,7 +4544,7 @@ export default function App() {
             </>)}
 
             {/* Cash Register — Treasury access ONLY */}
-            {(isAdmin || modulePerms['Treasury']) && (<>
+            {(isSuperAdmin || modulePerms['Treasury']) && (<>
             <div className="bg-emerald-100 rounded-lg px-3 py-2 mb-3 flex justify-between items-center cursor-pointer" onClick={() => setHideSections({...hideSections, cash: !hideSections.cash})}>
               <div>
                 <span className="text-sm font-bold text-emerald-800">🏦 CASH REGISTER / الخزنة</span>
@@ -4448,7 +4579,8 @@ export default function App() {
             </>}{/* end cash register gate */}
             </>)}{/* end treasury gate */}
 
-            {/* Monthly Sales — visible to ALL users, current year only */}
+            {/* Monthly Sales — Sales or Treasury permission, current year only */}
+            {(isSuperAdmin || modulePerms['Sales'] || modulePerms['Treasury']) && (
             <div className="bg-white rounded-xl p-4 mb-4">
               <h3 className="text-sm font-bold mb-2">📊 Monthly Sales — {new Date().getFullYear()} / المبيعات الشهرية</h3>
               {(() => {
@@ -4497,9 +4629,10 @@ export default function App() {
                 );
               })()}
             </div>
+            )}{/* end monthly sales gate */}
 
             {/* Income/Expense Buckets + USD — Treasury access only */}
-            {(isAdmin || modulePerms['Treasury']) && (<>
+            {(isSuperAdmin || modulePerms['Treasury']) && (<>
             {/* Income Buckets */}
             {incomeBuckets.length > 0 && (
               <div className="bg-white rounded-xl p-4 mb-4">
@@ -4593,7 +4726,7 @@ export default function App() {
             </div>{/* end financial-command */}
 
             {/* ===== EGYPT BANK TRANSACTIONS DASHBOARD ===== */}
-            {egyptBankTxns.length > 0 && (isAdmin || modulePerms['Egypt Bank']) && (() => {
+            {egyptBankTxns.length > 0 && (isSuperAdmin || modulePerms['Egypt Bank']) && (() => {
               const recent = egyptBankTxns.slice(0, 20);
               const totalIn = egyptBankTxns.filter(t => t.amount > 0).reduce((s, t) => s + Number(t.amount), 0);
               const totalOut = egyptBankTxns.filter(t => t.amount < 0).reduce((s, t) => s + Math.abs(Number(t.amount)), 0);
@@ -4647,7 +4780,7 @@ export default function App() {
 
 
             {/* ===== USD DOLLAR LEDGER ===== */}
-            {(isAdmin || modulePerms['Treasury']) && (() => {
+            {(isSuperAdmin || modulePerms['Treasury']) && (() => {
               const usdIn = filteredTreasury.reduce((a, t) => a + Number(t.usd_in || 0), 0);
               const usdOut = filteredTreasury.reduce((a, t) => a + Number(t.usd_out || 0), 0);
               const usdNet = usdIn - usdOut;
@@ -4700,6 +4833,66 @@ export default function App() {
                     </div>
                   </div>
                   </>)}
+                </div>
+              );
+            })()}
+
+            {/* ===== FOREIGN CURRENCY LEDGER (EUR/GBP/SAR/AED/etc) ===== */}
+            {(isSuperAdmin || modulePerms['Treasury']) && (() => {
+              const foreignTxns = filteredTreasury.filter(t => Number(t.foreign_amount || 0) > 0 && t.foreign_currency);
+              if (foreignTxns.length === 0) return null;
+              const byCur = {};
+              foreignTxns.forEach(t => {
+                const c = t.foreign_currency;
+                if (!byCur[c]) byCur[c] = { in: 0, out: 0, txns: [] };
+                if (t.foreign_direction === 'in') byCur[c].in += Number(t.foreign_amount);
+                else byCur[c].out += Number(t.foreign_amount);
+                byCur[c].txns.push(t);
+              });
+              return (
+                <div className="mt-6">
+                  <div className="bg-indigo-100 rounded-lg px-3 py-2 mb-3 flex justify-between items-center cursor-pointer" onClick={() => setHideSections({...hideSections, foreign: !hideSections.foreign})}>
+                    <span className="text-sm font-bold text-indigo-800">🌍 FOREIGN CURRENCY LEDGER / دفتر العملات الأجنبية</span>
+                    <span className="text-xs text-indigo-600">{hideSections.foreign ? '👁️ Show' : '🙈 Hide'}</span>
+                  </div>
+                  {!hideSections.foreign && Object.entries(byCur).map(([cur, data]) => (
+                    <div key={cur} className="mb-4">
+                      <div className="grid grid-cols-3 gap-3 mb-2">
+                        <div className="bg-white rounded-lg p-3" style={{borderLeftWidth:3,borderLeftColor:'#10b981'}}>
+                          <div className="text-[10px] text-slate-500">{cur} In / وارد</div>
+                          <div className="text-lg font-extrabold text-emerald-600">{data.in.toLocaleString()} {cur}</div>
+                        </div>
+                        <div className="bg-white rounded-lg p-3" style={{borderLeftWidth:3,borderLeftColor:'#ef4444'}}>
+                          <div className="text-[10px] text-slate-500">{cur} Out / صادر</div>
+                          <div className="text-lg font-extrabold text-red-500">{data.out.toLocaleString()} {cur}</div>
+                        </div>
+                        <div className="bg-white rounded-lg p-3" style={{borderLeftWidth:3,borderLeftColor:(data.in-data.out)>=0?'#10b981':'#ef4444'}}>
+                          <div className="text-[10px] text-slate-500">{cur} Net / صافي</div>
+                          <div className={'text-lg font-extrabold ' + ((data.in-data.out)>=0?'text-emerald-600':'text-red-500')}>{(data.in-data.out).toLocaleString()} {cur}</div>
+                        </div>
+                      </div>
+                      <div className="bg-white rounded-lg p-3 overflow-auto max-h-[250px]">
+                        <table className="w-full border-collapse">
+                          <thead className="sticky top-0"><tr className="bg-slate-50">
+                            <th className="px-2 py-1.5 text-[10px] text-left">Date</th>
+                            <th className="px-2 py-1.5 text-[10px]" style={{direction:'rtl'}}>Description</th>
+                            <th className="px-2 py-1.5 text-[10px] text-right">In</th>
+                            <th className="px-2 py-1.5 text-[10px] text-right">Out</th>
+                          </tr></thead>
+                          <tbody>
+                            {data.txns.slice(0, 50).map(t => (
+                              <tr key={t.id} className="border-b border-slate-50">
+                                <td className="px-2 py-1 text-[10px]">{t.transaction_date}</td>
+                                <td className="px-2 py-1 text-[10px]" style={{direction: lang === 'ar' ? 'rtl' : 'ltr'}}>{t.description}</td>
+                                <td className="px-2 py-1 text-[10px] text-right text-emerald-600 font-semibold">{t.foreign_direction === 'in' ? Number(t.foreign_amount).toLocaleString() : ''}</td>
+                                <td className="px-2 py-1 text-[10px] text-right text-red-500 font-semibold">{t.foreign_direction === 'out' ? Number(t.foreign_amount).toLocaleString() : ''}</td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      </div>
+                    </div>
+                  ))}
                 </div>
               );
             })()}
@@ -5513,21 +5706,38 @@ export default function App() {
                   </tr></thead>
                   <tbody>
                     {filteredTreasury.slice(0, treasuryVisible).map(txn => (
-                      <tr key={txn.id} className="border-b border-slate-50 hover:bg-blue-50/30">
+                      <tr key={txn.id} className={"border-b border-slate-50 " + (txn.is_bank_placeholder ? "bg-indigo-50/50 hover:bg-indigo-100/50" : "hover:bg-blue-50/30")}>
                         <td className="px-2 py-1.5 text-[10px] whitespace-nowrap">{txn.transaction_date}</td>
                         <td className="px-2 py-1.5 text-[10px] font-semibold text-center">{txn.order_number || ''}</td>
                         <td className="px-2 py-1.5 text-[10px]" style={{direction: lang === 'ar' ? 'rtl' : 'ltr'}}>
+                          {txn.is_bank_placeholder && (
+                            <span className="inline-block px-1.5 py-0.5 rounded bg-indigo-200 text-indigo-800 text-[8px] font-bold mr-1">🏦 BANK (awaiting)</span>
+                          )}
                           {tx(txn.description, txn.description_en)}
                           {txn.cash_out > 0 && txn.category && (
                             <span className="text-[8px] text-amber-600 ml-1">({txCat(txn.category)}{txn.subcategory ? ' > ' + txn.subcategory : ''})</span>
                           )}
+                          {txn.is_bank_placeholder && txn.bank_account_id && (() => {
+                            const acc = egyptBankAccounts.find(a => a.id === txn.bank_account_id);
+                            return acc ? <div className="text-[8px] text-indigo-600">→ {acc.bank_name}{acc.account_name ? ' / ' + acc.account_name : ''}</div> : null;
+                          })()}
                           {txn.linked_invoice_id && (() => {
                             const li = invoices.find(i => i.id === txn.linked_invoice_id);
                             return li ? <div className="text-[8px] text-emerald-600">✅ → {li.customer_name || li.order_number}</div> : null;
                           })()}
                         </td>
-                        <td className="px-2 py-1.5 text-[10px] text-right text-emerald-600 font-semibold">{Number(txn.cash_in) > 0 ? fE(txn.cash_in) : ''}</td>
-                        <td className="px-2 py-1.5 text-[10px] text-right text-red-500 font-semibold">{Number(txn.cash_out) > 0 ? fE(txn.cash_out) : ''}</td>
+                        <td className="px-2 py-1.5 text-[10px] text-right text-emerald-600 font-semibold">
+                          {txn.is_bank_placeholder && txn.expected_direction === 'in' && <div className="text-indigo-600 italic">~{fE(txn.expected_amount)}</div>}
+                          {Number(txn.cash_in) > 0 && fE(txn.cash_in)}
+                          {Number(txn.usd_in) > 0 && <div>${Number(txn.usd_in).toLocaleString()} <span className="text-[8px] text-amber-600">USD</span></div>}
+                          {Number(txn.foreign_amount || 0) > 0 && txn.foreign_direction === 'in' && <div>{Number(txn.foreign_amount).toLocaleString()} <span className="text-[8px] text-amber-600">{txn.foreign_currency}</span></div>}
+                        </td>
+                        <td className="px-2 py-1.5 text-[10px] text-right text-red-500 font-semibold">
+                          {txn.is_bank_placeholder && txn.expected_direction === 'out' && <div className="text-indigo-600 italic">~{fE(txn.expected_amount)}</div>}
+                          {Number(txn.cash_out) > 0 && fE(txn.cash_out)}
+                          {Number(txn.usd_out) > 0 && <div>${Number(txn.usd_out).toLocaleString()} <span className="text-[8px] text-amber-600">USD</span></div>}
+                          {Number(txn.foreign_amount || 0) > 0 && txn.foreign_direction === 'out' && <div>{Number(txn.foreign_amount).toLocaleString()} <span className="text-[8px] text-amber-600">{txn.foreign_currency}</span></div>}
+                        </td>
                         <td className="px-2 py-1.5 text-[10px] whitespace-nowrap">
                           <div className="flex gap-1 items-center">
                             <button onClick={() => setEditTreasuryModal({...txn})}
@@ -5536,7 +5746,7 @@ export default function App() {
                               <button onClick={() => setEditTreasuryModal({...txn, confirmDelete: true})}
                                 className="text-red-400 hover:text-red-600" title="Delete">🗑</button>
                             )}
-                            {Number(txn.cash_in) > 0 && !txn.linked_invoice_id && (
+                            {(Number(txn.cash_in) > 0 || Number(txn.usd_in) > 0 || (Number(txn.foreign_amount || 0) > 0 && txn.foreign_direction === 'in')) && !txn.linked_invoice_id && (
                               <button onClick={() => { setLinkingTreasuryTxn(txn); setTreasuryInvSearch(''); }}
                                 className="text-blue-500 font-semibold">🔗</button>
                             )}
