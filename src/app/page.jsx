@@ -716,10 +716,12 @@ export default function App() {
   const totalCashOut = useMemo(() => filteredTreasury.reduce((a, t) => a + Number(t.cash_out || 0), 0), [filteredTreasury]);
   const allTimeNet = useMemo(() => treasury.reduce((a, t) => a + Number(t.cash_in || 0) - Number(t.cash_out || 0), 0), [treasury]);
 
-  // Running balance for each treasury entry (chronological: oldest → newest)
+  // Running balance — computed in display order so top row always = current net when newest first
   const treasuryBalanceMap = useMemo(() => {
+    // Sort same as display but always oldest-first for accumulation
+    const sortCol = 'created_at';
     const sorted = [...treasury].sort((a, b) => {
-      const d = (a.transaction_date || '').localeCompare(b.transaction_date || '');
+      const d = (a[sortCol] || '').localeCompare(b[sortCol] || '');
       return d !== 0 ? d : (a.id || '').localeCompare(b.id || '');
     });
     const map = {};
@@ -1955,7 +1957,10 @@ export default function App() {
                         : 'text-slate-400 hover:text-white hover:bg-white/5'
                       )}>
                       <span className="text-sm">{t.icon}</span>
-                      <span className="truncate">{lang === 'en' ? t.label.split(' / ')[0] : t.label.split(' / ')[1] || t.label.split(' / ')[0]}</span>
+                      <span className="truncate">
+                        <span>{t.label.split(' / ')[0]}</span>
+                        {t.label.includes(' / ') && <span className="text-[8px] text-slate-500 block" style={{direction:'rtl'}}>{t.label.split(' / ')[1]}</span>}
+                      </span>
                     </button>
                   ))}
                 </div>
@@ -4388,48 +4393,65 @@ export default function App() {
                 </div>
               );
 
-              const TicketCard = ({ t, accent }) => (
-                <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '10px 14px', borderBottom: '1px solid rgba(255,255,255,0.04)', cursor: 'pointer', transition: 'background 0.15s' }}
+              const TicketCard = ({ t, accent }) => {
+                const lastUpdate = recentTicketUpdates.find(c => c.tickets?.id === t.id);
+                const updaterName = lastUpdate ? ((teamUsers || []).find(u => u.id === lastUpdate.created_by)?.name || 'System') : null;
+                return (
+                <div style={{ display: 'flex', alignItems: 'flex-start', gap: 10, padding: '12px 14px', borderBottom: '1px solid rgba(255,255,255,0.04)', cursor: 'pointer', transition: 'background 0.15s' }}
                   className="hover:bg-white/5" onClick={() => { setOpenTicketId(t.id); setTab('tickets'); }}>
-                  <div style={{ width: 6, height: 6, borderRadius: '50%', background: priColor(t.priority), flexShrink: 0 }} />
+                  <div style={{ width: 8, height: 8, borderRadius: '50%', background: priColor(t.priority), flexShrink: 0, marginTop: 6 }} />
                   <div style={{ flex: 1, minWidth: 0 }}>
-                    <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-                      <span style={{ fontSize: 10, fontWeight: 800, color: '#818cf8', fontFamily: 'monospace' }}>{t.ticket_number}</span>
-                      <span style={{ fontSize: 12, fontWeight: 600, color: '#e2e8f0', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{t.title}</span>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                      <span style={{ fontSize: 12, fontWeight: 800, color: '#818cf8', fontFamily: 'monospace' }}>{t.ticket_number}</span>
+                      <span style={{ fontSize: 14, fontWeight: 700, color: '#e2e8f0', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{t.title}</span>
                     </div>
-                    <div style={{ display: 'flex', gap: 8, marginTop: 3, fontSize: 10, color: '#64748b', alignItems: 'center' }}>
-                      <span style={{ padding: '1px 6px', borderRadius: 4, fontWeight: 700, fontSize: 9,
+                    <div style={{ display: 'flex', gap: 8, marginTop: 4, fontSize: 11, color: '#64748b', alignItems: 'center' }}>
+                      <span style={{ padding: '2px 8px', borderRadius: 4, fontWeight: 700, fontSize: 10,
                         background: t.status === 'New' ? 'rgba(59,130,246,0.2)' : t.status === 'In Progress' ? 'rgba(234,179,8,0.2)' : 'rgba(139,92,246,0.2)',
                         color: t.status === 'New' ? '#60a5fa' : t.status === 'In Progress' ? '#fbbf24' : '#a78bfa' }}>{t.status}</span>
                       {t.assigned_to && <span style={{ color: '#94a3b8' }}>→ {getUserName(t.assigned_to)}</span>}
                       {t.due_date && t.due_date < todayStr && <span style={{ color: '#f87171', fontWeight: 700 }}>⚠ OVERDUE</span>}
                       {t.due_date && t.due_date >= todayStr && <span>Due: {t.due_date}</span>}
                     </div>
+                    {lastUpdate && (
+                      <div style={{ fontSize: 12, color: '#94a3b8', marginTop: 5, padding: '4px 8px', background: 'rgba(139,92,246,0.06)', borderRadius: 6, borderLeft: '2px solid #a78bfa' }}>
+                        <span style={{ fontWeight: 700, color: '#a78bfa' }}>{updaterName}</span>
+                        <span style={{ color: '#64748b' }}> · {timeAgo(lastUpdate.created_at)}</span>
+                        <div style={{ fontSize: 12, color: '#cbd5e1', marginTop: 2 }}>{(lastUpdate.comment_text || '').substring(0, 120)}{(lastUpdate.comment_text || '').length > 120 ? '…' : ''}</div>
+                      </div>
+                    )}
+                    {!lastUpdate && t.updated_by && (
+                      <div style={{ fontSize: 11, color: '#64748b', marginTop: 4 }}>
+                        Last updated by <span style={{ fontWeight: 600, color: '#94a3b8' }}>{getUserName(t.updated_by) || 'Unknown'}</span> · {timeAgo(t.updated_at)}
+                      </div>
+                    )}
                   </div>
-                  <span style={{ fontSize: 10, color: '#475569', flexShrink: 0 }}>{timeAgo(t.created_at)}</span>
+                  <span style={{ fontSize: 11, color: '#475569', flexShrink: 0 }}>{timeAgo(t.created_at)}</span>
                 </div>
-              );
+                );
+              };
 
               const UpdateCard = ({ c }) => {
                 const ticket = c.tickets;
                 if (!ticket) return null;
                 const commenter = (teamUsers || []).find(u => u.id === c.created_by);
                 return (
-                  <div style={{ display: 'flex', gap: 10, padding: '10px 14px', borderBottom: '1px solid rgba(255,255,255,0.04)', cursor: 'pointer', transition: 'background 0.15s' }}
+                  <div style={{ display: 'flex', gap: 10, padding: '12px 14px', borderBottom: '1px solid rgba(255,255,255,0.04)', cursor: 'pointer', transition: 'background 0.15s' }}
                     className="hover:bg-white/5" onClick={() => { setOpenTicketId(ticket.id); setTab('tickets'); }}>
-                    <div style={{ width: 28, height: 28, borderRadius: '50%', background: 'rgba(139,92,246,0.15)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 12, flexShrink: 0 }}>
+                    <div style={{ width: 32, height: 32, borderRadius: '50%', background: 'rgba(139,92,246,0.15)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 14, flexShrink: 0 }}>
                       {c.is_system ? '🤖' : '💬'}
                     </div>
                     <div style={{ flex: 1, minWidth: 0 }}>
-                      <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-                        <span style={{ fontSize: 10, fontWeight: 800, color: '#818cf8', fontFamily: 'monospace' }}>{ticket.ticket_number}</span>
-                        <span style={{ fontSize: 11, fontWeight: 600, color: '#e2e8f0', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{ticket.title}</span>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                        <span style={{ fontSize: 12, fontWeight: 800, color: '#818cf8', fontFamily: 'monospace' }}>{ticket.ticket_number}</span>
+                        <span style={{ fontSize: 14, fontWeight: 700, color: '#e2e8f0', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{ticket.title}</span>
                       </div>
-                      <div style={{ fontSize: 11, color: '#94a3b8', marginTop: 2 }}>
-                        <span style={{ fontWeight: 700, color: '#a78bfa' }}>{commenter?.name || 'System'}</span>: {(c.comment_text || '').substring(0, 100)}{(c.comment_text || '').length > 100 ? '…' : ''}
+                      <div style={{ fontSize: 13, color: '#cbd5e1', marginTop: 4, padding: '4px 8px', background: 'rgba(139,92,246,0.06)', borderRadius: 6, borderLeft: '2px solid #a78bfa' }}>
+                        <span style={{ fontWeight: 700, color: '#a78bfa' }}>{commenter?.name || 'System'}</span>
+                        <span style={{ color: '#64748b' }}> · {timeAgo(c.created_at)}</span>
+                        <div style={{ fontSize: 12, color: '#94a3b8', marginTop: 2 }}>{(c.comment_text || '').substring(0, 150)}{(c.comment_text || '').length > 150 ? '…' : ''}</div>
                       </div>
                     </div>
-                    <span style={{ fontSize: 10, color: '#475569', flexShrink: 0, marginTop: 2 }}>{timeAgo(c.created_at)}</span>
                   </div>
                 );
               };
