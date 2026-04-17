@@ -1,5 +1,5 @@
 'use client';
-import { useState, useMemo, useEffect } from 'react';
+import { useState, useMemo, useEffect, useRef } from 'react';
 import { supabase, dbUpdate, dbDelete } from '../lib/supabase';
 
 const STATUS_COLORS = {New:'#3b82f6',Acknowledged:'#8b5cf6','In Progress':'#f59e0b',Waiting:'#6b7280',Review:'#ec4899',Testing:'#14b8a6',Ready:'#10b981',Closed:'#374151',Reopened:'#ef4444'};
@@ -35,6 +35,7 @@ export default function AdminTab({ user, userProfile, users, isAdmin, customers 
   const [ticketComments, setTicketComments] = useState([]);
   const [dateFrom, setDateFrom] = useState(() => { const d = new Date(); d.setDate(d.getDate() - 30); return d.toISOString().substring(0, 10); });
   const [dateTo, setDateTo] = useState(new Date().toISOString().substring(0, 10));
+  const drillRef = useRef(null);
 
   const myId = userProfile?.id || user?.id;
   const isSuperAdmin = userProfile?.role === 'super_admin';
@@ -204,8 +205,13 @@ export default function AdminTab({ user, userProfile, users, isAdmin, customers 
     {section === 'scorecards' && (<div>
       <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
         {scorecards.map(u => (
-          <div key={u.id} onClick={() => setSelUser(selUser === u.id ? 'all' : u.id)}
-            className={'bg-white rounded-xl p-5 cursor-pointer border-2 transition hover:shadow-lg ' + (selUser === u.id ? 'border-blue-500 shadow-lg' : 'border-slate-200')}>
+          <div key={u.id} onClick={() => {
+              const newDrill = drillUser === u.id ? null : u.id;
+              setDrillUser(newDrill);
+              setSelUser(newDrill || 'all');
+              if (newDrill) setTimeout(() => drillRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' }), 100);
+            }}
+            className={'bg-white rounded-xl p-5 cursor-pointer border-2 transition hover:shadow-lg ' + (drillUser === u.id ? 'border-blue-500 shadow-lg ring-2 ring-blue-200' : 'border-slate-200')}>
             {/* Header */}
             <div className="flex justify-between items-start mb-3">
               <div>
@@ -284,6 +290,125 @@ export default function AdminTab({ user, userProfile, users, isAdmin, customers 
           </div>
         ))}
       </div>
+
+      {/* Login Alerts — who didn't log in yesterday */}
+      {(() => {
+        const yesterday = new Date(Date.now() - 86400000).toISOString().substring(0, 10);
+        const dayName = new Date(yesterday).toLocaleDateString('en-US', { weekday: 'long' });
+        const day = new Date(yesterday).getDay();
+        if (day === 5 || day === 6) return null;
+        const loggedInYesterday = new Set(sessions.filter(s => s.date === yesterday).map(s => s.user_id));
+        const missing = (users || []).filter(u => u.active !== false && !loggedInYesterday.has(u.id) && u.role !== 'super_admin');
+        if (!missing.length) return null;
+        return (
+          <div className="bg-red-50 border border-red-200 rounded-xl p-4 mt-4">
+            <div className="text-sm font-bold text-red-700 mb-2">⚠️ Did Not Login Yesterday ({dayName} {yesterday})</div>
+            <div className="flex flex-wrap gap-2">
+              {missing.map(u => (
+                <span key={u.id} className="px-3 py-1.5 bg-red-100 rounded-lg text-xs font-semibold text-red-800">{u.name}</span>
+              ))}
+            </div>
+          </div>
+        );
+      })()}
+
+      {/* DRILL-DOWN: Activity breakdown for selected user */}
+      {drillUser && (() => {
+        const dUser = (users || []).find(u => u.id === drillUser);
+        if (!dUser) return null;
+        const uLogs = logs.filter(l => l.user_id === drillUser);
+        const todayLogs = uLogs.filter(l => l.log_date === todayStr);
+        const uSessions = sessions.filter(s => s.user_id === drillUser).sort((a, b) => (b.date || '').localeCompare(a.date || ''));
+        const catGroups = {};
+        todayLogs.forEach(l => {
+          const cat = l.log_category || (l.auto_generated ? 'other' : 'manual');
+          if (!catGroups[cat]) catGroups[cat] = [];
+          catGroups[cat].push(l);
+        });
+        const catEntries = Object.entries(catGroups).sort((a, b) => b[1].length - a[1].length);
+        const byDate = {};
+        uLogs.forEach(l => {
+          const d = l.log_date || 'unknown';
+          if (!byDate[d]) byDate[d] = [];
+          byDate[d].push(l);
+        });
+        const dateEntries = Object.entries(byDate).sort((a, b) => b[0].localeCompare(a[0]));
+
+        return (
+          <div ref={drillRef} className="mt-6 bg-white rounded-xl border-2 border-blue-400 p-5">
+            <div className="flex justify-between items-center mb-4">
+              <div>
+                <div className="text-lg font-extrabold text-blue-700">{dUser.name} — Activity Detail</div>
+                <div className="text-[10px] text-slate-500">{dUser.role} · {dUser.email}</div>
+              </div>
+              <button onClick={() => { setDrillUser(null); setSelUser('all'); }} className="px-3 py-1.5 bg-slate-100 rounded-lg text-xs font-semibold">✕ Close</button>
+            </div>
+
+            <div className="mb-4">
+              <div className="text-sm font-bold mb-2">📊 Today ({todayStr}) — {todayLogs.length} entries</div>
+              {catEntries.length === 0 && <div className="text-xs text-slate-400 bg-slate-50 p-3 rounded">No activity today</div>}
+              {catEntries.map(([cat, items]) => (
+                <div key={cat} className="mb-3">
+                  <div className="flex items-center gap-2 mb-1.5">
+                    <span className="text-sm">{CAT_ICONS[cat] || '⚡'}</span>
+                    <span className="text-xs font-bold" style={{ color: CAT_COLORS[cat] || '#64748b' }}>{CAT_LABELS[cat] || cat}</span>
+                    <span className="px-2 py-0.5 rounded-full text-[9px] font-bold text-white" style={{ background: CAT_COLORS[cat] || '#94a3b8' }}>{items.length}</span>
+                  </div>
+                  <div className="ml-6 space-y-1">
+                    {items.map(l => (
+                      <div key={l.id} className="flex justify-between items-start text-[11px] py-1 border-b border-slate-50">
+                        <div className="flex-1 text-slate-700">{resolveIds(l.entry_text)}</div>
+                        <div className="text-[9px] text-slate-400 ml-2 whitespace-nowrap">{l.log_time || new Date(l.created_at).toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' })}</div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              ))}
+            </div>
+
+            <div className="mb-4">
+              <div className="text-sm font-bold mb-2">🕐 Login History (last 7 days)</div>
+              <div className="grid grid-cols-7 gap-1">
+                {Array.from({ length: 7 }, (_, i) => {
+                  const d = new Date(); d.setDate(d.getDate() - (6 - i));
+                  const ds = d.toISOString().substring(0, 10);
+                  const dayLabel = d.toLocaleDateString('en-US', { weekday: 'short' });
+                  const sess = uSessions.find(s => s.date === ds);
+                  return (
+                    <div key={ds} className={'rounded-lg p-2 text-center text-[9px] ' + (sess ? 'bg-emerald-50 border border-emerald-200' : 'bg-red-50 border border-red-200')}>
+                      <div className="font-bold">{dayLabel}</div>
+                      <div className="text-[8px] text-slate-400">{ds.substring(5)}</div>
+                      <div className="mt-0.5">{sess ? '✅' : '❌'}</div>
+                      {sess && <div className="text-[8px] text-emerald-600">{(sess.login_at || '').substring(11, 16)}</div>}
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+
+            <div>
+              <div className="text-sm font-bold mb-2">📋 Full Activity Log ({uLogs.length} entries)</div>
+              <div className="max-h-[400px] overflow-auto rounded-lg border border-slate-200">
+                {dateEntries.map(([date, items]) => (
+                  <div key={date}>
+                    <div className="sticky top-0 bg-slate-100 px-3 py-1.5 text-[10px] font-bold text-slate-600 border-b">{date} — {items.length} entries</div>
+                    {items.sort((a, b) => (b.created_at || '').localeCompare(a.created_at || '')).map(l => {
+                      const cat = l.log_category || (l.auto_generated ? 'other' : 'manual');
+                      return (
+                        <div key={l.id} className="flex items-start gap-2 px-3 py-1.5 border-b border-slate-50 hover:bg-blue-50/30">
+                          <span className="text-[10px] mt-0.5" style={{ color: CAT_COLORS[cat] || '#94a3b8' }}>{CAT_ICONS[cat] || '⚡'}</span>
+                          <div className="flex-1 text-[11px] text-slate-700">{resolveIds(l.entry_text)}</div>
+                          <div className="text-[9px] text-slate-400 whitespace-nowrap">{l.log_time || new Date(l.created_at).toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' })}</div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                ))}
+              </div>
+            </div>
+          </div>
+        );
+      })()}
     </div>)}
 
     {/* ===== SALES PIPELINE ===== */}

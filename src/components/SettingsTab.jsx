@@ -40,7 +40,8 @@ const NOTIF_TYPES = [
   { v: 'reminder', l: 'Team Reminders / تذكيرات الفريق' },
 ];
 
-export default function SettingsTab({ user, users, onReload, isAdmin }) {
+export default function SettingsTab({ user, users, onReload, isAdmin, userProfile }) {
+  const isSuperAdmin = userProfile?.role === 'super_admin';
   const [section, setSection] = useState('roles');
   const [showAddMember, setShowAddMember] = useState(false);
   const [f, setF] = useState({});
@@ -183,6 +184,17 @@ export default function SettingsTab({ user, users, onReload, isAdmin }) {
       var data = await res.json();
       if (data.error) alert('Error: ' + data.error);
       else { onReload(); loadPrefs(); }
+    } catch (err) { alert('Error: ' + err.message); }
+  };
+
+  const handlePermanentDelete = async (userId, userName) => {
+    var confirmation = prompt('Type "DELETE ' + userName + '" to permanently remove this person and all their data. This CANNOT be undone.');
+    if (confirmation !== 'DELETE ' + userName) { if (confirmation !== null) alert('Text did not match. Deletion cancelled.'); return; }
+    try {
+      var res = await fetch('/api/users?id=' + userId + '&permanent=true', { method: 'DELETE' });
+      var data = await res.json();
+      if (data.error) alert('Error: ' + data.error);
+      else { alert(userName + ' has been permanently deleted.'); onReload(); loadPrefs(); }
     } catch (err) { alert('Error: ' + err.message); }
   };
 
@@ -355,6 +367,8 @@ export default function SettingsTab({ user, users, onReload, isAdmin }) {
                           className="px-2 py-1 rounded border border-red-300 text-red-500 text-[10px] font-semibold">Deactivate</button>}
                         {u.active === false && <button onClick={() => handleUpdateUser(u.id, { active: true })}
                           className="px-2 py-1 rounded border border-emerald-300 text-emerald-600 text-[10px] font-semibold">✅ Reactivate</button>}
+                        {isSuperAdmin && <button onClick={() => handlePermanentDelete(u.id, u.name)}
+                          className="px-2 py-1 rounded border border-red-600 bg-red-50 text-red-700 text-[10px] font-bold">🗑 Delete Permanently</button>}
                       </div>
                     </div>
                   )}

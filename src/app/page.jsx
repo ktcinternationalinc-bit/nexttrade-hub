@@ -335,6 +335,7 @@ export default function App() {
   const [showGlobalSearch, setShowGlobalSearch] = useState(false);
   const [showNotifBell, setShowNotifBell] = useState(false);
   const [showFAB, setShowFAB] = useState(false);
+  const [sidebarOpen, setSidebarOpen] = useState(false);
   const [lastLoaded, setLastLoaded] = useState(null);
   const [openTicketId, setOpenTicketId] = useState(null);
   const [egyptBankTxns, setEgyptBankTxns] = useState([]);
@@ -714,6 +715,21 @@ export default function App() {
   const totalCashIn = useMemo(() => filteredTreasury.reduce((a, t) => a + Number(t.cash_in || 0), 0), [filteredTreasury]);
   const totalCashOut = useMemo(() => filteredTreasury.reduce((a, t) => a + Number(t.cash_out || 0), 0), [filteredTreasury]);
   const allTimeNet = useMemo(() => treasury.reduce((a, t) => a + Number(t.cash_in || 0) - Number(t.cash_out || 0), 0), [treasury]);
+
+  // Running balance for each treasury entry (chronological: oldest → newest)
+  const treasuryBalanceMap = useMemo(() => {
+    const sorted = [...treasury].sort((a, b) => {
+      const d = (a.transaction_date || '').localeCompare(b.transaction_date || '');
+      return d !== 0 ? d : (a.id || '').localeCompare(b.id || '');
+    });
+    const map = {};
+    let running = 0;
+    sorted.forEach(t => {
+      running += Number(t.cash_in || 0) - Number(t.cash_out || 0);
+      map[t.id] = running;
+    });
+    return map;
+  }, [treasury]);
 
   // ==========================================
   // AUTO-MATCH BANK PLACEHOLDERS to imported bank transactions
@@ -1752,10 +1768,13 @@ export default function App() {
     <ErrorBoundary label="KTC Hub encountered an error" showDetails>
     <div className="min-h-screen" style={{background:'var(--bg-primary)'}}>
       {/* Header */}
-      <div style={{background:'linear-gradient(135deg, #0f172a 0%, #1e1b4b 50%, #0f172a 100%)', borderBottom:'1px solid rgba(56,189,248,0.15)'}} className="px-5 py-4 flex justify-between items-center">
-        <div>
-          <h1 className="text-2xl font-black tracking-tight" style={{background:'linear-gradient(135deg, #38bdf8, #818cf8, #a78bfa)',WebkitBackgroundClip:'text',WebkitTextFillColor:'transparent'}}>KANDIL KTC EGYPT HUB</h1>
-          <p style={{color:'rgba(148,163,184,0.5)'}} className="text-xs font-medium tracking-widest uppercase">{lang === 'en' ? 'KTC Trading Operations' : 'KTC — لوحة التحكم المالية'}</p>
+      <div style={{background:'linear-gradient(135deg, #0f172a 0%, #1e1b4b 50%, #0f172a 100%)', borderBottom:'1px solid rgba(56,189,248,0.15)'}} className="px-5 py-3 flex justify-between items-center sticky top-0 z-[101]">
+        <div className="flex items-center gap-3">
+          <button onClick={() => setSidebarOpen(!sidebarOpen)} className="lg:hidden text-white/70 hover:text-white text-xl p-1">☰</button>
+          <div>
+            <h1 className="text-xl sm:text-2xl font-black tracking-tight" style={{background:'linear-gradient(135deg, #38bdf8, #818cf8, #a78bfa)',WebkitBackgroundClip:'text',WebkitTextFillColor:'transparent'}}>KANDIL KTC EGYPT HUB</h1>
+            <p style={{color:'rgba(148,163,184,0.5)'}} className="text-[10px] font-medium tracking-widest uppercase hidden sm:block">{lang === 'en' ? 'KTC Trading Operations' : 'KTC — لوحة التحكم المالية'}</p>
+          </div>
         </div>
         <div className="flex items-center gap-2">
           {/* Treasury Net — treasury access only */}
@@ -1840,7 +1859,7 @@ export default function App() {
               </div>
             );
           })()}
-          <button onClick={handleSignOut} style={{background:'rgba(255,255,255,0.06)', border:'1px solid rgba(255,255,255,0.1)', color:'rgba(255,255,255,0.7)'}} className="px-3 py-1.5 text-xs rounded-lg font-medium hover:bg-white/10 transition">
+          <button onClick={handleSignOut} style={{background:'rgba(255,255,255,0.06)', border:'1px solid rgba(255,255,255,0.1)', color:'rgba(255,255,255,0.7)'}} className="px-3 py-1.5 text-xs rounded-lg font-medium hover:bg-white/10 transition hidden sm:block">
             Sign Out
           </button>
         </div>
@@ -1909,19 +1928,50 @@ export default function App() {
         </div>
       )}
 
-      {/* Tab Navigation */}
-      <div className="tab-nav px-1 overflow-x-auto flex" style={{background:'linear-gradient(to bottom, #ffffff, #f8fafc)'}}>
-        {visibleTabs.map(t => (
-          <button key={t.id} onClick={() => navigate(t.id)}
-            className={`px-3 py-2.5 text-xs font-semibold whitespace-nowrap border-b-2 transition ${
-              tab === t.id ? 'text-blue-600 border-blue-600 bg-blue-50/50' : 'text-slate-400 border-transparent hover:text-slate-600 hover:bg-slate-50'
-            }`}
-          >{t.icon} {lang === 'en' ? t.label.split(' / ')[0] : t.label}</button>
-        ))}
-      </div>
+      {/* Mobile sidebar overlay */}
+      {sidebarOpen && <div className="fixed inset-0 bg-black/50 z-[99] lg:hidden" onClick={() => setSidebarOpen(false)} />}
 
-      {/* Content */}
-      <div className="p-4 max-w-7xl mx-auto">
+      <div className="flex flex-1" style={{ minHeight: 'calc(100vh - 60px)' }}>
+        {/* Sidebar */}
+        <aside className={'fixed lg:sticky top-0 lg:top-[60px] left-0 z-[100] lg:z-10 h-full lg:h-[calc(100vh-60px)] overflow-y-auto transition-transform duration-200 ' + (sidebarOpen ? 'translate-x-0' : '-translate-x-full lg:translate-x-0')}
+          style={{ width: 210, background: 'linear-gradient(180deg, #0f172a 0%, #1e1b4b 100%)', borderRight: '1px solid rgba(56,189,248,0.1)' }}>
+          <div className="py-3">
+            {[
+              { group: 'Overview', items: ['dashboard'] },
+              { group: 'Finance', items: ['sales', 'treasury', 'checks', 'debts', 'egyptbank', 'bank', 'quotes', 'reports'] },
+              { group: 'Operations', items: ['warehouse', 'inventory', 'customs', 'shipping'] },
+              { group: 'People', items: ['customers', 'crm', 'tickets', 'calendar', 'comms', 'dailylog'] },
+              { group: 'System', items: ['admin', 'ai', 'settings', 'import'] },
+            ].map(g => {
+              const groupTabs = g.items.map(id => visibleTabs.find(t => t.id === id)).filter(Boolean);
+              if (!groupTabs.length) return null;
+              return (
+                <div key={g.group} className="mb-2">
+                  <div className="px-4 py-1.5 text-[9px] font-bold uppercase tracking-widest" style={{ color: 'rgba(148,163,184,0.4)' }}>{g.group}</div>
+                  {groupTabs.map(t => (
+                    <button key={t.id} onClick={() => { navigate(t.id); setSidebarOpen(false); }}
+                      className={'w-full text-left px-4 py-2 text-xs font-medium flex items-center gap-2 transition-colors ' + (tab === t.id
+                        ? 'text-white bg-white/10 border-r-2 border-blue-400'
+                        : 'text-slate-400 hover:text-white hover:bg-white/5'
+                      )}>
+                      <span className="text-sm">{t.icon}</span>
+                      <span className="truncate">{lang === 'en' ? t.label.split(' / ')[0] : t.label.split(' / ')[1] || t.label.split(' / ')[0]}</span>
+                    </button>
+                  ))}
+                </div>
+              );
+            })}
+          </div>
+          {/* Sign Out at bottom of sidebar */}
+          <div className="px-4 py-3 border-t" style={{ borderColor: 'rgba(255,255,255,0.06)' }}>
+            <button onClick={handleSignOut} className="w-full px-3 py-2 rounded-lg text-xs font-medium text-slate-400 hover:text-white hover:bg-white/5 transition text-left flex items-center gap-2">
+              🚪 <span>{lang === 'en' ? 'Sign Out' : 'تسجيل خروج'}</span>
+            </button>
+          </div>
+        </aside>
+
+        {/* Content */}
+        <main className="flex-1 p-4 max-w-7xl mx-auto lg:ml-0" style={{ minWidth: 0 }}>
 
         {/* ==========================================
             INVOICE DETAIL MODAL
@@ -3571,19 +3621,35 @@ export default function App() {
         {showAddTreasury && (
           <Modal onClose={() => { setShowAddTreasury(false); setFormData({}); }} title="New Transaction / معاملة جديدة">
             <div className="grid grid-cols-2 gap-3">
-              <div>
-                <label className="text-xs font-semibold text-slate-600">Type / النوع</label>
-                <select value={formData.type || 'in'}
-                  onChange={e => setFormData({ ...formData, type: e.target.value, bankAccountId: '' })}
-                  className="w-full px-3 py-2 rounded-lg border border-slate-200 text-sm">
-                  <option value="in">💵 Cash In / وارد</option>
-                  <option value="out">💸 Cash Out / منصرف</option>
-                  <option value="bank_in">🏦 Bank Payment Received (placeholder)</option>
-                  <option value="bank_out">🏦 Bank Payment Sent (placeholder)</option>
-                </select>
+              <div className="col-span-2">
+                <label className="text-xs font-semibold text-slate-600 block mb-2">Type / النوع</label>
+                <div className="grid grid-cols-2 md:grid-cols-4 gap-2">
+                  {[
+                    {v:'in', l:'💵 Cash In', color:'emerald', desc:'Actual cash received'},
+                    {v:'out', l:'💸 Cash Out', color:'red', desc:'Actual cash paid'},
+                    {v:'bank_in', l:'🏦 Bank In (placeholder)', color:'indigo', desc:"Won't affect net — auto-matches bank import"},
+                    {v:'bank_out', l:'🏦 Bank Out (placeholder)', color:'indigo', desc:"Won't affect net — auto-matches bank import"},
+                  ].map(opt => {
+                    const selected = (formData.type || 'in') === opt.v;
+                    const colorMap = {
+                      emerald: selected ? 'bg-emerald-500 text-white border-emerald-500' : 'bg-white text-slate-600 border-slate-200 hover:border-emerald-300',
+                      red: selected ? 'bg-red-500 text-white border-red-500' : 'bg-white text-slate-600 border-slate-200 hover:border-red-300',
+                      indigo: selected ? 'bg-indigo-500 text-white border-indigo-500' : 'bg-white text-slate-600 border-slate-200 hover:border-indigo-300',
+                    };
+                    return (
+                      <label key={opt.v} className={'cursor-pointer rounded-lg border-2 p-2.5 transition ' + colorMap[opt.color]}>
+                        <input type="radio" name="txn-type" value={opt.v} checked={selected}
+                          onChange={e => setFormData({ ...formData, type: e.target.value, bankAccountId: '' })}
+                          className="hidden" />
+                        <div className="text-xs font-bold">{opt.l}</div>
+                        <div className={'text-[9px] mt-0.5 ' + (selected ? 'text-white/80' : 'text-slate-400')}>{opt.desc}</div>
+                      </label>
+                    );
+                  })}
+                </div>
                 {(formData.type === 'bank_in' || formData.type === 'bank_out') && (
-                  <div className="mt-2 p-2 bg-indigo-50 border border-indigo-200 rounded text-[10px] text-indigo-800">
-                    ℹ️ Placeholder: won't affect cash net. Auto-matches to your next Egypt Bank import by amount + date + order #.
+                  <div className="mt-2 p-2 bg-indigo-50 border border-indigo-200 rounded text-[11px] text-indigo-800">
+                    ℹ️ <b>Placeholder mode:</b> This transaction will NOT affect cash net, credit, or debit. When you next import from Egypt Bank, the system auto-matches this entry using: same bank account, amount within 1%, date within 2 days, order # in description. Once matched, it converts to a real entry and links to the invoice.
                   </div>
                 )}
               </div>
@@ -3592,7 +3658,7 @@ export default function App() {
                 <DatePickerSelect value={formData.date || today()} onChange={v => setFormData({ ...formData, date: v })} />
               </div>
               <div>
-                <label className="text-xs font-semibold text-slate-600">Amount / المبلغ</label>
+                <label className="text-xs font-semibold text-slate-600">{(formData.type === 'bank_in' || formData.type === 'bank_out') ? 'Expected Amount / المبلغ المتوقع' : 'Amount / المبلغ'}</label>
                 <input type="number" value={formData.amount || ''}
                   onChange={e => setFormData({ ...formData, amount: e.target.value })}
                   className="w-full px-3 py-2 rounded-lg border border-slate-200 text-sm" />
@@ -5702,6 +5768,7 @@ export default function App() {
                     <th className="px-2 py-2 text-xs" style={{direction:'rtl'}}>Description</th>
                     <th className="px-2 py-2 text-xs text-right">In</th>
                     <th className="px-2 py-2 text-xs text-right">Out</th>
+                    <th className="px-2 py-2 text-xs text-right">Balance</th>
                     <th className="px-2 py-2 text-xs"></th>
                   </tr></thead>
                   <tbody>
@@ -5737,6 +5804,9 @@ export default function App() {
                           {Number(txn.cash_out) > 0 && fE(txn.cash_out)}
                           {Number(txn.usd_out) > 0 && <div>${Number(txn.usd_out).toLocaleString()} <span className="text-[8px] text-amber-600">USD</span></div>}
                           {Number(txn.foreign_amount || 0) > 0 && txn.foreign_direction === 'out' && <div>{Number(txn.foreign_amount).toLocaleString()} <span className="text-[8px] text-amber-600">{txn.foreign_currency}</span></div>}
+                        </td>
+                        <td className="px-2 py-1.5 text-[10px] text-right font-bold whitespace-nowrap" style={{color: (treasuryBalanceMap[txn.id] || 0) >= 0 ? '#059669' : '#dc2626'}}>
+                          {txn.is_bank_placeholder ? <span className="text-indigo-400">—</span> : fE(treasuryBalanceMap[txn.id] || 0)}
                         </td>
                         <td className="px-2 py-1.5 text-[10px] whitespace-nowrap">
                           <div className="flex gap-1 items-center">
@@ -7410,7 +7480,7 @@ export default function App() {
             SETTINGS TAB
         ========================================== */}
         {tab === 'settings' && (
-          <SettingsTab user={user} users={teamUsers} onReload={loadAllData} isAdmin={isAdmin} />
+          <SettingsTab user={user} users={teamUsers} onReload={loadAllData} isAdmin={isAdmin} userProfile={userProfile} />
         )}
 
 
@@ -7529,7 +7599,8 @@ export default function App() {
           </div>
         )}
 
-      </div>
+      </main>{/* end content */}
+      </div>{/* end flex sidebar+content */}
 
       {/* Quick Add FAB */}
       <div className="fixed bottom-20 right-4 z-40 fab-wrap">
@@ -7557,7 +7628,7 @@ export default function App() {
 
       {/* Data Freshness Indicator */}
       {lastLoaded && (
-        <div className="fixed bottom-4 left-4 z-30 flex items-center gap-2">
+        <div className="fixed bottom-4 left-4 lg:left-[220px] z-30 flex items-center gap-2">
           <button onClick={() => loadAllData()} className="px-2.5 py-1 bg-white/90 border border-slate-200 rounded-lg shadow-sm text-[10px] text-slate-500 hover:bg-slate-50 transition flex items-center gap-1.5">
             <span className="w-1.5 h-1.5 rounded-full bg-green-400" />
             Synced {Math.floor((Date.now() - lastLoaded.getTime()) / 60000)}m ago
