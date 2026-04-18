@@ -12,7 +12,7 @@ var PERSONALITIES = [
 
 export { PERSONALITIES };
 
-export default function AIGreeter({ user, userProfile, users, tickets, invoices, treasury, checks, lang, personality, greeterLang, onToggle, toast, enabled }) {
+export default function AIGreeter({ user, userProfile, users, tickets, invoices, treasury, checks, loginHistory, lang, personality, greeterLang, onToggle, toast, enabled }) {
   var [messages, setMessages] = useState([]);
   var [input, setInput] = useState('');
   var [loading, setLoading] = useState(false);
@@ -28,7 +28,8 @@ export default function AIGreeter({ user, userProfile, users, tickets, invoices,
   var recognitionRef = useRef(null);
 
   var myId = userProfile?.id || user?.id;
-  var myName = userProfile?.name || 'there';
+  var fullName = userProfile?.name || 'there';
+  var firstName = fullName.split(' ')[0] || fullName;
   var useLang = greeterLang || lang || 'en';
   var persona = PERSONALITIES.find(function(p) { return p.id === personality; }) || PERSONALITIES[1];
 
@@ -36,30 +37,88 @@ export default function AIGreeter({ user, userProfile, users, tickets, invoices,
     var todayStr = new Date().toISOString().substring(0, 10);
     var hour = new Date().getHours();
     var timeGreeting = hour < 12 ? 'morning' : hour < 17 ? 'afternoon' : 'evening';
+    
+    // Login history analysis
+    var loginSessions = loginHistory || [];
+    var todayLogins = loginSessions.filter(function(s) { return s.date === todayStr; });
+    var visitNumberToday = todayLogins.length;
+    var previousDays = loginSessions.filter(function(s) { return s.date !== todayStr; });
+    var lastLoginDate = previousDays.length > 0 ? previousDays[0].date : null;
+    
+    // Calculate days since last login
+    var daysSinceLastLogin = 0;
+    if (lastLoginDate) {
+      var diff = new Date(todayStr) - new Date(lastLoginDate);
+      daysSinceLastLogin = Math.floor(diff / 86400000);
+    }
+    
+    // Login streak
+    var streak = 1;
+    var allDates = loginSessions.map(function(s) { return s.date; }).filter(function(v, i, a) { return a.indexOf(v) === i; }).sort().reverse();
+    for (var si = 1; si < allDates.length; si++) {
+      var prev = new Date(allDates[si - 1]);
+      var curr = new Date(allDates[si]);
+      prev.setDate(prev.getDate() - 1);
+      if (prev.toISOString().substring(0, 10) === allDates[si]) { streak++; } else { break; }
+    }
+
+    // Tickets
     var myTickets = (tickets || []).filter(function(t) { return t.assigned_to === myId && t.status !== 'Closed'; });
     var overdueTickets = myTickets.filter(function(t) { return t.due_date && t.due_date < todayStr; });
     var newTickets = myTickets.filter(function(t) { return t.status === 'New'; });
     var overdueInvoices = (invoices || []).filter(function(i) { return Number(i.outstanding || 0) > 0 && i.invoice_date && (Date.now() - new Date(i.invoice_date).getTime()) > 30 * 86400000; });
     var pendingChecks = (checks || []).filter(function(c) { return c.status === 'pending' && c.due_date && c.due_date <= todayStr; });
+    
+    // Treasury summary
+    var totalIn = (treasury || []).reduce(function(a, t) { return a + Number(t.cash_in || 0); }, 0);
+    var totalOut = (treasury || []).reduce(function(a, t) { return a + Number(t.cash_out || 0); }, 0);
+    var net = totalIn - totalOut;
 
-    var ctx = 'BUSINESS CONTEXT:\n';
-    ctx += 'User: ' + myName + ' (' + (userProfile?.role || 'team') + ')\n';
-    ctx += 'Good ' + timeGreeting + ', ' + todayStr + '\n';
+    var ctx = 'USER CONTEXT:\n';
+    ctx += 'Full name: ' + fullName + '\n';
+    ctx += 'First name: ' + firstName + '\n';
+    ctx += 'Role: ' + (userProfile?.role || 'team member') + '\n';
+    ctx += 'Time: Good ' + timeGreeting + ', ' + todayStr + '\n';
+    ctx += '\nLOGIN HISTORY:\n';
+    if (visitNumberToday <= 1) {
+      ctx += 'This is ' + firstName + "'s FIRST login today.\n";
+    } else {
+      ctx += 'This is ' + firstName + "'s visit #" + visitNumberToday + ' today.\n';
+    }
+    if (daysSinceLastLogin === 0 && !lastLoginDate) {
+      ctx += 'This appears to be their very first time using the hub.\n';
+    } else if (daysSinceLastLogin === 1) {
+      ctx += firstName + ' was here yesterday too. Login streak: ' + streak + ' days.\n';
+    } else if (daysSinceLastLogin === 2) {
+      ctx += firstName + ' missed yesterday. Last login was 2 days ago.\n';
+    } else if (daysSinceLastLogin > 2 && lastLoginDate) {
+      ctx += firstName + ' has been away for ' + daysSinceLastLogin + ' days! Last login: ' + lastLoginDate + '. Welcome them back warmly.\n';
+    } else {
+      ctx += 'Login streak: ' + streak + ' day(s).\n';
+    }
+    ctx += '\nBUSINESS STATUS:\n';
     ctx += 'Open tickets: ' + myTickets.length;
     if (newTickets.length) ctx += ' (' + newTickets.length + ' NEW)';
-    if (overdueTickets.length) ctx += ' (' + overdueTickets.length + ' OVERDUE: ' + overdueTickets.map(function(t) { return t.ticket_number; }).join(', ') + ')';
+    if (overdueTickets.length) ctx += ' (' + overdueTickets.length + ' OVERDUE: ' + overdueTickets.map(function(t) { return t.ticket_number || t.title; }).join(', ') + ')';
     ctx += '\n';
     if (overdueInvoices.length) ctx += 'Overdue invoices: ' + overdueInvoices.length + ', EGP ' + overdueInvoices.reduce(function(a, i) { return a + Number(i.outstanding || 0); }, 0).toLocaleString() + '\n';
-    if (pendingChecks.length) ctx += 'Checks due: ' + pendingChecks.length + ', EGP ' + pendingChecks.reduce(function(a, c) { return a + Number(c.amount || 0); }, 0).toLocaleString() + '\n';
-    if (!myTickets.length && !overdueInvoices.length && !pendingChecks.length) ctx += 'No urgent items.\n';
+    if (pendingChecks.length) ctx += 'Checks due today: ' + pendingChecks.length + ', EGP ' + pendingChecks.reduce(function(a, c) { return a + Number(c.amount || 0); }, 0).toLocaleString() + '\n';
+    ctx += 'Treasury net: EGP ' + net.toLocaleString() + '\n';
+    if (!myTickets.length && !overdueInvoices.length && !pendingChecks.length) ctx += 'No urgent items — all clear!\n';
     return ctx;
-  }, [myId, myName, userProfile, tickets, invoices, checks]);
+  }, [myId, firstName, fullName, userProfile, tickets, invoices, treasury, checks, loginHistory]);
 
   var sysPrompt = persona.prompt + '\n'
-    + 'You work at KTC Trading Company (Egyptian/US import-export).\n'
+    + 'You work at KTC Trading Company (Kandil Trading - Egyptian/US import-export, textiles, chemicals, leather).\n'
     + 'Language: ' + (useLang === 'ar' ? 'Arabic (Egyptian dialect)' : 'English') + ' ONLY.\n'
-    + 'Keep responses SHORT: 2-4 sentences. Conversational, not robotic.\n'
-    + 'No markdown. Plain text only. Address user by name sometimes.\n';
+    + 'CRITICAL RULES:\n'
+    + '- ALWAYS address the user by their FIRST NAME (' + firstName + ').\n'
+    + '- Build a personal relationship. Be warm. Remember you are their dedicated AI assistant.\n'
+    + '- Use the LOGIN HISTORY to personalize: if first visit today say so naturally. If 2nd+ visit, acknowledge it. If they missed days, welcome them back.\n'
+    + '- NEVER say "this is the first time you are on the hub" unless login history confirms it is truly their first ever visit.\n'
+    + '- Keep responses SHORT: 2-4 sentences. Conversational, not robotic.\n'
+    + '- No markdown. Plain text only.\n'
+    + '- You have access to their tickets, invoices, treasury data, and checks. Answer business questions if asked.\n';
 
   // Auto-greet on first load
   useEffect(function() {
@@ -152,14 +211,14 @@ export default function AIGreeter({ user, userProfile, users, tickets, invoices,
     setLoading(true);
     try {
       var hist = msgs.map(function(m) { return { role: m.role === 'user' ? 'user' : 'assistant', text: m.text }; });
-      var q = isGreeting ? ctx + '\nGreet ' + myName + ' and tell them what needs attention today.' : (userText || '');
+      var q = isGreeting ? ctx + '\nGreet ' + firstName + ' personally based on the LOGIN HISTORY above. Tell them what needs attention. Be natural, warm, and personal.' : (userText || '');
       var res = await fetch('/api/ask', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ question: q, mode: 'greeter', systemOverride: sysPrompt + '\n' + ctx, history: isGreeting ? [] : hist.slice(-8) })
       });
       var data = await res.json();
       var aiText = data.answer || '';
-      if (!aiText) aiText = useLang === 'ar' ? 'صباح الخير ' + myName + '!' : 'Hey ' + myName + '!';
+      if (!aiText) aiText = useLang === 'ar' ? 'صباح الخير ' + firstName + '!' : 'Hey ' + firstName + '!';
       var final = [].concat(msgs, [{ role: 'assistant', text: aiText }]);
       setMessages(final);
       doType(aiText, function() { doSpeak(aiText); });

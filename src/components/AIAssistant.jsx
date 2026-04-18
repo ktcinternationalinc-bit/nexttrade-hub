@@ -61,92 +61,104 @@ export default function AIAssistant({ user, userProfile, users, customers }) {
       recognition.interimResults = true;
       recognition.lang = 'en-US';
       
+      let lastFinalText = '';
+      let lastFinalTime = 0;
+      
       recognition.onresult = (event) => {
-        // Build full transcript from all results
         let finalText = '';
         let interimText = '';
-        let avgConfidence = 0;
-        let resultCount = 0;
+        let hasFinal = false;
+        
         for (let i = 0; i < event.results.length; i++) {
           if (event.results[i].isFinal) {
             finalText += event.results[i][0].transcript;
-            avgConfidence += event.results[i][0].confidence || 0;
-            resultCount++;
+            hasFinal = true;
           } else {
             interimText += event.results[i][0].transcript;
           }
         }
-        if (resultCount > 0) avgConfidence = avgConfidence / resultCount;
         
         const displayText = (finalText + interimText).trim();
+        if (!displayText) return;
+        
         const lower = displayText.toLowerCase().replace(/[.,!?]/g, '').trim();
         const words = lower.split(/\s+/).filter(w => w.length > 1);
         const wordCount = words.length;
         
-        // Noise filter: skip common noise artifacts, very low confidence, or empty
-        const NOISE_WORDS = ['the', 'a', 'uh', 'um', 'ah', 'oh', 'hmm', 'hm', 'eh', 'er', 'like', 'yeah', 'so', 'and'];
+        // Noise filter
+        const NOISE_WORDS = ['the', 'a', 'uh', 'um', 'ah', 'oh', 'hmm', 'hm', 'eh', 'er', 'like', 'yeah', 'so', 'and', 'but', 'is', 'it'];
         const isNoise = wordCount === 0 || 
           (wordCount === 1 && NOISE_WORDS.includes(words[0])) ||
-          (wordCount <= 2 && avgConfidence > 0 && avgConfidence < 0.4) ||
           (displayText.length < 3);
         
-        // If AI is speaking, stop immediately when user starts talking
+        // ── IF AI IS SPEAKING ──
         if (speakingRef.current) {
-          if (lower === 'break' || lower === 'stop') {
-            // Hard interrupt — stop AI, clear input, stay listening
-            if (audioRef.current) { audioRef.current.pause(); audioRef.current = null; }
-            if ('speechSynthesis' in window) window.speechSynthesis.cancel();
-            speakingRef.current = false; setSpeaking(false);
+          // "break"/"stop" command
+          if (hasFinal && (lower === 'break' || lower === 'stop')) {
+            stopSpeaking();
             setInput('');
             if (silenceTimerRef.current) clearTimeout(silenceTimerRef.current);
             if (autoSendRef.current) clearTimeout(autoSendRef.current);
-            try { recognition.stop(); } catch(e) { console.warn(e); }
-            setTimeout(() => { if (conversationModeRef.current) { try { recognition.start(); setListening(true); } catch(e) { console.warn(e); } } }, 500);
+            lastFinalText = '';
+            try { recognition.stop(); } catch(e) {}
+            setTimeout(() => { if (conversationModeRef.current) { try { recognition.start(); setListening(true); } catch(e) {} } }, 300);
             return;
           }
-          // Any real word (not pure noise) — stop AI and listen
-          if (wordCount >= 1 && !isNoise && (avgConfidence === 0 || avgConfidence > 0.45)) {
-            if (audioRef.current) { audioRef.current.pause(); audioRef.current = null; }
-            if ('speechSynthesis' in window) window.speechSynthesis.cancel();
-            speakingRef.current = false; setSpeaking(false);
-            // Fall through to normal processing below
+          // 2+ real words in a FINAL result → user is talking, stop AI
+          if (hasFinal && wordCount >= 2 && !isNoise) {
+            stopSpeaking();
+            lastFinalText = displayText;
+            lastFinalTime = Date.now();
+            setInput(displayText);
+            // Don't return — fall through to set silence timer
           } else {
-            // Pure noise — ignore, let AI keep talking
+            // Interim result or noise while AI speaks — ignore completely
             return;
           }
         }
         
-        // Skip pure noise when not speaking either
-        if (isNoise && !speakingRef.current) return;
+        // ── NORMAL LISTENING ──
+        if (isNoise && !hasFinal) return; // skip interim noise
         
         setInput(displayText);
         
-        // "Break" command when not speaking
-        if (lower === 'break' || lower === 'stop') {
+        // "break"/"stop" command
+        if (hasFinal && (lower === 'break' || lower === 'stop')) {
           setInput('');
           if (silenceTimerRef.current) clearTimeout(silenceTimerRef.current);
           if (autoSendRef.current) clearTimeout(autoSendRef.current);
-          try { recognition.stop(); } catch(e) { console.warn(e); }
-          setTimeout(() => { if (conversationModeRef.current) { try { recognition.start(); setListening(true); } catch(e) { console.warn(e); } } }, 500);
+          lastFinalText = '';
+          try { recognition.stop(); } catch(e) {}
+          setTimeout(() => { if (conversationModeRef.current) { try { recognition.start(); setListening(true); } catch(e) {} } }, 300);
           return;
         }
         
-        // Reset silence timer on EVERY result
-        if (silenceTimerRef.current) clearTimeout(silenceTimerRef.current);
-        if (autoSendRef.current) clearTimeout(autoSendRef.current);
-        
-        // Only send after 2 seconds of silence (no human speech detected)
-        silenceTimerRef.current = setTimeout(() => {
-          const textToSend = displayText.trim();
-          if (!textToSend) return;
-          try { recognition.stop(); } catch(e) { console.warn(e); }
-          pendingTextRef.current = textToSend;
-          setInput('');
-          autoSendRef.current = setTimeout(() => {
-            const btn = document.getElementById('ai-send-btn-hidden');
-            if (btn) btn.click();
-          }, 100);
-        }, 2000);
+        // ── SILENCE TIMER: only reset on FINAL results ──
+        // Interim results do NOT reset the timer — this is the key fix
+        if (hasFinal && displayText !== lastFinalText) {
+          lastFinalText = displayText;
+          lastFinalTime = Date.now();
+          
+          // Clear any existing timer
+          if (silenceTimerRef.current) clearTimeout(silenceTimerRef.current);
+          if (autoSendRef.current) clearTimeout(autoSendRef.current);
+          
+          // Wait 3 seconds of silence after the last FINAL result
+          silenceTimerRef.current = setTimeout(() => {
+            const textToSend = displayText.trim();
+            if (!textToSend || textToSend.length < 3) return;
+            // Double-check we haven't gotten new speech
+            if (Date.now() - lastFinalTime < 2500) return;
+            try { recognition.stop(); } catch(e) {}
+            pendingTextRef.current = textToSend;
+            setInput('');
+            lastFinalText = '';
+            autoSendRef.current = setTimeout(() => {
+              const btn = document.getElementById('ai-send-btn-hidden');
+              if (btn) btn.click();
+            }, 100);
+          }, 3000);
+        }
       };
       recognition.onerror = (e) => { 
         if (e.error !== 'aborted' && e.error !== 'no-speech') { setListening(false); }
@@ -157,9 +169,9 @@ export default function AIAssistant({ user, userProfile, users, customers }) {
         if (conversationModeRef.current && !speakingRef.current) {
           setTimeout(() => {
             if (conversationModeRef.current && !speakingRef.current) {
-              try { recognition.start(); setListening(true); } catch(e) { console.warn(e); }
+              try { recognition.start(); setListening(true); } catch(e) {}
             }
-          }, 500);
+          }, 300);
         } else if (!conversationModeRef.current) {
           setListening(false); 
         }
@@ -184,28 +196,40 @@ export default function AIAssistant({ user, userProfile, users, customers }) {
     if (!recognitionRef.current) return;
     if (recording) { stopRecording(); return; }
 
-    // ALWAYS stop any speaking first
+    const wasSpeaking = speakingRef.current;
+    
+    // ALWAYS kill any speech immediately
     stopSpeaking();
+    if (silenceTimerRef.current) clearTimeout(silenceTimerRef.current);
+    if (autoSendRef.current) clearTimeout(autoSendRef.current);
+
+    if (wasSpeaking) {
+      // AI was talking → stop it and START listening
+      setInput('');
+      try { recognitionRef.current.stop(); } catch(e) {}
+      conversationModeRef.current = true;
+      setTimeout(() => {
+        try { recognitionRef.current.start(); setListening(true); } catch(e) {}
+      }, 300);
+      return;
+    }
 
     if (listening || conversationModeRef.current) {
-      // Currently listening or in conversation — stop everything
-      try { recognitionRef.current.stop(); } catch(e) { console.warn(e); }
+      // Currently listening → stop everything
+      try { recognitionRef.current.stop(); } catch(e) {}
       setListening(false);
       conversationModeRef.current = false;
       if (maxTimeoutRef.current) clearTimeout(maxTimeoutRef.current);
-      if (silenceTimerRef.current) clearTimeout(silenceTimerRef.current);
-      if (autoSendRef.current) clearTimeout(autoSendRef.current);
     } else {
-      // Not listening — start conversation mode
+      // Not listening, not speaking → start conversation mode
       setInput('');
       conversationModeRef.current = true;
-      try { recognitionRef.current.start(); } catch(e) { console.warn(e); }
+      try { recognitionRef.current.start(); } catch(e) {}
       setListening(true);
-      // 2 minute max timeout
       if (maxTimeoutRef.current) clearTimeout(maxTimeoutRef.current);
       maxTimeoutRef.current = setTimeout(() => {
         conversationModeRef.current = false;
-        try { recognitionRef.current.stop(); } catch(e) { console.warn(e); }
+        try { recognitionRef.current.stop(); } catch(e) {}
         setListening(false);
         stopSpeaking();
       }, 120000);
@@ -908,7 +932,7 @@ ${today}`;
           <div className="text-center mt-2 py-2">
             <div className="text-xs font-bold animate-pulse" style={{color:'#f87171'}}>🔴 Listening — speak naturally...</div>
             <div className="text-[10px] mt-1" style={{color:'var(--text-muted)'}}>
-              Sends after 2s of silence • Say "Break" to stop • Tap ⏹️ to end
+              Sends after 3s of silence • Say "Break" to stop • Tap ⏹️ to end
               <button onClick={() => { toggleVoice(); }} className="ml-2 px-2 py-0.5 rounded text-[10px] font-bold" style={{background:'rgba(248,113,113,0.2)', color:'#f87171'}}>End Session</button>
             </div>
           </div>

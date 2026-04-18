@@ -4291,7 +4291,7 @@ export default function App() {
                 <AIGreeter
                   user={user} userProfile={userProfile} users={teamUsers}
                   tickets={dashTickets} invoices={invoices} treasury={treasury}
-                  checks={pendingChecks}
+                  checks={pendingChecks} loginHistory={lastLoginInfo}
                   lang={lang} personality={greeterSettings.personality}
                   greeterLang={greeterSettings.language}
                   enabled={greeterSettings.enabled}
