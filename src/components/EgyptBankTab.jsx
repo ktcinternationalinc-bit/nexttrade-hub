@@ -515,14 +515,55 @@ export default function EgyptBankTab({ toast, user, userProfile, isAdmin, invoic
     const txn = transactions.find(t => t.id === txnId);
     const inv = (invoices || []).find(i => i.id === invoiceId);
     await dbUpdate('egypt_bank_transactions', txnId, { matched_invoice_id: invoiceId, matched_at: new Date().toISOString(), matched_by: myId }, myId);
-    // Update invoice total_collected
+    
     if (inv && txn && txn.amount > 0) {
-      const newCollected = Number(inv.total_collected || 0) + Number(txn.amount);
-      await dbUpdate('invoices', invoiceId, { total_collected: newCollected }, myId);
+      const bankAmt = Number(txn.amount);
+      
+      // Check if a pending check exists for same order + similar amount → auto-collect it
+      try {
+        const { data: pendingChecks } = await supabase.from('checks')
+          .select('*')
+          .eq('invoice_id', invoiceId)
+          .eq('status', 'pending');
+        
+        const matchingCheck = (pendingChecks || []).find(c => 
+          Math.abs(Number(c.amount) - bankAmt) < 1 // Exact match — checks must be the exact amount
+        );
+        
+        if (matchingCheck) {
+          // Auto-collect the check — the bank confirmed it
+          await dbUpdate('checks', matchingCheck.id, {
+            status: 'collected',
+            collection_date: txn.date || new Date().toISOString().substring(0, 10),
+          }, myId);
+          // Update invoice collected (check wasn't counted before, bank confirms it now)
+          const newCollected = Number(inv.total_collected || 0) + bankAmt;
+          const capped = Math.min(newCollected, Number(inv.total_amount || 0));
+          await dbUpdate('invoices', invoiceId, { 
+            total_collected: capped,
+            outstanding: Math.max(0, Number(inv.total_amount || 0) - capped),
+          }, myId);
+        } else {
+          // No matching check — check if this amount was already collected (dedup)
+          const existingCollected = Number(inv.total_collected || 0);
+          // Only add if it wouldn't exceed invoice total
+          const newCollected = Math.min(existingCollected + bankAmt, Number(inv.total_amount || 0));
+          if (newCollected > existingCollected) {
+            await dbUpdate('invoices', invoiceId, { 
+              total_collected: newCollected,
+              outstanding: Math.max(0, Number(inv.total_amount || 0) - newCollected),
+            }, myId);
+          }
+        }
+      } catch(e) {
+        // Fallback: simple add but capped
+        const newCollected = Math.min(Number(inv.total_collected || 0) + bankAmt, Number(inv.total_amount || 0));
+        await dbUpdate('invoices', invoiceId, { total_collected: newCollected }, myId);
+      }
     }
+    
     setMatchingTxn(null);
     setTransactions(prev => prev.map(t => t.id === txnId ? { ...t, matched_invoice_id: invoiceId, matched_at: new Date().toISOString() } : t));
-    // Refresh dashboard data so collected amounts update everywhere
     if (onReload) setTimeout(() => onReload(), 500);
   };
   const unmatch = async (txnId) => {
@@ -1136,8 +1177,10 @@ export default function EgyptBankTab({ toast, user, userProfile, isAdmin, invoic
                 <button onClick={() => setMatchingTxn(null)} className="text-slate-400 text-lg hover:text-slate-600">✕</button>
               </div>
               <input type="text" value={searchInv} onChange={e => setSearchInv(e.target.value)}
-                placeholder="Search by customer, order #, amount, date... / بحث"
-                className="w-full border rounded-lg px-3 py-2 text-xs mt-3" autoFocus />
+                placeholder="Search by customer, order #, amount, date... / بحث بالاسم أو رقم الأمر"
+                className="w-full border rounded-lg px-3 py-2 text-sm mt-3"
+                style={{ background: 'rgba(15,23,42,0.9)', color: '#e2e8f0', borderColor: 'rgba(56,189,248,0.3)' }}
+                autoFocus />
             </div>
             <div className="overflow-y-auto max-h-[55vh] p-2">
               {matchableInvoices.length === 0 ? (

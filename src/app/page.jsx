@@ -931,7 +931,38 @@ export default function App() {
 
           if (placeholder.order_number && !placeholder.linked_invoice_id) {
             const inv = invoices.find(i => i.order_number === placeholder.order_number);
-            if (inv) updates.linked_invoice_id = inv.id;
+            if (inv) {
+              updates.linked_invoice_id = inv.id;
+              // Smart dedup: check if another treasury entry already covers this payment
+              // (e.g., check was collected → treasury entry already exists for same order+amount)
+              const existingLinked = treasury.filter(t => 
+                t.id !== placeholder.id &&
+                !t.is_bank_placeholder &&
+                (t.linked_invoice_id === inv.id || t.order_number === inv.order_number) &&
+                Number(t.cash_in || 0) > 0
+              );
+              const alreadyCovered = existingLinked.some(t => 
+                Math.abs(Number(t.cash_in) - expAmt) < expAmt * 0.02 // same amount within 2%
+              );
+              if (alreadyCovered) {
+                // This payment already went through (likely check collection) — don't update invoice
+                // Mark this entry so it doesn't affect collected (it's a bank confirmation, not a new payment)
+                updates.linked_invoice_id = inv.id; // still link for tracking
+                updates.description = (updates.description || placeholder.description || '') + ' [bank confirmation — not added to collected]';
+                updates.cash_in = 0; // zero out so it doesn't affect net (the check collection entry already did)
+                updates.cash_out = 0;
+              } else {
+                // Genuinely new payment — recalculate collected from all linked entries
+                const existingTotal = existingLinked.reduce((a, t) => a + Number(t.cash_in || 0), 0);
+                const newTotal = existingTotal + expAmt;
+                // Cap at invoice total to prevent over-collection
+                const cappedTotal = Math.min(newTotal, Number(inv.total_amount || 0));
+                await supabase.from('invoices').update({
+                  total_collected: cappedTotal,
+                  outstanding: Math.max(0, Number(inv.total_amount || 0) - cappedTotal),
+                }).eq('id', inv.id);
+              }
+            }
           }
 
           await supabase.from('treasury').update(updates).eq('id', placeholder.id);
@@ -1112,6 +1143,38 @@ export default function App() {
     window.location.href = '/login';
   };
 
+  // ==========================================
+  // SINGLE SOURCE OF TRUTH: Recalculate invoice collected
+  // Called after ANY payment/link/unlink/match action
+  // Queries DB directly — always accurate, prevents double counting
+  // ==========================================
+  const recalcInvoiceCollected = async (invoiceId) => {
+    if (!invoiceId) return;
+    // Get invoice from DB
+    const { data: inv } = await supabase.from('invoices').select('id, total_amount, order_number').eq('id', invoiceId).maybeSingle();
+    if (!inv) return;
+    // Source of truth: ONLY treasury entries with linked_invoice_id pointing to this invoice
+    // order_number alone is NOT enough — it could be a deliberately unlinked entry
+    const { data: linked } = await supabase.from('treasury')
+      .select('id, cash_in, is_bank_placeholder, description')
+      .eq('linked_invoice_id', invoiceId)
+      .gt('cash_in', 0);
+    // Sum only real entries (not placeholders, not bank confirmations)
+    let total = 0;
+    for (const t of (linked || [])) {
+      if (t.is_bank_placeholder) continue;
+      if (t.description && t.description.includes('[bank confirmation')) continue;
+      total += Number(t.cash_in || 0);
+    }
+    // Cap at invoice total
+    const capped = Math.min(total, Number(inv.total_amount || 0));
+    await dbUpdate('invoices', invoiceId, {
+      total_collected: capped,
+      outstanding: Math.max(0, Number(inv.total_amount || 0) - capped),
+    }, userProfile?.id || user?.id);
+    return capped;
+  };
+
   const handleAddPayment = async (pf) => {
     if (!canEditInvoices) { toast.error('You do not have permission to edit invoices.'); return; }
     const pd = pf || formData;
@@ -1142,25 +1205,27 @@ export default function App() {
           notes: (selectedInvoice.notes || '') + '\n📝 Post-dated check: ' + fE(Number(pd.amount)) + ' due ' + (pd.checkDueDate || pd.date) + (pd.checkNumber ? ' #' + pd.checkNumber : ''),
         }, user?.id);
       } else {
-        // CASH → goes to treasury
+        // CASH → goes to treasury WITH invoice link (prevents double-count if re-linked later)
         if (isCash) {
           await dbInsert('treasury', {
             transaction_date: pd.date,
             order_number: selectedInvoice.order_number,
-            description: pd.desc || selectedInvoice.customer_name + ' payment',
+            description: sanitize(pd.desc || selectedInvoice.customer_name + ' payment'),
             cash_in: Number(pd.amount),
             cash_out: 0,
             category: pd.category || 'مبيعات',
             subcategory: pd.subcategory || '',
+            linked_invoice_id: selectedInvoice.id,
           }, user?.id);
         }
-        // ALL NON-CHECK methods update invoice collected immediately
-        const newCollected = Number(selectedInvoice.total_collected) + Number(pd.amount);
-        await dbUpdate('invoices', selectedInvoice.id, {
-          total_collected: newCollected,
-          outstanding: Math.max(0, Number(selectedInvoice.total_amount) - newCollected),
-          notes: (selectedInvoice.notes || '') + (!isCash ? '\n' + pd.payMethod + ': ' + fE(Number(pd.amount)) + ' on ' + pd.date : ''),
-        }, user?.id);
+        // Recalculate collected from all linked treasury entries (single source of truth)
+        await recalcInvoiceCollected(selectedInvoice.id);
+        if (!isCash) {
+          // Add payment method note for non-cash
+          await dbUpdate('invoices', selectedInvoice.id, {
+            notes: (selectedInvoice.notes || '') + '\n' + pd.payMethod + ': ' + fE(Number(pd.amount)) + ' on ' + pd.date,
+          }, user?.id);
+        }
       }
       setShowAddPayment(false); toast.success("Payment recorded ✓");
       setFormData({});
@@ -1388,47 +1453,33 @@ export default function App() {
   const linkTreasuryToInvoice = async (txnId, invoiceId) => {
     try {
       const txn = treasury.find(t => t.id === txnId);
-      const inv = invoices.find(i => i.id === invoiceId);
-      if (!txn || !inv) return;
+      if (!txn) return;
+      // If already linked to this invoice, skip
+      if (txn.linked_invoice_id === invoiceId) { toast.info('Already linked to this invoice'); return; }
+      // If linked to a different invoice, unlink old first then recalc old
+      const oldInvoiceId = txn.linked_invoice_id;
+      // Set the new link
       await dbUpdate('treasury', txnId, { linked_invoice_id: invoiceId }, userProfile?.id || user?.id);
-      // Only add to collected if this is a cash-in transaction
-      if (Number(txn.cash_in) > 0) {
-        const newCollected = Number(inv.total_collected || 0) + Number(txn.cash_in);
-        await dbUpdate('invoices', invoiceId, { total_collected: newCollected }, userProfile?.id || user?.id);
-      }
+      // Recalculate old invoice if was linked elsewhere
+      if (oldInvoiceId && oldInvoiceId !== invoiceId) await recalcInvoiceCollected(oldInvoiceId);
+      // Recalculate new invoice
+      await recalcInvoiceCollected(invoiceId);
       setLinkingTreasuryTxn(null);
       setTreasuryInvSearch('');
-      // Update local state immediately
-      setTreasury(prev => prev.map(t => t.id === txnId ? { ...t, linked_invoice_id: invoiceId } : t));
-      setInvoices(prev => prev.map(i => i.id === invoiceId ? {
-        ...i,
-        total_collected: Number(i.total_collected || 0) + Number(txn.cash_in || 0),
-        outstanding: Math.max(0, Number(i.total_amount || 0) - Number(i.total_collected || 0) - Number(txn.cash_in || 0)),
-      } : i));
-    } catch (err) { alert('Link error: ' + err.message); }
+      toast.success('Linked ✓');
+      await loadAllData();
+    } catch (err) { toast.error('Link error: ' + err.message); }
   };
 
   const unlinkTreasury = async (txnId) => {
     try {
       const txn = treasury.find(t => t.id === txnId);
       if (!txn || !txn.linked_invoice_id) return;
-      const inv = invoices.find(i => i.id === txn.linked_invoice_id);
+      const invoiceId = txn.linked_invoice_id;
+      // Remove the link
       await dbUpdate('treasury', txnId, { linked_invoice_id: null }, userProfile?.id || user?.id);
-      // Subtract from collected if this was a cash-in transaction
-      if (inv && Number(txn.cash_in) > 0) {
-        const newCollected = Math.max(0, Number(inv.total_collected || 0) - Number(txn.cash_in));
-        await dbUpdate('invoices', inv.id, { total_collected: newCollected }, userProfile?.id || user?.id);
-      }
-      // Update local state immediately
-      const invId = txn.linked_invoice_id;
-      setTreasury(prev => prev.map(t => t.id === txnId ? { ...t, linked_invoice_id: null } : t));
-      if (inv) {
-        setInvoices(prev => prev.map(i => i.id === invId ? {
-          ...i,
-          total_collected: Math.max(0, Number(i.total_collected || 0) - Number(txn.cash_in || 0)),
-          outstanding: Number(i.total_amount || 0) - Math.max(0, Number(i.total_collected || 0) - Number(txn.cash_in || 0)),
-        } : i));
-      }
+      // Recalculate invoice collected (will now exclude this entry)
+      await recalcInvoiceCollected(invoiceId);
     } catch (err) { alert('Unlink error: ' + err.message); }
   };
 
@@ -1475,15 +1526,27 @@ export default function App() {
       return;
     }
     try {
+      const affectedInvoiceIds = new Set();
+      // Track original invoice link for recalc
+      if (txn.linked_invoice_id) affectedInvoiceIds.add(txn.linked_invoice_id);
+
+      // Find invoice for each split by order number
+      const findInvoice = (orderNum) => orderNum ? invoices.find(i => i.order_number === orderNum) : null;
+
       // Update original entry to first split
+      const inv0 = findInvoice(splits[0].order);
       await dbUpdate('treasury', txn.id, {
         order_number: splits[0].order,
         cash_in: isIn ? Number(splits[0].amount) : 0,
         cash_out: isIn ? 0 : Number(splits[0].amount),
+        linked_invoice_id: inv0 ? inv0.id : null,
         description: txn.description + ' (split 1/' + splits.length + ')',
       }, user?.id);
+      if (inv0) affectedInvoiceIds.add(inv0.id);
+
       // Create new entries for remaining splits
       for (let i = 1; i < splits.length; i++) {
+        const invI = findInvoice(splits[i].order);
         await dbInsert('treasury', {
           transaction_date: txn.transaction_date,
           order_number: splits[i].order,
@@ -1491,10 +1554,19 @@ export default function App() {
           cash_in: isIn ? Number(splits[i].amount) : 0,
           cash_out: isIn ? 0 : Number(splits[i].amount),
           source: txn.source || 'main',
+          linked_invoice_id: invI ? invI.id : null,
         }, user?.id);
+        if (invI) affectedInvoiceIds.add(invI.id);
       }
+
+      // Recalc ALL affected invoices
+      for (const invId of affectedInvoiceIds) {
+        await recalcInvoiceCollected(invId);
+      }
+
       setSplittingTxn(null);
       setSplits([{ order: '', amount: 0 }, { order: '', amount: 0 }]);
+      toast.success('Split completed ✓');
       await loadAllData();
     } catch (err) {
       toast.error(err.message);
@@ -1505,17 +1577,11 @@ export default function App() {
     const ok = await toast.confirm({ title: 'Unlink Transaction', message: 'Unlink this transaction from order ' + (selectedInvoice?.order_number || '') + '?', confirmText: 'Unlink', danger: true });
     if (!ok) return;
     try {
-      await dbUpdate('treasury', txn.id, { order_number: '' }, user?.id);
-      // Recalculate invoice collected from remaining treasury entries
-      if (selectedInvoice) {
-        const remaining = treasury.filter(t => t.order_number === selectedInvoice.order_number && t.id !== txn.id);
-        const newCollected = remaining.reduce((a, t) => a + Number(t.cash_in || 0), 0);
-        await dbUpdate('invoices', selectedInvoice.id, {
-          total_collected: newCollected,
-          outstanding: Math.max(0, Number(selectedInvoice.total_amount) - newCollected),
-          notes: newCollected === 0 ? 'UNVERIFIED: No treasury entries linked' : (selectedInvoice.notes || '').replace('UNVERIFIED:', 'VERIFIED:'),
-        }, user?.id);
-      }
+      const invoiceId = txn.linked_invoice_id || (selectedInvoice ? selectedInvoice.id : null);
+      await dbUpdate('treasury', txn.id, { order_number: '', linked_invoice_id: null }, user?.id);
+      // Recalc the affected invoice
+      if (invoiceId) await recalcInvoiceCollected(invoiceId);
+      toast.success('Unlinked ✓');
       await loadAllData();
     } catch (err) {
       toast.error(err.message);
@@ -1525,17 +1591,11 @@ export default function App() {
   const handleLinkTreasury = async (txn) => {
     if (!selectedInvoice) return;
     try {
-      await dbUpdate('treasury', txn.id, { order_number: selectedInvoice.order_number }, user?.id);
-      // Recalculate collected from ALL linked treasury entries
-      const linked = treasury.filter(t => t.order_number === selectedInvoice.order_number);
-      const newCollected = linked.reduce((a, t) => a + Number(t.cash_in || 0), 0) + Number(txn.cash_in || 0);
-      await dbUpdate('invoices', selectedInvoice.id, {
-        total_collected: newCollected,
-        outstanding: Math.max(0, Number(selectedInvoice.total_amount) - newCollected),
-        notes: (selectedInvoice.notes || '').replace('UNVERIFIED:', 'RECONCILED:') || 'RECONCILED: Linked to treasury',
-      }, user?.id);
+      await dbUpdate('treasury', txn.id, { order_number: selectedInvoice.order_number, linked_invoice_id: selectedInvoice.id }, user?.id);
+      await recalcInvoiceCollected(selectedInvoice.id);
       setLinkSearch('');
       setShowLinkSearch(false);
+      toast.success('Linked ✓');
       await loadAllData();
     } catch (err) {
       toast.error(err.message);
@@ -1780,17 +1840,11 @@ export default function App() {
         linked_treasury_id: newTxn?.id || null,
       }, user?.id);
 
-      // 3. Update invoice collected amount
-      const orderNum = reconcileCheck.order_number;
+      // 3. Recalculate invoice collected from all linked treasury (single source of truth)
       const invId = reconcileCheck.invoice_id;
+      const orderNum = reconcileCheck.order_number;
       const inv = invId ? invoices.find(i => i.id === invId) : (orderNum ? invoices.find(i => i.order_number === orderNum) : null);
-      if (inv) {
-        const newCollected = Number(inv.total_collected || 0) + Number(reconcileCheck.amount);
-        await dbUpdate('invoices', inv.id, {
-          total_collected: newCollected,
-          outstanding: Math.max(0, Number(inv.total_amount) - newCollected),
-        }, user?.id);
-      }
+      if (inv) await recalcInvoiceCollected(inv.id);
 
       setReconcileCheck(null);
       setReconcileDate('');
@@ -2771,8 +2825,10 @@ export default function App() {
               <div className="bg-purple-50 rounded-lg p-4 border border-purple-200 mb-3">
                 <h4 className="text-sm font-bold text-purple-800 mb-1">Search Treasury & Bank to Link / بحث للربط</h4>
                 <input value={linkSearch} onChange={e => setLinkSearch(e.target.value)}
-                  placeholder="Search name, date, amount / بحث"
-                  className="w-full px-3 py-2 rounded-lg border border-purple-200 text-sm mb-2" autoFocus />
+                  placeholder="Search name, date, amount / بحث بالاسم أو التاريخ أو المبلغ"
+                  className="w-full px-3 py-2 rounded-lg border text-sm mb-2"
+                  style={{ background: 'rgba(15,23,42,0.9)', color: '#e2e8f0', borderColor: 'rgba(167,139,250,0.3)' }}
+                  autoFocus />
                 {linkSearch.length >= 2 && (() => {
                   const words = linkSearch.split(/\s+/).filter(w => w.length > 0);
                   const treasuryResults = treasury
@@ -3194,8 +3250,10 @@ export default function App() {
                   </div>
                   <input type="text" value={treasuryInvSearch}
                     onChange={e => setTreasuryInvSearch(e.target.value)}
-                    placeholder="Search by customer, order #, amount, date... / بحث"
-                    className="w-full border rounded-lg px-3 py-2 text-xs mt-3" autoFocus />
+                    placeholder="Search by customer, order #, amount, date... / بحث بالاسم أو رقم الأمر أو المبلغ"
+                    className="w-full border rounded-lg px-3 py-2 text-sm mt-3"
+                    style={{ background: 'rgba(15,23,42,0.9)', color: '#e2e8f0', borderColor: 'rgba(56,189,248,0.3)' }}
+                    autoFocus />
                 </div>
                 <div className="overflow-y-auto max-h-[55vh] p-2">
                   {linkableInvoices.length === 0 ? (

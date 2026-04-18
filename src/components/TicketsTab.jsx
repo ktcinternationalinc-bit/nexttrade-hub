@@ -128,7 +128,7 @@ export default function TicketsTab({ toast, customers, user, userProfile, users,
       const allToNotify = [f.assignedTo, ...extraAssignees].filter(id => id && id !== myId);
       if (allToNotify.length) notifyTicketAssigned(allToNotify, ticketNum + ' ' + f.title, myId);
       setShowAdd(false); setF({}); loadTickets();
-    } catch (err) { toast ? toast.error(err.message) : toast ? toast.error(err.message) : alert(err.message); }
+    } catch (err) { toast ? toast.error(err.message) : alert(err.message); }
   };
 
   const updateStatus = async (ticket, newStatus) => {
@@ -145,7 +145,7 @@ export default function TicketsTab({ toast, customers, user, userProfile, users,
       if (extras.length) notifyTicketStatus(extras, ticket.title, newStatus, myId);
       loadTickets();
       if (sel && sel.id === ticket.id) { setSel({...sel, ...updates}); loadComments(ticket.id); }
-    } catch (err) { toast ? toast.error(err.message) : toast ? toast.error(err.message) : alert(err.message); }
+    } catch (err) { toast ? toast.error(err.message) : alert(err.message); }
   };
 
   const reassignTicket = async (ticket, newUserId) => {
@@ -160,7 +160,7 @@ export default function TicketsTab({ toast, customers, user, userProfile, users,
       if (ticket.created_by && ticket.created_by !== myId && ticket.created_by !== newUserId && ticket.created_by !== ticket.assigned_to) notifyTicketReassigned([ticket.created_by], ticket.title, myId);
       loadTickets();
       if (sel && sel.id === ticket.id) { setSel({...sel, assigned_to: newUserId}); loadComments(ticket.id); }
-    } catch (err) { toast ? toast.error(err.message) : toast ? toast.error(err.message) : alert(err.message); }
+    } catch (err) { toast ? toast.error(err.message) : alert(err.message); }
   };
 
   const addComment = async () => {
@@ -174,7 +174,7 @@ export default function TicketsTab({ toast, customers, user, userProfile, users,
       const extras = parseAssignees(sel).filter(id => id !== myId && id !== sel.assigned_to && id !== sel.created_by);
       if (extras.length) notifyTicketComment(extras, sel.title, f.comment, myId);
       setF({...f, comment: ''}); loadComments(sel.id);
-    } catch (err) { toast ? toast.error(err.message) : toast ? toast.error(err.message) : alert(err.message); }
+    } catch (err) { toast ? toast.error(err.message) : alert(err.message); }
   };
 
   const deleteTicket = async (ticket) => {
@@ -191,7 +191,7 @@ export default function TicketsTab({ toast, customers, user, userProfile, users,
       await dbDelete('tickets', ticket.id, myId);
       await logActivity(myId, 'Deleted ticket: ' + (ticket.ticket_number || '') + ' ' + ticket.title, 'ticket');
       setSel(null); setComments([]); loadTickets();
-    } catch (err) { toast ? toast.error(err.message) : toast ? toast.error(err.message) : alert(err.message); }
+    } catch (err) { toast ? toast.error(err.message) : alert(err.message); }
   };
 
   // Bulk actions
@@ -226,7 +226,7 @@ export default function TicketsTab({ toast, customers, user, userProfile, users,
       setBulkSelected(new Set());
       setBulkAction(null);
       loadTickets();
-    } catch (err) { toast ? toast.error(err.message) : toast ? toast.error(err.message) : alert(err.message); }
+    } catch (err) { toast ? toast.error(err.message) : alert(err.message); }
   };
 
   // ===== TICKET DETAIL VIEW =====
@@ -320,7 +320,7 @@ export default function TicketsTab({ toast, customers, user, userProfile, users,
                       await dbUpdate('tickets', sel.id, { due_date: val, updated_by: myId }, myId);
                       await logActivity(myId, 'Changed due date on ' + (sel.ticket_number || sel.title) + ' to ' + (val || 'none'), 'ticket');
                       loadTickets(); setSel({...sel, due_date: val});
-                    } catch(err) { toast ? toast.error(err.message) : toast ? toast.error(err.message) : alert(err.message); }
+                    } catch(err) { toast ? toast.error(err.message) : alert(err.message); }
                   }} className="px-3 py-1 bg-blue-500 text-white rounded text-[10px] font-semibold">Set</button>
                 </div>
               ) : (
@@ -397,9 +397,19 @@ export default function TicketsTab({ toast, customers, user, userProfile, users,
             {userComments.map(c => {
               const authorName = getUserName(c.created_by) || 'Unknown';
               const isMe = c.created_by === myId;
+              // Linkify: make URLs in comment text clickable
+              const linkify = (text) => {
+                if (!text) return text;
+                const urlRegex = /(https?:\/\/[^\s<]+)/g;
+                const parts = text.split(urlRegex);
+                return parts.map((part, i) => urlRegex.test(part) 
+                  ? <a key={i} href={part} target="_blank" rel="noopener noreferrer" className="text-blue-500 underline break-all">{part.length > 50 ? part.substring(0,50) + '...' : part}</a>
+                  : part
+                );
+              };
               return (
                 <div key={c.id} className={'rounded-lg p-3 ' + (isMe ? 'bg-blue-50 ml-8' : 'bg-slate-50 mr-8')}>
-                  <div className="text-xs">{c.comment_text}</div>
+                  <div className="text-xs">{linkify(c.comment_text)}</div>
                   {c.attachment_url && (
                     <a href={c.attachment_url} target="_blank" rel="noopener noreferrer"
                       className="inline-flex items-center gap-1 mt-1 px-2 py-1 bg-white rounded border border-slate-200 text-[10px] text-blue-600 font-semibold hover:bg-blue-50">
@@ -423,6 +433,7 @@ export default function TicketsTab({ toast, customers, user, userProfile, users,
             {uploading ? '⏳' : '📎'}
             <input type="file" className="hidden" disabled={uploading} onChange={async (e) => {
               const file = e.target.files?.[0]; if (!file || !sel) return;
+              if (file.size > 10 * 1024 * 1024) { toast ? toast.warning('File too large — max 10MB / الملف كبير جداً') : alert('File too large — max 10MB'); e.target.value = ''; return; }
               setUploading(true);
               try {
                 const ext = file.name.split('.').pop();
@@ -434,7 +445,8 @@ export default function TicketsTab({ toast, customers, user, userProfile, users,
                 await dbInsert('ticket_comments', { ticket_id: sel.id, comment_text: '📎 Attached: ' + file.name, attachment_url: url, attachment_name: file.name, is_system: false, created_by: myId }, myId);
                 await dbUpdate('tickets', sel.id, { updated_by: myId }, myId);
                 loadComments(sel.id);
-              } catch (err) { alert('Upload failed: ' + err.message); }
+                if (toast) toast.success('File attached ✓');
+              } catch (err) { toast ? toast.error('Upload failed: ' + err.message) : alert('Upload failed: ' + err.message); }
               setUploading(false);
               e.target.value = '';
             }} />
