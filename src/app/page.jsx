@@ -980,6 +980,7 @@ export default function App() {
   }, [treasury, egyptBankTxns]);
 
   // Load last login info for welcome briefing
+  const [loginHistoryLoaded, setLoginHistoryLoaded] = useState(false);
   useEffect(() => {
     if (!userProfile?.id) return;
     (async () => {
@@ -988,9 +989,10 @@ export default function App() {
           .select('date, login_at')
           .eq('user_id', userProfile.id)
           .order('login_at', { ascending: false })
-          .limit(5);
+          .limit(30);
         setLastLoginInfo(data || []);
       } catch(e) { setLastLoginInfo([]); }
+      setLoginHistoryLoaded(true);
     })();
   }, [userProfile?.id]);
 
@@ -2826,8 +2828,7 @@ export default function App() {
                 <h4 className="text-sm font-bold text-purple-800 mb-1">Search Treasury & Bank to Link / بحث للربط</h4>
                 <input value={linkSearch} onChange={e => setLinkSearch(e.target.value)}
                   placeholder="Search name, date, amount / بحث بالاسم أو التاريخ أو المبلغ"
-                  className="w-full px-3 py-2 rounded-lg border text-sm mb-2"
-                  style={{ background: 'rgba(15,23,42,0.9)', color: '#e2e8f0', borderColor: 'rgba(167,139,250,0.3)' }}
+                  className="dark-input"
                   autoFocus />
                 {linkSearch.length >= 2 && (() => {
                   const words = linkSearch.split(/\s+/).filter(w => w.length > 0);
@@ -3251,8 +3252,7 @@ export default function App() {
                   <input type="text" value={treasuryInvSearch}
                     onChange={e => setTreasuryInvSearch(e.target.value)}
                     placeholder="Search by customer, order #, amount, date... / بحث بالاسم أو رقم الأمر أو المبلغ"
-                    className="w-full border rounded-lg px-3 py-2 text-sm mt-3"
-                    style={{ background: 'rgba(15,23,42,0.9)', color: '#e2e8f0', borderColor: 'rgba(56,189,248,0.3)' }}
+                    className="dark-input mt-3"
                     autoFocus />
                 </div>
                 <div className="overflow-y-auto max-h-[55vh] p-2">
@@ -4291,7 +4291,7 @@ export default function App() {
                 <AIGreeter
                   user={user} userProfile={userProfile} users={teamUsers}
                   tickets={dashTickets} invoices={invoices} treasury={treasury}
-                  checks={pendingChecks} loginHistory={lastLoginInfo}
+                  checks={pendingChecks} loginHistory={lastLoginInfo} loginHistoryLoaded={loginHistoryLoaded}
                   lang={lang} personality={greeterSettings.personality}
                   greeterLang={greeterSettings.language}
                   enabled={greeterSettings.enabled}

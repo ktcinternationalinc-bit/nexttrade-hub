@@ -1178,8 +1178,7 @@ export default function EgyptBankTab({ toast, user, userProfile, isAdmin, invoic
               </div>
               <input type="text" value={searchInv} onChange={e => setSearchInv(e.target.value)}
                 placeholder="Search by customer, order #, amount, date... / بحث بالاسم أو رقم الأمر"
-                className="w-full border rounded-lg px-3 py-2 text-sm mt-3"
-                style={{ background: 'rgba(15,23,42,0.9)', color: '#e2e8f0', borderColor: 'rgba(56,189,248,0.3)' }}
+                className="dark-input mt-3"
                 autoFocus />
             </div>
             <div className="overflow-y-auto max-h-[55vh] p-2">

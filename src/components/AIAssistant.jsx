@@ -57,12 +57,14 @@ export default function AIAssistant({ user, userProfile, users, customers }) {
     if (SR) {
       setVoiceSupported(true);
       const recognition = new SR();
-      recognition.continuous = true;
+      const isSafari = /^((?!chrome|android).)*safari/i.test(navigator.userAgent);
+      recognition.continuous = !isSafari; // Safari doesn't support continuous
       recognition.interimResults = true;
       recognition.lang = 'en-US';
       
-      let lastFinalText = '';
+      let lastFinalText = ''; accumulatedText = '';
       let lastFinalTime = 0;
+      let accumulatedText = '';
       
       recognition.onresult = (event) => {
         let finalText = '';
@@ -78,7 +80,13 @@ export default function AIAssistant({ user, userProfile, users, customers }) {
           }
         }
         
-        const displayText = (finalText + interimText).trim();
+        // Safari: accumulate text across recognition restarts
+        if (hasFinal && isSafari) {
+          accumulatedText = (accumulatedText + ' ' + finalText).trim();
+          finalText = accumulatedText;
+        }
+        
+        const displayText = isSafari ? (accumulatedText + ' ' + interimText).trim() : (finalText + interimText).trim();
         if (!displayText) return;
         
         const lower = displayText.toLowerCase().replace(/[.,!?]/g, '').trim();
@@ -99,7 +107,7 @@ export default function AIAssistant({ user, userProfile, users, customers }) {
             setInput('');
             if (silenceTimerRef.current) clearTimeout(silenceTimerRef.current);
             if (autoSendRef.current) clearTimeout(autoSendRef.current);
-            lastFinalText = '';
+            lastFinalText = ''; accumulatedText = '';
             try { recognition.stop(); } catch(e) {}
             setTimeout(() => { if (conversationModeRef.current) { try { recognition.start(); setListening(true); } catch(e) {} } }, 300);
             return;
@@ -127,7 +135,7 @@ export default function AIAssistant({ user, userProfile, users, customers }) {
           setInput('');
           if (silenceTimerRef.current) clearTimeout(silenceTimerRef.current);
           if (autoSendRef.current) clearTimeout(autoSendRef.current);
-          lastFinalText = '';
+          lastFinalText = ''; accumulatedText = '';
           try { recognition.stop(); } catch(e) {}
           setTimeout(() => { if (conversationModeRef.current) { try { recognition.start(); setListening(true); } catch(e) {} } }, 300);
           return;
@@ -152,7 +160,7 @@ export default function AIAssistant({ user, userProfile, users, customers }) {
             try { recognition.stop(); } catch(e) {}
             pendingTextRef.current = textToSend;
             setInput('');
-            lastFinalText = '';
+            lastFinalText = ''; accumulatedText = '';
             autoSendRef.current = setTimeout(() => {
               const btn = document.getElementById('ai-send-btn-hidden');
               if (btn) btn.click();
@@ -165,15 +173,16 @@ export default function AIAssistant({ user, userProfile, users, customers }) {
         if (silenceTimerRef.current) clearTimeout(silenceTimerRef.current); 
       };
       recognition.onend = () => { 
-        // In conversation mode, auto-restart if not currently sending
         if (conversationModeRef.current && !speakingRef.current) {
+          // Auto-restart — critical for Safari which stops after each utterance
           setTimeout(() => {
             if (conversationModeRef.current && !speakingRef.current) {
               try { recognition.start(); setListening(true); } catch(e) {}
             }
-          }, 300);
+          }, isSafari ? 100 : 300);
         } else if (!conversationModeRef.current) {
-          setListening(false); 
+          setListening(false);
+          accumulatedText = '';
         }
       };
       recognitionRef.current = recognition;

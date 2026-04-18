@@ -1,5 +1,6 @@
 'use client';
 import { useState, useEffect, useRef, useCallback } from 'react';
+import { supabase } from '../lib/supabase';
 
 var PERSONALITIES = [
   { id: 'professional', label: '🎩 Professional', labelAr: 'محترف', desc: 'Formal, concise, business-focused', color: '#1e40af', prompt: 'You are a professional executive assistant named Nadia. Speak formally, be concise and data-driven. Use business language. Be respectful and efficient.' },
@@ -12,7 +13,7 @@ var PERSONALITIES = [
 
 export { PERSONALITIES };
 
-export default function AIGreeter({ user, userProfile, users, tickets, invoices, treasury, checks, loginHistory, lang, personality, greeterLang, onToggle, toast, enabled }) {
+export default function AIGreeter({ user, userProfile, users, tickets, invoices, treasury, checks, loginHistory, loginHistoryLoaded, lang, personality, greeterLang, onToggle, toast, enabled }) {
   var [messages, setMessages] = useState([]);
   var [input, setInput] = useState('');
   var [loading, setLoading] = useState(false);
@@ -26,12 +27,40 @@ export default function AIGreeter({ user, userProfile, users, tickets, invoices,
   var typingRef = useRef(null);
   var audioRef = useRef(null);
   var recognitionRef = useRef(null);
+  var [aiMemory, setAiMemory] = useState('');
 
   var myId = userProfile?.id || user?.id;
   var fullName = userProfile?.name || 'there';
   var firstName = fullName.split(' ')[0] || fullName;
   var useLang = greeterLang || lang || 'en';
   var persona = PERSONALITIES.find(function(p) { return p.id === personality; }) || PERSONALITIES[1];
+
+  // Load AI memory from database
+  useEffect(function() {
+    if (!myId) return;
+    (async function() {
+      try {
+        var result = await supabase.from('users').select('ai_memory').eq('id', myId).maybeSingle();
+        if (result.data && result.data.ai_memory) setAiMemory(result.data.ai_memory);
+      } catch(e) {}
+    })();
+  }, [myId]);
+
+  // Save memory after each conversation (debounced)
+  var saveMemory = useCallback(async function(newMessages) {
+    if (!myId || newMessages.length < 2) return;
+    try {
+      // Build memory from conversation — extract personal facts
+      var convo = newMessages.map(function(m) { return m.role + ': ' + m.text; }).join('\n');
+      var todayStr = new Date().toISOString().substring(0, 10);
+      // Keep last 2000 chars of memory + add today's conversation summary
+      var existingMemory = aiMemory || '';
+      var newEntry = '\n[' + todayStr + '] ' + convo.substring(0, 500);
+      var combined = (existingMemory + newEntry).slice(-2000);
+      await supabase.from('users').update({ ai_memory: combined }).eq('id', myId);
+      setAiMemory(combined);
+    } catch(e) {}
+  }, [myId, aiMemory]);
 
   var buildContext = useCallback(function() {
     var todayStr = new Date().toISOString().substring(0, 10);
@@ -116,16 +145,19 @@ export default function AIGreeter({ user, userProfile, users, tickets, invoices,
     + '- Build a personal relationship. Be warm. Remember you are their dedicated AI assistant.\n'
     + '- Use the LOGIN HISTORY to personalize: if first visit today say so naturally. If 2nd+ visit, acknowledge it. If they missed days, welcome them back.\n'
     + '- NEVER say "this is the first time you are on the hub" unless login history confirms it is truly their first ever visit.\n'
+    + '- You REMEMBER past conversations. Use PAST MEMORIES below to reference things you discussed before — their kids, preferences, issues, personal details. This makes you a REAL secretary who knows them.\n'
+    + '- If they share personal info (kids names, hobbies, preferences, concerns), naturally remember and reference it in future conversations.\n'
     + '- Keep responses SHORT: 2-4 sentences. Conversational, not robotic.\n'
     + '- No markdown. Plain text only.\n'
-    + '- You have access to their tickets, invoices, treasury data, and checks. Answer business questions if asked.\n';
+    + '- You have access to their tickets, invoices, treasury data, and checks. Answer business questions if asked.\n'
+    + (aiMemory ? '\nPAST MEMORIES (from previous conversations with ' + firstName + '):\n' + aiMemory + '\n' : '\nNo past conversation history yet — this may be a new user.\n');
 
-  // Auto-greet on first load
+  // Auto-greet — wait until login history is loaded
   useEffect(function() {
-    if (hasGreetedRef.current || !enabled) return;
+    if (hasGreetedRef.current || !enabled || !loginHistoryLoaded) return;
     hasGreetedRef.current = true;
     doSend(null, true);
-  }, [enabled]);
+  }, [enabled, loginHistoryLoaded]);
 
   useEffect(function() {
     if (chatEndRef.current) chatEndRef.current.scrollIntoView({ behavior: 'smooth' });
@@ -221,6 +253,7 @@ export default function AIGreeter({ user, userProfile, users, tickets, invoices,
       if (!aiText) aiText = useLang === 'ar' ? 'صباح الخير ' + firstName + '!' : 'Hey ' + firstName + '!';
       var final = [].concat(msgs, [{ role: 'assistant', text: aiText }]);
       setMessages(final);
+      if (!isGreeting) saveMemory(final); // Save conversation memory after user interactions
       doType(aiText, function() { doSpeak(aiText); });
     } catch(e) {
       var fb = useLang === 'ar' ? 'عذراً، حدث خطأ.' : 'Sorry, something went wrong.';
