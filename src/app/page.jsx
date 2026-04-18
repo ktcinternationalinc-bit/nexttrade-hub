@@ -406,6 +406,8 @@ export default function App() {
   const [lastLoginInfo, setLastLoginInfo] = useState(null);
   const [tabLoading, setTabLoading] = useState(false);
   const [greeterDismissed, setGreeterDismissed] = useState(false);
+  const [greeterHasGreeted, setGreeterHasGreeted] = useState(false);
+  const [greeterMessages, setGreeterMessages] = useState([]);
   const [greeterSettings, setGreeterSettings] = useState({ personality: 'friendly', language: 'en', enabled: true });
   const [lastLoaded, setLastLoaded] = useState(null);
   const [openTicketId, setOpenTicketId] = useState(null);
@@ -4295,6 +4297,8 @@ export default function App() {
                   lang={lang} personality={greeterSettings.personality}
                   greeterLang={greeterSettings.language}
                   enabled={greeterSettings.enabled}
+                  hasGreeted={greeterHasGreeted} onGreeted={() => setGreeterHasGreeted(true)}
+                  sessionMessages={greeterMessages} onMessagesUpdate={setGreeterMessages}
                   onToggle={(on) => { if (!on) setGreeterDismissed(true); }}
                   toast={toast}
                 />

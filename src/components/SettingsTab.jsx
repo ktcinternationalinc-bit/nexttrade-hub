@@ -529,7 +529,9 @@ export default function SettingsTab({ toast, user, users, onReload, isAdmin, use
                     <input type="checkbox" checked={u.greeter_enabled !== false}
                       onChange={async (e) => {
                         try {
-                          await supabase.from('users').update({ greeter_enabled: e.target.checked }).eq('id', u.id);
+                          const { error } = await supabase.from('users').update({ greeter_enabled: e.target.checked }).eq('id', u.id);
+                          if (error) { if (toast) toast.error('Save failed: ' + error.message); return; }
+                          if (toast) toast.success(e.target.checked ? 'Greeter enabled ✓' : 'Greeter disabled');
                           onReload();
                         } catch(err) { if (toast) toast.error(err.message); }
                       }}
@@ -541,10 +543,12 @@ export default function SettingsTab({ toast, user, users, onReload, isAdmin, use
                     <label className="text-[10px] font-semibold text-slate-500 block mb-1">Personality</label>
                     <select value={u.greeter_personality || 'friendly'}
                       onChange={async (e) => {
+                        const val = e.target.value;
                         try {
-                          await supabase.from('users').update({ greeter_personality: e.target.value }).eq('id', u.id);
+                          const { error } = await supabase.from('users').update({ greeter_personality: val }).eq('id', u.id);
+                          if (error) { if (toast) toast.error('Save failed: ' + error.message); return; }
+                          if (toast) toast.success('Personality updated ✓');
                           onReload();
-                          if (toast) toast.success('Personality updated for ' + u.name);
                         } catch(err) { if (toast) toast.error(err.message); }
                       }}
                       className="w-full px-3 py-2 rounded-lg border border-slate-200 text-xs">
@@ -557,10 +561,12 @@ export default function SettingsTab({ toast, user, users, onReload, isAdmin, use
                     <label className="text-[10px] font-semibold text-slate-500 block mb-1">Language</label>
                     <select value={u.greeter_language || 'en'}
                       onChange={async (e) => {
+                        const val = e.target.value;
                         try {
-                          await supabase.from('users').update({ greeter_language: e.target.value }).eq('id', u.id);
+                          const { error } = await supabase.from('users').update({ greeter_language: val }).eq('id', u.id);
+                          if (error) { if (toast) toast.error('Save failed: ' + error.message); return; }
+                          if (toast) toast.success('Language updated ✓');
                           onReload();
-                          if (toast) toast.success('Language updated for ' + u.name);
                         } catch(err) { if (toast) toast.error(err.message); }
                       }}
                       className="w-full px-3 py-2 rounded-lg border border-slate-200 text-xs">

@@ -13,8 +13,11 @@ var PERSONALITIES = [
 
 export { PERSONALITIES };
 
-export default function AIGreeter({ user, userProfile, users, tickets, invoices, treasury, checks, loginHistory, loginHistoryLoaded, lang, personality, greeterLang, onToggle, toast, enabled }) {
-  var [messages, setMessages] = useState([]);
+export default function AIGreeter({ user, userProfile, users, tickets, invoices, treasury, checks, loginHistory, loginHistoryLoaded, lang, personality, greeterLang, onToggle, toast, enabled, hasGreeted, onGreeted, sessionMessages, onMessagesUpdate }) {
+  // Use parent's session messages — persist across tab switches
+  var messages = sessionMessages || [];
+  var setMessages = function(msgs) { if (onMessagesUpdate) onMessagesUpdate(msgs); };
+  
   var [input, setInput] = useState('');
   var [loading, setLoading] = useState(false);
   var [speaking, setSpeaking] = useState(false);
@@ -22,7 +25,6 @@ export default function AIGreeter({ user, userProfile, users, tickets, invoices,
   var [minimized, setMinimized] = useState(false);
   var [typingText, setTypingText] = useState('');
   var [typingDone, setTypingDone] = useState(true);
-  var hasGreetedRef = useRef(false);
   var chatEndRef = useRef(null);
   var typingRef = useRef(null);
   var audioRef = useRef(null);
@@ -223,12 +225,12 @@ export default function AIGreeter({ user, userProfile, users, tickets, invoices,
       return result;
     })();
 
-  // Auto-greet — wait until login history is loaded
+  // Auto-greet — only once per login session, waits for login history
   useEffect(function() {
-    if (hasGreetedRef.current || !enabled || !loginHistoryLoaded) return;
-    hasGreetedRef.current = true;
+    if (hasGreeted || !enabled || !loginHistoryLoaded) return;
+    if (onGreeted) onGreeted(); // Mark as greeted in parent (survives tab switches)
     doSend(null, true);
-  }, [enabled, loginHistoryLoaded]);
+  }, [enabled, loginHistoryLoaded, hasGreeted]);
 
   useEffect(function() {
     if (chatEndRef.current) chatEndRef.current.scrollIntoView({ behavior: 'smooth' });
