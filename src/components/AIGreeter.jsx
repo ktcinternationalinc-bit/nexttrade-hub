@@ -41,26 +41,80 @@ export default function AIGreeter({ user, userProfile, users, tickets, invoices,
     (async function() {
       try {
         var result = await supabase.from('users').select('ai_memory').eq('id', myId).maybeSingle();
-        if (result.data && result.data.ai_memory) setAiMemory(result.data.ai_memory);
+        if (result.data && result.data.ai_memory) {
+          setAiMemory(result.data.ai_memory);
+        }
       } catch(e) {}
     })();
   }, [myId]);
 
-  // Save memory after each conversation (debounced)
+  // Parse memory into facts + conversation log
+  var parsedMemory = useCallback(function() {
+    try {
+      var parsed = JSON.parse(aiMemory || '{}');
+      return { facts: parsed.facts || [], log: parsed.log || '' };
+    } catch(e) {
+      // Legacy: if aiMemory is plain text, treat it all as log
+      return { facts: [], log: aiMemory || '' };
+    }
+  }, [aiMemory]);
+
+  // Save memory — extract facts from user messages + keep conversation log
   var saveMemory = useCallback(async function(newMessages) {
     if (!myId || newMessages.length < 2) return;
     try {
-      // Build memory from conversation — extract personal facts
-      var convo = newMessages.map(function(m) { return m.role + ': ' + m.text; }).join('\n');
+      var mem = parsedMemory();
+      var existingFacts = mem.facts || [];
       var todayStr = new Date().toISOString().substring(0, 10);
-      // Keep last 2000 chars of memory + add today's conversation summary
-      var existingMemory = aiMemory || '';
-      var newEntry = '\n[' + todayStr + '] ' + convo.substring(0, 500);
-      var combined = (existingMemory + newEntry).slice(-2000);
-      await supabase.from('users').update({ ai_memory: combined }).eq('id', myId);
-      setAiMemory(combined);
-    } catch(e) {}
-  }, [myId, aiMemory]);
+
+      // Extract facts from user messages using pattern matching
+      var userMsgs = newMessages.filter(function(m) { return m.role === 'user'; });
+      var newFacts = [];
+      userMsgs.forEach(function(m) {
+        var t = (m.text || '').toLowerCase();
+        var orig = m.text || '';
+        // "Call me X" / "My name is X" / "I go by X"
+        var nameMatch = orig.match(/call me (\w+)|my name is (\w+)|i go by (\w+)|prefer (?:to be called |being called )?(\w+)/i);
+        if (nameMatch) {
+          var preferred = nameMatch[1] || nameMatch[2] || nameMatch[3] || nameMatch[4];
+          newFacts.push('Prefers to be called: ' + preferred);
+          // Remove old name preferences
+          existingFacts = existingFacts.filter(function(f) { return !f.startsWith('Prefers to be called'); });
+        }
+        // "Remember that..." / "Don't forget..."
+        var remMatch = orig.match(/remember (?:that |this[: ]*)?(.+)/i);
+        if (remMatch && remMatch[1].length > 3) newFacts.push('Remembered: ' + remMatch[1].substring(0, 200));
+        var forgetMatch = orig.match(/(?:don'?t forget|keep in mind)[: ]*(.+)/i);
+        if (forgetMatch) newFacts.push('Remembered: ' + forgetMatch[1].substring(0, 200));
+        // "I have X kids" / "My kids are..." / "My son/daughter..."
+        if (t.match(/my (?:kid|child|son|daughter|baby|wife|husband|spouse|family)/)) newFacts.push('Family: ' + orig.substring(0, 200));
+        // "I like/love/prefer/hate/don't like..."
+        var prefMatch = orig.match(/i (?:like|love|prefer|enjoy|hate|don'?t like|dislike) (.+)/i);
+        if (prefMatch) newFacts.push('Preference: ' + prefMatch[0].substring(0, 200));
+        // "I am..." / "I'm..."
+        var iamMatch = orig.match(/(?:i am|i'?m) (?:a |an )?(\w.{3,})/i);
+        if (iamMatch && !t.includes('i am good') && !t.includes('i am fine') && !t.includes('i am ok')) {
+          newFacts.push('About user: ' + iamMatch[0].substring(0, 200));
+        }
+      });
+
+      // Merge facts — deduplicate
+      var allFacts = existingFacts.concat(newFacts);
+      // Remove exact duplicates
+      allFacts = allFacts.filter(function(v, i, a) { return a.indexOf(v) === i; });
+      // Keep max 30 facts
+      if (allFacts.length > 30) allFacts = allFacts.slice(-30);
+
+      // Build conversation log summary (last 1500 chars)
+      var convoSummary = newMessages.slice(-6).map(function(m) { return (m.role === 'user' ? firstName : 'Nadia') + ': ' + m.text; }).join(' | ');
+      var logEntry = '[' + todayStr + '] ' + convoSummary.substring(0, 300);
+      var fullLog = ((mem.log || '') + '\n' + logEntry).slice(-1500);
+
+      var memoryObj = JSON.stringify({ facts: allFacts, log: fullLog });
+      await supabase.from('users').update({ ai_memory: memoryObj }).eq('id', myId);
+      setAiMemory(memoryObj);
+    } catch(e) { console.warn('Memory save error:', e); }
+  }, [myId, aiMemory, parsedMemory, firstName]);
 
   var buildContext = useCallback(function() {
     var todayStr = new Date().toISOString().substring(0, 10);
@@ -150,7 +204,24 @@ export default function AIGreeter({ user, userProfile, users, tickets, invoices,
     + '- Keep responses SHORT: 2-4 sentences. Conversational, not robotic.\n'
     + '- No markdown. Plain text only.\n'
     + '- You have access to their tickets, invoices, treasury data, and checks. Answer business questions if asked.\n'
-    + (aiMemory ? '\nPAST MEMORIES (from previous conversations with ' + firstName + '):\n' + aiMemory + '\n' : '\nNo past conversation history yet — this may be a new user.\n');
+    + (function() {
+      var mem = parsedMemory();
+      var result = '';
+      if (mem.facts.length > 0) {
+        result += '\nPERSONAL FACTS YOU KNOW ABOUT ' + firstName.toUpperCase() + ' (use these naturally, they are PERMANENT):\n';
+        mem.facts.forEach(function(f) { result += '- ' + f + '\n'; });
+        // Check for preferred name
+        var namePref = mem.facts.find(function(f) { return f.startsWith('Prefers to be called'); });
+        if (namePref) result += '\nIMPORTANT: ' + namePref + '. ALWAYS use this name instead of their system name.\n';
+      }
+      if (mem.log) {
+        result += '\nRECENT CONVERSATION HISTORY:\n' + mem.log.substring(-800) + '\n';
+      }
+      if (!mem.facts.length && !mem.log) {
+        result += '\nNo past conversation history yet. Get to know them!\n';
+      }
+      return result;
+    })();
 
   // Auto-greet — wait until login history is loaded
   useEffect(function() {
@@ -253,7 +324,7 @@ export default function AIGreeter({ user, userProfile, users, tickets, invoices,
       if (!aiText) aiText = useLang === 'ar' ? 'صباح الخير ' + firstName + '!' : 'Hey ' + firstName + '!';
       var final = [].concat(msgs, [{ role: 'assistant', text: aiText }]);
       setMessages(final);
-      if (!isGreeting) saveMemory(final); // Save conversation memory after user interactions
+      saveMemory(final); // Save conversation memory after every interaction
       doType(aiText, function() { doSpeak(aiText); });
     } catch(e) {
       var fb = useLang === 'ar' ? 'عذراً، حدث خطأ.' : 'Sorry, something went wrong.';
