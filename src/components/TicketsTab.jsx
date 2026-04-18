@@ -10,7 +10,7 @@ const STATUS_DESC = {New:'Just created — nobody has looked at it yet',Acknowle
   'On Hold':'Paused intentionally — not urgent right now',Review:'Work done — needs someone to check/approve',Closed:'Complete — no more action needed',Reopened:'Was closed but needs more work'};
 const USER_COLORS = ['#8b5cf6','#0ea5e9','#f59e0b','#10b981','#ec4899','#ef4444','#6366f1','#14b8a6','#f97316','#06b6d4','#a855f7','#84cc16'];
 
-export default function TicketsTab({ customers, user, userProfile, users, onReload, lang, isAdmin, modulePerms, openTicketId, onOpenTicketHandled }) {
+export default function TicketsTab({ toast, customers, user, userProfile, users, onReload, lang, isAdmin, modulePerms, openTicketId, onOpenTicketHandled }) {
   const myId = userProfile?.id || user?.id;
   const canManage = isAdmin || userProfile?.role === 'super_admin' || userProfile?.role === 'admin';
   const isSuperAdmin = userProfile?.role === 'super_admin';
@@ -20,7 +20,7 @@ export default function TicketsTab({ customers, user, userProfile, users, onRelo
   // Multi-assign helpers
   const parseAssignees = (t) => {
     const list = [t.assigned_to].filter(Boolean);
-    try { const extra = JSON.parse(t.additional_assignees || '[]'); if (Array.isArray(extra)) extra.forEach(id => { if (id && !list.includes(id)) list.push(id); }); } catch(e) {}
+    try { const extra = JSON.parse(t.additional_assignees || '[]'); if (Array.isArray(extra)) extra.forEach(id => { if (id && !list.includes(id)) list.push(id); }); } catch(e) { console.warn(e); }
     return list;
   };
   const isAssignedToMe = (t) => parseAssignees(t).includes(myId);
@@ -57,6 +57,9 @@ export default function TicketsTab({ customers, user, userProfile, users, onRelo
   const [sortBy, setSortBy] = useState('date');
   const [loaded, setLoaded] = useState(false);
   const [listening, setListening] = useState(false);
+  const [bulkSelected, setBulkSelected] = useState(new Set());
+  const [bulkAction, setBulkAction] = useState(null);
+  const [confirmDel, setConfirmDel] = useState(null);
 
   const todayStr = new Date().toISOString().substring(0, 10);
   const getUserName = (id) => (users || []).find(u => u.id === id)?.name || '';
@@ -125,7 +128,7 @@ export default function TicketsTab({ customers, user, userProfile, users, onRelo
       const allToNotify = [f.assignedTo, ...extraAssignees].filter(id => id && id !== myId);
       if (allToNotify.length) notifyTicketAssigned(allToNotify, ticketNum + ' ' + f.title, myId);
       setShowAdd(false); setF({}); loadTickets();
-    } catch (err) { alert('Error: ' + err.message); }
+    } catch (err) { toast ? toast.error(err.message) : toast ? toast.error(err.message) : alert(err.message); }
   };
 
   const updateStatus = async (ticket, newStatus) => {
@@ -142,7 +145,7 @@ export default function TicketsTab({ customers, user, userProfile, users, onRelo
       if (extras.length) notifyTicketStatus(extras, ticket.title, newStatus, myId);
       loadTickets();
       if (sel && sel.id === ticket.id) { setSel({...sel, ...updates}); loadComments(ticket.id); }
-    } catch (err) { alert('Error: ' + err.message); }
+    } catch (err) { toast ? toast.error(err.message) : toast ? toast.error(err.message) : alert(err.message); }
   };
 
   const reassignTicket = async (ticket, newUserId) => {
@@ -157,7 +160,7 @@ export default function TicketsTab({ customers, user, userProfile, users, onRelo
       if (ticket.created_by && ticket.created_by !== myId && ticket.created_by !== newUserId && ticket.created_by !== ticket.assigned_to) notifyTicketReassigned([ticket.created_by], ticket.title, myId);
       loadTickets();
       if (sel && sel.id === ticket.id) { setSel({...sel, assigned_to: newUserId}); loadComments(ticket.id); }
-    } catch (err) { alert('Error: ' + err.message); }
+    } catch (err) { toast ? toast.error(err.message) : toast ? toast.error(err.message) : alert(err.message); }
   };
 
   const addComment = async () => {
@@ -171,24 +174,59 @@ export default function TicketsTab({ customers, user, userProfile, users, onRelo
       const extras = parseAssignees(sel).filter(id => id !== myId && id !== sel.assigned_to && id !== sel.created_by);
       if (extras.length) notifyTicketComment(extras, sel.title, f.comment, myId);
       setF({...f, comment: ''}); loadComments(sel.id);
-    } catch (err) { alert('Error: ' + err.message); }
+    } catch (err) { toast ? toast.error(err.message) : toast ? toast.error(err.message) : alert(err.message); }
   };
 
   const deleteTicket = async (ticket) => {
-    if (!canDeleteTicket(ticket)) {
-      const isOwner = ticket.created_by === myId;
-      if (isOwner) alert('You can only delete your own tickets within 3 days of creation.\n\nيمكنك حذف تذاكرك فقط خلال 3 أيام من الإنشاء.');
-      else alert('You cannot delete other users\' tickets.\n\nلا يمكنك حذف تذاكر المستخدمين الآخرين.');
-      return;
-    }
-    if (!confirm('Permanently delete ' + (ticket.ticket_number || '') + ' "' + ticket.title + '"?\n\nThis cannot be undone.')) return;
+    if (!canDeleteTicket(ticket)) return;
+    setConfirmDel(ticket);
+  };
+
+  const executeDelete = async () => {
+    const ticket = confirmDel;
+    if (!ticket) return;
+    setConfirmDel(null);
     try {
-      // Delete comments first (foreign key)
       await supabase.from('ticket_comments').delete().eq('ticket_id', ticket.id);
       await dbDelete('tickets', ticket.id, myId);
       await logActivity(myId, 'Deleted ticket: ' + (ticket.ticket_number || '') + ' ' + ticket.title, 'ticket');
       setSel(null); setComments([]); loadTickets();
-    } catch (err) { alert('Error: ' + err.message); }
+    } catch (err) { toast ? toast.error(err.message) : toast ? toast.error(err.message) : alert(err.message); }
+  };
+
+  // Bulk actions
+  const toggleBulk = (id) => {
+    const next = new Set(bulkSelected);
+    if (next.has(id)) next.delete(id); else next.add(id);
+    setBulkSelected(next);
+  };
+  const toggleAllBulk = () => {
+    if (bulkSelected.size === filtered.length) setBulkSelected(new Set());
+    else setBulkSelected(new Set(filtered.map(t => t.id)));
+  };
+  const executeBulk = async (action, value) => {
+    if (!bulkSelected.size) return;
+    const ids = [...bulkSelected];
+    try {
+      if (action === 'status') {
+        for (const id of ids) {
+          await dbUpdate('tickets', id, { status: value, updated_by: myId }, myId);
+        }
+      } else if (action === 'assign') {
+        for (const id of ids) {
+          await dbUpdate('tickets', id, { assigned_to: value || null, updated_by: myId }, myId);
+        }
+      } else if (action === 'delete') {
+        for (const id of ids) {
+          await supabase.from('ticket_comments').delete().eq('ticket_id', id);
+          await dbDelete('tickets', id, myId);
+        }
+      }
+      await logActivity(myId, 'Bulk ' + action + ' on ' + ids.length + ' tickets', 'ticket');
+      setBulkSelected(new Set());
+      setBulkAction(null);
+      loadTickets();
+    } catch (err) { toast ? toast.error(err.message) : toast ? toast.error(err.message) : alert(err.message); }
   };
 
   // ===== TICKET DETAIL VIEW =====
@@ -282,7 +320,7 @@ export default function TicketsTab({ customers, user, userProfile, users, onRelo
                       await dbUpdate('tickets', sel.id, { due_date: val, updated_by: myId }, myId);
                       await logActivity(myId, 'Changed due date on ' + (sel.ticket_number || sel.title) + ' to ' + (val || 'none'), 'ticket');
                       loadTickets(); setSel({...sel, due_date: val});
-                    } catch(err) { alert('Error: ' + err.message); }
+                    } catch(err) { toast ? toast.error(err.message) : toast ? toast.error(err.message) : alert(err.message); }
                   }} className="px-3 py-1 bg-blue-500 text-white rounded text-[10px] font-semibold">Set</button>
                 </div>
               ) : (
@@ -530,21 +568,69 @@ export default function TicketsTab({ customers, user, userProfile, users, onRelo
       </div>
     </div>)}
 
+    {/* Confirm Delete Modal */}
+    {confirmDel && (
+      <div className="fixed inset-0 bg-black/50 z-[250] flex items-center justify-center p-4" onClick={() => setConfirmDel(null)}>
+        <div className="bg-white rounded-2xl p-6 max-w-md w-full shadow-2xl" onClick={e => e.stopPropagation()}>
+          <h3 className="text-lg font-bold mb-2 text-red-600">🗑 Delete Ticket</h3>
+          <p className="text-sm text-slate-600 mb-1">Permanently delete <b>{confirmDel.ticket_number}</b>:</p>
+          <p className="text-sm font-bold mb-4">"{confirmDel.title}"</p>
+          <p className="text-xs text-red-500 mb-5">This cannot be undone. All comments will also be deleted.</p>
+          <div className="flex gap-3 justify-end">
+            <button onClick={() => setConfirmDel(null)} className="px-4 py-2 border border-slate-200 rounded-lg text-sm font-semibold">Cancel</button>
+            <button onClick={executeDelete} className="px-4 py-2 bg-red-500 text-white rounded-lg text-sm font-bold hover:bg-red-600">Delete Permanently</button>
+          </div>
+        </div>
+      </div>
+    )}
+
+    {/* Bulk Action Bar */}
+    {bulkSelected.size > 0 && (
+      <div className="sticky top-0 z-20 bg-blue-600 text-white rounded-xl p-3 mb-3 flex items-center gap-3 flex-wrap shadow-lg">
+        <span className="text-sm font-bold">{bulkSelected.size} selected</span>
+        <select value="" onChange={async (e) => { if (e.target.value) { const ok = window.confirm('Change status of ' + bulkSelected.size + ' tickets to "' + e.target.value + '"?'); if (ok) await executeBulk('status', e.target.value); e.target.value = ''; } }}
+          className="px-2 py-1 rounded text-xs text-slate-800 font-semibold">
+          <option value="">Change Status...</option>
+          {STATUSES.map(s => <option key={s} value={s}>{s}</option>)}
+        </select>
+        <select value="" onChange={async (e) => { if (e.target.value) { await executeBulk('assign', e.target.value === '_none' ? null : e.target.value); e.target.value = ''; } }}
+          className="px-2 py-1 rounded text-xs text-slate-800 font-semibold">
+          <option value="">Reassign...</option>
+          <option value="_none">Unassign</option>
+          {(users || []).map(u => <option key={u.id} value={u.id}>{u.name}</option>)}
+        </select>
+        {canManage && (
+          <button onClick={async () => { const ok = window.confirm('Delete ' + bulkSelected.size + ' tickets permanently?'); if (ok) await executeBulk('delete'); }}
+            className="px-3 py-1 bg-red-500 rounded text-xs font-bold hover:bg-red-600">🗑 Delete ({bulkSelected.size})</button>
+        )}
+        <button onClick={() => setBulkSelected(new Set())} className="px-3 py-1 bg-white/20 rounded text-xs font-semibold ml-auto">✕ Clear</button>
+      </div>
+    )}
+
     {/* Ticket Cards */}
     <div className="space-y-2">
+      {filtered.length > 0 && (
+        <label className="flex items-center gap-2 px-4 py-1 text-[10px] text-slate-400 font-semibold cursor-pointer hover:text-slate-600">
+          <input type="checkbox" checked={bulkSelected.size === filtered.length && filtered.length > 0}
+            onChange={toggleAllBulk} className="w-3.5 h-3.5 rounded" />
+          Select All ({filtered.length})
+        </label>
+      )}
       {filtered.map(t => {
         const priColor = PRIORITIES.find(p=>p.v===t.priority)?.c||'#f59e0b';
         const tAssignees = parseAssignees(t);
         const createdName = getUserName(t.created_by);
         const isOverdue = t.due_date && t.due_date < todayStr && t.status !== 'Closed';
         const needsAck = t.status === 'New' && isAssignedToMe(t);
+        const isBulked = bulkSelected.has(t.id);
         return (
-          <div key={t.id} onClick={()=>{setSel(t);loadComments(t.id);}}
-            className="bg-white rounded-xl border border-slate-200 hover:border-slate-300 hover:shadow-sm transition cursor-pointer overflow-hidden">
+          <div key={t.id} className={'bg-white rounded-xl border-2 hover:shadow-sm transition cursor-pointer overflow-hidden ' + (isBulked ? 'border-blue-400 ring-1 ring-blue-200' : 'border-slate-200 hover:border-slate-300')}>
             <div className="h-1" style={{ background: STATUS_COLORS[t.status] || '#6b7280' }} />
             <div className="px-4 py-3">
-              <div className="flex justify-between items-center gap-2 mb-2">
-                <div className="flex items-center gap-2 flex-1 min-w-0">
+              <div className="flex items-center gap-2 mb-2">
+                <input type="checkbox" checked={isBulked} onChange={(e) => { e.stopPropagation(); toggleBulk(t.id); }}
+                  onClick={e => e.stopPropagation()} className="w-4 h-4 rounded flex-shrink-0" />
+                <div className="flex items-center gap-2 flex-1 min-w-0" onClick={()=>{setSel(t);loadComments(t.id);}}>
                   {t.ticket_number && <span className="text-[10px] font-mono text-blue-500 bg-blue-50 px-1.5 py-0.5 rounded flex-shrink-0">{t.ticket_number}</span>}
                   <span className="text-sm font-bold truncate">{t.title}</span>
                 </div>
@@ -553,8 +639,9 @@ export default function TicketsTab({ customers, user, userProfile, users, onRelo
                   <span className="px-2 py-0.5 rounded text-[9px] font-bold text-white" style={{background:STATUS_COLORS[t.status]}}>{t.status}</span>
                 </div>
               </div>
-              {t.description && <div className="text-[11px] text-slate-500 mb-2 line-clamp-1">{t.description}</div>}
-              <div className="flex items-center gap-2 flex-wrap">
+              <div onClick={()=>{setSel(t);loadComments(t.id);}}>
+              {t.description && <div className="text-[11px] text-slate-500 mb-2 line-clamp-1 ml-6">{t.description}</div>}
+              <div className="flex items-center gap-2 flex-wrap ml-6">
                 <span className="inline-flex items-center gap-1 text-[10px] bg-slate-50 text-slate-600 px-2 py-0.5 rounded">
                   <span className="w-1.5 h-1.5 rounded-full bg-blue-400" />{createdName || '?'}</span>
                 {tAssignees.length > 0 ? tAssignees.map(uid => (
@@ -566,6 +653,7 @@ export default function TicketsTab({ customers, user, userProfile, users, onRelo
                 {t.due_date && <span className={'inline-flex items-center gap-1 text-[10px] px-2 py-0.5 rounded ' + (isOverdue ? 'bg-red-100 text-red-700 font-bold' : 'bg-slate-50 text-slate-600')}>📅 {t.due_date}{isOverdue ? ' OVERDUE' : ''}</span>}
                 {t.order_number && <span className="text-[10px] bg-slate-50 text-slate-500 px-2 py-0.5 rounded">#{t.order_number}</span>}
                 <span className="text-[10px] text-slate-400 ml-auto">{new Date(t.created_at).toLocaleDateString()}</span>
+              </div>
               </div>
             </div>
             {needsAck && (

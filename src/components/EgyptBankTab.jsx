@@ -4,7 +4,7 @@ import { supabase, dbInsert, dbUpdate, dbDelete, logActivity } from '../lib/supa
 import * as XLSX from 'xlsx';
 import { EXPENSE_CATS } from '../lib/utils';
 
-export default function EgyptBankTab({ user, userProfile, isAdmin, invoices, onReload }) {
+export default function EgyptBankTab({ toast, user, userProfile, isAdmin, invoices, onReload }) {
   const [accounts, setAccounts] = useState([]);
   const [transactions, setTransactions] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -153,7 +153,7 @@ export default function EgyptBankTab({ user, userProfile, isAdmin, invoices, onR
     }
 
     if (sparseDateCol >= 0) {
-      console.log('📊 Detected sparse bank statement, date column:', sparseDateCol);
+      console.warn('📊 Detected sparse bank statement, date column:', sparseDateCol);
       
       // Find description column (column with most cells containing LETTERS)
       let sparseDescCol = -1, maxText = 0;
@@ -193,7 +193,7 @@ export default function EgyptBankTab({ user, userProfile, isAdmin, invoices, onR
       } else if (sortedAmtCols.length === 1) {
         creditCol = sortedAmtCols[0];
       }
-      console.log('Columns — date:', sparseDateCol, 'desc:', sparseDescCol, 'debit:', debitCol, 'credit:', creditCol, 'balance:', balCol);
+      console.warn('Columns — date:', sparseDateCol, 'desc:', sparseDescCol, 'debit:', debitCol, 'credit:', creditCol, 'balance:', balCol);
 
       // Group rows into transactions
       const transactions = [];
@@ -477,7 +477,7 @@ export default function EgyptBankTab({ user, userProfile, isAdmin, invoices, onR
       try {
         await supabase.from('egypt_bank_transactions').update({ category: batch.category, subcategory: batch.subcategory || null }).in('id', batch.ids);
         matched += batch.ids.length;
-      } catch(e) {}
+      } catch(e) { console.warn(e); }
     }
 
     // Batch propagate subcategories
@@ -492,7 +492,7 @@ export default function EgyptBankTab({ user, userProfile, isAdmin, invoices, onR
         try {
           await supabase.from('egypt_bank_transactions').update({ subcategory: sub }).in('id', ids);
           propagated += ids.length;
-        } catch(e) {}
+        } catch(e) { console.warn(e); }
       }
     }
 

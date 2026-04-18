@@ -109,3 +109,9 @@ export const inRange = (d, mode, df, dt) => {
   }
   return d >= df && d <= dt;
 };
+
+// Sanitize text input — strip HTML tags and script injections
+export const sanitize = (str) => {
+  if (!str || typeof str !== 'string') return str || '';
+  return str.replace(/<[^>]*>/g, '').replace(/javascript:/gi, '').replace(/on\w+\s*=/gi, '').trim();
+};

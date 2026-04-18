@@ -31,7 +31,7 @@ export default function CommunicationsTab({ user, supabase }) {
     try {
       var res = await supabase.from('messages').select('*').order('created_at', { ascending: false }).limit(50);
       if (res.data) setMessages(res.data);
-    } catch(e) {}
+    } catch(e) { console.warn(e); }
   }
 
   async function checkGmail() {
@@ -66,7 +66,7 @@ export default function CommunicationsTab({ user, supabase }) {
       var res = await fetch('/api/gmail/inbox?threadId=' + threadId);
       var data = await res.json();
       if (data.thread) setThreadMessages(data.thread);
-    } catch(e) {}
+    } catch(e) { console.warn(e); }
     setLoading(false);
   }
 
@@ -75,7 +75,7 @@ export default function CommunicationsTab({ user, supabase }) {
     try {
       var res = await supabase.from('comms_audit').select('*').order('created_at', { ascending: false }).limit(30);
       if (res.data) setAuditLog(res.data);
-    } catch(e) {}
+    } catch(e) { console.warn(e); }
   }
 
   async function handleSend() {

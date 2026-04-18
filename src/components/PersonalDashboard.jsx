@@ -33,12 +33,12 @@ export default function PersonalDashboard({ user, userProfile, isAdmin, invoices
       supabase.from('follow_ups').select('*, customers(name, name_en)').eq('completed', false).order('due_date'),
     ]);
     setTickets(t.data || []); setEvents(e.data || []); setFollowUps(fu.data || []);
-    try { const { data: rm } = await supabase.from('reminders').select('*').eq('user_id', pid).eq('completed', false).order('due_date'); setReminders(rm || []); } catch(e) {}
+    try { const { data: rm } = await supabase.from('reminders').select('*').eq('user_id', pid).eq('completed', false).order('due_date'); setReminders(rm || []); } catch(e) { console.warn(e); }
     setLoaded(true);
   }; load(); }, [user, userProfile]);
 
-  const addReminder = async () => { if (!newReminder.trim()) return; try { await dbInsert('reminders', { user_id: myId, text: newReminder, due_date: reminderDue || null }, myId); setNewReminder(''); setReminderDue(''); const { data } = await supabase.from('reminders').select('*').eq('user_id', myId).eq('completed', false).order('due_date'); setReminders(data || []); } catch(e) {} };
-  const completeReminder = async (id) => { try { await dbUpdate('reminders', id, { completed: true }, myId); setReminders(reminders.filter(r => r.id !== id)); } catch(e) {} };
+  const addReminder = async () => { if (!newReminder.trim()) return; try { await dbInsert('reminders', { user_id: myId, text: newReminder, due_date: reminderDue || null }, myId); setNewReminder(''); setReminderDue(''); const { data } = await supabase.from('reminders').select('*').eq('user_id', myId).eq('completed', false).order('due_date'); setReminders(data || []); } catch(e) { console.warn(e); } };
+  const completeReminder = async (id) => { try { await dbUpdate('reminders', id, { completed: true }, myId); setReminders(reminders.filter(r => r.id !== id)); } catch(e) { console.warn(e); } };
 
   if (!loaded) return <div className="text-center text-slate-400 py-4 text-sm">Loading...</div>;
 

@@ -40,7 +40,7 @@ export async function POST(request) {
       const newTranslations = {};
       for (let i = 0; i < needTranslation.length; i += 30) {
         const chunk = needTranslation.slice(i, i + 30);
-        const numbered = chunk.map((t, idx) => `${idx + 1}. ${t}`).join('\n');
+        var numbered = chunk.map(function(t, idx) { return (idx + 1) + '. ' + t; }).join('\n');
         
         try {
           const response = await fetch('https://api.anthropic.com/v1/messages', {
@@ -53,17 +53,8 @@ export async function POST(request) {
             body: JSON.stringify({
               model: 'claude-sonnet-4-20250514',
               max_tokens: 4000,
-              system: `You are a professional Arabic-to-English translator for a business context (trading company in Egypt dealing with textiles, leather, chemicals, shipping).
-
-RULES:
-- Translate each numbered line from Arabic to English
-- For person names: use common English spellings (e.g. محمد = Mohamed, أحمد = Ahmed, عبد الناصر = Abdel Nasser, مصطفى = Mostafa)
-- For business terms: use standard business English
-- For descriptions of expenses/transactions: keep it concise and clear
-- Return ONLY the translations, one per line, numbered to match input
-- If text is already English or just numbers, return it as-is
-- Format: "1. English translation\\n2. English translation\\n..."`,
-              messages: [{ role: 'user', content: `Translate these ${chunk.length} items:\n\n${numbered}` }],
+              system: 'You are a professional Arabic-to-English translator for a business context (trading company in Egypt dealing with textiles, leather, chemicals, shipping). RULES: Translate each numbered line from Arabic to English. For person names: use common English spellings. For business terms: use standard business English. For descriptions: keep it concise and clear. Return ONLY translations, one per line, numbered to match input. If text is already English or just numbers, return as-is. Format: 1. English translation (one per line).',
+              messages: [{ role: 'user', content: 'Translate these ' + chunk.length + ' items:\n\n' + numbered }],
             }),
           });
 
@@ -180,8 +171,8 @@ RULES:
 
       const { data, error } = await supabase
         .from(table)
-        .select(`id, ${arCol}`)
-        .or(`${enCol}.is.null,${enCol}.eq.`)
+        .select('id, ' + arCol)
+        .or(enCol + '.is.null,' + enCol + '.eq.')
         .not(arCol, 'is', null)
         .neq(arCol, '')
         .limit(limit);

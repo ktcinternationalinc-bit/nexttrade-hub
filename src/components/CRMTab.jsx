@@ -18,7 +18,7 @@ const PIPELINE_STAGES = [
   { v: 'lost', l: 'Lost', c: '#ef4444', icon: '❌' },
 ];
 
-export default function CRMTab({ customers, invoices, user, userProfile, users, onReload, isAdmin, onSelectInvoice, lang, modulePerms, initialClient }) {
+export default function CRMTab({ toast, customers, invoices, user, userProfile, users, onReload, isAdmin, onSelectInvoice, lang, modulePerms, initialClient }) {
   const myId = userProfile?.id;
   const canViewAll = isAdmin || modulePerms?.['CRM View All'] === true;
   const canViewContacts = isAdmin || modulePerms?.['CRM View Contacts'] === true;
@@ -64,9 +64,9 @@ export default function CRMTab({ customers, invoices, user, userProfile, users, 
         try {
           if (row.setting_key === 'custom_categories') setCustomCategories(JSON.parse(row.setting_value));
           if (row.setting_key === 'custom_groups') setCustomGroups(JSON.parse(row.setting_value));
-        } catch(e) {}
+        } catch(e) { console.warn(e); }
       });
-    } catch(e) { console.log('Custom lists not loaded:', e); }
+    } catch(e) { console.warn('Custom lists not loaded:', e); }
     setListsLoaded(true);
   };
   if (!listsLoaded) loadCustomLists();
@@ -83,7 +83,7 @@ export default function CRMTab({ customers, invoices, user, userProfile, users, 
       } else {
         await supabase.from('app_settings').insert({ setting_key: key, setting_value: JSON.stringify(list) });
       }
-    } catch(e) { console.log('Save list error:', e); }
+    } catch(e) { console.warn('Save list error:', e); }
   };
 
   const addCategory = async (name) => {
@@ -123,7 +123,7 @@ export default function CRMTab({ customers, invoices, user, userProfile, users, 
       }, myId);
       await logActivity(myId, type + ' contact with: ' + sel.name + (notes ? ' — ' + notes : ''), 'crm');
       loadClientData(sel);
-    } catch(err) { console.log('Contact log error:', err); }
+    } catch(err) { console.warn('Contact log error:', err); }
   };
 
   const openWhatsApp = (phone) => {
@@ -212,7 +212,7 @@ export default function CRMTab({ customers, invoices, user, userProfile, users, 
       }, myId);
       await logActivity(myId, 'Created client: ' + f.name, 'crm');
       setShowAdd(false); setF({}); onReload(); loadAllNotes();
-    } catch (err) { alert('Error / خطأ: ' + err.message); }
+    } catch (err) { toast ? toast.error(err.message) : toast ? toast.error(err.message) : alert(err.message); }
   };
 
   const handleEditClient = async () => {
@@ -235,7 +235,7 @@ export default function CRMTab({ customers, invoices, user, userProfile, users, 
       if (f.assignedRep && f.assignedRep !== sel.assigned_rep) notifyClientAssigned([f.assignedRep], f.name || sel.name, myId);
       setEditingClient(false); setF({}); onReload();
       loadClientData({...sel, name: f.name || sel.name});
-    } catch (err) { alert('Error / خطأ: ' + err.message); }
+    } catch (err) { toast ? toast.error(err.message) : toast ? toast.error(err.message) : alert(err.message); }
   };
 
   const handleAddNote = async () => {
@@ -249,7 +249,7 @@ export default function CRMTab({ customers, invoices, user, userProfile, users, 
           `<p>A note was added to client <strong>${sel.name}</strong>:</p><p style="color:#64748b;font-style:italic;">"${(f.noteText || '').slice(0, 200)}"</p>`, myId);
       }
       setShowNote(false); setF({}); loadClientData(sel); loadAllNotes();
-    } catch (err) { alert('Error / خطأ: ' + err.message); }
+    } catch (err) { toast ? toast.error(err.message) : toast ? toast.error(err.message) : alert(err.message); }
   };
 
   const handleAddFollowUp = async () => {
@@ -277,7 +277,7 @@ export default function CRMTab({ customers, invoices, user, userProfile, users, 
       await logActivity(myId, 'Created follow-up for ' + sel.name + ': ' + f.task, 'crm');
       if (assignTo && assignTo !== myId) notifyFollowUp([assignTo], sel.name, f.task, myId);
       setShowFollowUp(false); setF({}); loadClientData(sel);
-    } catch (err) { alert('Error / خطأ: ' + err.message); }
+    } catch (err) { toast ? toast.error(err.message) : toast ? toast.error(err.message) : alert(err.message); }
   };
 
   const completeFollowUp = async (id) => {
@@ -285,7 +285,7 @@ export default function CRMTab({ customers, invoices, user, userProfile, users, 
       await dbUpdate('follow_ups', id, { completed: true, completed_at: new Date().toISOString() }, myId);
       await logActivity(myId, 'Completed follow-up for ' + sel.name, 'crm');
       loadClientData(sel);
-    } catch (err) { alert('Error / خطأ: ' + err.message); }
+    } catch (err) { toast ? toast.error(err.message) : toast ? toast.error(err.message) : alert(err.message); }
   };
 
   const changeStage = async (client, newStage) => {
@@ -298,7 +298,7 @@ export default function CRMTab({ customers, invoices, user, userProfile, users, 
       if (client.assigned_rep && client.assigned_rep !== myId) notifyCRMStatus([client.assigned_rep], client.name, stageName, myId);
       if (sel && sel.id === client.id) { setSel({...sel, pipeline_stage: newStage}); loadClientData({...sel, pipeline_stage: newStage}); }
       onReload();
-    } catch (err) { alert('Error: ' + err.message); }
+    } catch (err) { toast ? toast.error(err.message) : toast ? toast.error(err.message) : alert(err.message); }
   };
 
   // ===== LIST VIEW =====
@@ -590,7 +590,7 @@ export default function CRMTab({ customers, invoices, user, userProfile, users, 
                 await dbUpdate('customers', sel.id, { important: newVal }, myId);
                 setSel({...sel, important: newVal});
                 onReload();
-              } catch(err) { alert('Error: ' + err.message); }
+              } catch(err) { toast ? toast.error(err.message) : toast ? toast.error(err.message) : alert(err.message); }
             }} className={'mt-2 px-3 py-1.5 rounded-lg text-xs font-bold border-2 transition ' + (sel.important ? 'border-amber-400 bg-amber-50 text-amber-700' : 'border-slate-200 text-slate-400')}>
               {sel.important ? '⭐ Important Client / عميل مهم' : '☆ Mark as Important / تعيين كمهم'}
             </button>
@@ -623,7 +623,7 @@ export default function CRMTab({ customers, invoices, user, userProfile, users, 
                       await dbUpdate('customers', sel.id, { restricted: e.target.checked }, myId);
                       setSel({...sel, restricted: e.target.checked});
                       onReload();
-                    } catch (err) { alert('Error: ' + err.message); }
+                    } catch (err) { toast ? toast.error(err.message) : toast ? toast.error(err.message) : alert(err.message); }
                   }} className="w-4 h-4" />
                 <label className="text-xs font-semibold text-red-700">Restricted — Admin Only / مقيد — للمسؤول فقط</label>
               </div>

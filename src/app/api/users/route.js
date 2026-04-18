@@ -63,7 +63,7 @@ export async function POST(request) {
     var allModules = ['Dashboard', 'Sales', 'Customers', 'Treasury', 'Checks', 'Debts',
       'Warehouse', 'Inventory', 'CRM', 'Tickets', 'Calendar', 'Customs',
       'Shipping Rates', 'Daily Log', 'Admin', 'AI Assistant', 'Communications', 'Settings', 'Import',
-      'Bank', 'Egypt Bank', 'Quotes', 'Reports'];
+      'Bank', 'Egypt Bank', 'Quotes', 'Reports', 'Welcome Briefing'];
     var selectedMods = body.modules && Array.isArray(body.modules) ? body.modules : [];
     var permRecords = allModules.map(function(mod) {
       return { user_id: dbResult.data.id, module_name: mod, has_access: selectedMods.includes(mod) };

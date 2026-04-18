@@ -3,6 +3,7 @@ import { useState, useEffect } from 'react';
 import { supabase, dbInsert, dbUpdate } from '../lib/supabase';
 import { EXPENSE_CATS } from '../lib/utils';
 import TranslationPanel from './TranslationPanel';
+import { PERSONALITIES } from './AIGreeter';
 
 const ROLES = [
   { v: 'super_admin', l: '🔴 Super Admin', c: 'text-red-500' },
@@ -19,7 +20,7 @@ const MODULES = [
   // Granular permissions
   'Edit Treasury', 'Edit Invoices', 'Delete Invoices', 'Edit Inventory', 'Edit Warehouse',
   'Edit CRM', 'View Costs', 'Delete Tickets', 'Assign Tickets', 'Merge Customers',
-  'Manage Categories', 'Export Data', 'Post Reminders',
+  'Manage Categories', 'Export Data', 'Post Reminders', 'Welcome Briefing',
 ];
 
 const NOTIF_TYPES = [
@@ -40,7 +41,7 @@ const NOTIF_TYPES = [
   { v: 'reminder', l: 'Team Reminders / تذكيرات الفريق' },
 ];
 
-export default function SettingsTab({ user, users, onReload, isAdmin, userProfile }) {
+export default function SettingsTab({ toast, user, users, onReload, isAdmin, userProfile }) {
   const isSuperAdmin = userProfile?.role === 'super_admin';
   const [section, setSection] = useState('roles');
   const [showAddMember, setShowAddMember] = useState(false);
@@ -88,7 +89,7 @@ export default function SettingsTab({ user, users, onReload, isAdmin, userProfil
         if (t.subcategory && !descMap[desc].subcategory) descMap[desc].subcategory = t.subcategory;
       });
       setExpDescs(Object.values(descMap).sort((a, b) => b.total - a.total));
-    } catch(e) { console.log('Expense desc load error:', e); }
+    } catch(e) { console.warn('Expense desc load error:', e); }
     const pMap = {};
     (perms.data || []).forEach(p => {
       if (!pMap[p.user_id]) pMap[p.user_id] = {};
@@ -174,7 +175,7 @@ export default function SettingsTab({ user, users, onReload, isAdmin, userProfil
       var data = await res.json();
       if (data.error) alert('Error: ' + data.error);
       else { onReload(); loadPrefs(); }
-    } catch (err) { alert('Error: ' + err.message); }
+    } catch (err) { toast ? toast.error(err.message) : toast ? toast.error(err.message) : alert(err.message); }
   };
 
   const handleDeactivateUser = async (userId, userName) => {
@@ -184,7 +185,7 @@ export default function SettingsTab({ user, users, onReload, isAdmin, userProfil
       var data = await res.json();
       if (data.error) alert('Error: ' + data.error);
       else { onReload(); loadPrefs(); }
-    } catch (err) { alert('Error: ' + err.message); }
+    } catch (err) { toast ? toast.error(err.message) : toast ? toast.error(err.message) : alert(err.message); }
   };
 
   const handlePermanentDelete = async (userId, userName) => {
@@ -195,7 +196,7 @@ export default function SettingsTab({ user, users, onReload, isAdmin, userProfil
       var data = await res.json();
       if (data.error) alert('Error: ' + data.error);
       else { alert(userName + ' has been permanently deleted.'); onReload(); loadPrefs(); }
-    } catch (err) { alert('Error: ' + err.message); }
+    } catch (err) { toast ? toast.error(err.message) : toast ? toast.error(err.message) : alert(err.message); }
   };
 
   const toggleModule = (mod) => {
@@ -211,7 +212,7 @@ export default function SettingsTab({ user, users, onReload, isAdmin, userProfil
 
       {/* Section Tabs */}
       <div className="flex gap-1 mb-3 flex-wrap">
-        {[['roles', 'Team & Roles'], ['permissions', 'Module Access'], ['notifications', 'Notifications'], ['comms', '📬 Communications'], ['categories', '🏷️ Categories'], ['rules', 'Category Rules / قواعد'], ['expenses', '📋 Expense Descriptions'], ['translation', '🌐 Translation / ترجمة']].map(([v, l]) => (
+        {[['roles', 'Team & Roles'], ['permissions', 'Module Access'], ['notifications', 'Notifications'], ['comms', '📬 Communications'], ['greeter', '🤖 AI Greeter'], ['categories', '🏷️ Categories'], ['rules', 'Category Rules / قواعد'], ['expenses', '📋 Expense Descriptions'], ['translation', '🌐 Translation / ترجمة']].map(([v, l]) => (
           <button key={v} onClick={() => setSection(v)}
             className={'px-3 py-1.5 rounded-lg text-xs font-semibold transition ' + (section === v ? 'bg-slate-900 text-white' : 'bg-slate-100 text-slate-500')}>
             {l}
@@ -396,7 +397,7 @@ export default function SettingsTab({ user, users, onReload, isAdmin, userProfil
             <tbody>
               {/* Tab Access */}
               <tr><td colSpan={nonSuperUsers.length + 1} className="px-2 py-2 bg-blue-50 text-[10px] font-bold text-blue-700 border-b border-blue-200">📑 TAB ACCESS — which tabs the user can see</td></tr>
-              {['Dashboard', 'Personal Dashboard', 'Sales', 'Customers', 'Treasury', 'Checks', 'Debts', 'Warehouse', 'Inventory', 'CRM', 'Tickets', 'Calendar', 'Customs', 'Shipping Rates', 'Quotes', 'Bank', 'Egypt Bank', 'Reports', 'Daily Log', 'Admin', 'AI Assistant', 'Communications', 'Settings', 'Import'].map(mod => (
+              {['Dashboard', 'Personal Dashboard', 'Sales', 'Customers', 'Treasury', 'Checks', 'Debts', 'Warehouse', 'Inventory', 'CRM', 'Tickets', 'Calendar', 'Customs', 'Shipping Rates', 'Quotes', 'Bank', 'Egypt Bank', 'Reports', 'Daily Log', 'Admin', 'AI Assistant', 'Communications', 'Settings', 'Import', 'Welcome Briefing'].map(mod => (
                 <tr key={mod} className="border-b border-slate-50">
                   <td className="px-2 py-1.5 text-[10px] font-semibold">{mod}</td>
                   {nonSuperUsers.map(u => {
@@ -509,6 +510,86 @@ export default function SettingsTab({ user, users, onReload, isAdmin, userProfil
       )}
 
       {/* ===== CATEGORIES MANAGER ===== */}
+      {/* ===== AI GREETER SETTINGS ===== */}
+      {section === 'greeter' && (
+        <div className="bg-white rounded-xl border border-slate-200 p-5">
+          <h3 className="text-base font-bold mb-1">🤖 AI Greeter Settings</h3>
+          <p className="text-xs text-slate-500 mb-4">Configure the AI personality that greets each team member when they log in. Super admin can set per-user preferences.</p>
+          
+          <div className="space-y-3">
+            {(users || []).filter(u => u.role !== 'super_admin' || isSuperAdmin).map(u => (
+              <div key={u.id} className="border border-slate-200 rounded-lg p-4">
+                <div className="flex items-center justify-between mb-3">
+                  <div>
+                    <div className="text-sm font-bold">{u.name}</div>
+                    <div className="text-[10px] text-slate-400">{u.email}</div>
+                  </div>
+                  <label className="flex items-center gap-2 cursor-pointer">
+                    <span className="text-[10px] text-slate-500">Greeter</span>
+                    <input type="checkbox" checked={u.greeter_enabled !== false}
+                      onChange={async (e) => {
+                        try {
+                          await supabase.from('users').update({ greeter_enabled: e.target.checked }).eq('id', u.id);
+                          onReload();
+                        } catch(err) { if (toast) toast.error(err.message); }
+                      }}
+                      className="w-4 h-4 rounded" />
+                  </label>
+                </div>
+                <div className="grid grid-cols-2 gap-3">
+                  <div>
+                    <label className="text-[10px] font-semibold text-slate-500 block mb-1">Personality</label>
+                    <select value={u.greeter_personality || 'friendly'}
+                      onChange={async (e) => {
+                        try {
+                          await supabase.from('users').update({ greeter_personality: e.target.value }).eq('id', u.id);
+                          onReload();
+                          if (toast) toast.success('Personality updated for ' + u.name);
+                        } catch(err) { if (toast) toast.error(err.message); }
+                      }}
+                      className="w-full px-3 py-2 rounded-lg border border-slate-200 text-xs">
+                      {(PERSONALITIES || []).map(p => (
+                        <option key={p.id} value={p.id}>{p.label} — {p.desc}</option>
+                      ))}
+                    </select>
+                  </div>
+                  <div>
+                    <label className="text-[10px] font-semibold text-slate-500 block mb-1">Language</label>
+                    <select value={u.greeter_language || 'en'}
+                      onChange={async (e) => {
+                        try {
+                          await supabase.from('users').update({ greeter_language: e.target.value }).eq('id', u.id);
+                          onReload();
+                          if (toast) toast.success('Language updated for ' + u.name);
+                        } catch(err) { if (toast) toast.error(err.message); }
+                      }}
+                      className="w-full px-3 py-2 rounded-lg border border-slate-200 text-xs">
+                      <option value="en">🇺🇸 English</option>
+                      <option value="ar">🇪🇬 Arabic / عربي</option>
+                    </select>
+                  </div>
+                </div>
+                <div className="mt-2 text-[10px] text-slate-400">
+                  Current: {(PERSONALITIES || []).find(p => p.id === (u.greeter_personality || 'friendly'))?.label || 'Friendly'} · {u.greeter_language === 'ar' ? 'Arabic' : 'English'}
+                </div>
+              </div>
+            ))}
+          </div>
+
+          <div className="mt-6 p-4 bg-indigo-50 rounded-lg border border-indigo-200">
+            <div className="text-xs font-bold text-indigo-700 mb-2">Personality Types</div>
+            <div className="grid grid-cols-2 md:grid-cols-3 gap-2">
+              {(PERSONALITIES || []).map(p => (
+                <div key={p.id} className="bg-white rounded-lg p-3 border border-indigo-100">
+                  <div className="text-sm font-bold">{p.label}</div>
+                  <div className="text-[10px] text-slate-500">{p.desc}</div>
+                </div>
+              ))}
+            </div>
+          </div>
+        </div>
+      )}
+
       {section === 'categories' && (
         <div className="bg-white rounded-xl p-4">
           <div className="flex justify-between items-center mb-4">
@@ -555,7 +636,7 @@ export default function SettingsTab({ user, users, onReload, isAdmin, userProfil
                   setF({...f, newCatAr: '', newCatEn: ''});
                   loadPrefs();
                   alert('Category "' + catName + '" added! It will now appear in all dropdowns.');
-                } catch(err) { alert('Error: ' + err.message); }
+                } catch(err) { toast ? toast.error(err.message) : toast ? toast.error(err.message) : alert(err.message); }
               }} className="px-3 py-1.5 bg-blue-500 text-white rounded text-xs font-bold">+ Add</button>
             </div>
           </div>
@@ -589,7 +670,7 @@ export default function SettingsTab({ user, users, onReload, isAdmin, userProfil
                   setF({...f, newSubName: ''});
                   loadPrefs();
                   alert('Subcategory "' + f.newSubName.trim() + '" added under ' + f.subParent);
-                } catch(err) { alert('Error: ' + err.message); }
+                } catch(err) { toast ? toast.error(err.message) : toast ? toast.error(err.message) : alert(err.message); }
               }} className="px-3 py-1.5 bg-orange-500 text-white rounded text-xs font-bold">+ Add</button>
             </div>
           </div>
@@ -663,7 +744,7 @@ export default function SettingsTab({ user, users, onReload, isAdmin, userProfil
                                 try {
                                   await dbUpdate('expense_rules', r.id, { category: e.target.value }, user?.id);
                                   loadPrefs();
-                                } catch(err) { alert('Error: ' + err.message); }
+                                } catch(err) { toast ? toast.error(err.message) : toast ? toast.error(err.message) : alert(err.message); }
                               }} className={'text-xs border rounded px-1 py-0.5 w-full ' + (isIncome ? 'bg-emerald-50' : 'bg-amber-50')}>
                                 <option value="">None</option>
                                 {Object.entries(EXPENSE_CATS).map(([ar, en]) => <option key={ar} value={ar}>{en}</option>)}
@@ -675,7 +756,7 @@ export default function SettingsTab({ user, users, onReload, isAdmin, userProfil
                                   try {
                                     await dbUpdate('expense_rules', r.id, { subcategory: e.target.value }, user?.id);
                                     loadPrefs();
-                                  } catch(err) { alert('Error: ' + err.message); }
+                                  } catch(err) { toast ? toast.error(err.message) : toast ? toast.error(err.message) : alert(err.message); }
                                 }
                               }} className="text-xs border rounded px-1 py-0.5 bg-orange-50 w-full" />
                             </td>
@@ -690,14 +771,14 @@ export default function SettingsTab({ user, users, onReload, isAdmin, userProfil
                                     }
                                     alert('Reversed ' + (matching || []).length + ' transactions');
                                     onReload();
-                                  } catch(err) { alert('Error: ' + err.message); }
+                                  } catch(err) { toast ? toast.error(err.message) : toast ? toast.error(err.message) : alert(err.message); }
                                 }} className="px-2 py-0.5 rounded border border-amber-300 text-amber-600 text-[10px] hover:bg-amber-50">Reverse</button>
                                 <button onClick={async () => {
                                   if (!confirm('Delete this rule?\nحذف هذه القاعدة؟')) return;
                                   try {
                                     await supabase.from('expense_rules').delete().eq('id', r.id);
                                     loadPrefs();
-                                  } catch(err) { alert('Error: ' + err.message); }
+                                  } catch(err) { toast ? toast.error(err.message) : toast ? toast.error(err.message) : alert(err.message); }
                                 }} className="px-2 py-0.5 rounded border border-red-300 text-red-600 text-[10px] hover:bg-red-50">Delete</button>
                               </div>
                             </td>
@@ -723,7 +804,7 @@ export default function SettingsTab({ user, users, onReload, isAdmin, userProfil
                 const data = await res.json();
                 alert('Auto-categorization complete!\n\nApplied: ' + (data.applied || 0) + ' entries\nTotal uncategorized: ' + (data.total_uncategorized || 0) + '\nRules used: ' + (data.total_rules || 0));
                 onReload();
-              } catch (err) { alert('Error: ' + err.message); }
+              } catch (err) { toast ? toast.error(err.message) : toast ? toast.error(err.message) : alert(err.message); }
             }} className="px-4 py-2 bg-blue-500 text-white rounded-lg text-xs font-bold hover:bg-blue-600 transition">
               ▶ Run Now / تشغيل الآن
             </button>
@@ -784,7 +865,7 @@ export default function SettingsTab({ user, users, onReload, isAdmin, userProfil
                       }
                       alert('Merged ' + mergeTargets.length + ' descriptions into "' + newName + '"');
                       setMergeMode(null); setMergeTargets([]); setTimeout(() => { loadPrefs(); onReload(); }, 800);
-                    } catch (err) { alert('Error: ' + err.message); }
+                    } catch (err) { toast ? toast.error(err.message) : toast ? toast.error(err.message) : alert(err.message); }
                   }} className="px-4 py-2 bg-purple-600 text-white rounded-lg text-xs font-bold">
                     ✅ Merge All
                   </button>
@@ -838,7 +919,7 @@ export default function SettingsTab({ user, users, onReload, isAdmin, userProfil
                                 if (existing) await dbUpdate('expense_rules', existing.id, { category: newCat }, user?.id);
                                 else await dbInsert('expense_rules', { description_match: d.description, category: newCat, subcategory: d.subcategory || '', rule_type: 'expense' }, user?.id);
                                 setTimeout(() => { loadPrefs(); onReload(); }, 800);
-                              } catch (err) { alert('Error: ' + err.message); }
+                              } catch (err) { toast ? toast.error(err.message) : toast ? toast.error(err.message) : alert(err.message); }
                             }}
                             className="w-full text-[10px] border rounded px-1 py-1 bg-amber-50">
                             <option value="">Uncategorized</option>
@@ -857,7 +938,7 @@ export default function SettingsTab({ user, users, onReload, isAdmin, userProfil
                                 if (existing) await dbUpdate('expense_rules', existing.id, { subcategory: newSub }, user?.id);
                                 else await dbInsert('expense_rules', { description_match: d.description, category: d.category || '', subcategory: newSub, rule_type: 'expense' }, user?.id);
                                 setTimeout(() => { loadPrefs(); onReload(); }, 800);
-                              } catch (err) { alert('Error: ' + err.message); }
+                              } catch (err) { toast ? toast.error(err.message) : toast ? toast.error(err.message) : alert(err.message); }
                             }}
                             className="w-full text-[10px] border rounded px-1 py-1 bg-orange-50" />
                         </td>

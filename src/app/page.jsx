@@ -1,7 +1,7 @@
 'use client';
-import { useState, useEffect, useMemo, useCallback, useRef } from 'react';
+import React, { useState, useEffect, useMemo, useCallback, useRef, useContext, createContext } from 'react';
 import { supabase, dbInsert, dbUpdate, dbDelete } from '../lib/supabase';
-import { fmt, fE, COLORS, EXPENSE_CATS, getReconStatus, STATUS_STYLES, today, inRange, monthOf, getWarehouseCat } from '../lib/utils';
+import { fmt, fE, COLORS, EXPENSE_CATS, getReconStatus, STATUS_STYLES, today, inRange, monthOf, getWarehouseCat, sanitize } from '../lib/utils';
 import * as XLSX from 'xlsx';
 import CRMTab from '../components/CRMTab';
 import TicketsTab from '../components/TicketsTab';
@@ -12,6 +12,7 @@ import SettingsTab from '../components/SettingsTab';
 import CustomsTab from '../components/CustomsTab';
 import PersonalDashboard from '../components/PersonalDashboard';
 import AIAssistant from '../components/AIAssistant';
+import AIGreeter, { PERSONALITIES } from '../components/AIGreeter';
 import ShippingRatesTab from '../components/ShippingRatesTab';
 import ErrorBoundary, { SafeSection } from '../components/ErrorBoundary';
 import { DashboardSkeleton, TableSkeleton, CardGridSkeleton } from '../components/LoadingSkeleton';
@@ -22,13 +23,78 @@ import EgyptBankTab from '../components/EgyptBankTab';
 import PhoneWidget from '../components/PhoneWidget';
 import ReportsTab from '../components/ReportsTab';
 
+// Toast notification system — replaces alert() across entire app
+const ToastContext = React.createContext();
+const ToastProvider = ({ children }) => {
+  const [toasts, setToasts] = useState([]);
+  const [confirmState, setConfirmState] = useState(null);
+  const addToast = useCallback((message, type = 'success', duration = 3500) => {
+    const id = Date.now() + Math.random();
+    setToasts(prev => [...prev, { id, message, type }]);
+    setTimeout(() => setToasts(prev => prev.filter(t => t.id !== id)), duration);
+  }, []);
+  const toast = useMemo(() => ({
+    success: (msg) => addToast(msg, 'success'),
+    error: (msg) => addToast(msg, 'error', 5000),
+    info: (msg) => addToast(msg, 'info'),
+    warning: (msg) => addToast(msg, 'warning', 4500),
+  }), [addToast]);
+  const confirmFn = useCallback((opts) => {
+    return new Promise((resolve) => {
+      setConfirmState({ ...opts, resolve });
+    });
+  }, []);
+  const handleConfirm = () => { if (confirmState?.resolve) confirmState.resolve(true); setConfirmState(null); };
+  const handleCancel = () => { if (confirmState?.resolve) confirmState.resolve(false); setConfirmState(null); };
+  const ctx = useMemo(() => ({ ...toast, confirm: confirmFn }), [toast, confirmFn]);
+  return (
+    <ToastContext.Provider value={ctx}>
+      {children}
+      <div className="fixed top-16 right-4 z-[300] flex flex-col gap-2 max-w-sm">
+        {toasts.map(t => (
+          <div key={t.id} className={'px-4 py-3 rounded-xl shadow-2xl border text-sm font-medium flex items-center gap-2 animate-[slideIn_0.2s_ease] ' + ({
+            success: 'bg-emerald-50 border-emerald-200 text-emerald-800',
+            error: 'bg-red-50 border-red-200 text-red-800',
+            info: 'bg-blue-50 border-blue-200 text-blue-800',
+            warning: 'bg-amber-50 border-amber-200 text-amber-800',
+          }[t.type] || 'bg-white border-slate-200 text-slate-800')}>
+            <span>{t.type === 'success' ? '✅' : t.type === 'error' ? '❌' : t.type === 'warning' ? '⚠️' : 'ℹ️'}</span>
+            <span className="flex-1">{t.message}</span>
+            <button onClick={() => setToasts(prev => prev.filter(x => x.id !== t.id))} className="text-lg opacity-40 hover:opacity-100">×</button>
+          </div>
+        ))}
+      </div>
+      <ConfirmModal open={!!confirmState} title={confirmState?.title} message={confirmState?.message}
+        confirmText={confirmState?.confirmText} cancelText={confirmState?.cancelText} danger={confirmState?.danger}
+        onConfirm={handleConfirm} onCancel={handleCancel} />
+    </ToastContext.Provider>
+  );
+};
+
+// Confirmation modal — replaces confirm()
+const ConfirmModal = ({ open, title, message, confirmText, cancelText, danger, onConfirm, onCancel }) => {
+  if (!open) return null;
+  return (
+    <div className="fixed inset-0 bg-black/50 z-[250] flex items-center justify-center p-4" onClick={onCancel}>
+      <div className="bg-white rounded-2xl p-6 max-w-md w-full shadow-2xl" onClick={e => e.stopPropagation()}>
+        <h3 className="text-lg font-bold mb-2">{title || 'Confirm'}</h3>
+        <p className="text-sm text-slate-600 mb-5">{message}</p>
+        <div className="flex gap-3 justify-end">
+          <button onClick={onCancel} className="px-4 py-2 border border-slate-200 rounded-lg text-sm font-semibold hover:bg-slate-50">{cancelText || 'Cancel'}</button>
+          <button onClick={onConfirm} className={'px-4 py-2 rounded-lg text-sm font-bold text-white ' + (danger ? 'bg-red-500 hover:bg-red-600' : 'bg-blue-500 hover:bg-blue-600')}>{confirmText || 'Confirm'}</button>
+        </div>
+      </div>
+    </div>
+  );
+};
+
 // Modal must be outside main component to prevent re-mounting on every render
 const Modal = ({ onClose, title, children }) => (
-  <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-3" onClick={onClose}>
+  <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-3" onClick={onClose} role="dialog" aria-modal="true" aria-label={title || 'Dialog'}>
     <div className="bg-white rounded-2xl p-6 max-w-2xl w-full max-h-[85vh] overflow-auto" onClick={e => e.stopPropagation()}>
       <div className="flex justify-between items-center mb-4">
         <h3 className="text-lg font-bold">{title}</h3>
-        <button onClick={onClose} className="text-2xl text-slate-400 hover:text-slate-600">×</button>
+        <button onClick={onClose} className="text-2xl text-slate-400 hover:text-slate-600" aria-label="Close dialog">×</button>
       </div>
       {children}
     </div>
@@ -322,7 +388,7 @@ export default function App() {
       } else {
         for (let i = 0; i < 6; i++) { playTone(700, i * 0.7, 0.25); playTone(900, i * 0.7 + 0.25, 0.25); }
       }
-    } catch(e) { console.log('Alarm error:', e); }
+    } catch(e) { console.warn('Alarm error:', e); }
   };
   const [reminders, setReminders] = useState([]);
   const [recentTicketUpdates, setRecentTicketUpdates] = useState([]);
@@ -336,6 +402,11 @@ export default function App() {
   const [showNotifBell, setShowNotifBell] = useState(false);
   const [showFAB, setShowFAB] = useState(false);
   const [sidebarOpen, setSidebarOpen] = useState(false);
+  const [welcomeDismissed, setWelcomeDismissed] = useState(false);
+  const [lastLoginInfo, setLastLoginInfo] = useState(null);
+  const [tabLoading, setTabLoading] = useState(false);
+  const [greeterDismissed, setGreeterDismissed] = useState(false);
+  const [greeterSettings, setGreeterSettings] = useState({ personality: 'friendly', language: 'en', enabled: true });
   const [lastLoaded, setLastLoaded] = useState(null);
   const [openTicketId, setOpenTicketId] = useState(null);
   const [egyptBankTxns, setEgyptBankTxns] = useState([]);
@@ -377,7 +448,7 @@ export default function App() {
         } else {
           for (let i = 0; i < 6; i++) { playTone(600, i * 0.8, 0.3); playTone(800, i * 0.8 + 0.3, 0.3); }
         }
-      } catch(e) {}
+      } catch(e) { console.warn('Silent error:', e.message || e); }
     }
   }, [reminders, userProfile]);
   
@@ -387,7 +458,7 @@ export default function App() {
       try {
         const { data: rems } = await supabase.from('team_reminders').select('*').or('completed.is.null,completed.eq.false').order('created_at', { ascending: false }).limit(50);
         if (rems) setReminders(rems);
-      } catch(e) {}
+      } catch(e) { console.warn('Silent error:', e.message || e); }
     }, 60000);
     return () => clearInterval(pollReminders);
   }, []);
@@ -413,7 +484,7 @@ export default function App() {
         if (ann) setAnnouncements(ann);
         const { data: acks } = await supabase.from('announcement_acks').select('*');
         if (acks) setAnnouncementAcks(acks);
-      } catch(e) {}
+      } catch(e) { console.warn('Silent error:', e.message || e); }
     }, 60000);
     return () => clearInterval(pollAnn);
   }, []);
@@ -459,8 +530,24 @@ export default function App() {
       }
     }, 5 * 60 * 1000);
 
-    // Global search shortcut: Ctrl+K / ⌘+K
-    const handleKey = (e) => { if ((e.metaKey || e.ctrlKey) && e.key === 'k') { e.preventDefault(); setShowGlobalSearch(true); } if (e.key === 'Escape') { setShowGlobalSearch(false); setShowNotifBell(false); setShowFAB(false); } };
+    // Keyboard shortcuts
+    const handleKey = (e) => {
+      // ⌘K / Ctrl+K: Global search
+      if ((e.metaKey || e.ctrlKey) && e.key === 'k') { e.preventDefault(); setShowGlobalSearch(true); return; }
+      // Escape: Close modals
+      if (e.key === 'Escape') { setShowGlobalSearch(false); setShowNotifBell(false); setShowFAB(false); setSidebarOpen(false); return; }
+      // Don't trigger shortcuts when typing in inputs
+      if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA' || e.target.tagName === 'SELECT' || e.target.isContentEditable) return;
+      // Alt + key: Navigate tabs
+      if (e.altKey) {
+        const altMap = { d: 'dashboard', s: 'sales', t: 'treasury', c: 'crm', k: 'tickets', a: 'admin', i: 'inventory', w: 'warehouse', e: 'egyptbank', l: 'calendar' };
+        if (altMap[e.key]) { e.preventDefault(); navigate(altMap[e.key]); return; }
+        // Alt+N: New (open FAB)
+        if (e.key === 'n') { e.preventDefault(); setShowFAB(true); return; }
+        // Alt+R: Refresh data
+        if (e.key === 'r') { e.preventDefault(); loadAllData(); if (toast) toast.info('Refreshing data...'); return; }
+      }
+    };
     window.addEventListener('keydown', handleKey);
     const handleClickOutside = (e) => { if (!e.target.closest('.notif-bell-wrap')) setShowNotifBell(false); if (!e.target.closest('.fab-wrap')) setShowFAB(false); };
     document.addEventListener('click', handleClickOutside);
@@ -484,9 +571,9 @@ export default function App() {
             .eq('user_id', uid).eq('date', today)
             .order('login_at', { ascending: false }).limit(1);
           // Log it
-          try { await supabase.from('daily_log').insert({ user_id: uid, entry_text: 'Auto-logged out after 30 min inactivity', log_category: 'login', log_date: today, log_time: new Date().toTimeString().substring(0,8), auto_generated: true }); } catch(e) {}
+          try { await supabase.from('daily_log').insert({ user_id: uid, entry_text: 'Auto-logged out after 30 min inactivity', log_category: 'login', log_date: today, log_time: new Date().toTimeString().substring(0,8), auto_generated: true }); } catch(e) { console.warn('Silent error:', e.message || e); }
           await supabase.auth.signOut(); window.location.href = '/login';
-        } catch(e) {}
+        } catch(e) { console.warn('Silent error:', e.message || e); }
       }, IDLE_TIMEOUT);
     };
     ['mousedown', 'keydown', 'touchstart', 'scroll'].forEach(evt => window.addEventListener(evt, resetIdle, { passive: true }));
@@ -526,7 +613,10 @@ export default function App() {
     return all;
   };
 
+  const loadingRef = useRef(false);
   const loadAllData = async () => {
+    if (loadingRef.current) return; // Prevent concurrent loads
+    loadingRef.current = true;
     try {
       const [inv, tres, chk, dbt, cust, wh, items, rules, stock] = await Promise.all([
         fetchAll('invoices', 'invoice_date'),
@@ -551,6 +641,12 @@ export default function App() {
           if (profile) {
             setUserProfile(profile);
             profileIdRef.current = profile.id;
+            // Load greeter settings
+            setGreeterSettings({
+              personality: profile.greeter_personality || 'friendly',
+              language: profile.greeter_language || 'en',
+              enabled: profile.greeter_enabled !== false,
+            });
             // Log first login of the day
             try {
               const todayStr = new Date().toISOString().substring(0, 10);
@@ -582,7 +678,7 @@ export default function App() {
             setModulePerms(permMap);
           }
         }
-      } catch(e) { console.log('Users table not ready'); }
+      } catch(e) { console.warn('Users table not ready'); }
       setInvoices(inv);
       setTreasury(tres);
       setChecks(chk);
@@ -650,10 +746,12 @@ export default function App() {
         const fxRes = await fetch('https://open.er-api.com/v6/latest/USD');
         const fxData = await fxRes.json();
         if (fxData?.rates?.EGP) setFxRate({ rate: fxData.rates.EGP, updated: fxData.time_last_update_utc });
-      } catch(e) {}
+      } catch(e) { console.warn('Silent error:', e.message || e); }
       setLastLoaded(new Date());
     } catch (err) {
       console.error('Load error:', err);
+    } finally {
+      loadingRef.current = false;
     }
   };
 
@@ -663,6 +761,25 @@ export default function App() {
   const isAdmin = userProfile?.role === 'super_admin' || userProfile?.role === 'admin';
   const isSuperAdmin = userProfile?.role === 'super_admin';
   const activeTeamUsers = useMemo(() => teamUsers.filter(u => u.active !== false), [teamUsers]);
+  const toast = useContext(ToastContext);
+
+  // Breadcrumb — shows current location
+  const TAB_GROUPS = { dashboard:'Overview', sales:'Finance', treasury:'Finance', checks:'Finance', debts:'Finance', egyptbank:'Finance', bank:'Finance', quotes:'Finance', reports:'Finance', warehouse:'Operations', inventory:'Operations', customs:'Operations', shipping:'Operations', customers:'People', crm:'People', tickets:'People', calendar:'People', comms:'People', dailylog:'People', admin:'System', ai:'System', settings:'System', import:'System' };
+  const currentTabLabel = TABS.find(t => t.id === tab)?.label?.split(' / ')[0] || tab;
+  const currentGroup = TAB_GROUPS[tab] || '';
+
+  // Name resolver
+  const getUserName = useCallback((id) => (teamUsers || []).find(u => u.id === id)?.name || '', [teamUsers]);
+
+  // Excel export helper
+  const exportExcel = (data, fileName, sheetName) => {
+    if (!data || !data.length) { if (toast) toast.warning('No data to export'); return; }
+    const ws = XLSX.utils.json_to_sheet(data);
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, sheetName || 'Data');
+    XLSX.writeFile(wb, fileName + '_' + new Date().toISOString().substring(0, 10) + '.xlsx');
+    if (toast) toast.success('Exported ' + data.length + ' rows to Excel');
+  };
   const canEditTreasury = isSuperAdmin || modulePerms?.['Edit Treasury'] === true || modulePerms?.['Treasury'] === true;
   const canEditInvoices = isSuperAdmin || modulePerms?.['Edit Invoices'] === true || modulePerms?.['Sales'] === true;
   const canEditInventory = isSuperAdmin || modulePerms?.['Edit Inventory'] === true || modulePerms?.['Inventory'] === true;
@@ -735,10 +852,11 @@ export default function App() {
 
   // ==========================================
   // AUTO-MATCH BANK PLACEHOLDERS to imported bank transactions
-  // Runs whenever treasury or egyptBankTxns change
-  // Tolerance: 1% amount, 2 days date, order# exact match (priority)
+  // Uses ref guard to prevent infinite re-trigger loop
   // ==========================================
+  const autoMatchRunning = useRef(false);
   useEffect(() => {
+    if (autoMatchRunning.current) return;
     if (!treasury.length || !egyptBankTxns.length) return;
     const placeholders = treasury.filter(t => t.is_bank_placeholder && !t.matched_bank_txn_id);
     if (!placeholders.length) return;
@@ -749,39 +867,30 @@ export default function App() {
     const matches = [];
     placeholders.forEach(ph => {
       const expAmt = Number(ph.expected_amount || 0);
-      const expDir = ph.expected_direction; // 'in' or 'out'
+      const expDir = ph.expected_direction;
       const phDate = new Date(ph.transaction_date);
-      const tolAmt = Math.max(expAmt * 0.01, 1); // 1% or min 1
+      const tolAmt = Math.max(expAmt * 0.01, 1);
       const twoDays = 2 * 86400000;
 
       const candidates = unmatchedBank.filter(b => {
-        // Same direction: bank amount sign matches expected direction
         const bankAmt = Number(b.amount);
         const bankIsIn = bankAmt > 0;
         if (expDir === 'in' && !bankIsIn) return false;
         if (expDir === 'out' && bankIsIn) return false;
-
-        // Same bank account if placeholder specified one
         if (ph.bank_account_id && b.account_id && ph.bank_account_id !== b.account_id) return false;
-
-        // Amount within 1% tolerance
         if (Math.abs(Math.abs(bankAmt) - expAmt) > tolAmt) return false;
-
-        // Date within 2 days
         const bDate = new Date(b.date);
         if (Math.abs(bDate - phDate) > twoDays) return false;
-
         return true;
       });
 
       if (!candidates.length) return;
 
-      // Score: order# match > amount closeness > date closeness
       const scored = candidates.map(b => {
         let score = 0;
         if (ph.order_number && (b.description || '').includes(ph.order_number)) score += 1000;
-        score -= Math.abs(Math.abs(Number(b.amount)) - expAmt); // smaller diff = higher
-        score -= Math.abs(new Date(b.date) - phDate) / 86400000; // days diff
+        score -= Math.abs(Math.abs(Number(b.amount)) - expAmt);
+        score -= Math.abs(new Date(b.date) - phDate) / 86400000;
         return { b, score };
       }).sort((a, b) => b.score - a.score);
 
@@ -790,40 +899,55 @@ export default function App() {
 
     if (!matches.length) return;
 
-    // Process matches
+    autoMatchRunning.current = true;
     (async () => {
-      for (const m of matches) {
-        const { placeholder, bank } = m;
-        const expAmt = Number(placeholder.expected_amount || 0);
-        const isIn = placeholder.expected_direction === 'in';
+      try {
+        for (const m of matches) {
+          const { placeholder, bank } = m;
+          const expAmt = Number(placeholder.expected_amount || 0);
+          const isIn = placeholder.expected_direction === 'in';
 
-        // Update treasury: convert from placeholder to real entry
-        const updates = {
-          is_bank_placeholder: false,
-          matched_bank_txn_id: bank.id,
-          cash_in: isIn ? expAmt : 0,
-          cash_out: !isIn ? expAmt : 0,
-          description: (placeholder.description || '').replace(' [awaiting bank confirmation]', '') + ' ✅ matched bank ' + bank.date,
-        };
+          const updates = {
+            is_bank_placeholder: false,
+            matched_bank_txn_id: bank.id,
+            cash_in: isIn ? expAmt : 0,
+            cash_out: !isIn ? expAmt : 0,
+            description: (placeholder.description || '').replace(' [awaiting bank confirmation]', '') + ' ✅ matched bank ' + bank.date,
+          };
 
-        // Find invoice to link (by order_number if placeholder has one)
-        if (placeholder.order_number && !placeholder.linked_invoice_id) {
-          const inv = invoices.find(i => i.order_number === placeholder.order_number);
-          if (inv) updates.linked_invoice_id = inv.id;
-        }
+          if (placeholder.order_number && !placeholder.linked_invoice_id) {
+            const inv = invoices.find(i => i.order_number === placeholder.order_number);
+            if (inv) updates.linked_invoice_id = inv.id;
+          }
 
-        try {
           await supabase.from('treasury').update(updates).eq('id', placeholder.id);
           await supabase.from('egypt_bank_transactions').update({
             matched_treasury_id: placeholder.id,
             matched_invoice_id: updates.linked_invoice_id || bank.matched_invoice_id || null,
             matched_at: new Date().toISOString(),
           }).eq('id', bank.id);
-        } catch (e) { console.log('Auto-match error:', e.message); }
-      }
-      loadAllData();
+        }
+        if (toast) toast.success(matches.length + ' bank transaction(s) auto-matched ✓');
+        await loadAllData();
+      } catch (e) { console.warn('Auto-match error:', e.message); }
+      autoMatchRunning.current = false;
     })();
   }, [treasury, egyptBankTxns]);
+
+  // Load last login info for welcome briefing
+  useEffect(() => {
+    if (!userProfile?.id) return;
+    (async () => {
+      try {
+        const { data } = await supabase.from('user_sessions')
+          .select('date, login_at')
+          .eq('user_id', userProfile.id)
+          .order('login_at', { ascending: false })
+          .limit(5);
+        setLastLoginInfo(data || []);
+      } catch(e) { setLastLoginInfo([]); }
+    })();
+  }, [userProfile?.id]);
 
   // Reset visible counts when filter changes
   useEffect(() => { setTreasuryVisible(50); setInvoiceVisible(50); }, [mode, df, dt]);
@@ -952,10 +1076,12 @@ export default function App() {
   // ACTIONS
   // ==========================================
   const navigate = (t) => {
+    setTabLoading(true);
     setTab(t); setQuery(''); setCustomerFilter(''); setSelectedCustomer(null); setSelectedDebtor(null);
     setSelectedInvoice(null); setDrillType(null); setTreasuryDrill(null); setSelectedMonth(null);
     if (t === 'treasury') setMode('all');
     else if (t === 'sales' || t === 'checks') setMode('ytd');
+    setTimeout(() => setTabLoading(false), 300);
   };
 
   const handleSignOut = async () => {
@@ -966,16 +1092,18 @@ export default function App() {
         .update({ logout_at: new Date().toISOString(), last_seen: new Date().toISOString(), logout_reason: 'manual' })
         .eq('user_id', uid).eq('date', today)
         .order('login_at', { ascending: false }).limit(1);
-      try { await supabase.from('daily_log').insert({ user_id: uid, entry_text: 'Clocked out (manual)', log_category: 'login', log_date: today, log_time: new Date().toTimeString().substring(0,8), auto_generated: true }); } catch(e) {}
+      try { await supabase.from('daily_log').insert({ user_id: uid, entry_text: 'Clocked out (manual)', log_category: 'login', log_date: today, log_time: new Date().toTimeString().substring(0,8), auto_generated: true }); } catch(e) { console.warn('Silent error:', e.message || e); }
     }
     await supabase.auth.signOut();
     window.location.href = '/login';
   };
 
   const handleAddPayment = async (pf) => {
-    if (!canEditInvoices) { alert('You do not have permission to edit invoices.'); return; }
-    var pd = pf || formData;
-    if (!pd.amount || !pd.date || !selectedInvoice) return;
+    if (!canEditInvoices) { toast.error('You do not have permission to edit invoices.'); return; }
+    const pd = pf || formData;
+    if (!pd.amount || Number(pd.amount) <= 0) { toast.warning('Payment amount is required'); return; }
+    if (!pd.date) { toast.warning('Payment date is required'); return; }
+    if (!selectedInvoice) { toast.warning('No invoice selected'); return; }
     try {
       const isCash = pd.payMethod === 'cash';
       const isCheck = pd.payMethod === 'check';
@@ -1020,11 +1148,11 @@ export default function App() {
           notes: (selectedInvoice.notes || '') + (!isCash ? '\n' + pd.payMethod + ': ' + fE(Number(pd.amount)) + ' on ' + pd.date : ''),
         }, user?.id);
       }
-      setShowAddPayment(false);
+      setShowAddPayment(false); toast.success("Payment recorded ✓");
       setFormData({});
       await loadAllData();
     } catch (err) {
-      alert('Error / خطأ: ' + err.message);
+      toast.error(err.message);
     }
   };
 
@@ -1104,33 +1232,35 @@ export default function App() {
   };
 
   const handleAddInvoice = async () => {
-    if (!formData.orderNumber || !formData.customerName || !formData.amount) return;
+    if (!formData.orderNumber) { toast.warning('Order number is required / رقم الأمر مطلوب'); return; }
+    if (!formData.customerName) { toast.warning('Customer name is required / اسم العميل مطلوب'); return; }
+    if (!formData.amount || Number(formData.amount) <= 0) { toast.warning('Amount must be greater than zero / المبلغ يجب أن يكون أكبر من صفر'); return; }
     try {
       await dbInsert('invoices', {
-        order_number: formData.orderNumber,
-        customer_name: formData.customerName,
+        order_number: sanitize(formData.orderNumber),
+        customer_name: sanitize(formData.customerName),
         customer_id: formData.customerId || null,
         invoice_date: formData.date || today(),
         total_amount: Number(formData.amount),
         total_collected: 0,
         sales_rep: formData.salesRep || '',
-        notes: formData.notes || '',
+        notes: sanitize(formData.notes || ''),
         source: 'manual',
       }, user?.id);
-      setShowAddInvoice(false);
+      setShowAddInvoice(false); toast.success("Invoice created ✓");
       setFormData({});
       await loadAllData();
     } catch (err) {
-      alert('Error / خطأ: ' + err.message);
+      toast.error(err.message);
     }
   };
 
   const handleAddTreasury = async () => {
-    if (!canEditTreasury) { alert('You do not have permission to add treasury entries.'); return; }
+    if (!canEditTreasury) { toast.error('You do not have permission to add treasury entries.'); return; }
     const txDate = formData.date || today();
-    if (!formData.amount) { alert('Please enter an amount / الرجاء إدخال المبلغ'); return; }
+    if (!formData.amount) { toast.warning('Please enter an amount / الرجاء إدخال المبلغ'); return; }
     const isBankPlaceholder = formData.type === 'bank_in' || formData.type === 'bank_out';
-    if (isBankPlaceholder && !formData.bankAccountId) { alert('Please select a bank account / الرجاء اختيار الحساب البنكي'); return; }
+    if (isBankPlaceholder && !formData.bankAccountId) { toast.warning('Please select a bank account'); return; }
     try {
       const isIncome = formData.type === 'in' || formData.type === 'bank_in';
       const currency = formData.currency || 'EGP';
@@ -1144,8 +1274,8 @@ export default function App() {
       }
       const record = {
         transaction_date: txDate,
-        order_number: formData.orderNumber || '',
-        description: formData.desc || '',
+        order_number: sanitize(formData.orderNumber || ''),
+        description: sanitize(formData.desc || ''),
         cash_in: 0, cash_out: 0,
         usd_in: 0, usd_out: 0,
         category: cat,
@@ -1171,11 +1301,11 @@ export default function App() {
       await dbInsert('treasury', record, user?.id);
       const tempEntry = { id: 'temp-' + Date.now(), ...record };
       setTreasury(prev => [tempEntry, ...prev]);
-      setShowAddTreasury(false);
+      setShowAddTreasury(false); toast.success("Transaction saved ✓");
       setFormData({});
       setTimeout(() => loadAllData(), 500);
     } catch (err) {
-      alert('Error / خطأ: ' + err.message);
+      toast.error(err.message);
     }
   };
 
@@ -1236,7 +1366,7 @@ export default function App() {
       setFormData({});
       setTimeout(() => loadAllData(), 800);
     } catch (err) {
-      alert('Error / خطأ: ' + err.message);
+      toast.error(err.message);
     }
   };
 
@@ -1353,12 +1483,13 @@ export default function App() {
       setSplits([{ order: '', amount: 0 }, { order: '', amount: 0 }]);
       await loadAllData();
     } catch (err) {
-      alert('Error / خطأ: ' + err.message);
+      toast.error(err.message);
     }
   };
 
   const handleUnlinkTreasury = async (txn) => {
-    if (!confirm('Unlink this transaction from order / إلغاء ربط المعاملة من الأمر ' + (selectedInvoice?.order_number || '') + '?')) return;
+    const ok = await toast.confirm({ title: 'Unlink Transaction', message: 'Unlink this transaction from order ' + (selectedInvoice?.order_number || '') + '?', confirmText: 'Unlink', danger: true });
+    if (!ok) return;
     try {
       await dbUpdate('treasury', txn.id, { order_number: '' }, user?.id);
       // Recalculate invoice collected from remaining treasury entries
@@ -1373,7 +1504,7 @@ export default function App() {
       }
       await loadAllData();
     } catch (err) {
-      alert('Error / خطأ: ' + err.message);
+      toast.error(err.message);
     }
   };
 
@@ -1393,7 +1524,7 @@ export default function App() {
       setShowLinkSearch(false);
       await loadAllData();
     } catch (err) {
-      alert('Error / خطأ: ' + err.message);
+      toast.error(err.message);
     }
   };
 
@@ -1413,13 +1544,14 @@ export default function App() {
       setRenameValue('');
       await loadAllData();
     } catch (err) {
-      alert('Error / خطأ: ' + err.message);
+      toast.error(err.message);
     }
   };
 
   const handleMoveSubcategory = async (subcatName, fromCategory, toCategory) => {
     if (!toCategory || toCategory === fromCategory) return;
-    if (!confirm('Move "' + subcatName + '" from "' + fromCategory + '" to "' + toCategory + '"?\n\nنقل التصنيف الفرعي إلى تصنيف آخر؟')) return;
+    const ok = await toast.confirm({ title: 'Move Subcategory', message: 'Move "' + subcatName + '" from "' + fromCategory + '" to "' + toCategory + '"?', confirmText: 'Move' });
+    if (!ok) return;
     try {
       const matching = treasury.filter(t => t.subcategory === subcatName && t.category === fromCategory);
       for (const t of matching) {
@@ -1428,7 +1560,7 @@ export default function App() {
       setBucketSub(null);
       await loadAllData();
     } catch (err) {
-      alert('Error / خطأ: ' + err.message);
+      toast.error(err.message);
     }
   };
 
@@ -1579,7 +1711,7 @@ export default function App() {
             record_ids: importedIds, record_count: importedIds.length,
             imported_by: user?.id,
           });
-        } catch (e) { console.log('Batch tracking failed:', e); }
+        } catch (e) { console.warn('Batch tracking failed:', e); }
       }
       setImportStats({ ...importStats, imported, skipped, lastBatchIds: importedIds, lastBatchTable: tableName });
       setImportStep('done');
@@ -1594,7 +1726,8 @@ export default function App() {
     const table = importStats?.lastBatchTable;
     const ids = importStats?.lastBatchIds;
     if (!table || !ids || ids.length === 0) { alert('No import to undo / لا يوجد استيراد لإلغائه'); return; }
-    if (!confirm('Undo last import? This will DELETE ' + ids.length + ' records from ' + table + '.\n\nإلغاء آخر استيراد؟ سيتم حذف ' + ids.length + ' سجل.')) return;
+    const ok = await toast.confirm({ title: 'Undo Import', message: 'This will DELETE ' + ids.length + ' records from ' + table + '. This cannot be undone.', confirmText: 'Delete ' + ids.length + ' Records', danger: true });
+    if (!ok) return;
     try {
       for (const id of ids) {
         await supabase.from(table).delete().eq('id', id);
@@ -1607,7 +1740,7 @@ export default function App() {
       alert('✅ Import undone! / تم إلغاء الاستيراد — ' + ids.length + ' records deleted.');
       await loadAllData();
       setImportStep('select');
-    } catch (err) { alert('Error undoing: ' + err.message); }
+    } catch (err) { toast.error(err.message); }
   };
 
   const handleCollectCheck = async () => {
@@ -1649,7 +1782,7 @@ export default function App() {
       setReconcileDate('');
       await loadAllData();
     } catch (err) {
-      alert('Error / خطأ: ' + err.message);
+      toast.error(err.message);
     }
   };
 
@@ -1676,7 +1809,8 @@ export default function App() {
   const Sparkline = ({ data, color, w = 80, h = 24 }) => {
     if (!data || data.length < 2) return null;
     const max = Math.max(...data), min = Math.min(...data), range = max - min || 1;
-    const pts = data.map((v, i) => `${(i / (data.length - 1)) * w},${h - ((v - min) / range) * (h - 2) - 1}`).join(' ');
+    const divisor = data.length - 1 || 1;
+    const pts = data.map((v, i) => `${(i / divisor) * w},${h - ((v - min) / range) * (h - 2) - 1}`).join(' ');
     return <svg width={w} height={h} className="mt-1"><polyline points={pts} fill="none" stroke={color || '#94a3b8'} strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" /><circle cx={(w)} cy={parseFloat(pts.split(' ').pop().split(',')[1])} r="2" fill={color || '#94a3b8'} /></svg>;
   };
 
@@ -1767,10 +1901,11 @@ export default function App() {
   // RENDER
   // ==========================================
   return (
+    <ToastProvider>
     <ErrorBoundary label="KTC Hub encountered an error" showDetails>
     <div className="min-h-screen" style={{background:'var(--bg-primary)'}}>
       {/* Header */}
-      <div style={{background:'linear-gradient(135deg, #0f172a 0%, #1e1b4b 50%, #0f172a 100%)', borderBottom:'1px solid rgba(56,189,248,0.15)'}} className="px-5 py-3 flex justify-between items-center sticky top-0 z-[101]">
+      <div style={{background:'linear-gradient(135deg, #0f172a 0%, #1e1b4b 50%, #0f172a 100%)', borderBottom:'1px solid rgba(56,189,248,0.15)'}} role="banner" aria-label="App header" className="px-5 py-3 flex justify-between items-center sticky top-0 z-[101]">
         <div className="flex items-center gap-3">
           <button onClick={() => setSidebarOpen(!sidebarOpen)} className="lg:hidden text-white/70 hover:text-white text-xl p-1">☰</button>
           <div>
@@ -1788,8 +1923,8 @@ export default function App() {
           )}
           {userProfile && (
             <div className="text-right">
-              <div className="text-sm font-bold" style={{color:'#f1f5f9'}}>{userProfile.name}</div>
-              <div style={{color:'rgba(148,163,184,0.6)'}} className="text-[10px]">{userProfile.role === 'super_admin' ? '🔴 Super Admin' : userProfile.role === 'admin' ? '🟣 Admin' : '🔵 Team'}</div>
+              <div className="text-sm font-bold" style={{color:'#f1f5f9'}}>{userProfile?.name}</div>
+              <div style={{color:'rgba(148,163,184,0.6)'}} className="text-[10px]">{userProfile?.role === 'super_admin' ? '🔴 Super Admin' : userProfile?.role === 'admin' ? '🟣 Admin' : '🔵 Team'}</div>
             </div>
           )}
           {(true) && (
@@ -1873,7 +2008,7 @@ export default function App() {
           <div className="bg-white rounded-2xl shadow-2xl w-full max-w-lg overflow-hidden" onClick={e => e.stopPropagation()}>
             <div className="flex items-center gap-3 px-4 py-3 border-b">
               <span className="text-lg">🔍</span>
-              <input autoFocus value={globalSearch} onChange={e => setGlobalSearch(e.target.value)} placeholder="Search invoices, customers, tickets, bank..." className="flex-1 outline-none text-sm" />
+              <input autoFocus value={globalSearch} onChange={e => setGlobalSearch(e.target.value)} placeholder="Search invoices, customers, tickets, bank..." aria-label="Global search" className="flex-1 outline-none text-sm" />
               <button onClick={() => setShowGlobalSearch(false)} className="text-xs text-slate-400 bg-slate-100 px-2 py-1 rounded">ESC</button>
             </div>
             {globalSearch.length >= 2 && (() => {
@@ -1925,18 +2060,39 @@ export default function App() {
                 </div>
               );
             })()}
-            {globalSearch.length < 2 && <div className="px-4 py-6 text-center text-xs text-slate-400">Type at least 2 characters to search</div>}
+            {globalSearch.length < 2 && (
+              <div className="px-4 py-4">
+                <div className="text-center text-xs text-slate-400 mb-4">Type at least 2 characters to search</div>
+                <div className="border-t border-slate-100 pt-3">
+                  <div className="text-[10px] font-bold text-slate-400 mb-2 uppercase">Keyboard Shortcuts</div>
+                  <div className="grid grid-cols-2 gap-1 text-[11px]">
+                    {[
+                      ['⌘K', 'Search'], ['Esc', 'Close'],
+                      ['Alt+D', 'Dashboard'], ['Alt+S', 'Sales'],
+                      ['Alt+T', 'Treasury'], ['Alt+C', 'CRM'],
+                      ['Alt+K', 'Tickets'], ['Alt+A', 'Admin'],
+                      ['Alt+N', 'New Item'], ['Alt+R', 'Refresh Data'],
+                    ].map(([key, label]) => (
+                      <div key={key} className="flex justify-between py-0.5">
+                        <kbd className="px-1.5 py-0.5 bg-slate-100 rounded text-[9px] font-mono font-bold text-slate-600">{key}</kbd>
+                        <span className="text-slate-500">{label}</span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              </div>
+            )}
           </div>
         </div>
       )}
 
       {/* Mobile sidebar overlay */}
-      {sidebarOpen && <div className="fixed inset-0 bg-black/50 z-[99] lg:hidden" onClick={() => setSidebarOpen(false)} />}
+      {sidebarOpen && <div className="fixed inset-0 top-[56px] bg-black/50 z-[99] lg:hidden" onClick={() => setSidebarOpen(false)} />}
 
       <div className="flex flex-1" style={{ minHeight: 'calc(100vh - 60px)' }}>
         {/* Sidebar */}
-        <aside className={'fixed lg:sticky top-0 lg:top-[60px] left-0 z-[100] lg:z-10 h-full lg:h-[calc(100vh-60px)] overflow-y-auto transition-transform duration-200 ' + (sidebarOpen ? 'translate-x-0' : '-translate-x-full lg:translate-x-0')}
-          style={{ width: 210, background: 'linear-gradient(180deg, #0f172a 0%, #1e1b4b 100%)', borderRight: '1px solid rgba(56,189,248,0.1)' }}>
+        <aside role="navigation" aria-label="Main navigation" className={'fixed lg:sticky top-[56px] lg:top-[56px] left-0 z-[100] lg:z-10 overflow-y-auto transition-transform duration-200 ' + (sidebarOpen ? 'translate-x-0' : '-translate-x-full lg:translate-x-0')}
+          style={{ width: 210, height: 'calc(100vh - 56px)', background: 'linear-gradient(180deg, #0f172a 0%, #1e1b4b 100%)', borderRight: '1px solid rgba(56,189,248,0.1)' }}>
           <div className="py-3">
             {[
               { group: 'Overview', items: ['dashboard'] },
@@ -1976,7 +2132,35 @@ export default function App() {
         </aside>
 
         {/* Content */}
-        <main className="flex-1 p-4 max-w-7xl mx-auto lg:ml-0" style={{ minWidth: 0 }}>
+        <main role="main" aria-label="Content area" className="flex-1 p-4 max-w-7xl mx-auto lg:ml-0" style={{ minWidth: 0 }}>
+
+          {/* Breadcrumb */}
+          {tab !== 'dashboard' && (
+            <div className="flex items-center gap-2 mb-3 text-xs">
+              <button onClick={() => navigate('dashboard')} className="text-blue-500 hover:underline font-medium">Dashboard</button>
+              <span className="text-slate-300">/</span>
+              <span className="text-slate-400">{currentGroup}</span>
+              <span className="text-slate-300">/</span>
+              <span className="font-bold text-slate-700">{currentTabLabel}</span>
+              {tab === 'treasury' && (
+                <button onClick={() => exportExcel(filteredTreasury.map(t => ({ Date: t.transaction_date, Order: t.order_number, Description: t.description, 'Cash In': t.cash_in, 'Cash Out': t.cash_out, Category: t.category, Subcategory: t.subcategory, Currency: t.currency || 'EGP' })), 'Treasury_Export', 'Treasury')}
+                  className="ml-auto px-3 py-1 rounded-lg bg-emerald-500 text-white text-[10px] font-bold hover:bg-emerald-600 flex items-center gap-1">📊 Export Excel</button>
+              )}
+              {tab === 'sales' && (
+                <button onClick={() => exportExcel(filteredInvoices.map(i => ({ Date: i.invoice_date, Order: i.order_number, Customer: i.customer_name, Amount: i.total_amount, Collected: i.total_collected, Outstanding: i.outstanding })), 'Invoices_Export', 'Invoices')}
+                  className="ml-auto px-3 py-1 rounded-lg bg-emerald-500 text-white text-[10px] font-bold hover:bg-emerald-600 flex items-center gap-1">📊 Export Excel</button>
+              )}
+              {tab === 'tickets' && (
+                <button onClick={() => exportExcel(dashTickets.map(t => ({ Number: t.ticket_number, Title: t.title, Status: t.status, Priority: t.priority, Assigned: getUserName(t.assigned_to), Created: t.created_at, Due: t.due_date, Client: t.client_name })), 'Tickets_Export', 'Tickets')}
+                  className="ml-auto px-3 py-1 rounded-lg bg-emerald-500 text-white text-[10px] font-bold hover:bg-emerald-600 flex items-center gap-1">📊 Export Excel</button>
+              )}
+            </div>
+          )}
+
+          {/* Tab loading indicator */}
+          {tabLoading && (
+            <div className="h-0.5 bg-gradient-to-r from-blue-500 via-indigo-500 to-purple-500 rounded-full mb-3 animate-pulse" />
+          )}
 
         {/* ==========================================
             INVOICE DETAIL MODAL
@@ -2005,7 +2189,7 @@ export default function App() {
                       }
                       setFormData({...formData, editingName: false});
                       await loadAllData();
-                    } catch (err) { alert('Error / خطأ: ' + err.message); }
+                    } catch (err) { toast.error(err.message); }
                   }} className="px-2 py-1 bg-emerald-500 text-white rounded text-xs">Save</button>
                   <button onClick={() => setFormData({...formData, editingName: false})}
                     className="px-2 py-1 bg-slate-300 rounded text-xs">Cancel</button>
@@ -2072,7 +2256,7 @@ export default function App() {
                             await supabase.from('invoices').delete().eq('id', selectedInvoice.id);
                             setSelectedInvoice(null); setFormData({});
                             await loadAllData();
-                          } catch(err) { alert('Error: ' + err.message); }
+                          } catch(err) { toast.error(err.message); }
                         }} className="px-4 py-2 bg-red-500 text-white rounded-lg text-xs font-bold">Yes, Delete / نعم، حذف</button>
                         <button onClick={() => setFormData({...formData, confirmDeleteInv: false})}
                           className="px-4 py-2 border border-slate-200 rounded-lg text-xs font-semibold">Cancel / إلغاء</button>
@@ -2129,7 +2313,7 @@ export default function App() {
                           setSelectedInvoice({...selectedInvoice, ...updates});
                           setFormData({...formData, editingInvoice: false, invEditDate: null});
                           setTimeout(() => loadAllData(), 500);
-                        } catch(err) { alert('Error: ' + err.message); }
+                        } catch(err) { toast.error(err.message); }
                       }} className="px-4 py-2 bg-amber-500 text-white rounded-lg text-xs font-bold hover:bg-amber-600">
                         💾 Save Changes / حفظ التعديلات
                       </button>
@@ -2153,7 +2337,7 @@ export default function App() {
                     try {
                       await dbUpdate('invoices', selectedInvoice.id, { division: val || null }, user?.id);
                       await loadAllData();
-                    } catch(err) { alert('Error: ' + err.message); }
+                    } catch(err) { toast.error(err.message); }
                   }}
                   className="px-2 py-1 rounded border text-xs bg-indigo-50 min-w-[140px]">
                   <option value="">Default (from CRM group)</option>
@@ -2186,7 +2370,7 @@ export default function App() {
                   try {
                     await dbUpdate('invoices', selectedInvoice.id, { total_collected: n, outstanding: Math.max(0, Number(selectedInvoice.total_amount) - n) }, user?.id);
                     await loadAllData();
-                  } catch(err) { alert('Error: ' + err.message); }
+                  } catch(err) { toast.error(err.message); }
                 }} className="text-[9px] text-blue-500 underline mt-1 block">✏️ Fix amount</button>
               </div>
               <div className={`rounded-lg p-3 ${selectedInvoice.outstanding > 0 ? 'bg-red-50' : 'bg-green-50'}`}>
@@ -2409,7 +2593,7 @@ export default function App() {
                                 }
                                 setFormData({...formData, addingItems: false, newItems: []});
                                 await loadAllData();
-                              } catch(err) { alert('Error: ' + err.message); }
+                              } catch(err) { toast.error(err.message); }
                             }} className="px-3 py-1.5 bg-blue-500 text-white rounded text-xs font-bold" disabled={(formData.newItems || []).length === 0}>
                               💾 Save {(formData.newItems || []).length} Items
                             </button>
@@ -2630,7 +2814,7 @@ export default function App() {
                               setSelectedInvoice({...selectedInvoice, total_collected: newCollected});
                               setEgyptBankTxns(prev => prev.map(t => t.id === txn.id ? {...t, matched_invoice_id: selectedInvoice.id} : t));
                               setShowLinkSearch(false); setLinkSearch('');
-                            } catch(err) { alert('Error: ' + err.message); }
+                            } catch(err) { toast.error(err.message); }
                           }}
                             className="px-3 py-1.5 bg-emerald-600 text-white rounded text-xs font-semibold hover:bg-emerald-700 ml-2">
                             🔗 Link
@@ -3242,7 +3426,7 @@ export default function App() {
                                           }
                                           setEditSubTxnId(null); setEditSubValue(''); setEditCatValue('');
                                           setTimeout(() => loadAllData(), 800);
-                                        } catch(err) { alert('Error: ' + err.message); }
+                                        } catch(err) { toast.error(err.message); }
                                       }} className="px-2 py-0.5 bg-blue-500 text-white rounded text-[9px] font-bold">Save</button>
                                       <button onClick={() => { setEditSubTxnId(null); setEditSubValue(''); setEditCatValue(''); }}
                                         className="px-2 py-0.5 border rounded text-[9px]">Cancel</button>
@@ -3578,10 +3762,10 @@ export default function App() {
                 }
                 try {
                   const { data: newInv } = await supabase.from('invoices').insert({
-                    order_number: formData.orderNumber, customer_name: formData.customerName,
+                    order_number: sanitize(formData.orderNumber), customer_name: sanitize(formData.customerName),
                     invoice_date: formData.date || today(), total_amount: totalAmt,
                     total_collected: 0, outstanding: totalAmt, sales_rep: formData.salesRep || '',
-                    notes: formData.notes || '', source: 'manual',
+                    notes: sanitize(formData.notes || ''), source: 'manual',
                   }).select('id').single();
                   if (newInv && items.length > 0) {
                     for (const item of items) {
@@ -3603,16 +3787,16 @@ export default function App() {
                   // Instant local update so new invoice appears at top immediately
                   const tempInv = {
                     id: newInv?.id || 'temp-' + Date.now(),
-                    order_number: formData.orderNumber, customer_name: formData.customerName,
+                    order_number: sanitize(formData.orderNumber), customer_name: sanitize(formData.customerName),
                     invoice_date: formData.date || today(), total_amount: totalAmt,
                     total_collected: 0, outstanding: totalAmt, sales_rep: formData.salesRep || '',
-                    notes: formData.notes || '', source: 'manual',
+                    notes: sanitize(formData.notes || ''), source: 'manual',
                   };
                   setInvoices(prev => [tempInv, ...prev]);
                   setShowAddInvoice(false); setFormData({});
                   // Full refresh in background
                   setTimeout(() => loadAllData(), 500);
-                } catch (err) { alert('Error / خطأ: ' + err.message); }
+                } catch (err) { toast.error(err.message); }
               }} className="px-4 py-2 bg-blue-500 text-white rounded-lg font-semibold">Create Invoice / إنشاء ✓</button>
               <button onClick={() => { setShowAddInvoice(false); setFormData({}); }}
                 className="px-4 py-2 border border-slate-200 rounded-lg font-semibold">Cancel / إلغاء</button>
@@ -3624,7 +3808,7 @@ export default function App() {
             ADD TREASURY MODAL
         ========================================== */}
         {showAddTreasury && (
-          <Modal onClose={() => { setShowAddTreasury(false); setFormData({}); }} title="New Transaction / معاملة جديدة">
+          <Modal onClose={() => { setShowAddTreasury(false); toast.success("Transaction saved ✓"); setFormData({}); }} title="New Transaction / معاملة جديدة">
             <div className="grid grid-cols-2 gap-3">
               <div className="col-span-2">
                 <label className="text-xs font-semibold text-slate-600 block mb-2">Type / النوع</label>
@@ -3726,48 +3910,60 @@ export default function App() {
                   onChange={e => setFormData({ ...formData, desc: e.target.value })}
                   className="w-full px-3 py-2 rounded-lg border border-slate-200 text-sm" />
               </div>
-              {(formData.type === 'out' || formData.type === 'in' || !formData.type) && (
+              {(formData.type === 'out' || formData.type === 'in' || formData.type === 'bank_in' || formData.type === 'bank_out' || !formData.type) && (
                 <div className="col-span-2">
-                  <label className="text-xs font-semibold text-slate-600">Category / تصنيف {(formData.type || 'in') === 'in' ? '(Income / إيرادات)' : '(Expense / منصرفات)'}</label>
-                  <select value={formData.category || ''} onChange={e => {
-                    if (e.target.value === '__custom') {
-                      const custom = prompt('Enter new category name / أدخل اسم التصنيف الجديد:');
-                      if (custom) setFormData({ ...formData, category: custom.trim() });
-                      else e.target.value = formData.category || '';
-                    } else {
-                      setFormData({ ...formData, category: e.target.value });
-                    }
-                  }} className="w-full px-3 py-2 rounded-lg border border-slate-200 text-sm bg-amber-50">
-                    <option value="">Select category...</option>
-                    {formData.category && !EXPENSE_CATS[formData.category] && !customCats.includes(formData.category) && formData.category !== '__custom' && (
-                      <option value={formData.category}>✨ {formData.category}</option>
-                    )}
-                    {Object.entries(EXPENSE_CATS).map(([ar, en]) => (
-                      <option key={ar} value={ar}>{en} / {ar}</option>
-                    ))}
-                    {customCats.map(c => <option key={c} value={c}>{c}</option>)}
-                    <option value="__custom">+ Add New Category / إضافة تصنيف جديد</option>
-                  </select>
-                  {formData.category && !EXPENSE_CATS[formData.category] && !customCats.includes(formData.category) && (
+                  <label className="text-xs font-semibold text-slate-600">Category / تصنيف {(formData.type || 'in') === 'in' || formData.type === 'bank_in' ? '(Income / إيرادات)' : '(Expense / منصرفات)'}</label>
+                  {formData.showCustomCat ? (
+                    <div className="flex gap-2 mt-1">
+                      <input autoFocus value={formData.customCatInput || ''} onChange={e => setFormData({...formData, customCatInput: e.target.value})}
+                        placeholder="New category name / اسم التصنيف" className="flex-1 px-3 py-2 rounded-lg border border-amber-400 text-sm bg-amber-50" />
+                      <button onClick={() => { if (formData.customCatInput?.trim()) setFormData({...formData, category: formData.customCatInput.trim(), showCustomCat: false, customCatInput: ''}); }}
+                        className="px-3 py-2 bg-emerald-500 text-white rounded-lg text-xs font-bold">✓</button>
+                      <button onClick={() => setFormData({...formData, showCustomCat: false, customCatInput: ''})}
+                        className="px-3 py-2 bg-slate-200 rounded-lg text-xs font-bold">✕</button>
+                    </div>
+                  ) : (
+                    <select value={formData.category || ''} onChange={e => {
+                      if (e.target.value === '__custom') setFormData({...formData, showCustomCat: true, customCatInput: ''});
+                      else setFormData({ ...formData, category: e.target.value });
+                    }} className="w-full px-3 py-2 rounded-lg border border-slate-200 text-sm bg-amber-50">
+                      <option value="">Select category...</option>
+                      {formData.category && !EXPENSE_CATS[formData.category] && !customCats.includes(formData.category) && formData.category !== '__custom' && (
+                        <option value={formData.category}>✨ {formData.category}</option>
+                      )}
+                      {Object.entries(EXPENSE_CATS).map(([ar, en]) => (
+                        <option key={ar} value={ar}>{en} / {ar}</option>
+                      ))}
+                      {customCats.map(c => <option key={c} value={c}>{c}</option>)}
+                      <option value="__custom">+ Add New Category / إضافة تصنيف جديد</option>
+                    </select>
+                  )}
+                  {formData.category && !EXPENSE_CATS[formData.category] && !customCats.includes(formData.category) && !formData.showCustomCat && (
                     <div className="text-[10px] text-emerald-600 font-semibold mt-1">✓ New category: "{formData.category}"</div>
                   )}
-                  <select value={formData.subcategory || ''} onChange={e => {
-                    if (e.target.value === '__custom') {
-                      const custom = prompt('Enter new subcategory / أدخل تصنيف فرعي جديد:');
-                      if (custom) setFormData({ ...formData, subcategory: custom.trim() });
-                      else e.target.value = formData.subcategory || '';
-                    } else {
-                      setFormData({ ...formData, subcategory: e.target.value });
-                    }
-                  }} className="w-full px-3 py-2 rounded-lg border border-slate-200 text-sm mt-1 bg-orange-50">
-                    <option value="">Subcategory (optional)...</option>
-                    {formData.subcategory && !uniqueSubcats.includes(formData.subcategory) && formData.subcategory !== '__custom' && (
-                      <option value={formData.subcategory}>✨ {formData.subcategory}</option>
-                    )}
-                    {uniqueSubcats.map(s => <option key={s} value={s}>{s}</option>)}
-                    <option value="__custom">+ Add New Subcategory / إضافة فرعي جديد</option>
-                  </select>
-                  {formData.subcategory && !uniqueSubcats.includes(formData.subcategory) && (
+                  {formData.showCustomSubcat ? (
+                    <div className="flex gap-2 mt-1">
+                      <input autoFocus value={formData.customSubcatInput || ''} onChange={e => setFormData({...formData, customSubcatInput: e.target.value})}
+                        placeholder="New subcategory / تصنيف فرعي" className="flex-1 px-3 py-2 rounded-lg border border-orange-400 text-sm bg-orange-50" />
+                      <button onClick={() => { if (formData.customSubcatInput?.trim()) setFormData({...formData, subcategory: formData.customSubcatInput.trim(), showCustomSubcat: false, customSubcatInput: ''}); }}
+                        className="px-3 py-2 bg-emerald-500 text-white rounded-lg text-xs font-bold">✓</button>
+                      <button onClick={() => setFormData({...formData, showCustomSubcat: false, customSubcatInput: ''})}
+                        className="px-3 py-2 bg-slate-200 rounded-lg text-xs font-bold">✕</button>
+                    </div>
+                  ) : (
+                    <select value={formData.subcategory || ''} onChange={e => {
+                      if (e.target.value === '__custom') setFormData({...formData, showCustomSubcat: true, customSubcatInput: ''});
+                      else setFormData({ ...formData, subcategory: e.target.value });
+                    }} className="w-full px-3 py-2 rounded-lg border border-slate-200 text-sm mt-1 bg-orange-50">
+                      <option value="">Subcategory (optional)...</option>
+                      {formData.subcategory && !uniqueSubcats.includes(formData.subcategory) && formData.subcategory !== '__custom' && (
+                        <option value={formData.subcategory}>✨ {formData.subcategory}</option>
+                      )}
+                      {uniqueSubcats.map(s => <option key={s} value={s}>{s}</option>)}
+                      <option value="__custom">+ Add New Subcategory / إضافة فرعي جديد</option>
+                    </select>
+                  )}
+                  {formData.subcategory && !uniqueSubcats.includes(formData.subcategory) && !formData.showCustomSubcat && (
                     <div className="text-[10px] text-emerald-600 font-semibold mt-1">✓ New subcategory: "{formData.subcategory}"</div>
                   )}
                 </div>
@@ -3776,7 +3972,7 @@ export default function App() {
             <div className="flex gap-2 mt-4">
               <button onClick={handleAddTreasury}
                 className="px-4 py-2 bg-blue-500 text-white rounded-lg font-semibold">Save / حفظ ✓</button>
-              <button onClick={() => { setShowAddTreasury(false); setFormData({}); }}
+              <button onClick={() => { setShowAddTreasury(false); toast.success("Transaction saved ✓"); setFormData({}); }}
                 className="px-4 py-2 border border-slate-200 rounded-lg font-semibold">Cancel / إلغاء</button>
             </div>
           </Modal>
@@ -3809,15 +4005,239 @@ export default function App() {
         ========================================== */}
         {tab === 'dashboard' && (
           <div>
-            {/* ===== COMMAND CENTER HEADER ===== */}
-            <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 16, padding: '14px 0' }}>
-              <div style={{ width: 4, height: 32, borderRadius: 2, background: 'linear-gradient(180deg, #38bdf8, #a78bfa)' }} />
-              <div>
-                <h2 style={{ fontSize: 18, fontWeight: 900, color: '#e2e8f0', letterSpacing: '0.04em', margin: 0 }}>COMMAND CENTER</h2>
-                <p style={{ fontSize: 10, color: '#64748b', letterSpacing: '0.1em', textTransform: 'uppercase', margin: 0 }}>Reminders · Messages · Alerts</p>
+
+            {/* ===== PRIORITY: UNACKNOWLEDGED ANNOUNCEMENTS FIRST ===== */}
+            {(() => {
+              const myId = userProfile?.id;
+              const active = announcements.filter(a => a.active !== false && (!a.target_user || a.target_user === myId));
+              const myAcks = new Set(announcementAcks.filter(a => a.user_id === myId).map(a => a.announcement_id));
+              const unacked = active.filter(a => !myAcks.has(a.id));
+              const hasUnacked = unacked.length > 0;
+
+              return (<>
+                {/* Unacknowledged messages — MUST acknowledge before seeing anything else */}
+                {hasUnacked && (
+                  <div className="mb-4">
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 12 }}>
+                      <div style={{ width: 4, height: 28, borderRadius: 2, background: '#ef4444' }} />
+                      <div>
+                        <h2 style={{ fontSize: 16, fontWeight: 900, color: '#fca5a5', margin: 0 }}>⚠️ ACTION REQUIRED — {unacked.length} message{unacked.length > 1 ? 's' : ''} to acknowledge</h2>
+                        <p style={{ fontSize: 10, color: '#64748b', margin: 0 }}>You must acknowledge these before continuing</p>
+                      </div>
+                    </div>
+                    {unacked.map(a => {
+                      const poster = teamUsers.find(u => u.id === a.posted_by);
+                      const icon = a.priority === 'urgent' ? '🚨' : a.priority === 'warning' ? '⚠️' : 'ℹ️';
+                      const isTargeted = a.target_user === myId;
+                      const bgColor = a.priority === 'urgent' ? 'linear-gradient(135deg,#fef2f2,#fee2e2)' : a.priority === 'warning' ? 'linear-gradient(135deg,#fffbeb,#fef3c7)' : 'linear-gradient(135deg,#eff6ff,#dbeafe)';
+                      const borderColor = a.priority === 'urgent' ? '#ef4444' : a.priority === 'warning' ? '#f59e0b' : '#3b82f6';
+                      return (
+                        <div key={a.id} className="rounded-2xl p-5 mb-3" style={{ background: bgColor, border: '3px solid ' + borderColor, boxShadow: '0 4px 20px rgba(0,0,0,0.15)' }}>
+                          <div style={{ fontSize: '1.2rem', fontWeight: 900, lineHeight: 1.3, color: a.priority === 'urgent' ? '#dc2626' : a.priority === 'warning' ? '#b45309' : '#1d4ed8' }}>
+                            {icon} {a.pinned && '📌 '}{isTargeted && '👤 '}{a.title}
+                          </div>
+                          {a.body && <div style={{ fontSize: '1rem', marginTop: '0.5rem', lineHeight: 1.6, color: '#1e293b', whiteSpace: 'pre-wrap' }}>{a.body}</div>}
+                          <div style={{ fontSize: '0.75rem', marginTop: '0.5rem', color: '#94a3b8' }}>
+                            From: {poster ? poster.name : 'Admin'} • {new Date(a.created_at).toLocaleDateString()} {new Date(a.created_at).toLocaleTimeString([], {hour:'2-digit',minute:'2-digit'})}
+                            {isTargeted && <span style={{ color: '#7c3aed', fontWeight: 700, marginLeft: 8 }}>📩 Sent to you directly</span>}
+                          </div>
+                          <button onClick={async () => {
+                            await dbInsert('announcement_acks', { announcement_id: a.id, user_id: myId, acked_at: new Date().toISOString() }, myId);
+                            setAnnouncementAcks(prev => [...prev, { announcement_id: a.id, user_id: myId, acked_at: new Date().toISOString() }]);
+                            if (toast) toast.success('Acknowledged ✓');
+                          }} style={{ marginTop: 12, fontSize: '0.9rem', fontWeight: 800, color: '#fff', background: a.priority === 'urgent' ? '#dc2626' : '#2563eb', padding: '10px 24px', borderRadius: 10, cursor: 'pointer', border: 'none', boxShadow: '0 2px 10px rgba(0,0,0,0.2)' }}>
+                            👋 Acknowledge / تأكيد الاستلام
+                          </button>
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+
+                {/* Everything below only shows when all announcements are acknowledged */}
+                {!hasUnacked && (<>
+
+            {/* ===== SMART WELCOME BRIEFING ===== */}
+            {!welcomeDismissed && userProfile && (isSuperAdmin || modulePerms?.['Welcome Briefing']) && (() => {
+              const myId = userProfile.id;
+              const todayStr = new Date().toISOString().substring(0, 10);
+              const hour = new Date().getHours();
+              const greeting = hour < 12 ? 'Good morning' : hour < 17 ? 'Good afternoon' : 'Good evening';
+              const firstName = (userProfile.name || '').split(' ')[0];
+
+              // Permission checks
+              const hasTreasury = isSuperAdmin || modulePerms?.['Treasury'];
+              const hasSales = isSuperAdmin || modulePerms?.['Sales'];
+              const hasTickets = isSuperAdmin || modulePerms?.['Tickets'];
+              const hasChecks = isSuperAdmin || modulePerms?.['Checks'];
+
+              // Login analysis
+              const prevLogins = (lastLoginInfo || []).filter(s => s.date !== todayStr);
+              const lastDate = prevLogins.length > 0 ? prevLogins[0].date : null;
+              const daysSinceLast = lastDate ? Math.floor((new Date(todayStr) - new Date(lastDate)) / 86400000) : null;
+              const loginStreak = (() => {
+                let streak = 1;
+                const dates = (lastLoginInfo || []).map(s => s.date).filter((v, i, a) => a.indexOf(v) === i).sort().reverse();
+                for (let i = 1; i < dates.length; i++) {
+                  const diff = Math.floor((new Date(dates[i-1]) - new Date(dates[i])) / 86400000);
+                  if (diff <= 2) streak++; else break;
+                }
+                return streak;
+              })();
+
+              // Ticket analysis (only if permitted)
+              const myTickets = hasTickets ? dashTickets.filter(t => t.assigned_to === myId && t.status !== 'Closed') : [];
+              const overdueTickets = myTickets.filter(t => t.due_date && t.due_date < todayStr);
+              const highPriority = myTickets.filter(t => t.priority === 'high');
+              const newTickets = myTickets.filter(t => t.status === 'New');
+
+              // Financial analysis (only if permitted)
+              const overdueInvoices = hasSales ? invoices.filter(i => i.outstanding > 0 && i.invoice_date && (Date.now() - new Date(i.invoice_date).getTime()) > 30 * 86400000) : [];
+              const upcomingChecks = hasChecks ? pendingChecks.filter(c => {
+                const d = c.due_date || c.check_date;
+                return d && d >= todayStr && d <= new Date(Date.now() + 7 * 86400000).toISOString().substring(0, 10);
+              }) : [];
+
+              // Treasury analysis (only if permitted)
+              const treasuryDays = hasTreasury ? (() => {
+                const sorted = [...treasury].sort((a, b) => (b.created_at || '').localeCompare(a.created_at || ''));
+                const last = sorted[0];
+                if (!last) return null;
+                return Math.floor((Date.now() - new Date(last.created_at).getTime()) / 86400000);
+              })() : null;
+              const unmatchedPlaceholders = hasTreasury ? treasury.filter(t => t.is_bank_placeholder && !t.matched_bank_txn_id).length : 0;
+
+              // Activity analysis
+              const todayLogs = (activityFeed || []).filter(l => l.user_id === myId && (l.created_at || '').substring(0, 10) === todayStr);
+
+              // Build messages
+              const messages = [];
+
+              // Login commentary
+              if (daysSinceLast === null) {
+                messages.push({ icon: '👋', text: 'Welcome to NextTrade Hub! This is your first time here.', type: 'info' });
+              } else if (daysSinceLast === 0 || daysSinceLast === 1) {
+                if (loginStreak >= 5) messages.push({ icon: '🔥', text: loginStreak + '-day streak! You\'re on fire. Keep it up.', type: 'success' });
+              } else if (daysSinceLast === 2) {
+                messages.push({ icon: '👀', text: 'You missed yesterday. Things may have piled up — let\'s catch up.', type: 'warning' });
+              } else if (daysSinceLast >= 3) {
+                messages.push({ icon: '⚠️', text: 'You haven\'t logged in for ' + daysSinceLast + ' days. Here\'s what needs your attention:', type: 'error' });
+              }
+
+              // Overdue tickets (only if permitted)
+              if (hasTickets && overdueTickets.length > 0) {
+                messages.push({ icon: '🚨', text: overdueTickets.length + ' ticket' + (overdueTickets.length > 1 ? 's are' : ' is') + ' OVERDUE. These need to be resolved immediately — clients are waiting.', type: 'error', items: overdueTickets.map(t => t.ticket_number + ' — ' + t.title) });
+              }
+              if (hasTickets && highPriority.length > 0 && overdueTickets.length === 0) {
+                messages.push({ icon: '🔴', text: highPriority.length + ' high-priority ticket' + (highPriority.length > 1 ? 's' : '') + ' in your queue. Handle these before anything else.', type: 'warning' });
+              }
+              if (hasTickets && newTickets.length > 0) {
+                messages.push({ icon: '✨', text: newTickets.length + ' new ticket' + (newTickets.length > 1 ? 's' : '') + ' assigned to you. Acknowledge them so your team knows you\'re on it.', type: 'info' });
+              }
+              if (hasTickets && myTickets.length === 0) {
+                messages.push({ icon: '✅', text: 'No open tickets. You\'re all clear — nice work!', type: 'success' });
+              } else if (hasTickets && overdueTickets.length === 0 && highPriority.length === 0 && newTickets.length === 0 && myTickets.length > 0) {
+                messages.push({ icon: '👍', text: myTickets.length + ' ticket' + (myTickets.length > 1 ? 's' : '') + ' in your queue, none overdue. You\'re on track.', type: 'success' });
+              }
+
+              // Overdue invoices (only if permitted)
+              if (hasSales && overdueInvoices.length > 0) {
+                const totalOD = overdueInvoices.reduce((a, i) => a + Number(i.outstanding || 0), 0);
+                messages.push({ icon: '💰', text: overdueInvoices.length + ' invoice' + (overdueInvoices.length > 1 ? 's' : '') + ' overdue (30+ days) totaling ' + fE(totalOD) + '. Follow up on collections.', type: 'warning' });
+              }
+
+              // Upcoming checks (only if permitted)
+              if (hasChecks && upcomingChecks.length > 0) {
+                const totalChk = upcomingChecks.reduce((a, c) => a + Number(c.amount || 0), 0);
+                messages.push({ icon: '📝', text: upcomingChecks.length + ' check' + (upcomingChecks.length > 1 ? 's' : '') + ' due this week totaling ' + fE(totalChk) + '. Make sure to collect.', type: 'info' });
+              }
+
+              // Treasury gaps (only if permitted)
+              if (hasTreasury && treasuryDays !== null && treasuryDays >= 14) {
+                messages.push({ icon: '📭', text: 'No treasury entries in the last ' + treasuryDays + ' days. Is everything being recorded?', type: 'warning' });
+              }
+              if (hasTreasury && unmatchedPlaceholders > 0) {
+                messages.push({ icon: '🏦', text: unmatchedPlaceholders + ' bank placeholder' + (unmatchedPlaceholders > 1 ? 's' : '') + ' still awaiting confirmation. Import your latest bank statement to match.', type: 'info' });
+              }
+
+              // Today's activity
+              if (todayLogs.length > 0) {
+                messages.push({ icon: '📊', text: 'You\'ve already logged ' + todayLogs.length + ' action' + (todayLogs.length > 1 ? 's' : '') + ' today. Keep going!', type: 'success' });
+              }
+
+              if (messages.length === 0) return null;
+
+              const typeColors = { success: '#10b981', warning: '#f59e0b', error: '#ef4444', info: '#3b82f6' };
+              const typeBgs = { success: 'rgba(16,185,129,0.08)', warning: 'rgba(245,158,11,0.08)', error: 'rgba(239,68,68,0.1)', info: 'rgba(59,130,246,0.08)' };
+
+              return (
+                <div style={{ background: 'linear-gradient(135deg, rgba(15,23,42,0.95), rgba(30,27,75,0.95))', borderRadius: 16, border: '1px solid rgba(56,189,248,0.15)', padding: 20, marginBottom: 16 }}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 14 }}>
+                    <div>
+                      <div style={{ fontSize: 20, fontWeight: 900, color: '#e2e8f0' }}>{greeting}, {firstName} 👋</div>
+                      <div style={{ fontSize: 11, color: '#64748b', marginTop: 2 }}>
+                        {new Date().toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric', year: 'numeric' })}
+                        {loginStreak >= 3 && <span style={{ marginLeft: 8, color: '#f59e0b', fontWeight: 700 }}>🔥 {loginStreak}-day streak</span>}
+                      </div>
+                    </div>
+                    <button onClick={() => setWelcomeDismissed(true)}
+                      style={{ background: 'rgba(255,255,255,0.06)', border: '1px solid rgba(255,255,255,0.1)', borderRadius: 8, padding: '6px 14px', color: '#94a3b8', fontSize: 11, fontWeight: 600, cursor: 'pointer' }}>
+                      Got it ✓
+                    </button>
+                  </div>
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                    {messages.map((m, i) => (
+                      <div key={i} style={{ padding: '10px 14px', borderRadius: 10, background: typeBgs[m.type], borderLeft: '3px solid ' + typeColors[m.type] }}>
+                        <div style={{ fontSize: 13, color: '#e2e8f0', fontWeight: 500 }}>
+                          <span style={{ marginRight: 8 }}>{m.icon}</span>{m.text}
+                        </div>
+                        {m.items && (
+                          <div style={{ marginTop: 6, marginLeft: 28 }}>
+                            {m.items.slice(0, 5).map((item, j) => (
+                              <div key={j} style={{ fontSize: 11, color: typeColors[m.type], fontWeight: 600, padding: '2px 0' }}>• {item}</div>
+                            ))}
+                            {m.items.length > 5 && <div style={{ fontSize: 10, color: '#64748b' }}>+ {m.items.length - 5} more</div>}
+                          </div>
+                        )}
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              );
+            })()}
+
+            {welcomeDismissed && (
+              <button onClick={() => setWelcomeDismissed(false)}
+                className="mb-3 px-4 py-2 rounded-full text-xs font-semibold text-blue-400 border border-blue-400/30 hover:bg-blue-500/10 transition">
+                📋 Show Morning Briefing
+              </button>
+            )}
+
+            {/* ===== AI ASSISTANT (compact — click to expand) ===== */}
+            {!greeterDismissed && greeterSettings.enabled ? (
+              <div className="mb-4">
+                <AIGreeter
+                  user={user} userProfile={userProfile} users={teamUsers}
+                  tickets={dashTickets} invoices={invoices} treasury={treasury}
+                  checks={pendingChecks}
+                  lang={lang} personality={greeterSettings.personality}
+                  greeterLang={greeterSettings.language}
+                  enabled={greeterSettings.enabled}
+                  onToggle={(on) => { if (!on) setGreeterDismissed(true); }}
+                  toast={toast}
+                />
               </div>
-              <div style={{ flex: 1, height: 1, background: 'linear-gradient(90deg, rgba(56,189,248,0.2), transparent)' }} />
-            </div>
+            ) : greeterSettings.enabled ? (
+              <button onClick={() => setGreeterDismissed(false)}
+                className="mb-4 w-full px-4 py-2.5 rounded-xl text-xs font-semibold text-indigo-300 border border-indigo-500/20 hover:bg-indigo-500/10 transition flex items-center gap-2"
+                style={{ background: 'rgba(99,102,241,0.05)' }}>
+                🤖 <span>Open AI Assistant</span> <span className="ml-auto text-[10px] text-indigo-400/60">Nadia</span>
+              </button>
+            ) : null}
+
+                </>)}{/* end !hasUnacked gate */}
+              </>);
+            })()}{/* end announcement priority IIFE */}
 
             {/* ===== TODAY'S EVENTS + SCORECARD ===== */}
             {(() => {
@@ -3979,7 +4399,6 @@ export default function App() {
               });
               const activeReminders = myReminders.filter(r => r.reminder_date === todayStr || (!r.reminder_date && r.created_at && r.created_at.substring(0, 10) === todayStr));
               const archivedReminders = myReminders.filter(r => (r.reminder_date || r.created_at?.substring(0, 10)) < todayStr);
-              const getUserName = (id) => (teamUsers || []).find(u => u.id === id)?.name || '';
               
               return (
                 <div className="mb-4">
@@ -4011,7 +4430,7 @@ export default function App() {
                               <button onClick={async (e) => { e.stopPropagation(); try { await dbUpdate('team_reminders', r.id, { completed: true }, userProfile?.id); setReminders(prev => prev.filter(x => x.id !== r.id)); } catch(err) { alert(err.message); } }}
                                 style={{ background: '#ffffff', color: '#1e40af', border: 'none', padding: '8px 16px', borderRadius: 10, fontSize: '12px', fontWeight: 800, cursor: 'pointer', boxShadow: '0 2px 8px rgba(0,0,0,0.2)' }}>✓ Dismiss</button>
                               {isAdmin && (
-                                <button onClick={async (e) => { e.stopPropagation(); if (!confirm('Delete this reminder?')) return; try { await dbDelete('team_reminders', r.id, userProfile?.id); setReminders(prev => prev.filter(x => x.id !== r.id)); } catch(err) { alert(err.message); } }}
+                                <button onClick={async (e) => { e.stopPropagation(); const ok = await toast.confirm({ title: 'Delete Reminder', message: 'Delete this reminder?', confirmText: 'Delete', danger: true }); if (!ok) return; try { await dbDelete('team_reminders', r.id, userProfile?.id); setReminders(prev => prev.filter(x => x.id !== r.id)); } catch(err) { toast.error(err.message); } }}
                                   style={{ background: 'rgba(255,255,255,0.15)', color: '#fff', border: '1px solid rgba(255,255,255,0.3)', padding: '4px 10px', borderRadius: 6, fontSize: '10px', cursor: 'pointer' }}>🗑️ Delete</button>
                               )}
                             </div>
@@ -4092,7 +4511,7 @@ export default function App() {
                                 triggeredBy: userProfile?.id,
                               })
                             });
-                          } catch(e) {}
+                          } catch(e) { console.warn('Silent error:', e.message || e); }
                           // Send WhatsApp to targeted users
                           try {
                             const targetUsers = formData.reminderTarget === 'all'
@@ -4110,11 +4529,11 @@ export default function App() {
                                 }).catch(() => {});
                               }
                             }
-                          } catch(e) {}
+                          } catch(e) { console.warn('Silent error:', e.message || e); }
                           setFormData({...formData, reminderMsg: '', reminderPriority: 'normal'});
                           setShowReminderForm(false);
                           await loadAllData();
-                        } catch(err) { alert('Error: ' + err.message); }
+                        } catch(err) { toast.error(err.message); }
                       }} className="px-4 py-2 bg-amber-500 text-white rounded-lg text-sm font-bold w-full">
                         📢 Post Reminder
                       </button>
@@ -4163,12 +4582,15 @@ export default function App() {
             {showAddAnnouncement && (
               <div className="bg-red-50 rounded-xl p-5 mb-4 border-2 border-red-400 shadow-lg">
                 <h4 className="text-lg font-extrabold text-red-800 mb-3">📢 New Message / رسالة جديدة</h4>
-                <input id="ann-title" placeholder="Subject / الموضوع *" className="w-full px-4 py-3 rounded-lg border-2 border-red-200 text-base font-bold mb-3" />
-                <textarea id="ann-body" placeholder="Message details / تفاصيل الرسالة" rows={4} className="w-full px-4 py-3 rounded-lg border-2 border-red-200 text-sm mb-3" />
+                <input value={formData.annTitle || ''} onChange={e => setFormData({...formData, annTitle: e.target.value})}
+                  placeholder="Subject / الموضوع *" className="w-full px-4 py-3 rounded-lg border-2 border-red-200 text-base font-bold mb-3" aria-label="Message subject" />
+                <textarea value={formData.annBody || ''} onChange={e => setFormData({...formData, annBody: e.target.value})}
+                  placeholder="Message details / تفاصيل الرسالة" rows={4} className="w-full px-4 py-3 rounded-lg border-2 border-red-200 text-sm mb-3" aria-label="Message body" />
                 <div className="grid grid-cols-2 gap-3 mb-3">
                   <div>
                     <label className="text-xs font-bold text-red-800 block mb-1">Priority / الأهمية</label>
-                    <select id="ann-priority" className="w-full px-3 py-2 rounded-lg border text-sm">
+                    <select value={formData.annPriority || 'urgent'} onChange={e => setFormData({...formData, annPriority: e.target.value})}
+                      className="w-full px-3 py-2 rounded-lg border text-sm" aria-label="Priority level">
                       <option value="urgent">🚨 URGENT / عاجل</option>
                       <option value="warning">⚠️ Important / مهم</option>
                       <option value="info">ℹ️ Info / معلومة</option>
@@ -4176,27 +4598,28 @@ export default function App() {
                   </div>
                   <div>
                     <label className="text-xs font-bold text-red-800 block mb-1">Send To / إرسال إلى</label>
-                    <select id="ann-target" className="w-full px-3 py-2 rounded-lg border text-sm">
+                    <select value={formData.annTarget || 'all'} onChange={e => setFormData({...formData, annTarget: e.target.value})}
+                      className="w-full px-3 py-2 rounded-lg border text-sm" aria-label="Send to">
                       <option value="all">👥 Everyone / الجميع</option>
                       {activeTeamUsers.map(u => <option key={u.id} value={u.id}>👤 {u.name}</option>)}
                     </select>
                   </div>
                 </div>
                 <div className="flex gap-3 items-center mb-3">
-                  <label className="flex items-center gap-2 text-xs font-bold"><input type="checkbox" id="ann-pin" defaultChecked className="w-4 h-4" /> 📌 Pin to top / تثبيت</label>
-                  <label className="flex items-center gap-2 text-xs font-bold"><input type="checkbox" id="ann-email" defaultChecked className="w-4 h-4" /> 📧 Email notify / إشعار بريد</label>
-                  <label className="flex items-center gap-2 text-xs font-bold"><input type="checkbox" id="ann-whatsapp" className="w-4 h-4" /> 💬 WhatsApp</label>
+                  <label className="flex items-center gap-2 text-xs font-bold"><input type="checkbox" checked={formData.annPin !== false} onChange={e => setFormData({...formData, annPin: e.target.checked})} className="w-4 h-4" /> 📌 Pin to top / تثبيت</label>
+                  <label className="flex items-center gap-2 text-xs font-bold"><input type="checkbox" checked={formData.annEmail !== false} onChange={e => setFormData({...formData, annEmail: e.target.checked})} className="w-4 h-4" /> 📧 Email notify / إشعار بريد</label>
+                  <label className="flex items-center gap-2 text-xs font-bold"><input type="checkbox" checked={!!formData.annWhatsapp} onChange={e => setFormData({...formData, annWhatsapp: e.target.checked})} className="w-4 h-4" /> 💬 WhatsApp</label>
                 </div>
                 <div className="flex gap-2">
                   <button onClick={async () => {
-                    var title = document.getElementById('ann-title').value;
-                    var body = document.getElementById('ann-body').value;
-                    var priority = document.getElementById('ann-priority').value;
-                    var pinned = document.getElementById('ann-pin').checked;
-                    var sendEmail = document.getElementById('ann-email').checked;
-                    var sendWhatsapp = document.getElementById('ann-whatsapp').checked;
-                    var target = document.getElementById('ann-target').value;
-                    if (!title) { alert('Subject is required / الموضوع مطلوب'); return; }
+                    const title = formData.annTitle || '';
+                    const body = formData.annBody || '';
+                    const priority = formData.annPriority || 'urgent';
+                    const pinned = formData.annPin !== false;
+                    const sendEmail = formData.annEmail !== false;
+                    const sendWhatsapp = !!formData.annWhatsapp;
+                    const target = formData.annTarget || 'all';
+                    if (!title) { toast.warning('Subject is required / الموضوع مطلوب'); return; }
                     try {
                       await dbInsert('announcements', {
                         title, body, priority, pinned,
@@ -4206,8 +4629,8 @@ export default function App() {
                       }, user?.id);
                       if (sendEmail) {
                         try {
-                          var recipients = target === 'all' ? teamUsers : teamUsers.filter(u => u.id === target);
-                          for (var r of recipients) {
+                          const recipients = target === 'all' ? teamUsers : teamUsers.filter(u => u.id === target);
+                          for (const r of recipients) {
                             if (r.email) {
                               await fetch('/api/notify', {
                                 method: 'POST', headers: {'Content-Type':'application/json'},
@@ -4218,20 +4641,22 @@ export default function App() {
                         } catch(emailErr) { console.error('Email send error:', emailErr); }
                       }
                       setShowAddAnnouncement(false);
+                      setFormData({});
+                      toast.success('Message sent ✓');
                       playAlarmSound(priority === 'urgent');
                       await loadAllData();
-                    } catch(err) { alert('Error: ' + err.message); }
+                    } catch(err) { toast.error(err.message); }
                   }} className="px-6 py-3 bg-red-600 text-white rounded-lg text-sm font-extrabold shadow-lg">📢 SEND NOW / أرسل الآن</button>
-                  <button onClick={() => setShowAddAnnouncement(false)} className="px-4 py-3 border-2 border-slate-300 rounded-lg text-sm font-bold">Cancel</button>
+                  <button onClick={() => { setShowAddAnnouncement(false); setFormData({}); }} className="px-4 py-3 border-2 border-slate-300 rounded-lg text-sm font-bold">Cancel</button>
                 </div>
               </div>
             )}
             {/* Active Announcements */}
             {(() => {
-              var myId = userProfile?.id;
-              var active = announcements.filter(a => a.active !== false && (!a.target_user || a.target_user === myId));
+              const myId = userProfile?.id;
+              const active = announcements.filter(a => a.active !== false && (!a.target_user || a.target_user === myId));
               // Sort: pinned first, then by date descending
-              var sorted = [...active].sort((a, b) => {
+              const sorted = [...active].sort((a, b) => {
                 if (a.pinned && !b.pinned) return -1;
                 if (!a.pinned && b.pinned) return 1;
                 return (b.created_at || '').localeCompare(a.created_at || '');
@@ -4239,19 +4664,19 @@ export default function App() {
               if (sorted.length === 0) return null;
               return (<div className="mb-4">
                 {sorted.map(a => {
-                  var styles = a.priority === 'urgent'
+                  const styles = a.priority === 'urgent'
                     ? { border: '3px solid #ef4444', shadow: '0 4px 20px rgba(239,68,68,0.25)' }
                     : a.priority === 'warning'
                     ? { border: '2px solid #f59e0b', shadow: '0 4px 15px rgba(245,158,11,0.2)' }
                     : { border: '2px solid #3b82f6', shadow: '0 4px 15px rgba(59,130,246,0.15)' };
-                  var icon = a.priority === 'urgent' ? '🚨' : a.priority === 'warning' ? '⚠️' : 'ℹ️';
-                  var poster = teamUsers.find(u => u.id === a.posted_by);
-                  var isTargeted = a.target_user === myId;
-                  var thisAcks = announcementAcks.filter(ak => ak.announcement_id === a.id);
-                  var myAck = thisAcks.find(ak => ak.user_id === myId);
-                  var targetUsers = a.target_user ? teamUsers.filter(u => u.id === a.target_user) : teamUsers;
-                  var ackedUsers = targetUsers.filter(u => thisAcks.some(ak => ak.user_id === u.id));
-                  var unackedUsers = targetUsers.filter(u => !thisAcks.some(ak => ak.user_id === u.id));
+                  const icon = a.priority === 'urgent' ? '🚨' : a.priority === 'warning' ? '⚠️' : 'ℹ️';
+                  const poster = teamUsers.find(u => u.id === a.posted_by);
+                  const isTargeted = a.target_user === myId;
+                  const thisAcks = announcementAcks.filter(ak => ak.announcement_id === a.id);
+                  const myAck = thisAcks.find(ak => ak.user_id === myId);
+                  const targetUsers = a.target_user ? teamUsers.filter(u => u.id === a.target_user) : teamUsers;
+                  const ackedUsers = targetUsers.filter(u => thisAcks.some(ak => ak.user_id === u.id));
+                  const unackedUsers = targetUsers.filter(u => !thisAcks.some(ak => ak.user_id === u.id));
                   return (
                     <div key={a.id} className="rounded-2xl p-5 mb-3" style={{ background: a.priority === 'urgent' ? 'linear-gradient(135deg,#fef2f2,#fee2e2)' : a.priority === 'warning' ? 'linear-gradient(135deg,#fffbeb,#fef3c7)' : 'linear-gradient(135deg,#eff6ff,#dbeafe)', border: styles.border, boxShadow: styles.shadow }}>
                       <div className="flex justify-between items-start">
@@ -4282,7 +4707,7 @@ export default function App() {
                             <div style={{ marginTop: '0.5rem', fontSize: '0.65rem' }}>
                               {ackedUsers.length > 0 && (
                                 <div style={{ color: '#16a34a' }}>✅ {ackedUsers.map(u => {
-                                  var ack = thisAcks.find(ak => ak.user_id === u.id);
+                                  const ack = thisAcks.find(ak => ak.user_id === u.id);
                                   return u.name + (ack ? ' (' + new Date(ack.acked_at).toLocaleString([], {month:'short',day:'numeric',hour:'2-digit',minute:'2-digit'}) + ')' : '');
                                 }).join(', ')}</div>
                               )}
@@ -4309,7 +4734,7 @@ export default function App() {
             })()}
             {/* Archived Messages */}
             {(() => {
-              var archived = announcements.filter(a => a.active === false);
+              const archived = announcements.filter(a => a.active === false);
               if (archived.length === 0) return null;
               return (
                 <div className="mb-4">
@@ -4327,12 +4752,12 @@ export default function App() {
                       </div>
                       <div className="space-y-2 max-h-[300px] overflow-auto">
                         {archived.map(a => {
-                          var icon = a.priority === 'urgent' ? '🚨' : a.priority === 'warning' ? '⚠️' : 'ℹ️';
-                          var poster = teamUsers.find(u => u.id === a.posted_by);
-                          var thisAcks = announcementAcks.filter(ak => ak.announcement_id === a.id);
-                          var targetUsers2 = a.target_user ? teamUsers.filter(u => u.id === a.target_user) : teamUsers;
-                          var ackedNames = targetUsers2.filter(u => thisAcks.some(ak => ak.user_id === u.id));
-                          var unackedNames = targetUsers2.filter(u => !thisAcks.some(ak => ak.user_id === u.id));
+                          const icon = a.priority === 'urgent' ? '🚨' : a.priority === 'warning' ? '⚠️' : 'ℹ️';
+                          const poster = teamUsers.find(u => u.id === a.posted_by);
+                          const thisAcks = announcementAcks.filter(ak => ak.announcement_id === a.id);
+                          const targetUsers2 = a.target_user ? teamUsers.filter(u => u.id === a.target_user) : teamUsers;
+                          const ackedNames = targetUsers2.filter(u => thisAcks.some(ak => ak.user_id === u.id));
+                          const unackedNames = targetUsers2.filter(u => !thisAcks.some(ak => ak.user_id === u.id));
                           return (
                             <div key={a.id} style={{ padding: '10px 14px', borderRadius: 10, background: 'rgba(0,0,0,0.02)', border: '1px solid rgba(0,0,0,0.06)' }}>
                               <div className="flex justify-between items-start">
@@ -4345,7 +4770,7 @@ export default function App() {
                                   {isAdmin && (
                                     <div style={{ fontSize: '0.6rem', marginTop: 4 }}>
                                       {ackedNames.length > 0 && <div style={{ color: '#16a34a' }}>✅ {ackedNames.map(u => {
-                                        var ack = thisAcks.find(ak => ak.user_id === u.id);
+                                        const ack = thisAcks.find(ak => ak.user_id === u.id);
                                         return u.name + (ack ? ' (' + new Date(ack.acked_at).toLocaleString([], {month:'short',day:'numeric',hour:'2-digit',minute:'2-digit'}) + ')' : '');
                                       }).join(', ')}</div>}
                                       {unackedNames.length > 0 && <div style={{ color: '#dc2626', fontWeight: 700 }}>⏳ {unackedNames.map(u => u.name).join(', ')}</div>}
@@ -4369,12 +4794,18 @@ export default function App() {
             })()}
 
 
+            {/* Section: Tickets */}
+            <div style={{ display: 'flex', alignItems: 'center', gap: 10, margin: '20px 0 12px' }}>
+              <div style={{ width: 3, height: 20, borderRadius: 2, background: '#8b5cf6' }} />
+              <span style={{ fontSize: 12, fontWeight: 800, color: '#94a3b8', letterSpacing: '0.06em' }}>🎫 TICKETS</span>
+              <div style={{ flex: 1, height: 1, background: 'rgba(148,163,184,0.1)' }} />
+            </div>
+
             {/* ===== TICKETS DASHBOARD ===== */}
             {dashTickets.length > 0 && (() => {
               const myId = userProfile?.id;
               const todayStr = new Date().toISOString().substring(0, 10);
               const twoDaysAgo = new Date(Date.now() - 48 * 3600000).toISOString();
-              const getUserName = (id) => (teamUsers || []).find(u => u.id === id)?.name || '';
               const priColor = (p) => p === 'high' ? '#ef4444' : p === 'low' ? '#10b981' : '#f59e0b';
               const timeAgo = (d) => { const m = Math.floor((Date.now() - new Date(d).getTime()) / 60000); if (m < 60) return m + 'm'; const h = Math.floor(m/60); if (h < 24) return h + 'h'; return Math.floor(h/24) + 'd'; };
 
@@ -4516,6 +4947,13 @@ export default function App() {
             })()}
 
 
+            {/* Section: Activity */}
+            <div style={{ display: 'flex', alignItems: 'center', gap: 10, margin: '20px 0 12px' }}>
+              <div style={{ width: 3, height: 20, borderRadius: 2, background: '#0ea5e9' }} />
+              <span style={{ fontSize: 12, fontWeight: 800, color: '#94a3b8', letterSpacing: '0.06em' }}>📋 TEAM ACTIVITY</span>
+              <div style={{ flex: 1, height: 1, background: 'rgba(148,163,184,0.1)' }} />
+            </div>
+
             {/* ===== TEAM ACTIVITY FEED ===== */}
             {activityFeed.length > 0 && (() => {
               const expanded = hideSections.dash_teamFeed;
@@ -4608,6 +5046,13 @@ export default function App() {
             })()}
 
 
+
+            {/* Section: Financial */}
+            <div style={{ display: 'flex', alignItems: 'center', gap: 10, margin: '20px 0 12px' }}>
+              <div style={{ width: 3, height: 20, borderRadius: 2, background: '#10b981' }} />
+              <span style={{ fontSize: 12, fontWeight: 800, color: '#94a3b8', letterSpacing: '0.06em' }}>💰 FINANCIAL OVERVIEW</span>
+              <div style={{ flex: 1, height: 1, background: 'rgba(148,163,184,0.1)' }} />
+            </div>
 
             {/* ===== FINANCIAL DASHBOARD — COMMAND CENTER ===== */}
             <div className="financial-command">
@@ -5282,7 +5727,8 @@ export default function App() {
                     const finalName = document.getElementById('merge-cust-name')?.value?.trim();
                     if (!finalName) return;
                     const targets = formData.mergeTargets || [];
-                    if (!confirm('Merge ' + targets.length + ' customers into:\n\n"' + finalName + '"\n\nThis will update ALL invoices, checks, and treasury entries. Continue?')) return;
+                    const ok = await toast.confirm({ title: 'Merge Customers', message: 'Merge ' + targets.length + ' customers into "' + finalName + '"? This will update ALL invoices, checks, and treasury entries.', confirmText: 'Merge', danger: true });
+                    if (!ok) return;
                     try {
                       // Find or create the target customer record
                       let targetCust = customers.find(c => c.name === finalName || c.name_ar === finalName);
@@ -5307,7 +5753,7 @@ export default function App() {
                       alert('Merged ' + targets.length + ' customers into "' + finalName + '"');
                       setFormData({...formData, mergeMode: false, mergeTargets: []});
                       await loadAllData();
-                    } catch(err) { alert('Error: ' + err.message); }
+                    } catch(err) { toast.error(err.message); }
                   }} className="px-4 py-2 bg-purple-600 text-white rounded-lg text-xs font-bold">
                     ✅ Merge All
                   </button>
@@ -5425,7 +5871,7 @@ export default function App() {
                             }
                             setFormData({...formData, editingEnName: false});
                             await loadAllData();
-                          } catch (err) { alert('Error / خطأ: ' + err.message); }
+                          } catch (err) { toast.error(err.message); }
                         }} className="px-2 py-1 bg-emerald-500 text-white rounded text-xs">Save</button>
                         <button onClick={() => setFormData({...formData, editingEnName: false})}
                           className="px-2 py-1 bg-slate-300 rounded text-xs">Cancel</button>
@@ -6023,7 +6469,7 @@ export default function App() {
                       }, user?.id);
                       setFormData({...formData, showAddCheck: false, chkCustomer:'', chkAmount:'', chkDueDate:'', chkNumber:'', chkOrder:'', chkBank:'', chkNotes:''});
                       await loadAllData();
-                    } catch(err) { alert('Error: ' + err.message); }
+                    } catch(err) { toast.error(err.message); }
                   }} className="px-4 py-2 bg-blue-500 text-white rounded-lg text-xs font-bold">Add Check / إضافة ✓</button>
                   <button onClick={() => setFormData({...formData, showAddCheck: false})}
                     className="px-4 py-2 border border-slate-200 rounded-lg text-xs">Cancel</button>
@@ -6161,7 +6607,8 @@ export default function App() {
                                       className="px-2 py-0.5 bg-emerald-500 text-white rounded text-[9px] font-semibold hover:bg-emerald-600">✓ Collect</button>
                                     {(userProfile?.role === 'super_admin' || (c.created_by === (userProfile?.id || user?.id) && (Date.now() - new Date(c.created_at || 0).getTime()) < 86400000)) && (
                                       <button onClick={async () => {
-                                        if (!window.confirm('Delete this check?')) return;
+                                        const ok = await toast.confirm({ title: 'Delete Check', message: 'Delete this check permanently?', confirmText: 'Delete', danger: true });
+                                        if (!ok) return;
                                         try { await dbDelete('checks', c.id, user?.id); await loadAllData(); } catch(err) { alert(err.message); }
                                       }} className="px-1.5 py-0.5 bg-red-50 text-red-500 rounded text-[9px] border border-red-200">🗑</button>
                                     )}
@@ -6344,7 +6791,7 @@ export default function App() {
                     }, userProfile?.id);
                     setFormData({...formData, showAddWarehouse: false, whExpDate: '', whExpDesc: '', whExpAmount: '', whExpCat: '', whExpSub: '', whExpRef: '', whType: 'general'});
                     await loadAllData();
-                  } catch(err) { alert('Error: ' + err.message); }
+                  } catch(err) { toast.error(err.message); }
                 }} className="w-full px-4 py-2 bg-purple-500 text-white rounded-lg font-semibold">
                   💾 Save Expense / حفظ المصروف
                 </button>
@@ -7022,7 +7469,7 @@ export default function App() {
                           }
                           setFormData({});
                           await loadAllData();
-                        } catch (err) { alert('Error: ' + err.message); }
+                        } catch (err) { toast.error(err.message); }
                       }} className="flex-1 py-3 rounded-xl text-sm font-bold text-white"
                         style={{background:'linear-gradient(135deg, #10b981, #059669)'}}>
                         Save / حفظ
@@ -7181,7 +7628,7 @@ export default function App() {
                               await dbUpdate('inventory', p.id, costs, user?.id);
                               setFormData({...formData, selectedProduct: {...p, ...costs}});
                               await loadAllData();
-                            } catch (err) { alert('Error: ' + err.message); }
+                            } catch (err) { toast.error(err.message); }
                           }} className="px-4 py-2 bg-red-600 text-white rounded-lg text-xs font-bold w-full mb-3">Save Costs</button>
 
                           {/* Profit Calculation */}
@@ -7426,83 +7873,83 @@ export default function App() {
             CRM TAB
         ========================================== */}
         {tab === 'crm' && (
-          <CRMTab customers={customers} invoices={invoices} user={user} userProfile={userProfile} users={teamUsers} onReload={loadAllData} isAdmin={isAdmin} onSelectInvoice={setSelectedInvoice} lang={lang} modulePerms={modulePerms} />
+          <SafeSection label="CRM"><CRMTab toast={toast} customers={customers} invoices={invoices} user={user} userProfile={userProfile} users={teamUsers} onReload={loadAllData} isAdmin={isAdmin} onSelectInvoice={setSelectedInvoice} lang={lang} modulePerms={modulePerms} /></SafeSection>
         )}
 
         {/* ==========================================
             TICKETS TAB
         ========================================== */}
         {tab === 'tickets' && (
-          <TicketsTab customers={customers} user={user} userProfile={userProfile} users={teamUsers} onReload={loadAllData} lang={lang} isAdmin={isAdmin} modulePerms={modulePerms} openTicketId={openTicketId} onOpenTicketHandled={() => setOpenTicketId(null)} />
+          <SafeSection label="Tickets"><TicketsTab toast={toast} customers={customers} user={user} userProfile={userProfile} users={teamUsers} onReload={loadAllData} lang={lang} isAdmin={isAdmin} modulePerms={modulePerms} openTicketId={openTicketId} onOpenTicketHandled={() => setOpenTicketId(null)} /></SafeSection>
         )}
 
         {/* ==========================================
             CALENDAR TAB
         ========================================== */}
         {tab === 'calendar' && (
-          <CalendarTab customers={customers} user={user} userProfile={userProfile} users={teamUsers} onReload={loadAllData} />
+          <SafeSection label="Calendar"><CalendarTab customers={customers} user={user} userProfile={userProfile} users={teamUsers} onReload={loadAllData} />
         )}
 
         {/* ==========================================
             CUSTOMS / BROKER TAB
         ========================================== */}
         {tab === 'customs' && (
-          <CustomsTab customers={customers} user={user} />
+          <SafeSection label="Customs"><CustomsTab customers={customers} user={user} />
         )}
 
         {/* ==========================================
             SHIPPING RATES TAB
         ========================================== */}
         {tab === 'shipping' && (
-          <ShippingRatesTab user={user} userProfile={userProfile} isAdmin={isAdmin} customers={customers} />
+          <SafeSection label="Shipping"><ShippingRatesTab toast={toast} user={user} userProfile={userProfile} isAdmin={isAdmin} customers={customers} /></SafeSection></SafeSection>
         )}
 
         {tab === 'bank' && (
-          <BankTab user={user} supabase={supabase} />
+          <SafeSection label="Bank"><BankTab user={user} supabase={supabase} /></SafeSection></SafeSection>
         )}
 
         {tab === 'egyptbank' && (
-          <EgyptBankTab user={user} userProfile={userProfile} isAdmin={isAdmin} invoices={invoices} onReload={loadAllData} />
+          <SafeSection label="Egypt Bank"><EgyptBankTab toast={toast} user={user} userProfile={userProfile} isAdmin={isAdmin} invoices={invoices} onReload={loadAllData} />
         )}
 
         {tab === 'reports' && (
-          <ReportsTab treasury={treasury} invoices={invoices} warehouseExpenses={warehouse} egyptBankTxns={egyptBankTxns} />
+          <SafeSection label="Reports"><ReportsTab treasury={treasury} invoices={invoices} warehouseExpenses={warehouse} egyptBankTxns={egyptBankTxns} /></SafeSection>
         )}
 
         {tab === 'quotes' && (
-          <QuotesTab user={user} userProfile={userProfile} isAdmin={isAdmin} />
+          <SafeSection label="Quotes"><QuotesTab user={user} userProfile={userProfile} isAdmin={isAdmin} /></SafeSection></SafeSection>
         )}
 
         {/* ==========================================
             DAILY LOG TAB
         ========================================== */}
         {tab === 'dailylog' && (
-          <DailyLogTab user={user} userProfile={userProfile} users={teamUsers} isAdmin={isAdmin} />
+          <SafeSection label="Daily Log"><DailyLogTab user={user} userProfile={userProfile} users={teamUsers} isAdmin={isAdmin} /></SafeSection>
         )}
 
         {/* ==========================================
             ADMIN TAB
         ========================================== */}
         {tab === 'admin' && (
-          <AdminTab user={user} userProfile={userProfile} users={teamUsers} isAdmin={isAdmin} customers={customers} />
+          <SafeSection label="Admin"><AdminTab user={user} userProfile={userProfile} users={teamUsers} isAdmin={isAdmin} customers={customers} /></SafeSection></SafeSection>
         )}
 
         {/* ==========================================
             AI ASSISTANT TAB
         ========================================== */}
         {tab === 'ai' && (
-          <AIAssistant user={user} userProfile={userProfile} users={teamUsers} customers={customers} />
+          <SafeSection label="AI Assistant"><AIAssistant user={user} userProfile={userProfile} users={teamUsers} customers={customers} /></SafeSection>
         )}
 
         {tab === 'comms' && (
-          <CommunicationsTab user={user} supabase={supabase} />
+          <SafeSection label="Communications"><CommunicationsTab user={user} supabase={supabase} /></SafeSection>
         )}
 
         {/* ==========================================
             SETTINGS TAB
         ========================================== */}
         {tab === 'settings' && (
-          <SettingsTab user={user} users={teamUsers} onReload={loadAllData} isAdmin={isAdmin} userProfile={userProfile} />
+          <SafeSection label="Settings"><SettingsTab toast={toast} user={user} users={teamUsers} onReload={loadAllData} isAdmin={isAdmin} userProfile={userProfile} /></SafeSection>
         )}
 
 
@@ -7660,8 +8107,9 @@ export default function App() {
       )}
 
       {/* Phone Widget - floating on all tabs */}
-      <PhoneWidget user={user} userProfile={userProfile} users={teamUsers} customers={customers} />
+      <PhoneWidget user={user} userProfile={userProfile} users={teamUsers} customers={customers} /></SafeSection>
     </div>
     </ErrorBoundary>
+    </ToastProvider>
   );
 }

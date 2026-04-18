@@ -139,6 +139,30 @@ export async function POST(request) {
     var apiKey = process.env.ANTHROPIC_API_KEY;
     if (!apiKey) return Response.json({ answer: 'API key not configured. Add ANTHROPIC_API_KEY in Vercel env vars.' });
 
+    // GREETER MODE — conversational AI assistant
+    if (body.mode === 'greeter' && body.systemOverride) {
+      try {
+        var gMessages = [];
+        if (body.history && body.history.length) {
+          body.history.forEach(function(m) {
+            gMessages.push({ role: m.role === 'user' ? 'user' : 'assistant', content: m.text || m.content || '' });
+          });
+        }
+        gMessages.push({ role: 'user', content: question });
+        var gResponse = await fetch('https://api.anthropic.com/v1/messages', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'x-api-key': apiKey, 'anthropic-version': '2023-06-01' },
+          body: JSON.stringify({ model: 'claude-sonnet-4-20250514', max_tokens: 400, system: body.systemOverride, messages: gMessages }),
+        });
+        if (gResponse.ok) {
+          var gData = await gResponse.json();
+          var gText = (gData.content && gData.content[0] && gData.content[0].text) || '';
+          return Response.json({ answer: gText });
+        }
+      } catch(e) {}
+      return Response.json({ answer: '' });
+    }
+
     // EXECUTE ACTION
     if (action) {
       try {

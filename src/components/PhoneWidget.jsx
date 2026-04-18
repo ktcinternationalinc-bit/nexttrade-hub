@@ -68,7 +68,7 @@ export default function PhoneWidget({ user, userProfile, users, customers }) {
         enableRingingState: true,
       });
 
-      device.on('ready', () => { console.log('📞 Twilio Device ready'); });
+      device.on('ready', () => { console.warn('📞 Twilio Device ready'); });
       device.on('error', (err) => { setError(err.message); setCallState('idle'); });
 
       device.on('incoming', (conn) => {
@@ -140,7 +140,7 @@ export default function PhoneWidget({ user, userProfile, users, customers }) {
 
   // End call
   const endCall = () => {
-    if (connectionRef.current) { try { connectionRef.current.disconnect(); } catch(e) {} }
+    if (connectionRef.current) { try { connectionRef.current.disconnect(); } catch(e) { console.warn(e); } }
     connectionRef.current = null;
     if (timerRef.current) { clearInterval(timerRef.current); timerRef.current = null; }
 

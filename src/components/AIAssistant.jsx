@@ -58,18 +58,32 @@ export default function AIAssistant({ user, userProfile, users, customers }) {
         // Build full transcript from all results
         let finalText = '';
         let interimText = '';
+        let avgConfidence = 0;
+        let resultCount = 0;
         for (let i = 0; i < event.results.length; i++) {
           if (event.results[i].isFinal) {
             finalText += event.results[i][0].transcript;
+            avgConfidence += event.results[i][0].confidence || 0;
+            resultCount++;
           } else {
             interimText += event.results[i][0].transcript;
           }
         }
+        if (resultCount > 0) avgConfidence = avgConfidence / resultCount;
+        
         const displayText = (finalText + interimText).trim();
         const lower = displayText.toLowerCase().replace(/[.,!?]/g, '').trim();
-        const wordCount = lower.split(/\s+/).filter(w => w.length > 1).length;
+        const words = lower.split(/\s+/).filter(w => w.length > 1);
+        const wordCount = words.length;
         
-        // If AI is speaking, only interrupt for "break" or 2+ real words
+        // Noise filter: skip common noise artifacts, very low confidence, or empty
+        const NOISE_WORDS = ['the', 'a', 'uh', 'um', 'ah', 'oh', 'hmm', 'hm', 'eh', 'er', 'like', 'yeah', 'so', 'and'];
+        const isNoise = wordCount === 0 || 
+          (wordCount === 1 && NOISE_WORDS.includes(words[0])) ||
+          (wordCount <= 2 && avgConfidence > 0 && avgConfidence < 0.4) ||
+          (displayText.length < 3);
+        
+        // If AI is speaking, only interrupt for "break" or 2+ meaningful words
         if (speakingRef.current) {
           if (lower === 'break' || lower === 'stop') {
             // Hard interrupt — stop AI, clear input, stay listening
@@ -79,21 +93,24 @@ export default function AIAssistant({ user, userProfile, users, customers }) {
             setInput('');
             if (silenceTimerRef.current) clearTimeout(silenceTimerRef.current);
             if (autoSendRef.current) clearTimeout(autoSendRef.current);
-            try { recognition.stop(); } catch(e) {}
-            setTimeout(() => { if (conversationModeRef.current) { try { recognition.start(); setListening(true); } catch(e) {} } }, 500);
+            try { recognition.stop(); } catch(e) { console.warn(e); }
+            setTimeout(() => { if (conversationModeRef.current) { try { recognition.start(); setListening(true); } catch(e) { console.warn(e); } } }, 500);
             return;
           }
-          if (wordCount >= 2) {
+          if (wordCount >= 2 && !isNoise) {
             // User is actually talking — stop AI and let them speak
             if (audioRef.current) { audioRef.current.pause(); audioRef.current = null; }
             if ('speechSynthesis' in window) window.speechSynthesis.cancel();
             speakingRef.current = false; setSpeaking(false);
             // Fall through to normal processing below
           } else {
-            // Just a sound or single short word — ignore, let AI keep talking
+            // Just noise or single filler word — ignore, let AI keep talking
             return;
           }
         }
+        
+        // Skip pure noise when not speaking either
+        if (isNoise && !speakingRef.current) return;
         
         setInput(displayText);
         
@@ -102,8 +119,8 @@ export default function AIAssistant({ user, userProfile, users, customers }) {
           setInput('');
           if (silenceTimerRef.current) clearTimeout(silenceTimerRef.current);
           if (autoSendRef.current) clearTimeout(autoSendRef.current);
-          try { recognition.stop(); } catch(e) {}
-          setTimeout(() => { if (conversationModeRef.current) { try { recognition.start(); setListening(true); } catch(e) {} } }, 500);
+          try { recognition.stop(); } catch(e) { console.warn(e); }
+          setTimeout(() => { if (conversationModeRef.current) { try { recognition.start(); setListening(true); } catch(e) { console.warn(e); } } }, 500);
           return;
         }
         
@@ -115,7 +132,7 @@ export default function AIAssistant({ user, userProfile, users, customers }) {
         silenceTimerRef.current = setTimeout(() => {
           const textToSend = displayText.trim();
           if (!textToSend) return;
-          try { recognition.stop(); } catch(e) {}
+          try { recognition.stop(); } catch(e) { console.warn(e); }
           pendingTextRef.current = textToSend;
           setInput('');
           autoSendRef.current = setTimeout(() => {
@@ -133,7 +150,7 @@ export default function AIAssistant({ user, userProfile, users, customers }) {
         if (conversationModeRef.current && !speakingRef.current) {
           setTimeout(() => {
             if (conversationModeRef.current && !speakingRef.current) {
-              try { recognition.start(); setListening(true); } catch(e) {}
+              try { recognition.start(); setListening(true); } catch(e) { console.warn(e); }
             }
           }, 500);
         } else if (!conversationModeRef.current) {
@@ -177,7 +194,7 @@ export default function AIAssistant({ user, userProfile, users, customers }) {
       if (maxTimeoutRef.current) clearTimeout(maxTimeoutRef.current);
       maxTimeoutRef.current = setTimeout(() => {
         conversationModeRef.current = false;
-        try { recognitionRef.current.stop(); } catch(e) {}
+        try { recognitionRef.current.stop(); } catch(e) { console.warn(e); }
         setListening(false);
         if (audioRef.current) { audioRef.current.pause(); audioRef.current = null; } if ('speechSynthesis' in window) window.speechSynthesis.cancel(); speakingRef.current = false; setSpeaking(false);
       }, 120000);
@@ -254,7 +271,7 @@ export default function AIAssistant({ user, userProfile, users, customers }) {
     stopSpeaking();
     if (conversationModeRef.current) {
       conversationModeRef.current = false;
-      try { recognitionRef.current?.stop(); } catch(e) {}
+      try { recognitionRef.current?.stop(); } catch(e) { console.warn(e); }
       setListening(false);
     }
     if (silenceTimerRef.current) clearTimeout(silenceTimerRef.current);
@@ -329,7 +346,7 @@ export default function AIAssistant({ user, userProfile, users, customers }) {
       if (!recordingRef.current) { clearInterval(watchdogRef.current); return; }
       const silentMs = Date.now() - lastResultTimeRef.current;
       if (silentMs > 8000 && recordingRecRef.current) {
-        try { recordingRecRef.current.stop(); } catch(e) {}
+        try { recordingRecRef.current.stop(); } catch(e) { console.warn(e); }
         // onend will trigger restart
       }
     }, 3000);
@@ -342,7 +359,7 @@ export default function AIAssistant({ user, userProfile, users, customers }) {
     recordingRef.current = false;
     if (recordingTimerRef.current) { clearInterval(recordingTimerRef.current); recordingTimerRef.current = null; }
     if (watchdogRef.current) { clearInterval(watchdogRef.current); watchdogRef.current = null; }
-    if (recordingRecRef.current) { try { recordingRecRef.current.stop(); } catch(e) {} recordingRecRef.current = null; }
+    if (recordingRecRef.current) { try { recordingRecRef.current.stop(); } catch(e) { console.warn(e); } recordingRecRef.current = null; }
     // Final text stays in input for review
   };
 

@@ -374,3 +374,5 @@ h3 { letter-spacing: -0.02em; }
 
 /* Opacity overrides - don't let items become invisible */
 .opacity-50 { opacity: 0.6 !important; }
+
+@keyframes slideIn { from { transform: translateX(100px); opacity: 0; } to { transform: translateX(0); opacity: 1; } }
