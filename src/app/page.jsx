@@ -126,6 +126,7 @@ const TABS = [
   { id: 'shipping', label: 'Shipping Rates / شحن', icon: '🛳️' },
   { id: 'crm', label: 'CRM', icon: '🤝' },
   { id: 'tickets', label: 'Tickets / تذاكر', icon: '🎫' },
+  { id: 'systemtickets', label: 'System Tickets / نظام', icon: '🐛' },
   { id: 'comms', label: 'Communications / رسائل', icon: '📬' },
   { id: 'calendar', label: 'Calendar / تقويم', icon: '📅' },
   { id: 'dailylog', label: 'Daily Log / يومي', icon: '📓' },
@@ -780,7 +781,7 @@ export default function App() {
   const toast = useContext(ToastContext);
 
   // Breadcrumb — shows current location
-  const TAB_GROUPS = { dashboard:'Overview', sales:'Finance', treasury:'Finance', checks:'Finance', debts:'Finance', egyptbank:'Finance', bank:'Finance', quotes:'Finance', reports:'Finance', warehouse:'Operations', inventory:'Operations', customs:'Operations', shipping:'Operations', customers:'People', crm:'People', tickets:'People', calendar:'People', comms:'People', dailylog:'People', admin:'System', ai:'System', settings:'System', import:'System' };
+  const TAB_GROUPS = { dashboard:'Overview', sales:'Finance', treasury:'Finance', checks:'Finance', debts:'Finance', egyptbank:'Finance', bank:'Finance', quotes:'Finance', reports:'Finance', warehouse:'Operations', inventory:'Operations', customs:'Operations', shipping:'Operations', customers:'People', crm:'People', tickets:'People', calendar:'People', comms:'People', dailylog:'People', admin:'System', ai:'System', settings:'System', import:'System', systemtickets:'System' };
   const currentTabLabel = TABS.find(t => t.id === tab)?.label?.split(' / ')[0] || tab;
   const currentGroup = TAB_GROUPS[tab] || '';
 
@@ -843,7 +844,12 @@ export default function App() {
   const filteredTreasury = useMemo(() => {
     const dir = treasurySort === 'oldest' ? 1 : -1;
     return treasury.filter(t => inRange(t.transaction_date, mode, df, dt))
-      .sort((a, b) => dir * ((a.created_at || '').localeCompare(b.created_at || '')));
+      .sort((a, b) => {
+        const d = (a.transaction_date || '').localeCompare(b.transaction_date || '');
+        if (d !== 0) return dir * d;
+        // Same date: secondary sort by created_at so newest entry appears first within same day
+        return dir * ((a.created_at || '').localeCompare(b.created_at || ''));
+      });
   }, [treasury, mode, df, dt, treasurySort]);
   const totalCashIn = useMemo(() => filteredTreasury.reduce((a, t) => a + Number(t.cash_in || 0), 0), [filteredTreasury]);
   const totalCashOut = useMemo(() => filteredTreasury.reduce((a, t) => a + Number(t.cash_out || 0), 0), [filteredTreasury]);
@@ -851,11 +857,11 @@ export default function App() {
 
   // Running balance — computed in display order so top row always = current net when newest first
   const treasuryBalanceMap = useMemo(() => {
-    // Sort same as display but always oldest-first for accumulation
-    const sortCol = 'created_at';
+    // Sort by transaction_date (oldest first) for accumulation, then by created_at as tiebreaker
     const sorted = [...treasury].sort((a, b) => {
-      const d = (a[sortCol] || '').localeCompare(b[sortCol] || '');
-      return d !== 0 ? d : (a.id || '').localeCompare(b.id || '');
+      const d = (a.transaction_date || '').localeCompare(b.transaction_date || '');
+      if (d !== 0) return d;
+      return (a.created_at || '').localeCompare(b.created_at || '');
     });
     const map = {};
     let running = 0;
@@ -2171,7 +2177,7 @@ export default function App() {
               { group: 'Finance', items: ['sales', 'treasury', 'checks', 'debts', 'egyptbank', 'bank', 'quotes', 'reports'] },
               { group: 'Operations', items: ['warehouse', 'inventory', 'customs', 'shipping'] },
               { group: 'People', items: ['customers', 'crm', 'tickets', 'calendar', 'comms', 'dailylog'] },
-              { group: 'System', items: ['admin', 'ai', 'settings', 'import'] },
+              { group: 'System', items: ['admin', 'ai', 'settings', 'import', 'systemtickets'] },
             ].map(g => {
               const groupTabs = g.items.map(id => visibleTabs.find(t => t.id === id)).filter(Boolean);
               if (!groupTabs.length) return null;
@@ -6200,14 +6206,20 @@ export default function App() {
                                     <td className="px-2 py-1 text-[10px] text-right text-emerald-600 font-semibold">{Number(t.cash_in) > 0 ? fE(t.cash_in) : ''}</td>
                                     <td className="px-2 py-1 text-[10px] text-right text-red-500 font-semibold">{Number(t.cash_out) > 0 ? fE(t.cash_out) : ''}</td>
                                     <td className="px-2 py-1 text-[10px]">
-                                      {Number(t.cash_in) > 0 && !t.linked_invoice_id && (
-                                        <button onClick={() => { setLinkingTreasuryTxn(t); setTreasuryInvSearch(''); }}
-                                          className="text-blue-500 font-semibold">🔗</button>
-                                      )}
-                                      {t.linked_invoice_id && (
-                                        <button onClick={() => unlinkTreasury(t.id)}
-                                          className="text-red-400 text-[9px] underline">unlink</button>
-                                      )}
+                                      <div className="flex gap-1 items-center">
+                                        <button onClick={() => setEditTreasuryModal({...t})}
+                                          className="text-blue-500 hover:text-blue-700" title="Edit">✏️</button>
+                                        <button onClick={() => setEditTreasuryModal({...t, confirmDelete: true})}
+                                          className="text-red-400 hover:text-red-600" title="Delete">🗑</button>
+                                        {Number(t.cash_in) > 0 && !t.linked_invoice_id && (
+                                          <button onClick={() => { setLinkingTreasuryTxn(t); setTreasuryInvSearch(''); }}
+                                            className="text-blue-500 font-semibold">🔗</button>
+                                        )}
+                                        {t.linked_invoice_id && (
+                                          <button onClick={() => unlinkTreasury(t.id)}
+                                            className="text-red-400 text-[9px] underline">unlink</button>
+                                        )}
+                                      </div>
                                     </td>
                                   </tr>
                                 ))}
@@ -6294,10 +6306,16 @@ export default function App() {
                             {txn.cash_out > 0 ? fE(txn.cash_out) : ''}
                           </td>
                           <td className="px-2 py-1.5 text-xs">
-                            {Number(txn.cash_in) > 0 && !txn.linked_invoice_id && (
-                              <button onClick={() => { setLinkingTreasuryTxn(txn); setTreasuryInvSearch(''); }}
-                                className="text-[10px] text-blue-500 font-semibold">🔗</button>
-                            )}
+                            <div className="flex gap-1 items-center">
+                              <button onClick={() => setEditTreasuryModal({...txn})}
+                                className="text-blue-500 hover:text-blue-700" title="Edit">✏️</button>
+                              <button onClick={() => setEditTreasuryModal({...txn, confirmDelete: true})}
+                                className="text-red-400 hover:text-red-600" title="Delete">🗑</button>
+                              {Number(txn.cash_in) > 0 && !txn.linked_invoice_id && (
+                                <button onClick={() => { setLinkingTreasuryTxn(txn); setTreasuryInvSearch(''); }}
+                                  className="text-[10px] text-blue-500 font-semibold">🔗</button>
+                              )}
+                            </div>
                           </td>
                         </tr>
                       ))}
@@ -8044,6 +8062,122 @@ export default function App() {
         ========================================== */}
         {tab === 'settings' && (
           <SafeSection label="Settings"><SettingsTab toast={toast} user={user} users={teamUsers} onReload={loadAllData} isAdmin={isAdmin} userProfile={userProfile} /></SafeSection>
+        )}
+
+        {/* ==========================================
+            SYSTEM TICKETS TAB
+        ========================================== */}
+        {tab === 'systemtickets' && (
+          <SafeSection label="System Tickets">
+          <div>
+            <div className="flex justify-between items-center mb-3">
+              <h2 className="text-xl font-extrabold">🐛 System Tickets / تذاكر النظام</h2>
+              <button onClick={() => setFormData({ showSysTicket: true, sysTitle: '', sysDesc: '', sysPriority: 'medium', sysCategory: 'bug' })}
+                className="px-4 py-2 bg-red-500 text-white rounded-lg text-xs font-bold">+ New System Ticket / تذكرة جديدة</button>
+            </div>
+            <div className="text-xs text-slate-400 mb-3">Report bugs, feature requests, and system issues / الإبلاغ عن الأخطاء وطلبات الميزات</div>
+
+            {formData.showSysTicket && (
+              <div className="bg-white rounded-xl p-4 mb-4 border-2 border-red-200">
+                <h3 className="text-sm font-bold mb-2">New System Ticket / تذكرة نظام جديدة</h3>
+                <div className="grid grid-cols-2 gap-3 mb-3">
+                  <div>
+                    <label className="text-[10px] font-semibold text-slate-500 block mb-1">Category / الفئة</label>
+                    <select value={formData.sysCategory || 'bug'} onChange={e => setFormData({...formData, sysCategory: e.target.value})} className="dark-input">
+                      <option value="bug">🐛 Bug / خطأ</option>
+                      <option value="feature">✨ Feature Request / ميزة</option>
+                      <option value="improvement">📈 Improvement / تحسين</option>
+                      <option value="question">❓ Question / سؤال</option>
+                      <option value="urgent">🚨 Urgent Fix / إصلاح عاجل</option>
+                    </select>
+                  </div>
+                  <div>
+                    <label className="text-[10px] font-semibold text-slate-500 block mb-1">Priority / الأولوية</label>
+                    <select value={formData.sysPriority || 'medium'} onChange={e => setFormData({...formData, sysPriority: e.target.value})} className="dark-input">
+                      <option value="low">🟢 Low / منخفض</option>
+                      <option value="medium">🟡 Medium / متوسط</option>
+                      <option value="high">🔴 High / عالي</option>
+                      <option value="critical">🚨 Critical / حرج</option>
+                    </select>
+                  </div>
+                </div>
+                <input value={formData.sysTitle || ''} onChange={e => setFormData({...formData, sysTitle: e.target.value})}
+                  placeholder="Title / العنوان *" className="dark-input mb-3" />
+                <textarea value={formData.sysDesc || ''} onChange={e => setFormData({...formData, sysDesc: e.target.value})}
+                  placeholder="Description — steps to reproduce, expected vs actual behavior&#10;الوصف — خطوات إعادة الإنتاج، السلوك المتوقع مقابل الفعلي"
+                  rows={4} className="dark-input mb-3" />
+                <div className="flex gap-2">
+                  <button onClick={async () => {
+                    if (!formData.sysTitle) { toast.warning('Title is required / العنوان مطلوب'); return; }
+                    try {
+                      const count = (await supabase.from('system_tickets').select('*', { count: 'exact', head: true })).count || 0;
+                      await dbInsert('system_tickets', {
+                        ticket_number: 'SYS-' + String(count + 1).padStart(4, '0'),
+                        title: sanitize(formData.sysTitle),
+                        description: sanitize(formData.sysDesc || ''),
+                        category: formData.sysCategory || 'bug',
+                        priority: formData.sysPriority || 'medium',
+                        status: 'Open',
+                        created_by: userProfile?.id || user?.id,
+                        assigned_to: null,
+                      }, user?.id);
+                      toast.success('System ticket created ✓');
+                      setFormData({});
+                      await loadAllData();
+                    } catch(err) { toast.error(err.message); }
+                  }} className="px-5 py-2.5 bg-red-500 text-white rounded-lg text-sm font-bold">Submit / إرسال</button>
+                  <button onClick={() => setFormData({})} className="px-4 py-2.5 border-2 border-slate-300 rounded-lg text-sm font-bold">Cancel</button>
+                </div>
+              </div>
+            )}
+
+            {(() => {
+              const sysTickets = (window.__sysTickets || []);
+              // Load system tickets on first render
+              if (!window.__sysTicketsLoaded) {
+                window.__sysTicketsLoaded = true;
+                supabase.from('system_tickets').select('*').order('created_at', { ascending: false }).then(({ data }) => {
+                  window.__sysTickets = data || [];
+                  setFormData(prev => ({...prev, _sysRefresh: Date.now()}));
+                });
+              }
+              const CATS = { bug: '🐛', feature: '✨', improvement: '📈', question: '❓', urgent: '🚨' };
+              const PRIS = { critical: '🚨', high: '🔴', medium: '🟡', low: '🟢' };
+              const STATS = { Open: 'bg-blue-100 text-blue-700', 'In Progress': 'bg-amber-100 text-amber-700', Resolved: 'bg-emerald-100 text-emerald-700', Closed: 'bg-slate-100 text-slate-500' };
+              return (
+                <div className="space-y-2">
+                  {sysTickets.length === 0 && <div className="text-center text-slate-400 text-sm py-8">No system tickets yet / لا توجد تذاكر نظام</div>}
+                  {sysTickets.map(t => (
+                    <div key={t.id} className="bg-white rounded-xl p-4 border border-slate-100">
+                      <div className="flex justify-between items-start">
+                        <div className="flex-1">
+                          <div className="flex items-center gap-2 mb-1">
+                            <span className="text-xs font-mono text-slate-400">{t.ticket_number}</span>
+                            <span>{CATS[t.category] || '🐛'}</span>
+                            <span>{PRIS[t.priority] || '🟡'}</span>
+                            <span className={'px-2 py-0.5 rounded text-[10px] font-bold ' + (STATS[t.status] || STATS.Open)}>{t.status}</span>
+                          </div>
+                          <div className="text-sm font-bold">{t.title}</div>
+                          {t.description && <div className="text-xs text-slate-500 mt-1 line-clamp-2">{t.description}</div>}
+                          <div className="text-[10px] text-slate-400 mt-1">
+                            {t.created_at ? new Date(t.created_at).toLocaleDateString() : ''} · {getUserName(t.created_by) || 'Unknown'}
+                          </div>
+                        </div>
+                        {isAdmin && t.status !== 'Closed' && (
+                          <div className="flex gap-1 flex-shrink-0">
+                            {t.status === 'Open' && <button onClick={async () => { await dbUpdate('system_tickets', t.id, { status: 'In Progress' }, user?.id); window.__sysTicketsLoaded = false; setFormData(prev => ({...prev, _r: Date.now()})); }} className="px-2 py-1 bg-amber-500 text-white rounded text-[10px]">Start</button>}
+                            {(t.status === 'Open' || t.status === 'In Progress') && <button onClick={async () => { await dbUpdate('system_tickets', t.id, { status: 'Resolved' }, user?.id); window.__sysTicketsLoaded = false; setFormData(prev => ({...prev, _r: Date.now()})); }} className="px-2 py-1 bg-emerald-500 text-white rounded text-[10px]">Resolve</button>}
+                            <button onClick={async () => { await dbUpdate('system_tickets', t.id, { status: 'Closed' }, user?.id); window.__sysTicketsLoaded = false; setFormData(prev => ({...prev, _r: Date.now()})); }} className="px-2 py-1 bg-slate-500 text-white rounded text-[10px]">Close</button>
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              );
+            })()}
+          </div>
+          </SafeSection>
         )}
 
 

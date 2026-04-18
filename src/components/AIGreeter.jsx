@@ -151,6 +151,13 @@ export default function AIGreeter({ user, userProfile, users, tickets, invoices,
     var myTickets = (tickets || []).filter(function(t) { return t.assigned_to === myId && t.status !== 'Closed'; });
     var overdueTickets = myTickets.filter(function(t) { return t.due_date && t.due_date < todayStr; });
     var newTickets = myTickets.filter(function(t) { return t.status === 'New'; });
+    // Stale tickets — not updated in 3+ days
+    var staleTickets = myTickets.filter(function(t) {
+      var lastUpdate = t.updated_at || t.created_at || '';
+      if (!lastUpdate) return false;
+      var daysSince = Math.floor((Date.now() - new Date(lastUpdate).getTime()) / 86400000);
+      return daysSince >= 3;
+    });
     var overdueInvoices = (invoices || []).filter(function(i) { return Number(i.outstanding || 0) > 0 && i.invoice_date && (Date.now() - new Date(i.invoice_date).getTime()) > 30 * 86400000; });
     var pendingChecks = (checks || []).filter(function(c) { return c.status === 'pending' && c.due_date && c.due_date <= todayStr; });
     
@@ -186,6 +193,7 @@ export default function AIGreeter({ user, userProfile, users, tickets, invoices,
     if (newTickets.length) ctx += ' (' + newTickets.length + ' NEW)';
     if (overdueTickets.length) ctx += ' (' + overdueTickets.length + ' OVERDUE: ' + overdueTickets.map(function(t) { return t.ticket_number || t.title; }).join(', ') + ')';
     ctx += '\n';
+    if (staleTickets.length) ctx += 'Stale tickets (not updated 3+ days): ' + staleTickets.length + ' — ' + staleTickets.slice(0, 5).map(function(t) { return (t.ticket_number || '') + ' ' + (t.title || ''); }).join(', ') + '. Remind them to update these!\n';
     if (overdueInvoices.length) ctx += 'Overdue invoices: ' + overdueInvoices.length + ', EGP ' + overdueInvoices.reduce(function(a, i) { return a + Number(i.outstanding || 0); }, 0).toLocaleString() + '\n';
     if (pendingChecks.length) ctx += 'Checks due today: ' + pendingChecks.length + ', EGP ' + pendingChecks.reduce(function(a, c) { return a + Number(c.amount || 0); }, 0).toLocaleString() + '\n';
     ctx += 'Treasury net: EGP ' + net.toLocaleString() + '\n';

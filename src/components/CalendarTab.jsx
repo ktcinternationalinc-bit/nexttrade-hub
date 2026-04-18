@@ -16,7 +16,9 @@ export default function CalendarTab({ customers, user, userProfile, users, onRel
   const [showAdd, setShowAdd] = useState(false);
   const [f, setF] = useState({});
   const [selectedUsers, setSelectedUsers] = useState([]);
-  const [calView, setCalView] = useState('my'); // my | team
+  const [calView, setCalView] = useState('my');
+  const [notesEvent, setNotesEvent] = useState(null);
+  const [meetingNotes, setMeetingNotes] = useState('');
   const myId = userProfile?.id;
 
   const loadEvents = async () => {
@@ -92,6 +94,31 @@ export default function CalendarTab({ customers, user, userProfile, users, onRel
       await logActivity(myId, 'Attended ' + (ev.event_type || 'event') + ': ' + ev.title, 'calendar');
       loadEvents();
     } catch (err) { alert('Error / خطأ: ' + err.message); }
+  };
+
+  const checkInWithNotes = async () => {
+    if (!notesEvent) return;
+    try {
+      var notes = meetingNotes.trim();
+      await dbUpdate('calendar_events', notesEvent.id, {
+        completed: true, event_status: 'attended',
+        meeting_notes: notes || null,
+        checked_in_at: new Date().toISOString(),
+        checked_in_by: myId,
+      }, myId);
+      // Archive notes to daily log
+      if (notes) {
+        await dbInsert('daily_log', {
+          user_id: myId,
+          log_date: notesEvent.event_date || new Date().toISOString().substring(0, 10),
+          entry_text: '📋 Meeting notes — ' + notesEvent.title + ': ' + notes,
+          log_category: 'meeting',
+          auto_generated: false,
+        }, myId);
+      }
+      await logActivity(myId, 'Checked in: ' + notesEvent.title + (notes ? ' — notes: ' + notes.substring(0, 100) : ''), 'calendar');
+      setNotesEvent(null); setMeetingNotes(''); loadEvents();
+    } catch (err) { alert('Error: ' + err.message); }
   };
 
   const getUserName = (id) => users?.find(u => u.id === id)?.name || '';
@@ -226,8 +253,16 @@ export default function CalendarTab({ customers, user, userProfile, users, onRel
                       {ev.recurring && ev.recurring !== 'none' && <span className="ml-1">🔄 {ev.recurring}</span>}
                     </div>
                   </div>
-                  {!ev.completed && <div className="flex gap-1">{ev.event_status === 'postponed' ? <span className="px-2 py-1 bg-amber-100 text-amber-700 rounded text-[10px] font-bold">Postponed</span> : <><button onClick={() => markEventStatus(ev, 'attended')} className="px-2 py-1 bg-emerald-500 text-white rounded text-[10px]">✓ Attended</button><button onClick={() => markEventStatus(ev, 'postponed')} className="px-2 py-1 bg-amber-500 text-white rounded text-[10px]">⏳ Postpone</button></>}</div>}
-                  {ev.completed && <span className="px-2 py-1 bg-emerald-100 text-emerald-700 rounded text-[10px] font-bold">✓ Attended</span>}
+                  {!ev.completed && <div className="flex gap-1">
+                    {ev.event_status === 'postponed' ? <span className="px-2 py-1 bg-amber-100 text-amber-700 rounded text-[10px] font-bold">Postponed</span> : <>
+                      <button onClick={() => { setNotesEvent(ev); setMeetingNotes(ev.meeting_notes || ''); }} className="px-2 py-1 bg-emerald-500 text-white rounded text-[10px]">✓ Check In</button>
+                      <button onClick={() => markEventStatus(ev, 'postponed')} className="px-2 py-1 bg-amber-500 text-white rounded text-[10px]">⏳ Postpone</button>
+                    </>}
+                  </div>}
+                  {ev.completed && <div className="text-right">
+                    <span className="px-2 py-1 bg-emerald-100 text-emerald-700 rounded text-[10px] font-bold">✓ Attended</span>
+                    {ev.meeting_notes && <div className="text-[9px] text-slate-400 mt-0.5 max-w-[150px] truncate">📝 {ev.meeting_notes}</div>}
+                  </div>}
                 </div>
               );
             })
@@ -254,12 +289,32 @@ export default function CalendarTab({ customers, user, userProfile, users, onRel
                     {ev.recurring && ev.recurring !== 'none' ? ' | 🔄 ' + ev.recurring : ''}
                   </div>
                 </div>
-                {!ev.completed && !ev.event_status && <div className="flex gap-1"><button onClick={() => markEventStatus(ev, 'attended')} className="px-2 py-0.5 bg-emerald-500 text-white rounded text-[10px]">✓</button><button onClick={() => markEventStatus(ev, 'postponed')} className="px-2 py-0.5 bg-amber-500 text-white rounded text-[10px]">⏳</button></div>}
+                {!ev.completed && !ev.event_status && <div className="flex gap-1"><button onClick={() => { setNotesEvent(ev); setMeetingNotes(ev.meeting_notes || ''); }} className="px-2 py-0.5 bg-emerald-500 text-white rounded text-[10px]">✓ Check In</button><button onClick={() => markEventStatus(ev, 'postponed')} className="px-2 py-0.5 bg-amber-500 text-white rounded text-[10px]">⏳</button></div>}
                 {ev.event_status === 'postponed' && <span className="text-[9px] text-amber-600 font-bold">Postponed</span>}
-                {ev.completed && <span className="text-[9px] text-emerald-600 font-bold">✓</span>}
+                {ev.completed && <div><span className="text-[9px] text-emerald-600 font-bold">✓</span>{ev.meeting_notes && <span className="text-[8px] text-slate-400 ml-1">📝</span>}</div>}
               </div>
             );
           })}
+        </div>
+      )}
+      {/* Check-In Notes Modal */}
+      {notesEvent && (
+        <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4" onClick={() => setNotesEvent(null)}>
+          <div className="bg-white rounded-2xl p-5 w-full max-w-md" onClick={e => e.stopPropagation()}>
+            <h3 className="text-lg font-bold mb-1">✓ Check In / تسجيل حضور</h3>
+            <div className="text-sm text-slate-500 mb-3">{notesEvent.title} — {notesEvent.event_date} {notesEvent.event_time || ''}</div>
+            <label className="text-xs font-semibold text-slate-600 block mb-1">Meeting Notes / ملاحظات الاجتماع</label>
+            <textarea value={meetingNotes} onChange={e => setMeetingNotes(e.target.value)}
+              placeholder="What was discussed? Action items? Decisions made?&#10;ماذا تمت مناقشته؟ بنود العمل؟ القرارات؟"
+              rows={5} className="dark-input mb-3" />
+            <div className="text-[10px] text-slate-400 mb-3">Notes will be saved to the daily log automatically / سيتم حفظ الملاحظات تلقائياً</div>
+            <div className="flex gap-2">
+              <button onClick={checkInWithNotes}
+                className="flex-1 px-4 py-2.5 bg-emerald-500 text-white rounded-lg text-sm font-bold">✓ Check In & Save Notes</button>
+              <button onClick={() => setNotesEvent(null)}
+                className="px-4 py-2.5 border-2 border-slate-300 rounded-lg text-sm font-bold">Cancel</button>
+            </div>
+          </div>
         </div>
       )}
     </div>
