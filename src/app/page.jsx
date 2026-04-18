@@ -7887,29 +7887,29 @@ export default function App() {
             CALENDAR TAB
         ========================================== */}
         {tab === 'calendar' && (
-          <SafeSection label="Calendar"><CalendarTab customers={customers} user={user} userProfile={userProfile} users={teamUsers} onReload={loadAllData} />
+          <SafeSection label="Calendar"><CalendarTab customers={customers} user={user} userProfile={userProfile} users={teamUsers} onReload={loadAllData} /></SafeSection>
         )}
 
         {/* ==========================================
             CUSTOMS / BROKER TAB
         ========================================== */}
         {tab === 'customs' && (
-          <SafeSection label="Customs"><CustomsTab customers={customers} user={user} />
+          <SafeSection label="Customs"><CustomsTab customers={customers} user={user} /></SafeSection>
         )}
 
         {/* ==========================================
             SHIPPING RATES TAB
         ========================================== */}
         {tab === 'shipping' && (
-          <SafeSection label="Shipping"><ShippingRatesTab toast={toast} user={user} userProfile={userProfile} isAdmin={isAdmin} customers={customers} /></SafeSection></SafeSection>
+          <SafeSection label="Shipping"><ShippingRatesTab toast={toast} user={user} userProfile={userProfile} isAdmin={isAdmin} customers={customers} /></SafeSection>
         )}
 
         {tab === 'bank' && (
-          <SafeSection label="Bank"><BankTab user={user} supabase={supabase} /></SafeSection></SafeSection>
+          <SafeSection label="Bank"><BankTab user={user} supabase={supabase} /></SafeSection>
         )}
 
         {tab === 'egyptbank' && (
-          <SafeSection label="Egypt Bank"><EgyptBankTab toast={toast} user={user} userProfile={userProfile} isAdmin={isAdmin} invoices={invoices} onReload={loadAllData} />
+          <SafeSection label="Egypt Bank"><EgyptBankTab toast={toast} user={user} userProfile={userProfile} isAdmin={isAdmin} invoices={invoices} onReload={loadAllData} /></SafeSection>
         )}
 
         {tab === 'reports' && (
@@ -7917,7 +7917,7 @@ export default function App() {
         )}
 
         {tab === 'quotes' && (
-          <SafeSection label="Quotes"><QuotesTab user={user} userProfile={userProfile} isAdmin={isAdmin} /></SafeSection></SafeSection>
+          <SafeSection label="Quotes"><QuotesTab user={user} userProfile={userProfile} isAdmin={isAdmin} /></SafeSection>
         )}
 
         {/* ==========================================
@@ -7931,7 +7931,7 @@ export default function App() {
             ADMIN TAB
         ========================================== */}
         {tab === 'admin' && (
-          <SafeSection label="Admin"><AdminTab user={user} userProfile={userProfile} users={teamUsers} isAdmin={isAdmin} customers={customers} /></SafeSection></SafeSection>
+          <SafeSection label="Admin"><AdminTab user={user} userProfile={userProfile} users={teamUsers} isAdmin={isAdmin} customers={customers} /></SafeSection>
         )}
 
         {/* ==========================================
@@ -8107,7 +8107,7 @@ export default function App() {
       )}
 
       {/* Phone Widget - floating on all tabs */}
-      <PhoneWidget user={user} userProfile={userProfile} users={teamUsers} customers={customers} /></SafeSection>
+      <PhoneWidget user={user} userProfile={userProfile} users={teamUsers} customers={customers} />
     </div>
     </ErrorBoundary>
     </ToastProvider>
