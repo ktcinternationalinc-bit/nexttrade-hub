@@ -5134,6 +5134,24 @@ export default function App() {
               <div style={{ flex: 1, height: 1, background: 'rgba(255,255,255,0.06)' }} />
             </div>
 
+            {/* Timeframe selector */}
+            <div className="mb-4 flex items-center gap-2 flex-wrap">
+              <span className="text-[10px] font-bold text-slate-500">📅 Viewing / عرض:</span>
+              {[['all', '🔄 All Time / كل الوقت'], ['ytd', '📅 This Year'], ['1mo', '1 Month'], ['3mo', '3 Months'], ['custom', '📆 Custom / مخصص']].map(([v, l]) => (
+                <button key={v} onClick={() => setMode(v)}
+                  className={'px-3 py-1.5 rounded-lg text-[11px] font-bold transition ' + (mode === v ? 'bg-blue-600 text-white shadow-lg' : 'text-slate-400 hover:text-white')}
+                  style={mode !== v ? { background: 'rgba(255,255,255,0.06)' } : {}}
+                >{l}</button>
+              ))}
+              {mode === 'custom' && (
+                <span className="flex gap-1 items-center">
+                  <DatePickerSelect value={df} onChange={v => setDf(v)} />
+                  <span className="text-xs text-slate-500">→</span>
+                  <DatePickerSelect value={dt} onChange={v => setDt(v)} />
+                </span>
+              )}
+            </div>
+
             {/* Invoices — Sales or Treasury access */}
             {(isSuperAdmin || modulePerms['Sales'] || modulePerms['Treasury']) && (<>
             <div className="bg-blue-100 rounded-lg px-3 py-2 mb-3 flex justify-between items-center cursor-pointer" onClick={() => setHideSections({...hideSections, invoices: !hideSections.invoices})}>

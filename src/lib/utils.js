@@ -97,6 +97,11 @@ export const inRange = (d, mode, df, dt) => {
     oneMonthAgo.setMonth(oneMonthAgo.getMonth() - 1);
     return d >= oneMonthAgo.toISOString().substring(0, 10);
   }
+  if (mode === '3mo') {
+    const threeMonthsAgo = new Date();
+    threeMonthsAgo.setMonth(threeMonthsAgo.getMonth() - 3);
+    return d >= threeMonthsAgo.toISOString().substring(0, 10);
+  }
   if (mode === '1yr') {
     const oneYearAgo = new Date();
     oneYearAgo.setFullYear(oneYearAgo.getFullYear() - 1);
