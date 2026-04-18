@@ -83,7 +83,7 @@ export default function AIAssistant({ user, userProfile, users, customers }) {
           (wordCount <= 2 && avgConfidence > 0 && avgConfidence < 0.4) ||
           (displayText.length < 3);
         
-        // If AI is speaking, only interrupt for "break" or 2+ meaningful words
+        // If AI is speaking, stop immediately when user starts talking
         if (speakingRef.current) {
           if (lower === 'break' || lower === 'stop') {
             // Hard interrupt — stop AI, clear input, stay listening
@@ -97,14 +97,14 @@ export default function AIAssistant({ user, userProfile, users, customers }) {
             setTimeout(() => { if (conversationModeRef.current) { try { recognition.start(); setListening(true); } catch(e) { console.warn(e); } } }, 500);
             return;
           }
-          if (wordCount >= 2 && !isNoise) {
-            // User is actually talking — stop AI and let them speak
+          // Any real word (not pure noise) — stop AI and listen
+          if (wordCount >= 1 && !isNoise && (avgConfidence === 0 || avgConfidence > 0.45)) {
             if (audioRef.current) { audioRef.current.pause(); audioRef.current = null; }
             if ('speechSynthesis' in window) window.speechSynthesis.cancel();
             speakingRef.current = false; setSpeaking(false);
             // Fall through to normal processing below
           } else {
-            // Just noise or single filler word — ignore, let AI keep talking
+            // Pure noise — ignore, let AI keep talking
             return;
           }
         }
@@ -175,20 +175,42 @@ export default function AIAssistant({ user, userProfile, users, customers }) {
 
   const toggleVoice = () => {
     if (!recognitionRef.current) return;
-    if (recording) { stopRecording(); return; } // If recording voice note, stop it
-    if (audioRef.current) { audioRef.current.pause(); audioRef.current = null; } if ('speechSynthesis' in window) window.speechSynthesis.cancel(); speakingRef.current = false; setSpeaking(false);
+    if (recording) { stopRecording(); return; }
+
+    // If AI is currently speaking — stop it and start listening immediately
+    if (speakingRef.current) {
+      if (audioRef.current) { audioRef.current.pause(); audioRef.current = null; }
+      if ('speechSynthesis' in window) window.speechSynthesis.cancel();
+      speakingRef.current = false; setSpeaking(false);
+      if (silenceTimerRef.current) clearTimeout(silenceTimerRef.current);
+      if (autoSendRef.current) clearTimeout(autoSendRef.current);
+      setInput('');
+      // Restart listening
+      try { recognitionRef.current.stop(); } catch(e) {}
+      setTimeout(() => {
+        conversationModeRef.current = true;
+        try { recognitionRef.current.start(); setListening(true); } catch(e) {}
+      }, 300);
+      return;
+    }
+
+    // Stop any lingering audio
+    if (audioRef.current) { audioRef.current.pause(); audioRef.current = null; }
+    if ('speechSynthesis' in window) window.speechSynthesis.cancel();
+    speakingRef.current = false; setSpeaking(false);
+
     if (listening || conversationModeRef.current) {
-      // Stop everything
-      recognitionRef.current.stop();
+      // Currently listening — stop everything
+      try { recognitionRef.current.stop(); } catch(e) {}
       setListening(false);
       conversationModeRef.current = false;
       if (maxTimeoutRef.current) clearTimeout(maxTimeoutRef.current);
       if (silenceTimerRef.current) clearTimeout(silenceTimerRef.current);
     } else {
-      // Start conversation mode
+      // Not listening — start conversation mode
       setInput('');
       conversationModeRef.current = true;
-      recognitionRef.current.start();
+      try { recognitionRef.current.start(); } catch(e) {}
       setListening(true);
       // 2 minute max timeout
       if (maxTimeoutRef.current) clearTimeout(maxTimeoutRef.current);
@@ -196,7 +218,9 @@ export default function AIAssistant({ user, userProfile, users, customers }) {
         conversationModeRef.current = false;
         try { recognitionRef.current.stop(); } catch(e) { console.warn(e); }
         setListening(false);
-        if (audioRef.current) { audioRef.current.pause(); audioRef.current = null; } if ('speechSynthesis' in window) window.speechSynthesis.cancel(); speakingRef.current = false; setSpeaking(false);
+        if (audioRef.current) { audioRef.current.pause(); audioRef.current = null; }
+        if ('speechSynthesis' in window) window.speechSynthesis.cancel();
+        speakingRef.current = false; setSpeaking(false);
       }, 120000);
     }
   };

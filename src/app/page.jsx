@@ -747,6 +747,20 @@ export default function App() {
         const fxData = await fxRes.json();
         if (fxData?.rates?.EGP) setFxRate({ rate: fxData.rates.EGP, updated: fxData.time_last_update_utc });
       } catch(e) { console.warn('Silent error:', e.message || e); }
+      // Refresh greeter settings from latest user profile
+      try {
+        const myEmail = user?.email?.toLowerCase();
+        if (myEmail) {
+          const { data: myProfile } = await supabase.from('users').select('greeter_personality, greeter_language, greeter_enabled').eq('email', myEmail).maybeSingle();
+          if (myProfile) {
+            setGreeterSettings({
+              personality: myProfile.greeter_personality || 'friendly',
+              language: myProfile.greeter_language || 'en',
+              enabled: myProfile.greeter_enabled !== false,
+            });
+          }
+        }
+      } catch(e) { console.warn('Greeter settings refresh:', e); }
       setLastLoaded(new Date());
     } catch (err) {
       console.error('Load error:', err);
@@ -3814,10 +3828,10 @@ export default function App() {
                 <label className="text-xs font-semibold text-slate-600 block mb-2">Type / النوع</label>
                 <div className="grid grid-cols-2 md:grid-cols-4 gap-2">
                   {[
-                    {v:'in', l:'💵 Cash In', color:'emerald', desc:'Actual cash received'},
-                    {v:'out', l:'💸 Cash Out', color:'red', desc:'Actual cash paid'},
-                    {v:'bank_in', l:'🏦 Bank In (placeholder)', color:'indigo', desc:"Won't affect net — auto-matches bank import"},
-                    {v:'bank_out', l:'🏦 Bank Out (placeholder)', color:'indigo', desc:"Won't affect net — auto-matches bank import"},
+                    {v:'in', l:'💵 Cash In / وارد نقدي', color:'emerald', desc:'Actual cash received / نقدية فعلية مستلمة'},
+                    {v:'out', l:'💸 Cash Out / صادر نقدي', color:'red', desc:'Actual cash paid / نقدية فعلية مدفوعة'},
+                    {v:'bank_in', l:'🏦 Bank In / وارد بنكي', color:'indigo', desc:'Placeholder — لا يؤثر على الصافي — يتطابق تلقائياً مع كشف البنك'},
+                    {v:'bank_out', l:'🏦 Bank Out / صادر بنكي', color:'indigo', desc:'Placeholder — لا يؤثر على الصافي — يتطابق تلقائياً مع كشف البنك'},
                   ].map(opt => {
                     const selected = (formData.type || 'in') === opt.v;
                     const colorMap = {
@@ -3838,7 +3852,7 @@ export default function App() {
                 </div>
                 {(formData.type === 'bank_in' || formData.type === 'bank_out') && (
                   <div className="mt-2 p-2 bg-indigo-50 border border-indigo-200 rounded text-[11px] text-indigo-800">
-                    ℹ️ <b>Placeholder mode:</b> This transaction will NOT affect cash net, credit, or debit. When you next import from Egypt Bank, the system auto-matches this entry using: same bank account, amount within 1%, date within 2 days, order # in description. Once matched, it converts to a real entry and links to the invoice.
+                    ℹ️ <b>Placeholder mode / وضع العنصر النائب:</b> This transaction will NOT affect cash net, credit, or debit. When you next import from Egypt Bank, the system auto-matches this entry using: same bank account, amount within 1%, date within 2 days, order # in description. Once matched, it converts to a real entry and links to the invoice.<br/><span style={{direction:'rtl',display:'block',marginTop:4}}>هذه المعاملة لن تؤثر على صافي النقد. عند استيراد كشف البنك، سيتم المطابقة التلقائية وتحويلها إلى قيد فعلي.</span>
                   </div>
                 )}
               </div>
@@ -3879,7 +3893,7 @@ export default function App() {
                     ))}
                   </select>
                   {egyptBankAccounts.length === 0 && (
-                    <div className="text-[10px] text-red-500 mt-1">⚠️ No bank accounts configured. Add them in Egypt Bank tab first.</div>
+                    <div className="text-[10px] text-red-500 mt-1">⚠️ No bank accounts configured. Add them in Egypt Bank tab first. / لا توجد حسابات بنكية. أضفها في تبويب بنك مصر أولاً.</div>
                   )}
                 </div>
               )}

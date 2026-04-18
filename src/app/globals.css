@@ -136,6 +136,21 @@ body {
 .border-purple-200, .border-purple-300, .border-indigo-200, .border-indigo-300 { border-color: rgba(167,139,250,0.2) !important; }
 
 /* ===== BUTTONS ===== */
+/* Input fields in dark theme */
+input, textarea, select {
+  background: rgba(15, 23, 42, 0.8) !important;
+  color: #e2e8f0 !important;
+  border-color: var(--border-glass) !important;
+}
+input::placeholder, textarea::placeholder {
+  color: rgba(148, 163, 184, 0.5) !important;
+}
+input:focus, textarea:focus, select:focus {
+  border-color: rgba(56, 189, 248, 0.5) !important;
+  outline: none;
+  box-shadow: 0 0 0 2px rgba(56, 189, 248, 0.15) !important;
+}
+
 button {
   transition: all 0.2s cubic-bezier(0.4,0,0.2,1);
   min-height: 32px;
