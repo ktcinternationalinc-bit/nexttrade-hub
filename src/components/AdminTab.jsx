@@ -30,7 +30,6 @@ export default function AdminTab({ user, userProfile, users, isAdmin, customers 
   const [selUser, setSelUser] = useState('all');
   const [section, setSection] = useState('scorecards');
   const [auditFilter, setAuditFilter] = useState('all');
-  const [auditFilter, setAuditFilter] = useState('all');
   const [drillStage, setDrillStage] = useState(null);
   const [drillUser, setDrillUser] = useState(null);
   const [viewTicket, setViewTicket] = useState(null);
