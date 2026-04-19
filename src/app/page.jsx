@@ -22,6 +22,8 @@ import QuotesTab from '../components/QuotesTab';
 import EgyptBankTab from '../components/EgyptBankTab';
 import PhoneWidget from '../components/PhoneWidget';
 import ReportsTab from '../components/ReportsTab';
+import TreasuryInspectorModal from '../components/TreasuryInspectorModal';
+import AccountingAuditorModal from '../components/AccountingAuditorModal';
 
 // Toast notification system — replaces alert() across entire app
 const ToastContext = React.createContext();
@@ -363,6 +365,8 @@ export default function App() {
   const [linkingTreasuryTxn, setLinkingTreasuryTxn] = useState(null);
   const [treasuryInvSearch, setTreasuryInvSearch] = useState('');
   const [editTreasuryModal, setEditTreasuryModal] = useState(null);
+  const [inspectedTreasury, setInspectedTreasury] = useState(null);
+  const [showAccountantReview, setShowAccountantReview] = useState(false);
   const [formData, setFormData] = useState({});
   const [hideSections, setHideSections] = useState({});
   const [announcements, setAnnouncements] = useState([]);
@@ -986,6 +990,160 @@ export default function App() {
       autoMatchRunning.current = false;
     })();
   }, [treasury, egyptBankTxns]);
+
+  // ==========================================
+  // AUTO-MATCH CHECKS ↔ EGYPT BANK DEPOSITS
+  // Pairs pending checks with unmatched bank credits.
+  // Verifies amount (±1%), date window (±5 days), and description signal
+  // (check#, order#, or customer-name tokens). Skips ambiguous cases.
+  // On match: creates treasury row, marks check collected, links bank txn,
+  // and recalcs invoice. All writes tagged [auto-matched from bank <date>]
+  // for audit traceability.
+  // ==========================================
+  const checkMatchRunning = useRef(false);
+  useEffect(() => {
+    if (checkMatchRunning.current) return;
+    if (!checks.length || !egyptBankTxns.length) return;
+
+    // Only pending, not-yet-linked, positive-amount checks
+    var pending = checks.filter(function(c) {
+      return c.status === 'pending' && !c.linked_treasury_id && Number(c.amount) > 0;
+    });
+    if (!pending.length) return;
+
+    // Only unmatched bank credits (money coming in)
+    var unmatchedBank = egyptBankTxns.filter(function(b) {
+      return Number(b.amount) > 0 && !b.matched_treasury_id;
+    });
+    if (!unmatchedBank.length) return;
+
+    var fiveDays = 5 * 86400000;
+    var matches = [];
+    var usedBankIds = new Set();
+
+    for (var i = 0; i < pending.length; i++) {
+      var chk = pending[i];
+      var chkAmt = Number(chk.amount);
+      var tolAmt = Math.max(chkAmt * 0.01, 1);
+      var dueRaw = chk.due_date || (chk.check_date && chk.check_date.length >= 10 ? chk.check_date.substring(0, 10) : null);
+      if (!dueRaw) continue;
+      var chkDate = new Date(dueRaw);
+      if (isNaN(chkDate.getTime())) continue;
+
+      // AMOUNT + DATE filter
+      var candidates = unmatchedBank.filter(function(b) {
+        if (usedBankIds.has(b.id)) return false;
+        if (Math.abs(Number(b.amount) - chkAmt) > tolAmt) return false;
+        var bDate = new Date(b.date);
+        if (isNaN(bDate.getTime())) return false;
+        if (Math.abs(bDate - chkDate) > fiveDays) return false;
+        return true;
+      });
+      if (!candidates.length) continue;
+
+      // DESCRIPTION scoring — verifies it's really THIS check
+      var scored = candidates.map(function(b) {
+        var score = 0;
+        var desc = (b.description || '').toLowerCase();
+
+        // Check# in description → strongest signal
+        if (chk.check_number && desc.indexOf(String(chk.check_number).toLowerCase()) >= 0) {
+          score += 2000;
+        }
+        // Order# in description → strong signal
+        if (chk.order_number && desc.indexOf(String(chk.order_number).toLowerCase()) >= 0) {
+          score += 1000;
+        }
+        // Customer name tokens (3+ chars) → medium signal
+        if (chk.customer_name) {
+          var tokens = chk.customer_name.split(/\s+/).filter(function(t) { return t.length >= 3; });
+          for (var j = 0; j < tokens.length; j++) {
+            if (desc.indexOf(tokens[j].toLowerCase()) >= 0) score += 200;
+          }
+        }
+        // Bank name match → weak signal
+        if (chk.bank_name && desc.indexOf(String(chk.bank_name).toLowerCase()) >= 0) {
+          score += 100;
+        }
+        // Tie-breakers
+        score -= Math.abs(Number(b.amount) - chkAmt) * 0.5;
+        score -= Math.abs(new Date(b.date) - chkDate) / 86400000 * 10;
+
+        return { b: b, score: score };
+      }).sort(function(a, b) { return b.score - a.score; });
+
+      var topScore = scored[0].score;
+      var runnerUp = scored[1] ? scored[1].score : -Infinity;
+
+      // GUARD 1: Need at least ONE real signal (not just amount+date coincidence)
+      var hasSignal = topScore >= 200;
+
+      // GUARD 2: Clear winner (or only candidate) — prevents grabbing wrong check
+      // when customer has multiple same-amount checks near same date
+      var unambiguous = scored.length === 1 || (topScore - runnerUp) >= 300;
+
+      if (!hasSignal || !unambiguous) continue;
+
+      matches.push({ check: chk, bank: scored[0].b });
+      usedBankIds.add(scored[0].b.id);
+    }
+
+    if (!matches.length) return;
+
+    checkMatchRunning.current = true;
+    (async function() {
+      try {
+        for (var k = 0; k < matches.length; k++) {
+          var chk = matches[k].check;
+          var bank = matches[k].bank;
+          var collectionDate = bank.date;
+
+          var desc = (chk.customer_name || '') + ' — شيك محصّل'
+            + (chk.check_number ? ' #' + chk.check_number : '')
+            + ' [auto-matched from bank ' + bank.date + ']';
+
+          // 1. Treasury row
+          var ins = await supabase.from('treasury').insert({
+            transaction_date: collectionDate,
+            order_number: chk.order_number || '',
+            description: desc,
+            cash_in: Number(chk.amount),
+            cash_out: 0,
+            source: 'main',
+            category: 'مبيعات',
+            linked_invoice_id: chk.invoice_id || null,
+          }).select('id').single();
+          if (!ins.data) continue;
+          var newTxnId = ins.data.id;
+
+          // 2. Mark check collected
+          await supabase.from('checks').update({
+            status: 'collected',
+            collection_date: collectionDate,
+            linked_treasury_id: newTxnId,
+          }).eq('id', chk.id);
+
+          // 3. Link bank transaction
+          await supabase.from('egypt_bank_transactions').update({
+            matched_treasury_id: newTxnId,
+            matched_invoice_id: chk.invoice_id || bank.matched_invoice_id || null,
+            matched_at: new Date().toISOString(),
+            matched_by: (userProfile && userProfile.id) || (user && user.id) || null,
+          }).eq('id', bank.id);
+
+          // 4. Recalc invoice collected
+          if (chk.invoice_id) {
+            try { await recalcInvoiceCollected(chk.invoice_id); } catch(e) {}
+          }
+        }
+        if (toast && toast.success) toast.success(matches.length + ' check(s) auto-matched to bank deposits ✓');
+        await loadAllData();
+      } catch (e) {
+        console.warn('Check auto-match error:', e.message);
+      }
+      checkMatchRunning.current = false;
+    })();
+  }, [checks, egyptBankTxns]);
 
   // Load last login info for welcome briefing
   const [loginHistoryLoaded, setLoginHistoryLoaded] = useState(false);
@@ -2765,6 +2923,10 @@ export default function App() {
                           <div className="text-[10px] text-slate-500">{txn.transaction_date}</div>
                         </div>
                         <div className="text-sm font-bold text-emerald-600 mr-2">{fE(txn.cash_in)}</div>
+                        <button onClick={() => setInspectedTreasury(txn)}
+                          className="px-2 py-0.5 rounded border border-indigo-300 text-indigo-600 text-[10px] mr-1 hover:bg-indigo-50" title="Inspect / فحص">
+                          ⓘ Inspect
+                        </button>
                         <button onClick={() => { setEditingTxn(txn.id); setFormData({ txEditDate: txn.transaction_date }); }}
                           className="px-2 py-0.5 rounded border border-blue-300 text-blue-600 text-[10px] mr-1 hover:bg-blue-50">
                           Edit
@@ -6023,6 +6185,11 @@ export default function App() {
                   className="px-2 py-1 rounded-lg border border-slate-200 text-xs font-semibold hover:bg-slate-100">
                   {treasurySort === 'newest' ? '↓ Newest' : '↑ Oldest'}
                 </button>
+                <button onClick={() => setShowAccountantReview(true)}
+                  className="px-3 py-1.5 bg-gradient-to-br from-indigo-500 to-blue-600 text-white rounded-lg text-xs font-extrabold hover:from-indigo-600 hover:to-blue-700 shadow"
+                  title="Run AI accounting review / تشغيل مراجعة المحاسب الذكي">
+                  🤖 AI Review
+                </button>
                 <button onClick={() => { setShowAddTreasury(true); setFormData({ date: today() }); }}
                   className="px-3 py-1.5 bg-blue-500 text-white rounded-lg text-xs font-semibold hover:bg-blue-600">
                   + New Transaction
@@ -6207,6 +6374,8 @@ export default function App() {
                                     <td className="px-2 py-1 text-[10px] text-right text-red-500 font-semibold">{Number(t.cash_out) > 0 ? fE(t.cash_out) : ''}</td>
                                     <td className="px-2 py-1 text-[10px]">
                                       <div className="flex gap-1 items-center">
+                                        <button onClick={() => setInspectedTreasury(t)}
+                                          className="text-slate-500 hover:text-indigo-600" title="Inspect / فحص">ⓘ</button>
                                         <button onClick={() => setEditTreasuryModal({...t})}
                                           className="text-blue-500 hover:text-blue-700" title="Edit">✏️</button>
                                         <button onClick={() => setEditTreasuryModal({...t, confirmDelete: true})}
@@ -6307,6 +6476,8 @@ export default function App() {
                           </td>
                           <td className="px-2 py-1.5 text-xs">
                             <div className="flex gap-1 items-center">
+                              <button onClick={() => setInspectedTreasury(txn)}
+                                className="text-slate-500 hover:text-indigo-600" title="Inspect / فحص">ⓘ</button>
                               <button onClick={() => setEditTreasuryModal({...txn})}
                                 className="text-blue-500 hover:text-blue-700" title="Edit">✏️</button>
                               <button onClick={() => setEditTreasuryModal({...txn, confirmDelete: true})}
@@ -6390,20 +6561,10 @@ export default function App() {
                         </td>
                         <td className="px-2 py-1.5 text-[10px] whitespace-nowrap">
                           <div className="flex gap-1 items-center">
+                            <button onClick={() => setInspectedTreasury(txn)}
+                              className="text-slate-500 hover:text-indigo-600" title="Inspect / فحص">ⓘ</button>
                             <button onClick={() => setEditTreasuryModal({...txn})}
                               className="text-blue-500 hover:text-blue-700" title="Edit">✏️</button>
-                            {(userProfile?.role === 'super_admin' || (txn.created_by === (userProfile?.id || user?.id) && (Date.now() - new Date(txn.created_at || 0).getTime()) < 86400000)) && (
-                              <button onClick={() => setEditTreasuryModal({...txn, confirmDelete: true})}
-                                className="text-red-400 hover:text-red-600" title="Delete">🗑</button>
-                            )}
-                            {(Number(txn.cash_in) > 0 || Number(txn.usd_in) > 0 || (Number(txn.foreign_amount || 0) > 0 && txn.foreign_direction === 'in')) && !txn.linked_invoice_id && (
-                              <button onClick={() => { setLinkingTreasuryTxn(txn); setTreasuryInvSearch(''); }}
-                                className="text-blue-500 font-semibold">🔗</button>
-                            )}
-                            {txn.linked_invoice_id && (
-                              <button onClick={() => unlinkTreasury(txn.id)}
-                                className="text-red-400 text-[8px] underline">unlink</button>
-                            )}
                           </div>
                         </td>
                       </tr>
@@ -6726,7 +6887,16 @@ export default function App() {
                                     )}
                                   </div>
                                 ) : (
-                                  <span className="text-emerald-500 text-[10px]">✓</span>
+                                  <div className="flex gap-1 items-center">
+                                    <span className="text-emerald-500 text-[10px]">✓</span>
+                                    {c.linked_treasury_id && (
+                                      <button onClick={() => {
+                                        const linkedTxn = treasury.find(t => t.id === c.linked_treasury_id);
+                                        if (linkedTxn) setInspectedTreasury(linkedTxn);
+                                      }}
+                                        className="px-1.5 py-0.5 rounded border border-indigo-300 text-indigo-600 text-[9px] hover:bg-indigo-50" title="Inspect treasury entry / فحص قيد الخزنة">ⓘ</button>
+                                    )}
+                                  </div>
                                 )}
                               </td>
                             </tr>
@@ -8336,6 +8506,34 @@ export default function App() {
 
       {/* Phone Widget - floating on all tabs */}
       <PhoneWidget user={user} userProfile={userProfile} users={teamUsers} customers={customers} />
+
+      {/* Treasury Inspector Modal — bilingual AR/EN transaction explainer */}
+      {inspectedTreasury && (
+        <TreasuryInspectorModal
+          txn={inspectedTreasury}
+          invoices={invoices}
+          checks={checks}
+          egyptBankTxns={egyptBankTxns}
+          treasury={treasury}
+          lang={lang}
+          onOpenInvoice={(inv) => { setSelectedInvoice(inv); setTab('sales'); }}
+          onClose={() => setInspectedTreasury(null)}
+        />
+      )}
+
+      {/* AI Accountant Review Modal — full reconciliation audit */}
+      {showAccountantReview && (
+        <AccountingAuditorModal
+          treasury={treasury}
+          invoices={invoices}
+          checks={checks}
+          egyptBankTxns={egyptBankTxns}
+          warehouse={warehouse}
+          customers={customers}
+          debts={debts}
+          onClose={() => setShowAccountantReview(false)}
+        />
+      )}
     </div>
     </ErrorBoundary>
     </ToastProvider>
