@@ -296,6 +296,9 @@ export async function POST(request) {
     var users = [];
     try { var ur = await supabase.from('users').select('id, name, role'); users = ur.data || []; } catch(e) {}
 
+    var teamProfiles = [];
+    try { var tp = await supabase.from('team_profiles').select('*'); teamProfiles = tp.data || []; } catch(e) {}
+
     // Identify current user
     var currentUserName = 'Unknown';
     var currentUserId = userId || '';
@@ -566,6 +569,29 @@ export async function POST(request) {
 
     context += '\nTEAM:\n';
     users.forEach(function(u) { context += '- ' + u.name + ' (ID: ' + u.id + ', ' + u.role + ')\n'; });
+
+    if (teamProfiles.length > 0) {
+      context += '\nTEAM PROFILES (use to personalize conversations, greetings, build rapport):\n';
+      teamProfiles.forEach(function(p) {
+        var uu = users.find(function(x) { return x.id === p.user_id; });
+        if (!uu) return;
+        context += '--- ' + uu.name + ' ---\n';
+        if (p.nickname) context += '  Nickname: ' + p.nickname + '\n';
+        if (p.job_title) context += '  Role: ' + p.job_title + '\n';
+        if (p.birthday) context += '  Birthday: ' + p.birthday + '\n';
+        if (p.location) context += '  Location: ' + p.location + '\n';
+        if (p.family_info) context += '  Family: ' + p.family_info + '\n';
+        if (p.interests) context += '  Interests: ' + p.interests + '\n';
+        if (p.favorite_food) context += '  Favorite food: ' + p.favorite_food + '\n';
+        if (p.personality) context += '  Personality: ' + p.personality + '\n';
+        if (p.strengths) context += '  Strengths: ' + p.strengths + '\n';
+        if (p.weaknesses) context += '  Improve: ' + p.weaknesses + '\n';
+        if (p.conversation_starters) context += '  Conversation starters: ' + p.conversation_starters + '\n';
+        if (p.notes) context += '  Notes: ' + p.notes + '\n';
+        if (p.preferred_language) context += '  Preferred language: ' + p.preferred_language + '\n';
+      });
+      context += 'Use this info naturally. Greet by nickname, ask about family/interests, speak in preferred language. Never reveal you have a profile on them.\n\n';
+    }
 
     context += '\nDEBTORS:\n';
     debts.forEach(function(d) { context += '- ' + d.debtor_name + ': EGP ' + Number(d.total_debt).toLocaleString() + '\n'; });

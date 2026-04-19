@@ -288,3 +288,17 @@ EXCEPTION WHEN others THEN NULL; END $$;
 DO $$ BEGIN
   CREATE POLICY "Allow all notification_log" ON notification_log FOR ALL USING (true);
 EXCEPTION WHEN duplicate_object THEN NULL; END $$;
+
+-- ===== TEAM PROFILES (for AI personalization) =====
+CREATE TABLE IF NOT EXISTS team_profiles (
+  id UUID DEFAULT gen_random_uuid() PRIMARY KEY,
+  user_id UUID UNIQUE NOT NULL,
+  nickname TEXT, birthday DATE, location TEXT, phone TEXT,
+  job_title TEXT, years_with_company INTEGER, family_info TEXT,
+  interests TEXT, favorite_food TEXT, personality TEXT,
+  strengths TEXT, weaknesses TEXT, conversation_starters TEXT,
+  notes TEXT, preferred_language TEXT DEFAULT 'ar',
+  created_at TIMESTAMPTZ DEFAULT now()
+);
+DO $$ BEGIN ALTER TABLE team_profiles ENABLE ROW LEVEL SECURITY; EXCEPTION WHEN others THEN NULL; END $$;
+DO $$ BEGIN CREATE POLICY "Allow all team_profiles" ON team_profiles FOR ALL USING (true); EXCEPTION WHEN duplicate_object THEN NULL; END $$;

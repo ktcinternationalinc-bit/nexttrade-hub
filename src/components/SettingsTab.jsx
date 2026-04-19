@@ -54,6 +54,9 @@ export default function SettingsTab({ toast, user, users, onReload, isAdmin, use
   const [expCatFilter, setExpCatFilter] = useState('all');
   const [mergeMode, setMergeMode] = useState(null);
   const [mergeTargets, setMergeTargets] = useState([]);
+  const [profiles, setProfiles] = useState({});
+  const [editingProfile, setEditingProfile] = useState(null);
+  const [profileForm, setProfileForm] = useState({});
   const [loaded, setLoaded] = useState(false);
 
   useEffect(() => {
@@ -103,6 +106,13 @@ export default function SettingsTab({ toast, user, users, onReload, isAdmin, use
     });
     setNotifPrefs(nMap);
     setRules(rls.data || []);
+    // Load team profiles
+    try {
+      const { data: profs } = await supabase.from('team_profiles').select('*');
+      const pMap2 = {};
+      (profs || []).forEach(p => { pMap2[p.user_id] = p; });
+      setProfiles(pMap2);
+    } catch(e) { console.log('Profiles not loaded:', e); }
     setLoaded(true);
   };
 
@@ -212,7 +222,7 @@ export default function SettingsTab({ toast, user, users, onReload, isAdmin, use
 
       {/* Section Tabs */}
       <div className="flex gap-1 mb-3 flex-wrap">
-        {[['roles', 'Team & Roles'], ['permissions', 'Module Access'], ['notifications', 'Notifications'], ['comms', '📬 Communications'], ['greeter', '🤖 AI Greeter'], ['categories', '🏷️ Categories'], ['rules', 'Category Rules / قواعد'], ['expenses', '📋 Expense Descriptions'], ['translation', '🌐 Translation / ترجمة']].map(([v, l]) => (
+        {[['roles', 'Team & Roles'], ['profiles', '👤 Team Profiles'], ['permissions', 'Module Access'], ['notifications', 'Notifications'], ['comms', '📬 Communications'], ['greeter', '🤖 AI Greeter'], ['categories', '🏷️ Categories'], ['rules', 'Category Rules / قواعد'], ['expenses', '📋 Expense Descriptions'], ['translation', '🌐 Translation / ترجمة']].map(([v, l]) => (
           <button key={v} onClick={() => setSection(v)}
             className={'px-3 py-1.5 rounded-lg text-xs font-semibold transition ' + (section === v ? 'bg-slate-900 text-white' : 'bg-slate-100 text-slate-500')}>
             {l}
@@ -380,7 +390,106 @@ export default function SettingsTab({ toast, user, users, onReload, isAdmin, use
         </div>
       )}
 
-      {/* ===== MODULE ACCESS ===== */}
+      {/* ===== TEAM PROFILES ===== */}
+      {section === 'profiles' && (
+        <div className="bg-white rounded-xl p-4">
+          <h3 className="text-sm font-bold mb-1">Team Profiles / \u0645\u0644\u0641\u0627\u062a \u0627\u0644\u0641\u0631\u064a\u0642</h3>
+          <p className="text-[10px] text-slate-400 mb-3">Add personal info about team members. AI Secretary uses this for personalized conversations.</p>
+
+          {editingProfile ? (() => {
+            const u = users.find(x => x.id === editingProfile);
+            const pf = profileForm;
+            const set = (k, v) => setProfileForm(prev => ({ ...prev, [k]: v }));
+            return (
+              <div className="border-2 border-blue-300 rounded-xl p-4 mb-3 bg-blue-50/30">
+                <div className="flex justify-between items-center mb-3">
+                  <h4 className="font-bold text-sm">{u?.name || 'Unknown'}</h4>
+                  <button onClick={() => setEditingProfile(null)} className="text-slate-400 text-lg">\u2715</button>
+                </div>
+                <div className="grid grid-cols-2 gap-2 mb-3">
+                  <div><label className="text-[10px] font-bold text-slate-500">Nickname</label>
+                    <input value={pf.nickname || ''} onChange={e => set('nickname', e.target.value)} placeholder="How they like to be called" className="w-full border rounded-lg px-3 py-2 text-xs" /></div>
+                  <div><label className="text-[10px] font-bold text-slate-500">Birthday</label>
+                    <input type="date" value={pf.birthday || ''} onChange={e => set('birthday', e.target.value)} className="w-full border rounded-lg px-3 py-2 text-xs" /></div>
+                  <div><label className="text-[10px] font-bold text-slate-500">Location</label>
+                    <input value={pf.location || ''} onChange={e => set('location', e.target.value)} placeholder="City, area..." className="w-full border rounded-lg px-3 py-2 text-xs" /></div>
+                  <div><label className="text-[10px] font-bold text-slate-500">Phone</label>
+                    <input value={pf.phone || ''} onChange={e => set('phone', e.target.value)} placeholder="Personal phone" className="w-full border rounded-lg px-3 py-2 text-xs" /></div>
+                  <div><label className="text-[10px] font-bold text-slate-500">Role / Title</label>
+                    <input value={pf.job_title || ''} onChange={e => set('job_title', e.target.value)} placeholder="Warehouse manager, Accountant..." className="w-full border rounded-lg px-3 py-2 text-xs" /></div>
+                  <div><label className="text-[10px] font-bold text-slate-500">Years with company</label>
+                    <input type="number" value={pf.years_with_company || ''} onChange={e => set('years_with_company', e.target.value)} className="w-full border rounded-lg px-3 py-2 text-xs" /></div>
+                </div>
+                <div className="mb-2"><label className="text-[10px] font-bold text-slate-500">Family</label>
+                  <input value={pf.family_info || ''} onChange={e => set('family_info', e.target.value)} placeholder="Married, 3 kids, wife Fatma..." className="w-full border rounded-lg px-3 py-2 text-xs" /></div>
+                <div className="mb-2"><label className="text-[10px] font-bold text-slate-500">Interests & Hobbies</label>
+                  <input value={pf.interests || ''} onChange={e => set('interests', e.target.value)} placeholder="Football, fishing, cooking..." className="w-full border rounded-lg px-3 py-2 text-xs" /></div>
+                <div className="mb-2"><label className="text-[10px] font-bold text-slate-500">Favorite food</label>
+                  <input value={pf.favorite_food || ''} onChange={e => set('favorite_food', e.target.value)} placeholder="Koshary, grilled chicken..." className="w-full border rounded-lg px-3 py-2 text-xs" /></div>
+                <div className="mb-2"><label className="text-[10px] font-bold text-slate-500">Personality</label>
+                  <textarea value={pf.personality || ''} onChange={e => set('personality', e.target.value)} rows={2} placeholder="Quiet, hardworking, likes jokes..." className="w-full border rounded-lg px-3 py-2 text-xs" /></div>
+                <div className="mb-2"><label className="text-[10px] font-bold text-slate-500">Strengths</label>
+                  <input value={pf.strengths || ''} onChange={e => set('strengths', e.target.value)} placeholder="Great with numbers, reliable..." className="w-full border rounded-lg px-3 py-2 text-xs" /></div>
+                <div className="mb-2"><label className="text-[10px] font-bold text-slate-500">Areas to improve</label>
+                  <input value={pf.weaknesses || ''} onChange={e => set('weaknesses', e.target.value)} placeholder="Needs reminders, sometimes late..." className="w-full border rounded-lg px-3 py-2 text-xs" /></div>
+                <div className="mb-2"><label className="text-[10px] font-bold text-slate-500">Conversation starters</label>
+                  <textarea value={pf.conversation_starters || ''} onChange={e => set('conversation_starters', e.target.value)} rows={2} placeholder="Ask about his son, how the car is, Al Ahly..." className="w-full border rounded-lg px-3 py-2 text-xs" /></div>
+                <div className="mb-2"><label className="text-[10px] font-bold text-slate-500">Important notes</label>
+                  <textarea value={pf.notes || ''} onChange={e => set('notes', e.target.value)} rows={2} placeholder="Health issues, preferences, sensitivities..." className="w-full border rounded-lg px-3 py-2 text-xs" /></div>
+                <div className="mb-3"><label className="text-[10px] font-bold text-slate-500">Preferred language</label>
+                  <select value={pf.preferred_language || 'ar'} onChange={e => set('preferred_language', e.target.value)} className="border rounded-lg px-3 py-2 text-xs">
+                    <option value="ar">Arabic</option><option value="en">English</option><option value="both">Both</option>
+                  </select></div>
+                <button onClick={async () => {
+                  try {
+                    const record = { ...pf, user_id: editingProfile };
+                    delete record.id; delete record.created_at;
+                    if (profiles[editingProfile]?.id) {
+                      await supabase.from('team_profiles').update(record).eq('id', profiles[editingProfile].id);
+                    } else {
+                      await supabase.from('team_profiles').insert(record);
+                    }
+                    setEditingProfile(null); loadPrefs();
+                  } catch (err) { alert('Error: ' + err.message); }
+                }} className="px-4 py-2 bg-blue-500 text-white rounded-lg text-xs font-semibold">Save Profile</button>
+              </div>
+            );
+          })() : null}
+
+          <div className="space-y-2">
+            {(users || []).map(u => {
+              const p = profiles[u.id] || {};
+              const hasProfile = Object.keys(p).length > 2;
+              return (
+                <div key={u.id} className="bg-slate-50 rounded-xl p-3 border flex items-start gap-3">
+                  <div className="w-10 h-10 rounded-full bg-blue-100 flex items-center justify-center text-lg font-bold text-blue-600">{(u.name || '?')[0]}</div>
+                  <div className="flex-1 min-w-0">
+                    <div className="font-bold text-sm">{u.name} {p.nickname ? `(${p.nickname})` : ''}</div>
+                    <div className="text-[10px] text-slate-500">{u.email} \u2022 {u.role}</div>
+                    {hasProfile ? (
+                      <div className="mt-1 space-y-0.5">
+                        {p.job_title && <div className="text-[10px]">\ud83d\udcbc {p.job_title}</div>}
+                        {p.location && <div className="text-[10px]">\ud83d\udccd {p.location}</div>}
+                        {p.family_info && <div className="text-[10px]">\ud83d\udc68\u200d\ud83d\udc69\u200d\ud83d\udc67\u200d\ud83d\udc66 {p.family_info}</div>}
+                        {p.interests && <div className="text-[10px]">\u2b50 {p.interests}</div>}
+                        {p.conversation_starters && <div className="text-[10px] text-blue-500">\ud83d\udcac {p.conversation_starters}</div>}
+                      </div>
+                    ) : (
+                      <div className="text-[10px] text-slate-400 mt-1">No profile yet</div>
+                    )}
+                  </div>
+                  <button onClick={() => { setEditingProfile(u.id); setProfileForm(profiles[u.id] || {}); }}
+                    className="px-3 py-1.5 bg-blue-50 text-blue-600 rounded-lg text-[10px] font-semibold">
+                    {hasProfile ? 'Edit' : '+ Add'}
+                  </button>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
+
+            {/* ===== MODULE ACCESS ===== */}
       {section === 'permissions' && (
         <div className="bg-white rounded-xl p-4 overflow-auto">
           <h3 className="text-sm font-bold mb-3">Module Access / صلاحيات الوحدات</h3>

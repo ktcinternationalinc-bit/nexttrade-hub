@@ -29,6 +29,8 @@ export default function AdminTab({ user, userProfile, users, isAdmin, customers 
   const [loaded, setLoaded] = useState(false);
   const [selUser, setSelUser] = useState('all');
   const [section, setSection] = useState('scorecards');
+  const [auditFilter, setAuditFilter] = useState('all');
+  const [auditFilter, setAuditFilter] = useState('all');
   const [drillStage, setDrillStage] = useState(null);
   const [drillUser, setDrillUser] = useState(null);
   const [viewTicket, setViewTicket] = useState(null);
@@ -695,12 +697,33 @@ export default function AdminTab({ user, userProfile, users, isAdmin, customers 
     {/* ===== AUDIT LOG ===== */}
     {section === 'audit' && (<div>
       <div className="bg-white rounded-xl p-4">
-        <h3 className="text-sm font-bold mb-3">{selUserName} — Audit Log ({filteredAudit.length})</h3>
+        <div className="flex items-center justify-between mb-3">
+          <h3 className="text-sm font-bold">{selUserName} — Audit Log ({filteredAudit.length})</h3>
+          <div className="flex gap-1">
+            <button onClick={() => setAuditFilter('all')} className={'px-2 py-1 rounded text-[10px] font-semibold ' + (auditFilter === 'all' ? 'bg-slate-800 text-white' : 'bg-slate-100')}>All</button>
+            <button onClick={() => setAuditFilter('late')} className={'px-2 py-1 rounded text-[10px] font-semibold ' + (auditFilter === 'late' ? 'bg-red-600 text-white' : 'bg-red-50 text-red-600')}>🚨 Late Edits</button>
+            <button onClick={() => setAuditFilter('sensitive')} className={'px-2 py-1 rounded text-[10px] font-semibold ' + (auditFilter === 'sensitive' ? 'bg-amber-600 text-white' : 'bg-amber-50 text-amber-600')}>⚠️ Sensitive</button>
+            <button onClick={() => setAuditFilter('delete')} className={'px-2 py-1 rounded text-[10px] font-semibold ' + (auditFilter === 'delete' ? 'bg-red-600 text-white' : 'bg-slate-100')}>🗑️ Deletes</button>
+          </div>
+        </div>
+        {(() => { var lateEdits = filteredAudit.filter(a => a.is_late_edit && a.action === 'update'); return lateEdits.length > 0 ? (
+          <div className="bg-red-50 border-2 border-red-200 rounded-xl p-3 mb-3">
+            <div className="text-sm font-extrabold text-red-700">🚨 {lateEdits.length} Late Edit{lateEdits.length > 1 ? 's' : ''} Detected</div>
+            <div className="text-[10px] text-red-600">Changes made 24+ hours after original entry</div>
+          </div>
+        ) : null; })()}
         <div className="space-y-1 max-h-[600px] overflow-auto">
-          {filteredAudit.map(a => {
+          {filteredAudit.filter(a => {
+            if (auditFilter === 'late') return a.is_late_edit;
+            if (auditFilter === 'sensitive') return a.sensitive_fields_changed && a.sensitive_fields_changed.length > 0;
+            if (auditFilter === 'delete') return a.action === 'delete';
+            return true;
+          }).map(a => {
             var userName = getUserName(a.changed_by);
             var actionColors = { create: 'text-emerald-600', update: 'text-blue-600', delete: 'text-red-600' };
             var actionIcons = { create: '✨', update: '✏️', delete: '🗑️' };
+            var isLate = a.is_late_edit;
+            var hasSensitive = a.sensitive_fields_changed && a.sensitive_fields_changed.length > 0;
 
             // Resolve ticket reference
             var linkedTicket = null;
@@ -730,9 +753,12 @@ export default function AdminTab({ user, userProfile, users, isAdmin, customers 
             }
 
             return (
-              <div key={a.id} className="py-2.5 border-b border-slate-50">
+              <div key={a.id} className={'py-2.5 border-b ' + (isLate ? 'border-red-200 bg-red-50/50' : hasSensitive ? 'border-amber-200 bg-amber-50/30' : 'border-slate-50')}>
                 <div className="flex items-center gap-2 text-xs flex-wrap">
                   <span>{actionIcons[a.action] || '📋'}</span>
+                  <span className={'font-bold ' + (actionColors[a.action] || '')}>{(a.action||'').toUpperCase()}</span>
+                  {isLate && <span className="px-1.5 py-0.5 rounded bg-red-100 text-red-700 text-[9px] font-extrabold">🚨 LATE EDIT ({a.hours_since_creation || '24+'}h)</span>}
+                  {hasSensitive && <span className="px-1.5 py-0.5 rounded bg-amber-100 text-amber-700 text-[9px] font-bold">⚠️ {a.sensitive_fields_changed.join(', ')}</span>}
                   <span className={'font-bold ' + (actionColors[a.action] || '')}>{(a.action||'').toUpperCase()}</span>
                   {linkedTicket ? (
                     <span className="text-blue-600 font-semibold cursor-pointer hover:underline" onClick={() => openTicketDetail(linkedTicket)}>
