@@ -25,11 +25,11 @@ function fmtDate(s) {
 
 function colorClasses(color) {
   var map = {
-    emerald: { bg: 'bg-emerald-50', border: 'border-emerald-300', text: 'text-emerald-800', ring: 'ring-emerald-200' },
-    red: { bg: 'bg-red-50', border: 'border-red-300', text: 'text-red-800', ring: 'ring-red-200' },
-    indigo: { bg: 'bg-indigo-50', border: 'border-indigo-300', text: 'text-indigo-800', ring: 'ring-indigo-200' },
-    amber: { bg: 'bg-amber-50', border: 'border-amber-300', text: 'text-amber-800', ring: 'ring-amber-200' },
-    slate: { bg: 'bg-slate-50', border: 'border-slate-300', text: 'text-slate-700', ring: 'ring-slate-200' }
+    emerald: { bg: 'bg-emerald-700', border: 'border-emerald-900', text: 'text-white', subText: 'text-white' },
+    red: { bg: 'bg-red-700', border: 'border-red-900', text: 'text-white', subText: 'text-white' },
+    indigo: { bg: 'bg-indigo-700', border: 'border-indigo-900', text: 'text-white', subText: 'text-white' },
+    amber: { bg: 'bg-amber-700', border: 'border-amber-900', text: 'text-white', subText: 'text-white' },
+    slate: { bg: 'bg-slate-800', border: 'border-slate-950', text: 'text-white', subText: 'text-white' }
   };
   return map[color] || map.slate;
 }
@@ -64,42 +64,71 @@ export default function TreasuryInspectorModal(props) {
 
   return (
     <div
-      className="fixed inset-0 z-50 flex items-start justify-center bg-black/60 backdrop-blur-sm overflow-y-auto p-2 md:p-6"
+      className="fixed inset-0 z-50 bg-black/70 backdrop-blur-sm"
       onClick={onClose}
+      style={{
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'center',
+        paddingTop: 'max(16px, env(safe-area-inset-top))',
+        paddingBottom: 'max(16px, env(safe-area-inset-bottom))',
+        paddingLeft: 8,
+        paddingRight: 8
+      }}
     >
       <div
-        className="bg-white rounded-2xl shadow-2xl w-full max-w-3xl my-4"
+        className="bg-white rounded-2xl shadow-2xl w-full max-w-3xl"
         onClick={function (e) { e.stopPropagation(); }}
+        style={{
+          display: 'flex',
+          flexDirection: 'column',
+          maxHeight: '100%',
+          minHeight: 0
+        }}
       >
-        {/* ---- Header ---- */}
-        <div className={'px-5 py-4 rounded-t-2xl border-b ' + cc.bg + ' ' + cc.border}>
+        {/* ---- Header (dark, high contrast, ALWAYS VISIBLE) ---- */}
+        <div
+          className={'px-5 py-4 rounded-t-2xl ' + cc.bg + ' border-b-4 ' + cc.border}
+          style={{ flexShrink: 0 }}
+        >
           <div className="flex justify-between items-start gap-3">
             <div className="flex-1 min-w-0">
               <div className="flex items-center gap-2 flex-wrap">
-                <span className="text-2xl">{c.emoji}</span>
-                <span className={'text-sm font-extrabold ' + cc.text}>{c.titleEn}</span>
+                <span className="text-3xl">{c.emoji}</span>
+                <span className={'text-lg font-extrabold ' + cc.text}>{c.titleEn}</span>
               </div>
-              <div className={'text-sm font-bold mt-1 ' + cc.text} style={{ direction: 'rtl' }}>{c.titleAr}</div>
-              <div className="text-[11px] text-slate-700 mt-2">{c.subtypeEn}</div>
-              <div className="text-[11px] text-slate-600 mt-0.5" style={{ direction: 'rtl' }}>{c.subtypeAr}</div>
+              <div className={'text-lg font-bold mt-1 ' + cc.text} style={{ direction: 'rtl' }}>{c.titleAr}</div>
+              <div className={'text-sm mt-2 font-semibold ' + cc.subText}>{c.subtypeEn}</div>
+              <div className={'text-sm mt-0.5 font-semibold ' + cc.subText} style={{ direction: 'rtl' }}>{c.subtypeAr}</div>
             </div>
             <button
               onClick={onClose}
-              className="px-2.5 py-1 rounded-lg border border-slate-300 text-xs font-bold text-slate-600 hover:bg-white bg-white/70 shrink-0"
+              className="px-3 py-2 rounded-lg text-base font-extrabold text-slate-900 bg-white hover:bg-slate-100 shadow"
+              style={{ flexShrink: 0 }}
             >
               ✕
             </button>
           </div>
         </div>
 
-        <div className="p-5 space-y-4">
+        {/* ---- Scrolling body ---- */}
+        <div
+          className="p-5 space-y-4"
+          style={{
+            overflowY: 'auto',
+            overflowX: 'hidden',
+            flex: '1 1 auto',
+            minHeight: 0,
+            WebkitOverflowScrolling: 'touch'
+          }}
+        >
           {/* ---- Warnings ---- */}
           {c.warnings.length > 0 && (
-            <div className="bg-amber-50 border border-amber-300 rounded-lg p-3 space-y-2">
-              <div className="text-[11px] font-extrabold text-amber-800">⚠️ Reconciliation Warnings / تنبيهات المطابقة</div>
+            <div className="bg-amber-100 border-2 border-amber-500 rounded-lg p-3 space-y-2">
+              <div className="text-sm font-extrabold text-amber-900">⚠️ Reconciliation Warnings / تنبيهات المطابقة</div>
               {c.warnings.map(function (w, i) {
                 return (
-                  <div key={i} className="text-[11px] text-amber-900">
+                  <div key={i} className="text-sm text-amber-950 font-medium leading-relaxed">
                     <div>• {w.en}</div>
                     <div style={{ direction: 'rtl' }}>• {w.ar}</div>
                   </div>
@@ -110,45 +139,45 @@ export default function TreasuryInspectorModal(props) {
 
           {/* ---- Core facts ---- */}
           <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-            <div className="border border-slate-200 rounded-lg p-3">
-              <div className="text-[10px] font-bold text-slate-500 uppercase mb-1">Transaction / المعاملة</div>
-              <div className="text-xs text-slate-500">Date</div>
-              <div className="text-sm font-bold">{fmtDate(txn.transaction_date)}</div>
-              <div className="text-xs text-slate-500 mt-2">Order # / رقم الأمر</div>
-              <div className="text-sm font-bold">{txn.order_number || '—'}</div>
-              <div className="text-xs text-slate-500 mt-2">Description / الوصف</div>
-              <div className="text-[11px] text-slate-700" style={{ direction: 'rtl', wordBreak: 'break-word' }}>{txn.description || '—'}</div>
+            <div className="bg-slate-100 border-2 border-slate-300 rounded-lg p-3">
+              <div className="text-xs font-extrabold text-slate-700 uppercase mb-2 tracking-wider">Transaction / المعاملة</div>
+              <div className="text-xs text-slate-700 font-semibold">Date</div>
+              <div className="text-sm font-extrabold text-slate-900">{fmtDate(txn.transaction_date)}</div>
+              <div className="text-xs text-slate-700 font-semibold mt-2">Order # / رقم الأمر</div>
+              <div className="text-sm font-extrabold text-slate-900">{txn.order_number || '—'}</div>
+              <div className="text-xs text-slate-700 font-semibold mt-2">Description / الوصف</div>
+              <div className="text-sm text-slate-900 font-medium leading-relaxed" style={{ direction: 'rtl', wordBreak: 'break-word' }}>{txn.description || '—'}</div>
               {txn.category && (
                 <>
-                  <div className="text-xs text-slate-500 mt-2">Category / التصنيف</div>
-                  <div className="text-[11px] font-semibold">{txn.category}{txn.subcategory ? ' › ' + txn.subcategory : ''}</div>
+                  <div className="text-xs text-slate-700 font-semibold mt-2">Category / التصنيف</div>
+                  <div className="text-sm font-extrabold text-slate-900">{txn.category}{txn.subcategory ? ' › ' + txn.subcategory : ''}</div>
                 </>
               )}
             </div>
 
-            <div className="border border-slate-200 rounded-lg p-3">
-              <div className="text-[10px] font-bold text-slate-500 uppercase mb-1">Amount / المبلغ</div>
+            <div className="bg-slate-100 border-2 border-slate-300 rounded-lg p-3">
+              <div className="text-xs font-extrabold text-slate-700 uppercase mb-2 tracking-wider">Amount / المبلغ</div>
               {c.amounts.cashIn > 0 && (
-                <div className="flex justify-between"><span className="text-xs">Cash In / وارد</span><span className="text-sm font-extrabold text-emerald-600">{fE(c.amounts.cashIn)}</span></div>
+                <div className="flex justify-between items-center py-0.5"><span className="text-sm font-semibold text-slate-800">Cash In / وارد</span><span className="text-base font-extrabold text-emerald-700">{fE(c.amounts.cashIn)}</span></div>
               )}
               {c.amounts.cashOut > 0 && (
-                <div className="flex justify-between"><span className="text-xs">Cash Out / صادر</span><span className="text-sm font-extrabold text-red-500">{fE(c.amounts.cashOut)}</span></div>
+                <div className="flex justify-between items-center py-0.5"><span className="text-sm font-semibold text-slate-800">Cash Out / صادر</span><span className="text-base font-extrabold text-red-700">{fE(c.amounts.cashOut)}</span></div>
               )}
               {c.amounts.usdIn > 0 && (
-                <div className="flex justify-between"><span className="text-xs">USD In / وارد دولار</span><span className="text-sm font-extrabold text-emerald-600">${c.amounts.usdIn.toLocaleString()}</span></div>
+                <div className="flex justify-between items-center py-0.5"><span className="text-sm font-semibold text-slate-800">USD In / وارد دولار</span><span className="text-base font-extrabold text-emerald-700">${c.amounts.usdIn.toLocaleString()}</span></div>
               )}
               {c.amounts.usdOut > 0 && (
-                <div className="flex justify-between"><span className="text-xs">USD Out / صادر دولار</span><span className="text-sm font-extrabold text-red-500">${c.amounts.usdOut.toLocaleString()}</span></div>
+                <div className="flex justify-between items-center py-0.5"><span className="text-sm font-semibold text-slate-800">USD Out / صادر دولار</span><span className="text-base font-extrabold text-red-700">${c.amounts.usdOut.toLocaleString()}</span></div>
               )}
               {c.amounts.foreignAmt > 0 && (
-                <div className="flex justify-between"><span className="text-xs">{c.amounts.foreignCur || 'Foreign'} {c.amounts.foreignDir === 'in' ? 'In' : 'Out'}</span><span className="text-sm font-extrabold">{c.amounts.foreignAmt.toLocaleString()}</span></div>
+                <div className="flex justify-between items-center py-0.5"><span className="text-sm font-semibold text-slate-800">{c.amounts.foreignCur || 'Foreign'} {c.amounts.foreignDir === 'in' ? 'In' : 'Out'}</span><span className="text-base font-extrabold text-slate-900">{c.amounts.foreignAmt.toLocaleString()}</span></div>
               )}
               {c.amounts.cashIn === 0 && c.amounts.cashOut === 0 && c.amounts.usdIn === 0 && c.amounts.usdOut === 0 && c.amounts.foreignAmt === 0 && (
-                <div className="text-xs text-slate-400 italic">No amount / بدون مبلغ</div>
+                <div className="text-sm text-slate-700 italic font-medium">No amount / بدون مبلغ</div>
               )}
               {txn.is_bank_placeholder && txn.expected_amount > 0 && (
-                <div className="mt-2 pt-2 border-t border-slate-100">
-                  <div className="text-xs text-indigo-600">Expected / متوقع: {c.amounts.foreignDir === 'out' ? '-' : ''}{fE(txn.expected_amount)}</div>
+                <div className="mt-2 pt-2 border-t-2 border-slate-300">
+                  <div className="text-sm font-extrabold text-indigo-800">Expected / متوقع: {c.amounts.foreignDir === 'out' ? '-' : ''}{fE(txn.expected_amount)}</div>
                 </div>
               )}
             </div>
@@ -156,43 +185,43 @@ export default function TreasuryInspectorModal(props) {
 
           {/* ---- Effects ---- */}
           <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-            <div className="border border-slate-200 rounded-lg p-3">
-              <div className="text-[10px] font-bold text-slate-500 uppercase mb-1">Effect on Treasury Net / صافي الخزنة</div>
-              <div className="text-[11px] text-slate-700">{c.netEffect.en}</div>
-              <div className="text-[11px] text-slate-600" style={{ direction: 'rtl' }}>{c.netEffect.ar}</div>
+            <div className="bg-slate-100 border-2 border-slate-300 rounded-lg p-3">
+              <div className="text-xs font-extrabold text-slate-700 uppercase mb-2 tracking-wider">Effect on Treasury Net / صافي الخزنة</div>
+              <div className="text-sm text-slate-900 font-medium leading-relaxed">{c.netEffect.en}</div>
+              <div className="text-sm text-slate-800 font-medium leading-relaxed mt-1" style={{ direction: 'rtl' }}>{c.netEffect.ar}</div>
               {c.netEffect.delta !== 0 && (
-                <div className={'text-sm font-extrabold mt-1 ' + (c.netEffect.delta > 0 ? 'text-emerald-600' : 'text-red-500')}>
+                <div className={'text-lg font-extrabold mt-2 ' + (c.netEffect.delta > 0 ? 'text-emerald-700' : 'text-red-700')}>
                   {c.netEffect.delta > 0 ? '+' : ''}{c.netEffect.delta.toLocaleString()} EGP
                 </div>
               )}
             </div>
 
-            <div className="border border-slate-200 rounded-lg p-3">
-              <div className="text-[10px] font-bold text-slate-500 uppercase mb-1">Effect on Invoice Collected / المحصّل</div>
-              <div className="text-[11px] text-slate-700">{c.collectedEffect.en}</div>
-              <div className="text-[11px] text-slate-600" style={{ direction: 'rtl' }}>{c.collectedEffect.ar}</div>
+            <div className="bg-slate-100 border-2 border-slate-300 rounded-lg p-3">
+              <div className="text-xs font-extrabold text-slate-700 uppercase mb-2 tracking-wider">Effect on Invoice Collected / المحصّل</div>
+              <div className="text-sm text-slate-900 font-medium leading-relaxed">{c.collectedEffect.en}</div>
+              <div className="text-sm text-slate-800 font-medium leading-relaxed mt-1" style={{ direction: 'rtl' }}>{c.collectedEffect.ar}</div>
               {c.collectedEffect.delta !== 0 && (
-                <div className="text-sm font-extrabold mt-1 text-emerald-600">+{c.collectedEffect.delta.toLocaleString()} EGP</div>
+                <div className="text-lg font-extrabold mt-2 text-emerald-700">+{c.collectedEffect.delta.toLocaleString()} EGP</div>
               )}
             </div>
           </div>
 
           {/* ---- Linked Invoice ---- */}
           {c.related.invoice && (
-            <div className="border border-emerald-200 bg-emerald-50 rounded-lg p-3">
-              <div className="text-[10px] font-bold text-emerald-700 uppercase mb-2">🧾 Linked Invoice / الفاتورة المرتبطة</div>
-              <div className="grid grid-cols-2 gap-2 text-xs">
-                <div><span className="text-slate-500">Customer:</span> <span className="font-semibold" style={{ direction: 'rtl' }}>{c.related.invoice.customer_name || '—'}</span></div>
-                <div><span className="text-slate-500">Order #:</span> <span className="font-bold">{c.related.invoice.order_number || '—'}</span></div>
-                <div><span className="text-slate-500">Invoice total:</span> <span className="font-bold">{fE(c.related.invoice.total_amount)}</span></div>
-                <div><span className="text-slate-500">Collected so far:</span> <span className="font-bold text-emerald-600">{fE(c.related.invoice.total_collected)}</span></div>
-                <div><span className="text-slate-500">Outstanding:</span> <span className={'font-bold ' + (Number(c.related.invoice.outstanding || 0) > 0 ? 'text-red-500' : 'text-slate-400')}>{fE(c.related.invoice.outstanding)}</span></div>
-                <div><span className="text-slate-500">Status:</span> <span className="font-semibold">{c.related.invoice.status || '—'}</span></div>
+            <div className="border-2 border-emerald-500 bg-emerald-100 rounded-lg p-3">
+              <div className="text-xs font-extrabold text-emerald-900 uppercase mb-2 tracking-wider">🧾 Linked Invoice / الفاتورة المرتبطة</div>
+              <div className="grid grid-cols-2 gap-2 text-sm">
+                <div><span className="text-slate-700 font-semibold">Customer:</span> <span className="font-extrabold text-slate-900" style={{ direction: 'rtl' }}>{c.related.invoice.customer_name || '—'}</span></div>
+                <div><span className="text-slate-700 font-semibold">Order #:</span> <span className="font-extrabold text-slate-900">{c.related.invoice.order_number || '—'}</span></div>
+                <div><span className="text-slate-700 font-semibold">Invoice total:</span> <span className="font-extrabold text-slate-900">{fE(c.related.invoice.total_amount)}</span></div>
+                <div><span className="text-slate-700 font-semibold">Collected so far:</span> <span className="font-extrabold text-emerald-800">{fE(c.related.invoice.total_collected)}</span></div>
+                <div><span className="text-slate-700 font-semibold">Outstanding:</span> <span className={'font-extrabold ' + (Number(c.related.invoice.outstanding || 0) > 0 ? 'text-red-700' : 'text-slate-600')}>{fE(c.related.invoice.outstanding)}</span></div>
+                <div><span className="text-slate-700 font-semibold">Status:</span> <span className="font-extrabold text-slate-900">{c.related.invoice.status || '—'}</span></div>
               </div>
               {props.onOpenInvoice && (
                 <button
                   onClick={function () { props.onOpenInvoice(c.related.invoice); onClose(); }}
-                  className="mt-2 text-[11px] text-emerald-700 font-bold hover:underline"
+                  className="mt-3 text-sm text-white bg-emerald-700 px-3 py-1.5 rounded-lg font-extrabold hover:bg-emerald-800 shadow"
                 >
                   → Open invoice / فتح الفاتورة
                 </button>
@@ -202,18 +231,18 @@ export default function TreasuryInspectorModal(props) {
 
           {/* ---- Linked Check ---- */}
           {c.related.linkedCheck && (
-            <div className="border border-blue-200 bg-blue-50 rounded-lg p-3">
-              <div className="text-[10px] font-bold text-blue-700 uppercase mb-2">📝 Linked Check / الشيك المرتبط</div>
-              <div className="grid grid-cols-2 gap-2 text-xs">
-                <div><span className="text-slate-500">Check #:</span> <span className="font-bold">{c.related.linkedCheck.check_number || '—'}</span></div>
-                <div><span className="text-slate-500">Amount:</span> <span className="font-bold">{fE(c.related.linkedCheck.amount)}</span></div>
-                <div><span className="text-slate-500">Due date:</span> <span className="font-semibold">{c.related.linkedCheck.due_date || c.related.linkedCheck.check_date || '—'}</span></div>
-                <div><span className="text-slate-500">Status:</span> <span className="font-semibold text-emerald-600">{c.related.linkedCheck.status}</span></div>
+            <div className="border-2 border-blue-500 bg-blue-100 rounded-lg p-3">
+              <div className="text-xs font-extrabold text-blue-900 uppercase mb-2 tracking-wider">📝 Linked Check / الشيك المرتبط</div>
+              <div className="grid grid-cols-2 gap-2 text-sm">
+                <div><span className="text-slate-700 font-semibold">Check #:</span> <span className="font-extrabold text-slate-900">{c.related.linkedCheck.check_number || '—'}</span></div>
+                <div><span className="text-slate-700 font-semibold">Amount:</span> <span className="font-extrabold text-slate-900">{fE(c.related.linkedCheck.amount)}</span></div>
+                <div><span className="text-slate-700 font-semibold">Due date:</span> <span className="font-extrabold text-slate-900">{c.related.linkedCheck.due_date || c.related.linkedCheck.check_date || '—'}</span></div>
+                <div><span className="text-slate-700 font-semibold">Status:</span> <span className="font-extrabold text-emerald-800">{c.related.linkedCheck.status}</span></div>
                 {c.related.linkedCheck.collection_date && (
-                  <div className="col-span-2"><span className="text-slate-500">Collected on:</span> <span className="font-bold">{c.related.linkedCheck.collection_date}</span></div>
+                  <div className="col-span-2"><span className="text-slate-700 font-semibold">Collected on:</span> <span className="font-extrabold text-slate-900">{c.related.linkedCheck.collection_date}</span></div>
                 )}
                 {c.related.linkedCheck.bank_name && (
-                  <div className="col-span-2"><span className="text-slate-500">Bank:</span> <span className="font-semibold">{c.related.linkedCheck.bank_name}</span></div>
+                  <div className="col-span-2"><span className="text-slate-700 font-semibold">Bank:</span> <span className="font-extrabold text-slate-900">{c.related.linkedCheck.bank_name}</span></div>
                 )}
               </div>
             </div>
@@ -221,14 +250,14 @@ export default function TreasuryInspectorModal(props) {
 
           {/* ---- Linked Egypt Bank Transaction ---- */}
           {c.related.linkedBank && (
-            <div className="border border-indigo-200 bg-indigo-50 rounded-lg p-3">
-              <div className="text-[10px] font-bold text-indigo-700 uppercase mb-2">🏦 Linked Bank Transaction / المعاملة البنكية المرتبطة</div>
-              <div className="grid grid-cols-2 gap-2 text-xs">
-                <div><span className="text-slate-500">Date:</span> <span className="font-bold">{c.related.linkedBank.date}</span></div>
-                <div><span className="text-slate-500">Amount:</span> <span className={'font-bold ' + (Number(c.related.linkedBank.amount) > 0 ? 'text-emerald-600' : 'text-red-500')}>{fE(Math.abs(Number(c.related.linkedBank.amount)))}</span></div>
+            <div className="border-2 border-indigo-500 bg-indigo-100 rounded-lg p-3">
+              <div className="text-xs font-extrabold text-indigo-900 uppercase mb-2 tracking-wider">🏦 Linked Bank Transaction / المعاملة البنكية المرتبطة</div>
+              <div className="grid grid-cols-2 gap-2 text-sm">
+                <div><span className="text-slate-700 font-semibold">Date:</span> <span className="font-extrabold text-slate-900">{c.related.linkedBank.date}</span></div>
+                <div><span className="text-slate-700 font-semibold">Amount:</span> <span className={'font-extrabold ' + (Number(c.related.linkedBank.amount) > 0 ? 'text-emerald-800' : 'text-red-700')}>{fE(Math.abs(Number(c.related.linkedBank.amount)))}</span></div>
                 <div className="col-span-2">
-                  <span className="text-slate-500">Description:</span>
-                  <div className="text-[11px] mt-0.5" style={{ wordBreak: 'break-word' }}>{c.related.linkedBank.description || '—'}</div>
+                  <span className="text-slate-700 font-semibold">Description:</span>
+                  <div className="text-sm mt-1 text-slate-900 font-medium leading-relaxed" style={{ wordBreak: 'break-word' }}>{c.related.linkedBank.description || '—'}</div>
                 </div>
               </div>
             </div>
@@ -236,20 +265,20 @@ export default function TreasuryInspectorModal(props) {
 
           {/* ---- Dedup Sibling ---- */}
           {c.related.dedupSibling && (
-            <div className="border border-slate-300 bg-slate-50 rounded-lg p-3">
-              <div className="text-[10px] font-bold text-slate-700 uppercase mb-2">🔗 Original Entry (Where the Money Counted) / القيد الأصلي (المُحتسب)</div>
-              <div className="grid grid-cols-2 gap-2 text-xs">
-                <div><span className="text-slate-500">Date:</span> <span className="font-bold">{c.related.dedupSibling.transaction_date}</span></div>
-                <div><span className="text-slate-500">Cash in:</span> <span className="font-bold text-emerald-600">{fE(c.related.dedupSibling.cash_in)}</span></div>
+            <div className="border-2 border-slate-500 bg-slate-200 rounded-lg p-3">
+              <div className="text-xs font-extrabold text-slate-900 uppercase mb-2 tracking-wider">🔗 Original Entry (Where the Money Counted) / القيد الأصلي (المُحتسب)</div>
+              <div className="grid grid-cols-2 gap-2 text-sm">
+                <div><span className="text-slate-700 font-semibold">Date:</span> <span className="font-extrabold text-slate-900">{c.related.dedupSibling.transaction_date}</span></div>
+                <div><span className="text-slate-700 font-semibold">Cash in:</span> <span className="font-extrabold text-emerald-800">{fE(c.related.dedupSibling.cash_in)}</span></div>
                 <div className="col-span-2">
-                  <span className="text-slate-500">Description:</span>
-                  <div className="text-[11px] mt-0.5" style={{ direction: 'rtl', wordBreak: 'break-word' }}>{c.related.dedupSibling.description || '—'}</div>
+                  <span className="text-slate-700 font-semibold">Description:</span>
+                  <div className="text-sm mt-1 text-slate-900 font-medium leading-relaxed" style={{ direction: 'rtl', wordBreak: 'break-word' }}>{c.related.dedupSibling.description || '—'}</div>
                 </div>
               </div>
-              <div className="text-[10px] text-slate-500 mt-2">
+              <div className="text-sm text-slate-800 font-medium leading-relaxed mt-2 pt-2 border-t-2 border-slate-400">
                 This current row exists only to record that the bank confirmed the deposit. The actual +{fE(c.related.dedupSibling.cash_in)} landed on the row shown here.
               </div>
-              <div className="text-[10px] text-slate-500 mt-0.5" style={{ direction: 'rtl' }}>
+              <div className="text-sm text-slate-800 font-medium leading-relaxed mt-1" style={{ direction: 'rtl' }}>
                 هذا القيد موجود فقط لتسجيل تأكيد البنك للإيداع. المبلغ الفعلي +{fE(c.related.dedupSibling.cash_in)} مسجّل على القيد أعلاه.
               </div>
             </div>
@@ -257,13 +286,13 @@ export default function TreasuryInspectorModal(props) {
 
           {/* ---- Split Family ---- */}
           {c.related.splitFamily.length > 0 && (
-            <div className="border border-purple-200 bg-purple-50 rounded-lg p-3">
-              <div className="text-[10px] font-bold text-purple-700 uppercase mb-2">🪓 Related Entries (Same Order, Same Day) / قيود ذات صلة</div>
+            <div className="border-2 border-purple-500 bg-purple-100 rounded-lg p-3">
+              <div className="text-xs font-extrabold text-purple-900 uppercase mb-2 tracking-wider">🪓 Related Entries (Same Order, Same Day) / قيود ذات صلة</div>
               {c.related.splitFamily.map(function (s) {
                 return (
-                  <div key={s.id} className="text-[11px] flex justify-between py-0.5">
-                    <span className="truncate" style={{ direction: 'rtl' }}>{(s.description || '').substring(0, 50)}</span>
-                    <span className="font-bold ml-2">
+                  <div key={s.id} className="text-sm flex justify-between py-1 border-b border-purple-200 last:border-0">
+                    <span className="truncate text-slate-900 font-medium" style={{ direction: 'rtl' }}>{(s.description || '').substring(0, 50)}</span>
+                    <span className="font-extrabold ml-2 text-slate-900">
                       {Number(s.cash_in) > 0 ? '+' + fE(s.cash_in) : ''}
                       {Number(s.cash_out) > 0 ? '-' + fE(s.cash_out) : ''}
                     </span>
@@ -275,17 +304,17 @@ export default function TreasuryInspectorModal(props) {
 
           {/* ---- Timeline ---- */}
           {c.timeline.length > 0 && (
-            <div className="border border-slate-200 rounded-lg p-3">
-              <div className="text-[10px] font-bold text-slate-500 uppercase mb-2">🕐 Timeline / السجل الزمني</div>
-              <div className="space-y-1.5">
+            <div className="bg-slate-100 border-2 border-slate-300 rounded-lg p-3">
+              <div className="text-xs font-extrabold text-slate-700 uppercase mb-2 tracking-wider">🕐 Timeline / السجل الزمني</div>
+              <div className="space-y-2">
                 {c.timeline.map(function (t, i) {
                   return (
-                    <div key={i} className="text-[11px] flex justify-between items-start gap-3">
+                    <div key={i} className="text-sm flex justify-between items-start gap-3">
                       <div className="flex-1">
-                        <div className="font-semibold text-slate-700">{t.labelEn}</div>
-                        <div className="text-slate-500" style={{ direction: 'rtl' }}>{t.labelAr}</div>
+                        <div className="font-extrabold text-slate-900">{t.labelEn}</div>
+                        <div className="text-slate-700 font-medium" style={{ direction: 'rtl' }}>{t.labelAr}</div>
                       </div>
-                      <div className="text-slate-500 whitespace-nowrap">{fmtDate(t.when)}</div>
+                      <div className="text-slate-800 font-semibold whitespace-nowrap">{fmtDate(t.when)}</div>
                     </div>
                   );
                 })}
@@ -294,15 +323,18 @@ export default function TreasuryInspectorModal(props) {
           )}
 
           {/* ---- Debug row id (small, for support / audit) ---- */}
-          <div className="text-[9px] text-slate-400 text-center pt-1">
+          <div className="text-xs text-slate-600 text-center pt-1 font-medium">
             txn id: {txn.id}{txn.created_by ? ' · created_by: ' + String(txn.created_by).substring(0, 8) : ''}
           </div>
         </div>
 
-        <div className="px-5 py-3 border-t border-slate-100 flex justify-end gap-2 rounded-b-2xl bg-slate-50">
+        <div
+          className="px-5 py-3 border-t-2 border-slate-200 flex justify-end gap-2 rounded-b-2xl bg-slate-100"
+          style={{ flexShrink: 0 }}
+        >
           <button
             onClick={onClose}
-            className="px-4 py-1.5 rounded-lg bg-slate-800 text-white text-xs font-bold hover:bg-slate-900"
+            className="px-5 py-2 rounded-lg bg-slate-900 text-white text-sm font-extrabold hover:bg-black shadow"
           >
             Close / إغلاق
           </button>

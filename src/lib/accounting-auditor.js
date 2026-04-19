@@ -216,6 +216,111 @@ export function runAccountingAudit(data) {
     });
   }
 
+  // C6: Ambiguous dedup — matched bank row with zero cash_in AND no identifiable sibling
+  // This is the "ghost dedup" case: dedup fired but the original sibling was deleted or never existed
+  var ambiguousDedup = [];
+  for (var ad = 0; ad < treasury.length; ad++) {
+    var trA = treasury[ad];
+    // Only consider rows that got matched with a bank txn AND have zero cash_in
+    if (!trA.matched_bank_txn_id) continue;
+    if (Number(trA.cash_in || 0) > 0 || Number(trA.cash_out || 0) > 0) continue;
+    if (trA.is_bank_placeholder) continue;
+    // Try to find the sibling the dedup was pointing at
+    var sibling = null;
+    // 1. Explicit column
+    if (trA.dedup_sibling_id) {
+      sibling = treasuryById[trA.dedup_sibling_id] || null;
+    }
+    // 2. Parse description
+    if (!sibling) {
+      var m2 = String(trA.description || '').match(/dedup_sibling=([a-f0-9-]+)/i);
+      if (m2) sibling = treasuryById[m2[1]] || null;
+    }
+    // 3. Heuristic search
+    if (!sibling && trA.linked_invoice_id) {
+      sibling = treasury.find(function (s) {
+        return s.id !== trA.id &&
+          s.linked_invoice_id === trA.linked_invoice_id &&
+          !s.is_bank_placeholder &&
+          Number(s.cash_in || 0) > 0 &&
+          !isDedupMarker(s);
+      }) || null;
+    }
+    // Confirm the bank txn actually had money
+    var bankTxn = egyptBankTxns.find(function (b) { return b.id === trA.matched_bank_txn_id; });
+    var bankAmt = bankTxn ? Number(bankTxn.amount || 0) : 0;
+    // Flag only if bank had real money AND we can't find any sibling explaining where it went
+    if (!sibling && Math.abs(bankAmt) > 0) {
+      ambiguousDedup.push({
+        treasury_id: trA.id,
+        transaction_date: trA.transaction_date,
+        bank_txn_id: trA.matched_bank_txn_id,
+        bank_amount: bankAmt,
+        linked_invoice_id: trA.linked_invoice_id,
+        description: String(trA.description || '').substring(0, 80)
+      });
+    }
+  }
+  if (ambiguousDedup.length > 0) {
+    findings.push({
+      severity: 'critical',
+      code: 'AMBIGUOUS_DEDUP',
+      titleEn: ambiguousDedup.length + ' zeroed treasury row(s) with missing original entry',
+      titleAr: ambiguousDedup.length + ' قيد خزنة مُصفّر بدون القيد الأصلي',
+      descEn: 'These rows were matched with a real bank deposit, but the treasury cash_in was zeroed because the system believed a duplicate existed. That duplicate can no longer be found — meaning the bank deposit was REAL MONEY that is now uncounted in treasury net. Most likely causes: (1) the original sibling row was deleted, (2) the dedup fired on an unrelated same-amount row, (3) multiple placeholders existed for the same bank deposit.',
+      descAr: 'هذه القيود تمت مطابقتها مع إيداع بنكي حقيقي، لكن تم تصفير المبلغ لأن النظام اعتقد بوجود قيد مُكرّر. هذا القيد المُكرّر لم يعد موجودًا — مما يعني أن الإيداع البنكي كان أموالًا حقيقية غير محتسبة الآن في صافي الخزنة. الأسباب المحتملة: (1) حُذف القيد الأصلي الشقيق، (2) دالة التكرار أطلقت على قيد غير ذي صلة بنفس المبلغ، (3) وجود عدة قيود مؤقتة لنفس الإيداع.',
+      totalImpact: sum(ambiguousDedup, function (x) { return Math.abs(x.bank_amount); }),
+      count: ambiguousDedup.length,
+      items: ambiguousDedup.slice(0, 20),
+      actionEn: 'For each: look up the bank_txn_id in Egypt Bank to confirm the real deposit amount. Then UPDATE the treasury row to restore cash_in to that amount and remove the [bank confirmation...] tag from description. Finally, re-open the linked invoice to recalc collected.',
+      actionAr: 'لكل حالة: ابحث عن bank_txn_id في بنك مصر للتأكد من المبلغ الحقيقي. ثم حدّث قيد الخزنة ليعيد المبلغ، وأزل وسم [bank confirmation] من الوصف. أخيرًا، افتح الفاتورة المرتبطة لإعادة حساب المحصّل.'
+    });
+  }
+
+  // C7: Duplicate placeholders for the same expected deposit
+  // (The root cause of Mouhamed's سعيد عبد الغنى bug)
+  var duplicatePlaceholders = [];
+  var placeholderKey = {};
+  for (var dp = 0; dp < treasury.length; dp++) {
+    var ph = treasury[dp];
+    if (!ph.is_bank_placeholder) continue;
+    var expAmtP = Number(ph.expected_amount || 0);
+    if (expAmtP === 0) continue;
+    // Key by expected amount + approximate date (±3 days) + order if present
+    var dayKey = ph.transaction_date ? ph.transaction_date.substring(0, 10) : '';
+    var key2 = expAmtP + '|' + dayKey + '|' + (ph.order_number || '');
+    // Also try fuzzy by name token
+    var nameToken = String(ph.description || '').split(/\s+/).slice(0, 3).join(' ');
+    var key3 = expAmtP + '|' + dayKey + '|' + nameToken;
+    if (placeholderKey[key2] || placeholderKey[key3]) {
+      duplicatePlaceholders.push({
+        treasury_id: ph.id,
+        duplicate_of: (placeholderKey[key2] || placeholderKey[key3]).id,
+        expected_amount: expAmtP,
+        date: dayKey,
+        description: String(ph.description || '').substring(0, 60)
+      });
+    } else {
+      placeholderKey[key2] = ph;
+      placeholderKey[key3] = ph;
+    }
+  }
+  if (duplicatePlaceholders.length > 0) {
+    findings.push({
+      severity: 'warning',
+      code: 'DUPLICATE_PLACEHOLDER',
+      titleEn: duplicatePlaceholders.length + ' duplicate bank placeholder(s) for the same expected deposit',
+      titleAr: duplicatePlaceholders.length + ' قيد مؤقت مُكرّر لنفس الإيداع المتوقع',
+      descEn: 'Multiple placeholders were created for what looks like the same expected bank deposit. When the real bank transaction arrives, only one placeholder will match — the other will sit stale forever, AND the dedup logic may mistakenly reference it.',
+      descAr: 'تم إنشاء عدة قيود مؤقتة لما يبدو أنه نفس الإيداع البنكي المتوقع. عند وصول المعاملة البنكية الحقيقية، سيُطابَق قيد واحد فقط — والآخر سيبقى معلقًا للأبد، وقد تُشير إليه دالة التكرار بالخطأ.',
+      totalImpact: sum(duplicatePlaceholders, function (x) { return x.expected_amount; }),
+      count: duplicatePlaceholders.length,
+      items: duplicatePlaceholders.slice(0, 20),
+      actionEn: 'For each pair: verify they are the same expected deposit, then delete the duplicate. Keep only one placeholder per real expected bank transaction.',
+      actionAr: 'لكل زوج: تأكد من أنهما نفس الإيداع المتوقع، ثم احذف المكرر. احتفظ بقيد مؤقت واحد فقط لكل معاملة بنكية متوقعة.'
+    });
+  }
+
   // ============================================================
   // WARNING CHECKS
   // ============================================================

@@ -945,29 +945,37 @@ export default function App() {
             const inv = invoices.find(i => i.order_number === placeholder.order_number);
             if (inv) {
               updates.linked_invoice_id = inv.id;
-              // Smart dedup: check if another treasury entry already covers this payment
-              // (e.g., check was collected → treasury entry already exists for same order+amount)
-              const existingLinked = treasury.filter(t => 
-                t.id !== placeholder.id &&
-                !t.is_bank_placeholder &&
-                (t.linked_invoice_id === inv.id || t.order_number === inv.order_number) &&
-                Number(t.cash_in || 0) > 0
+              // Smart dedup: check if another REAL treasury entry already covers this payment
+              // Guards: must be non-placeholder, positive cash_in, not a bank confirmation,
+              // AND within 90 days of the bank date (prevents matching ancient unrelated entries)
+              const bankDateMs = new Date(bank.date).getTime();
+              const ninetyDays = 90 * 86400000;
+              const existingLinked = treasury.filter(t => {
+                if (t.id === placeholder.id) return false;
+                if (t.is_bank_placeholder) return false;
+                if (Number(t.cash_in || 0) <= 0) return false;
+                if (String(t.description || '').indexOf('[bank confirmation') >= 0) return false;
+                if (t.linked_invoice_id !== inv.id && t.order_number !== inv.order_number) return false;
+                const tDate = t.transaction_date ? new Date(t.transaction_date).getTime() : 0;
+                if (!tDate || Math.abs(bankDateMs - tDate) > ninetyDays) return false;
+                return true;
+              });
+              // Find the sibling that actually matches this amount
+              const matchingSibling = existingLinked.find(t => 
+                Math.abs(Number(t.cash_in) - expAmt) < expAmt * 0.02
               );
-              const alreadyCovered = existingLinked.some(t => 
-                Math.abs(Number(t.cash_in) - expAmt) < expAmt * 0.02 // same amount within 2%
-              );
-              if (alreadyCovered) {
-                // This payment already went through (likely check collection) — don't update invoice
-                // Mark this entry so it doesn't affect collected (it's a bank confirmation, not a new payment)
-                updates.linked_invoice_id = inv.id; // still link for tracking
-                updates.description = (updates.description || placeholder.description || '') + ' [bank confirmation — not added to collected]';
-                updates.cash_in = 0; // zero out so it doesn't affect net (the check collection entry already did)
+              if (matchingSibling) {
+                // Dedup: real money already counted via matchingSibling — zero this row
+                updates.linked_invoice_id = inv.id;
+                updates.description = (updates.description || placeholder.description || '')
+                  + ' [bank confirmation — not added to collected, dedup_sibling=' + matchingSibling.id + ']';
+                updates.cash_in = 0;
                 updates.cash_out = 0;
+                updates.dedup_sibling_id = matchingSibling.id; // audit trail — requires column
               } else {
-                // Genuinely new payment — recalculate collected from all linked entries
+                // No matching sibling → this IS a new payment. Count it.
                 const existingTotal = existingLinked.reduce((a, t) => a + Number(t.cash_in || 0), 0);
                 const newTotal = existingTotal + expAmt;
-                // Cap at invoice total to prevent over-collection
                 const cappedTotal = Math.min(newTotal, Number(inv.total_amount || 0));
                 await supabase.from('invoices').update({
                   total_collected: cappedTotal,
@@ -6524,12 +6532,12 @@ export default function App() {
                   </tr></thead>
                   <tbody>
                     {filteredTreasury.slice(0, treasuryVisible).map(txn => (
-                      <tr key={txn.id} className={"border-b border-slate-50 " + (txn.is_bank_placeholder ? "bg-indigo-50/50 hover:bg-indigo-100/50" : "hover:bg-blue-50/30")}>
+                      <tr key={txn.id} className={"border-b border-slate-100 " + (txn.is_bank_placeholder ? "bg-indigo-200 hover:bg-indigo-300 border-l-4 border-l-indigo-600" : "hover:bg-blue-50/30")}>
                         <td className="px-2 py-1.5 text-[10px] whitespace-nowrap">{txn.transaction_date}</td>
                         <td className="px-2 py-1.5 text-[10px] font-semibold text-center">{txn.order_number || ''}</td>
                         <td className="px-2 py-1.5 text-[10px]" style={{direction: lang === 'ar' ? 'rtl' : 'ltr'}}>
                           {txn.is_bank_placeholder && (
-                            <span className="inline-block px-1.5 py-0.5 rounded bg-indigo-200 text-indigo-800 text-[8px] font-bold mr-1">🏦 BANK (awaiting)</span>
+                            <span className="inline-block px-2 py-0.5 rounded bg-indigo-700 text-white text-[10px] font-extrabold mr-1 shadow">🏦 BANK (awaiting)</span>
                           )}
                           {tx(txn.description, txn.description_en)}
                           {txn.cash_out > 0 && txn.category && (
@@ -6537,7 +6545,7 @@ export default function App() {
                           )}
                           {txn.is_bank_placeholder && txn.bank_account_id && (() => {
                             const acc = egyptBankAccounts.find(a => a.id === txn.bank_account_id);
-                            return acc ? <div className="text-[8px] text-indigo-600">→ {acc.bank_name}{acc.account_name ? ' / ' + acc.account_name : ''}</div> : null;
+                            return acc ? <div className="text-[10px] text-indigo-900 font-bold">→ {acc.bank_name}{acc.account_name ? ' / ' + acc.account_name : ''}</div> : null;
                           })()}
                           {txn.linked_invoice_id && (() => {
                             const li = invoices.find(i => i.id === txn.linked_invoice_id);

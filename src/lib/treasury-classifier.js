@@ -45,14 +45,26 @@ export function classifyTreasuryTransaction(txn, ctx) {
 
   // Sibling treasury row for dedup case (the original entry that actually counted)
   var dedupSibling = null;
-  if (isBankConfirmationDedup && linkedInvoiceId) {
-    dedupSibling = treasuryAll.find(function(t) {
-      return t.id !== txn.id &&
-        t.linked_invoice_id === linkedInvoiceId &&
-        !t.is_bank_placeholder &&
-        Number(t.cash_in || 0) > 0 &&
-        String(t.description || '').indexOf('[bank confirmation') < 0;
-    }) || null;
+  if (isBankConfirmationDedup) {
+    // Prefer explicit sibling ID (new hardened dedup stores this)
+    if (txn.dedup_sibling_id) {
+      dedupSibling = treasuryAll.find(function(t) { return t.id === txn.dedup_sibling_id; }) || null;
+    }
+    // Also try to extract from description ([... dedup_sibling=<uuid>])
+    if (!dedupSibling) {
+      var m = String(txn.description || '').match(/dedup_sibling=([a-f0-9-]+)/i);
+      if (m) dedupSibling = treasuryAll.find(function(t) { return t.id === m[1]; }) || null;
+    }
+    // Fallback heuristic (legacy rows that don't have sibling_id stored)
+    if (!dedupSibling && linkedInvoiceId) {
+      dedupSibling = treasuryAll.find(function(t) {
+        return t.id !== txn.id &&
+          t.linked_invoice_id === linkedInvoiceId &&
+          !t.is_bank_placeholder &&
+          Number(t.cash_in || 0) > 0 &&
+          String(t.description || '').indexOf('[bank confirmation') < 0;
+      }) || null;
+    }
   }
 
   // Split family (shares order_number with other entries created same day)
