@@ -240,6 +240,46 @@ export default function TreasuryInspectorModal(props) {
             </div>
           </div>
 
+          {/* ---- MISSING LINK WARNING ----
+              If the row has an order# + inflow + there's an invoice with that order# in
+              the system BUT the treasury row isn't linked to it, surface the fix. */}
+          {(function () {
+            if (!txn || !txn.order_number) return null;
+            if (txn.linked_invoice_id) return null;
+            if (txn.is_bank_placeholder) return null;
+            var inflow = Number(txn.cash_in || 0) + Number(txn.bank_in || 0);
+            if (inflow <= 0 && !(txn.matched_bank_txn_id && Number(txn.expected_amount || 0) > 0)) return null;
+            var match = (ctx.invoices || []).find(function (i) { return String(i.order_number || '').trim() === String(txn.order_number || '').trim(); });
+            if (!match) {
+              // Truly orphan — no invoice exists yet. Different message.
+              return (
+                <div className="border-2 border-amber-500 bg-amber-50 rounded-lg p-3">
+                  <div className="text-xs font-extrabold text-amber-900 uppercase mb-2 tracking-wider">⏳ Waiting for invoice / بانتظار الفاتورة</div>
+                  <div className="text-sm text-amber-900 font-semibold">Invoice #{txn.order_number} does not exist yet. This amount is tracked but not yet credited to any invoice. When you create invoice #{txn.order_number}, this row will auto-link and the invoice's collected total will update.</div>
+                  <div className="text-sm text-amber-800 mt-1 font-semibold" style={{ direction: 'rtl' }}>
+                    الفاتورة رقم {txn.order_number} غير موجودة بعد. هذا المبلغ مُسجّل لكن لم يُضف بعد إلى أي فاتورة. عند إنشاء الفاتورة، سيتم الربط تلقائيًا وسيتحدّث المحصّل.
+                  </div>
+                </div>
+              );
+            }
+            // Invoice EXISTS — the row just isn't linked. This is a bug state to fix.
+            return (
+              <div className="border-2 border-red-500 bg-red-50 rounded-lg p-3">
+                <div className="text-xs font-extrabold text-red-900 uppercase mb-2 tracking-wider">⚠️ Missing link detected / ربط مفقود</div>
+                <div className="text-sm text-red-900 font-semibold">Invoice #{txn.order_number} exists (customer: <span style={{direction:'rtl'}}>{match.customer_name || '—'}</span>), but this treasury row is NOT linked to it. The invoice's collected total is missing this amount. Click "Link Now" to fix.</div>
+                <div className="text-sm text-red-800 mt-1 font-semibold" style={{ direction: 'rtl' }}>
+                  الفاتورة رقم {txn.order_number} موجودة لكن هذا القيد غير مربوط بها. المبلغ المحصّل للفاتورة ناقص. اضغط "ربط الآن" للإصلاح.
+                </div>
+                {props.onLinkInvoice && (
+                  <button onClick={function () { props.onLinkInvoice(txn, match); }}
+                    className="mt-3 w-full px-3 py-2 rounded-lg bg-red-600 hover:bg-red-700 text-white text-sm font-bold">
+                    🔗 Link Now to Invoice #{match.order_number} ({fE(match.total_amount)})
+                  </button>
+                )}
+              </div>
+            );
+          })()}
+
           {/* ---- Linked Invoice ---- */}
           {c.related.invoice && (
             <div className="border-2 border-emerald-500 bg-emerald-100 rounded-lg p-3">

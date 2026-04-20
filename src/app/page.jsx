@@ -6706,6 +6706,45 @@ export default function App() {
                   title="Run AI accounting review / تشغيل مراجعة المحاسب الذكي">
                   🤖 AI Review
                 </button>
+                <button onClick={async () => {
+                  // Find all treasury rows with an order# but no linked_invoice_id where an invoice
+                  // with that order# DOES exist. Link them, recalc each affected invoice.
+                  const byOrder = {};
+                  invoices.forEach(i => { if (i.order_number) byOrder[String(i.order_number).trim()] = i; });
+                  const needsLink = treasury.filter(t => {
+                    if (t.linked_invoice_id) return false;
+                    if (t.is_bank_placeholder) return false;
+                    if (!t.order_number) return false;
+                    const inflow = Number(t.cash_in || 0) + Number(t.bank_in || 0);
+                    if (inflow <= 0) return false;
+                    return !!byOrder[String(t.order_number).trim()];
+                  });
+                  if (needsLink.length === 0) {
+                    toast.success('No missing links found — everything is in order ✓');
+                    return;
+                  }
+                  if (!confirm('Found ' + needsLink.length + ' treasury row(s) that should be linked to existing invoices but aren\'t. Link them now and recalculate the affected invoices?')) return;
+                  try {
+                    const affectedInvoiceIds = new Set();
+                    for (const t of needsLink) {
+                      const inv = byOrder[String(t.order_number).trim()];
+                      if (!inv) continue;
+                      await dbUpdate('treasury', t.id, { linked_invoice_id: inv.id }, userProfile?.id || user?.id);
+                      affectedInvoiceIds.add(inv.id);
+                    }
+                    for (const invId of affectedInvoiceIds) {
+                      await recalcInvoiceCollected(invId);
+                    }
+                    toast.success('Linked ' + needsLink.length + ' row(s) and recalculated ' + affectedInvoiceIds.size + ' invoice(s) ✓');
+                    await loadAllData();
+                  } catch (err) {
+                    toast.error('Fix failed: ' + err.message);
+                  }
+                }}
+                  className="px-3 py-1.5 bg-amber-500 text-white rounded-lg text-xs font-extrabold hover:bg-amber-600 shadow"
+                  title="Find and link treasury rows whose order# matches an existing invoice but aren't linked. Fixes the invoice collected totals. / ابحث عن قيود الخزنة التي يطابق رقم أمرها فاتورة موجودة لكنها غير مربوطة، واربطها.">
+                  🔗 Fix Links
+                </button>
                 <button onClick={() => { setShowAddTreasury(true); setFormData({ date: today() }); }}
                   className="px-3 py-1.5 bg-blue-500 text-white rounded-lg text-xs font-semibold hover:bg-blue-600">
                   + New Transaction
@@ -7061,10 +7100,13 @@ export default function App() {
                       const isBankMatched = !isBankPlaceholder && txn.matched_bank_txn_id;
                       const hasBankAmount = Number(txn.bank_in || 0) > 0 || Number(txn.bank_out || 0) > 0;
                       const isBankRow = isBankPlaceholder || isBankMatched || hasBankAmount;
-                      // ORPHAN: row has an order# and carries inflow (cash_in OR bank_in), but no
-                      // invoice with that order# exists yet. Amount is tracked but not yet crediting
-                      // any invoice. Will auto-link when someone creates the matching invoice.
-                      const hasInflow = Number(txn.cash_in || 0) > 0 || Number(txn.bank_in || 0) > 0;
+                      // ORPHAN: row carries inflow (cash_in, bank_in, or is a matched bank row
+                      // with expected_amount/cash_in falling back to it) AND has an order#
+                      // AND the invoice with that order# doesn't exist yet. Amount is tracked
+                      // but not yet crediting any invoice. Auto-links when invoice is created.
+                      const hasInflow = Number(txn.cash_in || 0) > 0
+                                      || Number(txn.bank_in || 0) > 0
+                                      || (isBankMatched && (Number(txn.expected_amount || 0) > 0 || Number(txn.cash_in || 0) > 0));
                       const isOrphanWaiting = hasInflow
                         && txn.order_number
                         && !txn.linked_invoice_id
@@ -7189,47 +7231,76 @@ export default function App() {
                             <div className="text-[10px] text-indigo-700 italic mt-0.5">Does not affect safe balance / لا يؤثر على رصيد الخزنة</div>
                           )}
                           {isOrphanWaiting && (
-                            <div className="text-[10px] text-amber-700 italic mt-0.5 font-semibold">
-                              ⏳ Not yet credited — invoice #{txn.order_number} does not exist. Click the order# to create it.
+                            <div className="text-[11px] text-amber-800 italic mt-1 font-semibold leading-snug">
+                              <div>⏳ Not yet credited — invoice #{txn.order_number} does not exist. Click the order# to create it.</div>
+                              <div style={{direction:'rtl'}} className="text-amber-700 mt-0.5">⏳ لم تُضف بعد إلى المحصّل — الفاتورة رقم {txn.order_number} غير موجودة. اضغط رقم الأمر لإنشائها.</div>
                             </div>
                           )}
                         </td>
-                        <td className="px-2 py-1.5 text-[10px] text-right font-semibold">
+                        <td className="px-2 py-1.5 text-right font-semibold">
                           {/* Awaiting bank placeholder — show expected amount + explicit "won't affect safe" caption */}
                           {isBankPlaceholder && txn.expected_direction === 'in' && (
                             <div>
-                              <div className="text-indigo-500 italic font-bold">~{fE(txn.expected_amount)}</div>
-                              <div className="text-[8px] text-indigo-400 italic normal-case">won't affect safe / لا يؤثر على الخزنة</div>
+                              <div className="text-indigo-500 italic font-bold text-[11px]">~{fE(txn.expected_amount)}</div>
+                              <div className="text-[9px] text-indigo-400 italic">won't affect safe / لا يؤثر على الخزنة</div>
                             </div>
                           )}
-                          {/* Matched / confirmed bank_in — emerald-tinted indigo + check mark */}
-                          {Number(txn.bank_in || 0) > 0 && (
+                          {/* Matched / confirmed bank_in — emerald-tinted indigo + check mark.
+                              Fallback: if bank_in is empty (un-migrated legacy row) but the row IS matched,
+                              show expected_amount OR cash_in so the user still sees the figure. */}
+                          {isBankMatched && Number(txn.bank_in || 0) > 0 && (
                             <div className="inline-block px-1.5 py-0.5 rounded" style={{background: '#ecfdf5', border: '1.5px solid #10b981'}}>
-                              <div className="text-indigo-700 font-extrabold">{fE(txn.bank_in)} <span className="text-emerald-600">✅</span></div>
-                              <div className="text-[8px] text-emerald-700 italic">matched — collected only</div>
+                              <div className="text-indigo-700 font-extrabold text-[11px]">{fE(txn.bank_in)} <span className="text-emerald-600">✅</span></div>
+                              <div className="text-[9px] text-emerald-700 italic">matched — collected only / للتحصيل فقط</div>
+                            </div>
+                          )}
+                          {isBankMatched && !(Number(txn.bank_in || 0) > 0) && (Number(txn.expected_amount || 0) > 0 || Number(txn.cash_in || 0) > 0) && (
+                            <div className="inline-block px-1.5 py-0.5 rounded" style={{background: '#ecfdf5', border: '1.5px solid #10b981'}}>
+                              <div className="text-indigo-700 font-extrabold text-[11px]">{fE(Number(txn.expected_amount || 0) || Number(txn.cash_in || 0))} <span className="text-emerald-600">✅</span></div>
+                              <div className="text-[9px] text-amber-600 italic" title="This row was matched before the bank-separation migration ran. Ask admin to run the migration to move the amount to bank_in.">
+                                matched (legacy — run migration) / تم المطابقة (قديم — شغّل الترقية)
+                              </div>
+                            </div>
+                          )}
+                          {!isBankMatched && Number(txn.bank_in || 0) > 0 && (
+                            <div className="inline-block px-1.5 py-0.5 rounded" style={{background: '#ecfdf5', border: '1.5px solid #10b981'}}>
+                              <div className="text-indigo-700 font-extrabold text-[11px]">{fE(txn.bank_in)} <span className="text-emerald-600">✅</span></div>
+                              <div className="text-[9px] text-emerald-700 italic">bank ledger / دفتر البنك</div>
                             </div>
                           )}
                           {/* Safe cash in — emerald */}
-                          {Number(txn.cash_in) > 0 && <span className="text-emerald-600">{fE(txn.cash_in)}</span>}
-                          {Number(txn.usd_in) > 0 && <div className="text-emerald-600">${Number(txn.usd_in).toLocaleString()} <span className="text-[8px] text-amber-600">USD</span></div>}
-                          {Number(txn.foreign_amount || 0) > 0 && txn.foreign_direction === 'in' && <div className="text-emerald-600">{Number(txn.foreign_amount).toLocaleString()} <span className="text-[8px] text-amber-600">{txn.foreign_currency}</span></div>}
+                          {!isBankMatched && Number(txn.cash_in) > 0 && <span className="text-emerald-600 text-[11px]">{fE(txn.cash_in)}</span>}
+                          {Number(txn.usd_in) > 0 && <div className="text-emerald-600 text-[11px]">${Number(txn.usd_in).toLocaleString()} <span className="text-[9px] text-amber-600">USD</span></div>}
+                          {Number(txn.foreign_amount || 0) > 0 && txn.foreign_direction === 'in' && <div className="text-emerald-600 text-[11px]">{Number(txn.foreign_amount).toLocaleString()} <span className="text-[9px] text-amber-600">{txn.foreign_currency}</span></div>}
                         </td>
-                        <td className="px-2 py-1.5 text-[10px] text-right font-semibold">
+                        <td className="px-2 py-1.5 text-right font-semibold">
                           {isBankPlaceholder && txn.expected_direction === 'out' && (
                             <div>
-                              <div className="text-indigo-500 italic font-bold">~{fE(txn.expected_amount)}</div>
-                              <div className="text-[8px] text-indigo-400 italic normal-case">won't affect safe / لا يؤثر على الخزنة</div>
+                              <div className="text-indigo-500 italic font-bold text-[11px]">~{fE(txn.expected_amount)}</div>
+                              <div className="text-[9px] text-indigo-400 italic">won't affect safe / لا يؤثر على الخزنة</div>
                             </div>
                           )}
-                          {Number(txn.bank_out || 0) > 0 && (
+                          {isBankMatched && Number(txn.bank_out || 0) > 0 && (
                             <div className="inline-block px-1.5 py-0.5 rounded" style={{background: '#fef2f2', border: '1.5px solid #ef4444'}}>
-                              <div className="text-indigo-700 font-extrabold">{fE(txn.bank_out)} <span className="text-red-500">✅</span></div>
-                              <div className="text-[8px] text-red-600 italic">matched — bank ledger only</div>
+                              <div className="text-indigo-700 font-extrabold text-[11px]">{fE(txn.bank_out)} <span className="text-red-500">✅</span></div>
+                              <div className="text-[9px] text-red-600 italic">bank ledger / دفتر البنك</div>
                             </div>
                           )}
-                          {Number(txn.cash_out) > 0 && <span className="text-red-500">{fE(txn.cash_out)}</span>}
-                          {Number(txn.usd_out) > 0 && <div className="text-red-500">${Number(txn.usd_out).toLocaleString()} <span className="text-[8px] text-amber-600">USD</span></div>}
-                          {Number(txn.foreign_amount || 0) > 0 && txn.foreign_direction === 'out' && <div className="text-red-500">{Number(txn.foreign_amount).toLocaleString()} <span className="text-[8px] text-amber-600">{txn.foreign_currency}</span></div>}
+                          {isBankMatched && !(Number(txn.bank_out || 0) > 0) && (Number(txn.expected_amount || 0) > 0 || Number(txn.cash_out || 0) > 0) && txn.expected_direction === 'out' && (
+                            <div className="inline-block px-1.5 py-0.5 rounded" style={{background: '#fef2f2', border: '1.5px solid #ef4444'}}>
+                              <div className="text-indigo-700 font-extrabold text-[11px]">{fE(Number(txn.expected_amount || 0) || Number(txn.cash_out || 0))} <span className="text-red-500">✅</span></div>
+                              <div className="text-[9px] text-amber-600 italic">matched (legacy) / تم المطابقة (قديم)</div>
+                            </div>
+                          )}
+                          {!isBankMatched && Number(txn.bank_out || 0) > 0 && (
+                            <div className="inline-block px-1.5 py-0.5 rounded" style={{background: '#fef2f2', border: '1.5px solid #ef4444'}}>
+                              <div className="text-indigo-700 font-extrabold text-[11px]">{fE(txn.bank_out)} <span className="text-red-500">✅</span></div>
+                              <div className="text-[9px] text-red-600 italic">bank ledger / دفتر البنك</div>
+                            </div>
+                          )}
+                          {!isBankMatched && Number(txn.cash_out) > 0 && <span className="text-red-500 text-[11px]">{fE(txn.cash_out)}</span>}
+                          {Number(txn.usd_out) > 0 && <div className="text-red-500 text-[11px]">${Number(txn.usd_out).toLocaleString()} <span className="text-[9px] text-amber-600">USD</span></div>}
+                          {Number(txn.foreign_amount || 0) > 0 && txn.foreign_direction === 'out' && <div className="text-red-500 text-[11px]">{Number(txn.foreign_amount).toLocaleString()} <span className="text-[9px] text-amber-600">{txn.foreign_currency}</span></div>}
                         </td>
                         <td className="px-2 py-1.5 text-[10px] text-right font-bold whitespace-nowrap" style={{color: (treasuryBalanceMap[txn.id] || 0) >= 0 ? '#059669' : '#dc2626'}}>
                           {/* Bank rows don't contribute to safe running balance — show dash */}
@@ -9194,6 +9265,17 @@ export default function App() {
           treasury={treasury}
           lang={lang}
           onOpenInvoice={(inv) => { setSelectedInvoice(inv); setTab('sales'); }}
+          onLinkInvoice={async (txn, inv) => {
+            try {
+              await dbUpdate('treasury', txn.id, { linked_invoice_id: inv.id }, userProfile?.id || user?.id);
+              await recalcInvoiceCollected(inv.id);
+              toast.success('Linked to invoice #' + inv.order_number + ' ✓');
+              setInspectedTreasury(null);
+              await loadAllData();
+            } catch (err) {
+              toast.error('Link failed: ' + err.message);
+            }
+          }}
           onClose={() => setInspectedTreasury(null)}
         />
       )}
