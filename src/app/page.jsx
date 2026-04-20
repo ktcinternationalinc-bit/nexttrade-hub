@@ -1,7 +1,7 @@
 'use client';
 import React, { useState, useEffect, useMemo, useCallback, useRef, useContext, createContext } from 'react';
 import { supabase, dbInsert, dbUpdate, dbDelete } from '../lib/supabase';
-import { fmt, fE, COLORS, EXPENSE_CATS, getReconStatus, STATUS_STYLES, today, inRange, monthOf, getWarehouseCat, sanitize, resolveCatName, buildCatOptions, isKnownCat } from '../lib/utils';
+import { fmt, fE, COLORS, EXPENSE_CATS, getReconStatus, STATUS_STYLES, today, inRange, monthOf, getWarehouseCat, sanitize, resolveCatName, buildCatOptions, isKnownCat, aggregatePaymentSources, PAYMENT_SOURCE_META } from '../lib/utils';
 import { evaluateCheckReconcile as libEvaluateCheckReconcile } from '../lib/check-reconcile';
 import * as XLSX from 'xlsx';
 import CRMTab from '../components/CRMTab';
@@ -689,16 +689,21 @@ export default function App() {
     if (loadingRef.current) return; // Prevent concurrent loads
     loadingRef.current = true;
     try {
+      // Per QA charter principle #5: each table query is independently safe.
+      // Promise.allSettled never rejects — one failed table cannot nuke the whole dashboard.
+      // Previously Promise.all here caused: single RLS hiccup on any of 9 tables → all setState
+      // calls skipped → dashboard renders empty/stale. Fixed 2026-04-20.
+      const safe = (p) => p.catch((e) => { try { console.warn('[loadAllData]', e?.message || e); } catch(_){} return []; });
       const [inv, tres, chk, dbt, cust, wh, items, rules, stock] = await Promise.all([
-        fetchAll('invoices', 'invoice_date'),
-        fetchAll('treasury', 'transaction_date'),
-        fetchAll('checks', 'check_date', true),
-        fetchAll('debts', 'total_debt'),
-        fetchAll('customers', 'name', true),
-        fetchAll('warehouse_expenses', 'expense_date'),
-        fetchAll('invoice_items', 'created_at', true),
-        fetchAll('expense_rules', 'created_at', true),
-        fetchAll('inventory', 'created_at', true),
+        safe(fetchAll('invoices', 'invoice_date')),
+        safe(fetchAll('treasury', 'transaction_date')),
+        safe(fetchAll('checks', 'check_date', true)),
+        safe(fetchAll('debts', 'total_debt')),
+        safe(fetchAll('customers', 'name', true)),
+        safe(fetchAll('warehouse_expenses', 'expense_date')),
+        safe(fetchAll('invoice_items', 'created_at', true)),
+        safe(fetchAll('expense_rules', 'created_at', true)),
+        safe(fetchAll('inventory', 'created_at', true)),
       ]);
       // Load bilingual categories (may not exist yet if SQL not run)
       try {
@@ -1854,12 +1859,14 @@ export default function App() {
           // Auto-link — set linked_invoice_id so recalcInvoiceCollected picks it up
           record.linked_invoice_id = matchingInvoice.id;
           // Insert. Only recalc for real cash_in; placeholders wait for the match.
-          await dbInsert('treasury', record, user?.id);
+          const inserted = await dbInsert('treasury', record, user?.id);
           if (!isBankPlaceholder) {
             await recalcInvoiceCollected(matchingInvoice.id);
           }
-          const tempEntry = { id: 'temp-' + Date.now(), ...record };
-          setTreasury(prev => [tempEntry, ...prev]);
+          // Use the REAL UUID returned by dbInsert. Previously a fake 'temp-<ts>' id
+          // was used, which broke Edit/Delete during the 500ms window before loadAllData
+          // refreshed — Postgres rejects 'temp-...' as invalid uuid syntax.
+          setTreasury(prev => [inserted, ...prev]);
           setShowAddTreasury(false);
           toast.success(
             (isBankPlaceholder ? 'Bank entry saved (awaiting statement) + linked to ' : 'Transaction saved + linked to ')
@@ -1879,9 +1886,9 @@ export default function App() {
       }
 
       // No order# branch covers: expenses with/without order#, non-order bank entries, cash_in without order#
-      await dbInsert('treasury', record, user?.id);
-      const tempEntry = { id: 'temp-' + Date.now(), ...record };
-      setTreasury(prev => [tempEntry, ...prev]);
+      const inserted = await dbInsert('treasury', record, user?.id);
+      // Real UUID from dbInsert (see note above). Fake 'temp-' ids broke Edit/Delete.
+      setTreasury(prev => [inserted, ...prev]);
       setShowAddTreasury(false);
       toast.success(isBankPlaceholder ? 'Bank entry saved — awaiting bank statement ✓' : 'Transaction saved ✓');
       setFormData({});
@@ -1902,12 +1909,13 @@ export default function App() {
       rec.order_number = invoiceToLink.order_number; // normalize to canonical
     }
     try {
-      await dbInsert('treasury', rec, user?.id);
+      const inserted = await dbInsert('treasury', rec, user?.id);
       if (invoiceToLink && invoiceToLink.id) {
         await recalcInvoiceCollected(invoiceToLink.id);
       }
-      const tempEntry = { id: 'temp-' + Date.now(), ...rec };
-      setTreasury(prev => [tempEntry, ...prev]);
+      // Real UUID from dbInsert. Fake 'temp-' ids broke Edit/Delete during the
+      // 500ms window before loadAllData refreshed.
+      setTreasury(prev => [inserted, ...prev]);
       setShowAddTreasury(false);
       setPendingTreasuryRecord(null);
       toast.success(invoiceToLink
@@ -3114,6 +3122,50 @@ export default function App() {
                 </div>
               </div>
             </div>
+
+            {/* ===== H3: Payment-Source Breakdown =====
+                Shows how the collected amount was actually paid —
+                Cash / Bank / Check / Vodafone / InstaPay. Only renders
+                when there's at least one positive-amount linked txn. */}
+            {(() => {
+              const txns = treasuryByOrder[selectedInvoice.order_number] || [];
+              if (txns.length === 0) return null;
+              const agg = aggregatePaymentSources(txns);
+              if (agg.total <= 0) return null;
+              const rows = PAYMENT_SOURCE_META.filter(r => agg.buckets[r.key] > 0);
+              if (rows.length === 0) return null;
+              return (
+                <div className="mb-4 rounded-lg p-3 border border-slate-200 bg-slate-50">
+                  <div className="flex items-center justify-between mb-2">
+                    <div className="text-[10px] text-slate-500 font-semibold uppercase tracking-wide">
+                      Payment Breakdown / تفصيل الدفع
+                    </div>
+                    <div className="text-[10px] text-slate-400">
+                      {txns.length} {txns.length === 1 ? 'transaction' : 'transactions'} / معاملات
+                    </div>
+                  </div>
+                  <div className="flex flex-wrap gap-2">
+                    {rows.map(r => {
+                      const amt = agg.buckets[r.key];
+                      const pct = agg.total > 0 ? Math.round((amt / agg.total) * 100) : 0;
+                      return (
+                        <div key={r.key} className="rounded-md px-2.5 py-1.5 bg-white border flex-1 min-w-[120px]"
+                          style={{ borderColor: r.color + '40' }}>
+                          <div className="text-[10px] font-semibold flex items-center justify-between gap-2" style={{ color: r.color }}>
+                            <span>{r.label}</span>
+                            <span className="text-[9px] opacity-60">{pct}%</span>
+                          </div>
+                          <div className="text-sm font-extrabold" style={{ color: r.color }}>
+                            {fE(amt)}
+                          </div>
+                          <div className="text-[9px] text-slate-400" style={{ direction: 'rtl' }}>{r.labelAr}</div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+              );
+            })()}
 
             {/* Reconciliation Status */}
             {(() => {
@@ -4691,15 +4743,25 @@ export default function App() {
                       backfillCount = orphans.length;
                     }
                   }
-                  // Instant local update so new invoice appears at top immediately
-                  const tempInv = {
-                    id: newInv?.id || 'temp-' + Date.now(),
-                    order_number: orderNum, customer_name: sanitize(formData.customerName),
-                    invoice_date: formData.date || today(), total_amount: totalAmt,
-                    total_collected: 0, outstanding: totalAmt, sales_rep: formData.salesRep || '',
-                    notes: sanitize(formData.notes || ''), source: 'manual',
-                  };
-                  setInvoices(prev => [tempInv, ...prev]);
+                  // Instant local update so new invoice appears at top immediately.
+                  // Only prepend if we have the real inserted row; otherwise skip the
+                  // optimistic update and let loadAllData fetch truth. Never fabricate
+                  // a 'temp-' id — Postgres uuid columns reject it and Edit/Delete breaks.
+                  if (newInv && newInv.id) {
+                    const optimistic = {
+                      ...newInv,
+                      order_number: orderNum,
+                      customer_name: sanitize(formData.customerName),
+                      invoice_date: formData.date || today(),
+                      total_amount: totalAmt,
+                      total_collected: newInv.total_collected || 0,
+                      outstanding: newInv.outstanding != null ? newInv.outstanding : totalAmt,
+                      sales_rep: formData.salesRep || newInv.sales_rep || '',
+                      notes: sanitize(formData.notes || ''),
+                      source: newInv.source || 'manual',
+                    };
+                    setInvoices(prev => [optimistic, ...prev]);
+                  }
                   setShowAddInvoice(false); setFormData({});
                   if (backfillCount > 0) {
                     toast.success('Invoice created + linked ' + backfillCount + ' waiting treasury entr' + (backfillCount === 1 ? 'y' : 'ies') + ' ✓');
@@ -5014,7 +5076,7 @@ export default function App() {
             DASHBOARD TAB
         ========================================== */}
         {tab === 'dashboard' && (
-          <div>
+          <div className="flex flex-col">
 
             {/* ===== PRIORITY: UNACKNOWLEDGED ANNOUNCEMENTS FIRST ===== */}
             {(() => {
@@ -5223,7 +5285,11 @@ export default function App() {
               </button>
             )}
 
-            {/* ===== AI ASSISTANT (compact — click to expand) ===== */}
+            {/* ===== AI ASSISTANT (compact — click to expand) =====
+                H2 (Apr 20): wrapper has max-md:order-last so Nadia visually sinks
+                to the bottom on viewports <768px. Desktop (md+) keeps natural order.
+                Single instance — no double mount, sessionMessages/hasGreeted preserved. */}
+            <div className="max-md:order-last">
             {!greeterDismissed && greeterSettings.enabled ? (
               <div className="mb-4 pt-12 mt-8">
                 <AIGreeter
@@ -5246,6 +5312,7 @@ export default function App() {
                 🤖 <span>Open AI Assistant</span> <span className="ml-auto text-[10px] text-indigo-400/60">Nadia</span>
               </button>
             ) : null}
+            </div>
 
                 </>)}{/* end !hasUnacked gate */}
               </>);

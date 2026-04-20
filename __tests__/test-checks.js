@@ -5,7 +5,9 @@ const path = require('path');
 const fs = require('fs');
 
 // Load the evaluator (transpile ES module syntax to CommonJS-style)
-const src = fs.readFileSync('/home/claude/nexttrade/src/lib/check-reconcile.js', 'utf8');
+// Portable via __dirname — mirrors test-full.js (no hard-coded absolute path)
+const REPO_ROOT = path.resolve(__dirname, '..');
+const src = fs.readFileSync(path.join(REPO_ROOT, 'src/lib/check-reconcile.js'), 'utf8');
 const transformed = src
   .replace(/export function/g, 'function')
   + '\nmodule.exports = { evaluateCheckReconcile };';

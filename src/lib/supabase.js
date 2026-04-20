@@ -100,17 +100,10 @@ export async function getUser() {
   return user;
 }
 
-// Recalculate invoice from treasury
-export async function recalcInvoice(orderNumber) {
-  const { data: txns } = await supabase
-    .from('treasury')
-    .select('cash_in')
-    .eq('order_number', orderNumber);
-  
-  const totalCollected = (txns || []).reduce((sum, t) => sum + (t.cash_in || 0), 0);
-  
-  await supabase
-    .from('invoices')
-    .update({ total_collected: totalCollected })
-    .eq('order_number', orderNumber);
-}
+// NOTE: the legacy `recalcInvoice(orderNumber)` helper was removed on
+// 2026-04-20 — it summed only `cash_in` (pre-bank-separation math) and
+// would have silently dropped every bank payment from collected totals.
+// All invoice recalculation MUST go through `recalcInvoiceCollected(id)`
+// in src/app/page.jsx, which sums `cash_in + bank_in`, skips placeholders
+// and bank-confirmation dedup markers, caps at invoice total, and updates
+// `outstanding`.

@@ -64,15 +64,16 @@ export function classifyTreasuryTransaction(txn, ctx) {
         return t.id !== txn.id &&
           t.linked_invoice_id === linkedInvoiceId &&
           !t.is_bank_placeholder &&
-          Number(t.cash_in || 0) > 0 &&
+          (Number(t.cash_in || 0) + Number(t.bank_in || 0)) > 0 &&
           String(t.description || '').indexOf('[bank confirmation') < 0;
       }) || null;
     }
   }
 
   // Split family (shares order_number with other entries created same day)
+  // Any channel (cash or bank) counts — a bank-only payment is still part of a split
   var splitFamily = [];
-  if (txn.order_number && (cashIn > 0 || cashOut > 0)) {
+  if (txn.order_number && (cashIn > 0 || cashOut > 0 || bankIn > 0 || bankOut > 0)) {
     splitFamily = treasuryAll.filter(function(t) {
       return t.id !== txn.id &&
         t.order_number === txn.order_number &&

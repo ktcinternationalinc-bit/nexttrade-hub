@@ -1,7 +1,9 @@
 'use client';
-import { useState, useMemo, useEffect } from 'react';
+import { useState, useMemo, useEffect, useRef } from 'react';
 import { supabase, dbInsert, dbUpdate, dbDelete, logActivity } from '../lib/supabase';
 import { notifyTicketAssigned, notifyTicketStatus, notifyTicketComment, notifyTicketReassigned } from '../lib/notify';
+import { sanitizeRichText, isHtmlComment, richTextToPlain } from '../lib/utils';
+import RichCommentComposer from './RichCommentComposer';
 
 const STATUSES = ['New','Acknowledged','In Progress','Blocked','On Hold','Review','Closed','Reopened'];
 const PRIORITIES = [{v:'high',l:'High / عالي',c:'#ef4444'},{v:'medium',l:'Medium / متوسط',c:'#f59e0b'},{v:'low',l:'Low / منخفض',c:'#10b981'}];
@@ -60,6 +62,9 @@ export default function TicketsTab({ toast, customers, user, userProfile, users,
   const [bulkSelected, setBulkSelected] = useState(new Set());
   const [bulkAction, setBulkAction] = useState(null);
   const [confirmDel, setConfirmDel] = useState(null);
+  // R7: inline edit of title/description. editingField = 'title' | 'description' | null
+  const [editingField, setEditingField] = useState(null);
+  const [editBuf, setEditBuf] = useState({ title: '', description: '' });
 
   const todayStr = new Date().toISOString().substring(0, 10);
   const getUserName = (id) => (users || []).find(u => u.id === id)?.name || '';
@@ -163,16 +168,73 @@ export default function TicketsTab({ toast, customers, user, userProfile, users,
     } catch (err) { toast ? toast.error(err.message) : alert(err.message); }
   };
 
+  // R7: who can edit title/description.
+  // Super admin always. Otherwise: creator, current assignee, any additional_assignee. Admin/manager can also edit.
+  const canEditTicketContent = (ticket) => {
+    if (!ticket) return false;
+    if (isSuperAdmin) return true;
+    if (isAdminRole) return true;
+    if (ticket.created_by === myId) return true;
+    if (parseAssignees(ticket).includes(myId)) return true;
+    return false;
+  };
+
+  // R7: save an inline edit to title or description. Writes a system comment
+  // with the original→new diff so the audit trail is preserved inside the ticket.
+  const saveTicketEdit = async (field) => {
+    if (!sel) return;
+    const oldVal = String(sel[field] || '');
+    const newVal = String((editBuf[field] || '')).trim();
+    if (newVal === oldVal) { setEditingField(null); return; }
+    if (field === 'title' && !newVal) {
+      toast ? toast.warning('Title cannot be empty / لا يمكن أن يكون العنوان فارغًا') : alert('Title required');
+      return;
+    }
+    try {
+      await dbUpdate('tickets', sel.id, { [field]: newVal, updated_by: myId }, myId);
+      const myName = getUserName(myId) || 'Someone';
+      // Truncate long field values in the audit comment so we don't store a novel in ticket_comments
+      const clip = (s) => { s = String(s || ''); return s.length > 500 ? s.substring(0, 500) + '…' : s; };
+      const fieldLabel = field === 'title' ? 'Title / العنوان' : 'Description / الوصف';
+      const auditText =
+        '✏️ ' + fieldLabel + ' edited by ' + myName + '\n' +
+        'BEFORE: ' + (oldVal ? clip(oldVal) : '(empty)') + '\n' +
+        'AFTER: ' + clip(newVal);
+      await dbInsert('ticket_comments', {
+        ticket_id: sel.id,
+        comment_text: auditText,
+        is_system: true,
+        created_by: myId,
+      }, myId);
+      await logActivity(myId, 'Edited ' + field + ' on ' + (sel.ticket_number || sel.title), 'ticket');
+      // Update local sel + reload
+      setSel({...sel, [field]: newVal, updated_by: myId, updated_at: new Date().toISOString()});
+      setEditingField(null);
+      loadTickets();
+      loadComments(sel.id);
+      if (toast) toast.success(fieldLabel + ' updated ✓');
+    } catch (err) {
+      toast ? toast.error(err.message) : alert(err.message);
+    }
+  };
+
   const addComment = async () => {
     if (!f.comment || !sel) return;
+    // f.comment is HTML from the contenteditable; sanitize to the tag allow-list.
+    var safeHtml = sanitizeRichText(String(f.comment));
+    // Empty check — if user typed only whitespace / pressed toolbar without typing, skip
+    var plain = richTextToPlain(safeHtml);
+    if (!plain.trim()) return;
     try {
-      await dbInsert('ticket_comments', { ticket_id: sel.id, comment_text: f.comment, is_system: false, created_by: myId }, myId);
+      await dbInsert('ticket_comments', { ticket_id: sel.id, comment_text: safeHtml, is_system: false, created_by: myId }, myId);
       await dbUpdate('tickets', sel.id, { updated_by: myId }, myId);
       await logActivity(myId, 'Comment on ticket: ' + sel.title, 'ticket');
-      if (sel.assigned_to && sel.assigned_to !== myId) notifyTicketComment([sel.assigned_to], sel.title, f.comment, myId);
-      if (sel.created_by && sel.created_by !== myId && sel.created_by !== sel.assigned_to) notifyTicketComment([sel.created_by], sel.title, f.comment, myId);
+      // Notifications use the plain-text preview, not the HTML (email clients render tags as text)
+      var preview = plain.length > 200 ? plain.substring(0, 200) + '…' : plain;
+      if (sel.assigned_to && sel.assigned_to !== myId) notifyTicketComment([sel.assigned_to], sel.title, preview, myId);
+      if (sel.created_by && sel.created_by !== myId && sel.created_by !== sel.assigned_to) notifyTicketComment([sel.created_by], sel.title, preview, myId);
       const extras = parseAssignees(sel).filter(id => id !== myId && id !== sel.assigned_to && id !== sel.created_by);
-      if (extras.length) notifyTicketComment(extras, sel.title, f.comment, myId);
+      if (extras.length) notifyTicketComment(extras, sel.title, preview, myId);
       setF({...f, comment: ''}); loadComments(sel.id);
     } catch (err) { toast ? toast.error(err.message) : alert(err.message); }
   };
@@ -253,11 +315,68 @@ export default function TicketsTab({ toast, customers, user, userProfile, users,
       {/* TICKET HEADER */}
       <div className={'bg-white rounded-xl p-5 mb-3 border-l-4'} style={{ borderLeftColor: STATUS_COLORS[sel.status] || '#6b7280' }}>
         <div className="flex justify-between items-start mb-3">
-          <h3 className="text-lg font-extrabold flex-1">{sel.ticket_number && <span className="text-blue-400 mr-2">{sel.ticket_number}</span>}{sel.title}</h3>
+          {/* R7: Title — click pencil to edit. Edit writes a system comment diff. */}
+          {editingField === 'title' ? (
+            <div className="flex-1 flex gap-2 items-start">
+              {sel.ticket_number && <span className="text-blue-400 mr-1 self-center">{sel.ticket_number}</span>}
+              <input autoFocus
+                value={editBuf.title}
+                onChange={e => setEditBuf({...editBuf, title: e.target.value})}
+                onKeyDown={e => {
+                  if (e.key === 'Enter') saveTicketEdit('title');
+                  else if (e.key === 'Escape') setEditingField(null);
+                }}
+                className="flex-1 text-lg font-extrabold px-2 py-1 border rounded" />
+              <button onClick={() => saveTicketEdit('title')} className="px-2 py-1 rounded bg-emerald-500 text-white text-xs font-bold">Save</button>
+              <button onClick={() => setEditingField(null)} className="px-2 py-1 rounded bg-slate-200 text-slate-700 text-xs">Cancel</button>
+            </div>
+          ) : (
+            <h3 className="text-lg font-extrabold flex-1 flex items-center gap-2">
+              {sel.ticket_number && <span className="text-blue-400 mr-2">{sel.ticket_number}</span>}
+              <span>{sel.title}</span>
+              {canEditTicketContent(sel) && (
+                <button onClick={() => { setEditBuf({...editBuf, title: sel.title || ''}); setEditingField('title'); }}
+                  title="Edit title / تعديل العنوان"
+                  className="text-slate-400 hover:text-blue-600 text-sm font-normal">✏️</button>
+              )}
+            </h3>
+          )}
           <span className="px-3 py-1 rounded-full text-xs font-bold text-white ml-2" style={{ background: STATUS_COLORS[sel.status] }}>{sel.status}</span>
         </div>
 
-        {sel.description && <p className="text-sm text-slate-600 mb-4 bg-slate-50 rounded-lg p-3">{sel.description}</p>}
+        {/* R7: Description — editable by anyone with content-edit permission. Shown even when empty
+            so the owner/assignee has somewhere to click to add one. */}
+        {editingField === 'description' ? (
+          <div className="mb-4 flex flex-col gap-2">
+            <textarea autoFocus rows={4}
+              value={editBuf.description}
+              onChange={e => setEditBuf({...editBuf, description: e.target.value})}
+              onKeyDown={e => {
+                if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) saveTicketEdit('description');
+                else if (e.key === 'Escape') setEditingField(null);
+              }}
+              className="w-full text-sm px-3 py-2 border rounded-lg bg-slate-50"
+              placeholder="Describe the ticket / اوصف التذكرة" />
+            <div className="flex gap-2">
+              <button onClick={() => saveTicketEdit('description')} className="px-3 py-1 rounded bg-emerald-500 text-white text-xs font-bold">Save (Ctrl+Enter)</button>
+              <button onClick={() => setEditingField(null)} className="px-3 py-1 rounded bg-slate-200 text-slate-700 text-xs">Cancel (Esc)</button>
+            </div>
+          </div>
+        ) : sel.description ? (
+          <div className="text-sm text-slate-600 mb-4 bg-slate-50 rounded-lg p-3 flex justify-between items-start gap-2">
+            <p className="flex-1 whitespace-pre-wrap">{sel.description}</p>
+            {canEditTicketContent(sel) && (
+              <button onClick={() => { setEditBuf({...editBuf, description: sel.description || ''}); setEditingField('description'); }}
+                title="Edit description / تعديل الوصف"
+                className="text-slate-400 hover:text-blue-600 text-sm shrink-0">✏️</button>
+            )}
+          </div>
+        ) : canEditTicketContent(sel) ? (
+          <button onClick={() => { setEditBuf({...editBuf, description: ''}); setEditingField('description'); }}
+            className="text-xs text-slate-400 mb-4 italic hover:text-blue-500">
+            + Add description / إضافة وصف
+          </button>
+        ) : null}
 
         {/* KEY DETAILS GRID */}
         <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-4">
@@ -374,7 +493,7 @@ export default function TicketsTab({ toast, customers, user, userProfile, users,
                 <div key={c.id} className="flex items-start gap-2 py-1.5 border-b border-slate-50">
                   <span className="text-xs mt-0.5">📋</span>
                   <div className="flex-1">
-                    <div className="text-xs">{c.comment_text}</div>
+                    <div className="text-xs whitespace-pre-wrap">{c.comment_text}</div>
                     <div className="text-[10px] text-slate-400 mt-0.5">
                       <span className="font-semibold text-purple-500">{updaterName}</span>
                       <span className="ml-2">{fmtDate(c.created_at)}</span>
@@ -397,7 +516,7 @@ export default function TicketsTab({ toast, customers, user, userProfile, users,
             {userComments.map(c => {
               const authorName = getUserName(c.created_by) || 'Unknown';
               const isMe = c.created_by === myId;
-              // Linkify: make URLs in comment text clickable
+              // Linkify: make URLs in comment text clickable (plain-text path only)
               const linkify = (text) => {
                 if (!text) return text;
                 const urlRegex = /(https?:\/\/[^\s<]+)/g;
@@ -407,9 +526,19 @@ export default function TicketsTab({ toast, customers, user, userProfile, users,
                   : part
                 );
               };
+              // R8: comment may be rich text (HTML) or plain text. We pick the renderer per row so
+              // every legacy comment still renders exactly as before; only new rich comments go through
+              // the sanitizer + dangerouslySetInnerHTML. The sanitizer strips any tag outside the
+              // allow-list so nothing arbitrary can land in the DOM.
+              const rawText = c.comment_text || '';
+              const isRich = isHtmlComment(rawText);
+              const safeHtml = isRich ? sanitizeRichText(rawText) : null;
               return (
                 <div key={c.id} className={'rounded-lg p-3 ' + (isMe ? 'bg-blue-50 ml-8' : 'bg-slate-50 mr-8')}>
-                  <div className="text-xs">{linkify(c.comment_text)}</div>
+                  {isRich
+                    ? <div className="text-xs rich-comment" dangerouslySetInnerHTML={{ __html: safeHtml }} />
+                    : <div className="text-xs whitespace-pre-wrap">{linkify(rawText)}</div>
+                  }
                   {c.attachment_url && (
                     <a href={c.attachment_url} target="_blank" rel="noopener noreferrer"
                       className="inline-flex items-center gap-1 mt-1 px-2 py-1 bg-white rounded border border-slate-200 text-[10px] text-blue-600 font-semibold hover:bg-blue-50">
@@ -425,34 +554,34 @@ export default function TicketsTab({ toast, customers, user, userProfile, users,
             })}
           </div>
         )}
-        <div className="flex gap-2">
-          <input value={f.comment || ''} onChange={e => setF({...f, comment: e.target.value})}
-            onKeyDown={e => e.key === 'Enter' && !e.shiftKey && addComment()}
-            placeholder="Add comment..." className="flex-1 px-3 py-2 border rounded-lg text-sm" />
-          <label className={'px-3 py-2 rounded-lg text-xs font-semibold cursor-pointer transition ' + (uploading ? 'bg-slate-200 text-slate-400' : 'bg-slate-100 text-slate-600 hover:bg-slate-200')}>
-            {uploading ? '⏳' : '📎'}
-            <input type="file" className="hidden" disabled={uploading} onChange={async (e) => {
-              const file = e.target.files?.[0]; if (!file || !sel) return;
-              if (file.size > 10 * 1024 * 1024) { toast ? toast.warning('File too large — max 10MB / الملف كبير جداً') : alert('File too large — max 10MB'); e.target.value = ''; return; }
-              setUploading(true);
-              try {
-                const ext = file.name.split('.').pop();
-                const fileName = sel.ticket_number + '_' + Date.now() + '.' + ext;
-                const { data: upData, error: upErr } = await supabase.storage.from('ticket-attachments').upload(fileName, file);
-                if (upErr) throw upErr;
-                const { data: urlData } = supabase.storage.from('ticket-attachments').getPublicUrl(fileName);
-                const url = urlData?.publicUrl || '';
-                await dbInsert('ticket_comments', { ticket_id: sel.id, comment_text: '📎 Attached: ' + file.name, attachment_url: url, attachment_name: file.name, is_system: false, created_by: myId }, myId);
-                await dbUpdate('tickets', sel.id, { updated_by: myId }, myId);
-                loadComments(sel.id);
-                if (toast) toast.success('File attached ✓');
-              } catch (err) { toast ? toast.error('Upload failed: ' + err.message) : alert('Upload failed: ' + err.message); }
-              setUploading(false);
-              e.target.value = '';
-            }} />
-          </label>
-          <button onClick={addComment} className="px-4 py-2 bg-blue-500 text-white rounded-lg text-xs font-semibold">Send</button>
-        </div>
+        {/* R8: Rich-text comment composer — toolbar + contenteditable.
+            Output is HTML; sanitizeRichText strips everything outside the tag
+            allow-list before insert. Legacy plain-text comments render via the
+            linkify path above unchanged. */}
+        <RichCommentComposer
+          value={f.comment || ''}
+          onChange={(html) => setF({...f, comment: html})}
+          onSubmit={addComment}
+          uploading={uploading}
+          onAttach={async (file) => {
+            if (!file || !sel) return;
+            if (file.size > 10 * 1024 * 1024) { toast ? toast.warning('File too large — max 10MB / الملف كبير جداً') : alert('File too large — max 10MB'); return; }
+            setUploading(true);
+            try {
+              const ext = file.name.split('.').pop();
+              const fileName = sel.ticket_number + '_' + Date.now() + '.' + ext;
+              const { data: upData, error: upErr } = await supabase.storage.from('ticket-attachments').upload(fileName, file);
+              if (upErr) throw upErr;
+              const { data: urlData } = supabase.storage.from('ticket-attachments').getPublicUrl(fileName);
+              const url = urlData?.publicUrl || '';
+              await dbInsert('ticket_comments', { ticket_id: sel.id, comment_text: '📎 Attached: ' + file.name, attachment_url: url, attachment_name: file.name, is_system: false, created_by: myId }, myId);
+              await dbUpdate('tickets', sel.id, { updated_by: myId }, myId);
+              loadComments(sel.id);
+              if (toast) toast.success('File attached ✓');
+            } catch (err) { toast ? toast.error('Upload failed: ' + err.message) : alert('Upload failed: ' + err.message); }
+            setUploading(false);
+          }}
+        />
       </div>
     </div>);
   }

@@ -1407,6 +1407,479 @@ assert(askSrc2.indexOf('rTarget !== userId') > 0, '18.10c create_reminder skips 
 }
 
 // ============================================================
+// SECTION 19: H2 — Mobile Nadia Freeze (greeter position on <768px)
+// Asserts the CSS-order solution is wired correctly in page.jsx.
+// No browser, no DOM — pure source inspection.
+// ============================================================
+function runSection19_MobileNadia() {
+  group('SECTION 19: H2 Mobile Nadia Freeze');
+  const pagePath = path.join(REPO_ROOT, 'src/app/page.jsx');
+  const src = fs.readFileSync(pagePath, 'utf8');
+
+  // 19.1 — dashboard root div is flex-col so order-* applies to children
+  const dashOpen = src.match(/\{tab === 'dashboard' && \(\s*\n\s*<div className="([^"]*)">/);
+  assert(!!dashOpen, '19.1a dashboard open tag matched');
+  assert(dashOpen && /flex/.test(dashOpen[1]), '19.1b dashboard root has flex');
+  assert(dashOpen && /flex-col/.test(dashOpen[1]), '19.1c dashboard root has flex-col');
+
+  // 19.2 — AIGreeter block is wrapped with max-md:order-last
+  const greeterWrapRE = /<div className="max-md:order-last">\s*\n\s*\{!greeterDismissed && greeterSettings\.enabled \?/;
+  assert(greeterWrapRE.test(src), '19.2a greeter block is wrapped with max-md:order-last');
+
+  // 19.3 — exactly ONE AIGreeter component instance remains (no double-mount)
+  const greeterInstances = (src.match(/<AIGreeter\b/g) || []).length;
+  assert(greeterInstances === 1, '19.3a exactly one AIGreeter instance in page.jsx', 'found=' + greeterInstances);
+
+  // 19.4 — the greeter wrapper does not use `hidden` / `md:hidden` toggling
+  // (that would cause double-mount if paired with another mobile-only slot)
+  const hasHiddenToggle = /<div className="(?:max-md:)?hidden md:block"[^>]*>\s*\n\s*<AIGreeter/.test(src) ||
+                         /<div className="md:hidden"[^>]*>\s*\n\s*<AIGreeter/.test(src);
+  assert(!hasHiddenToggle, '19.4a no display:none responsive toggling around AIGreeter (single mount guaranteed)');
+
+  // 19.5 — `max-md:order-last` is a Tailwind arbitrary variant, but order-last
+  // is a core utility (order: 9999). Assert it exists as expected token.
+  assert(/max-md:order-last/.test(src), '19.5a max-md:order-last token present');
+
+  // 19.6 — desktop visual behavior: no md:order-* on greeter (so it keeps natural JSX position on md+)
+  const greeterSection = src.slice(src.indexOf('max-md:order-last"'), src.indexOf('max-md:order-last"') + 2000);
+  assert(!/md:order-\d/.test(greeterSection.replace('max-md:order-last', '')),
+         '19.6a no conflicting md:order-N on greeter wrapper (desktop keeps natural order)');
+
+  // 19.7 — parent flex-col does not break layout: no child uses `float-` classes
+  // inside the dashboard block (float breaks flex)
+  const dashStart = src.indexOf("{tab === 'dashboard' &&");
+  // find matching close by counting — simple heuristic: take 180KB window (dashboard is ~120KB)
+  const dashSlice = src.slice(dashStart, dashStart + 250000);
+  const floatUsages = (dashSlice.match(/className="[^"]*\bfloat-(?:left|right|none)\b/g) || []).length;
+  assert(floatUsages === 0, '19.7a no float-* classes inside dashboard (flex compatible)', 'found=' + floatUsages);
+
+  // 19.8 — the wrapper div is closed (balance check on the immediate block)
+  // count opens and closes in the wrapper span
+  const wrapOpen = src.indexOf('<div className="max-md:order-last">');
+  assert(wrapOpen > 0, '19.8a wrapper open tag located');
+  // within next ~3000 chars, there should be one `</div>` that closes it
+  const after = src.slice(wrapOpen, wrapOpen + 3000);
+  // the wrapper contains a ternary with two branches each having their own div or button — rough balance check
+  const opens = (after.match(/<div\b/g) || []).length;
+  const closes = (after.match(/<\/div>/g) || []).length;
+  assert(opens > 0 && closes >= opens - 2 && closes <= opens + 2,
+         '19.8b wrapper JSX roughly balanced in local window',
+         'opens=' + opens + ' closes=' + closes);
+
+  // 19.9 — state props still threaded through (no accidental prop drop during wrap)
+  const requiredProps = ['sessionMessages', 'onMessagesUpdate', 'hasGreeted', 'onGreeted', 'loginHistoryLoaded'];
+  requiredProps.forEach(function(prop, i) {
+    assert(new RegExp('\\b' + prop + '=').test(greeterSection),
+           '19.9.' + (i+1) + ' prop ' + prop + ' still passed to AIGreeter');
+  });
+
+  // 19.10 — AIGreeter's own mount effects unchanged (shouldn't have touched it)
+  const greeterPath = path.join(REPO_ROOT, 'src/components/AIGreeter.jsx');
+  const greeterSrc = fs.readFileSync(greeterPath, 'utf8');
+  assert(/loginHistoryLoaded/.test(greeterSrc), '19.10a AIGreeter still gates on loginHistoryLoaded');
+  assert(/onGreeted/.test(greeterSrc), '19.10b AIGreeter still fires onGreeted callback');
+}
+
+try { runSection19_MobileNadia(); } catch(e) {
+  console.error('SECTION 19 ERROR:', e.message);
+  failed++;
+}
+
+// ============================================================
+// SECTION 20: H3 — Invoice Payment-Source Breakdown
+// Unit-tests the aggregatePaymentSources helper in src/lib/utils.js
+// Also source-inspects page.jsx to confirm the UI is wired correctly.
+// ============================================================
+function runSection20_PaymentBreakdown() {
+  group('SECTION 20: H3 Payment-Source Breakdown');
+
+  // Load utils.js as CommonJS — mirror Section 6 pattern (strip `export` + append module.exports)
+  const utilsSrc2 = fs.readFileSync(path.join(REPO_ROOT, 'src/lib/utils.js'), 'utf8');
+  const utilsShim = utilsSrc2.replace(/export\s+const\s+/g, 'const ') +
+    '\nmodule.exports = { aggregatePaymentSources: aggregatePaymentSources, PAYMENT_SOURCE_META: PAYMENT_SOURCE_META };';
+  fs.writeFileSync('/tmp/_utils_h3.js', utilsShim);
+  delete require.cache[require.resolve('/tmp/_utils_h3.js')];
+  const utilsMod = require('/tmp/_utils_h3.js');
+  const agg = utilsMod.aggregatePaymentSources;
+  const META = utilsMod.PAYMENT_SOURCE_META;
+
+  assert(typeof agg === 'function', '20.1a aggregatePaymentSources exported');
+  assert(Array.isArray(META) && META.length >= 6, '20.1b PAYMENT_SOURCE_META exported (>=6 entries)');
+
+  // 20.2 — empty input
+  const e1 = agg([]);
+  assert(e1.total === 0, '20.2a empty array → total 0');
+  assert(e1.buckets.cash === 0 && e1.buckets.bank === 0, '20.2b all buckets zero');
+
+  // 20.3 — null / undefined input handled
+  assert(agg(null).total === 0, '20.3a null → zero');
+  assert(agg(undefined).total === 0, '20.3b undefined → zero');
+  assert(agg('not an array').total === 0, '20.3c non-array → zero');
+
+  // 20.4 — single cash row
+  const r1 = agg([{ cash_in: 1000, bank_in: 0, payment_source: 'cash' }]);
+  assert(r1.buckets.cash === 1000, '20.4a cash bucket = 1000');
+  assert(r1.total === 1000, '20.4b total = 1000');
+  assert(r1.buckets.bank === 0, '20.4c other buckets untouched');
+
+  // 20.5 — single bank row
+  const r2 = agg([{ cash_in: 0, bank_in: 2500, payment_source: 'bank' }]);
+  assert(r2.buckets.bank === 2500, '20.5a bank bucket = 2500');
+  assert(r2.total === 2500, '20.5b total = 2500');
+
+  // 20.6 — check row
+  const r3 = agg([{ cash_in: 5000, bank_in: 0, payment_source: 'check' }]);
+  assert(r3.buckets.check === 5000, '20.6a check bucket counts cash_in amount');
+
+  // 20.7 — mixed bundle
+  const r4 = agg([
+    { cash_in: 1000, bank_in: 0, payment_source: 'cash' },
+    { cash_in: 0, bank_in: 2000, payment_source: 'bank' },
+    { cash_in: 500, bank_in: 0, payment_source: 'vodafone' },
+    { cash_in: 300, bank_in: 0, payment_source: 'instapay' },
+    { cash_in: 4000, bank_in: 0, payment_source: 'check' },
+  ]);
+  assert(r4.buckets.cash === 1000, '20.7a cash = 1000');
+  assert(r4.buckets.bank === 2000, '20.7b bank = 2000');
+  assert(r4.buckets.vodafone === 500, '20.7c vodafone = 500');
+  assert(r4.buckets.instapay === 300, '20.7d instapay = 300');
+  assert(r4.buckets.check === 4000, '20.7e check = 4000');
+  assert(r4.total === 7800, '20.7f total = 7800');
+
+  // 20.8 — fallback: missing payment_source with bank_in → bucket as bank
+  const r5 = agg([{ cash_in: 0, bank_in: 1500, payment_source: null }]);
+  assert(r5.buckets.bank === 1500, '20.8a null payment_source + bank_in → bank bucket');
+
+  // 20.9 — fallback: missing payment_source with cash_method=vodafone → vodafone
+  const r6 = agg([{ cash_in: 800, bank_in: 0, payment_source: '', cash_method: 'vodafone' }]);
+  assert(r6.buckets.vodafone === 800, '20.9a empty src + cash_method=vodafone → vodafone bucket');
+
+  // 20.10 — fallback: missing payment_source with cash_method=instapay → instapay
+  const r7 = agg([{ cash_in: 400, bank_in: 0, cash_method: 'instapay' }]);
+  assert(r7.buckets.instapay === 400, '20.10a undefined src + cash_method=instapay → instapay bucket');
+
+  // 20.11 — fallback: missing payment_source, no cash_method → default to cash
+  const r8 = agg([{ cash_in: 250, bank_in: 0 }]);
+  assert(r8.buckets.cash === 250, '20.11a bare cash row → cash bucket');
+
+  // 20.12 — zero amount rows skipped
+  const r9 = agg([
+    { cash_in: 0, bank_in: 0, payment_source: 'cash' },
+    { cash_in: 0, bank_in: 0, payment_source: 'bank' },
+  ]);
+  assert(r9.total === 0, '20.12a zero-amount rows contribute nothing');
+
+  // 20.13 — negative amounts skipped (outflows don't increase collected)
+  const r10 = agg([
+    { cash_in: -500, bank_in: 0, payment_source: 'cash' },
+    { cash_in: 1000, bank_in: 0, payment_source: 'cash' },
+  ]);
+  assert(r10.buckets.cash === 1000, '20.13a negative skipped, positive counted');
+
+  // 20.14 — unknown payment_source falls into "other"
+  const r11 = agg([{ cash_in: 600, bank_in: 0, payment_source: 'paypal' }]);
+  assert(r11.buckets.other === 600, '20.14a unknown source → other bucket');
+
+  // 20.15 — case insensitivity
+  const r12 = agg([{ cash_in: 900, bank_in: 0, payment_source: 'BANK' }]);
+  assert(r12.buckets.bank === 900, '20.15a payment_source case-insensitive (BANK → bank)');
+
+  // 20.16 — row with both cash_in and bank_in summed as one contribution
+  const r13 = agg([{ cash_in: 300, bank_in: 700, payment_source: 'bank' }]);
+  assert(r13.buckets.bank === 1000, '20.16a cash_in + bank_in summed into tagged bucket');
+
+  // 20.17 — META shape sanity
+  const keys = META.map(m => m.key).sort().join(',');
+  assert(keys === 'bank,cash,check,instapay,other,vodafone', '20.17a META keys match expected set');
+  META.forEach(function(m, i) {
+    assert(m.label && m.labelAr && m.color, '20.17.' + (i+1) + '.b META[' + m.key + '] has label/labelAr/color');
+  });
+
+  // 20.18 — page.jsx wiring: helper imported
+  const pageSrc = fs.readFileSync(path.join(REPO_ROOT, 'src/app/page.jsx'), 'utf8');
+  assert(/aggregatePaymentSources/.test(pageSrc), '20.18a aggregatePaymentSources referenced in page.jsx');
+  assert(/PAYMENT_SOURCE_META/.test(pageSrc), '20.18b PAYMENT_SOURCE_META referenced in page.jsx');
+
+  // 20.19 — page.jsx wiring: breakdown renders INSIDE the invoice modal
+  // Check it appears AFTER "Outstanding" card and BEFORE "Reconciliation Status"
+  const outstandingIdx = pageSrc.indexOf('Outstanding / المتبقّي');
+  const breakdownIdx = pageSrc.indexOf('Payment Breakdown / تفصيل الدفع');
+  const reconIdx = pageSrc.indexOf('{/* Reconciliation Status */}');
+  assert(outstandingIdx > 0, '20.19a outstanding card marker found');
+  assert(breakdownIdx > 0, '20.19b payment-breakdown section found');
+  assert(reconIdx > 0, '20.19c reconciliation status marker found');
+  assert(outstandingIdx < breakdownIdx, '20.19d breakdown is AFTER outstanding card');
+  assert(breakdownIdx < reconIdx, '20.19e breakdown is BEFORE reconciliation status');
+
+  // 20.20 — breakdown guarded on empty (won't render when no linked txns)
+  const breakdownSection = pageSrc.slice(breakdownIdx - 1500, breakdownIdx + 2500);
+  assert(/if \(txns\.length === 0\) return null/.test(breakdownSection), '20.20a empty-txns guard present');
+  assert(/if \(agg\.total <= 0\) return null/.test(breakdownSection), '20.20b zero-total guard present');
+}
+
+try { runSection20_PaymentBreakdown(); } catch(e) {
+  console.error('SECTION 20 ERROR:', e.message);
+  console.error(e.stack);
+  failed++;
+}
+
+// ============================================================
+// SECTION 21: QA Review Fixes — Session 2026-04-20 late
+// ============================================================
+function runSection21_QAReviewFixes() {
+  group('SECTION 21: QA review bug fixes');
+
+  // ---- 21.1 — Bug #1: test-checks.js must be portable (no hard-coded abs path) ----
+  const testChecksSrc = fs.readFileSync(path.join(REPO_ROOT, '__tests__/test-checks.js'), 'utf8');
+  assert(!/\/home\/claude\/nexttrade\/src\/lib\/check-reconcile\.js/.test(testChecksSrc),
+         '21.1a test-checks.js no longer contains the old hard-coded absolute path');
+  assert(/__dirname/.test(testChecksSrc) && /REPO_ROOT/.test(testChecksSrc),
+         '21.1b test-checks.js now uses __dirname-derived REPO_ROOT (portable)');
+  assert(/path\.join\(REPO_ROOT, 'src\/lib\/check-reconcile\.js'\)/.test(testChecksSrc),
+         '21.1c test-checks.js uses path.join for check-reconcile.js');
+
+  // ---- 21.2 — Bug #2: stale recalcInvoice removed from supabase.js ----
+  const supaLibSrc = fs.readFileSync(path.join(REPO_ROOT, 'src/lib/supabase.js'), 'utf8');
+  // The old function signature must not be present
+  assert(!/export\s+async\s+function\s+recalcInvoice\s*\(/.test(supaLibSrc),
+         '21.2a stale recalcInvoice function signature removed');
+  // The warning comment must be present so a future dev sees why it's gone
+  assert(/recalcInvoiceCollected/.test(supaLibSrc),
+         '21.2b supabase.js has a comment pointing to recalcInvoiceCollected as the canonical helper');
+  assert(/pre-bank-separation/.test(supaLibSrc) || /bank-separation/.test(supaLibSrc),
+         '21.2c comment explains the historical reason for removal');
+
+  // ---- 21.3 — Bug #3: dashboard load uses safe-wrapped Promise.all (no fragile failure) ----
+  const pageSrc = fs.readFileSync(path.join(REPO_ROOT, 'src/app/page.jsx'), 'utf8');
+  // The specific anti-pattern must be gone: a Promise.all whose items are bare fetchAll(...) calls
+  const loadAllStart = pageSrc.indexOf('const loadAllData = async () =>');
+  assert(loadAllStart > 0, '21.3a loadAllData defined');
+  const loadAllSlice = pageSrc.slice(loadAllStart, loadAllStart + 2500);
+  // Must have the `safe` wrapper
+  assert(/const safe = \(p\) =>/.test(loadAllSlice) || /safe\s*=\s*\(p\)\s*=>/.test(loadAllSlice),
+         '21.3b safe() wrapper introduced in loadAllData');
+  // All 9 main-table fetches must be wrapped in safe(...)
+  const safeCount = (loadAllSlice.match(/safe\(fetchAll\(/g) || []).length;
+  assert(safeCount === 9, '21.3c all 9 main tables wrapped in safe() — one query failure cannot nuke the dashboard',
+         'found=' + safeCount);
+  // The old unwrapped form must be gone
+  const unwrappedFetchAll = (loadAllSlice.match(/^\s{8,}fetchAll\(/gm) || []).length;
+  assert(unwrappedFetchAll === 0, '21.3d no bare fetchAll() inside Promise.all anymore',
+         'found unwrapped=' + unwrappedFetchAll);
+  // Comment explaining why must be present
+  assert(/Promise\.allSettled|principle #5|independently safe/i.test(loadAllSlice),
+         '21.3e loadAllData has a comment explaining the fix');
+}
+
+try { runSection21_QAReviewFixes(); } catch(e) {
+  console.error('SECTION 21 ERROR:', e.message);
+  console.error(e.stack);
+  failed++;
+}
+
+// ============================================================
+// SECTION 22: Regression — 'temp-' id fabrication
+// The screenshot bug: optimistic local-state insert used a fake
+// 'temp-' + Date.now() id. Edit/Delete within the 500ms reload
+// window sent 'temp-1776708673956' to Postgres → "invalid input
+// syntax for type uuid". The fix: use the REAL uuid returned by
+// dbInsert.
+// ============================================================
+function runSection22_TempIdRegression() {
+  group('SECTION 22: No fabricated temp- ids in optimistic inserts');
+  const pagePath = path.join(REPO_ROOT, 'src/app/page.jsx');
+  const src = fs.readFileSync(pagePath, 'utf8');
+
+  // 22.1 — no code site fabricates `id: 'temp-' + Date.now()` anymore
+  // Match only code (not comments): an object literal with id:'temp-'+Date.now()
+  const fabricationRE = /id:\s*['"]temp-['"]\s*\+\s*Date\.now\(\)/;
+  const fabricationFallbackRE = /id:\s*\w+\?\.id\s*\|\|\s*['"]temp-['"]\s*\+\s*Date\.now\(\)/;
+  assert(!fabricationRE.test(src), '22.1a no direct `id: "temp-" + Date.now()` fabrications');
+  assert(!fabricationFallbackRE.test(src), '22.1b no `newInv?.id || "temp-" + Date.now()` fallbacks');
+
+  // 22.2 — `const tempEntry = { id: ...` pattern gone (old 3-site name)
+  assert(!/const tempEntry = \{ id: ['"]temp-/.test(src), '22.2a no tempEntry objects with temp- id');
+
+  // 22.3 — treasury insert flow uses dbInsert return value
+  // After `dbInsert('treasury', ...)` there should be a capture into a variable
+  // that's then used in setTreasury(prev => [<var>, ...prev])
+  const treasuryInsertCount = (src.match(/const inserted = await dbInsert\('treasury'/g) || []).length;
+  assert(treasuryInsertCount >= 3,
+         '22.3a at least 3 treasury dbInsert call sites now capture the inserted row',
+         'found=' + treasuryInsertCount);
+
+  // 22.4 — setTreasury with the inserted variable (not a tempEntry)
+  const goodPattern = (src.match(/setTreasury\(prev => \[inserted, \.\.\.prev\]\)/g) || []).length;
+  assert(goodPattern >= 3,
+         '22.4a setTreasury uses the real `inserted` row (not a fabricated entry)',
+         'found=' + goodPattern);
+
+  // 22.5 — setEditTreasuryModal still receives the row object (unchanged UX)
+  assert(/setEditTreasuryModal\(\{\.\.\.t\}\)/.test(src), '22.5a edit modal still spreads the row as before');
+
+  // 22.6 — dbInsert in supabase.js still returns the data row so callers can rely on it
+  const supaSrc = fs.readFileSync(path.join(REPO_ROOT, 'src/lib/supabase.js'), 'utf8');
+  assert(/export async function dbInsert/.test(supaSrc), '22.6a dbInsert still exported');
+  assert(/\.insert\(record\)\.select\(\)\.single\(\)/.test(supaSrc), '22.6b dbInsert uses .select().single() so returned data carries the real uuid');
+  assert(/return data;/.test(supaSrc), '22.6c dbInsert returns data');
+
+  // 22.7 — handleSaveTreasuryEdit still passes the txn.id it was given (no preprocessing)
+  assert(/await dbUpdate\('treasury', txnId, updates, userProfile\?\.id \|\| user\?\.id\)/.test(src),
+         '22.7a handleSaveTreasuryEdit passes the id unchanged — fix is upstream at insert time, not here');
+}
+
+try { runSection22_TempIdRegression(); } catch(e) {
+  console.error('SECTION 22 ERROR:', e.message);
+  console.error(e.stack);
+  failed++;
+}
+
+// ============================================================
+// SECTION 23: Session 1 features — R7 (ticket edit audit),
+// R8 (rich text comments + sanitizer), R3 (meeting notes re-edit)
+// ============================================================
+function runSection23_Session1Features() {
+  group('SECTION 23: Session 1 features');
+
+  // ---- Load utils for sanitizer unit tests ----
+  const utilsSrc23 = fs.readFileSync(path.join(REPO_ROOT, 'src/lib/utils.js'), 'utf8');
+  const utilsShim23 = utilsSrc23.replace(/export\s+const\s+/g, 'const ') +
+    '\nmodule.exports = { sanitizeRichText: sanitizeRichText, isHtmlComment: isHtmlComment, richTextToPlain: richTextToPlain };';
+  fs.writeFileSync('/tmp/_utils_s23.js', utilsShim23);
+  delete require.cache[require.resolve('/tmp/_utils_s23.js')];
+  const U = require('/tmp/_utils_s23.js');
+
+  // ---------- R8: sanitizeRichText ----------
+  assert(typeof U.sanitizeRichText === 'function', '23.R8.1a sanitizeRichText exported');
+  assert(typeof U.isHtmlComment === 'function', '23.R8.1b isHtmlComment exported');
+  assert(typeof U.richTextToPlain === 'function', '23.R8.1c richTextToPlain exported');
+
+  // Allow-listed tags preserved
+  assert(U.sanitizeRichText('<b>bold</b>') === '<b>bold</b>', '23.R8.2a keeps <b>');
+  assert(U.sanitizeRichText('<strong>x</strong>') === '<strong>x</strong>', '23.R8.2b keeps <strong>');
+  assert(U.sanitizeRichText('<i>x</i>') === '<i>x</i>', '23.R8.2c keeps <i>');
+  assert(U.sanitizeRichText('<em>x</em>') === '<em>x</em>', '23.R8.2d keeps <em>');
+  assert(U.sanitizeRichText('<u>x</u>') === '<u>x</u>', '23.R8.2e keeps <u>');
+  assert(U.sanitizeRichText('line 1<br>line 2').indexOf('<br>') >= 0, '23.R8.2f keeps <br>');
+  assert(/<ul>.*<li>.*<\/li>.*<\/ul>/.test(U.sanitizeRichText('<ul><li>a</li></ul>')), '23.R8.2g keeps <ul>/<li>');
+  assert(/<ol>.*<li>.*<\/li>.*<\/ol>/.test(U.sanitizeRichText('<ol><li>a</li></ol>')), '23.R8.2h keeps <ol>/<li>');
+
+  // Script & handler stripped
+  assert(U.sanitizeRichText('<script>alert(1)</script>hello') === 'hello', '23.R8.3a <script> block stripped entirely');
+  assert(!/onerror/.test(U.sanitizeRichText('<b onerror="x()">hi</b>')), '23.R8.3b onerror attribute stripped');
+  assert(!/onclick/.test(U.sanitizeRichText('<b onclick="x()">hi</b>')), '23.R8.3c onclick attribute stripped');
+  assert(!/javascript:/i.test(U.sanitizeRichText('<b href="javascript:x">hi</b>')), '23.R8.3d javascript: href stripped');
+
+  // Disallowed tags dropped (content preserved)
+  assert(U.sanitizeRichText('<img src="x">nope') === 'nope', '23.R8.4a <img> dropped');
+  assert(U.sanitizeRichText('<iframe></iframe>hello') === 'hello', '23.R8.4b <iframe> block dropped');
+  assert(U.sanitizeRichText('<a href="http://x">link</a>') === 'link', '23.R8.4c <a> not on allow-list → dropped');
+
+  // style / class attrs stripped from allow-listed tags
+  assert(!/style=/.test(U.sanitizeRichText('<b style="color:red">x</b>')), '23.R8.5a style attr stripped from <b>');
+  assert(!/class=/.test(U.sanitizeRichText('<b class="evil">x</b>')), '23.R8.5b class attr stripped from <b>');
+
+  // Null / empty / non-string
+  assert(U.sanitizeRichText('') === '', '23.R8.6a empty string → empty');
+  assert(U.sanitizeRichText(null) === '', '23.R8.6b null → empty');
+  assert(U.sanitizeRichText(undefined) === '', '23.R8.6c undefined → empty');
+  assert(U.sanitizeRichText(123) === '', '23.R8.6d non-string → empty');
+
+  // ---------- isHtmlComment ----------
+  assert(U.isHtmlComment('<b>bold</b>') === true, '23.R8.7a detects <b>');
+  assert(U.isHtmlComment('<ul><li>x</li></ul>') === true, '23.R8.7b detects <ul>');
+  assert(U.isHtmlComment('plain text') === false, '23.R8.7c plain text → false');
+  assert(U.isHtmlComment('a < b > c') === false, '23.R8.7d literal comparison text → false');
+  assert(U.isHtmlComment('') === false, '23.R8.7e empty → false');
+  assert(U.isHtmlComment(null) === false, '23.R8.7f null → false');
+
+  // ---------- richTextToPlain ----------
+  assert(U.richTextToPlain('<b>hi</b>') === 'hi', '23.R8.8a strips <b>');
+  assert(/one\s+two/.test(U.richTextToPlain('one<br>two')), '23.R8.8b <br> becomes newline');
+  assert(U.richTextToPlain('<ul><li>a</li><li>b</li></ul>').replace(/\s+/g, ' ').trim() === 'a b',
+    '23.R8.8c list items separate with whitespace');
+  assert(U.richTextToPlain('&amp;&lt;&gt;&quot;&#39;') === '&<>"\'', '23.R8.8d html entities decoded');
+
+  // ---------- R8 WIRING in TicketsTab.jsx ----------
+  const ticketsSrc = fs.readFileSync(path.join(REPO_ROOT, 'src/components/TicketsTab.jsx'), 'utf8');
+  assert(/import\s+RichCommentComposer\s+from\s+['"]\.\/RichCommentComposer['"]/.test(ticketsSrc),
+         '23.R8.9a RichCommentComposer imported');
+  assert(/import\s*\{[^}]*sanitizeRichText[^}]*\}\s*from\s+['"]\.\.\/lib\/utils['"]/.test(ticketsSrc),
+         '23.R8.9b sanitizeRichText imported from utils');
+  assert(/sanitizeRichText\(String\(f\.comment\)\)/.test(ticketsSrc),
+         '23.R8.9c addComment sanitizes HTML before insert');
+  assert(/dangerouslySetInnerHTML/.test(ticketsSrc),
+         '23.R8.9d rich comments rendered via dangerouslySetInnerHTML (after sanitize)');
+  // Old plain-text input gone
+  assert(!/placeholder="Add comment\.\.\."\s+className="flex-1 px-3 py-2 border rounded-lg text-sm" \/>/.test(ticketsSrc),
+         '23.R8.9e old plain <input> comment composer removed');
+
+  // RichCommentComposer component presence + shape
+  const composerSrc = fs.readFileSync(path.join(REPO_ROOT, 'src/components/RichCommentComposer.jsx'), 'utf8');
+  assert(/export default function RichCommentComposer/.test(composerSrc), '23.R8.10a component exports default');
+  assert(/contentEditable/.test(composerSrc), '23.R8.10b uses contentEditable');
+  assert(/onClick=\{\(\) => exec\(['"]bold['"]\)\}/.test(composerSrc), '23.R8.10c bold button wired');
+  assert(/onClick=\{\(\) => exec\(['"]italic['"]\)\}/.test(composerSrc), '23.R8.10d italic button wired');
+  assert(/onClick=\{\(\) => exec\(['"]insertUnorderedList['"]\)\}/.test(composerSrc), '23.R8.10e bullet button wired');
+  assert(/onClick=\{\(\) => exec\(['"]insertOrderedList['"]\)\}/.test(composerSrc), '23.R8.10f numbered button wired');
+  // And the exec wrapper actually calls document.execCommand under the hood
+  assert(/document\.execCommand\(cmd, false, arg \|\| null\)/.test(composerSrc),
+         '23.R8.10c2 exec() wrapper delegates to document.execCommand');
+  assert(/Ctrl\+Enter|ctrlKey \|\| e\.metaKey/.test(composerSrc), '23.R8.10g Ctrl/Cmd+Enter submit wired');
+  assert(/onPaste/.test(composerSrc) && /insertText/.test(composerSrc), '23.R8.10h paste-as-plain-text guard present');
+
+  // ---------- R7: Ticket edit audit ----------
+  assert(/const \[editingField, setEditingField\] = useState\(null\)/.test(ticketsSrc),
+         '23.R7.1a editingField state declared');
+  assert(/const \[editBuf, setEditBuf\]/.test(ticketsSrc),
+         '23.R7.1b editBuf state declared');
+  assert(/const canEditTicketContent = /.test(ticketsSrc),
+         '23.R7.1c canEditTicketContent permission gate defined');
+  assert(/const saveTicketEdit = async \(field\) =>/.test(ticketsSrc),
+         '23.R7.1d saveTicketEdit handler defined');
+  assert(/'BEFORE: '/.test(ticketsSrc) && /'AFTER: '/.test(ticketsSrc),
+         '23.R7.2a audit comment contains BEFORE / AFTER markers');
+  assert(/is_system: true/.test(ticketsSrc),
+         '23.R7.2b audit comment marked is_system=true so it appears in Activity Log');
+  assert(/saveTicketEdit\('title'\)/.test(ticketsSrc), '23.R7.3a title save wired');
+  assert(/saveTicketEdit\('description'\)/.test(ticketsSrc), '23.R7.3b description save wired');
+  // Permission gate enforced (super_admin always, admin role, creator, any assignee)
+  const gateBlock = ticketsSrc.slice(ticketsSrc.indexOf('const canEditTicketContent'), ticketsSrc.indexOf('const canEditTicketContent') + 500);
+  assert(/isSuperAdmin/.test(gateBlock), '23.R7.4a super_admin always passes gate');
+  assert(/isAdminRole/.test(gateBlock), '23.R7.4b admin role passes gate');
+  assert(/created_by === myId/.test(gateBlock), '23.R7.4c creator passes gate');
+  assert(/parseAssignees\(ticket\)\.includes\(myId\)/.test(gateBlock), '23.R7.4d any assignee passes gate');
+  // System-comments render preserves newlines
+  assert(/className="text-xs whitespace-pre-wrap">{c\.comment_text}/.test(ticketsSrc),
+         '23.R7.5a system comments render with whitespace-pre-wrap (audit diff has \\n)');
+
+  // ---------- R3: Meeting-notes re-edit after completion ----------
+  const calSrc = fs.readFileSync(path.join(REPO_ROOT, 'src/components/CalendarTab.jsx'), 'utf8');
+  // Completed events now offer an Edit Notes / Add Notes button
+  assert(/Edit Notes/.test(calSrc), '23.R3.1a "Edit Notes" label present for completed events');
+  assert(/Add Notes/.test(calSrc), '23.R3.1b "Add Notes" label for completed events with no notes');
+  // checkInWithNotes handles both modes
+  assert(/wasCompleted = !!notesEvent\.completed/.test(calSrc),
+         '23.R3.2a checkInWithNotes branches on wasCompleted');
+  assert(/notesChanged = notes !== oldNotes/.test(calSrc),
+         '23.R3.2b detects whether notes actually changed');
+  // No duplicate daily_log on reopen-without-edit
+  assert(/if \(notes && notesChanged\)/.test(calSrc),
+         '23.R3.2c daily_log insert gated on (notes && notesChanged) — no duplicate archival on re-save');
+  // Modal header reflects mode
+  assert(/Edit Meeting Notes/.test(calSrc), '23.R3.3a modal header offers Edit state');
+  // Initial check-in still works (not accidentally regressed)
+  assert(/update\.completed = true/.test(calSrc) && /update\.event_status = 'attended'/.test(calSrc),
+         '23.R3.4a initial check-in still stamps completed + attended');
+}
+
+try { runSection23_Session1Features(); } catch(e) {
+  console.error('SECTION 23 ERROR:', e.message);
+  console.error(e.stack);
+  failed++;
+}
+
+// ============================================================
 // MAIN
 // ============================================================
 (async () => {

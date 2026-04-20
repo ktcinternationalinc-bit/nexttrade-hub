@@ -221,3 +221,105 @@ export const sanitize = (str) => {
   if (!str || typeof str !== 'string') return str || '';
   return str.replace(/<[^>]*>/g, '').replace(/javascript:/gi, '').replace(/on\w+\s*=/gi, '').trim();
 };
+
+// ============================================================
+// Rich-text sanitizer for ticket comments (R8)
+// Allow-lists exactly the tags produced by the toolbar editor:
+//   b, strong, i, em, u, br, ul, ol, li, p, div, span
+// Everything else — script, iframe, img, a with javascript:, on*
+// handlers, style attrs, any tag not in the allow-list — is stripped.
+// The output is safe for dangerouslySetInnerHTML.
+// ============================================================
+const RT_ALLOWED_TAGS = new Set(['b', 'strong', 'i', 'em', 'u', 'br', 'ul', 'ol', 'li', 'p', 'div', 'span']);
+
+export const sanitizeRichText = (html) => {
+  if (!html || typeof html !== 'string') return '';
+  var s = String(html);
+  // 1. Remove script / style / iframe / object blocks entirely (incl. content)
+  s = s.replace(/<(script|style|iframe|object|embed|link|meta|base)[\s\S]*?<\/\1>/gi, '');
+  s = s.replace(/<(script|style|iframe|object|embed|link|meta|base)\b[^>]*\/?>/gi, '');
+  // 2. Strip event handlers on any remaining tag  (on* =...)
+  s = s.replace(/\son\w+\s*=\s*(['"]).*?\1/gi, '');
+  s = s.replace(/\son\w+\s*=\s*[^\s>]+/gi, '');
+  // 3. Strip javascript: urls (href/src)
+  s = s.replace(/(href|src)\s*=\s*(['"])\s*javascript:[^'"]*\2/gi, '');
+  s = s.replace(/(href|src)\s*=\s*javascript:[^\s>]+/gi, '');
+  // 4. Strip style and class attributes (prevent CSS injection / layout break)
+  s = s.replace(/\sstyle\s*=\s*(['"]).*?\1/gi, '');
+  s = s.replace(/\sclass\s*=\s*(['"]).*?\1/gi, '');
+  // 5. Walk all tags, drop any not in the allow-list. Preserve inner text via the replace.
+  s = s.replace(/<\/?([a-zA-Z][a-zA-Z0-9]*)\b[^>]*>/g, function(match, tag) {
+    return RT_ALLOWED_TAGS.has(String(tag).toLowerCase()) ? match : '';
+  });
+  return s;
+};
+
+// Returns true if a string appears to contain HTML (for render decision)
+export const isHtmlComment = (text) => {
+  if (!text || typeof text !== 'string') return false;
+  return /<(b|strong|i|em|u|br|ul|ol|li|p|div|span)\b[^>]*>/i.test(text);
+};
+
+// Strip ALL HTML from a rich-text comment to produce a plain-text preview
+// (used in notifications where HTML would render as raw tags).
+export const richTextToPlain = (html) => {
+  if (!html || typeof html !== 'string') return '';
+  return html
+    .replace(/<br\s*\/?>/gi, '\n')
+    .replace(/<\/(p|div|li)>/gi, '\n')
+    .replace(/<[^>]*>/g, '')
+    .replace(/&nbsp;/g, ' ')
+    .replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&quot;/g, '"').replace(/&#39;/g, "'")
+    .replace(/\n{3,}/g, '\n\n')
+    .trim();
+};
+
+// ============================================================
+// H3: Payment Source Breakdown
+// Aggregates an invoice's linked treasury rows into amount-per-source buckets.
+// Buckets: cash | bank | check | vodafone | instapay | other
+// Per row contribution = cash_in + bank_in (same sum used elsewhere for
+// total_collected). Only positive contributions counted.
+// Falls back gracefully when `payment_source` is null (pre-backfill rows).
+// Pure function — no React, no DB — safe to unit-test directly.
+// ============================================================
+export const PAYMENT_SOURCE_META = [
+  { key: 'cash',     label: '💵 Cash',     labelAr: 'نقدي',    color: '#059669' },
+  { key: 'bank',     label: '🏦 Bank',     labelAr: 'بنك',     color: '#6366f1' },
+  { key: 'check',    label: '📝 Check',    labelAr: 'شيك',     color: '#d97706' },
+  { key: 'vodafone', label: '📱 Vodafone', labelAr: 'فودافون', color: '#dc2626' },
+  { key: 'instapay', label: '⚡ InstaPay', labelAr: 'إنستاباي', color: '#7c3aed' },
+  { key: 'other',    label: '❓ Other',    labelAr: 'أخرى',    color: '#64748b' },
+];
+
+export const aggregatePaymentSources = (txns) => {
+  const buckets = { cash: 0, bank: 0, check: 0, vodafone: 0, instapay: 0, other: 0 };
+  if (!Array.isArray(txns)) return { buckets: buckets, total: 0 };
+
+  for (let i = 0; i < txns.length; i++) {
+    const t = txns[i] || {};
+    const amt = Number(t.cash_in || 0) + Number(t.bank_in || 0);
+    if (amt <= 0) continue;
+
+    let src = (t.payment_source || '').trim().toLowerCase();
+    // Fallback inference when payment_source is missing (pre-backfill rows)
+    if (!src) {
+      if (Number(t.bank_in || 0) > 0) {
+        src = 'bank';
+      } else if (t.cash_method === 'vodafone' || t.cash_method === 'instapay') {
+        src = t.cash_method;
+      } else {
+        src = 'cash';
+      }
+    }
+
+    if (Object.prototype.hasOwnProperty.call(buckets, src)) {
+      buckets[src] += amt;
+    } else {
+      buckets.other += amt;
+    }
+  }
+
+  const total = buckets.cash + buckets.bank + buckets.check + buckets.vodafone + buckets.instapay + buckets.other;
+  return { buckets: buckets, total: total };
+};

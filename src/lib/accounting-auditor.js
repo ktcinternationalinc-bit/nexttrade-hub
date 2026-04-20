@@ -350,7 +350,12 @@ export function runAccountingAudit(data) {
     var linked = treasuryByInvoiceId[invM.id] || [];
     // Egypt bank entries matched to this invoice (not already in treasury as a real row)
     var bankMatched = egyptBankTxns.filter(function (bt) { return bt.matched_invoice_id === invM.id && !bt.matched_treasury_id; });
-    var treasurySum = sum(linked.filter(isCountedTowardCollected), function (x) { return x.cash_in; });
+    // Sum cash_in + bank_in — parity with recalcInvoiceCollected and isCountedTowardCollected.
+    // Prior to 2026-04-20 this summed only cash_in, producing false mismatch flags on
+    // every bank-paid invoice post bank-separation migration.
+    var treasurySum = sum(linked.filter(isCountedTowardCollected), function (x) {
+      return Number(x.cash_in || 0) + Number(x.bank_in || 0);
+    });
     var bankSum = sum(bankMatched, function (x) { return Number(x.amount || 0); });
     var actualCollected = treasurySum + bankSum;
     var storedCollected = Number(invM.total_collected || 0);

@@ -100,23 +100,33 @@ export default function CalendarTab({ customers, user, userProfile, users, onRel
     if (!notesEvent) return;
     try {
       var notes = meetingNotes.trim();
-      await dbUpdate('calendar_events', notesEvent.id, {
-        completed: true, event_status: 'attended',
-        meeting_notes: notes || null,
-        checked_in_at: new Date().toISOString(),
-        checked_in_by: myId,
-      }, myId);
-      // Archive notes to daily log
-      if (notes) {
+      var wasCompleted = !!notesEvent.completed;
+      var oldNotes = String(notesEvent.meeting_notes || '').trim();
+      var notesChanged = notes !== oldNotes;
+      // Build update. If already completed, don't overwrite check-in timestamp/owner —
+      // just update the notes. For a fresh check-in, stamp attendance too.
+      var update = { meeting_notes: notes || null };
+      if (!wasCompleted) {
+        update.completed = true;
+        update.event_status = 'attended';
+        update.checked_in_at = new Date().toISOString();
+        update.checked_in_by = myId;
+      }
+      await dbUpdate('calendar_events', notesEvent.id, update, myId);
+      // Archive to daily log ONLY when notes exist and actually changed (first time OR later edit).
+      // Prevents duplicate log entries if the user reopens the modal and saves without changes.
+      if (notes && notesChanged) {
+        var verb = wasCompleted ? '📋 Meeting notes updated — ' : '📋 Meeting notes — ';
         await dbInsert('daily_log', {
           user_id: myId,
           log_date: notesEvent.event_date || new Date().toISOString().substring(0, 10),
-          entry_text: '📋 Meeting notes — ' + notesEvent.title + ': ' + notes,
+          entry_text: verb + notesEvent.title + ': ' + notes,
           log_category: 'meeting',
           auto_generated: false,
         }, myId);
       }
-      await logActivity(myId, 'Checked in: ' + notesEvent.title + (notes ? ' — notes: ' + notes.substring(0, 100) : ''), 'calendar');
+      var logVerb = wasCompleted ? (notesChanged ? 'Updated notes: ' : 'Reviewed notes: ') : 'Checked in: ';
+      await logActivity(myId, logVerb + notesEvent.title + (notes && notesChanged ? ' — ' + notes.substring(0, 100) : ''), 'calendar');
       setNotesEvent(null); setMeetingNotes(''); loadEvents();
     } catch (err) { alert('Error: ' + err.message); }
   };
@@ -259,9 +269,14 @@ export default function CalendarTab({ customers, user, userProfile, users, onRel
                       <button onClick={() => markEventStatus(ev, 'postponed')} className="px-2 py-1 bg-amber-500 text-white rounded text-[10px]">⏳ Postpone</button>
                     </>}
                   </div>}
-                  {ev.completed && <div className="text-right">
+                  {ev.completed && <div className="text-right flex flex-col items-end gap-1">
                     <span className="px-2 py-1 bg-emerald-100 text-emerald-700 rounded text-[10px] font-bold">✓ Attended</span>
-                    {ev.meeting_notes && <div className="text-[9px] text-slate-400 mt-0.5 max-w-[150px] truncate">📝 {ev.meeting_notes}</div>}
+                    {ev.meeting_notes && <div className="text-[9px] text-slate-500 mt-0.5 max-w-[220px] line-clamp-2" title={ev.meeting_notes}>📝 {ev.meeting_notes}</div>}
+                    {/* R3: Always allow adding/editing notes on a completed event */}
+                    <button onClick={() => { setNotesEvent(ev); setMeetingNotes(ev.meeting_notes || ''); }}
+                      className="px-2 py-0.5 bg-slate-100 hover:bg-slate-200 text-slate-600 rounded text-[9px] font-semibold">
+                      {ev.meeting_notes ? '✏️ Edit Notes' : '📝 Add Notes'}
+                    </button>
                   </div>}
                 </div>
               );
@@ -291,26 +306,44 @@ export default function CalendarTab({ customers, user, userProfile, users, onRel
                 </div>
                 {!ev.completed && !ev.event_status && <div className="flex gap-1"><button onClick={() => { setNotesEvent(ev); setMeetingNotes(ev.meeting_notes || ''); }} className="px-2 py-0.5 bg-emerald-500 text-white rounded text-[10px]">✓ Check In</button><button onClick={() => markEventStatus(ev, 'postponed')} className="px-2 py-0.5 bg-amber-500 text-white rounded text-[10px]">⏳</button></div>}
                 {ev.event_status === 'postponed' && <span className="text-[9px] text-amber-600 font-bold">Postponed</span>}
-                {ev.completed && <div><span className="text-[9px] text-emerald-600 font-bold">✓</span>{ev.meeting_notes && <span className="text-[8px] text-slate-400 ml-1">📝</span>}</div>}
+                {ev.completed && <div className="flex items-center gap-1">
+                  <span className="text-[9px] text-emerald-600 font-bold">✓</span>
+                  {/* R3: Always allow editing notes on a completed event */}
+                  <button onClick={() => { setNotesEvent(ev); setMeetingNotes(ev.meeting_notes || ''); }}
+                    title={ev.meeting_notes ? 'Edit notes / تعديل الملاحظات' : 'Add notes / إضافة ملاحظات'}
+                    className="text-[10px] hover:bg-slate-200 rounded px-1">
+                    {ev.meeting_notes ? '📝' : '✏️'}
+                  </button>
+                </div>}
               </div>
             );
           })}
         </div>
       )}
-      {/* Check-In Notes Modal */}
+      {/* Check-In / Notes Modal — supports both first-time check-in AND note editing after completion (R3) */}
       {notesEvent && (
         <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4" onClick={() => setNotesEvent(null)}>
           <div className="bg-white rounded-2xl p-5 w-full max-w-md" onClick={e => e.stopPropagation()}>
-            <h3 className="text-lg font-bold mb-1">✓ Check In / تسجيل حضور</h3>
+            <h3 className="text-lg font-bold mb-1">
+              {notesEvent.completed
+                ? (notesEvent.meeting_notes ? '✏️ Edit Meeting Notes / تعديل الملاحظات' : '📝 Add Meeting Notes / إضافة ملاحظات')
+                : '✓ Check In / تسجيل حضور'}
+            </h3>
             <div className="text-sm text-slate-500 mb-3">{notesEvent.title} — {notesEvent.event_date} {notesEvent.event_time || ''}</div>
             <label className="text-xs font-semibold text-slate-600 block mb-1">Meeting Notes / ملاحظات الاجتماع</label>
             <textarea value={meetingNotes} onChange={e => setMeetingNotes(e.target.value)}
               placeholder="What was discussed? Action items? Decisions made?&#10;ماذا تمت مناقشته؟ بنود العمل؟ القرارات؟"
               rows={5} className="dark-input mb-3" />
-            <div className="text-[10px] text-slate-400 mb-3">Notes will be saved to the daily log automatically / سيتم حفظ الملاحظات تلقائياً</div>
+            <div className="text-[10px] text-slate-400 mb-3">
+              {notesEvent.completed
+                ? 'Changes will be archived to the daily log / سيتم أرشفة التعديلات في السجل اليومي'
+                : 'Notes will be saved to the daily log automatically / سيتم حفظ الملاحظات تلقائياً'}
+            </div>
             <div className="flex gap-2">
               <button onClick={checkInWithNotes}
-                className="flex-1 px-4 py-2.5 bg-emerald-500 text-white rounded-lg text-sm font-bold">✓ Check In & Save Notes</button>
+                className="flex-1 px-4 py-2.5 bg-emerald-500 text-white rounded-lg text-sm font-bold">
+                {notesEvent.completed ? '💾 Save Notes' : '✓ Check In & Save Notes'}
+              </button>
               <button onClick={() => setNotesEvent(null)}
                 className="px-4 py-2.5 border-2 border-slate-300 rounded-lg text-sm font-bold">Cancel</button>
             </div>
