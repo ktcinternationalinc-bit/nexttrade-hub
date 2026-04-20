@@ -25,6 +25,8 @@ export function classifyTreasuryTransaction(txn, ctx) {
   var linkedInvoiceId = txn.linked_invoice_id || null;
   var cashIn = Number(txn.cash_in || 0);
   var cashOut = Number(txn.cash_out || 0);
+  var bankIn = Number(txn.bank_in || 0);
+  var bankOut = Number(txn.bank_out || 0);
   var usdIn = Number(txn.usd_in || 0);
   var usdOut = Number(txn.usd_out || 0);
   var foreignAmt = Number(txn.foreign_amount || 0);
@@ -32,6 +34,7 @@ export function classifyTreasuryTransaction(txn, ctx) {
   var foreignCur = txn.foreign_currency || null;
   var desc = String(txn.description || '');
   var descLow = desc.toLowerCase();
+  var bankNonOrderCat = txn.bank_nonorder_category || null;
 
   var isBankConfirmationDedup = desc.indexOf('[bank confirmation') >= 0;
   var isAutoMatched = desc.indexOf('[auto-matched from bank') >= 0;
@@ -112,14 +115,46 @@ export function classifyTreasuryTransaction(txn, ctx) {
     color = 'emerald';
     subtypeEn = 'Someone marked the check collected in the Checks tab, which created this treasury entry.';
     subtypeAr = 'قام أحدهم بتحصيل الشيك من تبويب الشيكات، فتم إنشاء هذا القيد.';
+  } else if (matchedBankId && !isPlaceholder && bankNonOrderCat) {
+    type = 'BANK_NONORDER_CONFIRMED';
+    titleEn = 'Bank ' + (bankIn > 0 ? 'Deposit' : 'Withdrawal') + ' — ' + bankNonOrderCat + ' (Verified)';
+    titleAr = (bankIn > 0 ? 'إيداع' : 'سحب') + ' بنكي — ' + bankNonOrderCat + ' (متحقق)';
+    emoji = '🏦';
+    color = 'indigo';
+    subtypeEn = 'A non-order bank movement (not tied to a sales invoice), verified against the bank statement.';
+    subtypeAr = 'حركة بنكية بدون أمر بيع، تم التحقق منها من كشف البنك.';
   } else if (matchedBankId && !isPlaceholder) {
     type = 'BANK_PLACEHOLDER_MATCHED';
     titleEn = 'Bank Deposit — Received and Verified';
     titleAr = 'إيداع بنكي — مستلم ومتحقق منه';
     emoji = '🏦';
-    color = 'emerald';
-    subtypeEn = 'Originally entered as an expected deposit, now auto-matched with a real bank transaction.';
-    subtypeAr = 'تم إدخاله في الأصل كإيداع متوقع، ثم تم مطابقته تلقائيًا مع معاملة بنكية حقيقية.';
+    color = 'indigo';
+    subtypeEn = 'Originally entered as an expected deposit, now auto-matched with a real bank transaction. Counted toward invoice collected — NOT toward safe balance.';
+    subtypeAr = 'تم إدخاله في الأصل كإيداع متوقع، ثم تم مطابقته تلقائيًا مع معاملة بنكية حقيقية. يُحتسب ضمن تحصيل الفاتورة — وليس ضمن رصيد الخزنة.';
+  } else if ((bankIn > 0 || bankOut > 0) && bankNonOrderCat) {
+    type = 'BANK_NONORDER_UNVERIFIED';
+    titleEn = 'Bank ' + (bankIn > 0 ? 'Deposit' : 'Withdrawal') + ' — ' + bankNonOrderCat;
+    titleAr = (bankIn > 0 ? 'إيداع' : 'سحب') + ' بنكي — ' + bankNonOrderCat;
+    emoji = '🏦';
+    color = 'indigo';
+    subtypeEn = 'A non-order bank movement saved directly (not via a placeholder-match flow). Does not affect safe balance.';
+    subtypeAr = 'حركة بنكية بدون أمر محفوظة مباشرة. لا تؤثر على رصيد الخزنة.';
+  } else if (bankIn > 0 && linkedInvoiceId) {
+    type = 'BANK_INVOICE_PAYMENT';
+    titleEn = 'Bank Payment Received for Invoice';
+    titleAr = 'دفعة بنكية مستلمة على فاتورة';
+    emoji = '🏦';
+    color = 'indigo';
+    subtypeEn = 'A bank receipt credited to a customer invoice. Counted in invoice collected only — not in safe.';
+    subtypeAr = 'إيداع بنكي مسجل على فاتورة العميل. يُحتسب ضمن المحصّل فقط — ليس ضمن الخزنة.';
+  } else if (bankIn > 0 || bankOut > 0) {
+    type = 'BANK_UNLINKED';
+    titleEn = 'Bank ' + (bankIn > 0 ? 'Deposit' : 'Withdrawal') + ' — Not Linked';
+    titleAr = (bankIn > 0 ? 'إيداع' : 'سحب') + ' بنكي — غير مرتبط';
+    emoji = '🏦';
+    color = 'indigo';
+    subtypeEn = 'Bank movement with no invoice and no non-order category. Review and classify.';
+    subtypeAr = 'حركة بنكية بدون فاتورة وبدون تصنيف. راجع القيد.';
   } else if (cashIn > 0 && linkedInvoiceId) {
     type = 'INVOICE_PAYMENT';
     titleEn = 'Payment Received for Invoice';
@@ -170,31 +205,40 @@ export function classifyTreasuryTransaction(txn, ctx) {
     subtypeAr = 'لا يوجد مبلغ مسجّل بالجنيه أو الدولار أو عملة أجنبية. قد يكون قيدًا بالدولار بانتظار الاستيراد، أو قيدًا ناقصًا.';
   }
 
-  // --- Effect on treasury net (EGP) ---
+  // --- Effect on treasury SAFE net (EGP) ---
+  // Bank rows (bank_in / bank_out, placeholders, matched bank rows, bank dedup markers)
+  // never affect the safe net regardless of amount — they live in a separate ledger.
   var netEffectEn, netEffectAr, netDelta;
+  var isBankTypeRow = bankIn > 0 || bankOut > 0 || isPlaceholder || matchedBankId || type === 'BANK_CONFIRMATION_DEDUP';
   if (type === 'BANK_PLACEHOLDER_AWAITING') {
     netDelta = 0;
-    netEffectEn = 'No effect yet. Will be counted when the matching bank transaction arrives.';
-    netEffectAr = 'بدون تأثير حتى الآن. سيُحتسب عند وصول المعاملة البنكية المطابقة.';
+    netEffectEn = 'No effect on safe. This is a bank placeholder awaiting statement verification.';
+    netEffectAr = 'بدون تأثير على الخزنة. قيد بنكي بانتظار التحقق من كشف البنك.';
   } else if (type === 'BANK_CONFIRMATION_DEDUP') {
     netDelta = 0;
-    netEffectEn = 'Zero effect by design. The original entry already moved the money.';
-    netEffectAr = 'بدون تأثير عن قصد. القيد الأصلي سبق وحرّك المبلغ.';
+    netEffectEn = 'Zero safe effect — bank confirmation of a payment already counted via another row.';
+    netEffectAr = 'بدون تأثير على الخزنة — تأكيد بنكي لدفعة سبق احتسابها.';
+  } else if (isBankTypeRow) {
+    netDelta = 0;
+    var amt = bankIn > 0 ? bankIn : bankOut;
+    netEffectEn = 'No effect on safe balance. Bank ' + (bankIn > 0 ? 'In' : 'Out') + ' of ' + amt.toLocaleString() + ' EGP is tracked in the bank ledger only.';
+    netEffectAr = 'بدون تأثير على رصيد الخزنة. ' + (bankIn > 0 ? 'وارد' : 'صادر') + ' بنكي ' + amt.toLocaleString() + ' ج.م مسجّل في دفتر البنك فقط.';
   } else if (cashIn > 0) {
     netDelta = cashIn;
-    netEffectEn = 'Added ' + cashIn.toLocaleString() + ' EGP to treasury net.';
-    netEffectAr = 'أُضيف ' + cashIn.toLocaleString() + ' ج.م إلى صافي الخزنة.';
+    netEffectEn = 'Added ' + cashIn.toLocaleString() + ' EGP to safe (treasury cash).';
+    netEffectAr = 'أُضيف ' + cashIn.toLocaleString() + ' ج.م إلى الخزنة.';
   } else if (cashOut > 0) {
     netDelta = -cashOut;
-    netEffectEn = 'Subtracted ' + cashOut.toLocaleString() + ' EGP from treasury net.';
-    netEffectAr = 'خُصم ' + cashOut.toLocaleString() + ' ج.م من صافي الخزنة.';
+    netEffectEn = 'Subtracted ' + cashOut.toLocaleString() + ' EGP from safe (treasury cash).';
+    netEffectAr = 'خُصم ' + cashOut.toLocaleString() + ' ج.م من الخزنة.';
   } else {
     netDelta = 0;
-    netEffectEn = 'No EGP effect on treasury net.';
-    netEffectAr = 'بدون تأثير بالجنيه على صافي الخزنة.';
+    netEffectEn = 'No EGP effect on safe net.';
+    netEffectAr = 'بدون تأثير بالجنيه على الخزنة.';
   }
 
   // --- Effect on invoice total_collected ---
+  // Counts both cash_in and bank_in when linked.
   var collectedEffectEn, collectedEffectAr, collectedDelta;
   if (!linkedInvoiceId) {
     collectedDelta = 0;
@@ -202,16 +246,20 @@ export function classifyTreasuryTransaction(txn, ctx) {
     collectedEffectAr = 'لا توجد فاتورة مرتبطة — لم يتأثر إجمالي المحصّل.';
   } else if (type === 'BANK_PLACEHOLDER_AWAITING') {
     collectedDelta = 0;
-    collectedEffectEn = 'Not yet counted in collected total.';
-    collectedEffectAr = 'لم يُحتسب بعد ضمن المحصّل.';
+    collectedEffectEn = 'Not yet counted in collected total — waiting for bank statement.';
+    collectedEffectAr = 'لم يُحتسب بعد ضمن المحصّل — بانتظار كشف البنك.';
   } else if (type === 'BANK_CONFIRMATION_DEDUP') {
     collectedDelta = 0;
     collectedEffectEn = 'Explicitly excluded from collected total (the original entry already counted).';
     collectedEffectAr = 'مستبعد صراحةً من المحصّل (القيد الأصلي هو الذي احتسب).';
+  } else if (bankIn > 0) {
+    collectedDelta = bankIn;
+    collectedEffectEn = 'Added ' + bankIn.toLocaleString() + ' EGP to invoice collected (bank channel).';
+    collectedEffectAr = 'أُضيف ' + bankIn.toLocaleString() + ' ج.م إلى محصّل الفاتورة (قناة البنك).';
   } else if (cashIn > 0) {
     collectedDelta = cashIn;
-    collectedEffectEn = 'Added ' + cashIn.toLocaleString() + ' EGP to invoice collected total.';
-    collectedEffectAr = 'أُضيف ' + cashIn.toLocaleString() + ' ج.م إلى إجمالي المحصّل على الفاتورة.';
+    collectedEffectEn = 'Added ' + cashIn.toLocaleString() + ' EGP to invoice collected (safe channel).';
+    collectedEffectAr = 'أُضيف ' + cashIn.toLocaleString() + ' ج.م إلى محصّل الفاتورة (قناة الخزنة).';
   } else {
     collectedDelta = 0;
     collectedEffectEn = 'No effect on collected total.';

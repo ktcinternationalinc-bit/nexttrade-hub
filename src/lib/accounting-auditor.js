@@ -27,11 +27,13 @@ function daysBetween(a, b) {
 }
 
 // Is this treasury row "counted" toward invoice collected?
+// A row counts when it's not a placeholder, not a dedup marker, and carries
+// positive inflow in EITHER safe (cash_in) or bank (bank_in).
 function isCountedTowardCollected(t) {
   if (t.is_bank_placeholder) return false;
   var d = String(t.description || '');
   if (d.indexOf('[bank confirmation') >= 0) return false;
-  return Number(t.cash_in || 0) > 0;
+  return (Number(t.cash_in || 0) + Number(t.bank_in || 0)) > 0;
 }
 
 // Is this treasury row a dedup/bank-confirmation marker?
@@ -120,23 +122,36 @@ export function runAccountingAudit(data) {
     });
   }
 
-  // C2: Corrupted rows — cash_in AND cash_out on same row
+  // C2: Corrupted rows — a single row should hold money in EXACTLY ONE of the
+  // four amount columns (cash_in | cash_out | bank_in | bank_out). Any row
+  // with 2+ populated amount columns is data corruption.
   var corrupted = treasury.filter(function (tr) {
-    return Number(tr.cash_in || 0) > 0 && Number(tr.cash_out || 0) > 0;
+    var populated = 0;
+    if (Number(tr.cash_in  || 0) > 0) populated++;
+    if (Number(tr.cash_out || 0) > 0) populated++;
+    if (Number(tr.bank_in  || 0) > 0) populated++;
+    if (Number(tr.bank_out || 0) > 0) populated++;
+    return populated >= 2;
   });
   if (corrupted.length > 0) {
     findings.push({
       severity: 'critical',
       code: 'CORRUPTED_ROW',
-      titleEn: corrupted.length + ' treasury row(s) with both IN and OUT amounts',
-      titleAr: corrupted.length + ' قيد يحتوي على وارد وصادر معًا',
-      descEn: 'A single row should be either an income or an expense, not both. This inflates gross totals and breaks category reports.',
-      descAr: 'القيد الواحد يجب أن يكون إما وارد أو صادر، وليس كليهما. هذا يشوّه الإجماليات ويُعطّل تقارير التصنيف.',
-      totalImpact: sum(corrupted, function (x) { return Math.min(Number(x.cash_in), Number(x.cash_out)); }),
+      titleEn: corrupted.length + ' treasury row(s) with multiple populated amount columns',
+      titleAr: corrupted.length + ' قيد يحتوي على أكثر من خانة مبلغ',
+      descEn: 'A row should have money in ONE column only (cash_in OR cash_out OR bank_in OR bank_out). Populating multiple inflates gross totals, breaks category reports, and leaks bank amounts into the safe balance.',
+      descAr: 'القيد يجب أن يحتوي على مبلغ في خانة واحدة فقط. تسجيل مبالغ في أكثر من خانة يشوّه الإجماليات ويسرّب قيود البنك إلى رصيد الخزنة.',
+      totalImpact: sum(corrupted, function (x) {
+        var amounts = [Number(x.cash_in || 0), Number(x.cash_out || 0), Number(x.bank_in || 0), Number(x.bank_out || 0)]
+          .filter(function (a) { return a > 0; })
+          .sort(function (a, b) { return a - b; });
+        // impact = sum of the smaller amounts (the ones that shouldn't be there)
+        return amounts.slice(0, -1).reduce(function (a, b) { return a + b; }, 0);
+      }),
       count: corrupted.length,
-      items: corrupted.slice(0, 20).map(function (x) { return { id: x.id, date: x.transaction_date, cash_in: x.cash_in, cash_out: x.cash_out, description: (x.description || '').substring(0, 60) }; }),
-      actionEn: 'Open each row in Treasury → decide whether it\'s income or expense → zero out the other field.',
-      actionAr: 'افتح كل قيد في الخزنة → حدّد إن كان وارد أم صادر → صفّر الحقل الآخر.'
+      items: corrupted.slice(0, 20).map(function (x) { return { id: x.id, date: x.transaction_date, cash_in: x.cash_in, cash_out: x.cash_out, bank_in: x.bank_in, bank_out: x.bank_out, description: (x.description || '').substring(0, 60) }; }),
+      actionEn: 'Open each row in Treasury → decide which single column should hold the amount → zero out the rest.',
+      actionAr: 'افتح كل قيد → حدّد الخانة الصحيحة للمبلغ → صفّر بقية الخانات.'
     });
   }
 
@@ -147,7 +162,7 @@ export function runAccountingAudit(data) {
     var tr2 = treasury[dt];
     if (isDedupMarker(tr2)) continue; // these are intentional
     if (tr2.is_bank_placeholder) continue;
-    var amt = Number(tr2.cash_in || 0) + Number(tr2.cash_out || 0);
+    var amt = Number(tr2.cash_in || 0) + Number(tr2.cash_out || 0) + Number(tr2.bank_in || 0) + Number(tr2.bank_out || 0);
     if (amt === 0) continue;
     var key = (tr2.transaction_date || '') + '|' + amt + '|' + (tr2.order_number || '') + '|' + (tr2.description || '').substring(0, 40);
     if (dupeKey[key]) {
@@ -188,9 +203,9 @@ export function runAccountingAudit(data) {
       titleAr: brokenRefs.length + ' قيد خزنة مرتبط بفواتير محذوفة',
       descEn: 'The invoice these rows point to no longer exists. Collected totals are orphaned.',
       descAr: 'الفاتورة المرتبطة لم تعد موجودة. المبالغ المحصّلة معزولة.',
-      totalImpact: sum(brokenRefs, function (x) { return Number(x.cash_in || 0); }),
+      totalImpact: sum(brokenRefs, function (x) { return Number(x.cash_in || 0) + Number(x.bank_in || 0); }),
       count: brokenRefs.length,
-      items: brokenRefs.slice(0, 20).map(function (x) { return { id: x.id, date: x.transaction_date, cash_in: x.cash_in, ghost_invoice_id: x.linked_invoice_id }; }),
+      items: brokenRefs.slice(0, 20).map(function (x) { return { id: x.id, date: x.transaction_date, cash_in: x.cash_in, bank_in: x.bank_in, ghost_invoice_id: x.linked_invoice_id }; }),
       actionEn: 'Unlink from the deleted invoice, then either delete the treasury row or relink to the correct invoice.',
       actionAr: 'أزل الربط بالفاتورة المحذوفة، ثم احذف القيد أو أعد ربطه بالفاتورة الصحيحة.'
     });
@@ -216,14 +231,15 @@ export function runAccountingAudit(data) {
     });
   }
 
-  // C6: Ambiguous dedup — matched bank row with zero cash_in AND no identifiable sibling
+  // C6: Ambiguous dedup — matched bank row with zero amounts (cash AND bank) AND no identifiable sibling
   // This is the "ghost dedup" case: dedup fired but the original sibling was deleted or never existed
   var ambiguousDedup = [];
   for (var ad = 0; ad < treasury.length; ad++) {
     var trA = treasury[ad];
-    // Only consider rows that got matched with a bank txn AND have zero cash_in
+    // Only consider rows that got matched with a bank txn AND have zero amount in every column
     if (!trA.matched_bank_txn_id) continue;
-    if (Number(trA.cash_in || 0) > 0 || Number(trA.cash_out || 0) > 0) continue;
+    var trATotal = Number(trA.cash_in || 0) + Number(trA.cash_out || 0) + Number(trA.bank_in || 0) + Number(trA.bank_out || 0);
+    if (trATotal > 0) continue;
     if (trA.is_bank_placeholder) continue;
     // Try to find the sibling the dedup was pointing at
     var sibling = null;
@@ -236,13 +252,13 @@ export function runAccountingAudit(data) {
       var m2 = String(trA.description || '').match(/dedup_sibling=([a-f0-9-]+)/i);
       if (m2) sibling = treasuryById[m2[1]] || null;
     }
-    // 3. Heuristic search
+    // 3. Heuristic search — sibling must have inflow in either channel
     if (!sibling && trA.linked_invoice_id) {
       sibling = treasury.find(function (s) {
         return s.id !== trA.id &&
           s.linked_invoice_id === trA.linked_invoice_id &&
           !s.is_bank_placeholder &&
-          Number(s.cash_in || 0) > 0 &&
+          (Number(s.cash_in || 0) + Number(s.bank_in || 0)) > 0 &&
           !isDedupMarker(s);
       }) || null;
     }
@@ -272,8 +288,8 @@ export function runAccountingAudit(data) {
       totalImpact: sum(ambiguousDedup, function (x) { return Math.abs(x.bank_amount); }),
       count: ambiguousDedup.length,
       items: ambiguousDedup.slice(0, 20),
-      actionEn: 'For each: look up the bank_txn_id in Egypt Bank to confirm the real deposit amount. Then UPDATE the treasury row to restore cash_in to that amount and remove the [bank confirmation...] tag from description. Finally, re-open the linked invoice to recalc collected.',
-      actionAr: 'لكل حالة: ابحث عن bank_txn_id في بنك مصر للتأكد من المبلغ الحقيقي. ثم حدّث قيد الخزنة ليعيد المبلغ، وأزل وسم [bank confirmation] من الوصف. أخيرًا، افتح الفاتورة المرتبطة لإعادة حساب المحصّل.'
+      actionEn: 'For each: look up the bank_txn_id in Egypt Bank to confirm the real deposit amount. Then UPDATE the treasury row to restore the amount into bank_in (since this came from a bank deposit, not the safe) and remove the [bank confirmation...] tag from description. Finally, re-open the linked invoice to recalc collected.',
+      actionAr: 'لكل حالة: ابحث عن bank_txn_id في بنك مصر للتأكد من المبلغ. ثم حدّث قيد الخزنة ليعيد المبلغ في خانة bank_in (لأنه من إيداع بنكي وليس من الخزنة)، وأزل وسم [bank confirmation]. أخيرًا، افتح الفاتورة لإعادة حساب المحصّل.'
     });
   }
 
@@ -391,12 +407,12 @@ export function runAccountingAudit(data) {
     });
   }
 
-  // W3: Bounced checks whose treasury row still has cash_in
+  // W3: Bounced checks whose treasury row still has inflow (cash OR bank)
   var bouncedWithMoney = [];
   for (var bc = 0; bc < checks.length; bc++) {
     if (checks[bc].status === 'bounced' && checks[bc].linked_treasury_id) {
       var linkedTr = treasuryById[checks[bc].linked_treasury_id];
-      if (linkedTr && Number(linkedTr.cash_in || 0) > 0) {
+      if (linkedTr && (Number(linkedTr.cash_in || 0) + Number(linkedTr.bank_in || 0)) > 0) {
         bouncedWithMoney.push({ check: checks[bc], treasury: linkedTr });
       }
     }
@@ -405,15 +421,15 @@ export function runAccountingAudit(data) {
     findings.push({
       severity: 'warning',
       code: 'BOUNCED_CHECK_STILL_COUNTED',
-      titleEn: bouncedWithMoney.length + ' bounced check(s) still counted in treasury',
-      titleAr: bouncedWithMoney.length + ' شيك مرتجع لا يزال محتسبًا في الخزنة',
-      descEn: 'The check bounced but the treasury entry was never reversed. Treasury net is overstated.',
-      descAr: 'الشيك ارتد لكن لم يُعكس قيد الخزنة. صافي الخزنة أعلى من الواقع.',
-      totalImpact: sum(bouncedWithMoney, function (x) { return Number(x.treasury.cash_in); }),
+      titleEn: bouncedWithMoney.length + ' bounced check(s) still counted',
+      titleAr: bouncedWithMoney.length + ' شيك مرتجع لا يزال محتسبًا',
+      descEn: 'The check bounced but the treasury entry was never reversed. Collected/net is overstated.',
+      descAr: 'الشيك ارتد لكن لم يُعكس قيد الخزنة. المبلغ المحصّل/الصافي أعلى من الواقع.',
+      totalImpact: sum(bouncedWithMoney, function (x) { return Number(x.treasury.cash_in || 0) + Number(x.treasury.bank_in || 0); }),
       count: bouncedWithMoney.length,
-      items: bouncedWithMoney.slice(0, 15).map(function (x) { return { check_id: x.check.id, treasury_id: x.treasury.id, customer: x.check.customer_name, amount: x.treasury.cash_in }; }),
-      actionEn: 'For each: either delete the treasury row, or zero cash_in and add a note "check bounced — reversed".',
-      actionAr: 'لكل حالة: احذف قيد الخزنة أو صفّر المبلغ وأضف ملاحظة "شيك مرتجع — عُكس".'
+      items: bouncedWithMoney.slice(0, 15).map(function (x) { return { check_id: x.check.id, treasury_id: x.treasury.id, customer: x.check.customer_name, cash_in: x.treasury.cash_in, bank_in: x.treasury.bank_in }; }),
+      actionEn: 'For each: either delete the treasury row, or zero the inflow column (cash_in OR bank_in) and add a note "check bounced — reversed".',
+      actionAr: 'لكل حالة: احذف قيد الخزنة أو صفّر خانة الوارد (cash_in أو bank_in) وأضف ملاحظة "شيك مرتجع — عُكس".'
     });
   }
 
@@ -424,7 +440,7 @@ export function runAccountingAudit(data) {
     if (!isDedupMarker(tr4)) continue;
     if (!tr4.linked_invoice_id) continue;
     var siblings = (treasuryByInvoiceId[tr4.linked_invoice_id] || []).filter(function (s) {
-      return s.id !== tr4.id && !isDedupMarker(s) && !s.is_bank_placeholder && Number(s.cash_in || 0) > 0;
+      return s.id !== tr4.id && !isDedupMarker(s) && !s.is_bank_placeholder && (Number(s.cash_in || 0) + Number(s.bank_in || 0)) > 0;
     });
     if (siblings.length === 0) orphanDedup.push(tr4);
   }
@@ -550,24 +566,26 @@ export function runAccountingAudit(data) {
     });
   }
 
-  // I2: Unlinked treasury cash_in that might match an outstanding invoice
+  // I2: Unlinked treasury inflow (cash OR bank) that might match an outstanding invoice
   var unlinkedIn = treasury.filter(function (tr) {
-    return Number(tr.cash_in || 0) > 0 && !tr.linked_invoice_id && !tr.is_bank_placeholder && !isDedupMarker(tr);
+    var inflow = Number(tr.cash_in || 0) + Number(tr.bank_in || 0);
+    return inflow > 0 && !tr.linked_invoice_id && !tr.is_bank_placeholder && !isDedupMarker(tr);
   });
   var invoiceLinkSuggestions = [];
   var outstandingInvoices = invoices.filter(function (inv) { return Number(inv.outstanding || 0) > 0; });
   for (var ul = 0; ul < Math.min(unlinkedIn.length, 200); ul++) { // cap to avoid n*m blowup
     var u = unlinkedIn[ul];
-    var uAmt = Number(u.cash_in);
+    var uAmt = Number(u.cash_in || 0) + Number(u.bank_in || 0);
+    var uChannel = Number(u.bank_in || 0) > 0 ? 'bank' : 'cash';
     for (var oii = 0; oii < outstandingInvoices.length; oii++) {
       var cand = outstandingInvoices[oii];
       if (cand.order_number && u.order_number && cand.order_number === u.order_number) {
-        invoiceLinkSuggestions.push({ treasury: u, invoice: cand, reason: 'same_order' });
+        invoiceLinkSuggestions.push({ treasury: u, invoice: cand, reason: 'same_order', channel: uChannel, amount: uAmt });
         break;
       }
       if (cand.customer_name && u.description && String(u.description).indexOf(cand.customer_name) >= 0
         && Math.abs(Number(cand.outstanding) - uAmt) < uAmt * 0.02) {
-        invoiceLinkSuggestions.push({ treasury: u, invoice: cand, reason: 'customer_name+amount' });
+        invoiceLinkSuggestions.push({ treasury: u, invoice: cand, reason: 'customer_name+amount', channel: uChannel, amount: uAmt });
         break;
       }
     }
@@ -576,22 +594,24 @@ export function runAccountingAudit(data) {
     findings.push({
       severity: 'info',
       code: 'INVOICE_LINK_SUGGEST',
-      titleEn: invoiceLinkSuggestions.length + ' unlinked treasury payment(s) likely belong to an outstanding invoice',
+      titleEn: invoiceLinkSuggestions.length + ' unlinked payment(s) likely belong to an outstanding invoice',
       titleAr: invoiceLinkSuggestions.length + ' دفعة غير مربوطة بفاتورة تبدو أنها تخص فاتورة مستحقة',
-      descEn: 'Treasury entries that have cash in but no invoice link, yet match an outstanding invoice by order number or customer name + amount.',
-      descAr: 'قيود خزنة واردة بدون ربط بفاتورة، لكنها تطابق فاتورة مستحقة برقم الأمر أو اسم العميل والمبلغ.',
-      totalImpact: sum(invoiceLinkSuggestions, function (x) { return Number(x.treasury.cash_in); }),
+      descEn: 'Treasury entries with inflow (cash_in or bank_in) but no invoice link, yet match an outstanding invoice by order number or customer name + amount.',
+      descAr: 'قيود خزنة/بنك واردة بدون ربط بفاتورة، لكنها تطابق فاتورة مستحقة برقم الأمر أو اسم العميل والمبلغ.',
+      totalImpact: sum(invoiceLinkSuggestions, function (x) { return x.amount; }),
       count: invoiceLinkSuggestions.length,
-      items: invoiceLinkSuggestions.slice(0, 15).map(function (x) { return { treasury_id: x.treasury.id, invoice_id: x.invoice.id, customer: x.invoice.customer_name, order: x.invoice.order_number, amount: x.treasury.cash_in, reason: x.reason }; }),
-      actionEn: 'Treasury tab → open each row → use 🔗 Link Transaction to connect it to the suggested invoice.',
-      actionAr: 'تبويب الخزنة → افتح كل قيد → استخدم 🔗 ربط معاملة لربطه بالفاتورة المقترحة.'
+      items: invoiceLinkSuggestions.slice(0, 15).map(function (x) { return { treasury_id: x.treasury.id, invoice_id: x.invoice.id, customer: x.invoice.customer_name, order: x.invoice.order_number, amount: x.amount, channel: x.channel, reason: x.reason }; }),
+      actionEn: 'Treasury tab → open each row → use 🔗 Link to connect it to the suggested invoice.',
+      actionAr: 'تبويب الخزنة → افتح كل قيد → استخدم 🔗 ربط لربطه بالفاتورة المقترحة.'
     });
   }
 
-  // I3: Zero-EGP treasury rows (likely USD pending import)
+  // I3: Zero-amount treasury rows (likely USD pending import) — check all four channels
   var zeroEGP = treasury.filter(function (tr) {
     return Number(tr.cash_in || 0) === 0
       && Number(tr.cash_out || 0) === 0
+      && Number(tr.bank_in || 0) === 0
+      && Number(tr.bank_out || 0) === 0
       && Number(tr.usd_in || 0) === 0
       && Number(tr.usd_out || 0) === 0
       && Number(tr.foreign_amount || 0) === 0
@@ -602,8 +622,8 @@ export function runAccountingAudit(data) {
     findings.push({
       severity: 'info',
       code: 'ZERO_AMOUNT_ROWS',
-      titleEn: zeroEGP.length + ' treasury row(s) with no amount in any currency',
-      titleAr: zeroEGP.length + ' قيد خزنة بدون مبلغ بأي عملة',
+      titleEn: zeroEGP.length + ' treasury row(s) with no amount in any currency or channel',
+      titleAr: zeroEGP.length + ' قيد خزنة بدون مبلغ بأي عملة أو قناة',
       descEn: 'Could be rows imported from the USD column of the Arabic Excel that are still waiting for the USD import SQL to run. Run import_usd_transactions.sql in Supabase.',
       descAr: 'قد تكون قيودًا مستوردة من عمود الدولار في ملف Excel تنتظر تشغيل import_usd_transactions.sql في Supabase.',
       count: zeroEGP.length,
@@ -615,8 +635,12 @@ export function runAccountingAudit(data) {
 
   // ============================================================
   // OVERALL METRICS
+  // treasuryNet = SAFE only (cash_in - cash_out). Bank net tracked separately.
   // ============================================================
   metrics.treasuryNet = sum(treasury, function (x) { return Number(x.cash_in || 0) - Number(x.cash_out || 0); });
+  metrics.bankNet     = sum(treasury, function (x) { return Number(x.bank_in || 0) - Number(x.bank_out || 0); });
+  metrics.totalBankIn  = sum(treasury, function (x) { return Number(x.bank_in  || 0); });
+  metrics.totalBankOut = sum(treasury, function (x) { return Number(x.bank_out || 0); });
   metrics.totalInvoiceValue = sum(invoices, function (x) { return Number(x.total_amount || 0); });
   metrics.totalInvoiceCollected = sum(invoices, function (x) { return Number(x.total_collected || 0); });
   metrics.totalOutstanding = sum(invoices, function (x) { return Math.max(0, Number(x.outstanding || 0)); });

@@ -139,6 +139,21 @@ const TABS = [
 ];
 
 // ============================================
+// NON-ORDER BANK EVENT CATEGORIES
+// Bank transactions that are not tied to a sales invoice still need a
+// declared identity (Owner Draw, Transfer, Fee, etc.). They write to
+// bank_in/bank_out and never touch safe cash_in/cash_out.
+// ============================================
+const BANK_NONORDER_CATS = [
+  { v: 'Owner Draw',         en: 'Owner Draw',         ar: 'سحب صاحب' },
+  { v: 'Inter-Bank Transfer', en: 'Inter-Bank Transfer', ar: 'تحويل بين البنوك' },
+  { v: 'Bank Fee',           en: 'Bank Fee',           ar: 'رسوم بنكية' },
+  { v: 'Loan',               en: 'Loan',               ar: 'قرض' },
+  { v: 'Refund',             en: 'Refund',             ar: 'استرداد' },
+  { v: 'Other',              en: 'Other',              ar: 'أخرى' },
+];
+
+// ============================================
 // DATE PICKER WITH YEAR/MONTH/DAY DROPDOWNS (mobile-friendly)
 // ============================================
 function DatePickerSelect({ value, onChange, className }) {
@@ -207,11 +222,12 @@ function PaymentForm({ invoice, categories, existingSubcats, onSave, onCancel, f
         <label className="text-xs font-semibold text-slate-600 block mb-1.5">Payment Method / طريقة الدفع</label>
         <div className="flex gap-2 flex-wrap">
           {[
-            { v: 'cash', l: '💵 Cash', sub: 'Adds to treasury' },
-            { v: 'bank_transfer', l: '🏦 Bank Transfer', sub: 'Invoice only' },
-            { v: 'check', l: '📝 Post-dated Check', sub: 'Goes to Checks (pending)' },
-            { v: 'vodafone', l: '📱 Vodafone Cash', sub: 'Invoice only' },
-            { v: 'other', l: '📋 Other', sub: 'Invoice only' },
+            { v: 'cash',          l: '💵 Cash',                sub: 'Adds to safe (cash)' },
+            { v: 'vodafone',      l: '📱 Vodafone Cash',       sub: 'Adds to safe (cash)' },
+            { v: 'instapay',      l: '⚡ InstaPay',            sub: 'Adds to safe (cash)' },
+            { v: 'bank_transfer', l: '🏦 Bank Transfer',       sub: 'Bank channel (not safe)' },
+            { v: 'check',         l: '📝 Post-dated Check',    sub: 'Goes to Checks (pending)' },
+            { v: 'other',         l: '📋 Other',               sub: 'Invoice only' },
           ].map(m => (
             <label key={m.v} onClick={() => setPf({ ...pf, payMethod: m.v })}
               className={'flex items-center gap-2 px-3 py-2 rounded-lg border-2 cursor-pointer transition text-xs ' +
@@ -242,7 +258,16 @@ function PaymentForm({ invoice, categories, existingSubcats, onSave, onCancel, f
             </div>
           </div>
         )}
-        {pf.payMethod !== 'cash' && pf.payMethod !== 'check' && <div className="text-[10px] text-blue-600 mt-1">ℹ️ Only cash adds to treasury register. {pf.payMethod === 'bank_transfer' ? 'Bank transfer' : pf.payMethod === 'vodafone' ? 'Vodafone Cash' : 'This method'} updates the invoice only.</div>}
+        {(pf.payMethod === 'bank_transfer' || pf.payMethod === 'other') && (
+          <div className="text-[10px] text-indigo-700 mt-1 bg-indigo-50 p-1.5 rounded border border-indigo-200">
+            ℹ️ <b>{pf.payMethod === 'bank_transfer' ? 'Bank Transfer' : 'Other'}</b> — updates invoice collected via the bank channel. Does <b>NOT</b> affect safe balance.
+          </div>
+        )}
+        {(pf.payMethod === 'vodafone' || pf.payMethod === 'instapay') && (
+          <div className="text-[10px] text-emerald-700 mt-1 bg-emerald-50 p-1.5 rounded border border-emerald-200">
+            ℹ️ <b>{pf.payMethod === 'vodafone' ? 'Vodafone Cash' : 'InstaPay'}</b> auto-sweeps to the physical safe, so it counts as <b>cash in</b> (affects safe + invoice collected). Tagged for reconciliation.
+          </div>
+        )}
       </div>
 
       {/* Category & Subcategory */}
@@ -367,6 +392,10 @@ export default function App() {
   const [editTreasuryModal, setEditTreasuryModal] = useState(null);
   const [inspectedTreasury, setInspectedTreasury] = useState(null);
   const [showAccountantReview, setShowAccountantReview] = useState(false);
+  // Treasury ↔ Sales navigation return state
+  const [treasuryReturnState, setTreasuryReturnState] = useState(null);
+  // Mini-modal for "order# doesn't exist, create now?" flow
+  const [pendingTreasuryRecord, setPendingTreasuryRecord] = useState(null);
   const [formData, setFormData] = useState({});
   const [hideSections, setHideSections] = useState({});
   const [announcements, setAnnouncements] = useState([]);
@@ -855,9 +884,16 @@ export default function App() {
         return dir * ((a.created_at || '').localeCompare(b.created_at || ''));
       });
   }, [treasury, mode, df, dt, treasurySort]);
+  // SAFE (cash_in / cash_out) — physical treasury. Bank entries excluded by
+  // definition: bank rows always have cash_in=0 and cash_out=0 (amounts
+  // live in bank_in/bank_out). See bank-safe-separation.sql.
   const totalCashIn = useMemo(() => filteredTreasury.reduce((a, t) => a + Number(t.cash_in || 0), 0), [filteredTreasury]);
   const totalCashOut = useMemo(() => filteredTreasury.reduce((a, t) => a + Number(t.cash_out || 0), 0), [filteredTreasury]);
   const allTimeNet = useMemo(() => treasury.reduce((a, t) => a + Number(t.cash_in || 0) - Number(t.cash_out || 0), 0), [treasury]);
+  // BANK (bank_in / bank_out) — not counted toward safe net. Bank_in hits
+  // count toward invoice.total_collected only.
+  const totalBankIn = useMemo(() => filteredTreasury.reduce((a, t) => a + Number(t.bank_in || 0), 0), [filteredTreasury]);
+  const totalBankOut = useMemo(() => filteredTreasury.reduce((a, t) => a + Number(t.bank_out || 0), 0), [filteredTreasury]);
 
   // Running balance — computed in display order so top row always = current net when newest first
   const treasuryBalanceMap = useMemo(() => {
@@ -933,11 +969,15 @@ export default function App() {
           const expAmt = Number(placeholder.expected_amount || 0);
           const isIn = placeholder.expected_direction === 'in';
 
+          // POST-MATCH: amount lives in bank_in/bank_out (NOT cash_in/cash_out).
+          // Treasury safe net is cash-only; bank hits only affect invoice collected.
           const updates = {
             is_bank_placeholder: false,
             matched_bank_txn_id: bank.id,
-            cash_in: isIn ? expAmt : 0,
-            cash_out: !isIn ? expAmt : 0,
+            cash_in: 0,
+            cash_out: 0,
+            bank_in:  isIn ?  expAmt : 0,
+            bank_out: !isIn ? expAmt : 0,
             description: (placeholder.description || '').replace(' [awaiting bank confirmation]', '') + ' ✅ matched bank ' + bank.date,
           };
 
@@ -946,42 +986,38 @@ export default function App() {
             if (inv) {
               updates.linked_invoice_id = inv.id;
               // Smart dedup: check if another REAL treasury entry already covers this payment
-              // Guards: must be non-placeholder, positive cash_in, not a bank confirmation,
-              // AND within 90 days of the bank date (prevents matching ancient unrelated entries)
+              // Guards: non-placeholder, positive cash_in OR bank_in, not a bank confirmation,
+              // AND within 90 days of the bank date.
               const bankDateMs = new Date(bank.date).getTime();
               const ninetyDays = 90 * 86400000;
               const existingLinked = treasury.filter(t => {
                 if (t.id === placeholder.id) return false;
                 if (t.is_bank_placeholder) return false;
-                if (Number(t.cash_in || 0) <= 0) return false;
+                const tIn = Number(t.cash_in || 0) + Number(t.bank_in || 0);
+                if (tIn <= 0) return false;
                 if (String(t.description || '').indexOf('[bank confirmation') >= 0) return false;
                 if (t.linked_invoice_id !== inv.id && t.order_number !== inv.order_number) return false;
                 const tDate = t.transaction_date ? new Date(t.transaction_date).getTime() : 0;
                 if (!tDate || Math.abs(bankDateMs - tDate) > ninetyDays) return false;
                 return true;
               });
-              // Find the sibling that actually matches this amount
-              const matchingSibling = existingLinked.find(t => 
-                Math.abs(Number(t.cash_in) - expAmt) < expAmt * 0.02
+              // Find the sibling that actually matches this amount (cash OR bank)
+              const matchingSibling = existingLinked.find(t =>
+                Math.abs((Number(t.cash_in || 0) + Number(t.bank_in || 0)) - expAmt) < expAmt * 0.02
               );
               if (matchingSibling) {
-                // Dedup: real money already counted via matchingSibling — zero this row
+                // Dedup: real money already counted — zero this row in every bucket
                 updates.linked_invoice_id = inv.id;
                 updates.description = (updates.description || placeholder.description || '')
                   + ' [bank confirmation — not added to collected, dedup_sibling=' + matchingSibling.id + ']';
                 updates.cash_in = 0;
                 updates.cash_out = 0;
-                updates.dedup_sibling_id = matchingSibling.id; // audit trail — requires column
-              } else {
-                // No matching sibling → this IS a new payment. Count it.
-                const existingTotal = existingLinked.reduce((a, t) => a + Number(t.cash_in || 0), 0);
-                const newTotal = existingTotal + expAmt;
-                const cappedTotal = Math.min(newTotal, Number(inv.total_amount || 0));
-                await supabase.from('invoices').update({
-                  total_collected: cappedTotal,
-                  outstanding: Math.max(0, Number(inv.total_amount || 0) - cappedTotal),
-                }).eq('id', inv.id);
+                updates.bank_in = 0;
+                updates.bank_out = 0;
+                updates.dedup_sibling_id = matchingSibling.id;
               }
+              // Non-dedup branch: let recalcInvoiceCollected below read truth from DB
+              // (after the update commits) instead of maintaining a parallel running total.
             }
           }
 
@@ -991,6 +1027,11 @@ export default function App() {
             matched_invoice_id: updates.linked_invoice_id || bank.matched_invoice_id || null,
             matched_at: new Date().toISOString(),
           }).eq('id', bank.id);
+
+          // Recalc the linked invoice from DB truth (cash_in + bank_in on linked rows).
+          if (updates.linked_invoice_id) {
+            try { await recalcInvoiceCollected(updates.linked_invoice_id); } catch(e) {}
+          }
         }
         if (toast) toast.success(matches.length + ' bank transaction(s) auto-matched ✓');
         await loadAllData();
@@ -1305,6 +1346,49 @@ export default function App() {
     setTimeout(() => setTabLoading(false), 300);
   };
 
+  // Open an invoice while preserving the user's exact Treasury position so
+  // Back returns them to where they were.
+  const openInvoiceFromTreasury = (invoice) => {
+    if (!invoice || !invoice.id) return;
+    setTreasuryReturnState({
+      scrollY: typeof window !== 'undefined' ? window.scrollY : 0,
+      mode: mode,
+      df: df,
+      dt: dt,
+      query: query,
+      tSearch: tSearch,
+      treasuryVisible: treasuryVisible,
+      treasurySort: treasurySort,
+      anchorId: invoice.order_number || null,
+    });
+    setSelectedInvoice(invoice);
+  };
+
+  // Restore Treasury scroll position + filters after closing an invoice
+  // that was opened via openInvoiceFromTreasury.
+  const returnToTreasury = () => {
+    const saved = treasuryReturnState;
+    setSelectedInvoice(null);
+    setShowAddPayment(false); setEditingTxn(null); setShowLinkSearch(false); setLinkSearch('');
+    if (!saved) { setFormData({}); return; }
+    setFormData({});
+    // Restore filters
+    if (saved.mode !== undefined) setMode(saved.mode);
+    if (saved.df !== undefined) setDf(saved.df);
+    if (saved.dt !== undefined) setDt(saved.dt);
+    if (saved.query !== undefined) setQuery(saved.query);
+    if (saved.tSearch !== undefined) setTSearch(saved.tSearch);
+    if (saved.treasuryVisible !== undefined) setTreasuryVisible(saved.treasuryVisible);
+    if (saved.treasurySort !== undefined) setTreasurySort(saved.treasurySort);
+    setTreasuryReturnState(null);
+    // Restore scroll after React commits the filter state
+    setTimeout(() => {
+      if (typeof window !== 'undefined' && typeof saved.scrollY === 'number') {
+        window.scrollTo({ top: saved.scrollY, behavior: 'instant' });
+      }
+    }, 50);
+  };
+
   const handleSignOut = async () => {
     const uid = profileIdRef.current || user?.id;
     if (uid) {
@@ -1320,6 +1404,35 @@ export default function App() {
   };
 
   // ==========================================
+  // CHANNEL/DIRECTION HELPERS for treasury rows
+  // A treasury row holds money in exactly one of four columns:
+  //   cash_in, cash_out  (physical SAFE — affects treasury net)
+  //   bank_in, bank_out  (BANK — affects invoice.collected only)
+  // These helpers centralize the read/write so split, edit, and unlink
+  // behave correctly for both channels.
+  // ==========================================
+  const readTreasuryMoney = (txn) => {
+    const ci = Number(txn.cash_in || 0);
+    const co = Number(txn.cash_out || 0);
+    const bi = Number(txn.bank_in || 0);
+    const bo = Number(txn.bank_out || 0);
+    if (ci > 0) return { channel: 'cash', direction: 'in',  amount: ci };
+    if (co > 0) return { channel: 'cash', direction: 'out', amount: co };
+    if (bi > 0) return { channel: 'bank', direction: 'in',  amount: bi };
+    if (bo > 0) return { channel: 'bank', direction: 'out', amount: bo };
+    return { channel: null, direction: null, amount: 0 };
+  };
+  const buildSplitAmounts = (channel, direction, amount) => {
+    const amt = Number(amount) || 0;
+    return {
+      cash_in:  channel === 'cash' && direction === 'in'  ? amt : 0,
+      cash_out: channel === 'cash' && direction === 'out' ? amt : 0,
+      bank_in:  channel === 'bank' && direction === 'in'  ? amt : 0,
+      bank_out: channel === 'bank' && direction === 'out' ? amt : 0,
+    };
+  };
+
+  // ==========================================
   // SINGLE SOURCE OF TRUTH: Recalculate invoice collected
   // Called after ANY payment/link/unlink/match action
   // Queries DB directly — always accurate, prevents double counting
@@ -1329,18 +1442,19 @@ export default function App() {
     // Get invoice from DB
     const { data: inv } = await supabase.from('invoices').select('id, total_amount, order_number').eq('id', invoiceId).maybeSingle();
     if (!inv) return;
-    // Source of truth: ONLY treasury entries with linked_invoice_id pointing to this invoice
-    // order_number alone is NOT enough — it could be a deliberately unlinked entry
+    // Source of truth: treasury rows with linked_invoice_id pointing to this invoice.
+    // "Collected" sums BOTH safe cash_in AND bank_in (both are real money received
+    // for this invoice — just via different channels). We do NOT filter on cash_in>0
+    // in the query anymore because a row might have bank_in>0 and cash_in=0.
     const { data: linked } = await supabase.from('treasury')
-      .select('id, cash_in, is_bank_placeholder, description')
-      .eq('linked_invoice_id', invoiceId)
-      .gt('cash_in', 0);
-    // Sum only real entries (not placeholders, not bank confirmations)
+      .select('id, cash_in, bank_in, is_bank_placeholder, description')
+      .eq('linked_invoice_id', invoiceId);
+    // Sum only real entries (not placeholders, not bank-confirmation dedup markers)
     let total = 0;
     for (const t of (linked || [])) {
       if (t.is_bank_placeholder) continue;
       if (t.description && t.description.includes('[bank confirmation')) continue;
-      total += Number(t.cash_in || 0);
+      total += Number(t.cash_in || 0) + Number(t.bank_in || 0);
     }
     // Cap at invoice total
     const capped = Math.min(total, Number(inv.total_amount || 0));
@@ -1358,8 +1472,11 @@ export default function App() {
     if (!pd.date) { toast.warning('Payment date is required'); return; }
     if (!selectedInvoice) { toast.warning('No invoice selected'); return; }
     try {
-      const isCash = pd.payMethod === 'cash';
-      const isCheck = pd.payMethod === 'check';
+      const method = pd.payMethod || 'cash';
+      const isCheck = method === 'check';
+      // "Safe" channels — physical cash and mobile wallets that auto-sweep to the safe
+      const isSafeChannel = method === 'cash' || method === 'vodafone' || method === 'instapay';
+      const isBankChannel = method === 'bank_transfer';
 
       if (isCheck) {
         // POST-DATED CHECK → goes to checks table, does NOT update collected
@@ -1380,28 +1497,46 @@ export default function App() {
         await dbUpdate('invoices', selectedInvoice.id, {
           notes: (selectedInvoice.notes || '') + '\n📝 Post-dated check: ' + fE(Number(pd.amount)) + ' due ' + (pd.checkDueDate || pd.date) + (pd.checkNumber ? ' #' + pd.checkNumber : ''),
         }, user?.id);
-      } else {
-        // CASH → goes to treasury WITH invoice link (prevents double-count if re-linked later)
-        if (isCash) {
-          await dbInsert('treasury', {
-            transaction_date: pd.date,
-            order_number: selectedInvoice.order_number,
-            description: sanitize(pd.desc || selectedInvoice.customer_name + ' payment'),
-            cash_in: Number(pd.amount),
-            cash_out: 0,
-            category: pd.category || 'مبيعات',
-            subcategory: pd.subcategory || '',
-            linked_invoice_id: selectedInvoice.id,
-          }, user?.id);
-        }
-        // Recalculate collected from all linked treasury entries (single source of truth)
+      } else if (isSafeChannel) {
+        // CASH / VODAFONE / INSTAPAY → treasury cash_in + invoice link.
+        // cash_method tag preserves reconciliation: Vodafone statements, InstaPay statements,
+        // physical till counts — each can be reconciled against its tagged rows.
+        var methodLabel = method === 'vodafone' ? '📱 Vodafone Cash'
+                        : method === 'instapay' ? '⚡ InstaPay'
+                        : '💵 Cash';
+        await dbInsert('treasury', {
+          transaction_date: pd.date,
+          order_number: selectedInvoice.order_number,
+          description: sanitize((pd.desc || selectedInvoice.customer_name + ' payment') + ' [' + methodLabel + ']'),
+          cash_in: Number(pd.amount),
+          cash_out: 0,
+          bank_in: 0,
+          bank_out: 0,
+          cash_method: method,
+          category: pd.category || 'مبيعات',
+          subcategory: pd.subcategory || '',
+          linked_invoice_id: selectedInvoice.id,
+        }, user?.id);
         await recalcInvoiceCollected(selectedInvoice.id);
-        if (!isCash) {
-          // Add payment method note for non-cash
-          await dbUpdate('invoices', selectedInvoice.id, {
-            notes: (selectedInvoice.notes || '') + '\n' + pd.payMethod + ': ' + fE(Number(pd.amount)) + ' on ' + pd.date,
-          }, user?.id);
-        }
+      } else if (isBankChannel) {
+        // BANK TRANSFER → treasury bank_in + invoice link. Does NOT hit safe.
+        await dbInsert('treasury', {
+          transaction_date: pd.date,
+          order_number: selectedInvoice.order_number,
+          description: sanitize((pd.desc || selectedInvoice.customer_name + ' payment') + ' [🏦 Bank Transfer]'),
+          cash_in: 0, cash_out: 0,
+          bank_in: Number(pd.amount),
+          bank_out: 0,
+          category: pd.category || 'مبيعات',
+          subcategory: pd.subcategory || '',
+          linked_invoice_id: selectedInvoice.id,
+        }, user?.id);
+        await recalcInvoiceCollected(selectedInvoice.id);
+      } else {
+        // "Other" — no treasury row, just a note. Invoice collected unchanged.
+        await dbUpdate('invoices', selectedInvoice.id, {
+          notes: (selectedInvoice.notes || '') + '\n' + method + ': ' + fE(Number(pd.amount)) + ' on ' + pd.date,
+        }, user?.id);
       }
       setShowAddPayment(false); toast.success("Payment recorded ✓");
       setFormData({});
@@ -1420,7 +1555,7 @@ export default function App() {
     const mismatch = [], unverified = [], overpaid = [], overdue = [];
     invoices.forEach(inv => {
       const txns = treasuryByOrder[inv.order_number] || [];
-      const tTotal = txns.reduce((a, t) => a + Number(t.cash_in || 0), 0);
+      const tTotal = txns.reduce((a, t) => a + Number(t.cash_in || 0) + Number(t.bank_in || 0), 0);
       const status = getReconStatus(inv, tTotal);
       const row = {
         'Order # / رقم الأمر': inv.order_number,
@@ -1491,8 +1626,9 @@ export default function App() {
     if (!formData.customerName) { toast.warning('Customer name is required / اسم العميل مطلوب'); return; }
     if (!formData.amount || Number(formData.amount) <= 0) { toast.warning('Amount must be greater than zero / المبلغ يجب أن يكون أكبر من صفر'); return; }
     try {
-      await dbInsert('invoices', {
-        order_number: sanitize(formData.orderNumber),
+      const orderNum = sanitize(formData.orderNumber);
+      const { data: inserted } = await supabase.from('invoices').insert({
+        order_number: orderNum,
         customer_name: sanitize(formData.customerName),
         customer_id: formData.customerId || null,
         invoice_date: formData.date || today(),
@@ -1501,13 +1637,66 @@ export default function App() {
         sales_rep: formData.salesRep || '',
         notes: sanitize(formData.notes || ''),
         source: 'manual',
-      }, user?.id);
-      setShowAddInvoice(false); toast.success("Invoice created ✓");
+      }).select('id').single();
+
+      // BACKFILL: link any existing treasury rows that reference this order_number
+      // but don't yet have linked_invoice_id. Recalc collected afterward.
+      if (inserted && inserted.id) {
+        const { data: orphans } = await supabase.from('treasury')
+          .select('id')
+          .eq('order_number', orderNum)
+          .is('linked_invoice_id', null);
+        if (orphans && orphans.length > 0) {
+          await supabase.from('treasury')
+            .update({ linked_invoice_id: inserted.id })
+            .eq('order_number', orderNum)
+            .is('linked_invoice_id', null);
+          await recalcInvoiceCollected(inserted.id);
+          toast.success('Invoice created + linked ' + orphans.length + ' waiting treasury entr' + (orphans.length === 1 ? 'y' : 'ies') + ' ✓');
+        } else {
+          toast.success('Invoice created ✓');
+        }
+      } else {
+        toast.success('Invoice created ✓');
+      }
+
+      setShowAddInvoice(false);
       setFormData({});
       await loadAllData();
     } catch (err) {
       toast.error(err.message);
     }
+  };
+
+  // Fuzzy-match order numbers for typo suggestions.
+  // Returns up to 3 invoices with numerically-similar or prefix-matching order_numbers.
+  const findOrderNumberSuggestions = (typed) => {
+    if (!typed) return [];
+    const s = String(typed).trim();
+    if (!s) return [];
+    const lower = s.toLowerCase();
+    const scored = [];
+    for (const inv of invoices) {
+      const on = String(inv.order_number || '').toLowerCase();
+      if (!on || on === lower) continue;
+      let score = 0;
+      // Exact prefix match is strongest
+      if (on.startsWith(lower) || lower.startsWith(on)) score += 100;
+      // Substring both ways
+      if (on.includes(lower) || lower.includes(on)) score += 60;
+      // Same length, diff of one char (transposition / single typo)
+      if (on.length === lower.length) {
+        let diffs = 0;
+        for (let i = 0; i < on.length; i++) if (on[i] !== lower[i]) diffs++;
+        if (diffs === 1) score += 40;
+        if (diffs === 2) score += 15;
+      }
+      // Length off by 1 (added/removed digit)
+      if (Math.abs(on.length - lower.length) === 1) score += 10;
+      if (score > 0) scored.push({ inv, score });
+    }
+    scored.sort((a, b) => b.score - a.score);
+    return scored.slice(0, 3).map(x => x.inv);
   };
 
   const handleAddTreasury = async () => {
@@ -1516,6 +1705,29 @@ export default function App() {
     if (!formData.amount) { toast.warning('Please enter an amount / الرجاء إدخال المبلغ'); return; }
     const isBankPlaceholder = formData.type === 'bank_in' || formData.type === 'bank_out';
     if (isBankPlaceholder && !formData.bankAccountId) { toast.warning('Please select a bank account'); return; }
+    // Bank entries must declare their identity: either an Order (links to a
+    // sales invoice) or a Non-Order category (owner draw, inter-bank transfer,
+    // bank fee, loan, refund, other). Prevents orderless mystery rows that
+    // caused the ghost-dedup bug last session.
+    if (isBankPlaceholder) {
+      const mode = formData.bankEntryMode || 'order'; // 'order' | 'nonorder'
+      if (mode === 'order') {
+        const orderTrim = String(formData.orderNumber || '').trim();
+        if (!orderTrim) {
+          toast.warning('Order mode requires an order number. Switch to Non-Order and pick a category if this is not an invoice payment. / وضع الأمر يتطلب رقم أمر.');
+          return;
+        }
+      } else {
+        if (!formData.bankNonOrderCategory) {
+          toast.warning('Non-Order bank entries require a category (Owner Draw, Inter-Bank Transfer, Bank Fee, Loan, Refund, or Other). / قيد بنكي بدون أمر يتطلب تصنيف.');
+          return;
+        }
+      }
+      if (!String(formData.desc || '').trim()) {
+        toast.warning('Description is required for bank entries. / الوصف مطلوب للقيود البنكية.');
+        return;
+      }
+    }
     try {
       const isIncome = formData.type === 'in' || formData.type === 'bank_in';
       const currency = formData.currency || 'EGP';
@@ -1532,18 +1744,32 @@ export default function App() {
         order_number: sanitize(formData.orderNumber || ''),
         description: sanitize(formData.desc || ''),
         cash_in: 0, cash_out: 0,
+        bank_in: 0, bank_out: 0,
         usd_in: 0, usd_out: 0,
         category: cat,
         subcategory: subcat,
         currency: currency,
       };
+      // Tag cash_method for safe-channel rows so Vodafone/InstaPay flows
+      // can be reconciled separately from physical cash.
+      if (!isBankPlaceholder && (formData.type === 'in' || formData.type === 'out' || !formData.type)) {
+        record.cash_method = formData.cashMethod || 'cash';
+      }
       if (isBankPlaceholder) {
-        // PLACEHOLDER — expected amount stored separately, $0 in cash columns so doesn't affect net
+        // Bank entry — awaits statement verification. cash_in/cash_out stay 0
+        // forever. bank_in/bank_out stay 0 until auto-matcher confirms.
+        // expected_amount drives the pre-match display; after match the amount
+        // is written into bank_in/bank_out (see auto-matcher).
         record.is_bank_placeholder = true;
         record.expected_amount = amt;
         record.expected_direction = isIncome ? 'in' : 'out';
         record.bank_account_id = formData.bankAccountId;
         record.description = (record.description || '') + ' [awaiting bank confirmation]';
+        const mode = formData.bankEntryMode || 'order';
+        if (mode === 'nonorder') {
+          record.order_number = '';           // non-order rows carry no order#
+          record.bank_nonorder_category = formData.bankNonOrderCategory;
+        }
       } else if (currency === 'EGP') {
         if (isIncome) record.cash_in = amt; else record.cash_out = amt;
       } else if (currency === 'USD') {
@@ -1553,10 +1779,86 @@ export default function App() {
         record.foreign_currency = currency;
         record.foreign_direction = isIncome ? 'in' : 'out';
       }
+
+      // INVOICE-LINK WORKFLOW
+      // Triggers for:
+      //   (a) cash_in with an order# (real safe money against a sales order) — auto-link + recalc
+      //   (b) bank_in in Order mode with an order# — auto-link the placeholder so the
+      //       auto-matcher already knows the target invoice; recalc only fires on match
+      // Expenses (cash_out / bank_out) skip this — order# there is a PO/project code.
+      // Non-Order bank entries skip this — they have no order# by construction.
+      const bankEntryMode = formData.bankEntryMode || 'order';
+      const isOrderLinkable =
+        isIncome && (
+          !isBankPlaceholder ||                     // cash_in
+          (isBankPlaceholder && bankEntryMode === 'order')  // bank_in Order mode
+        );
+      const orderNumTrimmed = String(record.order_number || '').trim();
+      if (isOrderLinkable && orderNumTrimmed) {
+        const matchingInvoice = invoices.find(i => String(i.order_number || '').trim() === orderNumTrimmed);
+        if (matchingInvoice) {
+          // Auto-link — set linked_invoice_id so recalcInvoiceCollected picks it up
+          record.linked_invoice_id = matchingInvoice.id;
+          // Insert. Only recalc for real cash_in; placeholders wait for the match.
+          await dbInsert('treasury', record, user?.id);
+          if (!isBankPlaceholder) {
+            await recalcInvoiceCollected(matchingInvoice.id);
+          }
+          const tempEntry = { id: 'temp-' + Date.now(), ...record };
+          setTreasury(prev => [tempEntry, ...prev]);
+          setShowAddTreasury(false);
+          toast.success(
+            (isBankPlaceholder ? 'Bank entry saved (awaiting statement) + linked to ' : 'Transaction saved + linked to ')
+            + (matchingInvoice.customer_name || ('#' + matchingInvoice.order_number)) + ' ✓'
+          );
+          setFormData({});
+          setTimeout(() => loadAllData(), 500);
+          return;
+        }
+        // Order# provided but no matching invoice → open "create now or cancel" flow
+        setPendingTreasuryRecord({
+          record: record,
+          amount: amt,
+          suggestions: findOrderNumberSuggestions(orderNumTrimmed),
+        });
+        return; // form stays open behind the mini-modal; no insert yet
+      }
+
+      // No order# branch covers: expenses with/without order#, non-order bank entries, cash_in without order#
       await dbInsert('treasury', record, user?.id);
       const tempEntry = { id: 'temp-' + Date.now(), ...record };
       setTreasury(prev => [tempEntry, ...prev]);
-      setShowAddTreasury(false); toast.success("Transaction saved ✓");
+      setShowAddTreasury(false);
+      toast.success(isBankPlaceholder ? 'Bank entry saved — awaiting bank statement ✓' : 'Transaction saved ✓');
+      setFormData({});
+      setTimeout(() => loadAllData(), 500);
+    } catch (err) {
+      toast.error(err.message);
+    }
+  };
+
+  // Finalize the pending treasury record after the user either:
+  // (a) accepts a typo suggestion → use that invoice's id
+  // (b) creates a new invoice inline → use the new invoice id
+  const finalizePendingTreasury = async (invoiceToLink) => {
+    if (!pendingTreasuryRecord) return;
+    const rec = { ...pendingTreasuryRecord.record };
+    if (invoiceToLink && invoiceToLink.id) {
+      rec.linked_invoice_id = invoiceToLink.id;
+      rec.order_number = invoiceToLink.order_number; // normalize to canonical
+    }
+    try {
+      await dbInsert('treasury', rec, user?.id);
+      if (invoiceToLink && invoiceToLink.id) {
+        await recalcInvoiceCollected(invoiceToLink.id);
+      }
+      const tempEntry = { id: 'temp-' + Date.now(), ...rec };
+      setTreasury(prev => [tempEntry, ...prev]);
+      setShowAddTreasury(false);
+      setPendingTreasuryRecord(null);
+      toast.success(invoiceToLink
+        ? 'Transaction saved + linked to ' + (invoiceToLink.customer_name || ('#' + invoiceToLink.order_number)) + ' ✓'
+        : 'Transaction saved ✓');
       setFormData({});
       setTimeout(() => loadAllData(), 500);
     } catch (err) {
@@ -1583,6 +1885,8 @@ export default function App() {
         description: fd.desc || txn.description,
         cash_in: fd.cashIn != null ? Number(fd.cashIn) : txn.cash_in,
         cash_out: fd.cashOut != null ? Number(fd.cashOut) : txn.cash_out,
+        bank_in:  fd.bankIn  != null ? Number(fd.bankIn)  : txn.bank_in,
+        bank_out: fd.bankOut != null ? Number(fd.bankOut) : txn.bank_out,
         order_number: fd.orderNumber != null ? fd.orderNumber : txn.order_number,
         category: fd.category != null ? fd.category : txn.category,
         subcategory: fd.subcategory != null ? fd.subcategory : txn.subcategory,
@@ -1601,8 +1905,9 @@ export default function App() {
           if (subChanged) batchUpdates.subcategory = fd.subcategory;
           await supabase.from('treasury').update(batchUpdates).eq('description', desc);
           
-          // Create/update rule
-          const ruleType = Number(txn.cash_in || 0) > 0 ? 'income' : 'expense';
+          // Create/update rule — "income" if money flowed in (cash or bank), else "expense"
+          const inflow = Number(txn.cash_in || 0) + Number(txn.bank_in || 0);
+          const ruleType = inflow > 0 ? 'income' : 'expense';
           const existing = expenseRules.find(r => r.description_match === desc && (r.rule_type === ruleType || (!r.rule_type && ruleType === 'expense')));
           const ruleData = {
             category: fd.category || txn.category || '',
@@ -1615,6 +1920,11 @@ export default function App() {
             await dbInsert('expense_rules', { description_match: desc, ...ruleData }, user?.id);
           }
         }
+      }
+
+      // If this edit changed an amount on a linked row, recalc the invoice
+      if (txn.linked_invoice_id && (fd.cashIn != null || fd.bankIn != null)) {
+        try { await recalcInvoiceCollected(txn.linked_invoice_id); } catch(e) {}
       }
 
       setEditingTxn(null);
@@ -1664,17 +1974,14 @@ export default function App() {
     try {
       const txn = treasury.find(t => t.id === txnId);
       if (!txn) return;
-      // If linked to an invoice, undo the collected amount first
-      if (txn.linked_invoice_id && Number(txn.cash_in) > 0) {
-        const inv = invoices.find(i => i.id === txn.linked_invoice_id);
-        if (inv) {
-          const newCollected = Math.max(0, Number(inv.total_collected || 0) - Number(txn.cash_in));
-          await dbUpdate('invoices', inv.id, { total_collected: newCollected }, userProfile?.id || user?.id);
-        }
-      }
+      const invoiceToRecalc = txn.linked_invoice_id || null;
       await dbDelete('treasury', txnId, userProfile?.id || user?.id);
       setTreasury(prev => prev.filter(t => t.id !== txnId));
       setEditTreasuryModal(null);
+      // Recalc from DB truth — handles cash_in and bank_in correctly for any channel.
+      if (invoiceToRecalc) {
+        try { await recalcInvoiceCollected(invoiceToRecalc); } catch(e) {}
+      }
     } catch (err) { alert('Delete error / خطأ حذف: ' + err.message); }
   };
 
@@ -1690,8 +1997,11 @@ export default function App() {
   const handleSplitTreasury = async () => {
     if (!splittingTxn) return;
     const txn = splittingTxn;
-    const isIn = Number(txn.cash_in) > 0;
-    const total = isIn ? Number(txn.cash_in) : Number(txn.cash_out);
+    const { channel, direction, amount: total } = readTreasuryMoney(txn);
+    if (!channel) {
+      alert('Cannot split — this row has no amount to split.');
+      return;
+    }
     const splitTotal = splits.reduce((a, s) => a + (Number(s.amount) || 0), 0);
     if (splitTotal !== total) {
       alert('Split amounts must equal / يجب أن يساوي المجموع ' + total.toLocaleString() + '. Current / الحالي: ' + splitTotal.toLocaleString());
@@ -1701,6 +2011,14 @@ export default function App() {
       alert('Please enter at least one order number / الرجاء إدخال رقم أمر واحد على الأقل');
       return;
     }
+    // Bank rows: carry matched_bank_txn_id + bank_account_id onto every split
+    // sibling so the audit trail stays intact (one bank statement line → N
+    // invoice legs, all demonstrably from the same deposit).
+    const bankMeta = channel === 'bank' ? {
+      matched_bank_txn_id: txn.matched_bank_txn_id || null,
+      bank_account_id: txn.bank_account_id || null,
+      is_bank_placeholder: false, // splits always derive from a confirmed row
+    } : {};
     try {
       const affectedInvoiceIds = new Set();
       // Track original invoice link for recalc
@@ -1713,10 +2031,10 @@ export default function App() {
       const inv0 = findInvoice(splits[0].order);
       await dbUpdate('treasury', txn.id, {
         order_number: splits[0].order,
-        cash_in: isIn ? Number(splits[0].amount) : 0,
-        cash_out: isIn ? 0 : Number(splits[0].amount),
+        ...buildSplitAmounts(channel, direction, splits[0].amount),
+        ...bankMeta,
         linked_invoice_id: inv0 ? inv0.id : null,
-        description: txn.description + ' (split 1/' + splits.length + ')',
+        description: txn.description + ' (split 1/' + splits.length + (channel === 'bank' ? ', bank' : '') + ')',
       }, user?.id);
       if (inv0) affectedInvoiceIds.add(inv0.id);
 
@@ -1726,23 +2044,23 @@ export default function App() {
         await dbInsert('treasury', {
           transaction_date: txn.transaction_date,
           order_number: splits[i].order,
-          description: txn.description + ' (split ' + (i + 1) + '/' + splits.length + ')',
-          cash_in: isIn ? Number(splits[i].amount) : 0,
-          cash_out: isIn ? 0 : Number(splits[i].amount),
+          description: txn.description + ' (split ' + (i + 1) + '/' + splits.length + (channel === 'bank' ? ', bank' : '') + ')',
+          ...buildSplitAmounts(channel, direction, splits[i].amount),
+          ...bankMeta,
           source: txn.source || 'main',
           linked_invoice_id: invI ? invI.id : null,
         }, user?.id);
         if (invI) affectedInvoiceIds.add(invI.id);
       }
 
-      // Recalc ALL affected invoices
+      // Recalc ALL affected invoices (cash AND bank splits count toward collected)
       for (const invId of affectedInvoiceIds) {
         await recalcInvoiceCollected(invId);
       }
 
       setSplittingTxn(null);
       setSplits([{ order: '', amount: 0 }, { order: '', amount: 0 }]);
-      toast.success('Split completed ✓');
+      toast.success('Split completed ✓ ' + (channel === 'bank' ? '(bank deposit across ' + splits.length + ' invoices)' : ''));
       await loadAllData();
     } catch (err) {
       toast.error(err.message);
@@ -2075,7 +2393,7 @@ export default function App() {
 
   const StatusBadge = ({ invoice }) => {
     const txns = treasuryByOrder[invoice.order_number] || [];
-    const tTotal = txns.reduce((a, t) => a + Number(t.cash_in || 0), 0);
+    const tTotal = txns.reduce((a, t) => a + Number(t.cash_in || 0) + Number(t.bank_in || 0), 0);
     const status = getReconStatus(invoice, tTotal);
     const s = STATUS_STYLES[status];
     return (
@@ -2387,7 +2705,24 @@ export default function App() {
               <span className="text-slate-300">/</span>
               <span className="font-bold text-slate-700">{currentTabLabel}</span>
               {tab === 'treasury' && (
-                <button onClick={() => exportExcel(filteredTreasury.map(t => ({ Date: t.transaction_date, Order: t.order_number, Description: t.description, 'Cash In': t.cash_in, 'Cash Out': t.cash_out, Category: t.category, Subcategory: t.subcategory, Currency: t.currency || 'EGP' })), 'Treasury_Export', 'Treasury')}
+                <button onClick={() => exportExcel(filteredTreasury.map(t => {
+                  const isBank = Number(t.bank_in || 0) > 0 || Number(t.bank_out || 0) > 0 || t.is_bank_placeholder || t.matched_bank_txn_id;
+                  return {
+                    Date: t.transaction_date,
+                    Order: t.order_number,
+                    Description: t.description,
+                    Channel: isBank ? 'BANK' : 'SAFE',
+                    'Cash Method': t.cash_method || '',
+                    'Cash In': t.cash_in,
+                    'Cash Out': t.cash_out,
+                    'Bank In': t.bank_in || 0,
+                    'Bank Out': t.bank_out || 0,
+                    'Bank Non-Order Cat': t.bank_nonorder_category || '',
+                    Category: t.category,
+                    Subcategory: t.subcategory,
+                    Currency: t.currency || 'EGP',
+                  };
+                }), 'Treasury_Export', 'Treasury')}
                   className="ml-auto px-3 py-1 rounded-lg bg-emerald-500 text-white text-[10px] font-bold hover:bg-emerald-600 flex items-center gap-1">📊 Export Excel</button>
               )}
               {tab === 'sales' && (
@@ -2410,8 +2745,19 @@ export default function App() {
             INVOICE DETAIL MODAL
         ========================================== */}
         {selectedInvoice && (
-          <Modal onClose={() => { setSelectedInvoice(null); setShowAddPayment(false); setFormData({}); setEditingTxn(null); setShowLinkSearch(false); setLinkSearch(''); }}
+          <Modal onClose={() => {
+            if (treasuryReturnState) { returnToTreasury(); return; }
+            setSelectedInvoice(null); setShowAddPayment(false); setFormData({}); setEditingTxn(null); setShowLinkSearch(false); setLinkSearch('');
+          }}
             title={`Invoice / فاتورة #${selectedInvoice.order_number}`}>
+            {treasuryReturnState && (
+              <div className="mb-3">
+                <button onClick={returnToTreasury}
+                  className="px-3 py-1.5 rounded-lg bg-indigo-600 text-white text-sm font-extrabold hover:bg-indigo-700 shadow">
+                  ← Back to Treasury / عودة للخزنة
+                </button>
+              </div>
+            )}
             <div style={{ direction: 'rtl' }} className="mb-4 pb-3 border-b border-slate-200">
               {formData.editingName ? (
                 <div className="flex gap-2 items-center">
@@ -2628,7 +2974,7 @@ export default function App() {
             {/* Reconciliation Status */}
             {(() => {
               const txns = treasuryByOrder[selectedInvoice.order_number] || [];
-              const tTotal = txns.reduce((a, t) => a + Number(t.cash_in || 0), 0);
+              const tTotal = txns.reduce((a, t) => a + Number(t.cash_in || 0) + Number(t.bank_in || 0), 0);
               const status = getReconStatus(selectedInvoice, tTotal);
               const s = STATUS_STYLES[status];
               return (
@@ -2939,7 +3285,7 @@ export default function App() {
                           className="px-2 py-0.5 rounded border border-blue-300 text-blue-600 text-[10px] mr-1 hover:bg-blue-50">
                           Edit
                         </button>
-                        <button onClick={() => { setSplittingTxn(txn); const isIn = Number(txn.cash_in) > 0; const total = isIn ? Number(txn.cash_in) : Number(txn.cash_out); setSplits([{ order: txn.order_number || '', amount: total }, { order: '', amount: 0 }]); }}
+                        <button onClick={() => { setSplittingTxn(txn); const m = readTreasuryMoney(txn); setSplits([{ order: txn.order_number || '', amount: m.amount }, { order: '', amount: 0 }]); }}
                           className="px-2 py-0.5 rounded border border-purple-300 text-purple-600 text-[10px] mr-1 hover:bg-purple-50">
                           Split
                         </button>
@@ -2954,7 +3300,7 @@ export default function App() {
                 <div className="flex justify-between pt-2 mt-1 border-t-2 border-emerald-300">
                   <span className="text-xs font-bold">Total / الإجمالي</span>
                   <span className="text-sm font-extrabold text-emerald-600">
-                    {fE((treasuryByOrder[selectedInvoice.order_number] || []).reduce((a, t) => a + Number(t.cash_in || 0), 0))}
+                    {fE((treasuryByOrder[selectedInvoice.order_number] || []).reduce((a, t) => a + Number(t.cash_in || 0) + Number(t.bank_in || 0), 0))}
                   </span>
                 </div>
               </div>
@@ -3242,9 +3588,9 @@ export default function App() {
                           <td className="px-3 py-2 flex gap-1 flex-wrap">
                             <button onClick={() => { setEditingTxn(txn.id); setFormData({ txEditDate: txn.transaction_date }); }}
                               className="px-2 py-0.5 rounded border border-blue-300 text-blue-600 text-[10px]">Edit</button>
-                            <button onClick={() => { setSplittingTxn(txn); const isIn = Number(txn.cash_in) > 0; const total = isIn ? Number(txn.cash_in) : Number(txn.cash_out); setSplits([{ order: txn.order_number || '', amount: total }, { order: '', amount: 0 }]); }}
+                            <button onClick={() => { setSplittingTxn(txn); const m = readTreasuryMoney(txn); setSplits([{ order: txn.order_number || '', amount: m.amount }, { order: '', amount: 0 }]); }}
                               className="px-2 py-0.5 rounded border border-purple-300 text-purple-600 text-[10px]">Split</button>
-                            {Number(txn.cash_in) > 0 && !txn.linked_invoice_id && (
+                            {(Number(txn.cash_in) > 0 || Number(txn.bank_in) > 0) && !txn.linked_invoice_id && (
                               <button onClick={() => { setLinkingTreasuryTxn(txn); setTreasuryInvSearch(''); }}
                                 className="px-2 py-0.5 rounded border border-emerald-300 text-emerald-600 text-[10px]">🔗 Link</button>
                             )}
@@ -3473,14 +3819,25 @@ export default function App() {
         })()}
 
         {/* SPLIT PAYMENT MODAL */}
-        {splittingTxn && (
-          <Modal onClose={() => setSplittingTxn(null)} title="Split Payment / تقسيم الدفعة">
+        {splittingTxn && (() => {
+          const money = readTreasuryMoney(splittingTxn);
+          const isBank = money.channel === 'bank';
+          return (
+          <Modal onClose={() => setSplittingTxn(null)} title={isBank ? 'Split Bank Deposit / تقسيم إيداع بنكي' : 'Split Payment / تقسيم الدفعة'}>
             <div className="space-y-3">
-              <div className="bg-slate-50 rounded-lg p-3 text-xs">
+              <div className={(isBank ? 'bg-indigo-50 border border-indigo-200' : 'bg-slate-50') + ' rounded-lg p-3 text-xs'}>
                 <div className="font-bold mb-1" style={{ direction: 'rtl' }}>{splittingTxn.transaction_date} — {splittingTxn.description}</div>
-                <div>Original: <span className="font-bold text-emerald-600">{fE(Number(splittingTxn.cash_in) > 0 ? Number(splittingTxn.cash_in) : Number(splittingTxn.cash_out))}</span>
+                <div>Original: <span className={'font-bold ' + (isBank ? 'text-indigo-700' : 'text-emerald-600')}>
+                  {isBank ? '🏦 ' : ''}{fE(money.amount)}
+                </span>
                   {splittingTxn.order_number ? (' — Order: ' + splittingTxn.order_number) : ''}
                 </div>
+                {isBank && (
+                  <div className="mt-1.5 text-[10px] text-indigo-800 leading-snug">
+                    This is a bank deposit. Splits go to <code>bank_in</code>/<code>bank_out</code> — they will NOT affect the treasury safe balance. Each split updates its linked invoice's collected amount.
+                    <br/><span style={{direction:'rtl',display:'block'}}>هذا إيداع بنكي. التقسيمات تذهب إلى خانة البنك — لن تؤثر على رصيد الخزنة. كل تقسيم يحدّث تحصيل الفاتورة المرتبطة.</span>
+                  </div>
+                )}
               </div>
               <div className="max-h-[300px] overflow-auto space-y-2">
                 {splits.map((sp, idx) => (
@@ -3515,20 +3872,20 @@ export default function App() {
               </button>
               <div className="text-xs text-center text-slate-400">
                 {(() => {
-                  const isIn = Number(splittingTxn.cash_in) > 0;
-                  const total = isIn ? Number(splittingTxn.cash_in) : Number(splittingTxn.cash_out);
+                  const total = money.amount;
                   const splitTotal = splits.reduce((a, s) => a + (Number(s.amount) || 0), 0);
                   const remaining = total - splitTotal;
                   return 'Total: ' + fE(splitTotal) + ' / ' + fE(total) + (remaining === 0 ? ' ✅' : ' — Remaining: ' + fE(remaining));
                 })()}
               </div>
               <button onClick={handleSplitTreasury}
-                className="w-full py-2 bg-purple-600 text-white rounded-lg font-semibold text-sm hover:bg-purple-700">
-                Split into {splits.length} / تقسيم
+                className={'w-full py-2 text-white rounded-lg font-semibold text-sm ' + (isBank ? 'bg-indigo-600 hover:bg-indigo-700' : 'bg-purple-600 hover:bg-purple-700')}>
+                {isBank ? '🏦 ' : ''}Split into {splits.length} / تقسيم
               </button>
             </div>
           </Modal>
-        )}
+          );
+        })()}
 
         {/* ==========================================
             DRILL MODAL (Invoices/Collected/Outstanding)
@@ -3981,7 +4338,13 @@ export default function App() {
                     <tbody>
                       {(formData.invoiceItems || []).map((item, idx) => (
                         <tr key={idx} className="border-b border-blue-100">
-                          <td className="px-2 py-1 text-[10px]">{item.inv_desc}</td>
+                          <td className="px-2 py-1">
+                            <input type="text" value={item.inv_desc || ''}
+                              onChange={e => { const items = [...(formData.invoiceItems || [])]; items[idx] = {...items[idx], inv_desc: e.target.value}; setFormData({...formData, invoiceItems: items}); }}
+                              placeholder="Description / الوصف"
+                              className="w-full text-[10px] border rounded px-1 py-0.5"
+                              style={{direction: (item.inv_desc || '').match(/[\u0600-\u06FF]/) ? 'rtl' : 'ltr'}} />
+                          </td>
                           <td className="px-2 py-1"><input type="number" value={item.inv_qty}
                             onChange={e => { const items = [...(formData.invoiceItems || [])]; items[idx] = {...items[idx], inv_qty: Number(e.target.value) || 0, inv_total: (Number(e.target.value) || 0) * items[idx].inv_price}; setFormData({...formData, invoiceItems: items}); }}
                             className="w-full text-right text-[10px] border rounded px-1 py-0.5" /></td>
@@ -4058,7 +4421,7 @@ export default function App() {
             ADD TREASURY MODAL
         ========================================== */}
         {showAddTreasury && (
-          <Modal onClose={() => { setShowAddTreasury(false); toast.success("Transaction saved ✓"); setFormData({}); }} title="New Transaction / معاملة جديدة">
+          <Modal onClose={() => { setShowAddTreasury(false); setFormData({}); }} title="New Transaction / معاملة جديدة">
             <div className="grid grid-cols-2 gap-3">
               <div className="col-span-2">
                 <label className="text-xs font-semibold text-slate-600 block mb-2">Type / النوع</label>
@@ -4086,11 +4449,71 @@ export default function App() {
                     );
                   })}
                 </div>
-                {(formData.type === 'bank_in' || formData.type === 'bank_out') && (
-                  <div className="mt-2 p-2 bg-indigo-50 border border-indigo-200 rounded text-[11px] text-indigo-800">
-                    ℹ️ <b>Placeholder mode / وضع العنصر النائب:</b> This transaction will NOT affect cash net, credit, or debit. When you next import from Egypt Bank, the system auto-matches this entry using: same bank account, amount within 1%, date within 2 days, order # in description. Once matched, it converts to a real entry and links to the invoice.<br/><span style={{direction:'rtl',display:'block',marginTop:4}}>هذه المعاملة لن تؤثر على صافي النقد. عند استيراد كشف البنك، سيتم المطابقة التلقائية وتحويلها إلى قيد فعلي.</span>
-                  </div>
-                )}
+                {(formData.type === 'bank_in' || formData.type === 'bank_out') && (() => {
+                  const mode = formData.bankEntryMode || 'order';
+                  return (
+                    <div className="mt-2 space-y-2">
+                      {/* Order / Non-Order radio */}
+                      <div className="p-2 bg-indigo-50 border border-indigo-200 rounded">
+                        <label className="text-[11px] font-bold text-indigo-900 block mb-1.5">
+                          This bank entry is: / هذا القيد البنكي:
+                        </label>
+                        <div className="grid grid-cols-2 gap-2">
+                          {[
+                            { v: 'order',    en: '📄 Order (links to an invoice)', ar: 'أمر (مرتبط بفاتورة)' },
+                            { v: 'nonorder', en: '🏦 Non-Order (owner draw, transfer, fee…)', ar: 'بدون أمر (سحب، تحويل، رسوم...)' },
+                          ].map(opt => {
+                            const sel = mode === opt.v;
+                            return (
+                              <label key={opt.v}
+                                className={'cursor-pointer rounded border-2 p-2 text-center transition ' +
+                                  (sel ? 'bg-indigo-600 text-white border-indigo-700' : 'bg-white text-indigo-800 border-indigo-300 hover:border-indigo-500')}>
+                                <input type="radio" name="bank-entry-mode" value={opt.v} checked={sel}
+                                  onChange={e => setFormData({
+                                    ...formData,
+                                    bankEntryMode: e.target.value,
+                                    // clear the other mode's fields when switching
+                                    orderNumber: e.target.value === 'nonorder' ? '' : formData.orderNumber,
+                                    bankNonOrderCategory: e.target.value === 'order' ? '' : formData.bankNonOrderCategory,
+                                  })}
+                                  className="hidden" />
+                                <div className="text-[11px] font-bold">{opt.en}</div>
+                                <div className={'text-[9px] mt-0.5 ' + (sel ? 'text-white/80' : 'text-indigo-600')} style={{direction:'rtl'}}>{opt.ar}</div>
+                              </label>
+                            );
+                          })}
+                        </div>
+                      </div>
+
+                      {/* Non-Order category selector — only in non-order mode */}
+                      {mode === 'nonorder' && (
+                        <div className="p-2 bg-indigo-50 border border-indigo-200 rounded">
+                          <label className="text-[11px] font-bold text-indigo-900 block mb-1">
+                            What is this? / ما نوع هذا القيد؟ *
+                          </label>
+                          <select value={formData.bankNonOrderCategory || ''}
+                            onChange={e => setFormData({ ...formData, bankNonOrderCategory: e.target.value })}
+                            className="w-full px-2 py-1.5 rounded border border-indigo-300 text-sm bg-white">
+                            <option value="">Select a category…</option>
+                            {BANK_NONORDER_CATS.map(c => (
+                              <option key={c.v} value={c.v}>{c.en} / {c.ar}</option>
+                            ))}
+                          </select>
+                        </div>
+                      )}
+
+                      {/* Explainer banner */}
+                      <div className="p-2 bg-indigo-50 border border-indigo-200 rounded text-[11px] text-indigo-800">
+                        ℹ️ <b>Bank entry — safe balance protected:</b> This row will <b>NOT</b> affect the treasury (safe) Cash In / Cash Out / Net. Amount lives in <code>bank_in</code> / <code>bank_out</code> after the bank statement verifies it. {mode === 'order'
+                          ? 'On match, the linked invoice\'s collected amount is credited.'
+                          : 'No invoice is credited — this is a non-order movement.'}
+                        <br/><span style={{direction:'rtl',display:'block',marginTop:4}}>
+                          قيد بنكي — رصيد الخزنة محمي: هذا القيد لن يؤثر على صافي الخزنة. المبلغ يُسجَّل في خانة البنك بعد تأكيد الكشف. {mode === 'order' ? 'عند المطابقة، يُضاف المبلغ إلى تحصيل الفاتورة المرتبطة.' : 'لا يُضاف لأي فاتورة — حركة بنكية بدون أمر.'}
+                        </span>
+                      </div>
+                    </div>
+                  );
+                })()}
               </div>
               <div>
                 <label className="text-xs font-semibold text-slate-600">Date / التاريخ</label>
@@ -4133,27 +4556,65 @@ export default function App() {
                   )}
                 </div>
               )}
-              <div>
-                <label className="text-xs font-semibold text-slate-600">Order # / رقم</label>
-                <input value={formData.orderNumber || ''}
-                  onChange={e => setFormData({ ...formData, orderNumber: e.target.value })}
-                  placeholder="Type to search..."
-                  className="w-full px-3 py-2 rounded-lg border border-slate-200 text-sm" />
-                {formData.orderNumber && formData.orderNumber.length >= 2 && (
-                  <div className="mt-1 max-h-[120px] overflow-auto rounded border border-slate-200 bg-white">
-                    {invoices
-                      .filter(inv => (inv.order_number || '').includes(formData.orderNumber) || (inv.customer_name || '').includes(formData.orderNumber))
-                      .slice(0, 8)
-                      .map(inv => (
-                        <div key={inv.id} onClick={() => setFormData({ ...formData, orderNumber: inv.order_number, desc: inv.customer_name })}
-                          className="px-3 py-1.5 text-xs cursor-pointer hover:bg-blue-50 border-b border-slate-50">
-                          <span className="font-bold">{inv.order_number}</span> — <span>{inv.customer_name_en || inv.customer_name}</span>
-                          <span className="text-slate-400 ml-1">{fE(inv.total_amount)}</span>
-                        </div>
-                      ))}
+              {/* Cash Method — only for Cash In / Cash Out. Vodafone + InstaPay auto-sweep
+                  to the safe so they count as cash_in/cash_out, just tagged for reconciliation. */}
+              {(formData.type === 'in' || formData.type === 'out' || !formData.type) && (
+                <div className="col-span-2">
+                  <label className="text-xs font-semibold text-slate-600 block mb-1.5">Cash Channel / قناة النقد</label>
+                  <div className="grid grid-cols-3 gap-2">
+                    {[
+                      { v: 'cash',     en: '💵 Cash',         ar: 'نقدي' },
+                      { v: 'vodafone', en: '📱 Vodafone Cash', ar: 'فودافون كاش' },
+                      { v: 'instapay', en: '⚡ InstaPay',      ar: 'إنستاباي' },
+                    ].map(m => {
+                      const sel = (formData.cashMethod || 'cash') === m.v;
+                      return (
+                        <label key={m.v}
+                          className={'cursor-pointer rounded border-2 p-1.5 text-center transition ' +
+                            (sel ? 'bg-emerald-500 text-white border-emerald-600' : 'bg-white text-emerald-800 border-emerald-200 hover:border-emerald-400')}>
+                          <input type="radio" name="cash-method" value={m.v} checked={sel}
+                            onChange={e => setFormData({ ...formData, cashMethod: e.target.value })}
+                            className="hidden" />
+                          <div className="text-[11px] font-bold">{m.en}</div>
+                          <div className={'text-[9px] ' + (sel ? 'text-white/80' : 'text-emerald-600')} style={{direction:'rtl'}}>{m.ar}</div>
+                        </label>
+                      );
+                    })}
                   </div>
-                )}
-              </div>
+                  <div className="text-[10px] text-emerald-700 mt-1 italic">
+                    All three auto-sweep to the safe (Cash In/Out). The tag is kept for reconciliation against Vodafone/InstaPay statements.
+                  </div>
+                </div>
+              )}
+              {(() => {
+                const isBank = formData.type === 'bank_in' || formData.type === 'bank_out';
+                const bankMode = formData.bankEntryMode || 'order';
+                // Hide Order# in non-order bank mode — it doesn't apply.
+                if (isBank && bankMode === 'nonorder') return null;
+                return (
+                  <div>
+                    <label className="text-xs font-semibold text-slate-600">Order # / رقم{isBank ? ' *' : ''}</label>
+                    <input value={formData.orderNumber || ''}
+                      onChange={e => setFormData({ ...formData, orderNumber: e.target.value })}
+                      placeholder="Type to search..."
+                      className="w-full px-3 py-2 rounded-lg border border-slate-200 text-sm" />
+                    {formData.orderNumber && formData.orderNumber.length >= 2 && (
+                      <div className="mt-1 max-h-[120px] overflow-auto rounded border border-slate-200 bg-white">
+                        {invoices
+                          .filter(inv => (inv.order_number || '').includes(formData.orderNumber) || (inv.customer_name || '').includes(formData.orderNumber))
+                          .slice(0, 8)
+                          .map(inv => (
+                            <div key={inv.id} onClick={() => setFormData({ ...formData, orderNumber: inv.order_number, desc: inv.customer_name })}
+                              className="px-3 py-1.5 text-xs cursor-pointer hover:bg-blue-50 border-b border-slate-50">
+                              <span className="font-bold">{inv.order_number}</span> — <span>{inv.customer_name_en || inv.customer_name}</span>
+                              <span className="text-slate-400 ml-1">{fE(inv.total_amount)}</span>
+                            </div>
+                          ))}
+                      </div>
+                    )}
+                  </div>
+                );
+              })()}
               <div className="col-span-2">
                 <label className="text-xs font-semibold text-slate-600">Description / الوصف</label>
                 <input value={formData.desc || ''}
@@ -4222,7 +4683,7 @@ export default function App() {
             <div className="flex gap-2 mt-4">
               <button onClick={handleAddTreasury}
                 className="px-4 py-2 bg-blue-500 text-white rounded-lg font-semibold">Save / حفظ ✓</button>
-              <button onClick={() => { setShowAddTreasury(false); toast.success("Transaction saved ✓"); setFormData({}); }}
+              <button onClick={() => { setShowAddTreasury(false); setFormData({}); }}
                 className="px-4 py-2 border border-slate-200 rounded-lg font-semibold">Cancel / إلغاء</button>
             </div>
           </Modal>
@@ -5355,12 +5816,36 @@ export default function App() {
               </div>
               <span className="text-xs text-emerald-600">{hideSections.cash ? '👁️ Show' : '🙈 Hide'}</span>
             </div>
-            {!hideSections.cash && <><div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-5">
-              <Card title="Cash In" titleAr="وارد" value={fE(totalCashIn)} sub="Tap / اضغط" color="#10b981" onClick={() => setTreasuryDrill('in')} spark={sparkData.cin} />
-              <Card title="Cash Out" titleAr="منصرف" value={fE(totalCashOut)} sub="Tap / اضغط" color="#ef4444" onClick={() => setTreasuryDrill('out')} spark={sparkData.cout} />
-              <Card title="Net" titleAr="صافي" value={fE(totalCashIn - totalCashOut)} sub="Tap / اضغط" color={totalCashIn > totalCashOut ? '#10b981' : '#ef4444'} onClick={() => setTreasuryDrill('net')} />
+            {!hideSections.cash && <>
+            <div className="text-[10px] text-emerald-700 font-bold uppercase tracking-wide mb-1">Safe / الخزنة (physical cash)</div>
+            <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-3">
+              <Card title="Cash In" titleAr="وارد" value={fE(totalCashIn)} sub="Safe only / خزنة فقط" color="#10b981" onClick={() => setTreasuryDrill('in')} spark={sparkData.cin} />
+              <Card title="Cash Out" titleAr="منصرف" value={fE(totalCashOut)} sub="Safe only / خزنة فقط" color="#ef4444" onClick={() => setTreasuryDrill('out')} spark={sparkData.cout} />
+              <Card title="Net" titleAr="صافي" value={fE(totalCashIn - totalCashOut)} sub="Safe balance / رصيد الخزنة" color={totalCashIn > totalCashOut ? '#10b981' : '#ef4444'} onClick={() => setTreasuryDrill('net')} />
               <Card title="Checks" titleAr="شيكات" value={fE(pendingChecks.reduce((a, c) => a + Number(c.amount), 0))} sub={`${pendingChecks.length} pending`} color="#f59e0b" onClick={() => navigate('checks')} />
             </div>
+            {(totalBankIn > 0 || totalBankOut > 0) && (
+              <>
+                <div className="text-[10px] text-indigo-700 font-bold uppercase tracking-wide mb-1">🏦 Bank / البنك (tracked separately — does NOT affect safe balance)</div>
+                <div className="grid grid-cols-3 gap-3 mb-5">
+                  <div className="rounded-xl p-3" style={{ background: '#eef2ff', borderLeft: '4px solid #6366f1' }}>
+                    <div className="text-[10px] text-indigo-600 font-bold">Bank In / وارد بنكي</div>
+                    <div className="text-lg font-extrabold text-indigo-700">{fE(totalBankIn)}</div>
+                    <div className="text-[9px] text-indigo-500">counted toward invoice collected</div>
+                  </div>
+                  <div className="rounded-xl p-3" style={{ background: '#eef2ff', borderLeft: '4px solid #6366f1' }}>
+                    <div className="text-[10px] text-indigo-600 font-bold">Bank Out / صادر بنكي</div>
+                    <div className="text-lg font-extrabold text-indigo-700">{fE(totalBankOut)}</div>
+                    <div className="text-[9px] text-indigo-500">bank-paid expenses</div>
+                  </div>
+                  <div className="rounded-xl p-3" style={{ background: '#eef2ff', borderLeft: '4px solid #6366f1' }}>
+                    <div className="text-[10px] text-indigo-600 font-bold">Bank Net / صافي البنك</div>
+                    <div className={'text-lg font-extrabold ' + (totalBankIn >= totalBankOut ? 'text-indigo-700' : 'text-red-600')}>{fE(totalBankIn - totalBankOut)}</div>
+                    <div className="text-[9px] text-indigo-500">not included in safe net</div>
+                  </div>
+                </div>
+              </>
+            )}
 
             {/* Yearly Chart */}
             <div className="bg-white rounded-xl p-4 mb-4">
@@ -5939,7 +6424,7 @@ export default function App() {
               if (!sf || sf === 'all') return filteredInvoices;
               return filteredInvoices.filter(inv => {
                 const txns = treasuryByOrder[inv.order_number] || [];
-                const tTotal = txns.reduce((a, t) => a + Number(t.cash_in || 0), 0);
+                const tTotal = txns.reduce((a, t) => a + Number(t.cash_in || 0) + Number(t.bank_in || 0), 0);
                 return getReconStatus(inv, tTotal) === sf;
               });
             })()} onSelect={setSelectedInvoice} />
@@ -6463,7 +6948,21 @@ export default function App() {
                       {searchResults.slice(0, 200).map(txn => (
                         <tr key={txn.id} className="border-b border-slate-50">
                           <td className="px-2 py-1.5 text-xs">{txn.transaction_date}</td>
-                          <td className="px-2 py-1.5 text-xs font-semibold text-center">{txn.order_number || ''}</td>
+                          <td className="px-2 py-1.5 text-xs font-semibold text-center">
+                            {txn.order_number ? (() => {
+                              const matchInv = invoices.find(i => i.order_number === txn.order_number);
+                              if (matchInv) {
+                                return (
+                                  <button onClick={() => openInvoiceFromTreasury(matchInv)}
+                                    className="text-blue-600 hover:text-blue-800 font-extrabold underline-offset-2 hover:underline"
+                                    title="Open invoice / فتح الفاتورة">
+                                    {txn.order_number} ↗
+                                  </button>
+                                );
+                              }
+                              return <span className="text-slate-500">{txn.order_number}</span>;
+                            })() : ''}
+                          </td>
                           <td className="px-2 py-1.5 text-xs" style={{ direction: lang === 'ar' ? 'rtl' : 'ltr' }}>
                             {tx(txn.description, txn.description_en)}
                             {txn.linked_invoice_id && (() => {
@@ -6476,11 +6975,13 @@ export default function App() {
                               ) : null;
                             })()}
                           </td>
-                          <td className="px-2 py-1.5 text-xs text-right text-emerald-600 font-semibold">
-                            {txn.cash_in > 0 ? fE(txn.cash_in) : ''}
+                          <td className="px-2 py-1.5 text-xs text-right font-semibold">
+                            {Number(txn.bank_in || 0) > 0 && <div className="text-indigo-700 font-bold">🏦 {fE(txn.bank_in)}</div>}
+                            {Number(txn.cash_in) > 0 && <span className="text-emerald-600">{fE(txn.cash_in)}</span>}
                           </td>
-                          <td className="px-2 py-1.5 text-xs text-right text-red-500 font-semibold">
-                            {txn.cash_out > 0 ? fE(txn.cash_out) : ''}
+                          <td className="px-2 py-1.5 text-xs text-right font-semibold">
+                            {Number(txn.bank_out || 0) > 0 && <div className="text-indigo-700 font-bold">🏦 {fE(txn.bank_out)}</div>}
+                            {Number(txn.cash_out) > 0 && <span className="text-red-500">{fE(txn.cash_out)}</span>}
                           </td>
                           <td className="px-2 py-1.5 text-xs">
                             <div className="flex gap-1 items-center">
@@ -6490,7 +6991,7 @@ export default function App() {
                                 className="text-blue-500 hover:text-blue-700" title="Edit">✏️</button>
                               <button onClick={() => setEditTreasuryModal({...txn, confirmDelete: true})}
                                 className="text-red-400 hover:text-red-600" title="Delete">🗑</button>
-                              {Number(txn.cash_in) > 0 && !txn.linked_invoice_id && (
+                              {(Number(txn.cash_in) > 0 || Number(txn.bank_in || 0) > 0) && !txn.linked_invoice_id && (
                                 <button onClick={() => { setLinkingTreasuryTxn(txn); setTreasuryInvSearch(''); }}
                                   className="text-[10px] text-blue-500 font-semibold">🔗</button>
                               )}
@@ -6531,41 +7032,94 @@ export default function App() {
                     <th className="px-2 py-2 text-xs"></th>
                   </tr></thead>
                   <tbody>
-                    {filteredTreasury.slice(0, treasuryVisible).map(txn => (
-                      <tr key={txn.id} className={"border-b border-slate-100 " + (txn.is_bank_placeholder ? "bg-indigo-200 hover:bg-indigo-300 border-l-4 border-l-indigo-600" : "hover:bg-blue-50/30")}>
+                    {filteredTreasury.slice(0, treasuryVisible).map(txn => {
+                      // isBankRow = any row that holds money in bank_in/bank_out, OR is a placeholder waiting, OR has been matched.
+                      const isBankPlaceholder = txn.is_bank_placeholder === true;
+                      const isBankMatched = !isBankPlaceholder && txn.matched_bank_txn_id;
+                      const hasBankAmount = Number(txn.bank_in || 0) > 0 || Number(txn.bank_out || 0) > 0;
+                      const isBankRow = isBankPlaceholder || isBankMatched || hasBankAmount;
+                      const rowClass = "border-b border-slate-100 " +
+                        (isBankPlaceholder
+                          ? "bg-indigo-100 hover:bg-indigo-200 border-l-4 border-l-indigo-600"
+                          : isBankRow
+                          ? "bg-indigo-50 hover:bg-indigo-100 border-l-4 border-l-indigo-400"
+                          : "hover:bg-blue-50/30");
+                      const bankAcc = isBankRow && txn.bank_account_id ? egyptBankAccounts.find(a => a.id === txn.bank_account_id) : null;
+                      return (
+                      <tr key={txn.id} className={rowClass}
+                          title={isBankRow ? "Bank entry — affects invoice collections only, does NOT impact treasury (safe) net / قيد بنكي — يؤثر على تحصيل الفاتورة فقط، لا يؤثر على رصيد الخزنة" : undefined}>
                         <td className="px-2 py-1.5 text-[10px] whitespace-nowrap">{txn.transaction_date}</td>
-                        <td className="px-2 py-1.5 text-[10px] font-semibold text-center">{txn.order_number || ''}</td>
+                        <td className="px-2 py-1.5 text-[10px] font-semibold text-center">
+                          {txn.order_number ? (() => {
+                            const matchInv = invoices.find(i => i.order_number === txn.order_number);
+                            if (matchInv) {
+                              return (
+                                <button onClick={() => openInvoiceFromTreasury(matchInv)}
+                                  className={(isBankRow ? "text-indigo-700 hover:text-indigo-900" : "text-blue-600 hover:text-blue-800") + " font-extrabold underline-offset-2 hover:underline"}
+                                  title="Open invoice / فتح الفاتورة">
+                                  {txn.order_number} ↗
+                                </button>
+                              );
+                            }
+                            return <span className="text-slate-500" title="No matching invoice">{txn.order_number}</span>;
+                          })() : ''}
+                        </td>
                         <td className="px-2 py-1.5 text-[10px]" style={{direction: lang === 'ar' ? 'rtl' : 'ltr'}}>
-                          {txn.is_bank_placeholder && (
+                          {isBankPlaceholder && (
                             <span className="inline-block px-2 py-0.5 rounded bg-indigo-700 text-white text-[10px] font-extrabold mr-1 shadow">🏦 BANK (awaiting)</span>
+                          )}
+                          {isBankMatched && (
+                            <span className="inline-block px-2 py-0.5 rounded bg-indigo-600 text-white text-[10px] font-extrabold mr-1 shadow">🏦 BANK (received)</span>
+                          )}
+                          {!isBankPlaceholder && !isBankMatched && hasBankAmount && (
+                            <span className="inline-block px-2 py-0.5 rounded bg-indigo-500 text-white text-[10px] font-extrabold mr-1 shadow">🏦 BANK</span>
+                          )}
+                          {/* Cash-channel tag — Vodafone or InstaPay rows are visually distinct
+                              from physical cash for reconciliation purposes. */}
+                          {!isBankRow && txn.cash_method === 'vodafone' && (
+                            <span className="inline-block px-2 py-0.5 rounded bg-red-600 text-white text-[10px] font-extrabold mr-1 shadow">📱 Vodafone</span>
+                          )}
+                          {!isBankRow && txn.cash_method === 'instapay' && (
+                            <span className="inline-block px-2 py-0.5 rounded bg-amber-500 text-white text-[10px] font-extrabold mr-1 shadow">⚡ InstaPay</span>
                           )}
                           {tx(txn.description, txn.description_en)}
                           {txn.cash_out > 0 && txn.category && (
                             <span className="text-[8px] text-amber-600 ml-1">({txCat(txn.category)}{txn.subcategory ? ' > ' + txn.subcategory : ''})</span>
                           )}
-                          {txn.is_bank_placeholder && txn.bank_account_id && (() => {
-                            const acc = egyptBankAccounts.find(a => a.id === txn.bank_account_id);
-                            return acc ? <div className="text-[10px] text-indigo-900 font-bold">→ {acc.bank_name}{acc.account_name ? ' / ' + acc.account_name : ''}</div> : null;
-                          })()}
+                          {isBankRow && txn.bank_nonorder_category && (
+                            <span className="text-[8px] text-indigo-700 font-bold ml-1">[{txn.bank_nonorder_category}]</span>
+                          )}
+                          {bankAcc && (
+                            <div className="text-[10px] text-indigo-900 font-bold">→ {bankAcc.bank_name}{bankAcc.account_name ? ' / ' + bankAcc.account_name : ''}</div>
+                          )}
                           {txn.linked_invoice_id && (() => {
                             const li = invoices.find(i => i.id === txn.linked_invoice_id);
                             return li ? <div className="text-[8px] text-emerald-600">✅ → {li.customer_name || li.order_number}</div> : null;
                           })()}
+                          {isBankRow && (
+                            <div className="text-[9px] text-indigo-700 italic mt-0.5">Does not affect safe balance / لا يؤثر على رصيد الخزنة</div>
+                          )}
                         </td>
-                        <td className="px-2 py-1.5 text-[10px] text-right text-emerald-600 font-semibold">
-                          {txn.is_bank_placeholder && txn.expected_direction === 'in' && <div className="text-indigo-600 italic">~{fE(txn.expected_amount)}</div>}
-                          {Number(txn.cash_in) > 0 && fE(txn.cash_in)}
-                          {Number(txn.usd_in) > 0 && <div>${Number(txn.usd_in).toLocaleString()} <span className="text-[8px] text-amber-600">USD</span></div>}
-                          {Number(txn.foreign_amount || 0) > 0 && txn.foreign_direction === 'in' && <div>{Number(txn.foreign_amount).toLocaleString()} <span className="text-[8px] text-amber-600">{txn.foreign_currency}</span></div>}
+                        <td className="px-2 py-1.5 text-[10px] text-right font-semibold">
+                          {/* Awaiting bank placeholder — show expected amount in italics, indigo */}
+                          {isBankPlaceholder && txn.expected_direction === 'in' && <div className="text-indigo-500 italic">~{fE(txn.expected_amount)}</div>}
+                          {/* Matched / confirmed bank_in — indigo, not emerald, because this is not safe money */}
+                          {Number(txn.bank_in || 0) > 0 && <div className="text-indigo-700 font-bold">{fE(txn.bank_in)}</div>}
+                          {/* Safe cash in — emerald */}
+                          {Number(txn.cash_in) > 0 && <span className="text-emerald-600">{fE(txn.cash_in)}</span>}
+                          {Number(txn.usd_in) > 0 && <div className="text-emerald-600">${Number(txn.usd_in).toLocaleString()} <span className="text-[8px] text-amber-600">USD</span></div>}
+                          {Number(txn.foreign_amount || 0) > 0 && txn.foreign_direction === 'in' && <div className="text-emerald-600">{Number(txn.foreign_amount).toLocaleString()} <span className="text-[8px] text-amber-600">{txn.foreign_currency}</span></div>}
                         </td>
-                        <td className="px-2 py-1.5 text-[10px] text-right text-red-500 font-semibold">
-                          {txn.is_bank_placeholder && txn.expected_direction === 'out' && <div className="text-indigo-600 italic">~{fE(txn.expected_amount)}</div>}
-                          {Number(txn.cash_out) > 0 && fE(txn.cash_out)}
-                          {Number(txn.usd_out) > 0 && <div>${Number(txn.usd_out).toLocaleString()} <span className="text-[8px] text-amber-600">USD</span></div>}
-                          {Number(txn.foreign_amount || 0) > 0 && txn.foreign_direction === 'out' && <div>{Number(txn.foreign_amount).toLocaleString()} <span className="text-[8px] text-amber-600">{txn.foreign_currency}</span></div>}
+                        <td className="px-2 py-1.5 text-[10px] text-right font-semibold">
+                          {isBankPlaceholder && txn.expected_direction === 'out' && <div className="text-indigo-500 italic">~{fE(txn.expected_amount)}</div>}
+                          {Number(txn.bank_out || 0) > 0 && <div className="text-indigo-700 font-bold">{fE(txn.bank_out)}</div>}
+                          {Number(txn.cash_out) > 0 && <span className="text-red-500">{fE(txn.cash_out)}</span>}
+                          {Number(txn.usd_out) > 0 && <div className="text-red-500">${Number(txn.usd_out).toLocaleString()} <span className="text-[8px] text-amber-600">USD</span></div>}
+                          {Number(txn.foreign_amount || 0) > 0 && txn.foreign_direction === 'out' && <div className="text-red-500">{Number(txn.foreign_amount).toLocaleString()} <span className="text-[8px] text-amber-600">{txn.foreign_currency}</span></div>}
                         </td>
                         <td className="px-2 py-1.5 text-[10px] text-right font-bold whitespace-nowrap" style={{color: (treasuryBalanceMap[txn.id] || 0) >= 0 ? '#059669' : '#dc2626'}}>
-                          {txn.is_bank_placeholder ? <span className="text-indigo-400">—</span> : fE(treasuryBalanceMap[txn.id] || 0)}
+                          {/* Bank rows don't contribute to safe running balance — show dash */}
+                          {isBankRow ? <span className="text-indigo-400" title="Bank row — not part of safe balance">—</span> : fE(treasuryBalanceMap[txn.id] || 0)}
                         </td>
                         <td className="px-2 py-1.5 text-[10px] whitespace-nowrap">
                           <div className="flex gap-1 items-center">
@@ -6576,7 +7130,8 @@ export default function App() {
                           </div>
                         </td>
                       </tr>
-                    ))}
+                      );
+                    })}
                   </tbody>
                 </table>
                 {treasuryVisible < filteredTreasury.length && (
@@ -8541,6 +9096,220 @@ export default function App() {
           debts={debts}
           onClose={() => setShowAccountantReview(false)}
         />
+      )}
+
+      {/* "Order # not found — create invoice now?" Modal */}
+      {pendingTreasuryRecord && (
+        <div
+          className="fixed inset-0 z-[60] bg-black/70 backdrop-blur-sm"
+          onClick={() => { setPendingTreasuryRecord(null); }}
+          style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 12 }}
+        >
+          <div
+            className="bg-white rounded-2xl shadow-2xl w-full max-w-xl flex flex-col"
+            style={{ maxHeight: 'calc(100vh - 24px)' }}
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="px-5 py-4 rounded-t-2xl bg-amber-600 border-b-4 border-amber-800" style={{ flexShrink: 0 }}>
+              <div className="flex justify-between items-start gap-3">
+                <div className="flex-1">
+                  <div className="text-xl font-extrabold text-white">⚠️ Order #{pendingTreasuryRecord.record.order_number} Not Found</div>
+                  <div className="text-lg font-bold text-white mt-1" style={{ direction: 'rtl' }}>
+                    رقم الأمر #{pendingTreasuryRecord.record.order_number} غير موجود
+                  </div>
+                </div>
+                <button onClick={() => setPendingTreasuryRecord(null)}
+                  className="px-3 py-1.5 rounded-lg bg-white text-slate-900 text-sm font-extrabold hover:bg-slate-100 shadow">✕</button>
+              </div>
+            </div>
+
+            <div className="p-5 space-y-4" style={{ overflowY: 'auto', flex: '1 1 auto', minHeight: 0 }}>
+              {/* Typo suggestions */}
+              {pendingTreasuryRecord.suggestions && pendingTreasuryRecord.suggestions.length > 0 && !formData.__creatingInvoice && (
+                <div className="bg-blue-100 border-2 border-blue-500 rounded-lg p-3">
+                  <div className="text-sm font-extrabold text-blue-900 mb-2">
+                    Did you mean one of these? / هل تقصد أحد هذه؟
+                  </div>
+                  <div className="space-y-1.5">
+                    {pendingTreasuryRecord.suggestions.map(inv => (
+                      <button
+                        key={inv.id}
+                        onClick={() => finalizePendingTreasury(inv)}
+                        className="w-full text-left px-3 py-2.5 bg-white hover:bg-blue-50 rounded-lg border-2 border-blue-300 hover:border-blue-500 transition"
+                      >
+                        <div className="flex justify-between items-start gap-2">
+                          <div className="flex-1 min-w-0">
+                            <div className="text-base font-extrabold text-slate-900">#{inv.order_number}</div>
+                            <div className="text-sm font-semibold text-slate-800" style={{ direction: 'rtl' }}>{inv.customer_name || '—'}</div>
+                          </div>
+                          <div className="text-right shrink-0">
+                            <div className="text-sm font-extrabold text-emerald-700">{fE(inv.total_amount)}</div>
+                            <div className="text-xs text-slate-600">Outstanding: {fE(inv.outstanding || 0)}</div>
+                          </div>
+                        </div>
+                        <div className="text-xs text-blue-800 font-bold mt-1">→ Link treasury to this invoice</div>
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {/* Inline create-invoice form */}
+              {formData.__creatingInvoice ? (
+                <div className="bg-emerald-100 border-2 border-emerald-500 rounded-lg p-4 space-y-3">
+                  <div className="text-sm font-extrabold text-emerald-900">
+                    Create new invoice #{pendingTreasuryRecord.record.order_number}
+                  </div>
+                  <div className="text-sm font-bold text-emerald-800" style={{ direction: 'rtl' }}>
+                    إنشاء فاتورة جديدة رقم {pendingTreasuryRecord.record.order_number}
+                  </div>
+
+                  <div>
+                    <label className="text-xs font-bold text-slate-700">Customer Name / اسم العميل *</label>
+                    <input
+                      autoFocus
+                      value={formData.__newInvCustomer || ''}
+                      onChange={e => {
+                        const v = e.target.value;
+                        setFormData({ ...formData, __newInvCustomer: v, __newInvCustomerId: null });
+                      }}
+                      placeholder="Type or pick from customers below"
+                      className="w-full px-3 py-2 rounded-lg border-2 border-slate-300 text-sm font-semibold"
+                      style={{ direction: 'rtl' }}
+                    />
+                    {formData.__newInvCustomer && formData.__newInvCustomer.length >= 2 && (
+                      <div className="mt-1 max-h-[140px] overflow-auto rounded border border-slate-200 bg-white">
+                        {customers
+                          .filter(c => String(c.name || '').includes(formData.__newInvCustomer))
+                          .slice(0, 6)
+                          .map(c => (
+                            <div key={c.id}
+                              onClick={() => setFormData({ ...formData, __newInvCustomer: c.name, __newInvCustomerId: c.id })}
+                              className="px-3 py-2 text-sm cursor-pointer hover:bg-emerald-50 border-b border-slate-100">
+                              <span className="font-bold text-slate-900" style={{ direction: 'rtl' }}>{c.name}</span>
+                            </div>
+                          ))}
+                      </div>
+                    )}
+                  </div>
+
+                  <div className="grid grid-cols-2 gap-3">
+                    <div>
+                      <label className="text-xs font-bold text-slate-700">Invoice Total / إجمالي *</label>
+                      <input
+                        type="number"
+                        value={formData.__newInvTotal ?? pendingTreasuryRecord.amount}
+                        onChange={e => setFormData({ ...formData, __newInvTotal: e.target.value })}
+                        className="w-full px-3 py-2 rounded-lg border-2 border-slate-300 text-sm font-semibold"
+                      />
+                      <div className="text-[10px] text-slate-600 mt-0.5">
+                        Defaulted from payment. Adjust if invoice is larger.
+                      </div>
+                    </div>
+                    <div>
+                      <label className="text-xs font-bold text-slate-700">Invoice Date / تاريخ</label>
+                      <input
+                        type="date"
+                        value={formData.__newInvDate || pendingTreasuryRecord.record.transaction_date || today()}
+                        onChange={e => setFormData({ ...formData, __newInvDate: e.target.value })}
+                        className="w-full px-3 py-2 rounded-lg border-2 border-slate-300 text-sm font-semibold"
+                      />
+                    </div>
+                  </div>
+
+                  <div className="flex gap-2 pt-2">
+                    <button
+                      onClick={async () => {
+                        const name = String(formData.__newInvCustomer || '').trim();
+                        const totalAmt = Number(formData.__newInvTotal ?? pendingTreasuryRecord.amount);
+                        if (!name) { toast.warning('Customer name is required / اسم العميل مطلوب'); return; }
+                        if (!(totalAmt > 0)) { toast.warning('Invoice total must be > 0'); return; }
+                        const orderNum = pendingTreasuryRecord.record.order_number;
+                        const invDate = formData.__newInvDate || pendingTreasuryRecord.record.transaction_date || today();
+                        try {
+                          const { data: inserted, error } = await supabase.from('invoices').insert({
+                            order_number: sanitize(orderNum),
+                            customer_name: sanitize(name),
+                            customer_id: formData.__newInvCustomerId || null,
+                            invoice_date: invDate,
+                            total_amount: totalAmt,
+                            total_collected: 0,
+                            outstanding: totalAmt,
+                            source: 'treasury',
+                          }).select('id, order_number, customer_name, total_amount, outstanding').single();
+                          if (error) throw error;
+                          toast.success('Invoice #' + orderNum + ' created ✓');
+                          await finalizePendingTreasury(inserted);
+                          setFormData(prev => {
+                            const next = { ...prev };
+                            delete next.__creatingInvoice;
+                            delete next.__newInvCustomer;
+                            delete next.__newInvCustomerId;
+                            delete next.__newInvTotal;
+                            delete next.__newInvDate;
+                            return next;
+                          });
+                        } catch (err) {
+                          toast.error(err.message || 'Failed to create invoice');
+                        }
+                      }}
+                      className="flex-1 px-4 py-2.5 bg-emerald-700 text-white rounded-lg text-sm font-extrabold hover:bg-emerald-800 shadow"
+                    >
+                      ✓ Create Invoice + Save Treasury / إنشاء وحفظ
+                    </button>
+                    <button
+                      onClick={() => setFormData(prev => {
+                        const next = { ...prev };
+                        delete next.__creatingInvoice;
+                        delete next.__newInvCustomer;
+                        delete next.__newInvCustomerId;
+                        delete next.__newInvTotal;
+                        delete next.__newInvDate;
+                        return next;
+                      })}
+                      className="px-4 py-2.5 bg-slate-300 text-slate-900 rounded-lg text-sm font-bold hover:bg-slate-400"
+                    >
+                      ← Back
+                    </button>
+                  </div>
+                </div>
+              ) : (
+                <>
+                  <div className="text-sm text-slate-900 font-semibold leading-relaxed">
+                    This order doesn't exist in Sales yet. To save this treasury payment, you need to either pick a matching invoice or create a new one.
+                  </div>
+                  <div className="text-sm text-slate-800 font-semibold leading-relaxed" style={{ direction: 'rtl' }}>
+                    هذا الأمر غير موجود في المبيعات. لحفظ هذه الدفعة، إما اختر فاتورة مطابقة أو أنشئ واحدة جديدة.
+                  </div>
+                  <div className="flex gap-2 pt-2">
+                    <button
+                      onClick={() => setFormData({
+                        ...formData,
+                        __creatingInvoice: true,
+                        __newInvCustomer: formData.desc || '',
+                        __newInvCustomerId: null,
+                        __newInvTotal: pendingTreasuryRecord.amount,
+                        __newInvDate: pendingTreasuryRecord.record.transaction_date || today(),
+                      })}
+                      className="flex-1 px-4 py-2.5 bg-emerald-700 text-white rounded-lg text-sm font-extrabold hover:bg-emerald-800 shadow"
+                    >
+                      + Create Invoice Now / إنشاء فاتورة الآن
+                    </button>
+                    <button
+                      onClick={() => setPendingTreasuryRecord(null)}
+                      className="px-4 py-2.5 bg-slate-300 text-slate-900 rounded-lg text-sm font-bold hover:bg-slate-400"
+                    >
+                      Cancel / إلغاء
+                    </button>
+                  </div>
+                  <div className="text-xs text-slate-600 font-medium text-center pt-1">
+                    Cancel returns to the treasury form. Your entry is not saved yet.
+                  </div>
+                </>
+              )}
+            </div>
+          </div>
+        </div>
       )}
     </div>
     </ErrorBoundary>

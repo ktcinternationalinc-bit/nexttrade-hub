@@ -62,7 +62,7 @@ export default function AIAssistant({ user, userProfile, users, customers }) {
       recognition.interimResults = true;
       recognition.lang = 'en-US';
       
-      let lastFinalText = ''; accumulatedText = '';
+      let lastFinalText = '';
       let lastFinalTime = 0;
       let accumulatedText = '';
       

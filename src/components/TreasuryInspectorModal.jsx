@@ -158,10 +158,30 @@ export default function TreasuryInspectorModal(props) {
             <div className="bg-slate-100 border-2 border-slate-300 rounded-lg p-3">
               <div className="text-xs font-extrabold text-slate-700 uppercase mb-2 tracking-wider">Amount / المبلغ</div>
               {c.amounts.cashIn > 0 && (
-                <div className="flex justify-between items-center py-0.5"><span className="text-sm font-semibold text-slate-800">Cash In / وارد</span><span className="text-base font-extrabold text-emerald-700">{fE(c.amounts.cashIn)}</span></div>
+                <div className="flex justify-between items-center py-0.5">
+                  <span className="text-sm font-semibold text-slate-800">
+                    Cash In / وارد نقدي
+                    {txn.cash_method === 'vodafone' && <span className="ml-1 px-1.5 py-0.5 rounded bg-red-100 text-red-800 text-[10px] font-bold">📱 Vodafone</span>}
+                    {txn.cash_method === 'instapay' && <span className="ml-1 px-1.5 py-0.5 rounded bg-amber-100 text-amber-800 text-[10px] font-bold">⚡ InstaPay</span>}
+                  </span>
+                  <span className="text-base font-extrabold text-emerald-700">{fE(c.amounts.cashIn)}</span>
+                </div>
               )}
               {c.amounts.cashOut > 0 && (
-                <div className="flex justify-between items-center py-0.5"><span className="text-sm font-semibold text-slate-800">Cash Out / صادر</span><span className="text-base font-extrabold text-red-700">{fE(c.amounts.cashOut)}</span></div>
+                <div className="flex justify-between items-center py-0.5">
+                  <span className="text-sm font-semibold text-slate-800">
+                    Cash Out / صادر نقدي
+                    {txn.cash_method === 'vodafone' && <span className="ml-1 px-1.5 py-0.5 rounded bg-red-100 text-red-800 text-[10px] font-bold">📱 Vodafone</span>}
+                    {txn.cash_method === 'instapay' && <span className="ml-1 px-1.5 py-0.5 rounded bg-amber-100 text-amber-800 text-[10px] font-bold">⚡ InstaPay</span>}
+                  </span>
+                  <span className="text-base font-extrabold text-red-700">{fE(c.amounts.cashOut)}</span>
+                </div>
+              )}
+              {Number(txn.bank_in || 0) > 0 && (
+                <div className="flex justify-between items-center py-0.5"><span className="text-sm font-semibold text-indigo-800">🏦 Bank In / وارد بنكي</span><span className="text-base font-extrabold text-indigo-700">{fE(txn.bank_in)}</span></div>
+              )}
+              {Number(txn.bank_out || 0) > 0 && (
+                <div className="flex justify-between items-center py-0.5"><span className="text-sm font-semibold text-indigo-800">🏦 Bank Out / صادر بنكي</span><span className="text-base font-extrabold text-indigo-700">{fE(txn.bank_out)}</span></div>
               )}
               {c.amounts.usdIn > 0 && (
                 <div className="flex justify-between items-center py-0.5"><span className="text-sm font-semibold text-slate-800">USD In / وارد دولار</span><span className="text-base font-extrabold text-emerald-700">${c.amounts.usdIn.toLocaleString()}</span></div>
@@ -172,12 +192,26 @@ export default function TreasuryInspectorModal(props) {
               {c.amounts.foreignAmt > 0 && (
                 <div className="flex justify-between items-center py-0.5"><span className="text-sm font-semibold text-slate-800">{c.amounts.foreignCur || 'Foreign'} {c.amounts.foreignDir === 'in' ? 'In' : 'Out'}</span><span className="text-base font-extrabold text-slate-900">{c.amounts.foreignAmt.toLocaleString()}</span></div>
               )}
-              {c.amounts.cashIn === 0 && c.amounts.cashOut === 0 && c.amounts.usdIn === 0 && c.amounts.usdOut === 0 && c.amounts.foreignAmt === 0 && (
+              {c.amounts.cashIn === 0 && c.amounts.cashOut === 0 && Number(txn.bank_in || 0) === 0 && Number(txn.bank_out || 0) === 0 && c.amounts.usdIn === 0 && c.amounts.usdOut === 0 && c.amounts.foreignAmt === 0 && (
                 <div className="text-sm text-slate-700 italic font-medium">No amount / بدون مبلغ</div>
               )}
               {txn.is_bank_placeholder && txn.expected_amount > 0 && (
                 <div className="mt-2 pt-2 border-t-2 border-slate-300">
                   <div className="text-sm font-extrabold text-indigo-800">Expected / متوقع: {c.amounts.foreignDir === 'out' ? '-' : ''}{fE(txn.expected_amount)}</div>
+                </div>
+              )}
+              {(Number(txn.bank_in || 0) > 0 || Number(txn.bank_out || 0) > 0 || txn.is_bank_placeholder || txn.matched_bank_txn_id) && (
+                <div className="mt-2 pt-2 border-t-2 border-indigo-300 bg-indigo-50 -mx-3 -mb-3 px-3 pb-3 rounded-b">
+                  <div className="text-[11px] font-extrabold text-indigo-900 uppercase tracking-wider mb-1">🏦 Bank Entry Notice</div>
+                  <div className="text-xs text-indigo-900 leading-snug">
+                    This row is a bank entry. It affects the linked invoice's collected amount only — it does <b>NOT</b> affect the treasury (safe) Cash In, Cash Out, or Net.
+                  </div>
+                  <div className="text-xs text-indigo-900 leading-snug mt-1" style={{ direction: 'rtl' }}>
+                    هذا القيد بنكي. يؤثر على المبلغ المحصّل في الفاتورة فقط — لا يؤثر على رصيد الخزنة.
+                  </div>
+                  {txn.bank_nonorder_category && (
+                    <div className="mt-1.5 text-[11px] font-bold text-indigo-800">Non-Order category: {txn.bank_nonorder_category}</div>
+                  )}
                 </div>
               )}
             </div>
