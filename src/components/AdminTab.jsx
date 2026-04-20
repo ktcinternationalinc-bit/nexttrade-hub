@@ -110,6 +110,20 @@ export default function AdminTab({ user, userProfile, users, isAdmin, customers 
 
   useEffect(() => { if (!loaded) loadData(); }, [loaded]);
 
+  // Poll login_summary every 60s so Team Activity feels realtime.
+  // Refreshes only the login-summary slice (not the whole dataset) — cheap call.
+  useEffect(() => {
+    const refreshLoginSummary = async () => {
+      try {
+        const r = await fetch('/api/login-event?summary=1');
+        const d = await r.json();
+        if (d && d.summary) setLoginSummary(d.summary);
+      } catch (e) { /* non-fatal — next tick will retry */ }
+    };
+    const id = setInterval(refreshLoginSummary, 60 * 1000);
+    return () => clearInterval(id);
+  }, []);
+
   const handleDateChange = (field, value) => { if (field === 'from') setDateFrom(value); else setDateTo(value); setLoaded(false); };
   const todayStr = new Date().toISOString().substring(0, 10);
 

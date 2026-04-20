@@ -70,6 +70,65 @@ export const resolveCatName = (raw, lang, list) => {
 // Detect whether a string is Arabic
 export const isArabic = (s) => /[\u0600-\u06FF]/.test(String(s || ''));
 
+// Build dropdown options for category selectors. Returns [{value,label,type}].
+// `value` is always the stable internal key (Arabic name_ar). `label` is bilingual
+// by default — "EN / AR" — so both audiences can find the item. If the live DB
+// list is empty the hardcoded EXPENSE_CATS map is used as a fallback so the app
+// keeps working before the migration is run.
+// @param list  — array of {name_ar, name_en, type, active} rows from `categories`
+// @param opts  — { type?: 'expense'|'income'|'both', lang?: 'bi'|'en'|'ar' }
+export const buildCatOptions = (list, opts) => {
+  const o = opts || {};
+  const wantType = o.type || 'both';
+  const lang = o.lang || 'bi';
+  const seen = new Set();
+  const out = [];
+
+  const pushRow = (ar, en, rowType) => {
+    const key = ar || en;
+    if (!key || seen.has(key)) return;
+    seen.add(key);
+    let label;
+    if (lang === 'en') label = en || ar;
+    else if (lang === 'ar') label = ar || en;
+    else if (ar && en && ar !== en) label = en + ' / ' + ar;
+    else label = ar || en;
+    out.push({ value: key, label: label, type: rowType || 'expense' });
+  };
+
+  if (Array.isArray(list) && list.length > 0) {
+    list.forEach(c => {
+      if (c && c.active === false) return;
+      if (wantType !== 'both' && c && c.type && c.type !== wantType) return;
+      pushRow(c && c.name_ar, c && c.name_en, c && c.type);
+    });
+  } else {
+    // Fallback — use hardcoded EXPENSE_CATS
+    Object.entries(EXPENSE_CATS).forEach(([ar, en]) => {
+      pushRow(ar, en, ar === 'مبيعات' ? 'income' : 'expense');
+    });
+  }
+
+  return out;
+};
+
+// Returns true when `raw` matches any known category by AR or EN name — either in
+// the live DB list or in the static EXPENSE_CATS fallback map.
+export const isKnownCat = (raw, list) => {
+  if (!raw) return false;
+  const s = String(raw).trim();
+  if (!s) return false;
+  if (Array.isArray(list) && list.length > 0) {
+    for (const c of list) {
+      if (!c) continue;
+      if (c.name_ar === s || c.name_en === s) return true;
+    }
+  }
+  if (EXPENSE_CATS[s]) return true;
+  if (EXPENSE_CATS_REVERSE[s]) return true;
+  return false;
+};
+
 // Chart colors
 export const COLORS = [
   '#0ea5e9', '#f59e0b', '#10b981', '#ef4444', '#8b5cf6',

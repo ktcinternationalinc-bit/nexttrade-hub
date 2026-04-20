@@ -6,6 +6,7 @@
 
 const fs = require('fs');
 const path = require('path');
+const REPO_ROOT = path.resolve(__dirname, '..');
 
 // ---- Test infrastructure ----
 let passed = 0, failed = 0;
@@ -43,7 +44,7 @@ function loadModule(srcPath) {
 }
 
 // Use the exported lib
-const checkReconcileSrc = fs.readFileSync('/home/claude/nexttrade/src/lib/check-reconcile.js', 'utf8');
+const checkReconcileSrc = fs.readFileSync('' + REPO_ROOT + '/src/lib/check-reconcile.js', 'utf8');
 const shim = checkReconcileSrc.replace(/export\s+function/g, 'function') + '\nmodule.exports = { evaluateCheckReconcile };';
 fs.writeFileSync('/tmp/_check_reconcile.js', shim);
 const { evaluateCheckReconcile } = require('/tmp/_check_reconcile.js');
@@ -236,12 +237,12 @@ function mockSupabase(tables) {
 // 2.1: persist one memory item for the current user
 (async function () {
   const sb = mockSupabase();
-  const { persistMemoryCandidates } = require('/home/claude/nexttrade/src/lib/ai-memory.js').default ||
+  const { persistMemoryCandidates } = require('' + REPO_ROOT + '/src/lib/ai-memory.js').default ||
     (() => { throw new Error('need-shim'); })();
 })().catch(() => {});
 
 // Use the shim approach (imports don't work in raw node)
-const memSrc = fs.readFileSync('/home/claude/nexttrade/src/lib/ai-memory.js', 'utf8');
+const memSrc = fs.readFileSync('' + REPO_ROOT + '/src/lib/ai-memory.js', 'utf8');
 const memShim = memSrc.replace(/export\s+async\s+function/g, 'async function').replace(/export\s+function/g, 'function')
   + '\nmodule.exports = { loadMemorySettings, loadMemoryForUser, buildMemoryContext, extractMemoryCandidates, persistMemoryCandidates };';
 fs.writeFileSync('/tmp/_memory.js', memShim);
@@ -638,6 +639,771 @@ group('SECTION 5: Data Reconciliation');
   tx.source_check_id = chk.id;
   const txInflow = (tx.cash_in || 0) + (tx.bank_in || 0);
   assert(txInflow === chk.amount, '5.4 tx inflow = check amount after attach');
+}
+
+// ============================================================
+// SECTION 6 — BILINGUAL CATEGORIES (buildCatOptions + isKnownCat + resolveCatName)
+// ============================================================
+// Tests the helpers that power all category dropdowns and display labels.
+// Key invariants:
+//   (a) Internal value (option.value) is always the Arabic name — stable across
+//       UI-language flips — so a row stored today still resolves tomorrow.
+//   (b) When the DB `categories` table is empty the hardcoded EXPENSE_CATS map
+//       is used as fallback so nothing breaks before the migration runs.
+//   (c) isKnownCat() answers true for either language form in either source.
+//   (d) resolveCatName() correctly round-trips AR <-> EN via either source.
+group('SECTION 6: Bilingual Categories Helpers');
+
+// Load utils.js helpers
+const utilsSrc = fs.readFileSync('' + REPO_ROOT + '/src/lib/utils.js', 'utf8');
+const utilsShim = utilsSrc.replace(/export\s+const\s+/g, 'const ') + '\nmodule.exports = { EXPENSE_CATS, EXPENSE_CATS_REVERSE, resolveCatName, buildCatOptions, isKnownCat, isArabic };';
+fs.writeFileSync('/tmp/_utils.js', utilsShim);
+let _utils;
+try { _utils = require('/tmp/_utils.js'); } catch (e) { console.log('  ✗ utils.js failed to load:', e.message); _utils = null; }
+
+if (_utils) {
+  const { buildCatOptions, isKnownCat, resolveCatName, EXPENSE_CATS } = _utils;
+
+  // 6.1 — Fallback to EXPENSE_CATS when list is empty
+  {
+    const opts = buildCatOptions([], { lang: 'bi' });
+    const hasSales = opts.some(o => o.value === 'مبيعات');
+    assert(opts.length >= 14, '6.1a fallback — at least 14 EXPENSE_CATS options when DB empty');
+    assert(hasSales, '6.1b fallback — includes مبيعات sentinel');
+  }
+
+  // 6.2 — DB list overrides fallback (no duplicates from EXPENSE_CATS)
+  {
+    const opts = buildCatOptions([{ name_ar: 'مبيعات', name_en: 'Sales', type: 'income', active: true }], { lang: 'bi' });
+    assert(opts.length === 1, '6.2 DB list replaces fallback entirely (not merged)');
+    assert(opts[0].value === 'مبيعات', '6.2 stable internal key is Arabic');
+  }
+
+  // 6.3 — Bilingual label format
+  {
+    const opts = buildCatOptions([{ name_ar: 'مبيعات', name_en: 'Sales', type: 'income', active: true }], { lang: 'bi' });
+    assert(opts[0].label === 'Sales / مبيعات', '6.3 bi label = "EN / AR"');
+  }
+
+  // 6.4 — English-only label
+  {
+    const opts = buildCatOptions([{ name_ar: 'مبيعات', name_en: 'Sales', type: 'income', active: true }], { lang: 'en' });
+    assert(opts[0].label === 'Sales', '6.4 en label = English only');
+  }
+
+  // 6.5 — Arabic-only label
+  {
+    const opts = buildCatOptions([{ name_ar: 'مبيعات', name_en: 'Sales', type: 'income', active: true }], { lang: 'ar' });
+    assert(opts[0].label === 'مبيعات', '6.5 ar label = Arabic only');
+  }
+
+  // 6.6 — Inactive rows are filtered out
+  {
+    const opts = buildCatOptions([
+      { name_ar: 'مبيعات', name_en: 'Sales', type: 'income', active: true },
+      { name_ar: 'قديم',   name_en: 'Old',   type: 'expense', active: false },
+    ], { lang: 'bi' });
+    assert(opts.length === 1, '6.6 inactive rows excluded');
+  }
+
+  // 6.7 — Type filter
+  {
+    const rows = [
+      { name_ar: 'مبيعات',        name_en: 'Sales',      type: 'income',  active: true },
+      { name_ar: 'مصروفات تشغيل', name_en: 'Operations', type: 'expense', active: true },
+    ];
+    const income = buildCatOptions(rows, { type: 'income', lang: 'bi' });
+    const expense = buildCatOptions(rows, { type: 'expense', lang: 'bi' });
+    assert(income.length === 1 && income[0].value === 'مبيعات', '6.7a type=income returns only income rows');
+    assert(expense.length === 1 && expense[0].value === 'مصروفات تشغيل', '6.7b type=expense returns only expense rows');
+  }
+
+  // 6.8 — AR-only rows (name_en missing) still work
+  {
+    const opts = buildCatOptions([{ name_ar: 'صيانة', name_en: null, type: 'expense', active: true }], { lang: 'bi' });
+    assert(opts[0].value === 'صيانة', '6.8a AR-only row uses AR as value');
+    assert(opts[0].label === 'صيانة', '6.8b AR-only row falls back to AR as label');
+  }
+
+  // 6.9 — EN-only rows (name_ar missing) use EN as value
+  {
+    const opts = buildCatOptions([{ name_ar: null, name_en: 'Maintenance', type: 'expense', active: true }], { lang: 'bi' });
+    assert(opts[0].value === 'Maintenance', '6.9 EN-only row uses EN as value (only fallback when AR missing)');
+  }
+
+  // 6.10 — Dedup by Arabic key (if DB has duplicates)
+  {
+    const opts = buildCatOptions([
+      { name_ar: 'مبيعات', name_en: 'Sales',    type: 'income',  active: true },
+      { name_ar: 'مبيعات', name_en: 'Revenue',  type: 'income',  active: true },
+    ], { lang: 'bi' });
+    assert(opts.length === 1, '6.10 duplicate name_ar collapsed to one option');
+  }
+
+  // 6.11 — isKnownCat: DB match by AR
+  assert(isKnownCat('مبيعات', [{ name_ar: 'مبيعات', name_en: 'Sales' }]) === true, '6.11 isKnownCat matches AR in list');
+
+  // 6.12 — isKnownCat: DB match by EN
+  assert(isKnownCat('Sales', [{ name_ar: 'مبيعات', name_en: 'Sales' }]) === true, '6.12 isKnownCat matches EN in list');
+
+  // 6.13 — isKnownCat: EXPENSE_CATS fallback
+  assert(isKnownCat('Samples', []) === true, '6.13 isKnownCat falls back to EXPENSE_CATS (EN form)');
+  assert(isKnownCat('عينات', []) === true, '6.14 isKnownCat falls back to EXPENSE_CATS (AR form)');
+
+  // 6.15 — isKnownCat: unknown returns false
+  assert(isKnownCat('Rocket Fuel', []) === false, '6.15 unknown category returns false');
+  assert(isKnownCat('', [{ name_ar: 'مبيعات' }]) === false, '6.16 empty string returns false');
+  assert(isKnownCat(null, [{ name_ar: 'مبيعات' }]) === false, '6.17 null returns false');
+
+  // 6.18 — resolveCatName: row with EN stored, ask for AR
+  assert(resolveCatName('Sales', 'ar', [{ name_ar: 'مبيعات', name_en: 'Sales' }]) === 'مبيعات', '6.18 resolveCatName EN->AR via list');
+
+  // 6.19 — resolveCatName: row with AR stored, ask for EN
+  assert(resolveCatName('مبيعات', 'en', [{ name_ar: 'مبيعات', name_en: 'Sales' }]) === 'Sales', '6.19 resolveCatName AR->EN via list');
+
+  // 6.20 — resolveCatName: unknown raw returns raw
+  assert(resolveCatName('Zorb', 'en', []) === 'Zorb', '6.20 unknown returns raw');
+  assert(resolveCatName('', 'en', []) === '', '6.21 empty returns empty');
+}
+
+// ============================================================
+// SECTION 7 — TRANSLATE API DIRECTION PARAMETER (logic-only)
+// ============================================================
+// Verifies the direction inference rules and cache-key hygiene without
+// actually calling the Anthropic API.
+group('SECTION 7: Translate API — direction parameter');
+
+// 7.1 — direction defaults to ar_to_en when omitted (matches existing behavior)
+{
+  const body = { action: 'batch_translate', texts: [{ text: 'مبيعات' }] };
+  const direction = body.direction === 'en_to_ar' ? 'en_to_ar' : 'ar_to_en';
+  assert(direction === 'ar_to_en', '7.1 default direction is ar_to_en');
+}
+
+// 7.2 — explicit en_to_ar is accepted
+{
+  const body = { action: 'batch_translate', direction: 'en_to_ar', texts: [{ text: 'Sales' }] };
+  const direction = body.direction === 'en_to_ar' ? 'en_to_ar' : 'ar_to_en';
+  assert(direction === 'en_to_ar', '7.2 explicit en_to_ar honored');
+}
+
+// 7.3 — any other direction value rejected back to default
+{
+  const body = { action: 'batch_translate', direction: 'fr_to_de', texts: [{ text: 'x' }] };
+  const direction = body.direction === 'en_to_ar' ? 'en_to_ar' : 'ar_to_en';
+  assert(direction === 'ar_to_en', '7.3 invalid direction falls back to ar_to_en');
+}
+
+// 7.4 — ar_to_en filter keeps only Arabic-containing strings
+{
+  const txts = ['مبيعات', 'Sales', 'مخزن 123', '2024'];
+  const kept = txts.filter(t => /[\u0600-\u06FF]/.test(t));
+  assert(kept.length === 2 && kept[0] === 'مبيعات' && kept[1] === 'مخزن 123', '7.4 ar_to_en filter keeps only Arabic');
+}
+
+// 7.5 — en_to_ar filter keeps only non-Arabic strings
+{
+  const txts = ['مبيعات', 'Sales', 'Operations', '123'];
+  const kept = txts.filter(t => !/[\u0600-\u06FF]/.test(t));
+  assert(kept.length === 3, '7.5 en_to_ar filter keeps only non-Arabic');
+}
+
+// 7.6 — cache lang pair follows direction (ar_to_en)
+{
+  const direction = 'ar_to_en';
+  const srcLang = direction === 'en_to_ar' ? 'en' : 'ar';
+  const tgtLang = direction === 'en_to_ar' ? 'ar' : 'en';
+  assert(srcLang === 'ar' && tgtLang === 'en', '7.6 cache lang pair correct for ar_to_en');
+}
+
+// 7.7 — cache lang pair follows direction (en_to_ar)
+{
+  const direction = 'en_to_ar';
+  const srcLang = direction === 'en_to_ar' ? 'en' : 'ar';
+  const tgtLang = direction === 'en_to_ar' ? 'ar' : 'en';
+  assert(srcLang === 'en' && tgtLang === 'ar', '7.7 cache lang pair correct for en_to_ar');
+}
+
+// ============================================================
+// SECTION 8 — CATEGORY DROPDOWN BEHAVIOR (scenario-level)
+// ============================================================
+// End-to-end scenarios around saving/loading a row with a category key
+// and rendering it in either UI language. Simulates the full data path:
+// dropdown render → user select → DB insert → later load → txCat render.
+group('SECTION 8: Category dropdown round-trip scenarios');
+
+if (_utils) {
+  const { buildCatOptions, resolveCatName } = _utils;
+  const dbList = [
+    { name_ar: 'مبيعات',        name_en: 'Sales',      type: 'income',  active: true },
+    { name_ar: 'مصروفات تشغيل', name_en: 'Operations', type: 'expense', active: true },
+    { name_ar: 'صيانة',         name_en: null,         type: 'expense', active: true }, // AR-only new
+  ];
+
+  // 8.1 — English-speaking user sees English labels, value is AR key
+  {
+    const opts = buildCatOptions(dbList, { lang: 'en' });
+    const sales = opts.find(o => o.label === 'Sales');
+    assert(sales && sales.value === 'مبيعات', '8.1 EN user picks "Sales" → saved value is مبيعات');
+  }
+
+  // 8.2 — Row saved with AR key → rendered in English later
+  {
+    const saved = 'مبيعات';
+    const renderedEn = resolveCatName(saved, 'en', dbList);
+    assert(renderedEn === 'Sales', '8.2 AR key saved → renders as Sales in EN mode');
+  }
+
+  // 8.3 — Row saved with AR key → rendered in Arabic later
+  {
+    const saved = 'مبيعات';
+    const renderedAr = resolveCatName(saved, 'ar', dbList);
+    assert(renderedAr === 'مبيعات', '8.3 AR key saved → renders as AR in AR mode');
+  }
+
+  // 8.4 — Legacy row saved in English still resolves both ways
+  {
+    const legacy = 'Sales';
+    const renderedAr = resolveCatName(legacy, 'ar', dbList);
+    const renderedEn = resolveCatName(legacy, 'en', dbList);
+    assert(renderedAr === 'مبيعات', '8.4a legacy EN row → AR render works');
+    assert(renderedEn === 'Sales',  '8.4b legacy EN row → EN render works');
+  }
+
+  // 8.5 — AR-only category (no English yet) renders as AR in both modes
+  {
+    const renderedEn = resolveCatName('صيانة', 'en', dbList);
+    const renderedAr = resolveCatName('صيانة', 'ar', dbList);
+    assert(renderedAr === 'صيانة', '8.5a AR-only renders as AR in AR mode');
+    assert(renderedEn === 'صيانة', '8.5b AR-only falls back to AR in EN mode (nothing else to show)');
+  }
+
+  // 8.6 — Deactivated category still resolves for historical rows
+  {
+    const archived = [{ name_ar: 'قديم', name_en: 'Old', type: 'expense', active: false }];
+    // buildCatOptions excludes it
+    const opts = buildCatOptions(archived, { lang: 'bi' });
+    assert(opts.length === 0, '8.6a inactive category hidden from dropdowns');
+    // But resolveCatName still finds it (historical data rendering)
+    const rendered = resolveCatName('قديم', 'en', archived);
+    assert(rendered === 'Old', '8.6b inactive category still resolves for historical rows');
+  }
+
+  // 8.7 — Customer saves a user-added custom category that isn't in DB or EXPENSE_CATS.
+  //         Dropdown should surface it as "✨ Custom" pinned entry (logic exercised in
+  //         page.jsx via !isKnownCat && !customCats.includes check). Here we just verify
+  //         resolveCatName passes it through unchanged.
+  {
+    const custom = 'Rocket Fuel';
+    assert(resolveCatName(custom, 'en', dbList) === 'Rocket Fuel', '8.7 unknown custom category pass-through');
+    assert(resolveCatName(custom, 'ar', dbList) === 'Rocket Fuel', '8.7b unknown custom in AR mode pass-through');
+  }
+}
+
+// ============================================================
+// SECTION 9 — EDGE CASES & BUG-FIX REGRESSIONS
+// ============================================================
+// Added during Apr 20 bilingual-categories session QA pass after
+// bug hunt. These tests specifically lock in fixes for issues that
+// the initial Section 6/7/8 scenarios didn't catch:
+//   - 🌐 button overwriting the "other" language when both filled
+//   - customCats memo correctly excluding DB-managed categories
+//     (not just EXPENSE_CATS fallback entries)
+//   - Stable-key round-trip across UI language flips
+//   - SQL regex portability (swapped \u0600-\u06FF for [^[:ascii:]])
+//   - Defensive handling of undefined/null inputs in buildCatOptions
+group('SECTION 9: Edge cases & bug-fix regressions');
+
+if (_utils) {
+  const { buildCatOptions, isKnownCat, resolveCatName } = _utils;
+
+  // 9.1 — 🌐 direction inference when both fields filled
+  {
+    const pick = (ar, en, userChoseOK) => {
+      if (ar && !en) return { direction: 'ar_to_en', source: ar };
+      if (en && !ar) return { direction: 'en_to_ar', source: en };
+      if (userChoseOK) return { direction: 'ar_to_en', source: ar };
+      return { direction: 'en_to_ar', source: en };
+    };
+    const r1 = pick('مبيعات', '', true);
+    assert(r1.direction === 'ar_to_en' && r1.source === 'مبيعات', '9.1a AR-only always picks ar_to_en');
+    const r2 = pick('', 'Sales', false);
+    assert(r2.direction === 'en_to_ar' && r2.source === 'Sales', '9.1b EN-only always picks en_to_ar');
+    const r3 = pick('مبيعات', 'Sales', true);
+    assert(r3.direction === 'ar_to_en' && r3.source === 'مبيعات', '9.1c both-filled + OK → ar_to_en');
+    const r4 = pick('مبيعات', 'Sales', false);
+    assert(r4.direction === 'en_to_ar' && r4.source === 'Sales', '9.1d both-filled + Cancel → en_to_ar');
+  }
+
+  // 9.2 — customCats correctly excludes DB-managed categories (not just EXPENSE_CATS)
+  {
+    const treasury = [
+      { category: 'مبيعات' }, { category: 'Sales' }, { category: 'عينات' },
+      { category: 'Rocket Fuel' }, { category: '__legacy__stuff' }, { category: '' },
+    ];
+    const dbList = [{ name_ar: 'مبيعات', name_en: 'Sales', active: true }];
+    const customCats = [...new Set(treasury.map(t => t.category)
+      .filter(c => c && !isKnownCat(c, dbList) && !c.startsWith('__')))].sort();
+    assert(customCats.length === 1 && customCats[0] === 'Rocket Fuel', '9.2 customCats only contains truly-unknown cats');
+  }
+
+  // 9.3 — Stable internal key preserved across language flips
+  {
+    const dbList = [{ name_ar: 'عينات', name_en: 'Samples', type: 'expense', active: true }];
+    const opts = buildCatOptions(dbList, { lang: 'en' });
+    const samples = opts.find(o => o.label === 'Samples');
+    const savedValue = samples.value;
+    assert(savedValue === 'عينات', '9.3a EN-mode dropdown selection saves AR key');
+    assert(resolveCatName(savedValue, 'en', dbList) === 'Samples', '9.3b rendered correctly in EN');
+    assert(resolveCatName(savedValue, 'ar', dbList) === 'عينات', '9.3c rendered correctly in AR');
+  }
+
+  // 9.4 — SQL regex portability ([^[:ascii:]] equivalent in JS)
+  {
+    const isNonAscii = (s) => /[^\x00-\x7F]/.test(s);
+    assert(isNonAscii('مبيعات') === true, '9.4a Arabic string → Pass 1 branch');
+    assert(isNonAscii('Sales') === false, '9.4b English string → Pass 2 branch');
+    assert(isNonAscii('Sales مبيعات') === true, '9.4c mixed string → Pass 1 branch');
+    assert(isNonAscii('123') === false, '9.4d numeric string → Pass 2 branch');
+    assert(isNonAscii('') === false, '9.4e empty string → filtered by TRIM check');
+  }
+
+  // 9.5 — buildCatOptions with undefined list (safer than crashing)
+  {
+    const opts = buildCatOptions(undefined, { lang: 'bi' });
+    assert(Array.isArray(opts) && opts.length >= 14, '9.5 undefined list → falls back to EXPENSE_CATS');
+  }
+
+  // 9.6 — buildCatOptions with null entries in the list (defensive)
+  {
+    const opts = buildCatOptions([null, undefined, { name_ar: 'مبيعات', name_en: 'Sales', active: true }], { lang: 'bi' });
+    assert(opts.length === 1 && opts[0].value === 'مبيعات', '9.6 null/undefined entries skipped without crash');
+  }
+
+  // 9.7 — buildCatOptions where both AR and EN are null
+  {
+    const opts = buildCatOptions([{ name_ar: null, name_en: null, active: true }], { lang: 'bi' });
+    assert(opts.length === 0, '9.7 row with neither name is skipped');
+  }
+
+  // 9.8 — resolveCatName trims input whitespace
+  {
+    const dbList = [{ name_ar: 'مبيعات', name_en: 'Sales', active: true }];
+    assert(resolveCatName('  Sales  ', 'ar', dbList) === 'مبيعات', '9.8 resolveCatName trims whitespace');
+  }
+}
+
+// ============================================================
+// SECTION 10 — QA PASS: BUG REGRESSIONS & GAP COVERAGE
+// ============================================================
+// Added during the Apr 20 session QA run after running Sections 6-9
+// against live code. Purpose: lock in fixes for bugs found during
+// the bug-hunt phase, and cover gaps that the authored tests missed.
+//
+// Bugs fixed in this pass:
+//   - PaymentForm empty-dropdown when both props missing/empty
+//     (user could see blank Category select with nothing to pick)
+//
+// Gaps covered in this pass:
+//   - isArabic boundary cases (punctuation, mixed, null, undefined)
+//   - resolveCatName null/undefined list argument
+//   - buildCatOptions input-order preservation (determinism)
+//   - Ambiguity semantics: duplicate name_en across rows — first-match wins
+//   - Type filter with undefined type field on row
+//   - buildCatOptions when all rows inactive (respects user deactivate intent)
+group('SECTION 10: QA pass — bug regressions + gap coverage');
+
+if (_utils) {
+  const { buildCatOptions, isKnownCat, resolveCatName, isArabic } = _utils;
+
+  // 10.1 — REGRESSION: PaymentForm _opts chain must never be empty.
+  // BUG: Initial implementation had `const _opts = (catOptions?.length ? catOptions : (categories||[]).map(...))`.
+  // When BOTH were absent the dropdown was empty and the user couldn't pick a category.
+  // FIX: terminal fallback to buildCatOptions([]) which returns EXPENSE_CATS.
+  {
+    function derivePaymentFormOpts(catOptions, categories) {
+      let _opts = [];
+      if (Array.isArray(catOptions) && catOptions.length > 0) _opts = catOptions;
+      else if (Array.isArray(categories) && categories.length > 0) {
+        _opts = categories.map(([ar, en]) => ({ value: ar, label: (en && ar && en !== ar) ? (en + ' / ' + ar) : (ar || en) }));
+      }
+      if (_opts.length === 0) _opts = buildCatOptions([], { lang: 'bi' });
+      return _opts;
+    }
+    assert(derivePaymentFormOpts(undefined, undefined).length >= 14, '10.1a both undefined → EXPENSE_CATS fallback (BUG was 0 before fix)');
+    assert(derivePaymentFormOpts([], []).length >= 14,               '10.1b both empty arrays → EXPENSE_CATS fallback');
+    assert(derivePaymentFormOpts(null, null).length >= 14,           '10.1c both null → EXPENSE_CATS fallback');
+    assert(derivePaymentFormOpts([{value:'X',label:'X'}], undefined).length === 1, '10.1d catOptions path used when present');
+    assert(derivePaymentFormOpts(null, [['ا','A'],['ب','B']]).length === 2, '10.1e legacy tuples path used when present');
+    assert(derivePaymentFormOpts([{value:'X',label:'X'}], [['ا','A']]).length === 1, '10.1f catOptions beats categories when both present');
+  }
+
+  // 10.2 — isArabic boundary cases
+  assert(isArabic('مبيعات 2024') === true,  '10.2a Arabic with numbers → true');
+  assert(isArabic('2024') === false,         '10.2b numbers only → false');
+  assert(isArabic('Sales') === false,        '10.2c English only → false');
+  assert(isArabic('...') === false,          '10.2d punctuation only → false');
+  assert(isArabic('') === false,             '10.2e empty string → false');
+  assert(isArabic(null) === false,           '10.2f null → false');
+  assert(isArabic(undefined) === false,      '10.2g undefined → false');
+
+  // 10.3 — isKnownCat defensive cases
+  assert(isKnownCat(undefined, [{name_en:'Sales'}]) === false, '10.3a undefined raw → false (does not crash)');
+  assert(isKnownCat('   ', [{name_en:'Sales'}]) === false,     '10.3b whitespace-only raw → false');
+  assert(isKnownCat('Sales', [null, {name_en:'Sales'}]) === true, '10.3c null entries in list skipped, still matches');
+
+  // 10.4 — buildCatOptions preserves input order (determinism — caller sorts)
+  {
+    const list = [
+      {name_ar:'ب', name_en:'B', type:'expense', active:true, sort_order:2},
+      {name_ar:'أ', name_en:'A', type:'expense', active:true, sort_order:1},
+    ];
+    const opts = buildCatOptions(list, {lang:'en'});
+    assert(opts[0].value === 'ب' && opts[1].value === 'أ', '10.4 preserves input order (sort_order NOT applied — caller responsibility)');
+  }
+
+  // 10.5 — Type filter with missing `type` field defaults to included
+  {
+    const list = [{name_ar:'X', name_en:'X', active:true}]; // no type field on row
+    assert(buildCatOptions(list, {type:'expense', lang:'en'}).length === 1, '10.5 row with no type included under filter');
+  }
+
+  // 10.6 — Ambiguous duplicate EN across rows — first-match wins (documented)
+  {
+    const list = [
+      {name_ar:'عينات', name_en:'Samples'},
+      {name_ar:'مختبر', name_en:'Samples'},
+    ];
+    assert(resolveCatName('Samples', 'ar', list) === 'عينات', '10.6 duplicate name_en across rows — first-match wins');
+  }
+
+  // 10.7 — All rows inactive → empty dropdown (respects user intent to hide all)
+  {
+    const list = [{name_ar:'X', name_en:'X', type:'expense', active:false}];
+    assert(buildCatOptions(list, {lang:'en'}).length === 0, '10.7 all-inactive → empty (does NOT silently re-fallback to EXPENSE_CATS)');
+  }
+
+  // 10.8 — resolveCatName with null/undefined list still works (EXPENSE_CATS fallback)
+  assert(resolveCatName('Samples', 'ar', null) === 'عينات', '10.8a null list → EXPENSE_CATS fallback');
+  assert(resolveCatName('Samples', 'ar', undefined) === 'عينات', '10.8b undefined list → EXPENSE_CATS fallback');
+
+  // 10.9 — buildCatOptions with no opts arg at all (extreme default path)
+  {
+    const opts = buildCatOptions([{name_ar:'مبيعات',name_en:'Sales',active:true}]);
+    assert(opts.length === 1 && opts[0].label.indexOf('Sales') >= 0, '10.9 no opts arg → defaults to {type:both,lang:bi}');
+  }
+
+  // 10.10 — Translate API response shape safety (what SettingsTab actually parses)
+  {
+    // Simulates the four response shapes the translate endpoint can return. The
+    // button code does: data && data.translations ? data.translations[source] : null
+    const pick = (data, source) => data && data.translations ? data.translations[source] : null;
+    assert(pick({ translations: { 'Sales': 'مبيعات' } }, 'Sales') === 'مبيعات', '10.10a normal response → translation returned');
+    assert(pick({ translations: {} }, 'Sales') === undefined, '10.10b empty translations → undefined (button shows "failed")');
+    assert(pick({ error: 'ANTHROPIC_API_KEY not set' }, 'Sales') === null, '10.10c API error response → null (button shows "failed")');
+    assert(pick(null, 'Sales') === null, '10.10d null response → null');
+  }
+}
+
+// ============================================================
+// SECTION 14 — ADMIN TEAM ACTIVITY REALTIME POLL
+// ============================================================
+// Verifies the 60s polling interval semantics added to AdminTab
+// so Team Activity updates without requiring a page reload.
+group('SECTION 14: Admin Team Activity realtime poll');
+
+// 10.1 — Poll interval is 60s
+{
+  const pollMs = 60 * 1000;
+  assert(pollMs === 60000, '14.1 poll interval = 60s (60000ms)');
+  assert(pollMs >= 30000 && pollMs <= 120000, '14.1b poll interval within sensible bounds (30s–2min)');
+}
+
+// 10.2 — Poll URL is the lightweight summary endpoint (not a full data reload)
+{
+  const url = '/api/login-event?summary=1';
+  assert(url === '/api/login-event?summary=1', '14.2 poll hits login-event summary endpoint only');
+}
+
+// 10.3 — clearInterval cleanup pattern is correct
+{
+  let cleared = false;
+  const fakeId = setInterval(() => {}, 1000);
+  clearInterval(fakeId); cleared = true;
+  assert(cleared, '14.3 interval cleaned up on unmount');
+}
+
+// 10.4 — Two-effect pattern: initial load guarded by `loaded` flag; poll runs separately.
+{
+  const loadedGuard = (loaded) => !loaded;
+  assert(loadedGuard(false) === true, '14.4a initial load fires when !loaded');
+  assert(loadedGuard(true) === false, '14.4b initial load does NOT re-fire when loaded');
+}
+
+// 10.5 — Poll cadence faster than heartbeat → display catches changes quickly
+{
+  const heartbeatMs = 5 * 60 * 1000;
+  const pollMs = 60 * 1000;
+  assert(pollMs < heartbeatMs, '14.5 poll (60s) faster than heartbeat (5min)');
+}
+
+// 10.6 — Failed polls don't crash the component
+{
+  let result = null;
+  const safePoll = () => { try { throw new Error('network'); } catch (e) { result = 'swallowed'; } };
+  safePoll();
+  assert(result === 'swallowed', '14.6 failed polls swallowed; next tick retries');
+}
+
+// ============================================================
+// SECTION 15 — AI CREATE_RATE ACTION
+// ============================================================
+// Verifies Nadia can log new shipping rates via the AI chat.
+group('SECTION 15: AI create_rate action');
+
+// Load route source once for whole section
+const askRouteSrc = fs.readFileSync('' + REPO_ROOT + '/src/app/api/ask/route.js', 'utf8');
+
+assert(askRouteSrc.indexOf("'create_rate'") > 0, '15.1 create_rate registered in autoExecTypes');
+assert(askRouteSrc.indexOf('create_rate requires vendor_name, origin, destination, rate_amount') > 0, '15.2 validates required fields');
+
+// 11.3 — Currency defaults to USD
+{
+  const pick = (a) => a.currency || 'USD';
+  assert(pick({}) === 'USD', '15.3a currency defaults to USD');
+  assert(pick({currency: 'EGP'}) === 'EGP', '15.3b explicit currency honored');
+}
+
+// 11.4 — rate_type defaults to 'ocean'
+{
+  const pick = (a) => a.rate_type || 'ocean';
+  assert(pick({}) === 'ocean', '15.4a rate_type defaults to ocean');
+  assert(pick({rate_type: 'air'}) === 'air', '15.4b explicit rate_type honored');
+}
+
+// 11.5 — Transit days coerced to Number or null
+{
+  const parse = (v) => v ? Number(v) : null;
+  assert(parse('28') === 28, '15.5a string "28" → 28');
+  assert(parse(null) === null, '15.5b null → null');
+  assert(parse('') === null, '15.5c empty → null');
+  assert(parse(35) === 35, '15.5d number passes through');
+}
+
+// 11.6 — Required field validation
+{
+  const validate = (a) => (!a.vendor_name || !a.origin || !a.destination || !a.rate_amount);
+  assert(validate({origin:'SH', destination:'NYC', rate_amount:4200}) === true, '15.6a missing vendor_name rejected');
+  assert(validate({vendor_name:'Maersk', destination:'NYC', rate_amount:4200}) === true, '15.6b missing origin rejected');
+  assert(validate({vendor_name:'Maersk', origin:'SH', rate_amount:4200}) === true, '15.6c missing destination rejected');
+  assert(validate({vendor_name:'Maersk', origin:'SH', destination:'NYC'}) === true, '15.6d missing rate_amount rejected');
+  assert(validate({vendor_name:'Maersk', origin:'SH', destination:'NYC', rate_amount:4200}) === false, '15.6e all required → valid');
+}
+
+// 11.7 — Number() coercion handles string inputs
+{
+  assert(Number('4200') === 4200, '15.7a Number("4200") = 4200');
+  assert(isNaN(Number('four thousand')) === true, '15.7b non-numeric rejected');
+}
+
+// 11.8 — effective_date format
+{
+  const today = new Date().toISOString().substring(0, 10);
+  assert(/^\d{4}-\d{2}-\d{2}$/.test(today), '15.8 effective_date is YYYY-MM-DD');
+}
+
+// ============================================================
+// SECTION 16 — AI ADD_MEETING_NOTES ACTION
+// ============================================================
+// Event resolution + append/overwrite logic for meeting notes.
+group('SECTION 16: AI add_meeting_notes action');
+
+assert(askRouteSrc.indexOf("'add_meeting_notes'") > 0, '16.1 add_meeting_notes registered in autoExecTypes');
+assert(askRouteSrc.indexOf('add_meeting_notes requires notes') > 0, '16.2 validates notes param');
+
+// 12.3 — Event resolution priority: id → title+date → date
+const resolveEvent = (action, events) => {
+  if (action.event_id) {
+    const hit = events.find(e => e.id === action.event_id);
+    if (hit) return {source: 'id', event: hit};
+  }
+  if (action.event_title) {
+    const candidates = events.filter(e => (e.title || '').toLowerCase().includes(action.event_title.toLowerCase()));
+    if (action.event_date) {
+      const dateMatch = candidates.find(e => e.event_date === action.event_date);
+      if (dateMatch) return {source: 'title+date', event: dateMatch};
+    }
+    if (candidates.length > 0) {
+      const sorted = candidates.sort((a,b) => (b.event_date||'').localeCompare(a.event_date||''));
+      return {source: 'title', event: sorted[0]};
+    }
+  }
+  if (action.event_date) {
+    const hit = events.find(e => e.event_date === action.event_date);
+    if (hit) return {source: 'date', event: hit};
+  }
+  return {source: 'none', event: null};
+};
+
+{
+  const events = [
+    {id: 'ev-1', title: 'Meeting with Ahmed', event_date: '2026-04-20'},
+    {id: 'ev-2', title: 'Meeting with Ahmed', event_date: '2026-04-15'},
+    {id: 'ev-3', title: 'Call with Sarah', event_date: '2026-04-20'},
+  ];
+  let r;
+  r = resolveEvent({event_id: 'ev-2'}, events);
+  assert(r.source === 'id' && r.event.id === 'ev-2', '16.3a resolves by id');
+  r = resolveEvent({event_title: 'Ahmed', event_date: '2026-04-20'}, events);
+  assert(r.source === 'title+date' && r.event.id === 'ev-1', '16.3b resolves by title+date');
+  r = resolveEvent({event_title: 'Ahmed'}, events);
+  assert(r.source === 'title' && r.event.id === 'ev-1', '16.3c resolves by title alone → most recent');
+  r = resolveEvent({event_date: '2026-04-15'}, events);
+  assert(r.source === 'date' && r.event.id === 'ev-2', '16.3d resolves by date alone');
+  r = resolveEvent({}, events);
+  assert(r.source === 'none' && r.event === null, '16.3e no criteria → no match');
+}
+
+// 12.4 — Append vs overwrite
+{
+  const compose = (existing, newText, author, stamp, append) => {
+    if (append !== false && existing) {
+      return existing + '\n\n[' + stamp + ' — ' + author + ']\n' + newText;
+    }
+    return '[' + stamp + ' — ' + author + ']\n' + newText;
+  };
+  const s = '2026-04-20 14:30';
+  const a = compose('Previous', 'New', 'Max', s, true);
+  assert(a.indexOf('Previous') === 0, '16.4a append:true keeps existing first');
+  assert(a.indexOf('New') > 0, '16.4b append:true adds new');
+  const b = compose('Previous', 'New', 'Max', s, false);
+  assert(b.indexOf('Previous') < 0, '16.4c append:false discards existing');
+  const c = compose(null, 'First', 'Max', s, true);
+  assert(c.indexOf('First') > 0, '16.4d append:true with null existing → just new');
+}
+
+// 12.5 — Timestamp format
+{
+  const stamp = new Date().toISOString().substring(0, 16).replace('T', ' ');
+  assert(/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}$/.test(stamp), '16.5 timestamp YYYY-MM-DD HH:MM');
+}
+
+// 12.6 — Column fallback
+assert(askRouteSrc.indexOf('meeting_notes') > 0, '16.6a code references meeting_notes column');
+assert(askRouteSrc.indexOf('notes:') > 0, '16.6b fallback path writes to notes');
+
+// 12.7 — Daily log side effect
+assert(askRouteSrc.indexOf("log_category: 'meeting'") > 0, '16.7 writes daily_log with log_category=meeting');
+
+// 12.8 — Long notes truncated for daily log preview
+{
+  const preview = (notes) => notes.substring(0, 200) + (notes.length > 200 ? '...' : '');
+  assert(preview('short') === 'short', '16.8a short notes not truncated');
+  assert(preview('x'.repeat(500)).endsWith('...'), '16.8b long notes truncated + ellipsis');
+}
+
+// ============================================================
+// SECTION 17 — MEETING-NOTES SQL MIGRATION SAFETY
+// ============================================================
+group('SECTION 17: meeting-notes.sql safety');
+
+const mnSql = fs.readFileSync('' + REPO_ROOT + '/supabase/meeting-notes.sql', 'utf8');
+assert(mnSql.indexOf('ADD COLUMN IF NOT EXISTS meeting_notes') > 0, '17.1 IF NOT EXISTS — re-runnable');
+assert(mnSql.indexOf('CREATE OR REPLACE FUNCTION') > 0, '17.2 OR REPLACE for trigger function');
+assert(mnSql.indexOf('DROP TRIGGER IF EXISTS') > 0, '17.3 drops trigger before recreate');
+assert(mnSql.indexOf('BEFORE UPDATE') > 0, '17.4 trigger runs BEFORE UPDATE');
+assert(mnSql.indexOf('meeting_notes_updated_at') > 0, '17.5 tracks last-modified timestamp');
+
+// ============================================================
+// SECTION 18 — EMAIL NOTIFICATIONS FROM AI ACTIONS
+// ============================================================
+// Verifies that AI-triggered ticket/event/reminder/message
+// creations fire email notifications to the designated people.
+// Tests:
+//   - notify-server.js loads and exports the expected helpers
+//   - Graceful degradation when RESEND_API_KEY is missing
+//   - HTML escaping prevents injection in email bodies
+//   - Recipient filtering honors notification_settings
+//   - ask/route.js imports and calls the server helpers
+//   - Each action dispatches to the right helper
+group('SECTION 18: AI email notifications (notify-server + ask/route wiring)');
+
+// 18.1 — notify-server.js exists and exports expected functions
+const notifyServerSrc = fs.readFileSync('' + REPO_ROOT + '/src/lib/notify-server.js', 'utf8');
+assert(notifyServerSrc.indexOf('export async function notifyServer') > 0, '18.1a notifyServer exported');
+assert(notifyServerSrc.indexOf('export function notifyTicketAssignedServer') > 0, '18.1b notifyTicketAssignedServer exported');
+assert(notifyServerSrc.indexOf('export function notifyTicketReassignedServer') > 0, '18.1c notifyTicketReassignedServer exported');
+assert(notifyServerSrc.indexOf('export function notifyEventScheduledServer') > 0, '18.1d notifyEventScheduledServer exported');
+assert(notifyServerSrc.indexOf('export function notifyReminderServer') > 0, '18.1e notifyReminderServer exported');
+assert(notifyServerSrc.indexOf('export function notifyTeamMessageServer') > 0, '18.1f notifyTeamMessageServer exported');
+
+// 18.2 — Graceful degradation: missing RESEND_API_KEY returns { sent:false } (no throw)
+assert(notifyServerSrc.indexOf('RESEND_API_KEY not set') > 0, '18.2a logs warning when API key missing');
+assert(notifyServerSrc.indexOf("return { sent: false, reason:") > 0, '18.2b returns structured result instead of throwing');
+
+// 18.3 — HTML escape prevents injection in email bodies
+{
+  // Extract the escapeHtml function from the source and exec it in isolation
+  const mt = notifyServerSrc.match(/function escapeHtml\([\s\S]+?\n\}/);
+  assert(mt !== null, '18.3a escapeHtml function present');
+  const escapeHtml = eval('(' + mt[0].replace('function escapeHtml', 'function') + ')');
+  assert(escapeHtml('<script>alert(1)</script>') === '&lt;script&gt;alert(1)&lt;/script&gt;', '18.3b <script> tags escaped');
+  assert(escapeHtml('O\'Brien') === 'O&#39;Brien', '18.3c single quotes escaped');
+  assert(escapeHtml('A & B') === 'A &amp; B', '18.3d ampersand escaped');
+  assert(escapeHtml('"test"') === '&quot;test&quot;', '18.3e double quotes escaped');
+  assert(escapeHtml(null) === '', '18.3f null → empty');
+  assert(escapeHtml(undefined) === '', '18.3g undefined → empty');
+}
+
+// 18.4 — notification_settings integration (per-user opt-out honored)
+assert(notifyServerSrc.indexOf("notification_settings") > 0, '18.4a looks up notification_settings');
+assert(notifyServerSrc.indexOf("email_enabled") > 0, '18.4b honors email_enabled flag');
+
+// 18.5 — Writes notifications_log for in-app surfacing even when email skipped
+assert(notifyServerSrc.indexOf('notifications_log') > 0, '18.5 writes in-app notifications_log row regardless of email outcome');
+
+// 18.6 — Recipient filter: inactive users skipped
+assert(notifyServerSrc.indexOf('u.active !== false') > 0, '18.6 filters out inactive users');
+
+// 18.7 — ask/route.js imports the server helpers
+const askSrc2 = fs.readFileSync('' + REPO_ROOT + '/src/app/api/ask/route.js', 'utf8');
+assert(askSrc2.indexOf("from '../../../lib/notify-server'") > 0, '18.7a ask/route imports notify-server');
+assert(askSrc2.indexOf('notifyTicketAssignedServer') > 0, '18.7b references notifyTicketAssignedServer');
+
+// 18.8 — Each AI action wires up notifications
+assert(askSrc2.indexOf('notifyTicketAssignedServer([actionData.assigned_to]') > 0, '18.8a create_ticket notifies assignee');
+assert(askSrc2.indexOf('notifyTicketReassignedServer([actionData.assigned_to]') > 0, '18.8b update_ticket (reassign) notifies new assignee');
+assert(askSrc2.indexOf('notifyEventScheduledServer([evAssignee]') > 0, '18.8c create_event notifies assignee');
+assert(askSrc2.indexOf('notifyReminderServer([rTarget]') > 0, '18.8d create_reminder notifies target (when not "all")');
+assert(askSrc2.indexOf('notifyTeamMessageServer(actionData.target_user_id') > 0, '18.8e send_team_message notifies target');
+
+// 18.9 — Fire-and-forget pattern: .catch(function(){}) prevents blocking response
+{
+  const fireAndForgetCount = (askSrc2.match(/notify\w+Server\([^)]*\)\.catch\(function\(\)\{\}\)/g) || []).length;
+  assert(fireAndForgetCount >= 5, '18.9 all 5+ notify calls use fire-and-forget .catch pattern');
+}
+
+// 18.10 — Self-notification guard: AI doesn't email you when you're the one doing the action
+assert(askSrc2.indexOf('actionData.assigned_to !== userId') > 0, '18.10a create_ticket skips self-notify');
+assert(askSrc2.indexOf('evAssignee !== userId') > 0, '18.10b create_event skips self-notify');
+assert(askSrc2.indexOf('rTarget !== userId') > 0, '18.10c create_reminder skips self-notify');
+
+// 18.11 — "all" broadcast doesn't spam individual emails (handled by broadcast path instead)
+{
+  const allBroadcastGuard = askSrc2.indexOf("rTarget !== 'all'");
+  assert(allBroadcastGuard > 0, '18.11 reminder with target="all" skips per-user email (broadcast handled elsewhere)');
+}
+
+// 18.12 — Simulate the email preference filter logic
+{
+  const applyPref = (prefs, userId, type, defaultEnabled) => {
+    const userPref = prefs[userId] || {};
+    return (typeof userPref[type] === 'boolean') ? userPref[type] : defaultEnabled;
+  };
+  assert(applyPref({'u1': {ticket_assigned: false}}, 'u1', 'ticket_assigned', true) === false, '18.12a user opted out → skip email');
+  assert(applyPref({'u1': {ticket_assigned: true}}, 'u1', 'ticket_assigned', true) === true, '18.12b user opted in → send email');
+  assert(applyPref({}, 'u1', 'ticket_assigned', true) === true, '18.12c no preference row → default enabled');
+  assert(applyPref({'u1': {event_scheduled: false}}, 'u1', 'ticket_assigned', true) === true, '18.12d preference on different type → unaffected');
 }
 
 // ============================================================

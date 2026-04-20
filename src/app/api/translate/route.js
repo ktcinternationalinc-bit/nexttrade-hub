@@ -9,6 +9,8 @@ export async function POST(request) {
   try {
     const body = await request.json();
     const { texts, table, column, action } = body;
+    // direction: 'ar_to_en' (default, backward compat) | 'en_to_ar'
+    var direction = body.direction === 'en_to_ar' ? 'en_to_ar' : 'ar_to_en';
 
     const apiKey = process.env.ANTHROPIC_API_KEY;
     if (!apiKey) return Response.json({ error: 'ANTHROPIC_API_KEY not set' }, { status: 500 });
@@ -22,26 +24,39 @@ export async function POST(request) {
       // 1. Check cache for already-translated texts
       const uniqueTexts = [...new Set(texts.map(t => t.text).filter(Boolean))];
       const cached = {};
-      
-      // Fetch cached translations in batches of 50
+
+      // Fetch cached translations in batches of 50. Cache is keyed by source_text +
+      // source_lang + target_lang, so we scope the lookup to the requested direction.
+      var srcLang = direction === 'en_to_ar' ? 'en' : 'ar';
+      var tgtLang = direction === 'en_to_ar' ? 'ar' : 'en';
       for (let i = 0; i < uniqueTexts.length; i += 50) {
         const batch = uniqueTexts.slice(i, i + 50);
         const { data: cacheHits } = await supabase
           .from('translation_cache')
           .select('source_text, translated_text')
-          .in('source_text', batch);
+          .in('source_text', batch)
+          .eq('source_lang', srcLang)
+          .eq('target_lang', tgtLang);
         (cacheHits || []).forEach(h => { cached[h.source_text] = h.translated_text; });
       }
 
-      // 2. Find texts that need translation
-      const needTranslation = uniqueTexts.filter(t => !cached[t] && /[\u0600-\u06FF]/.test(t));
-      
+      // 2. Find texts that need translation. For ar_to_en only Arabic-containing
+      // strings qualify; for en_to_ar only non-Arabic strings qualify.
+      const needTranslation = uniqueTexts.filter(t => {
+        if (cached[t]) return false;
+        const hasArabic = /[\u0600-\u06FF]/.test(t);
+        return direction === 'en_to_ar' ? !hasArabic : hasArabic;
+      });
+
       // 3. Batch translate with Anthropic (chunks of 30 for reliability)
       const newTranslations = {};
+      var systemPrompt = direction === 'en_to_ar'
+        ? 'You are a professional English-to-Arabic translator for a business context (trading company in Egypt dealing with textiles, leather, chemicals, shipping). RULES: Translate each numbered line from English to Arabic (Egyptian/MSA business register). For person names: use common Arabic spellings. For business terms: use standard Arabic business terminology. Keep translations concise. Return ONLY translations, one per line, numbered to match input. If text is already Arabic or just numbers, return as-is. Format: 1. الترجمة العربية (one per line).'
+        : 'You are a professional Arabic-to-English translator for a business context (trading company in Egypt dealing with textiles, leather, chemicals, shipping). RULES: Translate each numbered line from Arabic to English. For person names: use common English spellings. For business terms: use standard business English. For descriptions: keep it concise and clear. Return ONLY translations, one per line, numbered to match input. If text is already English or just numbers, return as-is. Format: 1. English translation (one per line).';
       for (let i = 0; i < needTranslation.length; i += 30) {
         const chunk = needTranslation.slice(i, i + 30);
         var numbered = chunk.map(function(t, idx) { return (idx + 1) + '. ' + t; }).join('\n');
-        
+
         try {
           const response = await fetch('https://api.anthropic.com/v1/messages', {
             method: 'POST',
@@ -53,7 +68,7 @@ export async function POST(request) {
             body: JSON.stringify({
               model: 'claude-sonnet-4-20250514',
               max_tokens: 4000,
-              system: 'You are a professional Arabic-to-English translator for a business context (trading company in Egypt dealing with textiles, leather, chemicals, shipping). RULES: Translate each numbered line from Arabic to English. For person names: use common English spellings. For business terms: use standard business English. For descriptions: keep it concise and clear. Return ONLY translations, one per line, numbered to match input. If text is already English or just numbers, return as-is. Format: 1. English translation (one per line).',
+              system: systemPrompt,
               messages: [{ role: 'user', content: 'Translate these ' + chunk.length + ' items:\n\n' + numbered }],
             }),
           });
@@ -79,12 +94,12 @@ export async function POST(request) {
         }
       }
 
-      // 4. Save new translations to cache
+      // 4. Save new translations to cache (keyed by direction)
       const cacheInserts = Object.entries(newTranslations).map(([source, translated]) => ({
         source_text: source,
         translated_text: translated,
-        source_lang: 'ar',
-        target_lang: 'en',
+        source_lang: srcLang,
+        target_lang: tgtLang,
       }));
       
       if (cacheInserts.length > 0) {

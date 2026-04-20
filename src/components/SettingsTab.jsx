@@ -42,7 +42,7 @@ const NOTIF_TYPES = [
   { v: 'reminder', l: 'Team Reminders / تذكيرات الفريق' },
 ];
 
-export default function SettingsTab({ toast, user, users, onReload, isAdmin, userProfile }) {
+export default function SettingsTab({ toast, user, users, onReload, isAdmin, userProfile, categoriesList, onCategoriesReload }) {
   const isSuperAdmin = userProfile?.role === 'super_admin';
   const [section, setSection] = useState('roles');
   const [showAddMember, setShowAddMember] = useState(false);
@@ -716,22 +716,67 @@ export default function SettingsTab({ toast, user, users, onReload, isAdmin, use
           <div className="flex justify-between items-center mb-4">
             <div>
               <h3 className="text-sm font-bold">🏷️ Manage Categories & Subcategories</h3>
-              <p className="text-[10px] text-slate-400">Add, view, and organize income & expense categories. New categories appear in all dropdowns immediately.</p>
+              <p className="text-[10px] text-slate-400">Categories are stored bilingually in the <code className="bg-slate-100 px-1 rounded">categories</code> table. Arabic is the stable internal key; English is the display label. New categories appear in all dropdowns immediately.</p>
             </div>
           </div>
-          {/* Add New Category */}
+          {/* Add New Category — bilingual with auto-translate */}
           <div className="bg-blue-50 rounded-lg p-3 mb-4 border border-blue-200">
             <div className="text-xs font-bold text-blue-700 mb-2">+ Add New Category</div>
             <div className="flex gap-2 items-end flex-wrap">
               <div>
-                <label className="text-[9px] text-slate-500">Arabic Name</label>
+                <label className="text-[9px] text-slate-500">Arabic Name / الاسم بالعربية</label>
                 <input value={f.newCatAr || ''} onChange={e => setF({...f, newCatAr: e.target.value})}
-                  placeholder="e.g. مصروفات جديدة" className="px-2 py-1.5 border rounded text-xs w-40" style={{direction:'rtl'}} />
+                  placeholder="مثال: مصروفات جديدة" className="px-2 py-1.5 border rounded text-xs w-44" style={{direction:'rtl'}} />
               </div>
+              <button
+                type="button"
+                title="Auto-translate between Arabic and English"
+                disabled={f.catTranslating || (!((f.newCatAr||'').trim()) && !((f.newCatEn||'').trim()))}
+                onClick={async () => {
+                  const ar = (f.newCatAr || '').trim();
+                  const en = (f.newCatEn || '').trim();
+                  if (!ar && !en) { alert('Enter Arabic or English first'); return; }
+                  // Determine direction. If both are filled, ask before overwriting.
+                  var direction;
+                  var source;
+                  var willOverwrite = false;
+                  if (ar && !en) { direction = 'ar_to_en'; source = ar; }
+                  else if (en && !ar) { direction = 'en_to_ar'; source = en; }
+                  else {
+                    // Both filled — prompt user which to overwrite
+                    willOverwrite = true;
+                    var choice = confirm('Both fields have values.\n\nOK = translate Arabic → English (overwrites "' + en + '")\nCancel = translate English → Arabic (overwrites "' + ar + '")');
+                    if (choice) { direction = 'ar_to_en'; source = ar; }
+                    else         { direction = 'en_to_ar'; source = en; }
+                  }
+                  setF(prev => ({...prev, catTranslating: true}));
+                  try {
+                    const resp = await fetch('/api/translate', {
+                      method: 'POST',
+                      headers: { 'Content-Type': 'application/json' },
+                      body: JSON.stringify({ action: 'batch_translate', direction: direction, texts: [{ text: source }] })
+                    });
+                    const data = await resp.json();
+                    const translated = data && data.translations ? data.translations[source] : null;
+                    if (translated) {
+                      if (direction === 'ar_to_en') setF(prev => ({...prev, newCatEn: translated, catTranslating: false}));
+                      else setF(prev => ({...prev, newCatAr: translated, catTranslating: false}));
+                    } else {
+                      setF(prev => ({...prev, catTranslating: false}));
+                      alert('Translation failed — enter manually');
+                    }
+                  } catch (err) {
+                    setF(prev => ({...prev, catTranslating: false}));
+                    alert('Translation error: ' + (err.message || err));
+                  }
+                }}
+                className="px-2 py-1.5 bg-white border border-blue-300 rounded text-xs font-bold text-blue-600 hover:bg-blue-100 disabled:opacity-40">
+                {f.catTranslating ? '…' : '🌐'}
+              </button>
               <div>
                 <label className="text-[9px] text-slate-500">English Name</label>
                 <input value={f.newCatEn || ''} onChange={e => setF({...f, newCatEn: e.target.value})}
-                  placeholder="e.g. New Expenses" className="px-2 py-1.5 border rounded text-xs w-40" />
+                  placeholder="e.g. New Expenses" className="px-2 py-1.5 border rounded text-xs w-44" />
               </div>
               <div>
                 <label className="text-[9px] text-slate-500">Type</label>
@@ -744,34 +789,61 @@ export default function SettingsTab({ toast, user, users, onReload, isAdmin, use
               <button onClick={async () => {
                 const ar = (f.newCatAr || '').trim();
                 const en = (f.newCatEn || '').trim();
-                if (!ar && !en) { alert('Enter a category name'); return; }
-                const catName = ar || en;
+                if (!ar && !en) { alert('Enter a category name (Arabic or English)'); return; }
                 try {
-                  // Create a rule with this category so it persists
-                  await dbInsert('expense_rules', {
-                    description_match: '__CATEGORY__' + catName,
-                    category: catName,
-                    subcategory: '',
-                    rule_type: f.newCatType || 'expense',
-                  }, user?.id);
+                  // Prefer categories table; fall back to expense_rules if table missing.
+                  const row = {
+                    name_ar: ar || null,
+                    name_en: en || null,
+                    type: f.newCatType || 'expense',
+                    active: true,
+                    sort_order: 100,
+                  };
+                  const ins = await supabase.from('categories').insert(row).select().single();
+                  if (ins.error) {
+                    // Likely unique_violation on name_ar — treat as "already exists" friendly msg
+                    if (String(ins.error.message || '').toLowerCase().indexOf('duplicate') >= 0 || ins.error.code === '23505') {
+                      alert('Category "' + (ar || en) + '" already exists.');
+                    } else if (String(ins.error.message || '').toLowerCase().indexOf('does not exist') >= 0 || ins.error.code === '42P01') {
+                      alert('The categories table is not yet created. Please run supabase/categories.sql in Supabase first.');
+                    } else {
+                      alert('Error: ' + ins.error.message);
+                    }
+                    return;
+                  }
                   setF({...f, newCatAr: '', newCatEn: ''});
-                  loadPrefs();
-                  alert('Category "' + catName + '" added! It will now appear in all dropdowns.');
-                } catch(err) { toast ? toast.error(err.message) : toast ? toast.error(err.message) : alert(err.message); }
+                  if (typeof onCategoriesReload === 'function') await onCategoriesReload();
+                  if (toast && toast.success) toast.success('Category added: ' + (ar || en));
+                  else alert('Category "' + (ar || en) + '" added!');
+                } catch(err) { alert('Error: ' + (err.message || err)); }
               }} className="px-3 py-1.5 bg-blue-500 text-white rounded text-xs font-bold">+ Add</button>
             </div>
+            <div className="text-[9px] text-slate-400 mt-2">💡 Fill one side and tap 🌐 to auto-translate. Internal storage key is always the Arabic name for stability across language switches.</div>
           </div>
-          {/* Add New Subcategory */}
+          {/* Add New Subcategory (unchanged storage — still uses expense_rules subcat convention) */}
           <div className="bg-orange-50 rounded-lg p-3 mb-4 border border-orange-200">
             <div className="text-xs font-bold text-orange-700 mb-2">+ Add New Subcategory</div>
             <div className="flex gap-2 items-end flex-wrap">
               <div>
                 <label className="text-[9px] text-slate-500">Parent Category</label>
                 <select value={f.subParent || ''} onChange={e => setF({...f, subParent: e.target.value})}
-                  className="px-2 py-1.5 border rounded text-xs w-40">
+                  className="px-2 py-1.5 border rounded text-xs w-44">
                   <option value="">Select...</option>
-                  {Object.entries(EXPENSE_CATS).map(([ar, en]) => <option key={ar} value={ar}>{en} / {ar}</option>)}
-                  {[...new Set(rules.map(r => r.category).filter(c => c && !EXPENSE_CATS[c] && !c.startsWith('__')))].map(c => <option key={c} value={c}>{c}</option>)}
+                  {/* Live DB categories first (stable key = name_ar) */}
+                  {(Array.isArray(categoriesList) ? categoriesList : []).filter(c => c && c.active !== false).map(c => {
+                    var key = c.name_ar || c.name_en;
+                    var label = (c.name_en && c.name_ar && c.name_en !== c.name_ar) ? (c.name_en + ' / ' + c.name_ar) : (c.name_ar || c.name_en);
+                    return <option key={key} value={key}>{label}</option>;
+                  })}
+                  {/* Any lingering custom categories from expense_rules that are not in the DB list */}
+                  {[...new Set(rules.map(r => r.category).filter(c => c && !c.startsWith('__')))]
+                    .filter(c => !(Array.isArray(categoriesList) ? categoriesList : []).some(x => x && (x.name_ar === c || x.name_en === c)))
+                    .filter(c => !EXPENSE_CATS[c])
+                    .map(c => <option key={c} value={c}>{c}</option>)}
+                  {/* EXPENSE_CATS fallback only if DB is empty */}
+                  {(!Array.isArray(categoriesList) || categoriesList.length === 0) &&
+                    Object.entries(EXPENSE_CATS).map(([ar, en]) => <option key={ar} value={ar}>{en} / {ar}</option>)
+                  }
                 </select>
               </div>
               <div>
@@ -790,48 +862,84 @@ export default function SettingsTab({ toast, user, users, onReload, isAdmin, use
                   }, user?.id);
                   setF({...f, newSubName: ''});
                   loadPrefs();
-                  alert('Subcategory "' + f.newSubName.trim() + '" added under ' + f.subParent);
-                } catch(err) { toast ? toast.error(err.message) : toast ? toast.error(err.message) : alert(err.message); }
+                  if (toast && toast.success) toast.success('Subcategory added: ' + f.newSubName.trim());
+                  else alert('Subcategory "' + f.newSubName.trim() + '" added under ' + f.subParent);
+                } catch(err) { alert('Error: ' + (err.message || err)); }
               }} className="px-3 py-1.5 bg-orange-500 text-white rounded text-xs font-bold">+ Add</button>
             </div>
           </div>
-          {/* Current Categories */}
+          {/* Current Categories — live from DB */}
           <div>
             <h4 className="text-xs font-bold mb-2">Current Categories</h4>
             {(() => {
-              // Build category map from EXPENSE_CATS + rules + treasury
-              const allCats = {};
-              Object.entries(EXPENSE_CATS).forEach(([ar, en]) => {
-                allCats[ar] = { en, type: 'built-in', subcats: new Set() };
-              });
-              rules.forEach(r => {
-                if (r.category && !allCats[r.category]) allCats[r.category] = { en: r.category, type: r.rule_type || 'expense', subcats: new Set() };
-                if (r.subcategory && allCats[r.category]) allCats[r.category].subcats.add(r.subcategory);
-              });
-              // Get subcats from treasury data via expDescs
-              expDescs.forEach(d => {
-                if (d.category && allCats[d.category] && d.subcategory) allCats[d.category].subcats.add(d.subcategory);
-              });
-              return Object.entries(allCats).sort((a,b) => a[0].localeCompare(b[0])).map(([cat, data]) => (
-                <div key={cat} className="border-b border-slate-100 py-2">
-                  <div className="flex items-center justify-between">
-                    <div className="flex items-center gap-2">
-                      <span className="text-xs font-bold">{data.en !== cat ? data.en + ' / ' : ''}{cat}</span>
-                      <span className={'text-[9px] px-1.5 py-0.5 rounded-full ' + (data.type === 'built-in' ? 'bg-slate-100 text-slate-500' : data.type === 'income' ? 'bg-emerald-100 text-emerald-600' : 'bg-red-100 text-red-500')}>
-                        {data.type === 'built-in' ? 'System' : data.type}
-                      </span>
-                    </div>
-                    <span className="text-[10px] text-slate-400">{data.subcats.size} subcategories</span>
+              const dbList = Array.isArray(categoriesList) ? categoriesList : [];
+              if (dbList.length === 0) {
+                return (
+                  <div className="bg-amber-50 border border-amber-200 rounded p-3 text-[11px] text-amber-700">
+                    No categories in the database yet. Run <code className="bg-white px-1 rounded">supabase/categories.sql</code> in Supabase to seed the bilingual categories table, then reload this page.
+                    <div className="mt-2 text-slate-500 text-[10px]">Legacy EXPENSE_CATS fallback is still active in dropdowns until the migration is run.</div>
                   </div>
-                  {data.subcats.size > 0 && (
-                    <div className="flex gap-1 mt-1 flex-wrap pl-4">
-                      {[...data.subcats].sort().map(sub => (
-                        <span key={sub} className="text-[9px] px-2 py-0.5 bg-orange-50 text-orange-600 rounded border border-orange-200">{sub}</span>
-                      ))}
+                );
+              }
+              // Map subcats from expense_rules onto each category (by ar or en match)
+              const subMap = {};
+              rules.forEach(r => {
+                if (r.category && r.subcategory) {
+                  if (!subMap[r.category]) subMap[r.category] = new Set();
+                  subMap[r.category].add(r.subcategory);
+                }
+              });
+              expDescs.forEach(d => {
+                if (d.category && d.subcategory) {
+                  if (!subMap[d.category]) subMap[d.category] = new Set();
+                  subMap[d.category].add(d.subcategory);
+                }
+              });
+              const getSubs = (c) => {
+                const s = new Set();
+                if (c.name_ar && subMap[c.name_ar]) subMap[c.name_ar].forEach(x => s.add(x));
+                if (c.name_en && subMap[c.name_en]) subMap[c.name_en].forEach(x => s.add(x));
+                return [...s].sort();
+              };
+              return dbList.slice().sort((a,b) => (a.sort_order||100) - (b.sort_order||100) || String(a.name_ar||a.name_en||'').localeCompare(String(b.name_ar||b.name_en||''))).map(c => {
+                const subs = getSubs(c);
+                const canEdit = !!(c.id);
+                return (
+                  <div key={c.id || (c.name_ar || c.name_en)} className="border-b border-slate-100 py-2">
+                    <div className="flex items-center justify-between">
+                      <div className="flex items-center gap-2 flex-wrap">
+                        <span className="text-xs font-bold">{c.name_en || c.name_ar}</span>
+                        {c.name_en && c.name_ar && c.name_en !== c.name_ar && (
+                          <span className="text-xs text-slate-500" style={{direction:'rtl'}}>/ {c.name_ar}</span>
+                        )}
+                        <span className={'text-[9px] px-1.5 py-0.5 rounded-full ' + (c.type === 'income' ? 'bg-emerald-100 text-emerald-600' : 'bg-red-100 text-red-500')}>
+                          {c.type || 'expense'}
+                        </span>
+                      </div>
+                      <div className="flex items-center gap-2">
+                        <span className="text-[10px] text-slate-400">{subs.length} subcategories</span>
+                        {canEdit && (
+                          <button onClick={async () => {
+                            if (!confirm('Deactivate "' + (c.name_en || c.name_ar) + '"? It will be hidden from dropdowns but existing rows keep their tag.')) return;
+                            try {
+                              const up = await supabase.from('categories').update({ active: false }).eq('id', c.id);
+                              if (up.error) { alert('Error: ' + up.error.message); return; }
+                              if (typeof onCategoriesReload === 'function') await onCategoriesReload();
+                            } catch(err) { alert('Error: ' + (err.message || err)); }
+                          }} className="text-[10px] text-red-500 hover:underline">Deactivate</button>
+                        )}
+                      </div>
                     </div>
-                  )}
-                </div>
-              ));
+                    {subs.length > 0 && (
+                      <div className="flex gap-1 mt-1 flex-wrap pl-4">
+                        {subs.map(sub => (
+                          <span key={sub} className="text-[9px] px-2 py-0.5 bg-orange-50 text-orange-600 rounded border border-orange-200">{sub}</span>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                );
+              });
             })()}
           </div>
         </div>

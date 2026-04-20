@@ -1,7 +1,7 @@
 'use client';
 import React, { useState, useEffect, useMemo, useCallback, useRef, useContext, createContext } from 'react';
 import { supabase, dbInsert, dbUpdate, dbDelete } from '../lib/supabase';
-import { fmt, fE, COLORS, EXPENSE_CATS, getReconStatus, STATUS_STYLES, today, inRange, monthOf, getWarehouseCat, sanitize, resolveCatName } from '../lib/utils';
+import { fmt, fE, COLORS, EXPENSE_CATS, getReconStatus, STATUS_STYLES, today, inRange, monthOf, getWarehouseCat, sanitize, resolveCatName, buildCatOptions, isKnownCat } from '../lib/utils';
 import { evaluateCheckReconcile as libEvaluateCheckReconcile } from '../lib/check-reconcile';
 import * as XLSX from 'xlsx';
 import CRMTab from '../components/CRMTab';
@@ -194,8 +194,18 @@ function DatePickerSelect({ value, onChange, className }) {
 // ============================================
 // PAYMENT FORM (isolated state to prevent focus loss)
 // ============================================
-function PaymentForm({ invoice, categories, existingSubcats, onSave, onCancel, formData, setFormData }) {
+function PaymentForm({ invoice, categories, catOptions, existingSubcats, onSave, onCancel, formData, setFormData }) {
   const [pf, setPf] = useState({ date: formData.date || new Date().toISOString().substring(0, 10), amount: formData.amount || '', payMethod: formData.payMethod || 'cash', desc: formData.desc || '', category: formData.category || 'مبيعات', subcategory: formData.subcategory || '' });
+  // Option source chain (first non-empty wins):
+  //   1. catOptions prop  (new, from buildCatOptions via parent)
+  //   2. categories tuple prop  (legacy callers passing [[ar,en],...])
+  //   3. buildCatOptions([])  (EXPENSE_CATS fallback — never leaves the user staring at empty dropdown)
+  let _opts = [];
+  if (Array.isArray(catOptions) && catOptions.length > 0) _opts = catOptions;
+  else if (Array.isArray(categories) && categories.length > 0) {
+    _opts = categories.map(([ar, en]) => ({ value: ar, label: (en && ar && en !== ar) ? (en + ' / ' + ar) : (ar || en) }));
+  }
+  if (_opts.length === 0) _opts = buildCatOptions([], { lang: 'bi' });
 
   const handleSave = () => {
     setFormData({ ...formData, ...pf });
@@ -278,7 +288,7 @@ function PaymentForm({ invoice, categories, existingSubcats, onSave, onCancel, f
           <select value={pf.category || ''} onChange={e => setPf({ ...pf, category: e.target.value })}
             className="w-full px-3 py-2 rounded-lg border border-slate-200 text-sm">
             <option value="">Select...</option>
-            {categories.map(([ar, en]) => <option key={ar} value={ar}>{en} / {ar}</option>)}
+            {_opts.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
           </select>
         </div>
         <div>
@@ -1294,7 +1304,9 @@ export default function App() {
 
   // Expense/Income buckets (dual-level for both Cash In and Cash Out)
   const uniqueSubcats = useMemo(() => [...new Set([...treasury.map(t=>t.subcategory), ...expenseRules.map(r=>r.subcategory)].filter(Boolean))].sort().slice(0, 100), [treasury, expenseRules]);
-  const customCats = useMemo(() => [...new Set([...treasury.map(t=>t.category), ...expenseRules.map(r=>r.category)].filter(c=>c&&!EXPENSE_CATS[c]&&!c.startsWith('__')))].sort(), [treasury, expenseRules]);
+  const customCats = useMemo(() => [...new Set([...treasury.map(t=>t.category), ...expenseRules.map(r=>r.category)].filter(c=>c&&!isKnownCat(c, categoriesList)&&!c.startsWith('__')))].sort(), [treasury, expenseRules, categoriesList]);
+  // Pre-built bilingual option array — used by every category dropdown. Stable AR key + bilingual label.
+  const catOptions = useMemo(() => buildCatOptions(categoriesList, { lang: 'bi' }), [categoriesList]);
 
   const expenseBuckets = useMemo(() => {
     const cats = {};
@@ -1313,9 +1325,9 @@ export default function App() {
       }
     });
     return Object.entries(cats)
-      .map(([cat, data]) => ({ cat, eng: EXPENSE_CATS[cat] || cat, ...data }))
+      .map(([cat, data]) => ({ cat, eng: resolveCatName(cat, 'en', categoriesList), ...data }))
       .sort((a, b) => b.total - a.total);
-  }, [filteredTreasury]);
+  }, [filteredTreasury, categoriesList]);
 
   const incomeBuckets = useMemo(() => {
     const cats = {};
@@ -1334,9 +1346,9 @@ export default function App() {
       }
     });
     return Object.entries(cats)
-      .map(([cat, data]) => ({ cat, eng: EXPENSE_CATS[cat] || cat, ...data }))
+      .map(([cat, data]) => ({ cat, eng: resolveCatName(cat, 'en', categoriesList), ...data }))
       .sort((a, b) => b.total - a.total);
-  }, [filteredTreasury]);
+  }, [filteredTreasury, categoriesList]);
 
   // Checks
   const pendingChecks = useMemo(() => checks.filter(c => c.status === 'pending'), [checks]);
@@ -3371,7 +3383,7 @@ export default function App() {
                               }
                             }} className="w-full px-2 py-1 rounded border border-slate-200 text-xs bg-amber-50">
                               <option value="">None</option>
-                              {Object.entries(EXPENSE_CATS).map(([ar, en]) => <option key={ar} value={ar}>{en} / {ar}</option>)}
+                              {catOptions.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
                               {customCats.map(c => <option key={c} value={c}>{c}</option>)}
                               <option value="__custom">+ New Category</option>
                             </select>
@@ -3570,7 +3582,7 @@ export default function App() {
             ) : (
               <PaymentForm
                 invoice={selectedInvoice}
-                categories={Object.entries(EXPENSE_CATS)}
+                catOptions={catOptions}
                 existingSubcats={uniqueSubcats}
                 onSave={handleAddPayment}
                 onCancel={() => { setShowAddPayment(false); setFormData({}); }}
@@ -3661,7 +3673,7 @@ export default function App() {
                                 }
                               }} className="w-full text-[10px] border rounded px-1 py-0.5 bg-amber-50">
                                 <option value="">None</option>
-                                {Object.entries(EXPENSE_CATS).map(([ar, en]) => <option key={ar} value={ar}>{en}</option>)}
+                                {catOptions.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
                                 {customCats.map(c => <option key={c} value={c}>{c}</option>)}
                                 <option value="__custom">+ New Category</option>
                               </select>
@@ -3824,7 +3836,7 @@ export default function App() {
                       <select value={txn.category || ''} onChange={e => setEditTreasuryModal({...txn, category: e.target.value})}
                         className="w-full px-3 py-2 rounded-lg border text-sm bg-amber-50">
                         <option value="">None</option>
-                        {Object.entries(EXPENSE_CATS).map(([ar, en]) => <option key={ar} value={ar}>{en}</option>)}
+                        {catOptions.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
                         {customCats.map(c => <option key={c} value={c}>{c}</option>)}
                       </select>
                     </div>
@@ -4041,7 +4053,7 @@ export default function App() {
               const isIn = expenseDrill.startsWith('in:');
               const cat = isIn ? expenseDrill.slice(3) : expenseDrill;
               const prefix = isIn ? 'Income / إيرادات' : 'Expense / منصرف';
-              return bucketSub ? prefix + ': ' + cat + ' > ' + bucketSub : prefix + ': ' + (EXPENSE_CATS[cat] || cat);
+              return bucketSub ? prefix + ': ' + cat + ' > ' + bucketSub : prefix + ': ' + txCat(cat);
             })()}>
             {(() => {
               const isIn = expenseDrill.startsWith('in:');
@@ -4090,7 +4102,7 @@ export default function App() {
                       }} className="px-2 py-0.5 rounded border border-amber-300 text-amber-600 text-[10px]">
                         <option value="">Move to... / نقل إلى</option>
                         {[...new Set(treasury.map(t => t.category).filter(Boolean))].filter(c => c !== cat).sort().map(c => (
-                          <option key={c} value={c}>{EXPENSE_CATS[c] || c}</option>
+                          <option key={c} value={c}>{txCat(c)}</option>
                         ))}
                         <option value="_new">+ New Category</option>
                       </select>
@@ -4123,10 +4135,10 @@ export default function App() {
                                       } else setEditCatValue(e.target.value);
                                     }} className="w-full text-[9px] border-2 border-blue-400 rounded px-1 py-0.5 bg-amber-50">
                                       <option value="">None</option>
-                                      {editCatValue && !EXPENSE_CATS[editCatValue] && !customCats.includes(editCatValue) && editCatValue !== '__custom' && (
+                                      {editCatValue && !isKnownCat(editCatValue, categoriesList) && !customCats.includes(editCatValue) && editCatValue !== '__custom' && (
                                         <option value={editCatValue}>✨ {editCatValue}</option>
                                       )}
-                                      {Object.entries(EXPENSE_CATS).map(([ar, en]) => <option key={ar} value={ar}>{en}</option>)}
+                                      {catOptions.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
                                       {customCats.map(c => <option key={c} value={c}>{c}</option>)}
                                       <option value="__custom">+ New Category</option>
                                     </select>
@@ -4174,7 +4186,7 @@ export default function App() {
                                 ) : (
                                   <div onClick={() => { setEditSubTxnId(txn.id); setEditCatValue(txn.category || ''); setEditSubValue(txn.subcategory || ''); }}
                                     className="cursor-pointer hover:bg-slate-100 rounded px-1 py-0.5">
-                                    <div className="text-[9px] font-semibold text-amber-700">{EXPENSE_CATS[txn.category] || txn.category || <span className="text-slate-300 italic">+ category</span>}</div>
+                                    <div className="text-[9px] font-semibold text-amber-700">{txn.category ? txCat(txn.category) : <span className="text-slate-300 italic">+ category</span>}</div>
                                     <div className="text-[9px] text-orange-500">{txn.subcategory || <span className="text-slate-300 italic">+ subcategory</span>}</div>
                                   </div>
                                 )}
@@ -4926,17 +4938,17 @@ export default function App() {
                       else setFormData({ ...formData, category: e.target.value });
                     }} className="w-full px-3 py-2 rounded-lg border border-slate-200 text-sm bg-amber-50">
                       <option value="">Select category...</option>
-                      {formData.category && !EXPENSE_CATS[formData.category] && !customCats.includes(formData.category) && formData.category !== '__custom' && (
+                      {formData.category && !isKnownCat(formData.category, categoriesList) && !customCats.includes(formData.category) && formData.category !== '__custom' && (
                         <option value={formData.category}>✨ {formData.category}</option>
                       )}
-                      {Object.entries(EXPENSE_CATS).map(([ar, en]) => (
-                        <option key={ar} value={ar}>{en} / {ar}</option>
+                      {catOptions.map(o => (
+                        <option key={o.value} value={o.value}>{o.label}</option>
                       ))}
                       {customCats.map(c => <option key={c} value={c}>{c}</option>)}
                       <option value="__custom">+ Add New Category / إضافة تصنيف جديد</option>
                     </select>
                   )}
-                  {formData.category && !EXPENSE_CATS[formData.category] && !customCats.includes(formData.category) && !formData.showCustomCat && (
+                  {formData.category && !isKnownCat(formData.category, categoriesList) && !customCats.includes(formData.category) && !formData.showCustomCat && (
                     <div className="text-[10px] text-emerald-600 font-semibold mt-1">✓ New category: "{formData.category}"</div>
                   )}
                   {formData.showCustomSubcat ? (
@@ -6338,7 +6350,7 @@ export default function App() {
                           <div key={t.id} className="flex items-center justify-between bg-white rounded-lg p-2 border text-xs cursor-pointer hover:bg-slate-50" onClick={() => setTab('egyptbank')}>
                             <div className="flex-1 min-w-0">
                               <div className="font-semibold truncate">{t.description || '—'}</div>
-                              <div className="text-[9px] text-slate-400">{t.date} {t.category ? '• ' + (EXPENSE_CATS[t.category] || t.category) : ''}{t.matched_invoice_id ? ' ✅' : ''}</div>
+                              <div className="text-[9px] text-slate-400">{t.date} {t.category ? '• ' + txCat(t.category) : ''}{t.matched_invoice_id ? ' ✅' : ''}</div>
                             </div>
                             <div className={'font-bold ml-2 ' + (t.amount > 0 ? 'text-green-600' : 'text-red-600')}>{t.amount > 0 ? '+' : ''}{fE(t.amount)}</div>
                           </div>
@@ -7061,7 +7073,7 @@ export default function App() {
                 // Group by category
                 const byCat = {};
                 searchResults.forEach(t => {
-                  const c = (EXPENSE_CATS[t.category] || t.category || 'Uncategorized');
+                  const c = (t.category ? txCat(t.category) : (lang === 'en' ? 'Uncategorized' : 'غير مصنّف'));
                   if (!byCat[c]) byCat[c] = { in: 0, out: 0, count: 0, subs: {} };
                   byCat[c].in += Number(t.cash_in || 0);
                   byCat[c].out += Number(t.cash_out || 0);
@@ -7091,7 +7103,7 @@ export default function App() {
                         <select value={tSearch.cat} onChange={e => setTSearch({...tSearch, cat: e.target.value})}
                           className="w-full px-2 py-1.5 rounded border text-xs">
                           <option value="">All Categories</option>
-                          {allCats.map(c => <option key={c} value={c}>{EXPENSE_CATS[c] || c}</option>)}
+                          {allCats.map(c => <option key={c} value={c}>{txCat(c)}</option>)}
                         </select>
                       </div>
                       <div>
@@ -7188,7 +7200,7 @@ export default function App() {
                                         return li ? <div className="text-[9px] text-emerald-600">✅ → {li.customer_name || li.order_number}</div> : null;
                                       })()}
                                     </td>
-                                    <td className="px-2 py-1 text-[10px] text-amber-600">{EXPENSE_CATS[t.category] || t.category || ''}{t.subcategory ? ' / ' + t.subcategory : ''}</td>
+                                    <td className="px-2 py-1 text-[10px] text-amber-600">{t.category ? txCat(t.category) : ''}{t.subcategory ? ' / ' + t.subcategory : ''}</td>
                                     <td className="px-2 py-1 text-[10px] text-right text-emerald-600 font-semibold">{Number(t.cash_in) > 0 ? fE(t.cash_in) : ''}</td>
                                     <td className="px-2 py-1 text-[10px] text-right text-red-500 font-semibold">{Number(t.cash_out) > 0 ? fE(t.cash_out) : ''}</td>
                                     <td className="px-2 py-1 text-[10px]">
@@ -9243,7 +9255,12 @@ export default function App() {
             SETTINGS TAB
         ========================================== */}
         {tab === 'settings' && (
-          <SafeSection label="Settings"><SettingsTab toast={toast} user={user} users={teamUsers} onReload={loadAllData} isAdmin={isAdmin} userProfile={userProfile} /></SafeSection>
+          <SafeSection label="Settings"><SettingsTab toast={toast} user={user} users={teamUsers} onReload={loadAllData} isAdmin={isAdmin} userProfile={userProfile} categoriesList={categoriesList} onCategoriesReload={async () => {
+            try {
+              const { data: cats } = await supabase.from('categories').select('*').eq('active', true).order('sort_order').order('name_ar');
+              setCategoriesList(cats || []);
+            } catch (e) { /* table may not exist yet */ }
+          }} /></SafeSection>
         )}
 
         {/* ==========================================

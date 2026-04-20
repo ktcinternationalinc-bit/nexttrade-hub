@@ -1,4 +1,5 @@
 import { createClient } from '@supabase/supabase-js';
+import { notifyTicketAssignedServer, notifyTicketReassignedServer, notifyEventScheduledServer, notifyReminderServer, notifyTeamMessageServer, notifyShippingRateServer } from '../../../lib/notify-server';
 import { loadMemorySettings, loadMemoryForUser, buildMemoryContext, extractMemoryCandidates, persistMemoryCandidates } from '../../../lib/ai-memory';
 
 var supabase = createClient(
@@ -379,6 +380,15 @@ export async function POST(request) {
     context += '  EXAMPLE — "tell Omar he needs to put his ticket in today" → target_user_id:"<Omar uuid>", message:"You need to put your ticket in today", urgent:true\n';
     context += '  Set urgent:true ONLY for time-critical items. urgent items never expire until dismissed.\n';
     context += '- request_quote: {type:"request_quote", vendor_company, vendor_contact, vendor_email, vendor_whatsapp, vendor_type, send_via, origin, destination, container, commodity, customer_name}\n';
+    context += '- create_rate: {type:"create_rate", vendor_name, origin, destination, rate_amount, currency, rate_type, container_type, transit_days, expiry_date, commodity, notes}\n';
+    context += '  Log a NEW shipping rate you have received from a carrier or forwarder. Currency defaults to USD. rate_type defaults to "ocean".\n';
+    context += '  EXAMPLE — "log a new rate from Maersk Shanghai to New York 4200 dollars 40ft, transit 28 days" →\n';
+    context += '    vendor_name:"Maersk", origin:"Shanghai", destination:"New York", rate_amount:4200, currency:"USD", container_type:"40ft", transit_days:28\n';
+    context += '- add_meeting_notes: {type:"add_meeting_notes", event_id or event_title or event_date, notes, append}\n';
+    context += '  Attach notes to an existing calendar event. append:true appends to existing notes with a timestamp; false (default) overwrites.\n';
+    context += '  Finds the event by id, exact title, or closest match to title+date. Also writes a daily_log entry so it appears on the Daily Log.\n';
+    context += '  EXAMPLE — "add notes to today\'s meeting with Ahmed: agreed on delivery date March 15, price 12k per unit" →\n';
+    context += '    event_title:"Ahmed", event_date:"<today>", notes:"Agreed on delivery date March 15, price 12k per unit", append:true\n';
 
     if (gmailConnected) {
       context += '- read_email: {type:"read_email", query:"search query", maxResults:10}\n';
@@ -736,8 +746,8 @@ export async function POST(request) {
           return Response.json({ answer: cleanText.trim() || 'Draft ready. Say "Execute" or "Cancel".', pending_action: actionData });
         }
 
-        // Auto-execute safe actions immediately (tickets, events, reminders)
-        var autoExecTypes = ['create_ticket', 'update_ticket', 'create_event', 'create_reminder', 'send_team_message'];
+        // Auto-execute safe actions immediately (tickets, events, reminders, rates, notes)
+        var autoExecTypes = ['create_ticket', 'update_ticket', 'create_event', 'create_reminder', 'send_team_message', 'create_rate', 'add_meeting_notes'];
         if (autoExecTypes.indexOf(actionData.type) >= 0) {
           try {
             var execResult = null;
@@ -747,6 +757,10 @@ export async function POST(request) {
               var tr = await supabase.from('tickets').insert({ ticket_number: tn, title: actionData.title, description: actionData.description || '', priority: actionData.priority || 'medium', status: 'New', assigned_to: actionData.assigned_to || null, due_date: actionData.due_date || null, created_by: userId || null }).select().single();
               if (tr.error) throw tr.error;
               if (userId) await supabase.from('daily_log').insert({ user_id: userId, entry_text: 'AI created ' + tn + ': ' + actionData.title, auto_generated: true, log_date: new Date().toISOString().substring(0, 10), log_category: 'ticket' });
+              // Fire-and-forget email to assignee (never blocks response)
+              if (actionData.assigned_to && actionData.assigned_to !== userId) {
+                notifyTicketAssignedServer([actionData.assigned_to], tn + ' ' + actionData.title, userId).catch(function(){});
+              }
               execResult = '✅ ' + tn + ' created: ' + actionData.title + (actionData.priority ? ' [' + actionData.priority + ']' : '') + (actionData.due_date ? ' Due: ' + actionData.due_date : '');
             } else if (actionData.type === 'update_ticket') {
               var fq = null;
@@ -761,6 +775,10 @@ export async function POST(request) {
               up.updated_at = new Date().toISOString();
               await supabase.from('tickets').update(up).eq('id', tk.id);
               await supabase.from('ticket_comments').insert({ ticket_id: tk.id, comment_text: '🤖 AI: ' + ch.join(', '), is_system: true, created_by: userId });
+              // Fire-and-forget reassignment notification
+              if (actionData.assigned_to && actionData.assigned_to !== tk.assigned_to && actionData.assigned_to !== userId) {
+                notifyTicketReassignedServer([actionData.assigned_to], tk.title || tk.ticket_number, userId).catch(function(){});
+              }
               execResult = '✅ Updated ' + tk.ticket_number + ': ' + ch.join(', ');
             } else if (actionData.type === 'create_event') {
               // assigned_to optional — defaults to creator. Allows Max to schedule events for team.
@@ -770,6 +788,8 @@ export async function POST(request) {
               if (evAssignee && evAssignee !== userId) {
                 var aFind = await supabase.from('users').select('name').eq('id', evAssignee).maybeSingle();
                 if (aFind && aFind.data) evWho = ' for ' + aFind.data.name;
+                // Fire-and-forget invitation email
+                notifyEventScheduledServer([evAssignee], actionData.title, actionData.event_date, userId).catch(function(){});
               }
               execResult = '✅ Event created' + evWho + ': ' + actionData.title + ' on ' + actionData.event_date;
             } else if (actionData.type === 'create_reminder') {
@@ -781,6 +801,10 @@ export async function POST(request) {
               if (rTarget && rTarget !== 'all') {
                 var rFind = await supabase.from('users').select('name').eq('id', rTarget).maybeSingle();
                 if (rFind && rFind.data) rWho = ' for ' + rFind.data.name;
+                // Fire-and-forget email to specific target (skip if 'all' — handled by broadcast path)
+                if (rTarget !== userId) {
+                  notifyReminderServer([rTarget], actionData.task || actionData.title, actionData.due_date, userId).catch(function(){});
+                }
               }
               execResult = '✅ Reminder set' + rWho + ': ' + (actionData.task || actionData.title) + ' on ' + actionData.due_date;
             } else if (actionData.type === 'send_team_message') {
@@ -805,7 +829,74 @@ export async function POST(request) {
               });
               var msgRecip = await supabase.from('users').select('name').eq('id', actionData.target_user_id).maybeSingle();
               var recipName = (msgRecip && msgRecip.data && msgRecip.data.name) || 'team member';
+              // Fire-and-forget email alongside the in-app ai_memory insert
+              notifyTeamMessageServer(actionData.target_user_id, senderName, msgText, !!actionData.urgent, userId).catch(function(){});
               execResult = '✅ Message queued for ' + recipName + ' — they will see it on their next chat or morning briefing.';
+            } else if (actionData.type === 'create_rate') {
+              // Log a new shipping rate into the shipping_rates table.
+              if (!actionData.vendor_name || !actionData.origin || !actionData.destination || !actionData.rate_amount) {
+                throw new Error('create_rate requires vendor_name, origin, destination, rate_amount');
+              }
+              var rateRow = {
+                vendor_name: actionData.vendor_name,
+                origin: actionData.origin,
+                destination: actionData.destination,
+                rate_amount: Number(actionData.rate_amount),
+                currency: actionData.currency || 'USD',
+                rate_type: actionData.rate_type || 'ocean',
+                container_type: actionData.container_type || null,
+                transit_days: actionData.transit_days ? Number(actionData.transit_days) : null,
+                expiry_date: actionData.expiry_date || null,
+                commodity: actionData.commodity || null,
+                notes: actionData.notes || null,
+                shipping_line: actionData.shipping_line || actionData.vendor_name,
+                effective_date: new Date().toISOString().substring(0, 10),
+                created_by: userId || null,
+              };
+              var rateIns = await supabase.from('shipping_rates').insert(rateRow).select().single();
+              if (rateIns.error) throw rateIns.error;
+              if (userId) await supabase.from('daily_log').insert({ user_id: userId, entry_text: 'AI logged rate: ' + rateRow.vendor_name + ' ' + rateRow.origin + '→' + rateRow.destination + ' ' + rateRow.currency + ' ' + rateRow.rate_amount, auto_generated: true, log_date: new Date().toISOString().substring(0, 10), log_category: 'rate' });
+              execResult = '✅ Rate logged: ' + rateRow.vendor_name + ' ' + rateRow.origin + '→' + rateRow.destination + ' ' + rateRow.currency + ' ' + Number(rateRow.rate_amount).toLocaleString() + (rateRow.container_type ? ' (' + rateRow.container_type + ')' : '') + (rateRow.transit_days ? ' • ' + rateRow.transit_days + 'd transit' : '');
+            } else if (actionData.type === 'add_meeting_notes') {
+              // Attach notes to an existing calendar event. Finds by id → title+date → title alone.
+              if (!actionData.notes) throw new Error('add_meeting_notes requires notes');
+              var foundEv = null;
+              if (actionData.event_id) {
+                var byId = await supabase.from('calendar_events').select('*').eq('id', actionData.event_id).maybeSingle();
+                if (byId && byId.data) foundEv = byId.data;
+              }
+              if (!foundEv && actionData.event_title) {
+                var q = supabase.from('calendar_events').select('*').ilike('title', '%' + actionData.event_title + '%');
+                if (actionData.event_date) q = q.eq('event_date', actionData.event_date);
+                var byTitle = await q.order('event_date', { ascending: false }).limit(1).maybeSingle();
+                if (byTitle && byTitle.data) foundEv = byTitle.data;
+              }
+              if (!foundEv && actionData.event_date) {
+                var byDate = await supabase.from('calendar_events').select('*').eq('event_date', actionData.event_date).limit(1).maybeSingle();
+                if (byDate && byDate.data) foundEv = byDate.data;
+              }
+              if (!foundEv) throw new Error('No matching event found. Try with event_id, or event_title + event_date.');
+              var nowStamp = new Date().toISOString().substring(0, 16).replace('T', ' ');
+              var authorName = 'Someone';
+              if (userId) {
+                var aFind = await supabase.from('users').select('name').eq('id', userId).maybeSingle();
+                if (aFind && aFind.data) authorName = aFind.data.name;
+              }
+              var existingNotes = foundEv.meeting_notes || foundEv.notes || '';
+              var newNotes;
+              if (actionData.append !== false && existingNotes) {
+                newNotes = existingNotes + '\n\n[' + nowStamp + ' — ' + authorName + ']\n' + actionData.notes;
+              } else {
+                newNotes = '[' + nowStamp + ' — ' + authorName + ']\n' + actionData.notes;
+              }
+              // Prefer meeting_notes column; fall back to notes if column missing
+              var updRes = await supabase.from('calendar_events').update({ meeting_notes: newNotes, updated_at: new Date().toISOString() }).eq('id', foundEv.id);
+              if (updRes.error && String(updRes.error.message || '').toLowerCase().indexOf('meeting_notes') >= 0) {
+                // Column missing — run meeting-notes.sql. Fall back to notes for now.
+                await supabase.from('calendar_events').update({ notes: newNotes }).eq('id', foundEv.id);
+              }
+              if (userId) await supabase.from('daily_log').insert({ user_id: userId, entry_text: 'Meeting notes added for "' + (foundEv.title || 'event') + '" (' + foundEv.event_date + '): ' + actionData.notes.substring(0, 200) + (actionData.notes.length > 200 ? '...' : ''), auto_generated: true, log_date: new Date().toISOString().substring(0, 10), log_category: 'meeting' });
+              execResult = '✅ Notes added to "' + (foundEv.title || 'event') + '" on ' + foundEv.event_date + '. Also posted to your Daily Log.';
             }
             var finalAnswer = (cleanText.trim() ? cleanText.trim() + '\n\n' : '') + (execResult || 'Done.');
             return Response.json({ answer: finalAnswer, action_result: 'success' });
