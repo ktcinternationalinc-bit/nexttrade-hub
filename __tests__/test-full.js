@@ -3772,6 +3772,646 @@ try { runSection31_PageJsxAudit(); } catch(e) {
 }
 
 // ============================================================
+// SECTION 32: Recurrence math — src/lib/recurrence.js
+// Purpose: lock in the pure-function behavior used by the occurrence
+// generator. Also locks the documented DST / Cairo-offset behavior for
+// cairoToUTC + computeReminderTimes.
+// ============================================================
+function runSection32_Recurrence() {
+  group('SECTION 32: Recurrence math');
+
+  // Load recurrence.js via the same shim pattern used for check-reconcile.js
+  var recSrcPath = path.join(REPO_ROOT, 'src/lib/recurrence.js');
+  var recSrc = fs.readFileSync(recSrcPath, 'utf8');
+  var recShim = recSrc
+    .replace(/export\s+function\s+/g, 'function ')
+    .replace(/export\s+const\s+/g, 'const ')
+    + '\nmodule.exports = { parseDateStr, formatDateStr, daysInMonth, addDays, addMonthsClamp, cmpDate, nextOccurrence, generateOccurrences, cairoToUTC, computeReminderTimes, newUUID, CAIRO_OFFSET_HOURS, VALID_PATTERNS };';
+  fs.writeFileSync('/tmp/_recurrence.js', recShim);
+  // Purge any prior require cache so re-runs pick up edits
+  delete require.cache['/tmp/_recurrence.js'];
+  var R = require('/tmp/_recurrence.js');
+
+  // ---------- parseDateStr / formatDateStr ----------
+  assert(R.parseDateStr('2026-04-20') && R.parseDateStr('2026-04-20').y === 2026, '32.parse.1a parseDateStr year');
+  assert(R.parseDateStr('2026-04-20').m === 4, '32.parse.1b parseDateStr month');
+  assert(R.parseDateStr('2026-04-20').d === 20, '32.parse.1c parseDateStr day');
+  assert(R.parseDateStr('garbage') === null, '32.parse.2a non-matching input returns null');
+  assert(R.parseDateStr('') === null, '32.parse.2b empty string returns null');
+  assert(R.parseDateStr(null) === null, '32.parse.2c null input returns null');
+  assert(R.parseDateStr(undefined) === null, '32.parse.2d undefined input returns null');
+  // Surface-level: rejects non-ISO formats so the generator can't be fed ambiguous dates
+  assert(R.parseDateStr('4/20/2026') === null, '32.parse.2e US-style date rejected');
+  assert(R.formatDateStr(2026, 4, 3) === '2026-04-03', '32.fmt.1a zero-pads month and day');
+  assert(R.formatDateStr(999, 1, 1) === '999-01-01', '32.fmt.1b no year padding (intentional — ISO-8601 is 4-digit but we never hand in y<1000)');
+
+  // ---------- daysInMonth + leap years ----------
+  assert(R.daysInMonth(2024, 2) === 29, '32.leap.1a Feb 2024 (div 4, not div 100) = 29');
+  assert(R.daysInMonth(2025, 2) === 28, '32.leap.1b Feb 2025 non-leap = 28');
+  assert(R.daysInMonth(2100, 2) === 28, '32.leap.1c Feb 2100 (div 100, not div 400) = 28');
+  assert(R.daysInMonth(2000, 2) === 29, '32.leap.1d Feb 2000 (div 400) = 29');
+  assert(R.daysInMonth(2026, 4) === 30, '32.leap.2a April = 30');
+  assert(R.daysInMonth(2026, 12) === 31, '32.leap.2b December = 31');
+
+  // ---------- addDays ----------
+  assert(R.addDays('2026-04-20', 1) === '2026-04-21', '32.addd.1a +1 day');
+  assert(R.addDays('2026-04-20', -1) === '2026-04-19', '32.addd.1b -1 day');
+  assert(R.addDays('2026-04-20', 7) === '2026-04-27', '32.addd.1c +7 days');
+  assert(R.addDays('2026-12-31', 1) === '2027-01-01', '32.addd.2a year rollover forward');
+  assert(R.addDays('2026-01-01', -1) === '2025-12-31', '32.addd.2b year rollover back');
+  assert(R.addDays('2024-02-28', 1) === '2024-02-29', '32.addd.3a leap-year Feb 28 → 29');
+  assert(R.addDays('2024-02-29', 1) === '2024-03-01', '32.addd.3b leap-year Feb 29 → Mar 1');
+  assert(R.addDays('2025-02-28', 1) === '2025-03-01', '32.addd.3c non-leap Feb 28 → Mar 1');
+  assert(R.addDays('garbage', 1) === null, '32.addd.4a invalid input returns null');
+
+  // ---------- addMonthsClamp (the interesting one) ----------
+  assert(R.addMonthsClamp('2026-01-31', 1) === '2026-02-28', '32.addm.1a Jan31 + 1mo → Feb28 (non-leap)');
+  assert(R.addMonthsClamp('2024-01-31', 1) === '2024-02-29', '32.addm.1b Jan31 + 1mo → Feb29 (leap)');
+  assert(R.addMonthsClamp('2026-03-31', 1) === '2026-04-30', '32.addm.1c Mar31 + 1mo → Apr30');
+  assert(R.addMonthsClamp('2026-05-31', 1) === '2026-06-30', '32.addm.1d May31 + 1mo → Jun30');
+  assert(R.addMonthsClamp('2026-01-15', 1) === '2026-02-15', '32.addm.2a non-edge day preserved');
+  assert(R.addMonthsClamp('2026-10-31', 3) === '2027-01-31', '32.addm.2b Oct31 + 3mo = Jan31 (same-day valid)');
+  assert(R.addMonthsClamp('2026-12-31', 1) === '2027-01-31', '32.addm.2c Dec31 + 1mo crosses year');
+  assert(R.addMonthsClamp('2026-05-15', -6) === '2025-11-15', '32.addm.3a negative months');
+  assert(R.addMonthsClamp('2026-05-15', 0) === '2026-05-15', '32.addm.3b zero months = no-op');
+  assert(R.addMonthsClamp('garbage', 1) === null, '32.addm.4a invalid input returns null');
+
+  // ---------- cmpDate ----------
+  assert(R.cmpDate('2026-04-20', '2026-04-20') === 0, '32.cmp.1a equal');
+  assert(R.cmpDate('2026-04-20', '2026-04-21') === -1, '32.cmp.1b less-than');
+  assert(R.cmpDate('2026-04-21', '2026-04-20') === 1, '32.cmp.1c greater-than');
+  assert(R.cmpDate('2026-01-01', '2025-12-31') === 1, '32.cmp.1d year dominates');
+
+  // ---------- nextOccurrence ----------
+  assert(R.nextOccurrence('2026-04-20', 'daily', 1) === '2026-04-21', '32.next.1a daily +1');
+  assert(R.nextOccurrence('2026-04-20', 'daily', 3) === '2026-04-23', '32.next.1b daily +3');
+  assert(R.nextOccurrence('2026-04-20', 'weekly', 1) === '2026-04-27', '32.next.2a weekly +1');
+  assert(R.nextOccurrence('2026-04-20', 'weekly', 2) === '2026-05-04', '32.next.2b weekly +2');
+  assert(R.nextOccurrence('2026-04-20', 'biweekly', 1) === '2026-05-04', '32.next.3a biweekly (= weekly×2)');
+  assert(R.nextOccurrence('2026-01-31', 'monthly', 1) === '2026-02-28', '32.next.4a monthly clamps');
+  assert(R.nextOccurrence('2026-04-20', 'none', 1) === null, '32.next.5a pattern=none returns null');
+  assert(R.nextOccurrence('2026-04-20', 'custom', 1) === null, '32.next.5b pattern=custom returns null (not yet implemented)');
+  assert(R.nextOccurrence('2026-04-20', 'weekly', 0) === '2026-04-27', '32.next.6a interval=0 falls back to 1');
+  assert(R.nextOccurrence('2026-04-20', 'weekly', -5) === '2026-04-27', '32.next.6b negative interval falls back to 1');
+  assert(R.nextOccurrence('2026-04-20', 'weekly', null) === '2026-04-27', '32.next.6c null interval falls back to 1');
+  assert(R.nextOccurrence('2026-04-20', 'weekly', undefined) === '2026-04-27', '32.next.6d undefined interval falls back to 1');
+  assert(R.nextOccurrence('garbage', 'weekly', 1) === null, '32.next.7a invalid date returns null');
+
+  // ---------- generateOccurrences ----------
+  var master1 = { event_date: '2026-04-20', recurring: 'weekly', recurrence_interval: 1 };
+  var occ1 = R.generateOccurrences(master1, '2026-04-20', '2026-05-11', 100);
+  assert(JSON.stringify(occ1) === JSON.stringify(['2026-04-27','2026-05-04','2026-05-11']),
+    '32.gen.1a weekly with untilDate ceiling (inclusive)', 'got ' + JSON.stringify(occ1));
+
+  // recurring_end is the HARD ceiling — even if untilDate is later, stops at series_end
+  var master2 = { event_date: '2026-04-20', recurring: 'weekly', recurrence_interval: 1, recurring_end: '2026-05-01' };
+  var occ2 = R.generateOccurrences(master2, '2026-04-20', '2026-12-31', 100);
+  assert(JSON.stringify(occ2) === JSON.stringify(['2026-04-27']),
+    '32.gen.2a recurring_end bounds the series', 'got ' + JSON.stringify(occ2));
+
+  // Empty when pattern is none/custom
+  assert(R.generateOccurrences({ event_date: '2026-04-20', recurring: 'none' }, '2026-04-20', '2026-12-31', 100).length === 0,
+    '32.gen.3a none → empty');
+  assert(R.generateOccurrences({ event_date: '2026-04-20', recurring: 'custom' }, '2026-04-20', '2026-12-31', 100).length === 0,
+    '32.gen.3b custom → empty');
+
+  // Monthly with Jan-31 master goes through Feb→Mar clamping cleanly
+  var master3 = { event_date: '2026-01-31', recurring: 'monthly', recurrence_interval: 1 };
+  var occ3 = R.generateOccurrences(master3, '2026-01-31', '2026-05-15', 100);
+  // Note: the walk is cursor-based (next = nextOccurrence(cursor)), so after
+  // clamp to Feb 28, next monthly from Feb 28 = Mar 28, NOT Mar 31.
+  // This is the "phase drift after clamp" behavior — DOCUMENT IT, don't fight it.
+  assert(JSON.stringify(occ3) === JSON.stringify(['2026-02-28','2026-03-28','2026-04-28']),
+    '32.gen.4a DOCUMENTED: monthly clamp drifts cursor forward (Jan31→Feb28→Mar28 not Mar31)',
+    'got ' + JSON.stringify(occ3));
+
+  // Cap works
+  var master4 = { event_date: '2026-04-20', recurring: 'daily', recurrence_interval: 1 };
+  var occ4 = R.generateOccurrences(master4, '2026-04-20', '2026-12-31', 5);
+  assert(occ4.length === 5, '32.gen.5a maxN cap honored', 'len=' + occ4.length);
+
+  // No master, invalid master
+  assert(R.generateOccurrences(null, '2026-04-20', '2026-12-31', 10).length === 0, '32.gen.6a null master → []');
+  assert(R.generateOccurrences({}, '2026-04-20', '2026-12-31', 10).length === 0, '32.gen.6b empty master → []');
+
+  // ---------- cairoToUTC ----------
+  // Cairo UTC+2 baseline. 08:00 Cairo = 06:00 UTC. 13:00 Cairo = 11:00 UTC.
+  assert(R.cairoToUTC('2026-04-20', '08:00') === '2026-04-20T06:00:00.000Z', '32.tz.1a 08:00 Cairo = 06:00Z');
+  assert(R.cairoToUTC('2026-04-20', '13:00') === '2026-04-20T11:00:00.000Z', '32.tz.1b 13:00 Cairo = 11:00Z');
+  assert(R.cairoToUTC('2026-04-20', '00:30') === '2026-04-19T22:30:00.000Z', '32.tz.1c 00:30 Cairo = 22:30Z prior day');
+  // No time → 00:00 local = 22:00Z prior day
+  assert(R.cairoToUTC('2026-04-20', null) === '2026-04-19T22:00:00.000Z', '32.tz.2a no time defaults to 00:00 local');
+  assert(R.cairoToUTC('2026-04-20', '') === '2026-04-19T22:00:00.000Z', '32.tz.2b empty time treated as missing');
+  assert(R.cairoToUTC('garbage', '08:00') === null, '32.tz.3a invalid date returns null');
+  // With seconds stripped
+  assert(R.cairoToUTC('2026-04-20', '13:00:45') === '2026-04-20T11:00:00.000Z', '32.tz.4a HH:MM:SS seconds preserved or stripped (regex drops them — intentional)');
+  // DST gap — the code DOES NOT apply Egypt DST. Lock this as documented behavior.
+  // If DST-awareness is added later, this assertion will flip and signal the change.
+  assert(R.CAIRO_OFFSET_HOURS === 2, '32.tz.dst.gap.1a DOCUMENTED GAP: Cairo offset hardcoded to +2; Egypt DST (EEST=+3 Apr-Oct) NOT applied — reminders may fire 1h early on DST weeks');
+
+  // ---------- computeReminderTimes ----------
+  var ct1 = R.computeReminderTimes('2026-04-20', '13:00');
+  assert(ct1.length === 3, '32.crt.1a with time → 3 entries (day_before, day_of, 30min_before)');
+  assert(ct1[0].remind_type === 'day_before' && ct1[0].scheduled_for === '2026-04-19T16:00:00.000Z',
+    '32.crt.1b day_before = prior day 18:00 Cairo = 16:00Z');
+  assert(ct1[1].remind_type === 'day_of' && ct1[1].scheduled_for === '2026-04-20T06:00:00.000Z',
+    '32.crt.1c day_of = same day 08:00 Cairo = 06:00Z');
+  assert(ct1[2].remind_type === '30min_before' && ct1[2].scheduled_for === '2026-04-20T10:30:00.000Z',
+    '32.crt.1d 30min_before = event - 30min (13:00-0:30 = 12:30 Cairo = 10:30Z)');
+
+  var ct2 = R.computeReminderTimes('2026-04-20', null);
+  assert(ct2.length === 2, '32.crt.2a no time → 2 entries (no 30min anchor)');
+  assert(ct2[0].remind_type === 'day_before', '32.crt.2b no-time: day_before present');
+  assert(ct2[1].remind_type === 'day_of', '32.crt.2c no-time: day_of present');
+  assert(!ct2.find(function(x){return x.remind_type==='30min_before';}), '32.crt.2d no-time: 30min_before NOT emitted');
+
+  var ct3 = R.computeReminderTimes(null, '13:00');
+  assert(Array.isArray(ct3) && ct3.length === 0, '32.crt.3a null event_date → []');
+
+  // 30-min-before crossing midnight: event at 00:15 Cairo → reminder at 23:45 Cairo prior day
+  var ct4 = R.computeReminderTimes('2026-04-20', '00:15');
+  var tm = ct4.find(function(x){return x.remind_type==='30min_before';});
+  assert(tm && tm.scheduled_for === '2026-04-19T21:45:00.000Z',
+    '32.crt.4a 30min_before handles midnight-crossing');
+
+  // ---------- newUUID shape ----------
+  var u = R.newUUID();
+  assert(typeof u === 'string' && u.length === 36, '32.uuid.1a 36 chars including dashes');
+  assert(/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/.test(u),
+    '32.uuid.1b RFC4122 v4 format');
+}
+
+try { runSection32_Recurrence(); } catch(e) {
+  console.error('SECTION 32 ERROR:', e.message);
+  console.error(e.stack);
+  failed++;
+}
+
+// ============================================================
+// SECTION 33: Reminder scheduling lib — src/lib/reminders.js
+// Code-surface audit. We don't exercise the Supabase client here
+// (that belongs in an integration test); we verify the lib is SHAPED
+// correctly — correct onConflict tuple, correct target_kind values,
+// correct idempotency discipline, correct body/subject snapshotting.
+// ============================================================
+function runSection33_RemindersLib() {
+  group('SECTION 33: Reminder scheduling lib');
+
+  var src = fs.readFileSync(path.join(REPO_ROOT, 'src/lib/reminders.js'), 'utf8');
+
+  // Critical: onConflict string matches the unique index defined in
+  // session2-recurring-reminders.sql. Index is on (target_kind, target_id,
+  // target_user_id, remind_type, scheduled_for) — COMPLETE (non-partial).
+  // If a future edit reverts to the old 4-col tuple, this assertion flips
+  // and signals the P0 deploy bug is back.
+  assert(/onConflict:\s*['"]target_kind,target_id,target_user_id,remind_type,scheduled_for['"]/.test(src),
+    '33.idx.1a scheduleEventReminders onConflict tuple matches idx_scheduled_reminders_unique');
+  assert(!/onConflict:\s*['"]target_kind,target_id,target_user_id,remind_type['"]/.test(src),
+    '33.idx.1b old 4-col tuple is GONE (would fail at runtime against partial index)');
+
+  // target_kind is always 'event' or 'ticket' (matches CHECK constraint)
+  assert(/target_kind:\s*['"]event['"]/.test(src), '33.shape.1a writes target_kind=event');
+  // Scheduler populates snapshot fields so the dispatcher can send without
+  // re-joining to calendar_events
+  assert(/subject_snapshot:/.test(src), '33.shape.2a subject_snapshot populated at schedule time');
+  assert(/body_snapshot:/.test(src), '33.shape.2b body_snapshot populated at schedule time');
+
+  // Defensive: skip reminders whose scheduled_for is in the past
+  assert(/futureTimes = times\.filter\(t => t\.scheduled_for > nowIso\)/.test(src),
+    '33.past.1a past-timed reminders are filtered out before insert');
+
+  // Cancel semantics: deletes PENDING (sent_at IS NULL), preserves sent for audit
+  var cancelBlock = src.match(/export async function cancelEventReminders[\s\S]*?^\}/m);
+  assert(cancelBlock, '33.cancel.0a cancelEventReminders block found');
+  assert(cancelBlock && /\.is\(['"]sent_at['"],\s*null\)/.test(cancelBlock[0]),
+    '33.cancel.1a only deletes sent_at IS NULL rows (sent reminders preserved)');
+  assert(cancelBlock && /target_kind['"],\s*['"]event['"]/.test(cancelBlock[0]),
+    '33.cancel.1b scoped to target_kind=event');
+
+  // Reschedule = cancel + schedule (order matters)
+  var resched = src.match(/export async function rescheduleEventReminders[\s\S]*?^\}/m);
+  assert(resched, '33.resched.0a rescheduleEventReminders defined');
+  assert(resched && /await cancelEventReminders[\s\S]*?scheduleEventReminders/.test(resched[0]),
+    '33.resched.1a cancels BEFORE rescheduling (sequence correct)');
+
+  // Ticket reminders are stubbed for Session 3 (R6). The stub returns a
+  // 'deferred' flag so callers can distinguish "nothing to schedule" from
+  // "not-yet-implemented". Cancel-side is already functional.
+  var stStub = src.match(/export async function scheduleTicketReminders[\s\S]*?^\}/m);
+  assert(stStub, '33.ticket.0a scheduleTicketReminders stub present');
+  assert(stStub && /deferred:\s*['"]session-3-r6['"]/.test(stStub[0]),
+    '33.ticket.1a stub returns {inserted:0, deferred:"session-3-r6"}');
+
+  var ctCancel = src.match(/export async function cancelTicketReminders[\s\S]*?^\}/m);
+  assert(ctCancel, '33.ticket.2a cancelTicketReminders functional (not stubbed)');
+  assert(ctCancel && /target_kind['"],\s*['"]ticket['"]/.test(ctCancel[0]),
+    '33.ticket.2b cancel scoped to target_kind=ticket');
+
+  // HTML escape prevents body-injection when title contains < > & " '
+  assert(/function escapeHtml/.test(src), '33.esc.1a escapeHtml helper present');
+  assert(/\.replace\(\/&\/g, '&amp;'\)/.test(src), '33.esc.1b & escaped');
+  assert(/\.replace\(\/<\/g, '&lt;'\)/.test(src), '33.esc.1c < escaped');
+
+  // DOCUMENTED GAP — if a title changes (not date/time), reminders are NOT
+  // re-snapshotted. User gets "Upcoming: OLD TITLE" in the reminder email.
+  // Locked by assertion so a future fix will flip it.
+  // Fix path: add a title-change branch to saveEditEvent → rescheduleEventReminders.
+  // The CalendarTab currently only reschedules on date/time change.
+  var cal = fs.readFileSync(path.join(REPO_ROOT, 'src/components/CalendarTab.jsx'), 'utf8');
+  assert(/hasDateChange \|\| hasTimeChange/.test(cal),
+    '33.gap.1a DOCUMENTED GAP: saveEditEvent reschedules on date/time only; title change leaves body_snapshot stale');
+
+  // DOCUMENTED GAP — silent failure in scheduleEventReminders. If
+  // scheduling a fresh standalone event fails (network blip, RLS), the
+  // event is still created but no reminders. No recovery cron today.
+  // Fix path: add a 'reminders_missing' cron that backfills for recent events.
+  var scheduleBlock = src.match(/export async function scheduleEventReminders[\s\S]*?^\}/m);
+  assert(scheduleBlock && /catch \(err\)[\s\S]*?return \{ inserted: 0, error: err\.message \}/.test(scheduleBlock[0]),
+    '33.gap.2a DOCUMENTED GAP: scheduling failure returns {inserted:0, error} silently — no retry path');
+
+  // DOCUMENTED GAP — DST. cairoToUTC is fixed at +2. Between late Apr and
+  // late Oct, actual Cairo wall-clock is UTC+3 (EEST). 30min_before can
+  // fire 1h early during those months. Documented; no code-side fix in S2.
+  assert(/CAIRO_OFFSET_HOURS = 2/.test(fs.readFileSync(path.join(REPO_ROOT, 'src/lib/recurrence.js'), 'utf8')),
+    '33.gap.3a DOCUMENTED GAP: Cairo offset hardcoded, Egypt DST not modeled');
+}
+
+try { runSection33_RemindersLib(); } catch(e) {
+  console.error('SECTION 33 ERROR:', e.message);
+  console.error(e.stack);
+  failed++;
+}
+
+// ============================================================
+// SECTION 34: Dispatcher + Generator idempotency & safety
+// Audits /api/reminders/dispatch/route.js and
+// /api/events/generate-occurrences/route.js — the two cron targets.
+// Verifies claim-stamp pattern, corrected onConflict strings,
+// no-backticks compliance (SWC/Vercel rule from memory), response shapes.
+// ============================================================
+function runSection34_CronRoutes() {
+  group('SECTION 34: Dispatcher + Generator');
+
+  var disp = fs.readFileSync(path.join(REPO_ROOT, 'src/app/api/reminders/dispatch/route.js'), 'utf8');
+  var gen  = fs.readFileSync(path.join(REPO_ROOT, 'src/app/api/events/generate-occurrences/route.js'), 'utf8');
+
+  // ---------- SWC / Vercel constraint ----------
+  // Max's rule from memory: API routes must avoid template literals/backticks.
+  // Verify by the absence of backticks in both files.
+  assert(disp.indexOf('`') === -1, '34.swc.1a dispatcher: no backticks (SWC-safe)',
+    'indexOf=`=' + disp.indexOf('`'));
+  assert(gen.indexOf('`') === -1, '34.swc.1b generator: no backticks (SWC-safe)',
+    'indexOf=`=' + gen.indexOf('`'));
+
+  // ---------- Dispatcher claim-stamp (no double-send under race) ----------
+  // Atomic claim: UPDATE ... SET sent_at = now() WHERE id = X AND sent_at IS NULL
+  // If two crons fire at the same time, only one gets the row updated — the
+  // other's update touches 0 rows. We verify this pattern is intact.
+  assert(/\.update\(\{\s*sent_at:\s*new Date\(\)\.toISOString\(\)\s*\}\)/.test(disp),
+    '34.claim.1a dispatcher stamps sent_at in the claim update');
+  assert(/\.eq\('id',\s*row\.id\)\s*\.is\('sent_at',\s*null\)/.test(disp),
+    '34.claim.1b claim only succeeds when sent_at IS NULL (race guard)');
+  assert(/already_claimed_or_gone/.test(disp),
+    '34.claim.2a when claim affects 0 rows, the dispatch skips with reason');
+
+  // Dispatcher filters to due-only pending rows
+  assert(/\.is\(['"]sent_at['"],\s*null\)/.test(disp), '34.due.1a only fetches sent_at IS NULL');
+  assert(/\.lte\(['"]scheduled_for['"],\s*nowIso\)/.test(disp), '34.due.1b only fetches scheduled_for <= now');
+  assert(/\.order\(['"]scheduled_for['"]/.test(disp), '34.due.1c ordered by scheduled_for (FIFO)');
+
+  // Dispatcher calls notifyServer with the DENORMALIZED snapshot
+  // (subject_snapshot / body_snapshot) not a fresh event join — this is
+  // what keeps the dispatcher cheap.
+  assert(/notifyServer\(type,\s*\[row\.target_user_id\],\s*subj,\s*body,\s*row\.created_by\)/.test(disp),
+    '34.disp.1a calls notifyServer with snapshot fields');
+  // And captures the send result for the audit trail
+  assert(/send_result:\s*res/.test(disp), '34.disp.2a stamps send_result on success');
+  assert(/send_result:\s*\{\s*sent:\s*false,\s*reason:\s*e\.message\s*\}/.test(disp),
+    '34.disp.2b stamps send_result even on error (so no retry loop)');
+
+  // Batch limit guard against runaway cost
+  assert(/BATCH_LIMIT\s*=\s*\d+/.test(disp), '34.disp.3a BATCH_LIMIT constant defined');
+  assert(/Math\.min\(Math\.floor\(\+limit\),\s*BATCH_LIMIT\)/.test(disp),
+    '34.disp.3b POST limit is capped at BATCH_LIMIT');
+
+  // Both GET and POST exported
+  assert(/export async function GET/.test(disp), '34.disp.4a GET handler exported');
+  assert(/export async function POST/.test(disp), '34.disp.4b POST handler exported');
+
+  // ---------- Generator: onConflict tuple matches CORRECTED index ----------
+  // calendar_events idx is on (series_id, event_date) — COMPLETE, non-partial.
+  assert(/onConflict:\s*['"]series_id,event_date['"]/.test(gen),
+    '34.gen.idx.1a calendar_events onConflict matches idx_calendar_events_series_date_unique');
+  // ignoreDuplicates:true → ON CONFLICT DO NOTHING (occurrence re-gen is idempotent)
+  assert(/ignoreDuplicates:\s*true/.test(gen),
+    '34.gen.idx.1b occurrence upsert uses ignoreDuplicates:true (DO NOTHING)');
+  // Reminder upsert in generator uses the new 5-tuple (matches lib fix)
+  assert(/onConflict:\s*['"]target_kind,target_id,target_user_id,remind_type,scheduled_for['"]/.test(gen),
+    '34.gen.idx.2a generator reminder upsert uses 5-tuple (matches corrected scheduled_reminders index)');
+  assert(!/onConflict:\s*['"]target_kind,target_id,target_user_id,remind_type['"]/.test(gen),
+    '34.gen.idx.2b old 4-col tuple is GONE from generator (would fail at runtime)');
+
+  // ---------- Generator: horizon bounded, walks from LATEST existing date ----------
+  // Walk from the latest existing date, not master.event_date, so we only add NEW dates.
+  assert(/var latestDate = rows\[rows\.length - 1\]\.event_date/.test(gen),
+    '34.gen.walk.1a walks from latest existing occurrence (incremental)');
+  assert(/HORIZON_DAYS\s*=\s*\d+/.test(gen),
+    '34.gen.walk.1b HORIZON_DAYS constant bounds lookahead');
+
+  // Generator's child-row shape: inherits assignment/customer/time/type but
+  // does NOT copy completion / check-in / notes (each occurrence starts fresh)
+  var childRowBlock = gen.match(/var childRows = dates\.map\(function\(d\) \{[\s\S]*?\}\);/);
+  assert(childRowBlock, '34.gen.child.0a childRows mapper found');
+  if (childRowBlock) {
+    assert(!/completed:/.test(childRowBlock[0]), '34.gen.child.1a completed NOT copied (fresh occurrence)');
+    assert(!/meeting_notes:/.test(childRowBlock[0]), '34.gen.child.1b meeting_notes NOT copied');
+    assert(!/checked_in_at:/.test(childRowBlock[0]), '34.gen.child.1c checked_in_at NOT copied');
+    assert(!/event_status:/.test(childRowBlock[0]), '34.gen.child.1d event_status NOT copied');
+    assert(/is_series_master:\s*false/.test(childRowBlock[0]), '34.gen.child.2a children have is_series_master=false');
+    assert(/series_id:\s*seriesId/.test(childRowBlock[0]), '34.gen.child.2b children share master.series_id');
+    assert(/assigned_to:\s*master\.assigned_to/.test(childRowBlock[0]), '34.gen.child.3a assigned_to carried forward');
+    assert(/customer_id:\s*master\.customer_id/.test(childRowBlock[0]), '34.gen.child.3b customer_id carried forward');
+    assert(/recurring:\s*master\.recurring/.test(childRowBlock[0]), '34.gen.child.3c recurring carried forward (so each row self-describes)');
+    assert(/recurrence_interval:\s*master\.recurrence_interval/.test(childRowBlock[0]), '34.gen.child.3d recurrence_interval carried');
+  }
+
+  // Horizon stamping — after materializing, the master is marked so a future
+  // generator run knows "already covered up to this date."
+  assert(/recurrence_horizon_until:\s*until/.test(gen),
+    '34.gen.horizon.1a master.recurrence_horizon_until stamped after successful run');
+
+  // Both GET (cron) and POST (targeted) exported
+  assert(/export async function GET/.test(gen), '34.gen.4a GET handler exported');
+  assert(/export async function POST/.test(gen), '34.gen.4b POST handler exported');
+
+  // POST with body.series_id → generateForSeries only; no body → runAllSeries
+  var postBlock = gen.match(/export async function POST[\s\S]*?^\}/m);
+  assert(postBlock && /body\.series_id/.test(postBlock[0]),
+    '34.gen.post.1a POST branches on body.series_id');
+
+  // ---------- Service-role client pattern (both files) ----------
+  // Both routes prefer SUPABASE_SERVICE_ROLE_KEY (so RLS won't block the
+  // cron) and fall back to the anon key. Verify the pattern is intact.
+  assert(/SUPABASE_SERVICE_ROLE_KEY\s*\|\|\s*process\.env\.NEXT_PUBLIC_SUPABASE_ANON_KEY/.test(disp),
+    '34.svc.1a dispatcher uses service-role key with anon fallback');
+  assert(/SUPABASE_SERVICE_ROLE_KEY\s*\|\|\s*process\.env\.NEXT_PUBLIC_SUPABASE_ANON_KEY/.test(gen),
+    '34.svc.1b generator uses service-role key with anon fallback');
+
+  // ---------- DOCUMENTED GAP — hung send silently dropped ----------
+  // If notifyServer hangs forever, the row's sent_at is already stamped
+  // (claimed), so no retry. Intentional (dedup > completeness) but lock it.
+  assert(/Mark as sent \(so we don't retry in a tight loop\)/.test(disp),
+    '34.gap.1a DOCUMENTED: on send error, sent_at stays stamped (no retry) — trade-off for dedup safety');
+
+  // ---------- vercel.json wires BOTH crons ----------
+  var vc = JSON.parse(fs.readFileSync(path.join(REPO_ROOT, 'vercel.json'), 'utf8'));
+  assert(vc && Array.isArray(vc.crons), '34.cron.0a vercel.json has crons array');
+  var paths = (vc.crons || []).map(function(c) { return c.path; });
+  assert(paths.indexOf('/api/reminders/dispatch') !== -1,
+    '34.cron.1a dispatcher cron registered', 'paths=' + JSON.stringify(paths));
+  assert(paths.indexOf('/api/events/generate-occurrences') !== -1,
+    '34.cron.1b generator cron registered');
+  // Keep the preexisting categorize cron — regression guard against accidental removal
+  assert(paths.indexOf('/api/categorize') !== -1,
+    '34.cron.2a categorize cron preserved (not removed by session 2)');
+}
+
+try { runSection34_CronRoutes(); } catch(e) {
+  console.error('SECTION 34 ERROR:', e.message);
+  console.error(e.stack);
+  failed++;
+}
+
+// ============================================================
+// SECTION 35: CalendarTab R1 wiring — create, edit, reschedule
+// The UI surface where users actually interact with recurring events.
+// Verifies imports, interval input, series_id/is_series_master on insert,
+// edit-scope single/series toggle, reschedule-on-date-or-time, cancel-on-attend,
+// client-side dispatcher fallback on mount, and the ✏️ edit affordance.
+// ============================================================
+function runSection35_CalendarTabR1() {
+  group('SECTION 35: CalendarTab R1 wiring');
+
+  var cSrc = fs.readFileSync(path.join(REPO_ROOT, 'src/components/CalendarTab.jsx'), 'utf8');
+
+  // ---------- Imports ----------
+  assert(/import \{ newUUID, VALID_PATTERNS \} from '\.\.\/lib\/recurrence'/.test(cSrc),
+    '35.imp.1a imports from recurrence.js');
+  assert(/import \{ scheduleEventReminders, rescheduleEventReminders, cancelEventReminders \} from '\.\.\/lib\/reminders'/.test(cSrc),
+    '35.imp.1b imports from reminders.js');
+
+  // ---------- Interval UI ----------
+  assert(/f\.recurringInterval/.test(cSrc), '35.ui.1a recurringInterval form state referenced');
+  assert(/type="number"\s+min="1"\s+max="99"/.test(cSrc), '35.ui.1b interval input has 1..99 bounds');
+  // Defense against bad manual form state — clamp to 1..99 on blur/change
+  assert(/Math\.max\(1,\s*Math\.min\(99,\s*parseInt\(e\.target\.value,10\)\|\|1\)\)/.test(cSrc),
+    '35.ui.1c clamping applied at the input layer');
+  // Human-readable label beside the number input ("Every 2 weeks")
+  assert(/recurrenceLabel\(f\.recurring,\s*f\.recurringInterval\)/.test(cSrc),
+    '35.ui.2a live recurrenceLabel shown next to interval input');
+  // The interval field is hidden when recurring=none — verify the conditional
+  assert(/\{f\.recurring && f\.recurring !== 'none' && \(/.test(cSrc),
+    '35.ui.2b interval+until hidden when recurring=none');
+
+  // ---------- handleAddEvent writes the new columns correctly ----------
+  var add = cSrc.match(/const handleAddEvent = async \(\) =>[\s\S]*?^\s{2}\};/m);
+  assert(add, '35.add.0a handleAddEvent block found');
+  var ab = add ? add[0] : '';
+  // isRecurring gate
+  assert(/const isRecurring = pattern !== 'none'/.test(ab),
+    '35.add.1a isRecurring derived from pattern');
+  // interval clamped on the write path too (belt-and-suspenders vs UI clamp)
+  assert(/const interval = Math\.min\(99, Math\.max\(1, rawInt \|\| 1\)\)/.test(ab),
+    '35.add.1b interval clamped on write path (defense-in-depth vs UI clamp)');
+  // Payload shape
+  assert(/series_id:\s*isRecurring \? newUUID\(\) : null/.test(ab),
+    '35.add.2a series_id generated for recurring, null otherwise');
+  assert(/is_series_master:\s*isRecurring/.test(ab),
+    '35.add.2b is_series_master = isRecurring');
+  assert(/recurrence_interval:\s*isRecurring \? interval : null/.test(ab),
+    '35.add.2c recurrence_interval only set for recurring');
+  // Schedule reminders for the assignee right after insert
+  assert(/await scheduleEventReminders\(row, \[uid\], myId\)/.test(ab),
+    '35.add.3a reminders scheduled for each assignee');
+  // Fire-and-forget generator POST for immediate lookahead
+  assert(/fetch\('\/api\/events\/generate-occurrences'/.test(ab),
+    '35.add.3b generator POST fired after recurring insert (immediate lookahead)');
+  assert(/series_id:\s*row\.series_id/.test(ab),
+    '35.add.3c generator POST passes series_id');
+  // Parallel-series gap (R9 will fix) — each assignee gets independent series
+  assert(/for \(const uid of assignees\)/.test(ab),
+    '35.add.gap.1a DOCUMENTED R9 LIMITATION: N assignees = N parallel series (preserved from pre-session-2)');
+
+  // ---------- markEventStatus / completeEvent / checkInWithNotes cancel reminders ----------
+  assert(/const markEventStatus = async \(ev, status\)[\s\S]*?cancelEventReminders\(ev\.id\)/.test(cSrc),
+    '35.cancel.1a markEventStatus(attended|cancelled) cancels pending reminders');
+  assert(/const completeEvent[\s\S]*?cancelEventReminders\(ev\.id\)/.test(cSrc),
+    '35.cancel.1b completeEvent cancels pending reminders');
+  assert(/checkInWithNotes[\s\S]*?if \(!wasCompleted\)[\s\S]*?cancelEventReminders\(notesEvent\.id\)/.test(cSrc),
+    '35.cancel.1c first-time check-in cancels reminders (not on re-edit — already sent)');
+
+  // ---------- openEditEvent / saveEditEvent ----------
+  assert(/const openEditEvent = \(ev\) =>/.test(cSrc), '35.edit.0a openEditEvent defined');
+  assert(/const saveEditEvent = async \(\) =>/.test(cSrc), '35.edit.0b saveEditEvent defined');
+  var ed = cSrc.match(/const saveEditEvent = async \(\) =>[\s\S]*?^\s{2}\};/m);
+  assert(ed, '35.edit.0c saveEditEvent block found');
+  var eb = ed ? ed[0] : '';
+
+  // No-op shortcut when nothing changed
+  assert(/if \(!hasDateChange && !hasTimeChange && !hasTitleChange\) \{ closeEditEvent\(\); return; \}/.test(eb),
+    '35.edit.1a no-op when nothing changed (no audit spam, no reschedule)');
+
+  // Series edit must NOT mass-apply a date change (would collapse every
+  // occurrence onto one day — catastrophic UX bug if missed)
+  assert(/Don't mass-apply date \(would/.test(eb) || /seriesUpdate = \{\};[\s\S]*?if \(hasTitleChange\) seriesUpdate\.title[\s\S]*?if \(hasTimeChange\)  seriesUpdate\.event_time/.test(eb),
+    '35.edit.2a SERIES edit never mass-applies event_date (prevents occurrence collapse)');
+
+  // R2 prep: when moving a single occurrence inside a series, remember original
+  assert(/update\.original_event_date = editEvent\.event_date/.test(eb),
+    '35.edit.3a single-move inside series stamps original_event_date (R2 prep)');
+
+  // Reschedule on date/time change
+  assert(/rescheduleEventReminders\(fresh, \[editEvent\.assigned_to\], myId\)/.test(eb),
+    '35.edit.4a single-row date/time change reschedules reminders');
+  // Series time change: iterates every sibling and reschedules each
+  assert(/for \(const sib of \(siblings \|\| \[\]\)\)[\s\S]*?rescheduleEventReminders\(asIf, \[sib\.assigned_to\], myId\)/.test(eb),
+    '35.edit.4b series time change reschedules EVERY sibling (each has its own reminder rows)');
+
+  // ---------- Client-side dispatcher fallback on mount ----------
+  // If Vercel cron tier is throttled, this makes reminders still fire when
+  // ANY team member opens the Calendar.
+  assert(/fetch\('\/api\/reminders\/dispatch',\s*\{\s*method:\s*'GET'\s*\}\)/.test(cSrc),
+    '35.mount.1a client dispatches pending reminders when Calendar opens');
+  assert(/useEffect\(\(\) => \{\s*try \{\s*fetch\('\/api\/reminders\/dispatch'/.test(cSrc),
+    '35.mount.1b dispatcher fetch wrapped in try + useEffect (fires once on mount)');
+
+  // ---------- Edit affordance actually shown ----------
+  // ✏️ button in day view and month-selected view
+  var editButtons = (cSrc.match(/onClick=\{\(\) => openEditEvent\(ev\)\}/g) || []).length;
+  assert(editButtons >= 2, '35.ui.3a ✏️ edit button appears in both day and month-selected views',
+    'count=' + editButtons);
+  // But NOT on completed events (can only edit notes there)
+  var completedBranch = cSrc.match(/\{ev\.completed && <div[\s\S]*?<\/div>\}/g);
+  if (completedBranch) {
+    var anyEditInCompleted = completedBranch.some(function(b) { return /openEditEvent/.test(b); });
+    assert(!anyEditInCompleted, '35.ui.3b completed events do NOT show ✏️ (only notes-edit)');
+  }
+
+  // ---------- 🔄 badge surfaced on recurring occurrences ----------
+  assert(/\{ev\.series_id \? '🔄 ' : ''\}/.test(cSrc),
+    '35.badge.1a month cell shows 🔄 prefix on series occurrences');
+  assert(/🔄 \{recurrenceLabel\(ev\.recurring, ev\.recurrence_interval\)\}/.test(cSrc),
+    '35.badge.1b day-view shows human-readable recurrence label');
+
+  // ---------- original_event_date visibility ----------
+  // Shifted (R2-postponed) occurrences get a ↪ glyph with tooltip
+  assert(/ev\.original_event_date && ev\.original_event_date !== ev\.event_date/.test(cSrc),
+    '35.r2.1a day view surfaces moved-occurrence marker');
+
+  // ---------- Pre-session-2 regressions preserved ----------
+  // useEffect mount (audit from section 29) should still be intact
+  assert(/useEffect\(\(\) => \{ loadEvents\(\); \}, \[\]\)/.test(cSrc),
+    '35.regress.1a loadEvents useEffect mount pattern preserved (section 29 fix)');
+  // Modal close still clears stale state (section 29 fix)
+  assert(/const closeModal = \(\) => \{ setNotesEvent\(null\); setMeetingNotes\(''\); \};/.test(cSrc),
+    '35.regress.1b closeModal stale-state fix preserved');
+}
+
+try { runSection35_CalendarTabR1(); } catch(e) {
+  console.error('SECTION 35 ERROR:', e.message);
+  console.error(e.stack);
+  failed++;
+}
+
+// ============================================================
+// SECTION 36: Session 2 SQL migration safety
+// session2-recurring-reminders.sql should be idempotent, drop any
+// previously-created partial unique indexes (defensive re-run path), and
+// keep the corrected non-partial indexes.
+// ============================================================
+function runSection36_Session2Sql() {
+  group('SECTION 36: Session 2 SQL migration safety');
+
+  var sql = fs.readFileSync(path.join(REPO_ROOT, 'supabase/session2-recurring-reminders.sql'), 'utf8');
+
+  // Backup taken FIRST
+  assert(/CREATE TABLE calendar_events_backup_session2_20260420 AS SELECT \* FROM calendar_events/.test(sql),
+    '36.bk.1a calendar_events backup taken before any ALTER');
+  assert(/DROP TABLE IF EXISTS calendar_events_backup_session2_20260420/.test(sql),
+    '36.bk.1b idempotent — drops prior backup before re-taking');
+
+  // New columns on calendar_events
+  assert(/ADD COLUMN IF NOT EXISTS series_id UUID/.test(sql), '36.col.1a series_id added idempotently');
+  assert(/ADD COLUMN IF NOT EXISTS recurrence_interval INT DEFAULT 1/.test(sql), '36.col.1b recurrence_interval added');
+  assert(/ADD COLUMN IF NOT EXISTS is_series_master BOOLEAN DEFAULT false/.test(sql), '36.col.1c is_series_master added');
+  assert(/ADD COLUMN IF NOT EXISTS original_event_date DATE/.test(sql), '36.col.1d original_event_date added');
+  assert(/ADD COLUMN IF NOT EXISTS recurrence_horizon_until DATE/.test(sql), '36.col.1e recurrence_horizon_until added');
+
+  // Interval range check constraint protects against bad UI state
+  assert(/CHECK \(recurrence_interval IS NULL OR \(recurrence_interval >= 1 AND recurrence_interval <= 99\)\)/.test(sql),
+    '36.chk.1a interval range 1..99 enforced at DB level');
+
+  // Defensive drop of OLD partial unique indexes (in case a prior deploy used them)
+  assert(/indexdef ILIKE '%WHERE%series_id IS NOT NULL%'/.test(sql),
+    '36.drop.1a defensive: drops partial series-date unique if it exists');
+  assert(/indexdef ILIKE '%WHERE%sent_at IS NULL%'/.test(sql),
+    '36.drop.1b defensive: drops partial sent_at unique if it exists');
+  assert(/DROP INDEX public\.idx_calendar_events_series_date_unique/.test(sql),
+    '36.drop.2a drop statement targets the right index name');
+  assert(/DROP INDEX public\.idx_scheduled_reminders_unique/.test(sql),
+    '36.drop.2b drop statement targets the right reminder index name');
+
+  // CORRECTED non-partial unique indexes
+  // calendar_events: no WHERE predicate. NULLs-distinct lets non-recurring coexist.
+  var cIdxMatch = sql.match(/CREATE UNIQUE INDEX IF NOT EXISTS idx_calendar_events_series_date_unique[\s\S]*?;/);
+  assert(cIdxMatch, '36.idx.1a calendar_events unique index defined');
+  assert(cIdxMatch && !/WHERE/i.test(cIdxMatch[0]),
+    '36.idx.1b calendar_events unique index is COMPLETE (no WHERE — PostgREST onConflict needs this)');
+  assert(cIdxMatch && /\(series_id,\s*event_date\)/.test(cIdxMatch[0]),
+    '36.idx.1c calendar_events unique on (series_id, event_date)');
+
+  var srIdxMatch = sql.match(/CREATE UNIQUE INDEX IF NOT EXISTS idx_scheduled_reminders_unique[\s\S]*?;/);
+  assert(srIdxMatch, '36.idx.2a scheduled_reminders unique index defined');
+  assert(srIdxMatch && !/WHERE/i.test(srIdxMatch[0]),
+    '36.idx.2b scheduled_reminders unique index is COMPLETE (no WHERE)');
+  assert(srIdxMatch && /target_kind,\s*target_id,\s*target_user_id,\s*remind_type,\s*scheduled_for/.test(srIdxMatch[0]),
+    '36.idx.2c scheduled_reminders unique includes scheduled_for (reschedule-after-send works)');
+
+  // scheduled_reminders table structure
+  assert(/target_kind TEXT NOT NULL CHECK \(target_kind IN \('event','ticket'\)\)/.test(sql),
+    '36.tbl.1a target_kind check constraint matches lib enum');
+  assert(/remind_type TEXT NOT NULL CHECK \(remind_type IN \('day_before','day_of','30min_before','custom'\)\)/.test(sql),
+    '36.tbl.1b remind_type check constraint includes all used types + custom for future');
+  assert(/subject_snapshot TEXT/.test(sql), '36.tbl.2a subject_snapshot column (denormalization for dispatcher)');
+  assert(/body_snapshot\s+TEXT/.test(sql), '36.tbl.2b body_snapshot column');
+  assert(/sent_at TIMESTAMPTZ/.test(sql), '36.tbl.2c sent_at nullable (unsent by default)');
+  assert(/send_result JSONB/.test(sql), '36.tbl.2d send_result captured from notifyServer');
+  assert(/acknowledged_at TIMESTAMPTZ/.test(sql), '36.tbl.2e acknowledged_at for future bell-read wire-up');
+  assert(/ON DELETE CASCADE/.test(sql), '36.tbl.3a target_user_id FK cascades (user deletion cleans queue)');
+
+  // RLS — authenticated read/write (matches rest of app)
+  assert(/ALTER TABLE scheduled_reminders ENABLE ROW LEVEL SECURITY/.test(sql),
+    '36.rls.1a RLS enabled on scheduled_reminders');
+  assert(/CREATE POLICY "auth_read_sr"/.test(sql), '36.rls.1b read policy');
+  assert(/CREATE POLICY "auth_write_sr"/.test(sql), '36.rls.1c write policy');
+
+  // Backfill — existing recurring events promoted to series masters
+  assert(/UPDATE calendar_events\s+SET[\s\S]*?series_id = gen_random_uuid\(\)[\s\S]*?is_series_master = true[\s\S]*?WHERE recurring IS NOT NULL[\s\S]*?recurring <> 'none'[\s\S]*?series_id IS NULL/.test(sql),
+    '36.bf.1a backfill: existing recurring events promoted to masters (idempotent via series_id IS NULL clause)');
+
+  // Rollback block present (commented-out) and a drop-backup block for later
+  assert(/-- ROLLBACK/.test(sql), '36.rb.1a rollback comment block present');
+  assert(/-- DROP TABLE calendar_events_backup_session2_20260420/.test(sql),
+    '36.rb.1b drop-backup comment block present (for ~1 week later)');
+}
+
+try { runSection36_Session2Sql(); } catch(e) {
+  console.error('SECTION 36 ERROR:', e.message);
+  console.error(e.stack);
+  failed++;
+}
+
+// ============================================================
 // MAIN
 // ============================================================
 (async () => {

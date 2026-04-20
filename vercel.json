@@ -3,6 +3,14 @@
     {
       "path": "/api/categorize",
       "schedule": "0 3 * * *"
+    },
+    {
+      "path": "/api/events/generate-occurrences",
+      "schedule": "0 2 * * *"
+    },
+    {
+      "path": "/api/reminders/dispatch",
+      "schedule": "*/10 * * * *"
     }
   ]
 }
