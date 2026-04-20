@@ -10,7 +10,7 @@ export const fE = (n) => {
   return 'EGP ' + fmt(n);
 };
 
-// Expense category translations
+// Expense category translations (fallback map — supplemented by `categories` table)
 export const EXPENSE_CATS = {
   'مبيعات': 'Sales',
   'عهدة المخزن': 'Warehouse',
@@ -27,6 +27,48 @@ export const EXPENSE_CATS = {
   'ضرائب': 'Taxes',
   'مصروفات تشغيل': 'Operations',
 };
+
+// Reverse map — English name → Arabic. Used when a row's category
+// is stored in English but we need the Arabic equivalent.
+export const EXPENSE_CATS_REVERSE = Object.fromEntries(
+  Object.entries(EXPENSE_CATS).map(([ar, en]) => [en, ar])
+);
+
+// Resolve a category key to the display name in the given language.
+// Accepts either the Arabic or English form (whichever was saved).
+// Consults the runtime categories list (from the DB) first, falls back to
+// the static EXPENSE_CATS map, and as a last resort returns the raw key.
+//
+// @param raw   — the category string saved on the row (could be AR or EN)
+// @param lang  — 'en' | 'ar'
+// @param list  — optional array of categories rows from the `categories` table
+//                shape: [{ name_ar, name_en, ... }, ...]
+export const resolveCatName = (raw, lang, list) => {
+  if (!raw) return '';
+  const s = String(raw).trim();
+  // Try the runtime list first — covers user-added categories
+  if (Array.isArray(list) && list.length > 0) {
+    const hit = list.find(c =>
+      (c.name_ar && c.name_ar === s) || (c.name_en && c.name_en === s)
+    );
+    if (hit) {
+      if (lang === 'ar') return hit.name_ar || hit.name_en || s;
+      return hit.name_en || hit.name_ar || s;
+    }
+  }
+  // Fallback to static map
+  if (lang === 'ar') {
+    // Input could be EN → look up AR
+    if (EXPENSE_CATS_REVERSE[s]) return EXPENSE_CATS_REVERSE[s];
+    return s; // already Arabic or unknown
+  }
+  // Lang = en — input could be AR → look up EN
+  if (EXPENSE_CATS[s]) return EXPENSE_CATS[s];
+  return s; // already English or unknown
+};
+
+// Detect whether a string is Arabic
+export const isArabic = (s) => /[\u0600-\u06FF]/.test(String(s || ''));
 
 // Chart colors
 export const COLORS = [

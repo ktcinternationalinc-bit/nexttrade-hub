@@ -25,6 +25,7 @@ export default function AdminTab({ user, userProfile, users, isAdmin, customers 
   const [announcements, setAnnouncements] = useState([]);
   const [annAcks, setAnnAcks] = useState([]);
   const [sessions, setSessions] = useState([]);
+  const [loginSummary, setLoginSummary] = useState([]);  // user_login_summary view (ET-aware)
   const [msgFilter, setMsgFilter] = useState('all');
   const [loaded, setLoaded] = useState(false);
   const [selUser, setSelUser] = useState('all');
@@ -98,6 +99,12 @@ export default function AdminTab({ user, userProfile, users, isAdmin, customers 
     try { const { data } = await supabase.from('announcements').select('*').order('created_at', { ascending: false }).limit(100); setAnnouncements(data || []); } catch(e) { console.warn(e); }
     try { const { data } = await supabase.from('announcement_acks').select('*'); setAnnAcks(data || []); } catch(e) { console.warn(e); }
     try { const { data } = await supabase.from('user_sessions').select('*').gte('date', dateFrom).lte('date', dateTo).order('login_at', { ascending: false }).limit(500); setSessions(data || []); } catch(e) { console.warn(e); }
+    // Load ET-timezone-aware login summary (separate endpoint reads the SQL view)
+    try {
+      const r = await fetch('/api/login-event?summary=1');
+      const d = await r.json();
+      if (d && d.summary) setLoginSummary(d.summary);
+    } catch(e) { console.warn('login summary unavailable:', e.message); }
     setLoaded(true);
   };
 
@@ -837,7 +844,11 @@ export default function AdminTab({ user, userProfile, users, isAdmin, customers 
                 <table className="w-full border-collapse text-xs">
                   <thead className="sticky top-0"><tr className="bg-slate-50">
                     <th className="px-3 py-2 text-[10px] text-left">Team Member</th>
-                    <th className="px-3 py-2 text-[10px] text-center">Logins</th>
+                    <th className="px-3 py-2 text-[10px] text-center" title="Online if heartbeat within last 10 min">Status</th>
+                    <th className="px-3 py-2 text-[10px] text-center" title="Logins today (Eastern Time, midnight–midnight)">Today (ET)</th>
+                    <th className="px-3 py-2 text-[10px] text-center" title="Logins yesterday (ET)">Yesterday (ET)</th>
+                    <th className="px-3 py-2 text-[10px] text-center" title="Logins in last 7 ET days">7 days (ET)</th>
+                    <th className="px-3 py-2 text-[10px] text-center">Logins (range)</th>
                     <th className="px-3 py-2 text-[10px] text-center">Days Active</th>
                     <th className="px-3 py-2 text-[10px] text-center">Auto Timeouts</th>
                     <th className="px-3 py-2 text-[10px] text-center">Avg Session</th>
@@ -850,10 +861,25 @@ export default function AdminTab({ user, userProfile, users, isAdmin, customers 
                       const uDays = [...new Set(uSess.map(s => s.date))].length;
                       const uDurations = uSess.filter(s => s.login_at && s.logout_at).map(s => (new Date(s.logout_at) - new Date(s.login_at)) / 60000);
                       const uAvg = uDurations.length > 0 ? Math.round(uDurations.reduce((a, b) => a + b, 0) / uDurations.length) : 0;
-                      const lastLogin = uSess[0]?.login_at ? new Date(uSess[0].login_at).toLocaleString([], { month:'short', day:'numeric', hour:'2-digit', minute:'2-digit' }) : '—';
+                      // ET-aware data from user_login_summary view
+                      const lsRow = loginSummary.find(l => l.id === u.id) || {};
+                      const lastLoginAt = lsRow.last_login_at || uSess[0]?.login_at;
+                      const lastLogin = lastLoginAt ? new Date(lastLoginAt).toLocaleString([], { month:'short', day:'numeric', hour:'2-digit', minute:'2-digit' }) : '—';
+                      const isOnline = !!lsRow.is_online;
+                      const todayET = Number(lsRow.logins_today_et || 0);
+                      const yesterdayET = Number(lsRow.logins_yesterday_et || 0);
+                      const sevenDayET = Number(lsRow.logins_last_7d_et || 0);
                       return (
                         <tr key={u.id} className="border-b border-slate-50 hover:bg-blue-50 cursor-pointer" onClick={() => setSelUser(u.id)}>
                           <td className="px-3 py-2 font-semibold">{u.name}</td>
+                          <td className="px-3 py-2 text-center">
+                            {isOnline
+                              ? <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded bg-emerald-100 text-emerald-700 text-[10px] font-bold">🟢 Online</span>
+                              : <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded bg-slate-100 text-slate-500 text-[10px]">⚪ Offline</span>}
+                          </td>
+                          <td className="px-3 py-2 text-center font-bold text-blue-600">{todayET}</td>
+                          <td className="px-3 py-2 text-center text-slate-600">{yesterdayET}</td>
+                          <td className="px-3 py-2 text-center text-slate-600">{sevenDayET}</td>
                           <td className="px-3 py-2 text-center font-bold text-emerald-600">{uSess.length}</td>
                           <td className="px-3 py-2 text-center">{uDays}</td>
                           <td className="px-3 py-2 text-center"><span className={uAuto > 0 ? 'text-red-500 font-bold' : 'text-slate-400'}>{uAuto}</span></td>

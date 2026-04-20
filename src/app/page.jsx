@@ -1,7 +1,8 @@
 'use client';
 import React, { useState, useEffect, useMemo, useCallback, useRef, useContext, createContext } from 'react';
 import { supabase, dbInsert, dbUpdate, dbDelete } from '../lib/supabase';
-import { fmt, fE, COLORS, EXPENSE_CATS, getReconStatus, STATUS_STYLES, today, inRange, monthOf, getWarehouseCat, sanitize } from '../lib/utils';
+import { fmt, fE, COLORS, EXPENSE_CATS, getReconStatus, STATUS_STYLES, today, inRange, monthOf, getWarehouseCat, sanitize, resolveCatName } from '../lib/utils';
+import { evaluateCheckReconcile as libEvaluateCheckReconcile } from '../lib/check-reconcile';
 import * as XLSX from 'xlsx';
 import CRMTab from '../components/CRMTab';
 import TicketsTab from '../components/TicketsTab';
@@ -342,10 +343,16 @@ export default function App() {
   const profileIdRef = useRef(null);
   const [modulePerms, setModulePerms] = useState({});
   const [lang, setLang] = useState('ar'); // 'ar' or 'en'
+  const [categoriesList, setCategoriesList] = useState([]);  // from `categories` table (bilingual)
 
   // Translation helper — picks English text when available and lang is 'en'
   const tx = (arText, enText) => (lang === 'en' && enText) ? enText : (arText || '');
-  const txCat = (arCat) => lang === 'en' ? (EXPENSE_CATS[arCat] || arCat || 'Uncategorized') : (arCat || 'Uncategorized');
+  // Category resolver — consults the live `categories` table first, then EXPENSE_CATS
+  // fallback. Works regardless of whether the row has Arabic or English stored.
+  const txCat = (raw) => {
+    if (!raw) return lang === 'en' ? 'Uncategorized' : 'غير مصنّف';
+    return resolveCatName(raw, lang, categoriesList);
+  };
 
   // Modals
   const [selectedInvoice, setSelectedInvoice] = useState(null);
@@ -358,6 +365,12 @@ export default function App() {
   const [checkSort, setCheckSort] = useState('date'); // date | customer | order
   const [reconcileCheck, setReconcileCheck] = useState(null);
   const [reconcileDate, setReconcileDate] = useState('');
+  // Reconcile flow state — what the user picked in the modal:
+  //   { kind: 'attach', treasuryId: '<uuid>' }   — link check to existing treasury row
+  //   { kind: 'new' }                            — create a new treasury cash_in row
+  const [reconcileCheckChoice, setReconcileCheckChoice] = useState(null);
+  // Cash-swap case: customer paid cash and took the paper check back
+  const [reconcileCheckReturned, setReconcileCheckReturned] = useState(false);
   const [reconcileMethod, setReconcileMethod] = useState('check');
   const [expenseDrill, setExpenseDrill] = useState(null);
   const [tSearch, setTSearch] = useState({ show: false, type: 'all', cat: '', subcat: '', desc: '', dateFrom: '', dateTo: '', inboundRef: '' });
@@ -563,6 +576,14 @@ export default function App() {
           .eq('date', today)
           .order('login_at', { ascending: false })
           .limit(1);
+        // Also pulse login_events so admin portal "is_online" stays accurate
+        try {
+          fetch('/api/login-event', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ user_id: uid, event_type: 'heartbeat' }),
+          }).catch(() => {});
+        } catch(e) {}
       }
     }, 5 * 60 * 1000);
 
@@ -620,7 +641,11 @@ export default function App() {
       const uid = profileIdRef.current || user?.id;
       if (uid) {
         const today = new Date().toISOString().split('T')[0];
-        navigator.sendBeacon('/api/plaid/link', ''); // no-op, just to keep alive
+        // Best-effort logout event via beacon (survives navigation)
+        try {
+          const blob = new Blob([JSON.stringify({ user_id: uid, event_type: 'logout' })], { type: 'application/json' });
+          navigator.sendBeacon('/api/login-event', blob);
+        } catch(e) {}
         supabase.from('user_sessions')
           .update({ last_seen: new Date().toISOString(), logout_at: new Date().toISOString() })
           .eq('user_id', uid).eq('date', today)
@@ -665,6 +690,11 @@ export default function App() {
         fetchAll('expense_rules', 'created_at', true),
         fetchAll('inventory', 'created_at', true),
       ]);
+      // Load bilingual categories (may not exist yet if SQL not run)
+      try {
+        const { data: cats } = await supabase.from('categories').select('*').eq('active', true).order('sort_order').order('name_ar');
+        setCategoriesList(cats || []);
+      } catch (e) { setCategoriesList([]); }
       // Load team users separately (may not exist yet)
       try {
         const { data: usrs } = await supabase.from('users').select('*').order('name');
@@ -683,7 +713,7 @@ export default function App() {
               language: profile.greeter_language || 'en',
               enabled: profile.greeter_enabled !== false,
             });
-            // Log first login of the day
+            // Log first login of the day (legacy daily_log entry)
             try {
               const todayStr = new Date().toISOString().substring(0, 10);
               const loginTime = new Date().toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' });
@@ -699,6 +729,18 @@ export default function App() {
                   log_category: 'login',
                 });
               }
+            } catch(e) { /* non-fatal */ }
+            // NEW: record a precise login event in login_events (ET-tz aware via DB generated column)
+            try {
+              fetch('/api/login-event', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                  user_id: profile.id,
+                  event_type: 'login',
+                  user_agent: typeof navigator !== 'undefined' ? navigator.userAgent.substring(0, 200) : null,
+                }),
+              }).catch(() => {});
             } catch(e) { /* non-fatal */ }
           }
         }
@@ -2311,38 +2353,126 @@ export default function App() {
     } catch (err) { toast.error(err.message); }
   };
 
+  // Check ↔ treasury reconciliation evaluator.
+  // Pure logic lives in src/lib/check-reconcile.js (see test suite at /tmp/test-checks.js — 40 cases).
+  // This wrapper just binds the local invoices/treasury state and adds runtime warnings the pure
+  // evaluator doesn't surface (zero-amount, overpayment).
+  const evaluateCheckReconcile = (chk) => {
+    const result = libEvaluateCheckReconcile(chk, invoices, treasury);
+    // Annotate with runtime warnings
+    const warnings = [];
+    if (chk && Number(chk.amount || 0) === 0) {
+      warnings.push({
+        level: 'error',
+        en: 'This check has a zero amount. Cannot collect a zero-value check.',
+        ar: 'هذا الشيك بدون قيمة. لا يمكن تحصيل شيك بقيمة صفر.'
+      });
+    }
+    if (result.invoice && chk) {
+      const invTotal = Number(result.invoice.total_amount || 0);
+      const collected = Number(result.invoice.total_collected || 0);
+      const remaining = invTotal - collected;
+      if (Number(chk.amount || 0) > remaining + 0.01) {
+        warnings.push({
+          level: 'warn',
+          en: 'Check amount (' + fE(chk.amount) + ') exceeds remaining invoice balance (' + fE(remaining) + '). Collecting will overpay this invoice.',
+          ar: 'مبلغ الشيك (' + fE(chk.amount) + ') أكبر من المتبقي على الفاتورة (' + fE(remaining) + '). التحصيل سيؤدي إلى دفع زائد.'
+        });
+      }
+    }
+    return { ...result, warnings };
+  };
+
   const handleCollectCheck = async () => {
     if (!reconcileCheck || !reconcileDate) { alert('Please select a collection date / الرجاء تحديد تاريخ التحصيل'); return; }
     try {
-      // 1. Create treasury entry for the collected check
-      const desc = reconcileCheck.customer_name + ' — شيك محصّل' + (reconcileCheck.check_number ? ' #' + reconcileCheck.check_number : '');
-      const { data: newTxn } = await supabase.from('treasury').insert({
-        transaction_date: reconcileDate,
-        order_number: reconcileCheck.order_number || '',
-        description: desc,
-        cash_in: Number(reconcileCheck.amount),
-        cash_out: 0,
-        source: 'main',
-        category: 'مبيعات',
-        linked_invoice_id: reconcileCheck.invoice_id || null,
-      }).select('id').single();
+      const evalResult = evaluateCheckReconcile(reconcileCheck);
+      // Hard block: zero-amount check
+      const errorWarn = (evalResult.warnings || []).find(w => w.level === 'error');
+      if (errorWarn) {
+        alert('⛔ ' + errorWarn.en + '\n\n' + errorWarn.ar);
+        return;
+      }
+      // Soft block: overpayment — confirm before proceeding
+      const overpayWarn = (evalResult.warnings || []).find(w => w.level === 'warn');
+      if (overpayWarn) {
+        if (!confirm('⚠️ ' + overpayWarn.en + '\n\n' + overpayWarn.ar + '\n\nProceed anyway?')) return;
+      }
+      const choice = reconcileCheckChoice;
+      const physicalReturned = !!reconcileCheckReturned;
 
-      // 2. Mark check as collected + link to the treasury entry
-      await dbUpdate('checks', reconcileCheck.id, {
-        status: 'collected',
-        collection_date: reconcileDate,
-        linked_treasury_id: newTxn?.id || null,
-      }, user?.id);
+      // ---- Case A: already explicitly linked → just close the check ----
+      if (evalResult.mode === 'already_linked') {
+        await dbUpdate('checks', reconcileCheck.id, {
+          status: 'collected',
+          collection_date: reconcileDate,
+          linked_treasury_id: evalResult.existingTreasury.id,
+          physical_check_returned: physicalReturned,
+        }, user?.id);
+        if (evalResult.invoice) await recalcInvoiceCollected(evalResult.invoice.id);
+        toast.success('Check closed (already linked) ✓');
+        setReconcileCheck(null); setReconcileDate(''); setReconcileCheckChoice(null); setReconcileCheckReturned(false);
+        await loadAllData();
+        return;
+      }
 
-      // 3. Recalculate invoice collected from all linked treasury (single source of truth)
-      const invId = reconcileCheck.invoice_id;
-      const orderNum = reconcileCheck.order_number;
-      const inv = invId ? invoices.find(i => i.id === invId) : (orderNum ? invoices.find(i => i.order_number === orderNum) : null);
-      if (inv) await recalcInvoiceCollected(inv.id);
+      // ---- Case B: candidate match → user picked an existing treasury row to attach to ----
+      if (evalResult.mode === 'candidate_match' && choice && choice.kind === 'attach' && choice.treasuryId) {
+        // Stamp the picked treasury row with source_check_id, then close the check
+        await dbUpdate('treasury', choice.treasuryId, {
+          source_check_id: reconcileCheck.id,
+          payment_source: 'check',
+        }, user?.id);
+        await dbUpdate('checks', reconcileCheck.id, {
+          status: 'collected',
+          collection_date: reconcileDate,
+          linked_treasury_id: choice.treasuryId,
+          physical_check_returned: physicalReturned,
+        }, user?.id);
+        if (evalResult.invoice) await recalcInvoiceCollected(evalResult.invoice.id);
+        toast.success('Check linked to existing treasury entry + closed ✓');
+        setReconcileCheck(null); setReconcileDate(''); setReconcileCheckChoice(null); setReconcileCheckReturned(false);
+        await loadAllData();
+        return;
+      }
 
-      setReconcileCheck(null);
-      setReconcileDate('');
-      await loadAllData();
+      // ---- Case C: no_match OR user chose to create a new treasury row ----
+      // (Cash-swap "customer brought cash, took check back" → new cash_in row + physical_check_returned=true)
+      // (Or pure "new entry" fallback when user disagrees with all candidates)
+      if ((evalResult.mode === 'no_match' || (evalResult.mode === 'candidate_match' && choice && choice.kind === 'new'))
+          || (evalResult.mode === 'no_invoice')) {
+        const checkNum = reconcileCheck.check_number ? ' #' + reconcileCheck.check_number : '';
+        const desc = (reconcileCheck.customer_name || '') + ' — شيك محصّل' + checkNum;
+        const { data: newTxn } = await supabase.from('treasury').insert({
+          transaction_date: reconcileDate,
+          order_number: reconcileCheck.order_number || '',
+          description: desc,
+          cash_in: Number(reconcileCheck.amount),
+          cash_out: 0,
+          source: 'main',
+          category: 'مبيعات',
+          linked_invoice_id: evalResult.invoice ? evalResult.invoice.id : (reconcileCheck.invoice_id || null),
+          source_check_id: reconcileCheck.id,
+          payment_source: 'check',
+        }).select('id').single();
+        await dbUpdate('checks', reconcileCheck.id, {
+          status: 'collected',
+          collection_date: reconcileDate,
+          linked_treasury_id: newTxn?.id || null,
+          physical_check_returned: physicalReturned,
+        }, user?.id);
+        if (evalResult.invoice) await recalcInvoiceCollected(evalResult.invoice.id);
+        toast.success(physicalReturned ? 'Check collected as cash swap ✓' : 'Check collected + treasury entry added ✓');
+        setReconcileCheck(null); setReconcileDate(''); setReconcileCheckChoice(null); setReconcileCheckReturned(false);
+        await loadAllData();
+        return;
+      }
+
+      // Defensive: candidate_match mode but no choice picked → tell user
+      if (evalResult.mode === 'candidate_match' && !choice) {
+        alert('Please select how this check was collected (pick one of the options).');
+        return;
+      }
     } catch (err) {
       toast.error(err.message);
     }
@@ -2654,7 +2784,9 @@ export default function App() {
       <div className="flex flex-1" style={{ minHeight: 'calc(100vh - 60px)' }}>
         {/* Sidebar */}
         <aside role="navigation" aria-label="Main navigation" className={'fixed lg:sticky top-[56px] lg:top-[56px] left-0 z-[100] lg:z-10 overflow-y-auto transition-transform duration-200 ' + (sidebarOpen ? 'translate-x-0' : '-translate-x-full lg:translate-x-0')}
-          style={{ width: 210, height: 'calc(100vh - 56px)', background: 'linear-gradient(180deg, #0f172a 0%, #1e1b4b 100%)', borderRight: '1px solid rgba(56,189,248,0.1)' }}>
+          style={{ width: 210, height: 'calc(100vh - 56px)', background: 'linear-gradient(180deg, #0f172a 0%, #1e1b4b 100%)', borderRight: '1px solid rgba(56,189,248,0.1)', paddingTop: 'env(safe-area-inset-top, 0px)' }}>
+          {/* Extra top spacer on mobile so the first item (Dashboard) clears the iOS/Android status bar */}
+          <div className="h-6 lg:h-0"></div>
           <div className="py-3">
             {[
               { group: 'Overview', items: ['dashboard'] },
@@ -4120,27 +4252,159 @@ export default function App() {
         {/* ==========================================
             CHECK RECONCILE MODAL
         ========================================== */}
-        {reconcileCheck && (
-          <Modal onClose={() => { setReconcileCheck(null); setReconcileDate(''); }} title="✅ Collect Check / تحصيل شيك">
+        {reconcileCheck && (() => {
+          const evalResult = evaluateCheckReconcile(reconcileCheck);
+          // Helper: short text describing a treasury candidate
+          const candidateLabel = (t) => {
+            const inflow = Number(t.cash_in || 0) + Number(t.bank_in || 0);
+            const channel = Number(t.bank_in || 0) > 0 ? '🏦 Bank'
+                          : t.cash_method === 'vodafone' ? '📱 Vodafone'
+                          : t.cash_method === 'instapay' ? '⚡ InstaPay'
+                          : '💵 Cash';
+            const date = t.transaction_date || '';
+            const desc = (t.description || '').substring(0, 60);
+            return channel + ' · ' + fE(inflow) + ' · ' + date + (desc ? ' · ' + desc : '');
+          };
+          return (
+          <Modal onClose={() => { setReconcileCheck(null); setReconcileDate(''); setReconcileCheckChoice(null); setReconcileCheckReturned(false); }} title="✅ Collect Check / تحصيل شيك">
             <div className="bg-emerald-50 rounded-lg p-4 mb-4 border border-emerald-200">
               <div style={{ direction: 'rtl' }} className="text-lg font-bold text-emerald-800">{reconcileCheck.customer_name}</div>
               <div className="text-2xl font-extrabold text-emerald-600 mt-1">{fE(reconcileCheck.amount)}</div>
-              <div className="flex gap-3 mt-2 text-xs text-slate-500">
+              <div className="flex gap-3 mt-2 text-xs text-slate-500 flex-wrap">
                 {reconcileCheck.order_number && <span>Order #{reconcileCheck.order_number}</span>}
                 {reconcileCheck.check_number && <span>Check #{reconcileCheck.check_number}</span>}
                 {reconcileCheck.bank_name && <span>{reconcileCheck.bank_name}</span>}
                 <span>Due: {reconcileCheck.due_date || reconcileCheck.check_date}</span>
               </div>
             </div>
+
+            {/* Runtime warnings (zero amount, overpayment) */}
+            {(evalResult.warnings || []).length > 0 && (
+              <div className="mb-4 space-y-2">
+                {evalResult.warnings.map((w, idx) => (
+                  <div key={idx} className={'rounded-lg p-3 border-2 ' + (w.level === 'error' ? 'bg-red-50 border-red-400' : 'bg-amber-50 border-amber-400')}>
+                    <div className={'text-xs font-extrabold uppercase mb-1 ' + (w.level === 'error' ? 'text-red-800' : 'text-amber-800')}>
+                      {w.level === 'error' ? '⛔ Cannot proceed' : '⚠️ Warning'}
+                    </div>
+                    <div className={'text-sm font-medium ' + (w.level === 'error' ? 'text-red-900' : 'text-amber-900')}>{w.en}</div>
+                    <div className={'text-sm font-medium mt-1 ' + (w.level === 'error' ? 'text-red-900' : 'text-amber-900')} style={{direction:'rtl'}}>{w.ar}</div>
+                  </div>
+                ))}
+              </div>
+            )}
+
+            {/* ===== MODE A: Already explicitly linked ===== */}
+            {evalResult.mode === 'already_linked' && (
+              <div className="bg-emerald-50 border-2 border-emerald-400 rounded-lg p-3 mb-4">
+                <div className="text-xs font-extrabold text-emerald-800 uppercase mb-1">✅ Already linked / مرتبط بالفعل</div>
+                <div className="text-sm text-emerald-900 font-medium">This check is already linked to a treasury entry:</div>
+                <div className="text-xs text-emerald-900 bg-white/60 rounded p-2 mt-1 font-mono">{candidateLabel(evalResult.existingTreasury)}</div>
+                <div className="text-xs text-emerald-700 italic mt-2">Closing the check will NOT create a new treasury entry. / إغلاق الشيك لن يضيف قيدًا جديدًا.</div>
+              </div>
+            )}
+
+            {/* ===== MODE B: Candidate matches found — let user pick which treasury row this check IS ===== */}
+            {evalResult.mode === 'candidate_match' && (
+              <div className="bg-blue-50 border-2 border-blue-300 rounded-lg p-3 mb-4">
+                <div className="text-xs font-extrabold text-blue-800 uppercase mb-2">🔍 Possible matches found / احتمالات مطابقة</div>
+                <div className="text-sm text-blue-900 mb-2">{evalResult.message}</div>
+                <div className="text-sm text-blue-900 mb-2" style={{direction:'rtl'}}>تم العثور على {evalResult.candidates.length} قيد بنفس مبلغ الشيك بالضبط على هذه الفاتورة. اختر الذي يمثّل هذا الشيك.</div>
+                <div className="space-y-2 mt-3">
+                  {evalResult.candidates.map(t => (
+                    <label key={t.id} className={"flex items-start gap-2 p-2 rounded cursor-pointer border-2 " + (reconcileCheckChoice && reconcileCheckChoice.kind === 'attach' && reconcileCheckChoice.treasuryId === t.id ? 'border-emerald-500 bg-emerald-50' : 'border-blue-200 bg-white hover:bg-blue-50')}>
+                      <input type="radio" name="reconcile-choice" className="mt-1" checked={reconcileCheckChoice && reconcileCheckChoice.kind === 'attach' && reconcileCheckChoice.treasuryId === t.id} onChange={() => setReconcileCheckChoice({ kind: 'attach', treasuryId: t.id })} />
+                      <div className="flex-1 text-xs">
+                        <div className="font-semibold text-slate-900">{candidateLabel(t)}</div>
+                        <div className="text-slate-500 text-[10px] mt-0.5">Confirm: this is the deposit/cash that came from this check</div>
+                        <div className="text-slate-500 text-[10px]" style={{direction:'rtl'}}>تأكيد: هذا هو الإيداع/النقد الذي جاء من هذا الشيك</div>
+                      </div>
+                    </label>
+                  ))}
+                  <label className={"flex items-start gap-2 p-2 rounded cursor-pointer border-2 " + (reconcileCheckChoice && reconcileCheckChoice.kind === 'new' ? 'border-amber-500 bg-amber-50' : 'border-amber-200 bg-white hover:bg-amber-50')}>
+                    <input type="radio" name="reconcile-choice" className="mt-1" checked={reconcileCheckChoice && reconcileCheckChoice.kind === 'new'} onChange={() => setReconcileCheckChoice({ kind: 'new' })} />
+                    <div className="flex-1 text-xs">
+                      <div className="font-semibold text-amber-900">None of the above — create a new treasury entry for this check</div>
+                      <div className="font-semibold text-amber-900" style={{direction:'rtl'}}>لا شيء مما سبق — أنشئ قيد خزنة جديد لهذا الشيك</div>
+                      <div className="text-amber-700 text-[10px] mt-0.5">Use only if the existing matches above are coincidences (different payments that happen to share the same amount).</div>
+                    </div>
+                  </label>
+                </div>
+              </div>
+            )}
+
+            {/* ===== MODE C: No match — user must choose how check was collected ===== */}
+            {evalResult.mode === 'no_match' && (
+              <div className="bg-amber-50 border-2 border-amber-400 rounded-lg p-3 mb-4">
+                <div className="text-xs font-extrabold text-amber-800 uppercase mb-2">📥 How was this check collected? / كيف تم تحصيل هذا الشيك؟</div>
+                <div className="text-sm text-amber-900">No existing treasury entry on invoice #{evalResult.invoice.order_number || ''} matches the check amount of {fE(evalResult.checkAmount)} exactly.</div>
+                <div className="text-sm text-amber-900 mt-1" style={{direction:'rtl'}}>لا يوجد قيد خزنة على الفاتورة بنفس مبلغ الشيك بالضبط.</div>
+                <div className="text-xs text-amber-700 italic mt-2">Pick the option that matches what physically happened. The system will create a new treasury entry tagged as 'check' so it doesn't get confused with cash payments.</div>
+                <div className="text-xs text-amber-700 italic" style={{direction:'rtl'}}>اختر الذي يطابق ما حدث فعلًا.</div>
+                <div className="space-y-2 mt-3">
+                  <label className="flex items-start gap-2 p-2 rounded cursor-pointer border-2 border-amber-200 bg-white hover:bg-amber-50">
+                    <input type="radio" name="reconcile-choice" className="mt-1" checked={reconcileCheckChoice && reconcileCheckChoice.kind === 'new' && !reconcileCheckReturned} onChange={() => { setReconcileCheckChoice({ kind: 'new' }); setReconcileCheckReturned(false); }} />
+                    <div className="flex-1 text-xs">
+                      <div className="font-semibold text-slate-900">📝 Standard collection — bank or cash deposit not yet recorded</div>
+                      <div className="font-semibold text-slate-900" style={{direction:'rtl'}}>تحصيل عادي — إيداع بنكي أو نقدي لم يُسجَّل بعد</div>
+                      <div className="text-slate-500 text-[10px]">Creates a new treasury entry for this check. The physical paper stays with us (or was deposited).</div>
+                    </div>
+                  </label>
+                  <label className="flex items-start gap-2 p-2 rounded cursor-pointer border-2 border-amber-200 bg-white hover:bg-amber-50">
+                    <input type="radio" name="reconcile-choice" className="mt-1" checked={reconcileCheckChoice && reconcileCheckChoice.kind === 'new' && reconcileCheckReturned} onChange={() => { setReconcileCheckChoice({ kind: 'new' }); setReconcileCheckReturned(true); }} />
+                    <div className="flex-1 text-xs">
+                      <div className="font-semibold text-slate-900">💵 Cash swap — customer paid cash in office, took the paper check back</div>
+                      <div className="font-semibold text-slate-900" style={{direction:'rtl'}}>تبادل نقدي — العميل دفع نقدًا في المكتب وأخذ الشيك الورقي</div>
+                      <div className="text-slate-500 text-[10px]">Same effect on the books, but the check is marked as "physically returned" so we know the paper isn't with us anymore.</div>
+                    </div>
+                  </label>
+                </div>
+              </div>
+            )}
+
+            {/* No-invoice case — original simple flow */}
+            {evalResult.mode === 'no_invoice' && (
+              <div className="bg-slate-50 border-2 border-slate-200 rounded-lg p-3 mb-4">
+                <div className="text-xs font-extrabold text-slate-700 uppercase mb-1">No invoice linked / لا توجد فاتورة مرتبطة</div>
+                <div className="text-sm text-slate-700">A new treasury cash-in entry will be created on collection.</div>
+              </div>
+            )}
+
             <div className="mb-4">
               <label className="text-xs font-semibold text-slate-600 mb-1 block">Collection Date / تاريخ التحصيل</label>
               <DatePickerSelect value={reconcileDate || today()} onChange={v => setReconcileDate(v)} />
-              <p className="text-[10px] text-slate-400 mt-2">This will create a treasury cash-in entry and update the invoice collected amount / سيتم إنشاء معاملة وارد في الخزنة وتحديث المبلغ المحصّل في الفاتورة</p>
             </div>
-            <button onClick={handleCollectCheck}
-              className="px-4 py-3 bg-emerald-500 text-white rounded-lg font-bold w-full text-sm hover:bg-emerald-600">✅ Collect & Add to Treasury / تحصيل وإضافة للخزنة</button>
+
+            {/* Dynamic action button by mode */}
+            {evalResult.mode === 'already_linked' ? (
+              <button onClick={handleCollectCheck}
+                className="px-4 py-3 bg-emerald-600 text-white rounded-lg font-bold w-full text-sm hover:bg-emerald-700">
+                ✅ Close Check (No New Treasury) / إغلاق الشيك (بدون قيد جديد)
+              </button>
+            ) : evalResult.mode === 'candidate_match' ? (
+              <button onClick={handleCollectCheck} disabled={!reconcileCheckChoice}
+                className={"px-4 py-3 rounded-lg font-bold w-full text-sm " + (reconcileCheckChoice ? 'bg-emerald-500 text-white hover:bg-emerald-600' : 'bg-slate-300 text-slate-500 cursor-not-allowed')}>
+                {reconcileCheckChoice && reconcileCheckChoice.kind === 'attach'
+                  ? '🔗 Link Check to Selected Entry & Close / اربط الشيك بالقيد المحدد وأغلق'
+                  : reconcileCheckChoice && reconcileCheckChoice.kind === 'new'
+                  ? '➕ Create New Treasury Entry & Close / أنشئ قيدًا جديدًا وأغلق'
+                  : 'Pick an option above to continue'}
+              </button>
+            ) : evalResult.mode === 'no_match' ? (
+              <button onClick={handleCollectCheck} disabled={!reconcileCheckChoice}
+                className={"px-4 py-3 rounded-lg font-bold w-full text-sm " + (reconcileCheckChoice ? 'bg-emerald-500 text-white hover:bg-emerald-600' : 'bg-slate-300 text-slate-500 cursor-not-allowed')}>
+                {reconcileCheckChoice
+                  ? (reconcileCheckReturned ? '💵 Record Cash Swap & Close / سجّل التبادل النقدي وأغلق' : '✅ Collect & Add to Treasury / تحصيل وإضافة للخزنة')
+                  : 'Pick an option above to continue'}
+              </button>
+            ) : (
+              <button onClick={handleCollectCheck}
+                className="px-4 py-3 bg-emerald-500 text-white rounded-lg font-bold w-full text-sm hover:bg-emerald-600">
+                ✅ Collect & Add to Treasury / تحصيل وإضافة للخزنة
+              </button>
+            )}
           </Modal>
-        )}
+          );
+        })()}
 
         {/* ==========================================
             ADD INVOICE MODAL

@@ -368,8 +368,16 @@ export async function POST(request) {
     context += '- If you created a ticket earlier in this conversation, ALWAYS use update_ticket with its ticket_number for follow-up requests.\n';
     context += '- When the user says "update it", "change it", "add to it", "also", "and", or refers to a ticket by context (not by number), check the conversation history for the most recently discussed ticket and use update_ticket.\n';
     context += '- Only use create_ticket when the user explicitly asks to create a NEW/DIFFERENT ticket about a clearly different topic.\n';
-    context += '- create_event: {type:"create_event", title, event_date, event_time, event_type}\n';
-    context += '- create_reminder: {type:"create_reminder", task, due_date, due_time}\n';
+    context += '- create_event: {type:"create_event", title, event_date, event_time, event_type, assigned_to}\n';
+    context += '  assigned_to (optional, uuid from TEAM list) — when scheduling FOR another team member.\n';
+    context += '- create_reminder: {type:"create_reminder", task, due_date, due_time, priority, target_users}\n';
+    context += '  target_users: "all" (everyone), or a uuid from TEAM list (specific person).\n';
+    context += '  EXAMPLE — "remind Omar to call his customers tomorrow" → target_users:"<Omar uuid>", task:"Call your customers", due_date:"<tomorrow>"\n';
+    context += '- send_team_message: {type:"send_team_message", target_user_id, message, urgent}\n';
+    context += '  Send a direct message to ONE team member. They see it on their next AI chat or morning briefing.\n';
+    context += '  Use when the user says "tell <person>", "let <person> know", "message <person> that...", "remind <person>".\n';
+    context += '  EXAMPLE — "tell Omar he needs to put his ticket in today" → target_user_id:"<Omar uuid>", message:"You need to put your ticket in today", urgent:true\n';
+    context += '  Set urgent:true ONLY for time-critical items. urgent items never expire until dismissed.\n';
     context += '- request_quote: {type:"request_quote", vendor_company, vendor_contact, vendor_email, vendor_whatsapp, vendor_type, send_via, origin, destination, container, commodity, customer_name}\n';
 
     if (gmailConnected) {
@@ -388,7 +396,8 @@ export async function POST(request) {
     context += '- Tickets, events, and reminders execute IMMEDIATELY — do NOT say "shall I create this?" just create it. Say "Creating ticket..." then include the action JSON.\n';
     context += '- For emails and WhatsApp: ALWAYS draft first (draft_only:true). Say "Here is the draft, say Execute to send."\n';
     context += '- When user says "reply to X" — first read the email, THEN draft a reply for approval.\n';
-    context += '- For assigned_to on tickets: use user ID from TEAM list.\n';
+    context += '- For assigned_to on tickets/events, target_users on reminders, target_user_id on messages: use the UUID from the TEAM list. Match by name match (case-insensitive, accepts nicknames). If unsure who, ask.\n';
+    context += '- CROSS-TEAM AUTHORITY: any super admin can use create_ticket/create_reminder/create_event/send_team_message to delegate to ANY team member. Do not hesitate. The recipient sees it on their AI chat or briefing.\n';
     context += '- NEVER claim an action is done unless the action JSON is included. If you include an action, say "Done" or "Created" confidently.\n';
     context += '- Answer concisely. Use EGP currency. Format numbers with commas.\n\n';
 
@@ -728,7 +737,7 @@ export async function POST(request) {
         }
 
         // Auto-execute safe actions immediately (tickets, events, reminders)
-        var autoExecTypes = ['create_ticket', 'update_ticket', 'create_event', 'create_reminder'];
+        var autoExecTypes = ['create_ticket', 'update_ticket', 'create_event', 'create_reminder', 'send_team_message'];
         if (autoExecTypes.indexOf(actionData.type) >= 0) {
           try {
             var execResult = null;
@@ -754,11 +763,49 @@ export async function POST(request) {
               await supabase.from('ticket_comments').insert({ ticket_id: tk.id, comment_text: '🤖 AI: ' + ch.join(', '), is_system: true, created_by: userId });
               execResult = '✅ Updated ' + tk.ticket_number + ': ' + ch.join(', ');
             } else if (actionData.type === 'create_event') {
-              await supabase.from('calendar_events').insert({ title: actionData.title, event_date: actionData.event_date, event_time: actionData.event_time || null, event_type: actionData.event_type || 'task', assigned_to: userId });
-              execResult = '✅ Event created: ' + actionData.title + ' on ' + actionData.event_date;
+              // assigned_to optional — defaults to creator. Allows Max to schedule events for team.
+              var evAssignee = actionData.assigned_to || userId;
+              await supabase.from('calendar_events').insert({ title: actionData.title, event_date: actionData.event_date, event_time: actionData.event_time || null, event_type: actionData.event_type || 'task', assigned_to: evAssignee, created_by: userId });
+              var evWho = '';
+              if (evAssignee && evAssignee !== userId) {
+                var aFind = await supabase.from('users').select('name').eq('id', evAssignee).maybeSingle();
+                if (aFind && aFind.data) evWho = ' for ' + aFind.data.name;
+              }
+              execResult = '✅ Event created' + evWho + ': ' + actionData.title + ' on ' + actionData.event_date;
             } else if (actionData.type === 'create_reminder') {
-              await supabase.from('team_reminders').insert({ title: actionData.task || actionData.title, message: actionData.task || actionData.title, reminder_date: actionData.due_date, priority: actionData.priority || 'normal', target_users: 'all', created_by: userId });
-              execResult = '✅ Reminder set: ' + (actionData.task || actionData.title) + ' on ' + actionData.due_date;
+              // target_users now configurable: 'all' (everyone), uuid (specific user), or array of uuids.
+              // When AI extracts "remind Omar to..." it should set target_users to Omar's uuid.
+              var rTarget = actionData.target_users || actionData.assigned_to || 'all';
+              await supabase.from('team_reminders').insert({ title: actionData.task || actionData.title, message: actionData.task || actionData.title, reminder_date: actionData.due_date, priority: actionData.priority || 'normal', target_users: rTarget, created_by: userId });
+              var rWho = '';
+              if (rTarget && rTarget !== 'all') {
+                var rFind = await supabase.from('users').select('name').eq('id', rTarget).maybeSingle();
+                if (rFind && rFind.data) rWho = ' for ' + rFind.data.name;
+              }
+              execResult = '✅ Reminder set' + rWho + ': ' + (actionData.task || actionData.title) + ' on ' + actionData.due_date;
+            } else if (actionData.type === 'send_team_message') {
+              // Direct AI-mediated message to a specific team member. Lands in their ai_memory
+              // as a 'note' with target_user_id set, so it surfaces in their next chat or briefing.
+              if (!actionData.target_user_id) throw new Error('send_team_message requires target_user_id');
+              var senderName = 'Someone';
+              if (userId) {
+                var sFind = await supabase.from('users').select('name').eq('id', userId).maybeSingle();
+                if (sFind && sFind.data) senderName = sFind.data.name;
+              }
+              var msgText = actionData.message || actionData.content || '';
+              await supabase.from('ai_memory').insert({
+                user_id: actionData.target_user_id,
+                content: senderName + ' sent a message via AI: ' + msgText,
+                type: actionData.urgent ? 'urgent' : 'note',
+                scope: 'private',
+                target_user_id: actionData.target_user_id,
+                created_by: userId,
+                auto_captured: false,
+                expires_at: actionData.urgent ? null : new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString(),
+              });
+              var msgRecip = await supabase.from('users').select('name').eq('id', actionData.target_user_id).maybeSingle();
+              var recipName = (msgRecip && msgRecip.data && msgRecip.data.name) || 'team member';
+              execResult = '✅ Message queued for ' + recipName + ' — they will see it on their next chat or morning briefing.';
             }
             var finalAnswer = (cleanText.trim() ? cleanText.trim() + '\n\n' : '') + (execResult || 'Done.');
             return Response.json({ answer: finalAnswer, action_result: 'success' });
