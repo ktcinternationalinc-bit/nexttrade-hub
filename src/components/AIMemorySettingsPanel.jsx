@@ -6,6 +6,7 @@ import { useState, useEffect } from 'react';
 export default function AIMemorySettingsPanel({ userProfile, toast }) {
   const isSuperAdmin = userProfile && (userProfile.role === 'super_admin' || userProfile.role === 'superadmin' || userProfile.role === 'owner');
   const [settings, setSettings] = useState(null);
+  const [warning, setWarning] = useState('');
   const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState(false);
   const [allItems, setAllItems] = useState([]);
@@ -19,7 +20,11 @@ export default function AIMemorySettingsPanel({ userProfile, toast }) {
         const r = await fetch('/api/memory?settings=1&userId=' + userProfile.id);
         const data = await r.json();
         if (data.settings) setSettings(data.settings);
-      } catch (e) {}
+        if (data.warning) setWarning(data.warning);
+        if (data.error && !data.settings) setWarning(data.error);
+      } catch (e) {
+        setWarning('Network error loading settings: ' + e.message);
+      }
       setLoading(false);
     })();
   }, [isSuperAdmin, userProfile?.id]);
@@ -70,12 +75,23 @@ export default function AIMemorySettingsPanel({ userProfile, toast }) {
 
   if (!isSuperAdmin) return null;
   if (loading) return <div className="p-4 text-sm text-slate-500">Loading AI memory settings…</div>;
-  if (!settings) return <div className="p-4 text-sm text-red-500">Could not load AI memory settings.</div>;
+  if (!settings) return (
+    <div className="p-4 bg-red-50 border-2 border-red-300 rounded-xl">
+      <div className="text-sm font-bold text-red-800 mb-1">❌ Could not load AI memory settings</div>
+      <div className="text-xs text-red-700 mb-2">{warning || 'Unknown error'}</div>
+      <div className="text-xs text-red-600">Most likely cause: the <code className="bg-red-100 px-1 rounded">ai_memory_settings</code> table doesn't exist yet. Run <code className="bg-red-100 px-1 rounded">supabase/ai-memory.sql</code> in Supabase SQL editor.</div>
+    </div>
+  );
 
   const toggle = (k) => setSettings({ ...settings, [k]: !settings[k] });
 
   return (
     <div className="bg-white rounded-xl p-5 mb-4 border border-indigo-200" style={{boxShadow:'0 2px 8px rgba(79,70,229,0.1)'}}>
+      {warning && (
+        <div className="mb-3 p-2 bg-amber-50 border border-amber-300 rounded text-[11px] text-amber-800">
+          ⚠️ {warning}
+        </div>
+      )}
       <div className="flex justify-between items-center mb-3">
         <div>
           <h3 className="text-base font-extrabold text-indigo-800">🧠 AI Memory Settings</h3>

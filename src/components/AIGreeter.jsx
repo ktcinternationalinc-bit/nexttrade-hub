@@ -371,21 +371,12 @@ export default function AIGreeter({ user, userProfile, users, tickets, invoices,
   var showTypingAnim = lastMsg && lastMsg.role === 'assistant' && !typingDone;
   var containerRef = useRef(null);
 
-  // Scroll the greeter into view when it starts loading (initial greet) or when a
-  // new message begins typing — so the user sees the animation from the start
-  // instead of the card being above the fold.
-  useEffect(function() {
-    if ((loading || showTypingAnim) && containerRef.current) {
-      try { containerRef.current.scrollIntoView({ behavior: 'smooth', block: 'center' }); } catch(e) {}
-    }
-  }, [loading, showTypingAnim]);
-
   return (
-    <div ref={containerRef} className="mt-6 mb-4 rounded-2xl overflow-hidden shadow-2xl scroll-mt-24" style={{ border: '2px solid ' + persona.color + '30', background: 'linear-gradient(135deg, rgba(15,23,42,0.97), rgba(30,27,75,0.97))' }}>
+    <div ref={containerRef} className="mt-8 mb-4 rounded-2xl overflow-hidden shadow-2xl scroll-mt-32" style={{ border: '2px solid ' + persona.color + '30', background: 'linear-gradient(135deg, rgba(15,23,42,0.97), rgba(30,27,75,0.97))' }}>
       {/* Header */}
       <div className="px-4 py-3 flex items-center gap-3" style={{ background: persona.color + '18', borderBottom: '1px solid ' + persona.color + '25' }}>
-        <div className="w-10 h-10 rounded-full flex items-center justify-center text-lg shadow-lg" style={{ background: 'linear-gradient(135deg, ' + persona.color + ', ' + persona.color + '80)' }}>
-          {persona.label.substring(0, 2)}
+        <div className="w-10 h-10 rounded-full flex items-center justify-center text-sm font-extrabold shadow-lg text-white" style={{ background: 'linear-gradient(135deg, ' + persona.color + ', ' + persona.color + '80)' }}>
+          N
         </div>
         <div className="flex-1">
           <div className="text-sm font-bold text-white flex items-center gap-2">
@@ -393,7 +384,6 @@ export default function AIGreeter({ user, userProfile, users, tickets, invoices,
             {speaking && <span className="flex items-end gap-0.5 h-4">{[0,1,2,3,4].map(function(i) { return <span key={i} className="w-0.5 rounded-full bg-emerald-400" style={{ height: 4 + Math.random() * 12, animation: 'pulse 0.6s infinite', animationDelay: i * 80 + 'ms' }} />; })}</span>}
             {listening && <span className="px-2 py-0.5 rounded-full bg-red-500 text-[8px] font-bold animate-pulse">● LISTENING</span>}
           </div>
-          <div className="text-[9px] font-medium" style={{ color: persona.color + 'cc' }}>{persona.desc} · {useLang === 'ar' ? 'عربي' : 'EN'}</div>
         </div>
         <div className="flex items-center gap-1">
           {speaking && <button onClick={stopSpeech} className="p-1.5 rounded-lg bg-red-500/20 text-red-400 hover:bg-red-500/40 text-xs" title="Stop speaking">⏹</button>}

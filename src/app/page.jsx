@@ -4949,7 +4949,7 @@ export default function App() {
 
             {/* ===== AI ASSISTANT (compact — click to expand) ===== */}
             {!greeterDismissed && greeterSettings.enabled ? (
-              <div className="mb-4 pt-4">
+              <div className="mb-4 pt-12 mt-8">
                 <AIGreeter
                   user={user} userProfile={userProfile} users={teamUsers}
                   tickets={dashTickets} invoices={invoices} treasury={treasury}

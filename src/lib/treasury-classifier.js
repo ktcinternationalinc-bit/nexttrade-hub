@@ -210,6 +210,15 @@ export function classifyTreasuryTransaction(txn, ctx) {
   // never affect the safe net regardless of amount — they live in a separate ledger.
   var netEffectEn, netEffectAr, netDelta;
   var isBankTypeRow = bankIn > 0 || bankOut > 0 || isPlaceholder || matchedBankId || type === 'BANK_CONFIRMATION_DEDUP';
+  // Resolve a display amount for bank rows even when bank_in/bank_out are 0
+  // (legacy rows pre-migration where amount still sits in cash_in or expected_amount).
+  var bankDisplayAmt = bankIn > 0 ? bankIn
+                       : bankOut > 0 ? bankOut
+                       : Number(txn.expected_amount || 0) > 0 ? Number(txn.expected_amount || 0)
+                       : cashIn > 0 ? cashIn
+                       : cashOut > 0 ? cashOut
+                       : 0;
+  var bankDirIn = bankIn > 0 || (matchedBankId && (txn.expected_direction === 'in' || cashIn > 0));
   if (type === 'BANK_PLACEHOLDER_AWAITING') {
     netDelta = 0;
     netEffectEn = 'No effect on safe. This is a bank placeholder awaiting statement verification.';
@@ -220,9 +229,8 @@ export function classifyTreasuryTransaction(txn, ctx) {
     netEffectAr = 'بدون تأثير على الخزنة — تأكيد بنكي لدفعة سبق احتسابها.';
   } else if (isBankTypeRow) {
     netDelta = 0;
-    var amt = bankIn > 0 ? bankIn : bankOut;
-    netEffectEn = 'No effect on safe balance. Bank ' + (bankIn > 0 ? 'In' : 'Out') + ' of ' + amt.toLocaleString() + ' EGP is tracked in the bank ledger only.';
-    netEffectAr = 'بدون تأثير على رصيد الخزنة. ' + (bankIn > 0 ? 'وارد' : 'صادر') + ' بنكي ' + amt.toLocaleString() + ' ج.م مسجّل في دفتر البنك فقط.';
+    netEffectEn = 'No effect on safe balance. Bank ' + (bankDirIn ? 'In' : 'Out') + ' of ' + bankDisplayAmt.toLocaleString() + ' EGP is tracked in the bank ledger only.';
+    netEffectAr = 'بدون تأثير على رصيد الخزنة. ' + (bankDirIn ? 'وارد' : 'صادر') + ' بنكي ' + bankDisplayAmt.toLocaleString() + ' ج.م مسجّل في دفتر البنك فقط.';
   } else if (cashIn > 0) {
     netDelta = cashIn;
     netEffectEn = 'Added ' + cashIn.toLocaleString() + ' EGP to safe (treasury cash).';
@@ -238,7 +246,9 @@ export function classifyTreasuryTransaction(txn, ctx) {
   }
 
   // --- Effect on invoice total_collected ---
-  // Counts both cash_in and bank_in when linked.
+  // Counts both cash_in and bank_in when linked. For legacy matched rows where
+  // amount sits in cash_in or expected_amount instead of bank_in, fall back so
+  // the Inspector displays the correct amount and channel.
   var collectedEffectEn, collectedEffectAr, collectedDelta;
   if (!linkedInvoiceId) {
     collectedDelta = 0;
@@ -256,6 +266,11 @@ export function classifyTreasuryTransaction(txn, ctx) {
     collectedDelta = bankIn;
     collectedEffectEn = 'Added ' + bankIn.toLocaleString() + ' EGP to invoice collected (bank channel).';
     collectedEffectAr = 'أُضيف ' + bankIn.toLocaleString() + ' ج.م إلى محصّل الفاتورة (قناة البنك).';
+  } else if (matchedBankId && bankIn === 0 && bankDisplayAmt > 0) {
+    // Legacy-matched bank row — amount is in cash_in or expected_amount; still counts toward collected.
+    collectedDelta = bankDisplayAmt;
+    collectedEffectEn = 'Counted in invoice collected: ' + bankDisplayAmt.toLocaleString() + ' EGP (legacy matched row — amount is in cash_in/expected_amount; run bank-separation migration to move into bank_in).';
+    collectedEffectAr = 'محتسب في محصّل الفاتورة: ' + bankDisplayAmt.toLocaleString() + ' ج.م (قيد قديم — المبلغ في cash_in أو expected_amount؛ شغّل ترقية الفصل البنكي لنقله إلى bank_in).';
   } else if (cashIn > 0) {
     collectedDelta = cashIn;
     collectedEffectEn = 'Added ' + cashIn.toLocaleString() + ' EGP to invoice collected (safe channel).';

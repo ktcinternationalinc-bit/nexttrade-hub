@@ -192,12 +192,29 @@ export default function TreasuryInspectorModal(props) {
               {c.amounts.foreignAmt > 0 && (
                 <div className="flex justify-between items-center py-0.5"><span className="text-sm font-semibold text-slate-800">{c.amounts.foreignCur || 'Foreign'} {c.amounts.foreignDir === 'in' ? 'In' : 'Out'}</span><span className="text-base font-extrabold text-slate-900">{c.amounts.foreignAmt.toLocaleString()}</span></div>
               )}
-              {c.amounts.cashIn === 0 && c.amounts.cashOut === 0 && Number(txn.bank_in || 0) === 0 && Number(txn.bank_out || 0) === 0 && c.amounts.usdIn === 0 && c.amounts.usdOut === 0 && c.amounts.foreignAmt === 0 && (
+              {c.amounts.cashIn === 0 && c.amounts.cashOut === 0 && Number(txn.bank_in || 0) === 0 && Number(txn.bank_out || 0) === 0 && c.amounts.usdIn === 0 && c.amounts.usdOut === 0 && c.amounts.foreignAmt === 0 && !(txn.matched_bank_txn_id && Number(txn.expected_amount || 0) > 0) && !txn.is_bank_placeholder && (
                 <div className="text-sm text-slate-700 italic font-medium">No amount / بدون مبلغ</div>
               )}
               {txn.is_bank_placeholder && txn.expected_amount > 0 && (
                 <div className="mt-2 pt-2 border-t-2 border-slate-300">
                   <div className="text-sm font-extrabold text-indigo-800">Expected / متوقع: {c.amounts.foreignDir === 'out' ? '-' : ''}{fE(txn.expected_amount)}</div>
+                </div>
+              )}
+              {/* Legacy matched row — amount is in cash_in/expected_amount instead of bank_in.
+                  Still display the figure so the user isn't looking at a blank. */}
+              {txn.matched_bank_txn_id && !txn.is_bank_placeholder
+                && Number(txn.bank_in || 0) === 0 && Number(txn.bank_out || 0) === 0
+                && (Number(txn.expected_amount || 0) > 0 || Number(txn.cash_in || 0) > 0 || Number(txn.cash_out || 0) > 0) && (
+                <div className="mt-2 pt-2 border-t-2 border-amber-300 bg-amber-50 -mx-3 px-3 py-2">
+                  <div className="text-sm font-extrabold text-amber-900">
+                    Matched bank amount / المبلغ المطابق: {fE(Number(txn.expected_amount || 0) || Number(txn.cash_in || 0) || Number(txn.cash_out || 0))}
+                  </div>
+                  <div className="text-[11px] text-amber-800 mt-1 italic">
+                    This row was matched before the bank-separation migration ran. Amount currently sits in cash_in/expected_amount instead of bank_in. Running the migration will move it.
+                  </div>
+                  <div className="text-[11px] text-amber-800 mt-1 italic" style={{direction:'rtl'}}>
+                    تمت مطابقة هذا القيد قبل تشغيل ترقية الفصل البنكي. المبلغ حاليًا في cash_in بدلًا من bank_in. شغّل الترقية لنقله.
+                  </div>
                 </div>
               )}
               {(Number(txn.bank_in || 0) > 0 || Number(txn.bank_out || 0) > 0 || txn.is_bank_placeholder || txn.matched_bank_txn_id) && (

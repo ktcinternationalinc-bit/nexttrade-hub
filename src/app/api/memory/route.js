@@ -5,11 +5,31 @@ var supabase = createClient(
   process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY
 );
 
+function defaultSettings() {
+  return {
+    id: 1,
+    auto_capture_enabled: true,
+    capture_urgent: true,
+    capture_meetings: true,
+    capture_reminders: true,
+    capture_notes: true,
+    capture_follow_ups: true,
+    default_note_retention_days: 30,
+    cross_user_read: 'team_only',
+    morning_briefing_enabled: true,
+    briefing_hour_local: 8,
+    max_memory_items_per_user: 500,
+  };
+}
+
 async function isSuperAdmin(userId) {
   if (!userId) return false;
   try {
     var r = await supabase.from('users').select('role').eq('id', userId).maybeSingle();
-    if (r && r.data && (r.data.role === 'super_admin' || r.data.role === 'superadmin' || r.data.role === 'owner')) return true;
+    if (!r || !r.data) return false;
+    var role = String(r.data.role || '').toLowerCase().replace(/[\s_-]/g, '');
+    // matches: super_admin, super admin, superadmin, SuperAdmin, owner
+    return role === 'superadmin' || role === 'owner';
   } catch (e) {}
   return false;
 }
@@ -28,8 +48,30 @@ export async function GET(request) {
     if (wantSettings) {
       var admin = await isSuperAdmin(userId);
       if (!admin) return Response.json({ error: 'Forbidden — super admin only' }, { status: 403 });
-      var s = await supabase.from('ai_memory_settings').select('*').eq('id', 1).maybeSingle();
-      return Response.json({ settings: s.data || null });
+      // Try to load; if the table doesn't exist yet, return defaults so the UI works.
+      try {
+        var s = await supabase.from('ai_memory_settings').select('*').eq('id', 1).maybeSingle();
+        if (s.error) {
+          var code = s.error.code || '';
+          var msg = String(s.error.message || '');
+          var tableMissing = code === '42P01' || msg.toLowerCase().indexOf('does not exist') >= 0 || msg.toLowerCase().indexOf('relation') >= 0;
+          if (tableMissing) {
+            return Response.json({
+              settings: defaultSettings(),
+              warning: 'ai_memory_settings table not found — returning defaults. Run supabase/ai-memory.sql in Supabase SQL editor.'
+            });
+          }
+          return Response.json({ error: 'DB error: ' + msg }, { status: 500 });
+        }
+        if (!s.data) {
+          // Seed the singleton row
+          var seed = await supabase.from('ai_memory_settings').insert(Object.assign({ id: 1 }, defaultSettings())).select().maybeSingle();
+          return Response.json({ settings: (seed && seed.data) || defaultSettings() });
+        }
+        return Response.json({ settings: s.data });
+      } catch (eInner) {
+        return Response.json({ error: 'DB exception: ' + eInner.message, settings: defaultSettings() }, { status: 200 });
+      }
     }
 
     if (allUsers) {
