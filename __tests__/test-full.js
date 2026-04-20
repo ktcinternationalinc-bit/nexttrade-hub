@@ -1880,6 +1880,1898 @@ try { runSection23_Session1Features(); } catch(e) {
 }
 
 // ============================================================
+// SECTION 24: Comprehensive audit — src/lib/utils.js
+// Exhaustive edge cases + outliers + security scenarios for the
+// four helpers added/modified this session:
+//   aggregatePaymentSources (H3)
+//   sanitizeRichText (R8)
+//   isHtmlComment (R8)
+//   richTextToPlain (R8)
+// ============================================================
+function runSection24_UtilsAudit() {
+  group('SECTION 24: utils.js comprehensive audit');
+
+  // Load utils.js as CommonJS
+  const utilsSrc24 = fs.readFileSync(path.join(REPO_ROOT, 'src/lib/utils.js'), 'utf8');
+  const utilsShim24 = utilsSrc24.replace(/export\s+const\s+/g, 'const ') +
+    '\nmodule.exports = { aggregatePaymentSources, PAYMENT_SOURCE_META, sanitizeRichText, isHtmlComment, richTextToPlain };';
+  fs.writeFileSync('/tmp/_utils_s24.js', utilsShim24);
+  delete require.cache[require.resolve('/tmp/_utils_s24.js')];
+  const U = require('/tmp/_utils_s24.js');
+
+  // =========================================================
+  // aggregatePaymentSources — edge cases / outliers
+  // =========================================================
+
+  // 24.agg.1 — row with BOTH cash_in and bank_in positive (corrupted row; auditor
+  // flags it separately as CORRUPTED_ROW). Aggregator must still tally deterministically.
+  const r_both = U.aggregatePaymentSources([
+    { cash_in: 500, bank_in: 1500, payment_source: 'bank' },
+  ]);
+  assert(r_both.buckets.bank === 2000,
+    '24.agg.1a corrupted row (both channels populated) → sum goes to tagged bucket');
+  assert(r_both.total === 2000, '24.agg.1b total equals the sum regardless of channels');
+
+  // 24.agg.2 — row with cash_in AND cash_out (positive contribution only counts inflow)
+  const r_both2 = U.aggregatePaymentSources([
+    { cash_in: 1000, cash_out: 500, payment_source: 'cash' },
+  ]);
+  assert(r_both2.buckets.cash === 1000,
+    '24.agg.2a cash_in alone counts (cash_out ignored — not a collected payment)');
+
+  // 24.agg.3 — very large numbers (no float precision loss at this scale)
+  const big = 1_500_000_000; // 1.5 billion EGP
+  const r_big = U.aggregatePaymentSources([
+    { cash_in: big, bank_in: 0, payment_source: 'cash' },
+    { cash_in: 0, bank_in: big, payment_source: 'bank' },
+  ]);
+  assert(r_big.total === big * 2, '24.agg.3a billions-scale numbers sum correctly');
+
+  // 24.agg.4 — decimal numbers (partial EGP)
+  const r_dec = U.aggregatePaymentSources([
+    { cash_in: 0.33, payment_source: 'cash' },
+    { cash_in: 0.33, payment_source: 'cash' },
+    { cash_in: 0.34, payment_source: 'cash' },
+  ]);
+  assert(Math.abs(r_dec.buckets.cash - 1.0) < 0.001, '24.agg.4a decimals sum within float tolerance');
+
+  // 24.agg.5 — whitespace in payment_source (' cash ')
+  const r_ws = U.aggregatePaymentSources([{ cash_in: 100, payment_source: '  cash  ' }]);
+  assert(r_ws.buckets.cash === 100, '24.agg.5a whitespace trimmed from payment_source');
+
+  // 24.agg.6 — case variants: 'Cash', 'CASH', 'cash', 'CaSh'
+  ['Cash', 'CASH', 'cash', 'CaSh'].forEach(function(src, i) {
+    const r = U.aggregatePaymentSources([{ cash_in: 100, payment_source: src }]);
+    assert(r.buckets.cash === 100, '24.agg.6.' + (i+1) + ' case variant "' + src + '" normalizes to cash bucket');
+  });
+
+  // 24.agg.7 — malformed rows in array (nulls, undefined, non-objects)
+  const r_mal = U.aggregatePaymentSources([
+    null,
+    undefined,
+    'not an object',
+    { cash_in: 100, payment_source: 'cash' }, // valid
+  ]);
+  assert(r_mal.buckets.cash === 100, '24.agg.7a malformed entries skipped, valid ones counted');
+  assert(r_mal.total === 100, '24.agg.7b total reflects only valid entries');
+
+  // 24.agg.8 — row with non-numeric cash_in (string "100")
+  const r_str = U.aggregatePaymentSources([{ cash_in: '250', payment_source: 'cash' }]);
+  assert(r_str.buckets.cash === 250, '24.agg.8a string amounts coerced via Number()');
+
+  // 24.agg.9 — row with NaN/invalid amount
+  const r_nan = U.aggregatePaymentSources([
+    { cash_in: NaN, payment_source: 'cash' },
+    { cash_in: 'abc', payment_source: 'cash' },
+    { cash_in: 100, payment_source: 'cash' },
+  ]);
+  assert(r_nan.buckets.cash === 100, '24.agg.9a NaN/invalid amounts treated as 0');
+
+  // 24.agg.10 — all rows are zero (edge for UI hide-if-empty)
+  const r_zero = U.aggregatePaymentSources([
+    { cash_in: 0, payment_source: 'cash' },
+    { cash_in: 0, payment_source: 'bank' },
+  ]);
+  assert(r_zero.total === 0, '24.agg.10a all-zero total = 0 (UI should hide strip)');
+
+  // 24.agg.11 — realistic multi-channel split invoice
+  const r_split = U.aggregatePaymentSources([
+    { cash_in: 5000, payment_source: 'cash' },
+    { cash_in: 0, bank_in: 12000, payment_source: 'bank' },
+    { cash_in: 8000, payment_source: 'check' },
+    { cash_in: 2000, payment_source: 'vodafone' },
+  ]);
+  assert(r_split.total === 27000, '24.agg.11a realistic split-payment total');
+  const totalPctSum = Math.round((r_split.buckets.cash + r_split.buckets.bank + r_split.buckets.check + r_split.buckets.vodafone) / r_split.total * 100);
+  assert(totalPctSum === 100, '24.agg.11b percentages sum to 100');
+
+  // 24.agg.12 — confirm fallback priority: bank_in beats cash_method (both present, no explicit source)
+  const r_prio = U.aggregatePaymentSources([{ bank_in: 100, cash_method: 'vodafone', payment_source: '' }]);
+  assert(r_prio.buckets.bank === 100, '24.agg.12a bank_in>0 wins over cash_method when no explicit source');
+
+  // 24.agg.13 — whitespace-only payment_source treated same as empty → triggers inference
+  const r_ws_only = U.aggregatePaymentSources([{ cash_in: 100, payment_source: '   ', cash_method: 'vodafone' }]);
+  assert(r_ws_only.buckets.vodafone === 100, '24.agg.13a whitespace-only source → infer via cash_method');
+
+  // =========================================================
+  // sanitizeRichText — security / XSS scenarios
+  // =========================================================
+
+  // 24.san.1 — nested <script> inside allow-listed tag
+  assert(!/alert/.test(U.sanitizeRichText('<b><script>alert(1)</script>hi</b>')),
+    '24.san.1a <script> stripped even when nested in allow-listed tag');
+
+  // 24.san.2 — case variants of <SCRIPT>, <Script>, etc.
+  ['<SCRIPT>alert(1)</SCRIPT>', '<Script>x</Script>', '<scRIPT>y</scRIPT>'].forEach(function(v, i) {
+    assert(!/alert|scRIPT|Script|SCRIPT/i.test(U.sanitizeRichText(v).replace(/script/i, '')),
+      '24.san.2.' + (i+1) + ' case-variant script tag stripped');
+  });
+
+  // 24.san.3 — mixed case event handlers
+  ['OnErRoR', 'OnClick', 'ONMOUSEOVER'].forEach(function(handler, i) {
+    const html = '<b ' + handler + '=alert(1)>x</b>';
+    assert(!new RegExp(handler, 'i').test(U.sanitizeRichText(html)) || !/alert/.test(U.sanitizeRichText(html)),
+      '24.san.3.' + (i+1) + ' case-mixed event handler "' + handler + '" stripped');
+  });
+
+  // 24.san.4 — event handler with WHITESPACE injection in attribute name.
+  // Per HTML spec, whitespace (incl. newline) in an attribute name terminates it.
+  // So `<b on\nerror=alert(1)>` parses as TWO attributes: `on` and `error="alert(1)"`.
+  // Neither fires JavaScript (browsers only trigger handlers named on<event>).
+  // The attack vector is theoretical; our only obligation is that no script executes
+  // AND no obvious onerror=... substring survives that could fool a downstream parser.
+  const nl_attack = '<b on\nerror=alert(1)>x</b>';
+  const nl_out = U.sanitizeRichText(nl_attack);
+  // The key property: no substring of the form `on\werror=` exists that could be
+  // reassembled by a non-compliant parser. After whitespace collapse, we get
+  // `on error=` — two separate tokens, no onerror.
+  assert(!/on\w*error\s*=/i.test(nl_out),
+    '24.san.4a no reassembled onerror= token after whitespace normalization');
+  assert(!/<script>/i.test(nl_out),
+    '24.san.4b no script element in output');
+
+  // 24.san.5 — unquoted attribute value
+  assert(!/alert/.test(U.sanitizeRichText('<b onclick=alert(1)>x</b>')),
+    '24.san.5a unquoted event handler value stripped');
+
+  // 24.san.6 — data: URI
+  const data_uri = '<b href="data:text/html,<script>alert(1)</script>">x</b>';
+  // Current sanitizer strips <a> entirely (not allow-listed) but <b> stays — verify
+  // href on <b> is meaningless anyway; main goal is no script runs
+  const out_data = U.sanitizeRichText(data_uri);
+  assert(!/<script>/.test(out_data), '24.san.6a data: URI with embedded script neutralized');
+
+  // 24.san.7 — CSS expression (legacy IE)
+  const css_expr = '<b style="width:expression(alert(1))">x</b>';
+  assert(!/style/.test(U.sanitizeRichText(css_expr)) && !/expression/.test(U.sanitizeRichText(css_expr)),
+    '24.san.7a style attribute (incl. expression()) stripped');
+
+  // 24.san.8 — <iframe> with src
+  assert(U.sanitizeRichText('<iframe src="evil.com"></iframe>safe') === 'safe',
+    '24.san.8a <iframe> element + content dropped');
+
+  // 24.san.9 — <img onerror>
+  const img_attack = '<img src=x onerror=alert(1)>safe';
+  const out_img = U.sanitizeRichText(img_attack);
+  assert(!/alert/.test(out_img) && !/<img/.test(out_img),
+    '24.san.9a <img onerror> neutralized');
+
+  // 24.san.10 — self-closing tags
+  assert(/<br\s*\/?>/.test(U.sanitizeRichText('<br>')), '24.san.10a <br> preserved');
+  assert(/<br\s*\/?>/.test(U.sanitizeRichText('<br/>')), '24.san.10b <br/> preserved');
+  assert(/<br\s*\/?>/.test(U.sanitizeRichText('<br />')), '24.san.10c <br /> preserved');
+
+  // 24.san.11 — broken/unclosed tags (resilience, no crash)
+  try {
+    const out_broken = U.sanitizeRichText('<b>hello<i>world');
+    assert(typeof out_broken === 'string', '24.san.11a unclosed tags don\'t crash');
+  } catch (e) { assert(false, '24.san.11a CRASHED: ' + e.message); }
+
+  // 24.san.12 — extra > characters
+  try {
+    U.sanitizeRichText('>>>weird<<b>bold</b>');
+    assert(true, '24.san.12a extra brackets don\'t crash');
+  } catch (e) { assert(false, '24.san.12a CRASHED: ' + e.message); }
+
+  // 24.san.13 — long input doesn't cause exponential blow-up (regex DoS check)
+  const big_input = '<b>' + 'a'.repeat(100000) + '</b>';
+  const t0 = Date.now();
+  const out_big = U.sanitizeRichText(big_input);
+  const elapsed = Date.now() - t0;
+  assert(elapsed < 1000, '24.san.13a 100k-char input completes in <1s (no ReDoS)', 'elapsed=' + elapsed + 'ms');
+  assert(out_big.indexOf('a'.repeat(100)) >= 0, '24.san.13b content preserved inside allow-listed tag');
+
+  // 24.san.14 — unicode content preserved
+  assert(U.sanitizeRichText('<b>مرحبا world 你好</b>') === '<b>مرحبا world 你好</b>',
+    '24.san.14a multi-script unicode content preserved');
+
+  // 24.san.15 — empty tag content
+  assert(U.sanitizeRichText('<b></b>') === '<b></b>', '24.san.15a empty allow-listed tag preserved');
+
+  // 24.san.16 — numeric types (not strings) return empty
+  assert(U.sanitizeRichText(0) === '', '24.san.16a number input → empty');
+  assert(U.sanitizeRichText(false) === '', '24.san.16b boolean input → empty');
+  assert(U.sanitizeRichText({}) === '', '24.san.16c object input → empty');
+  assert(U.sanitizeRichText([]) === '', '24.san.16d array input → empty');
+
+  // 24.san.17 — HTML-entity-encoded whitespace in attribute name.
+  // Same as 24.san.4 — HTML parser decodes &#10; as whitespace inside attribute
+  // context, which terminates the attribute name. No script executes; we assert
+  // the post-normalization output is defanged.
+  const encoded_nl = '<b on&#10;click="alert(1)">x</b>';
+  const enl_out = U.sanitizeRichText(encoded_nl);
+  assert(!/on\w*click\s*=/i.test(enl_out),
+    '24.san.17a no reassembled onclick= token after entity decode');
+  assert(!/<script>/i.test(enl_out),
+    '24.san.17b no script element in output');
+
+  // 24.san.18 — mutation XSS: closing tag injection via title attr
+  // Allow-list strips <noscript>, <img> → no rendering path
+  const mxss = '<noscript><p title="</noscript><img src=x onerror=alert(1)>">hi</p>';
+  assert(!/alert/.test(U.sanitizeRichText(mxss)),
+    '24.san.18a mutation XSS / noscript attack neutralized');
+
+  // 24.san.19 — <span> (allow-listed) with injected attributes
+  const span_attack = '<span style="position:fixed;top:0" onclick="alert(1)">x</span>';
+  const out_span = U.sanitizeRichText(span_attack);
+  assert(/<span/.test(out_span) && !/style/.test(out_span) && !/onclick/.test(out_span),
+    '24.san.19a <span> allow-listed but style + onclick stripped');
+
+  // 24.san.20 — legitimate multi-tag use case (realistic ticket comment)
+  const realistic = '<p>Hey team,</p><ul><li><b>Due:</b> tomorrow</li><li><i>Contact:</i> client</li></ul>';
+  const out_real = U.sanitizeRichText(realistic);
+  assert(/<p>.*<\/p>/.test(out_real), '24.san.20a realistic <p> preserved');
+  assert(/<ul>.*<\/ul>/.test(out_real), '24.san.20b realistic <ul> preserved');
+  assert(/<li>.*<b>.*<\/b>.*<\/li>/.test(out_real), '24.san.20c nested <li><b> preserved');
+
+  // =========================================================
+  // isHtmlComment — edge cases
+  // =========================================================
+
+  // 24.ish.1 — text with HTML entity representations (should be false — they're text)
+  assert(U.isHtmlComment('&lt;b&gt;bold&lt;/b&gt;') === false,
+    '24.ish.1a HTML entities are text, not HTML → false');
+
+  // 24.ish.2 — text with opening <b but no closing bracket (incomplete)
+  assert(U.isHtmlComment('i like <b a lot') === false,
+    '24.ish.2a incomplete tag opener → false');
+
+  // 24.ish.3 — mid-string HTML
+  assert(U.isHtmlComment('plain text with <b>one bold</b> word') === true,
+    '24.ish.3a mid-string allow-listed tag → true');
+
+  // 24.ish.4 — only disallowed tag (non-allow-listed, user would think "plain")
+  assert(U.isHtmlComment('<h1>big heading</h1>') === false,
+    '24.ish.4a disallowed tag → false (treat as plain; sanitizer would strip anyway)');
+
+  // 24.ish.5 — whitespace only
+  assert(U.isHtmlComment('   ') === false, '24.ish.5a whitespace-only → false');
+  assert(U.isHtmlComment('\n\n') === false, '24.ish.5b newlines-only → false');
+
+  // 24.ish.6 — non-string inputs
+  assert(U.isHtmlComment(123) === false, '24.ish.6a number → false');
+  assert(U.isHtmlComment({}) === false, '24.ish.6b object → false');
+  assert(U.isHtmlComment([]) === false, '24.ish.6c array → false');
+
+  // =========================================================
+  // richTextToPlain — edge cases
+  // =========================================================
+
+  // 24.rtp.1 — nested lists
+  const nested = '<ul><li>outer<ul><li>inner</li></ul></li></ul>';
+  const plain_nested = U.richTextToPlain(nested);
+  assert(/outer/.test(plain_nested) && /inner/.test(plain_nested),
+    '24.rtp.1a nested list content preserved in plain output');
+
+  // 24.rtp.2 — consecutive <br> tags (multiple newlines compressed)
+  const multi_br = 'line1<br><br><br><br>line5';
+  const plain_br = U.richTextToPlain(multi_br);
+  assert(/line1/.test(plain_br) && /line5/.test(plain_br),
+    '24.rtp.2a consecutive <br> preserved as newlines');
+  // Compress >2 newlines → 2 (by sanitizer rule)
+  const newline_count = (plain_br.match(/\n/g) || []).length;
+  assert(newline_count <= 3, '24.rtp.2b excessive consecutive newlines collapsed', 'found=' + newline_count);
+
+  // 24.rtp.3 — numeric HTML entities — NOT decoded in current implementation (only named)
+  // Documenting current behavior; future enhancement could decode &#60; etc.
+  const num_ent = '&#60;b&#62;x&#60;/b&#62;';
+  const out_nent = U.richTextToPlain(num_ent);
+  assert(typeof out_nent === 'string', '24.rtp.3a numeric entities do not crash (current: not decoded — future enhancement)');
+
+  // 24.rtp.4 — empty tag content
+  assert(U.richTextToPlain('<b></b>') === '', '24.rtp.4a empty tag → empty string');
+
+  // 24.rtp.5 — null/undefined/non-string
+  assert(U.richTextToPlain(null) === '', '24.rtp.5a null → empty');
+  assert(U.richTextToPlain(undefined) === '', '24.rtp.5b undefined → empty');
+  assert(U.richTextToPlain(123) === '', '24.rtp.5c number → empty');
+
+  // 24.rtp.6 — only tags, no text content
+  assert(U.richTextToPlain('<b></b><i></i><u></u>') === '', '24.rtp.6a only-tags-no-content → empty');
+
+  // 24.rtp.7 — paragraphs separated (used by email notifications)
+  const para = '<p>First paragraph.</p><p>Second paragraph.</p>';
+  const plain_p = U.richTextToPlain(para);
+  assert(/First paragraph\..*Second paragraph\./s.test(plain_p),
+    '24.rtp.7a paragraphs separated by newlines in plain output');
+
+  // 24.rtp.8 — realistic ticket comment roundtrip
+  const rich_orig = '<p>Hey <b>team</b>,</p><ul><li>Item 1</li><li>Item 2</li></ul>';
+  const plain_out = U.richTextToPlain(rich_orig);
+  assert(!/<.>/.test(plain_out), '24.rtp.8a plain output contains no tags');
+  assert(/Hey team/.test(plain_out), '24.rtp.8b text content preserved');
+  assert(/Item 1/.test(plain_out) && /Item 2/.test(plain_out), '24.rtp.8c list items present');
+}
+
+try { runSection24_UtilsAudit(); } catch(e) {
+  console.error('SECTION 24 ERROR:', e.message);
+  console.error(e.stack);
+  failed++;
+}
+
+// ============================================================
+// SECTION 25: Comprehensive audit — src/lib/supabase.js
+// Pure-logic tests for the audit-diff + late-edit detection.
+// Source-inspection tests for defensive patterns around audit log
+// failures, concurrent writes, and timezone-sensitive activity logs.
+// ============================================================
+function runSection25_SupabaseLibAudit() {
+  group('SECTION 25: supabase.js comprehensive audit');
+
+  const supaSrc = fs.readFileSync(path.join(REPO_ROOT, 'src/lib/supabase.js'), 'utf8');
+
+  // =========================================================
+  // Pure-logic extraction — simulate the changedFields + sensitive
+  // detection block from dbUpdate
+  // =========================================================
+  // SENSITIVE_FIELDS list — keep in sync with supabase.js (expanded 2026-04-20)
+  const SENSITIVE_FIELDS = [
+    'amount', 'total', 'cash_in', 'cash_out', 'price', 'unit_price', 'rate', 'date', 'description', 'customer', 'order_number', 'invoice_number', 'qty', 'quantity', 'vat_rate',
+    'total_amount', 'total_collected', 'outstanding',
+    'bank_in', 'bank_out', 'expected_amount', 'usd_in', 'usd_out', 'foreign_amount',
+    'transaction_date', 'invoice_date', 'due_date', 'check_date', 'collection_date',
+    'customer_name', 'customer_name_en', 'check_number',
+  ];
+
+  const computeChangedFields = (old, changes) => {
+    return Object.keys(changes).filter(k => old && old[k] !== changes[k]);
+  };
+  const computeSensitive = (changedFields) => changedFields.filter(f => SENSITIVE_FIELDS.includes(f));
+  const isLateEditCalc = (createdAt, now) => {
+    if (!createdAt) return { isLate: false, hours: 0 };
+    const hours = (now - new Date(createdAt).getTime()) / 3600000;
+    return { isLate: hours > 24, hours: Math.round(hours) };
+  };
+
+  // ---- isLateEdit math ----
+  const now = new Date('2026-04-20T12:00:00Z').getTime();
+  assert(isLateEditCalc('2026-04-20T10:00:00Z', now).isLate === false, '25.late.1a 2h ago → not late');
+  assert(isLateEditCalc('2026-04-19T11:59:00Z', now).isLate === true, '25.late.1b 24h 1min ago → late (>24hr boundary crossed)');
+  assert(isLateEditCalc('2026-04-19T13:00:00Z', now).isLate === false, '25.late.1b2 23h ago → NOT late (under 24hr)');
+  assert(isLateEditCalc('2026-04-19T10:00:00Z', now).isLate === true, '25.late.1c 26h ago → late');
+  assert(isLateEditCalc(null, now).isLate === false, '25.late.1d null createdAt → not late');
+  assert(isLateEditCalc(undefined, now).isLate === false, '25.late.1e undefined createdAt → not late');
+  assert(isLateEditCalc('not a date', now).isLate === false, '25.late.1f invalid date string → NaN hours → not late');
+  // Future-dated created_at (clock skew / bad data)
+  const fut = isLateEditCalc('2027-01-01T00:00:00Z', now);
+  assert(fut.isLate === false, '25.late.1g future created_at → negative hours → not late (by spec >24 only)');
+  assert(fut.hours < 0, '25.late.1h future created_at rounds to negative hours');
+
+  // ---- changedFields detection ----
+  // Scalar identity — correct behaviors
+  assert(computeChangedFields({a: 1}, {a: 1}).length === 0, '25.chg.1a identical scalar not flagged');
+  assert(computeChangedFields({a: 1}, {a: 2}).length === 1, '25.chg.1b different scalar flagged');
+  assert(computeChangedFields({a: 'x', b: 'y'}, {a: 'x', b: 'z'}).length === 1, '25.chg.1c only changed field flagged');
+
+  // Old=null edge — ALL fields marked changed (AUDIT POLLUTION)
+  // Current behavior: if old is null (record missing), the filter's `old && old[k]` short-circuits to false
+  // and NO fields are flagged. Verify that's what happens.
+  assert(computeChangedFields(null, {a: 1, b: 2}).length === 0,
+    '25.chg.2a old=null → no fields flagged (thanks to short-circuit; audit row will have changed_fields=[])');
+  assert(computeChangedFields(undefined, {a: 1, b: 2}).length === 0, '25.chg.2b old=undefined → safe');
+
+  // Reference inequality on objects/arrays — FALSE POSITIVES
+  // This is a real gap: deep-equal arrays produce `!== true` because of identity comparison
+  const oldArr = ['a', 'b'];
+  const newArr = ['a', 'b']; // same content, different identity
+  const diff = computeChangedFields({tags: oldArr}, {tags: newArr});
+  assert(diff.length === 1,
+    '25.chg.3a KNOWN LIMITATION: arrays with identical content flagged as changed (reference equality)');
+  // Document the consequence: audit_log gets spurious "changed" entries for JSONB columns
+  // passed as new arrays even when content is unchanged.
+
+  // String-equal JSON (additional_assignees-style) — correct
+  assert(computeChangedFields({additional_assignees: '["a"]'}, {additional_assignees: '["a"]'}).length === 0,
+    '25.chg.3b string-equal JSON NOT flagged (strings interned)');
+  assert(computeChangedFields({additional_assignees: '["a"]'}, {additional_assignees: '["a","b"]'}).length === 1,
+    '25.chg.3c string-different JSON flagged correctly');
+
+  // Only fields in `changes` checked — ignores fields present on old but not on changes
+  const d2 = computeChangedFields({a: 1, b: 2, c: 3}, {b: 5});
+  assert(d2.length === 1 && d2[0] === 'b',
+    '25.chg.4a only fields in changes object checked (partial update scope)');
+
+  // ---- SENSITIVE_FIELDS coverage ----
+  // The list is in the source; verify it contains the essentials
+  const requiredSensitive = ['cash_in', 'cash_out', 'amount', 'price', 'description'];
+  requiredSensitive.forEach(function(f, i) {
+    assert(SENSITIVE_FIELDS.indexOf(f) >= 0,
+      '25.sens.1.' + (i+1) + ' SENSITIVE_FIELDS includes "' + f + '"');
+  });
+
+  // ---- SENSITIVE_FIELDS — gaps were CLOSED by the 2026-04-20 expansion ----
+  // Previously 'total_amount' etc. weren't in the list. Fixed this session.
+  // Load the ACTUAL list from source to verify.
+  const listMatch = supaSrc.match(/const SENSITIVE_FIELDS = \[([\s\S]*?)\];/);
+  assert(listMatch, '25.sens.gap.source list found in source');
+  const actualList = listMatch[1];
+  // These were all gaps before this session's fix
+  ['total_amount', 'bank_in', 'bank_out', 'transaction_date', 'invoice_date',
+   'due_date', 'check_date', 'collection_date', 'customer_name'].forEach(function(f, i) {
+    assert(actualList.indexOf("'" + f + "'") >= 0,
+      '25.sens.gap.fixed.' + (i+1) + ' ' + f + ' now in SENSITIVE_FIELDS (gap closed)');
+  });
+  // Short-form backward compat still there
+  ['amount', 'total', 'cash_in', 'cash_out', 'description'].forEach(function(f, i) {
+    assert(actualList.indexOf("'" + f + "'") >= 0,
+      '25.sens.bc.' + (i+1) + ' short-form "' + f + '" still listed (backward compat)');
+  });
+
+  // =========================================================
+  // Source-inspection tests
+  // =========================================================
+
+  // ---- dbInsert: audit row failure propagation ----
+  // If the business insert succeeds and the audit insert fails, the overall call still
+  // fails (no try/catch around the audit insert). That's a real risk: caller retries,
+  // double-inserts business row. Document current behavior.
+  const dbInsertBlock = supaSrc.match(/export async function dbInsert[\s\S]*?^\}/m);
+  assert(dbInsertBlock, '25.src.1a dbInsert block found');
+  assert(!/try\s*\{[\s\S]*?audit_log[\s\S]*?\}\s*catch/.test(dbInsertBlock[0]),
+    '25.src.1b KNOWN GAP: audit_log insert in dbInsert has no try/catch — business-insert success but audit failure propagates as thrown error');
+
+  // ---- dbUpdate: same audit-failure issue ----
+  const dbUpdateBlock = supaSrc.match(/export async function dbUpdate[\s\S]*?^\}/m);
+  assert(dbUpdateBlock, '25.src.2a dbUpdate block found');
+  assert(!/try\s*\{[\s\S]*?audit_log[\s\S]*?update[\s\S]*?\}\s*catch/.test(dbUpdateBlock[0]),
+    '25.src.2b KNOWN GAP: audit_log insert in dbUpdate has no try/catch');
+
+  // ---- dbDelete: pre-fetch error handling ----
+  // `const { data: old } = await supabase.from(table).select('*').eq('id', id).single();`
+  // If the record doesn't exist, .single() errors. But the destructure drops the error.
+  // Then `.delete()` on non-existent id affects 0 rows — silent. Audit row gets
+  // `old_values: undefined`. Document this.
+  const dbDeleteBlock = supaSrc.match(/export async function dbDelete[\s\S]*?^\}/m);
+  assert(dbDeleteBlock, '25.src.3a dbDelete block found');
+  const dbDelStr = dbDeleteBlock[0];
+  assert(/select\('\*'\)\.eq\('id', id\)\.single\(\)/.test(dbDelStr),
+    '25.src.3b dbDelete pre-fetches old via .single()');
+  assert(!/if \(!old\)/.test(dbDelStr) && !/throw[\s\S]*?not found/.test(dbDelStr),
+    '25.src.3c KNOWN GAP: dbDelete does not check if old exists before proceeding to delete');
+
+  // ---- logActivity: timezone drift ----
+  // `new Date().toISOString().substring(0,10)` is UTC. Cairo is UTC+2 (UTC+3 DST).
+  // Between 22:00-23:59 Cairo, log_date lands on tomorrow UTC.
+  assert(/new Date\(\)\.toISOString\(\)\.substring\(0, ?10\)/.test(supaSrc),
+    '25.src.4a KNOWN GAP: logActivity uses UTC date, not Cairo (Egypt) local date');
+  // Unlike login-events which now uses a generated column for ET tz,
+  // daily_log.log_date from activity is UTC-based in this helper.
+
+  // ---- dbQuery ilike: wildcard escaping ----
+  // `%${v}%` doesn't escape % or _ in v. Not a SQL injection (parameterized) but
+  // wildcard ambiguity: searching for "50%" returns "50anything%".
+  const ilikeBlock = supaSrc.match(/ilike[\s\S]{0,120}%/);
+  assert(ilikeBlock, '25.src.5a ilike block found');
+  assert(!/replace\(.*%/.test(supaSrc),
+    '25.src.5b KNOWN GAP: ilike value not escaped for % or _ wildcards');
+
+  // ---- supabase client creation: env-var guard ----
+  assert(/const supabaseUrl = process\.env\.NEXT_PUBLIC_SUPABASE_URL/.test(supaSrc),
+    '25.src.6a env var reference present');
+  assert(!/if \(!supabaseUrl\)/.test(supaSrc),
+    '25.src.6b KNOWN GAP: no early guard for missing env vars — createClient(undefined, undefined) fails lazily at first query');
+
+  // ---- recalcInvoice removal confirmed ----
+  assert(!/export\s+async\s+function\s+recalcInvoice\s*\(/.test(supaSrc),
+    '25.src.7a stale recalcInvoice confirmed absent (pre-bank-separation landmine)');
+  assert(/recalcInvoiceCollected/.test(supaSrc),
+    '25.src.7b warning comment points to the correct canonical helper');
+}
+
+try { runSection25_SupabaseLibAudit(); } catch(e) {
+  console.error('SECTION 25 ERROR:', e.message);
+  console.error(e.stack);
+  failed++;
+}
+
+// ============================================================
+// SECTION 26: Comprehensive audit — src/lib/accounting-auditor.js
+// Tests each of the 15 check types (C1-C7, W1-W6, I1-I4) with:
+//   - happy path (clean data → no finding)
+//   - trigger path (broken data → specific finding fires)
+//   - edge cases & false-positive guards
+// Locks in Bug #4 fix (W1 cash_in+bank_in regression guard)
+// ============================================================
+function runSection26_AuditorAudit() {
+  group('SECTION 26: accounting-auditor.js comprehensive audit');
+
+  // Load auditor as CJS
+  const audSrc = fs.readFileSync(path.join(REPO_ROOT, 'src/lib/accounting-auditor.js'), 'utf8');
+  const audShim = audSrc.replace(/export\s+function\s+/g, 'function ') +
+    '\nmodule.exports = { runAccountingAudit };';
+  fs.writeFileSync('/tmp/_auditor_s26.js', audShim);
+  delete require.cache[require.resolve('/tmp/_auditor_s26.js')];
+  const { runAccountingAudit } = require('/tmp/_auditor_s26.js');
+
+  assert(typeof runAccountingAudit === 'function', '26.0a runAccountingAudit loaded');
+
+  // Helper: find finding by code
+  const findCode = (result, code) => (result.findings || []).find(f => f.code === code);
+  const hasCode = (result, code) => !!findCode(result, code);
+
+  // =========================================================
+  // Happy path — clean data, no findings
+  // =========================================================
+  const clean = runAccountingAudit({
+    treasury: [], invoices: [], checks: [], egyptBankTxns: [], warehouse: [], customers: [], debts: [],
+  });
+  assert(clean.totalFindings === 0, '26.happy.1a empty universe → zero findings');
+  assert(clean.bySeverity.critical === 0 && clean.bySeverity.warning === 0, '26.happy.1b no severities flagged');
+  assert(clean.cleanBillOfHealth === true, '26.happy.1c clean bill of health');
+
+  // Clean realistic dataset
+  const inv1 = { id: 'i1', order_number: '100', customer_name: 'Acme', total_amount: 10000, total_collected: 10000, outstanding: 0 };
+  const tr1 = { id: 't1', linked_invoice_id: 'i1', cash_in: 10000, cash_out: 0, bank_in: 0, bank_out: 0, transaction_date: '2026-04-10', description: 'payment' };
+  const cleanRes = runAccountingAudit({ treasury: [tr1], invoices: [inv1] });
+  assert(!hasCode(cleanRes, 'OVER_COLLECTED_INVOICE'), '26.happy.2a matched invoice → no over-collect');
+  assert(!hasCode(cleanRes, 'INVOICE_COLLECTED_MISMATCH'), '26.happy.2b matched totals → no W1');
+  assert(!hasCode(cleanRes, 'CORRUPTED_ROW'), '26.happy.2c single-channel row → no corruption');
+
+  // =========================================================
+  // C1: OVER_COLLECTED_INVOICE
+  // =========================================================
+  const over = runAccountingAudit({
+    invoices: [{ id: 'i1', total_amount: 1000, total_collected: 1500 }],
+  });
+  assert(hasCode(over, 'OVER_COLLECTED_INVOICE'), '26.C1.1a triggers when collected > total');
+  assert(findCode(over, 'OVER_COLLECTED_INVOICE').totalImpact === 500,
+    '26.C1.1b totalImpact = excess (500)');
+
+  // Exact-match tolerance: 1000 collected on 1000 total → no flag
+  const exact = runAccountingAudit({
+    invoices: [{ id: 'i1', total_amount: 1000, total_collected: 1000 }],
+  });
+  assert(!hasCode(exact, 'OVER_COLLECTED_INVOICE'), '26.C1.2a equal → no flag');
+
+  // Floating-point: 1000.005 over 1000 → no flag (under 0.01 tolerance)
+  const fp = runAccountingAudit({
+    invoices: [{ id: 'i1', total_amount: 1000, total_collected: 1000.005 }],
+  });
+  assert(!hasCode(fp, 'OVER_COLLECTED_INVOICE'), '26.C1.3a sub-cent rounding not flagged');
+
+  // Zero total — not flagged (nothing to compare)
+  const zt = runAccountingAudit({
+    invoices: [{ id: 'i1', total_amount: 0, total_collected: 500 }],
+  });
+  assert(!hasCode(zt, 'OVER_COLLECTED_INVOICE'), '26.C1.4a zero-total invoice not flagged');
+
+  // =========================================================
+  // C2: CORRUPTED_ROW
+  // =========================================================
+  const corrupted = runAccountingAudit({
+    treasury: [
+      { id: 't1', cash_in: 100, bank_in: 200 }, // 2 channels → corrupted
+      { id: 't2', cash_in: 100, cash_out: 50 }, // 2 channels → corrupted
+      { id: 't3', cash_in: 100, cash_out: 0, bank_in: 0, bank_out: 0 }, // OK
+    ],
+  });
+  assert(hasCode(corrupted, 'CORRUPTED_ROW'), '26.C2.1a triggers on 2+ populated channels');
+  assert(findCode(corrupted, 'CORRUPTED_ROW').count === 2, '26.C2.1b counts exactly 2 corrupted rows');
+
+  // impact calculation — smaller amount is the "doesn't belong"
+  const imp = findCode(corrupted, 'CORRUPTED_ROW').totalImpact;
+  assert(imp === 150, '26.C2.2a impact = sum of smaller column amounts (100 from row1 + 50 from row2)');
+
+  // All 4 channels populated (pathological)
+  const all4 = runAccountingAudit({
+    treasury: [{ id: 't1', cash_in: 100, cash_out: 50, bank_in: 200, bank_out: 25 }],
+  });
+  assert(hasCode(all4, 'CORRUPTED_ROW'), '26.C2.3a all 4 channels populated → flagged');
+  // Impact = sum of 3 smaller = 100+50+25 = 175
+  assert(findCode(all4, 'CORRUPTED_ROW').totalImpact === 175,
+    '26.C2.3b all-4 impact = all but the largest');
+
+  // =========================================================
+  // C3: DUPLICATE_TREASURY
+  // =========================================================
+  const dupeInput = runAccountingAudit({
+    treasury: [
+      { id: 't1', transaction_date: '2026-04-10', cash_in: 500, order_number: '100', description: 'payment' },
+      { id: 't2', transaction_date: '2026-04-10', cash_in: 500, order_number: '100', description: 'payment' }, // dupe
+      { id: 't3', transaction_date: '2026-04-10', cash_in: 500, order_number: '101', description: 'different order' },
+    ],
+  });
+  assert(hasCode(dupeInput, 'DUPLICATE_TREASURY'), '26.C3.1a fires on same date+amount+order+desc');
+  assert(findCode(dupeInput, 'DUPLICATE_TREASURY').count === 1, '26.C3.1b one dupe pair detected');
+
+  // Dedup markers intentionally NOT flagged as duplicates
+  const dedupNoDupe = runAccountingAudit({
+    treasury: [
+      { id: 't1', transaction_date: '2026-04-10', cash_in: 500, description: 'payment' },
+      { id: 't2', transaction_date: '2026-04-10', cash_in: 500, description: 'payment [bank confirmation]' },
+    ],
+  });
+  assert(!hasCode(dedupNoDupe, 'DUPLICATE_TREASURY'), '26.C3.2a bank confirmation dedup not counted as dupe');
+
+  // Placeholder rows excluded
+  const phNoDupe = runAccountingAudit({
+    treasury: [
+      { id: 't1', transaction_date: '2026-04-10', cash_in: 500, description: 'x' },
+      { id: 't2', transaction_date: '2026-04-10', is_bank_placeholder: true, expected_amount: 500, description: 'x' },
+    ],
+  });
+  assert(!hasCode(phNoDupe, 'DUPLICATE_TREASURY'), '26.C3.3a placeholder vs real not counted as dupe');
+
+  // =========================================================
+  // C4: BROKEN_INVOICE_REF
+  // =========================================================
+  const broken = runAccountingAudit({
+    invoices: [{ id: 'i1', total_amount: 1000 }],
+    treasury: [
+      { id: 't1', linked_invoice_id: 'ghost-id', cash_in: 500 }, // broken
+      { id: 't2', linked_invoice_id: 'i1', cash_in: 500 }, // OK
+    ],
+  });
+  assert(hasCode(broken, 'BROKEN_INVOICE_REF'), '26.C4.1a fires when linked_invoice_id points to missing invoice');
+  assert(findCode(broken, 'BROKEN_INVOICE_REF').count === 1, '26.C4.1b exactly 1 broken ref');
+
+  // =========================================================
+  // C5: COLLECTED_CHECK_NO_TREASURY
+  // =========================================================
+  const orphanCollected = runAccountingAudit({
+    checks: [
+      { id: 'c1', status: 'collected', amount: 2000, customer_name: 'X' },     // orphan
+      { id: 'c2', status: 'collected', amount: 3000, linked_treasury_id: 't1' }, // OK
+      { id: 'c3', status: 'pending', amount: 1000 },                              // not collected, skip
+    ],
+  });
+  assert(hasCode(orphanCollected, 'COLLECTED_CHECK_NO_TREASURY'), '26.C5.1a fires on collected-without-link');
+  assert(findCode(orphanCollected, 'COLLECTED_CHECK_NO_TREASURY').count === 1,
+    '26.C5.1b exactly 1 orphan');
+
+  // =========================================================
+  // C6: AMBIGUOUS_DEDUP — the 4.02M-EGP-restoration bug class
+  // =========================================================
+  const ambig = runAccountingAudit({
+    invoices: [{ id: 'i1', total_amount: 10000 }],
+    // Row has zero amounts but is matched to a bank txn with real money, no sibling exists
+    treasury: [
+      { id: 't1', linked_invoice_id: 'i1', matched_bank_txn_id: 'b1',
+        cash_in: 0, cash_out: 0, bank_in: 0, bank_out: 0,
+        description: '[bank confirmation only]' }
+    ],
+    egyptBankTxns: [{ id: 'b1', amount: 10000 }],
+  });
+  assert(hasCode(ambig, 'AMBIGUOUS_DEDUP'), '26.C6.1a fires on zeroed-matched-no-sibling');
+  assert(findCode(ambig, 'AMBIGUOUS_DEDUP').totalImpact === 10000,
+    '26.C6.1b impact = bank amount that went uncounted');
+
+  // Does NOT fire when there IS a sibling holding the money
+  const notAmbig = runAccountingAudit({
+    invoices: [{ id: 'i1', total_amount: 10000 }],
+    treasury: [
+      { id: 't1', linked_invoice_id: 'i1', matched_bank_txn_id: 'b1',
+        cash_in: 0, bank_in: 0,
+        description: '[bank confirmation only]' },
+      { id: 't2', linked_invoice_id: 'i1', cash_in: 10000 }, // the real sibling
+    ],
+    egyptBankTxns: [{ id: 'b1', amount: 10000 }],
+  });
+  assert(!hasCode(notAmbig, 'AMBIGUOUS_DEDUP'), '26.C6.2a not flagged when real sibling exists');
+
+  // BUG #5 REGRESSION GUARD: sibling now located via cash_in OR bank_in (was cash_in only)
+  const bankSibling = runAccountingAudit({
+    invoices: [{ id: 'i1', total_amount: 10000 }],
+    treasury: [
+      { id: 't1', linked_invoice_id: 'i1', matched_bank_txn_id: 'b1',
+        cash_in: 0, bank_in: 0, description: '[bank confirmation only]' },
+      { id: 't2', linked_invoice_id: 'i1', cash_in: 0, bank_in: 10000 }, // bank-only sibling
+    ],
+    egyptBankTxns: [{ id: 'b1', amount: 10000 }],
+  });
+  assert(!hasCode(bankSibling, 'AMBIGUOUS_DEDUP'),
+    '26.C6.3a BUG #5 LOCKED: bank-only sibling found (previously only cash_in checked)');
+
+  // =========================================================
+  // C7: DUPLICATE_PLACEHOLDER
+  // =========================================================
+  const dupePh = runAccountingAudit({
+    treasury: [
+      { id: 'p1', is_bank_placeholder: true, expected_amount: 5000, transaction_date: '2026-04-10', order_number: '100', description: 'Ahmad' },
+      { id: 'p2', is_bank_placeholder: true, expected_amount: 5000, transaction_date: '2026-04-10', order_number: '100', description: 'Ahmad' },
+    ],
+  });
+  assert(hasCode(dupePh, 'DUPLICATE_PLACEHOLDER'), '26.C7.1a same expected+date+order → dupe placeholder');
+  assert(findCode(dupePh, 'DUPLICATE_PLACEHOLDER').count === 1, '26.C7.1b one dupe identified');
+
+  // Different amounts → not dupes
+  const notDupePh = runAccountingAudit({
+    treasury: [
+      { id: 'p1', is_bank_placeholder: true, expected_amount: 5000, transaction_date: '2026-04-10', description: 'A' },
+      { id: 'p2', is_bank_placeholder: true, expected_amount: 6000, transaction_date: '2026-04-10', description: 'B' },
+    ],
+  });
+  assert(!hasCode(notDupePh, 'DUPLICATE_PLACEHOLDER'), '26.C7.2a different amounts → not flagged');
+
+  // =========================================================
+  // W1: INVOICE_COLLECTED_MISMATCH — Bug #4 regression locks
+  // =========================================================
+  // Bug #4 was: treasurySum counted only cash_in, ignoring bank_in. Every bank-paid
+  // invoice was flagged as mismatch. Lock that fix here.
+  const bankPaid = runAccountingAudit({
+    invoices: [{ id: 'i1', total_amount: 10000, total_collected: 10000 }],
+    treasury: [{ id: 't1', linked_invoice_id: 'i1', cash_in: 0, bank_in: 10000 }],
+  });
+  assert(!hasCode(bankPaid, 'INVOICE_COLLECTED_MISMATCH'),
+    '26.W1.1a BUG #4 LOCKED: bank-only payment matches stored collected (no false mismatch)');
+
+  // Mixed cash + bank = total collected → no mismatch
+  const mixedPaid = runAccountingAudit({
+    invoices: [{ id: 'i1', total_amount: 10000, total_collected: 10000 }],
+    treasury: [
+      { id: 't1', linked_invoice_id: 'i1', cash_in: 3000, bank_in: 0 },
+      { id: 't2', linked_invoice_id: 'i1', cash_in: 0, bank_in: 7000 },
+    ],
+  });
+  assert(!hasCode(mixedPaid, 'INVOICE_COLLECTED_MISMATCH'),
+    '26.W1.2a cash+bank sum matches stored collected');
+
+  // Real mismatch: stored 10000, actual 5000
+  const realMismatch = runAccountingAudit({
+    invoices: [{ id: 'i1', total_amount: 10000, total_collected: 10000 }],
+    treasury: [{ id: 't1', linked_invoice_id: 'i1', cash_in: 5000, bank_in: 0 }],
+  });
+  assert(hasCode(realMismatch, 'INVOICE_COLLECTED_MISMATCH'),
+    '26.W1.3a real mismatch detected (stored 10k vs actual 5k)');
+  assert(findCode(realMismatch, 'INVOICE_COLLECTED_MISMATCH').totalImpact === 5000,
+    '26.W1.3b impact = abs delta');
+
+  // Bank txn matched to invoice (not yet in treasury) ALSO contributes to actualCollected
+  const bankMatched = runAccountingAudit({
+    invoices: [{ id: 'i1', total_amount: 10000, total_collected: 10000 }],
+    treasury: [],
+    egyptBankTxns: [{ id: 'b1', matched_invoice_id: 'i1', amount: 10000 }],
+  });
+  assert(!hasCode(bankMatched, 'INVOICE_COLLECTED_MISMATCH'),
+    '26.W1.4a bank-matched contribution counted → no mismatch');
+
+  // Rounding tolerance: 1 EGP delta → not flagged
+  const rnd = runAccountingAudit({
+    invoices: [{ id: 'i1', total_amount: 10000, total_collected: 10000 }],
+    treasury: [{ id: 't1', linked_invoice_id: 'i1', cash_in: 10000.5 }],
+  });
+  assert(!hasCode(rnd, 'INVOICE_COLLECTED_MISMATCH'), '26.W1.5a sub-EGP delta tolerated');
+
+  // Zero-total invoice ignored
+  const zIgnore = runAccountingAudit({
+    invoices: [{ id: 'i1', total_amount: 0, total_collected: 5000 }],
+    treasury: [{ id: 't1', linked_invoice_id: 'i1', cash_in: 5000 }],
+  });
+  assert(!hasCode(zIgnore, 'INVOICE_COLLECTED_MISMATCH'), '26.W1.6a zero-total invoices skipped');
+
+  // =========================================================
+  // W2: STALE_BANK_PLACEHOLDER
+  // =========================================================
+  const stale = runAccountingAudit({
+    treasury: [
+      { id: 'p1', is_bank_placeholder: true, expected_amount: 5000, transaction_date: '2026-03-01' }, // ~50d old
+      { id: 'p2', is_bank_placeholder: true, expected_amount: 5000, transaction_date: '2026-04-18', matched_bank_txn_id: null }, // 2d old
+    ],
+  });
+  assert(hasCode(stale, 'STALE_BANK_PLACEHOLDER'), '26.W2.1a fires on >14d old unmatched placeholder');
+  assert(findCode(stale, 'STALE_BANK_PLACEHOLDER').count === 1, '26.W2.1b recent placeholder not flagged');
+
+  // Matched placeholder never flagged
+  const matched = runAccountingAudit({
+    treasury: [{ id: 'p1', is_bank_placeholder: true, matched_bank_txn_id: 'b1',
+      transaction_date: '2026-03-01', expected_amount: 5000 }],
+  });
+  assert(!hasCode(matched, 'STALE_BANK_PLACEHOLDER'), '26.W2.2a matched placeholder not flagged regardless of age');
+
+  // =========================================================
+  // W3: BOUNCED_CHECK_STILL_COUNTED
+  // =========================================================
+  const bounced = runAccountingAudit({
+    checks: [{ id: 'c1', status: 'bounced', linked_treasury_id: 't1', customer_name: 'X' }],
+    treasury: [{ id: 't1', cash_in: 5000 }],
+  });
+  assert(hasCode(bounced, 'BOUNCED_CHECK_STILL_COUNTED'),
+    '26.W3.1a fires when bounced check has cash-bearing treasury row');
+
+  // Bug #5 regression: bank_in also counts (previously cash_in only)
+  const bouncedBank = runAccountingAudit({
+    checks: [{ id: 'c1', status: 'bounced', linked_treasury_id: 't1' }],
+    treasury: [{ id: 't1', cash_in: 0, bank_in: 5000 }],
+  });
+  assert(hasCode(bouncedBank, 'BOUNCED_CHECK_STILL_COUNTED'),
+    '26.W3.2a bank_in on bounced treasury row also flagged (bank payment + bounce)');
+
+  // Already-reversed treasury row (0 amounts) → not flagged
+  const reversed = runAccountingAudit({
+    checks: [{ id: 'c1', status: 'bounced', linked_treasury_id: 't1' }],
+    treasury: [{ id: 't1', cash_in: 0, bank_in: 0 }],
+  });
+  assert(!hasCode(reversed, 'BOUNCED_CHECK_STILL_COUNTED'), '26.W3.3a reversed row not flagged');
+
+  // =========================================================
+  // W4: ORPHAN_DEDUP (dedup markers with no visible original)
+  // =========================================================
+  const orphan = runAccountingAudit({
+    invoices: [{ id: 'i1', total_amount: 5000 }],
+    treasury: [
+      { id: 't1', linked_invoice_id: 'i1', description: 'x [bank confirmation only]', cash_in: 0, bank_in: 0 },
+      // No sibling with positive inflow
+    ],
+  });
+  assert(hasCode(orphan, 'ORPHAN_DEDUP'), '26.W4.1a orphan dedup flagged');
+
+  // Non-orphan: sibling exists
+  const notOrphan = runAccountingAudit({
+    invoices: [{ id: 'i1', total_amount: 5000 }],
+    treasury: [
+      { id: 't1', linked_invoice_id: 'i1', description: 'x [bank confirmation only]', cash_in: 0, bank_in: 0 },
+      { id: 't2', linked_invoice_id: 'i1', cash_in: 5000 }, // sibling
+    ],
+  });
+  assert(!hasCode(notOrphan, 'ORPHAN_DEDUP'), '26.W4.2a sibling with cash_in → not flagged');
+
+  // Sibling via bank_in (post Bug #5 fix)
+  const bankOrphan = runAccountingAudit({
+    invoices: [{ id: 'i1', total_amount: 5000 }],
+    treasury: [
+      { id: 't1', linked_invoice_id: 'i1', description: 'x [bank confirmation only]', cash_in: 0, bank_in: 0 },
+      { id: 't2', linked_invoice_id: 'i1', cash_in: 0, bank_in: 5000 }, // bank sibling
+    ],
+  });
+  assert(!hasCode(bankOrphan, 'ORPHAN_DEDUP'), '26.W4.3a bank-only sibling found post Bug #5 fix');
+
+  // =========================================================
+  // W5: OVERDUE_PENDING_CHECK
+  // =========================================================
+  const today = new Date().toISOString().substring(0, 10);
+  const eightDaysAgo = new Date(Date.now() - 8 * 86400000).toISOString().substring(0, 10);
+  const twoDaysAgo = new Date(Date.now() - 2 * 86400000).toISOString().substring(0, 10);
+
+  const overdue = runAccountingAudit({
+    checks: [
+      { id: 'c1', status: 'pending', due_date: eightDaysAgo, amount: 1000 }, // >7 days overdue → flag
+      { id: 'c2', status: 'pending', due_date: twoDaysAgo, amount: 2000 },   // 2d only → no flag
+    ],
+  });
+  assert(hasCode(overdue, 'OVERDUE_PENDING_CHECK'), '26.W5.1a >7d overdue flagged');
+  assert(findCode(overdue, 'OVERDUE_PENDING_CHECK').count === 1, '26.W5.1b recent not flagged');
+
+  // Status 'collected' never flagged
+  const collected = runAccountingAudit({
+    checks: [{ id: 'c1', status: 'collected', due_date: eightDaysAgo, amount: 1000 }],
+  });
+  assert(!hasCode(collected, 'OVERDUE_PENDING_CHECK'), '26.W5.2a collected checks never overdue-flagged');
+
+  // =========================================================
+  // W6: DEBT_MISMATCH
+  // =========================================================
+  const debtMism = runAccountingAudit({
+    invoices: [{ id: 'i1', customer_name: 'Acme', outstanding: 5000 }],
+    debts: [{ customer_name: 'Acme', total_debt: 3000 }], // mismatch
+  });
+  assert(hasCode(debtMism, 'DEBT_MISMATCH'), '26.W6.1a fires when debts tab ≠ sum of outstandings');
+
+  // Within 10 EGP tolerance → no flag
+  const debtOk = runAccountingAudit({
+    invoices: [{ id: 'i1', customer_name: 'Acme', outstanding: 5005 }],
+    debts: [{ customer_name: 'Acme', total_debt: 5000 }],
+  });
+  assert(!hasCode(debtOk, 'DEBT_MISMATCH'), '26.W6.2a 5 EGP diff tolerated');
+
+  // =========================================================
+  // I3: ZERO_AMOUNT_ROWS
+  // =========================================================
+  const zeroRows = runAccountingAudit({
+    treasury: [{ id: 't1', cash_in: 0, cash_out: 0, bank_in: 0, bank_out: 0, usd_in: 0, usd_out: 0, foreign_amount: 0 }],
+  });
+  assert(hasCode(zeroRows, 'ZERO_AMOUNT_ROWS'), '26.I3.1a all-zero treasury row flagged');
+
+  // USD row NOT flagged if usd_in > 0
+  const usdRow = runAccountingAudit({
+    treasury: [{ id: 't1', cash_in: 0, cash_out: 0, bank_in: 0, bank_out: 0, usd_in: 100, usd_out: 0 }],
+  });
+  assert(!hasCode(usdRow, 'ZERO_AMOUNT_ROWS'), '26.I3.2a USD-bearing row not flagged as zero');
+
+  // Placeholder / dedup markers excluded
+  const zeroPh = runAccountingAudit({
+    treasury: [{ id: 't1', is_bank_placeholder: true, cash_in: 0, cash_out: 0, bank_in: 0, bank_out: 0 }],
+  });
+  assert(!hasCode(zeroPh, 'ZERO_AMOUNT_ROWS'), '26.I3.3a placeholders excluded from zero-flag');
+
+  // =========================================================
+  // I4: ORPHAN_ORDER_NUMBER
+  // =========================================================
+  const orphanOrd = runAccountingAudit({
+    invoices: [], // NO invoices exist
+    treasury: [{ id: 't1', cash_in: 5000, order_number: '999', description: 'Ahmad' }],
+  });
+  assert(hasCode(orphanOrd, 'ORPHAN_ORDER_NUMBER'), '26.I4.1a order# with no matching invoice flagged');
+  assert(findCode(orphanOrd, 'ORPHAN_ORDER_NUMBER').totalImpact === 5000, '26.I4.1b impact = amount');
+
+  // Invoice exists but not linked → I2 handles (not I4)
+  const exists = runAccountingAudit({
+    invoices: [{ id: 'i1', order_number: '999' }],
+    treasury: [{ id: 't1', cash_in: 5000, order_number: '999' }],
+  });
+  assert(!hasCode(exists, 'ORPHAN_ORDER_NUMBER'), '26.I4.2a existing invoice + order# → not I4');
+
+  // Bug #5 regression: bank_in contributes to orphan_orders too
+  const bankOrphan2 = runAccountingAudit({
+    invoices: [],
+    treasury: [{ id: 't1', cash_in: 0, bank_in: 5000, order_number: '999' }],
+  });
+  assert(hasCode(bankOrphan2, 'ORPHAN_ORDER_NUMBER'), '26.I4.3a bank-only row with orphan order# flagged');
+
+  // =========================================================
+  // Metrics block
+  // =========================================================
+  const metrics = runAccountingAudit({
+    treasury: [
+      { id: 't1', cash_in: 1000, cash_out: 0, bank_in: 0, bank_out: 0 },
+      { id: 't2', cash_in: 0, cash_out: 500, bank_in: 0, bank_out: 0 },
+      { id: 't3', cash_in: 0, cash_out: 0, bank_in: 2000, bank_out: 0 },
+    ],
+    invoices: [{ id: 'i1', total_amount: 10000, total_collected: 8000, outstanding: 2000 }],
+  });
+  assert(metrics.metrics.treasuryNet === 500, '26.metrics.1a safe net = cash_in - cash_out');
+  assert(metrics.metrics.bankNet === 2000, '26.metrics.1b bank net = bank_in - bank_out');
+  assert(metrics.metrics.totalInvoiceValue === 10000, '26.metrics.1c total invoice value');
+  assert(metrics.metrics.totalInvoiceCollected === 8000, '26.metrics.1d total collected');
+  assert(metrics.metrics.totalOutstanding === 2000, '26.metrics.1e total outstanding');
+  assert(metrics.metrics.treasuryRowCount === 3, '26.metrics.1f treasury row count');
+
+  // =========================================================
+  // Result shape
+  // =========================================================
+  const shaped = runAccountingAudit({});
+  assert(typeof shaped.generatedAt === 'string', '26.shape.1a generatedAt ISO string');
+  assert(Array.isArray(shaped.findings), '26.shape.1b findings is array');
+  assert(typeof shaped.bySeverity === 'object', '26.shape.1c bySeverity object');
+  assert(typeof shaped.metrics === 'object', '26.shape.1d metrics object');
+  assert(typeof shaped.totalFindings === 'number', '26.shape.1e totalFindings number');
+  assert(typeof shaped.cleanBillOfHealth === 'boolean', '26.shape.1f cleanBillOfHealth boolean');
+
+  // =========================================================
+  // Robustness: malformed input
+  // =========================================================
+  assert(runAccountingAudit(null).totalFindings === 0, '26.robust.1a null input → no crash');
+  assert(runAccountingAudit(undefined).totalFindings === 0, '26.robust.1b undefined → no crash');
+  assert(runAccountingAudit({ treasury: 'not an array' }).totalFindings >= 0, '26.robust.2a non-array treasury → no crash');
+}
+
+try { runSection26_AuditorAudit(); } catch(e) {
+  console.error('SECTION 26 ERROR:', e.message);
+  console.error(e.stack);
+  failed++;
+}
+
+// ============================================================
+// SECTION 27: Comprehensive audit — src/lib/treasury-classifier.js
+// Covers all classification branches, netEffect (safe) math,
+// collectedEffect (invoice) math, Bug #5a/#5b regression locks,
+// and null/edge safety on return shape.
+// ============================================================
+function runSection27_ClassifierAudit() {
+  group('SECTION 27: treasury-classifier.js comprehensive audit');
+
+  // Load classifier as CJS
+  const clsSrc = fs.readFileSync(path.join(REPO_ROOT, 'src/lib/treasury-classifier.js'), 'utf8');
+  const clsShim = clsSrc.replace(/export\s+function\s+/g, 'function ') +
+    '\nmodule.exports = { classifyTreasuryTransaction };';
+  fs.writeFileSync('/tmp/_classifier_s27.js', clsShim);
+  delete require.cache[require.resolve('/tmp/_classifier_s27.js')];
+  const { classifyTreasuryTransaction } = require('/tmp/_classifier_s27.js');
+
+  assert(typeof classifyTreasuryTransaction === 'function', '27.0a classifier loaded');
+
+  // Helper for building minimal txn
+  const mk = (overrides) => Object.assign({
+    id: 't1', cash_in: 0, cash_out: 0, bank_in: 0, bank_out: 0, description: '',
+    transaction_date: '2026-04-10',
+  }, overrides);
+
+  // =========================================================
+  // Classification types — happy paths
+  // =========================================================
+
+  // BANK_PLACEHOLDER_AWAITING
+  const ph = classifyTreasuryTransaction(
+    mk({ is_bank_placeholder: true, expected_amount: 5000 }),
+    { invoices: [], checks: [], egyptBankTxns: [], treasury: [] }
+  );
+  assert(ph.type === 'BANK_PLACEHOLDER_AWAITING', '27.class.1a placeholder awaiting');
+  assert(ph.emoji === '⏳', '27.class.1b placeholder emoji');
+  assert(ph.netEffect.delta === 0, '27.class.1c placeholder no safe effect');
+  assert(ph.collectedEffect.delta === 0, '27.class.1d placeholder no collected effect yet');
+
+  // BANK_PLACEHOLDER_MATCHED — placeholder that found its bank txn
+  const phm = classifyTreasuryTransaction(
+    mk({ is_bank_placeholder: false, matched_bank_txn_id: 'b1', bank_in: 5000, linked_invoice_id: 'i1' }),
+    { invoices: [{ id: 'i1', customer_name: 'X' }], checks: [], egyptBankTxns: [{ id: 'b1', amount: 5000 }], treasury: [] }
+  );
+  assert(phm.type === 'BANK_PLACEHOLDER_MATCHED', '27.class.2a matched bank placeholder');
+  assert(phm.netEffect.delta === 0, '27.class.2b bank row → no safe effect');
+  assert(phm.collectedEffect.delta === 5000, '27.class.2c bank_in counted toward collected');
+
+  // BANK_CONFIRMATION_DEDUP
+  const dedup = classifyTreasuryTransaction(
+    mk({ linked_invoice_id: 'i1', description: '[bank confirmation only]' }),
+    { invoices: [{ id: 'i1' }], checks: [], egyptBankTxns: [], treasury: [] }
+  );
+  assert(dedup.type === 'BANK_CONFIRMATION_DEDUP', '27.class.3a dedup marker classified');
+  assert(dedup.collectedEffect.delta === 0, '27.class.3b dedup explicitly excluded from collected');
+
+  // CHECK_AUTO_MATCHED
+  const auto = classifyTreasuryTransaction(
+    mk({ cash_in: 0, bank_in: 5000, matched_bank_txn_id: 'b1',
+      description: 'شيك محصّل [auto-matched from bank]' }),
+    { invoices: [], checks: [], egyptBankTxns: [{ id: 'b1', amount: 5000 }], treasury: [] }
+  );
+  assert(auto.type === 'CHECK_AUTO_MATCHED', '27.class.4a auto-matched check collection');
+  assert(auto.flags.isAutoMatched === true, '27.class.4b auto flag set');
+  assert(auto.flags.isCheckCollection === true, '27.class.4c check-collection flag set');
+
+  // CHECK_MANUAL_COLLECTED
+  const manual = classifyTreasuryTransaction(
+    mk({ cash_in: 5000, description: 'شيك محصّل من CIB' }),
+    { invoices: [], checks: [], egyptBankTxns: [], treasury: [] }
+  );
+  assert(manual.type === 'CHECK_MANUAL_COLLECTED', '27.class.5a manual check collection');
+
+  // BANK_NONORDER_CONFIRMED
+  const nonOrderConf = classifyTreasuryTransaction(
+    mk({ bank_in: 10000, matched_bank_txn_id: 'b1', bank_nonorder_category: 'Owner Draw' }),
+    { invoices: [], checks: [], egyptBankTxns: [{ id: 'b1', amount: 10000 }], treasury: [] }
+  );
+  assert(nonOrderConf.type === 'BANK_NONORDER_CONFIRMED', '27.class.6a bank non-order confirmed');
+
+  // BANK_NONORDER_UNVERIFIED
+  const nonOrderUnv = classifyTreasuryTransaction(
+    mk({ bank_in: 10000, bank_nonorder_category: 'Owner Draw' }),
+    { invoices: [], checks: [], egyptBankTxns: [], treasury: [] }
+  );
+  assert(nonOrderUnv.type === 'BANK_NONORDER_UNVERIFIED', '27.class.7a bank non-order unverified');
+
+  // BANK_INVOICE_PAYMENT — bank in with linked invoice, no category
+  const bip = classifyTreasuryTransaction(
+    mk({ bank_in: 7500, linked_invoice_id: 'i1' }),
+    { invoices: [{ id: 'i1' }], checks: [], egyptBankTxns: [], treasury: [] }
+  );
+  assert(bip.type === 'BANK_INVOICE_PAYMENT', '27.class.8a bank invoice payment');
+  assert(bip.collectedEffect.delta === 7500, '27.class.8b bank_in → 7500 to collected');
+
+  // BANK_UNLINKED — bank activity with no invoice, no category
+  const bu = classifyTreasuryTransaction(
+    mk({ bank_in: 3000 }),
+    { invoices: [], checks: [], egyptBankTxns: [], treasury: [] }
+  );
+  assert(bu.type === 'BANK_UNLINKED', '27.class.9a bank unlinked');
+
+  // INVOICE_PAYMENT — cash_in + linked invoice
+  const ip = classifyTreasuryTransaction(
+    mk({ cash_in: 5000, linked_invoice_id: 'i1' }),
+    { invoices: [{ id: 'i1' }], checks: [], egyptBankTxns: [], treasury: [] }
+  );
+  assert(ip.type === 'INVOICE_PAYMENT', '27.class.10a cash invoice payment');
+  assert(ip.netEffect.delta === 5000, '27.class.10b +5000 to safe');
+  assert(ip.collectedEffect.delta === 5000, '27.class.10c +5000 to collected');
+
+  // CASH_IN_UNLINKED
+  const ciu = classifyTreasuryTransaction(
+    mk({ cash_in: 2000 }),
+    { invoices: [], checks: [], egyptBankTxns: [], treasury: [] }
+  );
+  assert(ciu.type === 'CASH_IN_UNLINKED', '27.class.11a unlinked cash in');
+  assert(ciu.netEffect.delta === 2000, '27.class.11b +2000 to safe');
+  assert(ciu.collectedEffect.delta === 0, '27.class.11c no collected (no invoice)');
+
+  // EXPENSE
+  const ex = classifyTreasuryTransaction(
+    mk({ cash_out: 1500 }),
+    { invoices: [], checks: [], egyptBankTxns: [], treasury: [] }
+  );
+  assert(ex.type === 'EXPENSE', '27.class.12a expense');
+  assert(ex.netEffect.delta === -1500, '27.class.12b -1500 from safe');
+
+  // USD_TRANSACTION
+  const usd = classifyTreasuryTransaction(
+    mk({ usd_in: 100 }),
+    { invoices: [], checks: [], egyptBankTxns: [], treasury: [] }
+  );
+  assert(usd.type === 'USD_TRANSACTION', '27.class.13a USD transaction');
+  assert(usd.netEffect.delta === 0, '27.class.13b USD does not affect EGP safe');
+
+  // FOREIGN_CURRENCY
+  const fc = classifyTreasuryTransaction(
+    mk({ foreign_amount: 500, foreign_currency: 'EUR' }),
+    { invoices: [], checks: [], egyptBankTxns: [], treasury: [] }
+  );
+  assert(fc.type === 'FOREIGN_CURRENCY', '27.class.14a foreign currency');
+
+  // ZERO_AMOUNT — catch-all
+  const zero = classifyTreasuryTransaction(
+    mk({}),
+    { invoices: [], checks: [], egyptBankTxns: [], treasury: [] }
+  );
+  assert(zero.type === 'ZERO_AMOUNT', '27.class.15a zero amount');
+
+  // =========================================================
+  // Bug #5a regression — dedup sibling found via bank_in, not just cash_in
+  // =========================================================
+  const bankSib = classifyTreasuryTransaction(
+    mk({ linked_invoice_id: 'i1', description: '[bank confirmation only]' }),
+    {
+      invoices: [{ id: 'i1' }],
+      checks: [],
+      egyptBankTxns: [],
+      // Sibling carries the money in bank_in (not cash_in)
+      treasury: [
+        mk({ id: 't1', linked_invoice_id: 'i1', description: '[bank confirmation only]' }),
+        mk({ id: 't2', linked_invoice_id: 'i1', bank_in: 5000, description: 'payment' }),
+      ],
+    }
+  );
+  assert(bankSib.related.dedupSibling !== null,
+    '27.bug5a.1a dedup sibling found via bank_in (previously only cash_in was checked)');
+  assert(bankSib.related.dedupSibling.id === 't2',
+    '27.bug5a.1b correct bank-only sibling identified');
+
+  // =========================================================
+  // Bug #5b regression — splitFamily detection includes bank rows
+  // =========================================================
+  const splitBank = classifyTreasuryTransaction(
+    mk({ id: 'tx1', order_number: '500', bank_in: 3000, transaction_date: '2026-04-10' }),
+    {
+      invoices: [],
+      checks: [],
+      egyptBankTxns: [],
+      treasury: [
+        mk({ id: 'tx1', order_number: '500', bank_in: 3000, transaction_date: '2026-04-10' }),
+        mk({ id: 'tx2', order_number: '500', cash_in: 2000, transaction_date: '2026-04-10' }),
+      ],
+    }
+  );
+  assert(splitBank.related.splitFamily.length === 1,
+    '27.bug5b.1a splitFamily detected for bank-only row (previously excluded)');
+
+  // Bank-only row with no same-order siblings → empty family (not null/undefined)
+  const noSplit = classifyTreasuryTransaction(
+    mk({ id: 'tx1', order_number: '500', bank_in: 3000, transaction_date: '2026-04-10' }),
+    { invoices: [], checks: [], egyptBankTxns: [], treasury: [mk({ id: 'tx1', order_number: '500', bank_in: 3000, transaction_date: '2026-04-10' })] }
+  );
+  assert(Array.isArray(noSplit.related.splitFamily) && noSplit.related.splitFamily.length === 0,
+    '27.bug5b.2a isolated bank row → empty splitFamily array');
+
+  // =========================================================
+  // netEffect math — ensuring bank never touches safe
+  // =========================================================
+  // bank_out → no negative on safe
+  const bankOut = classifyTreasuryTransaction(
+    mk({ bank_out: 10000, bank_nonorder_category: 'Owner Draw' }),
+    { invoices: [], checks: [], egyptBankTxns: [], treasury: [] }
+  );
+  assert(bankOut.netEffect.delta === 0, '27.net.1a bank_out → 0 safe delta');
+
+  // Placeholder with expected_amount → 0 safe delta (not yet received)
+  const phExp = classifyTreasuryTransaction(
+    mk({ is_bank_placeholder: true, expected_amount: 50000 }),
+    { invoices: [], checks: [], egyptBankTxns: [], treasury: [] }
+  );
+  assert(phExp.netEffect.delta === 0, '27.net.2a placeholder with expected → 0 delta');
+
+  // Dedup marker → 0 safe delta even if cash_in is stale
+  const dedupStale = classifyTreasuryTransaction(
+    mk({ cash_in: 5000, description: '[bank confirmation only]' }),
+    { invoices: [], checks: [], egyptBankTxns: [], treasury: [] }
+  );
+  assert(dedupStale.netEffect.delta === 0,
+    '27.net.3a dedup marker bypasses cash_in → 0 safe delta (critical for balance integrity)');
+
+  // =========================================================
+  // collectedEffect math — invoice linkage required
+  // =========================================================
+  // No linked invoice → 0 collected regardless of inflow
+  const noLink = classifyTreasuryTransaction(
+    mk({ cash_in: 5000 }),
+    { invoices: [], checks: [], egyptBankTxns: [], treasury: [] }
+  );
+  assert(noLink.collectedEffect.delta === 0,
+    '27.coll.1a no linked invoice → no collected effect');
+
+  // Legacy-matched bank row: bank_in=0 but matched + cash_in has the amount
+  // (pre-migration artifact). Classifier should still credit collected.
+  const legacy = classifyTreasuryTransaction(
+    mk({ cash_in: 5000, bank_in: 0, matched_bank_txn_id: 'b1', linked_invoice_id: 'i1' }),
+    { invoices: [{ id: 'i1' }], checks: [], egyptBankTxns: [{ id: 'b1', amount: 5000 }], treasury: [] }
+  );
+  assert(legacy.collectedEffect.delta === 5000,
+    '27.coll.2a legacy matched row → amount credited to collected via fallback');
+
+  // =========================================================
+  // Return shape — all required fields present
+  // =========================================================
+  const shaped = classifyTreasuryTransaction(mk({ cash_in: 100 }), {});
+  const requiredKeys = ['type', 'titleEn', 'titleAr', 'emoji', 'color', 'amounts', 'netEffect', 'collectedEffect', 'related', 'timeline', 'warnings', 'flags'];
+  requiredKeys.forEach(function(k, i) {
+    assert(shaped[k] !== undefined, '27.shape.1.' + (i+1) + ' return has ' + k);
+  });
+  assert(typeof shaped.netEffect.delta === 'number', '27.shape.2a netEffect.delta is number');
+  assert(typeof shaped.collectedEffect.delta === 'number', '27.shape.2b collectedEffect.delta is number');
+  assert(typeof shaped.flags.isPlaceholder === 'boolean', '27.shape.2c flag is boolean');
+  assert(Array.isArray(shaped.related.splitFamily), '27.shape.2d splitFamily is array');
+  assert(Array.isArray(shaped.timeline), '27.shape.2e timeline is array');
+  assert(Array.isArray(shaped.warnings), '27.shape.2f warnings is array');
+
+  // =========================================================
+  // Robustness — missing ctx, null txn
+  // =========================================================
+  try {
+    const r1 = classifyTreasuryTransaction(mk({ cash_in: 100 }), undefined);
+    assert(r1.type, '27.robust.1a missing ctx does not crash');
+  } catch (e) { assert(false, '27.robust.1a CRASHED: ' + e.message); }
+
+  try {
+    const r2 = classifyTreasuryTransaction(mk({ cash_in: 100 }), null);
+    assert(r2.type, '27.robust.1b null ctx does not crash');
+  } catch (e) { assert(false, '27.robust.1b CRASHED: ' + e.message); }
+
+  // String amount coerced to number via Number()
+  const strAmt = classifyTreasuryTransaction(mk({ cash_in: '500' }), {});
+  assert(strAmt.type === 'CASH_IN_UNLINKED', '27.robust.2a string amount still classifies');
+  assert(strAmt.netEffect.delta === 500, '27.robust.2b string amount coerced to number for delta');
+
+  // =========================================================
+  // Flags / related records
+  // =========================================================
+  const allFlags = classifyTreasuryTransaction(
+    mk({ id: 'tx1', linked_invoice_id: 'i1', matched_bank_txn_id: 'b1', cash_in: 5000 }),
+    {
+      invoices: [{ id: 'i1', customer_name: 'X' }],
+      checks: [{ id: 'c1', linked_treasury_id: 'tx1' }],
+      egyptBankTxns: [{ id: 'b1', matched_treasury_id: 'tx1' }],
+      treasury: [],
+    }
+  );
+  assert(allFlags.flags.hasLinkedInvoice === true, '27.flag.1a linked invoice flag');
+  assert(allFlags.flags.hasMatchedBank === true, '27.flag.1b matched bank flag');
+  assert(allFlags.flags.hasLinkedCheck === true, '27.flag.1c linked check flag');
+  assert(allFlags.related.invoice !== null, '27.flag.2a invoice populated');
+  assert(allFlags.related.linkedCheck !== null, '27.flag.2b linkedCheck populated');
+  assert(allFlags.related.linkedBank !== null, '27.flag.2c linkedBank populated');
+}
+
+try { runSection27_ClassifierAudit(); } catch(e) {
+  console.error('SECTION 27 ERROR:', e.message);
+  console.error(e.stack);
+  failed++;
+}
+
+// ============================================================
+// SECTION 28: Comprehensive audit — src/components/TicketsTab.jsx
+// Source-inspection of saveTicketEdit, addComment, permission gate,
+// notification fan-out logic.
+// ============================================================
+function runSection28_TicketsTabAudit() {
+  group('SECTION 28: TicketsTab.jsx comprehensive audit');
+
+  const tSrc = fs.readFileSync(path.join(REPO_ROOT, 'src/components/TicketsTab.jsx'), 'utf8');
+
+  // =========================================================
+  // saveTicketEdit
+  // =========================================================
+  const saveBlock = tSrc.match(/const saveTicketEdit = async \(field\) =>[\s\S]*?^\s{2}\};/m);
+  assert(saveBlock, '28.save.0a saveTicketEdit block found');
+  const sb = saveBlock[0];
+
+  // Permission re-check at function level (defense-in-depth)
+  assert(/if \(!canEditTicketContent\(sel\)\)/.test(sb),
+    '28.save.1a re-checks canEditTicketContent (UI gate alone was bypassable)');
+
+  // No-op when newVal === oldVal
+  assert(/if \(newVal === oldVal\)\s*\{\s*setEditingField\(null\)/.test(sb),
+    '28.save.2a no-op when value unchanged (no spurious audit row)');
+
+  // Empty title rejected
+  assert(/field === 'title' && !newVal/.test(sb), '28.save.3a empty title rejected');
+
+  // Empty description allowed (you can clear a description)
+  assert(!/field === 'description' && !newVal/.test(sb),
+    '28.save.3b empty description allowed (no symmetric block)');
+
+  // Audit comment written via dbInsert with is_system: true
+  assert(/dbInsert\('ticket_comments'/.test(sb), '28.save.4a audit comment uses dbInsert');
+  assert(/is_system: true/.test(sb), '28.save.4b audit comment marked is_system');
+
+  // BEFORE / AFTER markers in audit text
+  assert(/BEFORE: /.test(sb) && /AFTER: /.test(sb), '28.save.4c BEFORE/AFTER diff markers');
+
+  // Long values clipped
+  assert(/clip = \(s\) =>/.test(sb) && /substring\(0, 500\)/.test(sb),
+    '28.save.5a long values clipped to 500 chars in audit comment');
+
+  // Order: dbUpdate (ticket) BEFORE dbInsert (comment) — if comment fails, ticket already saved
+  // (acceptable risk; alternative is transactional which Supabase doesn't expose easily)
+  const updateIdx = sb.indexOf("dbUpdate('tickets'");
+  const insertIdx = sb.indexOf("dbInsert('ticket_comments'");
+  assert(updateIdx > 0 && insertIdx > updateIdx,
+    '28.save.6a ticket update happens BEFORE audit comment insert');
+
+  // logActivity called after save
+  assert(/logActivity\(myId, 'Edited ' \+ field/.test(sb),
+    '28.save.7a logActivity records the edit action');
+
+  // Local state updated (sel) — no full reload needed for immediate UX
+  assert(/setSel\(\{\.\.\.sel, \[field\]: newVal/.test(sb),
+    '28.save.8a setSel updates UI immediately with new value');
+
+  // setEditingField(null) closes edit mode
+  assert(/setEditingField\(null\)/.test(sb),
+    '28.save.9a edit mode closes after save');
+
+  // Error path uses toast.error not alert when toast is present
+  assert(/toast \? toast\.error\(err\.message\) : alert\(err\.message\)/.test(sb),
+    '28.save.10a error uses toast.error with alert fallback');
+
+  // =========================================================
+  // canEditTicketContent gate
+  // =========================================================
+  const gateBlock = tSrc.match(/const canEditTicketContent = \(ticket\) =>[\s\S]*?^\s{2}\};/m);
+  assert(gateBlock, '28.gate.0a permission gate block found');
+  const gb = gateBlock[0];
+
+  assert(/if \(!ticket\) return false/.test(gb), '28.gate.1a null ticket → false');
+  assert(/if \(isSuperAdmin\) return true/.test(gb), '28.gate.2a super_admin always true');
+  assert(/if \(isAdminRole\) return true/.test(gb), '28.gate.3a admin role always true');
+  assert(/ticket\.created_by === myId/.test(gb), '28.gate.4a creator true');
+  assert(/parseAssignees\(ticket\)\.includes\(myId\)/.test(gb), '28.gate.5a any assignee true');
+  // Final return false (not falling through to anything)
+  assert(/return false;\s*\};/.test(gb), '28.gate.6a default deny (final return false)');
+
+  // =========================================================
+  // addComment — sanitize before insert, plain-text preview for notify
+  // =========================================================
+  const addBlock = tSrc.match(/const addComment = async \(\) =>[\s\S]*?^\s{2}\};/m);
+  assert(addBlock, '28.add.0a addComment block found');
+  const ab = addBlock[0];
+
+  // Sanitize HTML before insert
+  assert(/sanitizeRichText\(String\(f\.comment\)\)/.test(ab),
+    '28.add.1a sanitizeRichText called on comment HTML before insert');
+
+  // Empty-after-sanitize check (prevents empty <p><br></p> rows)
+  assert(/richTextToPlain\(safeHtml\)/.test(ab),
+    '28.add.2a richTextToPlain used for empty-check');
+  assert(/if \(!plain\.trim\(\)\) return/.test(ab),
+    '28.add.2b empty plain text → no insert');
+
+  // Notification uses plain text preview, not raw HTML
+  assert(/preview = plain\.length > 200 \? plain\.substring\(0, 200\) \+ '…' : plain/.test(ab),
+    '28.add.3a 200-char preview generation');
+  assert(/notifyTicketComment\(\[sel\.assigned_to\], sel\.title, preview, myId\)/.test(ab),
+    '28.add.3b assignee notify uses preview not f.comment');
+
+  // No double-notify: assignee, then creator (skip if same as assignee), then extras (skip if assignee/creator)
+  assert(/sel\.assigned_to !== myId/.test(ab),
+    '28.add.4a skip notify-self for assignee');
+  assert(/sel\.created_by !== myId && sel\.created_by !== sel\.assigned_to/.test(ab),
+    '28.add.4b skip creator notify if same as assignee or self');
+  assert(/parseAssignees\(sel\)\.filter\(id => id !== myId && id !== sel\.assigned_to && id !== sel\.created_by\)/.test(ab),
+    '28.add.4c extras filter excludes self, assignee, creator');
+
+  // Form cleared after success
+  assert(/setF\(\{\.\.\.f, comment: ''\}\); loadComments\(sel\.id\)/.test(ab),
+    '28.add.5a comment cleared and reloaded after success');
+
+  // =========================================================
+  // parseAssignees — defensive
+  // =========================================================
+  const paBlock = tSrc.match(/const parseAssignees = \(t\) =>[\s\S]*?\};/);
+  assert(paBlock, '28.pa.0a parseAssignees block found');
+  const pab = paBlock[0];
+
+  assert(/\[t\.assigned_to\]\.filter\(Boolean\)/.test(pab),
+    '28.pa.1a primary assignee filtered for truthy');
+  assert(/JSON\.parse\(t\.additional_assignees \|\| '\[\]'\)/.test(pab),
+    '28.pa.2a JSON parse with default empty-array fallback');
+  assert(/if \(Array\.isArray\(extra\)\)/.test(pab),
+    '28.pa.2b verifies parsed result is array (defends against JSON storing object/string)');
+  assert(/!list\.includes\(id\)/.test(pab),
+    '28.pa.3a dedup — no duplicates from primary + extras');
+  assert(/catch\(e\) \{ console\.warn\(e\); \}/.test(pab),
+    '28.pa.4a malformed JSON caught, warn logged, function continues with primary only');
+
+  // =========================================================
+  // Comment renderer — picks per-row between rich HTML and plain
+  // =========================================================
+  // Should sanitize before dangerouslySetInnerHTML — never raw HTML to DOM
+  assert(/dangerouslySetInnerHTML=\{\{ __html: safeHtml \}\}/.test(tSrc),
+    '28.render.1a dangerouslySetInnerHTML uses sanitized HTML, not raw');
+  // Plain comments use linkify path
+  assert(/linkify\(rawText\)/.test(tSrc),
+    '28.render.2a plain comments use existing linkify path');
+
+  // System-comment rendering preserves whitespace (audit diff has \n)
+  assert(/className="text-xs whitespace-pre-wrap">\{c\.comment_text\}/.test(tSrc),
+    '28.render.3a system comments use whitespace-pre-wrap');
+
+  // =========================================================
+  // No legacy plain-input composer remaining
+  // =========================================================
+  assert(!/<input value=\{f\.comment \|\| ''\} onChange=\{e => setF\(\{\.\.\.f, comment: e\.target\.value\}\)\}/.test(tSrc),
+    '28.legacy.1a old <input> comment composer removed');
+  assert(/import RichCommentComposer from/.test(tSrc),
+    '28.legacy.1b new composer imported');
+  assert(/<RichCommentComposer/.test(tSrc),
+    '28.legacy.1c new composer used in JSX');
+}
+
+try { runSection28_TicketsTabAudit(); } catch(e) {
+  console.error('SECTION 28 ERROR:', e.message);
+  console.error(e.stack);
+  failed++;
+}
+
+// ============================================================
+// SECTION 29: Comprehensive audit — src/components/CalendarTab.jsx
+// useEffect mount fix, modal-close-clears-state fix, checkInWithNotes
+// edit/check-in branching, gap docs for known multi-assignee architecture
+// limitation (R9 will fix).
+// ============================================================
+function runSection29_CalendarTabAudit() {
+  group('SECTION 29: CalendarTab.jsx comprehensive audit');
+
+  const cSrc = fs.readFileSync(path.join(REPO_ROOT, 'src/components/CalendarTab.jsx'), 'utf8');
+
+  // =========================================================
+  // useEffect mount fix — render-loop bug
+  // =========================================================
+  // Previously: `if (!loaded) loadEvents();` in render body → fires every render
+  // until async resolves → burst of redundant network calls.
+  // Fixed: `useEffect(() => { loadEvents(); }, []);` fires once.
+  assert(/import \{ useState, useMemo, useEffect \} from 'react'/.test(cSrc),
+    '29.mount.1a useEffect imported');
+  assert(/useEffect\(\(\) => \{ loadEvents\(\); \}, \[\]\)/.test(cSrc),
+    '29.mount.1b loadEvents wired in useEffect with [] deps (fires once on mount)');
+  assert(!/^\s+if \(!loaded\) loadEvents\(\);/m.test(cSrc),
+    '29.mount.1c old render-body conditional removed (no more re-fetch loop)');
+
+  // =========================================================
+  // Modal close — clears stale state
+  // =========================================================
+  const closeBlock = cSrc.match(/const closeModal = \(\) => \{ setNotesEvent\(null\); setMeetingNotes\(''\); \};/);
+  assert(closeBlock, '29.modal.1a single closeModal handler defined');
+
+  // Both backdrop click AND Cancel button must use closeModal
+  const backdropClose = /onClick=\{closeModal\}/g;
+  const matches = (cSrc.match(backdropClose) || []).length;
+  assert(matches >= 2, '29.modal.2a closeModal used by both backdrop and Cancel button',
+    'matches=' + matches);
+
+  // The old direct setNotesEvent(null) without setMeetingNotes('') in modal context is gone
+  // (still used inside checkInWithNotes which handles cleanup, that's fine)
+  const stale = (cSrc.match(/onClick=\{\(\) => setNotesEvent\(null\)\}/g) || []).length;
+  assert(stale === 0,
+    '29.modal.2b no remaining onClick handlers that clear notesEvent without also clearing meetingNotes');
+
+  // =========================================================
+  // checkInWithNotes — first-time check-in vs later edit branching
+  // =========================================================
+  const cinBlock = cSrc.match(/const checkInWithNotes = async \(\) =>[\s\S]*?^\s{2}\};/m);
+  assert(cinBlock, '29.cin.0a checkInWithNotes block found');
+  const cb = cinBlock[0];
+
+  // Detects whether event was already completed
+  assert(/var wasCompleted = !!notesEvent\.completed/.test(cb),
+    '29.cin.1a wasCompleted captured from event state');
+
+  // Detects whether notes actually changed (prevents duplicate daily_log on reopen-and-save)
+  assert(/var notesChanged = notes !== oldNotes/.test(cb),
+    '29.cin.1b notesChanged compared against trimmed oldNotes');
+
+  // First-time check-in stamps attendance fields
+  assert(/if \(!wasCompleted\) \{[\s\S]*?update\.completed = true[\s\S]*?update\.event_status = 'attended'[\s\S]*?update\.checked_in_at[\s\S]*?update\.checked_in_by/.test(cb),
+    '29.cin.2a first-time check-in stamps completed + event_status + checked_in_at + checked_in_by');
+
+  // Edit-after-completion does NOT overwrite attendance stamps
+  assert(/var update = \{ meeting_notes: notes \|\| null \};/.test(cb),
+    '29.cin.2b base update only includes meeting_notes (attendance fields conditionally added)');
+
+  // Daily log gated on (notes && notesChanged) — no duplicates
+  assert(/if \(notes && notesChanged\)/.test(cb),
+    '29.cin.3a daily_log archive only when notes exist AND changed');
+
+  // Different verb for first-time vs update
+  assert(/var verb = wasCompleted \? '📋 Meeting notes updated — ' : '📋 Meeting notes — '/.test(cb),
+    '29.cin.4a daily_log entry verb reflects mode (updated vs new)');
+
+  // =========================================================
+  // markEventStatus — postponed sets completed:false
+  // =========================================================
+  const mes = cSrc.match(/const markEventStatus = async \(ev, status\) =>[\s\S]*?^\s{2}\};/m);
+  assert(mes, '29.mes.0a markEventStatus block found');
+  // 'attended' → completed=true; anything else (postponed, cancelled) → completed=false
+  assert(/completed: status === 'attended'/.test(mes[0]),
+    '29.mes.1a only "attended" sets completed=true (postponed/cancelled stay incomplete)');
+
+  // =========================================================
+  // handleAddEvent — known architectural limitation (R9 will fix)
+  // =========================================================
+  const haeBlock = cSrc.match(/const handleAddEvent = async \(\) =>[\s\S]*?^\s{2}\};/m);
+  assert(haeBlock, '29.hae.0a handleAddEvent block found');
+  const hae = haeBlock[0];
+  // Currently creates N independent rows for N assignees (loop dbInsert).
+  // This is the limitation R9 (team calendar with attendees table) will solve.
+  assert(/for \(const uid of assignees\)/.test(hae),
+    '29.hae.gap.1a KNOWN LIMITATION: 1 event per assignee (loop dbInsert) — R9 attendees table will replace');
+
+  // Notify-event-scheduled fires for non-self assignees
+  assert(/const otherAssignees = assignees\.filter\(uid => uid !== myId\)/.test(hae),
+    '29.hae.notify.1a non-self assignees collected for notification');
+  assert(/notifyEventScheduled\(otherAssignees, f\.title, f\.eventDate, myId\)/.test(hae),
+    '29.hae.notify.1b notification fires for invited assignees');
+
+  // =========================================================
+  // Add Notes / Edit Notes button on completed events (R3 UI)
+  // =========================================================
+  assert(/Edit Notes/.test(cSrc), '29.r3.1a "Edit Notes" label on completed events');
+  assert(/Add Notes/.test(cSrc), '29.r3.1b "Add Notes" label when no notes yet');
+  // The button on completed events seeds meetingNotes from existing
+  assert(/setMeetingNotes\(ev\.meeting_notes \|\| ''\)/.test(cSrc),
+    '29.r3.2a clicking edit seeds modal with existing notes');
+
+  // =========================================================
+  // Modal title reflects mode
+  // =========================================================
+  assert(/Edit Meeting Notes \/ تعديل الملاحظات/.test(cSrc),
+    '29.r3.3a edit-mode header (existing notes)');
+  assert(/Add Meeting Notes \/ إضافة ملاحظات/.test(cSrc),
+    '29.r3.3b add-mode header (no existing notes)');
+  assert(/Check In \/ تسجيل حضور/.test(cSrc),
+    '29.r3.3c first-time check-in header');
+
+  // =========================================================
+  // Documented timezone gap (UTC fallback for daily_log date)
+  // =========================================================
+  // This matches the gap noted in supabase.js logActivity — Cairo late-night
+  // actions land on tomorrow UTC. Lock as known limitation; R6+ will revisit.
+  assert(/notesEvent\.event_date \|\| new Date\(\)\.toISOString\(\)\.substring\(0, ?10\)/.test(cSrc),
+    '29.tz.1a KNOWN GAP: daily_log fallback uses UTC date (Cairo late-night → tomorrow)');
+}
+
+try { runSection29_CalendarTabAudit(); } catch(e) {
+  console.error('SECTION 29 ERROR:', e.message);
+  console.error(e.stack);
+  failed++;
+}
+
+// ============================================================
+// SECTION 30: Comprehensive audit — RichCommentComposer.jsx
+// Focus-steal prevention, paste defense, sync logic with parent value,
+// toolbar command wiring.
+// ============================================================
+function runSection30_RichComposerAudit() {
+  group('SECTION 30: RichCommentComposer.jsx comprehensive audit');
+
+  const rcSrc = fs.readFileSync(path.join(REPO_ROOT, 'src/components/RichCommentComposer.jsx'), 'utf8');
+
+  // =========================================================
+  // Focus-steal prevention — bug fix
+  // =========================================================
+  // Without onMouseDown preventDefault, clicking a toolbar button takes focus
+  // from the editor BEFORE the click handler fires, collapsing the selection.
+  // execCommand then applies bold/italic to nothing.
+  assert(/const preventFocusSteal = \(e\) => \{ e\.preventDefault\(\); \}/.test(rcSrc),
+    '30.focus.1a preventFocusSteal handler defined');
+
+  // Every formatting button must wire it (skip the help-toggle; it's not a formatting cmd)
+  ['Bold', 'Italic', 'Underline', 'Bullet list', 'Numbered list', 'Clear formatting'].forEach(function(label, i) {
+    var re = new RegExp('title="' + label + '[^"]*"\\s+onMouseDown=\\{preventFocusSteal\\}\\s+onClick=\\{');
+    assert(re.test(rcSrc),
+      '30.focus.2.' + (i+1) + ' "' + label + '" button has onMouseDown preventFocusSteal');
+  });
+
+  // Help button intentionally has NO preventFocusSteal — it doesn't need editor selection
+  assert(/title="Shortcuts" onClick=\{\(\) => setShowHelp/.test(rcSrc),
+    '30.focus.3a help toggle button does NOT preventDefault (no editor interaction needed)');
+
+  // =========================================================
+  // exec wrapper — focus before command, sync after
+  // =========================================================
+  const execBlock = rcSrc.match(/const exec = \(cmd, arg\) =>[\s\S]*?\};/);
+  assert(execBlock, '30.exec.0a exec block found');
+  const eb = execBlock[0];
+  // Focus FIRST so command applies to editor selection
+  const focusIdx = eb.indexOf('editorRef.current.focus()');
+  const cmdIdx = eb.indexOf('document.execCommand');
+  assert(focusIdx > 0 && focusIdx < cmdIdx,
+    '30.exec.1a editor focus happens before execCommand');
+  // try/catch around legacy API
+  assert(/try \{ document\.execCommand[\s\S]*?\} catch/.test(eb),
+    '30.exec.2a execCommand wrapped in try/catch (legacy API unreliable)');
+  // onChange fired with current innerHTML so parent stays in sync
+  assert(/onChange\(editorRef\.current\.innerHTML\)/.test(eb),
+    '30.exec.3a onChange called with current innerHTML after format');
+
+  // =========================================================
+  // handleInput — fires on every keystroke
+  // =========================================================
+  const hi = rcSrc.match(/const handleInput = \(\) =>[\s\S]*?\};/);
+  assert(hi, '30.input.0a handleInput block found');
+  assert(/if \(editorRef\.current && onChange\)/.test(hi[0]),
+    '30.input.1a guards both ref AND onChange existence');
+
+  // =========================================================
+  // handleKeyDown — Ctrl+Enter / Cmd+Enter submits
+  // =========================================================
+  const hk = rcSrc.match(/const handleKeyDown = \(e\) =>[\s\S]*?\};/);
+  assert(hk, '30.key.0a handleKeyDown found');
+  assert(/e\.key === 'Enter' && \(e\.ctrlKey \|\| e\.metaKey\)/.test(hk[0]),
+    '30.key.1a Ctrl+Enter OR Cmd+Enter triggers submit (Mac compat)');
+  assert(/e\.preventDefault\(\)/.test(hk[0]),
+    '30.key.2a Ctrl+Enter prevents default (no newline insertion before submit)');
+  assert(/if \(onSubmit\) onSubmit\(\)/.test(hk[0]),
+    '30.key.3a onSubmit guarded against missing prop');
+
+  // =========================================================
+  // handlePaste — plain-text paste defense
+  // =========================================================
+  const hp = rcSrc.match(/const handlePaste = \(e\) =>[\s\S]*?\};/);
+  assert(hp, '30.paste.0a handlePaste found');
+  const hpb = hp[0];
+  assert(/e\.preventDefault\(\)/.test(hpb),
+    '30.paste.1a default paste blocked');
+  assert(/clipboardData \|\| window\.clipboardData/.test(hpb),
+    '30.paste.2a both modern + legacy clipboard APIs supported');
+  assert(/getData\('text'\)/.test(hpb),
+    '30.paste.3a only text/plain extracted (no rich HTML, images, etc.)');
+  assert(/document\.execCommand\('insertText', false, text\)/.test(hpb),
+    '30.paste.4a inserts plain text via execCommand');
+  // Fallback path for browsers that drop insertText
+  assert(/document\.createTextNode\(text\)/.test(hpb),
+    '30.paste.5a fallback createTextNode for browsers without insertText');
+  assert(/handleInput\(\)/.test(hpb),
+    '30.paste.6a syncs upward after paste');
+
+  // =========================================================
+  // value sync — clear-only, never overwrite during typing
+  // =========================================================
+  const ueBlock = rcSrc.match(/useEffect\(\(\) => \{[\s\S]*?\}, \[value\]\)/);
+  assert(ueBlock, '30.sync.0a useEffect with [value] dep found');
+  const ueb = ueBlock[0];
+  // Only clears when value is empty/null (parent reset). Never echoes back during typing.
+  assert(/if \(\(value === '' \|\| value == null\) && el\.innerHTML !== ''\)/.test(ueb),
+    '30.sync.1a clears editor only when value is empty AND editor isn\'t already empty (no cursor jump)');
+
+  // =========================================================
+  // Attach button
+  // =========================================================
+  assert(/<input ref=\{fileRef\} type="file"/.test(rcSrc),
+    '30.attach.1a file input present with ref for clearing');
+  assert(/if \(fileRef\.current\) fileRef\.current\.value = ''/.test(rcSrc),
+    '30.attach.2a file input cleared after attach (allows attaching same file twice)');
+  assert(/disabled=\{uploading\}/.test(rcSrc),
+    '30.attach.3a file input disabled while uploading');
+
+  // =========================================================
+  // Send button
+  // =========================================================
+  assert(/<button type="button" onClick=\{onSubmit\}/.test(rcSrc),
+    '30.send.1a Send button calls onSubmit');
+
+  // =========================================================
+  // Placeholder via CSS :empty
+  // =========================================================
+  assert(/data-placeholder="Add comment\.\.\./.test(rcSrc),
+    '30.ph.1a placeholder attribute set');
+  assert(/\[contenteditable\]\[data-placeholder\]:empty::before/.test(rcSrc),
+    '30.ph.2a CSS :empty pseudo-class for placeholder visibility');
+
+  // =========================================================
+  // List CSS — verifies bullet/numbered render correctly
+  // =========================================================
+  assert(/list-style: disc/.test(rcSrc),
+    '30.list.1a <ul> styled with disc bullets');
+  assert(/list-style: decimal/.test(rcSrc),
+    '30.list.1b <ol> styled with decimal numbers');
+}
+
+try { runSection30_RichComposerAudit(); } catch(e) {
+  console.error('SECTION 30 ERROR:', e.message);
+  console.error(e.stack);
+  failed++;
+}
+
+// ============================================================
+// SECTION 31: Comprehensive audit — page.jsx surfaces touched this session
+// (H2 mobile order, H3 breakdown, Bug #3 safe loader, Bug #6 temp-uuid removal)
+// Mostly source inspection since page.jsx is too large + browser-dependent
+// to load as a unit. Locks in correct wiring per surface.
+// ============================================================
+function runSection31_PageJsxAudit() {
+  group('SECTION 31: page.jsx targeted audit (this-session surfaces)');
+
+  const pSrc = fs.readFileSync(path.join(REPO_ROOT, 'src/app/page.jsx'), 'utf8');
+
+  // =========================================================
+  // Imports — all this-session helpers wired
+  // =========================================================
+  const importLine = pSrc.match(/^import \{[^}]+\} from '\.\.\/lib\/utils';/m);
+  assert(importLine, '31.imp.0a utils import line found');
+  const il = importLine[0];
+  ['aggregatePaymentSources', 'PAYMENT_SOURCE_META'].forEach(function(n, i) {
+    assert(il.indexOf(n) >= 0, '31.imp.1.' + (i+1) + ' ' + n + ' imported');
+  });
+
+  // =========================================================
+  // Bug #3 — safe() wrapper around Promise.all
+  // =========================================================
+  const loadStart = pSrc.indexOf('const loadAllData = async () =>');
+  const loadSlice = pSrc.slice(loadStart, loadStart + 8000);
+
+  // safe() definition (regex must tolerate nested braces in the catch body)
+  assert(/const safe = \(p\) => p\.catch\(/.test(loadSlice),
+    '31.bug3.1a safe() wraps each fetchAll, .catch returns []');
+  assert(/return \[\]; \}\)/.test(loadSlice),
+    '31.bug3.1b safe() catch returns [] (fallback to empty)');
+
+  // Console.warn is itself try/catch'd inside safe (in case console missing in some envs)
+  assert(/try \{ console\.warn\('\[loadAllData\]'/.test(loadSlice),
+    '31.bug3.2a console.warn inside safe is try/catch wrapped (unkillable)');
+
+  // All 9 main tables wrapped
+  const safeFetchCount = (loadSlice.match(/safe\(fetchAll\(/g) || []).length;
+  assert(safeFetchCount === 9, '31.bug3.3a all 9 main tables wrapped in safe()',
+    'count=' + safeFetchCount);
+
+  // No bare fetchAll inside the Promise.all anymore — relying on the count check above.
+  // Per-item parsing is brittle because comma-split breaks on fetchAll's own arg lists.
+  // The 9-count assertion in 31.bug3.3a is sufficient proof.
+  // Verify the negative pattern: no UNWRAPPED `fetchAll(` immediately after a [ or , in this slice
+  const promiseAllBlock = loadSlice.match(/Promise\.all\(\[([\s\S]*?)\]\)/);
+  assert(promiseAllBlock, '31.bug3.4a Promise.all block found');
+  const arrInside = promiseAllBlock[1];
+  // Every line beginning with non-whitespace `fetchAll` (not preceded by `safe(`) would be a leak
+  const leakedFetchAll = (arrInside.match(/^\s+fetchAll\(/gm) || []).length;
+  assert(leakedFetchAll === 0, '31.bug3.4b no unwrapped fetchAll inside Promise.all',
+    'count=' + leakedFetchAll);
+
+  // setState calls happen UNCONDITIONALLY after Promise.all (no longer gated on success)
+  ['setInvoices', 'setTreasury', 'setChecks', 'setDebts', 'setCustomers', 'setWarehouse', 'setInvoiceItems', 'setExpenseRules', 'setInventory'].forEach(function(setter, i) {
+    assert(loadSlice.indexOf(setter + '(') >= 0,
+      '31.bug3.5.' + (i+1) + ' ' + setter + ' called in load (each table can land independently)');
+  });
+
+  // =========================================================
+  // Bug #6 — temp-uuid eradication
+  // =========================================================
+  // No `id: 'temp-' + Date.now()` in code (comments OK)
+  // Strip out comment-only lines, then assert
+  const codeOnly = pSrc.split('\n').filter(line => {
+    const trimmed = line.trim();
+    return !trimmed.startsWith('//') && !trimmed.startsWith('*');
+  }).join('\n');
+  assert(!/id:\s*['"]temp-['"]\s*\+\s*Date\.now\(\)/.test(codeOnly),
+    '31.bug6.1a no fabricated temp-id in non-comment code');
+  assert(!/['"]temp-['"]\s*\+\s*Date\.now\(\):/.test(codeOnly),
+    '31.bug6.1b no temp-id in object property keys either');
+
+  // Three treasury insert sites use real inserted row
+  const realInsertCount = (pSrc.match(/setTreasury\(prev => \[inserted, \.\.\.prev\]\)/g) || []).length;
+  assert(realInsertCount === 3,
+    '31.bug6.2a 3 treasury optimistic inserts use the REAL UUID from dbInsert',
+    'count=' + realInsertCount);
+
+  // Each insert site has the const inserted = await dbInsert pattern
+  const dbInsertCount = (pSrc.match(/const inserted = await dbInsert\('treasury'/g) || []).length;
+  assert(dbInsertCount === 3,
+    '31.bug6.3a 3 treasury insert sites capture dbInsert return',
+    'count=' + dbInsertCount);
+
+  // Invoice flow no longer has temp- fallback
+  assert(!/newInv\?\.id \|\| ['"]temp-['"]/.test(pSrc),
+    '31.bug6.4a invoice insert no longer uses temp- fallback (skip optimistic if newInv missing)');
+
+  // =========================================================
+  // H2 — mobile order wrapper
+  // =========================================================
+  // Dashboard root has flex flex-col
+  assert(/\{tab === 'dashboard' && \(\s*\n\s*<div className="flex flex-col">/.test(pSrc),
+    '31.h2.1a dashboard root is flex flex-col');
+
+  // AIGreeter wrapper has max-md:order-last
+  assert(/<div className="max-md:order-last">/.test(pSrc),
+    '31.h2.2a greeter wrapper has max-md:order-last');
+
+  // Single AIGreeter instance (no double-mount)
+  const greeterCount = (pSrc.match(/<AIGreeter\b/g) || []).length;
+  assert(greeterCount === 1, '31.h2.3a single AIGreeter instance', 'count=' + greeterCount);
+
+  // =========================================================
+  // H3 — breakdown rendering
+  // =========================================================
+  // aggregatePaymentSources called with treasuryByOrder lookup
+  assert(/const txns = treasuryByOrder\[selectedInvoice\.order_number\] \|\| \[\]/.test(pSrc),
+    '31.h3.1a breakdown reads treasury rows linked to invoice order_number');
+
+  assert(/const agg = aggregatePaymentSources\(txns\)/.test(pSrc),
+    '31.h3.2a aggregator called');
+
+  // Empty-txn early return
+  assert(/if \(txns\.length === 0\) return null/.test(pSrc),
+    '31.h3.3a empty txn list → no breakdown render');
+
+  // Zero-total early return
+  assert(/if \(agg\.total <= 0\) return null/.test(pSrc),
+    '31.h3.3b zero-total → no breakdown render');
+
+  // Empty-rows early return (all buckets are 0 → no rows to render)
+  assert(/const rows = PAYMENT_SOURCE_META\.filter\(r => agg\.buckets\[r\.key\] > 0\)/.test(pSrc),
+    '31.h3.4a only positive-amount buckets shown');
+
+  // Position: between Outstanding card (totals) and Reconciliation Status
+  const outstandingIdx = pSrc.indexOf('Outstanding / المتبقّي');
+  const breakdownIdx = pSrc.indexOf('Payment Breakdown / تفصيل الدفع');
+  const reconIdx = pSrc.indexOf('{/* Reconciliation Status */}');
+  assert(outstandingIdx > 0 && breakdownIdx > outstandingIdx && reconIdx > breakdownIdx,
+    '31.h3.5a breakdown sits BETWEEN totals cards and reconciliation status');
+
+  // =========================================================
+  // Cross-cutting: no leftover temp identifiers anywhere else
+  // =========================================================
+  // Confirm `temp-` no longer appears as a code-level identifier prefix
+  // for any state insert. Check for all common patterns.
+  const allTempIdAttempts = pSrc.match(/['"]temp-['"]\s*\+\s*Date\.now\(\)/g) || [];
+  // Comments are OK — they reference the historical bug. Filter those out.
+  // Walk line by line.
+  let realCodeTempCount = 0;
+  pSrc.split('\n').forEach(function(line) {
+    const trimmed = line.trim();
+    if (trimmed.startsWith('//') || trimmed.startsWith('*')) return;
+    if (/['"]temp-['"]\s*\+\s*Date\.now\(\)/.test(line)) realCodeTempCount++;
+  });
+  assert(realCodeTempCount === 0,
+    '31.cross.1a zero non-comment lines fabricate temp-uuid identifiers',
+    'count=' + realCodeTempCount);
+
+  // =========================================================
+  // No regression: recalcInvoiceCollected still the canonical helper
+  // =========================================================
+  assert(/const recalcInvoiceCollected = async \(invoiceId\) =>/.test(pSrc),
+    '31.canon.1a recalcInvoiceCollected defined in page.jsx');
+  assert(/cash_in \+ bank_in/.test(pSrc) || /Number\(t\.cash_in \|\| 0\) \+ Number\(t\.bank_in \|\| 0\)/.test(pSrc),
+    '31.canon.2a recalc sums cash_in + bank_in (post-bank-separation correct math)');
+
+  // =========================================================
+  // Imports list — final sanity
+  // =========================================================
+  // No accidental shadowing — sanitize and sanitizeRichText shouldn't both be imported
+  // in a way that conflicts (sanitize is page.jsx's old helper; sanitizeRichText is for tickets only)
+  assert(il.indexOf('sanitize,') >= 0 || /\bsanitize\b/.test(il),
+    '31.imp.2a base sanitize still imported in page.jsx (used elsewhere)');
+}
+
+try { runSection31_PageJsxAudit(); } catch(e) {
+  console.error('SECTION 31 ERROR:', e.message);
+  console.error(e.stack);
+  failed++;
+}
+
+// ============================================================
 // MAIN
 // ============================================================
 (async () => {

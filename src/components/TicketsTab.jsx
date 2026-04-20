@@ -183,6 +183,14 @@ export default function TicketsTab({ toast, customers, user, userProfile, users,
   // with the original→new diff so the audit trail is preserved inside the ticket.
   const saveTicketEdit = async (field) => {
     if (!sel) return;
+    // Defense-in-depth: re-check permission at the function level. The UI hides
+    // the pencil when canEditTicketContent is false, but a user could call this
+    // via the console. Reject early instead of silently saving.
+    if (!canEditTicketContent(sel)) {
+      toast ? toast.error('You do not have permission to edit this ticket / لا تملك صلاحية التعديل') : alert('Not permitted');
+      setEditingField(null);
+      return;
+    }
     const oldVal = String(sel[field] || '');
     const newVal = String((editBuf[field] || '')).trim();
     if (newVal === oldVal) { setEditingField(null); return; }

@@ -1,5 +1,5 @@
 'use client';
-import { useState, useMemo } from 'react';
+import { useState, useMemo, useEffect } from 'react';
 import { supabase, dbInsert, dbUpdate, logActivity } from '../lib/supabase';
 import { notifyEventScheduled } from '../lib/notify';
 
@@ -27,7 +27,10 @@ export default function CalendarTab({ customers, user, userProfile, users, onRel
     setLoaded(true);
   };
 
-  if (!loaded) loadEvents();
+  // Load once on mount. Previously called inline `if (!loaded) loadEvents()` in the
+  // render body — that fires on EVERY render until the async resolves and updates
+  // `loaded`, producing a burst of redundant network calls. useEffect fires once.
+  useEffect(() => { loadEvents(); }, []);
 
   const year = curDate.getFullYear();
   const month = curDate.getMonth();
@@ -321,8 +324,13 @@ export default function CalendarTab({ customers, user, userProfile, users, onRel
         </div>
       )}
       {/* Check-In / Notes Modal — supports both first-time check-in AND note editing after completion (R3) */}
-      {notesEvent && (
-        <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4" onClick={() => setNotesEvent(null)}>
+      {notesEvent && (() => {
+        // Single close handler — backdrop AND Cancel both go through here.
+        // Previously left meetingNotes stale across opens, so a different event
+        // would show the previous draft text.
+        const closeModal = () => { setNotesEvent(null); setMeetingNotes(''); };
+        return (
+        <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4" onClick={closeModal}>
           <div className="bg-white rounded-2xl p-5 w-full max-w-md" onClick={e => e.stopPropagation()}>
             <h3 className="text-lg font-bold mb-1">
               {notesEvent.completed
@@ -344,12 +352,13 @@ export default function CalendarTab({ customers, user, userProfile, users, onRel
                 className="flex-1 px-4 py-2.5 bg-emerald-500 text-white rounded-lg text-sm font-bold">
                 {notesEvent.completed ? '💾 Save Notes' : '✓ Check In & Save Notes'}
               </button>
-              <button onClick={() => setNotesEvent(null)}
+              <button onClick={closeModal}
                 className="px-4 py-2.5 border-2 border-slate-300 rounded-lg text-sm font-bold">Cancel</button>
             </div>
           </div>
         </div>
-      )}
+        );
+      })()}
     </div>
   );
 }

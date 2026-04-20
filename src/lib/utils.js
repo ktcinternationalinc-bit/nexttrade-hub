@@ -238,16 +238,30 @@ export const sanitizeRichText = (html) => {
   // 1. Remove script / style / iframe / object blocks entirely (incl. content)
   s = s.replace(/<(script|style|iframe|object|embed|link|meta|base)[\s\S]*?<\/\1>/gi, '');
   s = s.replace(/<(script|style|iframe|object|embed|link|meta|base)\b[^>]*\/?>/gi, '');
-  // 2. Strip event handlers on any remaining tag  (on* =...)
+  // 2. Collapse whitespace (incl. newlines/tabs) and HTML-entity whitespace inside
+  //    tag opening sequences. This defeats bypasses like `<b on\nerror=...>` or
+  //    `<b on&#10;click=...>` where an event-handler name is split by whitespace.
+  //    We normalize any <tag ...> run so attribute regexes can reliably match.
+  s = s.replace(/<([a-zA-Z][^>]*)>/g, function(_, inner) {
+    // Decode common HTML-entity whitespace (&#9;&#10;&#13;&nbsp;) inside attributes
+    var cleaned = inner
+      .replace(/&#0*(9|10|13|32);?/g, ' ')
+      .replace(/&#x0*(9|a|d|20);?/gi, ' ')
+      .replace(/&nbsp;/gi, ' ')
+      // Collapse any [\s]+ (including newlines, tabs) to a single space
+      .replace(/[\s\u00A0]+/g, ' ');
+    return '<' + cleaned + '>';
+  });
+  // 3. Strip event handlers on any remaining tag (on* =...) — now reliable after step 2
   s = s.replace(/\son\w+\s*=\s*(['"]).*?\1/gi, '');
   s = s.replace(/\son\w+\s*=\s*[^\s>]+/gi, '');
-  // 3. Strip javascript: urls (href/src)
+  // 4. Strip javascript: urls (href/src)
   s = s.replace(/(href|src)\s*=\s*(['"])\s*javascript:[^'"]*\2/gi, '');
   s = s.replace(/(href|src)\s*=\s*javascript:[^\s>]+/gi, '');
-  // 4. Strip style and class attributes (prevent CSS injection / layout break)
+  // 5. Strip style and class attributes (prevent CSS injection / layout break)
   s = s.replace(/\sstyle\s*=\s*(['"]).*?\1/gi, '');
   s = s.replace(/\sclass\s*=\s*(['"]).*?\1/gi, '');
-  // 5. Walk all tags, drop any not in the allow-list. Preserve inner text via the replace.
+  // 6. Walk all tags, drop any not in the allow-list. Preserve inner text via the replace.
   s = s.replace(/<\/?([a-zA-Z][a-zA-Z0-9]*)\b[^>]*>/g, function(match, tag) {
     return RT_ALLOWED_TAGS.has(String(tag).toLowerCase()) ? match : '';
   });
@@ -296,15 +310,20 @@ export const aggregatePaymentSources = (txns) => {
   const buckets = { cash: 0, bank: 0, check: 0, vodafone: 0, instapay: 0, other: 0 };
   if (!Array.isArray(txns)) return { buckets: buckets, total: 0 };
 
+  // NaN-safe numeric coercion. Number("abc") = NaN, Number(undefined) = NaN — both
+  // would poison buckets if not guarded. `+t || 0` converts NaN → 0.
+  const n = (v) => { var x = Number(v); return isFinite(x) ? x : 0; };
+
   for (let i = 0; i < txns.length; i++) {
-    const t = txns[i] || {};
-    const amt = Number(t.cash_in || 0) + Number(t.bank_in || 0);
+    const t = txns[i];
+    if (!t || typeof t !== 'object') continue;
+    const amt = n(t.cash_in) + n(t.bank_in);
     if (amt <= 0) continue;
 
-    let src = (t.payment_source || '').trim().toLowerCase();
+    let src = String(t.payment_source || '').trim().toLowerCase();
     // Fallback inference when payment_source is missing (pre-backfill rows)
     if (!src) {
-      if (Number(t.bank_in || 0) > 0) {
+      if (n(t.bank_in) > 0) {
         src = 'bank';
       } else if (t.cash_method === 'vodafone' || t.cash_method === 'instapay') {
         src = t.cash_method;

@@ -36,6 +36,12 @@ export default function RichCommentComposer({ value, onChange, onSubmit, uploadi
     if (editorRef.current && onChange) onChange(editorRef.current.innerHTML);
   };
 
+  // Prevent toolbar buttons from stealing focus / collapsing selection
+  // when clicked. Without this, "select text → click Bold" would lose the
+  // selection at the moment the button receives focus, so execCommand fires
+  // against an empty selection.
+  const preventFocusSteal = (e) => { e.preventDefault(); };
+
   const handleInput = () => {
     if (editorRef.current && onChange) onChange(editorRef.current.innerHTML);
   };
@@ -79,14 +85,14 @@ export default function RichCommentComposer({ value, onChange, onSubmit, uploadi
     <div className="flex flex-col gap-2">
       {/* Toolbar */}
       <div className="flex flex-wrap gap-1 items-center bg-slate-50 rounded-lg p-1.5 border border-slate-200">
-        <button type="button" title="Bold (Ctrl+B)" onClick={() => exec('bold')} className={toolBtn + ' font-extrabold'}>B</button>
-        <button type="button" title="Italic (Ctrl+I)" onClick={() => exec('italic')} className={toolBtn + ' italic'}>I</button>
-        <button type="button" title="Underline (Ctrl+U)" onClick={() => exec('underline')} className={toolBtn + ' underline'}>U</button>
+        <button type="button" title="Bold (Ctrl+B)" onMouseDown={preventFocusSteal} onClick={() => exec('bold')} className={toolBtn + ' font-extrabold'}>B</button>
+        <button type="button" title="Italic (Ctrl+I)" onMouseDown={preventFocusSteal} onClick={() => exec('italic')} className={toolBtn + ' italic'}>I</button>
+        <button type="button" title="Underline (Ctrl+U)" onMouseDown={preventFocusSteal} onClick={() => exec('underline')} className={toolBtn + ' underline'}>U</button>
         <span className="w-px h-4 bg-slate-300 mx-1" />
-        <button type="button" title="Bullet list" onClick={() => exec('insertUnorderedList')} className={toolBtn}>• List</button>
-        <button type="button" title="Numbered list" onClick={() => exec('insertOrderedList')} className={toolBtn}>1. List</button>
+        <button type="button" title="Bullet list" onMouseDown={preventFocusSteal} onClick={() => exec('insertUnorderedList')} className={toolBtn}>• List</button>
+        <button type="button" title="Numbered list" onMouseDown={preventFocusSteal} onClick={() => exec('insertOrderedList')} className={toolBtn}>1. List</button>
         <span className="w-px h-4 bg-slate-300 mx-1" />
-        <button type="button" title="Clear formatting" onClick={() => exec('removeFormat')} className={toolBtn + ' text-slate-500'}>⌫ Fmt</button>
+        <button type="button" title="Clear formatting" onMouseDown={preventFocusSteal} onClick={() => exec('removeFormat')} className={toolBtn + ' text-slate-500'}>⌫ Fmt</button>
         <span className="flex-1" />
         <button type="button" title="Shortcuts" onClick={() => setShowHelp(!showHelp)} className={toolBtn + ' text-slate-400'}>?</button>
       </div>

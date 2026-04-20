@@ -44,13 +44,17 @@ function isDedupMarker(t) {
 // ---------- Main auditor ----------
 export function runAccountingAudit(data) {
   data = data || {};
-  var treasury = data.treasury || [];
-  var invoices = data.invoices || [];
-  var checks = data.checks || [];
-  var egyptBankTxns = data.egyptBankTxns || [];
-  var warehouse = data.warehouse || [];
-  var customers = data.customers || [];
-  var debts = data.debts || [];
+  // Defensive array coercion — any non-array value (string, object, null, undefined)
+  // falls back to []. Previously `data.treasury || []` would pass a truthy string
+  // straight through and crash at the first .filter() call.
+  var toArr = function(v) { return Array.isArray(v) ? v : []; };
+  var treasury = toArr(data.treasury);
+  var invoices = toArr(data.invoices);
+  var checks = toArr(data.checks);
+  var egyptBankTxns = toArr(data.egyptBankTxns);
+  var warehouse = toArr(data.warehouse);
+  var customers = toArr(data.customers);
+  var debts = toArr(data.debts);
 
   var findings = [];
   var metrics = {};

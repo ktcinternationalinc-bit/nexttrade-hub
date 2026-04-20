@@ -44,8 +44,19 @@ export async function dbUpdate(table, id, changes, userId) {
     const hoursSinceCreation = createdAt ? (Date.now() - new Date(createdAt).getTime()) / 3600000 : 0;
     const isLateEdit = hoursSinceCreation > 24;
 
-    // Detect sensitive field changes
-    const SENSITIVE_FIELDS = ['amount', 'total', 'cash_in', 'cash_out', 'price', 'unit_price', 'rate', 'date', 'description', 'customer', 'order_number', 'invoice_number', 'qty', 'quantity', 'vat_rate'];
+    // Detect sensitive field changes. List covers both legacy short names
+    // (preserved for backward compat) AND actual schema column names across
+    // invoices / treasury / checks / bank. Without the long forms, audit trail
+    // would miss edits to bank_in, total_amount, transaction_date, etc.
+    const SENSITIVE_FIELDS = [
+      // Short forms (legacy; preserved)
+      'amount', 'total', 'cash_in', 'cash_out', 'price', 'unit_price', 'rate', 'date', 'description', 'customer', 'order_number', 'invoice_number', 'qty', 'quantity', 'vat_rate',
+      // Schema column names (real ones the UI edits)
+      'total_amount', 'total_collected', 'outstanding',
+      'bank_in', 'bank_out', 'expected_amount', 'usd_in', 'usd_out', 'foreign_amount',
+      'transaction_date', 'invoice_date', 'due_date', 'check_date', 'collection_date',
+      'customer_name', 'customer_name_en', 'check_number',
+    ];
     const changedFields = Object.keys(changes).filter(k => old && old[k] !== changes[k]);
     const sensitiveChanges = changedFields.filter(f => SENSITIVE_FIELDS.includes(f));
 
