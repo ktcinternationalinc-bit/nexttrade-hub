@@ -4374,8 +4374,9 @@ export default function App() {
                   alert('Please fill order#, customer, and add items / الرجاء ملء رقم الأمر والعميل وإضافة بنود'); return;
                 }
                 try {
+                  const orderNum = sanitize(formData.orderNumber);
                   const { data: newInv } = await supabase.from('invoices').insert({
-                    order_number: sanitize(formData.orderNumber), customer_name: sanitize(formData.customerName),
+                    order_number: orderNum, customer_name: sanitize(formData.customerName),
                     invoice_date: formData.date || today(), total_amount: totalAmt,
                     total_collected: 0, outstanding: totalAmt, sales_rep: formData.salesRep || '',
                     notes: sanitize(formData.notes || ''), source: 'manual',
@@ -4397,16 +4398,38 @@ export default function App() {
                       }
                     }
                   }
+                  // BACKFILL: link any orphan treasury rows (cash OR bank) that reference
+                  // this order_number but have no linked_invoice_id. Then recalc collected.
+                  let backfillCount = 0;
+                  if (newInv && newInv.id) {
+                    const { data: orphans } = await supabase.from('treasury')
+                      .select('id')
+                      .eq('order_number', orderNum)
+                      .is('linked_invoice_id', null);
+                    if (orphans && orphans.length > 0) {
+                      await supabase.from('treasury')
+                        .update({ linked_invoice_id: newInv.id })
+                        .eq('order_number', orderNum)
+                        .is('linked_invoice_id', null);
+                      await recalcInvoiceCollected(newInv.id);
+                      backfillCount = orphans.length;
+                    }
+                  }
                   // Instant local update so new invoice appears at top immediately
                   const tempInv = {
                     id: newInv?.id || 'temp-' + Date.now(),
-                    order_number: sanitize(formData.orderNumber), customer_name: sanitize(formData.customerName),
+                    order_number: orderNum, customer_name: sanitize(formData.customerName),
                     invoice_date: formData.date || today(), total_amount: totalAmt,
                     total_collected: 0, outstanding: totalAmt, sales_rep: formData.salesRep || '',
                     notes: sanitize(formData.notes || ''), source: 'manual',
                   };
                   setInvoices(prev => [tempInv, ...prev]);
                   setShowAddInvoice(false); setFormData({});
+                  if (backfillCount > 0) {
+                    toast.success('Invoice created + linked ' + backfillCount + ' waiting treasury entr' + (backfillCount === 1 ? 'y' : 'ies') + ' ✓');
+                  } else {
+                    toast.success('Invoice created ✓');
+                  }
                   // Full refresh in background
                   setTimeout(() => loadAllData(), 500);
                 } catch (err) { toast.error(err.message); }
@@ -4926,7 +4949,7 @@ export default function App() {
 
             {/* ===== AI ASSISTANT (compact — click to expand) ===== */}
             {!greeterDismissed && greeterSettings.enabled ? (
-              <div className="mb-4">
+              <div className="mb-4 pt-4">
                 <AIGreeter
                   user={user} userProfile={userProfile} users={teamUsers}
                   tickets={dashTickets} invoices={invoices} treasury={treasury}
@@ -7038,16 +7061,38 @@ export default function App() {
                       const isBankMatched = !isBankPlaceholder && txn.matched_bank_txn_id;
                       const hasBankAmount = Number(txn.bank_in || 0) > 0 || Number(txn.bank_out || 0) > 0;
                       const isBankRow = isBankPlaceholder || isBankMatched || hasBankAmount;
+                      // ORPHAN: row has an order# and carries inflow (cash_in OR bank_in), but no
+                      // invoice with that order# exists yet. Amount is tracked but not yet crediting
+                      // any invoice. Will auto-link when someone creates the matching invoice.
+                      const hasInflow = Number(txn.cash_in || 0) > 0 || Number(txn.bank_in || 0) > 0;
+                      const isOrphanWaiting = hasInflow
+                        && txn.order_number
+                        && !txn.linked_invoice_id
+                        && !txn.is_bank_placeholder
+                        && !invoices.find(i => String(i.order_number || '') === String(txn.order_number || ''));
                       const rowClass = "border-b border-slate-100 " +
                         (isBankPlaceholder
                           ? "bg-indigo-100 hover:bg-indigo-200 border-l-4 border-l-indigo-600"
+                          : isOrphanWaiting
+                          ? "bg-amber-50 hover:bg-amber-100 border-l-4 border-l-amber-500"
+                          : isBankMatched
+                          ? "border-l-4 border-l-emerald-500 hover:bg-emerald-50/50"
                           : isBankRow
                           ? "bg-indigo-50 hover:bg-indigo-100 border-l-4 border-l-indigo-400"
                           : "hover:bg-blue-50/30");
+                      // Matched bank rows get a subtle emerald-to-indigo gradient so the success
+                      // state is unmistakable at a glance.
+                      const rowStyle = isBankMatched
+                        ? { background: 'linear-gradient(90deg, #ecfdf5 0%, #eef2ff 100%)' }
+                        : undefined;
                       const bankAcc = isBankRow && txn.bank_account_id ? egyptBankAccounts.find(a => a.id === txn.bank_account_id) : null;
                       return (
-                      <tr key={txn.id} className={rowClass}
-                          title={isBankRow ? "Bank entry — affects invoice collections only, does NOT impact treasury (safe) net / قيد بنكي — يؤثر على تحصيل الفاتورة فقط، لا يؤثر على رصيد الخزنة" : undefined}>
+                      <tr key={txn.id} className={rowClass} style={rowStyle}
+                          title={isOrphanWaiting
+                            ? "Waiting for invoice #" + txn.order_number + " to be created — amount shown but not yet credited to any invoice"
+                            : isBankRow
+                            ? "Bank entry — affects invoice collections only, does NOT impact treasury (safe) net / قيد بنكي — يؤثر على تحصيل الفاتورة فقط، لا يؤثر على رصيد الخزنة"
+                            : undefined}>
                         <td className="px-2 py-1.5 text-[10px] whitespace-nowrap">{txn.transaction_date}</td>
                         <td className="px-2 py-1.5 text-[10px] font-semibold text-center">
                           {txn.order_number ? (() => {
@@ -7061,58 +7106,127 @@ export default function App() {
                                 </button>
                               );
                             }
+                            // No invoice exists yet — if this row has inflow, offer to create one inline.
+                            if (hasInflow) {
+                              return (
+                                <button
+                                  onClick={() => {
+                                    // Pre-fill the Add Invoice form with this treasury row's data
+                                    const inflowAmt = Number(txn.cash_in || 0) + Number(txn.bank_in || 0);
+                                    setFormData({
+                                      orderNumber: txn.order_number,
+                                      customerName: txn.description ? String(txn.description).split(/[\[\(]/)[0].trim() : '',
+                                      amount: inflowAmt,
+                                      date: txn.transaction_date || today(),
+                                      invoiceItems: inflowAmt > 0 ? [{
+                                        inv_desc: txn.description || 'Invoice for order ' + txn.order_number,
+                                        inv_qty: 1,
+                                        inv_price: inflowAmt,
+                                        inv_total: inflowAmt,
+                                      }] : [],
+                                    });
+                                    setShowAddInvoice(true);
+                                  }}
+                                  className="text-amber-700 hover:text-amber-900 font-extrabold underline-offset-2 hover:underline"
+                                  title="No invoice exists for this order. Click to create one — the amount will auto-link.">
+                                  {txn.order_number} ⚠️
+                                </button>
+                              );
+                            }
                             return <span className="text-slate-500" title="No matching invoice">{txn.order_number}</span>;
                           })() : ''}
                         </td>
-                        <td className="px-2 py-1.5 text-[10px]" style={{direction: lang === 'ar' ? 'rtl' : 'ltr'}}>
-                          {isBankPlaceholder && (
-                            <span className="inline-block px-2 py-0.5 rounded bg-indigo-700 text-white text-[10px] font-extrabold mr-1 shadow">🏦 BANK (awaiting)</span>
-                          )}
-                          {isBankMatched && (
-                            <span className="inline-block px-2 py-0.5 rounded bg-indigo-600 text-white text-[10px] font-extrabold mr-1 shadow">🏦 BANK (received)</span>
-                          )}
-                          {!isBankPlaceholder && !isBankMatched && hasBankAmount && (
-                            <span className="inline-block px-2 py-0.5 rounded bg-indigo-500 text-white text-[10px] font-extrabold mr-1 shadow">🏦 BANK</span>
-                          )}
-                          {/* Cash-channel tag — Vodafone or InstaPay rows are visually distinct
-                              from physical cash for reconciliation purposes. */}
-                          {!isBankRow && txn.cash_method === 'vodafone' && (
-                            <span className="inline-block px-2 py-0.5 rounded bg-red-600 text-white text-[10px] font-extrabold mr-1 shadow">📱 Vodafone</span>
-                          )}
-                          {!isBankRow && txn.cash_method === 'instapay' && (
-                            <span className="inline-block px-2 py-0.5 rounded bg-amber-500 text-white text-[10px] font-extrabold mr-1 shadow">⚡ InstaPay</span>
-                          )}
-                          {tx(txn.description, txn.description_en)}
-                          {txn.cash_out > 0 && txn.category && (
-                            <span className="text-[8px] text-amber-600 ml-1">({txCat(txn.category)}{txn.subcategory ? ' > ' + txn.subcategory : ''})</span>
+                        <td className="px-2 py-1.5" style={{direction: lang === 'ar' ? 'rtl' : 'ltr'}}>
+                          {/* Badges row */}
+                          <div className="flex flex-wrap gap-1 items-center mb-1">
+                            {isBankPlaceholder && (
+                              <span className="inline-block px-2 py-0.5 rounded bg-indigo-700 text-white text-[10px] font-extrabold shadow">🏦 BANK (awaiting)</span>
+                            )}
+                            {isBankMatched && (
+                              <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-white text-[10px] font-extrabold shadow"
+                                    style={{background: 'linear-gradient(135deg, #4f46e5 0%, #10b981 100%)'}}
+                                    title="Bank deposit matched + verified against the statement">
+                                🏦 BANK ✅ RECEIVED
+                              </span>
+                            )}
+                            {!isBankPlaceholder && !isBankMatched && hasBankAmount && (
+                              <span className="inline-block px-2 py-0.5 rounded bg-indigo-500 text-white text-[10px] font-extrabold shadow">🏦 BANK</span>
+                            )}
+                            {isOrphanWaiting && (
+                              <span className="inline-block px-2 py-0.5 rounded bg-amber-500 text-white text-[10px] font-extrabold shadow" title="No invoice exists for this order — amount shown but not yet credited. Will auto-link when the invoice is created.">
+                                ⏳ WAITING FOR INVOICE
+                              </span>
+                            )}
+                            {!isBankRow && txn.cash_method === 'vodafone' && (
+                              <span className="inline-block px-2 py-0.5 rounded bg-red-600 text-white text-[10px] font-extrabold shadow">📱 Vodafone</span>
+                            )}
+                            {!isBankRow && txn.cash_method === 'instapay' && (
+                              <span className="inline-block px-2 py-0.5 rounded bg-amber-500 text-white text-[10px] font-extrabold shadow">⚡ InstaPay</span>
+                            )}
+                          </div>
+                          {/* Description — primary content, larger font */}
+                          <div className="text-[12px] font-semibold text-slate-800 leading-snug">
+                            {tx(txn.description, txn.description_en)}
+                          </div>
+                          {/* Category — own line, below description, smaller muted */}
+                          {(txn.category || txn.subcategory) && (
+                            <div className="text-[10px] text-amber-700 mt-0.5">
+                              <span className="font-semibold">{txCat(txn.category) || 'Uncategorized'}</span>
+                              {txn.subcategory && <span className="text-amber-600"> › {txn.subcategory}</span>}
+                            </div>
                           )}
                           {isBankRow && txn.bank_nonorder_category && (
-                            <span className="text-[8px] text-indigo-700 font-bold ml-1">[{txn.bank_nonorder_category}]</span>
+                            <div className="text-[10px] text-indigo-700 font-bold mt-0.5">[{txn.bank_nonorder_category}]</div>
                           )}
                           {bankAcc && (
-                            <div className="text-[10px] text-indigo-900 font-bold">→ {bankAcc.bank_name}{bankAcc.account_name ? ' / ' + bankAcc.account_name : ''}</div>
+                            <div className="text-[10px] text-indigo-900 font-bold mt-0.5">→ {bankAcc.bank_name}{bankAcc.account_name ? ' / ' + bankAcc.account_name : ''}</div>
                           )}
                           {txn.linked_invoice_id && (() => {
                             const li = invoices.find(i => i.id === txn.linked_invoice_id);
-                            return li ? <div className="text-[8px] text-emerald-600">✅ → {li.customer_name || li.order_number}</div> : null;
+                            return li ? <div className="text-[10px] text-emerald-700 font-semibold mt-0.5">✅ → {li.customer_name || li.order_number}</div> : null;
                           })()}
                           {isBankRow && (
-                            <div className="text-[9px] text-indigo-700 italic mt-0.5">Does not affect safe balance / لا يؤثر على رصيد الخزنة</div>
+                            <div className="text-[10px] text-indigo-700 italic mt-0.5">Does not affect safe balance / لا يؤثر على رصيد الخزنة</div>
+                          )}
+                          {isOrphanWaiting && (
+                            <div className="text-[10px] text-amber-700 italic mt-0.5 font-semibold">
+                              ⏳ Not yet credited — invoice #{txn.order_number} does not exist. Click the order# to create it.
+                            </div>
                           )}
                         </td>
                         <td className="px-2 py-1.5 text-[10px] text-right font-semibold">
-                          {/* Awaiting bank placeholder — show expected amount in italics, indigo */}
-                          {isBankPlaceholder && txn.expected_direction === 'in' && <div className="text-indigo-500 italic">~{fE(txn.expected_amount)}</div>}
-                          {/* Matched / confirmed bank_in — indigo, not emerald, because this is not safe money */}
-                          {Number(txn.bank_in || 0) > 0 && <div className="text-indigo-700 font-bold">{fE(txn.bank_in)}</div>}
+                          {/* Awaiting bank placeholder — show expected amount + explicit "won't affect safe" caption */}
+                          {isBankPlaceholder && txn.expected_direction === 'in' && (
+                            <div>
+                              <div className="text-indigo-500 italic font-bold">~{fE(txn.expected_amount)}</div>
+                              <div className="text-[8px] text-indigo-400 italic normal-case">won't affect safe / لا يؤثر على الخزنة</div>
+                            </div>
+                          )}
+                          {/* Matched / confirmed bank_in — emerald-tinted indigo + check mark */}
+                          {Number(txn.bank_in || 0) > 0 && (
+                            <div className="inline-block px-1.5 py-0.5 rounded" style={{background: '#ecfdf5', border: '1.5px solid #10b981'}}>
+                              <div className="text-indigo-700 font-extrabold">{fE(txn.bank_in)} <span className="text-emerald-600">✅</span></div>
+                              <div className="text-[8px] text-emerald-700 italic">matched — collected only</div>
+                            </div>
+                          )}
                           {/* Safe cash in — emerald */}
                           {Number(txn.cash_in) > 0 && <span className="text-emerald-600">{fE(txn.cash_in)}</span>}
                           {Number(txn.usd_in) > 0 && <div className="text-emerald-600">${Number(txn.usd_in).toLocaleString()} <span className="text-[8px] text-amber-600">USD</span></div>}
                           {Number(txn.foreign_amount || 0) > 0 && txn.foreign_direction === 'in' && <div className="text-emerald-600">{Number(txn.foreign_amount).toLocaleString()} <span className="text-[8px] text-amber-600">{txn.foreign_currency}</span></div>}
                         </td>
                         <td className="px-2 py-1.5 text-[10px] text-right font-semibold">
-                          {isBankPlaceholder && txn.expected_direction === 'out' && <div className="text-indigo-500 italic">~{fE(txn.expected_amount)}</div>}
-                          {Number(txn.bank_out || 0) > 0 && <div className="text-indigo-700 font-bold">{fE(txn.bank_out)}</div>}
+                          {isBankPlaceholder && txn.expected_direction === 'out' && (
+                            <div>
+                              <div className="text-indigo-500 italic font-bold">~{fE(txn.expected_amount)}</div>
+                              <div className="text-[8px] text-indigo-400 italic normal-case">won't affect safe / لا يؤثر على الخزنة</div>
+                            </div>
+                          )}
+                          {Number(txn.bank_out || 0) > 0 && (
+                            <div className="inline-block px-1.5 py-0.5 rounded" style={{background: '#fef2f2', border: '1.5px solid #ef4444'}}>
+                              <div className="text-indigo-700 font-extrabold">{fE(txn.bank_out)} <span className="text-red-500">✅</span></div>
+                              <div className="text-[8px] text-red-600 italic">matched — bank ledger only</div>
+                            </div>
+                          )}
                           {Number(txn.cash_out) > 0 && <span className="text-red-500">{fE(txn.cash_out)}</span>}
                           {Number(txn.usd_out) > 0 && <div className="text-red-500">${Number(txn.usd_out).toLocaleString()} <span className="text-[8px] text-amber-600">USD</span></div>}
                           {Number(txn.foreign_amount || 0) > 0 && txn.foreign_direction === 'out' && <div className="text-red-500">{Number(txn.foreign_amount).toLocaleString()} <span className="text-[8px] text-amber-600">{txn.foreign_currency}</span></div>}

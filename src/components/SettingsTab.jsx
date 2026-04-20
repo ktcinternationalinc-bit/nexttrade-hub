@@ -3,6 +3,7 @@ import { useState, useEffect } from 'react';
 import { supabase, dbInsert, dbUpdate } from '../lib/supabase';
 import { EXPENSE_CATS } from '../lib/utils';
 import TranslationPanel from './TranslationPanel';
+import AIMemorySettingsPanel from './AIMemorySettingsPanel';
 import { PERSONALITIES } from './AIGreeter';
 
 const ROLES = [
@@ -222,13 +223,18 @@ export default function SettingsTab({ toast, user, users, onReload, isAdmin, use
 
       {/* Section Tabs */}
       <div className="flex gap-1 mb-3 flex-wrap">
-        {[['roles', 'Team & Roles'], ['profiles', '👤 Team Profiles'], ['permissions', 'Module Access'], ['notifications', 'Notifications'], ['comms', '📬 Communications'], ['greeter', '🤖 AI Greeter'], ['categories', '🏷️ Categories'], ['rules', 'Category Rules / قواعد'], ['expenses', '📋 Expense Descriptions'], ['translation', '🌐 Translation / ترجمة']].map(([v, l]) => (
+        {[['roles', 'Team & Roles'], ['profiles', '👤 Team Profiles'], ['permissions', 'Module Access'], ['notifications', 'Notifications'], ['comms', '📬 Communications'], ['greeter', '🤖 AI Greeter'], ...(isSuperAdmin ? [['aimemory', '🧠 AI Memory']] : []), ['categories', '🏷️ Categories'], ['rules', 'Category Rules / قواعد'], ['expenses', '📋 Expense Descriptions'], ['translation', '🌐 Translation / ترجمة']].map(([v, l]) => (
           <button key={v} onClick={() => setSection(v)}
             className={'px-3 py-1.5 rounded-lg text-xs font-semibold transition ' + (section === v ? 'bg-slate-900 text-white' : 'bg-slate-100 text-slate-500')}>
             {l}
           </button>
         ))}
       </div>
+
+      {/* ===== AI MEMORY (SUPER ADMIN ONLY) ===== */}
+      {section === 'aimemory' && isSuperAdmin && (
+        <AIMemorySettingsPanel userProfile={userProfile} toast={toast} />
+      )}
 
       {/* ===== TEAM & ROLES ===== */}
       {section === 'roles' && (

@@ -1,4 +1,5 @@
 import { createClient } from '@supabase/supabase-js';
+import { loadMemorySettings, loadMemoryForUser, buildMemoryContext, extractMemoryCandidates, persistMemoryCandidates } from '../../../lib/ai-memory';
 
 var supabase = createClient(
   process.env.NEXT_PUBLIC_SUPABASE_URL,
@@ -629,6 +630,21 @@ export async function POST(request) {
       });
     }
 
+    // AI MEMORY — inject per-user memory + context into the system prompt.
+    // Non-fatal on error. Settings-gated. Respects cross_user_read scope.
+    var memoryCtx = null;
+    try {
+      var currentUserProfile = null;
+      if (userId) {
+        var upRes = await supabase.from('users').select('id, name, full_name, role').eq('id', userId).maybeSingle();
+        currentUserProfile = upRes && upRes.data ? upRes.data : { id: userId };
+      }
+      memoryCtx = await buildMemoryContext(supabase, userId, currentUserProfile);
+      if (memoryCtx && memoryCtx.prompt) {
+        context += '\n\n' + memoryCtx.prompt + '\n';
+      }
+    } catch (memErr) { /* memory is optional — continue without it */ }
+
     // BUILD MESSAGES
     var messages = [];
     history.slice(-10).forEach(function(msg) {
@@ -650,6 +666,22 @@ export async function POST(request) {
 
     var data = await response.json();
     var aiText = (data.content && data.content[0] && data.content[0].text) || 'No response';
+
+    // AI MEMORY — fire-and-forget writer. Extract candidates from the user's
+    // message and the AI response; persist any that qualify. Settings-gated.
+    // We do NOT await this into the response — respond to the user immediately,
+    // memory gets written in the background.
+    (async function () {
+      try {
+        if (!memoryCtx || !memoryCtx.settings || !memoryCtx.settings.auto_capture_enabled) return;
+        // Load team roster for target resolution
+        var tm = await supabase.from('users').select('id, name, full_name, nickname').limit(50);
+        var candidates = await extractMemoryCandidates(question, aiText, currentUserProfile, (tm && tm.data) || [], memoryCtx.settings);
+        if (candidates && candidates.length > 0) {
+          await persistMemoryCandidates(supabase, candidates, userId, question, memoryCtx.settings);
+        }
+      } catch (e) { /* silent */ }
+    })();
 
     // PARSE ACTION
     var startTag = '---ACTION_START---';

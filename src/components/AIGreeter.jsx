@@ -335,7 +335,10 @@ export default function AIGreeter({ user, userProfile, users, tickets, invoices,
       var final = [].concat(msgs, [{ role: 'assistant', text: aiText }]);
       setMessages(final);
       saveMemory(final); // Save conversation memory after every interaction
-      doType(aiText, function() { doSpeak(aiText); });
+      // Start speech immediately in parallel with typing animation so the user
+      // hears the greeting at once instead of waiting for the typing to finish.
+      doSpeak(aiText);
+      doType(aiText, null);
     } catch(e) {
       var fb = useLang === 'ar' ? 'عذراً، حدث خطأ.' : 'Sorry, something went wrong.';
       setMessages([].concat(msgs, [{ role: 'assistant', text: fb }]));
@@ -366,9 +369,19 @@ export default function AIGreeter({ user, userProfile, users, tickets, invoices,
 
   var lastMsg = messages.length > 0 ? messages[messages.length - 1] : null;
   var showTypingAnim = lastMsg && lastMsg.role === 'assistant' && !typingDone;
+  var containerRef = useRef(null);
+
+  // Scroll the greeter into view when it starts loading (initial greet) or when a
+  // new message begins typing — so the user sees the animation from the start
+  // instead of the card being above the fold.
+  useEffect(function() {
+    if ((loading || showTypingAnim) && containerRef.current) {
+      try { containerRef.current.scrollIntoView({ behavior: 'smooth', block: 'center' }); } catch(e) {}
+    }
+  }, [loading, showTypingAnim]);
 
   return (
-    <div className="mb-4 rounded-2xl overflow-hidden shadow-2xl" style={{ border: '2px solid ' + persona.color + '30', background: 'linear-gradient(135deg, rgba(15,23,42,0.97), rgba(30,27,75,0.97))' }}>
+    <div ref={containerRef} className="mt-6 mb-4 rounded-2xl overflow-hidden shadow-2xl scroll-mt-24" style={{ border: '2px solid ' + persona.color + '30', background: 'linear-gradient(135deg, rgba(15,23,42,0.97), rgba(30,27,75,0.97))' }}>
       {/* Header */}
       <div className="px-4 py-3 flex items-center gap-3" style={{ background: persona.color + '18', borderBottom: '1px solid ' + persona.color + '25' }}>
         <div className="w-10 h-10 rounded-full flex items-center justify-center text-lg shadow-lg" style={{ background: 'linear-gradient(135deg, ' + persona.color + ', ' + persona.color + '80)' }}>

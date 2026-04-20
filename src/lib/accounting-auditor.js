@@ -606,6 +606,60 @@ export function runAccountingAudit(data) {
     });
   }
 
+  // I4: Orphan order numbers — treasury rows with inflow that reference an order_number
+  // for which no invoice exists yet. Money is tracked but not credited to any invoice.
+  // These auto-resolve when the matching invoice is created (backfill logic in page.jsx).
+  var orphanOrders = [];
+  var orderNumberSet = {};
+  for (var oi = 0; oi < invoices.length; oi++) {
+    if (invoices[oi].order_number) orderNumberSet[String(invoices[oi].order_number).trim()] = true;
+  }
+  for (var orp = 0; orp < treasury.length; orp++) {
+    var trO = treasury[orp];
+    var orpInflow = Number(trO.cash_in || 0) + Number(trO.bank_in || 0);
+    if (orpInflow <= 0) continue;
+    if (trO.is_bank_placeholder) continue;
+    if (isDedupMarker(trO)) continue;
+    if (trO.linked_invoice_id) continue;
+    var orpOrder = String(trO.order_number || '').trim();
+    if (!orpOrder) continue;
+    if (orderNumberSet[orpOrder]) continue; // invoice exists but not linked — I2 handles this
+    orphanOrders.push({
+      treasury_id: trO.id,
+      date: trO.transaction_date,
+      order_number: orpOrder,
+      channel: Number(trO.bank_in || 0) > 0 ? 'bank' : 'cash',
+      amount: orpInflow,
+      description: String(trO.description || '').substring(0, 60),
+      customer_hint: String(trO.description || '').split(/[\[\(]/)[0].trim().substring(0, 40),
+    });
+  }
+  if (orphanOrders.length > 0) {
+    // Group by order_number so Max can see total per missing invoice
+    var grouped = {};
+    for (var g = 0; g < orphanOrders.length; g++) {
+      var o = orphanOrders[g];
+      if (!grouped[o.order_number]) grouped[o.order_number] = { order_number: o.order_number, total: 0, count: 0, rows: [] };
+      grouped[o.order_number].total += o.amount;
+      grouped[o.order_number].count++;
+      grouped[o.order_number].rows.push(o);
+    }
+    var groupedArr = Object.keys(grouped).map(function(k){ return grouped[k]; });
+    findings.push({
+      severity: 'info',
+      code: 'ORPHAN_ORDER_NUMBER',
+      titleEn: orphanOrders.length + ' treasury row(s) waiting for missing invoice(s) — ' + groupedArr.length + ' unique order(s)',
+      titleAr: orphanOrders.length + ' قيد خزنة ينتظر إنشاء فاتورة — ' + groupedArr.length + ' أمر فريد',
+      descEn: 'These rows have inflow against an order# but no matching invoice exists yet. The money IS tracked (bank ledger and/or safe net) but is NOT credited to any invoice.total_collected. Creating the invoice will auto-link all waiting rows.',
+      descAr: 'هذه القيود تحمل مبالغ واردة على أرقام أوامر بدون فواتير مقابلة. المبلغ مسجّل (في البنك أو الخزنة) لكنه غير محتسب في تحصيل أي فاتورة. إنشاء الفاتورة سيربط القيود المنتظرة تلقائيًا.',
+      totalImpact: sum(orphanOrders, function(x){ return x.amount; }),
+      count: orphanOrders.length,
+      items: groupedArr.slice(0, 20).map(function(x){ return { order_number: x.order_number, total: x.total, rows_waiting: x.count, customer_hint: x.rows[0].customer_hint }; }),
+      actionEn: 'For each missing order, either create the invoice (Sales → Add Invoice with matching order#) to auto-link all waiting rows, OR unlink the treasury rows if the order# is wrong. Treasury tab shows these with a ⏳ WAITING FOR INVOICE badge.',
+      actionAr: 'لكل أمر: إما أنشئ الفاتورة (مبيعات → إضافة فاتورة بنفس رقم الأمر) ليتم الربط تلقائيًا، أو أزل الربط إن كان رقم الأمر خطأ. هذه القيود تظهر في الخزنة بشارة ⏳ بانتظار الفاتورة.'
+    });
+  }
+
   // I3: Zero-amount treasury rows (likely USD pending import) — check all four channels
   var zeroEGP = treasury.filter(function (tr) {
     return Number(tr.cash_in || 0) === 0

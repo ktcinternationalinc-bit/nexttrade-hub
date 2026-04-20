@@ -26,6 +26,37 @@ export default function AIAssistant({ user, userProfile, users, customers }) {
   const maxTimeoutRef = useRef(null);
   const voiceRef = useRef(null);
 
+  // Memory briefing state
+  const [briefing, setBriefing] = useState(null);
+  const [briefingShown, setBriefingShown] = useState(false);
+
+  // Fetch the morning briefing for this user
+  const fetchBriefing = async () => {
+    if (!myId) return null;
+    try {
+      const r = await fetch('/api/memory?briefing=1&userId=' + myId);
+      const data = await r.json();
+      return data && data.briefing ? data.briefing : null;
+    } catch (e) { return null; }
+  };
+
+  // On mount: show briefing once per day per user (first open of the day)
+  useEffect(() => {
+    if (!myId) return;
+    const key = 'ktc_briefing_shown_' + myId + '_' + new Date().toISOString().substring(0, 10);
+    if (typeof window !== 'undefined' && window.sessionStorage && window.sessionStorage.getItem(key)) return;
+    (async () => {
+      const b = await fetchBriefing();
+      if (!b) return;
+      const anyItems = (b.counts.urgent + b.counts.meetings + b.counts.reminders + b.counts.from_others) > 0;
+      if (!anyItems) return;
+      setBriefing(b);
+      setBriefingShown(true);
+      try { window.sessionStorage.setItem(key, '1'); } catch (e) {}
+    })();
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [myId]);
+
   useEffect(() => {
     // Find the most natural-sounding voice available
     const loadVoices = () => {
@@ -674,6 +705,17 @@ ${today}`;
               {listening ? '🔴 Listening...' : '🎤 Voice Ready'}
             </div>
           )}
+          <button onClick={async () => {
+              const b = await fetchBriefing();
+              if (!b) return;
+              setBriefing(b);
+              setBriefingShown(true);
+            }}
+            className="px-3 py-1.5 rounded-lg text-xs font-semibold"
+            style={{background:'linear-gradient(135deg,#4f46e5,#7c3aed)', color:'#fff', border:'1px solid rgba(255,255,255,0.15)'}}
+            title="Show your daily briefing (urgent items, meetings, reminders)">
+            ☀️ Brief Me
+          </button>
           {messages.length > 0 && (
             <button onClick={() => { setMessages([]); setPendingAction(null); window.speechSynthesis?.cancel(); }}
               className="px-3 py-1.5 rounded-lg text-xs font-semibold"
@@ -683,6 +725,53 @@ ${today}`;
           )}
         </div>
       </div>
+
+      {/* Morning briefing card */}
+      {briefingShown && briefing && (
+        <div className="rounded-xl p-4 mb-4" style={{
+          background: 'linear-gradient(135deg, rgba(79,70,229,0.15), rgba(16,185,129,0.1))',
+          border: '1.5px solid rgba(79,70,229,0.35)',
+        }}>
+          <div className="flex justify-between items-start mb-2">
+            <div>
+              <div style={{fontSize:14, fontWeight:900, color:'#fff'}}>☀️ Good morning{userProfile?.name ? ', ' + userProfile.name : ''}</div>
+              <div style={{fontSize:11, color:'rgba(255,255,255,0.6)'}}>Your briefing for {new Date().toLocaleDateString()}</div>
+            </div>
+            <button onClick={() => setBriefingShown(false)} style={{color:'rgba(255,255,255,0.5)', fontSize:16}}>✕</button>
+          </div>
+          <div style={{display:'grid', gridTemplateColumns:'repeat(2,1fr)', gap:8, fontSize:11}}>
+            {briefing.urgent.length > 0 && (
+              <div style={{background:'rgba(239,68,68,0.15)', border:'1px solid rgba(239,68,68,0.3)', borderRadius:8, padding:10}}>
+                <div style={{fontWeight:900, color:'#fca5a5', marginBottom:4}}>🚨 URGENT ({briefing.urgent.length})</div>
+                {briefing.urgent.slice(0, 3).map(m => <div key={m.id} style={{color:'#fee2e2', marginBottom:2}}>• {m.content}</div>)}
+                {briefing.urgent.length > 3 && <div style={{color:'rgba(254,226,226,0.5)'}}>+ {briefing.urgent.length - 3} more</div>}
+              </div>
+            )}
+            {briefing.meetings.length > 0 && (
+              <div style={{background:'rgba(79,70,229,0.15)', border:'1px solid rgba(79,70,229,0.3)', borderRadius:8, padding:10}}>
+                <div style={{fontWeight:900, color:'#a5b4fc', marginBottom:4}}>📅 Meetings ({briefing.meetings.length})</div>
+                {briefing.meetings.slice(0, 3).map(m => <div key={m.id} style={{color:'#e0e7ff', marginBottom:2}}>• {m.content}</div>)}
+              </div>
+            )}
+            {briefing.reminders.length > 0 && (
+              <div style={{background:'rgba(245,158,11,0.15)', border:'1px solid rgba(245,158,11,0.3)', borderRadius:8, padding:10}}>
+                <div style={{fontWeight:900, color:'#fcd34d', marginBottom:4}}>⏰ Reminders ({briefing.reminders.length})</div>
+                {briefing.reminders.slice(0, 3).map(m => <div key={m.id} style={{color:'#fef3c7', marginBottom:2}}>• {m.content}</div>)}
+                {briefing.reminders.length > 3 && <div style={{color:'rgba(254,243,199,0.5)'}}>+ {briefing.reminders.length - 3} more</div>}
+              </div>
+            )}
+            {briefing.from_others.length > 0 && (
+              <div style={{background:'rgba(16,185,129,0.15)', border:'1px solid rgba(16,185,129,0.3)', borderRadius:8, padding:10}}>
+                <div style={{fontWeight:900, color:'#6ee7b7', marginBottom:4}}>💬 From Team ({briefing.from_others.length})</div>
+                {briefing.from_others.slice(0, 3).map(m => <div key={m.id} style={{color:'#d1fae5', marginBottom:2}}>• {m.content}</div>)}
+              </div>
+            )}
+          </div>
+          <div style={{marginTop:10, fontSize:10, color:'rgba(255,255,255,0.55)', fontStyle:'italic'}}>
+            Ask me to knock through any of these, or just chat — I'll remember what matters.
+          </div>
+        </div>
+      )}
 
       {/* Voice Command Banner */}
       {messages.length === 0 && (
