@@ -323,10 +323,14 @@ export async function POST(request) {
     var apiKey = process.env.ANTHROPIC_API_KEY;
     if (!apiKey) return Response.json({ ok: false, error: 'ANTHROPIC_API_KEY not configured' });
 
-    // Build message history — map user-friendly format to Anthropic's shape
+    // Build message history — map user-friendly format to Anthropic's shape.
+    // Same gotcha as /api/ask: first message must be role=user or the API
+    // returns 400. Strip any leading assistant messages (greeter saves its own
+    // opening greeting into history before the user has spoken).
     var messages = history.slice(-8).map(function(m) {
       return { role: m.role === 'user' ? 'user' : 'assistant', content: m.text || m.content || '' };
     }).filter(function(m) { return m.content && m.content.trim(); });
+    while (messages.length > 0 && messages[0].role !== 'user') messages.shift();
     messages.push({ role: 'user', content: question });
 
     var today = new Date().toISOString().substring(0, 10);
