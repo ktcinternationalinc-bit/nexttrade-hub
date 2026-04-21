@@ -15,7 +15,6 @@ import PersonalDashboard from '../components/PersonalDashboard';
 import AIAssistant from '../components/AIAssistant';
 import AIGreeter, { PERSONALITIES } from '../components/AIGreeter';
 import VoiceController from '../components/VoiceController';
-import NadiaActionBridge from '../components/NadiaActionBridge';
 import ShippingRatesTab from '../components/ShippingRatesTab';
 import ErrorBoundary, { SafeSection } from '../components/ErrorBoundary';
 import { DashboardSkeleton, TableSkeleton, CardGridSkeleton } from '../components/LoadingSkeleton';
@@ -1015,12 +1014,6 @@ export default function App() {
   // Uses ref guard to prevent infinite re-trigger loop
   // ==========================================
   const autoMatchRunning = useRef(false);
-  // BUG 3 fix: guard against double-click / fast-repeat submissions on the
-  // Add Payment form. Without this, a user accidentally clicking twice inserts
-  // two treasury rows — the invoice caps at total_amount via recalc, so it
-  // LOOKS right, but safe totals inflate by the duplicate amount. This ref
-  // lets us reject the second call within the same logical submission.
-  const addPaymentRunning = useRef(false);
   useEffect(() => {
     if (autoMatchRunning.current) return;
     if (!treasury.length || !egyptBankTxns.length) return;
@@ -1105,15 +1098,9 @@ export default function App() {
                 if (!tDate || Math.abs(bankDateMs - tDate) > ninetyDays) return false;
                 return true;
               });
-              // Find the sibling that actually matches this amount (cash OR bank).
-              // BUG 4 fix: tolerance is the MIN of (2% of expected, 500 EGP absolute).
-              // Without the absolute cap, a 10M EGP placeholder had 200k tolerance —
-              // enough to dedup against the wrong payment if two siblings had similar
-              // amounts. The 500 EGP cap is tight enough to catch rounding / bank
-              // fee variance but never across two logically distinct payments.
-              var dedupTol = Math.min(expAmt * 0.02, 500);
+              // Find the sibling that actually matches this amount (cash OR bank)
               const matchingSibling = existingLinked.find(t =>
-                Math.abs((Number(t.cash_in || 0) + Number(t.bank_in || 0)) - expAmt) < dedupTol
+                Math.abs((Number(t.cash_in || 0) + Number(t.bank_in || 0)) - expAmt) < expAmt * 0.02
               );
               if (matchingSibling) {
                 // Dedup: real money already counted — zero this row in every bucket
@@ -1339,17 +1326,10 @@ export default function App() {
   const treasuryByOrder = useMemo(() => {
     const map = {};
     treasury.forEach(t => {
-      if (!t.order_number) return;
-      // BUG 7 fix: exclude placeholders + dedup markers from per-order lookup.
-      // Both legitimately have zero amounts — keeping them here was showing
-      // accountants "0 EGP" rows in invoice drill-downs with no context, and
-      // was inflating the row count shown in reconciliation dashboards.
-      // They still live in the main treasury array for audit purposes.
-      if (t.is_bank_placeholder) return;
-      if (t.dedup_sibling_id) return;
-      if (t.description && String(t.description).indexOf('[bank confirmation') >= 0) return;
-      if (!map[t.order_number]) map[t.order_number] = [];
-      map[t.order_number].push(t);
+      if (t.order_number) {
+        if (!map[t.order_number]) map[t.order_number] = [];
+        map[t.order_number].push(t);
+      }
     });
     return map;
   }, [treasury]);
@@ -1566,20 +1546,13 @@ export default function App() {
     // for this invoice — just via different channels). We do NOT filter on cash_in>0
     // in the query anymore because a row might have bank_in>0 and cash_in=0.
     const { data: linked } = await supabase.from('treasury')
-      .select('id, cash_in, bank_in, is_bank_placeholder, description, dedup_sibling_id')
+      .select('id, cash_in, bank_in, is_bank_placeholder, description')
       .eq('linked_invoice_id', invoiceId);
-    // Sum only real entries (not placeholders, not bank-confirmation dedup markers).
-    // BUG 5 fix: prefer dedup_sibling_id (the stable DB column set at auto-match
-    // time) as the authoritative dedup signal, with the old description substring
-    // check kept as a legacy fallback. Previously the marker check relied purely
-    // on the description containing "[bank confirmation" — if a user edited the
-    // description and removed that marker, the row became "real" and got counted,
-    // reintroducing the double-counting the marker was meant to prevent.
+    // Sum only real entries (not placeholders, not bank-confirmation dedup markers)
     let total = 0;
     for (const t of (linked || [])) {
       if (t.is_bank_placeholder) continue;
-      if (t.dedup_sibling_id) continue;                                // authoritative
-      if (t.description && t.description.includes('[bank confirmation')) continue; // legacy fallback
+      if (t.description && t.description.includes('[bank confirmation')) continue;
       total += Number(t.cash_in || 0) + Number(t.bank_in || 0);
     }
     // Cap at invoice total
@@ -1593,16 +1566,10 @@ export default function App() {
 
   const handleAddPayment = async (pf) => {
     if (!canEditInvoices) { toast.error('You do not have permission to edit invoices.'); return; }
-    // BUG 3 fix: reject re-entry while a submission is in flight. A fast
-    // double-click would otherwise insert two treasury rows for the same
-    // payment — invoice stays correct (capped at total_amount) but safe
-    // totals inflate. Guard released in finally.
-    if (addPaymentRunning.current) return;
-    addPaymentRunning.current = true;
     const pd = pf || formData;
-    if (!pd.amount || Number(pd.amount) <= 0) { addPaymentRunning.current = false; toast.warning('Payment amount is required'); return; }
-    if (!pd.date) { addPaymentRunning.current = false; toast.warning('Payment date is required'); return; }
-    if (!selectedInvoice) { addPaymentRunning.current = false; toast.warning('No invoice selected'); return; }
+    if (!pd.amount || Number(pd.amount) <= 0) { toast.warning('Payment amount is required'); return; }
+    if (!pd.date) { toast.warning('Payment date is required'); return; }
+    if (!selectedInvoice) { toast.warning('No invoice selected'); return; }
     try {
       const method = pd.payMethod || 'cash';
       const isCheck = method === 'check';
@@ -1675,9 +1642,6 @@ export default function App() {
       await loadAllData();
     } catch (err) {
       toast.error(err.message);
-    } finally {
-      // BUG 3 fix: release guard regardless of success/failure
-      addPaymentRunning.current = false;
     }
   };
 
@@ -2031,53 +1995,18 @@ export default function App() {
       };
       await dbUpdate('treasury', txn.id, updates, user?.id);
 
-      // BUG 2 fix: if amounts changed AND row is linked to an invoice, the
-      // invoice's total_collected / outstanding is now stale. Recalc from DB
-      // truth. Previously the invoice would show the old collected amount
-      // until a reload or "Fix Links" button press — so a user fixing a typo
-      // (5000 → 500) would see the invoice still reporting 5000 collected.
-      const amountsChanged =
-        Number(updates.cash_in  || 0) !== Number(txn.cash_in  || 0) ||
-        Number(updates.cash_out || 0) !== Number(txn.cash_out || 0) ||
-        Number(updates.bank_in  || 0) !== Number(txn.bank_in  || 0) ||
-        Number(updates.bank_out || 0) !== Number(txn.bank_out || 0);
-      if (amountsChanged && txn.linked_invoice_id) {
-        try { await recalcInvoiceCollected(txn.linked_invoice_id); } catch (e) { /* don't block UI */ }
-      }
-
       // Auto-apply category/subcategory to ALL entries with same description + create rule
       const catChanged = fd.category && fd.category !== txn.category;
       const subChanged = fd.subcategory !== undefined && fd.subcategory !== (txn.subcategory || '');
       if ((catChanged || subChanged) && (fd.category || fd.subcategory)) {
         const desc = (txn.description || '').trim();
         if (desc) {
-          // BUG 1 fix: bulk update gated by direction. Treasury can legitimately
-          // have the same description for both cash_in and cash_out rows (e.g.,
-          // "تحويل بنكى" for both outgoing AND incoming). Without a direction
-          // filter, changing the category on ONE direction would rewrite the
-          // OTHER direction's category too.
+          // Batch update all matching descriptions
           const batchUpdates = {};
           if (catChanged) batchUpdates.category = fd.category;
           if (subChanged) batchUpdates.subcategory = fd.subcategory;
-          // Figure out which direction THIS row represents, post-update (so a
-          // user editing 0 out → 500 out reassigns as expense going forward).
-          const postInflow  = Number(updates.cash_in  || 0) + Number(updates.bank_in  || 0);
-          const postOutflow = Number(updates.cash_out || 0) + Number(updates.bank_out || 0);
-          var bulkQ = supabase.from('treasury').update(batchUpdates).eq('description', desc);
-          if (postInflow > 0 && postOutflow === 0) {
-            // Income row — only touch rows where cash_in>0 OR bank_in>0
-            bulkQ = bulkQ.or('cash_in.gt.0,bank_in.gt.0');
-          } else if (postOutflow > 0 && postInflow === 0) {
-            // Expense row — only touch rows where cash_out>0 OR bank_out>0
-            bulkQ = bulkQ.or('cash_out.gt.0,bank_out.gt.0');
-          }
-          // Neutral (both 0 or both >0, rare): don't bulk — only update this row.
-          // Otherwise we risk nuking unrelated categorizations.
-          else {
-            bulkQ = bulkQ.eq('id', txn.id);
-          }
-          await bulkQ;
-
+          await supabase.from('treasury').update(batchUpdates).eq('description', desc);
+          
           // Create/update rule — "income" if money flowed in (cash or bank), else "expense"
           const inflow = Number(txn.cash_in || 0) + Number(txn.bank_in || 0);
           const ruleType = inflow > 0 ? 'income' : 'expense';
@@ -2729,10 +2658,6 @@ export default function App() {
     {/* Global voice controller — "Hey Bob" listens across all tabs, barge-in
         aware, cross-browser, per-user opt-out via voiceEnabled state. */}
     <VoiceController userId={userProfile?.id} userProfile={userProfile} enabled={voiceEnabled} />
-    {/* Action bridge — catches nadia-decision-action events from the Decision
-        Engine's chips and executes them (draft email, create reminder, flag
-        invoice, etc.). Headless component, safe to mount once globally. */}
-    <NadiaActionBridge userId={userProfile?.id} toast={toast} />
     <div className="min-h-screen" style={{background:'var(--bg-primary)'}}>
       {/* Header */}
       <div style={{background:'linear-gradient(135deg, #0f172a 0%, #1e1b4b 50%, #0f172a 100%)', borderBottom:'1px solid rgba(56,189,248,0.15)'}} role="banner" aria-label="App header" className="px-5 py-3 flex justify-between items-center sticky top-0 z-[101]">
@@ -2977,21 +2902,11 @@ export default function App() {
               {tab === 'treasury' && (
                 <button onClick={() => exportExcel(filteredTreasury.map(t => {
                   const isBank = Number(t.bank_in || 0) > 0 || Number(t.bank_out || 0) > 0 || t.is_bank_placeholder || t.matched_bank_txn_id;
-                  // BUG 6 fix: make the row's lifecycle state explicit in the
-                  // export. Placeholders and dedup markers both have zero
-                  // amounts — without a Status column, they appear as confusing
-                  // "0 EGP rows" in the accountant's workbook. With Status,
-                  // the accountant can filter/sort them out.
-                  var status = 'NORMAL';
-                  if (t.is_bank_placeholder) status = 'PLACEHOLDER';
-                  else if (t.dedup_sibling_id || (t.description && String(t.description).indexOf('[bank confirmation') >= 0)) status = 'DEDUP';
-                  else if (t.matched_bank_txn_id) status = 'MATCHED';
                   return {
                     Date: t.transaction_date,
                     Order: t.order_number,
                     Description: t.description,
                     Channel: isBank ? 'BANK' : 'SAFE',
-                    Status: status,
                     'Cash Method': t.cash_method || '',
                     'Cash In': t.cash_in,
                     'Cash Out': t.cash_out,
@@ -9388,7 +9303,7 @@ export default function App() {
             CALENDAR TAB
         ========================================== */}
         {tab === 'calendar' && (
-          <SafeSection label="Calendar"><CalendarTab customers={customers} user={user} userProfile={userProfile} users={teamUsers} tickets={dashTickets} onOpenTicket={(tid) => { setOpenTicketId(tid); setTab('tickets'); }} onReload={loadAllData} /></SafeSection>
+          <SafeSection label="Calendar"><CalendarTab customers={customers} user={user} userProfile={userProfile} users={teamUsers} onReload={loadAllData} /></SafeSection>
         )}
 
         {/* ==========================================
