@@ -6,6 +6,187 @@ import TranslationPanel from './TranslationPanel';
 import AIMemorySettingsPanel from './AIMemorySettingsPanel';
 import { PERSONALITIES } from './AIGreeter';
 
+// ============================================================
+// VoiceSettingsPanel — per-user "Hey Bob" toggle + diagnostics.
+// Writes users.voice_enabled. Also surfaces current browser support.
+// ============================================================
+function VoiceSettingsPanel({ userProfile, toast }) {
+  var [enabled, setEnabled] = useState(userProfile?.voice_enabled !== false);
+  var [saving, setSaving] = useState(false);
+  var myId = userProfile?.id;
+  // Detect browser support client-side only
+  var [support, setSupport] = useState({ kind: 'checking' });
+  useEffect(function() {
+    if (typeof window === 'undefined') return;
+    var SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+    var ua = (navigator.userAgent || '').toLowerCase();
+    var isFirefox = /firefox|fxios/.test(ua);
+    var isSafari = /safari/.test(ua) && !/chrome|chromium|crios|edg/.test(ua);
+    if (!SR && isFirefox) setSupport({ kind: 'firefox' });
+    else if (!SR) setSupport({ kind: 'unsupported' });
+    else if (isSafari) setSupport({ kind: 'safari' });
+    else setSupport({ kind: 'ok' });
+  }, []);
+  var toggle = async function(v) {
+    if (!myId) return;
+    setSaving(true);
+    try {
+      await supabase.from('users').update({ voice_enabled: v }).eq('id', myId);
+      setEnabled(v);
+      if (toast) toast.success(v ? 'Voice ON — say "Hey Bob"' : 'Voice OFF');
+    } catch (e) { if (toast) toast.error(e.message); }
+    setSaving(false);
+  };
+  return (
+    <div className="bg-white rounded-xl p-5 max-w-2xl">
+      <h3 className="text-lg font-bold mb-2">🎙️ Voice Assistant ("Hey Bob")</h3>
+      <p className="text-xs text-slate-500 mb-4">Continuous listening — say "Hey Bob" on any page and I'll respond. Cross-tab, barge-in aware.</p>
+
+      {/* Main toggle */}
+      <div className="flex items-center justify-between p-4 rounded-lg bg-slate-50 mb-3">
+        <div>
+          <div className="text-sm font-bold">Enable voice</div>
+          <div className="text-[11px] text-slate-500">Your personal preference. Stays on across logouts.</div>
+        </div>
+        <label className="relative inline-flex items-center cursor-pointer">
+          <input type="checkbox" checked={enabled} disabled={saving} onChange={function(e) { toggle(e.target.checked); }} className="sr-only peer" />
+          <div className="w-12 h-6 bg-slate-300 peer-checked:bg-emerald-500 rounded-full transition peer-disabled:opacity-50">
+            <div className={'w-5 h-5 bg-white rounded-full shadow transition transform ' + (enabled ? 'translate-x-6' : 'translate-x-0.5') + ' translate-y-0.5'} />
+          </div>
+        </label>
+      </div>
+
+      {/* Browser support */}
+      <div className="p-4 rounded-lg border border-slate-200 mb-3">
+        <div className="text-xs font-bold mb-2">Browser support</div>
+        {support.kind === 'ok' && <div className="text-[11px] text-emerald-600">✅ This browser supports continuous voice — "Hey Bob" will listen automatically.</div>}
+        {support.kind === 'safari' && <div className="text-[11px] text-amber-600">⚠️ Safari supports voice but re-starts after each utterance. Works — just slightly less seamless than Chrome.</div>}
+        {support.kind === 'firefox' && <div className="text-[11px] text-rose-600">❌ Firefox does NOT support speech recognition. Use Chrome/Safari/Edge for voice. Push-to-talk via Space bar still works.</div>}
+        {support.kind === 'unsupported' && <div className="text-[11px] text-rose-600">❌ No speech recognition in this browser. Update browser or switch to Chrome.</div>}
+        {support.kind === 'checking' && <div className="text-[11px] text-slate-400">Checking...</div>}
+      </div>
+
+      {/* How to */}
+      <div className="p-4 rounded-lg bg-indigo-50 border border-indigo-100">
+        <div className="text-xs font-bold text-indigo-700 mb-1.5">How to use</div>
+        <ul className="text-[11px] text-indigo-900 space-y-1 list-disc ml-4">
+          <li>Say "Hey Bob, what's on my calendar" — the indicator pill bottom-left flashes, Bob responds.</li>
+          <li>While Bob is speaking, just start talking — he stops and listens.</li>
+          <li>Hold Spacebar anywhere (except text boxes) for push-to-talk.</li>
+          <li>Click the pill's <strong>OFF</strong> button to pause for the rest of this session.</li>
+        </ul>
+      </div>
+    </div>
+  );
+}
+
+// ============================================================
+// AdminToolsPanel — one-click maintenance actions for super admins.
+// Currently hosts: Sales auto-categorization (learn / predict / backfill).
+// ============================================================
+function AdminToolsPanel({ toast }) {
+  var [stats, setStats] = useState(null);
+  var [running, setRunning] = useState(null);
+  var [result, setResult] = useState(null);
+  var loadStats = async function() {
+    try {
+      var res = await fetch('/api/categorize-sales');
+      var data = await res.json();
+      setStats(data);
+    } catch (e) { setStats({ error: e.message }); }
+  };
+  useEffect(function() { loadStats(); }, []);
+
+  var call = async function(action, opts) {
+    setRunning(action); setResult(null);
+    try {
+      var body = Object.assign({ action: action }, opts || {});
+      var res = await fetch('/api/categorize-sales', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      });
+      var data = await res.json();
+      setResult(data);
+      if (data.ok && toast) toast.success('Done: ' + action);
+      else if (toast) toast.error(data.error || 'Unknown error');
+      await loadStats();
+    } catch (e) { if (toast) toast.error(e.message); setResult({ ok: false, error: e.message }); }
+    setRunning(null);
+  };
+
+  return (
+    <div className="bg-white rounded-xl p-5 max-w-3xl">
+      <h3 className="text-lg font-bold mb-2">🛠️ Admin Tools</h3>
+      <p className="text-xs text-slate-500 mb-4">Super-admin maintenance — long-running operations, category backfill, data hygiene.</p>
+
+      {/* Stats */}
+      <div className="grid grid-cols-2 gap-3 mb-4">
+        <div className="rounded-lg p-3 bg-emerald-50">
+          <div className="text-[10px] text-emerald-700 uppercase tracking-wide">Category Memories</div>
+          <div className="text-2xl font-extrabold text-emerald-600">{stats?.memory_count ?? '—'}</div>
+        </div>
+        <div className="rounded-lg p-3 bg-amber-50">
+          <div className="text-[10px] text-amber-700 uppercase tracking-wide">Uncategorized Invoices</div>
+          <div className="text-2xl font-extrabold text-amber-600">{stats?.uncategorized_invoice_count ?? '—'}</div>
+        </div>
+      </div>
+
+      {/* Actions */}
+      <div className="space-y-3">
+        <div className="p-4 rounded-lg border border-slate-200">
+          <div className="flex justify-between items-start mb-2">
+            <div className="flex-1 mr-3">
+              <div className="text-sm font-bold">1. Learn from past invoices</div>
+              <div className="text-[11px] text-slate-500">Scan every already-categorized invoice and build a memory of which customers + keywords map to which categories. Safe — doesn't change any invoices.</div>
+            </div>
+            <button disabled={!!running} onClick={function() { call('learn'); }}
+              className="px-4 py-2 rounded-lg text-xs font-bold bg-blue-500 text-white disabled:opacity-50 whitespace-nowrap">
+              {running === 'learn' ? '...' : 'Learn'}
+            </button>
+          </div>
+        </div>
+
+        <div className="p-4 rounded-lg border border-slate-200">
+          <div className="flex justify-between items-start mb-2">
+            <div className="flex-1 mr-3">
+              <div className="text-sm font-bold">2. Backfill — dry run (preview only)</div>
+              <div className="text-[11px] text-slate-500">Shows how many uncategorized invoices WOULD get filled in and which category. Doesn't change anything.</div>
+            </div>
+            <button disabled={!!running} onClick={function() { call('backfill', { dry_run: true, min_confidence: 0.6 }); }}
+              className="px-4 py-2 rounded-lg text-xs font-bold bg-amber-500 text-white disabled:opacity-50 whitespace-nowrap">
+              {running === 'backfill' ? '...' : 'Preview'}
+            </button>
+          </div>
+        </div>
+
+        <div className="p-4 rounded-lg border border-rose-200 bg-rose-50">
+          <div className="flex justify-between items-start mb-2">
+            <div className="flex-1 mr-3">
+              <div className="text-sm font-bold text-rose-700">3. Backfill — apply (writes to invoices)</div>
+              <div className="text-[11px] text-rose-600">Fills in categories on all empty invoices where confidence ≥ 60%. ONLY run after reviewing the preview numbers. Run "Learn" first.</div>
+            </div>
+            <button disabled={!!running} onClick={function() {
+                if (!confirm('Apply backfill — this UPDATES invoices in the database. Continue?')) return;
+                call('backfill', { dry_run: false, min_confidence: 0.6 });
+              }}
+              className="px-4 py-2 rounded-lg text-xs font-bold bg-rose-500 text-white disabled:opacity-50 whitespace-nowrap">
+              {running === 'backfill' ? '...' : 'Apply'}
+            </button>
+          </div>
+        </div>
+      </div>
+
+      {/* Result */}
+      {result && (
+        <div className="mt-4 p-3 rounded-lg bg-slate-50 border border-slate-200">
+          <div className="text-[10px] font-bold mb-1 text-slate-600">Last result</div>
+          <pre className="text-[10px] text-slate-700 whitespace-pre-wrap overflow-x-auto">{JSON.stringify(result, null, 2)}</pre>
+        </div>
+      )}
+    </div>
+  );
+}
+
 const ROLES = [
   { v: 'super_admin', l: '🔴 Super Admin', c: 'text-red-500' },
   { v: 'admin', l: '🟣 Admin/Manager', c: 'text-purple-500' },
@@ -223,7 +404,7 @@ export default function SettingsTab({ toast, user, users, onReload, isAdmin, use
 
       {/* Section Tabs */}
       <div className="flex gap-1 mb-3 flex-wrap">
-        {[['roles', 'Team & Roles'], ['profiles', '👤 Team Profiles'], ['permissions', 'Module Access'], ['notifications', 'Notifications'], ['comms', '📬 Communications'], ['greeter', '🤖 AI Greeter'], ...(isSuperAdmin ? [['aimemory', '🧠 AI Memory']] : []), ['categories', '🏷️ Categories'], ['rules', 'Category Rules / قواعد'], ['expenses', '📋 Expense Descriptions'], ['translation', '🌐 Translation / ترجمة']].map(([v, l]) => (
+        {[['roles', 'Team & Roles'], ['profiles', '👤 Team Profiles'], ['permissions', 'Module Access'], ['notifications', 'Notifications'], ['voice', '🎙️ Voice'], ['comms', '📬 Communications'], ['greeter', '🤖 AI Greeter'], ...(isSuperAdmin ? [['aimemory', '🧠 AI Memory'], ['admintools', '🛠️ Admin Tools']] : []), ['categories', '🏷️ Categories'], ['rules', 'Category Rules / قواعد'], ['expenses', '📋 Expense Descriptions'], ['translation', '🌐 Translation / ترجمة']].map(([v, l]) => (
           <button key={v} onClick={() => setSection(v)}
             className={'px-3 py-1.5 rounded-lg text-xs font-semibold transition ' + (section === v ? 'bg-slate-900 text-white' : 'bg-slate-100 text-slate-500')}>
             {l}
@@ -234,6 +415,16 @@ export default function SettingsTab({ toast, user, users, onReload, isAdmin, use
       {/* ===== AI MEMORY (SUPER ADMIN ONLY) ===== */}
       {section === 'aimemory' && isSuperAdmin && (
         <AIMemorySettingsPanel userProfile={userProfile} toast={toast} />
+      )}
+
+      {/* ===== VOICE SETTINGS (ALL USERS) ===== */}
+      {section === 'voice' && (
+        <VoiceSettingsPanel userProfile={userProfile} toast={toast} />
+      )}
+
+      {/* ===== ADMIN TOOLS (SUPER ADMIN ONLY) ===== */}
+      {section === 'admintools' && isSuperAdmin && (
+        <AdminToolsPanel toast={toast} />
       )}
 
       {/* ===== TEAM & ROLES ===== */}
@@ -530,7 +721,7 @@ export default function SettingsTab({ toast, user, users, onReload, isAdmin, use
               ))}
               {/* Action Permissions */}
               <tr><td colSpan={nonSuperUsers.length + 1} className="px-2 py-2 bg-amber-50 text-[10px] font-bold text-amber-700 border-b border-amber-200 mt-2">🔐 ACTION PERMISSIONS — what the user can do (Tab ON + Edit OFF = Read Only 👁️)</td></tr>
-              {['Edit Treasury', 'Edit Invoices', 'Delete Invoices', 'Edit Inventory', 'Edit Warehouse', 'Edit CRM', 'View Costs', 'CRM View All', 'CRM View Contacts', 'Delete Tickets', 'Assign Tickets', 'Merge Customers', 'Manage Categories', 'Export Data', 'Post Reminders'].map(mod => (
+              {['Edit Treasury', 'Edit Invoices', 'Delete Invoices', 'Edit Inventory', 'Edit Warehouse', 'Edit CRM', 'View Costs', 'View Financial Reports', 'CRM View All', 'CRM View Contacts', 'Delete Tickets', 'Assign Tickets', 'Merge Customers', 'Manage Categories', 'Export Data', 'Post Reminders'].map(mod => (
                 <tr key={mod} className="border-b border-slate-50">
                   <td className="px-2 py-1.5 text-[10px] font-semibold text-amber-700">{mod}</td>
                   {nonSuperUsers.map(u => {

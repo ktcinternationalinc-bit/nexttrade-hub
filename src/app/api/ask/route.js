@@ -1,6 +1,7 @@
 import { createClient } from '@supabase/supabase-js';
 import { notifyTicketAssignedServer, notifyTicketReassignedServer, notifyEventScheduledServer, notifyReminderServer, notifyTeamMessageServer, notifyShippingRateServer } from '../../../lib/notify-server';
 import { loadMemorySettings, loadMemoryForUser, buildMemoryContext, extractMemoryCandidates, persistMemoryCandidates } from '../../../lib/ai-memory';
+import { runDecisionEngine, detectIntent } from '../../../lib/decision-engine';
 
 var supabase = createClient(
   process.env.NEXT_PUBLIC_SUPABASE_URL,
@@ -143,6 +144,17 @@ export async function POST(request) {
 
     // GREETER MODE — conversational AI assistant
     if (body.mode === 'greeter' && body.systemOverride) {
+      // Decision Engine pre-pass — if the user's question looks like a
+      // decision question ("what should I do about invoice 2280?"), run
+      // the engine in parallel with the chat model. Its structured output
+      // gets returned alongside the chat answer so the UI can render
+      // action buttons without blocking the conversation.
+      var decisionPromise = null;
+      try {
+        var intent = detectIntent(question);
+        if (intent !== 'unknown') decisionPromise = runDecisionEngine(question);
+      } catch(e) { decisionPromise = null; }
+
       try {
         var gMessages = [];
         if (body.history && body.history.length) {
@@ -159,7 +171,9 @@ export async function POST(request) {
         if (gResponse.ok) {
           var gData = await gResponse.json();
           var gText = (gData.content && gData.content[0] && gData.content[0].text) || '';
-          return Response.json({ answer: gText });
+          var decision = null;
+          if (decisionPromise) { try { decision = await decisionPromise; } catch(e) {} }
+          return Response.json({ answer: gText, decision: decision });
         }
       } catch(e) {}
       return Response.json({ answer: '' });

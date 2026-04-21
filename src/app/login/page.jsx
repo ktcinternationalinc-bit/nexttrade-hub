@@ -100,7 +100,10 @@ export default function LoginPage() {
         var sessionUserId = profile?.id || data.user.id;
         await supabase.from('user_sessions').insert({
           user_id: sessionUserId, login_at: new Date().toISOString(),
-          last_seen: new Date().toISOString(), date: new Date().toISOString().split('T')[0],
+          last_seen: new Date().toISOString(),
+          // ET, not UTC. Late-night ET logins (after ~7pm) used to land on
+          // tomorrow UTC and cause AI's "you weren't here yesterday" bug.
+          date: new Intl.DateTimeFormat('en-CA', { timeZone: 'America/New_York' }).format(new Date()),
         });
       }
       setUserName(name); setClockedIn(true); spawnBurst();

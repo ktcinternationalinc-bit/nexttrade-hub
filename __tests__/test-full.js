@@ -4412,6 +4412,971 @@ try { runSection36_Session2Sql(); } catch(e) {
 }
 
 // ============================================================
+// SECTION 37: ET timezone helpers — src/lib/et-time.js
+// Locks in the fix for the "you weren't here yesterday" bug.
+// All date truncation for user-facing "today" must use ET, not UTC.
+// ============================================================
+function runSection37_ETTime() {
+  group('SECTION 37: ET timezone helpers');
+
+  var src = fs.readFileSync(path.join(REPO_ROOT, 'src/lib/et-time.js'), 'utf8');
+  // Rewrite for CommonJS loading
+  var shim = src
+    .replace(/export\s+function\s+/g, 'function ')
+    .replace(/export\s+var\s+/g, 'var ')
+    + '\nmodule.exports = { etDateStr, todayET, yesterdayET, daysAgoET, cmpETDays, etHour, etGreetingWord };';
+  fs.writeFileSync('/tmp/_et_time.js', shim);
+  delete require.cache['/tmp/_et_time.js'];
+  var ET = require('/tmp/_et_time.js');
+
+  // ---------- Core: UTC→ET conversion straddles midnight correctly ----------
+  // 3am UTC on Apr 21 = 11pm EDT on Apr 20 (prior day)
+  assert(ET.etDateStr(new Date('2026-04-21T03:00:00Z')) === '2026-04-20',
+    '37.et.1a 3am UTC (Apr 21) = prior ET day (Apr 20 EDT)');
+  assert(ET.etDateStr(new Date('2026-04-21T15:00:00Z')) === '2026-04-21',
+    '37.et.1b 3pm UTC (Apr 21) = same ET day (Apr 21 EDT)');
+  // Winter = EST (UTC-5)
+  assert(ET.etDateStr(new Date('2026-01-05T03:00:00Z')) === '2026-01-04',
+    '37.et.1c 3am UTC Jan = prior ET day (EST UTC-5)');
+  assert(ET.etDateStr(new Date('2026-01-05T15:00:00Z')) === '2026-01-05',
+    '37.et.1d 3pm UTC Jan = same ET day');
+
+  // ---------- Calendar-day diff ----------
+  assert(ET.cmpETDays('2026-04-20', '2026-04-21') === 1, '37.cmp.1a +1 day forward');
+  assert(ET.cmpETDays('2026-04-21', '2026-04-20') === -1, '37.cmp.1b -1 day back');
+  assert(ET.cmpETDays('2026-04-20', '2026-04-20') === 0, '37.cmp.1c same day = 0');
+  // Across DST spring-forward (Mar 8 2026: 2am EST → 3am EDT — loses 1 hour)
+  assert(ET.cmpETDays('2026-03-07', '2026-03-09') === 2, '37.cmp.2a spans spring-forward DST correctly');
+  // Across DST fall-back (Nov 1 2026: 2am EDT → 1am EST — gains 1 hour)
+  assert(ET.cmpETDays('2026-10-31', '2026-11-02') === 2, '37.cmp.2b spans fall-back DST correctly');
+
+  // ---------- Null / empty safety ----------
+  assert(ET.cmpETDays(null, '2026-04-20') === 0, '37.cmp.null.1a null first arg → 0');
+  assert(ET.cmpETDays('2026-04-20', null) === 0, '37.cmp.null.1b null second arg → 0');
+  assert(ET.cmpETDays('', '') === 0, '37.cmp.null.1c empty strings → 0');
+
+  // ---------- Hour + greeting word ----------
+  var h = ET.etHour();
+  assert(h >= 0 && h < 24, '37.hr.1a etHour in valid 0..23');
+  var word = ET.etGreetingWord();
+  assert(['morning','afternoon','evening'].indexOf(word) !== -1,
+    '37.hr.1b etGreetingWord returns valid slot', 'word=' + word);
+
+  // ---------- Regression: old UTC toISOString.substring(0,10) path is GONE from AIGreeter ----------
+  var gSrc = fs.readFileSync(path.join(REPO_ROOT, 'src/components/AIGreeter.jsx'), 'utf8');
+  // The new code uses todayET() / cmpETDays(). Verify the old UTC pattern
+  // inside buildContext is NOT present anymore (it would cause the "yesterday" bug).
+  var bcBlock = gSrc.match(/var buildContext = useCallback\(function\(\)[\s\S]*?^\s{2}\}, \[[^\]]*\]\);/m);
+  assert(bcBlock, '37.regress.0a buildContext block found');
+  assert(bcBlock && !/new Date\(\)\.toISOString\(\)\.substring\(0, ?10\)/.test(bcBlock[0]),
+    '37.regress.1a buildContext no longer uses UTC toISOString.substring(0,10) — "yesterday" bug root cause');
+  assert(bcBlock && /todayET\(\)/.test(bcBlock[0]),
+    '37.regress.1b buildContext uses todayET()');
+  assert(bcBlock && /cmpETDays\(/.test(bcBlock[0]),
+    '37.regress.1c buildContext uses cmpETDays for day diff (not ms math)');
+
+  // ---------- Regression: login-session writes now use ET ----------
+  var loginSrc = fs.readFileSync(path.join(REPO_ROOT, 'src/app/login/page.jsx'), 'utf8');
+  assert(/'America\/New_York'/.test(loginSrc),
+    '37.regress.2a login/page.jsx writes user_sessions.date using America/New_York');
+  assert(!/date: new Date\(\)\.toISOString\(\)\.split\('T'\)\[0\]/.test(loginSrc),
+    '37.regress.2b old UTC date-write is gone from login/page.jsx');
+
+  // And the 4 heartbeat sites in page.jsx
+  var pSrc = fs.readFileSync(path.join(REPO_ROOT, 'src/app/page.jsx'), 'utf8');
+  var utcHits = (pSrc.match(/const today = new Date\(\)\.toISOString\(\)\.split\('T'\)\[0\];/g) || []).length;
+  assert(utcHits === 0,
+    '37.regress.3a page.jsx heartbeats no longer use UTC for user_sessions lookup',
+    'utcHits=' + utcHits);
+  // New ET-based pattern should appear at least 4 times (one per heartbeat site)
+  var etHits = (pSrc.match(/timeZone: 'America\/New_York'/g) || []).length;
+  assert(etHits >= 4, '37.regress.3b page.jsx uses America/New_York TZ at heartbeat sites (4+ times)',
+    'etHits=' + etHits);
+}
+try { runSection37_ETTime(); } catch(e) {
+  console.error('SECTION 37 ERROR:', e.message);
+  console.error(e.stack);
+  failed++;
+}
+
+// ============================================================
+// SECTION 38: Decision Engine — src/lib/decision-engine.js
+// Locks intent detection + the shape of recommendations returned.
+// Does NOT hit Supabase (that's integration territory). Pure function layer.
+// ============================================================
+function runSection38_DecisionEngine() {
+  group('SECTION 38: Decision Engine');
+
+  var src = fs.readFileSync(path.join(REPO_ROOT, 'src/lib/decision-engine.js'), 'utf8');
+  var shim = src
+    .replace(/^import[^;]*;?\s*$/gm, '')
+    .replace(/export\s+function\s+/g, 'function ')
+    .replace(/export\s+async\s+function\s+/g, 'async function ')
+    + '\nmodule.exports = { detectIntent };';
+  fs.writeFileSync('/tmp/_decision.js', shim);
+  delete require.cache['/tmp/_decision.js'];
+  var DE = require('/tmp/_decision.js');
+
+  // ---------- Intent detection — the classifier that gates everything ----------
+  assert(DE.detectIntent('what should I do about invoice #2280') === 'chase_invoice',
+    '38.int.1a chase_invoice via invoice #');
+  assert(DE.detectIntent('recommend how to handle order 4455') === 'chase_invoice',
+    '38.int.1b chase_invoice via order # (no "#" sign)');
+  assert(DE.detectIntent('should I go after the overdue invoice from Ahmed') === 'chase_invoice',
+    '38.int.1c chase_invoice via overdue + recommend phrasing');
+
+  assert(DE.detectIntent("I haven't heard from customer Al-Masri in weeks") === 'chase_customer',
+    '38.int.2a chase_customer — silent pattern');
+  assert(DE.detectIntent("customer Ali has gone silent") === 'chase_customer',
+    '38.int.2b chase_customer — went silent');
+  // Smart-quote tolerance
+  assert(DE.detectIntent('I haven\u2019t heard from customer Ali in weeks') === 'chase_customer',
+    '38.int.2c chase_customer with unicode apostrophe (real-world paste)');
+
+  assert(DE.detectIntent('what should I do here') === 'generic',
+    '38.int.3a generic decision when no specific domain');
+  assert(DE.detectIntent('what about the weather today') === 'unknown',
+    '38.int.3b non-decision → unknown');
+  assert(DE.detectIntent('') === 'unknown',
+    '38.int.3c empty question → unknown');
+  assert(DE.detectIntent(null) === 'unknown',
+    '38.int.3d null question → unknown');
+
+  // ---------- Code surface — scoring helpers preserved ----------
+  assert(/function scoreRisk\(signals\)/.test(src),
+    '38.shape.1a scoreRisk helper present');
+  assert(/function scoreOpportunity\(signals\)/.test(src),
+    '38.shape.1b scoreOpportunity helper present');
+  assert(/function confidenceFrom\(signals, evidenceCount\)/.test(src),
+    '38.shape.1c confidenceFrom helper present');
+
+  // Risk score caps at 1.0 (never returns >1)
+  assert(/return Math\.min\(1, r\);/.test(src),
+    '38.shape.2a scoreRisk caps at 1.0 (no over-max)');
+  assert(/return Math\.min\(1, o\);/.test(src),
+    '38.shape.2b scoreOpportunity caps at 1.0');
+  assert(/return Math\.min\(0\.98, Math\.max\(0\.1, base\)\)/.test(src),
+    '38.shape.2c confidence bounded [0.1, 0.98] — never 0 or 100%');
+
+  // ---------- Recommenders emit suggested_actions with the expected shape ----------
+  var recInv = src.match(/function recommendForInvoice\(ctx\)[\s\S]*?^\}/m);
+  assert(recInv, '38.rec.0a recommendForInvoice present');
+  assert(recInv && /suggested_actions/.test(recInv[0]),
+    '38.rec.1a recommendForInvoice returns suggested_actions array');
+  assert(recInv && /draft_email/.test(recInv[0]),
+    '38.rec.1b recommendForInvoice offers draft_email action');
+  assert(recInv && /create_event/.test(recInv[0]),
+    '38.rec.1c recommendForInvoice offers create_event action (follow-up call)');
+
+  // ---------- scanForAlerts — proactive intelligence ----------
+  assert(/export async function scanForAlerts/.test(src),
+    '38.scan.1a scanForAlerts exported for cron use');
+  assert(/alert_type: 'overdue_invoice'/.test(src),
+    '38.scan.2a emits overdue_invoice alerts');
+  assert(/alert_type: 'check_clearing_soon'/.test(src),
+    '38.scan.2b emits check_clearing_soon alerts');
+  // Severity scales with days overdue
+  assert(/daysOver > 90 \? 'critical' : daysOver > 60 \? 'high' : 'medium'/.test(src),
+    '38.scan.3a severity escalates with days_overdue (90/60 thresholds)');
+
+  // ---------- Wired into /api/ask greeter flow ----------
+  var ask = fs.readFileSync(path.join(REPO_ROOT, 'src/app/api/ask/route.js'), 'utf8');
+  assert(/import \{ runDecisionEngine, detectIntent \}/.test(ask),
+    '38.wire.1a /api/ask imports decision engine');
+  assert(/var intent = detectIntent\(question\);[\s\S]{0,100}decisionPromise = runDecisionEngine\(question\)/.test(ask),
+    '38.wire.1b /api/ask pre-runs decision engine when intent detected');
+  assert(/return Response\.json\(\{ answer: gText, decision: decision \}\);/.test(ask),
+    '38.wire.1c /api/ask returns { answer, decision } so UI can render action buttons');
+
+  // ---------- No backticks in decision engine / api routes (SWC rule) ----------
+  assert(src.indexOf('`') === -1,
+    '38.swc.1a decision-engine.js has no backticks (SWC-safe)');
+  var watchSrc = fs.readFileSync(path.join(REPO_ROOT, 'src/app/api/nadia/watch/route.js'), 'utf8');
+  assert(watchSrc.indexOf('`') === -1,
+    '38.swc.1b nadia/watch route has no backticks');
+  var hoSrc = fs.readFileSync(path.join(REPO_ROOT, 'src/app/api/claude-handoff/route.js'), 'utf8');
+  assert(hoSrc.indexOf('`') === -1,
+    '38.swc.1c claude-handoff route has no backticks');
+}
+try { runSection38_DecisionEngine(); } catch(e) {
+  console.error('SECTION 38 ERROR:', e.message);
+  console.error(e.stack);
+  failed++;
+}
+
+// ============================================================
+// SECTION 39: Claude Handoff API — the automated ticket pipeline
+// Audits: bearer auth, rate limiting, logging, no-backtick compliance,
+// GET/POST shape, action whitelist, and the idempotent stamping of
+// claude_last_read_at on pull.
+// ============================================================
+function runSection39_ClaudeHandoff() {
+  group('SECTION 39: Claude Handoff API');
+
+  var src = fs.readFileSync(path.join(REPO_ROOT, 'src/app/api/claude-handoff/route.js'), 'utf8');
+
+  // ---------- Auth ----------
+  assert(/process\.env\.CLAUDE_HANDOFF_TOKEN/.test(src),
+    '39.auth.1a token read from CLAUDE_HANDOFF_TOKEN env var');
+  assert(/if \(!expected \|\| expected\.length < 24\) return false/.test(src),
+    '39.auth.1b empty/short token rejects auth (prevents empty-env bypass)');
+  assert(/bearer /.test(src.toLowerCase()),
+    '39.auth.1c expects Bearer scheme');
+  // Constant-time compare to prevent timing attacks
+  assert(/diff \|= token\.charCodeAt\(i\) \^ expected\.charCodeAt\(i\)/.test(src),
+    '39.auth.2a constant-time token compare (no short-circuit leak)');
+  assert(/if \(token\.length !== expected\.length\) return false/.test(src),
+    '39.auth.2b length-mismatch early return (still constant time — length known)');
+  assert(/return unauthorizedResponse\(\);/.test(src),
+    '39.auth.3a unauthorized path returns 401');
+
+  // ---------- Rate limiting ----------
+  assert(/READ_LIMIT_PER_DAY  = 500/.test(src),
+    '39.rl.1a daily read cap constant');
+  assert(/WRITE_LIMIT_PER_DAY = 200/.test(src),
+    '39.rl.1b daily write cap constant');
+  assert(/status: 429/.test(src),
+    '39.rl.2a returns HTTP 429 on rate-limit exceeded');
+  // Rate limit per-session, per-kind
+  assert(/\.eq\('session_id', sessionId\)[\s\S]{0,60}\.eq\('action', actionKind\)/.test(src),
+    '39.rl.3a rate limit counts today\'s rows for (session, action) pair');
+
+  // ---------- Logging ----------
+  assert(/async function logAction\(sessionId, action, ticketId, payload, req\)/.test(src),
+    '39.log.1a logAction helper defined');
+  assert(/await logAction\(sessionId, 'pull'/.test(src),
+    '39.log.2a GET logs with action=pull');
+  assert(/await logAction\(sessionId, action, ticketId/.test(src),
+    '39.log.2b POST logs with action from request body');
+  assert(/ip_address: req\.headers\.get\('x-forwarded-for'\)/.test(src),
+    '39.log.3a captures requesting IP for audit trail');
+
+  // ---------- GET — bundle shape ----------
+  assert(/export async function GET\(req\)/.test(src),
+    '39.get.0a GET exported');
+  // Pulls open OR reopened OR claude-flagged
+  assert(/\.or\('status\.eq\.Open,status\.eq\.Reopened,claude_review_requested\.eq\.true'\)/.test(src),
+    '39.get.1a pulls Open + Reopened + claude_review_requested=true');
+  assert(/\.limit\(100\)/.test(src),
+    '39.get.1b caps at 100 tickets per pull (prevents runaway bundle)');
+  // Stamps claude_last_read_at after pull
+  assert(/\.update\(\{ claude_last_read_at: nowIso \}\)[\s\S]{0,80}\.in\('id', idsToStamp\)/.test(src),
+    '39.get.2a stamps claude_last_read_at on pulled tickets');
+  // Brings in comments + pending high-severity alerts
+  assert(/\.from\('ticket_comments'\)/.test(src),
+    '39.get.3a pulls ticket_comments for context');
+  assert(/\.from\('ai_alerts'\)/.test(src),
+    '39.get.3b pulls pending ai_alerts (critical+high, last 7 days)');
+
+  // ---------- POST — action whitelist ----------
+  assert(/if \(\['fix', 'comment', 'reopen', 'assign'\]\.indexOf\(action\) === -1\)/.test(src),
+    '39.post.1a only fix/comment/reopen/assign actions allowed');
+  // fix sets status + clears review flag
+  assert(/update\.status = \(body && body\.new_status\) \|\| 'Fixed'/.test(src)
+      && /update\.claude_last_fixed_at = nowIso/.test(src)
+      && /update\.claude_review_requested = false;/.test(src),
+    '39.post.2a fix: status=Fixed, claude_last_fixed_at stamped, review flag CLEARED');
+  // reopen re-flags for next handoff
+  assert(/update\.status = 'Reopened';[\s\S]{0,120}update\.claude_review_requested = true;/.test(src),
+    '39.post.2b reopen: status=Reopened, review flag RE-SET for next handoff');
+  // Comment writes to ticket_comments with 🤖 prefix
+  assert(/\.insert\(\{[\s\S]{0,200}'🤖 Claude: ' \+ notes/.test(src),
+    '39.post.3a comments written to ticket_comments with 🤖 Claude: prefix');
+
+  // ---------- Service-role client ----------
+  assert(/SUPABASE_SERVICE_ROLE_KEY \|\| process\.env\.NEXT_PUBLIC_SUPABASE_ANON_KEY/.test(src),
+    '39.svc.1a service-role client (RLS bypass for cron-like reads)');
+
+  // ---------- SQL migration surface ----------
+  var sql = fs.readFileSync(path.join(REPO_ROOT, 'supabase/session3-handoff-ai.sql'), 'utf8');
+  assert(/CREATE TABLE IF NOT EXISTS claude_handoff_log/.test(sql),
+    '39.sql.1a handoff log table created');
+  assert(/CHECK \(action IN \('pull','update','comment','fix','reopen'\)\)/.test(sql),
+    '39.sql.1b handoff log action CHECK matches API whitelist');
+  assert(/ADD COLUMN IF NOT EXISTS claude_review_requested BOOLEAN DEFAULT false/.test(sql),
+    '39.sql.2a system_tickets.claude_review_requested column added');
+  assert(/ADD COLUMN IF NOT EXISTS claude_fix_notes TEXT/.test(sql),
+    '39.sql.2b system_tickets.claude_fix_notes column added');
+  // No RLS write policy on handoff_log — only service role writes
+  assert(!/CREATE POLICY "auth_write_chl"/.test(sql),
+    '39.sql.3a no auth_write policy on claude_handoff_log (service-role only, intentional)');
+  assert(/CREATE POLICY "auth_read_chl"/.test(sql),
+    '39.sql.3b but auth users CAN read the audit log (for Admin tab visibility)');
+}
+try { runSection39_ClaudeHandoff(); } catch(e) {
+  console.error('SECTION 39 ERROR:', e.message);
+  console.error(e.stack);
+  failed++;
+}
+
+// ============================================================
+// SECTION 40: Proactive Intelligence — /api/nadia/watch + ai_alerts
+// Locks: cron registration, dedup via unique index, alert severity ladder,
+// and integration with scanForAlerts.
+// ============================================================
+function runSection40_ProactiveIntelligence() {
+  group('SECTION 40: Proactive Intelligence (Nadia watch)');
+
+  var src = fs.readFileSync(path.join(REPO_ROOT, 'src/app/api/nadia/watch/route.js'), 'utf8');
+
+  // Cron registration
+  var vc = JSON.parse(fs.readFileSync(path.join(REPO_ROOT, 'vercel.json'), 'utf8'));
+  var paths = (vc.crons || []).map(function(c) { return c.path; });
+  assert(paths.indexOf('/api/nadia/watch') !== -1,
+    '40.cron.1a /api/nadia/watch registered in vercel.json');
+  var nwCron = (vc.crons || []).find(function(c) { return c.path === '/api/nadia/watch'; });
+  assert(nwCron && /\*\/30 /.test(nwCron.schedule || ''),
+    '40.cron.1b scheduled every 30 minutes', 'schedule=' + (nwCron && nwCron.schedule));
+  // All 4 crons preserved from Session 2
+  assert(paths.indexOf('/api/categorize') !== -1, '40.cron.2a categorize preserved');
+  assert(paths.indexOf('/api/events/generate-occurrences') !== -1, '40.cron.2b generator preserved');
+  assert(paths.indexOf('/api/reminders/dispatch') !== -1, '40.cron.2c dispatcher preserved');
+
+  // scanForAlerts import
+  assert(/import \{ scanForAlerts \} from '[^']*decision-engine'/.test(src),
+    '40.imp.1a imports scanForAlerts from decision-engine');
+
+  // User targeting: cron = all admins/owners; POST with user_id = that user
+  assert(/\.eq\('active', true\)/.test(src),
+    '40.scope.1a scans only active users');
+  assert(/u\.role === 'super_admin' \|\| u\.role === 'admin'/.test(src),
+    '40.scope.1b cron scans admins + super_admins by default');
+  assert(/if \(specificUserId\)/.test(src),
+    '40.scope.1c POST can target a specific user_id');
+
+  // Upsert with dedup
+  assert(/onConflict: 'target_user_id,alert_type,related_entity_id'/.test(src),
+    '40.dedup.1a upsert onConflict matches ai_alerts unique index');
+  assert(/ignoreDuplicates: true/.test(src),
+    '40.dedup.1b ignoreDuplicates=true (DO NOTHING on conflict, same-day same-entity dedups)');
+
+  // SQL — ai_alerts table + index
+  var sql = fs.readFileSync(path.join(REPO_ROOT, 'supabase/session3-handoff-ai.sql'), 'utf8');
+  assert(/CREATE TABLE IF NOT EXISTS ai_alerts/.test(sql),
+    '40.sql.1a ai_alerts table created');
+  assert(/severity TEXT NOT NULL CHECK \(severity IN \('critical','high','medium','low','info'\)\)/.test(sql),
+    '40.sql.1b severity CHECK constraint covers full ladder');
+  // Unique index: (user, type, entity, day) — prevents duplicate alerts same day
+  assert(/CREATE UNIQUE INDEX IF NOT EXISTS idx_ai_alerts_unique[\s\S]{0,200}target_user_id, alert_type, related_entity_id, \(date_trunc\('day', created_at\)\)/.test(sql),
+    '40.sql.2a unique index: one alert per (user, type, entity, day)');
+
+  // Error resilience — scanForAlerts catches its own errors
+  var deSrc = fs.readFileSync(path.join(REPO_ROOT, 'src/lib/decision-engine.js'), 'utf8');
+  var scanBlock = deSrc.match(/export async function scanForAlerts[\s\S]*?^\}/m);
+  assert(scanBlock, '40.scan.0a scanForAlerts block found');
+  assert(scanBlock && /catch \(e\) \{[\s\S]{0,80}\/\/ Don't throw/.test(scanBlock[0]),
+    '40.scan.1a scanForAlerts swallows exceptions so cron never crashes');
+
+  // Watch route error resilience (summary has errors array)
+  assert(/summary\.errors = \[\]/.test(src) || /errors: \[\]/.test(src),
+    '40.err.1a watch run collects per-user errors instead of failing whole batch');
+
+  // ---------- DOCUMENTED GAPS ----------
+  // Future intents not yet implemented — locked so when they land, tests flip
+  assert(/'delegate_ticket'/.test(deSrc),
+    '40.gap.1a delegate_ticket intent defined but no data-pull yet (Session 4+)');
+  assert(/'escalate_shipment'/.test(deSrc),
+    '40.gap.1b escalate_shipment intent defined, no data-pull yet');
+  // Silent-customer alert not yet emitted (scanForAlerts only does invoices+checks for V1)
+  assert(!/alert_type: 'silent_customer'/.test(deSrc) || /\/\/ Future:/.test(deSrc),
+    '40.gap.2a DOCUMENTED: silent_customer alert-type reserved for V2 scanner (not yet emitted)');
+}
+try { runSection40_ProactiveIntelligence(); } catch(e) {
+  console.error('SECTION 40 ERROR:', e.message);
+  console.error(e.stack);
+  failed++;
+}
+
+// ============================================================
+// SECTION 41: Voice UX rebuild — "Hey Bob" wake word + VoiceController
+// Locks: wake detection regex, debounce, barge-in, cross-browser guards,
+// global event bus wiring from AIGreeter, session-persistent greeting.
+// ============================================================
+function runSection41_VoiceUX() {
+  group('SECTION 41: Voice UX rebuild');
+
+  // ---------- wake-word pure logic ----------
+  var wSrc = fs.readFileSync(path.join(REPO_ROOT, 'src/lib/voice/wake-word.js'), 'utf8');
+  var shim = wSrc.replace(/export\s+function\s+/g, 'function ')
+    + '\nmodule.exports = { detectWakeWord, createWakeEngine, isBargeInCandidate };';
+  fs.writeFileSync('/tmp/_wake.js', shim);
+  delete require.cache['/tmp/_wake.js'];
+  var W = require('/tmp/_wake.js');
+
+  // Detection
+  assert(W.detectWakeWord('hey bob show my tickets').matched === true, '41.det.1a basic match');
+  assert(W.detectWakeWord('hey bob show my tickets').command === 'show my tickets', '41.det.1b command extracted');
+  assert(W.detectWakeWord('hey, bob, schedule a call').command === 'schedule a call',
+    '41.det.2a punctuation after wake word stripped');
+  assert(W.detectWakeWord('ok bob what is on my calendar').matched === true,
+    '41.det.3a "ok bob" accepted (alternate wake)');
+  assert(W.detectWakeWord('hi bob send the email').matched === true,
+    '41.det.3b "hi bob" accepted');
+  assert(W.detectWakeWord('nothing to see here').matched === false,
+    '41.det.4a non-wake returns false');
+  assert(W.detectWakeWord(null).matched === false, '41.det.4b null-safe');
+  assert(W.detectWakeWord('').matched === false, '41.det.4c empty-safe');
+  assert(W.detectWakeWord('hey bob').command === '', '41.det.5a wake alone = empty command');
+
+  // Engine — debounce
+  var eng1 = W.createWakeEngine();
+  var r1 = eng1.process('hey bob show my tickets', true);
+  assert(r1.trigger === true, '41.eng.1a final trigger');
+  assert(r1.command === 'show my tickets', '41.eng.1b command captured');
+  var r2 = eng1.process('hey bob show my tickets', true);
+  assert(r2.trigger === false, '41.eng.2a debounce blocks duplicate within 2s');
+
+  // Engine — interim doesn't trigger, final does
+  var eng2 = W.createWakeEngine();
+  var i1 = eng2.process('hey bob sched', false);
+  assert(i1.trigger === false, '41.eng.3a interim does not trigger');
+  assert(i1.stillListening === true, '41.eng.3b interim opens collection window');
+  var i2 = eng2.process('hey bob schedule a call', true);
+  assert(i2.trigger === true, '41.eng.3c final after interim triggers');
+
+  // Engine — non-wake transcripts ignored
+  var eng3 = W.createWakeEngine();
+  assert(eng3.process('hello how are you', true).trigger === false,
+    '41.eng.4a casual speech does not trigger (no wake word)');
+
+  // Barge-in detection
+  assert(W.isBargeInCandidate('stop talking') === true,
+    '41.barge.1a 2 real words = barge-in');
+  assert(W.isBargeInCandidate('stop') === false,
+    '41.barge.1b single word not enough (prevents phantom stops)');
+  assert(W.isBargeInCandidate('um') === false,
+    '41.barge.1c fillers filtered');
+  assert(W.isBargeInCandidate('uh um mm') === false,
+    '41.barge.1d all-filler string filtered');
+  assert(W.isBargeInCandidate('um stop talking') === true,
+    '41.barge.1e filler + real words still count');
+  assert(W.isBargeInCandidate(null) === false, '41.barge.1f null-safe');
+  assert(W.isBargeInCandidate('') === false, '41.barge.1g empty-safe');
+
+  // ---------- VoiceController — code-surface audit ----------
+  var vSrc = fs.readFileSync(path.join(REPO_ROOT, 'src/components/VoiceController.jsx'), 'utf8');
+
+  // Cross-browser capability detection
+  assert(/window\.SpeechRecognition \|\| window\.webkitSpeechRecognition/.test(vSrc),
+    '41.cap.1a detects SpeechRecognition OR webkitSpeechRecognition');
+  assert(/isSafari = \/safari\/\.test/.test(vSrc),
+    '41.cap.1b detects Safari (needs per-utterance restart)');
+  assert(/isFirefox = \/firefox/.test(vSrc),
+    '41.cap.1c detects Firefox (no SR support)');
+  assert(/needsRestart: isSafari/.test(vSrc),
+    '41.cap.2a Safari flagged as needing auto-restart');
+
+  // Continuous listening with auto-restart on end
+  assert(/rec\.continuous = !caps\.needsRestart/.test(vSrc),
+    '41.cont.1a continuous mode only on browsers that support it');
+  assert(/rec\.onend = function\(\)/.test(vSrc),
+    '41.cont.2a onend handler restarts the recognition');
+  assert(/if \(userStoppedRef\.current\) return;/.test(vSrc),
+    '41.cont.2b restart skipped when user explicitly stopped');
+  assert(/if \(status === 'denied' \|\| status === 'unsupported' \|\| status === 'disabled'\) return;/.test(vSrc),
+    '41.cont.2c restart skipped when perms denied / browser unsupported');
+
+  // Event dispatch — global bus wiring
+  assert(/window\.dispatchEvent\(new CustomEvent\('hey-bob-command'/.test(vSrc),
+    '41.evt.1a dispatches hey-bob-command event');
+  assert(/window\.dispatchEvent\(new CustomEvent\('hey-bob-bargein'\)\)/.test(vSrc),
+    '41.evt.1b dispatches hey-bob-bargein event');
+  assert(/window\.addEventListener\('nadia-tts-start'/.test(vSrc),
+    '41.evt.2a listens for nadia-tts-start to track AI speaking state');
+  assert(/window\.addEventListener\('nadia-tts-stop'/.test(vSrc),
+    '41.evt.2b listens for nadia-tts-stop');
+
+  // Permission errors handled
+  assert(/err === 'not-allowed' \|\| err === 'service-not-allowed'/.test(vSrc),
+    '41.perm.1a handles permission denial (doesn\'t repeatedly prompt)');
+  assert(/err === 'no-speech' \|\| err === 'audio-capture'/.test(vSrc),
+    '41.perm.2a silently recovers from no-speech / audio-capture blips');
+
+  // Barge-in logic
+  assert(/if \(aiSpeakingRef\.current && !engineRef\.current\.isCollecting\(\) && isBargeInCandidate\(transcript\)\)/.test(vSrc),
+    '41.barge.2a barge-in triggers only when AI speaking + not already in command mode + meaningful speech');
+
+  // Spacebar push-to-talk fallback
+  assert(/e\.code !== 'Space'/.test(vSrc),
+    '41.kbd.1a spacebar push-to-talk shortcut wired');
+  assert(/if \(tag === 'INPUT' \|\| tag === 'TEXTAREA'/.test(vSrc),
+    '41.kbd.1b space shortcut disabled inside text inputs');
+
+  // ---------- AIGreeter integration ----------
+  var gSrc = fs.readFileSync(path.join(REPO_ROOT, 'src/components/AIGreeter.jsx'), 'utf8');
+  // TTS dispatches events so controller can barge-in
+  assert(/window\.dispatchEvent\(new CustomEvent\('nadia-tts-start'\)\)/.test(gSrc),
+    '41.tts.1a doSpeak fires nadia-tts-start');
+  assert(/window\.dispatchEvent\(new CustomEvent\('nadia-tts-stop'\)\)/.test(gSrc),
+    '41.tts.1b audio.onended fires nadia-tts-stop');
+  // Listens for Hey Bob commands
+  assert(/window\.addEventListener\('hey-bob-command'/.test(gSrc),
+    '41.cmd.1a AIGreeter subscribes to hey-bob-command');
+  assert(/window\.addEventListener\('hey-bob-bargein'/.test(gSrc),
+    '41.cmd.1b AIGreeter subscribes to hey-bob-bargein (stops its own speech)');
+
+  // ---------- VoiceController is actually mounted at root ----------
+  var pSrc = fs.readFileSync(path.join(REPO_ROOT, 'src/app/page.jsx'), 'utf8');
+  assert(/import VoiceController from '\.\.\/components\/VoiceController'/.test(pSrc),
+    '41.mount.1a VoiceController imported into page.jsx');
+  assert(/<VoiceController userId=\{userProfile\?\.id\} userProfile=\{userProfile\} enabled=\{voiceEnabled\}/.test(pSrc),
+    '41.mount.1b VoiceController mounted inside ToastProvider (global, above tabs)');
+  assert(/const \[voiceEnabled, setVoiceEnabled\] = useState\(false\)/.test(pSrc),
+    '41.mount.2a voiceEnabled state declared');
+  assert(/setVoiceEnabled\(userProfile\.voice_enabled !== false\)/.test(pSrc),
+    '41.mount.2b voiceEnabled hydrated from users.voice_enabled column');
+
+  // ---------- Session-persistent greeting ----------
+  assert(/const handleGreeted = useCallback\(async \(\) => \{/.test(pSrc),
+    '41.greet.1a handleGreeted stamps user_sessions.greeted_at');
+  assert(/\.update\(\{ greeted_at: new Date\(\)\.toISOString\(\) \}\)/.test(pSrc),
+    '41.greet.1b greeted_at marked with current timestamp');
+  // On mount, reads greeted_at from current open session
+  assert(/\.select\('id, greeted_at, logout_at'\)/.test(pSrc),
+    '41.greet.2a open-session lookup selects greeted_at + logout_at');
+  assert(/\.is\('logout_at', null\)/.test(pSrc),
+    '41.greet.2b filters to sessions where user has NOT logged out yet');
+  assert(/if \(sess && sess\.greeted_at\) setGreeterHasGreeted\(true\)/.test(pSrc),
+    '41.greet.3a skips greeting if already done in current session');
+}
+try { runSection41_VoiceUX(); } catch(e) {
+  console.error('SECTION 41 ERROR:', e.message);
+  console.error(e.stack);
+  failed++;
+}
+
+// ============================================================
+// SECTION 42: Sales auto-categorization — /api/categorize-sales
+// Locks: schema + API surface + tokenizer + prediction scoring shape
+// ============================================================
+function runSection42_Categorization() {
+  group('SECTION 42: Sales auto-categorization');
+
+  var src = fs.readFileSync(path.join(REPO_ROOT, 'src/app/api/categorize-sales/route.js'), 'utf8');
+  var sql = fs.readFileSync(path.join(REPO_ROOT, 'supabase/session3-handoff-ai.sql'), 'utf8');
+
+  // Schema
+  assert(/CREATE TABLE IF NOT EXISTS category_memory/.test(sql),
+    '42.sql.1a category_memory table created');
+  assert(/signal_type TEXT NOT NULL CHECK \(signal_type IN \('customer','keyword','amount_bracket'\)\)/.test(sql),
+    '42.sql.1b signal_type CHECK matches tokenizer outputs');
+  assert(/CREATE UNIQUE INDEX IF NOT EXISTS idx_catmem_unique/.test(sql),
+    '42.sql.2a unique index prevents duplicate signal→category mappings');
+  assert(/source TEXT NOT NULL DEFAULT 'observed'/.test(sql),
+    '42.sql.3a source column defaults to observed');
+
+  // API action whitelist
+  assert(/if \(action === 'learn'\)/.test(src),
+    '42.act.1a learn action handler');
+  assert(/if \(action === 'predict'\)/.test(src),
+    '42.act.1b predict action handler');
+  assert(/if \(action === 'backfill'\)/.test(src),
+    '42.act.1c backfill action handler');
+  // Unknown action rejected
+  assert(/unknown action \(use learn \| predict \| backfill\)/.test(src),
+    '42.act.1d unknown action rejected with helpful message');
+
+  // Tokenizer
+  assert(/\\u0600-\\u06ff/.test(src),
+    '42.tok.1a tokenizer preserves Arabic characters (U+0600..U+06FF)');
+  assert(/STOP = \{/.test(src),
+    '42.tok.1b stopword dictionary defined');
+  assert(/if \(out\.length >= 6\) break/.test(src),
+    '42.tok.2a max 6 tokens per row — caps noise from fat descriptions');
+
+  // Scoring
+  assert(/customer signal.*weighted 3x|\(m\.hit_count \|\| 1\) \* 3/i.test(src),
+    '42.score.1a customer signal weighted 3x (strongest predictor)');
+  assert(/\(m\.hit_count \|\| 1\) \* 1/.test(src),
+    '42.score.1b keyword signals weighted 1x');
+  assert(/confidence = total > 0 \? best\.score \/ total : 0/.test(src),
+    '42.score.2a confidence = best / total (proper share)');
+
+  // Backfill safety
+  assert(/dry_run/.test(src) && /dry_run: dry/.test(src),
+    '42.bf.1a dry_run option available (never touches invoices)');
+  assert(/minConfidence = 0\.6|conf = \(typeof minConfidence === 'number'[\s\S]{0,120}0\.6/.test(src),
+    '42.bf.2a default min_confidence threshold is 0.6');
+  assert(/skipped_low_confidence/.test(src),
+    '42.bf.2b tracks how many rows were skipped for low confidence');
+  assert(/\.or\('category\.is\.null,category\.eq\.'\)/.test(src),
+    '42.bf.3a backfill scans only empty/null category rows');
+  assert(/BATCH = 200/.test(src),
+    '42.bf.3b paginates backfill in batches of 200');
+
+  // Learn — paginates
+  assert(/BATCH = 500/.test(src),
+    '42.learn.1a learn paginates in batches of 500');
+  assert(/\.not\('category', 'is', null\)[\s\S]{0,80}\.neq\('category', ''\)/.test(src),
+    '42.learn.1b learn only scans already-categorized rows');
+
+  // Service-role client
+  assert(/SUPABASE_SERVICE_ROLE_KEY \|\| process\.env\.NEXT_PUBLIC_SUPABASE_ANON_KEY/.test(src),
+    '42.svc.1a service-role client');
+
+  // No backticks (SWC rule)
+  assert(src.indexOf('`') === -1, '42.swc.1a no backticks');
+}
+try { runSection42_Categorization(); } catch(e) {
+  console.error('SECTION 42 ERROR:', e.message);
+  console.error(e.stack);
+  failed++;
+}
+
+// ============================================================
+// SECTION 43: Session 4 UI items — CRM mask gaps + ticket priority edit
+// Locks in:
+//   - CRM edit form city AND email are now gated behind canSeeContact
+//   - Ticket priority shows as an editable dropdown for users with edit perm
+//   - Priority change writes to dbUpdate (audited) + daily activity log
+// ============================================================
+function runSection43_CRMAndPriority() {
+  group('SECTION 43: CRM masking gaps + ticket priority editable');
+
+  var crmSrc = fs.readFileSync(path.join(REPO_ROOT, 'src/components/CRMTab.jsx'), 'utf8');
+
+  // CRM: city gated
+  assert(/City restricted/.test(crmSrc),
+    '43.crm.1a city field in edit form is gated for non-contact-permitted users');
+  // Find the city block and verify it has canSeeContact ternary
+  var cityBlock = crmSrc.match(/City[\s\S]{0,400}City restricted/);
+  assert(cityBlock && /canSeeContact\(sel\) \?/.test(cityBlock[0]),
+    '43.crm.1b city edit field wrapped in canSeeContact ternary');
+
+  // CRM: email added and gated
+  assert(/Email/.test(crmSrc) && /\{maskEmail\(sel\.email\)\}/.test(crmSrc),
+    '43.crm.2a email edit field present AND gated (shows mask for unprivileged)');
+  // Email appears between Phone and City in the edit form (verify ordering via regex across section)
+  var editFormEmail = crmSrc.match(/Phone[\s\S]{0,800}Email[\s\S]{0,400}City/);
+  assert(editFormEmail, '43.crm.2b email field sits between Phone and City in edit form');
+
+  // Ticket priority — editable select present
+  var tSrc = fs.readFileSync(path.join(REPO_ROOT, 'src/components/TicketsTab.jsx'), 'utf8');
+  // Find the priority display block. It should contain a <select> when editable.
+  var priBlock = tSrc.match(/Priority \/ الأولوية[\s\S]{0,1500}<\/div>/);
+  assert(priBlock, '43.tkt.0a priority block found in detail view');
+  assert(priBlock && /canEditTicketContent\(sel\) \?/.test(priBlock[0]),
+    '43.tkt.1a priority editable ONLY when canEditTicketContent returns true');
+  assert(priBlock && /<select /.test(priBlock[0]),
+    '43.tkt.1b editable branch renders a <select>');
+  // The select must write via dbUpdate (audited) AND update local state
+  assert(priBlock && /dbUpdate\('tickets', sel\.id, \{ priority: newPri/.test(priBlock[0]),
+    '43.tkt.2a priority change calls dbUpdate (audit log path)');
+  assert(priBlock && /updated_at: new Date\(\)\.toISOString\(\), updated_by: myId/.test(priBlock[0]),
+    '43.tkt.2b updated_at + updated_by stamped on change');
+  assert(priBlock && /logActivity\(myId, 'Changed priority of '/.test(priBlock[0]),
+    '43.tkt.3a daily activity log entry written');
+  assert(priBlock && /if \(newPri === oldPri\) return;/.test(priBlock[0]),
+    '43.tkt.3b no-op short-circuit when same priority selected (no spam audits)');
+  // All three priority options rendered
+  assert(priBlock && /PRIORITIES\.map\(p => <option/.test(priBlock[0]),
+    '43.tkt.4a all three priority options rendered from PRIORITIES constant');
+}
+try { runSection43_CRMAndPriority(); } catch(e) {
+  console.error('SECTION 43 ERROR:', e.message);
+  console.error(e.stack);
+  failed++;
+}
+
+// ============================================================
+// SECTION 44: Decision panel UI + Settings → Voice + Admin Tools
+// ============================================================
+function runSection44_DecisionUIAndSettingsPanels() {
+  group('SECTION 44: Decision panel + Voice/Admin settings panels');
+
+  var gSrc = fs.readFileSync(path.join(REPO_ROOT, 'src/components/AIGreeter.jsx'), 'utf8');
+  var sSrc = fs.readFileSync(path.join(REPO_ROOT, 'src/components/SettingsTab.jsx'), 'utf8');
+
+  // ---------- Decision panel ----------
+  assert(/function renderDecisionPanel\(d, keyId, lang\)/.test(gSrc),
+    '44.dec.0a renderDecisionPanel helper defined at module scope');
+  // Confidence + risk meters
+  assert(/conf = Math\.round\(\(d\.confidence \|\| 0\) \* 100\)/.test(gSrc),
+    '44.dec.1a confidence rendered as percentage');
+  assert(/risk = Math\.round\(\(d\.risk_score \|\| 0\) \* 100\)/.test(gSrc),
+    '44.dec.1b risk rendered as percentage');
+  // Color coding thresholds
+  assert(/conf >= 75 \? '#10b981' : conf >= 50 \? '#f59e0b' : '#64748b'/.test(gSrc),
+    '44.dec.2a confidence color ramp green/amber/slate at 75/50 thresholds');
+  assert(/risk >= 70 \? '#ef4444' : risk >= 40 \? '#f59e0b' : '#10b981'/.test(gSrc),
+    '44.dec.2b risk color ramp red/amber/green at 70/40 thresholds');
+  // Action button dispatches custom event
+  assert(/window\.dispatchEvent\(new CustomEvent\('nadia-decision-action'/.test(gSrc),
+    '44.dec.3a clicking an action button dispatches nadia-decision-action event');
+  // Panel called from both historical and streaming messages
+  var panelCallSites = (gSrc.match(/renderDecisionPanel\(/g) || []).length;
+  assert(panelCallSites >= 3,
+    '44.dec.4a renderDecisionPanel called at: definition, history loop, streaming bubble',
+    'sites=' + panelCallSites);
+  // Panel only renders when ok=true decision present
+  assert(/if \(data\.decision && data\.decision\.ok\) assistantMsg\.decision = data\.decision;/.test(gSrc),
+    '44.dec.5a assistantMsg only gets decision if ok=true (skips no-signal responses)');
+  // Don't render during typewriter animation (would cause layout jump mid-typing)
+  assert(/!showTypingAnim && lastMsg\.decision && renderDecisionPanel/.test(gSrc),
+    '44.dec.5b streaming bubble waits for typewriter to finish before showing panel');
+
+  // ---------- Voice + Admin tabs in Settings ----------
+  assert(/\['voice', '🎙️ Voice'\]/.test(sSrc),
+    '44.set.1a Voice tab added to Settings tabs');
+  assert(/\['admintools', '🛠️ Admin Tools'\]/.test(sSrc),
+    '44.set.1b Admin Tools tab added (super-admin only)');
+  assert(/isSuperAdmin \? \[\['aimemory', '🧠 AI Memory'\], \['admintools', '🛠️ Admin Tools'\]\] : \[\]/.test(sSrc),
+    '44.set.1c Admin Tools gated to super admin in the tab list array');
+
+  // VoiceSettingsPanel
+  assert(/function VoiceSettingsPanel\(\{ userProfile, toast \}\)/.test(sSrc),
+    '44.vsp.0a VoiceSettingsPanel component defined');
+  assert(/from\('users'\)\.update\(\{ voice_enabled: v \}\)\.eq\('id', myId\)/.test(sSrc),
+    '44.vsp.1a toggle writes to users.voice_enabled');
+  // Browser detection branches
+  assert(/setSupport\(\{ kind: 'firefox' \}\)/.test(sSrc),
+    '44.vsp.2a Firefox detection branch (no SR support)');
+  assert(/setSupport\(\{ kind: 'safari' \}\)/.test(sSrc),
+    '44.vsp.2b Safari detection branch');
+  assert(/setSupport\(\{ kind: 'ok' \}\)/.test(sSrc),
+    '44.vsp.2c "ok" branch for Chrome/Edge');
+  // How-to-use guide for users
+  assert(/Hey Bob, what's on my calendar/.test(sSrc),
+    '44.vsp.3a example command shown in help section');
+
+  // AdminToolsPanel
+  assert(/function AdminToolsPanel\(\{ toast \}\)/.test(sSrc),
+    '44.atp.0a AdminToolsPanel component defined');
+  // Three action buttons: learn / preview (dry-run) / apply
+  assert(/call\('learn'\)/.test(sSrc),
+    '44.atp.1a Learn button calls POST /api/categorize-sales with action=learn');
+  assert(/call\('backfill', \{ dry_run: true, min_confidence: 0\.6 \}\)/.test(sSrc),
+    '44.atp.1b Preview button is dry-run=true + 0.6 confidence');
+  assert(/call\('backfill', \{ dry_run: false, min_confidence: 0\.6 \}\)/.test(sSrc),
+    '44.atp.1c Apply button dry-run=false (writes for real)');
+  // Apply has a browser confirm() guard before firing
+  assert(/if \(!confirm\('Apply backfill — this UPDATES invoices/.test(sSrc),
+    '44.atp.2a Apply button requires explicit user confirmation');
+  // Stats load from GET endpoint
+  assert(/await fetch\('\/api\/categorize-sales'\)/.test(sSrc),
+    '44.atp.3a GET /api/categorize-sales loads memory + uncategorized counts');
+
+  // ---------- View Financial Reports permission added to granular list ----------
+  assert(/'View Financial Reports'/.test(sSrc),
+    '44.perm.1a View Financial Reports added to granular permissions list');
+}
+try { runSection44_DecisionUIAndSettingsPanels(); } catch(e) {
+  console.error('SECTION 44 ERROR:', e.message);
+  console.error(e.stack);
+  failed++;
+}
+
+// ============================================================
+// SECTION 45: Reports finance gate + System Tickets Claude-review checkbox
+// ============================================================
+function runSection45_ReportsGateAndSysTickets() {
+  group('SECTION 45: Reports gate + System Tickets Claude UX');
+
+  var rSrc = fs.readFileSync(path.join(REPO_ROOT, 'src/components/ReportsTab.jsx'), 'utf8');
+  var pSrc = fs.readFileSync(path.join(REPO_ROOT, 'src/app/page.jsx'), 'utf8');
+
+  // ---------- Reports finance gate ----------
+  // Signature accepts canViewFinancials
+  assert(/export default function ReportsTab\(\{ treasury, invoices, warehouseExpenses, egyptBankTxns, canViewFinancials \}\)/.test(rSrc),
+    '45.rep.1a ReportsTab accepts canViewFinancials prop');
+  // Gate returns a lock-card when false
+  assert(/if \(canViewFinancials === false\)/.test(rSrc),
+    '45.rep.2a canViewFinancials===false short-circuits before any data computation');
+  assert(/Financial Reports Restricted/.test(rSrc),
+    '45.rep.2b lock-card shown with clear "Financial Reports Restricted" header');
+  assert(/View Financial Reports/.test(rSrc),
+    '45.rep.2c lock-card names the exact permission needed');
+  // Gate threads through at mount site in page.jsx
+  assert(/canViewFinancials=\{isSuperAdmin \|\| modulePerms\?\.\['View Financial Reports'\] === true\}/.test(pSrc),
+    '45.rep.3a page.jsx threads isSuperAdmin || perm to the prop');
+
+  // ---------- System Tickets — Claude review checkbox + UX ----------
+  // The checkbox itself
+  assert(/🤖 Fix next session/.test(pSrc),
+    '45.sys.1a "Fix next session" checkbox label present');
+  // It writes claude_review_requested
+  assert(/dbUpdate\('system_tickets', t\.id, \{ claude_review_requested: e\.target\.checked \}, user\?\.id\)/.test(pSrc),
+    '45.sys.1b checkbox writes claude_review_requested via dbUpdate (audited)');
+  // Badge shown when flagged
+  assert(/🤖 Claude review requested/.test(pSrc),
+    '45.sys.2a badge shown on tickets flagged for Claude review');
+  // Badge shown when fixed by Claude
+  assert(/✨ Claude-fixed/.test(pSrc),
+    '45.sys.2b "Claude-fixed" badge on tickets where claude_last_fixed_at is set');
+  // Claude fix notes rendered visibly
+  assert(/🤖 CLAUDE NOTES/.test(pSrc),
+    '45.sys.3a claude_fix_notes rendered in a highlighted box with indigo background');
+  // Reopen button re-flags for next session
+  assert(/status: 'Reopened', claude_review_requested: true/.test(pSrc),
+    '45.sys.4a Reopen button sets status=Reopened AND re-flags claude_review_requested');
+  // Sorting puts Claude-flagged first
+  assert(/if \(!!a\.claude_review_requested !== !!b\.claude_review_requested\)/.test(pSrc),
+    '45.sys.5a list sorted with Claude-flagged tickets first');
+  // Then Reopened, Open, In Progress, resolved, closed
+  assert(/'Reopened': 0, 'Open': 1, 'In Progress': 2, 'Resolved': 3, 'Fixed': 3, 'Closed': 4/.test(pSrc),
+    '45.sys.5b secondary sort: Reopened > Open > InProgress > Resolved/Fixed > Closed');
+  // Banner counts flagged tickets at top of list
+  assert(/claudeCount = sysTickets\.filter\(t => t\.claude_review_requested\)\.length/.test(pSrc),
+    '45.sys.6a claudeCount counted from sysTickets array');
+  assert(/flagged for Claude to fix next session/.test(pSrc),
+    '45.sys.6b banner copy tells user Claude will pull these next session');
+
+  // Reopened status has a style entry so the badge actually renders properly
+  assert(/Reopened: 'bg-rose-100 text-rose-700'/.test(pSrc),
+    '45.sys.7a STATS map includes Reopened (was missing before)');
+  assert(/Fixed: 'bg-emerald-100 text-emerald-700'/.test(pSrc),
+    '45.sys.7b STATS map includes Fixed (set by /api/claude-handoff POST)');
+}
+try { runSection45_ReportsGateAndSysTickets(); } catch(e) {
+  console.error('SECTION 45 ERROR:', e.message);
+  console.error(e.stack);
+  failed++;
+}
+
+// ============================================================
+// ============================================================
+// SECTION 43: Session 4 — CRM masking gaps closed + ticket priority editable
+// ============================================================
+function runSection43_CRMAndTickets() {
+  group('SECTION 43: CRM masking + ticket priority');
+
+  var crm = fs.readFileSync(path.join(REPO_ROOT, 'src/components/CRMTab.jsx'), 'utf8');
+
+  // CRM city field now gated behind canSeeContact
+  assert(/City restricted/.test(crm),
+    '43.crm.1a city field shows "City restricted" for non-permitted users');
+  // Email field added to edit form (was missing entirely before this session)
+  assert(/f\.email!==undefined\?f\.email:\(sel\.email\|\|''\)/.test(crm),
+    '43.crm.2a email field present in edit form');
+  assert(/maskEmail\(sel\.email\)/.test(crm),
+    '43.crm.2b email field uses maskEmail when gated');
+  // canSeeContact still gates phone
+  assert(/canSeeContact\(sel\) \? sel\.phone : maskPhone\(sel\.phone\)/.test(crm),
+    '43.crm.3a phone gating preserved (regression guard)');
+
+  var tk = fs.readFileSync(path.join(REPO_ROOT, 'src/components/TicketsTab.jsx'), 'utf8');
+  // Priority now inline-editable
+  assert(/canEditTicketContent\(sel\) \? \(\s*<select value=\{sel\.priority/.test(tk),
+    '43.tk.1a priority rendered as inline select when user can edit');
+  assert(/'Changed priority of '[\s\S]{0,40}\+ '\s*from\s*'/.test(tk),
+    '43.tk.1b priority change logs to activity log');
+  assert(/toast\.success\('Priority changed/.test(tk),
+    '43.tk.1c toast notification on priority change');
+  // Fallback to static display when NOT editable
+  assert(/\) : \(\s*<div className="text-sm font-bold" style=\{\{ color: priInfo\.c \}\}>/.test(tk),
+    '43.tk.2a falls back to static display when canEditTicketContent is false');
+}
+try { runSection43_CRMAndTickets(); } catch(e) { console.error('SECTION 43:', e.message); failed++; }
+
+// ============================================================
+// SECTION 44: Session 4 — Decision panel render in AIGreeter
+// ============================================================
+function runSection44_DecisionPanel() {
+  group('SECTION 44: Decision panel render');
+
+  var g = fs.readFileSync(path.join(REPO_ROOT, 'src/components/AIGreeter.jsx'), 'utf8');
+
+  assert(/function renderDecisionPanel\(d, keyId, lang\)/.test(g),
+    '44.dp.1a renderDecisionPanel helper defined');
+  // Attaches decision to assistant message
+  assert(/if \(data\.decision && data\.decision\.ok\) assistantMsg\.decision = data\.decision/.test(g),
+    '44.dp.2a decision attached to assistant message when ok');
+  // Rendered in historical messages
+  assert(/m\.decision && renderDecisionPanel\(m\.decision, i, useLang\)/.test(g),
+    '44.dp.3a decision rendered in historical messages');
+  // Rendered under the typing/latest message
+  assert(/!showTypingAnim && lastMsg\.decision && renderDecisionPanel\(lastMsg\.decision, -1, useLang\)/.test(g),
+    '44.dp.3b decision rendered under latest message AFTER typing finishes');
+  // Confidence + risk meters
+  assert(/conf = Math\.round\(\(d\.confidence \|\| 0\) \* 100\)/.test(g),
+    '44.dp.4a confidence meter shown as %');
+  assert(/risk = Math\.round\(\(d\.risk_score \|\| 0\) \* 100\)/.test(g),
+    '44.dp.4b risk meter shown as %');
+  // Action chips dispatch event
+  assert(/window\.dispatchEvent\(new CustomEvent\('nadia-decision-action'/.test(g),
+    '44.dp.5a action click dispatches nadia-decision-action event');
+  assert(/d\.suggested_actions\.slice\(0, 3\)/.test(g),
+    '44.dp.5b max 3 action buttons shown (prevents crowding)');
+  // Reasoning (max 3 lines)
+  assert(/d\.reasoning\.slice\(0, 3\)/.test(g),
+    '44.dp.6a reasoning capped at 3 lines');
+}
+try { runSection44_DecisionPanel(); } catch(e) { console.error('SECTION 44:', e.message); failed++; }
+
+// ============================================================
+// SECTION 45: Session 4 — Settings panels (Voice + Admin Tools)
+// ============================================================
+function runSection45_SettingsPanels() {
+  group('SECTION 45: Settings panels');
+
+  var s = fs.readFileSync(path.join(REPO_ROOT, 'src/components/SettingsTab.jsx'), 'utf8');
+
+  // Voice tab present in tab list
+  assert(/\['voice', '🎙️ Voice'\]/.test(s),
+    '45.tabs.1a Voice tab added to Settings nav (all users)');
+  // Admin Tools tab only for super admins
+  assert(/isSuperAdmin \? \[\['aimemory', '🧠 AI Memory'\], \['admintools', '🛠️ Admin Tools'\]\]/.test(s),
+    '45.tabs.1b Admin Tools tab super-admin-only');
+
+  // VoiceSettingsPanel
+  assert(/function VoiceSettingsPanel\(\{ userProfile, toast \}\)/.test(s),
+    '45.voice.1a VoiceSettingsPanel component defined');
+  assert(/await supabase\.from\('users'\)\.update\(\{ voice_enabled: v \}\)/.test(s),
+    '45.voice.2a toggle writes users.voice_enabled');
+  // Browser detection
+  assert(/isFirefox = \/firefox\|fxios\/\.test/.test(s),
+    '45.voice.3a detects Firefox (no-SR) for clear user messaging');
+  assert(/isSafari = \/safari\/\.test/.test(s),
+    '45.voice.3b detects Safari');
+
+  // AdminToolsPanel
+  assert(/function AdminToolsPanel\(\{ toast \}\)/.test(s),
+    '45.adm.1a AdminToolsPanel component defined');
+  // Three actions: learn / preview / apply
+  assert(/call\('learn'\)/.test(s), '45.adm.2a Learn button wired');
+  assert(/call\('backfill', \{ dry_run: true, min_confidence: 0\.6 \}\)/.test(s),
+    '45.adm.2b Preview button = dry_run=true');
+  assert(/call\('backfill', \{ dry_run: false, min_confidence: 0\.6 \}\)/.test(s),
+    '45.adm.2c Apply button = dry_run=false');
+  // Apply has confirm dialog
+  assert(/if \(!confirm\('Apply backfill — this UPDATES invoices/.test(s),
+    '45.adm.3a Apply has confirm() prompt (prevents accidental writes)');
+  // Stats shown
+  assert(/stats\?\.memory_count/.test(s) && /stats\?\.uncategorized_invoice_count/.test(s),
+    '45.adm.4a stats panel shows memory count + uncategorized count');
+}
+try { runSection45_SettingsPanels(); } catch(e) { console.error('SECTION 45:', e.message); failed++; }
+
+// ============================================================
+// SECTION 46: Session 4 — Reports financial gate
+// ============================================================
+function runSection46_ReportsGate() {
+  group('SECTION 46: Reports financial gate');
+
+  var r = fs.readFileSync(path.join(REPO_ROOT, 'src/components/ReportsTab.jsx'), 'utf8');
+
+  assert(/canViewFinancials/.test(r),
+    '46.rep.1a ReportsTab accepts canViewFinancials prop');
+  assert(/if \(canViewFinancials === false\)/.test(r),
+    '46.rep.1b early return when gated OFF — blocks all financial UI');
+  assert(/Financial Reports Restricted/.test(r),
+    '46.rep.1c locked card message visible to non-permitted users');
+  assert(/View Financial Reports/.test(r),
+    '46.rep.1d instructs user to ask admin for "View Financial Reports" perm');
+
+  // Page wires prop
+  var p = fs.readFileSync(path.join(REPO_ROOT, 'src/app/page.jsx'), 'utf8');
+  assert(/canViewFinancials=\{isSuperAdmin \|\| modulePerms\?\.\['View Financial Reports'\] === true\}/.test(p),
+    '46.wire.1a page.jsx passes isSuperAdmin OR perm to ReportsTab');
+
+  // Granular permission registered
+  var s = fs.readFileSync(path.join(REPO_ROOT, 'src/components/SettingsTab.jsx'), 'utf8');
+  assert(/'View Financial Reports'/.test(s),
+    '46.perm.1a "View Financial Reports" added to granular permission list in Settings');
+}
+try { runSection46_ReportsGate(); } catch(e) { console.error('SECTION 46:', e.message); failed++; }
+
+// ============================================================
 // MAIN
 // ============================================================
 (async () => {

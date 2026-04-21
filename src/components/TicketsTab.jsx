@@ -457,7 +457,24 @@ export default function TicketsTab({ toast, customers, user, userProfile, users,
           </div>
           <div className="rounded-lg p-3" style={{ background: priInfo.c + '15' }}>
             <div className="text-[10px] text-slate-500 font-semibold">Priority / الأولوية</div>
-            <div className="text-sm font-bold" style={{ color: priInfo.c }}>{sel.priority?.toUpperCase()}</div>
+            {canEditTicketContent(sel) ? (
+              <select value={sel.priority || 'medium'} onChange={async (e) => {
+                var newPri = e.target.value;
+                var oldPri = sel.priority;
+                if (newPri === oldPri) return;
+                try {
+                  await dbUpdate('tickets', sel.id, { priority: newPri, updated_at: new Date().toISOString(), updated_by: myId }, myId);
+                  await logActivity(myId, 'Changed priority of ' + (sel.ticket_number || sel.title) + ' from ' + (oldPri || 'none') + ' to ' + newPri, 'ticket');
+                  if (toast) toast.success('Priority changed: ' + oldPri + ' → ' + newPri);
+                  setSel({ ...sel, priority: newPri });
+                  if (onReload) onReload();
+                } catch (err) { if (toast) toast.error(err.message); else alert(err.message); }
+              }} className="text-sm font-bold bg-transparent border-0 cursor-pointer outline-none w-full" style={{ color: priInfo.c }}>
+                {PRIORITIES.map(p => <option key={p.v} value={p.v}>{p.v.toUpperCase()}</option>)}
+              </select>
+            ) : (
+              <div className="text-sm font-bold" style={{ color: priInfo.c }}>{sel.priority?.toUpperCase()}</div>
+            )}
             {sel.order_number && <div className="text-[10px] text-slate-500 mt-1">Order #{sel.order_number}</div>}
             {sel.client_name && <div className="text-[10px] text-slate-500">Client: {sel.client_name}</div>}
           </div>

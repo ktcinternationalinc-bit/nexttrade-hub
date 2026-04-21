@@ -4,7 +4,24 @@ import { EXPENSE_CATS, COLORS } from '../lib/utils';
 
 const MONTHS = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
 
-export default function ReportsTab({ treasury, invoices, warehouseExpenses, egyptBankTxns }) {
+export default function ReportsTab({ treasury, invoices, warehouseExpenses, egyptBankTxns, canViewFinancials }) {
+  // Financial gate — all the data in this tab is cash totals, outstanding,
+  // treasury breakdowns, P&L. None of that is appropriate for team members
+  // without "View Financial Reports" permission (or super_admin).
+  // When gated off, show a friendly locked card instead of the whole tab.
+  if (canViewFinancials === false) {
+    return (
+      <div className="max-w-2xl mx-auto mt-12 p-8 rounded-2xl bg-white border border-slate-200 text-center">
+        <div className="text-5xl mb-3">🔒</div>
+        <div className="text-xl font-bold mb-1">Financial Reports Restricted</div>
+        <div className="text-sm text-slate-500 mb-4">
+          This section shows cash flow, treasury totals, outstanding balances, and profit/loss data.
+          Access requires the <strong>View Financial Reports</strong> permission. Talk to an admin if you need it.
+        </div>
+        <div className="text-[11px] text-slate-400">(Super admins bypass this gate automatically.)</div>
+      </div>
+    );
+  }
   const [dateFrom, setDateFrom] = useState(() => { const d = new Date(); d.setFullYear(d.getFullYear() - 1); return d.toISOString().substring(0, 10); });
   const [dateTo, setDateTo] = useState(new Date().toISOString().substring(0, 10));
   const [view, setView] = useState('overview'); // overview | income | expenses | categories | comparison

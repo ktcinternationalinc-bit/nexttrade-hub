@@ -389,86 +389,187 @@ export default function ShippingRatesTab({ toast, user, userProfile, isAdmin, cu
     const wb = XLSX.read(d);
     const rows = XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]]);
     if (!rows.length) { alert('No data found'); return; }
-    
-    // Smart column detection — fuzzy match column headers
+
     const headers = Object.keys(rows[0]);
-    const findCol = (keywords) => {
-      const kws = keywords.map(k => k.toLowerCase());
-      return headers.find(h => {
-        const hl = h.toLowerCase().replace(/[_\-\.]/g, ' ');
-        return kws.some(k => hl.includes(k));
-      }) || null;
-    };
-    
-    const colMap = {
-      origin: findCol(['origin', 'from', 'المنشأ', 'loading country', 'pol country', 'departure']),
-      destination: findCol(['destination', 'dest', 'الوجهة', 'pod country', 'arrival', 'consignee country']),
-      vendor: findCol(['vendor', 'forwarder', 'freight forwarder', 'agent', 'المورد', 'supplier', 'company']),
-      line: findCol(['shipping line', 'line', 'carrier', 'الناقل', 'steamship', 'ssl']),
-      container: findCol(['container', 'size', 'type', 'cntr', 'equipment', 'حاوية', 'container type', 'container size']),
-      rate: findCol(['rate', 'price', 'amount', 'freight', 'cost', 'charge', 'السعر', 'ocean freight', 'total']),
-      currency: findCol(['currency', 'cur', 'ccy', 'العملة']),
-      transit: findCol(['transit', 'transit time', 'transit days', 'days', 'مدة', 'tt']),
-      free: findCol(['free days', 'free time', 'demurrage free', 'detention free', 'freedays']),
-      pol: findCol(['pol', 'port of loading', 'loading port', 'load port', 'port loading', 'ميناء التحميل']),
-      pod: findCol(['pod', 'port of discharge', 'discharge port', 'port discharge', 'ميناء التفريغ', 'unloading']),
-      date: findCol(['date', 'effective', 'valid from', 'start', 'rate date', 'التاريخ']),
-      expiry: findCol(['expiry', 'expiration', 'valid until', 'valid to', 'validity', 'end date', 'الصلاحية']),
-      portFees: findCol(['port fees', 'port charges', 'port cost', 'local charges']),
-      thc: findCol(['thc', 'terminal', 'terminal handling']),
-      docFees: findCol(['doc', 'documentation', 'bl fee', 'bill of lading']),
-      customsFees: findCol(['customs', 'duty', 'جمارك']),
-      otherFees: findCol(['other', 'surcharge', 'baf', 'caf', 'isps']),
-      notes: findCol(['notes', 'remarks', 'comment', 'ملاحظات']),
-      mode: findCol(['transport mode', 'shipping mode', 'mode of transport', 'ship type']),
-    };
-    
-    console.warn('📊 Column mapping:', colMap);
-    
-    const getVal = (row, col) => col ? String(row[col] || '').trim() : '';
-    const getNum = (row, col) => { const v = getVal(row, col); return v ? Number(v.replace(/[^0-9.\-]/g, '')) || 0 : 0; };
-    const parseDate = (row, col) => {
-      const v = getVal(row, col);
-      if (!v) return '';
-      // Handle Excel serial dates
-      if (!isNaN(v) && Number(v) > 40000) {
-        const d = new Date((Number(v) - 25569) * 86400000);
-        return d.toISOString().substring(0, 10);
+
+    // ---- NUMERIC-AWARE STRING PARSER ----
+    // Handles: "$2,500.00", "USD 2500", "2.500,00" (EU), "2,500", plain numbers
+    // Returns NaN if the string has no digits at all (so we can tell "empty" from "zero").
+    const parseNumberSmart = (raw) => {
+      if (raw == null || raw === '') return NaN;
+      if (typeof raw === 'number') return raw;
+      const s = String(raw).trim();
+      if (!s) return NaN;
+      // strip everything that isn't a digit, dot, comma, or minus
+      let clean = s.replace(/[^0-9.,\-]/g, '');
+      if (!clean) return NaN;
+      // Detect EU format: last separator is a comma AND there's a period before it
+      // → "1.234,56" → swap. Otherwise assume US/intl format and strip commas.
+      const lastComma = clean.lastIndexOf(',');
+      const lastDot = clean.lastIndexOf('.');
+      if (lastComma > -1 && lastDot > -1 && lastComma > lastDot) {
+        // EU: . = thousands, , = decimal → remove dots, swap comma for dot
+        clean = clean.replace(/\./g, '').replace(',', '.');
+      } else if (lastComma > -1 && lastDot === -1) {
+        // Only commas present. If there are multiple OR the comma is followed by
+        // 3+ digits → thousands separator. Otherwise decimal.
+        const commaCount = (clean.match(/,/g) || []).length;
+        const afterComma = clean.length - lastComma - 1;
+        if (commaCount > 1 || afterComma >= 3) clean = clean.replace(/,/g, '');
+        else clean = clean.replace(',', '.');
+      } else {
+        // US format or no separators at all
+        clean = clean.replace(/,/g, '');
       }
-      // Handle common date formats
-      const d = new Date(v);
-      return isNaN(d.getTime()) ? '' : d.toISOString().substring(0, 10);
+      const n = Number(clean);
+      return isNaN(n) ? NaN : n;
     };
-    
-    // Detect container type from value
+
+    // ---- COLUMN SCORING ----
+    // For each candidate column, count how many of the first 20 non-empty rows
+    // parse as numbers. We prefer columns that look numeric when we're picking
+    // the "rate" or fee columns — avoids grabbing "Rate Type" (text) when a real
+    // numeric rate column exists.
+    const numericScore = (col) => {
+      if (!col) return 0;
+      let numeric = 0, seen = 0;
+      for (const row of rows.slice(0, 20)) {
+        const v = row[col];
+        if (v == null || v === '') continue;
+        seen++;
+        if (!isNaN(parseNumberSmart(v))) numeric++;
+      }
+      return seen === 0 ? 0 : numeric / seen;
+    };
+
+    // Candidate-based matcher. Returns BEST match based on keyword hit + numeric preference.
+    const findColSmart = (keywords, opts) => {
+      const preferNumeric = !!(opts && opts.preferNumeric);
+      const exclude = (opts && opts.exclude) || [];
+      const kws = keywords.map(k => k.toLowerCase());
+      const candidates = headers.filter(h => {
+        const hl = h.toLowerCase().replace(/[_\-\.]/g, ' ');
+        if (exclude.some(x => hl.includes(x))) return false;
+        return kws.some(k => hl.includes(k));
+      });
+      if (candidates.length === 0) return null;
+      if (!preferNumeric || candidates.length === 1) return candidates[0];
+      // Sort by numeric-ratio descending, then original order
+      return candidates
+        .map(c => ({ c, s: numericScore(c) }))
+        .sort((a, b) => b.s - a.s)[0].c;
+    };
+
+    // Is this header a container-specific rate column? (e.g. "20GP", "40HC", "40HQ Rate")
+    const containerFromHeader = (h) => {
+      const hl = h.toLowerCase().replace(/[^a-z0-9]/g, '');
+      // Need BOTH a container size AND no disqualifying word like "type"
+      if (/(^|[^0-9])(20|40|45)(gp|hc|hq|st|rf|reefer|ft)/.test(hl)) {
+        if (hl.includes('20gp') || /20ft|20st/.test(hl)) return "20' GP";
+        if (hl.includes('40hc') || hl.includes('40hq')) return "40' HC";
+        if (hl.includes('40gp') || /40ft|40st/.test(hl)) return "40' GP";
+        if (hl.startsWith('45') || hl.includes('45hc')) return "45' HC";
+        if (hl.includes('20rf') || hl.includes('20reefer')) return "20' RF";
+        if (hl.includes('40rf') || hl.includes('40reefer')) return "40' RF";
+      }
+      return null;
+    };
+
+    // Find all container-specific rate columns — and ONLY if they're numeric
+    const containerRateCols = headers
+      .map(h => ({ h, ct: containerFromHeader(h), score: numericScore(h) }))
+      .filter(x => x.ct && x.score >= 0.5);
+
+    const colMap = {
+      origin: findColSmart(['origin', 'from', 'المنشأ', 'loading country', 'pol country', 'departure']),
+      destination: findColSmart(['destination', 'dest', 'الوجهة', 'pod country', 'arrival', 'consignee country']),
+      vendor: findColSmart(['vendor', 'forwarder', 'freight forwarder', 'agent', 'المورد', 'supplier', 'company']),
+      line: findColSmart(['shipping line', 'line', 'carrier', 'الناقل', 'steamship', 'ssl']),
+      container: findColSmart(['container type', 'container size', 'container', 'حاوية', 'equipment', 'cntr'], { exclude: ['rate', 'price', 'amount', 'cost'] }),
+      // RATE: prefer numeric columns, exclude "type"/"category"/"class" headers that would pick up "Rate Type"
+      rate: findColSmart(['rate', 'price', 'amount', 'freight', 'cost', 'charge', 'السعر', 'ocean freight', 'total'], { preferNumeric: true, exclude: ['type', 'category', 'class', 'container', 'currency', 'mode'] }),
+      currency: findColSmart(['currency', 'cur', 'ccy', 'العملة']),
+      transit: findColSmart(['transit time', 'transit days', 'transit', 'tt days', 'مدة'], { preferNumeric: true }),
+      free: findColSmart(['free days', 'free time', 'demurrage free', 'detention free', 'freedays'], { preferNumeric: true }),
+      pol: findColSmart(['pol', 'port of loading', 'loading port', 'load port', 'port loading', 'ميناء التحميل']),
+      pod: findColSmart(['pod', 'port of discharge', 'discharge port', 'port discharge', 'ميناء التفريغ', 'unloading']),
+      date: findColSmart(['effective date', 'rate date', 'valid from', 'start date', 'date', 'التاريخ'], { exclude: ['expiry', 'expiration', 'until', 'end'] }),
+      expiry: findColSmart(['expiry', 'expiration', 'valid until', 'valid to', 'validity', 'end date', 'الصلاحية']),
+      portFees: findColSmart(['port fees', 'port charges', 'port cost', 'local charges'], { preferNumeric: true, exclude: ['loading', 'discharge'] }),
+      thc: findColSmart(['thc', 'terminal handling', 'terminal'], { preferNumeric: true }),
+      docFees: findColSmart(['doc fees', 'documentation', 'bl fee', 'bill of lading', 'doc'], { preferNumeric: true }),
+      customsFees: findColSmart(['customs', 'duty', 'جمارك'], { preferNumeric: true }),
+      otherFees: findColSmart(['other fees', 'other charges', 'surcharge', 'baf', 'caf', 'isps'], { preferNumeric: true }),
+      notes: findColSmart(['notes', 'remarks', 'comment', 'ملاحظات']),
+      mode: findColSmart(['transport mode', 'shipping mode', 'mode of transport', 'ship type', 'mode']),
+    };
+
+    // DIAGNOSTIC — tells you the numeric score of whatever the rate column landed on
+    console.warn('📊 Column mapping:', colMap);
+    console.warn('📊 Rate column numeric score:', colMap.rate, '→', numericScore(colMap.rate).toFixed(2));
+    if (containerRateCols.length) console.warn('📊 Container-specific rate columns:', containerRateCols.map(x => x.h + ' (' + x.ct + ')').join(', '));
+
+    const getVal = (row, col) => col ? String(row[col] == null ? '' : row[col]).trim() : '';
+    const getNum = (row, col) => {
+      const n = parseNumberSmart(row[col]);
+      return isNaN(n) ? 0 : n;
+    };
+    const getNumOrNull = (row, col) => {
+      const n = parseNumberSmart(row[col]);
+      return isNaN(n) ? null : n;
+    };
+    const parseDate = (row, col) => {
+      const raw = col ? row[col] : null;
+      if (raw == null || raw === '') return '';
+      // Excel serial date (days since 1899-12-30)
+      if (typeof raw === 'number' && raw > 20000 && raw < 80000) {
+        return new Date((raw - 25569) * 86400000).toISOString().substring(0, 10);
+      }
+      const s = String(raw).trim();
+      if (!s) return '';
+      if (!isNaN(s) && Number(s) > 20000) {
+        return new Date((Number(s) - 25569) * 86400000).toISOString().substring(0, 10);
+      }
+      const dt = new Date(s);
+      return isNaN(dt.getTime()) ? '' : dt.toISOString().substring(0, 10);
+    };
+
     const normalizeContainer = (v) => {
       if (!v) return '40ft';
       v = v.toString().toLowerCase().replace(/[^a-z0-9]/g, '');
-      if (v.includes('20') && v.includes('gp') || v === '20' || v.includes('20ft') || v.includes('20st')) return "20' GP";
-      if (v.includes('40') && v.includes('hc') || v.includes('40hc') || v.includes('40hq')) return "40' HC";
-      if (v.includes('40') && v.includes('gp') || v === '40' || v.includes('40ft') || v.includes('40st')) return "40' GP";
+      if ((v.includes('20') && v.includes('gp')) || v === '20' || v.includes('20ft') || v.includes('20st')) return "20' GP";
+      if ((v.includes('40') && v.includes('hc')) || v.includes('40hc') || v.includes('40hq')) return "40' HC";
+      if ((v.includes('40') && v.includes('gp')) || v === '40' || v.includes('40ft') || v.includes('40st')) return "40' GP";
       if (v.includes('45')) return "45' HC";
-      if (v.includes('20') && v.includes('rf') || v.includes('20reefer')) return "20' RF";
-      if (v.includes('40') && v.includes('rf') || v.includes('40reefer')) return "40' RF";
+      if ((v.includes('20') && v.includes('rf')) || v.includes('20reefer')) return "20' RF";
+      if ((v.includes('40') && v.includes('rf')) || v.includes('40reefer')) return "40' RF";
       return v.length > 0 ? v : '40ft';
     };
-    
-    const parsed = rows.map(row => {
+
+    // ---- ROW PARSING ----
+    // If the sheet has container-specific rate columns (20GP, 40HC, etc.) AND there
+    // isn't a standalone "rate" column that scored high numerically, we expand each
+    // source row into MULTIPLE output rows (one per container that has a rate > 0).
+    // This is how real freight rate sheets are typically structured.
+    const useContainerExpansion =
+      containerRateCols.length >= 2 &&
+      (!colMap.rate || numericScore(colMap.rate) < 0.5);
+
+    const parsed = [];
+    for (const row of rows) {
       const origin = getVal(row, colMap.origin) || getVal(row, colMap.pol);
       const dest = getVal(row, colMap.destination) || getVal(row, colMap.pod);
-      if (!origin && !dest) return null; // skip empty rows
-      
-      const r = {
+      if (!origin && !dest) continue; // skip empty rows
+
+      const baseFields = {
         origin: origin,
         destination: dest,
         vendor_name: getVal(row, colMap.vendor),
         shipping_line: getVal(row, colMap.line),
         transport_mode: getVal(row, colMap.mode) || 'Ocean',
-        container_type: normalizeContainer(getVal(row, colMap.container)),
-        rate_amount: getNum(row, colMap.rate),
         currency: getVal(row, colMap.currency) || 'USD',
-        transit_days: getNum(row, colMap.transit) || null,
-        free_days: getNum(row, colMap.free) || null,
+        transit_days: getNumOrNull(row, colMap.transit),
+        free_days: getNumOrNull(row, colMap.free),
         port_fees: getNum(row, colMap.portFees),
         thc_fees: getNum(row, colMap.thc),
         documentation_fees: getNum(row, colMap.docFees),
@@ -480,21 +581,76 @@ export default function ShippingRatesTab({ toast, user, userProfile, isAdmin, cu
         port_of_discharge: getVal(row, colMap.pod),
         notes: getVal(row, colMap.notes),
       };
-      r.total_cost = (r.rate_amount || 0) + (r.port_fees || 0) + (r.thc_fees || 0) + (r.documentation_fees || 0) + (r.customs_fees || 0) + (r.other_fees || 0);
-      return r;
-    }).filter(Boolean);
-    
+
+      if (useContainerExpansion) {
+        // one row per container column that has a numeric value
+        for (const crc of containerRateCols) {
+          const rate = getNum(row, crc.h);
+          if (rate <= 0) continue;
+          const r = Object.assign({}, baseFields, {
+            container_type: crc.ct,
+            rate_amount: rate,
+          });
+          r.total_cost = r.rate_amount + r.port_fees + r.thc_fees + r.documentation_fees + r.customs_fees + r.other_fees;
+          parsed.push(r);
+        }
+      } else {
+        const r = Object.assign({}, baseFields, {
+          container_type: normalizeContainer(getVal(row, colMap.container)),
+          rate_amount: getNum(row, colMap.rate),
+        });
+        r.total_cost = r.rate_amount + r.port_fees + r.thc_fees + r.documentation_fees + r.customs_fees + r.other_fees;
+        parsed.push(r);
+      }
+    }
+
     if (!parsed.length) { alert('No valid rates found. Make sure columns include Origin/Destination or POL/POD.'); return; }
-    
+
+    // ---- VALIDATION — warn if rate is 0 ----
+    const zeroRateCount = parsed.filter(r => !r.rate_amount || r.rate_amount === 0).length;
+    const ratePct = ((parsed.length - zeroRateCount) / parsed.length * 100).toFixed(0);
+    if (zeroRateCount > 0) {
+      const detectedRateCol = useContainerExpansion
+        ? containerRateCols.map(x => x.h).join(', ')
+        : (colMap.rate || '(none detected)');
+      const msg =
+        'Heads up: ' + zeroRateCount + ' of ' + parsed.length + ' rows (' + (100 - ratePct) + '%) have rate = 0.\n\n' +
+        'Rate column(s) detected: ' + detectedRateCol + '\n\n' +
+        (colMap.rate && numericScore(colMap.rate) < 0.5
+          ? '⚠️  The detected rate column has mostly non-numeric values. Probably the wrong column.\n\n'
+          : '') +
+        'Continue anyway?';
+      if (!confirm(msg)) return;
+    }
+
     // Show detected columns
-    const detected = Object.entries(colMap).filter(([k, v]) => v).map(([k, v]) => `${k}→${v}`).join(', ');
-    console.warn('✅ Detected:', detected);
-    
+    const detected = Object.entries(colMap).filter(([k, v]) => v).map(([k, v]) => k + '→' + v).join(', ');
+    console.warn('✅ Detected:', detected, '| container-split:', useContainerExpansion);
+
     setImportData(parsed);
     setImportStep('preview');
-    setImportColMap(colMap);
+    setImportColMap(Object.assign({}, colMap, useContainerExpansion ? { __container_rate_cols: containerRateCols.map(x => x.h + ' (' + x.ct + ')').join(', ') } : {}));
   };
-  const executeImport = async () => { setImportStep('importing'); setImportProgress(0); for (let i=0;i<importData.length;i++) { try { await dbInsert('shipping_rates',importData[i],myId); } catch(e){} if(i%10===0) setImportProgress(Math.round((i/importData.length)*100)); } setImportProgress(100); setImportStep('done'); await loadData(); };
+  const executeImport = async () => {
+    setImportStep('importing'); setImportProgress(0);
+    let ok = 0, failed = 0;
+    const errors = [];
+    for (let i = 0; i < importData.length; i++) {
+      try {
+        await dbInsert('shipping_rates', importData[i], myId);
+        ok++;
+      } catch(e) {
+        failed++;
+        if (errors.length < 5) errors.push(e.message || String(e));
+      }
+      if (i % 10 === 0) setImportProgress(Math.round((i / importData.length) * 100));
+    }
+    setImportProgress(100); setImportStep('done');
+    if (failed > 0) {
+      alert('Import complete: ' + ok + ' saved, ' + failed + ' failed.\n\nFirst errors:\n' + errors.join('\n'));
+    }
+    await loadData();
+  };
   const handleAiQuery = async () => { if (!aiQuery.trim()) return; setAiLoading(true); setAiAnswer(''); try { const summary = routeGroups.slice(0,50).map(rg => { const c=rg.cheapest; return rg.key+': '+rg.count+' quotes ('+rg.activeCount+' active), best: '+(c?'$'+c.rate_amount+' '+c.vendor_name+'/'+(c.shipping_line||'N/A'):'none'); }).join('\n'); const res = await fetch('/api/ask',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({question:aiQuery,context:'Shipping rates assistant for KTC.\n\nROUTES:\n'+summary+'\n\nAnswer concisely.'})}); const data = await res.json(); setAiAnswer(data.answer||'No response'); } catch(err) { setAiAnswer('Error: '+err.message); } setAiLoading(false); };
   const resetQuoteForm = () => { setF({}); setEditingQuote(null); setPickedShipRate(null); setPickedTruckRate(null); setPickedBrokerRate(null); setManualShip(false); setManualTruck(false); setManualBroker(false); };
 

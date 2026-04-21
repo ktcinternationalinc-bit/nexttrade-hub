@@ -556,8 +556,18 @@ export default function CRMTab({ toast, customers, invoices, user, userProfile, 
               ) : (
                 <div className="w-full px-2 py-1.5 border rounded text-sm bg-slate-50 text-slate-400">🔒 {maskPhone(sel.phone)}</div>
               )}</div>
+            <div><label className="text-[10px] font-semibold">Email</label>
+              {canSeeContact(sel) ? (
+                <input value={f.email!==undefined?f.email:(sel.email||'')} onChange={e=>setF({...f,email:e.target.value})} className="w-full px-2 py-1.5 border rounded text-sm" />
+              ) : (
+                <div className="w-full px-2 py-1.5 border rounded text-sm bg-slate-50 text-slate-400">🔒 {maskEmail(sel.email)}</div>
+              )}</div>
             <div><label className="text-[10px] font-semibold">City</label>
-              <input value={f.city!==undefined?f.city:(sel.city||'')} onChange={e=>setF({...f,city:e.target.value})} className="w-full px-2 py-1.5 border rounded text-sm" /></div>
+              {canSeeContact(sel) ? (
+                <input value={f.city!==undefined?f.city:(sel.city||'')} onChange={e=>setF({...f,city:e.target.value})} className="w-full px-2 py-1.5 border rounded text-sm" />
+              ) : (
+                <div className="w-full px-2 py-1.5 border rounded text-sm bg-slate-50 text-slate-400">🔒 City restricted</div>
+              )}</div>
             <div><label className="text-[10px] font-semibold">Assigned Rep / الممثل</label>
               <select value={f.assignedRep!==undefined?f.assignedRep:(sel.assigned_rep||'')} onChange={e=>setF({...f,assignedRep:e.target.value})} className="w-full px-2 py-1.5 border rounded text-sm">
                 <option value="">Unassigned / غير معيّن</option>

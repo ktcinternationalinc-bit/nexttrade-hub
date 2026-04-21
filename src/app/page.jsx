@@ -14,6 +14,7 @@ import CustomsTab from '../components/CustomsTab';
 import PersonalDashboard from '../components/PersonalDashboard';
 import AIAssistant from '../components/AIAssistant';
 import AIGreeter, { PERSONALITIES } from '../components/AIGreeter';
+import VoiceController from '../components/VoiceController';
 import ShippingRatesTab from '../components/ShippingRatesTab';
 import ErrorBoundary, { SafeSection } from '../components/ErrorBoundary';
 import { DashboardSkeleton, TableSkeleton, CardGridSkeleton } from '../components/LoadingSkeleton';
@@ -466,6 +467,45 @@ export default function App() {
   const [greeterHasGreeted, setGreeterHasGreeted] = useState(false);
   const [greeterMessages, setGreeterMessages] = useState([]);
   const [greeterSettings, setGreeterSettings] = useState({ personality: 'friendly', language: 'en', enabled: true });
+  // Voice system ("Hey Bob"). Defaults to ON for super_admin, but each
+  // user can toggle in Settings. Off entirely in browsers without support.
+  const [voiceEnabled, setVoiceEnabled] = useState(false);
+  // Hydrate voiceEnabled from user profile once loaded
+  useEffect(() => {
+    if (userProfile) setVoiceEnabled(userProfile.voice_enabled !== false);
+  }, [userProfile?.id, userProfile?.voice_enabled]);
+  // Session-persistent greeted state: set greeterHasGreeted=true if
+  // the current login session already has greeted_at stamped. Prevents
+  // re-greeting when user navigates back to dashboard from another tab.
+  useEffect(() => {
+    if (!userProfile?.id || greeterHasGreeted) return;
+    (async () => {
+      try {
+        const { data: sess } = await supabase
+          .from('user_sessions')
+          .select('id, greeted_at, logout_at')
+          .eq('user_id', userProfile.id)
+          .is('logout_at', null)
+          .order('login_at', { ascending: false })
+          .limit(1).maybeSingle();
+        if (sess && sess.greeted_at) setGreeterHasGreeted(true);
+      } catch (e) { /* table may not have column yet — harmless */ }
+    })();
+  }, [userProfile?.id, greeterHasGreeted]);
+  // When greeter fires (child calls onGreeted), stamp greeted_at so
+  // subsequent dashboard re-mounts skip the greeting.
+  const handleGreeted = useCallback(async () => {
+    setGreeterHasGreeted(true);
+    if (!userProfile?.id) return;
+    try {
+      await supabase
+        .from('user_sessions')
+        .update({ greeted_at: new Date().toISOString() })
+        .eq('user_id', userProfile.id)
+        .is('logout_at', null)
+        .is('greeted_at', null);
+    } catch (e) { /* column may be missing pre-SQL — harmless */ }
+  }, [userProfile?.id]);
   const [lastLoaded, setLastLoaded] = useState(null);
   const [openTicketId, setOpenTicketId] = useState(null);
   const [egyptBankTxns, setEgyptBankTxns] = useState([]);
@@ -578,7 +618,7 @@ export default function App() {
     const heartbeat = setInterval(async () => {
       const { data: { session: s } } = await supabase.auth.getSession();
       if (s?.user) {
-        const today = new Date().toISOString().split('T')[0];
+        const today = new Intl.DateTimeFormat('en-CA', { timeZone: 'America/New_York' }).format(new Date()); // ET, not UTC — fixes 'you werent here yesterday' bug
         const uid = profileIdRef.current || s.user.id;
         await supabase.from('user_sessions')
           .update({ last_seen: new Date().toISOString() })
@@ -631,7 +671,7 @@ export default function App() {
           const { data: profile } = await supabase.from('users').select('role').eq('email', s.user.email).single();
           if (profile?.role === 'super_admin') return; // super admins stay logged in
           // Record auto-logout in session
-          const today = new Date().toISOString().split('T')[0];
+          const today = new Intl.DateTimeFormat('en-CA', { timeZone: 'America/New_York' }).format(new Date()); // ET, not UTC — fixes 'you werent here yesterday' bug
           const uid = profileIdRef.current || s.user.id;
           await supabase.from('user_sessions')
             .update({ logout_at: new Date().toISOString(), logout_reason: 'auto_timeout' })
@@ -650,7 +690,7 @@ export default function App() {
     const handleUnload = () => {
       const uid = profileIdRef.current || user?.id;
       if (uid) {
-        const today = new Date().toISOString().split('T')[0];
+        const today = new Intl.DateTimeFormat('en-CA', { timeZone: 'America/New_York' }).format(new Date()); // ET, not UTC — fixes 'you werent here yesterday' bug
         // Best-effort logout event via beacon (survives navigation)
         try {
           const blob = new Blob([JSON.stringify({ user_id: uid, event_type: 'logout' })], { type: 'application/json' });
@@ -1451,7 +1491,7 @@ export default function App() {
   const handleSignOut = async () => {
     const uid = profileIdRef.current || user?.id;
     if (uid) {
-      const today = new Date().toISOString().split('T')[0];
+      const today = new Intl.DateTimeFormat('en-CA', { timeZone: 'America/New_York' }).format(new Date()); // ET, not UTC — fixes 'you werent here yesterday' bug
       await supabase.from('user_sessions')
         .update({ logout_at: new Date().toISOString(), last_seen: new Date().toISOString(), logout_reason: 'manual' })
         .eq('user_id', uid).eq('date', today)
@@ -2615,6 +2655,9 @@ export default function App() {
   return (
     <ToastProvider>
     <ErrorBoundary label="KTC Hub encountered an error" showDetails>
+    {/* Global voice controller — "Hey Bob" listens across all tabs, barge-in
+        aware, cross-browser, per-user opt-out via voiceEnabled state. */}
+    <VoiceController userId={userProfile?.id} userProfile={userProfile} enabled={voiceEnabled} />
     <div className="min-h-screen" style={{background:'var(--bg-primary)'}}>
       {/* Header */}
       <div style={{background:'linear-gradient(135deg, #0f172a 0%, #1e1b4b 50%, #0f172a 100%)', borderBottom:'1px solid rgba(56,189,248,0.15)'}} role="banner" aria-label="App header" className="px-5 py-3 flex justify-between items-center sticky top-0 z-[101]">
@@ -5299,7 +5342,7 @@ export default function App() {
                   lang={lang} personality={greeterSettings.personality}
                   greeterLang={greeterSettings.language}
                   enabled={greeterSettings.enabled}
-                  hasGreeted={greeterHasGreeted} onGreeted={() => setGreeterHasGreeted(true)}
+                  hasGreeted={greeterHasGreeted} onGreeted={handleGreeted}
                   sessionMessages={greeterMessages} onMessagesUpdate={setGreeterMessages}
                   onToggle={(on) => { if (!on) setGreeterDismissed(true); }}
                   toast={toast}
@@ -9286,7 +9329,7 @@ export default function App() {
         )}
 
         {tab === 'reports' && (
-          <SafeSection label="Reports"><ReportsTab treasury={treasury} invoices={invoices} warehouseExpenses={warehouse} egyptBankTxns={egyptBankTxns} /></SafeSection>
+          <SafeSection label="Reports"><ReportsTab treasury={treasury} invoices={invoices} warehouseExpenses={warehouse} egyptBankTxns={egyptBankTxns} canViewFinancials={isSuperAdmin || modulePerms?.['View Financial Reports'] === true} /></SafeSection>
         )}
 
         {tab === 'quotes' && (
@@ -9398,7 +9441,7 @@ export default function App() {
             )}
 
             {(() => {
-              const sysTickets = (window.__sysTickets || []);
+              const sysTicketsRaw = (window.__sysTickets || []);
               // Load system tickets on first render
               if (!window.__sysTicketsLoaded) {
                 window.__sysTicketsLoaded = true;
@@ -9407,35 +9450,88 @@ export default function App() {
                   setFormData(prev => ({...prev, _sysRefresh: Date.now()}));
                 });
               }
+              // Sort: Claude-flagged first, then Reopened, then Open, then In Progress,
+              // then Resolved/Fixed/Closed. Within each bucket, newest first.
+              const statusOrder = { 'Reopened': 0, 'Open': 1, 'In Progress': 2, 'Resolved': 3, 'Fixed': 3, 'Closed': 4 };
+              const sysTickets = [...sysTicketsRaw].sort((a, b) => {
+                if (!!a.claude_review_requested !== !!b.claude_review_requested) {
+                  return a.claude_review_requested ? -1 : 1;
+                }
+                const sa = statusOrder[a.status] ?? 5;
+                const sb = statusOrder[b.status] ?? 5;
+                if (sa !== sb) return sa - sb;
+                return (b.created_at || '').localeCompare(a.created_at || '');
+              });
               const CATS = { bug: '🐛', feature: '✨', improvement: '📈', question: '❓', urgent: '🚨' };
               const PRIS = { critical: '🚨', high: '🔴', medium: '🟡', low: '🟢' };
-              const STATS = { Open: 'bg-blue-100 text-blue-700', 'In Progress': 'bg-amber-100 text-amber-700', Resolved: 'bg-emerald-100 text-emerald-700', Closed: 'bg-slate-100 text-slate-500' };
+              const STATS = { Open: 'bg-blue-100 text-blue-700', 'In Progress': 'bg-amber-100 text-amber-700', Resolved: 'bg-emerald-100 text-emerald-700', Fixed: 'bg-emerald-100 text-emerald-700', Reopened: 'bg-rose-100 text-rose-700', Closed: 'bg-slate-100 text-slate-500' };
+              const claudeCount = sysTickets.filter(t => t.claude_review_requested).length;
               return (
                 <div className="space-y-2">
+                  {claudeCount > 0 && (
+                    <div className="rounded-xl p-3 bg-gradient-to-r from-indigo-50 to-purple-50 border border-indigo-200">
+                      <div className="flex items-center gap-2">
+                        <span className="text-lg">🤖</span>
+                        <div className="flex-1">
+                          <div className="text-sm font-bold text-indigo-700">{claudeCount} ticket{claudeCount === 1 ? '' : 's'} flagged for Claude to fix next session</div>
+                          <div className="text-[11px] text-indigo-600">Claude will pull these automatically at the start of your next chat session if CLAUDE_HANDOFF_TOKEN is set.</div>
+                        </div>
+                      </div>
+                    </div>
+                  )}
                   {sysTickets.length === 0 && <div className="text-center text-slate-400 text-sm py-8">No system tickets yet / لا توجد تذاكر نظام</div>}
                   {sysTickets.map(t => (
                     <div key={t.id} className="bg-white rounded-xl p-4 border border-slate-100">
                       <div className="flex justify-between items-start">
                         <div className="flex-1">
-                          <div className="flex items-center gap-2 mb-1">
+                          <div className="flex items-center gap-2 mb-1 flex-wrap">
                             <span className="text-xs font-mono text-slate-400">{t.ticket_number}</span>
                             <span>{CATS[t.category] || '🐛'}</span>
                             <span>{PRIS[t.priority] || '🟡'}</span>
                             <span className={'px-2 py-0.5 rounded text-[10px] font-bold ' + (STATS[t.status] || STATS.Open)}>{t.status}</span>
+                            {t.claude_review_requested && <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-indigo-100 text-indigo-700">🤖 Claude review requested</span>}
+                            {t.claude_last_fixed_at && <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-emerald-50 text-emerald-700" title={'Fixed by Claude: ' + t.claude_last_fixed_at}>✨ Claude-fixed</span>}
                           </div>
                           <div className="text-sm font-bold">{t.title}</div>
                           {t.description && <div className="text-xs text-slate-500 mt-1 line-clamp-2">{t.description}</div>}
+                          {t.claude_fix_notes && (
+                            <div className="mt-2 p-2 rounded bg-indigo-50 border-l-2 border-indigo-400">
+                              <div className="text-[9px] font-bold text-indigo-600 mb-0.5">🤖 CLAUDE NOTES</div>
+                              <div className="text-[11px] text-indigo-900 whitespace-pre-wrap">{t.claude_fix_notes}</div>
+                            </div>
+                          )}
                           <div className="text-[10px] text-slate-400 mt-1">
                             {t.created_at ? new Date(t.created_at).toLocaleDateString() : ''} · {getUserName(t.created_by) || 'Unknown'}
                           </div>
                         </div>
-                        {isAdmin && t.status !== 'Closed' && (
-                          <div className="flex gap-1 flex-shrink-0">
-                            {t.status === 'Open' && <button onClick={async () => { await dbUpdate('system_tickets', t.id, { status: 'In Progress' }, user?.id); window.__sysTicketsLoaded = false; setFormData(prev => ({...prev, _r: Date.now()})); }} className="px-2 py-1 bg-amber-500 text-white rounded text-[10px]">Start</button>}
-                            {(t.status === 'Open' || t.status === 'In Progress') && <button onClick={async () => { await dbUpdate('system_tickets', t.id, { status: 'Resolved' }, user?.id); window.__sysTicketsLoaded = false; setFormData(prev => ({...prev, _r: Date.now()})); }} className="px-2 py-1 bg-emerald-500 text-white rounded text-[10px]">Resolve</button>}
-                            <button onClick={async () => { await dbUpdate('system_tickets', t.id, { status: 'Closed' }, user?.id); window.__sysTicketsLoaded = false; setFormData(prev => ({...prev, _r: Date.now()})); }} className="px-2 py-1 bg-slate-500 text-white rounded text-[10px]">Close</button>
-                          </div>
-                        )}
+                        <div className="flex flex-col gap-1 flex-shrink-0 ml-2">
+                          {isAdmin && (
+                            <label className="flex items-center gap-1 text-[10px] font-semibold text-indigo-600 cursor-pointer select-none px-2 py-1 rounded hover:bg-indigo-50">
+                              <input
+                                type="checkbox"
+                                checked={!!t.claude_review_requested}
+                                onChange={async (e) => {
+                                  try {
+                                    await dbUpdate('system_tickets', t.id, { claude_review_requested: e.target.checked }, user?.id);
+                                    window.__sysTicketsLoaded = false;
+                                    setFormData(prev => ({...prev, _r: Date.now()}));
+                                  } catch (err) { alert(err.message); }
+                                }}
+                              />
+                              🤖 Fix next session
+                            </label>
+                          )}
+                          {isAdmin && t.status !== 'Closed' && (
+                            <div className="flex gap-1 flex-shrink-0">
+                              {t.status === 'Open' && <button onClick={async () => { await dbUpdate('system_tickets', t.id, { status: 'In Progress' }, user?.id); window.__sysTicketsLoaded = false; setFormData(prev => ({...prev, _r: Date.now()})); }} className="px-2 py-1 bg-amber-500 text-white rounded text-[10px]">Start</button>}
+                              {(t.status === 'Open' || t.status === 'In Progress') && <button onClick={async () => { await dbUpdate('system_tickets', t.id, { status: 'Resolved' }, user?.id); window.__sysTicketsLoaded = false; setFormData(prev => ({...prev, _r: Date.now()})); }} className="px-2 py-1 bg-emerald-500 text-white rounded text-[10px]">Resolve</button>}
+                              <button onClick={async () => { await dbUpdate('system_tickets', t.id, { status: 'Closed' }, user?.id); window.__sysTicketsLoaded = false; setFormData(prev => ({...prev, _r: Date.now()})); }} className="px-2 py-1 bg-slate-500 text-white rounded text-[10px]">Close</button>
+                            </div>
+                          )}
+                          {isAdmin && (t.status === 'Closed' || t.status === 'Resolved' || t.status === 'Fixed') && (
+                            <button onClick={async () => { await dbUpdate('system_tickets', t.id, { status: 'Reopened', claude_review_requested: true }, user?.id); window.__sysTicketsLoaded = false; setFormData(prev => ({...prev, _r: Date.now()})); }} className="px-2 py-1 bg-rose-500 text-white rounded text-[10px]">Reopen</button>
+                          )}
+                        </div>
                       </div>
                     </div>
                   ))}
