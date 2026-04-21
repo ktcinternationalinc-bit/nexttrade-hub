@@ -196,17 +196,20 @@ export default function PhoneWidget({ user, userProfile, users, customers }) {
 
   return (
     <>
-      {/* Floating phone button */}
+      {/* Floating phone button — moved to LEFT side to stop obstructing
+          action buttons on the right side of cards (calendar check-in,
+          ticket action buttons, FAB). Smaller footprint. */}
       <button onClick={() => setOpen(!open)}
-        className="fixed bottom-6 right-6 w-14 h-14 rounded-full bg-green-500 text-white text-2xl shadow-xl z-50 flex items-center justify-center hover:bg-green-600 transition"
-        style={{ boxShadow: '0 4px 20px rgba(34,197,94,0.4)' }}>
+        className="fixed bottom-6 left-20 w-12 h-12 rounded-full bg-green-500 text-white text-xl shadow-xl z-50 flex items-center justify-center hover:bg-green-600 transition"
+        style={{ boxShadow: '0 4px 20px rgba(34,197,94,0.4)' }}
+        title="Phone">
         📞
         {callState === 'active' && <span className="absolute -top-1 -right-1 w-4 h-4 bg-red-500 rounded-full animate-pulse" />}
       </button>
 
-      {/* Phone panel */}
+      {/* Phone panel — anchored to the left now, matching the button */}
       {open && (
-        <div className="fixed bottom-24 right-4 w-80 bg-white rounded-2xl shadow-2xl z-50 overflow-hidden border" style={{ maxHeight: '70vh' }}>
+        <div className="fixed bottom-20 left-4 w-80 bg-white rounded-2xl shadow-2xl z-50 overflow-hidden border" style={{ maxHeight: '70vh' }}>
           {/* Header */}
           <div className="bg-slate-900 text-white p-4">
             <div className="flex justify-between items-center">

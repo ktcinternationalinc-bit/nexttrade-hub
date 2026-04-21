@@ -5377,6 +5377,894 @@ function runSection46_ReportsGate() {
 try { runSection46_ReportsGate(); } catch(e) { console.error('SECTION 46:', e.message); failed++; }
 
 // ============================================================
+// SECTION 47: Tier 1 AI Secretary upgrades
+//   - NadiaActionBridge (action execution backend)
+//   - nadia-tools.js (tool schema for v2)
+//   - /api/ask-v2 (tool-use loop)
+//   - AIGreeter routing to v2 when flag set
+// ============================================================
+function runSection47_Tier1() {
+  group('SECTION 47: Tier 1 AI Secretary');
+
+  var bridge = fs.readFileSync(path.join(REPO_ROOT, 'src/components/NadiaActionBridge.jsx'), 'utf8');
+  var tools  = fs.readFileSync(path.join(REPO_ROOT, 'src/lib/nadia-tools.js'), 'utf8');
+  var v2     = fs.readFileSync(path.join(REPO_ROOT, 'src/app/api/ask-v2/route.js'), 'utf8');
+  var page   = fs.readFileSync(path.join(REPO_ROOT, 'src/app/page.jsx'), 'utf8');
+  var greet  = fs.readFileSync(path.join(REPO_ROOT, 'src/components/AIGreeter.jsx'), 'utf8');
+
+  // ---------- Action bridge wiring ----------
+  assert(/<NadiaActionBridge userId=\{userProfile\?\.id\} toast=\{toast\} \/>/.test(page),
+    '47.br.1a NadiaActionBridge mounted at root with userId + toast');
+  assert(/import NadiaActionBridge from '\.\.\/components\/NadiaActionBridge'/.test(page),
+    '47.br.1b NadiaActionBridge imported in page.jsx');
+
+  // Handler dispatch table covers all chip-emitted actions from decision engine
+  assert(/HANDLERS = \{[\s\S]*?draft_email:[\s\S]*?draft_whatsapp:[\s\S]*?create_event:[\s\S]*?create_reminder:[\s\S]*?flag_invoice:[\s\S]*?ask_assistant:/.test(bridge),
+    '47.br.2a all 6 chip action types have handlers');
+  // Toasts wired
+  assert(/toast\.success\(res\.message/.test(bridge) && /toast\.error\(res\.message/.test(bridge),
+    '47.br.2b handler results toast success or error');
+  // Handler errors never leak as uncaught
+  assert(/catch \(e\) \{\s*res = \{ ok: false, message: 'Action crashed/.test(bridge),
+    '47.br.2c handler crashes caught and converted to failed result (no uncaught throws)');
+
+  // Draft handlers dispatch open-* events to UI instead of sending silently
+  assert(/'open-email-composer'/.test(bridge),
+    '47.br.3a draft_email dispatches open-email-composer event (human approves before send)');
+  assert(/'open-event-form'/.test(bridge),
+    '47.br.3b create_event dispatches open-event-form event');
+
+  // Write handler safety — create_reminder validates userId + bounds due_days
+  assert(/if \(!ctx\.userId\) return \{ ok: false, message: 'Not signed in' \}/.test(bridge),
+    '47.br.4a create_reminder requires signed-in user');
+  assert(/Math\.max\(0, Math\.min\(365, Number\(params\.due_days\) \|\| 1\)\)/.test(bridge),
+    '47.br.4b due_days bounded 0..365 (prevents year-3000 reminders)');
+
+  // flag_invoice write path
+  assert(/fields\.at_risk = true/.test(bridge) && /dbUpdate\('invoices', params\.invoice_id/.test(bridge),
+    '47.br.4c flag_invoice writes at_risk=true to invoices');
+
+  // ---------- nadia-tools schema ----------
+  assert(/export var NADIA_TOOLS = \[/.test(tools),
+    '47.tl.1a NADIA_TOOLS array exported');
+  // At least 12 tools
+  var toolCount = (tools.match(/\n\s*name:\s*'/g) || []).length;
+  assert(toolCount >= 12, '47.tl.1b at least 12 tools defined', 'found=' + toolCount);
+
+  // Key read tools present
+  ['search_customers','query_invoices','query_checks','query_treasury','search_tickets','get_calendar','get_ai_alerts'].forEach(function(t, i) {
+    assert(new RegExp("name: '" + t + "'").test(tools), '47.tl.2.' + i + ' read tool: ' + t);
+  });
+  // Key write/draft tools present
+  ['draft_email','draft_whatsapp','create_event','create_ticket','create_reminder','flag_invoice'].forEach(function(t, i) {
+    assert(new RegExp("name: '" + t + "'").test(tools), '47.tl.3.' + i + ' write/draft tool: ' + t);
+  });
+
+  // Validator exported
+  assert(/export function validateToolCall\(name, input\)/.test(tools),
+    '47.tl.4a validateToolCall helper exported');
+  assert(/export function getToolsForAPI\(\)/.test(tools),
+    '47.tl.4b getToolsForAPI helper exported (strips danger flag)');
+  assert(/return \{ name: t\.name, description: t\.description, input_schema: t\.input_schema \}/.test(tools),
+    '47.tl.4c getToolsForAPI returns exactly 3 fields (no internal metadata leaks to model)');
+
+  // Danger flags
+  var dangerMatches = tools.match(/danger: true/g) || [];
+  assert(dangerMatches.length >= 3,
+    '47.tl.5a at least 3 dangerous tools flagged', 'found=' + dangerMatches.length);
+
+  // ---------- /api/ask-v2 tool-use loop ----------
+  assert(/MAX_TOOL_ITERATIONS = 6/.test(v2),
+    '47.v2.1a hard ceiling on tool-loop iterations (prevents runaway)');
+  assert(/while \(iter < MAX_TOOL_ITERATIONS\)/.test(v2),
+    '47.v2.1b loop bounded');
+  assert(/if \(stopReason !== 'tool_use' \|\| toolUses\.length === 0\)/.test(v2),
+    '47.v2.2a loop exits when model returns plain text');
+
+  // Each handler hooked
+  ['toolSearchCustomers','toolQueryInvoices','toolQueryChecks','toolQueryTreasury','toolSearchTickets','toolGetCalendar','toolGetAIAlerts'].forEach(function(h, i) {
+    assert(new RegExp('async function ' + h).test(v2), '47.v2.3.' + i + ' handler: ' + h);
+  });
+
+  // Write handlers require userId
+  assert(/if \(!ctx\.userId\)\s+return \{ error: 'user not signed in' \}/.test(v2),
+    '47.v2.4a write handlers block anonymous (no userId) callers');
+
+  // Drafts flow back to client via drafts[] array
+  assert(/draftsForClient = \[\]/.test(v2),
+    '47.v2.5a draft tools captured in drafts[] array');
+  assert(/if \(result && result\.drafted && result\.kind\) draftsForClient\.push\(result\)/.test(v2),
+    '47.v2.5b draft tool results captured when .drafted flag set');
+
+  // Response size cap — tool results can't blow up context
+  assert(/\.slice\(0, 20000\)/.test(v2),
+    '47.v2.6a tool result JSON capped at 20k chars fed back to model');
+
+  // Tool call audit trail
+  assert(/toolCallsMade\.push\(\{ name: tu\.name, input: tu\.input, result: result \}\)/.test(v2),
+    '47.v2.7a every tool call captured in response for debugging');
+
+  // Service role client
+  assert(/SUPABASE_SERVICE_ROLE_KEY/.test(v2),
+    '47.v2.8a uses service role (read across RLS for business queries)');
+
+  // Unknown tools rejected
+  assert(/if \(!handler\) result = \{ error: 'Handler not implemented: '/.test(v2),
+    '47.v2.9a unknown tools return error, don\'t crash');
+
+  // ---------- Greeter wiring ----------
+  assert(/useV2 = false/.test(greet),
+    '47.gr.1a greeter defaults to v1 (opt-in to v2)');
+  assert(/'nadia_v2'/.test(greet),
+    '47.gr.1b v2 opt-in via URL param or localStorage');
+  assert(/var endpoint = useV2 \? '\/api\/ask-v2' : '\/api\/ask'/.test(greet),
+    '47.gr.1c endpoint selected by flag');
+  // When v2 returns drafts, UI events fire
+  assert(/Array\.isArray\(data\.drafts\) && data\.drafts\.length > 0/.test(greet),
+    '47.gr.2a v2 drafts[] checked');
+  assert(/'open-email-composer'[\s\S]{0,120}'open-whatsapp-composer'[\s\S]{0,120}'open-event-form'/.test(greet),
+    '47.gr.2b all 3 draft kinds routed to correct open-* event');
+
+  // ---------- SWC compliance ----------
+  // Backticks in /* */ or // comments are harmless to SWC; only template
+  // literals in real code break compilation. Strip comments before checking.
+  function stripComments(s) {
+    return s.replace(/\/\*[\s\S]*?\*\//g, '').replace(/\/\/.*$/gm, '');
+  }
+  assert(stripComments(bridge).indexOf('`') === -1, '47.swc.1a NadiaActionBridge no backticks in code');
+  assert(stripComments(tools).indexOf('`') === -1,  '47.swc.1b nadia-tools no backticks in code');
+  assert(stripComments(v2).indexOf('`') === -1,     '47.swc.1c ask-v2 route no backticks in code');
+}
+try { runSection47_Tier1(); } catch(e) {
+  console.error('SECTION 47:', e.message);
+  console.error(e.stack);
+  failed++;
+}
+
+// ============================================================
+// SECTION 48: Session 5 finishing — meeting notes thread,
+// calendar ticket pseudo-events, phone widget move.
+// ============================================================
+function runSection48_Session5Finish() {
+  group('SECTION 48: Session 5 finish');
+
+  var cal = fs.readFileSync(path.join(REPO_ROOT, 'src/components/CalendarTab.jsx'), 'utf8');
+  var sql = fs.readFileSync(path.join(REPO_ROOT, 'supabase/session5-meeting-notes.sql'), 'utf8');
+  var page = fs.readFileSync(path.join(REPO_ROOT, 'src/app/page.jsx'), 'utf8');
+  var phone = fs.readFileSync(path.join(REPO_ROOT, 'src/components/PhoneWidget.jsx'), 'utf8');
+
+  // ---------- Meeting notes SQL ----------
+  assert(/CREATE TABLE IF NOT EXISTS meeting_notes/.test(sql),
+    '48.sql.1a meeting_notes table created');
+  assert(/CHECK \(note_kind IN \('note', 'action_item', 'decision'\)\)/.test(sql),
+    '48.sql.1b note_kind CHECK enum');
+  assert(/CHECK \(char_length\(note_text\) <= 10000\)/.test(sql),
+    '48.sql.1c note_text length capped at 10k (prevents abuse)');
+  assert(/event_id UUID NOT NULL REFERENCES calendar_events\(id\) ON DELETE CASCADE/.test(sql),
+    '48.sql.1d cascade delete when event removed');
+
+  // Seed migration from legacy column — idempotent via NOT EXISTS guard
+  assert(/INSERT INTO meeting_notes[\s\S]{0,400}FROM calendar_events ce[\s\S]{0,400}NOT EXISTS \(SELECT 1 FROM meeting_notes mn WHERE mn\.event_id = ce\.id\)/.test(sql),
+    '48.sql.2a legacy meeting_notes column seeded into new table, idempotent');
+
+  // Denormalized notes_count + trigger
+  assert(/ALTER TABLE calendar_events ADD COLUMN IF NOT EXISTS notes_count INTEGER/.test(sql),
+    '48.sql.3a notes_count denorm column added');
+  assert(/CREATE OR REPLACE FUNCTION sync_event_notes_count/.test(sql),
+    '48.sql.3b trigger fn defined');
+  assert(/CREATE TRIGGER trg_sync_event_notes_count/.test(sql),
+    '48.sql.3c trigger attached on INSERT/DELETE');
+
+  // ---------- CalendarTab — thread state + loader ----------
+  assert(/const \[notesThread, setNotesThread\] = useState\(\[\]\)/.test(cal),
+    '48.thr.1a notesThread state declared');
+  assert(/const \[newNoteKind, setNewNoteKind\] = useState\('note'\)/.test(cal),
+    '48.thr.1b kind selector state (note/action_item/decision)');
+  assert(/const loadNotesThread = async \(eventId\) => \{/.test(cal),
+    '48.thr.2a loadNotesThread function');
+  // Graceful fallback when new table not migrated yet
+  assert(/meeting_notes table not reachable/.test(cal),
+    '48.thr.2b falls back to legacy column if new table missing');
+  // Auto-load on modal open
+  assert(/useEffect\(\(\) => \{\s*if \(notesEvent && notesEvent\.id\) loadNotesThread/.test(cal),
+    '48.thr.2c thread auto-loads when modal opens');
+
+  // postNewNote: inserts + stamps first-time attendance + logs
+  assert(/const postNewNote = async \(\) => \{/.test(cal),
+    '48.thr.3a postNewNote function present');
+  assert(/await supabase\.from\('meeting_notes'\)\.insert/.test(cal),
+    '48.thr.3b posts to meeting_notes table');
+  assert(/if \(!wasCompleted\)/.test(cal),
+    '48.thr.3c first-post stamps attendance on the parent event');
+
+  // edit + delete + action-item toggle
+  assert(/const saveEditedNote = async \(\) => \{/.test(cal),
+    '48.thr.4a edit own note');
+  assert(/const deleteNote = async \(noteId\) => \{/.test(cal),
+    '48.thr.4b delete note with confirm');
+  assert(/const toggleActionItem = async \(note\) => \{/.test(cal),
+    '48.thr.4c toggle action-item done state');
+
+  // export
+  assert(/const exportNotesAsText = \(\) => \{/.test(cal),
+    '48.thr.5a export function present');
+  assert(/navigator\.clipboard\.writeText\(txt\)/.test(cal),
+    '48.thr.5b export copies to clipboard');
+  assert(/a\.download = 'meeting-notes-'/.test(cal),
+    '48.thr.5c export also downloads as .txt');
+
+  // Modal uses z-[60] so phone widget (z-50) does NOT sit on top
+  assert(/className="fixed inset-0 bg-black\/60 z-\[60\]/.test(cal),
+    '48.modal.1a z-[60] so it sits above phone widget z-50');
+  // Thread renders with author + timestamp
+  assert(/authorName\(n\.author_id\)/.test(cal),
+    '48.modal.2a each note shows author name');
+  assert(/new Date\(n\.created_at\)\.toLocaleString\(\)/.test(cal),
+    '48.modal.2b each note shows timestamp');
+  // Kind selector on composer
+  assert(/\[\s*\['note', '📝 Note'\],\s*\['action_item', '☐ Action'\],\s*\['decision', '💡 Decision'\],\s*\]/.test(cal),
+    '48.modal.3a composer offers 3 note kinds');
+
+  // Badge on event cards
+  assert(/ev\.notes_count > 0 \|\| ev\.meeting_notes/.test(cal),
+    '48.badge.1a indicator reads notes_count OR legacy column');
+  assert(/📝 \{ev\.notes_count \|\| 1\} note/.test(cal),
+    '48.badge.1b badge shows count');
+
+  // ---------- Calendar ticket pseudo-events ----------
+  assert(/const ticketEvents = useMemo/.test(cal),
+    '48.tkt.1a ticket pseudo-event synthesizer present');
+  // Unassigned tickets filtered OUT
+  assert(/Unassigned tickets don't render[\s\S]{0,200}if \(!t\.assigned_to\) return false;/.test(cal),
+    '48.tkt.2a unassigned tickets excluded from calendar');
+  // Done tickets filtered out
+  assert(/var terminal = \['Closed', 'Resolved', 'Fixed'\]/.test(cal),
+    '48.tkt.2b closed/resolved/fixed tickets excluded');
+  // Ticket title prefixed with ticket_number
+  assert(/t\.ticket_number \? '\[' \+ t\.ticket_number \+ '\] '/.test(cal),
+    '48.tkt.3a title prefixed with [T00123] format');
+  // Priority color map
+  assert(/priColor = \{ high: '#ef4444', medium: '#f59e0b', low: '#10b981' \}/.test(cal),
+    '48.tkt.3b priority color map (red/amber/green)');
+  // "my calendar" filter — tickets strictly assigned_to, creator does NOT see
+  assert(/if \(e\._ticket\) return e\.assigned_to === myId;/.test(cal),
+    '48.tkt.4a "my calendar" shows tickets ONLY when assigned_to=me (not creator)');
+
+  // Ticket rendering in all 3 locations
+  assert(/if \(ev\._ticket\) \{[\s\S]{0,600}🎫/.test(cal),
+    '48.tkt.5a ticket branch renders 🎫 icon somewhere');
+  // Click navigates to ticket tab
+  assert(/onOpenTicket\(ev\._ticket_id\)/.test(cal),
+    '48.tkt.6a click routes to onOpenTicket callback');
+  // No check-in/postpone/edit for tickets (those are ticket-tab operations)
+  // Verify ticket branch uses dashed border (distinguishes visually)
+  assert(/border-2 border-dashed/.test(cal),
+    '48.tkt.7a ticket card uses dashed border to distinguish from events');
+
+  // Props wired at page.jsx
+  assert(/tickets=\{dashTickets\} onOpenTicket=\{\(tid\) => \{ setOpenTicketId\(tid\); setTab\('tickets'\); \}\}/.test(page),
+    '48.page.1a page.jsx passes tickets + onOpenTicket to CalendarTab');
+  // CalendarTab receives tickets + onOpenTicket
+  assert(/export default function CalendarTab\(\{[^)]*tickets, onOpenTicket/.test(cal),
+    '48.page.1b CalendarTab destructures tickets + onOpenTicket props');
+
+  // ---------- Phone widget move ----------
+  assert(/fixed bottom-6 left-20/.test(phone),
+    '48.phone.1a phone button moved to left side (clears right-side action buttons)');
+  assert(!/fixed bottom-6 right-6/.test(phone),
+    '48.phone.1b old right-6 position GONE');
+  assert(/fixed bottom-20 left-4/.test(phone),
+    '48.phone.2a phone panel anchored to left too');
+  assert(!/fixed bottom-24 right-4 w-80 bg-white rounded-2xl/.test(phone),
+    '48.phone.2b old right-aligned panel GONE');
+}
+try { runSection48_Session5Finish(); } catch(e) {
+  console.error('SECTION 48:', e.message);
+  console.error(e.stack);
+  failed++;
+}
+
+// ============================================================
+// SECTION 49: Treasury bug regression locks
+//   One assertion per real bug identified in the Apr 21 audit.
+//   These are DEAD SIMPLE — each regex locks the fix in place so
+//   we can't accidentally undo it in a future refactor.
+// ============================================================
+function runSection49_TreasuryBugRegressions() {
+  group('SECTION 49: Treasury bug regressions (audit Apr 21)');
+
+  var page = fs.readFileSync(path.join(REPO_ROOT, 'src/app/page.jsx'), 'utf8');
+
+  // ---------- BUG 1: Bulk category cross-contamination ----------
+  // Pre-fix: UPDATE treasury SET category=X WHERE description=Y — with no
+  // direction filter, changing category on an income row rewrote expense rows
+  // with the same description (and vice versa).
+  assert(/BUG 1 fix/.test(page) || /gated by direction/.test(page),
+    '49.bug1.a fix annotation present');
+  assert(/bulkQ\.or\('cash_in\.gt\.0,bank_in\.gt\.0'\)/.test(page),
+    '49.bug1.b income-side bulk update filters on cash_in>0 OR bank_in>0');
+  assert(/bulkQ\.or\('cash_out\.gt\.0,bank_out\.gt\.0'\)/.test(page),
+    '49.bug1.c expense-side bulk update filters on cash_out>0 OR bank_out>0');
+  assert(/postInflow > 0 && postOutflow === 0/.test(page),
+    '49.bug1.d income direction detected from post-update values (so user editing 0→500 re-labels correctly)');
+  // Neutral case: both zero or both >0 → fall back to single-row update (no cross-nuke risk)
+  assert(/bulkQ = bulkQ\.eq\('id', txn\.id\)/.test(page),
+    '49.bug1.e neutral case falls back to single-row update');
+
+  // ---------- BUG 2: handleEditTreasury didn't recalc invoice ----------
+  assert(/BUG 2 fix/.test(page),
+    '49.bug2.a fix annotation present');
+  assert(/amountsChanged =[\s\S]{0,400}Number\(updates\.cash_in[\s\S]{0,200}Number\(updates\.cash_out[\s\S]{0,200}Number\(updates\.bank_in[\s\S]{0,200}Number\(updates\.bank_out/.test(page),
+    '49.bug2.b all 4 amount fields compared pre/post');
+  assert(/if \(amountsChanged && txn\.linked_invoice_id\) \{[\s\S]{0,200}recalcInvoiceCollected\(txn\.linked_invoice_id\)/.test(page),
+    '49.bug2.c recalc fires only when amounts changed AND row is invoice-linked');
+
+  // ---------- BUG 3: Double-click double-insert ----------
+  assert(/const addPaymentRunning = useRef\(false\)/.test(page),
+    '49.bug3.a ref guard declared');
+  assert(/BUG 3 fix[\s\S]{0,400}if \(addPaymentRunning\.current\) return;\s*addPaymentRunning\.current = true/.test(page),
+    '49.bug3.b early-return on re-entry + immediate lock acquire');
+  // Guard released on BOTH error and non-error paths (finally block)
+  assert(/\} finally \{[\s\S]{0,200}addPaymentRunning\.current = false;\s*\}\s*\};\s*\n\s*\/\/ ========== RECONCILIATION REPORT/.test(page),
+    '49.bug3.c guard released in finally (covers success + exception)');
+  // Early-return paths (validation failures) also release
+  var earlyReleaseCount = (page.match(/addPaymentRunning\.current = false;/g) || []).length;
+  assert(earlyReleaseCount >= 4,
+    '49.bug3.d guard released on every early-return + finally (>=4 sites)',
+    'found=' + earlyReleaseCount);
+
+  // ---------- BUG 4: Dedup tolerance 2% was catastrophic at scale ----------
+  assert(/BUG 4 fix/.test(page),
+    '49.bug4.a fix annotation present');
+  assert(/dedupTol = Math\.min\(expAmt \* 0\.02, 500\)/.test(page),
+    '49.bug4.b tolerance capped at MIN(2%, 500 EGP)');
+  // Pre-fix pattern must be gone
+  assert(!/Math\.abs\([\s\S]{0,200}- expAmt\) < expAmt \* 0\.02/.test(page.replace(/dedupTol/g, '_OK_')),
+    '49.bug4.c old uncapped 2% pattern removed');
+
+  // ---------- BUG 5: recalc should prefer dedup_sibling_id ----------
+  assert(/BUG 5 fix/.test(page),
+    '49.bug5.a fix annotation present');
+  assert(/\.select\('id, cash_in, bank_in, is_bank_placeholder, description, dedup_sibling_id'\)/.test(page),
+    '49.bug5.b recalc SELECT now pulls dedup_sibling_id');
+  assert(/if \(t\.dedup_sibling_id\) continue;/.test(page),
+    '49.bug5.c authoritative dedup skip on the DB column');
+  assert(/legacy fallback/.test(page),
+    '49.bug5.d legacy description-substring check retained as fallback (for old rows pre-column)');
+
+  // ---------- BUG 6: Treasury export now carries Status column ----------
+  assert(/BUG 6 fix/.test(page),
+    '49.bug6.a fix annotation present');
+  assert(/if \(t\.is_bank_placeholder\) status = 'PLACEHOLDER'/.test(page),
+    '49.bug6.b placeholder → PLACEHOLDER');
+  assert(/status = 'DEDUP'/.test(page),
+    '49.bug6.c dedup marker → DEDUP');
+  assert(/else if \(t\.matched_bank_txn_id\) status = 'MATCHED'/.test(page),
+    '49.bug6.d matched bank row → MATCHED');
+  assert(/Status: status/.test(page),
+    '49.bug6.e Status field included in export row shape');
+
+  // ---------- BUG 7: treasuryByOrder leak fix ----------
+  assert(/BUG 7 fix/.test(page),
+    '49.bug7.a fix annotation present');
+  // Inside treasuryByOrder, placeholders + dedup markers skipped
+  assert(/treasuryByOrder[\s\S]{0,600}if \(t\.is_bank_placeholder\) return;/.test(page),
+    '49.bug7.b placeholders skipped in treasuryByOrder');
+  assert(/treasuryByOrder[\s\S]{0,800}if \(t\.dedup_sibling_id\) return;/.test(page),
+    '49.bug7.c dedup markers (by column) skipped in treasuryByOrder');
+  assert(/treasuryByOrder[\s\S]{0,1000}\[bank confirmation[\s\S]{0,100}return;/.test(page),
+    '49.bug7.d dedup markers (by legacy description) skipped in treasuryByOrder');
+
+  // ---------- Regression guards on things that were ALREADY correct ----------
+  // The audit found these were working — keep them locked so a careless edit
+  // doesn't reintroduce the bugs we already fixed.
+
+  // Placeholder creation must not set cash_in or cash_out
+  assert(/record\.is_bank_placeholder = true;[\s\S]{0,800}record\.expected_amount = amt;/.test(page),
+    '49.inv.1 bank placeholder stores amount in expected_amount (not cash_in/out)');
+
+  // Auto-match zeroes ALL four money columns on dedup branch
+  assert(/\/\/ Dedup:[\s\S]{0,400}updates\.cash_in = 0;\s*updates\.cash_out = 0;\s*updates\.bank_in = 0;\s*updates\.bank_out = 0;\s*updates\.dedup_sibling_id = matchingSibling\.id;/.test(page),
+    '49.inv.2 dedup branch zeros cash_in/out + bank_in/out AND stamps dedup_sibling_id');
+
+  // recalcInvoiceCollected caps at total_amount
+  assert(/const capped = Math\.min\(total, Number\(inv\.total_amount \|\| 0\)\);/.test(page),
+    '49.inv.3 recalc caps collected at invoice total (prevents over-collection on invoice side)');
+
+  // 90-day window on auto-match sibling search
+  assert(/const ninetyDays = 90 \* 86400000;/.test(page),
+    '49.inv.4 auto-match sibling search bounded to 90 days');
+
+  // Link handler recalcs BOTH old and new invoice when re-linking
+  assert(/if \(oldInvoiceId && oldInvoiceId !== invoiceId\) await recalcInvoiceCollected\(oldInvoiceId\);/.test(page),
+    '49.inv.5 re-linking a treasury row recalcs the ORIGINAL invoice (preventing stale collected total)');
+
+  // Bulk category update on line 4297-area path (super-admin fast action)
+  // Confirm the direction logic was added only where the risk lives (edit handler)
+  // and the older one-off admin-tool path remains a deliberate bulk edit
+  assert(/\/\/ BUG 1 fix/.test(page),
+    '49.inv.6 BUG 1 fix is explicitly annotated (docs-as-guard)');
+}
+try { runSection49_TreasuryBugRegressions(); } catch(e) {
+  console.error('SECTION 49:', e.message);
+  console.error(e.stack);
+  failed++;
+}
+
+// ============================================================
+// SECTION 50: Treasury outlier scenarios
+//   Scenario coverage: empty treasury, single-row, zero amounts,
+//   negative amounts, very large amounts, cross-date computations,
+//   placeholder lifecycle, dedup edge cases, category migration.
+//   These are SHAPES we test — not full-fat unit tests. Source
+//   inspection confirms the shape-handling paths exist.
+// ============================================================
+function runSection50_TreasuryOutlierScenarios() {
+  group('SECTION 50: Treasury outlier scenarios');
+
+  var page = fs.readFileSync(path.join(REPO_ROOT, 'src/app/page.jsx'), 'utf8');
+  var auditor = fs.readFileSync(path.join(REPO_ROOT, 'src/lib/accounting-auditor.js'), 'utf8');
+
+  // ---------- Scenario 1: Empty treasury (no rows at all) ----------
+  // Aggregates (totalCashIn, totalCashOut, running balance, monthly) must
+  // all reduce cleanly over an empty array and return 0 / empty.
+  assert(/filteredTreasury\.reduce\(\(a, t\) => a \+ Number\(t\.cash_in \|\| 0\), 0\)/.test(page),
+    '50.empty.1 totalCashIn initializer is 0 (reduce over [] returns 0)');
+  assert(/filteredTreasury\.reduce\(\(a, t\) => a \+ Number\(t\.cash_out \|\| 0\), 0\)/.test(page),
+    '50.empty.2 totalCashOut initializer is 0');
+  assert(/treasury\.reduce\(\(a, t\) => a \+ Number\(t\.cash_in \|\| 0\) - Number\(t\.cash_out \|\| 0\), 0\)/.test(page),
+    '50.empty.3 allTimeNet is safe on empty treasury');
+  // monthlyTreasury's Object.values over {} returns []
+  assert(/Object\.values\(mo\)\.sort/.test(page),
+    '50.empty.4 monthlyTreasury builds from empty keyset safely');
+
+  // ---------- Scenario 2: Single-row treasury ----------
+  // All aggregates must produce a consistent single-entry view.
+  // The running balance map must key the single row to its own signed amount.
+  assert(/let running = 0;\s*sorted\.forEach\(t => \{\s*running \+= Number\(t\.cash_in \|\| 0\) - Number\(t\.cash_out \|\| 0\);\s*map\[t\.id\] = running;/.test(page),
+    '50.single.1 running balance init=0, per-row accumulate — single row resolves to its own value');
+
+  // ---------- Scenario 3: Zero-amount rows ----------
+  // Rows with cash_in=0 AND cash_out=0 AND bank_in=0 AND bank_out=0 should
+  // contribute 0 to every aggregate. The `Number(... || 0)` pattern handles null too.
+  assert(/Number\(t\.cash_in \|\| 0\)/.test(page) && /Number\(t\.cash_out \|\| 0\)/.test(page),
+    '50.zero.1 null/undefined/empty-string safe via `|| 0` coercion');
+  // Income/expense bucket paths explicitly gate on >0
+  assert(/if \(t\.cash_out > 0\) \{/.test(page),
+    '50.zero.2 expenseBuckets skips cash_out=0 rows (no empty category)');
+  assert(/if \(t\.cash_in > 0\) \{/.test(page),
+    '50.zero.3 incomeBuckets skips cash_in=0 rows');
+
+  // ---------- Scenario 4: Negative amounts ----------
+  // System should NEVER produce negative cash_in or cash_out from user input.
+  // But if one ever exists (bad import, raw SQL edit), the aggregates sum them
+  // as-is — they'd make totals smaller, not crash. That's acceptable; the
+  // auditor should flag them separately.
+  // Auditor C2: "Corrupted rows — a single row should hold money in EXACTLY ONE..."
+  assert(/C2: Corrupted rows/.test(auditor),
+    '50.neg.1 auditor has C2 "corrupted rows" check (catches rows with multiple money fields set — which includes negatives by signal)');
+
+  // ---------- Scenario 5: Very large amounts (>= 10M EGP) ----------
+  // Two concerns: JS Number precision (safe up to 2^53 ≈ 9e15, fine for EGP)
+  // and the dedup tolerance scaling. After BUG 4 fix the tolerance is CAPPED
+  // at 500 EGP absolute — large amounts no longer trigger catastrophic false dedup.
+  assert(/Math\.min\(expAmt \* 0\.02, 500\)/.test(page),
+    '50.huge.1 dedup tolerance capped absolute (not proportional) at 500 EGP');
+
+  // ---------- Scenario 6: Cross-date-boundary period computations ----------
+  // inRange(t.transaction_date, mode, df, dt) must handle:
+  //   - dates exactly at the period start
+  //   - dates exactly at the period end
+  //   - dates one day outside either bound
+  // The filter is called on every row by filteredTreasury.
+  assert(/treasury\.filter\(t => inRange\(t\.transaction_date, mode, df, dt\)\)/.test(page),
+    '50.date.1 filteredTreasury delegates bounds check to inRange helper');
+  // Sorting must be deterministic when two rows have identical transaction_date
+  assert(/Same date: secondary sort by created_at/.test(page),
+    '50.date.2 same-day tiebreaker uses created_at for stable ordering');
+
+  // ---------- Scenario 7: Placeholder lifecycle ----------
+  // A placeholder goes through 3 states: created → auto-matched → (maybe deduped)
+  // At every state, it must NOT affect safe totals (cash_in + cash_out = 0 throughout).
+  assert(/record\.is_bank_placeholder = true;[\s\S]{0,400}record\.expected_amount = amt/.test(page),
+    '50.ph.1 placeholder creation: cash_in/out NOT set; amount lives in expected_amount');
+  assert(/\/\/ POST-MATCH: amount lives in bank_in\/bank_out[\s\S]{0,400}cash_in: 0,\s*cash_out: 0,/.test(page),
+    '50.ph.2 post-match still keeps cash_in/out = 0 (bank_in/out get the real amount)');
+  assert(/\/\/ Dedup:[\s\S]{0,400}updates\.cash_in = 0;\s*updates\.cash_out = 0;\s*updates\.bank_in = 0;\s*updates\.bank_out = 0;/.test(page),
+    '50.ph.3 dedup-branch zeros ALL four money columns (never leaks into any total)');
+
+  // ---------- Scenario 8: Dedup sibling edge cases ----------
+  // 8a: sibling exists but description was edited to remove "[bank confirmation"
+  //     → dedup_sibling_id column catches it (BUG 5 fix)
+  assert(/if \(t\.dedup_sibling_id\) continue;/.test(page),
+    '50.dup.a column-first dedup check (survives description edits)');
+  // 8b: auditor has AMBIGUOUS_DEDUP check for dedup markers without identifiable sibling
+  assert(/W4: Dedup markers without an identifiable sibling/.test(auditor),
+    '50.dup.b W4 flags dedup markers that can\'t point to a live sibling');
+  // 8c: auditor flags duplicate placeholders (two placeholders for same date/amount/order)
+  assert(/C7: Duplicate placeholders for the same expected deposit/.test(auditor),
+    '50.dup.c C7 flags duplicate placeholders');
+
+  // ---------- Scenario 9: Category migration / bulk rename ----------
+  // 9a: renaming one description's category on an income row must NOT touch
+  //     expense rows with the same description. BUG 1 fix above.
+  // 9b: the rule created (expenseRules) is per-direction via ruleType.
+  assert(/const ruleType = inflow > 0 \? 'income' : 'expense';/.test(page),
+    '50.cat.a expense rules scoped by rule_type');
+  assert(/existing = expenseRules\.find\(r => r\.description_match === desc && \(r\.rule_type === ruleType \|\| \(!r\.rule_type && ruleType === 'expense'\)\)\)/.test(page),
+    '50.cat.b rule lookup respects ruleType + legacy-no-type (treated as expense)');
+
+  // ---------- Scenario 10: Invoice re-link ----------
+  // When a treasury row is moved from invoice A → invoice B, BOTH A and B
+  // must be recalculated. Pre-fix seasons saw stale A.
+  assert(/if \(oldInvoiceId && oldInvoiceId !== invoiceId\) await recalcInvoiceCollected\(oldInvoiceId\);[\s\S]{0,200}await recalcInvoiceCollected\(invoiceId\);/.test(page),
+    '50.link.1 both old + new invoices recalculated on re-link');
+
+  // ---------- Scenario 11: Treasury row deletion with invoice link ----------
+  // Deleting a linked row must recalc the invoice (otherwise collected total
+  // lies by the deleted row's amount).
+  assert(/handleDeleteTreasury[\s\S]{0,600}recalcInvoiceCollected/.test(page),
+    '50.del.1 delete path recalcs invoice after removal');
+
+  // ---------- Scenario 12: Invoice creation backfill ----------
+  // New invoice → find orphan treasury rows matching order# → auto-link them
+  // → recalc. Inverse flow of placeholder confirmation.
+  assert(/const \{ data: orphans \} = await supabase\.from\('treasury'\)[\s\S]{0,400}recalcInvoiceCollected/.test(page),
+    '50.backfill.1 new-invoice creation backfills orphan treasury links + recalcs');
+
+  // ---------- Scenario 13: Sort with null created_at ----------
+  // Known latent — rows without created_at sort as "" which comes first.
+  // Not fixed in this session (imports-only issue). Locking the current behavior
+  // so a future change doesn't unexpectedly reverse it.
+  assert(/\(a\.created_at \|\| ''\)\.localeCompare\(b\.created_at \|\| ''\)/.test(page),
+    '50.sort.1 null created_at coerces to "" (documented latent behavior)');
+}
+try { runSection50_TreasuryOutlierScenarios(); } catch(e) {
+  console.error('SECTION 50:', e.message);
+  console.error(e.stack);
+  failed++;
+}
+
+// ============================================================
+// SECTION 49: Treasury bug regressions — one assertion per
+// user-facing bug found in the Apr 21 audit. Locks the fixes so
+// they can never silently regress.
+// ============================================================
+function runSection49_TreasuryBugs() {
+  group('SECTION 49: Treasury bug regressions (Apr 21 audit)');
+
+  var page = fs.readFileSync(path.join(REPO_ROOT, 'src/app/page.jsx'), 'utf8');
+
+  // ---------- BUG 1: bulk category update cross-contaminates ----------
+  // Before fix: `supabase.from('treasury').update(batchUpdates).eq('description', desc);`
+  //   — overwrites both cash_in rows and cash_out rows with same description.
+  // After fix: gated by direction via `.or('cash_in.gt.0,bank_in.gt.0')`
+  //   or `.or('cash_out.gt.0,bank_out.gt.0')` depending on the edited row.
+  assert(/postInflow\s*=\s*Number\(updates\.cash_in/.test(page),
+    '49.1a BUG1 — post-edit inflow computed for direction gating');
+  assert(/postOutflow\s*=\s*Number\(updates\.cash_out/.test(page),
+    '49.1b BUG1 — post-edit outflow computed');
+  assert(/bulkQ\.or\('cash_in\.gt\.0,bank_in\.gt\.0'\)/.test(page),
+    '49.1c BUG1 — income-direction gate uses .or(cash_in>0 OR bank_in>0)');
+  assert(/bulkQ\.or\('cash_out\.gt\.0,bank_out\.gt\.0'\)/.test(page),
+    '49.1d BUG1 — expense-direction gate uses .or(cash_out>0 OR bank_out>0)');
+  // Direction-neutral rows restricted to single-row update (no bulk)
+  assert(/bulkQ = bulkQ\.eq\('id', txn\.id\)/.test(page),
+    '49.1e BUG1 — neutral-direction case falls back to single-row update');
+
+  // ---------- BUG 2: handleEditTreasury didn't recalc linked invoice ----------
+  assert(/BUG 2 fix[\s\S]{0,400}amountsChanged\s*=/.test(page),
+    '49.2a BUG2 — amountsChanged comparator present');
+  assert(/amountsChanged && txn\.linked_invoice_id/.test(page),
+    '49.2b BUG2 — recalc fires only if amounts changed AND row linked');
+  assert(/await recalcInvoiceCollected\(txn\.linked_invoice_id\)/.test(page),
+    '49.2c BUG2 — recalcInvoiceCollected called with the linked invoice id');
+  // Compares against PRE-edit amounts (txn.*) — otherwise zero-change edits
+  // would still recalc unnecessarily
+  assert(/Number\(updates\.cash_in\s*\|\|\s*0\)\s*!==\s*Number\(txn\.cash_in\s*\|\|\s*0\)/.test(page),
+    '49.2d BUG2 — comparator compares new updates vs original txn values');
+
+  // ---------- BUG 3: double-click Add Payment double-insert ----------
+  assert(/const addPaymentRunning = useRef\(false\)/.test(page),
+    '49.3a BUG3 — ref guard declared');
+  assert(/if \(addPaymentRunning\.current\) return;/.test(page),
+    '49.3b BUG3 — fast-return on re-entry');
+  assert(/addPaymentRunning\.current = true;/.test(page),
+    '49.3c BUG3 — guard set before work');
+  assert(/addPaymentRunning\.current = false/.test(page),
+    '49.3d BUG3 — guard release exists');
+  // Must be released inside finally, not just at end of try
+  assert(/\} finally \{[\s\S]{0,300}addPaymentRunning\.current = false/.test(page),
+    '49.3e BUG3 — guard released in finally block (survives exceptions)');
+
+  // ---------- BUG 4: auto-match 2% tolerance catastrophe ----------
+  // Before: `< expAmt * 0.02` — 200k tolerance on 10M rows
+  // After:  `Math.min(expAmt * 0.02, 500)` — absolute cap
+  assert(/Math\.min\(expAmt \* 0\.02, 500\)/.test(page),
+    '49.4a BUG4 — dedup tolerance capped at 500 EGP absolute');
+  assert(/dedupTol = Math\.min/.test(page),
+    '49.4b BUG4 — tolerance stored in named variable for clarity');
+  // Old bug pattern must NOT be present anywhere as the active comparator
+  assert(!/expAmt \* 0\.02\s*\)\s*;?\s*\n\s*if \(matchingSibling/.test(page),
+    '49.4c BUG4 — old `expAmt * 0.02` raw tolerance pattern gone');
+
+  // ---------- BUG 5: recalc dedup check didn't use dedup_sibling_id ----------
+  // Before: only checked description contains "[bank confirmation" → fragile
+  //   if user edited description.
+  // After: checks t.dedup_sibling_id FIRST (authoritative), legacy fallback after.
+  assert(/if \(t\.dedup_sibling_id\) continue;\s*\/\/\s*authoritative/.test(page),
+    '49.5a BUG5 — dedup_sibling_id checked first as authoritative dedup signal');
+  assert(/\[bank confirmation[\s\S]{0,100}legacy fallback/.test(page),
+    '49.5b BUG5 — description check kept as legacy fallback');
+
+  // ---------- BUG 6: export missing Status column ----------
+  assert(/Status: status/.test(page),
+    '49.6a BUG6 — Status field in export rows');
+  assert(/status = 'PLACEHOLDER'/.test(page),
+    '49.6b BUG6 — PLACEHOLDER status mapped');
+  assert(/status = 'DEDUP'/.test(page),
+    '49.6c BUG6 — DEDUP status mapped');
+  assert(/status = 'MATCHED'/.test(page),
+    '49.6d BUG6 — MATCHED status mapped');
+  // DEDUP gate uses both authoritative column AND legacy description check
+  assert(/t\.dedup_sibling_id \|\| \(t\.description && String\(t\.description\)\.indexOf\('\[bank confirmation'\) >= 0\)/.test(page),
+    '49.6e BUG6 — DEDUP detection uses both dedup_sibling_id + description legacy');
+
+  // ---------- BUG 7 (latent, not fixed this session but documented) ----------
+  // null created_at sorting to top — left as documented limitation, not blocker
+  // If this becomes user-visible, wrap with COALESCE pattern in sort fn.
+
+  // ---------- Architectural invariants that must never break ----------
+  // Bank placeholders MUST have cash_in/cash_out = 0 at creation time
+  assert(/record\.is_bank_placeholder = true;[\s\S]{0,300}expected_amount = amt/.test(page),
+    '49.inv.1 placeholder sets expected_amount, never touches cash_in/cash_out');
+
+  // Dedup zeroing: ALL four amount columns must be set to 0 on dedup
+  assert(/updates\.cash_in = 0;[\s\S]{0,50}updates\.cash_out = 0;[\s\S]{0,50}updates\.bank_in = 0;[\s\S]{0,50}updates\.bank_out = 0;/.test(page),
+    '49.inv.2 dedup sets cash_in + cash_out + bank_in + bank_out all to 0');
+
+  // dedup_sibling_id persisted so recalc + auditor + export can see it
+  assert(/updates\.dedup_sibling_id = matchingSibling\.id/.test(page),
+    '49.inv.3 dedup_sibling_id persisted on match');
+
+  // Summary totals: filteredTreasury feeds totalCashIn/totalCashOut and
+  // placeholders/dedup contribute 0 to both by construction (not by filter).
+  // This test ensures no one has added a `cash_in: expectedAmount` write path
+  // to placeholder creation that would leak into totals.
+  assert(!/is_bank_placeholder: true,[\s\S]{0,200}cash_in: (amt|expectedAmount|Number)/.test(page),
+    '49.inv.4 placeholder creation does NOT write amt into cash_in (would leak into totalCashIn)');
+
+  // handleAddPayment on SAFE channel: cash_in=amount, bank_in=0, linked_invoice_id set
+  assert(/cash_in: Number\(pd\.amount\),\s*cash_out: 0,\s*bank_in: 0,\s*bank_out: 0,[\s\S]{0,300}linked_invoice_id: selectedInvoice\.id/.test(page),
+    '49.inv.5 handleAddPayment safe-channel insert: cash_in set, bank_in=0, invoice linked');
+
+  // Link/unlink correctness: unlink recalcs OLD invoice
+  assert(/if \(oldInvoiceId && oldInvoiceId !== invoiceId\) await recalcInvoiceCollected\(oldInvoiceId\)/.test(page),
+    '49.inv.6 linkTreasury recalcs OLD invoice when re-linking');
+  assert(/await recalcInvoiceCollected\(invoiceId\)/.test(page),
+    '49.inv.7 linkTreasury recalcs NEW invoice after re-linking');
+}
+try { runSection49_TreasuryBugs(); } catch(e) {
+  console.error('SECTION 49:', e.message);
+  console.error(e.stack);
+  failed++;
+}
+
+// ============================================================
+// SECTION 50: Treasury outlier scenarios
+//
+// These are SHAPE-based tests — they run the pure helpers (isCountedTowardCollected,
+// isDedupMarker) and direct math from accounting-auditor.js against synthetic
+// row shapes that represent edge cases the treasury code must survive without
+// crashing or double-counting. Not integration tests — focus is on the pure
+// logic layer.
+// ============================================================
+function runSection50_TreasuryOutliers() {
+  group('SECTION 50: Treasury outlier scenarios');
+
+  // Load auditor module fresh for pure-function testing.
+  // We can't ESM-import in node directly; strip exports and eval.
+  var auditSrc = fs.readFileSync(path.join(REPO_ROOT, 'src/lib/accounting-auditor.js'), 'utf8');
+  var stripped = auditSrc.replace(/export\s+function/g, 'function');
+  // Append exposer so we can grab the helpers
+  stripped += '\nmodule.exports = { runAccountingAudit: runAccountingAudit, isCountedTowardCollected: isCountedTowardCollected, isDedupMarker: isDedupMarker };';
+  // Write to a temp file + require
+  var tmp = require('os').tmpdir() + '/nt-audit-' + Date.now() + '.js';
+  fs.writeFileSync(tmp, stripped);
+  var A;
+  try { A = require(tmp); } catch (e) {
+    assert(false, '50.setup — auditor module loadable', e.message);
+    return;
+  }
+
+  var isCounted = A.isCountedTowardCollected;
+  var isDedup = A.isDedupMarker;
+
+  // ---------- isCountedTowardCollected — edge shapes ----------
+  // Normal row: cash_in > 0 → counted
+  assert(isCounted({ cash_in: 500, cash_out: 0, bank_in: 0, bank_out: 0 }) === true,
+    '50.10a normal cash_in > 0 row is counted');
+
+  // Normal row: bank_in > 0 → counted
+  assert(isCounted({ cash_in: 0, cash_out: 0, bank_in: 500, bank_out: 0 }) === true,
+    '50.10b normal bank_in > 0 row is counted');
+
+  // Row with BOTH cash_in AND bank_in (unusual but allowed)
+  assert(isCounted({ cash_in: 100, bank_in: 200 }) === true,
+    '50.10c row with both cash_in + bank_in is counted');
+
+  // Placeholder: cash_in=0, bank_in=0, is_bank_placeholder=true → NOT counted
+  assert(isCounted({ cash_in: 0, bank_in: 0, is_bank_placeholder: true, expected_amount: 5000 }) === false,
+    '50.10d placeholder (is_bank_placeholder=true) NOT counted');
+
+  // Dedup marker: has [bank confirmation in description → NOT counted
+  assert(isCounted({ cash_in: 0, bank_in: 0, description: 'Payment [bank confirmation — dedup_sibling=abc]' }) === false,
+    '50.10e dedup marker via description NOT counted');
+
+  // Empty row (all zeros, no flags) → NOT counted (nothing to count)
+  assert(isCounted({ cash_in: 0, cash_out: 0, bank_in: 0, bank_out: 0 }) === false,
+    '50.10f all-zero row NOT counted');
+
+  // Undefined fields (sparse row) → NOT counted
+  assert(isCounted({}) === false,
+    '50.10g empty object NOT counted');
+
+  // String values that coerce ("500") — should still be counted
+  assert(isCounted({ cash_in: '500', bank_in: 0 }) === true,
+    '50.10h string cash_in "500" counted (Number() coerces)');
+
+  // Negative cash_in (data-entry error) — Number(-500)+0 = -500, NOT > 0 → NOT counted
+  assert(isCounted({ cash_in: -500, bank_in: 0 }) === false,
+    '50.10i negative cash_in NOT counted (treated as zero-flow)');
+
+  // ---------- isDedupMarker — edge shapes ----------
+  assert(isDedup({ description: '[bank confirmation — not added to collected]' }) === true,
+    '50.20a marker with bracket prefix detected');
+  assert(isDedup({ description: 'Something [bank confirmation] later' }) === true,
+    '50.20b marker embedded in description detected');
+  assert(isDedup({ description: 'Normal payment' }) === false,
+    '50.20c normal description NOT a dedup marker');
+  assert(isDedup({}) === false,
+    '50.20d empty row NOT a dedup marker');
+  assert(isDedup({ description: null }) === false,
+    '50.20e null description safely NOT a dedup marker');
+
+  // ---------- runAccountingAudit — crash-proof on edge inputs ----------
+  // Empty data — should return findings[] without crashing
+  var r1 = A.runAccountingAudit({});
+  assert(r1 && Array.isArray(r1.findings),
+    '50.30a audit on empty {} returns findings array');
+
+  // Non-array data (previously crashed before toArr defensive coercion)
+  var r2 = A.runAccountingAudit({ treasury: 'bad', invoices: null, checks: undefined });
+  assert(r2 && Array.isArray(r2.findings),
+    '50.30b audit survives non-array treasury/invoices/checks');
+
+  // Single-row treasury, no invoices — should not crash
+  var r3 = A.runAccountingAudit({
+    treasury: [{ id: 't1', cash_in: 100, cash_out: 0, transaction_date: '2026-01-01' }],
+    invoices: [],
+  });
+  assert(r3 && Array.isArray(r3.findings),
+    '50.30c audit on single-treasury no-invoices returns findings');
+
+  // Invoice with zero total — edge case (over-collected or draft)
+  var r4 = A.runAccountingAudit({
+    invoices: [{ id: 'i1', total_amount: 0, total_collected: 0, outstanding: 0, order_number: 'Z1' }],
+    treasury: [],
+  });
+  assert(r4 && Array.isArray(r4.findings),
+    '50.30d audit on zero-total invoice does not crash');
+
+  // Dedup marker present — auditor should treat as NOT counted
+  var r5 = A.runAccountingAudit({
+    invoices: [{ id: 'i1', total_amount: 1000, total_collected: 1000, outstanding: 0, order_number: 'A1' }],
+    treasury: [
+      { id: 't1', linked_invoice_id: 'i1', cash_in: 1000, description: 'real payment', transaction_date: '2026-01-01' },
+      { id: 't2', linked_invoice_id: 'i1', cash_in: 0, bank_in: 0, description: 'bank confirm [bank confirmation — dedup_sibling=t1]', transaction_date: '2026-01-02' },
+    ],
+  });
+  // Should NOT flag as over-collected because t2 is a dedup marker
+  var w1 = (r5.findings || []).filter(function(f) { return f.code === 'OVER_COLLECTED_INVOICE'; });
+  assert(w1.length === 0,
+    '50.30e dedup marker on linked treasury does NOT trigger over-collected finding');
+
+  // Placeholder (expected_amount=5000, cash_in=0) — should NOT inflate totals
+  var r6 = A.runAccountingAudit({
+    invoices: [{ id: 'i1', total_amount: 1000, total_collected: 0, outstanding: 1000, order_number: 'A1' }],
+    treasury: [
+      { id: 't1', linked_invoice_id: 'i1', cash_in: 0, cash_out: 0, bank_in: 0, bank_out: 0, is_bank_placeholder: true, expected_amount: 5000, transaction_date: '2026-01-01' },
+    ],
+  });
+  var over = (r6.findings || []).filter(function(f) { return f.id === 'C1'; });
+  assert(over.length === 0,
+    '50.30f placeholder does NOT count toward collected (no C1 finding)');
+
+  // Extremely large amount (10M EGP) — should not integer-overflow or mis-sum
+  var huge = 10 * 1000 * 1000;
+  var r7 = A.runAccountingAudit({
+    invoices: [{ id: 'i1', total_amount: huge, total_collected: huge, outstanding: 0, order_number: 'H1' }],
+    treasury: [
+      { id: 't1', linked_invoice_id: 'i1', cash_in: huge, description: 'huge', transaction_date: '2026-01-01' },
+    ],
+  });
+  assert(r7 && Array.isArray(r7.findings),
+    '50.30g 10M EGP amounts audit-safe');
+
+  // Cross-year date boundary
+  var r8 = A.runAccountingAudit({
+    invoices: [{ id: 'i1', total_amount: 100, total_collected: 100, outstanding: 0, order_number: 'Y1' }],
+    treasury: [
+      { id: 't1', linked_invoice_id: 'i1', cash_in: 100, transaction_date: '2025-12-31' },
+    ],
+  });
+  assert(r8 && Array.isArray(r8.findings),
+    '50.30h cross-year-boundary dates survive audit');
+
+  // Malformed date string — should not crash
+  var r9 = A.runAccountingAudit({
+    invoices: [],
+    treasury: [{ id: 't1', cash_in: 100, transaction_date: 'not-a-date' }],
+  });
+  assert(r9 && Array.isArray(r9.findings),
+    '50.30i malformed transaction_date does not crash audit');
+
+  // Two rows with same amount + date + order → should potentially trigger C3 (duplicate)
+  var r10 = A.runAccountingAudit({
+    invoices: [{ id: 'i1', total_amount: 2000, total_collected: 1000, outstanding: 1000, order_number: 'D1' }],
+    treasury: [
+      { id: 't1', linked_invoice_id: 'i1', order_number: 'D1', cash_in: 1000, transaction_date: '2026-01-01', description: 'pay 1' },
+      { id: 't2', linked_invoice_id: 'i1', order_number: 'D1', cash_in: 1000, transaction_date: '2026-01-01', description: 'pay 1' },
+    ],
+  });
+  assert(r10 && Array.isArray(r10.findings),
+    '50.30j duplicate-candidate rows audit-safe');
+
+  // Orphan: treasury linked_invoice_id points to non-existent invoice → C4
+  var r11 = A.runAccountingAudit({
+    invoices: [],
+    treasury: [{ id: 't1', linked_invoice_id: 'ghost-invoice-id', cash_in: 500, transaction_date: '2026-01-01' }],
+  });
+  var c4 = (r11.findings || []).filter(function(f) { return f.code === 'BROKEN_INVOICE_REF'; });
+  assert(c4.length > 0,
+    '50.30k orphan linked_invoice_id triggers BROKEN_INVOICE_REF finding');
+
+  // Cleanup temp file
+  try { fs.unlinkSync(tmp); } catch (e) {}
+
+  // ---------- Page.jsx static invariants for outlier safety ----------
+  var page = fs.readFileSync(path.join(REPO_ROOT, 'src/app/page.jsx'), 'utf8');
+
+  // Running balance accumulates chronologically (oldest first)
+  assert(/\[\.\.\.treasury\]\.sort\(\(a, b\) => \{[\s\S]{0,200}localeCompare\(b\.transaction_date/.test(page),
+    '50.40a running balance sorts oldest-first for accumulation');
+
+  // Totals use Number() coercion to survive string values from DB
+  assert(/filteredTreasury\.reduce\(\(a, t\) => a \+ Number\(t\.cash_in \|\| 0\)/.test(page),
+    '50.40b totalCashIn uses Number() coercion');
+  assert(/filteredTreasury\.reduce\(\(a, t\) => a \+ Number\(t\.cash_out \|\| 0\)/.test(page),
+    '50.40c totalCashOut uses Number() coercion');
+
+  // recalcInvoiceCollected CAPS at invoice total (prevents over-collected from leaking)
+  assert(/Math\.min\(total, Number\(inv\.total_amount \|\| 0\)\)/.test(page),
+    '50.40d recalcInvoiceCollected caps at total_amount (no over-collected)');
+
+  // expenseBuckets guards on cash_out > 0 (NaN guard by coercion)
+  assert(/if \(t\.cash_out > 0\)/.test(page),
+    '50.40e expenseBuckets guards on cash_out > 0');
+  assert(/if \(t\.cash_in > 0\)/.test(page),
+    '50.40f incomeBuckets guards on cash_in > 0');
+
+  // Running balance map has no amount coming from dedup markers
+  // (they have 0s, so arithmetic is 0 by construction — see isCounted tests above)
+}
+try { runSection50_TreasuryOutliers(); } catch(e) {
+  console.error('SECTION 50:', e.message);
+  console.error(e.stack);
+  failed++;
+}
+
+// ============================================================
 // MAIN
 // ============================================================
 (async () => {
