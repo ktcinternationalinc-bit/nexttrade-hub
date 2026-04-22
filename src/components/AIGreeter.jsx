@@ -72,6 +72,8 @@ export default function AIGreeter({ user, userProfile, users, tickets, invoices,
   var [loading, setLoading] = useState(false);
   var [speaking, setSpeaking] = useState(false);
   var [listening, setListening] = useState(false);
+  var [recording, setRecording] = useState(false); // MediaRecorder session (separate from live-mic `listening`)
+  var [transcribing, setTranscribing] = useState(false); // uploading audio to /api/transcribe
   var [minimized, setMinimized] = useState(false);
   var [typingText, setTypingText] = useState('');
   var [typingDone, setTypingDone] = useState(true);
@@ -79,6 +81,14 @@ export default function AIGreeter({ user, userProfile, users, tickets, invoices,
   var typingRef = useRef(null);
   var audioRef = useRef(null);
   var recognitionRef = useRef(null);
+  // MediaRecorder — reliable press-to-start / press-to-stop voice capture.
+  // Completely independent from the live-mic SpeechRecognition path above.
+  var mediaRecorderRef = useRef(null);
+  var mediaStreamRef = useRef(null);
+  var audioChunksRef = useRef([]);
+  var recordStartTsRef = useRef(0);
+  var [recordElapsed, setRecordElapsed] = useState(0);
+  var recordTickRef = useRef(null);
   var [aiMemory, setAiMemory] = useState('');
 
   var myId = userProfile?.id || user?.id;
@@ -204,7 +214,9 @@ export default function AIGreeter({ user, userProfile, users, tickets, invoices,
     // Tickets
     var myTickets = (tickets || []).filter(function(t) { return t.assigned_to === myId && t.status !== 'Closed'; });
     var overdueTickets = myTickets.filter(function(t) { return t.due_date && t.due_date < todayStr; });
-    var newTickets = myTickets.filter(function(t) { return t.status === 'New'; });
+    var dueTodayTickets = myTickets.filter(function(t) { return t.due_date === todayStr; });
+    var unackedTickets = myTickets.filter(function(t) { return t.status === 'New'; }); // unacknowledged — user hasn't accepted yet
+    var newTickets = unackedTickets; // alias for backward compat
     // Stale tickets — not updated in 3+ days
     var staleTickets = myTickets.filter(function(t) {
       var lastUpdate = t.updated_at || t.created_at || '';
@@ -242,12 +254,18 @@ export default function AIGreeter({ user, userProfile, users, tickets, invoices,
     } else {
       ctx += 'Login streak: ' + streak + ' day(s).\n';
     }
-    ctx += '\nBUSINESS STATUS:\n';
-    ctx += 'Open tickets: ' + myTickets.length;
-    if (newTickets.length) ctx += ' (' + newTickets.length + ' NEW)';
-    if (overdueTickets.length) ctx += ' (' + overdueTickets.length + ' OVERDUE: ' + overdueTickets.map(function(t) { return t.ticket_number || t.title; }).join(', ') + ')';
-    ctx += '\n';
-    if (staleTickets.length) ctx += 'Stale tickets (not updated 3+ days): ' + staleTickets.length + ' — ' + staleTickets.slice(0, 5).map(function(t) { return (t.ticket_number || '') + ' ' + (t.title || ''); }).join(', ') + '. Remind them to update these!\n';
+    ctx += '\nBUSINESS STATUS (SURFACE THESE PROMINENTLY IN YOUR GREETING — do not bury them):\n';
+    if (unackedTickets.length) {
+      ctx += '⚠️ UNACKNOWLEDGED tickets waiting for first response: ' + unackedTickets.length + ' — ' + unackedTickets.slice(0, 5).map(function(t) { return (t.ticket_number || '') + ' "' + (t.title || '').substring(0, 40) + '"'; }).join(', ') + '\n';
+    }
+    if (dueTodayTickets.length) {
+      ctx += '📅 DUE TODAY: ' + dueTodayTickets.length + ' ticket(s) — ' + dueTodayTickets.map(function(t) { return (t.ticket_number || '') + ' ' + (t.title || ''); }).join(', ') + '\n';
+    }
+    if (overdueTickets.length) {
+      ctx += '🔴 OVERDUE tickets: ' + overdueTickets.length + ' — ' + overdueTickets.map(function(t) { return (t.ticket_number || '') + ' (was due ' + t.due_date + ')'; }).join(', ') + '\n';
+    }
+    ctx += 'Total open tickets: ' + myTickets.length + '\n';
+    if (staleTickets.length) ctx += 'Stale (not updated 3+ days): ' + staleTickets.length + ' — ' + staleTickets.slice(0, 5).map(function(t) { return (t.ticket_number || '') + ' ' + (t.title || ''); }).join(', ') + '. Nudge them!\n';
     if (overdueInvoices.length) ctx += 'Overdue invoices: ' + overdueInvoices.length + ', EGP ' + overdueInvoices.reduce(function(a, i) { return a + Number(i.outstanding || 0); }, 0).toLocaleString() + '\n';
     if (pendingChecks.length) ctx += 'Checks due today: ' + pendingChecks.length + ', EGP ' + pendingChecks.reduce(function(a, c) { return a + Number(c.amount || 0); }, 0).toLocaleString() + '\n';
     ctx += 'Treasury net: EGP ' + net.toLocaleString() + '\n';
@@ -268,6 +286,8 @@ export default function AIGreeter({ user, userProfile, users, tickets, invoices,
     + '- Keep responses SHORT: 2-4 sentences. Conversational, not robotic.\n'
     + '- No markdown. Plain text only.\n'
     + '- You have access to their tickets, invoices, treasury data, and checks. Answer business questions if asked.\n'
+    + '- PROACTIVELY surface urgent items in your greeting: unacknowledged tickets, tickets due today, overdue tickets, checks due today. Lead with these — do not make the user ask. Be direct: "You have 3 tickets waiting for your acknowledgment and 2 due today."\n'
+    + '- If there are NO urgent items, say so warmly ("all clear today") — do not invent urgency.\n'
     + (function() {
       var mem = parsedMemory();
       var result = '';
@@ -589,6 +609,181 @@ export default function AIGreeter({ user, userProfile, users, tickets, invoices,
     setListening(false);
   };
 
+  // =====================================================================
+  // RECORD BUTTON (NEW — reliable alternative to the live mic)
+  //
+  // Uses MediaRecorder to capture audio for as long as the user wants,
+  // then ships it to /api/transcribe (Whisper) on stop. Unlike the live
+  // SpeechRecognition mic, this never auto-cuts mid-sentence, never
+  // fails silently on the first click, and works identically across
+  // Chrome / Safari / Firefox.
+  //
+  // Flow: tap 🎙️ → tap again → audio uploads → transcript fills input →
+  // Nadia receives text like any typed message.
+  // =====================================================================
+
+  var stopRecordingTick = function() {
+    if (recordTickRef.current) {
+      clearInterval(recordTickRef.current);
+      recordTickRef.current = null;
+    }
+  };
+
+  var releaseMediaStream = function() {
+    if (mediaStreamRef.current) {
+      try {
+        mediaStreamRef.current.getTracks().forEach(function(t) { try { t.stop(); } catch (e) {} });
+      } catch (e) {}
+      mediaStreamRef.current = null;
+    }
+  };
+
+  var startRecording = async function() {
+    if (recording || transcribing) return;
+    // Barge-in: if Nadia is speaking, cut her off — user wants to record.
+    if (speaking) { try { stopSpeech(); } catch (e) {} }
+    // Also make sure the live-mic isn't running; these two modes are mutually exclusive.
+    if (listening) { try { stopListen(); } catch (e) {} }
+
+    if (typeof navigator === 'undefined' || !navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+      if (toast) toast.warning('Recording not supported in this browser');
+      return;
+    }
+
+    var stream;
+    try {
+      stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    } catch (e) {
+      if (toast) toast.warning('Microphone access denied. Click the 🔒 icon in the address bar to allow.');
+      return;
+    }
+    mediaStreamRef.current = stream;
+
+    // Pick the best supported mime type for this browser. OpenAI accepts
+    // webm/ogg/mp4/m4a/mp3/wav, so we just use whatever the browser gives us.
+    var preferred = ['audio/webm;codecs=opus', 'audio/webm', 'audio/ogg;codecs=opus', 'audio/mp4', ''];
+    var mime = '';
+    for (var i = 0; i < preferred.length; i++) {
+      try {
+        if (preferred[i] === '' || (typeof MediaRecorder !== 'undefined' && MediaRecorder.isTypeSupported && MediaRecorder.isTypeSupported(preferred[i]))) {
+          mime = preferred[i];
+          break;
+        }
+      } catch (e) {}
+    }
+
+    var mr;
+    try {
+      mr = mime ? new MediaRecorder(stream, { mimeType: mime }) : new MediaRecorder(stream);
+    } catch (e) {
+      releaseMediaStream();
+      if (toast) toast.warning('Could not start recorder: ' + (e && e.message ? e.message : 'unknown'));
+      return;
+    }
+    mediaRecorderRef.current = mr;
+    audioChunksRef.current = [];
+
+    mr.ondataavailable = function(ev) {
+      if (ev && ev.data && ev.data.size > 0) audioChunksRef.current.push(ev.data);
+    };
+
+    mr.onerror = function(ev) {
+      if (toast) toast.warning('Recorder error: ' + (ev && ev.error && ev.error.name ? ev.error.name : 'unknown'));
+      setRecording(false);
+      stopRecordingTick();
+      releaseMediaStream();
+    };
+
+    mr.onstop = async function() {
+      stopRecordingTick();
+      setRecording(false);
+      releaseMediaStream();
+
+      var chunks = audioChunksRef.current || [];
+      audioChunksRef.current = [];
+      if (chunks.length === 0) return;
+
+      var type = chunks[0].type || mime || 'audio/webm';
+      var blob = new Blob(chunks, { type: type });
+      // Guard rails: extremely small blobs are almost certainly silent taps.
+      if (blob.size < 1000) {
+        if (toast) toast.info('Recording was too short — try again');
+        return;
+      }
+
+      // Ship to Whisper
+      setTranscribing(true);
+      try {
+        var form = new FormData();
+        var ext = type.indexOf('mp4') >= 0 ? 'mp4' : type.indexOf('ogg') >= 0 ? 'ogg' : 'webm';
+        form.append('audio', blob, 'recording.' + ext);
+        form.append('language', useLang === 'ar' ? 'ar' : 'en');
+        var r = await fetch('/api/transcribe', { method: 'POST', body: form });
+        var data = await r.json();
+        if (!r.ok || data.error) {
+          if (toast) toast.warning(data.error || 'Transcription failed');
+          return;
+        }
+        var text = String(data.text || '').trim();
+        if (!text) {
+          if (toast) toast.info('Nothing was transcribed — try speaking closer to the mic');
+          return;
+        }
+        // Send straight to Nadia, exactly as if the user had typed it.
+        setInput('');
+        doSend(text);
+      } catch (e) {
+        if (toast) toast.warning('Transcription error: ' + (e && e.message ? e.message : 'unknown'));
+      } finally {
+        setTranscribing(false);
+      }
+    };
+
+    try {
+      // timeslice=1000 gives us a data chunk every second so if something
+      // crashes mid-record we don't lose the whole take.
+      mr.start(1000);
+      recordStartTsRef.current = Date.now();
+      setRecordElapsed(0);
+      setRecording(true);
+      recordTickRef.current = setInterval(function() {
+        setRecordElapsed(Math.floor((Date.now() - recordStartTsRef.current) / 1000));
+      }, 1000);
+    } catch (e) {
+      releaseMediaStream();
+      if (toast) toast.warning('Could not start recorder');
+    }
+  };
+
+  var stopRecording = function() {
+    if (!recording) return;
+    try {
+      if (mediaRecorderRef.current && mediaRecorderRef.current.state !== 'inactive') {
+        mediaRecorderRef.current.stop();
+      }
+    } catch (e) {}
+    // Final state changes happen inside onstop.
+  };
+
+  var toggleRecording = function() {
+    if (recording) stopRecording();
+    else startRecording();
+  };
+
+  // Clean up any in-flight recording when the component unmounts.
+  useEffect(function() {
+    return function() {
+      stopRecordingTick();
+      try {
+        if (mediaRecorderRef.current && mediaRecorderRef.current.state !== 'inactive') {
+          mediaRecorderRef.current.stop();
+        }
+      } catch (e) {}
+      releaseMediaStream();
+    };
+  }, []);
+
+
   // Typewriter — was setInterval(setState) every 20ms which caused ~200
   // React re-renders for a short reply and "froze" the dashboard page.
   // Now: writes ~5 chars per animation frame via requestAnimationFrame.
@@ -804,6 +999,35 @@ export default function AIGreeter({ user, userProfile, users, tickets, invoices,
             </span>
           </button>
         )}
+        {/* RECORDING banner — shown while MediaRecorder is active. Tapping
+            anywhere stops the recording, uploads to Whisper, and sends the
+            transcript to Nadia. Completely separate from the live-mic path. */}
+        {recording && (
+          <button onClick={stopRecording}
+            className="w-full mb-2 px-3 py-3 rounded-xl bg-rose-600 hover:bg-rose-700 text-white text-sm font-bold flex items-center gap-3 shadow-lg animate-pulse"
+            title={useLang === 'ar' ? 'اضغط لإنهاء التسجيل والإرسال إلى ناديا' : 'Tap to stop recording and send to Nadia'}>
+            <span className="flex items-end gap-0.5 h-5 flex-shrink-0">
+              {[0,1,2,3,4,5].map(function(i) { return <span key={i} className="w-1 rounded-full bg-white" style={{ height: 4 + Math.random() * 14, animation: 'pulse 0.5s infinite', animationDelay: i * 60 + 'ms' }} />; })}
+            </span>
+            <span className="flex-1 text-left">
+              <span>🎙️ </span>
+              <span>{useLang === 'ar' ? 'تسجيل…' : 'Recording…'}</span>
+              <span className="ml-2 font-mono text-[13px] opacity-90">
+                {String(Math.floor(recordElapsed / 60)).padStart(2, '0') + ':' + String(recordElapsed % 60).padStart(2, '0')}
+              </span>
+            </span>
+            <span className="flex-shrink-0 text-[11px] bg-white/20 rounded px-2 py-1 font-bold">
+              {useLang === 'ar' ? 'إيقاف وإرسال ⏹' : 'STOP & SEND ⏹'}
+            </span>
+          </button>
+        )}
+        {/* TRANSCRIBING banner — shown while the audio uploads to Whisper. */}
+        {transcribing && (
+          <div className="w-full mb-2 px-3 py-2 rounded-xl bg-blue-500/20 border border-blue-400/40 text-blue-100 text-sm font-semibold flex items-center gap-2">
+            <span className="animate-spin">⏳</span>
+            <span>{useLang === 'ar' ? 'جار التفريغ النصي…' : 'Transcribing…'}</span>
+          </div>
+        )}
         <div className="flex items-center gap-2 rounded-xl px-3 py-1.5" style={{ background: 'rgba(255,255,255,0.07)', border: '1px solid rgba(255,255,255,0.1)' }}>
           <button
             onClick={function() {
@@ -813,9 +1037,19 @@ export default function AIGreeter({ user, userProfile, users, tickets, invoices,
               if (listening) stopListen(); else startListen();
             }}
             className={'p-2 rounded-lg text-sm transition ' + (listening ? 'bg-red-500 text-white animate-pulse' : 'text-white/50 hover:text-white hover:bg-white/10')}
-            title={listening ? (useLang === 'ar' ? 'إنهاء الاستماع' : 'Tap to stop & send') : (useLang === 'ar' ? 'تحدث' : 'Hold to talk — long messages OK')}
+            title={listening ? (useLang === 'ar' ? 'إنهاء الاستماع' : 'Tap to stop & send') : (useLang === 'ar' ? 'تحدث (مايك مباشر)' : 'Live mic (quick questions)')}
           >
             🎤
+          </button>
+          {/* NEW — press to record, press to stop. Uses MediaRecorder + Whisper.
+              Reliable alternative to the live mic for dictation. */}
+          <button
+            onClick={toggleRecording}
+            disabled={transcribing}
+            className={'p-2 rounded-lg text-sm transition ' + (recording ? 'bg-rose-600 text-white animate-pulse' : 'text-white/50 hover:text-white hover:bg-white/10') + (transcribing ? ' opacity-40 cursor-not-allowed' : '')}
+            title={recording ? (useLang === 'ar' ? 'إيقاف التسجيل وإرسال' : 'Tap to stop & send to Nadia') : (useLang === 'ar' ? 'تسجيل صوتي — يفرّغ النص ثم يُرسل' : 'Record → transcribe → send (record as long as you like)')}
+          >
+            🎙️
           </button>
           <input value={input} onChange={function(e) { setInput(e.target.value); }}
             onKeyDown={function(e) { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); handleSubmit(); } }}

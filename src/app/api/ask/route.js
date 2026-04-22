@@ -888,30 +888,18 @@ export async function POST(request) {
         // Auto-execute safe actions immediately (tickets, events, reminders, rates, notes)
         var autoExecTypes = ['create_ticket', 'update_ticket', 'create_event', 'create_reminder', 'send_team_message', 'create_rate', 'add_meeting_notes'];
         if (autoExecTypes.indexOf(actionData.type) >= 0) {
-          // Permission gate — stop non-authorized users from triggering actions
-          // they wouldn't be allowed to do in the UI. Super admin + admin are
-          // cleared for everything; other users can do non-financial actions
-          // for themselves, but sensitive ones (shipping rate entry, treasury
-          // impact) require admin. Cross-team messaging (send_team_message,
-          // create_reminder targeting another user) also requires admin.
+          // Permission gate — keep minimal so team members can collaborate freely.
+          // Any team member can send reminders, messages, events, and tickets to
+          // any other team member via Nadia (Max's requirement — "everyone can
+          // send to everyone"). Only shipping rate entry stays admin-only, since
+          // that carries pricing authority that affects quoted deals.
           var isAdminish = isSuperAdmin || currentUserRole === 'admin';
           var blocked = false;
           var blockReason = '';
           if (!isAdminish) {
             if (actionData.type === 'create_rate') {
               blocked = true;
-              blockReason = 'Only admins can log shipping rates. Ask Max or the operations lead to record this rate.';
-            } else if (actionData.type === 'send_team_message' && actionData.target_user_id && actionData.target_user_id !== userId) {
-              blocked = true;
-              blockReason = 'Only admins can send direct messages to other team members through the AI.';
-            } else if (actionData.type === 'create_reminder' && actionData.target_users && actionData.target_users !== 'self' && actionData.target_users !== userId) {
-              blocked = true;
-              blockReason = 'Only admins can send reminders to other team members. You can still create reminders for yourself.';
-            } else if (actionData.type === 'create_ticket' && actionData.assigned_to && actionData.assigned_to !== userId) {
-              // Non-admins CAN create tickets assigned to themselves or unassigned, but not delegate to others.
-              // (This preserves the "I want to open a ticket for a rate quote" flow while stopping "assign this to Ahmed" from non-admins.)
-              blocked = true;
-              blockReason = 'Only admins can assign tickets to other team members. I can create this ticket assigned to you instead — just say so.';
+              blockReason = 'Only admins can log shipping rates into the system, since rates feed into customer quotes. Ask Max or the operations lead to record this rate.';
             }
           }
           if (blocked) {

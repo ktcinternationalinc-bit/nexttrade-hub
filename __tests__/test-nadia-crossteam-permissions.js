@@ -153,41 +153,41 @@ test('M11 Pending messages block appended to system prompt', function() {
 });
 
 // ===== PERMISSIONS =====
-test('P12 Non-admins blocked from create_rate', function() {
+test('P12 Non-admins blocked from create_rate (the only admin-only action)', function() {
   assert(/actionData\.type === 'create_rate'[\s\S]*?blocked = true/.test(askRoute),
     'create_rate must be gated for non-admins');
   assert(/Only admins can log shipping rates/.test(askRoute),
     'block reason must be clear and helpful');
 });
 
-test('P13 Non-admins blocked from send_team_message to other users', function() {
-  assert(/actionData\.type === 'send_team_message'[\s\S]*?actionData\.target_user_id !== userId[\s\S]*?blocked = true/.test(askRoute),
-    'send_team_message to a different user must be gated for non-admins');
+test('P13 All team members CAN send_team_message to other users (Max updated policy — everyone collaborates)', function() {
+  // Verify the restriction is NOT present. If any block on send_team_message exists for non-admins, this fails.
+  var gateMatch = askRoute.match(/if \(!isAdminish\) \{[\s\S]*?\}\s*if \(blocked\)/);
+  assert(gateMatch, 'permission gate block exists');
+  assert(!/send_team_message[\s\S]*?blocked = true/.test(gateMatch[0]),
+    'there must be NO send_team_message block inside the !isAdminish gate');
 });
 
-test('P14 Non-admins blocked from create_reminder targeting other users', function() {
-  assert(/actionData\.type === 'create_reminder'[\s\S]*?actionData\.target_users[\s\S]*?actionData\.target_users !== userId[\s\S]*?blocked = true/.test(askRoute),
-    'create_reminder for another user must be gated');
-  // But self-targeted or "self" sentinel must be allowed
-  assert(/actionData\.target_users !== 'self'/.test(askRoute),
-    'self-targeted reminders must remain allowed for non-admins');
+test('P14 All team members CAN create_reminder targeting other users', function() {
+  var gateMatch = askRoute.match(/if \(!isAdminish\) \{[\s\S]*?\}\s*if \(blocked\)/);
+  assert(gateMatch, 'permission gate block exists');
+  assert(!/create_reminder[\s\S]*?blocked = true/.test(gateMatch[0]),
+    'there must be NO create_reminder block inside the !isAdminish gate');
 });
 
-test('P15 Non-admins blocked from assigning tickets to other users', function() {
-  assert(/actionData\.type === 'create_ticket'[\s\S]*?actionData\.assigned_to !== userId[\s\S]*?blocked = true/.test(askRoute),
-    'create_ticket assigning to another user must be gated');
+test('P15 All team members CAN create_ticket assigning to other users', function() {
+  var gateMatch = askRoute.match(/if \(!isAdminish\) \{[\s\S]*?\}\s*if \(blocked\)/);
+  assert(gateMatch, 'permission gate block exists');
+  assert(!/create_ticket[\s\S]*?blocked = true/.test(gateMatch[0]),
+    'there must be NO create_ticket block inside the !isAdminish gate');
 });
 
-test('P15b Non-admins CAN still create tickets for themselves', function() {
-  // The block condition requires assigned_to to be present AND different from userId.
-  // An unassigned or self-assigned ticket must pass through.
-  var m = askRoute.match(/actionData\.type === 'create_ticket'[\s\S]*?blocked = true/);
-  assert(m, 'create_ticket gate exists');
-  assert(/actionData\.assigned_to && actionData\.assigned_to !== userId/.test(m[0]),
-    'gate requires both (a) assigned_to present AND (b) different from current user — self/unassigned cases pass through');
+test('P15b Policy comment documents the "everyone can send to everyone" intent', function() {
+  assert(/everyone can send to everyone/.test(askRoute) || /collaborate freely/.test(askRoute),
+    'code must document the open-collaboration policy so future changes do not silently re-lock it');
 });
 
-test('P16 Block returns clear reason in answer', function() {
+test('P16 Block returns clear reason in answer (for the rates case)', function() {
   assert(/if \(blocked\) \{[\s\S]*?Response\.json\([\s\S]*?blockReason/.test(askRoute),
     'blocked actions must return a Response.json containing the blockReason');
 });
@@ -198,6 +198,35 @@ test('P16b Super admin bypasses all permission gates', function() {
     'isAdminish flag must include isSuperAdmin');
   assert(/if \(!isAdminish\) \{/.test(askRoute),
     'all permission checks must be inside if(!isAdminish) so admins pass unchecked');
+});
+
+// ===== GREETER SURFACING URGENT ITEMS =====
+test('G1 Greeter computes unacknowledged tickets separately', function() {
+  assert(/var unackedTickets = myTickets\.filter\(function\(t\) \{ return t\.status === 'New'; \}\)/.test(greeter),
+    'unackedTickets = tickets still in New status (user has not acknowledged)');
+});
+
+test('G2 Greeter computes tickets due today specifically (not just overdue)', function() {
+  assert(/var dueTodayTickets = myTickets\.filter\(function\(t\) \{ return t\.due_date === todayStr; \}\)/.test(greeter),
+    'dueTodayTickets = tickets with due_date exactly today');
+});
+
+test('G3 Greeter context emphasizes unacked/due-today/overdue prominently', function() {
+  assert(/SURFACE THESE PROMINENTLY/.test(greeter),
+    'context must instruct Nadia not to bury urgent items');
+  assert(/UNACKNOWLEDGED tickets waiting for first response/.test(greeter),
+    'unacked block present');
+  assert(/DUE TODAY/.test(greeter),
+    'due-today block present');
+  assert(/OVERDUE tickets/.test(greeter),
+    'overdue block present');
+});
+
+test('G4 System prompt tells Nadia to proactively surface urgent items', function() {
+  assert(/PROACTIVELY surface urgent items/.test(greeter),
+    'system prompt must explicitly tell Nadia to lead with urgent items');
+  assert(/do not invent urgency/.test(greeter),
+    'but must not fabricate urgency when none exists');
 });
 
 console.log('');
