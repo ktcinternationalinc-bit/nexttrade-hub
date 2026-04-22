@@ -33,10 +33,12 @@ export default function AdminTab({ user, userProfile, users, isAdmin, customers 
   const [auditFilter, setAuditFilter] = useState('all');
   const [drillStage, setDrillStage] = useState(null);
   const [drillUser, setDrillUser] = useState(null);
+  const [bubbleDrill, setBubbleDrill] = useState(null); // { userId, type, label } — open when not null
   const [viewTicket, setViewTicket] = useState(null);
   const [ticketComments, setTicketComments] = useState([]);
-  const [dateFrom, setDateFrom] = useState(() => { const d = new Date(); d.setDate(d.getDate() - 30); return d.toISOString().substring(0, 10); });
-  const [dateTo, setDateTo] = useState(new Date().toISOString().substring(0, 10));
+  const [dateFrom, setDateFrom] = useState(() => new Intl.DateTimeFormat('en-CA', { timeZone: 'America/New_York' }).format(new Date()));
+  const [dateTo, setDateTo] = useState(() => new Intl.DateTimeFormat('en-CA', { timeZone: 'America/New_York' }).format(new Date()));
+  const [datePreset, setDatePreset] = useState('today'); // today | yesterday | 7d | 30d | 3mo | all | custom
   const drillRef = useRef(null);
 
   const myId = userProfile?.id || user?.id;
@@ -124,7 +126,26 @@ export default function AdminTab({ user, userProfile, users, isAdmin, customers 
     return () => clearInterval(id);
   }, []);
 
-  const handleDateChange = (field, value) => { if (field === 'from') setDateFrom(value); else setDateTo(value); setLoaded(false); };
+  const handleDateChange = (field, value) => { if (field === 'from') setDateFrom(value); else setDateTo(value); setDatePreset('custom'); setLoaded(false); };
+
+  // Apply one of the preset date ranges. ET-aware so "today" is today in New York.
+  const applyDatePreset = (preset) => {
+    const fmt = new Intl.DateTimeFormat('en-CA', { timeZone: 'America/New_York' });
+    const todayET = fmt.format(new Date());
+    const shiftDays = (n) => {
+      const d = new Date();
+      d.setDate(d.getDate() - n);
+      return fmt.format(d);
+    };
+    setDatePreset(preset);
+    if (preset === 'today') { setDateFrom(todayET); setDateTo(todayET); }
+    else if (preset === 'yesterday') { const y = shiftDays(1); setDateFrom(y); setDateTo(y); }
+    else if (preset === '7d') { setDateFrom(shiftDays(6)); setDateTo(todayET); }
+    else if (preset === '30d') { setDateFrom(shiftDays(29)); setDateTo(todayET); }
+    else if (preset === '3mo') { setDateFrom(shiftDays(89)); setDateTo(todayET); }
+    else if (preset === 'all') { setDateFrom('2020-01-01'); setDateTo(todayET); }
+    setLoaded(false);
+  };
   const todayStr = new Date().toISOString().substring(0, 10);
 
   // Enhanced scorecards
@@ -203,9 +224,39 @@ export default function AdminTab({ user, userProfile, users, isAdmin, customers 
         <option value="all">👥 All Team ({visibleUsers.length})</option>
         {visibleUsers.map(u => <option key={u.id} value={u.id}>👤 {u.name} ({u.role})</option>)}
       </select>
-      <input type="date" value={dateFrom} onChange={e => handleDateChange('from', e.target.value)} className="px-2 py-1.5 rounded border text-xs" />
-      <span className="text-xs text-slate-400">to</span>
-      <input type="date" value={dateTo} onChange={e => handleDateChange('to', e.target.value)} className="px-2 py-1.5 rounded border text-xs" />
+      <div className="flex gap-1 rounded-lg border border-slate-200 p-0.5 bg-slate-50">
+        {[
+          ['today', 'Today'],
+          ['yesterday', 'Yesterday'],
+          ['7d', 'Last 7d'],
+          ['30d', 'Last 30d'],
+          ['3mo', 'Last 3mo'],
+          ['all', 'All time'],
+        ].map(([k, label]) => (
+          <button key={k} onClick={() => applyDatePreset(k)}
+            className={'px-2.5 py-1 rounded-md text-[11px] font-semibold transition ' +
+              (datePreset === k ? 'bg-blue-500 text-white shadow' : 'text-slate-600 hover:bg-white')}>
+            {label}
+          </button>
+        ))}
+        <button onClick={() => setDatePreset('custom')}
+          className={'px-2.5 py-1 rounded-md text-[11px] font-semibold transition ' +
+            (datePreset === 'custom' ? 'bg-blue-500 text-white shadow' : 'text-slate-600 hover:bg-white')}>
+          Custom
+        </button>
+      </div>
+      {datePreset === 'custom' && (
+        <>
+          <input type="date" value={dateFrom} onChange={e => handleDateChange('from', e.target.value)} className="px-2 py-1.5 rounded border text-xs" />
+          <span className="text-xs text-slate-400">to</span>
+          <input type="date" value={dateTo} onChange={e => handleDateChange('to', e.target.value)} className="px-2 py-1.5 rounded border text-xs" />
+        </>
+      )}
+      <div className="text-[11px] text-slate-500 font-semibold">
+        {dateFrom === dateTo
+          ? (dateFrom === new Intl.DateTimeFormat('en-CA', { timeZone: 'America/New_York' }).format(new Date()) ? 'Today (ET)' : dateFrom)
+          : (dateFrom + ' → ' + dateTo)}
+      </div>
       <button onClick={() => setLoaded(false)} className="px-3 py-1.5 bg-blue-500 text-white rounded-lg text-xs font-semibold">Refresh</button>
     </div>
 
@@ -250,36 +301,60 @@ export default function AdminTab({ user, userProfile, users, isAdmin, customers 
               </div>
             </div>
 
-            {/* Ticket Metrics */}
+            {/* Ticket Metrics — each bubble is clickable to drill into the underlying records */}
             <div className="grid grid-cols-4 gap-2 mb-3">
-              <div className="bg-blue-50 rounded-lg p-2 text-center">
+              <button
+                onClick={(e) => { e.stopPropagation(); setBubbleDrill({ userId: u.id, userName: u.name, type: 'inqueue', label: 'In Queue' }); }}
+                className="bg-blue-50 rounded-lg p-2 text-center hover:bg-blue-100 hover:ring-2 hover:ring-blue-300 transition cursor-pointer"
+                title="Click to see these tickets"
+              >
                 <div className="text-lg font-bold text-blue-600">{u.openT}</div>
                 <div className="text-[8px] text-slate-500 font-semibold">In Queue</div>
-              </div>
-              <div className="bg-emerald-50 rounded-lg p-2 text-center">
+              </button>
+              <button
+                onClick={(e) => { e.stopPropagation(); setBubbleDrill({ userId: u.id, userName: u.name, type: 'closed', label: 'Closed Tickets' }); }}
+                className="bg-emerald-50 rounded-lg p-2 text-center hover:bg-emerald-100 hover:ring-2 hover:ring-emerald-300 transition cursor-pointer"
+                title="Click to see these tickets"
+              >
                 <div className="text-lg font-bold text-emerald-600">{u.closedT}</div>
                 <div className="text-[8px] text-slate-500 font-semibold">Closed</div>
-              </div>
-              <div className={'rounded-lg p-2 text-center ' + (u.overdueCount > 0 ? 'bg-red-50' : 'bg-slate-50')}>
+              </button>
+              <button
+                onClick={(e) => { e.stopPropagation(); setBubbleDrill({ userId: u.id, userName: u.name, type: 'overdue', label: 'Overdue Tickets' }); }}
+                className={'rounded-lg p-2 text-center hover:ring-2 transition cursor-pointer ' + (u.overdueCount > 0 ? 'bg-red-50 hover:bg-red-100 hover:ring-red-300' : 'bg-slate-50 hover:bg-slate-100 hover:ring-slate-300')}
+                title="Click to see overdue tickets"
+              >
                 <div className={'text-lg font-bold ' + (u.overdueCount > 0 ? 'text-red-600' : 'text-slate-400')}>{u.overdueCount}</div>
                 <div className="text-[8px] text-slate-500 font-semibold">Overdue Now</div>
-              </div>
-              <div className="bg-purple-50 rounded-lg p-2 text-center">
+              </button>
+              <button
+                onClick={(e) => { e.stopPropagation(); setBubbleDrill({ userId: u.id, userName: u.name, type: 'created', label: 'Tickets Created' }); }}
+                className="bg-purple-50 rounded-lg p-2 text-center hover:bg-purple-100 hover:ring-2 hover:ring-purple-300 transition cursor-pointer"
+                title="Click to see tickets this user created"
+              >
                 <div className="text-lg font-bold text-purple-600">{u.createdT}</div>
                 <div className="text-[8px] text-slate-500 font-semibold">Created</div>
-              </div>
+              </button>
             </div>
 
-            {/* Rates & Quotes */}
+            {/* Rates & Quotes — also clickable */}
             <div className="grid grid-cols-2 gap-2 mb-3">
-              <div className="bg-cyan-50 rounded-lg p-2 text-center">
+              <button
+                onClick={(e) => { e.stopPropagation(); setBubbleDrill({ userId: u.id, userName: u.name, type: 'rates', label: 'Rates Added' }); }}
+                className="bg-cyan-50 rounded-lg p-2 text-center hover:bg-cyan-100 hover:ring-2 hover:ring-cyan-300 transition cursor-pointer"
+                title="Click to see rates added"
+              >
                 <div className="text-lg font-bold text-cyan-600">{u.ratesCompleted}</div>
                 <div className="text-[8px] text-slate-500 font-semibold">Rates Added</div>
-              </div>
-              <div className="bg-amber-50 rounded-lg p-2 text-center">
+              </button>
+              <button
+                onClick={(e) => { e.stopPropagation(); setBubbleDrill({ userId: u.id, userName: u.name, type: 'quotes', label: 'Quotes Created' }); }}
+                className="bg-amber-50 rounded-lg p-2 text-center hover:bg-amber-100 hover:ring-2 hover:ring-amber-300 transition cursor-pointer"
+                title="Click to see quotes created"
+              >
                 <div className="text-lg font-bold text-amber-600">{u.quotesCompleted}</div>
                 <div className="text-[8px] text-slate-500 font-semibold">Quotes Created</div>
-              </div>
+              </button>
             </div>
 
             {/* Overdue History */}
@@ -329,6 +404,124 @@ export default function AdminTab({ user, userProfile, users, isAdmin, customers 
               {missing.map(u => (
                 <span key={u.id} className="px-3 py-1.5 bg-red-100 rounded-lg text-xs font-semibold text-red-800">{u.name}</span>
               ))}
+            </div>
+          </div>
+        );
+      })()}
+
+      {/* BUBBLE DRILL-DOWN MODAL — opens when you click any metric bubble on a scorecard.
+          Shows the actual tickets / rates / quotes that make up the count. */}
+      {bubbleDrill && (() => {
+        const uid = bubbleDrill.userId;
+        const type = bubbleDrill.type;
+        let rows = [];
+        let columns = [];
+        if (type === 'inqueue') {
+          rows = tickets.filter(t => t.assigned_to === uid && t.status !== 'Closed');
+          columns = ['ticket_number', 'title', 'status', 'priority', 'due_date'];
+        } else if (type === 'closed') {
+          rows = tickets.filter(t => t.assigned_to === uid && t.status === 'Closed');
+          columns = ['ticket_number', 'title', 'closed_at', 'due_date'];
+        } else if (type === 'overdue') {
+          rows = tickets.filter(t => t.assigned_to === uid && t.due_date && t.due_date < todayStr && t.status !== 'Closed');
+          columns = ['ticket_number', 'title', 'status', 'due_date'];
+        } else if (type === 'created') {
+          rows = tickets.filter(t => t.created_by === uid);
+          columns = ['ticket_number', 'title', 'assigned_to', 'status', 'created_at'];
+        } else if (type === 'rates') {
+          // Rates are counted via audit — resolve back to the actual rate rows when possible.
+          const rateIds = auditLogs
+            .filter(a => a.changed_by === uid && a.table_name === 'shipping_rates' && a.action === 'create')
+            .map(a => a.record_id);
+          rows = rates.filter(r => rateIds.includes(r.id));
+          if (rows.length === 0) {
+            // Fallback: show the audit rows themselves so user still sees what was created
+            rows = auditLogs
+              .filter(a => a.changed_by === uid && a.table_name === 'shipping_rates' && a.action === 'create')
+              .map(a => ({ id: a.id, vendor_name: '(rate created)', origin: a.record_id, destination: '', created_at: a.created_at }));
+          }
+          columns = ['vendor_name', 'origin', 'destination', 'rate_amount', 'created_at'];
+        } else if (type === 'quotes') {
+          rows = quotes.filter(q => q.created_by === uid);
+          columns = ['quote_number', 'customer_name', 'total_amount', 'created_at'];
+        }
+
+        const friendlyCol = (c) => ({
+          ticket_number: 'Ticket #', title: 'Title', status: 'Status', priority: 'Priority',
+          due_date: 'Due', closed_at: 'Closed', created_at: 'Created', assigned_to: 'Assigned',
+          vendor_name: 'Vendor', origin: 'Origin', destination: 'Destination', rate_amount: 'Rate',
+          quote_number: 'Quote #', customer_name: 'Customer', total_amount: 'Total',
+        })[c] || c;
+
+        const fmtCell = (col, val) => {
+          if (val == null) return '—';
+          if (col === 'assigned_to' || col === 'created_by') return getUserName(val) || String(val).substring(0, 8) + '…';
+          if (col === 'created_at' || col === 'closed_at') {
+            try { return new Date(val).toLocaleString([], { month: 'short', day: 'numeric', year: 'numeric', hour: '2-digit', minute: '2-digit' }); } catch { return String(val); }
+          }
+          if (col === 'title') return String(val).substring(0, 70);
+          if (col === 'total_amount' || col === 'rate_amount') return Number(val).toLocaleString() + ' ' + (val.currency || '');
+          return String(val);
+        };
+
+        return (
+          <div
+            className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-sm"
+            onClick={() => setBubbleDrill(null)}
+          >
+            <div
+              className="bg-white rounded-xl shadow-2xl w-full max-w-4xl max-h-[85vh] flex flex-col"
+              onClick={(e) => e.stopPropagation()}
+            >
+              <div className="flex items-center justify-between px-5 py-3 border-b border-slate-200">
+                <div>
+                  <div className="text-base font-extrabold text-slate-900">{bubbleDrill.userName} — {bubbleDrill.label}</div>
+                  <div className="text-[11px] text-slate-500">{rows.length} {rows.length === 1 ? 'item' : 'items'} · {dateFrom === dateTo ? dateFrom : (dateFrom + ' → ' + dateTo)}</div>
+                </div>
+                <button
+                  onClick={() => setBubbleDrill(null)}
+                  className="px-3 py-1.5 rounded-lg bg-slate-100 hover:bg-slate-200 text-xs font-semibold"
+                >
+                  ✕ Close
+                </button>
+              </div>
+              <div className="flex-1 overflow-auto">
+                {rows.length === 0 ? (
+                  <div className="p-8 text-center text-sm text-slate-400">No records to show.</div>
+                ) : (
+                  <table className="w-full border-collapse text-xs">
+                    <thead className="sticky top-0 bg-slate-50 shadow-sm">
+                      <tr>
+                        {columns.map(c => (
+                          <th key={c} className="px-3 py-2 text-left text-[10px] uppercase font-bold text-slate-500">{friendlyCol(c)}</th>
+                        ))}
+                        {(type === 'inqueue' || type === 'closed' || type === 'overdue' || type === 'created') && (
+                          <th className="px-3 py-2 text-left text-[10px] uppercase font-bold text-slate-500">Action</th>
+                        )}
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {rows.map(r => (
+                        <tr key={r.id} className="border-b border-slate-100 hover:bg-slate-50">
+                          {columns.map(c => (
+                            <td key={c} className="px-3 py-2 text-slate-700">{fmtCell(c, r[c])}</td>
+                          ))}
+                          {(type === 'inqueue' || type === 'closed' || type === 'overdue' || type === 'created') && (
+                            <td className="px-3 py-2">
+                              <button
+                                onClick={() => { setBubbleDrill(null); openTicketDetail(r); }}
+                                className="px-2 py-0.5 rounded bg-blue-500 text-white text-[10px] font-semibold hover:bg-blue-600"
+                              >
+                                Open
+                              </button>
+                            </td>
+                          )}
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                )}
+              </div>
             </div>
           </div>
         );
@@ -880,8 +1073,15 @@ export default function AdminTab({ user, userProfile, users, isAdmin, customers 
                       const lastLoginAt = lsRow.last_login_at || uSess[0]?.login_at;
                       const lastLogin = lastLoginAt ? new Date(lastLoginAt).toLocaleString([], { month:'short', day:'numeric', hour:'2-digit', minute:'2-digit' }) : '—';
                       const isOnline = !!lsRow.is_online;
-                      const todayET = Number(lsRow.logins_today_et || 0);
-                      const yesterdayET = Number(lsRow.logins_yesterday_et || 0);
+                      // Belt-and-suspenders: if login_events count is 0 but the user actually has an
+                      // active session today (from the older user_sessions table), use the session count.
+                      // Prevents the "0 logins today" bug when login_events writes fail silently.
+                      const etTodayStr = new Intl.DateTimeFormat('en-CA', { timeZone: 'America/New_York' }).format(new Date());
+                      const etYesterdayStr = (function() { const d = new Date(); d.setDate(d.getDate() - 1); return new Intl.DateTimeFormat('en-CA', { timeZone: 'America/New_York' }).format(d); })();
+                      const sessionsTodayCount = uSess.filter(s => (s.date || '') === etTodayStr).length;
+                      const sessionsYesterdayCount = uSess.filter(s => (s.date || '') === etYesterdayStr).length;
+                      const todayET = Math.max(Number(lsRow.logins_today_et || 0), sessionsTodayCount);
+                      const yesterdayET = Math.max(Number(lsRow.logins_yesterday_et || 0), sessionsYesterdayCount);
                       const sevenDayET = Number(lsRow.logins_last_7d_et || 0);
                       return (
                         <tr key={u.id} className="border-b border-slate-50 hover:bg-blue-50 cursor-pointer" onClick={() => setSelUser(u.id)}>

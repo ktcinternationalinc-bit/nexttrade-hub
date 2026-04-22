@@ -1858,18 +1858,20 @@ function runSection23_Session1Features() {
   // Completed events now offer an Edit Notes / Add Notes button
   assert(/Edit Notes/.test(calSrc), '23.R3.1a "Edit Notes" label present for completed events');
   assert(/Add Notes/.test(calSrc), '23.R3.1b "Add Notes" label for completed events with no notes');
-  // checkInWithNotes handles both modes
-  assert(/wasCompleted = !!notesEvent\.completed/.test(calSrc),
-         '23.R3.2a checkInWithNotes branches on wasCompleted');
-  assert(/notesChanged = notes !== oldNotes/.test(calSrc),
-         '23.R3.2b detects whether notes actually changed');
-  // No duplicate daily_log on reopen-without-edit
-  assert(/if \(notes && notesChanged\)/.test(calSrc),
-         '23.R3.2c daily_log insert gated on (notes && notesChanged) — no duplicate archival on re-save');
+  // postNewNote (the real handler after the S4 refactor) branches on wasCompleted
+  assert(/const wasCompleted = !!notesEvent\.completed/.test(calSrc),
+         '23.R3.2a postNewNote branches on wasCompleted');
+  // Each submission creates a new note row — user explicitly clicks Post, so no
+  // need for a notesChanged-style dedup inside the handler itself.
+  assert(/insert\(\{[\s\S]*?event_id: notesEvent\.id[\s\S]*?note_text: text/.test(calSrc),
+         '23.R3.2b each Post click creates a dedicated note row (dedup via explicit click gate, not string compare)');
+  // Every posted note archives to daily_log (explicit click => no duplicate risk)
+  assert(/await dbInsert\('daily_log',[\s\S]*?log_category: 'meeting'/.test(calSrc),
+         '23.R3.2c daily_log insert fires on each posted note');
   // Modal header reflects mode
   assert(/Edit Meeting Notes/.test(calSrc), '23.R3.3a modal header offers Edit state');
-  // Initial check-in still works (not accidentally regressed)
-  assert(/update\.completed = true/.test(calSrc) && /update\.event_status = 'attended'/.test(calSrc),
+  // Initial check-in still works — postNewNote stamps attendance on first note
+  assert(/completed: true[\s\S]*?event_status: 'attended'/.test(calSrc),
          '23.R3.4a initial check-in still stamps completed + attended');
 }
 
@@ -3353,8 +3355,10 @@ function runSection29_CalendarTabAudit() {
   // =========================================================
   // Modal close — clears stale state
   // =========================================================
-  const closeBlock = cSrc.match(/const closeModal = \(\) => \{ setNotesEvent\(null\); setMeetingNotes\(''\); \};/);
-  assert(closeBlock, '29.modal.1a single closeModal handler defined');
+  // closeModal may reset additional modal-local state (newNoteKind, editing note state) —
+  // the invariant we care about is that it clears BOTH notesEvent and meetingNotes.
+  const closeBlock = cSrc.match(/const closeModal = \(\) => \{[^}]*setNotesEvent\(null\)[^}]*setMeetingNotes\(''\)[^}]*\};/);
+  assert(closeBlock, '29.modal.1a single closeModal handler defined (clears notesEvent + meetingNotes at minimum)');
 
   // Both backdrop click AND Cancel button must use closeModal
   const backdropClose = /onClick=\{closeModal\}/g;
@@ -3369,35 +3373,44 @@ function runSection29_CalendarTabAudit() {
     '29.modal.2b no remaining onClick handlers that clear notesEvent without also clearing meetingNotes');
 
   // =========================================================
-  // checkInWithNotes — first-time check-in vs later edit branching
+  // postNewNote — first-time attendance stamp vs. subsequent note edit
+  //
+  // NOTE: this test block previously targeted `checkInWithNotes` but after the
+  // S4 refactor the note-handling logic moved to `postNewNote` while
+  // `checkInWithNotes` became a thin back-compat shim. The invariants
+  // (wasCompleted capture, attendance stamping, daily_log archive, differentiated
+  // verb) are preserved — just in a different function. These tests reflect that.
   // =========================================================
-  const cinBlock = cSrc.match(/const checkInWithNotes = async \(\) =>[\s\S]*?^\s{2}\};/m);
-  assert(cinBlock, '29.cin.0a checkInWithNotes block found');
-  const cb = cinBlock[0];
+  const pnnBlock = cSrc.match(/const postNewNote = async \(\) =>[\s\S]*?^\s{2}\};/m);
+  assert(pnnBlock, '29.cin.0a postNewNote block found');
+  const cb = pnnBlock[0];
 
   // Detects whether event was already completed
-  assert(/var wasCompleted = !!notesEvent\.completed/.test(cb),
+  assert(/const wasCompleted = !!notesEvent\.completed/.test(cb),
     '29.cin.1a wasCompleted captured from event state');
 
-  // Detects whether notes actually changed (prevents duplicate daily_log on reopen-and-save)
-  assert(/var notesChanged = notes !== oldNotes/.test(cb),
-    '29.cin.1b notesChanged compared against trimmed oldNotes');
+  // The inserted note row marks the "note text" — the equivalent of "notesChanged"
+  // in the old architecture is implicit because each call to postNewNote creates
+  // a new row (postNewNote is only invoked when the user explicitly submits).
+  assert(/insert\(\{[\s\S]*?event_id: notesEvent\.id[\s\S]*?note_text: text/.test(cb),
+    '29.cin.1b each submission creates a new note row (no accidental duplicates — user must click Post)');
 
-  // First-time check-in stamps attendance fields
-  assert(/if \(!wasCompleted\) \{[\s\S]*?update\.completed = true[\s\S]*?update\.event_status = 'attended'[\s\S]*?update\.checked_in_at[\s\S]*?update\.checked_in_by/.test(cb),
+  // First-time post stamps attendance fields on the parent event
+  assert(/if \(!wasCompleted\) \{[\s\S]*?completed: true[\s\S]*?event_status: 'attended'[\s\S]*?checked_in_at[\s\S]*?checked_in_by/.test(cb),
     '29.cin.2a first-time check-in stamps completed + event_status + checked_in_at + checked_in_by');
 
-  // Edit-after-completion does NOT overwrite attendance stamps
-  assert(/var update = \{ meeting_notes: notes \|\| null \};/.test(cb),
-    '29.cin.2b base update only includes meeting_notes (attendance fields conditionally added)');
+  // Edit-after-completion (posting an additional note) does NOT overwrite
+  // attendance stamps — the `if (!wasCompleted)` gate ensures it
+  assert(/if \(!wasCompleted\)/.test(cb),
+    '29.cin.2b attendance stamps only applied when !wasCompleted (later notes don\'t overwrite)');
 
-  // Daily log gated on (notes && notesChanged) — no duplicates
-  assert(/if \(notes && notesChanged\)/.test(cb),
-    '29.cin.3a daily_log archive only when notes exist AND changed');
+  // Daily log archive fires on every post (with different verb for first vs later)
+  assert(/await dbInsert\('daily_log',[\s\S]*?log_category: 'meeting'/.test(cb),
+    '29.cin.3a each posted note archives to daily_log');
 
   // Different verb for first-time vs update
-  assert(/var verb = wasCompleted \? '📋 Meeting notes updated — ' : '📋 Meeting notes — '/.test(cb),
-    '29.cin.4a daily_log entry verb reflects mode (updated vs new)');
+  assert(/wasCompleted \? '📋 Added to meeting notes — ' : '📋 Meeting notes — '/.test(cb),
+    '29.cin.4a daily_log entry verb reflects mode (added-to vs new check-in)');
 
   // =========================================================
   // markEventStatus — postponed sets completed:false
@@ -3441,7 +3454,7 @@ function runSection29_CalendarTabAudit() {
     '29.r3.3a edit-mode header (existing notes)');
   assert(/Add Meeting Notes \/ إضافة ملاحظات/.test(cSrc),
     '29.r3.3b add-mode header (no existing notes)');
-  assert(/Check In \/ تسجيل حضور/.test(cSrc),
+  assert(/Check In \/ تسجيل (ال)?حضور/.test(cSrc),
     '29.r3.3c first-time check-in header');
 
   // =========================================================
@@ -4247,8 +4260,8 @@ function runSection35_CalendarTabR1() {
     '35.cancel.1a markEventStatus(attended|cancelled) cancels pending reminders');
   assert(/const completeEvent[\s\S]*?cancelEventReminders\(ev\.id\)/.test(cSrc),
     '35.cancel.1b completeEvent cancels pending reminders');
-  assert(/checkInWithNotes[\s\S]*?if \(!wasCompleted\)[\s\S]*?cancelEventReminders\(notesEvent\.id\)/.test(cSrc),
-    '35.cancel.1c first-time check-in cancels reminders (not on re-edit — already sent)');
+  assert(/postNewNote[\s\S]*?if \(!wasCompleted\)[\s\S]*?cancelEventReminders\(notesEvent\.id\)/.test(cSrc),
+    '35.cancel.1c first-time note post cancels reminders (not on subsequent notes — already sent)');
 
   // ---------- openEditEvent / saveEditEvent ----------
   assert(/const openEditEvent = \(ev\) =>/.test(cSrc), '35.edit.0a openEditEvent defined');
@@ -4312,9 +4325,11 @@ function runSection35_CalendarTabR1() {
   // useEffect mount (audit from section 29) should still be intact
   assert(/useEffect\(\(\) => \{ loadEvents\(\); \}, \[\]\)/.test(cSrc),
     '35.regress.1a loadEvents useEffect mount pattern preserved (section 29 fix)');
-  // Modal close still clears stale state (section 29 fix)
-  assert(/const closeModal = \(\) => \{ setNotesEvent\(null\); setMeetingNotes\(''\); \};/.test(cSrc),
-    '35.regress.1b closeModal stale-state fix preserved');
+  // Modal close still clears stale state (section 29 fix).
+  // Accepts additional clears (newNoteKind, editingNoteId, etc.) as long as the
+  // essential two — notesEvent and meetingNotes — are still reset.
+  assert(/const closeModal = \(\) => \{[^}]*setNotesEvent\(null\)[^}]*setMeetingNotes\(''\)[^}]*\};/.test(cSrc),
+    '35.regress.1b closeModal stale-state fix preserved (clears notesEvent + meetingNotes at minimum)');
 }
 
 try { runSection35_CalendarTabR1(); } catch(e) {
@@ -4725,8 +4740,8 @@ function runSection40_ProactiveIntelligence() {
   assert(paths.indexOf('/api/nadia/watch') !== -1,
     '40.cron.1a /api/nadia/watch registered in vercel.json');
   var nwCron = (vc.crons || []).find(function(c) { return c.path === '/api/nadia/watch'; });
-  assert(nwCron && /\*\/30 /.test(nwCron.schedule || ''),
-    '40.cron.1b scheduled every 30 minutes', 'schedule=' + (nwCron && nwCron.schedule));
+  assert(nwCron && /\*\/5 /.test(nwCron.schedule || ''),
+    '40.cron.1b scheduled every 5 minutes (upgraded from 30-min in session 8)', 'schedule=' + (nwCron && nwCron.schedule));
   // All 4 crons preserved from Session 2
   assert(paths.indexOf('/api/categorize') !== -1, '40.cron.2a categorize preserved');
   assert(paths.indexOf('/api/events/generate-occurrences') !== -1, '40.cron.2b generator preserved');

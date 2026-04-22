@@ -370,8 +370,8 @@ export default function ShippingRatesTab({ toast, user, userProfile, isAdmin, cu
       setBookingModal(null); setF(prev => ({...prev, bookRef:'', bookCustomer:'', bookOrder:'', bookNotes:''})); await loadData();
     } catch (err) { toast ? toast.error(err.message) : alert(err.message); }
   };
-  const [rateHistoryMode, setRateHistoryMode] = useState('active');
-  const [rateHistoryDf, setRateHistoryDf] = useState('');
+  const [rateHistoryMode, setRateHistoryMode] = useState('1y');
+  const [rateHistoryDf, setRateHistoryDf] = useState(() => new Date(Date.now() - 365 * 86400000).toISOString().substring(0, 10));
   const [rateHistoryDt, setRateHistoryDt] = useState('');
 
   const handleSaveQuote = async () => {
@@ -988,11 +988,35 @@ Date: ${today}`;
       {chartSorted.length>1&&(<div className="bg-white rounded-xl p-4 mb-4 border border-slate-200"><h3 className="text-sm font-bold mb-2">📈 Rate Trend</h3><div className="flex items-end gap-1 h-[120px]">{chartSorted.map((d,i)=>{const mx=Math.max(...chartSorted.map(x=>x.max)); const h=mx>0?(d.avg/mx)*100:0; return (<div key={d.month} className="flex-1 flex flex-col items-center" title={d.month+': avg $'+d.avg}><div className="text-[8px] text-slate-400 mb-1">${d.avg}</div><div className="w-full rounded-t" style={{height:h+'%',background:i===chartSorted.length-1?'#0ea5e9':'#cbd5e1',minHeight:4}}></div><div className="text-[8px] text-slate-400 mt-1 -rotate-45">{d.month.substring(5)}</div></div>);})}</div></div>)}
       {Object.keys(byVL).length>0&&(<div className="bg-white rounded-xl p-4 mb-4 border border-slate-200"><h3 className="text-sm font-bold mb-2">🏆 Vendor Comparison</h3><div className="overflow-auto"><table className="w-full border-collapse text-xs"><thead><tr className="bg-slate-50"><th className="px-3 py-2 text-left text-[10px]">Vendor / Line</th><th className="px-3 py-2 text-right text-[10px]">Best Rate</th><th className="px-3 py-2 text-right text-[10px]">Transit</th><th className="px-3 py-2 text-right text-[10px]">Free Days</th><th className="px-3 py-2 text-[10px]">Expiry</th></tr></thead><tbody>{Object.entries(byVL).sort((a,b)=>(a[1][0]?.rate_amount||Infinity)-(b[1][0]?.rate_amount||Infinity)).map(([key,vr],i)=>{const best=vr.reduce((a,b)=>(a.rate_amount||Infinity)<(b.rate_amount||Infinity)?a:b); return (<tr key={key} className={'border-b border-slate-50 '+(i===0?'bg-emerald-50':'')}><td className="px-3 py-2 font-semibold">{i===0&&<span className="text-emerald-500 mr-1">★</span>}{key}</td><td className="px-3 py-2 text-right font-bold text-blue-600">{fCur(best.rate_amount,best.currency)}</td><td className="px-3 py-2 text-right">{best.transit_days?best.transit_days+'d':'—'}</td><td className="px-3 py-2 text-right">{best.free_days||'—'}</td><td className="px-3 py-2"><ExpiryBadge date={best.expiry_date}/></td></tr>);})}</tbody></table></div></div>)}
       {routeQuotes.length>0&&(<div className="bg-white rounded-xl p-4 mt-4 border border-slate-200"><h3 className="text-sm font-bold mb-2">📋 Quotes ({routeQuotes.length})</h3>{routeQuotes.map(qt=>(<div key={qt.id} className="flex justify-between items-center py-2 border-b border-slate-50"><div><div className="text-xs font-semibold">{qt.quote_number} — {qt.customer_name}</div><div className="text-[10px] text-slate-500">{qt.quote_date} • {qt.status}</div></div><div className="flex items-center gap-3"><div className="text-right"><div className="text-xs">Client: <span className="font-bold">{fCur(qt.client_total,qt.currency)}</span></div><div className="text-[10px]" style={{color:qt.profit>0?'#10b981':'#ef4444'}}>Profit: {fCur(qt.profit,qt.currency)}</div></div><button onClick={()=>setPreviewQuote(qt)} className="px-2 py-1 rounded border border-purple-300 text-purple-600 text-[10px]">📄</button></div></div>))}</div>)}
-      <div className="bg-white rounded-xl p-4 border border-slate-200 mt-4"><div className="flex justify-between items-center mb-2"><h3 className="text-sm font-bold">All Rates</h3><div className="flex gap-1"><button onClick={()=>{setRequestQuoteData({vendor:null,origin:selectedRoute.origin,destination:selectedRoute.destination,container:'40ft'});}} className="px-3 py-1 bg-cyan-500 text-white rounded text-[10px] font-semibold">📋 Request Rate</button><button onClick={()=>{setF({origin:selectedRoute.origin,destination:selectedRoute.destination});setView('add_rate');}} className="px-3 py-1 bg-blue-500 text-white rounded text-[10px] font-semibold">+ Add Rate</button></div></div>
+      <div className="bg-white rounded-xl p-4 border border-slate-200 mt-4"><div className="flex justify-between items-center mb-2"><h3 className="text-sm font-bold">Historical Rates</h3><div className="flex gap-1">{(() => {
+        // CSV export of the currently-filtered rate history
+        const exportCSV = (rows) => {
+          const headers = ['Effective Date','Vendor','Shipping Line','Container','Rate','Currency','Total Cost','Transit Days','Free Days','Expiry Date','Status','Booked','Shipment Ref','Booking Date'];
+          const esc = (v) => { if (v == null) return ''; const s = String(v); return /[",\n]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s; };
+          const lines = [headers.join(',')];
+          rows.forEach(r => {
+            lines.push([
+              r.effective_date || '', r.vendor_name || '', r.shipping_line || '',
+              r.container_type || '', r.rate_amount || 0, r.currency || 'USD',
+              r.total_cost || 0, r.transit_days || '', r.free_days || '',
+              r.expiry_date || '', isExpired(r.expiry_date) ? 'Expired' : 'Active',
+              r.booked ? 'Yes' : 'No', r.shipment_reference || '', r.booking_date || '',
+            ].map(esc).join(','));
+          });
+          const blob = new Blob([lines.join('\n')], { type: 'text/csv;charset=utf-8' });
+          const url = URL.createObjectURL(blob);
+          const a = document.createElement('a');
+          a.href = url;
+          a.download = 'rates_' + selectedRoute.origin + '_to_' + selectedRoute.destination + '_' + new Date().toISOString().substring(0, 10) + '.csv';
+          a.click();
+          URL.revokeObjectURL(url);
+        };
+        return (<><button onClick={() => { var filtered = routeHistory; if (rateHistoryMode === 'active') filtered = filtered.filter(r => !isExpired(r.expiry_date)); else if (rateHistoryDf) filtered = filtered.filter(r => (r.effective_date || '') >= rateHistoryDf); if (rateHistoryDt) filtered = filtered.filter(r => (r.effective_date || '') <= rateHistoryDt); exportCSV(filtered); }} className="px-3 py-1 bg-emerald-500 text-white rounded text-[10px] font-semibold" title="Download as CSV">📥 Export</button><button onClick={()=>{setRequestQuoteData({vendor:null,origin:selectedRoute.origin,destination:selectedRoute.destination,container:'40ft'});}} className="px-3 py-1 bg-cyan-500 text-white rounded text-[10px] font-semibold">📋 Request Rate</button><button onClick={()=>{setF({origin:selectedRoute.origin,destination:selectedRoute.destination});setView('add_rate');}} className="px-3 py-1 bg-blue-500 text-white rounded text-[10px] font-semibold">+ Add Rate</button></>);
+      })()}</div></div>
       <div className="flex gap-1 mb-2 flex-wrap items-center">
         <span className="text-[10px] text-slate-500 mr-1">Filter:</span>
-        {[['active','✅ Active'],['3m','3 Months'],['1y','1 Year'],['3y','3 Years'],['all','All Time'],['custom','Custom']].map(([v,l])=>(
-          <button key={v} onClick={()=>{setRateHistoryMode(v); if(v==='3m'){setRateHistoryDf(new Date(Date.now()-90*86400000).toISOString().substring(0,10));setRateHistoryDt('');} else if(v==='1y'){setRateHistoryDf(new Date(Date.now()-365*86400000).toISOString().substring(0,10));setRateHistoryDt('');} else if(v==='3y'){setRateHistoryDf(new Date(Date.now()-1095*86400000).toISOString().substring(0,10));setRateHistoryDt('');} else {setRateHistoryDf('');setRateHistoryDt('');}}}
+        {[['active','✅ Active Only'],['3m','3 Months'],['1y','1 Year'],['3y','3 Years'],['all','All Time (incl. expired)'],['custom','Custom']].map(([v,l])=>(
+          <button key={v} onClick={()=>{setRateHistoryMode(v); if(v==='3m'){setRateHistoryDf(new Date(Date.now()-90*86400000).toISOString().substring(0,10));setRateHistoryDt('');} else if(v==='1y'){setRateHistoryDf(new Date(Date.now()-365*86400000).toISOString().substring(0,10));setRateHistoryDt('');} else if(v==='3y'){setRateHistoryDf(new Date(Date.now()-1095*86400000).toISOString().substring(0,10));setRateHistoryDt('');} else if(v==='active'){setRateHistoryDf('');setRateHistoryDt('');} else {setRateHistoryDf('');setRateHistoryDt('');}}}
             className={'px-2 py-1 rounded text-[10px] font-semibold '+(rateHistoryMode===v?'bg-blue-500 text-white':'bg-slate-100 text-slate-600')}>{l}</button>
         ))}
         {rateHistoryMode==='custom'&&(<><input type="date" value={rateHistoryDf} onChange={e=>setRateHistoryDf(e.target.value)} className="px-2 py-1 border rounded text-[10px] w-28" /><span className="text-[10px]">→</span><input type="date" value={rateHistoryDt} onChange={e=>setRateHistoryDt(e.target.value)} className="px-2 py-1 border rounded text-[10px] w-28" /></>)}
@@ -1003,13 +1027,64 @@ Date: ${today}`;
         else if (rateHistoryDf) filtered = filtered.filter(r => (r.effective_date || '') >= rateHistoryDf);
         if (rateHistoryDt) filtered = filtered.filter(r => (r.effective_date || '') <= rateHistoryDt);
         var bestRate = filtered.length > 0 ? filtered.reduce((a,b) => (a.rate_amount||Infinity) < (b.rate_amount||Infinity) ? a : b) : null;
+        var expiredCount = filtered.filter(r => isExpired(r.expiry_date)).length;
+        var bookedCount = filtered.filter(r => r.booked).length;
         return (<>
         {bestRate && rateHistoryMode !== 'active' && <div className="bg-emerald-50 rounded-lg px-3 py-2 mb-2 border border-emerald-200 flex justify-between items-center">
           <span className="text-[10px] font-bold text-emerald-700">🏆 Best rate in period: {bestRate.vendor_name} {bestRate.shipping_line ? '/ '+bestRate.shipping_line : ''}</span>
           <span className="text-sm font-extrabold text-emerald-600">{fCur(bestRate.rate_amount, bestRate.currency)} <span className="text-[10px] font-normal">({bestRate.effective_date})</span></span>
         </div>}
-      <div className="overflow-auto max-h-[400px] rounded-lg border border-slate-200"><table className="w-full border-collapse text-xs"><thead className="sticky top-0"><tr className="bg-slate-50"><th className="px-2 py-2 text-[10px] text-left">Date</th><th className="px-2 py-2 text-[10px] text-left">Vendor</th><th className="px-2 py-2 text-[10px] text-left">Line</th><th className="px-2 py-2 text-[10px]">Container</th><th className="px-2 py-2 text-[10px] text-right">Rate</th><th className="px-2 py-2 text-[10px] text-right">Total</th><th className="px-2 py-2 text-[10px]">Expiry</th><th className="px-2 py-2 text-[10px]"></th></tr></thead><tbody>{filtered.map(r=>{const exp=isExpired(r.expiry_date); const isBest=bestRate&&r.id===bestRate.id; return (<tr key={r.id} className={'border-b border-slate-50 '+(isBest?'bg-emerald-50 ':exp?'bg-red-50 ':'')+(r.booked?' bg-green-50':'')}><td className="px-2 py-1.5">{r.effective_date}</td><td className="px-2 py-1.5 font-semibold">{isBest&&<span className="text-emerald-500 mr-1">★</span>}{r.vendor_name}</td><td className="px-2 py-1.5">{r.shipping_line||'—'}</td><td className="px-2 py-1.5 text-center"><span className="px-1.5 py-0.5 bg-blue-100 text-blue-700 rounded text-[9px]">{r.container_type}</span></td><td className={'px-2 py-1.5 text-right font-bold '+(exp?'text-red-400 line-through':'text-blue-600')}>{fCur(r.rate_amount,r.currency)}</td><td className="px-2 py-1.5 text-right font-bold text-amber-600">{fCur(r.total_cost,r.currency)}</td><td className="px-2 py-1.5"><ExpiryBadge date={r.expiry_date}/></td><td className="px-2 py-1.5 flex gap-1">{!exp&&<button onClick={()=>handleMarkBooked(r)} className="px-2 py-0.5 rounded border border-green-300 text-green-600 text-[10px]">Book</button>}<button onClick={()=>{setEditingRate(r);setF({origin:r.origin,destination:r.destination,vendorName:r.vendor_name,shippingLine:r.shipping_line,transportMode:r.transport_mode,rateType:r.rate_type||'',containerType:r.container_type,rateAmount:r.rate_amount,currency:r.currency,transitDays:r.transit_days,freeDays:r.free_days,portFees:r.port_fees,thcFees:r.thc_fees,docFees:r.documentation_fees,customsFees:r.customs_fees,otherFees:r.other_fees,otherFeesDesc:r.other_fees_desc,effectiveDate:r.effective_date,expiryDate:r.expiry_date,pol:r.port_of_loading,pod:r.port_of_discharge,notes:r.notes,booked:r.booked,shipmentRef:r.shipment_reference,bookingDate:r.booking_date,bookingNotes:r.booking_notes});setView('add_rate');}} className="px-2 py-0.5 rounded border border-blue-300 text-blue-600 text-[10px]">Edit</button>{isAdmin&&<button onClick={()=>handleDeleteRate(r)} className="px-2 py-0.5 rounded border border-red-300 text-red-500 text-[10px]">Del</button>}</td></tr>);})}</tbody></table></div>
-      <div className="text-[10px] text-slate-400 mt-1">Showing {filtered.length} of {routeHistory.length} rates</div>
+      <div className="overflow-auto max-h-[420px] rounded-lg border border-slate-200">
+        <table className="w-full border-collapse text-xs">
+          <thead className="sticky top-0 z-10"><tr className="bg-slate-50">
+            <th className="px-2 py-2 text-[10px] text-left">Date</th>
+            <th className="px-2 py-2 text-[10px] text-left">Vendor / Forwarder</th>
+            <th className="px-2 py-2 text-[10px] text-left">Shipping Line</th>
+            <th className="px-2 py-2 text-[10px]">Container</th>
+            <th className="px-2 py-2 text-[10px] text-right">Rate</th>
+            <th className="px-2 py-2 text-[10px] text-right">Total</th>
+            <th className="px-2 py-2 text-[10px] text-left">Status</th>
+            <th className="px-2 py-2 text-[10px] text-left">Booked</th>
+            <th className="px-2 py-2 text-[10px]"></th>
+          </tr></thead>
+          <tbody>{filtered.map(r => {
+            const exp = isExpired(r.expiry_date);
+            const isBest = bestRate && r.id === bestRate.id;
+            return (<tr key={r.id} className={'border-b border-slate-50 ' + (isBest ? 'bg-emerald-50 ' : exp ? 'bg-slate-50 ' : '') + (r.booked ? ' bg-green-50' : '')}>
+              <td className="px-2 py-1.5">{r.effective_date}</td>
+              <td className="px-2 py-1.5 font-semibold">{isBest && <span className="text-emerald-500 mr-1">★</span>}{r.vendor_name}</td>
+              <td className="px-2 py-1.5">{r.shipping_line || '—'}</td>
+              <td className="px-2 py-1.5 text-center"><span className="px-1.5 py-0.5 bg-blue-100 text-blue-700 rounded text-[9px]">{r.container_type}</span></td>
+              <td className={'px-2 py-1.5 text-right font-bold ' + (exp ? 'text-slate-500' : 'text-blue-600')}>{fCur(r.rate_amount, r.currency)}</td>
+              <td className={'px-2 py-1.5 text-right font-bold ' + (exp ? 'text-slate-500' : 'text-amber-600')}>{fCur(r.total_cost, r.currency)}</td>
+              <td className="px-2 py-1.5">
+                {exp
+                  ? <span className="px-1.5 py-0.5 bg-red-100 text-red-700 rounded text-[9px] font-bold" title={'Expired ' + (r.expiry_date || '')}>EXPIRED</span>
+                  : <ExpiryBadge date={r.expiry_date} />}
+              </td>
+              <td className="px-2 py-1.5">
+                {r.booked
+                  ? <div className="flex flex-col">
+                      <span className="px-1.5 py-0.5 bg-green-100 text-green-700 rounded text-[9px] font-bold w-fit">✓ BOOKED</span>
+                      {r.shipment_reference && <span className="text-[9px] text-slate-500 mt-0.5">Ref: {r.shipment_reference}</span>}
+                      {r.booking_date && <span className="text-[9px] text-slate-400">{r.booking_date}</span>}
+                    </div>
+                  : <span className="text-[9px] text-slate-400">—</span>}
+              </td>
+              <td className="px-2 py-1.5 flex gap-1">
+                {!exp && !r.booked && <button onClick={() => handleMarkBooked(r)} className="px-2 py-0.5 rounded border border-green-300 text-green-600 text-[10px]">Book</button>}
+                <button onClick={() => { setEditingRate(r); setF({ origin: r.origin, destination: r.destination, vendorName: r.vendor_name, shippingLine: r.shipping_line, transportMode: r.transport_mode, rateType: r.rate_type || '', containerType: r.container_type, rateAmount: r.rate_amount, currency: r.currency, transitDays: r.transit_days, freeDays: r.free_days, portFees: r.port_fees, thcFees: r.thc_fees, docFees: r.documentation_fees, customsFees: r.customs_fees, otherFees: r.other_fees, otherFeesDesc: r.other_fees_desc, effectiveDate: r.effective_date, expiryDate: r.expiry_date, pol: r.port_of_loading, pod: r.port_of_discharge, notes: r.notes, booked: r.booked, shipmentRef: r.shipment_reference, bookingDate: r.booking_date, bookingNotes: r.booking_notes }); setView('add_rate'); }} className="px-2 py-0.5 rounded border border-blue-300 text-blue-600 text-[10px]">Edit</button>
+                {isAdmin && <button onClick={() => handleDeleteRate(r)} className="px-2 py-0.5 rounded border border-red-300 text-red-500 text-[10px]" title="Danger: deletes historical pricing data">Del</button>}
+              </td>
+            </tr>);
+          })}</tbody>
+        </table>
+      </div>
+      <div className="text-[10px] text-slate-500 mt-1 flex gap-4">
+        <span>Showing <strong>{filtered.length}</strong> of {routeHistory.length} rates</span>
+        {expiredCount > 0 && <span className="text-red-600">• {expiredCount} expired (preserved for history)</span>}
+        {bookedCount > 0 && <span className="text-green-600">• {bookedCount} booked</span>}
+      </div>
       </>); })()}</div>
       {previewQuote && <QuotePrintView quote={previewQuote} onClose={() => setPreviewQuote(null)} />}
       {requestQuoteData && <RequestQuoteModal data={requestQuoteData} onClose={()=>setRequestQuoteData(null)} origins={origins} destinations={destinations} openWhatsApp={openWhatsApp} openEmail={openEmail} generateQuoteRequest={generateQuoteRequest} userId={myId} allVendors={vendorContacts} />}

@@ -178,6 +178,7 @@ export default function CalendarTab({ customers, user, userProfile, users, ticke
       for (const uid of assignees) {
         const payload = {
           title: f.title,
+          description: f.description || null,
           event_date: f.eventDate,
           event_time: f.eventTime || null,
           event_type: f.eventType || 'task',
@@ -419,45 +420,6 @@ export default function CalendarTab({ customers, user, userProfile, users, ticke
     } catch (err) { alert('Error: ' + err.message); }
   };
 
-  const _checkInWithNotesLegacy = async () => {
-    if (!notesEvent) return;
-    try {
-      var notes = meetingNotes.trim();
-      var wasCompleted = !!notesEvent.completed;
-      var oldNotes = String(notesEvent.meeting_notes || '').trim();
-      var notesChanged = notes !== oldNotes;
-      // Build update. If already completed, don't overwrite check-in timestamp/owner —
-      // just update the notes. For a fresh check-in, stamp attendance too.
-      var update = { meeting_notes: notes || null };
-      if (!wasCompleted) {
-        update.completed = true;
-        update.event_status = 'attended';
-        update.checked_in_at = new Date().toISOString();
-        update.checked_in_by = myId;
-      }
-      await dbUpdate('calendar_events', notesEvent.id, update, myId);
-      // Archive to daily log ONLY when notes exist and actually changed (first time OR later edit).
-      // Prevents duplicate log entries if the user reopens the modal and saves without changes.
-      if (notes && notesChanged) {
-        var verb = wasCompleted ? '📋 Meeting notes updated — ' : '📋 Meeting notes — ';
-        await dbInsert('daily_log', {
-          user_id: myId,
-          log_date: notesEvent.event_date || new Date().toISOString().substring(0, 10),
-          entry_text: verb + notesEvent.title + ': ' + notes,
-          log_category: 'meeting',
-          auto_generated: false,
-        }, myId);
-      }
-      var logVerb = wasCompleted ? (notesChanged ? 'Updated notes: ' : 'Reviewed notes: ') : 'Checked in: ';
-      await logActivity(myId, logVerb + notesEvent.title + (notes && notesChanged ? ' — ' + notes.substring(0, 100) : ''), 'calendar');
-      // Cancel pending reminders on first-time check-in (attended)
-      if (!wasCompleted) {
-        try { await cancelEventReminders(notesEvent.id); } catch (e) { /* swallow */ }
-      }
-      setNotesEvent(null); setMeetingNotes(''); loadEvents();
-    } catch (err) { alert('Error: ' + err.message); }
-  };
-
   // R1/R2 (prep): edit an event. Basic fields only (title/date/time). For a
   // series master, user picks scope: 'single' = this row only, 'series' = apply
   // to all occurrences in the same series. The "this and following" option is
@@ -578,6 +540,13 @@ export default function CalendarTab({ customers, user, userProfile, users, ticke
           <div className="grid grid-cols-2 gap-3">
             <div className="col-span-2"><label className="text-[10px] font-semibold">Title / العنوان</label>
               <input value={f.title||''} onChange={e=>setF({...f,title:e.target.value})} className="w-full px-3 py-2 rounded border text-sm" /></div>
+            <div className="col-span-2">
+              <label className="text-[10px] font-semibold">Description / Agenda — الوصف والأجندة <span className="text-slate-400 font-normal">(optional, shown before the meeting)</span></label>
+              <textarea value={f.description||''} onChange={e=>setF({...f,description:e.target.value})}
+                placeholder="What's this meeting about? Talking points, goals, pre-read links..."
+                rows={3}
+                className="w-full px-3 py-2 rounded border text-sm" />
+            </div>
             <div><label className="text-[10px] font-semibold">Date / التاريخ</label>
               <input type="date" value={f.eventDate||''} onChange={e=>setF({...f,eventDate:e.target.value})} className="w-full px-3 py-2 rounded border text-sm" /></div>
             <div><label className="text-[10px] font-semibold">Time / الوقت</label>
@@ -721,6 +690,11 @@ export default function CalendarTab({ customers, user, userProfile, users, ticke
                       {ev.recurring && ev.recurring !== 'none' && <span className="ml-1">🔄 {recurrenceLabel(ev.recurring, ev.recurrence_interval)}</span>}
                       {ev.original_event_date && ev.original_event_date !== ev.event_date && <span className="ml-1 text-amber-600" title={'Moved from ' + ev.original_event_date}>↪</span>}
                     </div>
+                    {ev.description && (
+                      <div className="text-[11px] text-slate-600 mt-1 pl-0 whitespace-pre-wrap max-w-[520px] leading-snug" title="Agenda / pre-meeting notes">
+                        <span className="font-semibold text-slate-500">📋 </span>{ev.description}
+                      </div>
+                    )}
                   </div>
                   {!ev.completed && <div className="flex gap-1">
                     {ev.event_status === 'postponed' ? <span className="px-2 py-1 bg-amber-100 text-amber-700 rounded text-[10px] font-bold">Postponed</span> : <>
@@ -738,10 +712,11 @@ export default function CalendarTab({ customers, user, userProfile, users, ticke
                         📝 {ev.notes_count || 1} note{ev.notes_count === 1 ? '' : 's'}
                       </button>
                     )}
-                    {/* Always allow opening the thread — add more notes any time */}
-                    <button onClick={() => { setNotesEvent(ev); setMeetingNotes(''); }}
+                    {/* Consistent labels: Edit Notes when notes exist, Add Notes when empty.
+                        Replaces the old ambiguous "+ Add / View" that confused users about the mode. */}
+                    <button onClick={() => { setNotesEvent(ev); setMeetingNotes(ev.meeting_notes || ''); }}
                       className="px-2 py-0.5 bg-slate-100 hover:bg-slate-200 text-slate-600 rounded text-[9px] font-semibold">
-                      {(ev.notes_count > 0 || ev.meeting_notes) ? '+ Add / View' : '📝 Add Notes'}
+                      {(ev.notes_count > 0 || ev.meeting_notes) ? '📝 Edit Notes' : '📝 Add Notes'}
                     </button>
                   </div>}
                 </div>
@@ -797,9 +772,9 @@ export default function CalendarTab({ customers, user, userProfile, users, ticke
                 {ev.event_status === 'postponed' && <span className="text-[9px] text-amber-600 font-bold">Postponed</span>}
                 {ev.completed && <div className="flex items-center gap-1">
                   <span className="text-[9px] text-emerald-600 font-bold">✓</span>
-                  {/* Always allow opening thread — works during AND after the meeting */}
-                  <button onClick={() => { setNotesEvent(ev); setMeetingNotes(''); }}
-                    title={(ev.notes_count > 0 || ev.meeting_notes) ? (ev.notes_count || 1) + ' note(s) — click to view/add' : 'Add notes / إضافة ملاحظات'}
+                  {/* Seed modal with existing notes so user can actually edit (not just add). */}
+                  <button onClick={() => { setNotesEvent(ev); setMeetingNotes(ev.meeting_notes || ''); }}
+                    title={(ev.notes_count > 0 || ev.meeting_notes) ? 'Edit Notes — ' + (ev.notes_count || 1) + ' note(s)' : 'Add Notes / إضافة ملاحظات'}
                     className="text-[10px] hover:bg-slate-200 rounded px-1 flex items-center gap-0.5">
                     {(ev.notes_count > 0 || ev.meeting_notes) ? <span>📝<span className="text-[8px] font-bold text-emerald-600">{ev.notes_count || 1}</span></span> : '✏️'}
                   </button>
@@ -825,12 +800,23 @@ export default function CalendarTab({ customers, user, userProfile, users, ticke
         return (
         <div className="fixed inset-0 bg-black/60 z-[60] flex items-end sm:items-center justify-center p-0 sm:p-4" onClick={closeModal}>
           <div className="bg-white w-full sm:max-w-lg sm:rounded-2xl rounded-t-2xl overflow-hidden flex flex-col" style={{ maxHeight: '88vh' }} onClick={e => e.stopPropagation()}>
-            {/* Header */}
+            {/* Header — title reflects mode so user knows if they're Editing vs Adding vs first-time Check-In */}
             <div className="px-5 py-3 border-b border-slate-100 flex items-start justify-between">
               <div className="flex-1 min-w-0">
-                <h3 className="text-base font-bold truncate">📝 Meeting Notes</h3>
+                <h3 className="text-base font-bold truncate">
+                  {!notesEvent.completed
+                    ? '✓ Check In / تسجيل الحضور'
+                    : (notesThread.length > 0 || notesEvent.meeting_notes)
+                      ? '📝 Edit Meeting Notes / تعديل الملاحظات'
+                      : '📝 Add Meeting Notes / إضافة ملاحظات'}
+                </h3>
                 <div className="text-xs text-slate-500 truncate">{notesEvent.title}</div>
                 <div className="text-[10px] text-slate-400">{notesEvent.event_date} {notesEvent.event_time || ''} · {notesThread.length} note{notesThread.length === 1 ? '' : 's'}</div>
+                {notesEvent.description && (
+                  <div className="mt-2 px-2 py-1.5 rounded bg-blue-50 border border-blue-100 text-[11px] text-blue-900 whitespace-pre-wrap leading-snug">
+                    <span className="font-semibold">📋 Agenda: </span>{notesEvent.description}
+                  </div>
+                )}
               </div>
               <div className="flex gap-1 ml-2">
                 {notesThread.length > 0 && (

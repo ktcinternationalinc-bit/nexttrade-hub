@@ -98,9 +98,78 @@ export default function PersonalDashboard({ user, userProfile, isAdmin, invoices
       {todayEvents.length>0?todayEvents.map(ev=>(<div key={ev.id} className="flex justify-between items-center py-2 border-b border-slate-50"><div><div className="text-xs font-semibold">{ev.title}</div><div className="text-[10px] text-slate-400">{ev.event_time?ev.event_time.substring(0,5):'All day'} • {ev.event_type||'Event'}</div></div><span className={'text-[10px] font-bold '+(ev.completed?'text-emerald-500':'text-amber-500')}>{ev.completed?'✅':'⏳'}</span></div>)):<div className="text-xs text-slate-400 py-2">No events today</div>}
       {upcomingEvents.length>0&&(<div className="mt-2 pt-2 border-t border-slate-100"><div className="text-[10px] font-semibold text-slate-500 mb-1">Upcoming</div>{upcomingEvents.map(ev=>(<div key={ev.id} className="flex justify-between py-1 text-[10px] text-slate-500"><span>{ev.title}</span><span>{ev.event_date} {ev.event_time?ev.event_time.substring(0,5):''}</span></div>))}</div>)}</div>
 
-    <div className="bg-white rounded-xl p-4 mb-3"><h3 className="text-sm font-bold mb-2">⏰ Reminders</h3>
-      <div className="flex gap-2 mb-3"><input value={newReminder} onChange={e=>setNewReminder(e.target.value)} onKeyDown={e=>e.key==='Enter'&&addReminder()} placeholder="Quick reminder..." className="flex-1 px-3 py-2 rounded-lg border text-xs" /><input type="date" value={reminderDue} onChange={e=>setReminderDue(e.target.value)} className="px-2 py-2 rounded-lg border text-xs w-32" /><button onClick={addReminder} className="px-3 py-2 bg-blue-500 text-white rounded-lg text-xs font-semibold">Add</button></div>
-      {reminders.length>0?(<div className="space-y-1 max-h-[150px] overflow-auto">{reminders.map(r=>{const ov=r.due_date&&r.due_date<todayStr; return (<div key={r.id} className={'flex justify-between items-center py-1.5 px-2 rounded border '+(ov?'border-red-200 bg-red-50':'border-slate-100')}><div className="flex-1"><div className={'text-xs '+(ov?'font-bold text-red-700':'')}>{r.text}</div>{r.due_date&&<div className={'text-[10px] '+(ov?'text-red-600 font-bold':'text-slate-400')}>Due: {r.due_date}</div>}</div><button onClick={()=>completeReminder(r.id)} className="px-2 py-0.5 bg-emerald-100 text-emerald-700 rounded text-[10px] font-bold ml-2">Done ✓</button></div>);})}</div>):<div className="text-xs text-slate-400">No reminders</div>}</div>
+    {/* Reminders — split into Urgent (today or overdue) vs Normal (future).
+        Today-due items (not yet overdue) get a blink animation so they stand out.
+        Tickets with due_date === today are folded in because they're reminders
+        that need action TODAY but aren't yet late. */}
+    <div className="bg-white rounded-xl p-4 mb-3">
+      <h3 className="text-sm font-bold mb-2">⏰ Reminders</h3>
+      <div className="flex gap-2 mb-3">
+        <input value={newReminder} onChange={e=>setNewReminder(e.target.value)} onKeyDown={e=>e.key==='Enter'&&addReminder()} placeholder="Quick reminder..." className="flex-1 px-3 py-2 rounded-lg border text-xs" />
+        <input type="date" value={reminderDue} onChange={e=>setReminderDue(e.target.value)} className="px-2 py-2 rounded-lg border text-xs w-32" />
+        <button onClick={addReminder} className="px-3 py-2 bg-blue-500 text-white rounded-lg text-xs font-semibold">Add</button>
+      </div>
+      {(() => {
+        // Bucket reminders
+        const urgentReminders = reminders.filter(r => r.due_date && r.due_date <= todayStr);
+        const normalReminders = reminders.filter(r => !r.due_date || r.due_date > todayStr);
+        // Today-due tickets appear here too — they're action items for today.
+        // Overdue tickets are already surfaced in the top "🚨 OVERDUE" banner so
+        // we skip them here to avoid duplication.
+        const todayDueTickets = [...myTickets, ...ticketsICreated]
+          .filter(t => t.due_date === todayStr)
+          .map(t => ({ kind: 'ticket', id: t.id, text: t.title, due_date: t.due_date, status: t.status, priority: t.priority }));
+        const urgentAll = [...urgentReminders.map(r => ({ kind: 'reminder', ...r })), ...todayDueTickets];
+
+        if (urgentAll.length === 0 && normalReminders.length === 0) {
+          return <div className="text-xs text-slate-400">No reminders</div>;
+        }
+
+        return (<>
+          {urgentAll.length > 0 && (
+            <div className="mb-3">
+              <div className="text-[10px] font-extrabold text-red-700 uppercase tracking-wide mb-1">🔴 Urgent ({urgentAll.length})</div>
+              <div className="space-y-1 max-h-[160px] overflow-auto">{urgentAll.map(item => {
+                const overdue = item.due_date && item.due_date < todayStr;
+                const today = item.due_date === todayStr;
+                // Blink today-due (not overdue) — draws the eye to "act TODAY"
+                const blinkClass = today && !overdue ? 'animate-pulse' : '';
+                return (<div key={item.kind + ':' + item.id}
+                  className={'flex justify-between items-center py-1.5 px-2 rounded border ' +
+                    (overdue ? 'border-red-300 bg-red-50 ' : 'border-amber-300 bg-amber-50 ') + blinkClass}>
+                  <div className="flex-1 min-w-0">
+                    <div className={'text-xs font-bold ' + (overdue ? 'text-red-700' : 'text-amber-800')}>
+                      {item.kind === 'ticket' ? '🎫 ' : ''}{item.text}
+                    </div>
+                    <div className={'text-[10px] font-bold ' + (overdue ? 'text-red-600' : 'text-amber-700')}>
+                      {overdue ? 'Overdue ' : 'Due today'}{item.due_date ? ' • ' + item.due_date : ''}
+                      {item.priority === 'high' && <span className="ml-1 text-red-500">🔴 HIGH</span>}
+                      {item.status && <span className="ml-1 text-slate-500">• {item.status}</span>}
+                    </div>
+                  </div>
+                  {item.kind === 'reminder' && <button onClick={()=>completeReminder(item.id)} className="px-2 py-0.5 bg-emerald-100 text-emerald-700 rounded text-[10px] font-bold ml-2">Done ✓</button>}
+                  {item.kind === 'ticket' && <button onClick={()=>navigate('tickets')} className="px-2 py-0.5 bg-blue-100 text-blue-700 rounded text-[10px] font-bold ml-2">Open →</button>}
+                </div>);
+              })}</div>
+            </div>
+          )}
+          {normalReminders.length > 0 && (
+            <div>
+              <div className="text-[10px] font-semibold text-slate-500 uppercase tracking-wide mb-1">Normal ({normalReminders.length})</div>
+              <div className="space-y-1 max-h-[150px] overflow-auto">{normalReminders.map(r => (
+                <div key={r.id} className="flex justify-between items-center py-1.5 px-2 rounded border border-slate-100">
+                  <div className="flex-1 min-w-0">
+                    <div className="text-xs">{r.text}</div>
+                    {r.due_date && <div className="text-[10px] text-slate-400">Due: {r.due_date}</div>}
+                  </div>
+                  <button onClick={()=>completeReminder(r.id)} className="px-2 py-0.5 bg-emerald-100 text-emerald-700 rounded text-[10px] font-bold ml-2">Done ✓</button>
+                </div>
+              ))}</div>
+            </div>
+          )}
+        </>);
+      })()}
+    </div>
 
     {(myCustomers.length>0||isAdmin)&&(<div className="bg-white rounded-xl p-4 mb-3"><h3 className="text-sm font-bold mb-2">📊 My Pipeline ({myCustomers.length} clients)</h3><div className="flex gap-1.5 flex-wrap mb-2">{PIPELINE_STAGES.map(s=>{const c=pipelineStats[s.v]||0; return (<div key={s.v} className="rounded-lg px-3 py-2 text-center min-w-[70px]" style={{background:c>0?s.c+'15':'#f8fafc',borderLeft:'3px solid '+(c>0?s.c:'#e2e8f0')}}><div className="text-lg font-extrabold" style={{color:c>0?s.c:'#cbd5e1'}}>{c}</div><div className="text-[9px] font-semibold text-slate-600">{s.icon} {s.l}</div></div>);})}</div>{notContacted30.length>0&&<div className="bg-amber-50 rounded-lg p-2 mt-2 border border-amber-200"><div className="text-[10px] font-bold text-amber-700">⚠️ {notContacted30.length} clients not contacted in 30+ days</div></div>}</div>)}
 

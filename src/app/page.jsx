@@ -627,12 +627,14 @@ export default function App() {
           .eq('date', today)
           .order('login_at', { ascending: false })
           .limit(1);
-        // Also pulse login_events so admin portal "is_online" stays accurate
+        // Also pulse login_events so admin portal "is_online" stays accurate.
+        // keepalive: true ensures the heartbeat isn't cancelled if the user navigates away.
         try {
           fetch('/api/login-event', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ user_id: uid, event_type: 'heartbeat' }),
+            keepalive: true,
           }).catch(() => {});
         } catch(e) {}
       }
@@ -660,9 +662,9 @@ export default function App() {
     const handleClickOutside = (e) => { if (!e.target.closest('.notif-bell-wrap')) setShowNotifBell(false); if (!e.target.closest('.fab-wrap')) setShowFAB(false); };
     document.addEventListener('click', handleClickOutside);
 
-    // Session timeout: auto-logout after 30 min of inactivity (except super_admin)
+    // Session timeout: auto-logout after 2 hours of inactivity (except super_admin)
     let idleTimer;
-    const IDLE_TIMEOUT = 30 * 60 * 1000;
+    const IDLE_TIMEOUT = 2 * 60 * 60 * 1000; // 2 hours
     const resetIdle = () => {
       clearTimeout(idleTimer);
       idleTimer = setTimeout(async () => {
@@ -679,7 +681,7 @@ export default function App() {
             .eq('user_id', uid).eq('date', today)
             .order('login_at', { ascending: false }).limit(1);
           // Log it
-          try { await supabase.from('daily_log').insert({ user_id: uid, entry_text: 'Auto-logged out after 30 min inactivity', log_category: 'login', log_date: today, log_time: new Date().toTimeString().substring(0,8), auto_generated: true }); } catch(e) { console.warn('Silent error:', e.message || e); }
+          try { await supabase.from('daily_log').insert({ user_id: uid, entry_text: 'Auto-logged out after 2 hours of inactivity', log_category: 'login', log_date: today, log_time: new Date().toTimeString().substring(0,8), auto_generated: true }); } catch(e) { console.warn('Silent error:', e.message || e); }
           await supabase.auth.signOut(); window.location.href = '/login';
         } catch(e) { console.warn('Silent error:', e.message || e); }
       }, IDLE_TIMEOUT);
@@ -786,18 +788,44 @@ export default function App() {
                 });
               }
             } catch(e) { /* non-fatal */ }
-            // NEW: record a precise login event in login_events (ET-tz aware via DB generated column)
+            // Record a precise login event in login_events (ET-tz aware via DB generated column).
+            // Previously this was a plain fetch().catch() — if the user navigated away before the
+            // request completed (common on initial login), the row never got written and the admin
+            // dashboard showed "0 logins today" even when the user was clearly logged in.
+            // Fix: use navigator.sendBeacon first (survives page navigation) with fetch fallback,
+            // then await + retry once on transient failure.
             try {
-              fetch('/api/login-event', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({
-                  user_id: profile.id,
-                  event_type: 'login',
-                  user_agent: typeof navigator !== 'undefined' ? navigator.userAgent.substring(0, 200) : null,
-                }),
-              }).catch(() => {});
-            } catch(e) { /* non-fatal */ }
+              const payload = JSON.stringify({
+                user_id: profile.id,
+                event_type: 'login',
+                user_agent: typeof navigator !== 'undefined' ? navigator.userAgent.substring(0, 200) : null,
+              });
+              let beaconed = false;
+              try {
+                if (typeof navigator !== 'undefined' && navigator.sendBeacon) {
+                  // sendBeacon needs a Blob with a content-type for Next.js API routes to parse JSON
+                  const blob = new Blob([payload], { type: 'application/json' });
+                  beaconed = navigator.sendBeacon('/api/login-event', blob);
+                }
+              } catch (e) { beaconed = false; }
+              if (!beaconed) {
+                // Fallback: actually await the fetch so it doesn't get cancelled on navigation.
+                const attempt = async (retry) => {
+                  try {
+                    const r = await fetch('/api/login-event', {
+                      method: 'POST',
+                      headers: { 'Content-Type': 'application/json' },
+                      body: payload,
+                      keepalive: true, // critical: lets fetch survive page transitions
+                    });
+                    if (!r.ok && retry > 0) { await new Promise(res => setTimeout(res, 600)); return attempt(retry - 1); }
+                  } catch (e) {
+                    if (retry > 0) { await new Promise(res => setTimeout(res, 600)); return attempt(retry - 1); }
+                  }
+                };
+                await attempt(1);
+              }
+            } catch(e) { /* truly non-fatal — we've done 2 paths of best-effort already */ }
           }
         }
         // Load module permissions for current user
@@ -9902,18 +9930,39 @@ export default function App() {
                       className="w-full px-3 py-2 rounded-lg border-2 border-slate-300 text-sm font-semibold"
                       style={{ direction: 'rtl' }}
                     />
-                    {formData.__newInvCustomer && formData.__newInvCustomer.length >= 2 && (
+                    {/* Linked badge — shows when customer_id is set, so user knows the invoice will link correctly */}
+                    {formData.__newInvCustomerId && (
+                      <div className="mt-1 inline-flex items-center gap-1 text-[11px] font-bold text-emerald-700 bg-emerald-50 border border-emerald-200 rounded px-2 py-0.5">
+                        ✓ Linked to existing customer / مربوط بعميل موجود
+                      </div>
+                    )}
+                    {/* Suggestion dropdown — only while no customer is linked yet. Hides the "shows my own typing again" visual confusion. */}
+                    {formData.__newInvCustomer && formData.__newInvCustomer.length >= 2 && !formData.__newInvCustomerId && (
                       <div className="mt-1 max-h-[140px] overflow-auto rounded border border-slate-200 bg-white">
-                        {customers
-                          .filter(c => String(c.name || '').includes(formData.__newInvCustomer))
-                          .slice(0, 6)
-                          .map(c => (
-                            <div key={c.id}
-                              onClick={() => setFormData({ ...formData, __newInvCustomer: c.name, __newInvCustomerId: c.id })}
-                              className="px-3 py-2 text-sm cursor-pointer hover:bg-emerald-50 border-b border-slate-100">
-                              <span className="font-bold text-slate-900" style={{ direction: 'rtl' }}>{c.name}</span>
-                            </div>
-                          ))}
+                        {(() => {
+                          var typed = String(formData.__newInvCustomer || '').trim();
+                          var matches = customers
+                            .filter(function(c) { return String(c.name || '').includes(formData.__newInvCustomer); })
+                            .slice(0, 6);
+                          if (matches.length === 0) {
+                            return (
+                              <div className="px-3 py-2 text-[11px] text-amber-800 bg-amber-50">
+                                ⚠ No match — a new customer won't be auto-created. Type exact existing name or leave unlinked.
+                              </div>
+                            );
+                          }
+                          return matches.map(function(c) {
+                            var isExact = String(c.name || '').trim() === typed;
+                            return (
+                              <div key={c.id}
+                                onClick={function() { setFormData({ ...formData, __newInvCustomer: c.name, __newInvCustomerId: c.id }); }}
+                                className={'px-3 py-2 text-sm cursor-pointer hover:bg-emerald-50 border-b border-slate-100 ' + (isExact ? 'bg-emerald-50' : '')}>
+                                <span className="font-bold text-slate-900" style={{ direction: 'rtl' }}>{c.name}</span>
+                                {isExact && <span className="ml-2 text-[10px] text-emerald-700 font-bold">exact match — click to link</span>}
+                              </div>
+                            );
+                          });
+                        })()}
                       </div>
                     )}
                   </div>
@@ -9951,11 +10000,20 @@ export default function App() {
                         if (!(totalAmt > 0)) { toast.warning('Invoice total must be > 0'); return; }
                         const orderNum = pendingTreasuryRecord.record.order_number;
                         const invDate = formData.__newInvDate || pendingTreasuryRecord.record.transaction_date || today();
+                        // Belt-and-suspenders: if customer_id wasn't explicitly linked via dropdown,
+                        // try an exact-name match here before saving. Prevents silent orphan invoices
+                        // when the user typed an existing customer's name verbatim but didn't click
+                        // the dropdown suggestion.
+                        var resolvedCustomerId = formData.__newInvCustomerId || null;
+                        if (!resolvedCustomerId) {
+                          var exact = customers.find(function(c) { return String(c.name || '').trim() === name; });
+                          if (exact) resolvedCustomerId = exact.id;
+                        }
                         try {
                           const { data: inserted, error } = await supabase.from('invoices').insert({
                             order_number: sanitize(orderNum),
                             customer_name: sanitize(name),
-                            customer_id: formData.__newInvCustomerId || null,
+                            customer_id: resolvedCustomerId,
                             invoice_date: invDate,
                             total_amount: totalAmt,
                             total_collected: 0,
@@ -9963,7 +10021,9 @@ export default function App() {
                             source: 'treasury',
                           }).select('id, order_number, customer_name, total_amount, outstanding').single();
                           if (error) throw error;
-                          toast.success('Invoice #' + orderNum + ' created ✓');
+                          toast.success(resolvedCustomerId
+                            ? 'Invoice #' + orderNum + ' created + linked to customer ✓'
+                            : 'Invoice #' + orderNum + ' created (new customer — no link) ✓');
                           await finalizePendingTreasury(inserted);
                           setFormData(prev => {
                             const next = { ...prev };
@@ -10008,14 +10068,24 @@ export default function App() {
                   </div>
                   <div className="flex gap-2 pt-2">
                     <button
-                      onClick={() => setFormData({
-                        ...formData,
-                        __creatingInvoice: true,
-                        __newInvCustomer: formData.desc || '',
-                        __newInvCustomerId: null,
-                        __newInvTotal: pendingTreasuryRecord.amount,
-                        __newInvDate: pendingTreasuryRecord.record.transaction_date || today(),
-                      })}
+                      onClick={() => {
+                        // Pre-fill customer from treasury desc. If desc exactly matches an
+                        // existing customer, auto-link customer_id so the user doesn't have
+                        // to re-pick from the dropdown. Fixes silent-orphan-invoice bug where
+                        // invoices were saved with customer_id:null when the dropdown wasn't clicked.
+                        var descText = String(formData.desc || '').trim();
+                        var exactMatch = descText
+                          ? customers.find(function(c) { return String(c.name || '').trim() === descText; })
+                          : null;
+                        setFormData({
+                          ...formData,
+                          __creatingInvoice: true,
+                          __newInvCustomer: descText,
+                          __newInvCustomerId: exactMatch ? exactMatch.id : null,
+                          __newInvTotal: pendingTreasuryRecord.amount,
+                          __newInvDate: pendingTreasuryRecord.record.transaction_date || today(),
+                        });
+                      }}
                       className="flex-1 px-4 py-2.5 bg-emerald-700 text-white rounded-lg text-sm font-extrabold hover:bg-emerald-800 shadow"
                     >
                       + Create Invoice Now / إنشاء فاتورة الآن

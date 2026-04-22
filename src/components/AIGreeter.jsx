@@ -2,6 +2,7 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { supabase } from '../lib/supabase';
 import { todayET, etGreetingWord, cmpETDays } from '../lib/et-time';
+import NadiaFace from './NadiaFace';
 
 var PERSONALITIES = [
   { id: 'professional', label: '🎩 Professional', labelAr: 'محترف', desc: 'Formal, concise, business-focused', color: '#1e40af', prompt: 'You are a professional executive assistant named Nadia. Speak formally, be concise and data-driven. Use business language. Be respectful and efficient.' },
@@ -306,12 +307,16 @@ export default function AIGreeter({ user, userProfile, users, tickets, invoices,
 
   // TTS — dispatches window events so the global VoiceController can
   // barge-in (cut us off) when the user starts talking while we're speaking.
+  // We also expose the current Audio element to NadiaFace via state so the
+  // face can tap the live audio stream with an AnalyserNode for real lip sync.
+  var [currentAudio, setCurrentAudio] = useState(null);
   var doSpeak = useCallback(function(text) {
     if (!text) return;
     setSpeaking(true);
     try { window.dispatchEvent(new CustomEvent('nadia-tts-start')); } catch (e) {}
     var fireStop = function() {
       setSpeaking(false);
+      setCurrentAudio(null);
       try { window.dispatchEvent(new CustomEvent('nadia-tts-stop')); } catch (e) {}
     };
     fetch('/api/tts', {
@@ -324,7 +329,9 @@ export default function AIGreeter({ user, userProfile, users, tickets, invoices,
     }).then(function(blob) {
       var url = URL.createObjectURL(blob);
       var audio = new Audio(url);
+      // CORS: objectURL blob is same-origin so no crossOrigin flag needed
       audioRef.current = audio;
+      setCurrentAudio(audio);
       audio.onended = function() { audioRef.current = null; fireStop(); };
       audio.play().catch(function() { doFallbackSpeak(text); });
     }).catch(function() { doFallbackSpeak(text); });
@@ -350,6 +357,7 @@ export default function AIGreeter({ user, userProfile, users, tickets, invoices,
     if (audioRef.current) { audioRef.current.pause(); audioRef.current = null; }
     if (window.speechSynthesis) window.speechSynthesis.cancel();
     setSpeaking(false);
+    setCurrentAudio(null);
     try { window.dispatchEvent(new CustomEvent('nadia-tts-stop')); } catch (e) {}
   };
 
@@ -385,28 +393,120 @@ export default function AIGreeter({ user, userProfile, users, tickets, invoices,
     };
   }, [enabled]);
 
-  // Voice recognition
-  var startListen = function() {
-    var SR = window.SpeechRecognition || window.webkitSpeechRecognition;
-    if (!SR) { if (toast) toast.warning('Voice not supported in this browser'); return; }
-    var rec = new SR();
-    rec.lang = useLang === 'ar' ? 'ar-EG' : 'en-US';
-    rec.continuous = false;
-    rec.interimResults = true;
-    recognitionRef.current = rec;
-    setListening(true);
-    rec.onresult = function(ev) {
-      var t = '';
-      for (var i = 0; i < ev.results.length; i++) t += ev.results[i][0].transcript;
-      setInput(t);
-      if (ev.results[0].isFinal) { setListening(false); if (t.trim()) doSend(t.trim()); }
-    };
-    rec.onerror = function() { setListening(false); };
-    rec.onend = function() { setListening(false); };
-    rec.start();
+  // Voice recognition — continuous mode with smart send.
+  // Previous behavior: `continuous=false` + auto-send on first final result meant
+  // Nadia stopped listening after ~5 words because any natural pause counted as "done."
+  // New behavior: continuous listening, accumulate all transcribed text into the input
+  // field, and the user explicitly stops (clicks mic again) or times out after
+  // SILENCE_TIMEOUT_MS of silence. This supports both "quick question" and
+  // "long dictation" flows with the same button.
+  var SILENCE_TIMEOUT_MS = 3500; // stop after 3.5 seconds of silence (was: first pause)
+  var silenceTimerRef = useRef(null);
+  var accumulatedRef = useRef(''); // running transcript across results
+
+  var clearSilenceTimer = function() {
+    if (silenceTimerRef.current) {
+      clearTimeout(silenceTimerRef.current);
+      silenceTimerRef.current = null;
+    }
   };
 
-  var stopListen = function() { if (recognitionRef.current) recognitionRef.current.stop(); setListening(false); };
+  var startListen = async function() {
+    var SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+    if (!SR) { if (toast) toast.warning('Voice not supported in this browser'); return; }
+
+    // Pre-flight: barge in on any currently-speaking Nadia so the two audio paths
+    // don't collide and so the user gets immediate feedback that the mic is engaged.
+    if (speaking) { try { stopSpeech(); } catch (e) {} }
+
+    // Use Permissions API when available to avoid re-prompting users who already
+    // granted mic permission. Does not replace the browser's own prompt — but on
+    // Chromium browsers, 'granted' means the recognition start will not re-prompt.
+    try {
+      if (navigator.permissions && navigator.permissions.query) {
+        var perm = await navigator.permissions.query({ name: 'microphone' });
+        if (perm && perm.state === 'denied') {
+          if (toast) toast.warning('Microphone blocked in browser settings. Click the 🔒 icon in the address bar to enable.');
+          return;
+        }
+      }
+    } catch (e) { /* Safari / older browsers don't support permissions.query for microphone */ }
+
+    var rec = new SR();
+    rec.lang = useLang === 'ar' ? 'ar-EG' : 'en-US';
+    // Safari's "continuous" support is flaky. On Safari we use short sessions
+    // and restart via onend; on Chromium-based browsers we use real continuous.
+    var ua = typeof navigator !== 'undefined' ? navigator.userAgent : '';
+    var isSafari = /^((?!chrome|android).)*safari/i.test(ua);
+    rec.continuous = !isSafari;
+    rec.interimResults = true;
+    rec.maxAlternatives = 1;
+    recognitionRef.current = rec;
+    accumulatedRef.current = '';
+    setListening(true);
+
+    // Every new audio chunk resets the silence timer. If the user goes quiet
+    // for SILENCE_TIMEOUT_MS, we auto-send.
+    var resetSilenceTimer = function() {
+      clearSilenceTimer();
+      silenceTimerRef.current = setTimeout(function() {
+        try { rec.stop(); } catch (e) {}
+        // onend handler below will finalize and send
+      }, SILENCE_TIMEOUT_MS);
+    };
+
+    rec.onresult = function(ev) {
+      // Accumulate only finalized results into the running transcript; always
+      // show interim text in the input while the user is mid-sentence.
+      var finalText = accumulatedRef.current;
+      var interim = '';
+      for (var i = ev.resultIndex; i < ev.results.length; i++) {
+        var r = ev.results[i];
+        if (r.isFinal) finalText += r[0].transcript + ' ';
+        else interim += r[0].transcript;
+      }
+      accumulatedRef.current = finalText;
+      setInput((finalText + interim).trim());
+      resetSilenceTimer();
+    };
+
+    rec.onerror = function(e) {
+      // 'no-speech' and 'aborted' are normal stop events, not errors the user needs to see.
+      if (e && e.error && e.error !== 'no-speech' && e.error !== 'aborted') {
+        if (toast) toast.warning('Mic error: ' + e.error);
+      }
+      clearSilenceTimer();
+      setListening(false);
+    };
+
+    rec.onend = function() {
+      clearSilenceTimer();
+      setListening(false);
+      // Send whatever we accumulated. Empty transcripts (accidental taps) are silently dropped.
+      var finalTranscript = String(accumulatedRef.current || '').trim();
+      accumulatedRef.current = '';
+      if (finalTranscript) {
+        setInput('');
+        doSend(finalTranscript);
+      }
+    };
+
+    try {
+      rec.start();
+      resetSilenceTimer();
+    } catch (e) {
+      setListening(false);
+      if (toast) toast.warning('Could not start microphone');
+    }
+  };
+
+  var stopListen = function() {
+    clearSilenceTimer();
+    if (recognitionRef.current) {
+      try { recognitionRef.current.stop(); } catch (e) {}
+    }
+    setListening(false);
+  };
 
   // Typewriter — was setInterval(setState) every 20ms which caused ~200
   // React re-renders for a short reply and "froze" the dashboard page.
@@ -526,9 +626,15 @@ export default function AIGreeter({ user, userProfile, users, tickets, invoices,
     <div ref={containerRef} className="mt-8 mb-4 rounded-2xl overflow-hidden shadow-2xl scroll-mt-32" style={{ border: '2px solid ' + persona.color + '30', background: 'linear-gradient(135deg, rgba(15,23,42,0.97), rgba(30,27,75,0.97))' }}>
       {/* Header */}
       <div className="px-4 py-3 flex items-center gap-3" style={{ background: persona.color + '18', borderBottom: '1px solid ' + persona.color + '25' }}>
-        <div className="w-10 h-10 rounded-full flex items-center justify-center text-sm font-extrabold shadow-lg text-white" style={{ background: 'linear-gradient(135deg, ' + persona.color + ', ' + persona.color + '80)' }}>
-          N
-        </div>
+        <NadiaFace
+          speaking={speaking}
+          listening={listening}
+          loading={loading}
+          color={persona.color}
+          size={56}
+          audioElement={currentAudio}
+          lang={useLang}
+        />
         <div className="flex-1">
           <div className="text-sm font-bold text-white flex items-center gap-2">
             Nadia
@@ -585,9 +691,40 @@ export default function AIGreeter({ user, userProfile, users, tickets, invoices,
 
       {/* Input */}
       <div className="px-3 pb-3">
+        {/* Floating STOP SPEAKING bar — big and obvious while Nadia is talking.
+            Tapping it (or the mic) interrupts her immediately. */}
+        {speaking && (
+          <button
+            onClick={stopSpeech}
+            className="w-full mb-2 px-3 py-2 rounded-xl bg-red-500 hover:bg-red-600 text-white text-xs font-bold flex items-center justify-center gap-2 shadow-lg animate-pulse"
+            title="Stop Nadia from speaking"
+          >
+            <span>⏹</span>
+            <span>{useLang === 'ar' ? 'إيقاف المساعد' : 'Tap to stop Nadia'}</span>
+          </button>
+        )}
+        {/* Listening status strip — shows what was heard in real time and how long until auto-send. */}
+        {listening && (
+          <div className="mb-2 px-3 py-1.5 rounded-xl bg-emerald-500/20 border border-emerald-500/40 text-emerald-200 text-[11px] flex items-center gap-2">
+            <span className="flex items-end gap-0.5 h-3">
+              {[0,1,2,3].map(function(i) { return <span key={i} className="w-0.5 rounded-full bg-emerald-400" style={{ height: 3 + Math.random() * 8, animation: 'pulse 0.6s infinite', animationDelay: i * 80 + 'ms' }} />; })}
+            </span>
+            <span className="flex-1 font-semibold">
+              {useLang === 'ar' ? 'أستمع… تحدث كما تريد. اضغط المايك لإنهاء.' : 'Listening… speak as long as you like. Tap mic to send.'}
+            </span>
+          </div>
+        )}
         <div className="flex items-center gap-2 rounded-xl px-3 py-1.5" style={{ background: 'rgba(255,255,255,0.07)', border: '1px solid rgba(255,255,255,0.1)' }}>
-          <button onClick={function() { listening ? stopListen() : startListen(); }}
-            className={'p-2 rounded-lg text-sm transition ' + (listening ? 'bg-red-500 text-white animate-pulse' : 'text-white/50 hover:text-white hover:bg-white/10')}>
+          <button
+            onClick={function() {
+              // Mic button doubles as barge-in: if Nadia is speaking, the first tap stops her
+              // AND starts listening, so the user doesn't have to tap twice.
+              if (speaking) { try { stopSpeech(); } catch (e) {} }
+              if (listening) stopListen(); else startListen();
+            }}
+            className={'p-2 rounded-lg text-sm transition ' + (listening ? 'bg-red-500 text-white animate-pulse' : 'text-white/50 hover:text-white hover:bg-white/10')}
+            title={listening ? (useLang === 'ar' ? 'إنهاء الاستماع' : 'Tap to stop & send') : (useLang === 'ar' ? 'تحدث' : 'Hold to talk — long messages OK')}
+          >
             🎤
           </button>
           <input value={input} onChange={function(e) { setInput(e.target.value); }}
