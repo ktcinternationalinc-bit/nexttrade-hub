@@ -367,11 +367,21 @@ export default function AIGreeter({ user, userProfile, users, tickets, invoices,
       doSend(cmd, false);
     };
     var onBargeIn = function() { stopSpeech(); };
+    // Some decision chips are "ask me more" — they dispatch nadia-push-question
+    // to route a follow-up query back into this greeter.
+    var onPushQuestion = function(ev) {
+      var q = ev && ev.detail && ev.detail.question;
+      if (!q) return;
+      stopSpeech();
+      doSend(q, false);
+    };
     window.addEventListener('hey-bob-command', onBobCommand);
     window.addEventListener('hey-bob-bargein', onBargeIn);
+    window.addEventListener('nadia-push-question', onPushQuestion);
     return function() {
       window.removeEventListener('hey-bob-command', onBobCommand);
       window.removeEventListener('hey-bob-bargein', onBargeIn);
+      window.removeEventListener('nadia-push-question', onPushQuestion);
     };
   }, [enabled]);
 
@@ -434,17 +444,45 @@ export default function AIGreeter({ user, userProfile, users, tickets, invoices,
     try {
       var hist = msgs.map(function(m) { return { role: m.role === 'user' ? 'user' : 'assistant', text: m.text }; });
       var q = isGreeting ? ctx + '\nGreet ' + firstName + ' personally based on the LOGIN HISTORY above. Tell them what needs attention. Be natural, warm, and personal.' : (userText || '');
-      var res = await fetch('/api/ask', {
+
+      // Opt-in to tool-use v2 via ?nadia_v2=1 OR localStorage flag.
+      // Keep /api/ask as the default until v2 is battle-tested in production.
+      var useV2 = false;
+      try {
+        if (typeof window !== 'undefined') {
+          if (new URLSearchParams(window.location.search).get('nadia_v2') === '1') useV2 = true;
+          else if (window.localStorage && window.localStorage.getItem('nadia_v2') === '1') useV2 = true;
+        }
+      } catch (e) {}
+
+      var endpoint = useV2 ? '/api/ask-v2' : '/api/ask';
+      var payload = useV2
+        ? { question: q, history: isGreeting ? [] : hist.slice(-8), userId: (userProfile && userProfile.id) || null }
+        : { question: q, mode: 'greeter', systemOverride: sysPrompt + '\n' + ctx, history: isGreeting ? [] : hist.slice(-8) };
+
+      var res = await fetch(endpoint, {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ question: q, mode: 'greeter', systemOverride: sysPrompt + '\n' + ctx, history: isGreeting ? [] : hist.slice(-8) })
+        body: JSON.stringify(payload)
       });
       var data = await res.json();
       var aiText = data.answer || '';
       if (!aiText) aiText = useLang === 'ar' ? 'صباح الخير ' + firstName + '!' : 'Hey ' + firstName + '!';
-      // Decision engine payload — attached to the assistant message so the UI
-      // can render recommendation + confidence + one-click action buttons
-      // alongside the chat bubble. Only present when /api/ask detected a
-      // decision intent (chase_invoice / chase_customer / etc).
+
+      // v2 returns drafts[] when Nadia called draft_email / draft_whatsapp / create_event
+      // — fan those out to the bridge (which opens the right UI).
+      if (useV2 && Array.isArray(data.drafts) && data.drafts.length > 0) {
+        data.drafts.forEach(function(d) {
+          try {
+            var evName = d.kind === 'email'    ? 'open-email-composer'
+                      : d.kind === 'whatsapp'  ? 'open-whatsapp-composer'
+                      : d.kind === 'event'     ? 'open-event-form'
+                      : null;
+            if (evName) window.dispatchEvent(new CustomEvent(evName, { detail: d.payload || {} }));
+          } catch (err) {}
+        });
+      }
+
+      // Legacy /api/ask still returns `decision` for the decision-panel UI
       var assistantMsg = { role: 'assistant', text: aiText };
       if (data.decision && data.decision.ok) assistantMsg.decision = data.decision;
       var final = [].concat(msgs, [assistantMsg]);

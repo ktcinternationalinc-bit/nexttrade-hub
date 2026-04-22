@@ -162,6 +162,16 @@ export async function POST(request) {
             gMessages.push({ role: m.role === 'user' ? 'user' : 'assistant', content: m.text || m.content || '' });
           });
         }
+        // Anthropic's Messages API rejects any conversation whose first turn is
+        // role=assistant. The greeter saves its own opening greeting into its
+        // local messages[] before the user has typed anything, so the first
+        // follow-up question would ship a history starting with assistant —
+        // which returned a 400 and left the client with answer:'' (symptom:
+        // "Nadia only says Hi, doesn't respond to anything else"). We also
+        // drop any assistant messages with empty content (same 400 trigger),
+        // and filter out rows where content is empty.
+        while (gMessages.length > 0 && gMessages[0].role !== 'user') gMessages.shift();
+        gMessages = gMessages.filter(function(m) { return m.content && String(m.content).trim(); });
         gMessages.push({ role: 'user', content: question });
         var gResponse = await fetch('https://api.anthropic.com/v1/messages', {
           method: 'POST',
@@ -175,8 +185,16 @@ export async function POST(request) {
           if (decisionPromise) { try { decision = await decisionPromise; } catch(e) {} }
           return Response.json({ answer: gText, decision: decision });
         }
-      } catch(e) {}
-      return Response.json({ answer: '' });
+        // Non-OK response — read the error body so we don't silently fall
+        // through to answer:''. Client sees the actual failure.
+        var errBody = '';
+        try { errBody = await gResponse.text(); } catch(e) {}
+        console.warn('[ask/greeter] Anthropic API non-OK:', gResponse.status, errBody.substring(0, 500));
+        return Response.json({ answer: 'AI error (' + gResponse.status + '): ' + (errBody.substring(0, 200) || 'no response body') });
+      } catch(e) {
+        console.warn('[ask/greeter] exception:', e && e.message);
+        return Response.json({ answer: 'AI error: ' + (e && e.message ? e.message : 'unknown') });
+      }
     }
 
     // EXECUTE ACTION
