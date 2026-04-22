@@ -302,7 +302,26 @@ export default function AIGreeter({ user, userProfile, users, tickets, invoices,
   }, [enabled, loginHistoryLoaded, hasGreeted]);
 
   useEffect(function() {
-    if (chatEndRef.current) chatEndRef.current.scrollIntoView({ behavior: 'smooth' });
+    // Only scroll the internal chat container — NEVER the window.
+    // Previously used chatEndRef.current.scrollIntoView({ behavior: 'smooth' })
+    // which propagates up through overflow-y-auto containers and forcibly
+    // scrolls the whole dashboard page down every time Nadia types a
+    // character. That made the rest of the dashboard unusable during a reply.
+    try {
+      var endEl = chatEndRef.current;
+      if (!endEl) return;
+      // Find the nearest scrollable ancestor (the overflow-y-auto container
+      // holding the messages) and adjust only its scrollTop. The window stays put.
+      var scroller = endEl.parentElement;
+      while (scroller && scroller !== document.body) {
+        var style = window.getComputedStyle(scroller);
+        if (/(auto|scroll)/.test(style.overflowY)) break;
+        scroller = scroller.parentElement;
+      }
+      if (scroller && scroller !== document.body) {
+        scroller.scrollTop = scroller.scrollHeight;
+      }
+    } catch (e) { /* best-effort — never let a scroll glitch crash the UI */ }
   }, [messages, typingText]);
 
   // TTS — dispatches window events so the global VoiceController can
@@ -393,16 +412,19 @@ export default function AIGreeter({ user, userProfile, users, tickets, invoices,
     };
   }, [enabled]);
 
-  // Voice recognition — continuous mode with smart send.
-  // Previous behavior: `continuous=false` + auto-send on first final result meant
-  // Nadia stopped listening after ~5 words because any natural pause counted as "done."
-  // New behavior: continuous listening, accumulate all transcribed text into the input
-  // field, and the user explicitly stops (clicks mic again) or times out after
-  // SILENCE_TIMEOUT_MS of silence. This supports both "quick question" and
-  // "long dictation" flows with the same button.
-  var SILENCE_TIMEOUT_MS = 3500; // stop after 3.5 seconds of silence (was: first pause)
+  // Voice recognition — press-to-start, press-to-stop, then send.
+  // Previous behavior kept auto-stopping on silence pauses which cut users off
+  // mid-thought. New behavior: you START the recording, and it only ENDS when
+  // (a) you tap the mic again, or (b) 60 seconds of true silence pass as a
+  // safety net. Users get predictable "record → stop → transcribe" flow.
+  var SILENCE_TIMEOUT_MS = 60000; // 60s safety net; primary stop is user tap
   var silenceTimerRef = useRef(null);
   var accumulatedRef = useRef(''); // running transcript across results
+  // True while the user intends to be listening — lets us auto-restart the
+  // recognition if Chromium ends it prematurely (a known issue with Web Speech
+  // on some Chromium builds where continuous=true still ends after ~10s of audio).
+  var userWantsListenRef = useRef(false);
+  var lastVoiceActivityRef = useRef(0);
 
   var clearSilenceTimer = function() {
     if (silenceTimerRef.current) {
@@ -419,6 +441,15 @@ export default function AIGreeter({ user, userProfile, users, tickets, invoices,
     // don't collide and so the user gets immediate feedback that the mic is engaged.
     if (speaking) { try { stopSpeech(); } catch (e) {} }
 
+    // Clean up any stale recognition instance from a previous click. This is
+    // the #1 cause of "mic doesn't work the first few times" — the browser
+    // rejects a second rec.start() while the prior instance is still alive.
+    if (recognitionRef.current) {
+      try { recognitionRef.current.onend = null; recognitionRef.current.onresult = null; recognitionRef.current.onerror = null; } catch (e) {}
+      try { recognitionRef.current.abort(); } catch (e) {}
+      recognitionRef.current = null;
+    }
+
     // Use Permissions API when available to avoid re-prompting users who already
     // granted mic permission. Does not replace the browser's own prompt — but on
     // Chromium browsers, 'granted' means the recognition start will not re-prompt.
@@ -432,75 +463,125 @@ export default function AIGreeter({ user, userProfile, users, tickets, invoices,
       }
     } catch (e) { /* Safari / older browsers don't support permissions.query for microphone */ }
 
-    var rec = new SR();
-    rec.lang = useLang === 'ar' ? 'ar-EG' : 'en-US';
-    // Safari's "continuous" support is flaky. On Safari we use short sessions
-    // and restart via onend; on Chromium-based browsers we use real continuous.
-    var ua = typeof navigator !== 'undefined' ? navigator.userAgent : '';
-    var isSafari = /^((?!chrome|android).)*safari/i.test(ua);
-    rec.continuous = !isSafari;
-    rec.interimResults = true;
-    rec.maxAlternatives = 1;
-    recognitionRef.current = rec;
+    userWantsListenRef.current = true;
     accumulatedRef.current = '';
     setListening(true);
 
-    // Every new audio chunk resets the silence timer. If the user goes quiet
-    // for SILENCE_TIMEOUT_MS, we auto-send.
-    var resetSilenceTimer = function() {
-      clearSilenceTimer();
-      silenceTimerRef.current = setTimeout(function() {
-        try { rec.stop(); } catch (e) {}
-        // onend handler below will finalize and send
-      }, SILENCE_TIMEOUT_MS);
+    // Factory so we can build a fresh instance on auto-restart. Each instance
+    // must have its own handlers because Chromium sometimes retains state.
+    var buildRec = function() {
+      var r = new SR();
+      r.lang = useLang === 'ar' ? 'ar-EG' : 'en-US';
+      var ua = typeof navigator !== 'undefined' ? navigator.userAgent : '';
+      var isSafari = /^((?!chrome|android).)*safari/i.test(ua);
+      r.continuous = !isSafari;
+      r.interimResults = true;
+      r.maxAlternatives = 1;
+      return r;
     };
 
-    rec.onresult = function(ev) {
-      // Accumulate only finalized results into the running transcript; always
-      // show interim text in the input while the user is mid-sentence.
-      var finalText = accumulatedRef.current;
-      var interim = '';
-      for (var i = ev.resultIndex; i < ev.results.length; i++) {
-        var r = ev.results[i];
-        if (r.isFinal) finalText += r[0].transcript + ' ';
-        else interim += r[0].transcript;
-      }
-      accumulatedRef.current = finalText;
-      setInput((finalText + interim).trim());
-      resetSilenceTimer();
+    var attachHandlers = function(r) {
+      // Every new audio chunk resets the silence timer. If the user goes quiet
+      // for SILENCE_TIMEOUT_MS, we auto-send.
+      var resetSilenceTimer = function() {
+        clearSilenceTimer();
+        silenceTimerRef.current = setTimeout(function() {
+          // User stopped talking — end the session. onend will flush the transcript.
+          userWantsListenRef.current = false;
+          try { r.stop(); } catch (e) {}
+        }, SILENCE_TIMEOUT_MS);
+      };
+
+      r.onresult = function(ev) {
+        // Accumulate only finalized results into the running transcript; always
+        // show interim text in the input while the user is mid-sentence.
+        var finalText = accumulatedRef.current;
+        var interim = '';
+        var sawContent = false;
+        for (var i = ev.resultIndex; i < ev.results.length; i++) {
+          var res = ev.results[i];
+          var txt = res[0] && res[0].transcript ? res[0].transcript : '';
+          if (res.isFinal) { finalText += txt + ' '; if (txt.trim()) sawContent = true; }
+          else { interim += txt; if (txt.trim()) sawContent = true; }
+        }
+        accumulatedRef.current = finalText;
+        setInput((finalText + interim).trim());
+        // Only reset silence timer on real speech progress, not empty ticks.
+        if (sawContent) { lastVoiceActivityRef.current = Date.now(); resetSilenceTimer(); }
+      };
+
+      r.onerror = function(e) {
+        // 'no-speech' and 'aborted' are normal stop events, not errors the user needs to see.
+        if (e && e.error && e.error !== 'no-speech' && e.error !== 'aborted') {
+          if (toast) toast.warning('Mic error: ' + e.error);
+        }
+        // Fatal errors should stop the session; soft errors let onend decide.
+        if (e && e.error && (e.error === 'not-allowed' || e.error === 'service-not-allowed' || e.error === 'audio-capture')) {
+          userWantsListenRef.current = false;
+          clearSilenceTimer();
+          setListening(false);
+        }
+      };
+
+      r.onend = function() {
+        // If the user still wants to listen AND we saw recent voice activity,
+        // Chromium ended the recognition prematurely — silently restart it so
+        // the "only caught 5–8 words" bug doesn't happen.
+        var wantMore = userWantsListenRef.current;
+        var recentSpeech = (Date.now() - lastVoiceActivityRef.current) < SILENCE_TIMEOUT_MS;
+        if (wantMore && recentSpeech) {
+          try {
+            var nextRec = buildRec();
+            recognitionRef.current = nextRec;
+            attachHandlers(nextRec);
+            nextRec.start();
+            resetSilenceTimer();
+            return;
+          } catch (e) { /* fall through to finalize */ }
+        }
+        // Otherwise: this is a real stop. Finalize and send.
+        clearSilenceTimer();
+        userWantsListenRef.current = false;
+        setListening(false);
+        var finalTranscript = String(accumulatedRef.current || '').trim();
+        accumulatedRef.current = '';
+        if (finalTranscript) {
+          setInput('');
+          doSend(finalTranscript);
+        }
+      };
+      return resetSilenceTimer;
     };
 
-    rec.onerror = function(e) {
-      // 'no-speech' and 'aborted' are normal stop events, not errors the user needs to see.
-      if (e && e.error && e.error !== 'no-speech' && e.error !== 'aborted') {
-        if (toast) toast.warning('Mic error: ' + e.error);
-      }
-      clearSilenceTimer();
-      setListening(false);
-    };
-
-    rec.onend = function() {
-      clearSilenceTimer();
-      setListening(false);
-      // Send whatever we accumulated. Empty transcripts (accidental taps) are silently dropped.
-      var finalTranscript = String(accumulatedRef.current || '').trim();
-      accumulatedRef.current = '';
-      if (finalTranscript) {
-        setInput('');
-        doSend(finalTranscript);
-      }
-    };
+    var rec = buildRec();
+    recognitionRef.current = rec;
+    var resetSilenceTimer = attachHandlers(rec);
 
     try {
       rec.start();
+      lastVoiceActivityRef.current = Date.now();
       resetSilenceTimer();
     } catch (e) {
-      setListening(false);
-      if (toast) toast.warning('Could not start microphone');
+      // InvalidStateError when an instance is still alive — abort + retry once.
+      try {
+        rec.abort();
+        setTimeout(function() {
+          try { rec.start(); resetSilenceTimer(); } catch (e2) {
+            setListening(false);
+            userWantsListenRef.current = false;
+            if (toast) toast.warning('Could not start microphone — try clicking again');
+          }
+        }, 150);
+      } catch (e3) {
+        setListening(false);
+        userWantsListenRef.current = false;
+        if (toast) toast.warning('Could not start microphone');
+      }
     }
   };
 
   var stopListen = function() {
+    userWantsListenRef.current = false;
     clearSilenceTimer();
     if (recognitionRef.current) {
       try { recognitionRef.current.stop(); } catch (e) {}
@@ -703,16 +784,25 @@ export default function AIGreeter({ user, userProfile, users, tickets, invoices,
             <span>{useLang === 'ar' ? 'إيقاف المساعد' : 'Tap to stop Nadia'}</span>
           </button>
         )}
-        {/* Listening status strip — shows what was heard in real time and how long until auto-send. */}
+        {/* Listening status — big obvious STOP & SEND button. Users were missing
+            the small mic-icon color change so they'd wait endlessly. Now it's
+            a full-width red button with live mic animation + accumulated text. */}
         {listening && (
-          <div className="mb-2 px-3 py-1.5 rounded-xl bg-emerald-500/20 border border-emerald-500/40 text-emerald-200 text-[11px] flex items-center gap-2">
-            <span className="flex items-end gap-0.5 h-3">
-              {[0,1,2,3].map(function(i) { return <span key={i} className="w-0.5 rounded-full bg-emerald-400" style={{ height: 3 + Math.random() * 8, animation: 'pulse 0.6s infinite', animationDelay: i * 80 + 'ms' }} />; })}
+          <button onClick={stopListen}
+            className="w-full mb-2 px-3 py-2.5 rounded-xl bg-red-500 hover:bg-red-600 text-white text-sm font-bold flex items-center gap-2 shadow-lg animate-pulse"
+            title={useLang === 'ar' ? 'اضغط لإنهاء التسجيل وإرسال' : 'Tap to stop recording and send'}>
+            <span className="flex items-end gap-0.5 h-4 flex-shrink-0">
+              {[0,1,2,3,4].map(function(i) { return <span key={i} className="w-1 rounded-full bg-white" style={{ height: 3 + Math.random() * 12, animation: 'pulse 0.5s infinite', animationDelay: i * 60 + 'ms' }} />; })}
             </span>
-            <span className="flex-1 font-semibold">
-              {useLang === 'ar' ? 'أستمع… تحدث كما تريد. اضغط المايك لإنهاء.' : 'Listening… speak as long as you like. Tap mic to send.'}
+            <span className="flex-1 text-left truncate">
+              {input
+                ? '🎤 ' + input.substring(0, 60) + (input.length > 60 ? '…' : '')
+                : (useLang === 'ar' ? '🎤 أستمع… تحدث' : '🎤 Recording… speak now')}
             </span>
-          </div>
+            <span className="flex-shrink-0 text-[11px] bg-white/20 rounded px-2 py-0.5">
+              {useLang === 'ar' ? 'إيقاف وإرسال ⏹' : 'STOP & SEND ⏹'}
+            </span>
+          </button>
         )}
         <div className="flex items-center gap-2 rounded-xl px-3 py-1.5" style={{ background: 'rgba(255,255,255,0.07)', border: '1px solid rgba(255,255,255,0.1)' }}>
           <button

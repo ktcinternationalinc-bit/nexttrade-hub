@@ -110,5 +110,3 @@ SUPABASE_URL=xxx SUPABASE_KEY=xxx node scripts/seed.js
 - WhatsApp integration (per-user)
 - Deal pipeline (Lead → Won/Lost)
 - Client health scoring
-
-

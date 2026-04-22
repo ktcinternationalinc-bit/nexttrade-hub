@@ -155,6 +155,55 @@ export async function POST(request) {
         if (intent !== 'unknown') decisionPromise = runDecisionEngine(question);
       } catch(e) { decisionPromise = null; }
 
+      // Pending cross-team messages — previously missing from greeter flow.
+      // If another team member (usually Max) asked Nadia to relay a message
+      // or reminder to THIS user, surface it in the greeting so they actually
+      // hear about it. Without this append, Omar's greeter would never know
+      // Max sent him a reminder last night.
+      var crossTeamBlock = '';
+      try {
+        if (userId) {
+          // Pending ai_memory messages targeted at this user (not yet expired, not auto-captured)
+          var pendingMsgRes = await supabase.from('ai_memory')
+            .select('content, type, created_at, created_by')
+            .eq('target_user_id', userId)
+            .eq('auto_captured', false)
+            .or('expires_at.is.null,expires_at.gt.' + new Date().toISOString())
+            .order('created_at', { ascending: false })
+            .limit(10);
+          var pending = (pendingMsgRes && pendingMsgRes.data) || [];
+
+          // Active team_reminders targeted at this user — either 'all' or this uuid
+          var remRes = await supabase.from('team_reminders')
+            .select('title, message, reminder_date, priority, target_users, created_by')
+            .or('target_users.eq.all,target_users.eq.' + userId)
+            .order('reminder_date', { ascending: true })
+            .limit(10);
+          var reminders = ((remRes && remRes.data) || []).filter(function(r) {
+            // Only surface reminders due today or earlier (past-due or due now)
+            return !r.reminder_date || r.reminder_date <= new Date().toISOString().substring(0, 10);
+          });
+
+          if (pending.length > 0 || reminders.length > 0) {
+            crossTeamBlock = '\n\n===== PENDING MESSAGES FOR THIS USER =====\n';
+            crossTeamBlock += 'Another team member asked you (Nadia) to relay the following to this user. SURFACE THESE in your greeting — they haven\'t seen them yet.\n';
+            if (pending.length > 0) {
+              crossTeamBlock += '\nDirect messages:\n';
+              pending.forEach(function(m) {
+                crossTeamBlock += '- [' + (m.type || 'note') + '] ' + (m.content || '') + '\n';
+              });
+            }
+            if (reminders.length > 0) {
+              crossTeamBlock += '\nReminders sent to this user:\n';
+              reminders.forEach(function(r) {
+                crossTeamBlock += '- [' + (r.priority || 'normal') + ']' + (r.reminder_date ? ' (due ' + r.reminder_date + ')' : '') + ' ' + (r.message || r.title || '') + '\n';
+              });
+            }
+            crossTeamBlock += '===== END PENDING MESSAGES =====\n';
+          }
+        }
+      } catch(e) { /* non-fatal — never block greeting on this */ }
+
       try {
         var gMessages = [];
         if (body.history && body.history.length) {
@@ -176,7 +225,7 @@ export async function POST(request) {
         var gResponse = await fetch('https://api.anthropic.com/v1/messages', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json', 'x-api-key': apiKey, 'anthropic-version': '2023-06-01' },
-          body: JSON.stringify({ model: 'claude-sonnet-4-20250514', max_tokens: 400, system: body.systemOverride, messages: gMessages }),
+          body: JSON.stringify({ model: 'claude-sonnet-4-20250514', max_tokens: 400, system: body.systemOverride + crossTeamBlock, messages: gMessages }),
         });
         if (gResponse.ok) {
           var gData = await gResponse.json();
@@ -379,7 +428,33 @@ export async function POST(request) {
     if (restrictedModules.length > 0) {
       context += 'ACCESS RESTRICTIONS: This user does NOT have access to: ' + restrictedModules.join(', ') + '. If they ask about restricted data, politely tell them they do not have access to that information and should contact their manager.\n';
     }
-    context += '\n';
+
+    // Explicit super_admin scope expansion — previously Claude refused employee
+    // questions because the system prompt didn't say she had that visibility.
+    // For super_admins (Max), she DOES: tickets, events, daily_log, and team_profiles
+    // all carry per-user info. Tell her to use it.
+    if (isSuperAdmin) {
+      context += '\n===== SUPER ADMIN ACCESS — YOU HAVE FULL TEAM VISIBILITY =====\n';
+      context += 'The current user (' + currentUserName + ') is a SUPER ADMIN and has authority over the entire team.\n';
+      context += 'You DO have visibility into every team member through:\n';
+      context += '  • TICKETS — shows assigned_to, status, due dates, overdue flags for ALL employees\n';
+      context += '  • CALENDAR EVENTS — all team events are loaded\n';
+      context += '  • DAILY_LOG — recent activity entries for every user (check-ins, logouts, tickets created/updated, notes, rates logged, etc.)\n';
+      context += '  • TEAM PROFILES — job title, strengths, weaknesses, personality notes on each member\n';
+      context += '  • FOLLOW_UPS — each team member\'s assigned CRM tasks\n';
+      context += '  • INVOICES — with sales_rep attribution\n';
+      context += 'When Max asks about an employee ("what has Omar been doing today", "is Mohamed online", "did anyone close tickets this week", "show me Ahmed\'s overdue items") — ANSWER IT using the data above. Do NOT refuse by saying you are "just a personal assistant" or "don\'t track HR" — you have the data, use it. You are his executive assistant with full operational visibility.\n';
+      context += 'You also have cross-team SEND authority:\n';
+      context += '  • create_ticket with assigned_to=<employee_uuid> — delegate work\n';
+      context += '  • create_reminder with target_users=<employee_uuid> — send them a reminder\n';
+      context += '  • send_team_message with target_user_id=<employee_uuid> — direct message\n';
+      context += '  • create_event with assigned_to=<employee_uuid> — schedule for them\n';
+      context += 'When Max says "remind Omar to follow up with X", "tell Mohamed to finalize the shipping quote", "warn Ahmed about the overdue ticket" — do it immediately with the appropriate action JSON. Match employee by name against the TEAM list (case-insensitive, accepts nicknames and partial matches).\n';
+      context += 'When answering questions about employee activity, be direct and factual. You are giving an executive a status report on his team, not writing an HR review. Stick to what the data says.\n';
+      context += '===========================================\n\n';
+    } else {
+      context += '\n';
+    }
     context += 'CAPABILITIES:\n';
     context += '1. Answer business questions with real data\n';
     context += '2. Execute commands (tickets, meetings, reminders, rate requests)\n';
@@ -684,6 +759,38 @@ export async function POST(request) {
     // AI MEMORY — inject per-user memory + context into the system prompt.
     // Non-fatal on error. Settings-gated. Respects cross_user_read scope.
     var memoryCtx = null;
+
+    // For super_admin, surface recent login activity so Nadia can answer
+    // "is Omar online right now?", "who logged in today?", "when did Ahmed
+    // last log in?". We load a compact, per-user summary rather than raw events.
+    if (isSuperAdmin) {
+      try {
+        var since = new Date(Date.now() - 7 * 86400000).toISOString();
+        var leRes = await supabase.from('login_events')
+          .select('user_id, event_type, created_at')
+          .gte('created_at', since)
+          .order('created_at', { ascending: false })
+          .limit(500);
+        var events = (leRes && leRes.data) || [];
+        // Per-user: last_seen, login_today flag, count_this_week
+        var byUser = {};
+        events.forEach(function(e) {
+          if (!byUser[e.user_id]) byUser[e.user_id] = { last_seen: e.created_at, logins_7d: 0, last_event: e.event_type };
+          if (e.event_type === 'login') byUser[e.user_id].logins_7d++;
+        });
+        if (Object.keys(byUser).length > 0) {
+          context += '\nTEAM ACTIVITY (last 7 days — for is-online / attendance questions):\n';
+          Object.keys(byUser).forEach(function(uid) {
+            var u = users.find(function(x) { return x.id === uid; });
+            if (!u) return;
+            var info = byUser[uid];
+            var minutesAgo = Math.round((Date.now() - new Date(info.last_seen).getTime()) / 60000);
+            var onlineNow = minutesAgo < 10 && info.last_event !== 'logout';
+            context += '- ' + u.name + ': last activity ' + minutesAgo + ' min ago' + (onlineNow ? ' [ONLINE NOW]' : '') + ' | ' + info.logins_7d + ' logins this week\n';
+          });
+        }
+      } catch(e) { /* non-fatal */ }
+    }
     try {
       var currentUserProfile = null;
       if (userId) {
@@ -781,6 +888,36 @@ export async function POST(request) {
         // Auto-execute safe actions immediately (tickets, events, reminders, rates, notes)
         var autoExecTypes = ['create_ticket', 'update_ticket', 'create_event', 'create_reminder', 'send_team_message', 'create_rate', 'add_meeting_notes'];
         if (autoExecTypes.indexOf(actionData.type) >= 0) {
+          // Permission gate — stop non-authorized users from triggering actions
+          // they wouldn't be allowed to do in the UI. Super admin + admin are
+          // cleared for everything; other users can do non-financial actions
+          // for themselves, but sensitive ones (shipping rate entry, treasury
+          // impact) require admin. Cross-team messaging (send_team_message,
+          // create_reminder targeting another user) also requires admin.
+          var isAdminish = isSuperAdmin || currentUserRole === 'admin';
+          var blocked = false;
+          var blockReason = '';
+          if (!isAdminish) {
+            if (actionData.type === 'create_rate') {
+              blocked = true;
+              blockReason = 'Only admins can log shipping rates. Ask Max or the operations lead to record this rate.';
+            } else if (actionData.type === 'send_team_message' && actionData.target_user_id && actionData.target_user_id !== userId) {
+              blocked = true;
+              blockReason = 'Only admins can send direct messages to other team members through the AI.';
+            } else if (actionData.type === 'create_reminder' && actionData.target_users && actionData.target_users !== 'self' && actionData.target_users !== userId) {
+              blocked = true;
+              blockReason = 'Only admins can send reminders to other team members. You can still create reminders for yourself.';
+            } else if (actionData.type === 'create_ticket' && actionData.assigned_to && actionData.assigned_to !== userId) {
+              // Non-admins CAN create tickets assigned to themselves or unassigned, but not delegate to others.
+              // (This preserves the "I want to open a ticket for a rate quote" flow while stopping "assign this to Ahmed" from non-admins.)
+              blocked = true;
+              blockReason = 'Only admins can assign tickets to other team members. I can create this ticket assigned to you instead — just say so.';
+            }
+          }
+          if (blocked) {
+            return Response.json({ answer: (cleanText.trim() ? cleanText.trim() + '\n\n' : '') + '⚠️ ' + blockReason });
+          }
+
           try {
             var execResult = null;
             if (actionData.type === 'create_ticket') {
