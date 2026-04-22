@@ -148,8 +148,10 @@ test('M10b team_reminders filtered to due today or earlier', function() {
 test('M11 Pending messages block appended to system prompt', function() {
   assert(/PENDING MESSAGES FOR THIS USER/.test(askRoute),
     'system prompt must include a labeled PENDING MESSAGES block');
-  assert(/body\.systemOverride \+ crossTeamBlock/.test(askRoute),
-    'crossTeamBlock must be concatenated onto the greeter system prompt');
+  // S9 upgrade: system prompt now concatenates override + superAdminBlock +
+  // actionSyntaxBlock + crossTeamBlock. crossTeamBlock must still be on the end.
+  assert(/body\.systemOverride \+ superAdminBlock \+ actionSyntaxBlock \+ crossTeamBlock/.test(askRoute),
+    'crossTeamBlock must still be concatenated onto the greeter system prompt (as the final piece after super-admin + action blocks)');
 });
 
 // ===== PERMISSIONS =====

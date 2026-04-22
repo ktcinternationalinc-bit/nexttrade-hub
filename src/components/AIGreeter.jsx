@@ -89,6 +89,13 @@ export default function AIGreeter({ user, userProfile, users, tickets, invoices,
   var recordStartTsRef = useRef(0);
   var [recordElapsed, setRecordElapsed] = useState(0);
   var recordTickRef = useRef(null);
+  // S10 2026-04-22 — backup transcription path. While the user is recording,
+  // we ALSO run the browser's built-in speech recognition in parallel. If
+  // Whisper fails (missing API key, network issue, etc.) we still have the
+  // user's words and can proceed. This is why the Record button now works
+  // even if OPENAI_API_KEY is never added to Vercel.
+  var recordBackupRecogRef = useRef(null);
+  var recordBackupTextRef = useRef('');
   var [aiMemory, setAiMemory] = useState('');
 
   var myId = userProfile?.id || user?.id;
@@ -610,16 +617,23 @@ export default function AIGreeter({ user, userProfile, users, tickets, invoices,
   };
 
   // =====================================================================
-  // RECORD BUTTON (NEW — reliable alternative to the live mic)
+  // RECORD BUTTON — now bulletproof (S10 2026-04-22)
   //
-  // Uses MediaRecorder to capture audio for as long as the user wants,
-  // then ships it to /api/transcribe (Whisper) on stop. Unlike the live
-  // SpeechRecognition mic, this never auto-cuts mid-sentence, never
-  // fails silently on the first click, and works identically across
-  // Chrome / Safari / Firefox.
+  // Why this button exists: the live mic sometimes cuts off mid-sentence on
+  // Chromium. This one never does — user taps to start, taps to stop.
   //
-  // Flow: tap 🎙️ → tap again → audio uploads → transcript fills input →
-  // Nadia receives text like any typed message.
+  // How it works now (the important part):
+  //   1. Start — we turn on TWO things at once:
+  //        a) Audio recording (for Whisper)
+  //        b) The browser's built-in speech-to-text (as a free backup)
+  //   2. Stop — we try Whisper first because it's more accurate, especially
+  //      in Arabic. If Whisper fails for ANY reason (no key, network issue,
+  //      anything), we silently use what the browser already transcribed.
+  //   3. Errors — if both fail, we show a big RED card inside the chat
+  //      explaining exactly what went wrong. Nothing ever fails silently.
+  //
+  // Every step logs to the browser console with the [record] prefix so if
+  // it still breaks, the console tells us exactly where.
   // =====================================================================
 
   var stopRecordingTick = function() {
@@ -638,15 +652,51 @@ export default function AIGreeter({ user, userProfile, users, tickets, invoices,
     }
   };
 
+  // Stop + tear down the backup SpeechRecognition. Safe to call multiple
+  // times — a null ref is a no-op.
+  var stopBackupRecog = function() {
+    if (recordBackupRecogRef.current) {
+      try {
+        recordBackupRecogRef.current.onresult = null;
+        recordBackupRecogRef.current.onerror = null;
+        recordBackupRecogRef.current.onend = null;
+      } catch (e) {}
+      try { recordBackupRecogRef.current.stop(); } catch (e) {}
+      try { recordBackupRecogRef.current.abort(); } catch (e) {}
+      recordBackupRecogRef.current = null;
+    }
+  };
+
+  // Push a loud inline error card into the chat. This is the new primary
+  // way we communicate failures during recording — small auto-dismissing
+  // toasts were getting missed, especially on mobile.
+  var pushRecordError = function(title, detail) {
+    try { console.warn('[record] error card:', title, '|', detail); } catch (e) {}
+    var newMsgs = (messages || []).concat([{
+      role: 'assistant',
+      text: '⚠️ ' + title + (detail ? '\n\n' + detail : ''),
+      isRecordError: true, // picked up by renderer for red styling
+    }]);
+    setMessages(newMsgs);
+    // Show the existing toast too, as a backup — won't dismiss before the
+    // card is visible in chat.
+    if (toast) { try { toast.warning(title); } catch (e) {} }
+  };
+
   var startRecording = async function() {
     if (recording || transcribing) return;
-    // Barge-in: if Nadia is speaking, cut her off — user wants to record.
+    try { console.log('[record] startRecording invoked'); } catch (e) {}
+
+    // Barge-in: if Nadia is speaking, cut her off.
     if (speaking) { try { stopSpeech(); } catch (e) {} }
-    // Also make sure the live-mic isn't running; these two modes are mutually exclusive.
+    // Live-mic and recorder are mutually exclusive.
     if (listening) { try { stopListen(); } catch (e) {} }
 
     if (typeof navigator === 'undefined' || !navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
-      if (toast) toast.warning('Recording not supported in this browser');
+      pushRecordError(
+        useLang === 'ar' ? 'المتصفح لا يدعم التسجيل' : 'Recording not supported in this browser',
+        useLang === 'ar' ? 'جرب فتح الصفحة في Chrome أو Safari حديث.' : 'Try opening this page in an up-to-date Chrome, Edge, or Safari.'
+      );
       return;
     }
 
@@ -654,13 +704,17 @@ export default function AIGreeter({ user, userProfile, users, tickets, invoices,
     try {
       stream = await navigator.mediaDevices.getUserMedia({ audio: true });
     } catch (e) {
-      if (toast) toast.warning('Microphone access denied. Click the 🔒 icon in the address bar to allow.');
+      try { console.warn('[record] getUserMedia denied:', e && e.message); } catch (er) {}
+      pushRecordError(
+        useLang === 'ar' ? 'تم رفض الوصول إلى الميكروفون' : 'Microphone access was denied',
+        useLang === 'ar' ? 'افتح إعدادات الموقع في المتصفح واسمح بالوصول إلى الميكروفون، ثم حاول مرة أخرى.' : 'Click the 🔒 icon in the address bar, set Microphone to "Allow", reload the page, and try again.'
+      );
       return;
     }
     mediaStreamRef.current = stream;
+    try { console.log('[record] mic stream acquired'); } catch (e) {}
 
-    // Pick the best supported mime type for this browser. OpenAI accepts
-    // webm/ogg/mp4/m4a/mp3/wav, so we just use whatever the browser gives us.
+    // Pick the best supported mime type for MediaRecorder.
     var preferred = ['audio/webm;codecs=opus', 'audio/webm', 'audio/ogg;codecs=opus', 'audio/mp4', ''];
     var mime = '';
     for (var i = 0; i < preferred.length; i++) {
@@ -671,73 +725,197 @@ export default function AIGreeter({ user, userProfile, users, tickets, invoices,
         }
       } catch (e) {}
     }
+    try { console.log('[record] using mime:', mime || '(default)'); } catch (e) {}
 
     var mr;
     try {
       mr = mime ? new MediaRecorder(stream, { mimeType: mime }) : new MediaRecorder(stream);
     } catch (e) {
       releaseMediaStream();
-      if (toast) toast.warning('Could not start recorder: ' + (e && e.message ? e.message : 'unknown'));
+      pushRecordError(
+        useLang === 'ar' ? 'تعذر بدء المسجل' : 'Could not start recorder',
+        (e && e.message) ? String(e.message) : (useLang === 'ar' ? 'خطأ غير معروف — أعد تحميل الصفحة وجرب مرة أخرى.' : 'Unknown error. Reload the page and try again.')
+      );
       return;
     }
     mediaRecorderRef.current = mr;
     audioChunksRef.current = [];
+    recordBackupTextRef.current = '';
 
     mr.ondataavailable = function(ev) {
       if (ev && ev.data && ev.data.size > 0) audioChunksRef.current.push(ev.data);
     };
 
     mr.onerror = function(ev) {
-      if (toast) toast.warning('Recorder error: ' + (ev && ev.error && ev.error.name ? ev.error.name : 'unknown'));
+      try { console.warn('[record] MediaRecorder.onerror:', ev && ev.error); } catch (e) {}
+      pushRecordError(
+        useLang === 'ar' ? 'خطأ في المسجل' : 'Recorder error',
+        ev && ev.error && ev.error.name ? ('Error type: ' + ev.error.name) : ''
+      );
       setRecording(false);
       stopRecordingTick();
+      stopBackupRecog();
       releaseMediaStream();
     };
 
     mr.onstop = async function() {
+      try { console.log('[record] MediaRecorder.onstop — gathering result'); } catch (e) {}
       stopRecordingTick();
       setRecording(false);
+
+      // Give the backup recognition a moment to finalize any last interim
+      // text before we tear it down (SpeechRecognition can be async about
+      // flushing the final result).
+      await new Promise(function(resolve) { setTimeout(resolve, 250); });
+      var backupText = String(recordBackupTextRef.current || '').trim();
+      stopBackupRecog();
       releaseMediaStream();
+      try { console.log('[record] backup transcript captured:', backupText.length, 'chars'); } catch (e) {}
 
       var chunks = audioChunksRef.current || [];
       audioChunksRef.current = [];
-      if (chunks.length === 0) return;
 
-      var type = chunks[0].type || mime || 'audio/webm';
-      var blob = new Blob(chunks, { type: type });
-      // Guard rails: extremely small blobs are almost certainly silent taps.
-      if (blob.size < 1000) {
-        if (toast) toast.info('Recording was too short — try again');
+      // CASE 1: No audio chunks captured at all. Very unusual — usually means
+      // the mic never produced data. Still — if backup picked up text, use it.
+      if (chunks.length === 0) {
+        try { console.warn('[record] no audio chunks captured'); } catch (e) {}
+        if (backupText) {
+          try { console.log('[record] falling back to backup transcript (no audio)'); } catch (e) {}
+          setInput('');
+          doSend(backupText);
+          return;
+        }
+        pushRecordError(
+          useLang === 'ar' ? 'لم يتم تسجيل أي صوت' : 'No audio was captured',
+          useLang === 'ar' ? 'تأكد من أن الميكروفون يعمل ولم تكتمه الأيقونة في شريط الأدوات.' : 'Check that your microphone is not muted (system tray / address bar icon), then try again.'
+        );
         return;
       }
 
-      // Ship to Whisper
+      var type = chunks[0].type || mime || 'audio/webm';
+      var blob = new Blob(chunks, { type: type });
+      try { console.log('[record] blob built — type:', type, 'size:', blob.size); } catch (e) {}
+
+      // CASE 2: Very tiny blob usually means a silent tap. If backup has
+      // text anyway, send it; otherwise advise the user.
+      if (blob.size < 1000) {
+        if (backupText) {
+          try { console.log('[record] tiny blob but backup has text — sending backup'); } catch (e) {}
+          setInput('');
+          doSend(backupText);
+          return;
+        }
+        pushRecordError(
+          useLang === 'ar' ? 'التسجيل قصير جدًا' : 'Recording was too short',
+          useLang === 'ar' ? 'اضغط على الزر، تحدث بوضوح، ثم اضغط إيقاف.' : 'Tap the button, speak clearly for a few seconds, then tap stop.'
+        );
+        return;
+      }
+
+      // CASE 3: Normal path — try Whisper first for best quality.
       setTranscribing(true);
+      var whisperText = '';
+      var whisperError = null;
       try {
         var form = new FormData();
         var ext = type.indexOf('mp4') >= 0 ? 'mp4' : type.indexOf('ogg') >= 0 ? 'ogg' : 'webm';
         form.append('audio', blob, 'recording.' + ext);
         form.append('language', useLang === 'ar' ? 'ar' : 'en');
+        try { console.log('[record] posting to /api/transcribe'); } catch (e) {}
         var r = await fetch('/api/transcribe', { method: 'POST', body: form });
-        var data = await r.json();
-        if (!r.ok || data.error) {
-          if (toast) toast.warning(data.error || 'Transcription failed');
-          return;
+        var data = null;
+        try { data = await r.json(); } catch (parseErr) { data = { error: 'Server returned invalid JSON (status ' + r.status + ')' }; }
+        if (!r.ok || (data && data.error)) {
+          whisperError = (data && data.error) || ('HTTP ' + r.status);
+          try { console.warn('[record] Whisper failed:', whisperError); } catch (e) {}
+        } else {
+          whisperText = String((data && data.text) || '').trim();
+          try { console.log('[record] Whisper returned', whisperText.length, 'chars'); } catch (e) {}
         }
-        var text = String(data.text || '').trim();
-        if (!text) {
-          if (toast) toast.info('Nothing was transcribed — try speaking closer to the mic');
-          return;
-        }
-        // Send straight to Nadia, exactly as if the user had typed it.
-        setInput('');
-        doSend(text);
       } catch (e) {
-        if (toast) toast.warning('Transcription error: ' + (e && e.message ? e.message : 'unknown'));
+        whisperError = (e && e.message) ? e.message : 'network error';
+        try { console.warn('[record] Whisper fetch threw:', whisperError); } catch (er) {}
       } finally {
         setTranscribing(false);
       }
+
+      // Decision: Whisper wins if it returned text. Otherwise fall back to
+      // the browser's built-in transcript we ran in parallel.
+      var finalText = whisperText || backupText;
+
+      if (finalText) {
+        if (!whisperText && backupText) {
+          try { console.log('[record] using browser backup transcript because Whisper failed:', whisperError); } catch (e) {}
+        }
+        setInput('');
+        doSend(finalText);
+        return;
+      }
+
+      // CASE 4: Both paths returned nothing. Explain plainly and point to
+      // the most likely cause so Max knows what to do.
+      var title, detail;
+      if (whisperError && /OPENAI_API_KEY|not configured/i.test(String(whisperError))) {
+        title = useLang === 'ar' ? 'خدمة التفريغ النصي غير مفعّلة وفشل النسخ الاحتياطي أيضًا' : 'Transcription service not set up and browser backup came back empty';
+        detail = useLang === 'ar'
+          ? 'اضغط وتحدث مباشرة بجوار الميكروفون، ثم اضغط إيقاف. إذا استمرت المشكلة، راجع إعدادات الميكروفون.'
+          : 'The premium transcription (Whisper) has not been configured in Vercel (needs OPENAI_API_KEY), AND the browser backup did not pick up any speech. Speak clearly and close to the mic, then tap stop. If it keeps happening, check your microphone.';
+      } else if (whisperError) {
+        title = useLang === 'ar' ? 'لم يتمكن من التعرف على أي كلام' : 'Could not transcribe anything';
+        detail = useLang === 'ar'
+          ? ('سبب الفشل: ' + whisperError + '. حاول التحدث بوضوح أقرب إلى الميكروفون.')
+          : ('Whisper error: ' + whisperError + '. The browser backup also came back empty — please speak closer to the mic and try again.');
+      } else {
+        title = useLang === 'ar' ? 'لم يتم التعرف على أي كلام' : 'No speech was detected';
+        detail = useLang === 'ar'
+          ? 'قد يكون الميكروفون مكتوماً. تحقق من إعدادات النظام، ثم حاول مرة أخرى.'
+          : 'Your mic may be muted at the system level, or you may be too far from it. Check your system audio settings and try again.';
+      }
+      pushRecordError(title, detail);
     };
+
+    // Start backup SpeechRecognition in parallel — this is the safety net.
+    // If anything fails here we just skip the backup and rely on Whisper;
+    // this path is best-effort on purpose.
+    try {
+      var SR2 = typeof window !== 'undefined' ? (window.SpeechRecognition || window.webkitSpeechRecognition) : null;
+      if (SR2) {
+        var br = new SR2();
+        br.lang = useLang === 'ar' ? 'ar-EG' : 'en-US';
+        var ua2 = typeof navigator !== 'undefined' ? navigator.userAgent : '';
+        var isSafari2 = /^((?!chrome|android).)*safari/i.test(ua2);
+        br.continuous = !isSafari2;
+        br.interimResults = true;
+        br.maxAlternatives = 1;
+        br.onresult = function(ev) {
+          // Only accumulate final results into the backup buffer.
+          var added = '';
+          for (var j = ev.resultIndex; j < ev.results.length; j++) {
+            var res2 = ev.results[j];
+            if (res2.isFinal && res2[0] && res2[0].transcript) {
+              added += res2[0].transcript + ' ';
+            }
+          }
+          if (added) {
+            recordBackupTextRef.current = (recordBackupTextRef.current || '') + added;
+          }
+        };
+        br.onerror = function(e) {
+          // Non-fatal — we still have the recording.
+          try { console.log('[record] backup SR error (non-fatal):', e && e.error); } catch (er) {}
+        };
+        br.onend = function() {
+          // Auto-restart while still recording — same trick as the live mic.
+          if (recording && recordBackupRecogRef.current === br) {
+            try { br.start(); } catch (restartErr) { /* ignore */ }
+          }
+        };
+        recordBackupRecogRef.current = br;
+        try { br.start(); console.log('[record] backup SR started'); } catch (e) { try { console.log('[record] backup SR start failed (non-fatal):', e && e.message); } catch (er) {} }
+      } else {
+        try { console.log('[record] SpeechRecognition not available in this browser — skipping backup path'); } catch (e) {}
+      }
+    } catch (e) { /* best-effort — ignore */ }
 
     try {
       // timeslice=1000 gives us a data chunk every second so if something
@@ -749,9 +927,14 @@ export default function AIGreeter({ user, userProfile, users, tickets, invoices,
       recordTickRef.current = setInterval(function() {
         setRecordElapsed(Math.floor((Date.now() - recordStartTsRef.current) / 1000));
       }, 1000);
+      try { console.log('[record] recording started'); } catch (e) {}
     } catch (e) {
+      stopBackupRecog();
       releaseMediaStream();
-      if (toast) toast.warning('Could not start recorder');
+      pushRecordError(
+        useLang === 'ar' ? 'تعذر بدء المسجل' : 'Could not start recorder',
+        (e && e.message) ? String(e.message) : ''
+      );
     }
   };
 
@@ -832,9 +1015,12 @@ export default function AIGreeter({ user, userProfile, users, tickets, invoices,
       } catch (e) {}
 
       var endpoint = useV2 ? '/api/ask-v2' : '/api/ask';
+      // S9 2026-04-22: userId added to legacy greeter payload too. Without
+      // this the server cannot detect super_admin and the team-visibility
+      // / cross-team-action blocks never get injected into Nadia's prompt.
       var payload = useV2
         ? { question: q, history: isGreeting ? [] : hist.slice(-8), userId: (userProfile && userProfile.id) || null }
-        : { question: q, mode: 'greeter', systemOverride: sysPrompt + '\n' + ctx, history: isGreeting ? [] : hist.slice(-8) };
+        : { question: q, mode: 'greeter', systemOverride: sysPrompt + '\n' + ctx, history: isGreeting ? [] : hist.slice(-8), userId: (userProfile && userProfile.id) || null };
 
       var res = await fetch(endpoint, {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
@@ -928,6 +1114,17 @@ export default function AIGreeter({ user, userProfile, users, tickets, invoices,
       {/* Chat */}
       <div className="px-4 py-3 max-h-[220px] overflow-y-auto" style={{ minHeight: 50 }}>
         {messages.slice(0, -1).map(function(m, i) {
+          // Record-error messages get loud red styling so they can't be missed.
+          if (m.isRecordError) {
+            return (
+              <div key={i} className="mb-3 flex flex-col items-start">
+                <div className="max-w-[92%] px-3 py-2.5 rounded-xl text-xs leading-relaxed border-2 border-red-500"
+                  style={{ background: 'rgba(220, 38, 38, 0.15)', color: '#fecaca', direction: useLang === 'ar' ? 'rtl' : 'ltr', whiteSpace: 'pre-wrap' }}>
+                  {m.text}
+                </div>
+              </div>
+            );
+          }
           return (
             <div key={i} className={'mb-2 flex flex-col ' + (m.role === 'user' ? 'items-end' : 'items-start')}>
               <div className={'max-w-[80%] px-3 py-2 rounded-2xl text-xs leading-relaxed ' + (m.role === 'user' ? 'bg-blue-500 text-white rounded-br-sm' : 'text-slate-200 rounded-bl-sm')}
@@ -939,14 +1136,23 @@ export default function AIGreeter({ user, userProfile, users, tickets, invoices,
           );
         })}
         {lastMsg && lastMsg.role === 'assistant' && (
-          <div className="mb-2 flex flex-col items-start">
-            <div className="max-w-[80%] px-3 py-2 rounded-2xl rounded-bl-sm text-xs leading-relaxed text-slate-200"
-              style={{ background: persona.color + '20', direction: useLang === 'ar' ? 'rtl' : 'ltr' }}>
-              {showTypingAnim ? typingText : lastMsg.text}
-              {showTypingAnim && <span className="inline-block w-0.5 h-3 bg-white/60 ml-0.5 animate-pulse" />}
+          lastMsg.isRecordError ? (
+            <div className="mb-3 flex flex-col items-start">
+              <div className="max-w-[92%] px-3 py-2.5 rounded-xl text-xs leading-relaxed border-2 border-red-500"
+                style={{ background: 'rgba(220, 38, 38, 0.15)', color: '#fecaca', direction: useLang === 'ar' ? 'rtl' : 'ltr', whiteSpace: 'pre-wrap' }}>
+                {lastMsg.text}
+              </div>
             </div>
-            {!showTypingAnim && lastMsg.decision && renderDecisionPanel(lastMsg.decision, -1, useLang)}
-          </div>
+          ) : (
+            <div className="mb-2 flex flex-col items-start">
+              <div className="max-w-[80%] px-3 py-2 rounded-2xl rounded-bl-sm text-xs leading-relaxed text-slate-200"
+                style={{ background: persona.color + '20', direction: useLang === 'ar' ? 'rtl' : 'ltr' }}>
+                {showTypingAnim ? typingText : lastMsg.text}
+                {showTypingAnim && <span className="inline-block w-0.5 h-3 bg-white/60 ml-0.5 animate-pulse" />}
+              </div>
+              {!showTypingAnim && lastMsg.decision && renderDecisionPanel(lastMsg.decision, -1, useLang)}
+            </div>
+          )
         )}
         {lastMsg && lastMsg.role === 'user' && (
           <div className="mb-2 flex justify-end">

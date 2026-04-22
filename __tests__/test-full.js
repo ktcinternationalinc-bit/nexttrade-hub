@@ -4600,8 +4600,10 @@ function runSection38_DecisionEngine() {
     '38.wire.1a /api/ask imports decision engine');
   assert(/var intent = detectIntent\(question\);[\s\S]{0,100}decisionPromise = runDecisionEngine\(question\)/.test(ask),
     '38.wire.1b /api/ask pre-runs decision engine when intent detected');
-  assert(/return Response\.json\(\{ answer: gText, decision: decision \}\);/.test(ask),
-    '38.wire.1c /api/ask returns { answer, decision } so UI can render action buttons');
+  // S9 upgrade: greeter response now also carries actions_executed (array of
+  // server-side action results). answer + decision must still be present.
+  assert(/return Response\.json\(\{ answer: finalText, decision: decision, actions_executed: actionsExecuted \}\);/.test(ask),
+    '38.wire.1c /api/ask greeter returns { answer, decision, actions_executed } — preserves answer+decision contract and adds action results');
 
   // ---------- No backticks in decision engine / api routes (SWC rule) ----------
   assert(src.indexOf('`') === -1,

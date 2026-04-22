@@ -108,7 +108,11 @@ test('REC11 onstop uploads to /api/transcribe and sends transcript to Nadia', fu
   assert(/new FormData\(\)/.test(body), 'builds FormData');
   assert(/form\.append\('audio',/.test(body), 'attaches audio field');
   assert(/fetch\('\/api\/transcribe'/.test(body), 'posts to /api/transcribe');
-  assert(/doSend\(text\)/.test(body), 'sends transcribed text to Nadia');
+  // S10: transcript variable renamed to finalText because we now fall back
+  // to browser backup when Whisper fails. doSend must receive either the
+  // Whisper text OR the backup text.
+  assert(/doSend\((text|finalText|backupText)\)/.test(body),
+    'sends transcribed text (Whisper or browser backup) to Nadia');
 });
 
 test('REC12 onstop guards against tiny/silent blobs (<1 KB)', function() {

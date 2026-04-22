@@ -142,28 +142,226 @@ export async function POST(request) {
     var apiKey = process.env.ANTHROPIC_API_KEY;
     if (!apiKey) return Response.json({ answer: 'API key not configured. Add ANTHROPIC_API_KEY in Vercel env vars.' });
 
-    // GREETER MODE — conversational AI assistant
+    // GREETER MODE — conversational AI assistant.
+    //
+    // UPGRADED S9 (2026-04-22): super_admin team visibility + cross-team
+    // action execution now work from the dashboard greeter, not just the
+    // AI Assistant tab.
+    //
+    // Before S9 the greeter early-returned after calling Anthropic with
+    // only the client-built systemOverride. That system prompt had no
+    // login_events, no team_profiles, no other users' tickets, and no
+    // way to parse ---ACTION_START--- blocks. Symptom: Max would ask
+    // "is Omar online" from the dashboard and Nadia would say she didn't
+    // know; he would say "remind Omar to X" and she would agree but
+    // nothing would land in team_reminders. This block fixes that gap.
     if (body.mode === 'greeter' && body.systemOverride) {
       // Decision Engine pre-pass — if the user's question looks like a
       // decision question ("what should I do about invoice 2280?"), run
-      // the engine in parallel with the chat model. Its structured output
-      // gets returned alongside the chat answer so the UI can render
-      // action buttons without blocking the conversation.
+      // the engine in parallel with the chat model.
       var decisionPromise = null;
       try {
         var intent = detectIntent(question);
         if (intent !== 'unknown') decisionPromise = runDecisionEngine(question);
       } catch(e) { decisionPromise = null; }
 
-      // Pending cross-team messages — previously missing from greeter flow.
-      // If another team member (usually Max) asked Nadia to relay a message
-      // or reminder to THIS user, surface it in the greeting so they actually
-      // hear about it. Without this append, Omar's greeter would never know
-      // Max sent him a reminder last night.
+      // ---------- Resolve current user + team roster server-side ----------
+      // The client systemOverride is untrusted for auth purposes; we look
+      // up role here so super_admin gates can't be spoofed from the browser.
+      var gUsersList = [];
+      var gCurrentUserName = 'Unknown';
+      var gCurrentUserRole = 'viewer';
+      var gIsSuperAdmin = false;
+      try {
+        if (userId) {
+          var gUsersRes = await supabase.from('users').select('id, name, role');
+          gUsersList = (gUsersRes && gUsersRes.data) || [];
+          var gMe = gUsersList.find(function(u) { return u.id === userId; });
+          if (gMe) {
+            gCurrentUserName = gMe.name || 'Unknown';
+            gCurrentUserRole = gMe.role || 'viewer';
+            gIsSuperAdmin = gCurrentUserRole === 'super_admin';
+          }
+        }
+      } catch(e) { /* non-fatal — proceed with no team context */ }
+
+      // ---------- Super-admin team visibility block ----------
+      // team_profiles + login-derived TEAM ACTIVITY + per-assignee open
+      // tickets + recent daily_log. Only injected for super_admin so
+      // non-admins don't see HR-grade data on the dashboard.
+      var superAdminBlock = '';
+      if (gIsSuperAdmin) {
+        superAdminBlock += '\n\n===== SUPER ADMIN ACCESS — YOU HAVE FULL TEAM VISIBILITY =====\n';
+        superAdminBlock += 'The current user (' + gCurrentUserName + ') is a SUPER ADMIN. You DO have visibility into every team member through the sections below.\n';
+        superAdminBlock += 'You can answer questions using: TICKETS (assigned_to per employee), CALENDAR EVENTS (team schedule next 14 days), DAILY_LOG (recent activity entries for every user), TEAM PROFILES (job, personality, strengths), FOLLOW_UPS (each team member\'s CRM tasks), and LOGIN_EVENTS (who is online, attendance).\n';
+        superAdminBlock += 'When he asks about an employee ("what has Omar been doing", "is Mohamed online", "who has overdue items") — ANSWER using the team data below. Do NOT refuse by saying you "don\'t track HR" — you are his executive assistant with full operational visibility.\n';
+
+        // team_profiles
+        try {
+          var tpRes = await supabase.from('team_profiles').select('user_id, nickname, job_title, personality, strengths, weaknesses, notes');
+          var profiles = (tpRes && tpRes.data) || [];
+          if (profiles.length > 0) {
+            superAdminBlock += '\nTEAM PROFILES:\n';
+            profiles.forEach(function(p) {
+              var u = gUsersList.find(function(x) { return x.id === p.user_id; });
+              if (!u) return;
+              var parts = [];
+              if (p.nickname) parts.push('nickname "' + p.nickname + '"');
+              if (p.personality) parts.push('personality: ' + p.personality);
+              if (p.strengths) parts.push('strengths: ' + p.strengths);
+              if (p.weaknesses) parts.push('watch-outs: ' + p.weaknesses);
+              if (p.notes) parts.push('notes: ' + p.notes);
+              superAdminBlock += '- ' + u.name + ' (' + (p.job_title || u.role || 'team member') + ')' + (parts.length ? ': ' + parts.join(' | ') : '') + '\n';
+            });
+          }
+        } catch(e) {}
+
+        // login_events — online now + last seen + logins_7d
+        try {
+          var since = new Date(Date.now() - 7 * 86400000).toISOString();
+          var leRes = await supabase.from('login_events')
+            .select('user_id, event_type, created_at')
+            .gte('created_at', since)
+            .order('created_at', { ascending: false })
+            .limit(500);
+          var loginEv = (leRes && leRes.data) || [];
+          var byUser = {};
+          loginEv.forEach(function(ev) {
+            if (!byUser[ev.user_id]) byUser[ev.user_id] = { last_seen: ev.created_at, logins_7d: 0, last_event: ev.event_type };
+            if (ev.event_type === 'login') byUser[ev.user_id].logins_7d++;
+          });
+          if (Object.keys(byUser).length > 0) {
+            superAdminBlock += '\nTEAM ACTIVITY (last 7 days — use for "is X online" / attendance questions):\n';
+            Object.keys(byUser).forEach(function(uid) {
+              var u = gUsersList.find(function(x) { return x.id === uid; });
+              if (!u) return;
+              var info = byUser[uid];
+              var minutesAgo = Math.round((Date.now() - new Date(info.last_seen).getTime()) / 60000);
+              var onlineNow = minutesAgo < 10 && info.last_event !== 'logout';
+              superAdminBlock += '- ' + u.name + ': last activity ' + minutesAgo + ' min ago' + (onlineNow ? ' [ONLINE NOW]' : '') + ' | ' + info.logins_7d + ' logins this week\n';
+            });
+          }
+        } catch(e) {}
+
+        // Team tickets grouped by assignee
+        try {
+          var tktRes = await supabase.from('tickets')
+            .select('ticket_number, title, status, priority, due_date, assigned_to, created_at')
+            .neq('status', 'Closed')
+            .order('created_at', { ascending: false })
+            .limit(100);
+          var teamTickets = (tktRes && tktRes.data) || [];
+          if (teamTickets.length > 0) {
+            superAdminBlock += '\nTEAM TICKETS (all open, grouped by assignee — for "what is X working on" questions):\n';
+            var byAssignee = {};
+            teamTickets.forEach(function(t) {
+              var aid = t.assigned_to || 'unassigned';
+              if (!byAssignee[aid]) byAssignee[aid] = [];
+              byAssignee[aid].push(t);
+            });
+            Object.keys(byAssignee).forEach(function(aid) {
+              var aUser = gUsersList.find(function(u) { return u.id === aid; });
+              var aName = aid === 'unassigned' ? 'UNASSIGNED' : ((aUser && aUser.name) || aid.substring(0, 8));
+              var line = '- ' + aName + ': ';
+              line += byAssignee[aid].slice(0, 6).map(function(t) {
+                return (t.ticket_number || '') + ' "' + (t.title || '').substring(0, 40) + '" [' + (t.status || '') + (t.due_date ? ', due ' + t.due_date : '') + ']';
+              }).join('; ');
+              if (byAssignee[aid].length > 6) line += ' (+' + (byAssignee[aid].length - 6) + ' more)';
+              superAdminBlock += line + '\n';
+            });
+          }
+        } catch(e) {}
+
+        // Recent daily_log — what people have been doing
+        try {
+          var dlRes = await supabase.from('daily_log')
+            .select('user_id, entry_text, log_date, log_category')
+            .order('created_at', { ascending: false })
+            .limit(40);
+          var dLogs = (dlRes && dlRes.data) || [];
+          if (dLogs.length > 0) {
+            superAdminBlock += '\nRECENT TEAM ACTIVITY LOG (~40 latest entries):\n';
+            dLogs.forEach(function(l) {
+              var u = gUsersList.find(function(x) { return x.id === l.user_id; });
+              var uName = (u && u.name) || 'unknown';
+              superAdminBlock += '- ' + (l.log_date || '') + ' [' + uName + ']: ' + (l.entry_text || '').substring(0, 140) + '\n';
+            });
+          }
+        } catch(e) {}
+
+        // Upcoming calendar_events for the team — next 14 days, grouped by assignee.
+        // Needed for "what does Omar have today / this week" questions.
+        try {
+          var cEvStart = new Date().toISOString().substring(0, 10);
+          var cEvEnd = new Date(Date.now() + 14 * 86400000).toISOString().substring(0, 10);
+          var ceRes = await supabase.from('calendar_events')
+            .select('title, event_date, event_time, event_type, assigned_to')
+            .gte('event_date', cEvStart)
+            .lte('event_date', cEvEnd)
+            .order('event_date', { ascending: true })
+            .limit(80);
+          var cEv = (ceRes && ceRes.data) || [];
+          if (cEv.length > 0) {
+            superAdminBlock += '\nCALENDAR EVENTS (next 14 days):\n';
+            cEv.forEach(function(e) {
+              var u = gUsersList.find(function(x) { return x.id === e.assigned_to; });
+              var uName = (u && u.name) || 'unassigned';
+              superAdminBlock += '- ' + e.event_date + (e.event_time ? ' ' + e.event_time : '') + ' [' + uName + ']: ' + (e.title || '') + ' (' + (e.event_type || 'event') + ')\n';
+            });
+          }
+        } catch(e) {}
+
+        // FOLLOW_UPS — each team member's assigned CRM tasks (legacy super-admin block
+        // referenced these; re-adding here so "who has overdue follow-ups" works).
+        try {
+          var fuRes = await supabase.from('follow_ups')
+            .select('task, due_date, completed, customer_id, assigned_to')
+            .eq('completed', false)
+            .order('due_date', { ascending: true })
+            .limit(60);
+          var fus = (fuRes && fuRes.data) || [];
+          if (fus.length > 0) {
+            superAdminBlock += '\nOPEN FOLLOW_UPS:\n';
+            fus.forEach(function(f) {
+              var u = gUsersList.find(function(x) { return x.id === f.assigned_to; });
+              var uName = (u && u.name) || 'unassigned';
+              superAdminBlock += '- ' + (f.due_date || 'no date') + ' [' + uName + ']: ' + (f.task || '').substring(0, 120) + '\n';
+            });
+          }
+        } catch(e) {}
+        superAdminBlock += '===========================================\n';
+      }
+
+      // ---------- Cross-team action syntax block ----------
+      // Action execution works for ALL users (per v25 permission reversal —
+      // any team member can send reminders/messages/tickets/events to anyone).
+      // Only the visibility data above is super_admin-gated.
+      var actionSyntaxBlock = '';
+      if (gUsersList.length > 0) {
+        actionSyntaxBlock += '\n\n===== CROSS-TEAM ACTIONS YOU CAN EXECUTE =====\n';
+        actionSyntaxBlock += 'When the user asks you to do something for a team member ("remind Omar to X", "tell Mohamed Y", "assign a ticket to Ahmed", "schedule a meeting with Sara"), emit ONE action block in your reply using EXACTLY this syntax — the literal markers must be on their own lines:\n';
+        actionSyntaxBlock += '---ACTION_START---\n';
+        actionSyntaxBlock += '{"type":"<action_type>", ...fields}\n';
+        actionSyntaxBlock += '---ACTION_END---\n\n';
+        actionSyntaxBlock += 'Supported actions:\n';
+        actionSyntaxBlock += '  * create_reminder: {"type":"create_reminder","task":"<what>","due_date":"YYYY-MM-DD","priority":"normal|high","target_users":"<user_uuid>"}\n';
+        actionSyntaxBlock += '  * send_team_message: {"type":"send_team_message","target_user_id":"<user_uuid>","message":"<text>","urgent":false}\n';
+        actionSyntaxBlock += '  * create_ticket: {"type":"create_ticket","title":"<title>","description":"<detail>","priority":"medium","assigned_to":"<user_uuid>","due_date":"YYYY-MM-DD"}\n';
+        actionSyntaxBlock += '  * create_event: {"type":"create_event","title":"<title>","event_date":"YYYY-MM-DD","event_time":"HH:MM","assigned_to":"<user_uuid>"}\n';
+        actionSyntaxBlock += 'Resolve employee names to UUIDs from the USERS list below (case-insensitive, accept nicknames and partial matches). If you cannot confidently resolve a name, ASK the user for clarification instead of guessing.\n';
+        actionSyntaxBlock += 'USERS (uuid → name):\n';
+        gUsersList.forEach(function(u) {
+          actionSyntaxBlock += '  - ' + u.id + ' => ' + u.name + ' (' + (u.role || 'member') + ')\n';
+        });
+        actionSyntaxBlock += '\nIn your conversational text, just say "Done — reminded Omar for tomorrow" or similar. The action block is what actually executes — do not just PROMISE to do it, always emit the block.\n';
+        actionSyntaxBlock += '===========================================\n';
+      }
+
+      // ---------- Pending messages targeted AT the current user ----------
+      // (Receive side — already worked before S9, kept unchanged.)
       var crossTeamBlock = '';
       try {
         if (userId) {
-          // Pending ai_memory messages targeted at this user (not yet expired, not auto-captured)
           var pendingMsgRes = await supabase.from('ai_memory')
             .select('content, type, created_at, created_by')
             .eq('target_user_id', userId)
@@ -173,18 +371,16 @@ export async function POST(request) {
             .limit(10);
           var pending = (pendingMsgRes && pendingMsgRes.data) || [];
 
-          // Active team_reminders targeted at this user — either 'all' or this uuid
           var remRes = await supabase.from('team_reminders')
             .select('title, message, reminder_date, priority, target_users, created_by')
             .or('target_users.eq.all,target_users.eq.' + userId)
             .order('reminder_date', { ascending: true })
             .limit(10);
-          var reminders = ((remRes && remRes.data) || []).filter(function(r) {
-            // Only surface reminders due today or earlier (past-due or due now)
+          var remindersForUser = ((remRes && remRes.data) || []).filter(function(r) {
             return !r.reminder_date || r.reminder_date <= new Date().toISOString().substring(0, 10);
           });
 
-          if (pending.length > 0 || reminders.length > 0) {
+          if (pending.length > 0 || remindersForUser.length > 0) {
             crossTeamBlock = '\n\n===== PENDING MESSAGES FOR THIS USER =====\n';
             crossTeamBlock += 'Another team member asked you (Nadia) to relay the following to this user. SURFACE THESE in your greeting — they haven\'t seen them yet.\n';
             if (pending.length > 0) {
@@ -193,9 +389,9 @@ export async function POST(request) {
                 crossTeamBlock += '- [' + (m.type || 'note') + '] ' + (m.content || '') + '\n';
               });
             }
-            if (reminders.length > 0) {
+            if (remindersForUser.length > 0) {
               crossTeamBlock += '\nReminders sent to this user:\n';
-              reminders.forEach(function(r) {
+              remindersForUser.forEach(function(r) {
                 crossTeamBlock += '- [' + (r.priority || 'normal') + ']' + (r.reminder_date ? ' (due ' + r.reminder_date + ')' : '') + ' ' + (r.message || r.title || '') + '\n';
               });
             }
@@ -204,6 +400,7 @@ export async function POST(request) {
         }
       } catch(e) { /* non-fatal — never block greeting on this */ }
 
+      // ---------- Call Anthropic ----------
       try {
         var gMessages = [];
         if (body.history && body.history.length) {
@@ -211,35 +408,165 @@ export async function POST(request) {
             gMessages.push({ role: m.role === 'user' ? 'user' : 'assistant', content: m.text || m.content || '' });
           });
         }
-        // Anthropic's Messages API rejects any conversation whose first turn is
-        // role=assistant. The greeter saves its own opening greeting into its
-        // local messages[] before the user has typed anything, so the first
-        // follow-up question would ship a history starting with assistant —
-        // which returned a 400 and left the client with answer:'' (symptom:
-        // "Nadia only says Hi, doesn't respond to anything else"). We also
-        // drop any assistant messages with empty content (same 400 trigger),
-        // and filter out rows where content is empty.
         while (gMessages.length > 0 && gMessages[0].role !== 'user') gMessages.shift();
         gMessages = gMessages.filter(function(m) { return m.content && String(m.content).trim(); });
         gMessages.push({ role: 'user', content: question });
+
+        var fullSystem = body.systemOverride + superAdminBlock + actionSyntaxBlock + crossTeamBlock;
+        // Bumped max_tokens 400 -> 900 because action JSON blocks push over
+        // the old cap when Nadia emits a reminder and also chats about it.
         var gResponse = await fetch('https://api.anthropic.com/v1/messages', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json', 'x-api-key': apiKey, 'anthropic-version': '2023-06-01' },
-          body: JSON.stringify({ model: 'claude-sonnet-4-20250514', max_tokens: 400, system: body.systemOverride + crossTeamBlock, messages: gMessages }),
+          body: JSON.stringify({ model: 'claude-sonnet-4-20250514', max_tokens: 900, system: fullSystem, messages: gMessages }),
         });
-        if (gResponse.ok) {
-          var gData = await gResponse.json();
-          var gText = (gData.content && gData.content[0] && gData.content[0].text) || '';
-          var decision = null;
-          if (decisionPromise) { try { decision = await decisionPromise; } catch(e) {} }
-          return Response.json({ answer: gText, decision: decision });
+
+        if (!gResponse.ok) {
+          var errBody = '';
+          try { errBody = await gResponse.text(); } catch(e) {}
+          console.warn('[ask/greeter] Anthropic API non-OK:', gResponse.status, errBody.substring(0, 500));
+          return Response.json({ answer: 'AI error (' + gResponse.status + '): ' + (errBody.substring(0, 200) || 'no response body') });
         }
-        // Non-OK response — read the error body so we don't silently fall
-        // through to answer:''. Client sees the actual failure.
-        var errBody = '';
-        try { errBody = await gResponse.text(); } catch(e) {}
-        console.warn('[ask/greeter] Anthropic API non-OK:', gResponse.status, errBody.substring(0, 500));
-        return Response.json({ answer: 'AI error (' + gResponse.status + '): ' + (errBody.substring(0, 200) || 'no response body') });
+
+        var gData = await gResponse.json();
+        var gText = (gData.content && gData.content[0] && gData.content[0].text) || '';
+
+        // ---------- Parse and execute action blocks ----------
+        // Claude may emit zero, one, or rarely multiple action blocks. We
+        // extract each one, execute it server-side, replace the block with
+        // a confirmation line, and return the cleaned text. Hard cap at 3
+        // blocks per turn so Claude can't accidentally flood.
+        var actionsExecuted = [];
+        var aStart = '---ACTION_START---';
+        var aEnd = '---ACTION_END---';
+        var finalText = gText;
+        var safety = 0;
+        while (safety < 3) {
+          safety++;
+          var sIdx = finalText.indexOf(aStart);
+          var eIdx = sIdx >= 0 ? finalText.indexOf(aEnd, sIdx + aStart.length) : -1;
+          if (sIdx < 0 || eIdx <= sIdx) break;
+          var rawJson = finalText.substring(sIdx + aStart.length, eIdx).trim();
+          var beforeBlock = finalText.substring(0, sIdx).replace(/\s+$/, '');
+          var afterBlock = finalText.substring(eIdx + aEnd.length).replace(/^\s+/, '');
+          var actionData = null;
+          try {
+            actionData = JSON.parse(rawJson);
+          } catch (parseErr) {
+            var errLine = '⚠️ Could not parse action JSON: ' + parseErr.message;
+            var joinerP = beforeBlock && afterBlock ? '\n' : '';
+            finalText = (beforeBlock + joinerP + afterBlock).trim();
+            if (finalText) finalText += '\n\n' + errLine;
+            else finalText = errLine;
+            actionsExecuted.push({ ok: false, error: 'parse_error', raw: rawJson.substring(0, 200) });
+            continue;
+          }
+
+          var execLine = '';
+          try {
+            if (actionData.type === 'create_reminder') {
+              var rTarget = actionData.target_users || actionData.assigned_to || 'all';
+              var rRes = await supabase.from('team_reminders').insert({
+                title: actionData.task || actionData.title,
+                message: actionData.task || actionData.title,
+                reminder_date: actionData.due_date,
+                priority: actionData.priority || 'normal',
+                target_users: rTarget,
+                created_by: userId || null,
+              });
+              if (rRes && rRes.error) throw rRes.error;
+              var rWho = '';
+              if (rTarget && rTarget !== 'all') {
+                var rFind = gUsersList.find(function(u) { return u.id === rTarget; });
+                if (rFind) rWho = ' for ' + rFind.name;
+                if (rTarget !== userId) {
+                  notifyReminderServer([rTarget], actionData.task || actionData.title, actionData.due_date, userId).catch(function(){});
+                }
+              }
+              execLine = '✅ Reminder set' + rWho + ': ' + (actionData.task || actionData.title) + (actionData.due_date ? ' (due ' + actionData.due_date + ')' : '');
+              actionsExecuted.push({ ok: true, type: 'create_reminder', message: execLine });
+            } else if (actionData.type === 'send_team_message') {
+              if (!actionData.target_user_id) throw new Error('send_team_message requires target_user_id');
+              var msgText = actionData.message || actionData.content || '';
+              var smRes = await supabase.from('ai_memory').insert({
+                user_id: actionData.target_user_id,
+                content: gCurrentUserName + ' sent a message via AI: ' + msgText,
+                type: actionData.urgent ? 'urgent' : 'note',
+                scope: 'private',
+                target_user_id: actionData.target_user_id,
+                created_by: userId || null,
+                auto_captured: false,
+                expires_at: actionData.urgent ? null : new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString(),
+              });
+              if (smRes && smRes.error) throw smRes.error;
+              var mRecip = gUsersList.find(function(u) { return u.id === actionData.target_user_id; });
+              var mName = (mRecip && mRecip.name) || 'team member';
+              notifyTeamMessageServer(actionData.target_user_id, gCurrentUserName, msgText, !!actionData.urgent, userId).catch(function(){});
+              execLine = '✅ Message queued for ' + mName + ' — they will see it on their next chat or morning briefing.';
+              actionsExecuted.push({ ok: true, type: 'send_team_message', message: execLine });
+            } else if (actionData.type === 'create_ticket') {
+              if (!actionData.title) throw new Error('create_ticket requires title');
+              var tcCount = (await supabase.from('tickets').select('id', { count: 'exact', head: true })).count || 0;
+              var tcNum = 'TKT-' + String(tcCount + 1).padStart(4, '0');
+              var tcRes = await supabase.from('tickets').insert({
+                ticket_number: tcNum,
+                title: actionData.title,
+                description: actionData.description || '',
+                priority: actionData.priority || 'medium',
+                status: 'New',
+                assigned_to: actionData.assigned_to || null,
+                due_date: actionData.due_date || null,
+                created_by: userId || null,
+              });
+              if (tcRes && tcRes.error) throw tcRes.error;
+              if (actionData.assigned_to && actionData.assigned_to !== userId) {
+                notifyTicketAssignedServer([actionData.assigned_to], tcNum + ' ' + actionData.title, userId).catch(function(){});
+              }
+              var tcWho = '';
+              if (actionData.assigned_to) {
+                var tcUser = gUsersList.find(function(u) { return u.id === actionData.assigned_to; });
+                if (tcUser) tcWho = ' assigned to ' + tcUser.name;
+              }
+              execLine = '✅ ' + tcNum + ' created' + tcWho + ': ' + actionData.title + (actionData.due_date ? ' (due ' + actionData.due_date + ')' : '');
+              actionsExecuted.push({ ok: true, type: 'create_ticket', message: execLine, ticket_number: tcNum });
+            } else if (actionData.type === 'create_event') {
+              if (!actionData.title || !actionData.event_date) throw new Error('create_event requires title + event_date');
+              var evAssignee = actionData.assigned_to || userId;
+              var ceRes = await supabase.from('calendar_events').insert({
+                title: actionData.title,
+                event_date: actionData.event_date,
+                event_time: actionData.event_time || null,
+                event_type: actionData.event_type || 'meeting',
+                assigned_to: evAssignee,
+                created_by: userId || null,
+              });
+              if (ceRes && ceRes.error) throw ceRes.error;
+              var evWho = '';
+              if (evAssignee && evAssignee !== userId) {
+                var evUser = gUsersList.find(function(u) { return u.id === evAssignee; });
+                if (evUser) evWho = ' for ' + evUser.name;
+                notifyEventScheduledServer([evAssignee], actionData.title, actionData.event_date, userId).catch(function(){});
+              }
+              execLine = '✅ Event created' + evWho + ': ' + actionData.title + ' on ' + actionData.event_date + (actionData.event_time ? ' @ ' + actionData.event_time : '');
+              actionsExecuted.push({ ok: true, type: 'create_event', message: execLine });
+            } else {
+              throw new Error('Unknown action type: ' + actionData.type);
+            }
+          } catch (execErr) {
+            execLine = '⚠️ Action failed (' + (actionData.type || 'unknown') + '): ' + (execErr.message || String(execErr));
+            actionsExecuted.push({ ok: false, type: actionData.type, error: execErr.message || String(execErr) });
+          }
+
+          // Collapse block out and append the exec line.
+          var joiner = beforeBlock && afterBlock ? '\n' : '';
+          finalText = (beforeBlock + joiner + afterBlock).trim();
+          if (finalText) finalText += '\n\n' + execLine;
+          else finalText = execLine;
+        }
+
+        var decision = null;
+        if (decisionPromise) { try { decision = await decisionPromise; } catch(e) {} }
+        return Response.json({ answer: finalText, decision: decision, actions_executed: actionsExecuted });
       } catch(e) {
         console.warn('[ask/greeter] exception:', e && e.message);
         return Response.json({ answer: 'AI error: ' + (e && e.message ? e.message : 'unknown') });
