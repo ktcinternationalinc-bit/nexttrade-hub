@@ -1,7 +1,7 @@
 'use client';
 import { useState, useMemo } from 'react';
 import { supabase, dbInsert, dbUpdate, logActivity } from '../lib/supabase';
-import { notifyClientAssigned, notifyFollowUp } from '../lib/notify';
+import { notifyClientAssigned, notifyFollowUp, notifyCRMStatus } from '../lib/notify';
 import EmailComposer from './EmailComposer';
 import { fE, fmt } from '../lib/utils';
 
@@ -18,9 +18,14 @@ const PIPELINE_STAGES = [
   { v: 'lost', l: 'Lost', c: '#ef4444', icon: '❌' },
 ];
 
-export default function CRMTab({ customers, invoices, user, userProfile, users, onReload, isAdmin, onSelectInvoice, lang, modulePerms }) {
-  const myId = userProfile?.id || user?.id;
+export default function CRMTab({ toast, customers, invoices, user, userProfile, users, onReload, isAdmin, onSelectInvoice, lang, modulePerms, initialClient }) {
+  const myId = userProfile?.id;
   const canViewAll = isAdmin || modulePerms?.['CRM View All'] === true;
+  const canViewContacts = isAdmin || modulePerms?.['CRM View Contacts'] === true;
+  // Can see contact info if: admin, has CRM View Contacts perm, or is the assigned rep
+  const canSeeContact = (c) => canViewContacts || (c && c.assigned_rep === myId);
+  const maskPhone = (ph) => { if (!ph) return '—'; return ph.substring(0, 3) + '•••••' + ph.substring(ph.length - 2); };
+  const maskEmail = (em) => { if (!em) return '—'; const [u, d] = em.split('@'); return u.substring(0, 2) + '•••@' + (d || ''); };
   const [sel, setSel] = useState(null);
   const [q, setQ] = useState('');
   const [groupF, setGroupF] = useState('all');
@@ -59,9 +64,9 @@ export default function CRMTab({ customers, invoices, user, userProfile, users, 
         try {
           if (row.setting_key === 'custom_categories') setCustomCategories(JSON.parse(row.setting_value));
           if (row.setting_key === 'custom_groups') setCustomGroups(JSON.parse(row.setting_value));
-        } catch(e) {}
+        } catch(e) { console.warn(e); }
       });
-    } catch(e) { console.log('Custom lists not loaded:', e); }
+    } catch(e) { console.warn('Custom lists not loaded:', e); }
     setListsLoaded(true);
   };
   if (!listsLoaded) loadCustomLists();
@@ -78,7 +83,7 @@ export default function CRMTab({ customers, invoices, user, userProfile, users, 
       } else {
         await supabase.from('app_settings').insert({ setting_key: key, setting_value: JSON.stringify(list) });
       }
-    } catch(e) { console.log('Save list error:', e); }
+    } catch(e) { console.warn('Save list error:', e); }
   };
 
   const addCategory = async (name) => {
@@ -118,7 +123,7 @@ export default function CRMTab({ customers, invoices, user, userProfile, users, 
       }, myId);
       await logActivity(myId, type + ' contact with: ' + sel.name + (notes ? ' — ' + notes : ''), 'crm');
       loadClientData(sel);
-    } catch(err) { console.log('Contact log error:', err); }
+    } catch(err) { console.warn('Contact log error:', err); }
   };
 
   const openWhatsApp = (phone) => {
@@ -207,24 +212,30 @@ export default function CRMTab({ customers, invoices, user, userProfile, users, 
       }, myId);
       await logActivity(myId, 'Created client: ' + f.name, 'crm');
       setShowAdd(false); setF({}); onReload(); loadAllNotes();
-    } catch (err) { alert('Error / خطأ: ' + err.message); }
+    } catch (err) { toast ? toast.error(err.message) : toast ? toast.error(err.message) : alert(err.message); }
   };
 
   const handleEditClient = async () => {
     if (!sel) return;
     try {
       await dbUpdate('customers', sel.id, {
-        name: f.name || sel.name, name_ar: f.nameAr || sel.name_ar, name_en: f.nameEn || sel.name_en,
-        phone: f.phone || sel.phone, email: f.email || sel.email, address: f.address || sel.address,
-        city: f.city || sel.city, group_name: f.group || sel.group_name, industry: f.industry !== undefined ? f.industry : sel.industry,
-        lead_source: f.leadSource || sel.lead_source,
+        name: f.name !== undefined ? f.name : sel.name,
+        name_ar: f.nameAr !== undefined ? f.nameAr : sel.name_ar,
+        name_en: f.nameEn !== undefined ? f.nameEn : sel.name_en,
+        phone: f.phone !== undefined ? f.phone : sel.phone,
+        email: f.email !== undefined ? f.email : sel.email,
+        address: f.address !== undefined ? f.address : sel.address,
+        city: f.city !== undefined ? f.city : sel.city,
+        group_name: f.group !== undefined ? f.group : sel.group_name,
+        industry: f.industry !== undefined ? f.industry : sel.industry,
+        lead_source: f.leadSource !== undefined ? f.leadSource : sel.lead_source,
         assigned_rep: f.assignedRep !== undefined ? (f.assignedRep || null) : sel.assigned_rep,
       }, myId);
       await logActivity(myId, 'Edited client: ' + (f.name || sel.name), 'crm');
       if (f.assignedRep && f.assignedRep !== sel.assigned_rep) notifyClientAssigned([f.assignedRep], f.name || sel.name, myId);
       setEditingClient(false); setF({}); onReload();
       loadClientData({...sel, name: f.name || sel.name});
-    } catch (err) { alert('Error / خطأ: ' + err.message); }
+    } catch (err) { toast ? toast.error(err.message) : toast ? toast.error(err.message) : alert(err.message); }
   };
 
   const handleAddNote = async () => {
@@ -232,8 +243,13 @@ export default function CRMTab({ customers, invoices, user, userProfile, users, 
     try {
       await dbInsert('client_notes', { customer_id: sel.id, note_text: f.noteText }, myId);
       await logActivity(myId, 'Added note to client: ' + sel.name, 'crm');
+      if (sel.assigned_rep && sel.assigned_rep !== myId) {
+        const { notify } = await import('../lib/notify');
+        notify('crm_note_added', [sel.assigned_rep], `New Note: ${sel.name}`,
+          `<p>A note was added to client <strong>${sel.name}</strong>:</p><p style="color:#64748b;font-style:italic;">"${(f.noteText || '').slice(0, 200)}"</p>`, myId);
+      }
       setShowNote(false); setF({}); loadClientData(sel); loadAllNotes();
-    } catch (err) { alert('Error / خطأ: ' + err.message); }
+    } catch (err) { toast ? toast.error(err.message) : toast ? toast.error(err.message) : alert(err.message); }
   };
 
   const handleAddFollowUp = async () => {
@@ -261,7 +277,7 @@ export default function CRMTab({ customers, invoices, user, userProfile, users, 
       await logActivity(myId, 'Created follow-up for ' + sel.name + ': ' + f.task, 'crm');
       if (assignTo && assignTo !== myId) notifyFollowUp([assignTo], sel.name, f.task, myId);
       setShowFollowUp(false); setF({}); loadClientData(sel);
-    } catch (err) { alert('Error / خطأ: ' + err.message); }
+    } catch (err) { toast ? toast.error(err.message) : toast ? toast.error(err.message) : alert(err.message); }
   };
 
   const completeFollowUp = async (id) => {
@@ -269,7 +285,7 @@ export default function CRMTab({ customers, invoices, user, userProfile, users, 
       await dbUpdate('follow_ups', id, { completed: true, completed_at: new Date().toISOString() }, myId);
       await logActivity(myId, 'Completed follow-up for ' + sel.name, 'crm');
       loadClientData(sel);
-    } catch (err) { alert('Error / خطأ: ' + err.message); }
+    } catch (err) { toast ? toast.error(err.message) : toast ? toast.error(err.message) : alert(err.message); }
   };
 
   const changeStage = async (client, newStage) => {
@@ -279,9 +295,10 @@ export default function CRMTab({ customers, invoices, user, userProfile, users, 
       const stageName = PIPELINE_STAGES.find(s => s.v === newStage)?.l || newStage;
       await logActivity(myId, 'Pipeline: ' + (client.name_en || client.name) + ' → ' + stageName, 'crm');
       await dbInsert('client_notes', { customer_id: client.id, note_text: '📊 Pipeline stage changed: ' + oldStage + ' → ' + newStage + ' by ' + (users?.find(u => u.id === myId)?.name || '') }, myId);
+      if (client.assigned_rep && client.assigned_rep !== myId) notifyCRMStatus([client.assigned_rep], client.name, stageName, myId);
       if (sel && sel.id === client.id) { setSel({...sel, pipeline_stage: newStage}); loadClientData({...sel, pipeline_stage: newStage}); }
       onReload();
-    } catch (err) { alert('Error: ' + err.message); }
+    } catch (err) { toast ? toast.error(err.message) : toast ? toast.error(err.message) : alert(err.message); }
   };
 
   // ===== LIST VIEW =====
@@ -534,9 +551,23 @@ export default function CRMTab({ customers, invoices, user, userProfile, users, 
               <select value={f.leadSource!==undefined?f.leadSource:(sel.lead_source||'')} onChange={e=>setF({...f,leadSource:e.target.value})} className="w-full px-2 py-1.5 border rounded text-sm">
                 <option value="">None</option>{LEAD_SOURCES.map(s=><option key={s} value={s}>{s}</option>)}</select></div>
             <div><label className="text-[10px] font-semibold">Phone</label>
-              <input value={f.phone!==undefined?f.phone:(sel.phone||'')} onChange={e=>setF({...f,phone:e.target.value})} className="w-full px-2 py-1.5 border rounded text-sm" /></div>
+              {canSeeContact(sel) ? (
+                <input value={f.phone!==undefined?f.phone:(sel.phone||'')} onChange={e=>setF({...f,phone:e.target.value})} className="w-full px-2 py-1.5 border rounded text-sm" />
+              ) : (
+                <div className="w-full px-2 py-1.5 border rounded text-sm bg-slate-50 text-slate-400">🔒 {maskPhone(sel.phone)}</div>
+              )}</div>
+            <div><label className="text-[10px] font-semibold">Email</label>
+              {canSeeContact(sel) ? (
+                <input value={f.email!==undefined?f.email:(sel.email||'')} onChange={e=>setF({...f,email:e.target.value})} className="w-full px-2 py-1.5 border rounded text-sm" />
+              ) : (
+                <div className="w-full px-2 py-1.5 border rounded text-sm bg-slate-50 text-slate-400">🔒 {maskEmail(sel.email)}</div>
+              )}</div>
             <div><label className="text-[10px] font-semibold">City</label>
-              <input value={f.city!==undefined?f.city:(sel.city||'')} onChange={e=>setF({...f,city:e.target.value})} className="w-full px-2 py-1.5 border rounded text-sm" /></div>
+              {canSeeContact(sel) ? (
+                <input value={f.city!==undefined?f.city:(sel.city||'')} onChange={e=>setF({...f,city:e.target.value})} className="w-full px-2 py-1.5 border rounded text-sm" />
+              ) : (
+                <div className="w-full px-2 py-1.5 border rounded text-sm bg-slate-50 text-slate-400">🔒 City restricted</div>
+              )}</div>
             <div><label className="text-[10px] font-semibold">Assigned Rep / الممثل</label>
               <select value={f.assignedRep!==undefined?f.assignedRep:(sel.assigned_rep||'')} onChange={e=>setF({...f,assignedRep:e.target.value})} className="w-full px-2 py-1.5 border rounded text-sm">
                 <option value="">Unassigned / غير معيّن</option>
@@ -569,11 +600,11 @@ export default function CRMTab({ customers, invoices, user, userProfile, users, 
                 await dbUpdate('customers', sel.id, { important: newVal }, myId);
                 setSel({...sel, important: newVal});
                 onReload();
-              } catch(err) { alert('Error: ' + err.message); }
+              } catch(err) { toast ? toast.error(err.message) : toast ? toast.error(err.message) : alert(err.message); }
             }} className={'mt-2 px-3 py-1.5 rounded-lg text-xs font-bold border-2 transition ' + (sel.important ? 'border-amber-400 bg-amber-50 text-amber-700' : 'border-slate-200 text-slate-400')}>
               {sel.important ? '⭐ Important Client / عميل مهم' : '☆ Mark as Important / تعيين كمهم'}
             </button>
-            {sel.phone && <div className="text-xs text-slate-500 mt-2">Phone: {sel.phone}</div>}
+            {sel.phone && <div className="text-xs text-slate-500 mt-2">Phone: {canSeeContact(sel) ? sel.phone : maskPhone(sel.phone)}</div>}
             {sel.assigned_rep && (() => { const rep = users?.find(u => u.id === sel.assigned_rep); return rep ? <div className="text-xs text-indigo-600 font-semibold mt-1">👤 Assigned Rep / الممثل: {rep.name}</div> : null; })()}
 
             {/* Pipeline Stage */}
@@ -602,7 +633,7 @@ export default function CRMTab({ customers, invoices, user, userProfile, users, 
                       await dbUpdate('customers', sel.id, { restricted: e.target.checked }, myId);
                       setSel({...sel, restricted: e.target.checked});
                       onReload();
-                    } catch (err) { alert('Error: ' + err.message); }
+                    } catch (err) { toast ? toast.error(err.message) : toast ? toast.error(err.message) : alert(err.message); }
                   }} className="w-4 h-4" />
                 <label className="text-xs font-semibold text-red-700">Restricted — Admin Only / مقيد — للمسؤول فقط</label>
               </div>
@@ -623,6 +654,7 @@ export default function CRMTab({ customers, invoices, user, userProfile, users, 
       <div className="flex gap-2 mb-3 flex-wrap">
         <button onClick={()=>{setShowNote(true);setF({});}} className="px-3 py-1.5 bg-blue-500 text-white rounded-lg text-xs font-semibold">+ Note / ملاحظة</button>
         <button onClick={()=>{setShowFollowUp(true);setF({});}} className="px-3 py-1.5 bg-amber-500 text-white rounded-lg text-xs font-semibold">+ Follow-up / متابعة</button>
+        {canSeeContact(sel) ? (<>
         <button onClick={() => openWhatsApp(sel.phone)} className="px-3 py-1.5 bg-green-500 text-white rounded-lg text-xs font-semibold">💬 WhatsApp</button>
         <button onClick={() => { if(sel.phone) { logContact('phone', 'Phone call'); window.open('tel:'+sel.phone); } else alert('No phone'); }}
           className="px-3 py-1.5 bg-purple-500 text-white rounded-lg text-xs font-semibold">📞 Call</button>
@@ -633,6 +665,9 @@ export default function CRMTab({ customers, invoices, user, userProfile, users, 
           style={{background:'linear-gradient(135deg, #0ea5e9, #6366f1)'}}>📨 Send Email</button>}
         <button onClick={() => { const note = prompt('Visit notes / ملاحظات الزيارة:'); if(note) logContact('visit', note); }}
           className="px-3 py-1.5 bg-cyan-500 text-white rounded-lg text-xs font-semibold">🚗 Visit</button>
+        </>) : (
+          <span className="text-[10px] text-slate-400 bg-slate-100 px-3 py-1.5 rounded-lg">🔒 Contact info restricted — assigned reps only</span>
+        )}
       </div>
       {showNote && (
         <div className="bg-blue-50 rounded-lg p-3 mb-3 border border-blue-200">

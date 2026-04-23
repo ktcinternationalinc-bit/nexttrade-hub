@@ -10,7 +10,7 @@ export const fE = (n) => {
   return 'EGP ' + fmt(n);
 };
 
-// Expense category translations
+// Expense category translations (fallback map — supplemented by `categories` table)
 export const EXPENSE_CATS = {
   'مبيعات': 'Sales',
   'عهدة المخزن': 'Warehouse',
@@ -22,9 +22,111 @@ export const EXPENSE_CATS = {
   'تحويلات بنكية': 'Banking',
   'زكاة وصدقات': 'Charity',
   'شحن وجمارك': 'Shipping',
+  'جمارك': 'Customs',
   'عينات': 'Samples',
   'ضرائب': 'Taxes',
   'مصروفات تشغيل': 'Operations',
+};
+
+// Reverse map — English name → Arabic. Used when a row's category
+// is stored in English but we need the Arabic equivalent.
+export const EXPENSE_CATS_REVERSE = Object.fromEntries(
+  Object.entries(EXPENSE_CATS).map(([ar, en]) => [en, ar])
+);
+
+// Resolve a category key to the display name in the given language.
+// Accepts either the Arabic or English form (whichever was saved).
+// Consults the runtime categories list (from the DB) first, falls back to
+// the static EXPENSE_CATS map, and as a last resort returns the raw key.
+//
+// @param raw   — the category string saved on the row (could be AR or EN)
+// @param lang  — 'en' | 'ar'
+// @param list  — optional array of categories rows from the `categories` table
+//                shape: [{ name_ar, name_en, ... }, ...]
+export const resolveCatName = (raw, lang, list) => {
+  if (!raw) return '';
+  const s = String(raw).trim();
+  // Try the runtime list first — covers user-added categories
+  if (Array.isArray(list) && list.length > 0) {
+    const hit = list.find(c =>
+      (c.name_ar && c.name_ar === s) || (c.name_en && c.name_en === s)
+    );
+    if (hit) {
+      if (lang === 'ar') return hit.name_ar || hit.name_en || s;
+      return hit.name_en || hit.name_ar || s;
+    }
+  }
+  // Fallback to static map
+  if (lang === 'ar') {
+    // Input could be EN → look up AR
+    if (EXPENSE_CATS_REVERSE[s]) return EXPENSE_CATS_REVERSE[s];
+    return s; // already Arabic or unknown
+  }
+  // Lang = en — input could be AR → look up EN
+  if (EXPENSE_CATS[s]) return EXPENSE_CATS[s];
+  return s; // already English or unknown
+};
+
+// Detect whether a string is Arabic
+export const isArabic = (s) => /[\u0600-\u06FF]/.test(String(s || ''));
+
+// Build dropdown options for category selectors. Returns [{value,label,type}].
+// `value` is always the stable internal key (Arabic name_ar). `label` is bilingual
+// by default — "EN / AR" — so both audiences can find the item. If the live DB
+// list is empty the hardcoded EXPENSE_CATS map is used as a fallback so the app
+// keeps working before the migration is run.
+// @param list  — array of {name_ar, name_en, type, active} rows from `categories`
+// @param opts  — { type?: 'expense'|'income'|'both', lang?: 'bi'|'en'|'ar' }
+export const buildCatOptions = (list, opts) => {
+  const o = opts || {};
+  const wantType = o.type || 'both';
+  const lang = o.lang || 'bi';
+  const seen = new Set();
+  const out = [];
+
+  const pushRow = (ar, en, rowType) => {
+    const key = ar || en;
+    if (!key || seen.has(key)) return;
+    seen.add(key);
+    let label;
+    if (lang === 'en') label = en || ar;
+    else if (lang === 'ar') label = ar || en;
+    else if (ar && en && ar !== en) label = en + ' / ' + ar;
+    else label = ar || en;
+    out.push({ value: key, label: label, type: rowType || 'expense' });
+  };
+
+  if (Array.isArray(list) && list.length > 0) {
+    list.forEach(c => {
+      if (c && c.active === false) return;
+      if (wantType !== 'both' && c && c.type && c.type !== wantType) return;
+      pushRow(c && c.name_ar, c && c.name_en, c && c.type);
+    });
+  } else {
+    // Fallback — use hardcoded EXPENSE_CATS
+    Object.entries(EXPENSE_CATS).forEach(([ar, en]) => {
+      pushRow(ar, en, ar === 'مبيعات' ? 'income' : 'expense');
+    });
+  }
+
+  return out;
+};
+
+// Returns true when `raw` matches any known category by AR or EN name — either in
+// the live DB list or in the static EXPENSE_CATS fallback map.
+export const isKnownCat = (raw, list) => {
+  if (!raw) return false;
+  const s = String(raw).trim();
+  if (!s) return false;
+  if (Array.isArray(list) && list.length > 0) {
+    for (const c of list) {
+      if (!c) continue;
+      if (c.name_ar === s || c.name_en === s) return true;
+    }
+  }
+  if (EXPENSE_CATS[s]) return true;
+  if (EXPENSE_CATS_REVERSE[s]) return true;
+  return false;
 };
 
 // Chart colors
@@ -87,6 +189,20 @@ export const yearOf = (d) => d ? parseInt(d.substring(0, 4)) : 0;
 export const inRange = (d, mode, df, dt) => {
   if (!d || d.length < 4) return mode === 'all';
   if (mode === 'all') return true;
+  if (mode === 'ytd') {
+    const year = new Date().getFullYear();
+    return d >= year + '-01-01';
+  }
+  if (mode === '1mo') {
+    const oneMonthAgo = new Date();
+    oneMonthAgo.setMonth(oneMonthAgo.getMonth() - 1);
+    return d >= oneMonthAgo.toISOString().substring(0, 10);
+  }
+  if (mode === '3mo') {
+    const threeMonthsAgo = new Date();
+    threeMonthsAgo.setMonth(threeMonthsAgo.getMonth() - 3);
+    return d >= threeMonthsAgo.toISOString().substring(0, 10);
+  }
   if (mode === '1yr') {
     const oneYearAgo = new Date();
     oneYearAgo.setFullYear(oneYearAgo.getFullYear() - 1);
@@ -98,4 +214,131 @@ export const inRange = (d, mode, df, dt) => {
     return d >= threeYearsAgo.toISOString().substring(0, 10);
   }
   return d >= df && d <= dt;
+};
+
+// Sanitize text input — strip HTML tags and script injections
+export const sanitize = (str) => {
+  if (!str || typeof str !== 'string') return str || '';
+  return str.replace(/<[^>]*>/g, '').replace(/javascript:/gi, '').replace(/on\w+\s*=/gi, '').trim();
+};
+
+// ============================================================
+// Rich-text sanitizer for ticket comments (R8)
+// Allow-lists exactly the tags produced by the toolbar editor:
+//   b, strong, i, em, u, br, ul, ol, li, p, div, span
+// Everything else — script, iframe, img, a with javascript:, on*
+// handlers, style attrs, any tag not in the allow-list — is stripped.
+// The output is safe for dangerouslySetInnerHTML.
+// ============================================================
+const RT_ALLOWED_TAGS = new Set(['b', 'strong', 'i', 'em', 'u', 'br', 'ul', 'ol', 'li', 'p', 'div', 'span']);
+
+export const sanitizeRichText = (html) => {
+  if (!html || typeof html !== 'string') return '';
+  var s = String(html);
+  // 1. Remove script / style / iframe / object blocks entirely (incl. content)
+  s = s.replace(/<(script|style|iframe|object|embed|link|meta|base)[\s\S]*?<\/\1>/gi, '');
+  s = s.replace(/<(script|style|iframe|object|embed|link|meta|base)\b[^>]*\/?>/gi, '');
+  // 2. Collapse whitespace (incl. newlines/tabs) and HTML-entity whitespace inside
+  //    tag opening sequences. This defeats bypasses like `<b on\nerror=...>` or
+  //    `<b on&#10;click=...>` where an event-handler name is split by whitespace.
+  //    We normalize any <tag ...> run so attribute regexes can reliably match.
+  s = s.replace(/<([a-zA-Z][^>]*)>/g, function(_, inner) {
+    // Decode common HTML-entity whitespace (&#9;&#10;&#13;&nbsp;) inside attributes
+    var cleaned = inner
+      .replace(/&#0*(9|10|13|32);?/g, ' ')
+      .replace(/&#x0*(9|a|d|20);?/gi, ' ')
+      .replace(/&nbsp;/gi, ' ')
+      // Collapse any [\s]+ (including newlines, tabs) to a single space
+      .replace(/[\s\u00A0]+/g, ' ');
+    return '<' + cleaned + '>';
+  });
+  // 3. Strip event handlers on any remaining tag (on* =...) — now reliable after step 2
+  s = s.replace(/\son\w+\s*=\s*(['"]).*?\1/gi, '');
+  s = s.replace(/\son\w+\s*=\s*[^\s>]+/gi, '');
+  // 4. Strip javascript: urls (href/src)
+  s = s.replace(/(href|src)\s*=\s*(['"])\s*javascript:[^'"]*\2/gi, '');
+  s = s.replace(/(href|src)\s*=\s*javascript:[^\s>]+/gi, '');
+  // 5. Strip style and class attributes (prevent CSS injection / layout break)
+  s = s.replace(/\sstyle\s*=\s*(['"]).*?\1/gi, '');
+  s = s.replace(/\sclass\s*=\s*(['"]).*?\1/gi, '');
+  // 6. Walk all tags, drop any not in the allow-list. Preserve inner text via the replace.
+  s = s.replace(/<\/?([a-zA-Z][a-zA-Z0-9]*)\b[^>]*>/g, function(match, tag) {
+    return RT_ALLOWED_TAGS.has(String(tag).toLowerCase()) ? match : '';
+  });
+  return s;
+};
+
+// Returns true if a string appears to contain HTML (for render decision)
+export const isHtmlComment = (text) => {
+  if (!text || typeof text !== 'string') return false;
+  return /<(b|strong|i|em|u|br|ul|ol|li|p|div|span)\b[^>]*>/i.test(text);
+};
+
+// Strip ALL HTML from a rich-text comment to produce a plain-text preview
+// (used in notifications where HTML would render as raw tags).
+export const richTextToPlain = (html) => {
+  if (!html || typeof html !== 'string') return '';
+  return html
+    .replace(/<br\s*\/?>/gi, '\n')
+    .replace(/<\/(p|div|li)>/gi, '\n')
+    .replace(/<[^>]*>/g, '')
+    .replace(/&nbsp;/g, ' ')
+    .replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&quot;/g, '"').replace(/&#39;/g, "'")
+    .replace(/\n{3,}/g, '\n\n')
+    .trim();
+};
+
+// ============================================================
+// H3: Payment Source Breakdown
+// Aggregates an invoice's linked treasury rows into amount-per-source buckets.
+// Buckets: cash | bank | check | vodafone | instapay | other
+// Per row contribution = cash_in + bank_in (same sum used elsewhere for
+// total_collected). Only positive contributions counted.
+// Falls back gracefully when `payment_source` is null (pre-backfill rows).
+// Pure function — no React, no DB — safe to unit-test directly.
+// ============================================================
+export const PAYMENT_SOURCE_META = [
+  { key: 'cash',     label: '💵 Cash',     labelAr: 'نقدي',    color: '#059669' },
+  { key: 'bank',     label: '🏦 Bank',     labelAr: 'بنك',     color: '#6366f1' },
+  { key: 'check',    label: '📝 Check',    labelAr: 'شيك',     color: '#d97706' },
+  { key: 'vodafone', label: '📱 Vodafone', labelAr: 'فودافون', color: '#dc2626' },
+  { key: 'instapay', label: '⚡ InstaPay', labelAr: 'إنستاباي', color: '#7c3aed' },
+  { key: 'other',    label: '❓ Other',    labelAr: 'أخرى',    color: '#64748b' },
+];
+
+export const aggregatePaymentSources = (txns) => {
+  const buckets = { cash: 0, bank: 0, check: 0, vodafone: 0, instapay: 0, other: 0 };
+  if (!Array.isArray(txns)) return { buckets: buckets, total: 0 };
+
+  // NaN-safe numeric coercion. Number("abc") = NaN, Number(undefined) = NaN — both
+  // would poison buckets if not guarded. `+t || 0` converts NaN → 0.
+  const n = (v) => { var x = Number(v); return isFinite(x) ? x : 0; };
+
+  for (let i = 0; i < txns.length; i++) {
+    const t = txns[i];
+    if (!t || typeof t !== 'object') continue;
+    const amt = n(t.cash_in) + n(t.bank_in);
+    if (amt <= 0) continue;
+
+    let src = String(t.payment_source || '').trim().toLowerCase();
+    // Fallback inference when payment_source is missing (pre-backfill rows)
+    if (!src) {
+      if (n(t.bank_in) > 0) {
+        src = 'bank';
+      } else if (t.cash_method === 'vodafone' || t.cash_method === 'instapay') {
+        src = t.cash_method;
+      } else {
+        src = 'cash';
+      }
+    }
+
+    if (Object.prototype.hasOwnProperty.call(buckets, src)) {
+      buckets[src] += amt;
+    } else {
+      buckets.other += amt;
+    }
+  }
+
+  const total = buckets.cash + buckets.bank + buckets.check + buckets.vodafone + buckets.instapay + buckets.other;
+  return { buckets: buckets, total: total };
 };

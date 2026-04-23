@@ -164,27 +164,36 @@ function QuotePrintView({ quote, onClose }) {
 }
 
 // ========== REQUEST QUOTE MODAL ==========
-function RequestQuoteModal({ data, onClose, origins, destinations, openWhatsApp, openEmail, generateQuoteRequest, userId }) {
+function RequestQuoteModal({ data, onClose, origins, destinations, openWhatsApp, openEmail, generateQuoteRequest, userId, allVendors }) {
   const [origin, setOrigin] = useState(data.origin || '');
   const [dest, setDest] = useState(data.destination || 'Egypt');
   const [container, setContainer] = useState(data.container || '40ft');
   const [commodity, setCommodity] = useState('General cargo / Trading materials');
-  const [showComposer, setShowComposer] = useState(false);
-  const vendor = data.vendor;
-  const { subject, body } = generateQuoteRequest(vendor, origin, dest, container);
-  // Custom body with commodity
-  const customBody = body.replace('General cargo / Trading materials', commodity);
+  const [selectedVendors, setSelectedVendors] = useState(data.vendor ? [data.vendor.id] : []);
+  const [sendingTo, setSendingTo] = useState(null); // current vendor being sent to
+  const [sent, setSent] = useState([]); // vendor ids already sent
+  const [showComposer, setShowComposer] = useState(null); // vendor for email composer
+  const vendors = allVendors || [];
+  const shippingVendors = vendors.filter(v => v.vendor_type === 'Shipping' || !v.vendor_type);
+  
+  const toggleVendor = (id) => {
+    if (selectedVendors.includes(id)) setSelectedVendors(selectedVendors.filter(x => x !== id));
+    else setSelectedVendors([...selectedVendors, id]);
+  };
+  const selectAll = () => setSelectedVendors(shippingVendors.map(v => v.id));
+  const selectNone = () => setSelectedVendors([]);
 
   return (<div className="fixed inset-0 bg-black/60 z-50 flex items-start justify-center overflow-auto p-4" onClick={e=>{if(e.target===e.currentTarget)onClose();}}>
-    <div className="bg-white rounded-xl shadow-2xl w-full max-w-[600px] my-8">
+    <div className="bg-white rounded-xl shadow-2xl w-full max-w-[650px] my-8">
       <div className="p-4 border-b flex justify-between items-center">
         <div>
           <h3 className="text-lg font-bold">📋 Request Rate Quote</h3>
-          <p className="text-xs text-slate-500">From: {vendor.company_name}{vendor.contact_name ? ' — ' + vendor.contact_name : ''}</p>
+          <p className="text-xs text-slate-500">{selectedVendors.length} vendor{selectedVendors.length !== 1 ? 's' : ''} selected</p>
         </div>
         <button onClick={onClose} className="text-2xl text-slate-400">×</button>
       </div>
       <div className="p-4">
+        {/* Route Details */}
         <div className="grid grid-cols-2 gap-3 mb-4">
           <div><label className="text-[10px] font-semibold">Origin</label><input list="rq-origins" value={origin} onChange={e=>setOrigin(e.target.value)} className="w-full px-3 py-2 rounded-lg border text-sm" placeholder="e.g. China, Turkey..." /><datalist id="rq-origins">{origins.map(o=><option key={o} value={o}/>)}</datalist></div>
           <div><label className="text-[10px] font-semibold">Destination</label><input list="rq-dests" value={dest} onChange={e=>setDest(e.target.value)} className="w-full px-3 py-2 rounded-lg border text-sm" /><datalist id="rq-dests">{destinations.map(d=><option key={d} value={d}/>)}</datalist></div>
@@ -192,62 +201,88 @@ function RequestQuoteModal({ data, onClose, origins, destinations, openWhatsApp,
           <div><label className="text-[10px] font-semibold">Commodity</label><input value={commodity} onChange={e=>setCommodity(e.target.value)} className="w-full px-3 py-2 rounded-lg border text-sm" /></div>
         </div>
 
-        {/* Preview */}
-        <div className="bg-slate-50 rounded-lg p-3 mb-4 border max-h-[200px] overflow-auto">
-          <div className="text-[10px] font-semibold text-slate-500 mb-1">Message Preview:</div>
-          <pre className="text-xs whitespace-pre-wrap text-slate-700" style={{fontFamily:'inherit'}}>{customBody}</pre>
+        {/* Vendor Selection */}
+        <div className="mb-4">
+          <div className="flex justify-between items-center mb-2">
+            <label className="text-xs font-bold">Select Vendors</label>
+            <div className="flex gap-2">
+              <button onClick={selectAll} className="text-[10px] text-blue-600 font-bold hover:underline">Select All</button>
+              <button onClick={selectNone} className="text-[10px] text-slate-400 hover:underline">Clear</button>
+            </div>
+          </div>
+          <div className="max-h-[200px] overflow-auto rounded-lg border border-slate-200">
+            {shippingVendors.map(v => {
+              const isSel = selectedVendors.includes(v.id);
+              const isSent = sent.includes(v.id);
+              return (
+                <div key={v.id} onClick={() => !isSent && toggleVendor(v.id)}
+                  className={'flex items-center gap-3 px-3 py-2 border-b border-slate-50 cursor-pointer transition ' + (isSent ? 'bg-emerald-50 ' : isSel ? 'bg-blue-50 ' : 'hover:bg-slate-50 ')}>
+                  <div className={'w-5 h-5 rounded border-2 flex items-center justify-center text-[10px] flex-shrink-0 ' + (isSent ? 'bg-emerald-500 border-emerald-500 text-white' : isSel ? 'bg-blue-500 border-blue-500 text-white' : 'border-slate-300')}>
+                    {isSent ? '✓' : isSel ? '✓' : ''}
+                  </div>
+                  <div className="flex-1 min-w-0">
+                    <div className="text-xs font-semibold truncate">{v.company_name}{v.contact_name ? ' — ' + v.contact_name : ''}</div>
+                    <div className="text-[10px] text-slate-400 flex gap-2">
+                      {v.email && <span>📧 {v.email}</span>}
+                      {v.whatsapp && <span>💬 WhatsApp</span>}
+                    </div>
+                  </div>
+                  {isSent && <span className="text-[10px] text-emerald-600 font-bold">Sent ✓</span>}
+                </div>
+              );
+            })}
+            {shippingVendors.length === 0 && <div className="p-4 text-xs text-slate-400 text-center">No vendor contacts. Add vendors first (📇 Vendors).</div>}
+          </div>
         </div>
 
-        {/* Action Buttons — BIG for mobile */}
-        <div className="space-y-2">
-          {vendor.whatsapp && (
-            <button onClick={()=>{openWhatsApp(vendor.whatsapp, customBody);onClose();}}
-              className="w-full py-4 rounded-xl text-base font-bold bg-emerald-500 text-white flex items-center justify-center gap-2 hover:bg-emerald-600 transition"
-              style={{boxShadow:'0 4px 15px rgba(52,211,153,0.3)'}}>
-              💬 Send via WhatsApp
+        {/* Send Buttons */}
+        {selectedVendors.length > 0 && (
+          <div className="space-y-2">
+            <button onClick={() => {
+              const toSend = selectedVendors.filter(id => !sent.includes(id));
+              toSend.forEach(id => {
+                const v = vendors.find(x => x.id === id);
+                if (!v) return;
+                const { body } = generateQuoteRequest(v, origin, dest, container);
+                const customBody = body.replace('General cargo / Trading materials', commodity);
+                if (v.whatsapp) openWhatsApp(v.whatsapp, customBody);
+                else if (v.email) openEmail(v.email, 'Rate Request — ' + origin + ' to ' + dest + ' — KTC', customBody);
+              });
+              setSent([...sent, ...toSend]);
+            }} className="w-full py-3 rounded-xl text-sm font-bold bg-emerald-500 text-white hover:bg-emerald-600 transition">
+              💬 Send All via WhatsApp/Email ({selectedVendors.filter(id => !sent.includes(id)).length} vendors)
             </button>
-          )}
-          {vendor.email && (
-            <button onClick={()=>setShowComposer(true)}
-              className="w-full py-4 rounded-xl text-base font-bold text-white flex items-center justify-center gap-2 transition"
-              style={{background:'linear-gradient(135deg, #0ea5e9, #6366f1)', boxShadow:'0 4px 15px rgba(56,189,248,0.3)'}}>
-              📨 Send Direct from @ktcus.com
-            </button>
-          )}
-          {vendor.email && (
-            <button onClick={()=>{openEmail(vendor.email, subject, customBody);onClose();}}
-              className="w-full py-3 rounded-xl text-sm font-bold border-2 border-blue-200 text-blue-600 flex items-center justify-center gap-2 hover:bg-blue-50 transition">
-              📧 Open in Email Client
-            </button>
-          )}
-          {vendor.phone && (
-            <a href={'tel:'+vendor.phone}
-              className="w-full py-3 rounded-xl text-sm font-bold border-2 border-slate-200 text-slate-600 flex items-center justify-center gap-2 hover:bg-slate-50 transition block text-center">
-              📞 Call {vendor.contact_name || vendor.company_name}
-            </a>
-          )}
-          {!vendor.whatsapp && !vendor.email && (
-            <div className="text-center text-sm text-red-500 py-4">No email or WhatsApp on file for this vendor. Edit the vendor to add contact info.</div>
-          )}
-        </div>
+            {selectedVendors.filter(id => !sent.includes(id)).map(id => {
+              const v = vendors.find(x => x.id === id);
+              if (!v) return null;
+              const { subject, body } = generateQuoteRequest(v, origin, dest, container);
+              const customBody = body.replace('General cargo / Trading materials', commodity);
+              return (
+                <div key={id} className="flex gap-1">
+                  {v.whatsapp && <button onClick={() => { openWhatsApp(v.whatsapp, customBody); setSent([...sent, id]); }}
+                    className="flex-1 py-2 rounded-lg text-[10px] font-bold bg-emerald-100 text-emerald-700 hover:bg-emerald-200">💬 {v.company_name}</button>}
+                  {v.email && <button onClick={() => setShowComposer(v)}
+                    className="flex-1 py-2 rounded-lg text-[10px] font-bold bg-blue-100 text-blue-700 hover:bg-blue-200">📧 {v.company_name}</button>}
+                </div>
+              );
+            })}
+          </div>
+        )}
+        {sent.length > 0 && <div className="mt-3 text-center text-xs text-emerald-600 font-bold">✅ Sent to {sent.length} vendor{sent.length !== 1 ? 's' : ''}</div>}
       </div>
     </div>
-    {showComposer && (
-      <EmailComposer
-        to={vendor.email}
-        subject={subject}
-        body={customBody}
-        userId={userId}
-        senderName="KTC International"
-        onClose={() => setShowComposer(false)}
-        onSent={() => { setShowComposer(false); onClose(); }}
-      />
-    )}
+    {showComposer && (() => {
+      const v = showComposer;
+      const { subject, body } = generateQuoteRequest(v, origin, dest, container);
+      const customBody = body.replace('General cargo / Trading materials', commodity);
+      return <EmailComposer to={v.email} subject={subject} body={customBody} userId={userId} senderName="KTC International"
+        onClose={() => setShowComposer(null)} onSent={() => { setShowComposer(null); setSent([...sent, v.id]); }} />;
+    })()}
   </div>);
 }
 
-export default function ShippingRatesTab({ user, userProfile, isAdmin, customers }) {
-  const myId = userProfile?.id || user?.id;
+export default function ShippingRatesTab({ toast, user, userProfile, isAdmin, customers }) {
+  const myId = userProfile?.id;
   const [rates, setRates] = useState([]);
   const [quotes, setQuotes] = useState([]);
   const [bookings, setBookings] = useState([]);
@@ -270,6 +305,7 @@ export default function ShippingRatesTab({ user, userProfile, isAdmin, customers
   const [importData, setImportData] = useState([]);
   const [importStep, setImportStep] = useState('select');
   const [importProgress, setImportProgress] = useState(0);
+  const [importColMap, setImportColMap] = useState({});
   const [previewQuote, setPreviewQuote] = useState(null);
   const [pickedShipRate, setPickedShipRate] = useState(null);
   const [pickedTruckRate, setPickedTruckRate] = useState(null);
@@ -319,7 +355,7 @@ export default function ShippingRatesTab({ user, userProfile, isAdmin, customers
     if (!f.origin || !f.destination || !f.vendorName) { alert('Fill Origin, Destination, Vendor'); return; }
     if (!f.rateType) { alert('Rate Type is required! Select Shipping, Trucking, or Customs/Brokerage.\n\nنوع السعر مطلوب! اختر شحن أو نقل بري أو جمارك'); return; }
     const record = { origin: f.origin, destination: f.destination, vendor_name: f.vendorName, shipping_line: f.shippingLine || '', transport_mode: f.transportMode || 'Ocean', rate_type: f.rateType, container_type: f.containerType || '40ft', rate_amount: Number(f.rateAmount) || 0, currency: f.currency || 'USD', transit_days: f.transitDays ? Number(f.transitDays) : null, free_days: f.freeDays ? Number(f.freeDays) : null, port_fees: Number(f.portFees) || 0, thc_fees: Number(f.thcFees) || 0, documentation_fees: Number(f.docFees) || 0, customs_fees: Number(f.customsFees) || 0, other_fees: Number(f.otherFees) || 0, other_fees_desc: f.otherFeesDesc || '', total_cost: Number(f.rateAmount||0)+Number(f.portFees||0)+Number(f.thcFees||0)+Number(f.docFees||0)+Number(f.customsFees||0)+Number(f.otherFees||0), effective_date: f.effectiveDate || new Date().toISOString().substring(0,10), expiry_date: f.expiryDate || null, port_of_loading: f.pol || '', port_of_discharge: f.pod || '', notes: f.notes || '', booked: f.booked || false, shipment_reference: f.shipmentRef || '', booking_date: f.bookingDate || null, booking_notes: f.bookingNotes || '' };
-    try { if (editingRate) await dbUpdate('shipping_rates', editingRate.id, record, myId); else { await dbInsert('shipping_rates', record, myId); notifyShippingRate('all', f.origin, f.destination, myId); } await logActivity(myId, (editingRate ? 'Updated' : 'Created') + ' ' + (f.rateType || 'shipping') + ' rate: ' + f.origin + ' → ' + f.destination + ' (' + f.vendorName + ', ' + (f.currency || 'USD') + ' ' + (f.rateAmount || 0) + ')', 'shipping'); setF({}); setEditingRate(null); setView(selectedRoute ? 'route_detail' : 'routes'); await loadData(); } catch (err) { alert('Error: ' + err.message); }
+    try { if (editingRate) await dbUpdate('shipping_rates', editingRate.id, record, myId); else { await dbInsert('shipping_rates', record, myId); notifyShippingRate('all', f.origin, f.destination, myId); } await logActivity(myId, (editingRate ? 'Updated' : 'Created') + ' ' + (f.rateType || 'shipping') + ' rate: ' + f.origin + ' → ' + f.destination + ' (' + f.vendorName + ', ' + (f.currency || 'USD') + ' ' + (f.rateAmount || 0) + ')', 'shipping'); setF({}); setEditingRate(null); setView(selectedRoute ? 'route_detail' : 'routes'); await loadData(); } catch (err) { toast ? toast.error(err.message) : toast ? toast.error(err.message) : alert(err.message); }
   };
 
   const [bookingModal, setBookingModal] = useState(null);
@@ -332,10 +368,10 @@ export default function ShippingRatesTab({ user, userProfile, isAdmin, customers
       await logActivity(myId, 'Booked rate: ' + bookingModal.vendor_name + ' ' + bookingModal.origin + '→' + bookingModal.destination + ' Ref: ' + f.bookRef + (f.bookCustomer ? ' for ' + f.bookCustomer : ''), 'shipping');
       notifyShippingBooked('all', f.bookRef, myId);
       setBookingModal(null); setF(prev => ({...prev, bookRef:'', bookCustomer:'', bookOrder:'', bookNotes:''})); await loadData();
-    } catch (err) { alert(err.message); }
+    } catch (err) { toast ? toast.error(err.message) : alert(err.message); }
   };
-  const [rateHistoryMode, setRateHistoryMode] = useState('active');
-  const [rateHistoryDf, setRateHistoryDf] = useState('');
+  const [rateHistoryMode, setRateHistoryMode] = useState('1y');
+  const [rateHistoryDf, setRateHistoryDf] = useState(() => new Date(Date.now() - 365 * 86400000).toISOString().substring(0, 10));
   const [rateHistoryDt, setRateHistoryDt] = useState('');
 
   const handleSaveQuote = async () => {
@@ -344,12 +380,277 @@ export default function ShippingRatesTab({ user, userProfile, isAdmin, customers
     const cT = Number(f.qClientShip||0)+Number(f.qClientTruck||0)+Number(f.qClientCustoms||0)+Number(f.qClientService||0)+Number(f.qClientOther||0);
     const profit = cT - iT;
     const record = { quote_number: f.qNumber || ('Q-' + Date.now().toString(36).toUpperCase()), quote_date: f.qDate || new Date().toISOString().substring(0,10), customer_name: f.qCustomer, customer_email: f.qEmail || '', origin: f.qOrigin, destination: f.qDest, port_of_loading: f.qPol || '', port_of_discharge: f.qPod || '', container_type: f.qContainer || '40ft', shipping_rate_id: pickedShipRate || f.qRateId || null, shipping_cost: Number(f.qShipCost)||0, shipping_vendor: f.qShipVendor || '', shipping_line: f.qShipLine || '', trucking_cost: Number(f.qTruckCost)||0, trucking_vendor: f.qTruckVendor || '', customs_cost: Number(f.qCustomsCost)||0, other_internal_cost: Number(f.qOtherInternal)||0, other_internal_desc: f.qOtherInternalDesc || '', total_internal_cost: iT, client_shipping_fee: Number(f.qClientShip)||0, client_trucking_fee: Number(f.qClientTruck)||0, client_customs_fee: Number(f.qClientCustoms)||0, client_service_fee: Number(f.qClientService)||0, client_other_fee: Number(f.qClientOther)||0, client_other_desc: f.qClientOtherDesc || '', client_total: cT, client_display_text: f.qDisplayText || '', client_show_breakdown: f.qShowBreakdown || false, profit, profit_pct: iT > 0 ? Math.round((profit/iT)*10000)/100 : 0, currency: f.qCurrency || 'USD', status: f.qStatus || 'draft', valid_until: f.qValidUntil || null, notes: f.qNotes || '' };
-    try { if (editingQuote) await dbUpdate('shipping_quotes', editingQuote.id, record, myId); else await dbInsert('shipping_quotes', record, myId); await logActivity(myId, `Quote ${record.quote_number} ${editingQuote?'updated':'created'} for ${record.customer_name}`); resetQuoteForm(); setView('quotes'); await loadData(); } catch (err) { alert('Error: ' + err.message); }
+    try { if (editingQuote) await dbUpdate('shipping_quotes', editingQuote.id, record, myId); else await dbInsert('shipping_quotes', record, myId); await logActivity(myId, `Quote ${record.quote_number} ${editingQuote?'updated':'created'} for ${record.customer_name}`); resetQuoteForm(); setView('quotes'); await loadData(); } catch (err) { toast ? toast.error(err.message) : toast ? toast.error(err.message) : alert(err.message); }
   };
 
-  const handleDeleteRate = async (rate) => { if (!confirm('Delete this rate?')) return; try { await dbDelete('shipping_rates', rate.id, myId); await loadData(); } catch (err) { alert(err.message); } };
-  const processImportFile = async (file) => { const d = await file.arrayBuffer(); const wb = XLSX.read(d); const rows = XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]]); if (!rows.length) { alert('Empty'); return; } const parsed = rows.map(row => { const get = (...keys) => { for (const k of keys) { const v = row[k]||row[k?.toLowerCase?.()]||row[k?.toUpperCase?.()]; if (v!=null&&v!=='') return String(v).trim(); } return ''; }; const getNum = (...keys) => { const v = get(...keys); return v ? Number(v.replace(/[^0-9.-]/g,''))||0 : 0; }; const r = { origin:get('Origin','From','المنشأ'), destination:get('Destination','To','الوجهة'), vendor_name:get('Vendor','Forwarder','المورد'), shipping_line:get('Shipping Line','Line','Carrier','الناقل'), transport_mode:get('Mode','Transport')||'Ocean', container_type:get('Container','Size')||'40ft', rate_amount:getNum('Rate','Amount','Freight'), currency:get('Currency','Cur')||'USD', transit_days:getNum('Transit','Transit Days')||null, free_days:getNum('Free Days','Free')||null, port_fees:getNum('Port Fees'), thc_fees:getNum('THC'), documentation_fees:getNum('Doc Fees'), customs_fees:getNum('Customs'), other_fees:getNum('Other Fees'), effective_date:get('Date','Effective')||new Date().toISOString().substring(0,10), expiry_date:get('Expiry','Valid Until')||null, port_of_loading:get('POL','Loading Port'), port_of_discharge:get('POD','Discharge Port'), notes:get('Notes','Remarks') }; r.total_cost=(r.rate_amount||0)+(r.port_fees||0)+(r.thc_fees||0)+(r.documentation_fees||0)+(r.customs_fees||0)+(r.other_fees||0); return r; }).filter(r=>r.origin&&r.destination); setImportData(parsed); setImportStep('preview'); };
-  const executeImport = async () => { setImportStep('importing'); setImportProgress(0); for (let i=0;i<importData.length;i++) { try { await dbInsert('shipping_rates',importData[i],myId); } catch(e){} if(i%10===0) setImportProgress(Math.round((i/importData.length)*100)); } setImportProgress(100); setImportStep('done'); await loadData(); };
+  const handleDeleteRate = async (rate) => { if (!confirm('Delete this rate?')) return; try { await dbDelete('shipping_rates', rate.id, myId); await loadData(); } catch (err) { toast ? toast.error(err.message) : alert(err.message); } };
+  const processImportFile = async (file) => {
+    const d = await file.arrayBuffer();
+    const wb = XLSX.read(d);
+    const rows = XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]]);
+    if (!rows.length) { alert('No data found'); return; }
+
+    const headers = Object.keys(rows[0]);
+
+    // ---- NUMERIC-AWARE STRING PARSER ----
+    // Handles: "$2,500.00", "USD 2500", "2.500,00" (EU), "2,500", plain numbers
+    // Returns NaN if the string has no digits at all (so we can tell "empty" from "zero").
+    const parseNumberSmart = (raw) => {
+      if (raw == null || raw === '') return NaN;
+      if (typeof raw === 'number') return raw;
+      const s = String(raw).trim();
+      if (!s) return NaN;
+      // strip everything that isn't a digit, dot, comma, or minus
+      let clean = s.replace(/[^0-9.,\-]/g, '');
+      if (!clean) return NaN;
+      // Detect EU format: last separator is a comma AND there's a period before it
+      // → "1.234,56" → swap. Otherwise assume US/intl format and strip commas.
+      const lastComma = clean.lastIndexOf(',');
+      const lastDot = clean.lastIndexOf('.');
+      if (lastComma > -1 && lastDot > -1 && lastComma > lastDot) {
+        // EU: . = thousands, , = decimal → remove dots, swap comma for dot
+        clean = clean.replace(/\./g, '').replace(',', '.');
+      } else if (lastComma > -1 && lastDot === -1) {
+        // Only commas present. If there are multiple OR the comma is followed by
+        // 3+ digits → thousands separator. Otherwise decimal.
+        const commaCount = (clean.match(/,/g) || []).length;
+        const afterComma = clean.length - lastComma - 1;
+        if (commaCount > 1 || afterComma >= 3) clean = clean.replace(/,/g, '');
+        else clean = clean.replace(',', '.');
+      } else {
+        // US format or no separators at all
+        clean = clean.replace(/,/g, '');
+      }
+      const n = Number(clean);
+      return isNaN(n) ? NaN : n;
+    };
+
+    // ---- COLUMN SCORING ----
+    // For each candidate column, count how many of the first 20 non-empty rows
+    // parse as numbers. We prefer columns that look numeric when we're picking
+    // the "rate" or fee columns — avoids grabbing "Rate Type" (text) when a real
+    // numeric rate column exists.
+    const numericScore = (col) => {
+      if (!col) return 0;
+      let numeric = 0, seen = 0;
+      for (const row of rows.slice(0, 20)) {
+        const v = row[col];
+        if (v == null || v === '') continue;
+        seen++;
+        if (!isNaN(parseNumberSmart(v))) numeric++;
+      }
+      return seen === 0 ? 0 : numeric / seen;
+    };
+
+    // Candidate-based matcher. Returns BEST match based on keyword hit + numeric preference.
+    const findColSmart = (keywords, opts) => {
+      const preferNumeric = !!(opts && opts.preferNumeric);
+      const exclude = (opts && opts.exclude) || [];
+      const kws = keywords.map(k => k.toLowerCase());
+      const candidates = headers.filter(h => {
+        const hl = h.toLowerCase().replace(/[_\-\.]/g, ' ');
+        if (exclude.some(x => hl.includes(x))) return false;
+        return kws.some(k => hl.includes(k));
+      });
+      if (candidates.length === 0) return null;
+      if (!preferNumeric || candidates.length === 1) return candidates[0];
+      // Sort by numeric-ratio descending, then original order
+      return candidates
+        .map(c => ({ c, s: numericScore(c) }))
+        .sort((a, b) => b.s - a.s)[0].c;
+    };
+
+    // Is this header a container-specific rate column? (e.g. "20GP", "40HC", "40HQ Rate")
+    const containerFromHeader = (h) => {
+      const hl = h.toLowerCase().replace(/[^a-z0-9]/g, '');
+      // Need BOTH a container size AND no disqualifying word like "type"
+      if (/(^|[^0-9])(20|40|45)(gp|hc|hq|st|rf|reefer|ft)/.test(hl)) {
+        if (hl.includes('20gp') || /20ft|20st/.test(hl)) return "20' GP";
+        if (hl.includes('40hc') || hl.includes('40hq')) return "40' HC";
+        if (hl.includes('40gp') || /40ft|40st/.test(hl)) return "40' GP";
+        if (hl.startsWith('45') || hl.includes('45hc')) return "45' HC";
+        if (hl.includes('20rf') || hl.includes('20reefer')) return "20' RF";
+        if (hl.includes('40rf') || hl.includes('40reefer')) return "40' RF";
+      }
+      return null;
+    };
+
+    // Find all container-specific rate columns — and ONLY if they're numeric
+    const containerRateCols = headers
+      .map(h => ({ h, ct: containerFromHeader(h), score: numericScore(h) }))
+      .filter(x => x.ct && x.score >= 0.5);
+
+    const colMap = {
+      origin: findColSmart(['origin', 'from', 'المنشأ', 'loading country', 'pol country', 'departure']),
+      destination: findColSmart(['destination', 'dest', 'الوجهة', 'pod country', 'arrival', 'consignee country']),
+      vendor: findColSmart(['vendor', 'forwarder', 'freight forwarder', 'agent', 'المورد', 'supplier', 'company']),
+      line: findColSmart(['shipping line', 'line', 'carrier', 'الناقل', 'steamship', 'ssl']),
+      container: findColSmart(['container type', 'container size', 'container', 'حاوية', 'equipment', 'cntr'], { exclude: ['rate', 'price', 'amount', 'cost'] }),
+      // RATE: prefer numeric columns, exclude "type"/"category"/"class" headers that would pick up "Rate Type"
+      rate: findColSmart(['rate', 'price', 'amount', 'freight', 'cost', 'charge', 'السعر', 'ocean freight', 'total'], { preferNumeric: true, exclude: ['type', 'category', 'class', 'container', 'currency', 'mode'] }),
+      currency: findColSmart(['currency', 'cur', 'ccy', 'العملة']),
+      transit: findColSmart(['transit time', 'transit days', 'transit', 'tt days', 'مدة'], { preferNumeric: true }),
+      free: findColSmart(['free days', 'free time', 'demurrage free', 'detention free', 'freedays'], { preferNumeric: true }),
+      pol: findColSmart(['pol', 'port of loading', 'loading port', 'load port', 'port loading', 'ميناء التحميل']),
+      pod: findColSmart(['pod', 'port of discharge', 'discharge port', 'port discharge', 'ميناء التفريغ', 'unloading']),
+      date: findColSmart(['effective date', 'rate date', 'valid from', 'start date', 'date', 'التاريخ'], { exclude: ['expiry', 'expiration', 'until', 'end'] }),
+      expiry: findColSmart(['expiry', 'expiration', 'valid until', 'valid to', 'validity', 'end date', 'الصلاحية']),
+      portFees: findColSmart(['port fees', 'port charges', 'port cost', 'local charges'], { preferNumeric: true, exclude: ['loading', 'discharge'] }),
+      thc: findColSmart(['thc', 'terminal handling', 'terminal'], { preferNumeric: true }),
+      docFees: findColSmart(['doc fees', 'documentation', 'bl fee', 'bill of lading', 'doc'], { preferNumeric: true }),
+      customsFees: findColSmart(['customs', 'duty', 'جمارك'], { preferNumeric: true }),
+      otherFees: findColSmart(['other fees', 'other charges', 'surcharge', 'baf', 'caf', 'isps'], { preferNumeric: true }),
+      notes: findColSmart(['notes', 'remarks', 'comment', 'ملاحظات']),
+      mode: findColSmart(['transport mode', 'shipping mode', 'mode of transport', 'ship type', 'mode']),
+    };
+
+    // DIAGNOSTIC — tells you the numeric score of whatever the rate column landed on
+    console.warn('📊 Column mapping:', colMap);
+    console.warn('📊 Rate column numeric score:', colMap.rate, '→', numericScore(colMap.rate).toFixed(2));
+    if (containerRateCols.length) console.warn('📊 Container-specific rate columns:', containerRateCols.map(x => x.h + ' (' + x.ct + ')').join(', '));
+
+    const getVal = (row, col) => col ? String(row[col] == null ? '' : row[col]).trim() : '';
+    const getNum = (row, col) => {
+      const n = parseNumberSmart(row[col]);
+      return isNaN(n) ? 0 : n;
+    };
+    const getNumOrNull = (row, col) => {
+      const n = parseNumberSmart(row[col]);
+      return isNaN(n) ? null : n;
+    };
+    const parseDate = (row, col) => {
+      const raw = col ? row[col] : null;
+      if (raw == null || raw === '') return '';
+      // Excel serial date (days since 1899-12-30)
+      if (typeof raw === 'number' && raw > 20000 && raw < 80000) {
+        return new Date((raw - 25569) * 86400000).toISOString().substring(0, 10);
+      }
+      const s = String(raw).trim();
+      if (!s) return '';
+      if (!isNaN(s) && Number(s) > 20000) {
+        return new Date((Number(s) - 25569) * 86400000).toISOString().substring(0, 10);
+      }
+      const dt = new Date(s);
+      return isNaN(dt.getTime()) ? '' : dt.toISOString().substring(0, 10);
+    };
+
+    const normalizeContainer = (v) => {
+      if (!v) return '40ft';
+      v = v.toString().toLowerCase().replace(/[^a-z0-9]/g, '');
+      if ((v.includes('20') && v.includes('gp')) || v === '20' || v.includes('20ft') || v.includes('20st')) return "20' GP";
+      if ((v.includes('40') && v.includes('hc')) || v.includes('40hc') || v.includes('40hq')) return "40' HC";
+      if ((v.includes('40') && v.includes('gp')) || v === '40' || v.includes('40ft') || v.includes('40st')) return "40' GP";
+      if (v.includes('45')) return "45' HC";
+      if ((v.includes('20') && v.includes('rf')) || v.includes('20reefer')) return "20' RF";
+      if ((v.includes('40') && v.includes('rf')) || v.includes('40reefer')) return "40' RF";
+      return v.length > 0 ? v : '40ft';
+    };
+
+    // ---- ROW PARSING ----
+    // If the sheet has container-specific rate columns (20GP, 40HC, etc.) AND there
+    // isn't a standalone "rate" column that scored high numerically, we expand each
+    // source row into MULTIPLE output rows (one per container that has a rate > 0).
+    // This is how real freight rate sheets are typically structured.
+    const useContainerExpansion =
+      containerRateCols.length >= 2 &&
+      (!colMap.rate || numericScore(colMap.rate) < 0.5);
+
+    const parsed = [];
+    for (const row of rows) {
+      const origin = getVal(row, colMap.origin) || getVal(row, colMap.pol);
+      const dest = getVal(row, colMap.destination) || getVal(row, colMap.pod);
+      if (!origin && !dest) continue; // skip empty rows
+
+      const baseFields = {
+        origin: origin,
+        destination: dest,
+        vendor_name: getVal(row, colMap.vendor),
+        shipping_line: getVal(row, colMap.line),
+        transport_mode: getVal(row, colMap.mode) || 'Ocean',
+        currency: getVal(row, colMap.currency) || 'USD',
+        transit_days: getNumOrNull(row, colMap.transit),
+        free_days: getNumOrNull(row, colMap.free),
+        port_fees: getNum(row, colMap.portFees),
+        thc_fees: getNum(row, colMap.thc),
+        documentation_fees: getNum(row, colMap.docFees),
+        customs_fees: getNum(row, colMap.customsFees),
+        other_fees: getNum(row, colMap.otherFees),
+        effective_date: parseDate(row, colMap.date) || new Date().toISOString().substring(0, 10),
+        expiry_date: parseDate(row, colMap.expiry) || null,
+        port_of_loading: getVal(row, colMap.pol),
+        port_of_discharge: getVal(row, colMap.pod),
+        notes: getVal(row, colMap.notes),
+      };
+
+      if (useContainerExpansion) {
+        // one row per container column that has a numeric value
+        for (const crc of containerRateCols) {
+          const rate = getNum(row, crc.h);
+          if (rate <= 0) continue;
+          const r = Object.assign({}, baseFields, {
+            container_type: crc.ct,
+            rate_amount: rate,
+          });
+          r.total_cost = r.rate_amount + r.port_fees + r.thc_fees + r.documentation_fees + r.customs_fees + r.other_fees;
+          parsed.push(r);
+        }
+      } else {
+        const r = Object.assign({}, baseFields, {
+          container_type: normalizeContainer(getVal(row, colMap.container)),
+          rate_amount: getNum(row, colMap.rate),
+        });
+        r.total_cost = r.rate_amount + r.port_fees + r.thc_fees + r.documentation_fees + r.customs_fees + r.other_fees;
+        parsed.push(r);
+      }
+    }
+
+    if (!parsed.length) { alert('No valid rates found. Make sure columns include Origin/Destination or POL/POD.'); return; }
+
+    // ---- VALIDATION — warn if rate is 0 ----
+    const zeroRateCount = parsed.filter(r => !r.rate_amount || r.rate_amount === 0).length;
+    const ratePct = ((parsed.length - zeroRateCount) / parsed.length * 100).toFixed(0);
+    if (zeroRateCount > 0) {
+      const detectedRateCol = useContainerExpansion
+        ? containerRateCols.map(x => x.h).join(', ')
+        : (colMap.rate || '(none detected)');
+      const msg =
+        'Heads up: ' + zeroRateCount + ' of ' + parsed.length + ' rows (' + (100 - ratePct) + '%) have rate = 0.\n\n' +
+        'Rate column(s) detected: ' + detectedRateCol + '\n\n' +
+        (colMap.rate && numericScore(colMap.rate) < 0.5
+          ? '⚠️  The detected rate column has mostly non-numeric values. Probably the wrong column.\n\n'
+          : '') +
+        'Continue anyway?';
+      if (!confirm(msg)) return;
+    }
+
+    // Show detected columns
+    const detected = Object.entries(colMap).filter(([k, v]) => v).map(([k, v]) => k + '→' + v).join(', ');
+    console.warn('✅ Detected:', detected, '| container-split:', useContainerExpansion);
+
+    setImportData(parsed);
+    setImportStep('preview');
+    setImportColMap(Object.assign({}, colMap, useContainerExpansion ? { __container_rate_cols: containerRateCols.map(x => x.h + ' (' + x.ct + ')').join(', ') } : {}));
+  };
+  const executeImport = async () => {
+    setImportStep('importing'); setImportProgress(0);
+    let ok = 0, failed = 0;
+    const errors = [];
+    for (let i = 0; i < importData.length; i++) {
+      try {
+        await dbInsert('shipping_rates', importData[i], myId);
+        ok++;
+      } catch(e) {
+        failed++;
+        if (errors.length < 5) errors.push(e.message || String(e));
+      }
+      if (i % 10 === 0) setImportProgress(Math.round((i / importData.length) * 100));
+    }
+    setImportProgress(100); setImportStep('done');
+    if (failed > 0) {
+      alert('Import complete: ' + ok + ' saved, ' + failed + ' failed.\n\nFirst errors:\n' + errors.join('\n'));
+    }
+    await loadData();
+  };
   const handleAiQuery = async () => { if (!aiQuery.trim()) return; setAiLoading(true); setAiAnswer(''); try { const summary = routeGroups.slice(0,50).map(rg => { const c=rg.cheapest; return rg.key+': '+rg.count+' quotes ('+rg.activeCount+' active), best: '+(c?'$'+c.rate_amount+' '+c.vendor_name+'/'+(c.shipping_line||'N/A'):'none'); }).join('\n'); const res = await fetch('/api/ask',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({question:aiQuery,context:'Shipping rates assistant for KTC.\n\nROUTES:\n'+summary+'\n\nAnswer concisely.'})}); const data = await res.json(); setAiAnswer(data.answer||'No response'); } catch(err) { setAiAnswer('Error: '+err.message); } setAiLoading(false); };
   const resetQuoteForm = () => { setF({}); setEditingQuote(null); setPickedShipRate(null); setPickedTruckRate(null); setPickedBrokerRate(null); setManualShip(false); setManualTruck(false); setManualBroker(false); };
 
@@ -362,7 +663,7 @@ export default function ShippingRatesTab({ user, userProfile, isAdmin, customers
       else await dbInsert('vendor_contacts', record, myId);
       await logActivity(myId, (editingVendor ? 'Updated' : 'Added') + ' vendor: ' + record.company_name);
       setF({}); setEditingVendor(null); setView('vendors'); await loadData();
-    } catch (err) { alert('Error: ' + err.message); }
+    } catch (err) { toast ? toast.error(err.message) : toast ? toast.error(err.message) : alert(err.message); }
   };
 
   const openWhatsApp = (phone, message) => {
@@ -457,7 +758,7 @@ Date: ${today}`;
       ))}
       {vendorContacts.length === 0 && <div className="text-center py-8 text-slate-400 text-sm">No vendor contacts yet. Add your freight forwarders, truckers, and brokers.</div>}
     </div>
-    {requestQuoteData && <RequestQuoteModal data={requestQuoteData} onClose={()=>setRequestQuoteData(null)} origins={origins} destinations={destinations} openWhatsApp={openWhatsApp} openEmail={openEmail} generateQuoteRequest={generateQuoteRequest} userId={myId} />}
+    {requestQuoteData && <RequestQuoteModal data={requestQuoteData} onClose={()=>setRequestQuoteData(null)} origins={origins} destinations={destinations} openWhatsApp={openWhatsApp} openEmail={openEmail} generateQuoteRequest={generateQuoteRequest} userId={myId} allVendors={vendorContacts} />}
   </div>);
 
   // ========== ADD/EDIT VENDOR ==========
@@ -493,7 +794,7 @@ Date: ${today}`;
       <div className="flex gap-2">
         <button onClick={handleSaveVendor} className="px-5 py-2 bg-blue-500 text-white rounded-lg font-semibold text-sm">{editingVendor?'Update':'Save Vendor'} ✓</button>
         <button onClick={()=>{setView('vendors');setF({});setEditingVendor(null);}} className="px-5 py-2 border border-slate-200 rounded-lg text-sm">Cancel</button>
-        {editingVendor && isAdmin && <button onClick={async()=>{if(!confirm('Delete this vendor?'))return;try{await supabase.from('vendor_contacts').delete().eq('id',editingVendor.id);setView('vendors');setF({});setEditingVendor(null);await loadData();}catch(err){alert(err.message);}}} className="px-5 py-2 bg-red-500 text-white rounded-lg text-sm ml-auto">Delete</button>}
+        {editingVendor && isAdmin && <button onClick={async()=>{if(!confirm('Delete this vendor?'))return;try{await supabase.from('vendor_contacts').delete().eq('id',editingVendor.id);setView('vendors');setF({});setEditingVendor(null);await loadData();}catch(err){toast ? toast.error(err.message) : alert(err.message);}}} className="px-5 py-2 bg-red-500 text-white rounded-lg text-sm ml-auto">Delete</button>}
       </div>
     </div>
   </div>);
@@ -687,11 +988,35 @@ Date: ${today}`;
       {chartSorted.length>1&&(<div className="bg-white rounded-xl p-4 mb-4 border border-slate-200"><h3 className="text-sm font-bold mb-2">📈 Rate Trend</h3><div className="flex items-end gap-1 h-[120px]">{chartSorted.map((d,i)=>{const mx=Math.max(...chartSorted.map(x=>x.max)); const h=mx>0?(d.avg/mx)*100:0; return (<div key={d.month} className="flex-1 flex flex-col items-center" title={d.month+': avg $'+d.avg}><div className="text-[8px] text-slate-400 mb-1">${d.avg}</div><div className="w-full rounded-t" style={{height:h+'%',background:i===chartSorted.length-1?'#0ea5e9':'#cbd5e1',minHeight:4}}></div><div className="text-[8px] text-slate-400 mt-1 -rotate-45">{d.month.substring(5)}</div></div>);})}</div></div>)}
       {Object.keys(byVL).length>0&&(<div className="bg-white rounded-xl p-4 mb-4 border border-slate-200"><h3 className="text-sm font-bold mb-2">🏆 Vendor Comparison</h3><div className="overflow-auto"><table className="w-full border-collapse text-xs"><thead><tr className="bg-slate-50"><th className="px-3 py-2 text-left text-[10px]">Vendor / Line</th><th className="px-3 py-2 text-right text-[10px]">Best Rate</th><th className="px-3 py-2 text-right text-[10px]">Transit</th><th className="px-3 py-2 text-right text-[10px]">Free Days</th><th className="px-3 py-2 text-[10px]">Expiry</th></tr></thead><tbody>{Object.entries(byVL).sort((a,b)=>(a[1][0]?.rate_amount||Infinity)-(b[1][0]?.rate_amount||Infinity)).map(([key,vr],i)=>{const best=vr.reduce((a,b)=>(a.rate_amount||Infinity)<(b.rate_amount||Infinity)?a:b); return (<tr key={key} className={'border-b border-slate-50 '+(i===0?'bg-emerald-50':'')}><td className="px-3 py-2 font-semibold">{i===0&&<span className="text-emerald-500 mr-1">★</span>}{key}</td><td className="px-3 py-2 text-right font-bold text-blue-600">{fCur(best.rate_amount,best.currency)}</td><td className="px-3 py-2 text-right">{best.transit_days?best.transit_days+'d':'—'}</td><td className="px-3 py-2 text-right">{best.free_days||'—'}</td><td className="px-3 py-2"><ExpiryBadge date={best.expiry_date}/></td></tr>);})}</tbody></table></div></div>)}
       {routeQuotes.length>0&&(<div className="bg-white rounded-xl p-4 mt-4 border border-slate-200"><h3 className="text-sm font-bold mb-2">📋 Quotes ({routeQuotes.length})</h3>{routeQuotes.map(qt=>(<div key={qt.id} className="flex justify-between items-center py-2 border-b border-slate-50"><div><div className="text-xs font-semibold">{qt.quote_number} — {qt.customer_name}</div><div className="text-[10px] text-slate-500">{qt.quote_date} • {qt.status}</div></div><div className="flex items-center gap-3"><div className="text-right"><div className="text-xs">Client: <span className="font-bold">{fCur(qt.client_total,qt.currency)}</span></div><div className="text-[10px]" style={{color:qt.profit>0?'#10b981':'#ef4444'}}>Profit: {fCur(qt.profit,qt.currency)}</div></div><button onClick={()=>setPreviewQuote(qt)} className="px-2 py-1 rounded border border-purple-300 text-purple-600 text-[10px]">📄</button></div></div>))}</div>)}
-      <div className="bg-white rounded-xl p-4 border border-slate-200 mt-4"><div className="flex justify-between items-center mb-2"><h3 className="text-sm font-bold">All Rates</h3><div className="flex gap-1"><button onClick={()=>{const matchVendors=vendorContacts.filter(v=>!v.origin_regions||(v.origin_regions||'').toLowerCase().includes((selectedRoute.origin||'').toLowerCase().substring(0,4)));if(matchVendors.length>0)setRequestQuoteData({vendor:matchVendors[0],origin:selectedRoute.origin,destination:selectedRoute.destination,container:'40ft'});else alert('No vendor contacts found. Add vendors first (📇 Vendors).');}} className="px-3 py-1 bg-cyan-500 text-white rounded text-[10px] font-semibold">📋 Request Rate</button><button onClick={()=>{setF({origin:selectedRoute.origin,destination:selectedRoute.destination});setView('add_rate');}} className="px-3 py-1 bg-blue-500 text-white rounded text-[10px] font-semibold">+ Add Rate</button></div></div>
+      <div className="bg-white rounded-xl p-4 border border-slate-200 mt-4"><div className="flex justify-between items-center mb-2"><h3 className="text-sm font-bold">Historical Rates</h3><div className="flex gap-1">{(() => {
+        // CSV export of the currently-filtered rate history
+        const exportCSV = (rows) => {
+          const headers = ['Effective Date','Vendor','Shipping Line','Container','Rate','Currency','Total Cost','Transit Days','Free Days','Expiry Date','Status','Booked','Shipment Ref','Booking Date'];
+          const esc = (v) => { if (v == null) return ''; const s = String(v); return /[",\n]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s; };
+          const lines = [headers.join(',')];
+          rows.forEach(r => {
+            lines.push([
+              r.effective_date || '', r.vendor_name || '', r.shipping_line || '',
+              r.container_type || '', r.rate_amount || 0, r.currency || 'USD',
+              r.total_cost || 0, r.transit_days || '', r.free_days || '',
+              r.expiry_date || '', isExpired(r.expiry_date) ? 'Expired' : 'Active',
+              r.booked ? 'Yes' : 'No', r.shipment_reference || '', r.booking_date || '',
+            ].map(esc).join(','));
+          });
+          const blob = new Blob([lines.join('\n')], { type: 'text/csv;charset=utf-8' });
+          const url = URL.createObjectURL(blob);
+          const a = document.createElement('a');
+          a.href = url;
+          a.download = 'rates_' + selectedRoute.origin + '_to_' + selectedRoute.destination + '_' + new Date().toISOString().substring(0, 10) + '.csv';
+          a.click();
+          URL.revokeObjectURL(url);
+        };
+        return (<><button onClick={() => { var filtered = routeHistory; if (rateHistoryMode === 'active') filtered = filtered.filter(r => !isExpired(r.expiry_date)); else if (rateHistoryDf) filtered = filtered.filter(r => (r.effective_date || '') >= rateHistoryDf); if (rateHistoryDt) filtered = filtered.filter(r => (r.effective_date || '') <= rateHistoryDt); exportCSV(filtered); }} className="px-3 py-1 bg-emerald-500 text-white rounded text-[10px] font-semibold" title="Download as CSV">📥 Export</button><button onClick={()=>{setRequestQuoteData({vendor:null,origin:selectedRoute.origin,destination:selectedRoute.destination,container:'40ft'});}} className="px-3 py-1 bg-cyan-500 text-white rounded text-[10px] font-semibold">📋 Request Rate</button><button onClick={()=>{setF({origin:selectedRoute.origin,destination:selectedRoute.destination});setView('add_rate');}} className="px-3 py-1 bg-blue-500 text-white rounded text-[10px] font-semibold">+ Add Rate</button></>);
+      })()}</div></div>
       <div className="flex gap-1 mb-2 flex-wrap items-center">
         <span className="text-[10px] text-slate-500 mr-1">Filter:</span>
-        {[['active','✅ Active'],['3m','3 Months'],['1y','1 Year'],['3y','3 Years'],['all','All Time'],['custom','Custom']].map(([v,l])=>(
-          <button key={v} onClick={()=>{setRateHistoryMode(v); if(v==='3m'){setRateHistoryDf(new Date(Date.now()-90*86400000).toISOString().substring(0,10));setRateHistoryDt('');} else if(v==='1y'){setRateHistoryDf(new Date(Date.now()-365*86400000).toISOString().substring(0,10));setRateHistoryDt('');} else if(v==='3y'){setRateHistoryDf(new Date(Date.now()-1095*86400000).toISOString().substring(0,10));setRateHistoryDt('');} else {setRateHistoryDf('');setRateHistoryDt('');}}}
+        {[['active','✅ Active Only'],['3m','3 Months'],['1y','1 Year'],['3y','3 Years'],['all','All Time (incl. expired)'],['custom','Custom']].map(([v,l])=>(
+          <button key={v} onClick={()=>{setRateHistoryMode(v); if(v==='3m'){setRateHistoryDf(new Date(Date.now()-90*86400000).toISOString().substring(0,10));setRateHistoryDt('');} else if(v==='1y'){setRateHistoryDf(new Date(Date.now()-365*86400000).toISOString().substring(0,10));setRateHistoryDt('');} else if(v==='3y'){setRateHistoryDf(new Date(Date.now()-1095*86400000).toISOString().substring(0,10));setRateHistoryDt('');} else if(v==='active'){setRateHistoryDf('');setRateHistoryDt('');} else {setRateHistoryDf('');setRateHistoryDt('');}}}
             className={'px-2 py-1 rounded text-[10px] font-semibold '+(rateHistoryMode===v?'bg-blue-500 text-white':'bg-slate-100 text-slate-600')}>{l}</button>
         ))}
         {rateHistoryMode==='custom'&&(<><input type="date" value={rateHistoryDf} onChange={e=>setRateHistoryDf(e.target.value)} className="px-2 py-1 border rounded text-[10px] w-28" /><span className="text-[10px]">→</span><input type="date" value={rateHistoryDt} onChange={e=>setRateHistoryDt(e.target.value)} className="px-2 py-1 border rounded text-[10px] w-28" /></>)}
@@ -702,16 +1027,67 @@ Date: ${today}`;
         else if (rateHistoryDf) filtered = filtered.filter(r => (r.effective_date || '') >= rateHistoryDf);
         if (rateHistoryDt) filtered = filtered.filter(r => (r.effective_date || '') <= rateHistoryDt);
         var bestRate = filtered.length > 0 ? filtered.reduce((a,b) => (a.rate_amount||Infinity) < (b.rate_amount||Infinity) ? a : b) : null;
+        var expiredCount = filtered.filter(r => isExpired(r.expiry_date)).length;
+        var bookedCount = filtered.filter(r => r.booked).length;
         return (<>
         {bestRate && rateHistoryMode !== 'active' && <div className="bg-emerald-50 rounded-lg px-3 py-2 mb-2 border border-emerald-200 flex justify-between items-center">
           <span className="text-[10px] font-bold text-emerald-700">🏆 Best rate in period: {bestRate.vendor_name} {bestRate.shipping_line ? '/ '+bestRate.shipping_line : ''}</span>
           <span className="text-sm font-extrabold text-emerald-600">{fCur(bestRate.rate_amount, bestRate.currency)} <span className="text-[10px] font-normal">({bestRate.effective_date})</span></span>
         </div>}
-      <div className="overflow-auto max-h-[400px] rounded-lg border border-slate-200"><table className="w-full border-collapse text-xs"><thead className="sticky top-0"><tr className="bg-slate-50"><th className="px-2 py-2 text-[10px] text-left">Date</th><th className="px-2 py-2 text-[10px] text-left">Vendor</th><th className="px-2 py-2 text-[10px] text-left">Line</th><th className="px-2 py-2 text-[10px]">Container</th><th className="px-2 py-2 text-[10px] text-right">Rate</th><th className="px-2 py-2 text-[10px] text-right">Total</th><th className="px-2 py-2 text-[10px]">Expiry</th><th className="px-2 py-2 text-[10px]"></th></tr></thead><tbody>{filtered.map(r=>{const exp=isExpired(r.expiry_date); const isBest=bestRate&&r.id===bestRate.id; return (<tr key={r.id} className={'border-b border-slate-50 '+(isBest?'bg-emerald-50/80 ':exp?'bg-red-50/50 ':'')+(r.booked?' bg-green-50/50':'')}><td className="px-2 py-1.5">{r.effective_date}</td><td className="px-2 py-1.5 font-semibold">{isBest&&<span className="text-emerald-500 mr-1">★</span>}{r.vendor_name}</td><td className="px-2 py-1.5">{r.shipping_line||'—'}</td><td className="px-2 py-1.5 text-center"><span className="px-1.5 py-0.5 bg-blue-100 text-blue-700 rounded text-[9px]">{r.container_type}</span></td><td className={'px-2 py-1.5 text-right font-bold '+(exp?'text-red-400 line-through':'text-blue-600')}>{fCur(r.rate_amount,r.currency)}</td><td className="px-2 py-1.5 text-right font-bold text-amber-600">{fCur(r.total_cost,r.currency)}</td><td className="px-2 py-1.5"><ExpiryBadge date={r.expiry_date}/></td><td className="px-2 py-1.5 flex gap-1">{!exp&&<button onClick={()=>handleMarkBooked(r)} className="px-2 py-0.5 rounded border border-green-300 text-green-600 text-[10px]">Book</button>}<button onClick={()=>{setEditingRate(r);setF({origin:r.origin,destination:r.destination,vendorName:r.vendor_name,shippingLine:r.shipping_line,transportMode:r.transport_mode,rateType:r.rate_type||'',containerType:r.container_type,rateAmount:r.rate_amount,currency:r.currency,transitDays:r.transit_days,freeDays:r.free_days,portFees:r.port_fees,thcFees:r.thc_fees,docFees:r.documentation_fees,customsFees:r.customs_fees,otherFees:r.other_fees,otherFeesDesc:r.other_fees_desc,effectiveDate:r.effective_date,expiryDate:r.expiry_date,pol:r.port_of_loading,pod:r.port_of_discharge,notes:r.notes,booked:r.booked,shipmentRef:r.shipment_reference,bookingDate:r.booking_date,bookingNotes:r.booking_notes});setView('add_rate');}} className="px-2 py-0.5 rounded border border-blue-300 text-blue-600 text-[10px]">Edit</button>{isAdmin&&<button onClick={()=>handleDeleteRate(r)} className="px-2 py-0.5 rounded border border-red-300 text-red-500 text-[10px]">Del</button>}</td></tr>);})}</tbody></table></div>
-      <div className="text-[10px] text-slate-400 mt-1">Showing {filtered.length} of {routeHistory.length} rates</div>
+      <div className="overflow-auto max-h-[420px] rounded-lg border border-slate-200">
+        <table className="w-full border-collapse text-xs">
+          <thead className="sticky top-0 z-10"><tr className="bg-slate-50">
+            <th className="px-2 py-2 text-[10px] text-left">Date</th>
+            <th className="px-2 py-2 text-[10px] text-left">Vendor / Forwarder</th>
+            <th className="px-2 py-2 text-[10px] text-left">Shipping Line</th>
+            <th className="px-2 py-2 text-[10px]">Container</th>
+            <th className="px-2 py-2 text-[10px] text-right">Rate</th>
+            <th className="px-2 py-2 text-[10px] text-right">Total</th>
+            <th className="px-2 py-2 text-[10px] text-left">Status</th>
+            <th className="px-2 py-2 text-[10px] text-left">Booked</th>
+            <th className="px-2 py-2 text-[10px]"></th>
+          </tr></thead>
+          <tbody>{filtered.map(r => {
+            const exp = isExpired(r.expiry_date);
+            const isBest = bestRate && r.id === bestRate.id;
+            return (<tr key={r.id} className={'border-b border-slate-50 ' + (isBest ? 'bg-emerald-50 ' : exp ? 'bg-slate-50 ' : '') + (r.booked ? ' bg-green-50' : '')}>
+              <td className="px-2 py-1.5">{r.effective_date}</td>
+              <td className="px-2 py-1.5 font-semibold">{isBest && <span className="text-emerald-500 mr-1">★</span>}{r.vendor_name}</td>
+              <td className="px-2 py-1.5">{r.shipping_line || '—'}</td>
+              <td className="px-2 py-1.5 text-center"><span className="px-1.5 py-0.5 bg-blue-100 text-blue-700 rounded text-[9px]">{r.container_type}</span></td>
+              <td className={'px-2 py-1.5 text-right font-bold ' + (exp ? 'text-slate-500' : 'text-blue-600')}>{fCur(r.rate_amount, r.currency)}</td>
+              <td className={'px-2 py-1.5 text-right font-bold ' + (exp ? 'text-slate-500' : 'text-amber-600')}>{fCur(r.total_cost, r.currency)}</td>
+              <td className="px-2 py-1.5">
+                {exp
+                  ? <span className="px-1.5 py-0.5 bg-red-100 text-red-700 rounded text-[9px] font-bold" title={'Expired ' + (r.expiry_date || '')}>EXPIRED</span>
+                  : <ExpiryBadge date={r.expiry_date} />}
+              </td>
+              <td className="px-2 py-1.5">
+                {r.booked
+                  ? <div className="flex flex-col">
+                      <span className="px-1.5 py-0.5 bg-green-100 text-green-700 rounded text-[9px] font-bold w-fit">✓ BOOKED</span>
+                      {r.shipment_reference && <span className="text-[9px] text-slate-500 mt-0.5">Ref: {r.shipment_reference}</span>}
+                      {r.booking_date && <span className="text-[9px] text-slate-400">{r.booking_date}</span>}
+                    </div>
+                  : <span className="text-[9px] text-slate-400">—</span>}
+              </td>
+              <td className="px-2 py-1.5 flex gap-1">
+                {!exp && !r.booked && <button onClick={() => handleMarkBooked(r)} className="px-2 py-0.5 rounded border border-green-300 text-green-600 text-[10px]">Book</button>}
+                <button onClick={() => { setEditingRate(r); setF({ origin: r.origin, destination: r.destination, vendorName: r.vendor_name, shippingLine: r.shipping_line, transportMode: r.transport_mode, rateType: r.rate_type || '', containerType: r.container_type, rateAmount: r.rate_amount, currency: r.currency, transitDays: r.transit_days, freeDays: r.free_days, portFees: r.port_fees, thcFees: r.thc_fees, docFees: r.documentation_fees, customsFees: r.customs_fees, otherFees: r.other_fees, otherFeesDesc: r.other_fees_desc, effectiveDate: r.effective_date, expiryDate: r.expiry_date, pol: r.port_of_loading, pod: r.port_of_discharge, notes: r.notes, booked: r.booked, shipmentRef: r.shipment_reference, bookingDate: r.booking_date, bookingNotes: r.booking_notes }); setView('add_rate'); }} className="px-2 py-0.5 rounded border border-blue-300 text-blue-600 text-[10px]">Edit</button>
+                {isAdmin && <button onClick={() => handleDeleteRate(r)} className="px-2 py-0.5 rounded border border-red-300 text-red-500 text-[10px]" title="Danger: deletes historical pricing data">Del</button>}
+              </td>
+            </tr>);
+          })}</tbody>
+        </table>
+      </div>
+      <div className="text-[10px] text-slate-500 mt-1 flex gap-4">
+        <span>Showing <strong>{filtered.length}</strong> of {routeHistory.length} rates</span>
+        {expiredCount > 0 && <span className="text-red-600">• {expiredCount} expired (preserved for history)</span>}
+        {bookedCount > 0 && <span className="text-green-600">• {bookedCount} booked</span>}
+      </div>
       </>); })()}</div>
       {previewQuote && <QuotePrintView quote={previewQuote} onClose={() => setPreviewQuote(null)} />}
-      {requestQuoteData && <RequestQuoteModal data={requestQuoteData} onClose={()=>setRequestQuoteData(null)} origins={origins} destinations={destinations} openWhatsApp={openWhatsApp} openEmail={openEmail} generateQuoteRequest={generateQuoteRequest} userId={myId} />}
+      {requestQuoteData && <RequestQuoteModal data={requestQuoteData} onClose={()=>setRequestQuoteData(null)} origins={origins} destinations={destinations} openWhatsApp={openWhatsApp} openEmail={openEmail} generateQuoteRequest={generateQuoteRequest} userId={myId} allVendors={vendorContacts} />}
 
       {/* Booking Modal */}
       {bookingModal && (
@@ -768,8 +1144,84 @@ Date: ${today}`;
   if (view === 'import') return (<div>
     <button onClick={()=>{setView('routes');setImportData([]);setImportStep('select');}} className="px-3 py-1 rounded border border-slate-200 text-xs font-semibold mb-3">← Back</button>
     <h2 className="text-xl font-extrabold mb-3">Import Shipping Rates</h2>
-    {importStep==='select'&&<div className="bg-white rounded-xl p-6 text-center border-2 border-dashed border-blue-300"><div className="text-4xl mb-2">📁</div><p className="text-xs text-slate-400 mb-3">Columns: Origin, Destination, Vendor, Shipping Line, Rate, Container, Transit, Free Days, Expiry...</p><label className="px-6 py-3 bg-blue-500 text-white rounded-lg text-sm font-semibold cursor-pointer inline-block">Select File<input type="file" accept=".xlsx,.xls,.csv" className="hidden" onChange={async(e)=>{if(e.target.files[0])await processImportFile(e.target.files[0]);}}/></label></div>}
-    {importStep==='preview'&&importData.length>0&&<div><div className="bg-emerald-50 rounded-xl p-4 mb-3 border border-emerald-200 flex justify-between items-center"><span className="text-sm font-bold text-emerald-800">Found {importData.length} rates</span><div className="flex gap-2"><button onClick={()=>{setImportStep('select');setImportData([]);}} className="px-3 py-1.5 border rounded-lg text-xs">Cancel</button><button onClick={executeImport} className="px-4 py-1.5 bg-emerald-500 text-white rounded-lg text-xs font-semibold">Import</button></div></div><div className="overflow-auto max-h-[350px] rounded-lg border bg-white text-xs"><table className="w-full border-collapse"><thead><tr className="bg-slate-50"><th className="px-2 py-1.5 text-[10px]">Origin</th><th className="px-2 py-1.5 text-[10px]">Dest</th><th className="px-2 py-1.5 text-[10px]">Vendor</th><th className="px-2 py-1.5 text-[10px]">Line</th><th className="px-2 py-1.5 text-[10px] text-right">Rate</th><th className="px-2 py-1.5 text-[10px]">Expiry</th></tr></thead><tbody>{importData.slice(0,30).map((r,i)=>(<tr key={i} className="border-b border-slate-50"><td className="px-2 py-1">{r.origin}</td><td className="px-2 py-1">{r.destination}</td><td className="px-2 py-1">{r.vendor_name}</td><td className="px-2 py-1">{r.shipping_line}</td><td className="px-2 py-1 text-right font-bold">{fCur(r.rate_amount,r.currency)}</td><td className="px-2 py-1">{r.expiry_date||'—'}</td></tr>))}</tbody></table></div></div>}
+    {importStep==='select'&&<div className="bg-white rounded-xl p-6 text-center border-2 border-dashed border-blue-300">
+      <div className="text-4xl mb-2">📁</div>
+      <p className="text-sm font-bold mb-2">Upload shipping rates spreadsheet</p>
+      <p className="text-[10px] text-slate-400 mb-1">Auto-detects columns by name (any order). Supports:</p>
+      <div className="text-[9px] text-slate-400 mb-3 leading-relaxed">
+        <span className="font-semibold text-slate-500">Origin/Destination:</span> Origin, From, Destination, To, POL, POD, Port of Loading, Port of Discharge<br/>
+        <span className="font-semibold text-slate-500">Shipping:</span> Vendor, Forwarder, Shipping Line, Carrier, Container, Container Type/Size<br/>
+        <span className="font-semibold text-slate-500">Pricing:</span> Rate, Price, Amount, Freight, Port Fees, THC, Doc Fees, Customs<br/>
+        <span className="font-semibold text-slate-500">Timing:</span> Transit Days, Free Days, Date, Effective, Expiry, Valid Until
+      </div>
+      <label className="px-6 py-3 bg-blue-500 text-white rounded-lg text-sm font-semibold cursor-pointer inline-block">Select File<input type="file" accept=".xlsx,.xls,.csv" className="hidden" onChange={async(e)=>{if(e.target.files[0])await processImportFile(e.target.files[0]);}}/></label>
+      <button onClick={() => {
+        const ws = XLSX.utils.aoa_to_sheet([
+          ['Origin', 'Destination', 'Port of Loading (POL)', 'Port of Discharge (POD)', 'Vendor / Forwarder', 'Shipping Line', 'Container Type', 'Rate / Freight', 'Currency', 'Transit Days', 'Free Days', 'Effective Date', 'Expiry Date', 'Notes'],
+          ['China', 'Egypt', 'Shanghai', 'Alexandria', 'MSC Egypt', 'MSC', "40' HC", 2850, 'USD', 28, 14, '2025-03-01', '2025-04-30', ''],
+          ['Turkey', 'Egypt', 'Mersin', 'Alexandria', 'ZIM', 'ZIM', "40' HC", 1200, 'USD', 8, 14, '2025-03-15', '2025-06-15', 'Weekly'],
+        ]);
+        ws['!cols'] = [{wch:12},{wch:12},{wch:18},{wch:18},{wch:18},{wch:15},{wch:14},{wch:14},{wch:10},{wch:12},{wch:12},{wch:14},{wch:14},{wch:20}];
+        const twb = XLSX.utils.book_new();
+        XLSX.utils.book_append_sheet(twb, ws, 'Rates Template');
+        XLSX.writeFile(twb, 'Shipping-Rates-Import-Template.xlsx');
+      }} className="ml-2 px-4 py-3 bg-slate-100 text-slate-600 rounded-lg text-sm font-semibold cursor-pointer inline-block hover:bg-slate-200">📄 Download Template</button>
+    </div>}
+    {importStep==='preview'&&importData.length>0&&<div>
+      <div className="bg-emerald-50 rounded-xl p-4 mb-3 border border-emerald-200">
+        <div className="flex justify-between items-center mb-2">
+          <span className="text-sm font-bold text-emerald-800">Found {importData.length} rates</span>
+          <div className="flex gap-2">
+            <button onClick={()=>{setImportStep('select');setImportData([]);}} className="px-3 py-1.5 border rounded-lg text-xs">Cancel</button>
+            <button onClick={executeImport} className="px-4 py-1.5 bg-emerald-500 text-white rounded-lg text-xs font-semibold">✅ Import All</button>
+          </div>
+        </div>
+        <div className="text-[9px] text-emerald-700">
+          <span className="font-bold">Detected columns: </span>
+          {Object.entries(importColMap).filter(([k,v])=>v).map(([k,v])=>(
+            <span key={k} className="inline-block px-1.5 py-0.5 bg-emerald-100 rounded mr-1 mb-1">{k}: <b>{v}</b></span>
+          ))}
+          {Object.entries(importColMap).filter(([k,v])=>!v).length > 0 && (
+            <div className="mt-1 text-amber-600">Not found: {Object.entries(importColMap).filter(([k,v])=>!v).map(([k])=>k).join(', ')}</div>
+          )}
+        </div>
+      </div>
+      <div className="overflow-auto max-h-[400px] rounded-lg border bg-white text-xs">
+        <table className="w-full border-collapse">
+          <thead><tr className="bg-slate-50 sticky top-0">
+            <th className="px-2 py-1.5 text-[10px]">Origin</th>
+            <th className="px-2 py-1.5 text-[10px]">Dest</th>
+            <th className="px-2 py-1.5 text-[10px]">POL</th>
+            <th className="px-2 py-1.5 text-[10px]">POD</th>
+            <th className="px-2 py-1.5 text-[10px]">Vendor</th>
+            <th className="px-2 py-1.5 text-[10px]">Line</th>
+            <th className="px-2 py-1.5 text-[10px]">Container</th>
+            <th className="px-2 py-1.5 text-[10px] text-right">Rate</th>
+            <th className="px-2 py-1.5 text-[10px]">Transit</th>
+            <th className="px-2 py-1.5 text-[10px]">Free</th>
+            <th className="px-2 py-1.5 text-[10px]">Date</th>
+            <th className="px-2 py-1.5 text-[10px]">Expiry</th>
+          </tr></thead>
+          <tbody>{importData.slice(0,50).map((r,i)=>(
+            <tr key={i} className="border-b border-slate-50 hover:bg-slate-50">
+              <td className="px-2 py-1">{r.origin}</td>
+              <td className="px-2 py-1">{r.destination}</td>
+              <td className="px-2 py-1 text-slate-400">{r.port_of_loading||'—'}</td>
+              <td className="px-2 py-1 text-slate-400">{r.port_of_discharge||'—'}</td>
+              <td className="px-2 py-1">{r.vendor_name||'—'}</td>
+              <td className="px-2 py-1">{r.shipping_line||'—'}</td>
+              <td className="px-2 py-1 font-semibold">{r.container_type}</td>
+              <td className="px-2 py-1 text-right font-bold">{fCur(r.rate_amount,r.currency)}</td>
+              <td className="px-2 py-1">{r.transit_days ? r.transit_days+'d' : '—'}</td>
+              <td className="px-2 py-1">{r.free_days ? r.free_days+'d' : '—'}</td>
+              <td className="px-2 py-1">{r.effective_date}</td>
+              <td className="px-2 py-1">{r.expiry_date||'—'}</td>
+            </tr>
+          ))}</tbody>
+        </table>
+        {importData.length>50&&<div className="text-center py-2 text-[10px] text-slate-400">Showing 50 of {importData.length}</div>}
+      </div>
+    </div>}
     {importStep==='importing'&&<div className="bg-white rounded-xl p-8 text-center"><div className="text-4xl mb-3">⏳</div><div className="w-full bg-slate-200 rounded-full h-3"><div className="bg-blue-500 h-3 rounded-full" style={{width:importProgress+'%'}}></div></div><p className="text-sm mt-2">{importProgress}%</p></div>}
     {importStep==='done'&&<div className="bg-white rounded-xl p-8 text-center"><div className="text-4xl mb-3">✅</div><h3 className="text-lg font-bold text-emerald-700">Done!</h3><button onClick={()=>{setView('routes');setImportData([]);setImportStep('select');}} className="mt-3 px-6 py-2 bg-blue-500 text-white rounded-lg font-semibold">Done</button></div>}
   </div>);
@@ -794,7 +1246,7 @@ Date: ${today}`;
         <button onClick={()=>setView('import')} className="px-3 py-1.5 bg-amber-500 text-white rounded-lg text-xs font-semibold">📥 Import</button>
         <button onClick={()=>setView('ai')} className="px-3 py-1.5 bg-emerald-500 text-white rounded-lg text-xs font-semibold">🤖 AI</button>
         <button onClick={()=>setView('vendors')} className="px-3 py-1.5 bg-indigo-500 text-white rounded-lg text-xs font-semibold">📇 Vendors</button>
-        <button onClick={()=>{if(vendorContacts.length===0){alert('Add vendor contacts first (📇 Vendors button)');return;}setRequestQuoteData({vendor:vendorContacts[0],origin:'',destination:'Egypt',container:'40ft'});}} className="px-3 py-1.5 bg-cyan-500 text-white rounded-lg text-xs font-semibold">📋 Request Rate</button>
+        <button onClick={()=>{setRequestQuoteData({vendor:null,origin:'',destination:'Egypt',container:'40ft'});}} className="px-3 py-1.5 bg-cyan-500 text-white rounded-lg text-xs font-semibold">📋 Request Rate</button>
       </div>
     </div>
     <div className="grid grid-cols-5 gap-3 mb-4">
@@ -817,6 +1269,6 @@ Date: ${today}`;
       <div className="flex justify-between text-[10px] text-slate-500 border-t border-slate-100 pt-2"><span>{rg.activeCount} active{rg.expiredCount>0&&<span className="text-red-400 ml-1">({rg.expiredCount} exp)</span>}</span><span>{[...rg.vendors].length} vendors</span>{(() => { const rb = routeBookings(rg.origin,rg.destination); return rb.length > 0 && <span className="text-emerald-600">✓ {rb.length}x</span>; })()}</div>
     </div>);})}</div>)}
     {previewQuote && <QuotePrintView quote={previewQuote} onClose={() => setPreviewQuote(null)} />}
-    {requestQuoteData && <RequestQuoteModal data={requestQuoteData} onClose={()=>setRequestQuoteData(null)} origins={origins} destinations={destinations} openWhatsApp={openWhatsApp} openEmail={openEmail} generateQuoteRequest={generateQuoteRequest} userId={myId} />}
+    {requestQuoteData && <RequestQuoteModal data={requestQuoteData} onClose={()=>setRequestQuoteData(null)} origins={origins} destinations={destinations} openWhatsApp={openWhatsApp} openEmail={openEmail} generateQuoteRequest={generateQuoteRequest} userId={myId} allVendors={vendorContacts} />}
   </div>);
 }

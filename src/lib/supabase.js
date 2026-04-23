@@ -39,9 +39,33 @@ export async function dbUpdate(table, id, changes, userId) {
   const { data, error } = await supabase.from(table).update(changes).eq('id', id).select().single();
   if (error) throw error;
   if (userId) {
+    // Check if this is a late edit (24h+ after creation)
+    const createdAt = old?.created_at || old?.date;
+    const hoursSinceCreation = createdAt ? (Date.now() - new Date(createdAt).getTime()) / 3600000 : 0;
+    const isLateEdit = hoursSinceCreation > 24;
+
+    // Detect sensitive field changes. List covers both legacy short names
+    // (preserved for backward compat) AND actual schema column names across
+    // invoices / treasury / checks / bank. Without the long forms, audit trail
+    // would miss edits to bank_in, total_amount, transaction_date, etc.
+    const SENSITIVE_FIELDS = [
+      // Short forms (legacy; preserved)
+      'amount', 'total', 'cash_in', 'cash_out', 'price', 'unit_price', 'rate', 'date', 'description', 'customer', 'order_number', 'invoice_number', 'qty', 'quantity', 'vat_rate',
+      // Schema column names (real ones the UI edits)
+      'total_amount', 'total_collected', 'outstanding',
+      'bank_in', 'bank_out', 'expected_amount', 'usd_in', 'usd_out', 'foreign_amount',
+      'transaction_date', 'invoice_date', 'due_date', 'check_date', 'collection_date',
+      'customer_name', 'customer_name_en', 'check_number',
+    ];
+    const changedFields = Object.keys(changes).filter(k => old && old[k] !== changes[k]);
+    const sensitiveChanges = changedFields.filter(f => SENSITIVE_FIELDS.includes(f));
+
     await supabase.from('audit_log').insert({
       table_name: table, record_id: id, action: 'update',
-      changed_by: userId, old_values: old, new_values: changes
+      changed_by: userId, old_values: old, new_values: changes,
+      is_late_edit: isLateEdit,
+      hours_since_creation: Math.round(hoursSinceCreation),
+      sensitive_fields_changed: sensitiveChanges.length > 0 ? sensitiveChanges : null,
     });
   }
   return data;
@@ -87,17 +111,10 @@ export async function getUser() {
   return user;
 }
 
-// Recalculate invoice from treasury
-export async function recalcInvoice(orderNumber) {
-  const { data: txns } = await supabase
-    .from('treasury')
-    .select('cash_in')
-    .eq('order_number', orderNumber);
-  
-  const totalCollected = (txns || []).reduce((sum, t) => sum + (t.cash_in || 0), 0);
-  
-  await supabase
-    .from('invoices')
-    .update({ total_collected: totalCollected })
-    .eq('order_number', orderNumber);
-}
+// NOTE: the legacy `recalcInvoice(orderNumber)` helper was removed on
+// 2026-04-20 — it summed only `cash_in` (pre-bank-separation math) and
+// would have silently dropped every bank payment from collected totals.
+// All invoice recalculation MUST go through `recalcInvoiceCollected(id)`
+// in src/app/page.jsx, which sums `cash_in + bank_in`, skips placeholders
+// and bank-confirmation dedup markers, caps at invoice total, and updates
+// `outstanding`.
