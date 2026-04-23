@@ -80,9 +80,14 @@ test('S17.M7 Modal renders with comment textarea + link input', function() {
     'modal must render a url input bound to closeModal.link');
 });
 
-test('S17.M8 Close button is disabled until comment has content', function() {
-  assert(/disabled=\{!closeModal\.comment\.trim\(\)\}/.test(ticketsTab),
-    'submit button must be disabled when comment is empty/whitespace only');
+test('S17.M8 Close button enforces comment (S22.4 — loud alert instead of silent disable)', function() {
+  // S22.4: button is always clickable, but finalizeClose shows a loud
+  // alert + focuses the textarea if the comment is empty. Max reported
+  // "click Close, nothing happens" when the button was silently disabled.
+  assert(/A closing comment is required/.test(ticketsTab),
+    'finalizeClose alerts the user if comment is empty');
+  assert(/You must type a closing comment/.test(ticketsTab),
+    'modal shows a banner up-front requiring a comment');
 });
 
 test('S17.M9 Modal has Cancel button that clears closeModal state', function() {

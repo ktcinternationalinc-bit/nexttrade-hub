@@ -469,7 +469,40 @@ export default function App() {
   const [tabLoading, setTabLoading] = useState(false);
   const [greeterDismissed, setGreeterDismissed] = useState(false);
   const [greeterHasGreeted, setGreeterHasGreeted] = useState(false);
+  // S22 (Apr 23 2026) — Persistent chat memory.
+  // Previously greeterMessages started empty on every reload, so every
+  // "Hey Nadia" felt like a fresh introduction. Now we hydrate from
+  // localStorage (keyed by user id once we know it) and write back
+  // whenever it changes.
   const [greeterMessages, setGreeterMessages] = useState([]);
+  // Hydrate from localStorage once we know whose messages to load
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    const uid = userProfile?.id;
+    if (!uid) return;
+    try {
+      const raw = localStorage.getItem('nadia.messages.' + uid);
+      if (raw) {
+        const parsed = JSON.parse(raw);
+        if (Array.isArray(parsed) && parsed.length > 0) {
+          setGreeterMessages(parsed);
+        }
+      }
+    } catch (e) { /* corrupted localStorage entry — ignore */ }
+    // Only run once per userProfile id; not on every render.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [userProfile?.id]);
+  // Persist on every change (cap to last 80 messages to stay under
+  // localStorage's practical size limits)
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    const uid = userProfile?.id;
+    if (!uid) return;
+    try {
+      const trimmed = (greeterMessages || []).slice(-80);
+      localStorage.setItem('nadia.messages.' + uid, JSON.stringify(trimmed));
+    } catch (e) { /* quota errors are non-fatal */ }
+  }, [greeterMessages, userProfile?.id]);
   // S17 — Shared Nadia mute state. Read from localStorage on mount so the
   // user's mute preference persists across sessions. Both the dashboard
   // AIGreeter and the NadiaFloatingOverlay read this same value, so muting
@@ -5722,18 +5755,20 @@ export default function App() {
             <div className="max-md:order-last">
             {!greeterDismissed && greeterSettings.enabled ? (
               <div className="mb-4">
-                <AIGreeter
-                  user={user} userProfile={userProfile} users={teamUsers}
-                  tickets={dashTickets} invoices={invoices} treasury={treasury}
-                  checks={pendingChecks} loginHistory={lastLoginInfo} loginHistoryLoaded={loginHistoryLoaded}
-                  lang={lang} personality={greeterSettings.personality}
-                  greeterLang={greeterSettings.language}
-                  enabled={greeterSettings.enabled}
-                  hasGreeted={greeterHasGreeted} onGreeted={handleGreeted}
-                  sessionMessages={greeterMessages} onMessagesUpdate={setGreeterMessages}
-                  onToggle={(on) => { if (!on) setGreeterDismissed(true); }}
-                  toast={toast}
-                />
+                <SafeSection label="Nadia">
+                  <AIGreeter
+                    user={user} userProfile={userProfile} users={teamUsers}
+                    tickets={dashTickets} invoices={invoices} treasury={treasury}
+                    checks={pendingChecks} loginHistory={lastLoginInfo} loginHistoryLoaded={loginHistoryLoaded}
+                    lang={lang} personality={greeterSettings.personality}
+                    greeterLang={greeterSettings.language}
+                    enabled={greeterSettings.enabled}
+                    hasGreeted={greeterHasGreeted} onGreeted={handleGreeted}
+                    sessionMessages={greeterMessages} onMessagesUpdate={setGreeterMessages}
+                    onToggle={(on) => { if (!on) setGreeterDismissed(true); }}
+                    toast={toast}
+                  />
+                </SafeSection>
               </div>
             ) : greeterSettings.enabled ? (
               <button onClick={() => setGreeterDismissed(false)}

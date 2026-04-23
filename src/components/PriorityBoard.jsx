@@ -49,6 +49,11 @@ export default function PriorityBoard({
   var [statusFilter, setStatusFilter] = useState('open'); // open | all
   var [busy, setBusy] = useState(false);
   var [toastMsg, setToastMsg] = useState('');
+  // S22.3 (Apr 23 2026) — Per-column expand state for the Unranked pile.
+  // Max: "haitham has 10 more to show.. but we cannot open it." Previously
+  // we hid everything past the 6th ticket behind a non-clickable counter.
+  // Now each user's Unranked section can be toggled open to show all.
+  var [expandedUnranked, setExpandedUnranked] = useState({});
 
   // Only show open/in-progress on the board by default — closed tickets
   // don't need prioritizing. Admins can toggle to see everything.
@@ -392,16 +397,33 @@ export default function PriorityBoard({
                   </div>
                 )}
 
-                {/* Unranked pile */}
-                {col.unranked.length > 0 && (
-                  <div className="mt-3 pt-2 border-t border-slate-200">
-                    <div className="text-[9px] font-bold text-slate-400 uppercase mb-1">Unranked ({col.unranked.length})</div>
-                    {col.unranked.slice(0, 6).map(function(t) { return renderTicketCard(t, null); })}
-                    {col.unranked.length > 6 && (
-                      <div className="text-[9px] text-slate-400 text-center py-1">+ {col.unranked.length - 6} more</div>
-                    )}
-                  </div>
-                )}
+                {/* Unranked pile — S22.3: clickable "show all / show less" */}
+                {col.unranked.length > 0 && (function() {
+                  var isExpanded = !!expandedUnranked[u.id];
+                  var shownCount = isExpanded ? col.unranked.length : Math.min(6, col.unranked.length);
+                  var hiddenCount = col.unranked.length - shownCount;
+                  return (
+                    <div className="mt-3 pt-2 border-t border-slate-200">
+                      <div className="text-[9px] font-bold text-slate-400 uppercase mb-1">Unranked ({col.unranked.length})</div>
+                      {col.unranked.slice(0, shownCount).map(function(t) { return renderTicketCard(t, null); })}
+                      {col.unranked.length > 6 && (
+                        <button
+                          onClick={function() {
+                            setExpandedUnranked(function(prev) {
+                              var next = {};
+                              for (var k in prev) next[k] = prev[k];
+                              next[u.id] = !prev[u.id];
+                              return next;
+                            });
+                          }}
+                          className="w-full mt-1 text-[10px] font-bold text-indigo-600 hover:bg-indigo-50 rounded py-1 transition"
+                        >
+                          {isExpanded ? '− Show less' : '+ Show ' + hiddenCount + ' more'}
+                        </button>
+                      )}
+                    </div>
+                  );
+                })()}
               </div>
             );
           })}

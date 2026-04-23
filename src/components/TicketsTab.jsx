@@ -182,7 +182,17 @@ export default function TicketsTab({ toast, customers, user, userProfile, users,
     const { ticket, comment, link } = closeModal;
     const trimmed = (comment || '').trim();
     if (!trimmed) {
-      toast ? toast.error('Please enter a closing comment') : alert('Please enter a closing comment');
+      // S22.4 (Apr 23 2026) — Both a toast AND a browser alert so the user
+      // cannot miss it. Max reported clicking Close and "nothing happens"
+      // because the disabled button gave no feedback; now the button is
+      // always clickable and we enforce here with maximum visibility.
+      try { if (toast) toast.error('Please type a closing comment first — required for audit trail'); } catch (_) {}
+      alert('⚠️ A closing comment is required.\n\nPlease type what was done to resolve this ticket before closing. This is saved on the ticket for the audit trail.');
+      // Focus the textarea so the user lands in the right field
+      try {
+        var ta = document.querySelector('textarea[placeholder^="Describe how this was resolved"]');
+        if (ta) ta.focus();
+      } catch (_) {}
       return;
     }
     // Validate optional URL — if they typed something, it must look like a URL
@@ -193,28 +203,52 @@ export default function TicketsTab({ toast, customers, user, userProfile, users,
     }
     try {
       const myName = getUserName(myId) || 'Unknown';
-      const updates = {
-        status: 'Closed',
-        updated_by: myId,
-        closed_at: new Date().toISOString(),
-        closed_by: myId,
-      };
-      await dbUpdate('tickets', ticket.id, updates, myId);
+      // S22 (Apr 23 2026) — Resilient close. Some tickets tables don't have
+      // closed_at / closed_by columns yet. If the full update fails because
+      // those columns don't exist, retry with just status + updated_by so
+      // the close still succeeds — the closing comment captures "who" and
+      // "when" anyway via ticket_comments.created_by and created_at.
+      try {
+        await dbUpdate('tickets', ticket.id, {
+          status: 'Closed',
+          updated_by: myId,
+          closed_at: new Date().toISOString(),
+          closed_by: myId,
+        }, myId);
+      } catch (e1) {
+        const msg = String(e1 && e1.message || '');
+        if (/closed_at|closed_by|column/i.test(msg)) {
+          // Fall back to the minimal payload
+          await dbUpdate('tickets', ticket.id, { status: 'Closed', updated_by: myId }, myId);
+        } else {
+          throw e1;
+        }
+      }
       // Write the closing comment as a visible (non-system) comment so it's
       // obvious in the ticket history what the resolution was.
       const commentBody = '🔒 CLOSED by ' + myName + '\n\n' + trimmed
         + (trimmedLink ? '\n\n🔗 ' + trimmedLink : '');
-      await dbInsert('ticket_comments', { ticket_id: ticket.id, comment_text: commentBody, is_system: false, created_by: myId }, myId);
-      await logActivity(myId, 'Closed ticket: ' + ticket.title, 'ticket');
-      if (ticket.assigned_to && ticket.assigned_to !== myId) notifyTicketStatus([ticket.assigned_to], ticket.title, 'Closed', myId);
-      if (ticket.created_by && ticket.created_by !== myId && ticket.created_by !== ticket.assigned_to) notifyTicketStatus([ticket.created_by], ticket.title, 'Closed', myId);
-      const extras = parseAssignees(ticket).filter(id => id !== myId && id !== ticket.assigned_to && id !== ticket.created_by);
-      if (extras.length) notifyTicketStatus(extras, ticket.title, 'Closed', myId);
+      try {
+        await dbInsert('ticket_comments', { ticket_id: ticket.id, comment_text: commentBody, is_system: false, created_by: myId }, myId);
+      } catch (commentErr) {
+        // Don't block the close itself if the comment fails to save
+        console.warn('[close] could not save closing comment:', commentErr && commentErr.message);
+      }
+      try { await logActivity(myId, 'Closed ticket: ' + ticket.title, 'ticket'); } catch (_) {}
+      try {
+        if (ticket.assigned_to && ticket.assigned_to !== myId) notifyTicketStatus([ticket.assigned_to], ticket.title, 'Closed', myId);
+        if (ticket.created_by && ticket.created_by !== myId && ticket.created_by !== ticket.assigned_to) notifyTicketStatus([ticket.created_by], ticket.title, 'Closed', myId);
+        const extras = parseAssignees(ticket).filter(id => id !== myId && id !== ticket.assigned_to && id !== ticket.created_by);
+        if (extras.length) notifyTicketStatus(extras, ticket.title, 'Closed', myId);
+      } catch (_) {}
       setCloseModal(null);
       loadTickets();
-      if (sel && sel.id === ticket.id) { setSel({...sel, ...updates}); loadComments(ticket.id); }
-      if (toast) toast.success('Ticket closed with comment ✓');
-    } catch (err) { toast ? toast.error(err.message) : alert(err.message); }
+      if (sel && sel.id === ticket.id) { setSel({...sel, status: 'Closed'}); loadComments(ticket.id); }
+      if (toast) toast.success('Ticket closed ✓');
+    } catch (err) {
+      const m = err && err.message ? err.message : String(err);
+      toast ? toast.error('Could not close: ' + m) : alert('Could not close: ' + m);
+    }
   };
 
   const reassignTicket = async (ticket, newUserId) => {
@@ -565,8 +599,11 @@ export default function TicketsTab({ toast, customers, user, userProfile, users,
           <span className="text-[10px] text-slate-500 mr-1 self-center">Change status:</span>
           {STATUSES.filter(s => s !== sel.status).map(s => (
             <button key={s} onClick={() => updateStatus(sel, s)}
-              className="px-3 py-1 rounded-lg text-[10px] font-bold border-2 hover:shadow transition"
-              style={{ borderColor: STATUS_COLORS[s], color: STATUS_COLORS[s] }}>{s}</button>
+              className="px-3 py-1.5 rounded-lg text-[11px] font-extrabold text-white hover:opacity-90 hover:shadow transition"
+              style={ s === 'Closed'
+                ? { background: 'linear-gradient(135deg, #059669, #047857)', boxShadow: '0 2px 8px rgba(5,150,105,0.3)' }
+                : { background: STATUS_COLORS[s] }
+              }>{s === 'Closed' ? '✓ Close' : s}</button>
           ))}
         </div>
       </div>
@@ -672,6 +709,91 @@ export default function TicketsTab({ toast, customers, user, userProfile, users,
           }}
         />
       </div>
+
+      {/* S22 (Apr 23 2026) — Close-with-comment modal.
+          This was previously only rendered in the ticket LIST view return.
+          Since the detail view early-returns above the list view return, the
+          modal was unreachable when the user clicked "🔒 Closed" from inside
+          a ticket. Rendering it here too makes the close action work from
+          the detail view as well. */}
+      {closeModal && (
+        <div className="fixed inset-0 bg-black/60 z-[250] flex items-center justify-center p-4" onClick={() => setCloseModal(null)}>
+          <div className="bg-white rounded-2xl p-6 max-w-lg w-full shadow-2xl" onClick={e => e.stopPropagation()}>
+            <div className="flex items-start justify-between mb-4">
+              <div>
+                <h3 className="text-lg font-bold text-slate-900 flex items-center gap-2">
+                  <span>🔒</span> Close Ticket
+                </h3>
+                <p className="text-xs text-slate-500 mt-0.5">
+                  {closeModal.ticket.ticket_number && <span className="font-mono font-bold mr-2">{closeModal.ticket.ticket_number}</span>}
+                  {closeModal.ticket.title}
+                </p>
+              </div>
+              <button onClick={() => setCloseModal(null)}
+                className="text-slate-400 hover:text-slate-600 text-xl leading-none">×</button>
+            </div>
+            {/* S22.4 — Assertive enforcement banner. Tells the user up-front
+                they MUST type a comment. Previously the disabled button gave
+                no feedback ("clicked Close... nothing happens"). */}
+            <div className="mb-3 px-3 py-2 rounded-lg bg-amber-50 border border-amber-300 text-[12px] text-amber-900 font-semibold flex items-start gap-2">
+              <span>⚠️</span>
+              <span>You must type a closing comment below — this is required for the audit trail.</span>
+            </div>
+            <div className="mb-4">
+              <label className="block text-xs font-bold text-slate-700 mb-1.5">
+                Closing Comment <span className="text-red-500">*</span>
+              </label>
+              <textarea
+                value={closeModal.comment}
+                onChange={e => setCloseModal({...closeModal, comment: e.target.value})}
+                onKeyDown={e => {
+                  if ((e.metaKey || e.ctrlKey) && e.key === 'Enter') {
+                    e.preventDefault();
+                    finalizeClose();
+                  }
+                }}
+                autoFocus
+                rows={4}
+                placeholder="Describe how this was resolved, what was done, what was learned..."
+                className={'w-full rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 ' + (!closeModal.comment.trim() ? 'border-2 border-red-400 focus:ring-red-400 focus:border-red-400' : 'border border-slate-300 focus:ring-emerald-400 focus:border-emerald-400')}
+              />
+              <p className="text-[10px] text-slate-400 mt-1">
+                This comment will be visible on the ticket history. Required for audit trail.
+              </p>
+            </div>
+            <div className="mb-5">
+              <label className="block text-xs font-bold text-slate-700 mb-1.5">
+                Related Link <span className="text-slate-400 font-normal">(optional)</span>
+              </label>
+              <input
+                type="url"
+                value={closeModal.link}
+                onChange={e => setCloseModal({...closeModal, link: e.target.value})}
+                placeholder="https://... or mailto:..."
+                className="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-emerald-400 focus:border-emerald-400"
+              />
+              <p className="text-[10px] text-slate-400 mt-1">
+                Attach a related URL — a doc, PR, external ticket, or email thread.
+              </p>
+            </div>
+            <div className="flex gap-3 justify-end pt-4 border-t border-slate-100">
+              <button onClick={() => setCloseModal(null)}
+                className="px-4 py-2 border border-slate-200 rounded-lg text-sm font-semibold hover:bg-slate-50">
+                Cancel
+              </button>
+              {/* S22.4 — Button is ALWAYS clickable. If comment is empty,
+                  finalizeClose() shows a loud error toast + scrolls the
+                  comment field into view. No more silent non-responsive
+                  button. */}
+              <button onClick={finalizeClose}
+                className="px-5 py-2.5 rounded-lg text-sm font-extrabold text-white shadow-md transition hover:shadow-lg"
+                style={{ background: !closeModal.comment.trim() ? '#94a3b8' : 'linear-gradient(135deg, #059669, #047857)' }}>
+                ✓ Close Ticket
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>);
   }
 
@@ -867,6 +989,12 @@ export default function TicketsTab({ toast, customers, user, userProfile, users,
               className="text-slate-400 hover:text-slate-600 text-xl leading-none">×</button>
           </div>
 
+          {/* S22.4 — Assertive enforcement banner */}
+          <div className="mb-3 px-3 py-2 rounded-lg bg-amber-50 border border-amber-300 text-[12px] text-amber-900 font-semibold flex items-start gap-2">
+            <span>⚠️</span>
+            <span>You must type a closing comment below — this is required for the audit trail.</span>
+          </div>
+
           <div className="mb-4">
             <label className="block text-xs font-bold text-slate-700 mb-1.5">
               Closing Comment <span className="text-red-500">*</span>
@@ -884,7 +1012,7 @@ export default function TicketsTab({ toast, customers, user, userProfile, users,
               autoFocus
               rows={4}
               placeholder="Describe how this was resolved, what was done, what was learned..."
-              className="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-400 focus:border-blue-400"
+              className={'w-full rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 ' + (!closeModal.comment.trim() ? 'border-2 border-red-400 focus:ring-red-400 focus:border-red-400' : 'border border-slate-300 focus:ring-emerald-400 focus:border-emerald-400')}
             />
             <p className="text-[10px] text-slate-400 mt-1">
               This comment will be visible on the ticket history. Required for audit trail.
@@ -900,7 +1028,7 @@ export default function TicketsTab({ toast, customers, user, userProfile, users,
               value={closeModal.link}
               onChange={e => setCloseModal({...closeModal, link: e.target.value})}
               placeholder="https://... or mailto:..."
-              className="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-400 focus:border-blue-400"
+              className="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-emerald-400 focus:border-emerald-400"
             />
             <p className="text-[10px] text-slate-400 mt-1">
               Attach a related URL — a doc, PR, external ticket, or email thread.
@@ -913,10 +1041,9 @@ export default function TicketsTab({ toast, customers, user, userProfile, users,
               Cancel
             </button>
             <button onClick={finalizeClose}
-              disabled={!closeModal.comment.trim()}
-              className="px-4 py-2 rounded-lg text-sm font-bold text-white disabled:opacity-40 disabled:cursor-not-allowed"
-              style={{ background: '#1e293b' }}>
-              🔒 Close Ticket
+              className="px-5 py-2.5 rounded-lg text-sm font-extrabold text-white shadow-md transition hover:shadow-lg"
+              style={{ background: !closeModal.comment.trim() ? '#94a3b8' : 'linear-gradient(135deg, #059669, #047857)' }}>
+              ✓ Close Ticket
             </button>
           </div>
         </div>

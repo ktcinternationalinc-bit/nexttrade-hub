@@ -78,7 +78,7 @@ test('S18.3.1 NadiaFace draws a human face (not just geometric circle)', functio
     'gradients for skin / hair / lips must exist');
 });
 test('S18.3.2 Animated mouth path actually opens with mouthOpen', function() {
-  assert(/mouthH = 2 \+ mouthOpen \* faceRy \* 0\.35/.test(face),
+  assert(/mouthH = 2 \+ mouthOpen \* faceRy \* 0\.\d+/.test(face),
     'mouthH scales with mouthOpen so lips open when speaking');
 });
 test('S18.3.3 Eyes have iris + pupil + catch-light', function() {

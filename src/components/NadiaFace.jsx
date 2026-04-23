@@ -54,21 +54,68 @@ export default function NadiaFace({
     return function() { clearInterval(t); };
   }, [listening]);
 
+  // S22.2 (Apr 23 2026) — Root cause of browser crashes on dashboard:
+  // every TTS playback creates a new <audio> element. Every time `speaking`
+  // flipped, this effect re-ran. The old code could leave:
+  //   - multiple analyser nodes connected to one AudioContext destination
+  //   - stale RAF loops calling setMouthOpen() forever
+  //   - InvalidStateError swallowed silently, producing zombie state
+  // After 10-20 messages, the browser ran out of resources and crashed.
+  //
+  // New implementation: every run disconnects the previous source before
+  // attempting anything new. One analyser at a time. Cleanup always
+  // cancels the RAF, even when the try block threw.
   useEffect(function() {
+    var cancelled = false;
+    var localRaf = 0;
+
     if (!speaking) {
       setMouthOpen(0);
       if (rafRef.current) { cancelAnimationFrame(rafRef.current); rafRef.current = null; }
       return;
     }
 
+    // Tear down any prior source/analyser before wiring up a new one.
+    var disconnectPrior = function() {
+      try { if (sourceRef.current && sourceRef.current.disconnect) sourceRef.current.disconnect(); } catch (_) {}
+      try { if (analyserRef.current && analyserRef.current.disconnect) analyserRef.current.disconnect(); } catch (_) {}
+      sourceRef.current = null;
+      analyserRef.current = null;
+    };
+
+    var startFallback = function() {
+      var lastUpdate = 0;
+      var target = 0.2;
+      var step = function(ts) {
+        if (cancelled) return;
+        if (ts - lastUpdate > 110) {
+          target = 0.12 + Math.random() * 0.7;
+          lastUpdate = ts;
+        }
+        setMouthOpen(function(prev) { return prev + (target - prev) * 0.35; });
+        localRaf = requestAnimationFrame(step);
+        rafRef.current = localRaf;
+      };
+      localRaf = requestAnimationFrame(step);
+      rafRef.current = localRaf;
+    };
+
+    // Try real audio analysis first; fall through to fallback on any error.
+    var tried = false;
     if (audioElement && typeof window !== 'undefined' && (window.AudioContext || window.webkitAudioContext)) {
       try {
         var Ctx = window.AudioContext || window.webkitAudioContext;
         var ctx = audioCtxRef.current || new Ctx();
         audioCtxRef.current = ctx;
-        if (!sourceRef.current || sourceRef.current.audioElement !== audioElement) {
+
+        disconnectPrior();
+
+        // createMediaElementSource throws if already called on this element.
+        // We gate with a marker so even across NadiaFace remounts we're safe.
+        if (!audioElement.__nadiaHooked) {
           var src = ctx.createMediaElementSource(audioElement);
           src.audioElement = audioElement;
+          audioElement.__nadiaHooked = true;
           var analyser = ctx.createAnalyser();
           analyser.fftSize = 512;
           src.connect(analyser);
@@ -76,39 +123,42 @@ export default function NadiaFace({
           sourceRef.current = src;
           analyserRef.current = analyser;
         }
-        var buf = new Uint8Array(analyserRef.current.frequencyBinCount);
-        var loop = function() {
-          analyserRef.current.getByteTimeDomainData(buf);
-          var sumSq = 0;
-          for (var i = 0; i < buf.length; i++) {
-            var v = (buf[i] - 128) / 128;
-            sumSq += v * v;
-          }
-          var rms = Math.sqrt(sumSq / buf.length);
-          var aperture = Math.min(1, Math.max(0.02, rms * 4));
-          setMouthOpen(aperture);
-          rafRef.current = requestAnimationFrame(loop);
-        };
-        rafRef.current = requestAnimationFrame(loop);
-        return function() {
-          if (rafRef.current) { cancelAnimationFrame(rafRef.current); rafRef.current = null; }
-        };
-      } catch (e) {}
-    }
 
-    var lastUpdate = 0;
-    var target = 0.2;
-    var step = function(ts) {
-      if (ts - lastUpdate > 110) {
-        target = 0.12 + Math.random() * 0.7;
-        lastUpdate = ts;
+        // If this element was already hooked by a PREVIOUS NadiaFace mount,
+        // we can't get its analyser back — use fallback animation.
+        if (!analyserRef.current) {
+          tried = false;
+        } else {
+          var buf = new Uint8Array(analyserRef.current.frequencyBinCount);
+          var loop = function() {
+            if (cancelled) return;
+            if (!analyserRef.current) return;
+            try { analyserRef.current.getByteTimeDomainData(buf); } catch (_) { return; }
+            var sumSq = 0;
+            for (var i = 0; i < buf.length; i++) {
+              var v = (buf[i] - 128) / 128;
+              sumSq += v * v;
+            }
+            var rms = Math.sqrt(sumSq / buf.length);
+            var aperture = Math.min(1, Math.max(0.02, rms * 4));
+            setMouthOpen(aperture);
+            localRaf = requestAnimationFrame(loop);
+            rafRef.current = localRaf;
+          };
+          localRaf = requestAnimationFrame(loop);
+          rafRef.current = localRaf;
+          tried = true;
+        }
+      } catch (e) {
+        tried = false;
       }
-      setMouthOpen(function(prev) { return prev + (target - prev) * 0.35; });
-      rafRef.current = requestAnimationFrame(step);
-    };
-    rafRef.current = requestAnimationFrame(step);
+    }
+    if (!tried) startFallback();
+
     return function() {
-      if (rafRef.current) { cancelAnimationFrame(rafRef.current); rafRef.current = null; }
+      cancelled = true;
+      if (localRaf) { try { cancelAnimationFrame(localRaf); } catch (_) {} }
+      if (rafRef.current) { try { cancelAnimationFrame(rafRef.current); } catch (_) {} rafRef.current = null; }
     };
   }, [speaking, audioElement]);
 
@@ -119,33 +169,36 @@ export default function NadiaFace({
   var faceRy = H * 0.34;
   var eyeY = faceCy - faceRy * 0.10;
   var eyeDx = faceRx * 0.42;
-  var eyeRx = faceRx * 0.16;
-  var eyeRy = faceRy * 0.09;
-  var irisR = eyeRx * 0.55;
+  // S22 — larger, rounder eyes for a softer, more expressive look
+  var eyeRx = faceRx * 0.19;
+  var eyeRy = faceRy * 0.115;
+  var irisR = eyeRx * 0.62;
   var pupilR = irisR * 0.45;
   var pupilShift = lookDir * irisR * 0.5;
-  var browY = eyeY - faceRy * 0.16;
+  var browY = eyeY - faceRy * 0.18;
   var browDx = eyeDx;
-  var browLen = eyeRx * 1.7;
+  var browLen = eyeRx * 1.8;
   var noseY = faceCy + faceRy * 0.05;
   var mouthCy = faceCy + faceRy * 0.45;
-  var mouthW = faceRx * 0.55;
-  var mouthH = 2 + mouthOpen * faceRy * 0.35;
+  // S22 — fuller mouth for a warmer smile
+  var mouthW = faceRx * 0.58;
+  var mouthH = 2 + mouthOpen * faceRy * 0.38;
 
-  var skinLight  = '#f7d4b3';
-  var skinBase   = '#e8b896';
-  var skinShadow = '#c49071';
+  // S22 — softer, warmer palette
+  var skinLight  = '#fde0c7';
+  var skinBase   = '#f2bf9b';
+  var skinShadow = '#c98d6e';
   var hairDark   = '#2a1712';
   var hairMid    = '#4a2820';
-  var hairHi     = '#7a4a38';
-  var lipBase    = '#c64a5a';
-  var lipDeep    = '#8b2838';
-  var lipHi      = '#e78794';
-  var toothWhite = '#f6efe3';
-  var irisColor  = '#6b3a1c';
-  var eyeWhite   = '#fbf6ee';
+  var hairHi     = '#a26a4a';
+  var lipBase    = '#d85e6f';
+  var lipDeep    = '#9c2e40';
+  var lipHi      = '#f4a3ae';
+  var toothWhite = '#fbf5eb';
+  var irisColor  = '#7a462a';
+  var eyeWhite   = '#fdfaf3';
   var lashDark   = '#1a0f0a';
-  var blushPink  = '#e89a8a';
+  var blushPink  = '#f0a597';
 
   var ringColor = listening ? '#10b981' : (loading ? '#6366f1' : (speaking ? color : 'transparent'));
   var ringOpacity = (listening || loading || speaking) ? 1 : 0;

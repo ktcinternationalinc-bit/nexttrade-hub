@@ -531,10 +531,23 @@ export default function AIGreeter({ user, userProfile, users, tickets, invoices,
   };
 
   var stopSpeech = function() {
-    if (audioRef.current) { audioRef.current.pause(); audioRef.current = null; }
-    if (window.speechSynthesis) window.speechSynthesis.cancel();
-    setSpeaking(false);
-    setCurrentAudio(null);
+    // S22 (Apr 23 2026) — Hardened against every failure mode that was
+    // crashing Nadia when users clicked buttons mid-conversation.
+    // Every sub-step is its own try/catch so one problem doesn't cascade.
+    try {
+      if (audioRef.current) {
+        try { audioRef.current.pause(); } catch (e) {}
+        try { audioRef.current.src = ''; } catch (e) {}
+        audioRef.current = null;
+      }
+    } catch (e) {}
+    try {
+      if (typeof window !== 'undefined' && window.speechSynthesis) {
+        window.speechSynthesis.cancel();
+      }
+    } catch (e) {}
+    try { setSpeaking(false); } catch (e) {}
+    try { setCurrentAudio(null); } catch (e) {}
     try { window.dispatchEvent(new CustomEvent('nadia-tts-stop')); } catch (e) {}
   };
 
@@ -1208,8 +1221,8 @@ export default function AIGreeter({ user, userProfile, users, tickets, invoices,
       // S17.6: isGreeting is true ONLY for login greeting. Tab greetings
       // skip the expensive briefing computation.
       var payload = useV2
-        ? { question: q, history: anyGreeting ? [] : hist.slice(-8), userId: (userProfile && userProfile.id) || null, isGreeting: isLoginGreet }
-        : { question: q, mode: 'greeter', systemOverride: sysPrompt + '\n' + ctx, history: anyGreeting ? [] : hist.slice(-8), userId: (userProfile && userProfile.id) || null, isGreeting: isLoginGreet };
+        ? { question: q, history: anyGreeting ? [] : hist.slice(-20), userId: (userProfile && userProfile.id) || null, isGreeting: isLoginGreet }
+        : { question: q, mode: 'greeter', systemOverride: sysPrompt + '\n' + ctx, history: anyGreeting ? [] : hist.slice(-20), userId: (userProfile && userProfile.id) || null, isGreeting: isLoginGreet };
 
       var res = await fetch(endpoint, {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
@@ -1367,9 +1380,9 @@ export default function AIGreeter({ user, userProfile, users, tickets, invoices,
           </div>
         </div>
         <div className="flex items-center gap-1">
-          {speaking && <button onClick={stopSpeech} className="p-1.5 rounded-lg bg-red-500/20 text-red-400 hover:bg-red-500/40 text-xs" title="Stop speaking">⏹</button>}
-          <button onClick={function() { setMinimized(true); }} className="p-1.5 rounded-lg bg-white/8 text-white/50 hover:bg-white/15 text-xs" title="Minimize">▬</button>
-          <button onClick={function() { stopSpeech(); stopListen(); if (onToggle) onToggle(false); }} className="p-1.5 rounded-lg bg-white/8 text-white/50 hover:bg-white/15 text-xs" title="Turn off">✕</button>
+          {speaking && <button onClick={function() { try { stopSpeech(); } catch (e) {} }} className="p-1.5 rounded-lg bg-red-500/20 text-red-400 hover:bg-red-500/40 text-xs" title="Stop speaking">⏹</button>}
+          <button onClick={function() { try { setMinimized(true); } catch (e) {} }} className="p-1.5 rounded-lg bg-white/8 text-white/50 hover:bg-white/15 text-xs" title="Minimize">▬</button>
+          <button onClick={function() { try { stopSpeech(); } catch (e) {} try { stopListen(); } catch (e) {} try { if (onToggle) onToggle(false); } catch (e) {} }} className="p-1.5 rounded-lg bg-white/8 text-white/50 hover:bg-white/15 text-xs" title="Turn off">✕</button>
         </div>
       </div>
 
@@ -1513,10 +1526,18 @@ export default function AIGreeter({ user, userProfile, users, tickets, invoices,
         <div className="flex items-center gap-2 rounded-xl px-3 py-1.5" style={{ background: 'rgba(255,255,255,0.07)', border: '1px solid rgba(255,255,255,0.1)' }}>
           <button
             onClick={function() {
-              // Mic button doubles as barge-in: if Nadia is speaking, the first tap stops her
-              // AND starts listening, so the user doesn't have to tap twice.
-              if (speaking) { try { stopSpeech(); } catch (e) {} }
-              if (listening) stopListen(); else startListen();
+              // S22 (Apr 23 2026) — Every step wrapped. Root cause of
+              // "mic button not working": a single thrown error inside
+              // stopSpeech or startListen killed the whole handler
+              // before anything else could run. Now each step is
+              // independent.
+              try { if (speaking) stopSpeech(); } catch (e) {}
+              try {
+                if (listening) stopListen();
+                else startListen();
+              } catch (e) {
+                try { if (toast) toast.warning('Microphone error — please try again'); } catch (_) {}
+              }
             }}
             className={'p-2 rounded-lg text-sm transition ' + (listening ? 'bg-red-500 text-white animate-pulse' : 'text-white/50 hover:text-white hover:bg-white/10')}
             title={listening ? (useLang === 'ar' ? 'إنهاء الاستماع' : 'Tap to stop & send') : (useLang === 'ar' ? 'تحدث (مايك مباشر)' : 'Live mic (quick questions)')}

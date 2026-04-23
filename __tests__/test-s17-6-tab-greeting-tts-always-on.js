@@ -120,8 +120,9 @@ test('S17.6.D4 Tab_greeting does NOT trigger expensive morning briefing', functi
 });
 
 test('S17.6.D5 Tab_greeting still skips chat history in API call', function() {
-  // history: anyGreeting ? [] : hist.slice(-8) — both greeting types start fresh on server
-  assert(/history: anyGreeting \? \[\] : hist\.slice\(-8\)/.test(greeter),
+  // Both greeting types must start with empty history — the slice value
+  // is a tuning knob (was -8, now -20 in S22 for richer memory).
+  assert(/history: anyGreeting \? \[\] : hist\.slice\(-\d+\)/.test(greeter),
     'both greeting types must send empty history to keep prompts focused');
 });
 

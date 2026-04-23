@@ -185,12 +185,17 @@ test('S17.5.REG2 Login greeting gate is intact', function() {
     'AIGreeter still gates on loginHistoryLoaded for login greeting');
 });
 
-test('S17.5.REG3 Close-with-comment modal still intact (S17)', function() {
+test('S17.5.REG3 Close-with-comment modal still enforces a comment (S22.4 update)', function() {
   var ticketsTab = fs.readFileSync(path.join(REPO, 'src/components/TicketsTab.jsx'), 'utf8');
   assert(/const finalizeClose = async \(\) => \{/.test(ticketsTab),
     'finalizeClose still defined');
-  assert(/disabled=\{!closeModal\.comment\.trim\(\)\}/.test(ticketsTab),
-    'close button still requires comment');
+  // S22.4 (Apr 23 2026) — Close button is now ALWAYS clickable, but
+  // finalizeClose shows a loud alert if comment is empty. Previously the
+  // button was silently disabled, which Max misread as "nothing happens".
+  assert(/A closing comment is required/.test(ticketsTab),
+    'finalizeClose shows a loud alert if comment is empty');
+  assert(/You must type a closing comment/.test(ticketsTab),
+    'modal banner tells the user a comment is required up-front');
 });
 
 test('S17.5.REG4 Summary card dark palette still intact (S17)', function() {
