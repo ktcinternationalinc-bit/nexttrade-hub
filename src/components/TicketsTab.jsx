@@ -4,6 +4,7 @@ import { supabase, dbInsert, dbUpdate, dbDelete, logActivity } from '../lib/supa
 import { notifyTicketAssigned, notifyTicketStatus, notifyTicketComment, notifyTicketReassigned } from '../lib/notify';
 import { sanitizeRichText, isHtmlComment, richTextToPlain } from '../lib/utils';
 import RichCommentComposer from './RichCommentComposer';
+import PriorityBoard from './PriorityBoard';
 
 const STATUSES = ['New','Acknowledged','In Progress','Blocked','On Hold','Review','Closed','Reopened'];
 // S16 — Distinct priority colors that don't collide with due-today orange.
@@ -69,6 +70,8 @@ export default function TicketsTab({ toast, customers, user, userProfile, users,
   const [bulkSelected, setBulkSelected] = useState(new Set());
   const [bulkAction, setBulkAction] = useState(null);
   const [confirmDel, setConfirmDel] = useState(null);
+  // S21 (Apr 23 2026) — view toggle for Priority Board vs List
+  const [viewMode, setViewMode] = useState('list'); // 'list' | 'board'
   // R7: inline edit of title/description. editingField = 'title' | 'description' | null
   const [editingField, setEditingField] = useState(null);
   const [editBuf, setEditBuf] = useState({ title: '', description: '' });
@@ -675,7 +678,21 @@ export default function TicketsTab({ toast, customers, user, userProfile, users,
   // ===== TICKET LIST VIEW =====
   return (<div>
     <div className="flex justify-between flex-wrap gap-2 mb-3">
-      <h2 className="text-xl font-extrabold">Tickets / التذاكر</h2>
+      <div className="flex items-center gap-3">
+        <h2 className="text-xl font-extrabold">Tickets / التذاكر</h2>
+        {/* S21 — view toggle: List vs Priority Board */}
+        <div className="flex gap-1 bg-slate-100 rounded-lg p-0.5">
+          <button onClick={() => setViewMode('list')}
+            className={'px-2.5 py-1 rounded text-[11px] font-semibold ' + (viewMode === 'list' ? 'bg-white text-slate-900 shadow-sm' : 'text-slate-500')}>
+            📋 List
+          </button>
+          <button onClick={() => setViewMode('board')}
+            className={'px-2.5 py-1 rounded text-[11px] font-semibold ' + (viewMode === 'board' ? 'bg-white text-slate-900 shadow-sm' : 'text-slate-500')}
+            title="Visual drag-and-drop priority board">
+            🗂️ Priority Board
+          </button>
+        </div>
+      </div>
       <div className="flex gap-2 items-center">
         <div className="relative">
           <input value={q} onChange={e => setQ(e.target.value)} placeholder="Search tickets... / بحث" className="px-3 py-1.5 rounded-lg border text-xs w-48 pr-6" />
@@ -687,34 +704,53 @@ export default function TicketsTab({ toast, customers, user, userProfile, users,
       </div>
     </div>
 
-    {/* Filters */}
+    {/* S21 — Priority Board view */}
+    {viewMode === 'board' && (
+      <PriorityBoard
+        tickets={tickets}
+        users={users}
+        currentUserId={myId}
+        isAdmin={canManage}
+        onReorder={() => { loadTickets(); }}
+        onSelectTicket={(t) => { setSel(t); loadComments(t.id); }}
+        onRefresh={() => { loadTickets(); }}
+        lang={lang}
+      />
+    )}
+
+    {viewMode === 'list' && (<>
+
+    {/* Filters — S18.4: status preset no longer resets the person/priority
+        filters; person/priority no longer reset status. Max: he needs to be
+        able to look at "Closed tickets assigned to Omar" etc. Filters
+        combine. A separate Clear filters button fully resets. */}
     <div className="flex gap-2 mb-3 flex-wrap">
       {[['open','Open'],['mine','Assigned to Me'],['team','Assigned to Team'],['created','Created by Me'],['overdue','Overdue'],['all','All'],...STATUSES.map(s=>[s,s])].map(([v,l]) => (
-        <button key={v} onClick={() => { setStatusF(v); setOwnerF('all'); setAssignedF('all'); setPriorityF('all'); }}
+        <button key={v} onClick={() => { setStatusF(v); }}
           className={'px-3 py-1 rounded-md text-xs font-semibold transition ' + (statusF === v ? 'bg-slate-900 text-white' : 'bg-slate-100 text-slate-500')}>{l}</button>
       ))}
     </div>
 
     {/* Sort + Filters */}
     <div className="flex gap-2 mb-3 items-center flex-wrap">
-      <select value={ownerF} onChange={e => { setOwnerF(e.target.value); if (e.target.value !== 'all') setStatusF('all'); }} className="px-2 py-1 rounded-lg border text-xs font-semibold">
+      <select value={ownerF} onChange={e => { setOwnerF(e.target.value); }} className="px-2 py-1 rounded-lg border text-xs font-semibold">
         <option value="all">👤 Owner: All</option>
         {(users || []).map(u => <option key={u.id} value={u.id}>{u.name}</option>)}
       </select>
-      <select value={assignedF} onChange={e => { setAssignedF(e.target.value); if (e.target.value !== 'all') setStatusF('all'); }} className="px-2 py-1 rounded-lg border text-xs font-semibold">
+      <select value={assignedF} onChange={e => { setAssignedF(e.target.value); }} className="px-2 py-1 rounded-lg border text-xs font-semibold">
         <option value="all">🎯 Assigned: All</option>
         <option value="unassigned">Unassigned</option>
         {(users || []).map(u => <option key={u.id} value={u.id}>{u.name}</option>)}
       </select>
-      <select value={priorityF} onChange={e => { setPriorityF(e.target.value); if (e.target.value !== 'all') setStatusF('all'); }} className="px-2 py-1 rounded-lg border text-xs font-semibold">
+      <select value={priorityF} onChange={e => { setPriorityF(e.target.value); }} className="px-2 py-1 rounded-lg border text-xs font-semibold">
         <option value="all">⚡ Priority: All</option>
         <option value="high">🔴 High</option>
         <option value="medium">🟡 Medium</option>
         <option value="low">🟢 Low</option>
       </select>
-      {(ownerF !== 'all' || assignedF !== 'all' || priorityF !== 'all') && (
+      {(ownerF !== 'all' || assignedF !== 'all' || priorityF !== 'all' || (statusF !== 'open' && statusF !== 'all')) && (
         <button onClick={() => { setOwnerF('all'); setAssignedF('all'); setPriorityF('all'); setStatusF('open'); }}
-          className="px-2 py-1 rounded-lg text-[10px] font-semibold text-red-500 bg-red-50 border border-red-200">✕ Clear filters</button>
+          className="px-2 py-1 rounded-lg text-[10px] font-semibold text-red-500 bg-red-50 border border-red-200">✕ Clear all filters</button>
       )}
       <span className="text-[10px] text-slate-400 font-semibold">{filtered.length} result{filtered.length !== 1 ? 's' : ''}</span>
     </div>
@@ -732,7 +768,7 @@ export default function TicketsTab({ toast, customers, user, userProfile, users,
     <div className="grid grid-cols-4 gap-3 mb-3">
       <div onClick={() => setStatusF('open')} className="bg-white rounded-lg p-3 cursor-pointer hover:shadow transition" style={{borderLeftWidth:3,borderLeftColor:'#3b82f6'}}><div className="text-[10px] text-slate-500">Open</div><div className="text-lg font-extrabold">{tickets.filter(t=>t.status!=='Closed').length}</div></div>
       <div onClick={() => setStatusF('overdue')} className="bg-white rounded-lg p-3 cursor-pointer hover:shadow transition" style={{borderLeftWidth:3,borderLeftColor:'#ef4444'}}><div className="text-[10px] text-slate-500">Overdue</div><div className="text-lg font-extrabold text-red-500">{tickets.filter(t=>t.due_date&&t.due_date<todayStr&&t.status!=='Closed').length}</div></div>
-      <div onClick={() => { setPriorityF('high'); setStatusF('all'); }} className="bg-white rounded-lg p-3 cursor-pointer hover:shadow transition" style={{borderLeftWidth:3,borderLeftColor:'#f59e0b'}}><div className="text-[10px] text-slate-500">High Priority</div><div className="text-lg font-extrabold text-amber-500">{tickets.filter(t=>t.priority==='high'&&t.status!=='Closed').length}</div></div>
+      <div onClick={() => { setPriorityF('high'); }} className="bg-white rounded-lg p-3 cursor-pointer hover:shadow transition" style={{borderLeftWidth:3,borderLeftColor:'#f59e0b'}}><div className="text-[10px] text-slate-500">High Priority</div><div className="text-lg font-extrabold text-amber-500">{tickets.filter(t=>t.priority==='high'&&t.status!=='Closed').length}</div></div>
       <div onClick={() => setStatusF('Closed')} className="bg-white rounded-lg p-3 cursor-pointer hover:shadow transition" style={{borderLeftWidth:3,borderLeftColor:'#1e293b'}}><div className="text-[10px] text-slate-500">Closed</div><div className="text-lg font-extrabold text-slate-800">{tickets.filter(t=>t.status==='Closed').length}</div></div>
     </div>
 
@@ -1067,5 +1103,6 @@ export default function TicketsTab({ toast, customers, user, userProfile, users,
       })}
       {filtered.length === 0 && <div className="bg-white rounded-xl p-6 text-center text-slate-400 text-sm">No tickets</div>}
     </div>
+    </>)}
   </div>);
 }

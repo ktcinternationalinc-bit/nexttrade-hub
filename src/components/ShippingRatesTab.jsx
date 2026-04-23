@@ -5,6 +5,7 @@ import { notifyShippingRate, notifyShippingBooked } from '../lib/notify';
 import { fE, fmt } from '../lib/utils';
 import EmailComposer from './EmailComposer';
 import * as XLSX from 'xlsx';
+import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip as RTooltip, Legend as RLegend, ResponsiveContainer } from 'recharts';
 
 const CONTAINER_TYPES = ['20ft', '40ft', '40ft HC', '45ft', 'LCL', 'Bulk', 'Flatbed', 'Reefer', 'Open Top', 'Truck', 'Trailer'];
 const TRANSPORT_MODES = ['Ocean', 'Trucking', 'Air', 'Rail', 'Multi-modal'];
@@ -373,6 +374,15 @@ export default function ShippingRatesTab({ toast, user, userProfile, isAdmin, cu
   const [rateHistoryMode, setRateHistoryMode] = useState('1y');
   const [rateHistoryDf, setRateHistoryDf] = useState(() => new Date(Date.now() - 365 * 86400000).toISOString().substring(0, 10));
   const [rateHistoryDt, setRateHistoryDt] = useState('');
+  // S17.11 (Apr 23 2026) — historical rates UX overhaul.
+  // hideExpired: separate checkbox, NOT tied to the time-period buttons.
+  // Default OFF so expired rates show when user picks a period. Max complained
+  // he could not "uncheck" Active Only in the old button group. Now Active is
+  // a checkbox he can flip freely.
+  // chartShippingLine: 'all' shows one line per shipping line in the trend
+  // chart; picking a specific line shows only that one.
+  const [hideExpired, setHideExpired] = useState(false);
+  const [chartShippingLine, setChartShippingLine] = useState('all');
 
   const handleSaveQuote = async () => {
     if (!f.qCustomer || !f.qOrigin || !f.qDest) { alert('Fill Customer, Origin, Destination'); return; }
@@ -973,7 +983,8 @@ Date: ${today}`;
   // ========== ROUTE DETAIL ==========
   if (view === 'route_detail' && selectedRoute) {
     const bk = routeHistory.filter(r=>r.booked); const active = routeHistory.filter(r=>!isExpired(r.expiry_date)); const byVL = {}; active.forEach(r => { const k=(r.vendor_name||'?')+' / '+(r.shipping_line||'N/A'); if(!byVL[k])byVL[k]=[]; byVL[k].push(r); });
-    const chartData = {}; routeHistory.forEach(r => { const m=(r.effective_date||'').substring(0,7); if(!m)return; if(!chartData[m])chartData[m]={month:m,rates:[],min:Infinity,max:0}; chartData[m].rates.push(Number(r.rate_amount||0)); chartData[m].min=Math.min(chartData[m].min,Number(r.rate_amount||0)); chartData[m].max=Math.max(chartData[m].max,Number(r.rate_amount||0)); }); Object.values(chartData).forEach(d=>{d.avg=Math.round(d.rates.reduce((a,b)=>a+b,0)/d.rates.length);}); const chartSorted=Object.values(chartData).sort((a,b)=>a.month.localeCompare(b.month));
+    // S17.11 — The old compact bar chart was replaced by the new LineChart
+    // trend below. chartData/chartSorted no longer needed.
     return (<div>
       <button onClick={()=>{setSelectedRoute(null);setView('routes');}} className="px-3 py-1 rounded border border-slate-200 text-xs font-semibold mb-3">← Back</button>
       <h2 className="text-xl font-extrabold mb-1">🚢 {selectedRoute.origin} → {selectedRoute.destination}</h2>
@@ -985,7 +996,95 @@ Date: ${today}`;
         <div className="bg-white rounded-lg p-3" style={{borderLeftWidth:3,borderLeftColor:'#8b5cf6'}}><div className="text-[10px] text-slate-500">Vendors</div><div className="text-lg font-extrabold">{Object.keys(byVL).length}</div></div>
         <div className="bg-white rounded-lg p-3" style={{borderLeftWidth:3,borderLeftColor:'#f59e0b'}}><div className="text-[10px] text-slate-500">Bookings</div><div className="text-lg font-extrabold">{routeBookings(selectedRoute.origin,selectedRoute.destination).length}</div></div>
       </div>
-      {chartSorted.length>1&&(<div className="bg-white rounded-xl p-4 mb-4 border border-slate-200"><h3 className="text-sm font-bold mb-2">📈 Rate Trend</h3><div className="flex items-end gap-1 h-[120px]">{chartSorted.map((d,i)=>{const mx=Math.max(...chartSorted.map(x=>x.max)); const h=mx>0?(d.avg/mx)*100:0; return (<div key={d.month} className="flex-1 flex flex-col items-center" title={d.month+': avg $'+d.avg}><div className="text-[8px] text-slate-400 mb-1">${d.avg}</div><div className="w-full rounded-t" style={{height:h+'%',background:i===chartSorted.length-1?'#0ea5e9':'#cbd5e1',minHeight:4}}></div><div className="text-[8px] text-slate-400 mt-1 -rotate-45">{d.month.substring(5)}</div></div>);})}</div></div>)}
+      {(() => {
+        // S17.11 — proper rate trend chart with time-period + shipping-line filters.
+        // Uses SAME rateHistoryMode state that drives the table below, so the chart
+        // and table always stay in sync (change the period, both update).
+        var trendRates = routeHistory;
+        if (rateHistoryDf) trendRates = trendRates.filter(r => (r.effective_date || '') >= rateHistoryDf);
+        if (rateHistoryDt) trendRates = trendRates.filter(r => (r.effective_date || '') <= rateHistoryDt);
+        if (hideExpired) trendRates = trendRates.filter(r => !isExpired(r.expiry_date));
+
+        // Available shipping lines in the full route history (not just filtered) so
+        // user can always see the dropdown options.
+        var allLinesInRoute = Array.from(new Set(routeHistory.map(r => r.shipping_line || '(no line)'))).sort();
+
+        // Build: [{month, <line1>: avg, <line2>: avg, _avg: overall}]
+        var monthsSet = new Set();
+        trendRates.forEach(r => { var m = (r.effective_date || '').substring(0,7); if (m) monthsSet.add(m); });
+        var months = Array.from(monthsSet).sort();
+
+        // Distinct color palette for up to 8 lines.
+        var LINE_COLORS = ['#0ea5e9','#8b5cf6','#f59e0b','#10b981','#ef4444','#ec4899','#14b8a6','#6366f1'];
+
+        var linesToPlot = [];
+        if (chartShippingLine === 'all') {
+          linesToPlot = allLinesInRoute.filter(L => trendRates.some(r => (r.shipping_line || '(no line)') === L));
+        } else {
+          linesToPlot = [chartShippingLine];
+        }
+
+        var trendPoints = months.map(function(m) {
+          var point = { month: m };
+          linesToPlot.forEach(function(L) {
+            var ratesForLine = trendRates.filter(r => (r.effective_date||'').substring(0,7) === m && (r.shipping_line || '(no line)') === L);
+            if (ratesForLine.length) {
+              var sum = ratesForLine.reduce((a,b) => a + Number(b.rate_amount||0), 0);
+              point[L] = Math.round(sum / ratesForLine.length);
+            }
+          });
+          // Overall avg across ALL lines in this month
+          var monthRates = trendRates.filter(r => (r.effective_date||'').substring(0,7) === m);
+          if (monthRates.length) {
+            point._avg = Math.round(monthRates.reduce((a,b) => a + Number(b.rate_amount||0), 0) / monthRates.length);
+          }
+          return point;
+        });
+
+        if (trendPoints.length === 0) {
+          return (<div className="bg-white rounded-xl p-4 mb-4 border border-slate-200">
+            <div className="flex justify-between items-center mb-2">
+              <h3 className="text-sm font-bold">📈 Rate Trend Over Time</h3>
+            </div>
+            <div className="text-xs text-slate-500 py-6 text-center">No rate data in the selected period. Try a longer time range or turn off "Hide expired".</div>
+          </div>);
+        }
+
+        return (<div className="bg-white rounded-xl p-4 mb-4 border border-slate-200">
+          <div className="flex justify-between items-center mb-3 flex-wrap gap-2">
+            <h3 className="text-sm font-bold">📈 Rate Trend Over Time</h3>
+            <div className="flex items-center gap-2">
+              <span className="text-[10px] text-slate-500">Shipping line:</span>
+              <select value={chartShippingLine} onChange={function(e){ setChartShippingLine(e.target.value); }} className="px-2 py-1 rounded border text-xs">
+                <option value="all">All lines (compare)</option>
+                {allLinesInRoute.map(function(L){ return (<option key={L} value={L}>{L}</option>); })}
+              </select>
+            </div>
+          </div>
+          <div style={{width: '100%', height: 280}}>
+            <ResponsiveContainer>
+              <LineChart data={trendPoints} margin={{top: 10, right: 20, left: 0, bottom: 10}}>
+                <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" />
+                <XAxis dataKey="month" tick={{fontSize: 10}} />
+                <YAxis tick={{fontSize: 10}} tickFormatter={function(v){ return '$' + v; }} />
+                <RTooltip formatter={function(v){ return '$' + Number(v).toLocaleString(); }} />
+                <RLegend wrapperStyle={{fontSize: 11}} />
+                {chartShippingLine === 'all'
+                  ? linesToPlot.map(function(L, i) {
+                      return (<Line key={L} type="monotone" dataKey={L} stroke={LINE_COLORS[i % LINE_COLORS.length]} strokeWidth={2} connectNulls={true} dot={{r: 3}} />);
+                    })
+                  : (<Line type="monotone" dataKey={chartShippingLine} stroke="#0ea5e9" strokeWidth={3} connectNulls={true} dot={{r: 4}} />)
+                }
+                {chartShippingLine === 'all' && <Line type="monotone" dataKey="_avg" name="Overall avg" stroke="#334155" strokeWidth={2} strokeDasharray="5 3" dot={false} />}
+              </LineChart>
+            </ResponsiveContainer>
+          </div>
+          <div className="text-[10px] text-slate-500 mt-1">
+            {trendRates.length} rates plotted across {months.length} month{months.length === 1 ? '' : 's'}
+            {hideExpired && <span className="ml-2 text-amber-600">• Expired rates hidden</span>}
+          </div>
+        </div>);
+      })()}
       {Object.keys(byVL).length>0&&(<div className="bg-white rounded-xl p-4 mb-4 border border-slate-200"><h3 className="text-sm font-bold mb-2">🏆 Vendor Comparison</h3><div className="overflow-auto"><table className="w-full border-collapse text-xs"><thead><tr className="bg-slate-50"><th className="px-3 py-2 text-left text-[10px]">Vendor / Line</th><th className="px-3 py-2 text-right text-[10px]">Best Rate</th><th className="px-3 py-2 text-right text-[10px]">Transit</th><th className="px-3 py-2 text-right text-[10px]">Free Days</th><th className="px-3 py-2 text-[10px]">Expiry</th></tr></thead><tbody>{Object.entries(byVL).sort((a,b)=>(a[1][0]?.rate_amount||Infinity)-(b[1][0]?.rate_amount||Infinity)).map(([key,vr],i)=>{const best=vr.reduce((a,b)=>(a.rate_amount||Infinity)<(b.rate_amount||Infinity)?a:b); return (<tr key={key} className={'border-b border-slate-50 '+(i===0?'bg-emerald-50':'')}><td className="px-3 py-2 font-semibold">{i===0&&<span className="text-emerald-500 mr-1">★</span>}{key}</td><td className="px-3 py-2 text-right font-bold text-blue-600">{fCur(best.rate_amount,best.currency)}</td><td className="px-3 py-2 text-right">{best.transit_days?best.transit_days+'d':'—'}</td><td className="px-3 py-2 text-right">{best.free_days||'—'}</td><td className="px-3 py-2"><ExpiryBadge date={best.expiry_date}/></td></tr>);})}</tbody></table></div></div>)}
       {routeQuotes.length>0&&(<div className="bg-white rounded-xl p-4 mt-4 border border-slate-200"><h3 className="text-sm font-bold mb-2">📋 Quotes ({routeQuotes.length})</h3>{routeQuotes.map(qt=>(<div key={qt.id} className="flex justify-between items-center py-2 border-b border-slate-50"><div><div className="text-xs font-semibold">{qt.quote_number} — {qt.customer_name}</div><div className="text-[10px] text-slate-500">{qt.quote_date} • {qt.status}</div></div><div className="flex items-center gap-3"><div className="text-right"><div className="text-xs">Client: <span className="font-bold">{fCur(qt.client_total,qt.currency)}</span></div><div className="text-[10px]" style={{color:qt.profit>0?'#10b981':'#ef4444'}}>Profit: {fCur(qt.profit,qt.currency)}</div></div><button onClick={()=>setPreviewQuote(qt)} className="px-2 py-1 rounded border border-purple-300 text-purple-600 text-[10px]">📄</button></div></div>))}</div>)}
       <div className="bg-white rounded-xl p-4 border border-slate-200 mt-4"><div className="flex justify-between items-center mb-2"><h3 className="text-sm font-bold">Historical Rates</h3><div className="flex gap-1">{(() => {
@@ -1011,26 +1110,39 @@ Date: ${today}`;
           a.click();
           URL.revokeObjectURL(url);
         };
-        return (<><button onClick={() => { var filtered = routeHistory; if (rateHistoryMode === 'active') filtered = filtered.filter(r => !isExpired(r.expiry_date)); else if (rateHistoryDf) filtered = filtered.filter(r => (r.effective_date || '') >= rateHistoryDf); if (rateHistoryDt) filtered = filtered.filter(r => (r.effective_date || '') <= rateHistoryDt); exportCSV(filtered); }} className="px-3 py-1 bg-emerald-500 text-white rounded text-[10px] font-semibold" title="Download as CSV">📥 Export</button><button onClick={()=>{setRequestQuoteData({vendor:null,origin:selectedRoute.origin,destination:selectedRoute.destination,container:'40ft'});}} className="px-3 py-1 bg-cyan-500 text-white rounded text-[10px] font-semibold">📋 Request Rate</button><button onClick={()=>{setF({origin:selectedRoute.origin,destination:selectedRoute.destination});setView('add_rate');}} className="px-3 py-1 bg-blue-500 text-white rounded text-[10px] font-semibold">+ Add Rate</button></>);
+        return (<><button onClick={() => { var filtered = routeHistory; if (rateHistoryDf) filtered = filtered.filter(r => (r.effective_date || '') >= rateHistoryDf); if (rateHistoryDt) filtered = filtered.filter(r => (r.effective_date || '') <= rateHistoryDt); if (hideExpired) filtered = filtered.filter(r => !isExpired(r.expiry_date)); exportCSV(filtered); }} className="px-3 py-1 bg-emerald-500 text-white rounded text-[10px] font-semibold" title="Download as CSV">📥 Export</button><button onClick={()=>{setRequestQuoteData({vendor:null,origin:selectedRoute.origin,destination:selectedRoute.destination,container:'40ft'});}} className="px-3 py-1 bg-cyan-500 text-white rounded text-[10px] font-semibold">📋 Request Rate</button><button onClick={()=>{setF({origin:selectedRoute.origin,destination:selectedRoute.destination});setView('add_rate');}} className="px-3 py-1 bg-blue-500 text-white rounded text-[10px] font-semibold">+ Add Rate</button></>);
       })()}</div></div>
       <div className="flex gap-1 mb-2 flex-wrap items-center">
-        <span className="text-[10px] text-slate-500 mr-1">Filter:</span>
-        {[['active','✅ Active Only'],['3m','3 Months'],['1y','1 Year'],['3y','3 Years'],['all','All Time (incl. expired)'],['custom','Custom']].map(([v,l])=>(
-          <button key={v} onClick={()=>{setRateHistoryMode(v); if(v==='3m'){setRateHistoryDf(new Date(Date.now()-90*86400000).toISOString().substring(0,10));setRateHistoryDt('');} else if(v==='1y'){setRateHistoryDf(new Date(Date.now()-365*86400000).toISOString().substring(0,10));setRateHistoryDt('');} else if(v==='3y'){setRateHistoryDf(new Date(Date.now()-1095*86400000).toISOString().substring(0,10));setRateHistoryDt('');} else if(v==='active'){setRateHistoryDf('');setRateHistoryDt('');} else {setRateHistoryDf('');setRateHistoryDt('');}}}
-            className={'px-2 py-1 rounded text-[10px] font-semibold '+(rateHistoryMode===v?'bg-blue-500 text-white':'bg-slate-100 text-slate-600')}>{l}</button>
-        ))}
+        <span className="text-[10px] text-slate-500 mr-1">Period:</span>
+        {[['1m','1 Month',30],['3m','3 Months',90],['6m','6 Months',180],['1y','1 Year',365],['3y','3 Years',1095],['all','All Time',0],['custom','Custom',-1]].map(function(row){
+          var v = row[0], l = row[1], days = row[2];
+          return (<button key={v} onClick={function(){
+            setRateHistoryMode(v);
+            if (days > 0) { setRateHistoryDf(new Date(Date.now() - days*86400000).toISOString().substring(0,10)); setRateHistoryDt(''); }
+            else if (days === 0) { setRateHistoryDf(''); setRateHistoryDt(''); }
+            else { setRateHistoryDf(''); setRateHistoryDt(''); }
+          }}
+            className={'px-2 py-1 rounded text-[10px] font-semibold '+(rateHistoryMode===v?'bg-blue-500 text-white':'bg-slate-100 text-slate-600 hover:bg-slate-200')}>{l}</button>);
+        })}
         {rateHistoryMode==='custom'&&(<><input type="date" value={rateHistoryDf} onChange={e=>setRateHistoryDf(e.target.value)} className="px-2 py-1 border rounded text-[10px] w-28" /><span className="text-[10px]">→</span><input type="date" value={rateHistoryDt} onChange={e=>setRateHistoryDt(e.target.value)} className="px-2 py-1 border rounded text-[10px] w-28" /></>)}
+        {/* S17.11 — separate "Hide expired" toggle. Max can freely check or
+            uncheck, independent of the time period. Default OFF so expired
+            rates ARE visible, matching the "show me historical rates" ask. */}
+        <label className="flex items-center gap-1 ml-3 cursor-pointer select-none">
+          <input type="checkbox" checked={hideExpired} onChange={function(e){ setHideExpired(e.target.checked); }} className="w-3.5 h-3.5 cursor-pointer" />
+          <span className="text-[10px] text-slate-600 font-semibold">Hide expired</span>
+        </label>
       </div>
       {(() => {
         var filtered = routeHistory;
-        if (rateHistoryMode === 'active') filtered = filtered.filter(r => !isExpired(r.expiry_date));
-        else if (rateHistoryDf) filtered = filtered.filter(r => (r.effective_date || '') >= rateHistoryDf);
+        if (rateHistoryDf) filtered = filtered.filter(r => (r.effective_date || '') >= rateHistoryDf);
         if (rateHistoryDt) filtered = filtered.filter(r => (r.effective_date || '') <= rateHistoryDt);
+        if (hideExpired) filtered = filtered.filter(r => !isExpired(r.expiry_date));
         var bestRate = filtered.length > 0 ? filtered.reduce((a,b) => (a.rate_amount||Infinity) < (b.rate_amount||Infinity) ? a : b) : null;
         var expiredCount = filtered.filter(r => isExpired(r.expiry_date)).length;
         var bookedCount = filtered.filter(r => r.booked).length;
         return (<>
-        {bestRate && rateHistoryMode !== 'active' && <div className="bg-emerald-50 rounded-lg px-3 py-2 mb-2 border border-emerald-200 flex justify-between items-center">
+        {bestRate && <div className="bg-emerald-50 rounded-lg px-3 py-2 mb-2 border border-emerald-200 flex justify-between items-center">
           <span className="text-[10px] font-bold text-emerald-700">🏆 Best rate in period: {bestRate.vendor_name} {bestRate.shipping_line ? '/ '+bestRate.shipping_line : ''}</span>
           <span className="text-sm font-extrabold text-emerald-600">{fCur(bestRate.rate_amount, bestRate.currency)} <span className="text-[10px] font-normal">({bestRate.effective_date})</span></span>
         </div>}

@@ -538,6 +538,16 @@ export default function AIGreeter({ user, userProfile, users, tickets, invoices,
     try { window.dispatchEvent(new CustomEvent('nadia-tts-stop')); } catch (e) {}
   };
 
+  // S18.1 — stale-closure fix for cross-tab memory. The onBobCommand
+  // listener below only registers when `enabled` flips. Over multiple
+  // conversations its captured `doSend` is the one from that first
+  // render — which closes over the initial (empty) `messages`. Result:
+  // every "Hey Nadia" voice command was being sent to the API with
+  // EMPTY history, even though messages had grown. It felt like Nadia
+  // lost her memory on voice. Fix: keep a ref that always points at the
+  // latest doSend; the listener reads the ref at call time.
+  var doSendRef = useRef(null);
+
   // Listen for wake-word commands + user-initiated events from VoiceController.
   // This replaces the old broken per-component mic code.
   // S18.1 (Apr 23 2026) — Per Max: Nadia should stop ONLY when the user hits
@@ -553,7 +563,8 @@ export default function AIGreeter({ user, userProfile, users, tickets, invoices,
       // User said a wake-word command — this IS a user action, so it's
       // treated like pressing a button. Stop current speech, then process.
       stopSpeech();
-      doSend(cmd, false);
+      // S18.1 — read from ref so we ALWAYS have the latest messages/doSend
+      if (doSendRef.current) doSendRef.current(cmd, false);
     };
     // Some decision chips are "ask me more" — they dispatch nadia-push-question
     // to route a follow-up query back into this greeter. Button click = OK to stop.
@@ -561,15 +572,30 @@ export default function AIGreeter({ user, userProfile, users, tickets, invoices,
       var q = ev && ev.detail && ev.detail.question;
       if (!q) return;
       stopSpeech();
-      doSend(q, false);
+      if (doSendRef.current) doSendRef.current(q, false);
+    };
+    // S18.2 — acknowledgment on wake word. When VoiceController detects
+    // "Hey Nadia" (before the user finishes their command), play a tiny
+    // "Yes?" so the user knows the mic picked up the wake word and it's
+    // safe to keep talking. This MUST NOT fire the API.
+    var onWakeAck = function() {
+      if (!enabled) return;
+      if (muted) return;
+      // Use the same doSpeak pipeline so it respects mute + TTS settings.
+      // Very short phrase so it doesn't collide with the user's incoming
+      // command (Web Speech tolerates a brief overlap).
+      var ack = (useLang === 'ar') ? 'نعم' : "I'm here";
+      try { doSpeak(ack); } catch (e) {}
     };
     window.addEventListener('hey-bob-command', onBobCommand);
     window.addEventListener('nadia-push-question', onPushQuestion);
+    window.addEventListener('nadia-wake-ack', onWakeAck);
     return function() {
       window.removeEventListener('hey-bob-command', onBobCommand);
       window.removeEventListener('nadia-push-question', onPushQuestion);
+      window.removeEventListener('nadia-wake-ack', onWakeAck);
     };
-  }, [enabled]);
+  }, [enabled, muted, useLang]);
 
   // Voice recognition — press-to-start, press-to-stop, then send.
   // Previous behavior kept auto-stopping on silence pauses which cut users off
@@ -1251,6 +1277,11 @@ export default function AIGreeter({ user, userProfile, users, tickets, invoices,
   };
 
   var handleSubmit = function() { if (!input.trim()) return; stopSpeech(); doSend(input.trim()); };
+
+  // S18.1 — keep the ref fresh so hey-bob listeners read the latest doSend
+  // (which closes over the latest messages). Without this, voice commands
+  // get stale history and Nadia feels like she forgot everything.
+  doSendRef.current = doSend;
 
   // S13 — Handle clicks on Morning Briefing action buttons. Each item has
   // an action_type like "open_ticket", "open_customer", etc. We dispatch

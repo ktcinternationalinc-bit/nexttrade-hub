@@ -3,23 +3,33 @@
 // src/components/VoiceController.jsx
 //
 // The global voice system. Mounts ONCE at the root of the app. Handles:
-//   - continuous listening for "Hey Bob" wake phrase
+//   - continuous listening for "Hey Nadia" wake phrase
 //   - command extraction + dispatch to the AI
-//   - barge-in (cancel AI audio when user starts talking)
+//   - S18.2 (Apr 23 2026): CONVERSATION MODE — per Max's request:
+//       1. Say "Hey Nadia" → short ack ("Yes?") so user knows she heard
+//       2. User speaks; 2s of silence = end of utterance
+//       3. Nadia answers
+//       4. After she finishes, 5s "follow-up window" where the user can
+//          keep talking WITHOUT saying "Hey Nadia" again
+//       5. 5s of silence → back to sleep, needs "Hey Nadia" to wake
+//       6. Saying "Hey Nadia" at ANY time starts a new topic
 //   - cross-browser quirks (Safari auto-restart, Chrome continuous, Firefox fallback)
 //   - per-user on/off toggle (reads users.voice_enabled)
 //   - visible indicator that's always onscreen (fixed position, dismissible)
-//
-// Architecture:
-//   - Event-driven: when wake + command captured, we dispatch a
-//     CustomEvent('hey-bob-command', { detail: { command } }) on window.
-//     Any page can listen. AIGreeter listens and handles the command.
-//   - TTS state is global too: when audio plays we set window.__nadiaSpeaking=true
-//     so we can barge-in from any component.
 // ============================================================
 
 import { useState, useEffect, useRef, useCallback } from 'react';
-import { createWakeEngine, isBargeInCandidate } from '../lib/voice/wake-word';
+import { createWakeEngine, detectWakeWord, isBargeInCandidate } from '../lib/voice/wake-word';
+
+// S18.2 — follow-up window duration. After Nadia stops speaking, keep the
+// mic "open" (no wake word required) for this long. Long enough to let the
+// user start a follow-up thought, short enough to avoid picking up
+// unrelated room chatter.
+var FOLLOWUP_WINDOW_MS = 5000;
+
+// S18.2 — minimum meaningful words to count as a follow-up command. A
+// single "yeah" shouldn't fire; "tell me more" should.
+var FOLLOWUP_MIN_WORDS = 2;
 
 // Browser capability detection — done ONCE at module load
 var _caps = null;
@@ -35,29 +45,40 @@ function getCaps() {
     SR: SR,
     isSafari: isSafari,
     isFirefox: isFirefox,
-    // Firefox at time of writing has no SpeechRecognition. We treat
-    // voice as unsupported there and show a push-to-talk fallback hint.
-    needsRestart: isSafari, // Safari's "continuous" mode isn't actually continuous
+    needsRestart: isSafari,
   };
   return _caps;
 }
 
 export default function VoiceController({ userId, userProfile, enabled, onCommand }) {
   var [status, setStatus] = useState('idle');
-    // 'idle' | 'listening' | 'hearing' | 'command' | 'disabled' | 'unsupported' | 'denied'
+    // 'idle' | 'listening' | 'hearing' | 'command' | 'followup' | 'disabled' | 'unsupported' | 'denied'
   var [lastTranscript, setLastTranscript] = useState('');
   var [visible, setVisible] = useState(true);
   var recognitionRef = useRef(null);
   var engineRef = useRef(null);
   var restartTimerRef = useRef(null);
   var mountedRef = useRef(true);
-  // Track user-initiated stop so we don't auto-restart after toggle-off
   var userStoppedRef = useRef(false);
-  // Track AI speaking so we can barge-in
   var aiSpeakingRef = useRef(false);
+  // S18.2 — follow-up window state. True when Nadia just finished speaking
+  // and we're giving the user 5s to continue without saying "Hey Nadia".
+  var followUpActiveRef = useRef(false);
+  var followUpTimerRef = useRef(null);
+  // Seen-transcripts for follow-up so the same interim text doesn't fire twice
+  var followUpLastFiredRef = useRef('');
+  // S18.2 — ack-fired ref tracks whether we already played the "Yes?" for
+  // the current wake. Reset when a command finally commits. MUST be declared
+  // before `start` (the callback closes over it).
+  var ackFiredRef = useRef(false);
 
-  // Initialize engine once
   if (!engineRef.current) engineRef.current = createWakeEngine();
+
+  var clearFollowUp = useCallback(function() {
+    if (followUpTimerRef.current) { clearTimeout(followUpTimerRef.current); followUpTimerRef.current = null; }
+    followUpActiveRef.current = false;
+    followUpLastFiredRef.current = '';
+  }, []);
 
   // ---------- Stop recognition (clean) ----------
   var stop = useCallback(function() {
@@ -69,8 +90,9 @@ export default function VoiceController({ userId, userProfile, enabled, onComman
       recognitionRef.current = null;
     }
     engineRef.current && engineRef.current.reset();
+    clearFollowUp();
     setStatus('idle');
-  }, []);
+  }, [clearFollowUp]);
 
   // ---------- Start recognition ----------
   var start = useCallback(function() {
@@ -79,7 +101,6 @@ export default function VoiceController({ userId, userProfile, enabled, onComman
     if (!enabled)         { setStatus('disabled'); return; }
     userStoppedRef.current = false;
 
-    // Clean up any previous instance
     if (recognitionRef.current) {
       try { recognitionRef.current.abort(); } catch (e) {}
       recognitionRef.current = null;
@@ -89,18 +110,17 @@ export default function VoiceController({ userId, userProfile, enabled, onComman
     try { rec = new caps.SR(); }
     catch (e) { setStatus('unsupported'); return; }
 
-    rec.continuous = !caps.needsRestart; // Safari lies about supporting this
+    rec.continuous = !caps.needsRestart;
     rec.interimResults = true;
     rec.lang = (userProfile && userProfile.ai_language === 'ar') ? 'ar-EG' : 'en-US';
     rec.maxAlternatives = 1;
 
     rec.onstart = function() {
-      if (mountedRef.current) setStatus('listening');
+      if (mountedRef.current) setStatus(followUpActiveRef.current ? 'followup' : 'listening');
     };
 
     rec.onresult = function(ev) {
       if (!mountedRef.current) return;
-      // Concatenate all results into one transcript + detect final state
       var transcript = '';
       var isFinal = false;
       for (var i = ev.resultIndex; i < ev.results.length; i++) {
@@ -113,36 +133,59 @@ export default function VoiceController({ userId, userProfile, enabled, onComman
 
       setLastTranscript(transcript);
 
-      // S17.10 (Apr 23 2026) — BUG FIX: Nadia was cutting off after 2-3 words.
-      // Root cause: the VoiceController mic is always hot listening for
-      // "Hey Bob". When Nadia speaks, her voice comes out the speakers and
-      // into the mic. The mic transcribes it ("Good morning Mohamed"), sees
-      // 2+ meaningful words, thinks the user is speaking, and fires a
-      // barge-in event. Nadia stops herself.
-      //
-      // Fix: NEVER fire barge-in while Nadia is speaking. Accept user
-      // barge-in ONLY through the explicit wake-word ("Hey Bob") path OR
-      // when the user presses the mic button. If the user wants to
-      // interrupt, they say "hey bob" — the wake-word detector catches
-      // that as a command, which handles the stop correctly downstream.
-      //
-      // The aiSpeakingRef flag is still flipped by nadia-tts-start/stop,
-      // so this doesn't break other places that check it.
+      // S18.2 — check wake word FIRST even during follow-up.
+      // If user says "Hey Nadia" mid-conversation, that's a new topic
+      // and should cancel follow-up mode + go through the wake engine.
+      var wakeInCurrent = detectWakeWord(transcript);
+      if (wakeInCurrent.matched && followUpActiveRef.current) {
+        // Explicit wake during follow-up → clear follow-up, let wake engine take over
+        clearFollowUp();
+        // Fall through to wake-engine processing below
+      }
+
+      // S18.2 — follow-up mode: any final result with 2+ words is a command.
+      // Skip the wake engine entirely.
+      if (followUpActiveRef.current && isFinal && !wakeInCurrent.matched) {
+        var words = transcript.split(/\s+/).filter(function(w) {
+          return w.length > 1 && !/^(uh|um|mm|er|ah)$/i.test(w);
+        });
+        if (words.length >= FOLLOWUP_MIN_WORDS && transcript !== followUpLastFiredRef.current) {
+          followUpLastFiredRef.current = transcript;
+          clearFollowUp();
+          setStatus('command');
+          try { window.dispatchEvent(new CustomEvent('hey-bob-command', { detail: { command: transcript, at: Date.now(), followUp: true } })); } catch (e) {}
+          if (onCommand) { try { onCommand(transcript); } catch (e) {} }
+          setTimeout(function() { if (mountedRef.current) setStatus('listening'); }, 800);
+          return;
+        }
+      }
+
+      // S17.10 — barge-in path is OFF. Aggressive mic pickup of Nadia's
+      // own voice used to cut her off mid-sentence.
       // if (aiSpeakingRef.current && !engineRef.current.isCollecting() && isBargeInCandidate(transcript)) {
       //   try { window.dispatchEvent(new CustomEvent('hey-bob-bargein')); } catch (e) {}
       //   aiSpeakingRef.current = false;
       // }
 
-      // Show "hearing you" state during collection
       if (engineRef.current.isCollecting()) setStatus('hearing');
 
       var out = engineRef.current.process(transcript, isFinal);
+
+      // S18.2 — acknowledgment. When user said just "Hey Nadia" (no command
+      // yet), the engine flips into "collecting" mode. Fire a one-shot ack
+      // event so AIGreeter can play a short "Yes?" / "I'm here" so the
+      // user knows the mic heard them and it's safe to speak.
+      if (out.stillListening && engineRef.current.isCollecting() && !ackFiredRef.current) {
+        ackFiredRef.current = true;
+        try { window.dispatchEvent(new CustomEvent('nadia-wake-ack')); } catch (e) {}
+      }
+
       if (out.trigger && out.command) {
+        ackFiredRef.current = false; // reset for the next wake
         setStatus('command');
         try { window.dispatchEvent(new CustomEvent('hey-bob-command', { detail: { command: out.command, at: Date.now() } })); } catch (e) {}
         if (onCommand) { try { onCommand(out.command); } catch (e) {} }
-        // Brief visual feedback, then return to listening
-        setTimeout(function() { if (mountedRef.current) setStatus('listening'); }, 800);
+        setTimeout(function() { if (mountedRef.current) setStatus(followUpActiveRef.current ? 'followup' : 'listening'); }, 800);
       }
     };
 
@@ -151,13 +194,12 @@ export default function VoiceController({ userId, userProfile, enabled, onComman
       var err = (ev && ev.error) || '';
       if (err === 'not-allowed' || err === 'service-not-allowed') {
         setStatus('denied');
-        userStoppedRef.current = true; // Don't auto-retry — would prompt repeatedly
+        userStoppedRef.current = true;
       } else if (err === 'no-speech' || err === 'audio-capture') {
-        // Common on Safari silences. Restart path below will pick it up.
+        // benign
       } else if (err === 'aborted') {
-        // Expected on clean stop
+        // expected on clean stop
       } else {
-        // Network / language-not-supported / etc — soft fail
         setStatus('listening');
       }
     };
@@ -165,11 +207,8 @@ export default function VoiceController({ userId, userProfile, enabled, onComman
     rec.onend = function() {
       if (!mountedRef.current) return;
       recognitionRef.current = null;
-      // Auto-restart on Safari OR if continuous mode dropped unexpectedly.
-      // Skipped when user explicitly stopped or denied permission.
       if (userStoppedRef.current) return;
       if (status === 'denied' || status === 'unsupported' || status === 'disabled') return;
-      // Small delay prevents tight-loop on some browsers' rate-limiter
       restartTimerRef.current = setTimeout(function() {
         if (mountedRef.current && !userStoppedRef.current) start();
       }, 250);
@@ -177,10 +216,9 @@ export default function VoiceController({ userId, userProfile, enabled, onComman
 
     try { rec.start(); recognitionRef.current = rec; }
     catch (e) {
-      // "already started" sometimes — treat as OK
       if (!/already/.test(String(e.message || ''))) setStatus('idle');
     }
-  }, [enabled, onCommand, userProfile]);
+  }, [enabled, onCommand, userProfile, clearFollowUp]);
 
   // ---------- React to enabled changes ----------
   useEffect(function() {
@@ -190,14 +228,28 @@ export default function VoiceController({ userId, userProfile, enabled, onComman
       mountedRef.current = false;
       stop();
     };
-    // Intentionally only re-runs when enabled flips
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [enabled]);
 
   // ---------- Listen for AI-speaking events from AIGreeter ----------
   useEffect(function() {
     var onStart = function() { aiSpeakingRef.current = true; };
-    var onStop  = function() { aiSpeakingRef.current = false; };
+    var onStop  = function() {
+      aiSpeakingRef.current = false;
+      // S18.2 — Nadia just finished speaking. Open the follow-up window.
+      // During FOLLOWUP_WINDOW_MS, any 2-word final transcript is accepted
+      // as a command without requiring "Hey Nadia".
+      followUpActiveRef.current = true;
+      followUpLastFiredRef.current = '';
+      if (followUpTimerRef.current) clearTimeout(followUpTimerRef.current);
+      followUpTimerRef.current = setTimeout(function() {
+        followUpActiveRef.current = false;
+        followUpTimerRef.current = null;
+        followUpLastFiredRef.current = '';
+        if (mountedRef.current) setStatus('listening');
+      }, FOLLOWUP_WINDOW_MS);
+      if (mountedRef.current) setStatus('followup');
+    };
     window.addEventListener('nadia-tts-start', onStart);
     window.addEventListener('nadia-tts-stop',  onStop);
     return function() {
@@ -215,7 +267,6 @@ export default function VoiceController({ userId, userProfile, enabled, onComman
       if (tag === 'INPUT' || tag === 'TEXTAREA' || (e.target && e.target.isContentEditable)) return;
       if (!enabled) return;
       held = true;
-      // Manual trigger: simulate wake detected, open command window
       try { window.dispatchEvent(new CustomEvent('hey-bob-manual-start')); } catch (err) {}
       setStatus('hearing');
     };
@@ -223,7 +274,7 @@ export default function VoiceController({ userId, userProfile, enabled, onComman
       if (!held || e.code !== 'Space') return;
       held = false;
       try { window.dispatchEvent(new CustomEvent('hey-bob-manual-end')); } catch (err) {}
-      if (enabled) setStatus('listening');
+      if (enabled) setStatus(followUpActiveRef.current ? 'followup' : 'listening');
     };
     window.addEventListener('keydown', onKd);
     window.addEventListener('keyup', onKu);
@@ -251,6 +302,9 @@ export default function VoiceController({ userId, userProfile, enabled, onComman
   } else if (status === 'command') {
     label = '✨ Got it'; dotColor = '#10b981';
     title = 'Command received. Processing...';
+  } else if (status === 'followup') {
+    label = '💬 Listening (follow-up)'; dotColor = '#10b981';
+    title = 'Keep talking — no need to say "Hey Nadia" again.';
   } else if (status === 'hearing') {
     label = '👂 Listening...'; dotColor = '#3b82f6';
     title = lastTranscript || 'Speak your command.';
@@ -272,8 +326,8 @@ export default function VoiceController({ userId, userProfile, enabled, onComman
     }} title={title}>
       <span style={{
         width: 8, height: 8, borderRadius: '50%', background: dotColor,
-        boxShadow: status === 'listening' || status === 'hearing' ? '0 0 8px ' + dotColor : 'none',
-        animation: status === 'hearing' ? 'nadia-pulse 1s infinite' : 'none',
+        boxShadow: status === 'listening' || status === 'hearing' || status === 'followup' ? '0 0 8px ' + dotColor : 'none',
+        animation: status === 'hearing' || status === 'followup' ? 'nadia-pulse 1s infinite' : 'none',
       }} />
       <span>{label}</span>
       {status === 'disabled' || status === 'unsupported' || status === 'denied' ? null : (

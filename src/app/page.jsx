@@ -28,6 +28,7 @@ import PhoneWidget from '../components/PhoneWidget';
 import ReportsTab from '../components/ReportsTab';
 import TreasuryInspectorModal from '../components/TreasuryInspectorModal';
 import AccountingAuditorModal from '../components/AccountingAuditorModal';
+import InventoryImport from '../components/InventoryImport';
 
 // Toast notification system — replaces alert() across entire app
 const ToastContext = React.createContext();
@@ -351,6 +352,7 @@ export default function App() {
   const [expenseRules, setExpenseRules] = useState([]);
   const [inventory, setInventory] = useState([]);
   const [invInbounds, setInvInbounds] = useState([]);
+  const [invAdjustments, setInvAdjustments] = useState([]); // S20 — adjustment journal
   const [teamUsers, setTeamUsers] = useState([]);
   const [userProfile, setUserProfile] = useState(null);
   const profileIdRef = useRef(null);
@@ -873,6 +875,11 @@ export default function App() {
         const ib = await fetchAll('inventory_inbounds', 'inbound_date', true);
         setInvInbounds(ib || []);
       } catch(e) { setInvInbounds([]); }
+      // S20 — Load adjustment journal (may not exist yet)
+      try {
+        const { data: adj } = await supabase.from('inventory_adjustments').select('*').order('adjusted_at', { ascending: false }).limit(2000);
+        setInvAdjustments(adj || []);
+      } catch(e) { setInvAdjustments([]); }
       // Load reminders
       try {
         const { data: rems } = await supabase.from('team_reminders').select('*').or('completed.is.null,completed.eq.false').order('created_at', { ascending: false }).limit(200);
@@ -7203,6 +7210,56 @@ export default function App() {
             })()}
 
 
+            {/* ===== S21 — Team Priorities Today =====
+                One-glance view: each team member's #1 priority ticket.
+                Populated by tickets.assignee_priority = 1. Clicking goes
+                to the Tickets tab with the ticket open. */}
+            {(() => {
+              const topPerUser = {};
+              (dashTickets || []).forEach(t => {
+                if (!t.assigned_to || t.assignee_priority == null) return;
+                const s = (t.status || '').toLowerCase();
+                if (s === 'closed' || s === 'done' || s === 'resolved' || s === 'cancelled') return;
+                const current = topPerUser[t.assigned_to];
+                if (!current || Number(t.assignee_priority) < Number(current.assignee_priority)) {
+                  topPerUser[t.assigned_to] = t;
+                }
+              });
+              const anyoneHasPriorities = Object.keys(topPerUser).length > 0;
+              if (!anyoneHasPriorities) return null;
+              return (
+                <div className="mb-4">
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 8 }}>
+                    <div style={{ width: 4, height: 22, borderRadius: 2, background: '#6366f1' }} />
+                    <h3 className="text-sm font-extrabold text-slate-700">🎯 Team Priorities Today</h3>
+                    <button onClick={() => { setTab('tickets'); }}
+                      className="ml-auto text-[10px] text-indigo-600 hover:underline font-semibold">Open board →</button>
+                  </div>
+                  <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-2">
+                    {(teamUsers || []).filter(u => topPerUser[u.id]).map(u => {
+                      const t = topPerUser[u.id];
+                      const initials = (u.name || '?').split(' ').map(p => p[0]).filter(Boolean).slice(0, 2).join('').toUpperCase();
+                      return (
+                        <div key={u.id}
+                          onClick={() => { setOpenTicketId(t.id); setTab('tickets'); }}
+                          className="bg-white border border-slate-200 rounded-lg p-2.5 cursor-pointer hover:border-indigo-300 hover:shadow-sm transition">
+                          <div className="flex items-center gap-2">
+                            <div className="w-7 h-7 bg-gradient-to-br from-indigo-500 to-purple-600 text-white rounded-full flex items-center justify-center text-[10px] font-bold">
+                              {initials}
+                            </div>
+                            <div className="flex-1 min-w-0">
+                              <div className="text-[10px] font-bold text-slate-700 truncate">{u.name}</div>
+                              <div className="text-[11px] font-semibold text-slate-800 truncate" title={t.title}>{t.title}</div>
+                            </div>
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+              );
+            })()}
+
             {/* ===== PERSONAL DASHBOARD (tickets, reminders, calendar — after financial for admins, first for team) ===== */}
             <PersonalDashboard user={user} userProfile={userProfile} isAdmin={isAdmin}
               invoices={invoices} customers={customers} navigate={navigate} fE={fE} users={teamUsers} />
@@ -9215,6 +9272,18 @@ export default function App() {
                     .map(p => p.subcategory).filter(Boolean))].sort().map(s =>
                     <option key={s} value={s}>{s}</option>)}
                 </select>
+                <select value={formData.invColorFilter || 'all'} onChange={e => setFormData({...formData, invColorFilter: e.target.value})}
+                  className="px-2 py-1.5 rounded border text-xs"
+                  title="Filter by color">
+                  <option value="all">All Colors</option>
+                  {[...new Set(inventory.map(p => p.color_en || p.color).filter(Boolean))].sort().map(c =>
+                    <option key={c} value={c}>{c}</option>)}
+                </select>
+                <button onClick={() => setFormData({...formData, showInvBreakdown: !formData.showInvBreakdown})}
+                  className={'px-3 py-1.5 rounded-lg text-xs font-bold ' + (formData.showInvBreakdown ? 'bg-indigo-600 text-white' : 'bg-slate-100 text-slate-700 hover:bg-slate-200')}
+                  title="Toggle breakdown by product type, subcategory, color">
+                  📊 Breakdown
+                </button>
                 <select value={formData.invView || 'cards'} onChange={e => setFormData({...formData, invView: e.target.value})}
                   className="px-2 py-1.5 rounded border text-xs">
                   <option value="cards">📷 Cards</option>
@@ -9224,6 +9293,26 @@ export default function App() {
                   className="px-3 py-1.5 bg-gradient-to-r from-blue-500 to-indigo-600 text-white rounded-lg text-xs font-bold shadow-sm">
                   + Add Product
                 </button>
+                <button onClick={() => setFormData({...formData, showInvImport: true})}
+                  className="px-3 py-1.5 bg-emerald-500 hover:bg-emerald-600 text-white rounded-lg text-xs font-bold shadow-sm"
+                  title="Bulk import inventory items from Excel">
+                  📥 Import
+                </button>
+                <button onClick={() => setFormData({...formData, showInvHistorical: true})}
+                  className="px-3 py-1.5 bg-slate-200 hover:bg-slate-300 text-slate-700 rounded-lg text-xs font-bold"
+                  title="See quantity received as of a specific date">
+                  📅 Historical
+                </button>
+                <button onClick={() => setFormData({...formData, showInvByShipment: true})}
+                  className="px-3 py-1.5 bg-indigo-500 hover:bg-indigo-600 text-white rounded-lg text-xs font-bold shadow-sm"
+                  title="See original quantity received per shipment, per product">
+                  📦 By Shipment
+                </button>
+                <button onClick={() => setFormData({...formData, showInvExpected: true})}
+                  className="px-3 py-1.5 bg-purple-500 hover:bg-purple-600 text-white rounded-lg text-xs font-bold shadow-sm"
+                  title="Compare expected vs actual per shipment">
+                  📊 Expected vs Actual
+                </button>
               </div>
             </div>
 
@@ -9232,6 +9321,7 @@ export default function App() {
               const filtered = inventory.filter(p => {
                 if (formData.invTypeFilter && formData.invTypeFilter !== 'all' && p.product_type !== formData.invTypeFilter) return false;
                 if (formData.invSubFilter && formData.invSubFilter !== 'all' && p.subcategory !== formData.invSubFilter) return false;
+                if (formData.invColorFilter && formData.invColorFilter !== 'all' && (p.color_en || p.color) !== formData.invColorFilter) return false;
                 if (query) return (p.product_id||'').includes(query)||(p.reference_number||'').includes(query)||(p.description||'').includes(query)||(p.description_en||'').toLowerCase().includes(query.toLowerCase())||(p.color||'').includes(query)||(p.product_type||'').toLowerCase().includes(query.toLowerCase())||(p.subcategory||'').toLowerCase().includes(query.toLowerCase());
                 return true;
               });
@@ -9259,6 +9349,66 @@ export default function App() {
                   <div className="text-xl font-extrabold text-purple-600">{fE(totalValue)}</div>
                 </div>
               </div>
+
+              {/* S20 — Breakdown panel: group filtered products by type, subcategory, color
+                  so you can see what you have. Toggleable from the header row. */}
+              {formData.showInvBreakdown && (() => {
+                const groupBy = (keyFn, label) => {
+                  const map = {};
+                  filtered.forEach(p => {
+                    const k = keyFn(p) || '(none)';
+                    if (!map[k]) map[k] = { key: k, count: 0, orig: 0, curr: 0, value: 0 };
+                    map[k].count += 1;
+                    map[k].orig += Number(p.original_quantity || p.roll_count || 0);
+                    map[k].curr += Number(p.current_quantity || p.roll_count || 0);
+                    map[k].value += Number(p.current_quantity || p.roll_count || 0) * Number(p.unit_price || 0);
+                  });
+                  return { label, rows: Object.values(map).sort((a, b) => b.curr - a.curr) };
+                };
+                const byType = groupBy(p => p.product_type, 'Product Type');
+                const bySub = groupBy(p => p.subcategory, 'Subcategory');
+                const byColor = groupBy(p => p.color_en || p.color, 'Color');
+                const renderGroup = (g) => (
+                  <div className="bg-white rounded-xl border border-slate-100 overflow-hidden" key={g.label}>
+                    <div className="bg-gradient-to-r from-indigo-50 to-purple-50 px-3 py-2 border-b border-slate-100">
+                      <div className="text-xs font-bold">{g.label}</div>
+                      <div className="text-[9px] text-slate-500">{g.rows.length} group{g.rows.length === 1 ? '' : 's'}</div>
+                    </div>
+                    <div className="overflow-auto max-h-[280px]">
+                      <table className="w-full text-[11px] border-collapse">
+                        <thead className="sticky top-0 bg-slate-50"><tr>
+                          <th className="px-2 py-1.5 text-left">{g.label}</th>
+                          <th className="px-2 py-1.5 text-right">#</th>
+                          <th className="px-2 py-1.5 text-right">Original</th>
+                          <th className="px-2 py-1.5 text-right">Current</th>
+                          <th className="px-2 py-1.5 text-right">Value</th>
+                        </tr></thead>
+                        <tbody>
+                          {g.rows.map(r => (
+                            <tr key={r.key} className="border-b border-slate-50 hover:bg-slate-50">
+                              <td className="px-2 py-1 font-semibold truncate max-w-[140px]" title={r.key}>{r.key}</td>
+                              <td className="px-2 py-1 text-right text-slate-500">{r.count}</td>
+                              <td className="px-2 py-1 text-right text-blue-600">{r.orig.toLocaleString()}</td>
+                              <td className="px-2 py-1 text-right text-emerald-600 font-bold">{r.curr.toLocaleString()}</td>
+                              <td className="px-2 py-1 text-right text-purple-600">{fE(r.value)}</td>
+                            </tr>
+                          ))}
+                          {g.rows.length === 0 && (
+                            <tr><td colSpan="5" className="text-center text-slate-400 py-3 text-[10px]">No groups.</td></tr>
+                          )}
+                        </tbody>
+                      </table>
+                    </div>
+                  </div>
+                );
+                return (
+                  <div className="grid grid-cols-1 md:grid-cols-3 gap-3 mb-4">
+                    {renderGroup(byType)}
+                    {renderGroup(bySub)}
+                    {renderGroup(byColor)}
+                  </div>
+                );
+              })()}
 
               {/* Cards View */}
               {(formData.invView || 'cards') === 'cards' && (
@@ -9403,10 +9553,97 @@ export default function App() {
                         <input value={formData.prodColor || ''} onChange={e => setFormData({...formData, prodColor: e.target.value})} className="w-full px-3 py-2 rounded-lg border text-sm" style={{direction:'rtl'}} /></div>
                       <div><label className="text-[10px] font-bold text-slate-500">Color (English)</label>
                         <input value={formData.prodColorEn || ''} onChange={e => setFormData({...formData, prodColorEn: e.target.value})} className="w-full px-3 py-2 rounded-lg border text-sm" /></div>
-                      <div><label className="text-[10px] font-bold text-slate-500">Original Quantity</label>
-                        <input type="number" value={formData.prodOrigQty || ''} onChange={e => setFormData({...formData, prodOrigQty: e.target.value})} className="w-full px-3 py-2 rounded-lg border text-sm" /></div>
-                      <div><label className="text-[10px] font-bold text-slate-500">Current Quantity</label>
-                        <input type="number" value={formData.prodCurrQty || ''} onChange={e => setFormData({...formData, prodCurrQty: e.target.value || formData.prodOrigQty})} placeholder="Same as original if blank" className="w-full px-3 py-2 rounded-lg border text-sm" /></div>
+                      {(() => {
+                        // S20 (Apr 23 2026) — three-field inventory flow:
+                        //   - Inbound Qty: always editable. It's how much
+                        //     arrived THIS TIME.
+                        //   - Original Qty + Current Qty: editable ONLY the
+                        //     first time a product_id is created, OR by a
+                        //     super-admin (who triggers an adjustment journal
+                        //     entry).
+                        // Normal rule: add an inbound → current auto-updates.
+                        const existingForCurr = formData.prodId
+                          ? inventory.find(p => p.product_id === formData.prodId)
+                          : null;
+                        const isSuperAdmin = userProfile?.role === 'super_admin';
+                        const isFirstTime = !existingForCurr;
+                        const qtyLocked = !isFirstTime && !isSuperAdmin;
+                        const exOrig = existingForCurr ? Number(existingForCurr.original_quantity) || 0 : 0;
+                        const exCurr = existingForCurr ? Number(existingForCurr.current_quantity) || 0 : 0;
+                        return (<>
+                          <div className="col-span-2">
+                            <label className="text-[10px] font-bold text-slate-500">
+                              Inbound Quantity {isFirstTime ? '(this first batch)' : '(add to existing)'}
+                            </label>
+                            <input
+                              type="number"
+                              value={formData.prodInboundQty || ''}
+                              onChange={e => setFormData({...formData, prodInboundQty: e.target.value})}
+                              placeholder={isFirstTime ? 'How much in this first batch?' : 'How much came in this shipment?'}
+                              className="w-full px-3 py-2 rounded-lg border text-sm" />
+                            {!isFirstTime && (
+                              <div className="text-[10px] text-slate-500 mt-1">
+                                Adding <strong>{Number(formData.prodInboundQty) || 0}</strong> to current stock of <strong>{exCurr}</strong> → new total <strong>{exCurr + (Number(formData.prodInboundQty) || 0)}</strong>.
+                              </div>
+                            )}
+                          </div>
+                          <div>
+                            <label className="text-[10px] font-bold text-slate-500">
+                              Original Quantity {qtyLocked && <span className="text-red-600">🔒</span>}
+                            </label>
+                            <input
+                              type="number"
+                              value={isFirstTime ? (formData.prodOrigQty || '') : (formData.prodOrigQty !== undefined ? formData.prodOrigQty : exOrig)}
+                              disabled={qtyLocked}
+                              onChange={e => setFormData({...formData, prodOrigQty: e.target.value})}
+                              placeholder={isFirstTime ? 'Opening original' : '—'}
+                              className={'w-full px-3 py-2 rounded-lg border text-sm ' + (qtyLocked ? 'bg-slate-100 text-slate-500 cursor-not-allowed' : '')} />
+                            {qtyLocked && (
+                              <div className="text-[10px] text-slate-400 mt-1">Locked — super-admin only.</div>
+                            )}
+                            {!isFirstTime && isSuperAdmin && (
+                              <div className="text-[10px] text-amber-600 mt-1">
+                                ⚠️ Any change here writes a journal entry under this product.
+                              </div>
+                            )}
+                          </div>
+                          <div>
+                            <label className="text-[10px] font-bold text-slate-500">
+                              Current Quantity {qtyLocked && <span className="text-red-600">🔒</span>}
+                            </label>
+                            <input
+                              type="number"
+                              value={isFirstTime ? (formData.prodCurrQty || '') : (formData.prodCurrQty !== undefined ? formData.prodCurrQty : exCurr)}
+                              disabled={qtyLocked}
+                              onChange={e => setFormData({...formData, prodCurrQty: e.target.value})}
+                              placeholder={isFirstTime ? 'Same as Original if blank' : '—'}
+                              className={'w-full px-3 py-2 rounded-lg border text-sm ' + (qtyLocked ? 'bg-slate-100 text-slate-500 cursor-not-allowed' : '')} />
+                            {qtyLocked && (
+                              <div className="text-[10px] text-slate-400 mt-1">Locked — auto-updates when an inbound is added.</div>
+                            )}
+                            {!isFirstTime && isSuperAdmin && (formData.prodCurrQty !== undefined && Number(formData.prodCurrQty) !== exCurr) && (
+                              <div className="text-[10px] text-amber-600 mt-1">
+                                ⚠️ Overrides running total. Needs a reason (below).
+                              </div>
+                            )}
+                          </div>
+                          {/* Super-admin reason for manual adjustment — required when they
+                              change Original or Current away from the computed values. */}
+                          {!isFirstTime && isSuperAdmin && (
+                            (formData.prodOrigQty !== undefined && Number(formData.prodOrigQty) !== exOrig) ||
+                            (formData.prodCurrQty !== undefined && Number(formData.prodCurrQty) !== exCurr)
+                          ) && (
+                            <div className="col-span-2">
+                              <label className="text-[10px] font-bold text-amber-700">🧾 Reason for adjustment (journal entry)</label>
+                              <input
+                                value={formData.prodAdjReason || ''}
+                                onChange={e => setFormData({...formData, prodAdjReason: e.target.value})}
+                                placeholder="e.g. Physical count correction, damaged goods write-off, historical correction"
+                                className="w-full px-3 py-2 rounded-lg border border-amber-300 bg-amber-50 text-sm" />
+                            </div>
+                          )}
+                        </>);
+                      })()}
                       <div><label className="text-[10px] font-bold text-slate-500">Gross Weight (kg)</label>
                         <input type="number" value={formData.prodGross || ''} onChange={e => setFormData({...formData, prodGross: e.target.value})} className="w-full px-3 py-2 rounded-lg border text-sm" /></div>
                       <div><label className="text-[10px] font-bold text-slate-500">Net Weight (kg)</label>
@@ -9451,8 +9688,68 @@ export default function App() {
                     <div className="flex gap-2 pt-2">
                       <button onClick={async () => {
                         try {
-                          const origQty = Number(formData.prodOrigQty) || Number(formData.prodRolls) || 0;
-                          const currQty = Number(formData.prodCurrQty) || origQty;
+                          const isSuperAdmin = userProfile?.role === 'super_admin';
+                          const existingProduct = formData.prodId ? inventory.find(p => p.product_id === formData.prodId) : null;
+                          const isFirstTime = !existingProduct;
+
+                          // Inbound quantity is always editable. Original/Current input
+                          // is editable only on first creation OR for super_admin.
+                          const inboundQty = Number(formData.prodInboundQty) || 0;
+
+                          // Compute what Original and Current should become. Regular
+                          // users: locked to "existing + inbound" (existing flow).
+                          // Super-admin: can enter explicit overrides, which get
+                          // written to inventory_adjustments as a journal entry.
+                          let finalOrigQty, finalCurrQty;
+                          let adjustmentsToLog = []; // {field, old, new, reason}
+
+                          if (isFirstTime) {
+                            // First time: user can enter Original/Current directly.
+                            // If blank, default to inbound. Same as before.
+                            finalOrigQty = Number(formData.prodOrigQty) || inboundQty;
+                            finalCurrQty = Number(formData.prodCurrQty) || finalOrigQty;
+                            if (inboundQty === 0 && finalOrigQty === 0) {
+                              alert('Please enter at least a quantity.');
+                              return;
+                            }
+                          } else {
+                            // Existing product. Default path: add inbound to both.
+                            const exOrig = Number(existingProduct.original_quantity) || 0;
+                            const exCurr = Number(existingProduct.current_quantity) || 0;
+                            finalOrigQty = exOrig + inboundQty;
+                            finalCurrQty = exCurr + inboundQty;
+
+                            if (isSuperAdmin) {
+                              // Super-admin CAN override by typing values different
+                              // from the computed defaults. We detect by comparing
+                              // to exOrig/exCurr (since we pre-fill the inputs with
+                              // the existing values when super-admin opens form).
+                              const typedOrig = formData.prodOrigQty;
+                              const typedCurr = formData.prodCurrQty;
+                              const origChanged = typedOrig !== undefined && Number(typedOrig) !== exOrig;
+                              const currChanged = typedCurr !== undefined && Number(typedCurr) !== exCurr;
+                              if (origChanged || currChanged) {
+                                if (!formData.prodAdjReason || !formData.prodAdjReason.trim()) {
+                                  alert('Please provide a reason for the adjustment — it will be logged on the product.');
+                                  return;
+                                }
+                                if (origChanged) {
+                                  adjustmentsToLog.push({ field: 'original_quantity', old: exOrig, new: Number(typedOrig), reason: formData.prodAdjReason });
+                                  finalOrigQty = Number(typedOrig) + inboundQty; // inbound still added on top
+                                }
+                                if (currChanged) {
+                                  adjustmentsToLog.push({ field: 'current_quantity', old: exCurr, new: Number(typedCurr), reason: formData.prodAdjReason });
+                                  finalCurrQty = Number(typedCurr) + inboundQty;
+                                }
+                              }
+                            }
+
+                            if (inboundQty === 0 && adjustmentsToLog.length === 0) {
+                              alert('Nothing to save. Enter an Inbound Quantity, or (super-admin) change Original/Current with a reason.');
+                              return;
+                            }
+                          }
+
                           const costData = {
                             purchase_cost: Number(formData.prodPurchaseCost) || 0, purchase_currency: formData.prodPurchaseCurr || 'USD',
                             customs_cost: Number(formData.prodCustomsCost) || 0, customs_currency: formData.prodCustomsCurr || 'EGP',
@@ -9460,10 +9757,7 @@ export default function App() {
                             other_cost: Number(formData.prodOtherCost) || 0, other_currency: formData.prodOtherCurr || 'EGP',
                             fx_rate: Number(formData.prodFxRate) || 50,
                           };
-                          
-                          // Check if product_id already exists — aggregate if so
-                          const existingProduct = formData.prodId ? inventory.find(p => p.product_id === formData.prodId) : null;
-                          
+
                           // Upload photo if selected
                           let photoUrl = '';
                           const fileInput = document.getElementById('prod-photo');
@@ -9477,39 +9771,36 @@ export default function App() {
                               photoUrl = urlData?.publicUrl || '';
                             }
                           }
-                          
-                          // Record inbound
-                          await dbInsert('inventory_inbounds', {
-                            product_id: formData.prodId || '',
-                            reference_number: formData.prodShipment || '',
-                            shipment_reference: formData.prodShipment || '',
-                            inbound_date: formData.prodDate || today(),
-                            quantity: origQty,
-                            unit_price: Number(formData.prodPrice) || 0,
-                            ...costData,
-                            notes: formData.prodDescEn || formData.prodDesc || '',
-                          }, userProfile?.id);
-                          
+
+                          // Record the inbound (only if there IS an inbound this time)
+                          if (inboundQty > 0) {
+                            await dbInsert('inventory_inbounds', {
+                              product_id: formData.prodId || '',
+                              reference_number: formData.prodShipment || '',
+                              shipment_reference: formData.prodShipment || '',
+                              inbound_date: formData.prodDate || today(),
+                              quantity: inboundQty,
+                              unit_price: Number(formData.prodPrice) || 0,
+                              ...costData,
+                              notes: formData.prodDescEn || formData.prodDesc || '',
+                            }, userProfile?.id);
+                          }
+
                           if (existingProduct) {
-                            // AGGREGATE: update existing product
-                            const oldQty = Number(existingProduct.original_quantity || 0);
-                            const oldCurr = Number(existingProduct.current_quantity || 0);
-                            const newOrigQty = oldQty + origQty;
-                            const newCurrQty = oldCurr + currQty;
-                            // Weighted average costs
+                            // AGGREGATE: weighted-average costs exactly like before
                             const toEgp = (amt, curr, fx) => curr === 'USD' ? amt * fx : amt;
                             const oldFx = Number(existingProduct.fx_rate) || 50;
                             const newFx = costData.fx_rate;
                             const oldTotal = toEgp(Number(existingProduct.purchase_cost)||0, existingProduct.purchase_currency, oldFx);
                             const newTotal = toEgp(costData.purchase_cost, costData.purchase_currency, newFx);
-                            const avgPurchase = oldQty + origQty > 0 ? (oldTotal + newTotal) / 2 : 0;
+                            const avgPurchase = (Number(existingProduct.original_quantity) || 0) + inboundQty > 0 ? (oldTotal + newTotal) / 2 : 0;
                             const oldCustoms = toEgp(Number(existingProduct.customs_cost)||0, existingProduct.customs_currency, oldFx);
                             const newCustoms = toEgp(costData.customs_cost, costData.customs_currency, newFx);
-                            const avgCustoms = oldQty + origQty > 0 ? (oldCustoms + newCustoms) / 2 : 0;
-                            
+                            const avgCustoms = (Number(existingProduct.original_quantity) || 0) + inboundQty > 0 ? (oldCustoms + newCustoms) / 2 : 0;
+
                             await dbUpdate('inventory', existingProduct.id, {
-                              original_quantity: newOrigQty,
-                              current_quantity: newCurrQty,
+                              original_quantity: finalOrigQty,
+                              current_quantity: finalCurrQty,
                               purchase_cost: Math.round(avgPurchase * 100) / 100,
                               purchase_currency: 'EGP',
                               customs_cost: Math.round(avgCustoms * 100) / 100,
@@ -9520,7 +9811,25 @@ export default function App() {
                               shipment_reference: (existingProduct.shipment_reference || '') + (formData.prodShipment ? ', ' + formData.prodShipment : ''),
                               ...(photoUrl ? { photo_url: photoUrl } : {}),
                             }, userProfile?.id);
-                            alert('✅ Added ' + origQty + ' to existing product ' + formData.prodId + ' (now ' + newCurrQty + ' total)');
+
+                            // Log any super-admin adjustments to the journal
+                            for (const adj of adjustmentsToLog) {
+                              try {
+                                await dbInsert('inventory_adjustments', {
+                                  product_id: formData.prodId,
+                                  field: adj.field,
+                                  old_value: adj.old,
+                                  new_value: adj.new,
+                                  reason: adj.reason,
+                                  source: 'manual',
+                                  adjusted_by: userProfile?.id || null,
+                                }, userProfile?.id);
+                              } catch (adjErr) {
+                                console.warn('[adjustment-log] failed — run S20 SQL if missing', adjErr?.message);
+                              }
+                            }
+
+                            alert('✅ Added ' + inboundQty + ' to existing product ' + formData.prodId + ' (now ' + finalCurrQty + ' total)' + (adjustmentsToLog.length ? ' — ' + adjustmentsToLog.length + ' adjustment(s) logged.' : ''));
                           } else {
                             // NEW product
                             const record = {
@@ -9531,7 +9840,7 @@ export default function App() {
                               color: formData.prodColor || '', color_en: formData.prodColorEn || '',
                               roll_count: Number(formData.prodRolls) || 0, gross_weight: Number(formData.prodGross) || 0,
                               net_weight: Number(formData.prodNet) || 0, unit_price: Number(formData.prodPrice) || 0,
-                              original_quantity: origQty, current_quantity: currQty,
+                              original_quantity: finalOrigQty, current_quantity: finalCurrQty,
                               ...costData,
                               ...(photoUrl ? { photo_url: photoUrl } : {}),
                             };
@@ -9816,6 +10125,104 @@ export default function App() {
                         ) : (<div className="px-3 py-4 text-xs text-slate-400 text-center">No linked invoices</div>)}
                       </div>
                       
+                      {/* S20.2 — Per-Shipment Original Quantity breakdown.
+                          Max's ask: remember what ORIGINALLY arrived in each shipment
+                          for this product. The product-level "overall value" still
+                          lives in inventory.original_quantity; this panel uses the
+                          immutable inventory_inbounds rows as the source of truth
+                          for per-shipment originals. "Estimated remaining" is a
+                          FIFO allocation against the product's current_quantity —
+                          it's an estimate because we don't track which shipment a
+                          unit was sold from. */}
+                      {(() => {
+                        const inbs = invInbounds
+                          .filter(ib => ib.product_id === p.product_id)
+                          .sort((a, b) => (a.inbound_date || '').localeCompare(b.inbound_date || ''));
+                        if (inbs.length === 0) return null;
+                        // Group by shipment_reference. Multiple inbounds for the same
+                        // shipment reference collapse into one row (summed original qty).
+                        const groups = {};
+                        inbs.forEach(ib => {
+                          const key = ib.shipment_reference || '(no shipment ref)';
+                          if (!groups[key]) groups[key] = {
+                            shipment: key,
+                            originalQty: 0,
+                            firstDate: ib.inbound_date,
+                            lastDate: ib.inbound_date,
+                            rows: [],
+                          };
+                          groups[key].originalQty += Number(ib.quantity || 0);
+                          if ((ib.inbound_date || '') < (groups[key].firstDate || '9999')) groups[key].firstDate = ib.inbound_date;
+                          if ((ib.inbound_date || '') > (groups[key].lastDate || '')) groups[key].lastDate = ib.inbound_date;
+                          groups[key].rows.push(ib);
+                        });
+                        const ordered = Object.values(groups).sort((a, b) => (a.firstDate || '').localeCompare(b.firstDate || ''));
+                        // FIFO remaining: current_quantity is the product-wide running
+                        // total. Allocate it from newest shipment backward — newest
+                        // shipments are "still in stock" first, older shipments are
+                        // "sold down" first. This matches how traders typically think
+                        // about it but is a heuristic.
+                        let remainingBudget = Number(p.current_quantity || 0);
+                        // Allocate newest-first → iterate reverse
+                        for (let i = ordered.length - 1; i >= 0; i--) {
+                          const g = ordered[i];
+                          if (remainingBudget <= 0) { g.estimatedRemaining = 0; continue; }
+                          if (remainingBudget >= g.originalQty) {
+                            g.estimatedRemaining = g.originalQty;
+                            remainingBudget -= g.originalQty;
+                          } else {
+                            g.estimatedRemaining = remainingBudget;
+                            remainingBudget = 0;
+                          }
+                        }
+                        return (
+                          <div className="mt-3 pt-3 border-t border-slate-200">
+                            <h4 className="text-xs font-bold mb-1">📦 Per-Shipment Original Quantity ({ordered.length})</h4>
+                            <div className="text-[10px] text-slate-500 mb-2">
+                              Each shipment's original quantity is locked to what arrived — it never changes. "Est. remaining" is a newest-first estimate of how much of each shipment is still in stock (based on the product's current quantity).
+                            </div>
+                            <div className="overflow-auto max-h-[220px] rounded border border-slate-200">
+                              <table className="w-full border-collapse text-[10px]">
+                                <thead className="sticky top-0"><tr className="bg-indigo-50">
+                                  <th className="px-2 py-1 text-left">Shipment</th>
+                                  <th className="px-2 py-1 text-left">Arrived</th>
+                                  <th className="px-2 py-1 text-right">Original Qty</th>
+                                  <th className="px-2 py-1 text-right">Est. Remaining</th>
+                                  <th className="px-2 py-1 text-right">Est. Sold</th>
+                                  <th className="px-2 py-1 text-right">% left</th>
+                                </tr></thead>
+                                <tbody>
+                                  {ordered.map(g => {
+                                    const sold = Math.max(0, g.originalQty - (g.estimatedRemaining || 0));
+                                    const pct = g.originalQty > 0 ? Math.round((g.estimatedRemaining || 0) / g.originalQty * 100) : 0;
+                                    return (
+                                      <tr key={g.shipment} className="border-b border-slate-50">
+                                        <td className="px-2 py-1 text-blue-600 font-semibold">{g.shipment}</td>
+                                        <td className="px-2 py-1 text-slate-600">
+                                          {g.firstDate}
+                                          {g.firstDate !== g.lastDate && <span className="text-slate-400"> → {g.lastDate}</span>}
+                                        </td>
+                                        <td className="px-2 py-1 text-right font-bold text-indigo-700">{g.originalQty.toLocaleString()}</td>
+                                        <td className="px-2 py-1 text-right text-emerald-600 font-semibold">{(g.estimatedRemaining || 0).toLocaleString()}</td>
+                                        <td className="px-2 py-1 text-right text-slate-500">{sold.toLocaleString()}</td>
+                                        <td className={'px-2 py-1 text-right font-bold ' + (pct >= 75 ? 'text-emerald-600' : pct >= 25 ? 'text-amber-600' : 'text-red-600')}>{pct}%</td>
+                                      </tr>
+                                    );
+                                  })}
+                                  <tr className="bg-slate-50 border-t-2 border-slate-200 font-bold">
+                                    <td className="px-2 py-1.5" colSpan="2">Total across shipments</td>
+                                    <td className="px-2 py-1.5 text-right text-indigo-700">{ordered.reduce((a, g) => a + g.originalQty, 0).toLocaleString()}</td>
+                                    <td className="px-2 py-1.5 text-right text-emerald-600">{ordered.reduce((a, g) => a + (g.estimatedRemaining || 0), 0).toLocaleString()}</td>
+                                    <td className="px-2 py-1.5 text-right text-slate-500">{ordered.reduce((a, g) => a + Math.max(0, g.originalQty - (g.estimatedRemaining || 0)), 0).toLocaleString()}</td>
+                                    <td className="px-2 py-1.5 text-right text-slate-400">—</td>
+                                  </tr>
+                                </tbody>
+                              </table>
+                            </div>
+                          </div>
+                        );
+                      })()}
+
                       {/* Inbound History */}
                       {(() => {
                         const inbounds = invInbounds.filter(ib => ib.product_id === p.product_id);
@@ -9856,6 +10263,58 @@ export default function App() {
                                           return totalKg > 0 ? fE(totalCustoms / totalKg) + '/kg' : '—';
                                         })()}</td>
                                         <td className="px-2 py-1 text-right font-bold text-red-600">{fE(total)}</td>
+                                      </tr>
+                                    );
+                                  })}
+                                </tbody>
+                              </table>
+                            </div>
+                          </div>
+                        );
+                      })()}
+
+                      {/* S20 — Adjustment journal for this product. Each row is a
+                          super-admin override to original_quantity or current_quantity.
+                          Immutable audit trail; never affects live values directly. */}
+                      {(() => {
+                        const adjForProd = (invAdjustments || []).filter(a => a.product_id === p.product_id);
+                        if (adjForProd.length === 0) return null;
+                        const userName = (uid) => (teamUsers || []).find(u => u.id === uid)?.name || 'Unknown';
+                        return (
+                          <div className="mt-3 pt-3 border-t border-slate-200">
+                            <h4 className="text-xs font-bold mb-2 flex items-center gap-2">
+                              🧾 Adjustment Journal ({adjForProd.length})
+                              <span className="text-[9px] font-normal text-slate-400">super-admin manual changes</span>
+                            </h4>
+                            <div className="overflow-auto max-h-[200px] rounded border border-slate-200">
+                              <table className="w-full border-collapse text-[10px]">
+                                <thead className="sticky top-0"><tr className="bg-amber-50">
+                                  <th className="px-2 py-1 text-left">When</th>
+                                  <th className="px-2 py-1 text-left">Who</th>
+                                  <th className="px-2 py-1 text-left">Field</th>
+                                  <th className="px-2 py-1 text-right">From</th>
+                                  <th className="px-2 py-1 text-right">To</th>
+                                  <th className="px-2 py-1 text-right">Δ</th>
+                                  <th className="px-2 py-1 text-left">Source</th>
+                                  <th className="px-2 py-1 text-left">Reason</th>
+                                </tr></thead>
+                                <tbody>
+                                  {adjForProd.map(a => {
+                                    const delta = Number(a.new_value || 0) - Number(a.old_value || 0);
+                                    return (
+                                      <tr key={a.id} className="border-b border-slate-50">
+                                        <td className="px-2 py-1">{a.adjusted_at ? new Date(a.adjusted_at).toLocaleString() : '—'}</td>
+                                        <td className="px-2 py-1 font-semibold text-slate-700">{userName(a.adjusted_by)}</td>
+                                        <td className="px-2 py-1">{a.field === 'original_quantity' ? 'Original Qty' : a.field === 'current_quantity' ? 'Current Qty' : a.field}</td>
+                                        <td className="px-2 py-1 text-right text-slate-500">{a.old_value}</td>
+                                        <td className="px-2 py-1 text-right font-bold">{a.new_value}</td>
+                                        <td className={'px-2 py-1 text-right font-bold ' + (delta > 0 ? 'text-emerald-600' : delta < 0 ? 'text-red-600' : 'text-slate-400')}>{delta > 0 ? '+' : ''}{delta}</td>
+                                        <td className="px-2 py-1">
+                                          <span className={'px-1.5 py-0.5 rounded text-[9px] ' + (a.source === 'import' ? 'bg-blue-100 text-blue-700' : 'bg-slate-100 text-slate-600')}>
+                                            {a.source || 'manual'}
+                                          </span>
+                                        </td>
+                                        <td className="px-2 py-1 text-slate-600 max-w-[220px] truncate" title={a.reason}>{a.reason || '—'}</td>
                                       </tr>
                                     );
                                   })}
@@ -9936,12 +10395,372 @@ export default function App() {
                 </div>
               );
             })()}
+
+            {/* ===== S19 — Inventory Import modal ===== */}
+            {formData.showInvImport && (
+              <InventoryImport
+                inventory={inventory}
+                isSuperAdmin={userProfile?.role === 'super_admin'}
+                userId={userProfile?.id}
+                onClose={() => setFormData({...formData, showInvImport: false})}
+                onComplete={() => { loadAllData(); }}
+              />
+            )}
+
+            {/* ===== S19 — Historical received-by-date report =====
+                Plain-English: shows how much of each product had been received
+                up to a chosen date, by summing inventory_inbounds. This is NOT
+                a full stock-on-hand snapshot (we don't track outbounds yet) —
+                it's "stock received as of date X" which is still useful for
+                reconciliation and planning. */}
+            {formData.showInvHistorical && (() => {
+              const asOfDate = formData.invHistDate || today();
+              // Per product: sum inbound qty where inbound_date <= asOfDate
+              const byProduct = {};
+              (invInbounds || []).forEach(ib => {
+                if (!ib.inbound_date || ib.inbound_date > asOfDate) return;
+                const pid = ib.product_id || '—';
+                if (!byProduct[pid]) byProduct[pid] = { qty: 0, lastDate: '' };
+                byProduct[pid].qty += Number(ib.quantity || 0);
+                if (ib.inbound_date > byProduct[pid].lastDate) byProduct[pid].lastDate = ib.inbound_date;
+              });
+              const rows = Object.entries(byProduct).map(([pid, v]) => {
+                const p = inventory.find(x => x.product_id === pid);
+                return {
+                  product_id: pid,
+                  description: p?.description_en || p?.description || '',
+                  qty_received: v.qty,
+                  current_qty: p ? Number(p.current_quantity || 0) : 0,
+                  last_inbound: v.lastDate,
+                };
+              }).sort((a, b) => b.qty_received - a.qty_received);
+              const totalRx = rows.reduce((a, r) => a + r.qty_received, 0);
+              return (
+                <div className="fixed inset-0 bg-black/50 z-[60] flex items-center justify-center p-4" onClick={() => setFormData({...formData, showInvHistorical: false})}>
+                  <div className="bg-white rounded-2xl w-full max-w-3xl max-h-[85vh] overflow-hidden shadow-2xl flex flex-col" onClick={e => e.stopPropagation()}>
+                    <div className="px-5 py-3 border-b border-slate-100 flex justify-between items-center">
+                      <h3 className="text-base font-extrabold">📅 Inventory Received as of…</h3>
+                      <button onClick={() => setFormData({...formData, showInvHistorical: false})} className="text-slate-400 hover:text-slate-600 text-xl">×</button>
+                    </div>
+                    <div className="p-5 overflow-auto">
+                      <div className="flex items-center gap-3 mb-4 flex-wrap">
+                        <label className="text-xs font-semibold">As of date:</label>
+                        <input type="date" value={asOfDate}
+                          max={today()}
+                          onChange={e => setFormData({...formData, invHistDate: e.target.value})}
+                          className="px-2 py-1 rounded border text-xs" />
+                        {[['7d', 7], ['30d', 30], ['90d', 90], ['1y', 365]].map(([label, days]) => (
+                          <button key={label}
+                            onClick={() => {
+                              const d = new Date(Date.now() - days * 86400000).toISOString().substring(0, 10);
+                              setFormData({...formData, invHistDate: d});
+                            }}
+                            className="px-2 py-1 rounded border text-xs hover:bg-slate-50">{label} ago</button>
+                        ))}
+                        <button
+                          onClick={() => {
+                            if (rows.length === 0) return;
+                            const headers = ['Product ID', 'Description', 'Received Qty', 'Current Qty', 'Last Inbound'];
+                            const csv = [headers.join(',')].concat(
+                              rows.map(r => [r.product_id, r.description, r.qty_received, r.current_qty, r.last_inbound].map(v => '"' + String(v || '').replace(/"/g, '""') + '"').join(','))
+                            ).join('\n');
+                            const blob = new Blob([csv], { type: 'text/csv;charset=utf-8' });
+                            const url = URL.createObjectURL(blob);
+                            const a = document.createElement('a');
+                            a.href = url;
+                            a.download = 'inventory_as_of_' + asOfDate + '.csv';
+                            a.click();
+                            URL.revokeObjectURL(url);
+                          }}
+                          disabled={rows.length === 0}
+                          className="px-3 py-1 bg-emerald-500 text-white rounded text-xs font-semibold disabled:opacity-40">📥 Export CSV</button>
+                      </div>
+                      <div className="text-xs text-slate-500 mb-2">
+                        Based on <strong>{rows.length}</strong> product{rows.length === 1 ? '' : 's'} · total <strong>{totalRx.toLocaleString()}</strong> units received on or before {asOfDate}.
+                      </div>
+                      <div className="text-[10px] text-amber-600 mb-3 italic">
+                        Note: this counts received inbounds only. If you need point-in-time stock-on-hand (after sales), ask to add inventory_outbounds + daily snapshots.
+                      </div>
+                      <div className="overflow-auto border rounded max-h-[420px]">
+                        <table className="w-full text-xs border-collapse">
+                          <thead className="sticky top-0 bg-slate-100"><tr>
+                            <th className="px-2 py-2 text-left">Product ID</th>
+                            <th className="px-2 py-2 text-left">Description</th>
+                            <th className="px-2 py-2 text-right">Received Qty</th>
+                            <th className="px-2 py-2 text-right">Current Qty</th>
+                            <th className="px-2 py-2 text-left">Last Inbound</th>
+                          </tr></thead>
+                          <tbody>
+                            {rows.map(r => (
+                              <tr key={r.product_id} className="border-b border-slate-50">
+                                <td className="px-2 py-1.5 font-bold">{r.product_id}</td>
+                                <td className="px-2 py-1.5 text-slate-600 truncate max-w-[260px]">{r.description}</td>
+                                <td className="px-2 py-1.5 text-right font-semibold text-blue-600">{r.qty_received.toLocaleString()}</td>
+                                <td className="px-2 py-1.5 text-right">{r.current_qty.toLocaleString()}</td>
+                                <td className="px-2 py-1.5 text-slate-500">{r.last_inbound}</td>
+                              </tr>
+                            ))}
+                            {rows.length === 0 && (
+                              <tr><td colSpan="5" className="text-center text-slate-400 py-4 text-xs">No inbounds on or before this date.</td></tr>
+                            )}
+                          </tbody>
+                        </table>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              );
+            })()}
+
+            {/* ===== S19 — Expected vs Actual by shipment report =====
+                Reads inventory_expected (optional table — gracefully handles missing).
+                For each shipment_reference it matches to actual inbounds in that
+                shipment and shows the delta. */}
+            {formData.showInvExpected && (() => {
+              // Load expected rows lazily via state held in formData.invExpected
+              const expected = formData.invExpected || null;
+              if (expected === null) {
+                // Kick off load once
+                supabase.from('inventory_expected').select('*').order('expected_date', { ascending: false })
+                  .then(r => {
+                    setFormData(prev => ({...prev, invExpected: r.data || []}));
+                  })
+                  .catch(() => setFormData(prev => ({...prev, invExpected: []})));
+              }
+              // Build shipment summary: for each shipment_reference, list expected
+              // per product and the actual received
+              const byShipment = {};
+              (expected || []).forEach(e => {
+                const key = (e.shipment_reference || '—') + '|' + e.product_id;
+                if (!byShipment[e.shipment_reference]) byShipment[e.shipment_reference] = {};
+                if (!byShipment[e.shipment_reference][e.product_id]) {
+                  byShipment[e.shipment_reference][e.product_id] = { expected: 0, actual: 0 };
+                }
+                byShipment[e.shipment_reference][e.product_id].expected += Number(e.expected_quantity || 0);
+              });
+              (invInbounds || []).forEach(ib => {
+                if (!ib.shipment_reference) return;
+                if (!byShipment[ib.shipment_reference]) return; // no expected for this shipment
+                if (!byShipment[ib.shipment_reference][ib.product_id]) {
+                  byShipment[ib.shipment_reference][ib.product_id] = { expected: 0, actual: 0 };
+                }
+                byShipment[ib.shipment_reference][ib.product_id].actual += Number(ib.quantity || 0);
+              });
+              const shipments = Object.entries(byShipment).map(([shipRef, prods]) => {
+                const products = Object.entries(prods).map(([pid, v]) => ({
+                  product_id: pid,
+                  expected: v.expected,
+                  actual: v.actual,
+                  delta: v.actual - v.expected,
+                }));
+                const totalExp = products.reduce((a, x) => a + x.expected, 0);
+                const totalAct = products.reduce((a, x) => a + x.actual, 0);
+                return { shipRef, products, totalExp, totalAct, totalDelta: totalAct - totalExp };
+              }).sort((a, b) => a.shipRef.localeCompare(b.shipRef));
+
+              return (
+                <div className="fixed inset-0 bg-black/50 z-[60] flex items-center justify-center p-4" onClick={() => setFormData({...formData, showInvExpected: false, invExpected: undefined})}>
+                  <div className="bg-white rounded-2xl w-full max-w-4xl max-h-[85vh] overflow-hidden shadow-2xl flex flex-col" onClick={e => e.stopPropagation()}>
+                    <div className="px-5 py-3 border-b border-slate-100 flex justify-between items-center">
+                      <h3 className="text-base font-extrabold">📊 Expected vs Actual by Shipment</h3>
+                      <button onClick={() => setFormData({...formData, showInvExpected: false, invExpected: undefined})} className="text-slate-400 hover:text-slate-600 text-xl">×</button>
+                    </div>
+                    <div className="p-5 overflow-auto">
+                      {expected === null && (
+                        <div className="text-center py-6 text-sm text-slate-500">Loading…</div>
+                      )}
+                      {expected !== null && shipments.length === 0 && (
+                        <div className="p-4 bg-amber-50 border border-amber-200 rounded text-xs text-amber-900">
+                          <div className="font-bold mb-1">No expected quantities recorded yet.</div>
+                          <div>Use the Excel import and fill in the <strong>Expected Quantity</strong> + <strong>Shipment Reference</strong> columns to populate this report. Expected quantities never change the actual inventory — they're stored separately.</div>
+                          <div className="mt-2 text-slate-600">
+                            If you've never set this up in the database, run the <code className="bg-white px-1 rounded">inventory_expected</code> SQL in the handover doc first.
+                          </div>
+                        </div>
+                      )}
+                      {expected !== null && shipments.length > 0 && (
+                        <>
+                          <div className="grid grid-cols-3 gap-3 mb-4">
+                            <div className="bg-purple-50 border border-purple-200 rounded-lg p-3">
+                              <div className="text-[10px] text-purple-700 font-bold">Shipments tracked</div>
+                              <div className="text-xl font-extrabold text-purple-700">{shipments.length}</div>
+                            </div>
+                            <div className="bg-blue-50 border border-blue-200 rounded-lg p-3">
+                              <div className="text-[10px] text-blue-700 font-bold">Total expected</div>
+                              <div className="text-xl font-extrabold text-blue-700">{shipments.reduce((a, s) => a + s.totalExp, 0).toLocaleString()}</div>
+                            </div>
+                            <div className="bg-emerald-50 border border-emerald-200 rounded-lg p-3">
+                              <div className="text-[10px] text-emerald-700 font-bold">Total received</div>
+                              <div className="text-xl font-extrabold text-emerald-700">{shipments.reduce((a, s) => a + s.totalAct, 0).toLocaleString()}</div>
+                            </div>
+                          </div>
+                          {shipments.map(s => (
+                            <div key={s.shipRef} className="mb-4 border border-slate-200 rounded-lg overflow-hidden">
+                              <div className="bg-slate-50 px-3 py-2 flex justify-between items-center">
+                                <div>
+                                  <div className="text-sm font-bold">📦 {s.shipRef}</div>
+                                  <div className="text-[10px] text-slate-500">
+                                    Expected <strong>{s.totalExp.toLocaleString()}</strong> · Received <strong>{s.totalAct.toLocaleString()}</strong>
+                                    <span className={'ml-2 font-bold ' + (s.totalDelta === 0 ? 'text-emerald-600' : s.totalDelta < 0 ? 'text-red-600' : 'text-amber-600')}>
+                                      {s.totalDelta === 0 ? '✓ Match' : (s.totalDelta > 0 ? '+' : '') + s.totalDelta.toLocaleString()}
+                                    </span>
+                                  </div>
+                                </div>
+                              </div>
+                              <table className="w-full text-xs border-collapse">
+                                <thead><tr className="bg-white border-b"><th className="px-2 py-1.5 text-left">Product ID</th><th className="px-2 py-1.5 text-right">Expected</th><th className="px-2 py-1.5 text-right">Received</th><th className="px-2 py-1.5 text-right">Delta</th></tr></thead>
+                                <tbody>
+                                  {s.products.sort((a, b) => a.product_id.localeCompare(b.product_id)).map(p => (
+                                    <tr key={p.product_id} className={'border-b border-slate-50 ' + (p.delta === 0 ? '' : p.delta < 0 ? 'bg-red-50' : 'bg-amber-50')}>
+                                      <td className="px-2 py-1.5 font-semibold">{p.product_id}</td>
+                                      <td className="px-2 py-1.5 text-right">{p.expected.toLocaleString()}</td>
+                                      <td className="px-2 py-1.5 text-right">{p.actual.toLocaleString()}</td>
+                                      <td className={'px-2 py-1.5 text-right font-bold ' + (p.delta === 0 ? 'text-emerald-600' : p.delta < 0 ? 'text-red-600' : 'text-amber-600')}>
+                                        {p.delta === 0 ? '✓' : (p.delta > 0 ? '+' : '') + p.delta.toLocaleString()}
+                                      </td>
+                                    </tr>
+                                  ))}
+                                </tbody>
+                              </table>
+                            </div>
+                          ))}
+                        </>
+                      )}
+                    </div>
+                  </div>
+                </div>
+              );
+            })()}
+
+            {/* ===== S20.2 — By-Shipment report =====
+                Pick a shipment reference. See every product that arrived in it,
+                with each product's original quantity AT THAT SHIPMENT (immutable,
+                from inventory_inbounds). This is the "per-shipment original"
+                view Max asked for, independent of the product-level running
+                totals. */}
+            {formData.showInvByShipment && (() => {
+              // All shipment references present in inbounds
+              const refSet = new Set();
+              (invInbounds || []).forEach(ib => { if (ib.shipment_reference) refSet.add(ib.shipment_reference); });
+              const refs = [...refSet].sort();
+              const chosen = formData.invByShipRef || refs[0] || '';
+              const ibsInShip = (invInbounds || []).filter(ib => ib.shipment_reference === chosen);
+              // Per-product rollup for this shipment
+              const perProd = {};
+              ibsInShip.forEach(ib => {
+                const pid = ib.product_id;
+                if (!perProd[pid]) {
+                  const p = inventory.find(x => x.product_id === pid);
+                  perProd[pid] = {
+                    product_id: pid,
+                    description: p?.description_en || p?.description || '',
+                    color: p?.color_en || p?.color || '',
+                    product_type: p?.product_type || '',
+                    originalInShipment: 0,
+                    firstDate: ib.inbound_date,
+                    lastDate: ib.inbound_date,
+                    productCurrent: p ? Number(p.current_quantity || 0) : 0,
+                    productOriginal: p ? Number(p.original_quantity || 0) : 0,
+                  };
+                }
+                perProd[pid].originalInShipment += Number(ib.quantity || 0);
+                if ((ib.inbound_date || '') < (perProd[pid].firstDate || '9999')) perProd[pid].firstDate = ib.inbound_date;
+                if ((ib.inbound_date || '') > (perProd[pid].lastDate || '')) perProd[pid].lastDate = ib.inbound_date;
+              });
+              const prodRows = Object.values(perProd).sort((a, b) => b.originalInShipment - a.originalInShipment);
+              const totalOrigInShip = prodRows.reduce((a, r) => a + r.originalInShipment, 0);
+              return (
+                <div className="fixed inset-0 bg-black/50 z-[60] flex items-center justify-center p-4" onClick={() => setFormData({...formData, showInvByShipment: false})}>
+                  <div className="bg-white rounded-2xl w-full max-w-4xl max-h-[85vh] overflow-hidden shadow-2xl flex flex-col" onClick={e => e.stopPropagation()}>
+                    <div className="px-5 py-3 border-b border-slate-100 flex justify-between items-center">
+                      <h3 className="text-base font-extrabold">📦 By Shipment — Original Quantities</h3>
+                      <button onClick={() => setFormData({...formData, showInvByShipment: false})} className="text-slate-400 hover:text-slate-600 text-xl">×</button>
+                    </div>
+                    <div className="p-5 overflow-auto">
+                      {refs.length === 0 ? (
+                        <div className="text-center py-6 text-sm text-slate-500">No shipments on file yet. Add inventory with a Shipment Reference to see it here.</div>
+                      ) : (<>
+                        <div className="flex items-center gap-3 mb-3 flex-wrap">
+                          <label className="text-xs font-semibold">Shipment:</label>
+                          <select value={chosen}
+                            onChange={e => setFormData({...formData, invByShipRef: e.target.value})}
+                            className="px-2 py-1 rounded border text-xs">
+                            {refs.map(r => <option key={r} value={r}>{r}</option>)}
+                          </select>
+                          <span className="text-[10px] text-slate-500">{refs.length} shipment{refs.length === 1 ? '' : 's'} tracked</span>
+                          <button
+                            onClick={() => {
+                              if (prodRows.length === 0) return;
+                              const headers = ['Shipment', 'Product ID', 'Description', 'Color', 'Type', 'Original in Shipment', 'Arrived', 'Product Current (whole)', 'Product Original (whole)'];
+                              const csv = [headers.join(',')].concat(
+                                prodRows.map(r => [chosen, r.product_id, r.description, r.color, r.product_type, r.originalInShipment, r.firstDate === r.lastDate ? r.firstDate : r.firstDate + ' → ' + r.lastDate, r.productCurrent, r.productOriginal]
+                                  .map(v => '"' + String(v || '').replace(/"/g, '""') + '"').join(','))
+                              ).join('\n');
+                              const blob = new Blob([csv], { type: 'text/csv;charset=utf-8' });
+                              const url = URL.createObjectURL(blob);
+                              const a = document.createElement('a');
+                              a.href = url;
+                              a.download = 'shipment_' + chosen + '.csv';
+                              a.click();
+                              URL.revokeObjectURL(url);
+                            }}
+                            className="ml-auto px-3 py-1 bg-emerald-500 text-white rounded text-xs font-semibold">📥 CSV</button>
+                        </div>
+                        <div className="grid grid-cols-3 gap-3 mb-3">
+                          <div className="bg-indigo-50 border border-indigo-200 rounded-lg p-3">
+                            <div className="text-[10px] text-indigo-700 font-bold">Products in shipment</div>
+                            <div className="text-xl font-extrabold text-indigo-700">{prodRows.length}</div>
+                          </div>
+                          <div className="bg-blue-50 border border-blue-200 rounded-lg p-3">
+                            <div className="text-[10px] text-blue-700 font-bold">Original qty (this shipment)</div>
+                            <div className="text-xl font-extrabold text-blue-700">{totalOrigInShip.toLocaleString()}</div>
+                          </div>
+                          <div className="bg-slate-50 border border-slate-200 rounded-lg p-3">
+                            <div className="text-[10px] text-slate-500 font-bold">Product-level current total</div>
+                            <div className="text-xl font-extrabold text-slate-700">{prodRows.reduce((a, r) => a + r.productCurrent, 0).toLocaleString()}</div>
+                            <div className="text-[9px] text-slate-400">(across these products, all shipments)</div>
+                          </div>
+                        </div>
+                        <div className="overflow-auto border rounded max-h-[360px]">
+                          <table className="w-full text-xs border-collapse">
+                            <thead className="sticky top-0 bg-slate-100"><tr>
+                              <th className="px-2 py-2 text-left">Product ID</th>
+                              <th className="px-2 py-2 text-left">Description</th>
+                              <th className="px-2 py-2 text-left">Color</th>
+                              <th className="px-2 py-2 text-left">Type</th>
+                              <th className="px-2 py-2 text-right">Original in Shipment</th>
+                              <th className="px-2 py-2 text-left">Arrived</th>
+                              <th className="px-2 py-2 text-right">Product Current</th>
+                            </tr></thead>
+                            <tbody>
+                              {prodRows.map(r => (
+                                <tr key={r.product_id} className="border-b border-slate-50">
+                                  <td className="px-2 py-1.5 font-bold">{r.product_id}</td>
+                                  <td className="px-2 py-1.5 text-slate-600 truncate max-w-[220px]" title={r.description}>{r.description}</td>
+                                  <td className="px-2 py-1.5 text-slate-600">{r.color}</td>
+                                  <td className="px-2 py-1.5 text-slate-600">{r.product_type}</td>
+                                  <td className="px-2 py-1.5 text-right font-bold text-indigo-700">{r.originalInShipment.toLocaleString()}</td>
+                                  <td className="px-2 py-1.5 text-slate-500">{r.firstDate === r.lastDate ? r.firstDate : r.firstDate + ' → ' + r.lastDate}</td>
+                                  <td className="px-2 py-1.5 text-right text-emerald-600">{r.productCurrent.toLocaleString()}</td>
+                                </tr>
+                              ))}
+                              {prodRows.length === 0 && (
+                                <tr><td colSpan="7" className="text-center text-slate-400 py-4">No products in this shipment.</td></tr>
+                              )}
+                            </tbody>
+                          </table>
+                        </div>
+                        <div className="text-[10px] text-slate-400 mt-2 italic">
+                          "Original in Shipment" never changes after import — it's the immutable record of what arrived in this shipment. "Product Current" is the running total for the whole product across all shipments.
+                        </div>
+                      </>)}
+                    </div>
+                  </div>
+                </div>
+              );
+            })()}
           </div>
         )}
-
-        {/* ==========================================
-            CRM TAB
-        ========================================== */}
         {tab === 'crm' && (
           <SafeSection label="CRM"><CRMTab toast={toast} customers={customers} invoices={invoices} user={user} userProfile={userProfile} users={teamUsers} onReload={loadAllData} isAdmin={isAdmin} onSelectInvoice={setSelectedInvoice} lang={lang} modulePerms={modulePerms} /></SafeSection>
         )}

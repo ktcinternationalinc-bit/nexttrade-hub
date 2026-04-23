@@ -8,6 +8,7 @@ export default function QuotesTab({ user, userProfile, isAdmin }) {
   const [view, setView] = useState('list'); // list | create | preview | companies
   const [companies, setCompanies] = useState([]);
   const [quotes, setQuotes] = useState([]);
+  const [customers, setCustomers] = useState([]); // S18.4 — CRM customers for the picker
   const [editCompany, setEditCompany] = useState(null);
   const [editQuote, setEditQuote] = useState(null);
   const [previewQuote, setPreviewQuote] = useState(null);
@@ -16,12 +17,10 @@ export default function QuotesTab({ user, userProfile, isAdmin }) {
   // ───── Load Data ─────
   const load = useCallback(async () => {
     setLoading(true);
-    const [{ data: c }, { data: q }] = await Promise.all([
-      supabase.from('quote_companies').select('*').order('name'),
-      supabase.from('customer_quotes').select('*').order('created_at', { ascending: false }),
-    ]);
-    setCompanies(c || []);
-    setQuotes(q || []);
+    // S18.4 — independent try/catch per query so one failure doesn't blank the whole tab
+    try { const { data } = await supabase.from('quote_companies').select('*').order('name'); setCompanies(data || []); } catch (e) { console.warn('[quotes] companies load:', e); }
+    try { const { data } = await supabase.from('customer_quotes').select('*').order('created_at', { ascending: false }); setQuotes(data || []); } catch (e) { console.warn('[quotes] quotes load:', e); }
+    try { const { data } = await supabase.from('customers').select('id, name, group_name, phone, email, contact_person').order('name'); setCustomers(data || []); } catch (e) { console.warn('[quotes] customers load:', e); }
     setLoading(false);
   }, []);
   useEffect(() => { load(); }, [load]);
@@ -43,12 +42,18 @@ export default function QuotesTab({ user, userProfile, isAdmin }) {
   };
 
   // ───── Quote CRUD ─────
+  // ───── Quote CRUD ─────
   const saveQuote = async (qt) => {
     const record = {
       ...qt,
       line_items: JSON.stringify(qt.line_items || []),
     };
     delete record._company; // don't store joined obj
+    // S18.6 — strip fields that the UI uses for convenience but that the
+    // customer_quotes table may not have columns for. If these columns DO
+    // exist, we'll add them back later; for now keep inserts safe.
+    delete record.customer_id;
+    delete record.client_phone;
     if (qt.id) {
       await dbUpdate('customer_quotes', qt.id, record, user?.id);
     } else {
@@ -99,7 +104,9 @@ export default function QuotesTab({ user, userProfile, isAdmin }) {
 
       {/* ===== QUOTE BUILDER ===== */}
       {view === 'create' && editQuote && (
-        <QuoteBuilder quote={editQuote} companies={companies} onSave={saveQuote}
+        <QuoteBuilder quote={editQuote} companies={companies} customers={customers} user={user}
+          onCustomerCreated={load}
+          onSave={saveQuote}
           onCancel={() => { setEditQuote(null); setView('list'); }} />
       )}
 
@@ -208,9 +215,63 @@ function CompanyManager({ companies, onSave, onDelete, editCompany, setEditCompa
 // ============================================================
 //  QUOTE BUILDER
 // ============================================================
-function QuoteBuilder({ quote, companies, onSave, onCancel }) {
+function QuoteBuilder({ quote, companies, customers, user, onCustomerCreated, onSave, onCancel }) {
   const [q, setQ] = useState(quote);
+  // S18.4 — customer picker state. When showNewCustomer=true we show an
+  // inline modal to create a CRM record; on success we auto-select it
+  // and refresh the parent's customer list.
+  const [customerSearch, setCustomerSearch] = useState(quote && quote.client_name ? quote.client_name : '');
+  const [showCustomerList, setShowCustomerList] = useState(false);
+  const [showNewCustomer, setShowNewCustomer] = useState(false);
+  const [newCust, setNewCust] = useState({ name: '', phone: '', email: '', contact_person: '', group_name: '' });
+  const [savingCust, setSavingCust] = useState(false);
+
   const set = (k, v) => setQ(prev => ({ ...prev, [k]: v }));
+
+  // Filter customers by typed search — matches name / contact_person / phone / email
+  const filteredCustomers = (customers || []).filter(c => {
+    if (!customerSearch) return true;
+    const s = customerSearch.toLowerCase();
+    return (c.name || '').toLowerCase().includes(s)
+      || (c.contact_person || '').toLowerCase().includes(s)
+      || (c.phone || '').toLowerCase().includes(s)
+      || (c.email || '').toLowerCase().includes(s);
+  }).slice(0, 20); // cap dropdown length
+
+  const selectCustomer = (c) => {
+    set('customer_id', c.id);
+    set('client_name', c.name);
+    if (c.email) set('client_email', c.email);
+    if (c.phone) set('client_phone', c.phone);
+    setCustomerSearch(c.name);
+    setShowCustomerList(false);
+  };
+
+  const handleCreateCustomer = async () => {
+    if (!newCust.name.trim()) { alert('Customer name is required'); return; }
+    setSavingCust(true);
+    try {
+      // Insert into customers table (CRM)
+      const { data, error } = await supabase.from('customers').insert({
+        name: newCust.name.trim(),
+        phone: newCust.phone || '',
+        email: newCust.email || '',
+        contact_person: newCust.contact_person || '',
+        group_name: newCust.group_name || '',
+        created_at: new Date().toISOString(),
+      }).select().single();
+      if (error) throw error;
+      // Auto-select the brand-new customer
+      selectCustomer(data);
+      setShowNewCustomer(false);
+      setNewCust({ name: '', phone: '', email: '', contact_person: '', group_name: '' });
+      // Tell parent to reload customers list so future quotes see it too
+      if (onCustomerCreated) onCustomerCreated();
+    } catch (err) {
+      alert('Could not create customer: ' + (err.message || err));
+    }
+    setSavingCust(false);
+  };
 
   const addLine = () => set('line_items', [...(q.line_items || []), { description: '', qty: 1, unit_price: 0 }]);
   const updateLine = (i, k, v) => {
@@ -255,9 +316,44 @@ function QuoteBuilder({ quote, companies, onSave, onCancel }) {
             <input type="number" value={q.validity_days || ''} onChange={e => set('validity_days', e.target.value)} className="w-full border rounded-lg px-3 py-2 text-xs" />
             {expiryDate && <p className="text-[9px] text-slate-400 mt-0.5">Expires: {expiryDate}</p>}
           </div>
-          <div>
-            <label className="text-[10px] text-slate-500 font-bold">Client Name / العميل</label>
-            <input value={q.client_name || ''} onChange={e => set('client_name', e.target.value)} className="w-full border rounded-lg px-3 py-2 text-xs" />
+          <div className="relative">
+            <label className="text-[10px] text-slate-500 font-bold">Client / العميل (from CRM)</label>
+            <div className="flex gap-1">
+              <input
+                value={customerSearch}
+                onChange={e => { setCustomerSearch(e.target.value); set('client_name', e.target.value); setShowCustomerList(true); if (q.customer_id) set('customer_id', null); }}
+                onFocus={() => setShowCustomerList(true)}
+                onBlur={() => setTimeout(() => setShowCustomerList(false), 180)}
+                placeholder="Start typing a client name..."
+                className="flex-1 border rounded-lg px-3 py-2 text-xs"
+              />
+              <button type="button" onClick={() => setShowNewCustomer(true)}
+                className="px-2 bg-emerald-500 text-white rounded-lg text-[10px] font-bold whitespace-nowrap"
+                title="Create a new customer in the CRM">+ New</button>
+            </div>
+            {q.customer_id && (
+              <div className="text-[9px] text-emerald-600 mt-0.5">✓ Linked to CRM record</div>
+            )}
+            {showCustomerList && filteredCustomers.length > 0 && (
+              <div className="absolute z-10 left-0 right-0 mt-1 bg-white border border-slate-200 rounded-lg shadow-lg max-h-56 overflow-auto">
+                {filteredCustomers.map(c => (
+                  <div key={c.id} onMouseDown={() => selectCustomer(c)}
+                    className="px-3 py-2 hover:bg-blue-50 cursor-pointer border-b border-slate-50 text-xs">
+                    <div className="font-semibold">{c.name}</div>
+                    <div className="text-[10px] text-slate-500">
+                      {c.contact_person && <span>{c.contact_person} · </span>}
+                      {c.phone && <span>{c.phone} · </span>}
+                      {c.email && <span>{c.email}</span>}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+            {showCustomerList && customerSearch && filteredCustomers.length === 0 && (
+              <div className="absolute z-10 left-0 right-0 mt-1 bg-white border border-slate-200 rounded-lg shadow-lg px-3 py-2 text-[11px] text-slate-500">
+                No match. Click <span className="font-bold text-emerald-600">+ New</span> to add "{customerSearch}" to the CRM.
+              </div>
+            )}
           </div>
           <div>
             <label className="text-[10px] text-slate-500 font-bold">Client Email</label>
@@ -331,6 +427,58 @@ function QuoteBuilder({ quote, companies, onSave, onCancel }) {
           <button onClick={onCancel} className="px-4 py-2 bg-slate-100 rounded-lg text-xs font-semibold">Cancel</button>
         </div>
       </div>
+
+      {/* S18.4 — New Customer modal. Creates a CRM record and auto-selects it
+          on the quote. Keeps CRM as the single source of truth for clients. */}
+      {showNewCustomer && (
+        <div className="fixed inset-0 bg-black/50 z-[60] flex items-center justify-center p-4" onClick={() => !savingCust && setShowNewCustomer(false)}>
+          <div className="bg-white rounded-2xl w-full max-w-md overflow-hidden shadow-2xl" onClick={e => e.stopPropagation()}>
+            <div className="px-4 py-3 border-b border-slate-100 flex justify-between items-center">
+              <h3 className="text-base font-extrabold">➕ New Customer / عميل جديد</h3>
+              <button onClick={() => !savingCust && setShowNewCustomer(false)} className="text-slate-400 hover:text-slate-600 text-xl">×</button>
+            </div>
+            <div className="p-4 space-y-3">
+              <div className="text-[11px] text-slate-500">Will be saved to the CRM and auto-selected on this quote.</div>
+              <div>
+                <label className="text-[10px] text-slate-500 font-bold">Company Name *</label>
+                <input autoFocus value={newCust.name} onChange={e => setNewCust(prev => ({...prev, name: e.target.value}))}
+                  onKeyDown={e => e.key === 'Enter' && handleCreateCustomer()}
+                  placeholder="e.g. ABC Trading Co." className="w-full border rounded-lg px-3 py-2 text-xs" />
+              </div>
+              <div>
+                <label className="text-[10px] text-slate-500 font-bold">Contact Person</label>
+                <input value={newCust.contact_person} onChange={e => setNewCust(prev => ({...prev, contact_person: e.target.value}))}
+                  placeholder="e.g. Ahmed Hassan" className="w-full border rounded-lg px-3 py-2 text-xs" />
+              </div>
+              <div className="grid grid-cols-2 gap-2">
+                <div>
+                  <label className="text-[10px] text-slate-500 font-bold">Phone / WhatsApp</label>
+                  <input value={newCust.phone} onChange={e => setNewCust(prev => ({...prev, phone: e.target.value}))}
+                    placeholder="+1 555 123 4567" className="w-full border rounded-lg px-3 py-2 text-xs" />
+                </div>
+                <div>
+                  <label className="text-[10px] text-slate-500 font-bold">Email</label>
+                  <input value={newCust.email} onChange={e => setNewCust(prev => ({...prev, email: e.target.value}))}
+                    placeholder="contact@company.com" className="w-full border rounded-lg px-3 py-2 text-xs" />
+                </div>
+              </div>
+              <div>
+                <label className="text-[10px] text-slate-500 font-bold">Group / Segment</label>
+                <input value={newCust.group_name} onChange={e => setNewCust(prev => ({...prev, group_name: e.target.value}))}
+                  placeholder="e.g. Hotels, Retailers, Distributors" className="w-full border rounded-lg px-3 py-2 text-xs" />
+              </div>
+            </div>
+            <div className="px-4 py-3 border-t border-slate-100 flex justify-end gap-2">
+              <button onClick={() => setShowNewCustomer(false)} disabled={savingCust}
+                className="px-3 py-1.5 rounded-lg border border-slate-200 text-xs font-semibold">Cancel</button>
+              <button onClick={handleCreateCustomer} disabled={savingCust || !newCust.name.trim()}
+                className="px-4 py-1.5 rounded-lg bg-emerald-500 text-white text-xs font-bold hover:bg-emerald-600 disabled:opacity-50">
+                {savingCust ? 'Saving...' : 'Save & Use'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

@@ -161,20 +161,43 @@ export default function CalendarTab({ customers, user, userProfile, users, ticke
     setSelectedUsers(users.map(u => u.id));
   };
 
+  // S20.1 (Apr 23 2026) — Hardened save flow. Previously:
+  //   - Silent return on missing title/date
+  //   - Fire-and-forget occurrence generator (future dates might not
+  //     appear for a while, making it feel like the save didn't work)
+  //   - No "Saving..." state, no success confirmation
+  // Max reported creating a weekly Saturday meeting till end of year
+  // with 3 participants and nothing saved. This path addresses all of
+  // those failure modes at once.
+  const [saving, setSaving] = useState(false);
   const handleAddEvent = async () => {
-    if (!f.title || !f.eventDate) return;
+    // Visible validation — never silent-fail
+    if (!f.title || !f.title.trim()) {
+      alert('Please enter a title for the event.');
+      return;
+    }
+    if (!f.eventDate) {
+      alert('Please pick a date for the event.');
+      return;
+    }
+    // If the user asked for recurrence with no end date, we still let it save
+    // but warn — otherwise the series will repeat indefinitely.
+    if (f.recurring && f.recurring !== 'none' && !f.recurringEnd) {
+      if (!confirm('This event is set to repeat but has no end date — it will go on forever. Continue?')) {
+        return;
+      }
+    }
+    if (saving) return; // guard against double-click
+    setSaving(true);
     try {
       const assignees = selectedUsers.length > 0 ? selectedUsers : [myId];
       const pattern = f.recurring || 'none';
       const isRecurring = pattern !== 'none';
-      // Safe-clamp interval. UI enforces 1..99 but we defend against tampered form state.
       const rawInt = Number.isFinite(+f.recurringInterval) ? Math.floor(+f.recurringInterval) : 1;
       const interval = Math.min(99, Math.max(1, rawInt || 1));
-      // One series_id per (recurring event, assignee). Non-recurring events get no series_id.
-      // A single recurring event spanning multiple assignees creates N parallel series —
-      // known pre-R9 architectural limitation (see test section 29.hae.gap.1a).
 
       const createdIds = [];
+      const seriesIdsToExpand = [];
       for (const uid of assignees) {
         const payload = {
           title: f.title,
@@ -193,21 +216,40 @@ export default function CalendarTab({ customers, user, userProfile, users, ticke
         const row = await dbInsert('calendar_events', payload, myId);
         createdIds.push(row);
 
-        // Schedule reminders for the master occurrence itself
         try {
           await scheduleEventReminders(row, [uid], myId);
         } catch (e) { console.log('[calendar] scheduleEventReminders failed: ' + e.message); }
 
-        // If recurring, fire the generator for this series so the user sees the
-        // next occurrences immediately. Fire-and-forget — cron will re-run nightly.
         if (isRecurring && row.series_id) {
-          try {
-            fetch('/api/events/generate-occurrences', {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({ series_id: row.series_id }),
-            }).catch(() => {});
-          } catch (e) { /* swallow */ }
+          seriesIdsToExpand.push(row.series_id);
+        }
+      }
+
+      // S20.1 — AWAIT the occurrence generator (previously fire-and-forget).
+      // This is what makes "save a weekly meeting till end of year" actually
+      // create all the Saturdays up front, so Max sees them immediately.
+      // If the generator hits an error we still consider the save successful
+      // (master events are already in the DB) but we tell the user.
+      let occurrencesGenerated = 0;
+      let generatorFailed = false;
+      for (const series_id of seriesIdsToExpand) {
+        try {
+          const r = await fetch('/api/events/generate-occurrences', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ series_id }),
+          });
+          if (r.ok) {
+            try {
+              const j = await r.json();
+              if (typeof j?.inserted === 'number') occurrencesGenerated += j.inserted;
+            } catch (_) {}
+          } else {
+            generatorFailed = true;
+          }
+        } catch (e) {
+          generatorFailed = true;
+          console.log('[calendar] generate-occurrences failed: ' + e.message);
         }
       }
 
@@ -215,10 +257,29 @@ export default function CalendarTab({ customers, user, userProfile, users, ticke
         + (isRecurring ? ' (' + recurrenceLabel(pattern, interval) + ')' : ''), 'calendar');
       const otherAssignees = assignees.filter(uid => uid !== myId);
       if (otherAssignees.length) notifyEventScheduled(otherAssignees, f.title, f.eventDate, myId);
+
+      // Reset form, hide modal
       setShowAdd(false); setF({}); setSelectedUsers([]);
-      // Slight delay before reload so the generator has time to write occurrences
-      setTimeout(() => { loadEvents(); }, 500);
-    } catch (err) { alert('Error / خطأ: ' + err.message); }
+
+      // Refresh list now that occurrences exist
+      await loadEvents();
+
+      // User-visible success confirmation so Max knows it saved
+      const parts = [];
+      parts.push('✅ Saved "' + f.title + '" on ' + f.eventDate);
+      if (assignees.length > 1) parts.push(' for ' + assignees.length + ' people');
+      if (isRecurring) {
+        parts.push(' — ' + recurrenceLabel(pattern, interval));
+        if (f.recurringEnd) parts.push(' until ' + f.recurringEnd);
+        if (occurrencesGenerated > 0) parts.push(' (' + occurrencesGenerated + ' occurrences created)');
+        if (generatorFailed) parts.push('\n\n⚠️ Occurrences couldn\'t be expanded right now — the scheduler will create them overnight.');
+      }
+      alert(parts.join(''));
+    } catch (err) {
+      alert('❌ Could not save: ' + (err && err.message ? err.message : err));
+    } finally {
+      setSaving(false);
+    }
   };
 
   const markEventStatus = async (ev, status) => {
@@ -597,7 +658,11 @@ export default function CalendarTab({ customers, user, userProfile, users, ticke
             {selectedUsers.length === 0 && <div className="text-[10px] text-slate-400 mt-1">No selection = assigned to you</div>}
           </div>
           <div className="flex gap-2 mt-3">
-            <button onClick={handleAddEvent} className="px-4 py-2 bg-emerald-500 text-white rounded-lg text-sm font-semibold">Save / حفظ</button>
+            <button onClick={handleAddEvent}
+              disabled={saving}
+              className={'px-4 py-2 rounded-lg text-sm font-semibold text-white ' + (saving ? 'bg-slate-400 cursor-wait' : 'bg-emerald-500 hover:bg-emerald-600')}>
+              {saving ? 'Saving...' : 'Save / حفظ'}
+            </button>
             <button onClick={()=>{setShowAdd(false);setSelectedUsers([]);}} className="px-4 py-2 border border-slate-200 rounded-lg text-sm">Cancel / إلغاء</button>
           </div>
         </div>
@@ -698,7 +763,7 @@ export default function CalendarTab({ customers, user, userProfile, users, ticke
                   </div>
                   {!ev.completed && <div className="flex gap-1">
                     {ev.event_status === 'postponed' ? <span className="px-2 py-1 bg-amber-100 text-amber-700 rounded text-[10px] font-bold">Postponed</span> : <>
-                      <button onClick={() => { setNotesEvent(ev); setMeetingNotes(ev.meeting_notes || ''); }} className="px-2 py-1 bg-emerald-500 text-white rounded text-[10px]">✓ Check In</button>
+                      <button onClick={() => { setNotesEvent(ev); setMeetingNotes(''); setNewNoteKind('note'); }} className="px-2 py-1 bg-emerald-500 text-white rounded text-[10px]">✓ Check In</button>
                       <button onClick={() => markEventStatus(ev, 'postponed')} className="px-2 py-1 bg-amber-500 text-white rounded text-[10px]">⏳ Postpone</button>
                       <button onClick={() => openEditEvent(ev)} title="Edit" className="px-2 py-1 bg-slate-200 hover:bg-slate-300 rounded text-[10px]">✏️</button>
                     </>}
@@ -706,17 +771,20 @@ export default function CalendarTab({ customers, user, userProfile, users, ticke
                   {ev.completed && <div className="text-right flex flex-col items-end gap-1">
                     <span className="px-2 py-1 bg-emerald-100 text-emerald-700 rounded text-[10px] font-bold">✓ Attended</span>
                     {(ev.notes_count > 0 || ev.meeting_notes) && (
-                      <button onClick={() => { setNotesEvent(ev); setMeetingNotes(''); }}
+                      <button onClick={() => { setNotesEvent(ev); setMeetingNotes(''); setNewNoteKind('note'); }}
                         className="text-[9px] text-slate-500 mt-0.5 max-w-[220px] flex items-center gap-1 hover:text-emerald-600 font-semibold"
-                        title={'View ' + (ev.notes_count || 1) + ' note(s)'}>
+                        title={'View / add to ' + (ev.notes_count || 1) + ' note(s)'}>
                         📝 {ev.notes_count || 1} note{ev.notes_count === 1 ? '' : 's'}
                       </button>
                     )}
-                    {/* Consistent labels: Edit Notes when notes exist, Add Notes when empty.
-                        Replaces the old ambiguous "+ Add / View" that confused users about the mode. */}
-                    <button onClick={() => { setNotesEvent(ev); setMeetingNotes(ev.meeting_notes || ''); }}
+                    {/* S18.5 — button label clarifies this is ADD not EDIT.
+                        Max: after checking in, the old "Edit Notes" copy made
+                        him think he could only edit. The modal always supports
+                        adding a new note on top of the existing thread; the
+                        label should say so. */}
+                    <button onClick={() => { setNotesEvent(ev); setMeetingNotes(''); setNewNoteKind('note'); }}
                       className="px-2 py-0.5 bg-slate-100 hover:bg-slate-200 text-slate-600 rounded text-[9px] font-semibold">
-                      {(ev.notes_count > 0 || ev.meeting_notes) ? '📝 Edit Notes' : '📝 Add Notes'}
+                      {(ev.notes_count > 0 || ev.meeting_notes) ? '➕ Add Note' : '📝 Add Notes'}
                     </button>
                   </div>}
                 </div>
@@ -765,16 +833,17 @@ export default function CalendarTab({ customers, user, userProfile, users, ticke
                   </div>
                 </div>
                 {!ev.completed && !ev.event_status && <div className="flex gap-1">
-                  <button onClick={() => { setNotesEvent(ev); setMeetingNotes(ev.meeting_notes || ''); }} className="px-2 py-0.5 bg-emerald-500 text-white rounded text-[10px]">✓ Check In</button>
+                  <button onClick={() => { setNotesEvent(ev); setMeetingNotes(''); setNewNoteKind('note'); }} className="px-2 py-0.5 bg-emerald-500 text-white rounded text-[10px]">✓ Check In</button>
                   <button onClick={() => markEventStatus(ev, 'postponed')} className="px-2 py-0.5 bg-amber-500 text-white rounded text-[10px]">⏳</button>
                   <button onClick={() => openEditEvent(ev)} title="Edit" className="px-2 py-0.5 bg-slate-200 hover:bg-slate-300 rounded text-[10px]">✏️</button>
                 </div>}
                 {ev.event_status === 'postponed' && <span className="text-[9px] text-amber-600 font-bold">Postponed</span>}
                 {ev.completed && <div className="flex items-center gap-1">
                   <span className="text-[9px] text-emerald-600 font-bold">✓</span>
-                  {/* Seed modal with existing notes so user can actually edit (not just add). */}
-                  <button onClick={() => { setNotesEvent(ev); setMeetingNotes(ev.meeting_notes || ''); }}
-                    title={(ev.notes_count > 0 || ev.meeting_notes) ? 'Edit Notes — ' + (ev.notes_count || 1) + ' note(s)' : 'Add Notes / إضافة ملاحظات'}
+                  {/* S18.5 — open an empty composer so user can append
+                      a new note without accidentally editing old ones. */}
+                  <button onClick={() => { setNotesEvent(ev); setMeetingNotes(''); setNewNoteKind('note'); }}
+                    title={(ev.notes_count > 0 || ev.meeting_notes) ? 'Add Note — ' + (ev.notes_count || 1) + ' already posted' : 'Add Notes / إضافة ملاحظات'}
                     className="text-[10px] hover:bg-slate-200 rounded px-1 flex items-center gap-0.5">
                     {(ev.notes_count > 0 || ev.meeting_notes) ? <span>📝<span className="text-[8px] font-bold text-emerald-600">{ev.notes_count || 1}</span></span> : '✏️'}
                   </button>
@@ -807,7 +876,7 @@ export default function CalendarTab({ customers, user, userProfile, users, ticke
                   {!notesEvent.completed
                     ? '✓ Check In / تسجيل الحضور'
                     : (notesThread.length > 0 || notesEvent.meeting_notes)
-                      ? '📝 Edit Meeting Notes / تعديل الملاحظات'
+                      ? '📝 Meeting Notes / ملاحظات الاجتماع'
                       : '📝 Add Meeting Notes / إضافة ملاحظات'}
                 </h3>
                 <div className="text-xs text-slate-500 truncate">{notesEvent.title}</div>
@@ -889,7 +958,16 @@ export default function CalendarTab({ customers, user, userProfile, users, ticke
             </div>
 
             {/* Composer */}
-            <div className="border-t border-slate-100 p-3 bg-white">
+            <div className="border-t-2 border-emerald-200 p-3 bg-white">
+              {/* S18.5 — prominent "Add new note" banner so user knows the
+                  bottom composer is for appending to the thread, not editing
+                  the existing ones above. */}
+              {notesThread.length > 0 && (
+                <div className="flex items-center gap-2 mb-2 px-2 py-1 bg-emerald-50 border border-emerald-200 rounded text-[11px] text-emerald-800 font-semibold">
+                  <span>➕</span>
+                  <span>Add a new note — existing notes above stay untouched</span>
+                </div>
+              )}
               <div className="flex gap-1 mb-2">
                 {[
                   ['note', '📝 Note'],

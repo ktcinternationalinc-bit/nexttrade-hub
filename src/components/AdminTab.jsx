@@ -1165,7 +1165,23 @@ export default function AdminTab({ user, userProfile, users, isAdmin, customers 
               <div className="text-xs font-mono text-blue-500 font-bold mb-0.5">{viewTicket.ticket_number || '—'}</div>
               <h3 className="text-base font-extrabold">{viewTicket.title}</h3>
             </div>
-            <button onClick={() => setViewTicket(null)} className="w-8 h-8 rounded-lg bg-slate-100 flex items-center justify-center text-slate-400 hover:text-red-500 hover:bg-red-50 text-lg font-bold">✕</button>
+            <div className="flex gap-2 items-start">
+              {/* S18.4 — Deep-link to Tickets tab. Max: from Admin he wants
+                  a way to click through into a specific ticket so he can add
+                  a comment, reassign, etc. Dispatching briefing-open-ticket
+                  reuses the existing handler in page.jsx. */}
+              <button
+                onClick={() => {
+                  try {
+                    window.dispatchEvent(new CustomEvent('briefing-open-ticket', { detail: { ticket_id: viewTicket.id } }));
+                  } catch(e){}
+                  setViewTicket(null);
+                }}
+                className="px-3 py-1.5 rounded-lg bg-blue-500 text-white text-xs font-bold hover:bg-blue-600"
+                title="Jump to this ticket in the Tickets tab to comment, reassign, or change status"
+              >↗ Open in Tickets</button>
+              <button onClick={() => setViewTicket(null)} className="w-8 h-8 rounded-lg bg-slate-100 flex items-center justify-center text-slate-400 hover:text-red-500 hover:bg-red-50 text-lg font-bold">✕</button>
+            </div>
           </div>
 
           <div className="p-4 overflow-auto" style={{ maxHeight: 'calc(85vh - 120px)' }}>

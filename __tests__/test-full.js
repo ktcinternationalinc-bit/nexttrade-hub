@@ -1869,8 +1869,10 @@ function runSection23_Session1Features() {
   // Every posted note archives to daily_log (explicit click => no duplicate risk)
   assert(/await dbInsert\('daily_log',[\s\S]*?log_category: 'meeting'/.test(calSrc),
          '23.R3.2c daily_log insert fires on each posted note');
-  // Modal header reflects mode
-  assert(/Edit Meeting Notes/.test(calSrc), '23.R3.3a modal header offers Edit state');
+  // S18.5 (Apr 23 2026): Modal header was renamed from "Edit Meeting Notes"
+  // to neutral "Meeting Notes" because Max found the old wording confusing
+  // (suggested you could only edit old notes, not add new ones).
+  assert(/Meeting Notes \/ ملاحظات الاجتماع/.test(calSrc), '23.R3.3a modal header reflects notes state');
   // Initial check-in still works — postNewNote stamps attendance on first note
   assert(/completed: true[\s\S]*?event_status: 'attended'/.test(calSrc),
          '23.R3.4a initial check-in still stamps completed + attended');
@@ -3440,19 +3442,22 @@ function runSection29_CalendarTabAudit() {
     '29.hae.notify.1b notification fires for invited assignees');
 
   // =========================================================
-  // Add Notes / Edit Notes button on completed events (R3 UI)
   // =========================================================
-  assert(/Edit Notes/.test(cSrc), '29.r3.1a "Edit Notes" label on completed events');
+  // S18.5 (Apr 23 2026) — reopened event opens an EMPTY composer so user
+  // can append without accidentally editing old notes. The button labels
+  // changed from "Edit Notes" to "+ Add Note"/"Add Notes".
+  // =========================================================
+  assert(/Add Note/.test(cSrc), '29.r3.1a "Add Note" label on completed events');
   assert(/Add Notes/.test(cSrc), '29.r3.1b "Add Notes" label when no notes yet');
-  // The button on completed events seeds meetingNotes from existing
-  assert(/setMeetingNotes\(ev\.meeting_notes \|\| ''\)/.test(cSrc),
-    '29.r3.2a clicking edit seeds modal with existing notes');
+  // The button on completed events opens an empty composer (NOT seeded with old text)
+  assert(/setNotesEvent\(ev\); setMeetingNotes\(''\); setNewNoteKind\('note'\);/.test(cSrc),
+    '29.r3.2a clicking add-note opens an empty composer (add-only flow)');
 
   // =========================================================
   // Modal title reflects mode
   // =========================================================
-  assert(/Edit Meeting Notes \/ تعديل الملاحظات/.test(cSrc),
-    '29.r3.3a edit-mode header (existing notes)');
+  assert(/Meeting Notes \/ ملاحظات الاجتماع/.test(cSrc),
+    '29.r3.3a notes-mode header');
   assert(/Add Meeting Notes \/ إضافة ملاحظات/.test(cSrc),
     '29.r3.3b add-mode header (no existing notes)');
   assert(/Check In \/ تسجيل (ال)?حضور/.test(cSrc),
@@ -4261,8 +4266,8 @@ function runSection35_CalendarTabR1() {
   // Fire-and-forget generator POST for immediate lookahead
   assert(/fetch\('\/api\/events\/generate-occurrences'/.test(ab),
     '35.add.3b generator POST fired after recurring insert (immediate lookahead)');
-  assert(/series_id:\s*row\.series_id/.test(ab),
-    '35.add.3c generator POST passes series_id');
+  assert(/series_id:\s*row\.series_id|JSON\.stringify\(\{\s*series_id\s*\}\)/.test(ab),
+    '35.add.3c generator POST passes series_id (shorthand or explicit)');
   // Parallel-series gap (R9 will fix) — each assignee gets independent series
   assert(/for \(const uid of assignees\)/.test(ab),
     '35.add.gap.1a DOCUMENTED R9 LIMITATION: N assignees = N parallel series (preserved from pre-session-2)');
@@ -4833,34 +4838,34 @@ function runSection41_VoiceUX() {
   var W = require('/tmp/_wake.js');
 
   // Detection
-  assert(W.detectWakeWord('hey bob show my tickets').matched === true, '41.det.1a basic match');
-  assert(W.detectWakeWord('hey bob show my tickets').command === 'show my tickets', '41.det.1b command extracted');
-  assert(W.detectWakeWord('hey, bob, schedule a call').command === 'schedule a call',
+  assert(W.detectWakeWord('hey nadia show my tickets').matched === true, '41.det.1a basic match');
+  assert(W.detectWakeWord('hey nadia show my tickets').command === 'show my tickets', '41.det.1b command extracted');
+  assert(W.detectWakeWord('hey, nadia, schedule a call').command === 'schedule a call',
     '41.det.2a punctuation after wake word stripped');
-  assert(W.detectWakeWord('ok bob what is on my calendar').matched === true,
-    '41.det.3a "ok bob" accepted (alternate wake)');
-  assert(W.detectWakeWord('hi bob send the email').matched === true,
-    '41.det.3b "hi bob" accepted');
+  assert(W.detectWakeWord('ok nadia what is on my calendar').matched === true,
+    '41.det.3a "ok nadia" accepted (alternate wake)');
+  assert(W.detectWakeWord('hi nadia send the email').matched === true,
+    '41.det.3b "hi nadia" accepted');
   assert(W.detectWakeWord('nothing to see here').matched === false,
     '41.det.4a non-wake returns false');
   assert(W.detectWakeWord(null).matched === false, '41.det.4b null-safe');
   assert(W.detectWakeWord('').matched === false, '41.det.4c empty-safe');
-  assert(W.detectWakeWord('hey bob').command === '', '41.det.5a wake alone = empty command');
+  assert(W.detectWakeWord('hey nadia').command === '', '41.det.5a wake alone = empty command');
 
   // Engine — debounce
   var eng1 = W.createWakeEngine();
-  var r1 = eng1.process('hey bob show my tickets', true);
+  var r1 = eng1.process('hey nadia show my tickets', true);
   assert(r1.trigger === true, '41.eng.1a final trigger');
   assert(r1.command === 'show my tickets', '41.eng.1b command captured');
-  var r2 = eng1.process('hey bob show my tickets', true);
+  var r2 = eng1.process('hey nadia show my tickets', true);
   assert(r2.trigger === false, '41.eng.2a debounce blocks duplicate within 2s');
 
   // Engine — interim doesn't trigger, final does
   var eng2 = W.createWakeEngine();
-  var i1 = eng2.process('hey bob sched', false);
+  var i1 = eng2.process('hey nadia sched', false);
   assert(i1.trigger === false, '41.eng.3a interim does not trigger');
   assert(i1.stillListening === true, '41.eng.3b interim opens collection window');
-  var i2 = eng2.process('hey bob schedule a call', true);
+  var i2 = eng2.process('hey nadia schedule a call', true);
   assert(i2.trigger === true, '41.eng.3c final after interim triggers');
 
   // Engine — non-wake transcripts ignored
@@ -4941,8 +4946,11 @@ function runSection41_VoiceUX() {
   // Listens for Hey Bob commands
   assert(/window\.addEventListener\('hey-bob-command'/.test(gSrc),
     '41.cmd.1a AIGreeter subscribes to hey-bob-command');
-  assert(/window\.addEventListener\('hey-bob-bargein'/.test(gSrc),
-    '41.cmd.1b AIGreeter subscribes to hey-bob-bargein (stops its own speech)');
+  // S17.10: barge-in listener was intentionally removed to prevent
+  // the speaker-echo cutoff bug (mic hearing Nadia's own voice and
+  // making her stop herself). Verify it stays gone.
+  assert(!/window\.addEventListener\('hey-bob-bargein'/.test(gSrc),
+    '41.cmd.1b AIGreeter must NOT subscribe to hey-bob-bargein (speaker-echo fix)');
 
   // ---------- VoiceController is actually mounted at root ----------
   var pSrc = fs.readFileSync(path.join(REPO_ROOT, 'src/app/page.jsx'), 'utf8');
@@ -5164,8 +5172,8 @@ function runSection44_DecisionUIAndSettingsPanels() {
     '44.vsp.2b Safari detection branch');
   assert(/setSupport\(\{ kind: 'ok' \}\)/.test(sSrc),
     '44.vsp.2c "ok" branch for Chrome/Edge');
-  // How-to-use guide for users
-  assert(/Hey Bob, what's on my calendar/.test(sSrc),
+  // How-to-use guide for users (wake word renamed Bob → Nadia)
+  assert(/Hey Nadia, what's on my calendar/.test(sSrc),
     '44.vsp.3a example command shown in help section');
 
   // AdminToolsPanel
