@@ -159,12 +159,20 @@ export function runAccountingAudit(data) {
     });
   }
 
-  // C3: Duplicate treasury entries
+  // C3: Duplicate treasury entries — split detection
+  //
+  // S11 2026-04-22: The old detector flagged 174 rows as "critical" which
+  // dwarfed everything else. Reality check against Max's Excel master showed
+  // 72 of those were LEGITIMATE repeats (taxis, phone bills, recurring small
+  // expenses — really did happen multiple times the same day). We now:
+  //   1. Skip small (< 5,000 EGP) recurring-expense patterns entirely
+  //   2. Split remaining into HIGH-VALUE (>=100k EGP) = critical, rest = warning
+  //   3. Surface clear counts in the finding description
   var dupeKey = {};
   var dupes = [];
   for (var dt = 0; dt < treasury.length; dt++) {
     var tr2 = treasury[dt];
-    if (isDedupMarker(tr2)) continue; // these are intentional
+    if (isDedupMarker(tr2)) continue;
     if (tr2.is_bank_placeholder) continue;
     var amt = Number(tr2.cash_in || 0) + Number(tr2.cash_out || 0) + Number(tr2.bank_in || 0) + Number(tr2.bank_out || 0);
     if (amt === 0) continue;
@@ -175,19 +183,73 @@ export function runAccountingAudit(data) {
       dupeKey[key] = tr2;
     }
   }
-  if (dupes.length > 0) {
+
+  // Patterns that are almost always legitimate repeats (recurring expenses
+  // where the same vendor + same small amount happens multiple times/day).
+  // Hit any of these AND amount < 5k = suppressed from report.
+  var recurringKeywords = [
+    'تاكس', 'تاكسى', 'taxi',
+    'مواصلات', 'بنزين', 'petrol', 'gas',
+    'بصمه', 'بصمة',
+    'عهده', 'عهدة',
+    'خط تليفون', 'تليفون', 'phone',
+    'كهرباء', 'ميه', 'مياه', 'water', 'electric',
+    'كشف', 'علاج', 'دوا', 'medical',
+    'فطار', 'غدا', 'عشا',
+    'مساهمه تكافليه', 'مساهمة تكافلية'
+  ];
+  function isRecurringSmallExpense(d) {
+    if (d.amount >= 5000) return false;
+    var desc = String((d.duplicate.description || '')).toLowerCase();
+    for (var k = 0; k < recurringKeywords.length; k++) {
+      if (desc.indexOf(recurringKeywords[k]) >= 0) return true;
+    }
+    return false;
+  }
+
+  var filteredDupes = [];
+  var suppressedCount = 0;
+  for (var fd = 0; fd < dupes.length; fd++) {
+    if (isRecurringSmallExpense(dupes[fd])) { suppressedCount++; continue; }
+    filteredDupes.push(dupes[fd]);
+  }
+
+  var HIGH_VALUE_THRESHOLD = 100000;
+  var highValueDupes = filteredDupes.filter(function (d) { return d.amount >= HIGH_VALUE_THRESHOLD; });
+  var otherDupes = filteredDupes.filter(function (d) { return d.amount < HIGH_VALUE_THRESHOLD; });
+
+  if (highValueDupes.length > 0) {
     findings.push({
       severity: 'critical',
-      code: 'DUPLICATE_TREASURY',
-      titleEn: dupes.length + ' likely duplicate treasury entries',
-      titleAr: dupes.length + ' قيد خزنة مُكرَّر محتمل',
-      descEn: 'Multiple rows share the same date, amount, order #, and description. May double-count income or expense.',
-      descAr: 'عدة قيود تشترك في نفس التاريخ والمبلغ ورقم الأمر والوصف. قد تُحتسب الدخل أو المصروف مرتين.',
-      totalImpact: sum(dupes, function (d) { return d.amount; }),
-      count: dupes.length,
-      items: dupes.slice(0, 15).map(function (d) { return { id: d.duplicate.id, original_id: d.original.id, date: d.duplicate.transaction_date, amount: d.amount, description: (d.duplicate.description || '').substring(0, 60) }; }),
-      actionEn: 'Inspect each pair → if truly duplicate, delete one. If legitimate (e.g., customer paid twice), append distinguishing text to descriptions.',
-      actionAr: 'افحص كل زوج → إن كان مكررًا فعلاً، احذف أحدهما. إن كان مشروعًا (مثلاً: العميل دفع مرتين)، أضف نصًا مميزًا للأوصاف.'
+      code: 'DUPLICATE_TREASURY_HIGH',
+      titleEn: highValueDupes.length + ' high-value duplicate treasury entries (>= 100k EGP)',
+      titleAr: highValueDupes.length + ' قيد خزنة مُكرَّر عالي القيمة (100 ألف+ جنيه)',
+      descEn: 'Rows sharing same date, amount, order #, and description where the amount is >= 100,000 EGP. These are most likely import-duplicates and should be audited first.',
+      descAr: 'قيود متطابقة في التاريخ والمبلغ ورقم الأمر والوصف، بقيمة 100 ألف جنيه أو أكثر. غالبًا ما تكون ازدواجًا ناتجًا عن الاستيراد ويجب مراجعتها أولاً.',
+      totalImpact: sum(highValueDupes, function (d) { return d.amount; }),
+      count: highValueDupes.length,
+      items: highValueDupes.slice(0, 20).map(function (d) { return { id: d.duplicate.id, original_id: d.original.id, date: d.duplicate.transaction_date, amount: d.amount, description: (d.duplicate.description || '').substring(0, 60) }; }),
+      actionEn: 'Compare each pair against your master treasury Excel. If DB has more copies than Excel — delete the extras. Use the bulk-delete tool in Treasury tab.',
+      actionAr: 'قارن كل زوج بملف إكسل الخزنة الأصلي. إن كان عدد النسخ في قاعدة البيانات أكثر من إكسل، احذف الزائد من تبويب الخزنة.'
+    });
+  }
+
+  if (otherDupes.length > 0) {
+    var suppressNote = suppressedCount > 0
+      ? ' (' + suppressedCount + ' small recurring-expense duplicates suppressed as likely legitimate)'
+      : '';
+    findings.push({
+      severity: 'warning',
+      code: 'DUPLICATE_TREASURY_LOW',
+      titleEn: otherDupes.length + ' lower-value duplicate treasury entries (< 100k EGP)' + suppressNote,
+      titleAr: otherDupes.length + ' قيد خزنة مُكرَّر منخفض القيمة (أقل من 100 ألف)' + (suppressedCount > 0 ? ' (تم إخفاء ' + suppressedCount + ' قيد صغير متكرر باعتباره شرعيًا محتملاً)' : ''),
+      descEn: 'Smaller duplicate amounts (< 100k EGP). Often these are legitimate repeats (customer paid same amount twice in a week, recurring vendor charges) but worth checking.',
+      descAr: 'مبالغ مكررة أصغر (أقل من 100 ألف). غالبًا ما تكون متكررة بشكل مشروع (العميل دفع نفس المبلغ مرتين، مدفوعات دورية)، لكن تستحق المراجعة.',
+      totalImpact: sum(otherDupes, function (d) { return d.amount; }),
+      count: otherDupes.length,
+      items: otherDupes.slice(0, 15).map(function (d) { return { id: d.duplicate.id, original_id: d.original.id, date: d.duplicate.transaction_date, amount: d.amount, description: (d.duplicate.description || '').substring(0, 60) }; }),
+      actionEn: 'Review in Treasury tab. If truly duplicate, delete one. If legit (recurring charge, same-day repeat), add distinguishing text to description.',
+      actionAr: 'راجع في تبويب الخزنة. إن كان مكررًا فعلاً، احذف أحدهما. إن كان شرعيًا (مدفوعات دورية، تكرار نفس اليوم)، أضف نصًا مميزًا للوصف.'
     });
   }
 

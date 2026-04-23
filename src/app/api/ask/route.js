@@ -2,6 +2,10 @@ import { createClient } from '@supabase/supabase-js';
 import { notifyTicketAssignedServer, notifyTicketReassignedServer, notifyEventScheduledServer, notifyReminderServer, notifyTeamMessageServer, notifyShippingRateServer } from '../../../lib/notify-server';
 import { loadMemorySettings, loadMemoryForUser, buildMemoryContext, extractMemoryCandidates, persistMemoryCandidates } from '../../../lib/ai-memory';
 import { runDecisionEngine, detectIntent } from '../../../lib/decision-engine';
+// Phase 2 / S13 — Morning briefing engine. Computes top 3 things needing
+// attention when the user logs in for the first time today. See
+// src/lib/briefing-engine.js for the scoring logic.
+import * as briefingEngine from '../../../lib/briefing-engine';
 
 var supabase = createClient(
   process.env.NEXT_PUBLIC_SUPABASE_URL,
@@ -400,6 +404,67 @@ export async function POST(request) {
         }
       } catch(e) { /* non-fatal — never block greeting on this */ }
 
+      // ---------- New alerts since last login ----------
+      // S14 — Proactive watcher (running every 30 min) populates ai_alerts.
+      // Surface any UNACKED alerts so Nadia can say "since we last talked,
+      // X happened." Only runs on isFirstGreeting to avoid spamming every
+      // chat turn.
+      var watcherAlerts = [];
+      if (isFirstGreeting && userId) {
+        try {
+          var alertsRes = await supabase.from('ai_alerts')
+            .select('id, alert_type, severity, subject, body, recommendation, created_at')
+            .eq('target_user_id', userId)
+            .or('acknowledged.is.null,acknowledged.eq.false')
+            .order('created_at', { ascending: false })
+            .limit(15);
+          watcherAlerts = (alertsRes && alertsRes.data) || [];
+          if (watcherAlerts.length > 0) {
+            crossTeamBlock += '\n\n===== RECENT ALERTS FROM THE PROACTIVE WATCHER =====\n';
+            crossTeamBlock += 'I\'ve been monitoring the business between conversations. Here is what I flagged (newest first). Mention only the 1-2 most important ones naturally in your greeting; the full list is visible to the user in their alerts bell.\n';
+            watcherAlerts.slice(0, 5).forEach(function(a) {
+              crossTeamBlock += '- [' + (a.severity || 'med').toUpperCase() + '] ' + (a.subject || '') + ' — ' + (a.body || '') + (a.recommendation ? ' (suggestion: ' + a.recommendation + ')' : '') + '\n';
+            });
+            crossTeamBlock += '====================================================\n';
+          }
+        } catch(e) { /* non-fatal */ }
+      }
+
+      // ---------- Build morning briefing (only on first greeting today) ----------
+      // S13 — Phase 2: structured top-3 priority list returned alongside the
+      // chat answer. Client renders it as visual cards above the chat.
+      // We compute this ONLY when this is the auto-greeting (no question typed)
+      // OR when the question is empty/looks like an opening — avoids running
+      // the full scan on every chat turn.
+      var briefing = null;
+      var isFirstGreeting = body.isGreeting === true || (!question || /^(hi|hello|hey|good morning|good afternoon|good evening|what.s up|sabah)/i.test(String(question || '').trim()));
+      if (isFirstGreeting && userId) {
+        try {
+          var briefingDataRes = await Promise.all([
+            supabase.from('tickets').select('id, ticket_number, title, status, priority, due_date, assigned_to, created_at, updated_at').neq('status', 'Closed').limit(500),
+            supabase.from('invoices').select('id, customer_name, customer_name_en, customer_id, invoice_date, total_collected, outstanding, order_number, invoice_number').limit(2000),
+            supabase.from('checks').select('id, check_number, amount, status, due_date').eq('status', 'pending').limit(200),
+            supabase.from('calendar_events').select('id, title, event_date, event_time, assigned_to, description').eq('event_date', new Date().toISOString().substring(0, 10)).limit(50),
+            supabase.from('follow_ups').select('id, task, due_date, completed, customer_id, assigned_to').eq('completed', false).limit(200),
+            supabase.from('customers').select('id, name, name_en').limit(500),
+          ]);
+          briefing = briefingEngine.buildBriefing({
+            userId: userId,
+            todayStr: new Date().toISOString().substring(0, 10),
+            nowMs: Date.now(),
+            tickets: (briefingDataRes[0] && briefingDataRes[0].data) || [],
+            invoices: (briefingDataRes[1] && briefingDataRes[1].data) || [],
+            checks: (briefingDataRes[2] && briefingDataRes[2].data) || [],
+            calendar_events: (briefingDataRes[3] && briefingDataRes[3].data) || [],
+            follow_ups: (briefingDataRes[4] && briefingDataRes[4].data) || [],
+            customers: (briefingDataRes[5] && briefingDataRes[5].data) || [],
+          });
+        } catch (briefingErr) {
+          console.warn('[ask/greeter] briefing computation failed:', briefingErr && briefingErr.message);
+          briefing = null;
+        }
+      }
+
       // ---------- Call Anthropic ----------
       try {
         var gMessages = [];
@@ -413,6 +478,26 @@ export async function POST(request) {
         gMessages.push({ role: 'user', content: question });
 
         var fullSystem = body.systemOverride + superAdminBlock + actionSyntaxBlock + crossTeamBlock;
+
+        // S13 — When briefing is computed, tell Claude about it so the chat
+        // answer is CONSISTENT with what the visual cards will show. Claude
+        // should mention/discuss these top items naturally in the greeting,
+        // not list everything in the system prompt.
+        if (briefing && !briefing.all_clear) {
+          fullSystem += '\n\n===== TOP PRIORITIES (will be shown to user as visual cards above your chat) =====\n';
+          fullSystem += 'Headline: ' + briefing.headline + '\n';
+          fullSystem += 'In your greeting, briefly acknowledge these by name (one short sentence each), then ask what they want to do first. DO NOT list every detail — the cards already show that. Just be human about it: "Morning Max — looks like Ahmed\'s payment is the biggest one today, want me to draft the chase?"\n';
+          briefing.top3.forEach(function(item, idx) {
+            fullSystem += (idx + 1) + '. [' + item.urgency.toUpperCase() + '] ' + item.title + ' — ' + item.why + '\n';
+          });
+          if (briefing.deferred_count > 0) {
+            fullSystem += 'Plus ' + briefing.deferred_count + ' less-urgent items stacked behind these.\n';
+          }
+          fullSystem += '===========================================\n';
+        } else if (briefing && briefing.all_clear) {
+          fullSystem += '\n\n===== TOP PRIORITIES =====\nAll clear today — nothing urgent. Greet warmly and ask what they want to focus on.\n';
+        }
+
         // Bumped max_tokens 400 -> 900 because action JSON blocks push over
         // the old cap when Nadia emits a reminder and also chats about it.
         var gResponse = await fetch('https://api.anthropic.com/v1/messages', {
@@ -566,7 +651,7 @@ export async function POST(request) {
 
         var decision = null;
         if (decisionPromise) { try { decision = await decisionPromise; } catch(e) {} }
-        return Response.json({ answer: finalText, decision: decision, actions_executed: actionsExecuted });
+        return Response.json({ answer: finalText, decision: decision, actions_executed: actionsExecuted, briefing: briefing });
       } catch(e) {
         console.warn('[ask/greeter] exception:', e && e.message);
         return Response.json({ answer: 'AI error: ' + (e && e.message ? e.message : 'unknown') });

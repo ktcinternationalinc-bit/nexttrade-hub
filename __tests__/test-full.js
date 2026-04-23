@@ -2493,8 +2493,8 @@ function runSection26_AuditorAudit() {
       { id: 't3', transaction_date: '2026-04-10', cash_in: 500, order_number: '101', description: 'different order' },
     ],
   });
-  assert(hasCode(dupeInput, 'DUPLICATE_TREASURY'), '26.C3.1a fires on same date+amount+order+desc');
-  assert(findCode(dupeInput, 'DUPLICATE_TREASURY').count === 1, '26.C3.1b one dupe pair detected');
+  assert(hasCode(dupeInput, 'DUPLICATE_TREASURY_LOW'), '26.C3.1a fires on same date+amount+order+desc (500 EGP → LOW variant)');
+  assert(findCode(dupeInput, 'DUPLICATE_TREASURY_LOW').count === 1, '26.C3.1b one dupe pair detected');
 
   // Dedup markers intentionally NOT flagged as duplicates
   const dedupNoDupe = runAccountingAudit({
@@ -4600,10 +4600,10 @@ function runSection38_DecisionEngine() {
     '38.wire.1a /api/ask imports decision engine');
   assert(/var intent = detectIntent\(question\);[\s\S]{0,100}decisionPromise = runDecisionEngine\(question\)/.test(ask),
     '38.wire.1b /api/ask pre-runs decision engine when intent detected');
-  // S9 upgrade: greeter response now also carries actions_executed (array of
-  // server-side action results). answer + decision must still be present.
-  assert(/return Response\.json\(\{ answer: finalText, decision: decision, actions_executed: actionsExecuted \}\);/.test(ask),
-    '38.wire.1c /api/ask greeter returns { answer, decision, actions_executed } — preserves answer+decision contract and adds action results');
+  // S13 upgrade: greeter response now also carries `briefing`. answer +
+  // decision + actions_executed must still be present and shaped this way.
+  assert(/return Response\.json\(\{ answer: finalText, decision: decision, actions_executed: actionsExecuted, briefing: briefing \}\);/.test(ask),
+    '38.wire.1c /api/ask greeter returns { answer, decision, actions_executed, briefing } — preserves prior contract and adds briefing');
 
   // ---------- No backticks in decision engine / api routes (SWC rule) ----------
   assert(src.indexOf('`') === -1,

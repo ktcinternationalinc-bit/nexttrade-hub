@@ -3,6 +3,7 @@ import { useState, useEffect, useRef, useCallback } from 'react';
 import { supabase } from '../lib/supabase';
 import { todayET, etGreetingWord, cmpETDays } from '../lib/et-time';
 import NadiaFace from './NadiaFace';
+import MorningBriefing from './MorningBriefing';
 
 var PERSONALITIES = [
   { id: 'professional', label: '🎩 Professional', labelAr: 'محترف', desc: 'Formal, concise, business-focused', color: '#1e40af', prompt: 'You are a professional executive assistant named Nadia. Speak formally, be concise and data-driven. Use business language. Be respectful and efficient.' },
@@ -1018,9 +1019,11 @@ export default function AIGreeter({ user, userProfile, users, tickets, invoices,
       // S9 2026-04-22: userId added to legacy greeter payload too. Without
       // this the server cannot detect super_admin and the team-visibility
       // / cross-team-action blocks never get injected into Nadia's prompt.
+      // S13 2026-04-22: isGreeting flag added so server only computes the
+      // morning briefing on the auto-greeting (not every chat turn).
       var payload = useV2
-        ? { question: q, history: isGreeting ? [] : hist.slice(-8), userId: (userProfile && userProfile.id) || null }
-        : { question: q, mode: 'greeter', systemOverride: sysPrompt + '\n' + ctx, history: isGreeting ? [] : hist.slice(-8), userId: (userProfile && userProfile.id) || null };
+        ? { question: q, history: isGreeting ? [] : hist.slice(-8), userId: (userProfile && userProfile.id) || null, isGreeting: !!isGreeting }
+        : { question: q, mode: 'greeter', systemOverride: sysPrompt + '\n' + ctx, history: isGreeting ? [] : hist.slice(-8), userId: (userProfile && userProfile.id) || null, isGreeting: !!isGreeting };
 
       var res = await fetch(endpoint, {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
@@ -1047,6 +1050,11 @@ export default function AIGreeter({ user, userProfile, users, tickets, invoices,
       // Legacy /api/ask still returns `decision` for the decision-panel UI
       var assistantMsg = { role: 'assistant', text: aiText };
       if (data.decision && data.decision.ok) assistantMsg.decision = data.decision;
+      // S13 — morning briefing returned only on isGreeting calls. Attach to
+      // the message so the renderer shows the structured card above the text.
+      if (data.briefing && (data.briefing.top3 || data.briefing.all_clear)) {
+        assistantMsg.briefing = data.briefing;
+      }
       var final = [].concat(msgs, [assistantMsg]);
       setMessages(final);
       saveMemory(final);
@@ -1061,6 +1069,47 @@ export default function AIGreeter({ user, userProfile, users, tickets, invoices,
   };
 
   var handleSubmit = function() { if (!input.trim()) return; stopSpeech(); doSend(input.trim()); };
+
+  // S13 — Handle clicks on Morning Briefing action buttons. Each item has
+  // an action_type like "open_ticket", "open_customer", etc. We dispatch
+  // the appropriate window event so the main page (page.jsx) can react.
+  var handleBriefingAction = function(item) {
+    if (!item || !item.action_type) return;
+    try { console.log('[briefing] action', item.action_type, item.action_payload); } catch (e) {}
+    var p = item.action_payload || {};
+    var eventName = null;
+    var eventDetail = p;
+    switch (item.action_type) {
+      case 'open_ticket':
+        eventName = 'briefing-open-ticket';
+        break;
+      case 'open_customer':
+        eventName = 'briefing-open-customer';
+        break;
+      case 'open_check':
+        eventName = 'briefing-open-check';
+        break;
+      case 'open_calendar':
+        eventName = 'briefing-open-calendar';
+        break;
+      case 'open_crm':
+        eventName = 'briefing-open-crm';
+        break;
+      case 'draft_collection_message':
+        // Auto-prompt Nadia to draft the chase message
+        var promptText = useLang === 'ar'
+          ? 'اكتب لي رسالة متابعة دفع لـ ' + (p.customer_name || 'العميل') + ' المبلغ المستحق ' + (p.owed || 0) + ' جنيه'
+          : 'Draft a polite payment follow-up message to ' + (p.customer_name || 'this customer') + ' for the outstanding ' + (p.owed || 0) + ' EGP on order ' + (p.order_number || '');
+        setInput(promptText);
+        setTimeout(function() { doSend(promptText); }, 100);
+        return;
+      default:
+        eventName = null;
+    }
+    if (eventName) {
+      try { window.dispatchEvent(new CustomEvent(eventName, { detail: eventDetail })); } catch (e) {}
+    }
+  };
 
   if (!enabled) return null;
 
@@ -1127,6 +1176,14 @@ export default function AIGreeter({ user, userProfile, users, tickets, invoices,
           }
           return (
             <div key={i} className={'mb-2 flex flex-col ' + (m.role === 'user' ? 'items-end' : 'items-start')}>
+              {/* S13 — Morning briefing card renders BEFORE the chat bubble so user
+                  sees the structured priority list first, then Nadia's friendly
+                  acknowledgment beneath. */}
+              {m.briefing && m.role === 'assistant' && (
+                <div className="w-full max-w-[95%]">
+                  <MorningBriefing briefing={m.briefing} onAction={handleBriefingAction} useLang={useLang} />
+                </div>
+              )}
               <div className={'max-w-[80%] px-3 py-2 rounded-2xl text-xs leading-relaxed ' + (m.role === 'user' ? 'bg-blue-500 text-white rounded-br-sm' : 'text-slate-200 rounded-bl-sm')}
                 style={m.role !== 'user' ? { background: persona.color + '20', direction: useLang === 'ar' ? 'rtl' : 'ltr' } : {}}>
                 {m.text}
@@ -1145,6 +1202,12 @@ export default function AIGreeter({ user, userProfile, users, tickets, invoices,
             </div>
           ) : (
             <div className="mb-2 flex flex-col items-start">
+              {/* S13 — also render briefing on the in-progress (last) message */}
+              {lastMsg.briefing && (
+                <div className="w-full max-w-[95%]">
+                  <MorningBriefing briefing={lastMsg.briefing} onAction={handleBriefingAction} useLang={useLang} />
+                </div>
+              )}
               <div className="max-w-[80%] px-3 py-2 rounded-2xl rounded-bl-sm text-xs leading-relaxed text-slate-200"
                 style={{ background: persona.color + '20', direction: useLang === 'ar' ? 'rtl' : 'ltr' }}>
                 {showTypingAnim ? typingText : lastMsg.text}

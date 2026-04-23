@@ -1484,6 +1484,41 @@ export default function App() {
   // ==========================================
   // ACTIONS
   // ==========================================
+
+  // S13 — Phase 2 Morning Briefing actions. When user taps an action button
+  // in the morning briefing card (e.g. "Open ticket"), AIGreeter dispatches
+  // a window event. We catch it here and navigate to the right place.
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    const handleOpenTicket = (e) => {
+      const { ticket_id } = e.detail || {};
+      if (ticket_id) { setTab('tickets'); setOpenTicketId(ticket_id); }
+    };
+    const handleOpenCustomer = (e) => {
+      const { customer_name } = e.detail || {};
+      if (customer_name) { setTab('customers'); setSelectedCustomer(customer_name); }
+    };
+    const handleOpenCheck = (e) => {
+      setTab('checks');
+      const { check_number } = e.detail || {};
+      if (check_number) setQuery(check_number);
+    };
+    const handleOpenCalendar = () => { setTab('calendar'); };
+    const handleOpenCRM = () => { setTab('crm'); };
+    window.addEventListener('briefing-open-ticket', handleOpenTicket);
+    window.addEventListener('briefing-open-customer', handleOpenCustomer);
+    window.addEventListener('briefing-open-check', handleOpenCheck);
+    window.addEventListener('briefing-open-calendar', handleOpenCalendar);
+    window.addEventListener('briefing-open-crm', handleOpenCRM);
+    return () => {
+      window.removeEventListener('briefing-open-ticket', handleOpenTicket);
+      window.removeEventListener('briefing-open-customer', handleOpenCustomer);
+      window.removeEventListener('briefing-open-check', handleOpenCheck);
+      window.removeEventListener('briefing-open-calendar', handleOpenCalendar);
+      window.removeEventListener('briefing-open-crm', handleOpenCRM);
+    };
+  }, []);
+
   const navigate = (t) => {
     setTabLoading(true);
     setTab(t); setQuery(''); setCustomerFilter(''); setSelectedCustomer(null); setSelectedDebtor(null);
@@ -2707,8 +2742,45 @@ export default function App() {
           </tr>
         </thead>
         <tbody>
-          {data.map(inv => (
+          {data.map(inv => {
+            // S12 2026-04-22 — Color coding for each row
+            //
+            // Pull the same status that the StatusBadge uses so the row tint
+            // and the badge agree visually. Then render:
+            //   - colored left border (status at a glance)
+            //   - row tint (subtle, only on payment status, not in dark mode)
+            //   - paid amount in shaded green if any payment, neutral if zero
+            //   - owed amount in shaded red proportional to % unpaid
+            //   - thin progress bar under Paid column showing collected / invoiced
+            var invAmt = Number(inv.total_amount || 0);
+            var paidAmt = Number(inv.total_collected || 0);
+            var owedAmt = Number(inv.outstanding || 0);
+            var paidPct = invAmt > 0 ? Math.min(100, Math.round((paidAmt / invAmt) * 100)) : (paidAmt > 0 ? 100 : 0);
+
+            // Status drives the left-border color. getReconStatus returns a
+            // STRING (e.g. 'reconciled'), not an object. Pass treasuryTotal=0
+            // when we don't have a precomputed value — the function still
+            // returns a sensible category from invoice.outstanding alone.
+            var statusKey = (typeof getReconStatus === 'function')
+              ? getReconStatus(inv, paidAmt)
+              : (owedAmt > 0 ? 'open' : (paidAmt > 0 ? 'reconciled' : 'unverified'));
+            var borderColors = {
+              reconciled: '#10b981',  // green
+              open:       '#ef4444',  // red
+              unverified: '#f59e0b',  // amber
+              mismatch:   '#fb923c',  // orange
+              overpaid:   '#ea580c',  // dark orange
+            };
+            var rowBorderColor = borderColors[statusKey] || '#cbd5e1';
+
+            // Paid cell: brighter green when fully paid, soft green when partial
+            var paidColor = paidAmt === 0 ? '#94a3b8' : (paidPct >= 100 ? '#059669' : '#34d399');
+            // Owed cell: deeper red when more is owed
+            var owedColor = owedAmt === 0 ? '#10b981' : (paidPct < 25 ? '#dc2626' : (paidPct < 75 ? '#f87171' : '#fb923c'));
+
+            return (
             <tr key={inv.id} onClick={() => onSelect(inv)}
+              style={{ borderLeft: '4px solid ' + rowBorderColor }}
               className="border-b border-slate-50 cursor-pointer hover:bg-blue-50 transition">
               <td className="px-3 py-2 text-xs">{inv.invoice_date || '—'}</td>
               <td className="px-3 py-2 text-xs font-semibold">{inv.order_number}</td>
@@ -2719,14 +2791,22 @@ export default function App() {
                   <div style={{direction:'rtl'}}>{inv.customer_name}</div>
                 )}
               </td>
-              <td className="px-3 py-2 text-xs text-right">{fE(inv.total_amount)}</td>
-              <td className="px-3 py-2 text-xs text-right text-emerald-600">{fE(inv.total_collected)}</td>
-              <td className="px-3 py-2 text-xs text-right" style={{ color: inv.outstanding > 0 ? '#ef4444' : '#10b981' }}>
-                {inv.outstanding > 0 ? fE(inv.outstanding) : '✓'}
+              <td className="px-3 py-2 text-xs text-right font-bold text-sky-700">{fE(invAmt)}</td>
+              <td className="px-3 py-2 text-xs text-right">
+                <div className="font-bold" style={{ color: paidColor }}>{fE(paidAmt)}</div>
+                {invAmt > 0 && (
+                  <div className="mt-1 h-1 w-full rounded-full bg-slate-100 overflow-hidden" title={paidPct + '% paid'}>
+                    <div style={{ width: paidPct + '%', background: paidColor, height: '100%', transition: 'width 0.3s' }} />
+                  </div>
+                )}
+              </td>
+              <td className="px-3 py-2 text-xs text-right font-bold" style={{ color: owedColor }}>
+                {owedAmt > 0 ? fE(owedAmt) : '✓'}
               </td>
               <td className="px-3 py-2"><StatusBadge invoice={inv} /></td>
             </tr>
-          ))}
+            );
+          })}
         </tbody>
       </table>
     </div>
@@ -6049,50 +6129,186 @@ export default function App() {
               const myUpdates = recentTicketUpdates.filter(c => c.tickets && (c.tickets.assigned_to === myId || c.tickets.created_by === myId));
               const overdueTickets = myTickets.filter(t => t.due_date && t.due_date < todayStr);
 
-              const sectionStyle = { background: 'rgba(17,24,39,0.7)', borderRadius: 14, border: '1px solid rgba(255,255,255,0.08)', marginBottom: 10, overflow: 'hidden' };
-              const sectionHeaderStyle = (color, bgColor) => ({ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '10px 14px', borderBottom: '1px solid rgba(255,255,255,0.06)', background: bgColor });
+              // S14 — Dashboard ticket UI redesign for better readability.
+              //
+              // What changed (in plain English):
+              //   1. Each section gets a distinct "chapter feel" — the header
+              //      band has a colored left accent bar + tighter typography.
+              //   2. Ticket cards now have a clear left border in the priority
+              //      color (red/amber/yellow/grey) — your eye jumps to the hot
+              //      ones first.
+              //   3. The ticket title is BIG and bold; the ticket number
+              //      becomes a subtle tag. Before they fought for attention.
+              //   4. Status + due date + assignee now sit in a clean info row
+              //      using small "pills" instead of random inline text.
+              //   5. Overdue days show as "3 days overdue" not a cryptic ⚠ icon.
+              //   6. Space between cards: gap 6px instead of a flat 1px line,
+              //      with the colored left border acting as the divider.
+              //   7. Last-update comment: cleaner, indented, with the commenter
+              //      shown as a small avatar circle instead of purple text.
+              const sectionStyle = { background: 'rgba(17,24,39,0.7)', borderRadius: 14, border: '1px solid rgba(255,255,255,0.08)', marginBottom: 12, overflow: 'hidden' };
+              const sectionHeaderStyle = (color, bgColor) => ({
+                display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+                padding: '12px 16px',
+                borderBottom: '1px solid rgba(255,255,255,0.06)',
+                background: bgColor,
+                borderLeft: '3px solid ' + color,
+              });
               const sectionLabel = (icon, text, count, color) => (
-                <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                  <span style={{ fontSize: 14 }}>{icon}</span>
-                  <span style={{ fontSize: 12, fontWeight: 800, color: color, letterSpacing: '0.03em' }}>{text}</span>
-                  <span style={{ fontSize: 10, fontWeight: 800, color: '#fff', background: color, borderRadius: 10, padding: '1px 8px', minWidth: 20, textAlign: 'center' }}>{count}</span>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                  <span style={{ fontSize: 15, lineHeight: 1 }}>{icon}</span>
+                  <span style={{ fontSize: 12, fontWeight: 800, color: color, letterSpacing: '0.04em', textTransform: 'uppercase' }}>{text}</span>
+                  <span style={{ fontSize: 10, fontWeight: 800, color: '#fff', background: color, borderRadius: 10, padding: '2px 9px', minWidth: 20, textAlign: 'center', lineHeight: 1.4 }}>{count}</span>
                 </div>
               );
+
+              // Priority → row-level urgency color
+              const priBorderColor = (p) => {
+                if (p === 'urgent' || p === 'high') return '#ef4444';  // red
+                if (p === 'medium') return '#f59e0b';                  // amber
+                if (p === 'low') return '#64748b';                     // grey
+                return '#475569';                                      // default
+              };
+
+              // Status pill style — replaces the old inline badge
+              const statusPillStyle = (status) => {
+                const map = {
+                  'New':         { bg: 'rgba(59,130,246,0.12)',  fg: '#60a5fa', border: 'rgba(59,130,246,0.3)' },
+                  'In Progress': { bg: 'rgba(234,179,8,0.12)',   fg: '#fbbf24', border: 'rgba(234,179,8,0.3)' },
+                  'Resolved':    { bg: 'rgba(16,185,129,0.12)',  fg: '#34d399', border: 'rgba(16,185,129,0.3)' },
+                  'Closed':      { bg: 'rgba(100,116,139,0.12)', fg: '#94a3b8', border: 'rgba(100,116,139,0.3)' },
+                };
+                const s = map[status] || { bg: 'rgba(139,92,246,0.12)', fg: '#a78bfa', border: 'rgba(139,92,246,0.3)' };
+                return {
+                  display: 'inline-flex', alignItems: 'center', gap: 4,
+                  padding: '2px 8px', borderRadius: 4,
+                  fontWeight: 700, fontSize: 10,
+                  background: s.bg, color: s.fg,
+                  border: '1px solid ' + s.border,
+                  letterSpacing: '0.02em',
+                };
+              };
+
+              // Infer initials for avatar circles
+              const initialsOf = (name) => {
+                if (!name) return '?';
+                const parts = String(name).trim().split(/\s+/);
+                return (parts[0][0] + (parts[1] ? parts[1][0] : '')).toUpperCase();
+              };
 
               const TicketCard = ({ t, accent }) => {
                 const lastUpdate = recentTicketUpdates.find(c => c.tickets?.id === t.id);
                 const updaterName = lastUpdate ? ((teamUsers || []).find(u => u.id === lastUpdate.created_by)?.name || 'System') : null;
+                const daysOverdue = t.due_date && t.due_date < todayStr
+                  ? Math.floor((new Date(todayStr).getTime() - new Date(t.due_date).getTime()) / 86400000)
+                  : 0;
+                const dueToday = t.due_date === todayStr;
+                const leftBorderColor = daysOverdue > 0 ? '#ef4444' : (dueToday ? '#f59e0b' : priBorderColor(t.priority));
+
                 return (
-                <div style={{ display: 'flex', alignItems: 'flex-start', gap: 10, padding: '12px 14px', borderBottom: '1px solid rgba(255,255,255,0.04)', cursor: 'pointer', transition: 'background 0.15s' }}
-                  className="hover:bg-white/5" onClick={() => { setOpenTicketId(t.id); setTab('tickets'); }}>
-                  <div style={{ width: 8, height: 8, borderRadius: '50%', background: priColor(t.priority), flexShrink: 0, marginTop: 6 }} />
-                  <div style={{ flex: 1, minWidth: 0 }}>
-                    <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                      <span style={{ fontSize: 12, fontWeight: 800, color: '#818cf8', fontFamily: 'monospace' }}>{t.ticket_number}</span>
-                      <span style={{ fontSize: 14, fontWeight: 700, color: '#e2e8f0', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{t.title}</span>
+                <div style={{
+                  cursor: 'pointer',
+                  transition: 'background 0.15s',
+                  borderLeft: '3px solid ' + leftBorderColor,
+                  background: 'rgba(255,255,255,0.01)',
+                  borderBottom: '1px solid rgba(255,255,255,0.04)',
+                }}
+                  className="hover:bg-white/[0.04]" onClick={() => { setOpenTicketId(t.id); setTab('tickets'); }}>
+                  <div style={{ padding: '12px 14px 12px 12px' }}>
+                    {/* Title row — title is the star, ticket # is a subtle tag */}
+                    <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 12 }}>
+                      <div style={{ flex: 1, minWidth: 0 }}>
+                        <div style={{
+                          fontSize: 14, fontWeight: 700, color: '#f1f5f9',
+                          lineHeight: 1.35, marginBottom: 6,
+                          overflow: 'hidden', textOverflow: 'ellipsis',
+                          display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical',
+                        }}>
+                          {t.title}
+                        </div>
+                        {/* Info row — status pill, ticket#, assignee, due */}
+                        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, alignItems: 'center' }}>
+                          <span style={statusPillStyle(t.status)}>{t.status}</span>
+                          <span style={{ fontSize: 10, fontWeight: 700, color: '#64748b', fontFamily: 'monospace', letterSpacing: '0.03em' }}>
+                            {t.ticket_number}
+                          </span>
+                          {t.assigned_to && (
+                            <span style={{ fontSize: 11, color: '#94a3b8', display: 'inline-flex', alignItems: 'center', gap: 4 }}>
+                              <span style={{ fontSize: 9, color: '#64748b' }}>→</span>
+                              {getUserName(t.assigned_to)}
+                            </span>
+                          )}
+                          {daysOverdue > 0 && (
+                            <span style={{
+                              fontSize: 10, fontWeight: 800,
+                              color: '#fca5a5', background: 'rgba(239,68,68,0.12)',
+                              border: '1px solid rgba(239,68,68,0.3)',
+                              padding: '2px 8px', borderRadius: 4,
+                              letterSpacing: '0.02em',
+                            }}>
+                              {daysOverdue === 1 ? '1 DAY OVERDUE' : daysOverdue + ' DAYS OVERDUE'}
+                            </span>
+                          )}
+                          {dueToday && (
+                            <span style={{
+                              fontSize: 10, fontWeight: 800,
+                              color: '#fbbf24', background: 'rgba(234,179,8,0.12)',
+                              border: '1px solid rgba(234,179,8,0.3)',
+                              padding: '2px 8px', borderRadius: 4,
+                            }}>
+                              DUE TODAY
+                            </span>
+                          )}
+                          {t.due_date && t.due_date > todayStr && (
+                            <span style={{ fontSize: 11, color: '#64748b' }}>
+                              Due {t.due_date}
+                            </span>
+                          )}
+                        </div>
+                      </div>
+                      <span style={{ fontSize: 10, color: '#475569', flexShrink: 0, whiteSpace: 'nowrap' }}>
+                        {timeAgo(t.created_at)}
+                      </span>
                     </div>
-                    <div style={{ display: 'flex', gap: 8, marginTop: 4, fontSize: 11, color: '#64748b', alignItems: 'center' }}>
-                      <span style={{ padding: '2px 8px', borderRadius: 4, fontWeight: 700, fontSize: 10,
-                        background: t.status === 'New' ? 'rgba(59,130,246,0.2)' : t.status === 'In Progress' ? 'rgba(234,179,8,0.2)' : 'rgba(139,92,246,0.2)',
-                        color: t.status === 'New' ? '#60a5fa' : t.status === 'In Progress' ? '#fbbf24' : '#a78bfa' }}>{t.status}</span>
-                      {t.assigned_to && <span style={{ color: '#94a3b8' }}>→ {getUserName(t.assigned_to)}</span>}
-                      {t.due_date && t.due_date < todayStr && <span style={{ color: '#f87171', fontWeight: 700 }}>⚠ OVERDUE</span>}
-                      {t.due_date && t.due_date >= todayStr && <span>Due: {t.due_date}</span>}
-                    </div>
+
+                    {/* Last update block — cleaner presentation with avatar */}
                     {lastUpdate && (
-                      <div style={{ fontSize: 12, color: '#94a3b8', marginTop: 5, padding: '4px 8px', background: 'rgba(139,92,246,0.06)', borderRadius: 6, borderLeft: '2px solid #a78bfa' }}>
-                        <span style={{ fontWeight: 700, color: '#a78bfa' }}>{updaterName}</span>
-                        <span style={{ color: '#64748b' }}> · {timeAgo(lastUpdate.created_at)}</span>
-                        <div style={{ fontSize: 12, color: '#cbd5e1', marginTop: 2 }}>{(lastUpdate.comment_text || '').substring(0, 120)}{(lastUpdate.comment_text || '').length > 120 ? '…' : ''}</div>
+                      <div style={{
+                        marginTop: 10,
+                        padding: '8px 10px',
+                        background: 'rgba(139,92,246,0.05)',
+                        borderRadius: 6,
+                        borderLeft: '2px solid rgba(167,139,250,0.5)',
+                        display: 'flex', gap: 8, alignItems: 'flex-start',
+                      }}>
+                        <div style={{
+                          width: 22, height: 22, borderRadius: '50%',
+                          background: 'rgba(167,139,250,0.2)', color: '#c4b5fd',
+                          display: 'flex', alignItems: 'center', justifyContent: 'center',
+                          fontSize: 9, fontWeight: 800, flexShrink: 0,
+                        }}>
+                          {initialsOf(updaterName)}
+                        </div>
+                        <div style={{ flex: 1, minWidth: 0 }}>
+                          <div style={{ fontSize: 11, color: '#cbd5e1', marginBottom: 2 }}>
+                            <span style={{ fontWeight: 700, color: '#a78bfa' }}>{updaterName}</span>
+                            <span style={{ color: '#64748b', marginLeft: 6 }}>{timeAgo(lastUpdate.created_at)}</span>
+                          </div>
+                          <div style={{ fontSize: 12, color: '#e2e8f0', lineHeight: 1.4 }}>
+                            {(lastUpdate.comment_text || '').substring(0, 120)}{(lastUpdate.comment_text || '').length > 120 ? '…' : ''}
+                          </div>
+                        </div>
                       </div>
                     )}
-                    {!lastUpdate && t.updated_by && (
-                      <div style={{ fontSize: 11, color: '#64748b', marginTop: 4 }}>
-                        Last updated by <span style={{ fontWeight: 600, color: '#94a3b8' }}>{getUserName(t.updated_by) || 'Unknown'}</span> · {timeAgo(t.updated_at)}
+                    {!lastUpdate && t.updated_by && t.updated_at && t.updated_at !== t.created_at && (
+                      <div style={{ fontSize: 11, color: '#64748b', marginTop: 8, display: 'flex', alignItems: 'center', gap: 6 }}>
+                        <span>Last touched by</span>
+                        <span style={{ fontWeight: 600, color: '#94a3b8' }}>{getUserName(t.updated_by) || 'Unknown'}</span>
+                        <span>·</span>
+                        <span>{timeAgo(t.updated_at)}</span>
                       </div>
                     )}
                   </div>
-                  <span style={{ fontSize: 11, color: '#475569', flexShrink: 0 }}>{timeAgo(t.created_at)}</span>
                 </div>
                 );
               };
@@ -6102,20 +6318,41 @@ export default function App() {
                 if (!ticket) return null;
                 const commenter = (teamUsers || []).find(u => u.id === c.created_by);
                 return (
-                  <div style={{ display: 'flex', gap: 10, padding: '12px 14px', borderBottom: '1px solid rgba(255,255,255,0.04)', cursor: 'pointer', transition: 'background 0.15s' }}
-                    className="hover:bg-white/5" onClick={() => { setOpenTicketId(ticket.id); setTab('tickets'); }}>
-                    <div style={{ width: 32, height: 32, borderRadius: '50%', background: 'rgba(139,92,246,0.15)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 14, flexShrink: 0 }}>
-                      {c.is_system ? '🤖' : '💬'}
-                    </div>
-                    <div style={{ flex: 1, minWidth: 0 }}>
-                      <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                        <span style={{ fontSize: 12, fontWeight: 800, color: '#818cf8', fontFamily: 'monospace' }}>{ticket.ticket_number}</span>
-                        <span style={{ fontSize: 14, fontWeight: 700, color: '#e2e8f0', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{ticket.title}</span>
+                  <div style={{
+                    cursor: 'pointer',
+                    transition: 'background 0.15s',
+                    borderLeft: '3px solid #a78bfa',
+                    background: 'rgba(255,255,255,0.01)',
+                    borderBottom: '1px solid rgba(255,255,255,0.04)',
+                  }}
+                    className="hover:bg-white/[0.04]" onClick={() => { setOpenTicketId(ticket.id); setTab('tickets'); }}>
+                    <div style={{ padding: '12px 14px 12px 12px', display: 'flex', gap: 10, alignItems: 'flex-start' }}>
+                      <div style={{
+                        width: 28, height: 28, borderRadius: '50%',
+                        background: 'rgba(139,92,246,0.15)',
+                        display: 'flex', alignItems: 'center', justifyContent: 'center',
+                        fontSize: 12, flexShrink: 0,
+                      }}>
+                        {c.is_system ? '🤖' : initialsOf(commenter?.name)}
                       </div>
-                      <div style={{ fontSize: 13, color: '#cbd5e1', marginTop: 4, padding: '4px 8px', background: 'rgba(139,92,246,0.06)', borderRadius: 6, borderLeft: '2px solid #a78bfa' }}>
-                        <span style={{ fontWeight: 700, color: '#a78bfa' }}>{commenter?.name || 'System'}</span>
-                        <span style={{ color: '#64748b' }}> · {timeAgo(c.created_at)}</span>
-                        <div style={{ fontSize: 12, color: '#94a3b8', marginTop: 2 }}>{(c.comment_text || '').substring(0, 150)}{(c.comment_text || '').length > 150 ? '…' : ''}</div>
+                      <div style={{ flex: 1, minWidth: 0 }}>
+                        <div style={{
+                          fontSize: 13, fontWeight: 700, color: '#f1f5f9',
+                          marginBottom: 4, lineHeight: 1.3,
+                          overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+                        }}>
+                          {ticket.title}
+                        </div>
+                        <div style={{ display: 'flex', gap: 8, alignItems: 'center', fontSize: 11, color: '#64748b', marginBottom: 6 }}>
+                          <span style={{ fontWeight: 700, color: '#a78bfa' }}>{commenter?.name || 'System'}</span>
+                          <span>·</span>
+                          <span>{timeAgo(c.created_at)}</span>
+                          <span>·</span>
+                          <span style={{ fontFamily: 'monospace', letterSpacing: '0.03em' }}>{ticket.ticket_number}</span>
+                        </div>
+                        <div style={{ fontSize: 12, color: '#cbd5e1', lineHeight: 1.5 }}>
+                          {(c.comment_text || '').substring(0, 150)}{(c.comment_text || '').length > 150 ? '…' : ''}
+                        </div>
                       </div>
                     </div>
                   </div>
@@ -6836,17 +7073,50 @@ export default function App() {
               </div>
             </div>
             <div className="grid grid-cols-3 gap-3 mb-3">
-              <div className="bg-white rounded-lg p-3 border-l-3" style={{ borderLeftWidth: 3, borderLeftColor: '#0ea5e9' }}>
-                <div className="text-[10px] text-slate-500">Invoiced</div>
-                <div className="text-lg font-extrabold text-sky-600">{fE(totalInvoiced)}</div>
+              {/* S12 — Sales summary cards with strong color coding to match Treasury */}
+              <div className="rounded-xl p-3 transition-all hover:shadow-lg hover:scale-[1.02]"
+                style={{ background: 'linear-gradient(135deg, #dbeafe 0%, #bfdbfe 100%)', border: '1px solid #0ea5e9' }}>
+                <div className="flex items-center justify-between">
+                  <div className="text-[10px] text-sky-800 font-bold uppercase tracking-wider">📋 Invoiced</div>
+                  <span className="text-sky-600 text-base">📊</span>
+                </div>
+                <div className="text-lg font-extrabold text-sky-700 mt-1">{fE(totalInvoiced)}</div>
               </div>
-              <div className="bg-white rounded-lg p-3" style={{ borderLeftWidth: 3, borderLeftColor: '#10b981' }}>
-                <div className="text-[10px] text-slate-500">Collected</div>
-                <div className="text-lg font-extrabold text-emerald-600">{fE(totalCollected)}</div>
+              <div className="rounded-xl p-3 transition-all hover:shadow-lg hover:scale-[1.02]"
+                style={{ background: 'linear-gradient(135deg, #d1fae5 0%, #a7f3d0 100%)', border: '1px solid #10b981' }}>
+                <div className="flex items-center justify-between">
+                  <div className="text-[10px] text-emerald-800 font-bold uppercase tracking-wider">✅ Collected</div>
+                  <span className="text-emerald-600 text-base">💵</span>
+                </div>
+                <div className="text-lg font-extrabold text-emerald-700 mt-1">{fE(totalCollected)}</div>
+                {totalInvoiced > 0 && (
+                  <div className="mt-1.5 h-1 w-full rounded-full bg-white/60 overflow-hidden" title={Math.round(totalCollected/totalInvoiced*100) + '% collected'}>
+                    <div style={{
+                      width: Math.min(100, totalCollected / totalInvoiced * 100) + '%',
+                      background: '#10b981',
+                      height: '100%',
+                      transition: 'width 0.3s'
+                    }} />
+                  </div>
+                )}
               </div>
-              <div className="bg-white rounded-lg p-3" style={{ borderLeftWidth: 3, borderLeftColor: '#ef4444' }}>
-                <div className="text-[10px] text-slate-500">Outstanding</div>
-                <div className="text-lg font-extrabold text-red-500">{fE(totalOutstanding)}</div>
+              <div className="rounded-xl p-3 transition-all hover:shadow-lg hover:scale-[1.02]"
+                style={{ background: 'linear-gradient(135deg, #fee2e2 0%, #fecaca 100%)', border: '1px solid #ef4444' }}>
+                <div className="flex items-center justify-between">
+                  <div className="text-[10px] text-red-800 font-bold uppercase tracking-wider">⏳ Outstanding</div>
+                  <span className="text-red-600 text-base">⚠️</span>
+                </div>
+                <div className="text-lg font-extrabold text-red-700 mt-1">{fE(totalOutstanding)}</div>
+                {totalInvoiced > 0 && (
+                  <div className="mt-1.5 h-1 w-full rounded-full bg-white/60 overflow-hidden" title={Math.round(totalOutstanding/totalInvoiced*100) + '% outstanding'}>
+                    <div style={{
+                      width: Math.min(100, totalOutstanding / totalInvoiced * 100) + '%',
+                      background: '#ef4444',
+                      height: '100%',
+                      transition: 'width 0.3s'
+                    }} />
+                  </div>
+                )}
               </div>
             </div>
             {/* Sales by Division / المبيعات حسب القسم */}
@@ -7457,17 +7727,49 @@ export default function App() {
               })()}
             </div>
             <div className="grid grid-cols-3 gap-3 mb-3">
-              <div onClick={() => setTreasuryDrill('in')} className="bg-white rounded-lg p-3 cursor-pointer hover:shadow-md" style={{ borderLeftWidth: 3, borderLeftColor: '#10b981' }}>
-                <div className="text-[10px] text-slate-500">Cash In / وارد</div>
-                <div className="text-lg font-extrabold text-emerald-600">{fE(totalCashIn)}</div>
+              {/* S12 — Treasury summary cards with strong color coding.
+                  Background gradients make in/out instantly recognizable.
+                  Net card flips to red when treasury goes negative. */}
+              <div onClick={() => setTreasuryDrill('in')}
+                className="rounded-xl p-3 cursor-pointer transition-all hover:shadow-lg hover:scale-[1.02]"
+                style={{ background: 'linear-gradient(135deg, #d1fae5 0%, #a7f3d0 100%)', border: '1px solid #10b981' }}>
+                <div className="flex items-center justify-between">
+                  <div className="text-[10px] text-emerald-800 font-bold uppercase tracking-wider">↓ Cash In / وارد</div>
+                  <span className="text-emerald-600 text-base">💰</span>
+                </div>
+                <div className="text-lg font-extrabold text-emerald-700 mt-1">{fE(totalCashIn)}</div>
               </div>
-              <div onClick={() => setTreasuryDrill('out')} className="bg-white rounded-lg p-3 cursor-pointer hover:shadow-md" style={{ borderLeftWidth: 3, borderLeftColor: '#ef4444' }}>
-                <div className="text-[10px] text-slate-500">Cash Out / منصرف</div>
-                <div className="text-lg font-extrabold text-red-500">{fE(totalCashOut)}</div>
+              <div onClick={() => setTreasuryDrill('out')}
+                className="rounded-xl p-3 cursor-pointer transition-all hover:shadow-lg hover:scale-[1.02]"
+                style={{ background: 'linear-gradient(135deg, #fee2e2 0%, #fecaca 100%)', border: '1px solid #ef4444' }}>
+                <div className="flex items-center justify-between">
+                  <div className="text-[10px] text-red-800 font-bold uppercase tracking-wider">↑ Cash Out / منصرف</div>
+                  <span className="text-red-600 text-base">💸</span>
+                </div>
+                <div className="text-lg font-extrabold text-red-700 mt-1">{fE(totalCashOut)}</div>
               </div>
-              <div onClick={() => setTreasuryDrill('net')} className="bg-white rounded-lg p-3 cursor-pointer hover:shadow-md" style={{ borderLeftWidth: 3, borderLeftColor: totalCashIn > totalCashOut ? '#10b981' : '#ef4444' }}>
-                <div className="text-[10px] text-slate-500">Net / صافي</div>
-                <div className={'text-lg font-extrabold ' + (totalCashIn >= totalCashOut ? 'text-emerald-600' : 'text-red-500')}>{fE(totalCashIn - totalCashOut)}</div>
+              <div onClick={() => setTreasuryDrill('net')}
+                className="rounded-xl p-3 cursor-pointer transition-all hover:shadow-lg hover:scale-[1.02]"
+                style={{
+                  background: totalCashIn >= totalCashOut
+                    ? 'linear-gradient(135deg, #dbeafe 0%, #bfdbfe 100%)'
+                    : 'linear-gradient(135deg, #fef3c7 0%, #fde68a 100%)',
+                  border: '1px solid ' + (totalCashIn >= totalCashOut ? '#3b82f6' : '#f59e0b')
+                }}>
+                <div className="flex items-center justify-between">
+                  <div className={'text-[10px] font-bold uppercase tracking-wider ' + (totalCashIn >= totalCashOut ? 'text-blue-800' : 'text-amber-800')}>= Net / صافي</div>
+                  <span className="text-base">{totalCashIn >= totalCashOut ? '📈' : '📉'}</span>
+                </div>
+                <div className={'text-lg font-extrabold mt-1 ' + (totalCashIn >= totalCashOut ? 'text-blue-700' : 'text-amber-700')}>{fE(totalCashIn - totalCashOut)}</div>
+                {totalCashIn > 0 && (
+                  <div className="mt-1.5 h-1 w-full rounded-full bg-white/60 overflow-hidden">
+                    <div style={{
+                      width: Math.min(100, (totalCashIn - totalCashOut) / totalCashIn * 100) + '%',
+                      background: totalCashIn >= totalCashOut ? '#3b82f6' : '#ef4444',
+                      height: '100%'
+                    }} />
+                  </div>
+                )}
               </div>
             </div>
             {query && (() => {

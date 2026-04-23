@@ -219,8 +219,10 @@ test('E19 Hard cap of 3 action blocks per turn', function() {
 });
 
 test('E20 Response returns actions_executed array', function() {
-  assert(/return Response\.json\(\{ answer: finalText, decision: decision, actions_executed: actionsExecuted \}\)/.test(greeterBranch),
-    'final response must include actions_executed so client can show what happened');
+  // S13 upgrade: response also carries `briefing`. Test asserts the contract
+  // preserves answer + decision + actions_executed AND includes briefing.
+  assert(/return Response\.json\(\{ answer: finalText, decision: decision, actions_executed: actionsExecuted, briefing: briefing \}\)/.test(greeterBranch),
+    'final response must include answer, decision, actions_executed, AND briefing');
 });
 
 test('E21 Notifier helpers fire for cross-user actions', function() {
