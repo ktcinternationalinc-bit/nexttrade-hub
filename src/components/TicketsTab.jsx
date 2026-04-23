@@ -783,48 +783,128 @@ export default function TicketsTab({ toast, customers, user, userProfile, users,
         </label>
       )}
       {filtered.map(t => {
+        // S15 — Tickets tab redesign to match dashboard visual language.
+        //   * Title is the star: fontSize 15, bold, full prominence
+        //   * Ticket # demoted to small grey monospace tag
+        //   * Status = colored pill with border (not inline chip)
+        //   * Overdue = explicit "N DAYS OVERDUE" badge, red
+        //   * Due today = amber "DUE TODAY" badge
+        //   * Priority color drives the CARD left border so urgent tickets
+        //     jump out. Overdue overrides to red, due-today to amber.
+        //   * More breathing room — gap between cards, padding inside
         const priColor = PRIORITIES.find(p=>p.v===t.priority)?.c||'#f59e0b';
         const tAssignees = parseAssignees(t);
         const createdName = getUserName(t.created_by);
         const isOverdue = t.due_date && t.due_date < todayStr && t.status !== 'Closed';
+        const isDueToday = t.due_date === todayStr && t.status !== 'Closed';
+        const daysOverdue = isOverdue
+          ? Math.floor((new Date(todayStr).getTime() - new Date(t.due_date).getTime()) / 86400000)
+          : 0;
         const needsAck = t.status === 'New' && isAssignedToMe(t);
         const isBulked = bulkSelected.has(t.id);
+
+        // Left border: overdue > due-today > priority color
+        const leftBorderColor = isOverdue ? '#ef4444' : (isDueToday ? '#f59e0b' : priColor);
+
+        // Status pill color map (matches the dashboard palette)
+        const statusPill = {
+          'New':          { bg: '#dbeafe', fg: '#1e40af', border: '#93c5fd' },
+          'Acknowledged': { bg: '#e0e7ff', fg: '#3730a3', border: '#a5b4fc' },
+          'In Progress':  { bg: '#fef3c7', fg: '#92400e', border: '#fcd34d' },
+          'Resolved':     { bg: '#d1fae5', fg: '#065f46', border: '#6ee7b7' },
+          'Closed':       { bg: '#f1f5f9', fg: '#475569', border: '#cbd5e1' },
+        };
+        const sp = statusPill[t.status] || { bg: '#ede9fe', fg: '#6d28d9', border: '#c4b5fd' };
+
         return (
-          <div key={t.id} className={'bg-white rounded-xl border-2 hover:shadow-sm transition cursor-pointer overflow-hidden ' + (isBulked ? 'border-blue-400 ring-1 ring-blue-200' : 'border-slate-200 hover:border-slate-300')}>
-            <div className="h-1" style={{ background: STATUS_COLORS[t.status] || '#6b7280' }} />
+          <div key={t.id}
+            className={'bg-white rounded-xl hover:shadow-md transition cursor-pointer overflow-hidden ' + (isBulked ? 'ring-2 ring-blue-400' : '')}
+            style={{ borderLeft: '4px solid ' + leftBorderColor, border: isBulked ? undefined : '1px solid #e2e8f0', borderLeftWidth: 4, borderLeftColor: leftBorderColor }}>
             <div className="px-4 py-3">
-              <div className="flex items-center gap-2 mb-2">
+              {/* Top row: bulk select + title (the star) + status pill */}
+              <div className="flex items-start gap-3 mb-2">
                 <input type="checkbox" checked={isBulked} onChange={(e) => { e.stopPropagation(); toggleBulk(t.id); }}
-                  onClick={e => e.stopPropagation()} className="w-4 h-4 rounded flex-shrink-0" />
-                <div className="flex items-center gap-2 flex-1 min-w-0" onClick={()=>{setSel(t);loadComments(t.id);}}>
-                  {t.ticket_number && <span className="text-[10px] font-mono text-blue-500 bg-blue-50 px-1.5 py-0.5 rounded flex-shrink-0">{t.ticket_number}</span>}
-                  <span className="text-sm font-bold truncate">{t.title}</span>
+                  onClick={e => e.stopPropagation()} className="w-4 h-4 rounded mt-0.5 flex-shrink-0" />
+                <div className="flex-1 min-w-0" onClick={()=>{setSel(t);loadComments(t.id);}}>
+                  <div className="font-bold text-[15px] text-slate-900 leading-tight mb-1"
+                    style={{ wordBreak: 'break-word' }}>
+                    {t.title}
+                  </div>
+                  {/* Info row — ticket#, status pill, and urgency badges */}
+                  <div className="flex items-center gap-2 flex-wrap">
+                    {t.ticket_number && (
+                      <span className="text-[10px] font-mono font-bold text-slate-500 tracking-wider">
+                        {t.ticket_number}
+                      </span>
+                    )}
+                    <span className="inline-flex items-center px-2 py-0.5 rounded-md text-[10px] font-bold"
+                      style={{ background: sp.bg, color: sp.fg, border: '1px solid ' + sp.border }}>
+                      {t.status}
+                    </span>
+                    {daysOverdue > 0 && (
+                      <span className="inline-flex items-center px-2 py-0.5 rounded-md text-[10px] font-extrabold tracking-wider"
+                        style={{ background: '#fee2e2', color: '#b91c1c', border: '1px solid #fca5a5' }}>
+                        {daysOverdue === 1 ? '1 DAY OVERDUE' : daysOverdue + ' DAYS OVERDUE'}
+                      </span>
+                    )}
+                    {isDueToday && (
+                      <span className="inline-flex items-center px-2 py-0.5 rounded-md text-[10px] font-extrabold tracking-wider"
+                        style={{ background: '#fef3c7', color: '#92400e', border: '1px solid #fcd34d' }}>
+                        DUE TODAY
+                      </span>
+                    )}
+                    {/* Priority dot with label */}
+                    <span className="inline-flex items-center gap-1 text-[10px] font-semibold text-slate-600 capitalize">
+                      <span className="w-2 h-2 rounded-full" style={{ background: priColor }} />
+                      {t.priority || 'medium'}
+                    </span>
+                  </div>
                 </div>
-                <div className="flex items-center gap-1.5 flex-shrink-0">
-                  <span className="w-2 h-2 rounded-full" style={{background:priColor}} title={t.priority} />
-                  <span className="px-2 py-0.5 rounded text-[9px] font-bold text-white" style={{background:STATUS_COLORS[t.status]}}>{t.status}</span>
-                </div>
+                <span className="text-[10px] text-slate-400 flex-shrink-0">
+                  {new Date(t.created_at).toLocaleDateString()}
+                </span>
               </div>
-              <div onClick={()=>{setSel(t);loadComments(t.id);}}>
-              {t.description && <div className="text-[11px] text-slate-500 mb-2 line-clamp-1 ml-6">{t.description}</div>}
-              <div className="flex items-center gap-2 flex-wrap ml-6">
+
+              {/* Description (if present) */}
+              {t.description && (
+                <div className="text-[12px] text-slate-600 mb-2 line-clamp-2 pl-7" onClick={()=>{setSel(t);loadComments(t.id);}}>
+                  {t.description}
+                </div>
+              )}
+
+              {/* Meta row: created by / assignees / due date / order */}
+              <div className="flex items-center gap-2 flex-wrap pl-7" onClick={()=>{setSel(t);loadComments(t.id);}}>
                 <span className="inline-flex items-center gap-1 text-[10px] bg-slate-50 text-slate-600 px-2 py-0.5 rounded">
-                  <span className="w-1.5 h-1.5 rounded-full bg-blue-400" />{createdName || '?'}</span>
+                  <span className="w-1.5 h-1.5 rounded-full bg-blue-400" />by {createdName || '?'}
+                </span>
                 {tAssignees.length > 0 ? tAssignees.map(uid => (
                   <span key={uid} className="inline-flex items-center gap-1 text-[10px] px-2 py-0.5 rounded font-semibold"
                     style={{ background: (userColorMap[uid] || '#8b5cf6') + '18', color: userColorMap[uid] || '#8b5cf6' }}>
-                    <span className="w-1.5 h-1.5 rounded-full" style={{ background: userColorMap[uid] || '#8b5cf6' }} />{getUserName(uid) || '?'}</span>
-                )) : <span className="inline-flex items-center gap-1 text-[10px] px-2 py-0.5 rounded font-semibold bg-red-50 text-red-600">
-                  <span className="w-1.5 h-1.5 rounded-full bg-red-500" />Unassigned</span>}
-                {t.due_date && <span className={'inline-flex items-center gap-1 text-[10px] px-2 py-0.5 rounded ' + (isOverdue ? 'bg-red-100 text-red-700 font-bold' : 'bg-slate-50 text-slate-600')}>📅 {t.due_date}{isOverdue ? ' OVERDUE' : ''}</span>}
-                {t.order_number && <span className="text-[10px] bg-slate-50 text-slate-500 px-2 py-0.5 rounded">#{t.order_number}</span>}
-                <span className="text-[10px] text-slate-400 ml-auto">{new Date(t.created_at).toLocaleDateString()}</span>
-              </div>
+                    <span className="w-1.5 h-1.5 rounded-full" style={{ background: userColorMap[uid] || '#8b5cf6' }} />
+                    → {getUserName(uid) || '?'}
+                  </span>
+                )) : (
+                  <span className="inline-flex items-center gap-1 text-[10px] px-2 py-0.5 rounded font-semibold bg-red-50 text-red-600">
+                    <span className="w-1.5 h-1.5 rounded-full bg-red-500" />Unassigned
+                  </span>
+                )}
+                {t.due_date && !isOverdue && !isDueToday && (
+                  <span className="inline-flex items-center gap-1 text-[10px] px-2 py-0.5 rounded bg-slate-50 text-slate-600">
+                    📅 Due {t.due_date}
+                  </span>
+                )}
+                {t.order_number && (
+                  <span className="text-[10px] bg-slate-50 text-slate-500 px-2 py-0.5 rounded">
+                    #{t.order_number}
+                  </span>
+                )}
               </div>
             </div>
             {needsAck && (
               <button onClick={(e) => { e.stopPropagation(); updateStatus(t, 'Acknowledged'); }}
-                className="w-full px-4 py-2.5 bg-purple-600 text-white text-xs font-bold border-t border-purple-500">✓ Acknowledge</button>
+                className="w-full px-4 py-2.5 bg-purple-600 hover:bg-purple-700 text-white text-xs font-bold transition">
+                ✓ Acknowledge
+              </button>
             )}
           </div>
         );

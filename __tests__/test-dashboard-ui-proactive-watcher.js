@@ -39,8 +39,9 @@ var askRoute = fs.readFileSync(path.join(REPO, 'src/app/api/ask/route.js'), 'utf
 test('S14.UI1 TicketCard has priority-colored left border', function() {
   assert(/const priBorderColor = \(p\) =>/.test(page),
     'priBorderColor helper must be defined');
-  assert(/borderLeft: '3px solid ' \+ leftBorderColor/.test(page),
-    'TicketCard must render a 3px left border in the computed priority color');
+  // S15 bumped from 3px to 4px for stronger separation
+  assert(/borderLeft: '4px solid ' \+ leftBorderColor/.test(page),
+    'TicketCard must render a 4px left border in the computed priority color');
 });
 
 test('S14.UI2 priBorderColor maps priorities to distinct colors', function() {
@@ -65,10 +66,9 @@ test('S14.UI4 Due-today takes amber (urgent but not overdue)', function() {
 });
 
 test('S14.UI5 Title is visually prominent, ticket# is a small tag', function() {
-  // The title now has fontSize 14 and fontWeight 700; ticket# dropped to fontSize 10 fontWeight 700 color #64748b (subtle grey)
-  var titleMatch = page.match(/\{t\.title\}[\s\S]{0,100}/);
-  assert(/fontSize: 14, fontWeight: 700, color: '#f1f5f9'/.test(page),
-    'title must be fontSize 14, fontWeight 700, in bright f1f5f9 color');
+  // S15 bumped to fontSize 15, fontWeight 800 for clearer visual hierarchy
+  assert(/fontSize: 15, fontWeight: 800, color: '#f1f5f9'/.test(page),
+    'title must be fontSize 15, fontWeight 800, in bright f1f5f9 color');
   // Ticket number should be subtle monospace tag
   assert(/fontSize: 10, fontWeight: 700, color: '#64748b', fontFamily: 'monospace'[\s\S]{0,80}\{t\.ticket_number\}/.test(page),
     'ticket number must be small subdued monospace tag');

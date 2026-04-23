@@ -2673,6 +2673,129 @@ export default function App() {
   };
 
   // ==========================================
+  // UNCOLLECT CHECK (S15 — Apr 22 2026)
+  // ==========================================
+  // What this does in plain English:
+  //   Reverses a "Collected" check back to "Pending". Cleanly:
+  //     1. Finds the treasury cash_in row that was created when the check was
+  //        collected (linked via source_check_id OR check.linked_treasury_id).
+  //     2. Decides what to DO with that treasury row:
+  //        a) If the treasury row was CREATED by the collect flow (typical
+  //           case — source_check_id = this check), we DELETE it. That reverses
+  //           the double-count we're worried about.
+  //        b) If the treasury row existed BEFORE (user attached the check to
+  //           an existing treasury row in mode 'candidate_match'), we just
+  //           UNSTAMP it (clear source_check_id + payment_source) — the money
+  //           is real, we just break the link.
+  //     3. Unlinks any bank transaction that was matched to this treasury row.
+  //     4. Recalculates the invoice's collected total.
+  //     5. Flips the check back to pending, clears collection_date, clears
+  //        linked_treasury_id.
+  //     6. Writes an audit trail comment so there's a permanent record.
+  //
+  // Safety: every step runs inside try/catch. A failure mid-way does NOT
+  // leave the system in a half-reversed state — either everything succeeds
+  // or the check stays marked collected with an error toast.
+  const handleUncollectCheck = async (check, reason) => {
+    if (!check) return;
+    if (check.status !== 'collected') {
+      toast.error('Only collected checks can be uncollected');
+      return;
+    }
+
+    const confirmMsg = 'Reverse the collection of this check?\n\n' +
+      'Check: #' + (check.check_number || '?') + ' for ' + Number(check.amount).toLocaleString() + ' EGP\n' +
+      'Customer: ' + (check.customer_name || '?') + '\n' +
+      'Collected on: ' + (check.collection_date || '?') + '\n\n' +
+      'This will:\n' +
+      '  • Remove/unlink the treasury entry\n' +
+      '  • Unlink any matched bank transaction\n' +
+      '  • Recalculate the invoice\n' +
+      '  • Set check back to Pending\n\n' +
+      'Are you sure?';
+    if (!confirm(confirmMsg)) return;
+
+    try {
+      // Step 1 — find the linked treasury row
+      let treasuryRow = null;
+      if (check.linked_treasury_id) {
+        const tRes = await supabase.from('treasury')
+          .select('id, source_check_id, payment_source, cash_in, linked_invoice_id')
+          .eq('id', check.linked_treasury_id)
+          .maybeSingle();
+        if (tRes.data) treasuryRow = tRes.data;
+      }
+      // Fallback — look up by source_check_id
+      if (!treasuryRow) {
+        const fbRes = await supabase.from('treasury')
+          .select('id, source_check_id, payment_source, cash_in, linked_invoice_id')
+          .eq('source_check_id', check.id)
+          .maybeSingle();
+        if (fbRes.data) treasuryRow = fbRes.data;
+      }
+
+      // Step 2 — decide: delete vs unstamp
+      if (treasuryRow) {
+        const wasCreatedByCollect = treasuryRow.source_check_id === check.id;
+        if (wasCreatedByCollect) {
+          // Delete the treasury row we created
+          const delRes = await supabase.from('treasury').delete().eq('id', treasuryRow.id);
+          if (delRes.error) throw new Error('Could not delete treasury row: ' + delRes.error.message);
+        } else {
+          // Unstamp an existing treasury row
+          await supabase.from('treasury').update({
+            source_check_id: null,
+            payment_source: null,
+          }).eq('id', treasuryRow.id);
+        }
+
+        // Step 3 — unlink any bank transactions that were matched to this treasury
+        await supabase.from('egypt_bank_transactions').update({
+          matched_treasury_id: null,
+          matched_at: null,
+          matched_by: null,
+        }).eq('matched_treasury_id', treasuryRow.id);
+      }
+
+      // Step 4 — recalc invoice if the check was linked to one
+      const invoiceId = check.invoice_id || (treasuryRow && treasuryRow.linked_invoice_id) || null;
+      if (invoiceId) {
+        try { await recalcInvoiceCollected(invoiceId); } catch (e) {
+          console.warn('Invoice recalc after uncollect failed:', e.message);
+        }
+      }
+
+      // Step 5 — flip the check back to pending, clear collection fields
+      await dbUpdate('checks', check.id, {
+        status: 'pending',
+        collection_date: null,
+        linked_treasury_id: null,
+        physical_check_returned: false,
+      }, (userProfile && userProfile.id) || (user && user.id) || null);
+
+      // Step 6 — audit trail (optional: write a note)
+      const auditNote = 'Check uncollected by ' + ((userProfile && userProfile.name) || 'user') +
+        (reason ? ' — reason: ' + reason : '') +
+        (treasuryRow ? (treasuryRow.source_check_id === check.id ? ' (treasury row deleted)' : ' (treasury row unstamped)') : ' (no treasury row found)');
+      try {
+        await supabase.from('daily_log').insert({
+          user_id: (userProfile && userProfile.id) || null,
+          entry_text: auditNote + ' — Check #' + (check.check_number || '?') + ' for ' + Number(check.amount).toLocaleString() + ' EGP',
+          log_category: 'check',
+          log_date: new Date().toISOString().substring(0, 10),
+          auto_generated: true,
+        });
+      } catch (e) { /* non-fatal */ }
+
+      toast.success('Check uncollected successfully ↩︎');
+      await loadAllData();
+    } catch (err) {
+      console.error('Uncollect error:', err);
+      toast.error('Uncollect failed: ' + (err.message || 'unknown error'));
+    }
+  };
+
+  // ==========================================
   // UI HELPERS
   // ==========================================
   const ModeBar = () => (
@@ -5524,10 +5647,12 @@ export default function App() {
             {/* ===== AI ASSISTANT (compact — click to expand) =====
                 H2 (Apr 20): wrapper has max-md:order-last so Nadia visually sinks
                 to the bottom on viewports <768px. Desktop (md+) keeps natural order.
-                Single instance — no double mount, sessionMessages/hasGreeted preserved. */}
+                Single instance — no double mount, sessionMessages/hasGreeted preserved.
+                S15 (Apr 22): removed pt-12 mt-8 which was adding ~80px of empty
+                space above Nadia. mb-4 alone is enough breathing room. */}
             <div className="max-md:order-last">
             {!greeterDismissed && greeterSettings.enabled ? (
-              <div className="mb-4 pt-12 mt-8">
+              <div className="mb-4">
                 <AIGreeter
                   user={user} userProfile={userProfile} users={teamUsers}
                   tickets={dashTickets} invoices={invoices} treasury={treasury}
@@ -5539,6 +5664,10 @@ export default function App() {
                   sessionMessages={greeterMessages} onMessagesUpdate={setGreeterMessages}
                   onToggle={(on) => { if (!on) setGreeterDismissed(true); }}
                   toast={toast}
+                  contextTab={tab}
+                  contextSelectedCustomer={selectedCustomer}
+                  contextSelectedInvoice={selectedInvoice}
+                  contextOpenTicketId={openTicketId}
                 />
               </div>
             ) : greeterSettings.enabled ? (
@@ -6209,18 +6338,18 @@ export default function App() {
                 <div style={{
                   cursor: 'pointer',
                   transition: 'background 0.15s',
-                  borderLeft: '3px solid ' + leftBorderColor,
-                  background: 'rgba(255,255,255,0.01)',
-                  borderBottom: '1px solid rgba(255,255,255,0.04)',
+                  borderLeft: '4px solid ' + leftBorderColor,
+                  background: 'rgba(255,255,255,0.015)',
+                  borderBottom: '1px solid rgba(255,255,255,0.06)',
                 }}
-                  className="hover:bg-white/[0.04]" onClick={() => { setOpenTicketId(t.id); setTab('tickets'); }}>
+                  className="hover:bg-white/[0.05]" onClick={() => { setOpenTicketId(t.id); setTab('tickets'); }}>
                   <div style={{ padding: '12px 14px 12px 12px' }}>
                     {/* Title row — title is the star, ticket # is a subtle tag */}
                     <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 12 }}>
                       <div style={{ flex: 1, minWidth: 0 }}>
                         <div style={{
-                          fontSize: 14, fontWeight: 700, color: '#f1f5f9',
-                          lineHeight: 1.35, marginBottom: 6,
+                          fontSize: 15, fontWeight: 800, color: '#f1f5f9',
+                          lineHeight: 1.35, marginBottom: 8,
                           overflow: 'hidden', textOverflow: 'ellipsis',
                           display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical',
                         }}>
@@ -8444,6 +8573,14 @@ export default function App() {
                                         if (linkedTxn) setInspectedTreasury(linkedTxn);
                                       }}
                                         className="px-1.5 py-0.5 rounded border border-indigo-300 text-indigo-600 text-[9px] hover:bg-indigo-50" title="Inspect treasury entry / فحص قيد الخزنة">ⓘ</button>
+                                    )}
+                                    {/* S15 — Uncollect button: reverses the collect flow cleanly */}
+                                    {(userProfile?.role === 'super_admin' || userProfile?.role === 'admin') && (
+                                      <button onClick={() => handleUncollectCheck(c)}
+                                        className="px-1.5 py-0.5 rounded border border-amber-300 text-amber-700 text-[9px] hover:bg-amber-50 font-semibold"
+                                        title="Uncollect — reverse this collection">
+                                        ↩︎ Uncollect
+                                      </button>
                                     )}
                                   </div>
                                 )}

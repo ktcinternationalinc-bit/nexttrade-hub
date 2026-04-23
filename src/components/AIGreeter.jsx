@@ -64,7 +64,7 @@ function renderDecisionPanel(d, keyId, lang) {
   );
 }
 
-export default function AIGreeter({ user, userProfile, users, tickets, invoices, treasury, checks, loginHistory, loginHistoryLoaded, lang, personality, greeterLang, onToggle, toast, enabled, hasGreeted, onGreeted, sessionMessages, onMessagesUpdate }) {
+export default function AIGreeter({ user, userProfile, users, tickets, invoices, treasury, checks, loginHistory, loginHistoryLoaded, lang, personality, greeterLang, onToggle, toast, enabled, hasGreeted, onGreeted, sessionMessages, onMessagesUpdate, contextTab, contextSelectedCustomer, contextSelectedInvoice, contextOpenTicketId }) {
   // Use parent's session messages — persist across tab switches
   var messages = sessionMessages || [];
   var setMessages = function(msgs) { if (onMessagesUpdate) onMessagesUpdate(msgs); };
@@ -278,8 +278,79 @@ export default function AIGreeter({ user, userProfile, users, tickets, invoices,
     if (pendingChecks.length) ctx += 'Checks due today: ' + pendingChecks.length + ', EGP ' + pendingChecks.reduce(function(a, c) { return a + Number(c.amount || 0); }, 0).toLocaleString() + '\n';
     ctx += 'Treasury net: EGP ' + net.toLocaleString() + '\n';
     if (!myTickets.length && !overdueInvoices.length && !pendingChecks.length) ctx += 'No urgent items — all clear!\n';
+
+    // S15 — Phase 2 sub-project 3: Context-aware screens.
+    // Inject what the user is currently looking at so Nadia can tailor her
+    // conversation. E.g. if they're on a customer detail page, she knows
+    // to talk about THAT customer specifically.
+    var screenCtx = '';
+    if (contextTab) {
+      screenCtx += '\n===== CURRENT SCREEN CONTEXT =====\n';
+      screenCtx += 'Active tab: ' + contextTab + '\n';
+
+      if (contextSelectedCustomer) {
+        screenCtx += 'Currently viewing customer: ' + contextSelectedCustomer + '\n';
+        // Pull customer's recent invoices + outstanding balance
+        var custInvoices = (invoices || []).filter(function(inv) {
+          var n = inv.customer_name || inv.customer_name_en || '';
+          return n === contextSelectedCustomer;
+        });
+        if (custInvoices.length > 0) {
+          var custOutstanding = custInvoices.reduce(function(a, i) { return a + Number(i.outstanding || 0); }, 0);
+          var custCollected = custInvoices.reduce(function(a, i) { return a + Number(i.total_collected || 0); }, 0);
+          screenCtx += '  Total invoices with this customer: ' + custInvoices.length + '\n';
+          screenCtx += '  Outstanding: EGP ' + custOutstanding.toLocaleString() + '\n';
+          screenCtx += '  Lifetime collected: EGP ' + custCollected.toLocaleString() + '\n';
+          var recentInv = custInvoices.slice(0, 3).map(function(i) {
+            return (i.order_number || '#?') + ' ' + (i.invoice_date || '') + ' outstanding ' + Number(i.outstanding || 0).toLocaleString();
+          }).join(' | ');
+          if (recentInv) screenCtx += '  Recent: ' + recentInv + '\n';
+        }
+        var custChecks = (checks || []).filter(function(c) { return c.customer_name === contextSelectedCustomer; });
+        if (custChecks.length > 0) {
+          screenCtx += '  Has ' + custChecks.length + ' check(s) in the system.\n';
+        }
+        screenCtx += 'When the user asks generic questions, tailor to THIS customer specifically.\n';
+      }
+
+      if (contextSelectedInvoice) {
+        screenCtx += 'Currently viewing invoice: ' + (contextSelectedInvoice.order_number || contextSelectedInvoice.id) + '\n';
+        screenCtx += '  Customer: ' + (contextSelectedInvoice.customer_name || '?') + '\n';
+        screenCtx += '  Total: EGP ' + Number(contextSelectedInvoice.total_amount || 0).toLocaleString() + '\n';
+        screenCtx += '  Collected: EGP ' + Number(contextSelectedInvoice.total_collected || 0).toLocaleString() + '\n';
+        screenCtx += '  Outstanding: EGP ' + Number(contextSelectedInvoice.outstanding || 0).toLocaleString() + '\n';
+        screenCtx += '  Date: ' + (contextSelectedInvoice.invoice_date || '?') + '\n';
+      }
+
+      if (contextOpenTicketId) {
+        var openT = (tickets || []).find(function(t) { return t.id === contextOpenTicketId; });
+        if (openT) {
+          screenCtx += 'Currently viewing ticket: ' + (openT.ticket_number || '') + ' — ' + (openT.title || '') + '\n';
+          screenCtx += '  Status: ' + (openT.status || '') + ' | Priority: ' + (openT.priority || '') + '\n';
+          if (openT.due_date) screenCtx += '  Due: ' + openT.due_date + '\n';
+        }
+      }
+
+      // Tab-specific hints so Nadia anticipates useful conversation
+      var tabHints = {
+        treasury:   'User is in Treasury. Be ready to answer cash-flow, balance, and transaction questions.',
+        sales:      'User is in Sales. Be ready to discuss specific invoices, collection rates, outstanding balances.',
+        customers:  'User is in Customers. Be ready to pull up any customer\'s history or compare customers.',
+        checks:     'User is in Checks. Be ready to discuss pending collections, overdue checks, bank matching.',
+        tickets:    'User is in Tickets. Be ready to discuss any ticket status, assignee, or priority.',
+        crm:        'User is in CRM. Be ready to discuss follow-ups, customer outreach.',
+        shipping:   'User is in Shipping. Be ready to discuss rates, quotes, bookings.',
+        calendar:   'User is in Calendar. Be ready to schedule or discuss meetings.',
+      };
+      if (tabHints[contextTab]) {
+        screenCtx += '\nTab guidance: ' + tabHints[contextTab] + '\n';
+      }
+      screenCtx += '===================================\n';
+      ctx += screenCtx;
+    }
+
     return ctx;
-  }, [myId, firstName, fullName, userProfile, tickets, invoices, treasury, checks, loginHistory]);
+  }, [myId, firstName, fullName, userProfile, tickets, invoices, treasury, checks, loginHistory, contextTab, contextSelectedCustomer, contextSelectedInvoice, contextOpenTicketId]);
 
   var sysPrompt = persona.prompt + '\n'
     + 'You work at KTC Trading Company (Kandil Trading - Egyptian/US import-export, textiles, chemicals, leather).\n'
