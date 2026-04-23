@@ -26,15 +26,16 @@ test('S15.D1 Empty space above Nadia removed (pt-12 mt-8 gone)', function() {
     'old "mb-4 pt-12 mt-8" must be removed — was adding ~80px dead space above Nadia');
 });
 
-test('S15.D2 S16 supersedes: AIGreeter moved to floating overlay', function() {
-  // S16 (Apr 22) moved Nadia from a dashboard-embedded AIGreeter into a
-  // NadiaFloatingOverlay at page root. So there's no longer a "wrapper with
-  // mb-4 around AIGreeter on the dashboard" — instead, the floating overlay
-  // handles positioning globally. This test now verifies the migration happened.
+test('S15.D2 S17.5: dashboard AIGreeter restored + overlay on other tabs', function() {
+  // S16 had moved Nadia to overlay-only (broke dashboard home). S17.5
+  // restored her to the dashboard. Now BOTH exist: dashboard AIGreeter is
+  // the primary home, overlay is for non-dashboard tabs.
+  assert(/<AIGreeter\s/.test(page),
+    'dashboard AIGreeter must be present (primary home)');
   assert(/<NadiaFloatingOverlay\s/.test(page),
-    'dashboard AIGreeter was replaced by NadiaFloatingOverlay at page root (S16)');
-  assert(/The dashboard-only AIGreeter is gone/.test(page),
-    'explicit comment marks where the old dashboard AIGreeter was removed');
+    'overlay must also be present (for non-dashboard tabs)');
+  assert(/tab !== 'dashboard' && \(\s*<NadiaFloatingOverlay/.test(page),
+    'overlay must be gated on tab !== dashboard to avoid double-mount');
 });
 
 // ===== PART 2: TICKETS TAB UI — MATCHES DASHBOARD =====

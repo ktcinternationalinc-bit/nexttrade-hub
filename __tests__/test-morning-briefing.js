@@ -175,10 +175,13 @@ test('S13.E15 Cold customer detection requires VIP threshold (100k+ revenue)', f
 // ===== AIGREETER + ASK ROUTE WIRING =====
 
 test('S13.W1 AIGreeter sends isGreeting flag in payload', function() {
-  assert(/isGreeting: !!isGreeting/.test(greeter),
-    'AIGreeter must include isGreeting in BOTH payload variants');
+  // S17.6: the payload flag is now `isLoginGreet` (true only for the
+  // initial login greeting, not tab greetings). This lets the server
+  // skip the expensive briefing computation on tab_greeting calls.
+  assert(/isGreeting: isLoginGreet/.test(greeter),
+    'AIGreeter must send isGreeting: isLoginGreet in both payload variants');
   // Verify both branches (v2 and legacy)
-  var matches = (greeter.match(/isGreeting: !!isGreeting/g) || []).length;
+  var matches = (greeter.match(/isGreeting: isLoginGreet/g) || []).length;
   assert(matches >= 2, 'isGreeting must be in both v2 and legacy payload — found ' + matches);
 });
 

@@ -1422,33 +1422,33 @@ function runSection19_MobileNadia() {
   assert(dashOpen && /flex/.test(dashOpen[1]), '19.1b dashboard root has flex');
   assert(dashOpen && /flex-col/.test(dashOpen[1]), '19.1c dashboard root has flex-col');
 
-  // ===== S16 (Apr 22 2026) — Nadia moved from dashboard-only to global =====
-  // She now lives as a floating overlay mounted at the root of page.jsx.
-  // The old dashboard-only AIGreeter block was removed. Tests in this block
-  // have been updated to assert the new pattern.
+  // ===== S17.5 (Apr 23 2026) — Dual Nadia: dashboard AIGreeter restored =====
+  // After S16 moved Nadia entirely into a floating overlay, Max clarified
+  // she needs to stay in her ORIGINAL home on the dashboard for login
+  // greetings/briefings. The overlay now only renders on NON-dashboard tabs.
+  // Both share state via page-level nadiaMuted.
   // ========================================================================
 
-  // 19.2 — Floating overlay is mounted at the page root (visible on all tabs)
+  // 19.2 — Floating overlay is mounted (on non-dashboard tabs)
   assert(/<NadiaFloatingOverlay\s/.test(src),
-    '19.2a NadiaFloatingOverlay is mounted at page root so Nadia lives on every tab');
+    '19.2a NadiaFloatingOverlay is mounted (renders on non-dashboard tabs)');
 
-  // 19.3 — No direct <AIGreeter> mount in page.jsx (it renders inside the overlay)
+  // 19.3 — Exactly ONE direct <AIGreeter> mount — the dashboard home
   const greeterInstances = (src.match(/<AIGreeter\b/g) || []).length;
-  assert(greeterInstances === 0,
-    '19.3a no direct AIGreeter mount in page.jsx — overlay owns Nadia now (found=' + greeterInstances + ')');
+  assert(greeterInstances === 1,
+    '19.3a exactly one <AIGreeter> mount in page.jsx (the dashboard home) — found ' + greeterInstances);
 
   // 19.4 — overlay import is present
   assert(/import NadiaFloatingOverlay from '\.\.\/components\/NadiaFloatingOverlay'/.test(src),
     '19.4a NadiaFloatingOverlay must be imported');
 
-  // 19.5 — overlay is gated on greeterSettings.enabled AND !greeterDismissed
-  //        so the user can still dismiss Nadia in Settings
-  assert(/greeterSettings\.enabled && !greeterDismissed && \(\s*<NadiaFloatingOverlay/.test(src),
-    '19.5a overlay render is gated on greeterSettings.enabled && !greeterDismissed');
+  // 19.5 — Overlay render gate: enabled && !dismissed && tab !== 'dashboard'
+  assert(/greeterSettings\.enabled && !greeterDismissed && tab !== 'dashboard' && \(\s*<NadiaFloatingOverlay/.test(src),
+    '19.5a overlay gated on tab !== \'dashboard\' so it does NOT double-mount on the dashboard');
 
-  // 19.6 — The old dashboard-only block was replaced with an explanatory comment
-  assert(/The dashboard-only AIGreeter is gone/.test(src),
-    '19.6a explanatory comment marks where the dashboard-only AIGreeter was removed');
+  // 19.6 — Dashboard AIGreeter wrapper still uses max-md:order-last for mobile
+  assert(/<div className="max-md:order-last">/.test(src),
+    '19.6a dashboard AIGreeter still wrapped with max-md:order-last (original mobile ordering)');
 
   // 19.7 — parent flex-col does not break layout: no child uses `float-` classes
   // inside the dashboard block (float breaks flex)
@@ -3701,22 +3701,30 @@ function runSection31_PageJsxAudit() {
     '31.bug6.4a invoice insert no longer uses temp- fallback (skip optimistic if newInv missing)');
 
   // =========================================================
-  // H2 — S16 supersedes: AIGreeter moved to NadiaFloatingOverlay (global)
+  // H2 — S17.5: dashboard AIGreeter restored + overlay on other tabs
   // =========================================================
   // Dashboard root still has flex flex-col (unchanged)
   assert(/\{tab === 'dashboard' && \(\s*\n\s*<div className="flex flex-col">/.test(pSrc),
     '31.h2.1a dashboard root is flex flex-col');
 
-  // S16: AIGreeter moved from dashboard-embedded to a floating overlay at
-  // page root, so the old "max-md:order-last" wrapper is gone. Verify that
-  // the floating overlay is mounted instead.
+  // Floating overlay mounted for non-dashboard tabs
   assert(/<NadiaFloatingOverlay\s/.test(pSrc),
-    '31.h2.2a NadiaFloatingOverlay is mounted (replaces old max-md:order-last wrapper)');
+    '31.h2.2a NadiaFloatingOverlay is mounted (for non-dashboard tabs)');
 
-  // S16: No direct <AIGreeter> mount in page.jsx — it renders inside the overlay
+  // Exactly ONE direct <AIGreeter> mount — the dashboard home.
+  // The overlay renders AIGreeter internally but that does NOT appear in
+  // page.jsx.
   const greeterCount = (pSrc.match(/<AIGreeter\b/g) || []).length;
-  assert(greeterCount === 0,
-    '31.h2.3a no direct AIGreeter mount in page.jsx (overlay owns it now, count=' + greeterCount + ')');
+  assert(greeterCount === 1,
+    '31.h2.3a exactly one <AIGreeter> mount in page.jsx — dashboard home (count=' + greeterCount + ')');
+
+  // Dashboard AIGreeter wrapper still uses max-md:order-last for mobile order
+  assert(/<div className="max-md:order-last">/.test(pSrc),
+    '31.h2.4a dashboard AIGreeter still wrapped with max-md:order-last');
+
+  // Overlay gated to NOT render on dashboard (prevents double-mount)
+  assert(/tab !== 'dashboard' && \(\s*<NadiaFloatingOverlay/.test(pSrc),
+    '31.h2.5a overlay gated on tab !== \'dashboard\' to avoid double-mount');
 
   // =========================================================
   // H3 — breakdown rendering

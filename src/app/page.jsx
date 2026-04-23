@@ -468,6 +468,23 @@ export default function App() {
   const [greeterDismissed, setGreeterDismissed] = useState(false);
   const [greeterHasGreeted, setGreeterHasGreeted] = useState(false);
   const [greeterMessages, setGreeterMessages] = useState([]);
+  // S17 — Shared Nadia mute state. Read from localStorage on mount so the
+  // user's mute preference persists across sessions. Both the dashboard
+  // AIGreeter and the NadiaFloatingOverlay read this same value, so muting
+  // on one instance silences the other too.
+  const [nadiaMuted, setNadiaMuted] = useState(() => {
+    if (typeof window === 'undefined') return false;
+    try { return localStorage.getItem('nadia.muted') === 'true'; } catch (e) { return false; }
+  });
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    try { localStorage.setItem('nadia.muted', nadiaMuted ? 'true' : 'false'); } catch (e) {}
+    // Also dispatch events so components that listen (like the overlay)
+    // stay in sync if another part of the app toggles mute.
+    try {
+      window.dispatchEvent(new CustomEvent(nadiaMuted ? 'nadia-mute' : 'nadia-unmute'));
+    } catch (e) {}
+  }, [nadiaMuted]);
   const [greeterSettings, setGreeterSettings] = useState({ personality: 'friendly', language: 'en', enabled: true });
   // Voice system ("Hey Bob"). Defaults to ON for super_admin, but each
   // user can toggle in Settings. Off entirely in browsers without support.
@@ -2965,11 +2982,12 @@ export default function App() {
         Engine's chips and executes them (draft email, create reminder, flag
         invoice, etc.). Headless component, safe to mount once globally. */}
     <NadiaActionBridge userId={userProfile?.id} toast={toast} />
-    {/* S16 — Floating Nadia overlay. Visible on every tab. User can mute /
-        unmute via a button in the pill. Starts collapsed by default until
-        the user clicks to expand. When expanded, the full AIGreeter chat
-        UI is rendered inside it. */}
-    {greeterSettings.enabled && !greeterDismissed && (
+    {/* S17 — Floating Nadia overlay. Visible on every tab EXCEPT the
+        dashboard (where Nadia lives in her original home spot for login
+        greetings and briefing cards). Shared muted state means toggling
+        on one instance also silences the other.
+        User can mute/unmute via button in the pill. Starts collapsed. */}
+    {greeterSettings.enabled && !greeterDismissed && tab !== 'dashboard' && (
       <NadiaFloatingOverlay
         user={user} userProfile={userProfile} users={teamUsers}
         tickets={dashTickets} invoices={invoices} treasury={treasury}
@@ -2985,6 +3003,8 @@ export default function App() {
         contextSelectedCustomer={selectedCustomer}
         contextSelectedInvoice={selectedInvoice}
         contextOpenTicketId={openTicketId}
+        externalMuted={nadiaMuted}
+        onMutedChange={setNadiaMuted}
       />
     )}
     <div className="min-h-screen" style={{background:'var(--bg-primary)'}}>
@@ -5685,10 +5705,42 @@ export default function App() {
               </button>
             )}
 
-            {/* S16 (Apr 22): The dashboard-only AIGreeter is gone. Nadia now
-                lives as a floating overlay (NadiaFloatingOverlay) mounted at
-                the root of the page, so she's available on EVERY tab, not
-                just the dashboard. See NadiaFloatingOverlay.jsx. */}
+            {/* ===== AI ASSISTANT — DASHBOARD HOME =====
+                S17 (Apr 23): Nadia is back in her original dashboard spot
+                for the login greeting + briefing cards. The floating
+                overlay still renders on every OTHER tab, giving her a
+                presence everywhere — but the dashboard keeps her primary
+                location intact. Shared sessionMessages/hasGreeted state
+                means you won't see her greet twice. */}
+            <div className="max-md:order-last">
+            {!greeterDismissed && greeterSettings.enabled ? (
+              <div className="mb-4">
+                <AIGreeter
+                  user={user} userProfile={userProfile} users={teamUsers}
+                  tickets={dashTickets} invoices={invoices} treasury={treasury}
+                  checks={pendingChecks} loginHistory={lastLoginInfo} loginHistoryLoaded={loginHistoryLoaded}
+                  lang={lang} personality={greeterSettings.personality}
+                  greeterLang={greeterSettings.language}
+                  enabled={greeterSettings.enabled}
+                  hasGreeted={greeterHasGreeted} onGreeted={handleGreeted}
+                  sessionMessages={greeterMessages} onMessagesUpdate={setGreeterMessages}
+                  onToggle={(on) => { if (!on) setGreeterDismissed(true); }}
+                  toast={toast}
+                  contextTab={tab}
+                  contextSelectedCustomer={selectedCustomer}
+                  contextSelectedInvoice={selectedInvoice}
+                  contextOpenTicketId={openTicketId}
+                  muted={nadiaMuted}
+                />
+              </div>
+            ) : greeterSettings.enabled ? (
+              <button onClick={() => setGreeterDismissed(false)}
+                className="mb-4 w-full px-4 py-2.5 rounded-xl text-xs font-semibold text-indigo-300 border border-indigo-500/20 hover:bg-indigo-500/10 transition flex items-center gap-2"
+                style={{ background: 'rgba(99,102,241,0.05)' }}>
+                🤖 <span>Open AI Assistant</span> <span className="ml-auto text-[10px] text-indigo-400/60">Nadia</span>
+              </button>
+            ) : null}
+            </div>
 
                 </>)}{/* end !hasUnacked gate */}
               </>);

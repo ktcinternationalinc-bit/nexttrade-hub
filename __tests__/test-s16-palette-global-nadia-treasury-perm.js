@@ -215,22 +215,20 @@ test('S16.N15 Overlay passes full context props through', function() {
     });
 });
 
-test('S16.N16 Dashboard-only AIGreeter block was removed (no double mount)', function() {
-  // The old dashboard-only section should be gone — it would cause Nadia
-  // to appear twice on the dashboard otherwise. We look for the specific
-  // comment that marked the removal.
-  assert(/The dashboard-only AIGreeter is gone/.test(page),
-    'must have an explicit note that dashboard-only AIGreeter was removed');
-  // And confirm: AIGreeter tag should no longer appear directly in page.jsx —
-  // it's only rendered via the overlay wrapper now
-  var directAIGreeter = page.match(/<AIGreeter\b/g) || [];
-  assert(directAIGreeter.length === 0,
-    'page.jsx should not render <AIGreeter> directly anymore — found ' + directAIGreeter.length + ' instance(s)');
+test('S16.N16 S17.5 supersedes: dashboard AIGreeter kept, overlay on other tabs', function() {
+  // S17.5 clarified: Nadia stays on the dashboard in her original home,
+  // the overlay adds her to OTHER tabs. So there IS a direct AIGreeter
+  // in page.jsx (dashboard) — exactly one. And the overlay skips dashboard.
+  var directAIGreeter = (page.match(/<AIGreeter\b/g) || []).length;
+  assert(directAIGreeter === 1,
+    'expected exactly 1 direct <AIGreeter> mount (dashboard home) — found ' + directAIGreeter);
 });
 
-test('S16.N17 Overlay is gated on greeterSettings.enabled and NOT greeterDismissed', function() {
-  assert(/greeterSettings\.enabled && !greeterDismissed && \(\s*<NadiaFloatingOverlay/.test(page),
-    'overlay must be gated same as the old AIGreeter was');
+test('S16.N17 Overlay gated to non-dashboard tabs only', function() {
+  // The overlay still has the enabled + !dismissed gates, plus the new
+  // tab !== 'dashboard' guard.
+  assert(/greeterSettings\.enabled && !greeterDismissed && tab !== 'dashboard' && \(\s*<NadiaFloatingOverlay/.test(page),
+    'overlay render gate must include tab !== \'dashboard\' so it only appears on other tabs');
 });
 
 // ======================================================

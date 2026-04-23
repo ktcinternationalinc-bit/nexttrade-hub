@@ -400,6 +400,31 @@ export default function AIGreeter({ user, userProfile, users, tickets, invoices,
     return function() { clearTimeout(t); };
   }, [enabled, loginHistoryLoaded, hasGreeted]);
 
+  // S17.6 — Tab-aware proactive greeting. When the user navigates to a new
+  // tab (e.g. from dashboard → tickets), Nadia says something relevant to
+  // THAT tab. This runs AFTER the initial login greeting has happened, so
+  // it won't double-greet. It also only fires once per tab per session via
+  // a ref that tracks the last-greeted tab.
+  //
+  // The greeting is brief (1-2 sentences) and context-aware, e.g.:
+  //   Tickets tab → "You've got 3 tickets open for you, 1 overdue."
+  //   Treasury tab → "Cash net today is +180,000 EGP. Want the breakdown?"
+  //   Customers tab → "On customers — anyone specific you want to check on?"
+  var lastGreetedTabRef = useRef(null);
+  useEffect(function() {
+    if (!enabled) return;
+    if (!hasGreeted) return;              // wait for initial greeting first
+    if (!contextTab) return;
+    if (contextTab === 'dashboard') return; // dashboard already handled by main greeting
+    if (lastGreetedTabRef.current === contextTab) return;  // already greeted this tab
+    lastGreetedTabRef.current = contextTab;
+    // Defer slightly so tab content paints first
+    var t = setTimeout(function() {
+      doSend(null, 'tab_greeting');
+    }, 600);
+    return function() { clearTimeout(t); };
+  }, [contextTab, hasGreeted, enabled]);
+
   useEffect(function() {
     // Only scroll the internal chat container — NEVER the window.
     // Previously used chatEndRef.current.scrollIntoView({ behavior: 'smooth' })
@@ -436,9 +461,35 @@ export default function AIGreeter({ user, userProfile, users, tickets, invoices,
       try { console.log('[nadia] muted — skipping TTS playback'); } catch (e) {}
       return;
     }
+    // S17.6 — Stop any prior speech CLEANLY before starting new. Otherwise
+    // the previous audio's onended handler may fire mid-way through the new
+    // one and flip speaking state off, which makes Nadia appear to stop
+    // mid-sentence. This is especially visible when navigating between tabs.
+    // We also broadcast nadia-stop-all so OTHER AIGreeter instances (e.g. a
+    // dashboard one that unmounted while its audio was still playing in
+    // memory) can silence their audio too. Prevents two voices at once.
+    try {
+      if (typeof window !== 'undefined') {
+        window.dispatchEvent(new CustomEvent('nadia-stop-all'));
+      }
+      if (audioRef.current) {
+        var prior = audioRef.current;
+        audioRef.current = null;   // unlink BEFORE pause so the old onended no-ops
+        try { prior.onended = null; prior.onerror = null; prior.pause(); } catch (e) {}
+      }
+      if (typeof window !== 'undefined' && window.speechSynthesis) {
+        try { window.speechSynthesis.cancel(); } catch (e) {}
+      }
+    } catch (e) {}
+
     setSpeaking(true);
     try { window.dispatchEvent(new CustomEvent('nadia-tts-start')); } catch (e) {}
+    // Capture this speech's ID so a stale onended from a RACE doesn't reset
+    // state that belongs to a newer speech.
+    var mySpeechId = Date.now() + '-' + Math.random().toString(36).slice(2, 8);
     var fireStop = function() {
+      // Only fire if we're still the active speech
+      if (audioRef.current && audioRef.current._speechId !== mySpeechId) return;
       setSpeaking(false);
       setCurrentAudio(null);
       try { window.dispatchEvent(new CustomEvent('nadia-tts-stop')); } catch (e) {}
@@ -451,12 +502,16 @@ export default function AIGreeter({ user, userProfile, users, tickets, invoices,
       if (!res.ok) throw new Error('TTS failed');
       return res.blob();
     }).then(function(blob) {
+      // If user muted while the fetch was in flight, skip playback.
+      if (muted) return;
       var url = URL.createObjectURL(blob);
       var audio = new Audio(url);
+      audio._speechId = mySpeechId;
       // CORS: objectURL blob is same-origin so no crossOrigin flag needed
       audioRef.current = audio;
       setCurrentAudio(audio);
-      audio.onended = function() { audioRef.current = null; fireStop(); };
+      audio.onended = function() { fireStop(); };
+      audio.onerror = function() { fireStop(); };
       audio.play().catch(function() { doFallbackSpeak(text); });
     }).catch(function() { doFallbackSpeak(text); });
   }, [useLang, muted]);
@@ -508,13 +563,19 @@ export default function AIGreeter({ user, userProfile, users, tickets, invoices,
       stopSpeech();
       doSend(q, false);
     };
+    // S17.6 — nadia-stop-all: fired when any AIGreeter starts a new speech.
+    // Silences any audio that a prior instance (e.g. unmounted dashboard
+    // AIGreeter on tab navigation) might still have playing in memory.
+    var onStopAll = function() { stopSpeech(); };
     window.addEventListener('hey-bob-command', onBobCommand);
     window.addEventListener('hey-bob-bargein', onBargeIn);
     window.addEventListener('nadia-push-question', onPushQuestion);
+    window.addEventListener('nadia-stop-all', onStopAll);
     return function() {
       window.removeEventListener('hey-bob-command', onBobCommand);
       window.removeEventListener('hey-bob-bargein', onBargeIn);
       window.removeEventListener('nadia-push-question', onPushQuestion);
+      window.removeEventListener('nadia-stop-all', onStopAll);
     };
   }, [enabled]);
 
@@ -1075,13 +1136,40 @@ export default function AIGreeter({ user, userProfile, users, tickets, invoices,
   // Send message
   var doSend = async function(userText, isGreeting) {
     if (loading) return;
+    // S17.6 — isGreeting can be true (initial login greeting) or
+    // 'tab_greeting' (tab-aware proactive greeting on tab change). Both
+    // skip prior chat history in the API call; tab_greeting PRESERVES
+    // the chat messages on screen so the conversation feels continuous.
+    var isTabGreet = isGreeting === 'tab_greeting';
+    var isLoginGreet = isGreeting === true;
+    var anyGreeting = isLoginGreet || isTabGreet;
     var ctx = buildContext();
-    var msgs = isGreeting ? [] : [].concat(messages);
+    // Login greeting resets visible messages; tab greeting appends to them.
+    var msgs = isLoginGreet ? [] : [].concat(messages);
     if (userText) { msgs.push({ role: 'user', text: userText }); setMessages(msgs); setInput(''); }
     setLoading(true);
     try {
       var hist = msgs.map(function(m) { return { role: m.role === 'user' ? 'user' : 'assistant', text: m.text }; });
-      var q = isGreeting ? ctx + '\nGreet ' + firstName + ' personally based on the LOGIN HISTORY above. Tell them what needs attention. Be natural, warm, and personal.' : (userText || '');
+      var q;
+      if (isLoginGreet) {
+        q = ctx + '\nGreet ' + firstName + ' personally based on the LOGIN HISTORY above. Tell them what needs attention. Be natural, warm, and personal.';
+      } else if (isTabGreet) {
+        // S17.7 — Tab greeting. Two or three sentences, directly useful,
+        // tab-specific. The buildContext already injected "CURRENT SCREEN
+        // CONTEXT" (see Phase 2 sub-project #3) so Nadia has full tab +
+        // selected record awareness.
+        // We want her to sound like a coworker who just saw you sit down:
+        // brief, personal, pointed, and ACTIONABLE. Not a cold summary.
+        q = ctx + '\n\nThe user just navigated to the "' + contextTab + '" tab. '
+          + 'Give a 2-3 sentence proactive update about what matters on THIS tab right now '
+          + 'using the CURRENT SCREEN CONTEXT and the business data above. '
+          + 'Be specific and actionable — cite real numbers, names, counts, or dates from the context. '
+          + 'Tone: a warm experienced colleague noticing the important thing. Not a robot listing stats. '
+          + 'Do NOT say hello/hi/good morning/sabah — you already greeted them earlier. '
+          + 'Start directly with the useful info. End with a brief question or offer to help.';
+      } else {
+        q = userText || '';
+      }
 
       // Opt-in to tool-use v2 via ?nadia_v2=1 OR localStorage flag.
       // Keep /api/ask as the default until v2 is battle-tested in production.
@@ -1099,9 +1187,11 @@ export default function AIGreeter({ user, userProfile, users, tickets, invoices,
       // / cross-team-action blocks never get injected into Nadia's prompt.
       // S13 2026-04-22: isGreeting flag added so server only computes the
       // morning briefing on the auto-greeting (not every chat turn).
+      // S17.6: isGreeting is true ONLY for login greeting. Tab greetings
+      // skip the expensive briefing computation.
       var payload = useV2
-        ? { question: q, history: isGreeting ? [] : hist.slice(-8), userId: (userProfile && userProfile.id) || null, isGreeting: !!isGreeting }
-        : { question: q, mode: 'greeter', systemOverride: sysPrompt + '\n' + ctx, history: isGreeting ? [] : hist.slice(-8), userId: (userProfile && userProfile.id) || null, isGreeting: !!isGreeting };
+        ? { question: q, history: anyGreeting ? [] : hist.slice(-8), userId: (userProfile && userProfile.id) || null, isGreeting: isLoginGreet }
+        : { question: q, mode: 'greeter', systemOverride: sysPrompt + '\n' + ctx, history: anyGreeting ? [] : hist.slice(-8), userId: (userProfile && userProfile.id) || null, isGreeting: isLoginGreet };
 
       var res = await fetch(endpoint, {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
@@ -1109,7 +1199,29 @@ export default function AIGreeter({ user, userProfile, users, tickets, invoices,
       });
       var data = await res.json();
       var aiText = data.answer || '';
-      if (!aiText) aiText = useLang === 'ar' ? 'صباح الخير ' + firstName + '!' : 'Hey ' + firstName + '!';
+      // S17.7 — If API returned nothing, retry ONCE. Previously we fell back
+      // to "Hey firstName!" which is the exact bug Max flagged: on tab
+      // navigation Nadia would ONLY say "good morning mohamed" (the fallback)
+      // even though the tab-greeting request should have yielded real content.
+      // The empty response usually meant a transient API hiccup; a retry is
+      // much better than silently shortening Nadia's output.
+      if (!aiText) {
+        try {
+          var res2 = await fetch(endpoint, {
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(payload)
+          });
+          var data2 = await res2.json();
+          aiText = (data2 && data2.answer) || '';
+          if (data2 && data2.decision && data2.decision.ok) data.decision = data2.decision;
+          if (data2 && data2.briefing) data.briefing = data2.briefing;
+        } catch (e) { /* if retry also fails, fall through to minimal fallback below */ }
+      }
+      // Only use the minimal fallback if BOTH attempts returned nothing. Keep
+      // this short — Nadia shouldn't fake a fake greeting.
+      if (!aiText) aiText = useLang === 'ar'
+        ? 'لحظة واحدة يا ' + firstName + '، بحمّل البيانات.'
+        : 'One sec ' + firstName + ', loading your data.';
 
       // v2 returns drafts[] when Nadia called draft_email / draft_whatsapp / create_event
       // — fan those out to the bridge (which opens the right UI).
