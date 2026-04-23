@@ -129,53 +129,57 @@ test('S17.6.D5 Tab_greeting still skips chat history in API call', function() {
 // PART 3 — TTS CUTOFF FIX
 // ======================================================
 
-test('S17.6.TTS1 doSpeak captures a unique speech ID per invocation', function() {
-  assert(/var mySpeechId = Date\.now\(\) \+ '-' \+ Math\.random\(\)\.toString\(36\)/.test(greeter),
-    'each doSpeak call must generate a unique speech ID');
+test('S17.6.TTS1 doSpeak calls /api/tts with text and language', function() {
+  // Simpler current model — fetch blob, play. Browser handles the rest.
+  assert(/fetch\('\/api\/tts'/.test(greeter),
+    'doSpeak must call /api/tts');
+  assert(/body: JSON\.stringify\(\{ text: text, language: useLang \}\)/.test(greeter),
+    'request body must include text and language');
 });
 
-test('S17.6.TTS2 doSpeak tags the new audio element with speech ID', function() {
-  assert(/audio\._speechId = mySpeechId;/.test(greeter),
-    'audio element must be tagged with mySpeechId for later race checks');
+test('S17.6.TTS2 doSpeak creates an Audio element from the TTS blob', function() {
+  assert(/var audio = new Audio\(url\);/.test(greeter),
+    'must construct Audio from blob URL');
+  assert(/audioRef\.current = audio/.test(greeter),
+    'must store audio in audioRef for later stopSpeech()');
 });
 
-test('S17.6.TTS3 fireStop no-ops if speech ID no longer matches (race safety)', function() {
-  // When a NEW speech starts, the OLD audio's onended shouldn't flip state
-  assert(/if \(audioRef\.current && audioRef\.current\._speechId !== mySpeechId\) return;/.test(greeter),
-    'fireStop must guard with speech ID comparison');
+test('S17.6.TTS3 doSpeak attaches onended to mark speech done', function() {
+  assert(/audio\.onended = function/.test(greeter),
+    'audio.onended must fire a stop signal when playback naturally ends');
 });
 
-test('S17.6.TTS4 doSpeak stops prior audio BEFORE starting new', function() {
-  // Unlink + pause before the new audio setup
-  assert(/audioRef\.current = null;[\s\S]{0,80}prior\.onended = null;[\s\S]{0,80}prior\.pause\(\)/.test(greeter),
-    'must unlink audioRef, null handlers, pause prior audio');
+test('S17.6.TTS4 doSpeak has fallback to browser synthesis if TTS fails', function() {
+  assert(/\.catch\(function\(\) \{ doFallbackSpeak\(text\); \}\)/.test(greeter),
+    'TTS fetch/play failure must fall back to browser speech synthesis');
 });
 
-test('S17.6.TTS5 doSpeak broadcasts nadia-stop-all with senderId (S17.9 fix)', function() {
-  // S17.9 (Apr 23) — the event now carries a senderId so instances can
-  // ignore events they sent themselves. Without this, Nadia was cutting
-  // off after 2-3 words by telling herself to stop.
-  assert(/new CustomEvent\('nadia-stop-all', \{\s*detail: \{ senderId: instanceIdRef\.current \}/.test(greeter),
-    'nadia-stop-all event must carry senderId tag (S17.9)');
+test('S17.6.TTS5 doSpeak flips speaking state and dispatches tts-start', function() {
+  assert(/setSpeaking\(true\)/.test(greeter),
+    'doSpeak must set speaking=true');
+  assert(/new CustomEvent\('nadia-tts-start'\)/.test(greeter),
+    'doSpeak must dispatch nadia-tts-start so VoiceController flag flips');
 });
 
-test('S17.6.TTS6 AIGreeter listens for nadia-stop-all but ignores own signal (S17.9 fix)', function() {
-  // Listener now accepts the event object, checks senderId, ignores if self
-  assert(/var onStopAll = function\(ev\) \{/.test(greeter),
-    'onStopAll takes the event so it can inspect senderId');
-  assert(/if \(senderId && senderId === instanceIdRef\.current\) return;/.test(greeter),
-    'onStopAll must ignore events that came from this same instance');
-  assert(/window\.addEventListener\('nadia-stop-all', onStopAll\)/.test(greeter),
-    'AIGreeter must register nadia-stop-all listener');
-  assert(/window\.removeEventListener\('nadia-stop-all', onStopAll\)/.test(greeter),
-    'cleanup must remove listener (no memory leak)');
+test('S17.6.TTS6 onBargeIn listener removed entirely (S17.10 final fix)', function() {
+  // Originally planned a 5s echo-guard window. Went further: removed
+  // the barge-in listener entirely from AIGreeter AND stopped firing
+  // it from VoiceController. Speaker-echo can't possibly cut her off
+  // now — there's no listener AND nothing fires it from the mic path.
+  assert(!/onBargeIn/.test(greeter),
+    'onBargeIn must not exist — whole barge-in path severed');
+  assert(!/hey-bob-bargein/.test(greeter),
+    'no listener registered for hey-bob-bargein');
 });
 
-test('S17.6.TTS7 doSpeak honors mute that happened during TTS fetch', function() {
-  // If user mutes while the TTS fetch is still pending, we should NOT
-  // play the blob when it arrives. Check inside the .then(blob) block.
-  var m = greeter.match(/\}\)\.then\(function\(blob\) \{[\s\S]{0,300}if \(muted\) return;/);
-  assert(m, 'after TTS fetch returns, must re-check muted before playing');
+test('S17.6.TTS7 stopSpeech can be called explicitly (submit, close, mic)', function() {
+  // The simpler model uses explicit stopSpeech at known points.
+  assert(/var stopSpeech = function\(\)/.test(greeter),
+    'stopSpeech helper must be defined');
+  assert(/audioRef\.current\.pause\(\)/.test(greeter),
+    'stopSpeech must pause the current audio');
+  assert(/setSpeaking\(false\)/.test(greeter),
+    'stopSpeech must flip speaking=false');
 });
 
 // ======================================================

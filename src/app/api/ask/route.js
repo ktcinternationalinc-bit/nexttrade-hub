@@ -343,7 +343,7 @@ export async function POST(request) {
       var actionSyntaxBlock = '';
       if (gUsersList.length > 0) {
         actionSyntaxBlock += '\n\n===== CROSS-TEAM ACTIONS YOU CAN EXECUTE =====\n';
-        actionSyntaxBlock += 'When the user asks you to do something for a team member ("remind Omar to X", "tell Mohamed Y", "assign a ticket to Ahmed", "schedule a meeting with Sara"), emit ONE action block in your reply using EXACTLY this syntax — the literal markers must be on their own lines:\n';
+        actionSyntaxBlock += 'When the user asks you to do something for a team member ("remind Omar to X", "tell Mohamed Y", "assign a ticket to Ahmed", "schedule a meeting with Sara"), emit an action block in your reply using EXACTLY this syntax — the literal markers must be on their own lines:\n';
         actionSyntaxBlock += '---ACTION_START---\n';
         actionSyntaxBlock += '{"type":"<action_type>", ...fields}\n';
         actionSyntaxBlock += '---ACTION_END---\n\n';
@@ -358,6 +358,7 @@ export async function POST(request) {
           actionSyntaxBlock += '  - ' + u.id + ' => ' + u.name + ' (' + (u.role || 'member') + ')\n';
         });
         actionSyntaxBlock += '\nIn your conversational text, just say "Done — reminded Omar for tomorrow" or similar. The action block is what actually executes — do not just PROMISE to do it, always emit the block.\n';
+        actionSyntaxBlock += 'If the user asks you to message MULTIPLE people (e.g. "tell everyone", "message the team"), emit one action block per person. The system supports up to 10 action blocks per reply.\n';
         actionSyntaxBlock += '===========================================\n';
       }
 
@@ -517,16 +518,16 @@ export async function POST(request) {
         var gText = (gData.content && gData.content[0] && gData.content[0].text) || '';
 
         // ---------- Parse and execute action blocks ----------
-        // Claude may emit zero, one, or rarely multiple action blocks. We
-        // extract each one, execute it server-side, replace the block with
-        // a confirmation line, and return the cleaned text. Hard cap at 3
-        // blocks per turn so Claude can't accidentally flood.
+        // Claude may emit zero, one, or multiple action blocks. We extract
+        // each one, execute it server-side, replace the block with a
+        // confirmation line, and return the cleaned text. Cap at 10 so one
+        // turn can reach the full team without accidents flooding beyond.
         var actionsExecuted = [];
         var aStart = '---ACTION_START---';
         var aEnd = '---ACTION_END---';
         var finalText = gText;
         var safety = 0;
-        while (safety < 3) {
+        while (safety < 10) {
           safety++;
           var sIdx = finalText.indexOf(aStart);
           var eIdx = sIdx >= 0 ? finalText.indexOf(aEnd, sIdx + aStart.length) : -1;
@@ -647,6 +648,34 @@ export async function POST(request) {
           finalText = (beforeBlock + joiner + afterBlock).trim();
           if (finalText) finalText += '\n\n' + execLine;
           else finalText = execLine;
+        }
+
+        // S17.10 — Bulletproof safety: strip any leftover ACTION blocks
+        // from finalText no matter what. If the cap was hit, or parsing
+        // skipped over malformed blocks, or for any other reason raw
+        // markers are still present, sweep them out so they never leak
+        // into the user-visible chat.
+        var strayStart = finalText.indexOf(aStart);
+        if (strayStart >= 0) {
+          var strayCount = 0;
+          // Keep stripping while any pair remains.
+          while (finalText.indexOf(aStart) >= 0) {
+            strayCount++;
+            var s = finalText.indexOf(aStart);
+            var e = finalText.indexOf(aEnd, s + aStart.length);
+            if (e < 0) {
+              // Dangling open marker — drop everything from marker to end.
+              finalText = finalText.substring(0, s).replace(/\s+$/, '');
+              break;
+            }
+            var before = finalText.substring(0, s).replace(/\s+$/, '');
+            var after = finalText.substring(e + aEnd.length).replace(/^\s+/, '');
+            var joinS = before && after ? '\n' : '';
+            finalText = (before + joinS + after).trim();
+          }
+          if (strayCount > 0) {
+            finalText += '\n\n⚠️ ' + strayCount + ' additional action' + (strayCount === 1 ? '' : 's') + ' could not be processed — please try again if needed.';
+          }
         }
 
         var decision = null;

@@ -213,9 +213,9 @@ test('E18 JSON parse errors surface as warnings, do not crash', function() {
     'parse_error must be recorded in actions_executed');
 });
 
-test('E19 Hard cap of 3 action blocks per turn', function() {
-  assert(/while \(safety < 3\)/.test(greeterBranch),
-    'action-parse loop must cap at 3 iterations to prevent flooding');
+test('E19 Hard cap of 10 action blocks per turn (S17.10 — raised from 3)', function() {
+  assert(/while \(safety < 10\)/.test(greeterBranch),
+    'action-parse loop must cap at 10 iterations to prevent flooding while allowing multi-recipient');
 });
 
 test('E20 Response returns actions_executed array', function() {

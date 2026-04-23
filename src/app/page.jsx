@@ -2975,8 +2975,8 @@ export default function App() {
   return (
     <ToastProvider>
     <ErrorBoundary label="KTC Hub encountered an error" showDetails>
-    {/* Global voice controller — "Hey Bob" listens across all tabs, barge-in
-        aware, cross-browser, per-user opt-out via voiceEnabled state. */}
+    {/* Global voice controller — "Hey Nadia" listens across all tabs,
+        cross-browser, per-user opt-out via voiceEnabled state. */}
     <VoiceController userId={userProfile?.id} userProfile={userProfile} enabled={voiceEnabled} />
     {/* Action bridge — catches nadia-decision-action events from the Decision
         Engine's chips and executes them (draft email, create reminder, flag

@@ -113,12 +113,25 @@ export default function VoiceController({ userId, userProfile, enabled, onComman
 
       setLastTranscript(transcript);
 
-      // BARGE-IN: if AI is speaking and user is producing meaningful speech
-      // while not already in command-collection mode, cancel the AI audio.
-      if (aiSpeakingRef.current && !engineRef.current.isCollecting() && isBargeInCandidate(transcript)) {
-        try { window.dispatchEvent(new CustomEvent('hey-bob-bargein')); } catch (e) {}
-        aiSpeakingRef.current = false;
-      }
+      // S17.10 (Apr 23 2026) — BUG FIX: Nadia was cutting off after 2-3 words.
+      // Root cause: the VoiceController mic is always hot listening for
+      // "Hey Bob". When Nadia speaks, her voice comes out the speakers and
+      // into the mic. The mic transcribes it ("Good morning Mohamed"), sees
+      // 2+ meaningful words, thinks the user is speaking, and fires a
+      // barge-in event. Nadia stops herself.
+      //
+      // Fix: NEVER fire barge-in while Nadia is speaking. Accept user
+      // barge-in ONLY through the explicit wake-word ("Hey Bob") path OR
+      // when the user presses the mic button. If the user wants to
+      // interrupt, they say "hey bob" — the wake-word detector catches
+      // that as a command, which handles the stop correctly downstream.
+      //
+      // The aiSpeakingRef flag is still flipped by nadia-tts-start/stop,
+      // so this doesn't break other places that check it.
+      // if (aiSpeakingRef.current && !engineRef.current.isCollecting() && isBargeInCandidate(transcript)) {
+      //   try { window.dispatchEvent(new CustomEvent('hey-bob-bargein')); } catch (e) {}
+      //   aiSpeakingRef.current = false;
+      // }
 
       // Show "hearing you" state during collection
       if (engineRef.current.isCollecting()) setStatus('hearing');
@@ -242,8 +255,8 @@ export default function VoiceController({ userId, userProfile, enabled, onComman
     label = '👂 Listening...'; dotColor = '#3b82f6';
     title = lastTranscript || 'Speak your command.';
   } else if (status === 'listening') {
-    label = '🎙️ "Hey Bob"'; dotColor = '#8b5cf6';
-    title = 'Say "Hey Bob" to wake me.';
+    label = '🎙️ "Hey Nadia"'; dotColor = '#8b5cf6';
+    title = 'Say "Hey Nadia" to wake me.';
   } else {
     label = '🎙️ Idle'; dotColor = '#64748b';
     title = '';

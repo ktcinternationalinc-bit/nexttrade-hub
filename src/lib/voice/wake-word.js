@@ -1,21 +1,26 @@
 // ============================================================
 // src/lib/voice/wake-word.js
 //
-// Pure logic for detecting the wake phrase "Hey Bob" in a stream of
+// Pure logic for detecting the wake phrase "Hey Nadia" in a stream of
 // live speech-recognition transcripts. No DOM, no React. Testable.
 //
-// Why a dedicated detector instead of just `if (text.includes('hey bob'))`:
-//   1. People drop filler words: "hey, bob...", "hey Bob can you", "ay bob"
+// Why a dedicated detector instead of just `if (text.includes('hey nadia'))`:
+//   1. People drop filler words: "hey, nadia...", "hey Nadia can you", "ay nadia"
 //   2. Recognizers emit partial/interim transcripts that double back on
 //      themselves — we have to remember what we already processed so we
 //      don't re-trigger on the same utterance.
 //   3. After the wake phrase, everything that follows IS the command and
 //      must be captured until the user stops speaking.
+//   4. Speech recognition often mishears "Nadia" as "Nadya", "Nadiah",
+//      "Nadi", "Nadja", "nadir", "media", "Mahdi" — we accept common
+//      variants so Max doesn't have to enunciate precisely.
 // ============================================================
 
-// Accept "hey bob", "hey, bob", "heybob", "a bob", "hey bob can you"...
-// Capture group 1 = anything after "bob" (the actual command)
-var WAKE_RE = /\b(?:hey|hi|ok|ey|ay)[\s,]*bob\b([\s\S]*)$/i;
+// Accept "hey nadia", "hi nadia", "hey, nadia", "nadia", "ya nadia" (Arabic
+// vocative يا), plus common recognizer mishearings. Also accepts bare
+// "nadia" (no "hey") because people naturally just say her name.
+// Capture group 1 = anything after the name (the actual command)
+var WAKE_RE = /\b(?:(?:hey|hi|ok|ey|ay|yo|yeah|ya)[\s,]*)?(?:nadia|nadya|nadiah|nadja|nadi|nadir|mahdi|media)\b([\s\S]*)$/i;
 
 // Heuristic for "the user was speaking but said nothing meaningful" —
 // filters out just the wake word alone with no command.
@@ -134,7 +139,7 @@ export function createWakeEngine() {
         out.stillListening = true;
       }
     } else {
-      // "Hey Bob" alone with no command yet — open the collection window
+      // "Hey Nadia" alone with no command yet — open the collection window
       state.activeCommand = '';
       state.activeCommandStartedAt = now;
       out.stillListening = true;

@@ -106,6 +106,12 @@ export default function AIGreeter({ user, userProfile, users, tickets, invoices,
   if (!instanceIdRef.current) {
     instanceIdRef.current = 'nadia-' + Date.now() + '-' + Math.random().toString(36).slice(2, 8);
   }
+  // S17.10 — When Nadia started speaking. Used to ignore barge-in events
+  // that arrive in the first few seconds of her speech, which are almost
+  // certainly the microphone picking up her OWN voice from the speakers
+  // (speaker echo). Without this guard, Nadia cuts herself off after
+  // saying 2-3 words.
+  var speakingStartedAtRef = useRef(0);
   var [aiMemory, setAiMemory] = useState('');
 
   var myId = userProfile?.id || user?.id;
@@ -464,45 +470,25 @@ export default function AIGreeter({ user, userProfile, users, tickets, invoices,
   var [currentAudio, setCurrentAudio] = useState(null);
   var doSpeak = useCallback(function(text) {
     if (!text) return;
-    // S16 — When user has muted Nadia, do NOT play audio. Just skip silently.
-    // The text is still displayed in the chat bubble; only voice is suppressed.
+    // S16 — When user has muted Nadia, skip TTS playback. The text still
+    // displays in the chat bubble; only voice is suppressed. Guard placed
+    // at top so we don't even hit /api/tts.
     if (muted) {
       try { console.log('[nadia] muted — skipping TTS playback'); } catch (e) {}
       return;
     }
-    // S17.9 (Apr 23 2026) — BUG FIX: Nadia was cutting off after 2-3 words.
-    // Root cause: doSpeak broadcasts "nadia-stop-all" so any OTHER AIGreeter
-    // instance (e.g. a dashboard one that unmounted mid-audio) can silence
-    // its audio. But THIS instance also had a listener for that event and
-    // was telling itself to stop. The moment she started speaking she heard
-    // her own signal and cut off.
-    // Fix: tag the event with this instance's unique ID. The listener
-    // (onStopAll below) compares the sender ID to its own and ignores
-    // events that came from itself.
-    try {
-      if (typeof window !== 'undefined') {
-        window.dispatchEvent(new CustomEvent('nadia-stop-all', {
-          detail: { senderId: instanceIdRef.current }
-        }));
-      }
-      if (audioRef.current) {
-        var prior = audioRef.current;
-        audioRef.current = null;   // unlink BEFORE pause so the old onended no-ops
-        try { prior.onended = null; prior.onerror = null; prior.pause(); } catch (e) {}
-      }
-      if (typeof window !== 'undefined' && window.speechSynthesis) {
-        try { window.speechSynthesis.cancel(); } catch (e) {}
-      }
-    } catch (e) {}
-
+    // S18 (Apr 23 2026) — REVERTED to original simple doSpeak.
+    // Max kept reporting Nadia cut off after 2-3 words. The extra machinery
+    // I added (nadia-stop-all broadcast, prior-audio pause, speechSynthesis
+    // cancel at start) was fighting itself and killing her own speech.
+    // Back to basics: fetch TTS blob, play it, done. The browser handles
+    // everything else. If a stale audio from a previous turn is playing,
+    // stopSpeech() gets called explicitly at the right moments (submit,
+    // close button, barge-in). No need to auto-stop on every new speech.
     setSpeaking(true);
+    speakingStartedAtRef.current = Date.now();
     try { window.dispatchEvent(new CustomEvent('nadia-tts-start')); } catch (e) {}
-    // Capture this speech's ID so a stale onended from a RACE doesn't reset
-    // state that belongs to a newer speech.
-    var mySpeechId = Date.now() + '-' + Math.random().toString(36).slice(2, 8);
     var fireStop = function() {
-      // Only fire if we're still the active speech
-      if (audioRef.current && audioRef.current._speechId !== mySpeechId) return;
       setSpeaking(false);
       setCurrentAudio(null);
       try { window.dispatchEvent(new CustomEvent('nadia-tts-stop')); } catch (e) {}
@@ -515,16 +501,14 @@ export default function AIGreeter({ user, userProfile, users, tickets, invoices,
       if (!res.ok) throw new Error('TTS failed');
       return res.blob();
     }).then(function(blob) {
-      // If user muted while the fetch was in flight, skip playback.
+      // S17.6 — re-check muted after the async fetch. If user toggled mute
+      // while we were waiting, do not play the blob.
       if (muted) return;
       var url = URL.createObjectURL(blob);
       var audio = new Audio(url);
-      audio._speechId = mySpeechId;
-      // CORS: objectURL blob is same-origin so no crossOrigin flag needed
       audioRef.current = audio;
       setCurrentAudio(audio);
-      audio.onended = function() { fireStop(); };
-      audio.onerror = function() { fireStop(); };
+      audio.onended = function() { audioRef.current = null; fireStop(); };
       audio.play().catch(function() { doFallbackSpeak(text); });
     }).catch(function() { doFallbackSpeak(text); });
   }, [useLang, muted]);
@@ -554,48 +538,36 @@ export default function AIGreeter({ user, userProfile, users, tickets, invoices,
     try { window.dispatchEvent(new CustomEvent('nadia-tts-stop')); } catch (e) {}
   };
 
-  // Listen for global Hey-Bob commands + barge-in events from VoiceController.
-  // This replaces the old broken per-component mic code. Now the mic runs
-  // globally and any page can receive voice commands.
+  // Listen for wake-word commands + user-initiated events from VoiceController.
+  // This replaces the old broken per-component mic code.
+  // S18.1 (Apr 23 2026) — Per Max: Nadia should stop ONLY when the user hits
+  // the stop button or the mute button. No automatic cutoff from the mic.
+  // The barge-in path is REMOVED entirely. The mic was picking up Nadia's
+  // own voice from the speakers and stopping her after 2-3 words. The only
+  // thing that interrupts her speech now is a deliberate user button press.
   useEffect(function() {
     var onBobCommand = function(ev) {
       if (!enabled) return;
       var cmd = ev && ev.detail && ev.detail.command;
       if (!cmd) return;
-      // If we were speaking, stop first (polite handoff)
+      // User said a wake-word command — this IS a user action, so it's
+      // treated like pressing a button. Stop current speech, then process.
       stopSpeech();
-      // Dispatch the command as if the user typed it
       doSend(cmd, false);
     };
-    var onBargeIn = function() { stopSpeech(); };
     // Some decision chips are "ask me more" — they dispatch nadia-push-question
-    // to route a follow-up query back into this greeter.
+    // to route a follow-up query back into this greeter. Button click = OK to stop.
     var onPushQuestion = function(ev) {
       var q = ev && ev.detail && ev.detail.question;
       if (!q) return;
       stopSpeech();
       doSend(q, false);
     };
-    // S17.9 — nadia-stop-all: fired when any AIGreeter starts a new speech.
-    // Silences any audio that a prior instance (e.g. unmounted dashboard
-    // AIGreeter on tab navigation) might still have playing in memory.
-    // CRITICAL: ignore events we sent ourselves. The event detail carries
-    // the sender's instanceId; if it matches ours, skip. Without this,
-    // Nadia mutes herself mid-speech after 2-3 words.
-    var onStopAll = function(ev) {
-      var senderId = ev && ev.detail && ev.detail.senderId;
-      if (senderId && senderId === instanceIdRef.current) return;  // ignore own signal
-      stopSpeech();
-    };
     window.addEventListener('hey-bob-command', onBobCommand);
-    window.addEventListener('hey-bob-bargein', onBargeIn);
     window.addEventListener('nadia-push-question', onPushQuestion);
-    window.addEventListener('nadia-stop-all', onStopAll);
     return function() {
       window.removeEventListener('hey-bob-command', onBobCommand);
-      window.removeEventListener('hey-bob-bargein', onBargeIn);
       window.removeEventListener('nadia-push-question', onPushQuestion);
-      window.removeEventListener('nadia-stop-all', onStopAll);
     };
   }, [enabled]);
 

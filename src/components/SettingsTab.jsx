@@ -33,14 +33,14 @@ function VoiceSettingsPanel({ userProfile, toast }) {
     try {
       await supabase.from('users').update({ voice_enabled: v }).eq('id', myId);
       setEnabled(v);
-      if (toast) toast.success(v ? 'Voice ON — say "Hey Bob"' : 'Voice OFF');
+      if (toast) toast.success(v ? 'Voice ON — say "Hey Nadia"' : 'Voice OFF');
     } catch (e) { if (toast) toast.error(e.message); }
     setSaving(false);
   };
   return (
     <div className="bg-white rounded-xl p-5 max-w-2xl">
-      <h3 className="text-lg font-bold mb-2">🎙️ Voice Assistant ("Hey Bob")</h3>
-      <p className="text-xs text-slate-500 mb-4">Continuous listening — say "Hey Bob" on any page and I'll respond. Cross-tab, barge-in aware.</p>
+      <h3 className="text-lg font-bold mb-2">🎙️ Voice Assistant ("Hey Nadia")</h3>
+      <p className="text-xs text-slate-500 mb-4">Continuous listening — say "Hey Nadia" on any page and she'll respond. Cross-tab aware.</p>
 
       {/* Main toggle */}
       <div className="flex items-center justify-between p-4 rounded-lg bg-slate-50 mb-3">
@@ -59,7 +59,7 @@ function VoiceSettingsPanel({ userProfile, toast }) {
       {/* Browser support */}
       <div className="p-4 rounded-lg border border-slate-200 mb-3">
         <div className="text-xs font-bold mb-2">Browser support</div>
-        {support.kind === 'ok' && <div className="text-[11px] text-emerald-600">✅ This browser supports continuous voice — "Hey Bob" will listen automatically.</div>}
+        {support.kind === 'ok' && <div className="text-[11px] text-emerald-600">✅ This browser supports continuous voice — "Hey Nadia" will listen automatically.</div>}
         {support.kind === 'safari' && <div className="text-[11px] text-amber-600">⚠️ Safari supports voice but re-starts after each utterance. Works — just slightly less seamless than Chrome.</div>}
         {support.kind === 'firefox' && <div className="text-[11px] text-rose-600">❌ Firefox does NOT support speech recognition. Use Chrome/Safari/Edge for voice. Push-to-talk via Space bar still works.</div>}
         {support.kind === 'unsupported' && <div className="text-[11px] text-rose-600">❌ No speech recognition in this browser. Update browser or switch to Chrome.</div>}
@@ -70,10 +70,10 @@ function VoiceSettingsPanel({ userProfile, toast }) {
       <div className="p-4 rounded-lg bg-indigo-50 border border-indigo-100">
         <div className="text-xs font-bold text-indigo-700 mb-1.5">How to use</div>
         <ul className="text-[11px] text-indigo-900 space-y-1 list-disc ml-4">
-          <li>Say "Hey Bob, what's on my calendar" — the indicator pill bottom-left flashes, Bob responds.</li>
-          <li>While Bob is speaking, just start talking — he stops and listens.</li>
+          <li>Say "Hey Nadia, what's on my calendar" — the indicator pill bottom-left flashes, Nadia responds.</li>
+          <li>To interrupt Nadia while she's speaking, click the ⏹ Stop button or the Mute button.</li>
           <li>Hold Spacebar anywhere (except text boxes) for push-to-talk.</li>
-          <li>Click the pill's <strong>OFF</strong> button to pause for the rest of this session.</li>
+          <li>Click the pill's <strong>OFF</strong> button to pause voice for the rest of this session.</li>
         </ul>
       </div>
     </div>
