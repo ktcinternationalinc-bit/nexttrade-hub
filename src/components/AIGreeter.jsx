@@ -97,6 +97,15 @@ export default function AIGreeter({ user, userProfile, users, tickets, invoices,
   // even if OPENAI_API_KEY is never added to Vercel.
   var recordBackupRecogRef = useRef(null);
   var recordBackupTextRef = useRef('');
+  // S17.9 — Unique ID for THIS AIGreeter instance. Used to tag
+  // "nadia-stop-all" events so we can distinguish events WE sent (which
+  // we should ignore) from events OTHER instances sent (which we should
+  // honor). Without this, Nadia tells herself to stop every time she
+  // starts speaking, cutting off her own voice after 2-3 words.
+  var instanceIdRef = useRef(null);
+  if (!instanceIdRef.current) {
+    instanceIdRef.current = 'nadia-' + Date.now() + '-' + Math.random().toString(36).slice(2, 8);
+  }
   var [aiMemory, setAiMemory] = useState('');
 
   var myId = userProfile?.id || user?.id;
@@ -461,16 +470,20 @@ export default function AIGreeter({ user, userProfile, users, tickets, invoices,
       try { console.log('[nadia] muted — skipping TTS playback'); } catch (e) {}
       return;
     }
-    // S17.6 — Stop any prior speech CLEANLY before starting new. Otherwise
-    // the previous audio's onended handler may fire mid-way through the new
-    // one and flip speaking state off, which makes Nadia appear to stop
-    // mid-sentence. This is especially visible when navigating between tabs.
-    // We also broadcast nadia-stop-all so OTHER AIGreeter instances (e.g. a
-    // dashboard one that unmounted while its audio was still playing in
-    // memory) can silence their audio too. Prevents two voices at once.
+    // S17.9 (Apr 23 2026) — BUG FIX: Nadia was cutting off after 2-3 words.
+    // Root cause: doSpeak broadcasts "nadia-stop-all" so any OTHER AIGreeter
+    // instance (e.g. a dashboard one that unmounted mid-audio) can silence
+    // its audio. But THIS instance also had a listener for that event and
+    // was telling itself to stop. The moment she started speaking she heard
+    // her own signal and cut off.
+    // Fix: tag the event with this instance's unique ID. The listener
+    // (onStopAll below) compares the sender ID to its own and ignores
+    // events that came from itself.
     try {
       if (typeof window !== 'undefined') {
-        window.dispatchEvent(new CustomEvent('nadia-stop-all'));
+        window.dispatchEvent(new CustomEvent('nadia-stop-all', {
+          detail: { senderId: instanceIdRef.current }
+        }));
       }
       if (audioRef.current) {
         var prior = audioRef.current;
@@ -563,10 +576,17 @@ export default function AIGreeter({ user, userProfile, users, tickets, invoices,
       stopSpeech();
       doSend(q, false);
     };
-    // S17.6 — nadia-stop-all: fired when any AIGreeter starts a new speech.
+    // S17.9 — nadia-stop-all: fired when any AIGreeter starts a new speech.
     // Silences any audio that a prior instance (e.g. unmounted dashboard
     // AIGreeter on tab navigation) might still have playing in memory.
-    var onStopAll = function() { stopSpeech(); };
+    // CRITICAL: ignore events we sent ourselves. The event detail carries
+    // the sender's instanceId; if it matches ours, skip. Without this,
+    // Nadia mutes herself mid-speech after 2-3 words.
+    var onStopAll = function(ev) {
+      var senderId = ev && ev.detail && ev.detail.senderId;
+      if (senderId && senderId === instanceIdRef.current) return;  // ignore own signal
+      stopSpeech();
+    };
     window.addEventListener('hey-bob-command', onBobCommand);
     window.addEventListener('hey-bob-bargein', onBargeIn);
     window.addEventListener('nadia-push-question', onPushQuestion);

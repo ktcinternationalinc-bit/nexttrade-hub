@@ -61,18 +61,24 @@ test('S17.5.R3 Dashboard AIGreeter receives all its original props', function() 
   });
 });
 
-test('S17.5.R4 Dashboard AIGreeter receives muted prop from shared nadiaMuted', function() {
+test('S17.5.R4 Dashboard AIGreeter does NOT receive muted prop (original behavior)', function() {
+  // S17.8 (Apr 23) — Reverted to original props only. You wanted the
+  // dashboard to work EXACTLY as it used to before any of the recent tab/
+  // overlay changes. That means no muted prop. The overlay-only mute
+  // button still works via page-level events and audio element control.
   var greeterSection = page.match(/<AIGreeter\s[\s\S]*?\/>/);
-  assert(greeterSection && /muted=\{nadiaMuted\}/.test(greeterSection[0]),
-    'dashboard AIGreeter must receive muted={nadiaMuted} so it honors the global mute toggle');
+  assert(greeterSection && !/muted=\{nadiaMuted\}/.test(greeterSection[0]),
+    'dashboard AIGreeter must NOT receive muted prop (restored original behavior)');
 });
 
-test('S17.5.R5 Dashboard AIGreeter has context props for Phase 2 sub-project #3', function() {
+test('S17.5.R5 Dashboard AIGreeter does NOT receive context props (original behavior)', function() {
+  // Same reason as R4 — context props changed Nadia\'s prompt on the
+  // dashboard. Reverted.
   var greeterSection = page.match(/<AIGreeter\s[\s\S]*?\/>/);
   ['contextTab', 'contextSelectedCustomer', 'contextSelectedInvoice', 'contextOpenTicketId']
     .forEach(function(p) {
-      assert(greeterSection && new RegExp('\\b' + p + '=').test(greeterSection[0]),
-        'dashboard AIGreeter must still receive context prop: ' + p);
+      assert(greeterSection && !new RegExp('\\b' + p + '=').test(greeterSection[0]),
+        'dashboard AIGreeter must NOT receive context prop: ' + p + ' (original behavior)');
     });
 });
 

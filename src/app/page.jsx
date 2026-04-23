@@ -5705,13 +5705,13 @@ export default function App() {
               </button>
             )}
 
-            {/* ===== AI ASSISTANT — DASHBOARD HOME =====
-                S17 (Apr 23): Nadia is back in her original dashboard spot
-                for the login greeting + briefing cards. The floating
-                overlay still renders on every OTHER tab, giving her a
-                presence everywhere — but the dashboard keeps her primary
-                location intact. Shared sessionMessages/hasGreeted state
-                means you won't see her greet twice. */}
+            {/* ===== AI ASSISTANT (compact — click to expand) =====
+                H2 (Apr 20): wrapper has max-md:order-last so Nadia visually sinks
+                to the bottom on viewports <768px. Desktop (md+) keeps natural order.
+                Single instance — no double mount, sessionMessages/hasGreeted preserved.
+                S17.8 (Apr 23): Reverted to original props only — no context
+                props, no muted prop. This is Nadia's ORIGINAL dashboard behavior,
+                unchanged from before any of the recent tab/overlay work. */}
             <div className="max-md:order-last">
             {!greeterDismissed && greeterSettings.enabled ? (
               <div className="mb-4">
@@ -5726,11 +5726,6 @@ export default function App() {
                   sessionMessages={greeterMessages} onMessagesUpdate={setGreeterMessages}
                   onToggle={(on) => { if (!on) setGreeterDismissed(true); }}
                   toast={toast}
-                  contextTab={tab}
-                  contextSelectedCustomer={selectedCustomer}
-                  contextSelectedInvoice={selectedInvoice}
-                  contextOpenTicketId={openTicketId}
-                  muted={nadiaMuted}
                 />
               </div>
             ) : greeterSettings.enabled ? (

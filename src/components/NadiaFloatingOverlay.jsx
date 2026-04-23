@@ -60,16 +60,43 @@ export default function NadiaFloatingOverlay(props) {
     try { localStorage.setItem(MUTED_STORAGE_KEY, internalMuted ? 'true' : 'false'); } catch (e) {}
   }, [internalMuted, usingExternalMuted]);
 
-  // When user mutes, immediately stop any current speech.
+  // When user mutes, immediately stop any current speech AND keep stopping
+  // any NEW audio that starts playing while muted. Since we're using the
+  // original unmodified AIGreeter now (which doesn't know about muted), the
+  // overlay has to be the gatekeeper. A MutationObserver + periodic poller
+  // catch any <audio> element that AIGreeter creates and keep it silenced
+  // until the user unmutes.
   useEffect(function() {
-    if (muted && typeof window !== 'undefined' && window.speechSynthesis) {
-      try { window.speechSynthesis.cancel(); } catch (e) {}
-      // Also stop any <audio> elements (ElevenLabs TTS uses these)
+    if (typeof window === 'undefined') return;
+    if (!muted) return;
+    // Immediately silence anything currently playing.
+    try { if (window.speechSynthesis) window.speechSynthesis.cancel(); } catch (e) {}
+    try {
+      document.querySelectorAll('audio').forEach(function(a) {
+        try { a.pause(); a.currentTime = 0; a.muted = true; } catch (er) {}
+      });
+    } catch (e) {}
+    // Poll every 200ms — catches any new audio element AIGreeter spawns.
+    // Stops when the user unmutes (this effect cleans up and re-runs).
+    var iv = setInterval(function() {
+      try { if (window.speechSynthesis && window.speechSynthesis.speaking) window.speechSynthesis.cancel(); } catch (e) {}
       try {
-        var audios = document.querySelectorAll('audio');
-        audios.forEach(function(a) { try { a.pause(); } catch (er) {} });
+        document.querySelectorAll('audio').forEach(function(a) {
+          if (!a.paused || !a.muted) {
+            try { a.pause(); a.muted = true; } catch (er) {}
+          }
+        });
       } catch (e) {}
-    }
+    }, 200);
+    return function() {
+      clearInterval(iv);
+      // On unmute, unmute all audio elements so NEXT playback works.
+      try {
+        document.querySelectorAll('audio').forEach(function(a) {
+          try { a.muted = false; } catch (er) {}
+        });
+      } catch (e) {}
+    };
   }, [muted]);
 
   // Listen for cross-screen "stop Nadia" events — e.g. user clicks stop on

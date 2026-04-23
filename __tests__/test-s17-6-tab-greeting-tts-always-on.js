@@ -151,14 +151,20 @@ test('S17.6.TTS4 doSpeak stops prior audio BEFORE starting new', function() {
     'must unlink audioRef, null handlers, pause prior audio');
 });
 
-test('S17.6.TTS5 doSpeak broadcasts nadia-stop-all to silence stale instances', function() {
-  assert(/window\.dispatchEvent\(new CustomEvent\('nadia-stop-all'\)\)/.test(greeter),
-    'must broadcast nadia-stop-all so unmounted instances silence their audio');
+test('S17.6.TTS5 doSpeak broadcasts nadia-stop-all with senderId (S17.9 fix)', function() {
+  // S17.9 (Apr 23) — the event now carries a senderId so instances can
+  // ignore events they sent themselves. Without this, Nadia was cutting
+  // off after 2-3 words by telling herself to stop.
+  assert(/new CustomEvent\('nadia-stop-all', \{\s*detail: \{ senderId: instanceIdRef\.current \}/.test(greeter),
+    'nadia-stop-all event must carry senderId tag (S17.9)');
 });
 
-test('S17.6.TTS6 AIGreeter listens for nadia-stop-all to silence its own audio', function() {
-  assert(/var onStopAll = function\(\) \{ stopSpeech\(\); \}/.test(greeter),
-    'onStopAll handler must be defined');
+test('S17.6.TTS6 AIGreeter listens for nadia-stop-all but ignores own signal (S17.9 fix)', function() {
+  // Listener now accepts the event object, checks senderId, ignores if self
+  assert(/var onStopAll = function\(ev\) \{/.test(greeter),
+    'onStopAll takes the event so it can inspect senderId');
+  assert(/if \(senderId && senderId === instanceIdRef\.current\) return;/.test(greeter),
+    'onStopAll must ignore events that came from this same instance');
   assert(/window\.addEventListener\('nadia-stop-all', onStopAll\)/.test(greeter),
     'AIGreeter must register nadia-stop-all listener');
   assert(/window\.removeEventListener\('nadia-stop-all', onStopAll\)/.test(greeter),
@@ -227,12 +233,14 @@ test('S17.6.REG1 Dashboard AIGreeter still mounted directly in page.jsx', functi
     'exactly one direct <AIGreeter> mount must remain (dashboard home) — found ' + direct);
 });
 
-test('S17.6.REG2 Dashboard AIGreeter still receives muted + context props', function() {
+test('S17.6.REG2 Dashboard AIGreeter does NOT receive muted or context props (S17.8 revert)', function() {
+  // S17.8 reverted dashboard to original props — no muted, no context props.
+  // The overlay still handles muting/context for non-dashboard tabs.
   var m = page.match(/<AIGreeter\s[\s\S]*?\/>/);
-  assert(m && /muted=\{nadiaMuted\}/.test(m[0]),
-    'dashboard AIGreeter must still receive muted prop');
-  assert(m && /contextTab=\{tab\}/.test(m[0]),
-    'dashboard AIGreeter must still receive contextTab');
+  assert(m && !/muted=\{nadiaMuted\}/.test(m[0]),
+    'dashboard AIGreeter must NOT receive muted prop (original behavior restored)');
+  assert(m && !/contextTab=\{tab\}/.test(m[0]),
+    'dashboard AIGreeter must NOT receive contextTab (original behavior restored)');
 });
 
 test('S17.6.REG3 Login greeting still fires on loginHistoryLoaded', function() {
