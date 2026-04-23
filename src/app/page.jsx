@@ -16,6 +16,7 @@ import AIAssistant from '../components/AIAssistant';
 import AIGreeter, { PERSONALITIES } from '../components/AIGreeter';
 import VoiceController from '../components/VoiceController';
 import NadiaActionBridge from '../components/NadiaActionBridge';
+import NadiaFloatingOverlay from '../components/NadiaFloatingOverlay';
 import ShippingRatesTab from '../components/ShippingRatesTab';
 import ErrorBoundary, { SafeSection } from '../components/ErrorBoundary';
 import { DashboardSkeleton, TableSkeleton, CardGridSkeleton } from '../components/LoadingSkeleton';
@@ -2964,6 +2965,28 @@ export default function App() {
         Engine's chips and executes them (draft email, create reminder, flag
         invoice, etc.). Headless component, safe to mount once globally. */}
     <NadiaActionBridge userId={userProfile?.id} toast={toast} />
+    {/* S16 — Floating Nadia overlay. Visible on every tab. User can mute /
+        unmute via a button in the pill. Starts collapsed by default until
+        the user clicks to expand. When expanded, the full AIGreeter chat
+        UI is rendered inside it. */}
+    {greeterSettings.enabled && !greeterDismissed && (
+      <NadiaFloatingOverlay
+        user={user} userProfile={userProfile} users={teamUsers}
+        tickets={dashTickets} invoices={invoices} treasury={treasury}
+        checks={pendingChecks} loginHistory={lastLoginInfo} loginHistoryLoaded={loginHistoryLoaded}
+        lang={lang} personality={greeterSettings.personality}
+        greeterLang={greeterSettings.language}
+        enabled={greeterSettings.enabled}
+        hasGreeted={greeterHasGreeted} onGreeted={handleGreeted}
+        sessionMessages={greeterMessages} onMessagesUpdate={setGreeterMessages}
+        onToggle={(on) => { if (!on) setGreeterDismissed(true); }}
+        toast={toast}
+        contextTab={tab}
+        contextSelectedCustomer={selectedCustomer}
+        contextSelectedInvoice={selectedInvoice}
+        contextOpenTicketId={openTicketId}
+      />
+    )}
     <div className="min-h-screen" style={{background:'var(--bg-primary)'}}>
       {/* Header */}
       <div style={{background:'linear-gradient(135deg, #0f172a 0%, #1e1b4b 50%, #0f172a 100%)', borderBottom:'1px solid rgba(56,189,248,0.15)'}} role="banner" aria-label="App header" className="px-5 py-3 flex justify-between items-center sticky top-0 z-[101]">
@@ -2975,11 +2998,29 @@ export default function App() {
           </div>
         </div>
         <div className="flex items-center gap-2">
-          {/* Treasury Net — treasury access only */}
-          {(isSuperAdmin || modulePerms?.['Treasury']) && (
-          <div onClick={() => { setTab('treasury'); setMode('all'); }} className="cursor-pointer px-2 sm:px-3 py-1.5 rounded-lg" style={{background:'rgba(255,255,255,0.04)', border:'1px solid rgba(255,255,255,0.08)'}}>
-            <div style={{color:'rgba(148,163,184,0.5)'}} className="text-[7px] sm:text-[8px] font-bold uppercase tracking-wider">Treasury Net (All Time)</div>
-            <div className={'text-xs sm:text-sm font-black'} style={{color: allTimeNet >= 0 ? '#34d399' : '#f87171'}}>{fE(allTimeNet)}</div>
+          {/* Treasury Net — ONLY shown to users with Treasury permission.
+              S16 (Apr 22 2026): tightened check to require explicit === true
+              (matches the tab-visibility logic at line 980). Prevents the
+              header number from leaking to users who happened to have an
+              unrelated truthy value in modulePerms['Treasury']. */}
+          {(isSuperAdmin || modulePerms?.['Treasury'] === true) && (
+          <div onClick={() => { setTab('treasury'); setMode('all'); }}
+            className="cursor-pointer px-3 sm:px-4 py-2 rounded-lg flex flex-col items-center justify-center text-center transition-all hover:scale-[1.03]"
+            style={{
+              background: allTimeNet >= 0
+                ? 'linear-gradient(135deg, rgba(16,185,129,0.12), rgba(16,185,129,0.06))'
+                : 'linear-gradient(135deg, rgba(239,68,68,0.12), rgba(239,68,68,0.06))',
+              border: '1px solid ' + (allTimeNet >= 0 ? 'rgba(16,185,129,0.4)' : 'rgba(239,68,68,0.4)'),
+              minWidth: 130,
+            }}>
+            <div style={{color:'rgba(203,213,225,0.7)'}} className="text-[8px] sm:text-[9px] font-bold uppercase tracking-wider leading-tight">Treasury Net</div>
+            <div className="text-sm sm:text-base font-black tracking-tight"
+              style={{
+                color: allTimeNet >= 0 ? '#34d399' : '#f87171',
+                textShadow: '0 0 12px ' + (allTimeNet >= 0 ? 'rgba(52,211,153,0.4)' : 'rgba(248,113,113,0.4)'),
+              }}>
+              {fE(allTimeNet)}
+            </div>
           </div>
           )}
           {userProfile && (
@@ -5644,40 +5685,10 @@ export default function App() {
               </button>
             )}
 
-            {/* ===== AI ASSISTANT (compact — click to expand) =====
-                H2 (Apr 20): wrapper has max-md:order-last so Nadia visually sinks
-                to the bottom on viewports <768px. Desktop (md+) keeps natural order.
-                Single instance — no double mount, sessionMessages/hasGreeted preserved.
-                S15 (Apr 22): removed pt-12 mt-8 which was adding ~80px of empty
-                space above Nadia. mb-4 alone is enough breathing room. */}
-            <div className="max-md:order-last">
-            {!greeterDismissed && greeterSettings.enabled ? (
-              <div className="mb-4">
-                <AIGreeter
-                  user={user} userProfile={userProfile} users={teamUsers}
-                  tickets={dashTickets} invoices={invoices} treasury={treasury}
-                  checks={pendingChecks} loginHistory={lastLoginInfo} loginHistoryLoaded={loginHistoryLoaded}
-                  lang={lang} personality={greeterSettings.personality}
-                  greeterLang={greeterSettings.language}
-                  enabled={greeterSettings.enabled}
-                  hasGreeted={greeterHasGreeted} onGreeted={handleGreeted}
-                  sessionMessages={greeterMessages} onMessagesUpdate={setGreeterMessages}
-                  onToggle={(on) => { if (!on) setGreeterDismissed(true); }}
-                  toast={toast}
-                  contextTab={tab}
-                  contextSelectedCustomer={selectedCustomer}
-                  contextSelectedInvoice={selectedInvoice}
-                  contextOpenTicketId={openTicketId}
-                />
-              </div>
-            ) : greeterSettings.enabled ? (
-              <button onClick={() => setGreeterDismissed(false)}
-                className="mb-4 w-full px-4 py-2.5 rounded-xl text-xs font-semibold text-indigo-300 border border-indigo-500/20 hover:bg-indigo-500/10 transition flex items-center gap-2"
-                style={{ background: 'rgba(99,102,241,0.05)' }}>
-                🤖 <span>Open AI Assistant</span> <span className="ml-auto text-[10px] text-indigo-400/60">Nadia</span>
-              </button>
-            ) : null}
-            </div>
+            {/* S16 (Apr 22): The dashboard-only AIGreeter is gone. Nadia now
+                lives as a floating overlay (NadiaFloatingOverlay) mounted at
+                the root of the page, so she's available on EVERY tab, not
+                just the dashboard. See NadiaFloatingOverlay.jsx. */}
 
                 </>)}{/* end !hasUnacked gate */}
               </>);
@@ -6292,9 +6303,16 @@ export default function App() {
               );
 
               // Priority → row-level urgency color
+              // S16: DISTINCT colors for each urgency type. Previously both
+              // "due today" and "medium priority" shared amber, confusing.
+              //   Overdue    → #ef4444 red      (danger)
+              //   Due today  → #f97316 orange   (attention now)
+              //   Urgent/High→ #dc2626 crimson  (critical importance)
+              //   Medium     → #eab308 yellow   (warning)
+              //   Low        → #64748b grey     (normal)
               const priBorderColor = (p) => {
-                if (p === 'urgent' || p === 'high') return '#ef4444';  // red
-                if (p === 'medium') return '#f59e0b';                  // amber
+                if (p === 'urgent' || p === 'high') return '#dc2626';  // crimson
+                if (p === 'medium') return '#eab308';                  // yellow
                 if (p === 'low') return '#64748b';                     // grey
                 return '#475569';                                      // default
               };
@@ -6332,7 +6350,8 @@ export default function App() {
                   ? Math.floor((new Date(todayStr).getTime() - new Date(t.due_date).getTime()) / 86400000)
                   : 0;
                 const dueToday = t.due_date === todayStr;
-                const leftBorderColor = daysOverdue > 0 ? '#ef4444' : (dueToday ? '#f59e0b' : priBorderColor(t.priority));
+                // Overdue = red, Due Today = orange (distinct from amber medium), else priority color
+                const leftBorderColor = daysOverdue > 0 ? '#ef4444' : (dueToday ? '#f97316' : priBorderColor(t.priority));
 
                 return (
                 <div style={{
@@ -6381,8 +6400,8 @@ export default function App() {
                           {dueToday && (
                             <span style={{
                               fontSize: 10, fontWeight: 800,
-                              color: '#fbbf24', background: 'rgba(234,179,8,0.12)',
-                              border: '1px solid rgba(234,179,8,0.3)',
+                              color: '#fdba74', background: 'rgba(249,115,22,0.15)',
+                              border: '1px solid rgba(249,115,22,0.4)',
                               padding: '2px 8px', borderRadius: 4,
                             }}>
                               DUE TODAY
@@ -7202,45 +7221,64 @@ export default function App() {
               </div>
             </div>
             <div className="grid grid-cols-3 gap-3 mb-3">
-              {/* S12 — Sales summary cards with strong color coding to match Treasury */}
-              <div className="rounded-xl p-3 transition-all hover:shadow-lg hover:scale-[1.02]"
-                style={{ background: 'linear-gradient(135deg, #dbeafe 0%, #bfdbfe 100%)', border: '1px solid #0ea5e9' }}>
-                <div className="flex items-center justify-between">
-                  <div className="text-[10px] text-sky-800 font-bold uppercase tracking-wider">📋 Invoiced</div>
-                  <span className="text-sky-600 text-base">📊</span>
+              {/* S17 — Sales summary cards redesigned. Dark backgrounds, bright
+                  centered numbers, matching Treasury. */}
+              <div className="rounded-xl p-3 transition-all hover:shadow-xl hover:scale-[1.02] flex flex-col items-center justify-center text-center min-h-[96px]"
+                style={{
+                  background: 'linear-gradient(135deg, #0c4a6e 0%, #075985 100%)',
+                  border: '2px solid #0ea5e9',
+                  boxShadow: '0 0 0 1px rgba(14,165,233,0.1) inset',
+                }}>
+                <div className="flex items-center justify-center gap-1.5 mb-1">
+                  <span className="text-sky-300 text-base">📊</span>
+                  <div className="text-[10px] text-sky-200 font-bold uppercase tracking-wider">Invoiced</div>
                 </div>
-                <div className="text-lg font-extrabold text-sky-700 mt-1">{fE(totalInvoiced)}</div>
+                <div className="text-xl sm:text-2xl font-black text-sky-300 tracking-tight" style={{ textShadow: '0 0 20px rgba(14,165,233,0.3)' }}>
+                  {fE(totalInvoiced)}
+                </div>
               </div>
-              <div className="rounded-xl p-3 transition-all hover:shadow-lg hover:scale-[1.02]"
-                style={{ background: 'linear-gradient(135deg, #d1fae5 0%, #a7f3d0 100%)', border: '1px solid #10b981' }}>
-                <div className="flex items-center justify-between">
-                  <div className="text-[10px] text-emerald-800 font-bold uppercase tracking-wider">✅ Collected</div>
-                  <span className="text-emerald-600 text-base">💵</span>
+              <div className="rounded-xl p-3 transition-all hover:shadow-xl hover:scale-[1.02] flex flex-col items-center justify-center text-center min-h-[96px]"
+                style={{
+                  background: 'linear-gradient(135deg, #064e3b 0%, #065f46 100%)',
+                  border: '2px solid #10b981',
+                  boxShadow: '0 0 0 1px rgba(16,185,129,0.1) inset',
+                }}>
+                <div className="flex items-center justify-center gap-1.5 mb-1">
+                  <span className="text-emerald-400 text-base">💵</span>
+                  <div className="text-[10px] text-emerald-200 font-bold uppercase tracking-wider">Collected</div>
                 </div>
-                <div className="text-lg font-extrabold text-emerald-700 mt-1">{fE(totalCollected)}</div>
+                <div className="text-xl sm:text-2xl font-black text-emerald-300 tracking-tight" style={{ textShadow: '0 0 20px rgba(16,185,129,0.3)' }}>
+                  {fE(totalCollected)}
+                </div>
                 {totalInvoiced > 0 && (
-                  <div className="mt-1.5 h-1 w-full rounded-full bg-white/60 overflow-hidden" title={Math.round(totalCollected/totalInvoiced*100) + '% collected'}>
+                  <div className="mt-2 h-1 w-4/5 rounded-full bg-black/30 overflow-hidden" title={Math.round(totalCollected/totalInvoiced*100) + '% collected'}>
                     <div style={{
                       width: Math.min(100, totalCollected / totalInvoiced * 100) + '%',
-                      background: '#10b981',
+                      background: '#34d399',
                       height: '100%',
                       transition: 'width 0.3s'
                     }} />
                   </div>
                 )}
               </div>
-              <div className="rounded-xl p-3 transition-all hover:shadow-lg hover:scale-[1.02]"
-                style={{ background: 'linear-gradient(135deg, #fee2e2 0%, #fecaca 100%)', border: '1px solid #ef4444' }}>
-                <div className="flex items-center justify-between">
-                  <div className="text-[10px] text-red-800 font-bold uppercase tracking-wider">⏳ Outstanding</div>
-                  <span className="text-red-600 text-base">⚠️</span>
+              <div className="rounded-xl p-3 transition-all hover:shadow-xl hover:scale-[1.02] flex flex-col items-center justify-center text-center min-h-[96px]"
+                style={{
+                  background: 'linear-gradient(135deg, #7f1d1d 0%, #991b1b 100%)',
+                  border: '2px solid #ef4444',
+                  boxShadow: '0 0 0 1px rgba(239,68,68,0.1) inset',
+                }}>
+                <div className="flex items-center justify-center gap-1.5 mb-1">
+                  <span className="text-red-400 text-base">⚠️</span>
+                  <div className="text-[10px] text-red-200 font-bold uppercase tracking-wider">Outstanding</div>
                 </div>
-                <div className="text-lg font-extrabold text-red-700 mt-1">{fE(totalOutstanding)}</div>
+                <div className="text-xl sm:text-2xl font-black text-red-300 tracking-tight" style={{ textShadow: '0 0 20px rgba(239,68,68,0.3)' }}>
+                  {fE(totalOutstanding)}
+                </div>
                 {totalInvoiced > 0 && (
-                  <div className="mt-1.5 h-1 w-full rounded-full bg-white/60 overflow-hidden" title={Math.round(totalOutstanding/totalInvoiced*100) + '% outstanding'}>
+                  <div className="mt-2 h-1 w-4/5 rounded-full bg-black/30 overflow-hidden" title={Math.round(totalOutstanding/totalInvoiced*100) + '% outstanding'}>
                     <div style={{
                       width: Math.min(100, totalOutstanding / totalInvoiced * 100) + '%',
-                      background: '#ef4444',
+                      background: '#f87171',
                       height: '100%',
                       transition: 'width 0.3s'
                     }} />
@@ -7856,46 +7894,63 @@ export default function App() {
               })()}
             </div>
             <div className="grid grid-cols-3 gap-3 mb-3">
-              {/* S12 — Treasury summary cards with strong color coding.
-                  Background gradients make in/out instantly recognizable.
-                  Net card flips to red when treasury goes negative. */}
+              {/* S17 — Treasury summary cards redesigned for high contrast.
+                  Dark solid backgrounds with bright neon-colored numbers.
+                  All content centered inside each bucket. */}
               <div onClick={() => setTreasuryDrill('in')}
-                className="rounded-xl p-3 cursor-pointer transition-all hover:shadow-lg hover:scale-[1.02]"
-                style={{ background: 'linear-gradient(135deg, #d1fae5 0%, #a7f3d0 100%)', border: '1px solid #10b981' }}>
-                <div className="flex items-center justify-between">
-                  <div className="text-[10px] text-emerald-800 font-bold uppercase tracking-wider">↓ Cash In / وارد</div>
-                  <span className="text-emerald-600 text-base">💰</span>
+                className="rounded-xl p-3 cursor-pointer transition-all hover:shadow-xl hover:scale-[1.02] flex flex-col items-center justify-center text-center min-h-[96px]"
+                style={{
+                  background: 'linear-gradient(135deg, #064e3b 0%, #065f46 100%)',
+                  border: '2px solid #10b981',
+                  boxShadow: '0 0 0 1px rgba(16,185,129,0.1) inset',
+                }}>
+                <div className="flex items-center justify-center gap-1.5 mb-1">
+                  <span className="text-emerald-400 text-base">💰</span>
+                  <div className="text-[10px] text-emerald-200 font-bold uppercase tracking-wider">Cash In / وارد</div>
                 </div>
-                <div className="text-lg font-extrabold text-emerald-700 mt-1">{fE(totalCashIn)}</div>
+                <div className="text-xl sm:text-2xl font-black text-emerald-300 tracking-tight" style={{ textShadow: '0 0 20px rgba(16,185,129,0.3)' }}>
+                  {fE(totalCashIn)}
+                </div>
               </div>
               <div onClick={() => setTreasuryDrill('out')}
-                className="rounded-xl p-3 cursor-pointer transition-all hover:shadow-lg hover:scale-[1.02]"
-                style={{ background: 'linear-gradient(135deg, #fee2e2 0%, #fecaca 100%)', border: '1px solid #ef4444' }}>
-                <div className="flex items-center justify-between">
-                  <div className="text-[10px] text-red-800 font-bold uppercase tracking-wider">↑ Cash Out / منصرف</div>
-                  <span className="text-red-600 text-base">💸</span>
+                className="rounded-xl p-3 cursor-pointer transition-all hover:shadow-xl hover:scale-[1.02] flex flex-col items-center justify-center text-center min-h-[96px]"
+                style={{
+                  background: 'linear-gradient(135deg, #7f1d1d 0%, #991b1b 100%)',
+                  border: '2px solid #ef4444',
+                  boxShadow: '0 0 0 1px rgba(239,68,68,0.1) inset',
+                }}>
+                <div className="flex items-center justify-center gap-1.5 mb-1">
+                  <span className="text-red-400 text-base">💸</span>
+                  <div className="text-[10px] text-red-200 font-bold uppercase tracking-wider">Cash Out / منصرف</div>
                 </div>
-                <div className="text-lg font-extrabold text-red-700 mt-1">{fE(totalCashOut)}</div>
+                <div className="text-xl sm:text-2xl font-black text-red-300 tracking-tight" style={{ textShadow: '0 0 20px rgba(239,68,68,0.3)' }}>
+                  {fE(totalCashOut)}
+                </div>
               </div>
               <div onClick={() => setTreasuryDrill('net')}
-                className="rounded-xl p-3 cursor-pointer transition-all hover:shadow-lg hover:scale-[1.02]"
+                className="rounded-xl p-3 cursor-pointer transition-all hover:shadow-xl hover:scale-[1.02] flex flex-col items-center justify-center text-center min-h-[96px]"
                 style={{
                   background: totalCashIn >= totalCashOut
-                    ? 'linear-gradient(135deg, #dbeafe 0%, #bfdbfe 100%)'
-                    : 'linear-gradient(135deg, #fef3c7 0%, #fde68a 100%)',
-                  border: '1px solid ' + (totalCashIn >= totalCashOut ? '#3b82f6' : '#f59e0b')
+                    ? 'linear-gradient(135deg, #1e3a8a 0%, #1e40af 100%)'
+                    : 'linear-gradient(135deg, #78350f 0%, #92400e 100%)',
+                  border: '2px solid ' + (totalCashIn >= totalCashOut ? '#3b82f6' : '#f59e0b'),
+                  boxShadow: '0 0 0 1px ' + (totalCashIn >= totalCashOut ? 'rgba(59,130,246,0.1)' : 'rgba(245,158,11,0.1)') + ' inset',
                 }}>
-                <div className="flex items-center justify-between">
-                  <div className={'text-[10px] font-bold uppercase tracking-wider ' + (totalCashIn >= totalCashOut ? 'text-blue-800' : 'text-amber-800')}>= Net / صافي</div>
+                <div className="flex items-center justify-center gap-1.5 mb-1">
                   <span className="text-base">{totalCashIn >= totalCashOut ? '📈' : '📉'}</span>
+                  <div className={'text-[10px] font-bold uppercase tracking-wider ' + (totalCashIn >= totalCashOut ? 'text-blue-200' : 'text-amber-200')}>Net / صافي</div>
                 </div>
-                <div className={'text-lg font-extrabold mt-1 ' + (totalCashIn >= totalCashOut ? 'text-blue-700' : 'text-amber-700')}>{fE(totalCashIn - totalCashOut)}</div>
+                <div className={'text-xl sm:text-2xl font-black tracking-tight ' + (totalCashIn >= totalCashOut ? 'text-blue-300' : 'text-amber-300')}
+                  style={{ textShadow: '0 0 20px ' + (totalCashIn >= totalCashOut ? 'rgba(59,130,246,0.3)' : 'rgba(245,158,11,0.3)') }}>
+                  {fE(totalCashIn - totalCashOut)}
+                </div>
                 {totalCashIn > 0 && (
-                  <div className="mt-1.5 h-1 w-full rounded-full bg-white/60 overflow-hidden">
+                  <div className="mt-2 h-1 w-4/5 rounded-full bg-black/30 overflow-hidden">
                     <div style={{
-                      width: Math.min(100, (totalCashIn - totalCashOut) / totalCashIn * 100) + '%',
-                      background: totalCashIn >= totalCashOut ? '#3b82f6' : '#ef4444',
-                      height: '100%'
+                      width: Math.min(100, Math.max(0, (totalCashIn - totalCashOut) / totalCashIn * 100)) + '%',
+                      background: totalCashIn >= totalCashOut ? '#60a5fa' : '#fbbf24',
+                      height: '100%',
+                      transition: 'width 0.3s'
                     }} />
                   </div>
                 )}

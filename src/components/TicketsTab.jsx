@@ -6,8 +6,15 @@ import { sanitizeRichText, isHtmlComment, richTextToPlain } from '../lib/utils';
 import RichCommentComposer from './RichCommentComposer';
 
 const STATUSES = ['New','Acknowledged','In Progress','Blocked','On Hold','Review','Closed','Reopened'];
-const PRIORITIES = [{v:'high',l:'High / عالي',c:'#ef4444'},{v:'medium',l:'Medium / متوسط',c:'#f59e0b'},{v:'low',l:'Low / منخفض',c:'#10b981'}];
-const STATUS_COLORS = {New:'#3b82f6',Acknowledged:'#8b5cf6','In Progress':'#eab308',Blocked:'#ef4444','On Hold':'#f97316',Review:'#06b6d4',Closed:'#10b981',Reopened:'#eab308'};
+// S16 — Distinct priority colors that don't collide with due-today orange.
+// High   → crimson   #dc2626  (critical importance)
+// Medium → yellow    #eab308  (warning)
+// Low    → emerald   #10b981  (normal/no concern)
+const PRIORITIES = [{v:'high',l:'High / عالي',c:'#dc2626'},{v:'medium',l:'Medium / متوسط',c:'#eab308'},{v:'low',l:'Low / منخفض',c:'#10b981'}];
+// S17 — STATUS_COLORS used for summary cards and top-level indicators.
+// Closed switched from green (#10b981) to dark slate (#1e293b) so it reads
+// as archive-like, distinct from Acknowledged (purple) and Resolved (green).
+const STATUS_COLORS = {New:'#3b82f6',Acknowledged:'#8b5cf6','In Progress':'#eab308',Blocked:'#ef4444','On Hold':'#f97316',Review:'#06b6d4',Closed:'#1e293b',Reopened:'#eab308'};
 const STATUS_DESC = {New:'Just created — nobody has looked at it yet',Acknowledged:'Assigned person has seen and accepted it','In Progress':'Actively being worked on',Blocked:'Cannot proceed — waiting on something external',
   'On Hold':'Paused intentionally — not urgent right now',Review:'Work done — needs someone to check/approve',Closed:'Complete — no more action needed',Reopened:'Was closed but needs more work'};
 const USER_COLORS = ['#8b5cf6','#0ea5e9','#f59e0b','#10b981','#ec4899','#ef4444','#6366f1','#14b8a6','#f97316','#06b6d4','#a855f7','#84cc16'];
@@ -65,6 +72,10 @@ export default function TicketsTab({ toast, customers, user, userProfile, users,
   // R7: inline edit of title/description. editingField = 'title' | 'description' | null
   const [editingField, setEditingField] = useState(null);
   const [editBuf, setEditBuf] = useState({ title: '', description: '' });
+  // S17 — Close-with-comment modal state. Opens when user chooses to close
+  // a ticket. User MUST type a closing comment to proceed. Optional link
+  // field for attaching a related URL (e.g., PR / doc / external ticket).
+  const [closeModal, setCloseModal] = useState(null); // { ticket, comment: '', link: '' } or null
 
   const todayStr = new Date().toISOString().substring(0, 10);
   const getUserName = (id) => (users || []).find(u => u.id === id)?.name || '';
@@ -137,9 +148,17 @@ export default function TicketsTab({ toast, customers, user, userProfile, users,
   };
 
   const updateStatus = async (ticket, newStatus) => {
+    // S17 — Closing a ticket now requires a closing comment. Intercept and
+    // open the close modal instead of performing the update immediately.
+    // The modal's submit handler calls finalizeClose which writes the comment
+    // (and optional link) BEFORE the status update, so the audit trail is
+    // always complete.
+    if (newStatus === 'Closed') {
+      setCloseModal({ ticket: ticket, comment: '', link: '' });
+      return;
+    }
     try {
       const updates = { status: newStatus, updated_by: myId };
-      if (newStatus === 'Closed') { updates.closed_at = new Date().toISOString(); updates.closed_by = myId; }
       await dbUpdate('tickets', ticket.id, updates, myId);
       const myName = getUserName(myId) || 'Unknown';
       await dbInsert('ticket_comments', { ticket_id: ticket.id, comment_text: '📋 Status changed to ' + newStatus + ' by ' + myName, is_system: true, created_by: myId }, myId);
@@ -150,6 +169,48 @@ export default function TicketsTab({ toast, customers, user, userProfile, users,
       if (extras.length) notifyTicketStatus(extras, ticket.title, newStatus, myId);
       loadTickets();
       if (sel && sel.id === ticket.id) { setSel({...sel, ...updates}); loadComments(ticket.id); }
+    } catch (err) { toast ? toast.error(err.message) : alert(err.message); }
+  };
+
+  // S17 — Finalize a Closed status with the mandatory closing comment.
+  // Called by the close modal's Submit button after validation.
+  const finalizeClose = async () => {
+    if (!closeModal) return;
+    const { ticket, comment, link } = closeModal;
+    const trimmed = (comment || '').trim();
+    if (!trimmed) {
+      toast ? toast.error('Please enter a closing comment') : alert('Please enter a closing comment');
+      return;
+    }
+    // Validate optional URL — if they typed something, it must look like a URL
+    const trimmedLink = (link || '').trim();
+    if (trimmedLink && !/^(https?:\/\/|\/|mailto:)/i.test(trimmedLink)) {
+      toast ? toast.error('Link must start with http://, https://, /, or mailto:') : alert('Link must start with http://, https://, /, or mailto:');
+      return;
+    }
+    try {
+      const myName = getUserName(myId) || 'Unknown';
+      const updates = {
+        status: 'Closed',
+        updated_by: myId,
+        closed_at: new Date().toISOString(),
+        closed_by: myId,
+      };
+      await dbUpdate('tickets', ticket.id, updates, myId);
+      // Write the closing comment as a visible (non-system) comment so it's
+      // obvious in the ticket history what the resolution was.
+      const commentBody = '🔒 CLOSED by ' + myName + '\n\n' + trimmed
+        + (trimmedLink ? '\n\n🔗 ' + trimmedLink : '');
+      await dbInsert('ticket_comments', { ticket_id: ticket.id, comment_text: commentBody, is_system: false, created_by: myId }, myId);
+      await logActivity(myId, 'Closed ticket: ' + ticket.title, 'ticket');
+      if (ticket.assigned_to && ticket.assigned_to !== myId) notifyTicketStatus([ticket.assigned_to], ticket.title, 'Closed', myId);
+      if (ticket.created_by && ticket.created_by !== myId && ticket.created_by !== ticket.assigned_to) notifyTicketStatus([ticket.created_by], ticket.title, 'Closed', myId);
+      const extras = parseAssignees(ticket).filter(id => id !== myId && id !== ticket.assigned_to && id !== ticket.created_by);
+      if (extras.length) notifyTicketStatus(extras, ticket.title, 'Closed', myId);
+      setCloseModal(null);
+      loadTickets();
+      if (sel && sel.id === ticket.id) { setSel({...sel, ...updates}); loadComments(ticket.id); }
+      if (toast) toast.success('Ticket closed with comment ✓');
     } catch (err) { toast ? toast.error(err.message) : alert(err.message); }
   };
 
@@ -672,7 +733,7 @@ export default function TicketsTab({ toast, customers, user, userProfile, users,
       <div onClick={() => setStatusF('open')} className="bg-white rounded-lg p-3 cursor-pointer hover:shadow transition" style={{borderLeftWidth:3,borderLeftColor:'#3b82f6'}}><div className="text-[10px] text-slate-500">Open</div><div className="text-lg font-extrabold">{tickets.filter(t=>t.status!=='Closed').length}</div></div>
       <div onClick={() => setStatusF('overdue')} className="bg-white rounded-lg p-3 cursor-pointer hover:shadow transition" style={{borderLeftWidth:3,borderLeftColor:'#ef4444'}}><div className="text-[10px] text-slate-500">Overdue</div><div className="text-lg font-extrabold text-red-500">{tickets.filter(t=>t.due_date&&t.due_date<todayStr&&t.status!=='Closed').length}</div></div>
       <div onClick={() => { setPriorityF('high'); setStatusF('all'); }} className="bg-white rounded-lg p-3 cursor-pointer hover:shadow transition" style={{borderLeftWidth:3,borderLeftColor:'#f59e0b'}}><div className="text-[10px] text-slate-500">High Priority</div><div className="text-lg font-extrabold text-amber-500">{tickets.filter(t=>t.priority==='high'&&t.status!=='Closed').length}</div></div>
-      <div onClick={() => setStatusF('Closed')} className="bg-white rounded-lg p-3 cursor-pointer hover:shadow transition" style={{borderLeftWidth:3,borderLeftColor:'#10b981'}}><div className="text-[10px] text-slate-500">Closed</div><div className="text-lg font-extrabold">{tickets.filter(t=>t.status==='Closed').length}</div></div>
+      <div onClick={() => setStatusF('Closed')} className="bg-white rounded-lg p-3 cursor-pointer hover:shadow transition" style={{borderLeftWidth:3,borderLeftColor:'#1e293b'}}><div className="text-[10px] text-slate-500">Closed</div><div className="text-lg font-extrabold text-slate-800">{tickets.filter(t=>t.status==='Closed').length}</div></div>
     </div>
 
     {/* Status Legend — collapsible */}
@@ -750,12 +811,99 @@ export default function TicketsTab({ toast, customers, user, userProfile, users,
       </div>
     )}
 
+    {/* S17 — Close-with-comment modal. User MUST type a closing comment
+        before the Close button becomes active. Optional link field lets
+        them attach a related URL (doc, external ticket, etc.) */}
+    {closeModal && (
+      <div className="fixed inset-0 bg-black/60 z-[250] flex items-center justify-center p-4" onClick={() => setCloseModal(null)}>
+        <div className="bg-white rounded-2xl p-6 max-w-lg w-full shadow-2xl" onClick={e => e.stopPropagation()}>
+          <div className="flex items-start justify-between mb-4">
+            <div>
+              <h3 className="text-lg font-bold text-slate-900 flex items-center gap-2">
+                <span>🔒</span> Close Ticket
+              </h3>
+              <p className="text-xs text-slate-500 mt-0.5">
+                {closeModal.ticket.ticket_number && <span className="font-mono font-bold mr-2">{closeModal.ticket.ticket_number}</span>}
+                {closeModal.ticket.title}
+              </p>
+            </div>
+            <button onClick={() => setCloseModal(null)}
+              className="text-slate-400 hover:text-slate-600 text-xl leading-none">×</button>
+          </div>
+
+          <div className="mb-4">
+            <label className="block text-xs font-bold text-slate-700 mb-1.5">
+              Closing Comment <span className="text-red-500">*</span>
+            </label>
+            <textarea
+              value={closeModal.comment}
+              onChange={e => setCloseModal({...closeModal, comment: e.target.value})}
+              onKeyDown={e => {
+                // Cmd/Ctrl + Enter submits
+                if ((e.metaKey || e.ctrlKey) && e.key === 'Enter') {
+                  e.preventDefault();
+                  finalizeClose();
+                }
+              }}
+              autoFocus
+              rows={4}
+              placeholder="Describe how this was resolved, what was done, what was learned..."
+              className="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-400 focus:border-blue-400"
+            />
+            <p className="text-[10px] text-slate-400 mt-1">
+              This comment will be visible on the ticket history. Required for audit trail.
+            </p>
+          </div>
+
+          <div className="mb-5">
+            <label className="block text-xs font-bold text-slate-700 mb-1.5">
+              Related Link <span className="text-slate-400 font-normal">(optional)</span>
+            </label>
+            <input
+              type="url"
+              value={closeModal.link}
+              onChange={e => setCloseModal({...closeModal, link: e.target.value})}
+              placeholder="https://... or mailto:..."
+              className="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-400 focus:border-blue-400"
+            />
+            <p className="text-[10px] text-slate-400 mt-1">
+              Attach a related URL — a doc, PR, external ticket, or email thread.
+            </p>
+          </div>
+
+          <div className="flex gap-3 justify-end pt-4 border-t border-slate-100">
+            <button onClick={() => setCloseModal(null)}
+              className="px-4 py-2 border border-slate-200 rounded-lg text-sm font-semibold hover:bg-slate-50">
+              Cancel
+            </button>
+            <button onClick={finalizeClose}
+              disabled={!closeModal.comment.trim()}
+              className="px-4 py-2 rounded-lg text-sm font-bold text-white disabled:opacity-40 disabled:cursor-not-allowed"
+              style={{ background: '#1e293b' }}>
+              🔒 Close Ticket
+            </button>
+          </div>
+        </div>
+      </div>
+    )}
+
     {/* Bulk Action Bar */}
     {bulkSelected.size > 0 && (
       <div className="sticky top-0 z-20 bg-blue-600 text-white rounded-xl p-3 mb-3 flex items-center gap-3 flex-wrap shadow-lg">
         <span className="text-sm font-bold">{bulkSelected.size} selected</span>
-        <select value="" onChange={async (e) => { if (e.target.value) { const ok = window.confirm('Change status of ' + bulkSelected.size + ' tickets to "' + e.target.value + '"?'); if (ok) await executeBulk('status', e.target.value); e.target.value = ''; } }}
-          className="px-2 py-1 rounded text-xs text-slate-800 font-semibold">
+        <select value="" onChange={async (e) => {
+          if (!e.target.value) return;
+          // S17 — Bulk "Closed" is blocked because each close requires its
+          // own comment. Tell the user to close them individually.
+          if (e.target.value === 'Closed') {
+            alert('To close tickets, open each one and use the Close button — a closing comment is required per ticket.');
+            e.target.value = '';
+            return;
+          }
+          const ok = window.confirm('Change status of ' + bulkSelected.size + ' tickets to "' + e.target.value + '"?');
+          if (ok) await executeBulk('status', e.target.value);
+          e.target.value = '';
+        }} className="px-2 py-1 rounded text-xs text-slate-800 font-semibold">
           <option value="">Change Status...</option>
           {STATUSES.map(s => <option key={s} value={s}>{s}</option>)}
         </select>
@@ -803,16 +951,24 @@ export default function TicketsTab({ toast, customers, user, userProfile, users,
         const needsAck = t.status === 'New' && isAssignedToMe(t);
         const isBulked = bulkSelected.has(t.id);
 
-        // Left border: overdue > due-today > priority color
-        const leftBorderColor = isOverdue ? '#ef4444' : (isDueToday ? '#f59e0b' : priColor);
+        // Left border: overdue > due-today > priority color.
+        // S16: Distinct colors — overdue=red, due-today=orange (new), else priority color.
+        // Previously due-today and medium-priority both used amber = visually confusing.
+        const leftBorderColor = isOverdue ? '#ef4444' : (isDueToday ? '#f97316' : priColor);
 
-        // Status pill color map (matches the dashboard palette)
+        // Status pill color map (matches the dashboard palette).
+        // S17 — Closed made VERY distinct: dark slate/charcoal with white text,
+        // unlike Acknowledged (light indigo) which was too similar before.
         const statusPill = {
           'New':          { bg: '#dbeafe', fg: '#1e40af', border: '#93c5fd' },
           'Acknowledged': { bg: '#e0e7ff', fg: '#3730a3', border: '#a5b4fc' },
           'In Progress':  { bg: '#fef3c7', fg: '#92400e', border: '#fcd34d' },
+          'Blocked':      { bg: '#fee2e2', fg: '#991b1b', border: '#fca5a5' },
+          'On Hold':      { bg: '#ffedd5', fg: '#9a3412', border: '#fdba74' },
+          'Review':       { bg: '#cffafe', fg: '#155e75', border: '#67e8f9' },
           'Resolved':     { bg: '#d1fae5', fg: '#065f46', border: '#6ee7b7' },
-          'Closed':       { bg: '#f1f5f9', fg: '#475569', border: '#cbd5e1' },
+          'Closed':       { bg: '#1e293b', fg: '#f1f5f9', border: '#334155' },
+          'Reopened':     { bg: '#fef3c7', fg: '#854d0e', border: '#facc15' },
         };
         const sp = statusPill[t.status] || { bg: '#ede9fe', fg: '#6d28d9', border: '#c4b5fd' };
 
@@ -849,7 +1005,7 @@ export default function TicketsTab({ toast, customers, user, userProfile, users,
                     )}
                     {isDueToday && (
                       <span className="inline-flex items-center px-2 py-0.5 rounded-md text-[10px] font-extrabold tracking-wider"
-                        style={{ background: '#fef3c7', color: '#92400e', border: '1px solid #fcd34d' }}>
+                        style={{ background: '#ffedd5', color: '#c2410c', border: '1px solid #fdba74' }}>
                         DUE TODAY
                       </span>
                     )}

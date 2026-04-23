@@ -64,7 +64,7 @@ function renderDecisionPanel(d, keyId, lang) {
   );
 }
 
-export default function AIGreeter({ user, userProfile, users, tickets, invoices, treasury, checks, loginHistory, loginHistoryLoaded, lang, personality, greeterLang, onToggle, toast, enabled, hasGreeted, onGreeted, sessionMessages, onMessagesUpdate, contextTab, contextSelectedCustomer, contextSelectedInvoice, contextOpenTicketId }) {
+export default function AIGreeter({ user, userProfile, users, tickets, invoices, treasury, checks, loginHistory, loginHistoryLoaded, lang, personality, greeterLang, onToggle, toast, enabled, hasGreeted, onGreeted, sessionMessages, onMessagesUpdate, contextTab, contextSelectedCustomer, contextSelectedInvoice, contextOpenTicketId, muted }) {
   // Use parent's session messages — persist across tab switches
   var messages = sessionMessages || [];
   var setMessages = function(msgs) { if (onMessagesUpdate) onMessagesUpdate(msgs); };
@@ -430,6 +430,12 @@ export default function AIGreeter({ user, userProfile, users, tickets, invoices,
   var [currentAudio, setCurrentAudio] = useState(null);
   var doSpeak = useCallback(function(text) {
     if (!text) return;
+    // S16 — When user has muted Nadia, do NOT play audio. Just skip silently.
+    // The text is still displayed in the chat bubble; only voice is suppressed.
+    if (muted) {
+      try { console.log('[nadia] muted — skipping TTS playback'); } catch (e) {}
+      return;
+    }
     setSpeaking(true);
     try { window.dispatchEvent(new CustomEvent('nadia-tts-start')); } catch (e) {}
     var fireStop = function() {
@@ -453,9 +459,10 @@ export default function AIGreeter({ user, userProfile, users, tickets, invoices,
       audio.onended = function() { audioRef.current = null; fireStop(); };
       audio.play().catch(function() { doFallbackSpeak(text); });
     }).catch(function() { doFallbackSpeak(text); });
-  }, [useLang]);
+  }, [useLang, muted]);
 
   var doFallbackSpeak = function(text) {
+    if (muted) return;
     try {
       var u = new SpeechSynthesisUtterance(text);
       u.lang = useLang === 'ar' ? 'ar-EG' : 'en-US';

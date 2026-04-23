@@ -1422,55 +1422,56 @@ function runSection19_MobileNadia() {
   assert(dashOpen && /flex/.test(dashOpen[1]), '19.1b dashboard root has flex');
   assert(dashOpen && /flex-col/.test(dashOpen[1]), '19.1c dashboard root has flex-col');
 
-  // 19.2 — AIGreeter block is wrapped with max-md:order-last
-  const greeterWrapRE = /<div className="max-md:order-last">\s*\n\s*\{!greeterDismissed && greeterSettings\.enabled \?/;
-  assert(greeterWrapRE.test(src), '19.2a greeter block is wrapped with max-md:order-last');
+  // ===== S16 (Apr 22 2026) — Nadia moved from dashboard-only to global =====
+  // She now lives as a floating overlay mounted at the root of page.jsx.
+  // The old dashboard-only AIGreeter block was removed. Tests in this block
+  // have been updated to assert the new pattern.
+  // ========================================================================
 
-  // 19.3 — exactly ONE AIGreeter component instance remains (no double-mount)
+  // 19.2 — Floating overlay is mounted at the page root (visible on all tabs)
+  assert(/<NadiaFloatingOverlay\s/.test(src),
+    '19.2a NadiaFloatingOverlay is mounted at page root so Nadia lives on every tab');
+
+  // 19.3 — No direct <AIGreeter> mount in page.jsx (it renders inside the overlay)
   const greeterInstances = (src.match(/<AIGreeter\b/g) || []).length;
-  assert(greeterInstances === 1, '19.3a exactly one AIGreeter instance in page.jsx', 'found=' + greeterInstances);
+  assert(greeterInstances === 0,
+    '19.3a no direct AIGreeter mount in page.jsx — overlay owns Nadia now (found=' + greeterInstances + ')');
 
-  // 19.4 — the greeter wrapper does not use `hidden` / `md:hidden` toggling
-  // (that would cause double-mount if paired with another mobile-only slot)
-  const hasHiddenToggle = /<div className="(?:max-md:)?hidden md:block"[^>]*>\s*\n\s*<AIGreeter/.test(src) ||
-                         /<div className="md:hidden"[^>]*>\s*\n\s*<AIGreeter/.test(src);
-  assert(!hasHiddenToggle, '19.4a no display:none responsive toggling around AIGreeter (single mount guaranteed)');
+  // 19.4 — overlay import is present
+  assert(/import NadiaFloatingOverlay from '\.\.\/components\/NadiaFloatingOverlay'/.test(src),
+    '19.4a NadiaFloatingOverlay must be imported');
 
-  // 19.5 — `max-md:order-last` is a Tailwind arbitrary variant, but order-last
-  // is a core utility (order: 9999). Assert it exists as expected token.
-  assert(/max-md:order-last/.test(src), '19.5a max-md:order-last token present');
+  // 19.5 — overlay is gated on greeterSettings.enabled AND !greeterDismissed
+  //        so the user can still dismiss Nadia in Settings
+  assert(/greeterSettings\.enabled && !greeterDismissed && \(\s*<NadiaFloatingOverlay/.test(src),
+    '19.5a overlay render is gated on greeterSettings.enabled && !greeterDismissed');
 
-  // 19.6 — desktop visual behavior: no md:order-* on greeter (so it keeps natural JSX position on md+)
-  const greeterSection = src.slice(src.indexOf('max-md:order-last"'), src.indexOf('max-md:order-last"') + 2000);
-  assert(!/md:order-\d/.test(greeterSection.replace('max-md:order-last', '')),
-         '19.6a no conflicting md:order-N on greeter wrapper (desktop keeps natural order)');
+  // 19.6 — The old dashboard-only block was replaced with an explanatory comment
+  assert(/The dashboard-only AIGreeter is gone/.test(src),
+    '19.6a explanatory comment marks where the dashboard-only AIGreeter was removed');
 
   // 19.7 — parent flex-col does not break layout: no child uses `float-` classes
   // inside the dashboard block (float breaks flex)
   const dashStart = src.indexOf("{tab === 'dashboard' &&");
-  // find matching close by counting — simple heuristic: take 180KB window (dashboard is ~120KB)
   const dashSlice = src.slice(dashStart, dashStart + 250000);
   const floatUsages = (dashSlice.match(/className="[^"]*\bfloat-(?:left|right|none)\b/g) || []).length;
   assert(floatUsages === 0, '19.7a no float-* classes inside dashboard (flex compatible)', 'found=' + floatUsages);
 
-  // 19.8 — the wrapper div is closed (balance check on the immediate block)
-  // count opens and closes in the wrapper span
-  const wrapOpen = src.indexOf('<div className="max-md:order-last">');
-  assert(wrapOpen > 0, '19.8a wrapper open tag located');
-  // within next ~3000 chars, there should be one `</div>` that closes it
-  const after = src.slice(wrapOpen, wrapOpen + 3000);
-  // the wrapper contains a ternary with two branches each having their own div or button — rough balance check
-  const opens = (after.match(/<div\b/g) || []).length;
-  const closes = (after.match(/<\/div>/g) || []).length;
-  assert(opens > 0 && closes >= opens - 2 && closes <= opens + 2,
-         '19.8b wrapper JSX roughly balanced in local window',
-         'opens=' + opens + ' closes=' + closes);
+  // 19.8 — the overlay receives all required props (no accidental drops)
+  const overlayOpen = src.indexOf('<NadiaFloatingOverlay');
+  assert(overlayOpen > 0, '19.8a overlay open tag located');
+  const overlayBlock = src.slice(overlayOpen, overlayOpen + 2500);
+  const requiredOverlayProps = ['sessionMessages', 'onMessagesUpdate', 'hasGreeted', 'onGreeted', 'loginHistoryLoaded'];
+  requiredOverlayProps.forEach(function(prop, i) {
+    assert(new RegExp('\\b' + prop + '=').test(overlayBlock),
+      '19.8.' + (i+1) + ' prop ' + prop + ' still passed through overlay');
+  });
 
-  // 19.9 — state props still threaded through (no accidental prop drop during wrap)
-  const requiredProps = ['sessionMessages', 'onMessagesUpdate', 'hasGreeted', 'onGreeted', 'loginHistoryLoaded'];
-  requiredProps.forEach(function(prop, i) {
-    assert(new RegExp('\\b' + prop + '=').test(greeterSection),
-           '19.9.' + (i+1) + ' prop ' + prop + ' still passed to AIGreeter');
+  // 19.9 — Context props threaded so Nadia knows which tab/record is open
+  const contextProps = ['contextTab', 'contextSelectedCustomer', 'contextSelectedInvoice', 'contextOpenTicketId'];
+  contextProps.forEach(function(prop, i) {
+    assert(new RegExp('\\b' + prop + '=').test(overlayBlock),
+      '19.9.' + (i+1) + ' context prop ' + prop + ' passed to overlay');
   });
 
   // 19.10 — AIGreeter's own mount effects unchanged (shouldn't have touched it)
@@ -3700,19 +3701,22 @@ function runSection31_PageJsxAudit() {
     '31.bug6.4a invoice insert no longer uses temp- fallback (skip optimistic if newInv missing)');
 
   // =========================================================
-  // H2 — mobile order wrapper
+  // H2 — S16 supersedes: AIGreeter moved to NadiaFloatingOverlay (global)
   // =========================================================
-  // Dashboard root has flex flex-col
+  // Dashboard root still has flex flex-col (unchanged)
   assert(/\{tab === 'dashboard' && \(\s*\n\s*<div className="flex flex-col">/.test(pSrc),
     '31.h2.1a dashboard root is flex flex-col');
 
-  // AIGreeter wrapper has max-md:order-last
-  assert(/<div className="max-md:order-last">/.test(pSrc),
-    '31.h2.2a greeter wrapper has max-md:order-last');
+  // S16: AIGreeter moved from dashboard-embedded to a floating overlay at
+  // page root, so the old "max-md:order-last" wrapper is gone. Verify that
+  // the floating overlay is mounted instead.
+  assert(/<NadiaFloatingOverlay\s/.test(pSrc),
+    '31.h2.2a NadiaFloatingOverlay is mounted (replaces old max-md:order-last wrapper)');
 
-  // Single AIGreeter instance (no double-mount)
+  // S16: No direct <AIGreeter> mount in page.jsx — it renders inside the overlay
   const greeterCount = (pSrc.match(/<AIGreeter\b/g) || []).length;
-  assert(greeterCount === 1, '31.h2.3a single AIGreeter instance', 'count=' + greeterCount);
+  assert(greeterCount === 0,
+    '31.h2.3a no direct AIGreeter mount in page.jsx (overlay owns it now, count=' + greeterCount + ')');
 
   // =========================================================
   // H3 — breakdown rendering

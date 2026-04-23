@@ -45,11 +45,12 @@ test('S14.UI1 TicketCard has priority-colored left border', function() {
 });
 
 test('S14.UI2 priBorderColor maps priorities to distinct colors', function() {
-  // urgent/high → red, medium → amber, low → grey
-  assert(/p === 'urgent' \|\| p === 'high'.*return '#ef4444'/.test(page),
-    'urgent/high priority should be red (#ef4444)');
-  assert(/p === 'medium'.*return '#f59e0b'/.test(page),
-    'medium priority should be amber (#f59e0b)');
+  // S16 palette update: urgent/high → crimson, medium → yellow (distinct
+  // from due-today orange), low → grey
+  assert(/p === 'urgent' \|\| p === 'high'.*return '#dc2626'/.test(page),
+    'urgent/high priority should be crimson (#dc2626)');
+  assert(/p === 'medium'.*return '#eab308'/.test(page),
+    'medium priority should be yellow (#eab308)');
   assert(/p === 'low'.*return '#64748b'/.test(page),
     'low priority should be grey (#64748b)');
 });
@@ -60,9 +61,10 @@ test('S14.UI3 Overdue takes precedence over priority color', function() {
     'overdue tickets always get the red border, even if their priority is low');
 });
 
-test('S14.UI4 Due-today takes amber (urgent but not overdue)', function() {
-  assert(/dueToday \? '#f59e0b' : priBorderColor/.test(page),
-    'due-today tickets get amber border — sits between overdue red and normal priority color');
+test('S14.UI4 Due-today takes ORANGE — distinct from medium-priority yellow', function() {
+  // S16: moved from amber to orange #f97316 to stop colliding with medium-priority yellow
+  assert(/dueToday \? '#f97316' : priBorderColor/.test(page),
+    'due-today tickets get orange border — distinct from medium-priority yellow');
 });
 
 test('S14.UI5 Title is visually prominent, ticket# is a small tag', function() {

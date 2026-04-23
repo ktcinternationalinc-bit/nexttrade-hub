@@ -22,23 +22,25 @@ var page = fs.readFileSync(path.join(REPO, 'src/app/page.jsx'), 'utf8');
 
 // ===== TREASURY SUMMARY CARDS =====
 test('S12.T1 Treasury Cash In card uses emerald gradient', function() {
-  assert(/setTreasuryDrill\('in'\)[\s\S]{0,400}linear-gradient\(135deg, #d1fae5 0%, #a7f3d0 100%\)/.test(page),
-    'Cash In card must have green gradient background');
+  // S17: switched to DARK emerald (#064e3b → #065f46) for high contrast
+  assert(/setTreasuryDrill\('in'\)[\s\S]{0,600}linear-gradient\(135deg, #064e3b 0%, #065f46 100%\)/.test(page),
+    'Cash In card must have dark emerald gradient background (S17 upgrade)');
 });
 
 test('S12.T2 Treasury Cash Out card uses red gradient', function() {
-  assert(/setTreasuryDrill\('out'\)[\s\S]{0,400}linear-gradient\(135deg, #fee2e2 0%, #fecaca 100%\)/.test(page),
-    'Cash Out card must have red gradient background');
+  // S17: switched to DARK red (#7f1d1d → #991b1b) for high contrast
+  assert(/setTreasuryDrill\('out'\)[\s\S]{0,600}linear-gradient\(135deg, #7f1d1d 0%, #991b1b 100%\)/.test(page),
+    'Cash Out card must have dark red gradient background (S17 upgrade)');
 });
 
 test('S12.T3 Treasury Net card flips color when going negative', function() {
-  // The Net card flips between blue (positive) and amber (negative).
-  assert(/totalCashIn >= totalCashOut \? '#3b82f6' : '#f59e0b'/.test(page),
+  // S17: new dark blue/amber palette
+  assert(/border: '2px solid ' \+ \(totalCashIn >= totalCashOut \? '#3b82f6' : '#f59e0b'\)/.test(page),
     'Net card border must compare in vs out to pick blue (positive) or amber (negative)');
-  assert(/linear-gradient\(135deg, #dbeafe 0%, #bfdbfe 100%\)/.test(page),
-    'Positive net uses blue gradient');
-  assert(/linear-gradient\(135deg, #fef3c7 0%, #fde68a 100%\)/.test(page),
-    'Negative/breakeven net uses amber gradient as a warning');
+  assert(/linear-gradient\(135deg, #1e3a8a 0%, #1e40af 100%\)/.test(page),
+    'Positive net uses dark blue gradient');
+  assert(/linear-gradient\(135deg, #78350f 0%, #92400e 100%\)/.test(page),
+    'Negative/breakeven net uses dark amber gradient as a warning');
 });
 
 test('S12.T4 Treasury cards have hover-scale animation', function() {
@@ -47,19 +49,18 @@ test('S12.T4 Treasury cards have hover-scale animation', function() {
 });
 
 test('S12.T5 Treasury Net card has progress bar for visual ratio', function() {
-  // The Net card must render a progress bar showing how much of cash_in remains as net
   assert(/\(totalCashIn - totalCashOut\) \/ totalCashIn \* 100/.test(page),
     'Net card must have a progress bar showing net as % of cash_in');
 });
 
 // ===== SALES SUMMARY CARDS =====
 test('S12.S1 Sales Invoiced card uses sky-blue gradient', function() {
-  // Sales summary uses the same blue gradient. Asserted by presence of the
-  // exact gradient color combo near the Invoiced label.
-  assert(/📋 Invoiced/.test(page),
-    'Invoiced card label "📋 Invoiced" must exist');
-  assert(/linear-gradient\(135deg, #dbeafe 0%, #bfdbfe 100%\)/.test(page),
-    'sky-blue gradient must be present (used by Invoiced and positive Net)');
+  // S17: Sales cards redesigned — Invoiced now uses dark sky #0c4a6e → #075985
+  // The label emoji was moved into a separate span from the text.
+  assert(/Invoiced<\/div>/.test(page),
+    'Invoiced label must still exist in the Sales cards');
+  assert(/linear-gradient\(135deg, #0c4a6e 0%, #075985 100%\)/.test(page),
+    'dark sky-blue gradient must be present on Invoiced card (S17 upgrade)');
 });
 
 test('S12.S2 Sales Collected card has progress bar showing collection rate', function() {
@@ -73,7 +74,6 @@ test('S12.S3 Sales Outstanding card has progress bar showing outstanding rate', 
 });
 
 test('S12.S4 Sales summary cards all have hover effects matching Treasury', function() {
-  // Count instances of hover:scale-[1.02] — should be at least 6 (3 treasury + 3 sales)
   var matches = page.match(/hover:scale-\[1\.02\]/g) || [];
   assert(matches.length >= 6,
     'expected at least 6 hover-scale cards (3 Treasury + 3 Sales), found ' + matches.length);

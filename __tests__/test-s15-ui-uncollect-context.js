@@ -26,10 +26,15 @@ test('S15.D1 Empty space above Nadia removed (pt-12 mt-8 gone)', function() {
     'old "mb-4 pt-12 mt-8" must be removed — was adding ~80px dead space above Nadia');
 });
 
-test('S15.D2 AIGreeter wrapper still has breathing room below (mb-4)', function() {
-  // Ensure we didn't strip ALL spacing — there should still be mb-4 below
-  assert(/className="mb-4"[\s\S]{0,120}AIGreeter/.test(page),
-    'AIGreeter wrapper must still have mb-4 so the next section has breathing room');
+test('S15.D2 S16 supersedes: AIGreeter moved to floating overlay', function() {
+  // S16 (Apr 22) moved Nadia from a dashboard-embedded AIGreeter into a
+  // NadiaFloatingOverlay at page root. So there's no longer a "wrapper with
+  // mb-4 around AIGreeter on the dashboard" — instead, the floating overlay
+  // handles positioning globally. This test now verifies the migration happened.
+  assert(/<NadiaFloatingOverlay\s/.test(page),
+    'dashboard AIGreeter was replaced by NadiaFloatingOverlay at page root (S16)');
+  assert(/The dashboard-only AIGreeter is gone/.test(page),
+    'explicit comment marks where the old dashboard AIGreeter was removed');
 });
 
 // ===== PART 2: TICKETS TAB UI — MATCHES DASHBOARD =====
@@ -47,8 +52,10 @@ test('S15.T2 TicketsTab: ticket# becomes small monospace tag (not cramped beside
 test('S15.T3 TicketsTab: colored left border drives urgency', function() {
   assert(/borderLeft: '4px solid ' \+ leftBorderColor/.test(ticketsTab),
     'card must have 4px colored left border');
-  assert(/leftBorderColor = isOverdue \? '#ef4444' : \(isDueToday \? '#f59e0b' : priColor\)/.test(ticketsTab),
-    'leftBorderColor logic: overdue→red, dueToday→amber, else→priority color');
+  // S16 palette: due-today moved from amber (#f59e0b) to orange (#f97316)
+  // to disambiguate from medium-priority yellow.
+  assert(/leftBorderColor = isOverdue \? '#ef4444' : \(isDueToday \? '#f97316' : priColor\)/.test(ticketsTab),
+    'leftBorderColor logic: overdue→red, dueToday→ORANGE (distinct from medium yellow), else→priority color');
 });
 
 test('S15.T4 TicketsTab: explicit N DAYS OVERDUE badge', function() {
