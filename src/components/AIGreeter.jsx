@@ -635,18 +635,28 @@ export default function AIGreeter({ user, userProfile, users, tickets, invoices,
     speakingStartedAtRef.current = Date.now();
     // v51 — self-suppress the wake-word listener for the duration of this
     // utterance (recomputed on end to add the tail buffer).
-    // v51.2 — floor-only: take MAX of current vs new so rapid start/stop
-    // events can't shorten the window.
-    var startUntil = Date.now() + 30 * 1000; // conservative upper bound; refined at end
+    //
+    // v51.3 (Apr 24 2026) — CRITICAL UX FIX. Previously the stop-tail
+    // extension was a floor-only update (take MAX), which meant the 30-second
+    // upper bound set here on start was NEVER reduced when TTS actually
+    // ended. That made the mic deaf for 30 seconds after each ack — so after
+    // "Hey Nadia" → "I'm here" the user's follow-up command ("show me my
+    // tickets") was silently dropped. Now: on start we still set a 30s
+    // upper bound (in case TTS-stop never fires — e.g. crash mid-speech),
+    // but the STOP handler REPLACES the window with now+tail instead of
+    // take-max. That way the suppress ends ~3s after real TTS finishes, and
+    // the user's command is heard normally.
+    var startUntil = Date.now() + 30 * 1000; // upper bound — replaced on TTS stop
     if (startUntil > selfSuppressUntilRef.current) selfSuppressUntilRef.current = startUntil;
     try { window.dispatchEvent(new CustomEvent('nadia-tts-start', { detail: { until: selfSuppressUntilRef.current } })); } catch (e) {}
     var fireStop = function() {
       setSpeaking(false);
       setCurrentAudio(null);
-      // Extend suppression by the tail buffer so the last few words don't
-      // leak into the wake detector through room echo.
+      // v51.3 — REPLACE (not max) the suppress window with now+tail. The
+      // TTS actually ended, so we want the mic active again ~3s later, not
+      // stuck deaf for the remainder of the original 30s upper bound.
       var stopUntil = Date.now() + SELF_SUPPRESS_MS;
-      if (stopUntil > selfSuppressUntilRef.current) selfSuppressUntilRef.current = stopUntil;
+      selfSuppressUntilRef.current = stopUntil;
       try { window.dispatchEvent(new CustomEvent('nadia-tts-stop', { detail: { until: selfSuppressUntilRef.current } })); } catch (e) {}
     };
     // v51.2 — voice preferences. Read from userProfile.voice_settings JSON

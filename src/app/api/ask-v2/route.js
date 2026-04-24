@@ -327,11 +327,19 @@ export async function POST(request) {
     // Same gotcha as /api/ask: first message must be role=user or the API
     // returns 400. Strip any leading assistant messages (greeter saves its own
     // opening greeting into history before the user has spoken).
+    //
+    // v53.1 (Apr 24 2026) — same double-push bug fix as /api/ask: client
+    // already includes the current user message in history, so only push
+    // `question` separately if it's NOT already at the tail.
     var messages = history.slice(-8).map(function(m) {
       return { role: m.role === 'user' ? 'user' : 'assistant', content: m.text || m.content || '' };
     }).filter(function(m) { return m.content && m.content.trim(); });
     while (messages.length > 0 && messages[0].role !== 'user') messages.shift();
-    messages.push({ role: 'user', content: question });
+    var lastMsgV2 = messages[messages.length - 1];
+    var alreadyInHistoryV2 = lastMsgV2 && lastMsgV2.role === 'user' && String(lastMsgV2.content || '').trim() === String(question || '').trim();
+    if (!alreadyInHistoryV2) {
+      messages.push({ role: 'user', content: question });
+    }
 
     var today = new Date().toISOString().substring(0, 10);
     var system =

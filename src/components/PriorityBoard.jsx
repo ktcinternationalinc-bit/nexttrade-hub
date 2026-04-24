@@ -84,10 +84,76 @@ export default function PriorityBoard({
   // types a number + Enter → reorders the ranked pile to that position.
   var [editingPriorityFor, setEditingPriorityFor] = useState(null);
   var [priorityEditValue, setPriorityEditValue] = useState('');
+  // v53 — move-to picker state. null = no picker open; otherwise holds
+  // the ticket.id whose picker is currently open. Card on hover shows a
+  // small "Move to →" button that opens a dropdown of other users.
+  // Clicking a user reassigns the ticket (same effect as dragging there).
+  var [moveToPickerFor, setMoveToPickerFor] = useState(null);
   // v52 — horizontal scroll ref for the board strip so the person-picker
   // can scroll a specific column into view.
   var boardStripRef = useRef(null);
   var columnRefs = useRef({}); // user.id → DOM node of that column
+
+  // v53 — EDGE AUTO-SCROLL during drag.
+  //
+  // Problem v52 didn't solve: to drag a ticket from Omar (col 1) to Sara
+  // (col 9), you need Omar visible to GRAB it AND Sara visible to DROP
+  // on her. The person-picker jump we built scrolled Sara into view but
+  // then the grab source was gone.
+  //
+  // Fix: while dragging, if the cursor is within EDGE_ZONE of the left
+  // or right edge of the scroll container, the board auto-scrolls in
+  // that direction. This is how Trello / Asana / Jira handle it.
+  //
+  // Implementation: pointer position is tracked via `dragover` on the
+  // container (dragover fires continuously during HTML5 drag). Scroll
+  // is applied via a RAF loop that keeps running as long as we're near
+  // an edge. We stop the loop on dragend/drop.
+  var edgeScrollRAFRef = useRef(null);
+  var edgeScrollSpeedRef = useRef(0); // -N..+N pixels per frame; 0 = not scrolling
+
+  function stopEdgeScroll() {
+    if (edgeScrollRAFRef.current) {
+      cancelAnimationFrame(edgeScrollRAFRef.current);
+      edgeScrollRAFRef.current = null;
+    }
+    edgeScrollSpeedRef.current = 0;
+  }
+
+  function edgeScrollTick() {
+    var el = boardStripRef.current;
+    if (!el || !edgeScrollSpeedRef.current) {
+      edgeScrollRAFRef.current = null;
+      return;
+    }
+    el.scrollLeft += edgeScrollSpeedRef.current;
+    edgeScrollRAFRef.current = requestAnimationFrame(edgeScrollTick);
+  }
+
+  function handleBoardDragOver(e) {
+    if (!dragging) return;
+    var el = boardStripRef.current;
+    if (!el) return;
+    var rect = el.getBoundingClientRect();
+    var EDGE_ZONE = 80; // px from edge that triggers scrolling
+    var MAX_SPEED = 18; // px per frame at full speed
+    var x = e.clientX;
+    var speed = 0;
+    if (x < rect.left + EDGE_ZONE) {
+      // Near left edge → scroll left. Closer = faster.
+      var leftT = 1 - (x - rect.left) / EDGE_ZONE; // 0..1
+      speed = -Math.max(4, Math.round(leftT * MAX_SPEED));
+    } else if (x > rect.right - EDGE_ZONE) {
+      var rightT = 1 - (rect.right - x) / EDGE_ZONE;
+      speed = Math.max(4, Math.round(rightT * MAX_SPEED));
+    }
+    edgeScrollSpeedRef.current = speed;
+    if (speed !== 0 && !edgeScrollRAFRef.current) {
+      edgeScrollRAFRef.current = requestAnimationFrame(edgeScrollTick);
+    } else if (speed === 0) {
+      stopEdgeScroll();
+    }
+  }
   // Per-column expand/collapse state for the Unranked pile.
   var [expandedUnranked, setExpandedUnranked] = useState({});
   // S22.14 (Apr 24 2026) — Inline quick-create for a new ticket assigned
@@ -237,6 +303,7 @@ export default function PriorityBoard({
     setDragging(null);
     setDropTarget(null);
     try { window.__priorityBoardDragging = false; } catch (_) {}
+    stopEdgeScroll();
   }
 
   function onDragOverCol(e, userId, position, pile) {
@@ -425,6 +492,35 @@ export default function PriorityBoard({
     })();
   }
 
+  // v53 — reassign via click (no drag). Click-to-move picker on each card
+  // calls this. Reuses the existing onDropCol machinery by constructing a
+  // synthetic drag state and simulating a drop at the END of the target's
+  // unranked pile. No event object needed because onDropCol only uses
+  // e.preventDefault(), which we stub.
+  async function reassignTicketTo(ticket, targetUserId) {
+    if (!ticket || !targetUserId) return;
+    if (ticket.assigned_to === targetUserId) {
+      showToast('Already assigned to that person.');
+      return;
+    }
+    if (!canDragTicket(ticket)) {
+      showToast('Only people on this ticket can move it.');
+      return;
+    }
+    // Close the picker immediately so the UI feels responsive.
+    setMoveToPickerFor(null);
+    // Prime the drag state so onDropCol sees a valid source.
+    setDragging({ ticketId: ticket.id, fromUserId: ticket.assigned_to });
+    // Give React a tick to apply state, then simulate the drop at end of
+    // the target's unranked pile.
+    setTimeout(function() {
+      var targetCol = columns[targetUserId] || { ranked: [], unranked: [] };
+      var targetPosition = (targetCol.unranked && targetCol.unranked.length) || 0;
+      var fakeEvent = { preventDefault: function() {} };
+      onDropCol(fakeEvent, targetUserId, targetPosition, 'unranked');
+    }, 0);
+  }
+
   // v52 — set a ticket's priority by typed number. User clicks the #N
   // badge → types a number + Enter. The ranked pile re-sequences to place
   // the ticket at that rank (clamped to 1..N+1 where N is current pile length).
@@ -502,7 +598,7 @@ export default function PriorityBoard({
         onDragStart={canDrag ? function(e) { onDragStart(e, t); } : undefined}
         onDragEnd={onDragEnd}
         onClick={function() { if (!isEditingPrio && onSelectTicket) onSelectTicket(t); }}
-        className={'border rounded-lg p-2 mb-1.5 hover:shadow-md hover:border-indigo-300 transition select-none ' + starredCls + ' ' + (canDrag && !isEditingPrio ? 'cursor-grab' : 'cursor-pointer')}
+        className={'group relative border rounded-lg p-2 mb-1.5 hover:shadow-md hover:border-indigo-300 transition select-none ' + starredCls + ' ' + (canDrag && !isEditingPrio ? 'cursor-grab' : 'cursor-pointer')}
         title={canDrag ? 'Drag to reorder or move to another column; click to open' : 'Click to open (only people on this ticket can drag)'}
       >
         <div className="flex items-center gap-1.5 mb-1">
@@ -588,6 +684,49 @@ export default function PriorityBoard({
             </div>
           )}
         </div>
+        {/* v53 — MOVE TO PICKER. Button shown on card hover (opacity-0 →
+            hover opens). Clicking opens a mini dropdown with all other
+            team members; clicking a name reassigns the ticket to them
+            (same effect as dragging). Solves the problem where the
+            target person was scrolled off-screen during drag. */}
+        {canDrag && (users || []).length > 1 && (
+          <div className="relative mt-1 pt-1 border-t border-slate-100 opacity-0 group-hover:opacity-100 transition">
+            <button
+              onClick={function(e) {
+                e.stopPropagation();
+                setMoveToPickerFor(moveToPickerFor === t.id ? null : t.id);
+              }}
+              className="w-full text-[9px] text-slate-500 hover:text-indigo-600 hover:bg-indigo-50 rounded py-0.5 transition"
+              title="Reassign to someone else without dragging"
+            >
+              {moveToPickerFor === t.id ? 'Close ▲' : 'Move to → ▾'}
+            </button>
+            {moveToPickerFor === t.id && (
+              <div
+                onClick={function(e) { e.stopPropagation(); }}
+                className="absolute top-full left-0 right-0 mt-1 bg-white border border-slate-200 rounded-lg shadow-lg z-20 max-h-48 overflow-y-auto"
+              >
+                {(users || []).filter(function(u) { return u.id !== t.assigned_to; }).map(function(u) {
+                  var ini = (u.name || '?').split(' ').map(function(p) { return p[0]; }).filter(Boolean).slice(0, 2).join('').toUpperCase();
+                  return (
+                    <button key={u.id}
+                      onClick={function(e) {
+                        e.stopPropagation();
+                        reassignTicketTo(t, u.id);
+                      }}
+                      className="w-full flex items-center gap-2 px-2 py-1.5 text-[10px] font-semibold hover:bg-indigo-50 text-left transition"
+                    >
+                      <span className="w-5 h-5 rounded-full bg-gradient-to-br from-indigo-500 to-purple-600 text-white flex items-center justify-center text-[9px] font-bold flex-shrink-0">
+                        {ini}
+                      </span>
+                      <span className="truncate">{u.name}</span>
+                    </button>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+        )}
       </div>
     );
   }
@@ -719,7 +858,13 @@ export default function PriorityBoard({
             </div>
           )}
         </div>
-        <div ref={boardStripRef} className="flex gap-3 overflow-x-auto pb-3" style={{ scrollSnapType: 'x mandatory' }}>
+        <div ref={boardStripRef}
+          className="flex gap-3 overflow-x-auto pb-3"
+          style={{ scrollSnapType: 'x mandatory' }}
+          onDragOver={handleBoardDragOver}
+          onDragLeave={stopEdgeScroll}
+          onDrop={stopEdgeScroll}
+        >
           {(users || []).map(function(u) {
             var col = columns[u.id] || { ranked: [], unranked: [] };
             var total = col.ranked.length + col.unranked.length;

@@ -1365,11 +1365,31 @@ export async function POST(request) {
     } catch (memErr) { /* memory is optional — continue without it */ }
 
     // BUILD MESSAGES
+    //
+    // v53.1 (Apr 24 2026) — CRITICAL BUG FIX.
+    // The client pushes the user's message into `msgs` BEFORE mapping it to
+    // `hist`. That means the outgoing `history` array already contains the
+    // current question as its last entry. Then this server block added
+    // `{ role: 'user', content: question }` on top — sending the SAME user
+    // message to Claude twice. Claude would see:
+    //   user: "what's my status"   ← from history
+    //   user: "what's my status"   ← pushed below
+    // and correctly observe "you said that twice" in replies. That's why
+    // Nadia accused the user of repeating themselves on every single turn.
+    // Double messages also doubled token count → slower responses.
+    //
+    // Fix: if the last history entry is already `{role:'user', content:question}`,
+    // skip the extra push. Otherwise keep the legacy behavior so older
+    // clients that don't pre-push don't break.
     var messages = [];
     history.slice(-10).forEach(function(msg) {
       messages.push({ role: msg.role === 'user' ? 'user' : 'assistant', content: msg.text });
     });
-    messages.push({ role: 'user', content: question });
+    var lastMsg = messages[messages.length - 1];
+    var alreadyInHistory = lastMsg && lastMsg.role === 'user' && String(lastMsg.content || '').trim() === String(question || '').trim();
+    if (!alreadyInHistory) {
+      messages.push({ role: 'user', content: question });
+    }
 
     // CALL CLAUDE
     var response = await fetch('https://api.anthropic.com/v1/messages', {

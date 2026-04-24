@@ -280,19 +280,21 @@ export default function VoiceController({ userId, userProfile, enabled, onComman
     var onStart = function(ev) {
       aiSpeakingRef.current = true;
       // v51 — pick up the self-suppress window from the dispatching event.
-      // v51.2 — FLOOR ONLY: never let an incoming window shorten the
-      // current one. Prevents a quick onStart→onStop cycle from cutting
+      // v51.2 — FLOOR ONLY on start: never let an incoming window shorten
+      // the current one. Prevents a quick onStart→onStop cycle from cutting
       // the tail window short and letting her own echo through.
       var until = ev && ev.detail && ev.detail.until;
       if (until && until > selfSuppressUntilRef.current) selfSuppressUntilRef.current = until;
     };
     var onStop  = function(ev) {
       aiSpeakingRef.current = false;
-      // Extend suppression by a short tail window so room echo doesn't
-      // leak the last few words into the wake detector.
-      // v51.2 — FLOOR ONLY, same rationale as onStart.
+      // v51.3 (Apr 24 2026) — REPLACE (not max) on stop. The start handler
+      // sets a 30-second upper bound as a safety in case the stop event
+      // never fires. When stop DOES fire, we want the suppress to shrink
+      // down to now+tail so the user's command is heard immediately after
+      // Nadia finishes speaking. Taking max kept the mic deaf for 30s.
       var until = ev && ev.detail && ev.detail.until;
-      if (until && until > selfSuppressUntilRef.current) selfSuppressUntilRef.current = until;
+      if (until) selfSuppressUntilRef.current = until;
       // v51.2 — Follow-up mode was causing echo feedback. Keep the window
       // tracking for future use, but DO NOT fire commands from it
       // (auto-send logic is disabled above in onresult).

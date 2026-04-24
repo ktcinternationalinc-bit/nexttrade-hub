@@ -174,20 +174,28 @@ test('SS1 AIGreeter has selfSuppressUntilRef', function() {
 });
 
 test('SS2 setSpeaking(true) sets initial suppression window (floor-only)', function() {
-  // v51.2: changed from direct assignment to floor-only (take-max).
-  var m = greeter.match(/setSpeaking\(true\);[\s\S]{0,700}/);
+  // start remains floor-only to protect mid-speech. v51.3 didn't change this side.
+  var m = greeter.match(/setSpeaking\(true\);[\s\S]{0,1800}/);
   assert(m, 'setSpeaking(true) found');
   assert(/startUntil = Date\.now\(\) \+ 30 \* 1000/.test(m[0]),
-    'still sets an initial window (30s upper bound)');
+    'still sets an initial 30s upper bound');
   assert(/startUntil > selfSuppressUntilRef\.current\) selfSuppressUntilRef\.current = startUntil/.test(m[0]),
-    'uses floor-only update so a shorter window cannot shrink it');
+    'uses floor-only update so a shorter window cannot shrink it mid-speech');
 });
 
-test('SS3 fireStop extends suppression by SELF_SUPPRESS_MS tail (floor-only)', function() {
+test('SS3 fireStop REPLACES suppression with now+tail (v51.3 fix)', function() {
+  // v51.3: changed from floor-only back to direct assignment on stop,
+  // so when TTS actually ends, the 30s upper bound set at start gets
+  // trimmed down to 3s tail. Without this, the mic was deaf for 30s
+  // after every ack — dropping the user command.
   assert(/stopUntil = Date\.now\(\) \+ SELF_SUPPRESS_MS/.test(greeter),
-    'fireStop computes tail-extension target');
-  assert(/stopUntil > selfSuppressUntilRef\.current\) selfSuppressUntilRef\.current = stopUntil/.test(greeter),
-    'floor-only so the tail never shrinks mid-speech');
+    'fireStop computes tail-end target');
+  var m = greeter.match(/var fireStop = function\(\) \{[\s\S]*?\n    \};/);
+  assert(m, 'fireStop body');
+  assert(/selfSuppressUntilRef\.current = stopUntil/.test(m[0]),
+    'fireStop direct-assigns (replaces), does not take-max');
+  assert(!/if \(stopUntil > selfSuppressUntilRef\.current\)/.test(m[0]),
+    'must NOT gate on take-max — that was the v51.2 bug');
 });
 
 test('SS4 Wake-word handler checks self-suppress before processing', function() {
