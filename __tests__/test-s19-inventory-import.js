@@ -86,8 +86,12 @@ test('S19.14 Every imported row writes to inventory_inbounds', function() {
 
 // --- Create vs aggregate parent row ---
 test('S19.15 New product_id → dbInsert into inventory', function() {
-  assert(/dbInsert\('inventory', \{[\s\S]{0,100}product_id: r\.product_id/.test(imp),
-    'brand-new product_id inserts into inventory');
+  // S22.11 — changed from an inline object literal to `newInvRecord` so
+  // we can defensively retry without uom/linear_density if columns are missing.
+  assert(/var newInvRecord = \{[\s\S]{0,200}product_id: r\.product_id/.test(imp),
+    'brand-new product_id inserts into inventory (via newInvRecord)');
+  assert(/await dbInsert\('inventory', newInvRecord, userId\)/.test(imp),
+    'inserted via dbInsert');
 });
 test('S19.16 Existing product_id → dbUpdate aggregating quantities', function() {
   assert(/dbUpdate\('inventory', existing\.id/.test(imp), 'existing goes through dbUpdate');
@@ -155,11 +159,17 @@ test('S19.28 Shows a friendly empty state when inventory_expected is missing or 
 });
 
 // --- Add Product popup: Current Quantity lock ---
-test('S19.29 +Add Product popup locks Original+Current for non-super-admin when product exists', function() {
-  assert(/S20 \(Apr 23 2026\) — three-field inventory flow/.test(page),
+test('S19.29 +Add Product popup locks Original+Current unless super-admin or "Adjust Inventory Quantities" permission', function() {
+  // S22.10 (Apr 23 2026) — per Max: "inventory access is a permission
+  // outside of updating inventory values". Split the permissions:
+  //   "Edit Inventory" = day-to-day (add, edit, inbound)
+  //   "Adjust Inventory Quantities" = override Original/Current (audit event)
+  assert(/three-field inventory flow/.test(page),
     'three-field lock logic in add popup');
-  assert(/qtyLocked = !isFirstTime && !isSuperAdmin/.test(page),
-    'lock combines existing product + non-super-admin');
+  assert(/canOverrideQty = userProfile\?\.role === 'super_admin' \|\| modulePerms\?\.\['Adjust Inventory Quantities'\] === true/.test(page),
+    'unlock gate is Adjust Inventory Quantities, separate from Edit Inventory');
+  assert(/qtyLocked = !isFirstTime && !canOverrideQty/.test(page),
+    'lock = existing product + no override permission');
 });
 test('S19.30 Locked inputs disabled in add popup', function() {
   assert(/disabled=\{qtyLocked\}/.test(page),

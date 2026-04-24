@@ -190,13 +190,18 @@ test('S20.24 Breakdown toggle button exists', function() {
   assert(/📊 Breakdown/.test(page), 'button label');
 });
 
-test('S20.25 Breakdown panel groups by type, subcategory, color', function() {
-  assert(/const byType = groupBy\(p => p\.product_type, 'Product Type'\)/.test(page),
-    'groups by type');
-  assert(/const bySub = groupBy\(p => p\.subcategory, 'Subcategory'\)/.test(page),
-    'groups by subcategory');
-  assert(/const byColor = groupBy\(p => p\.color_en \|\| p\.color, 'Color'\)/.test(page),
-    'groups by color');
+test('S20.25 Breakdown panel is a single unified table with dimension tabs (no more 3-bubble layout)', function() {
+  // S22.9 — Max feedback: "I don't really like the bubble buckets. Make it
+  // better." Replaced the 3 side-by-side cards with one sortable table
+  // plus a pill row to switch dimensions (type / subcategory / color).
+  assert(/keyFnByDim = \{[\s\S]{0,200}type: p => p\.product_type/.test(page),
+    'type dimension mapping');
+  assert(/sub: p => p\.subcategory/.test(page),
+    'subcategory dimension mapping');
+  assert(/color: p => p\.color_en \|\| p\.color/.test(page),
+    'color dimension mapping');
+  assert(/activeDim = formData\.invBreakdownDim \|\| 'type'/.test(page),
+    'active dimension state');
 });
 
 console.log('\n' + passed + ' passed, ' + failed + ' failed');

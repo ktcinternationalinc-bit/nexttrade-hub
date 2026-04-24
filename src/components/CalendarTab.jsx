@@ -212,6 +212,12 @@ export default function CalendarTab({ customers, user, userProfile, users, ticke
           recurrence_interval: isRecurring ? interval : null,
           series_id: isRecurring ? newUUID() : null,
           is_series_master: isRecurring,
+          // S22.6 (Apr 23 2026) — Explicitly set created_by. Without this,
+          // when Max assigned a weekly recurring event to someone else, his
+          // "My" view filter (assigned_to === myId || created_by === myId)
+          // matched neither field, so the event was invisible on his
+          // calendar even though it saved correctly.
+          created_by: myId,
         };
         const row = await dbInsert('calendar_events', payload, myId);
         createdIds.push(row);
@@ -263,6 +269,24 @@ export default function CalendarTab({ customers, user, userProfile, users, ticke
 
       // Refresh list now that occurrences exist
       await loadEvents();
+
+      // S22.6 (Apr 23 2026) — Navigate the calendar to the event's date
+      // so the user sees their freshly-saved event immediately. Without
+      // this, saving an event for "next Saturday" (which might be in the
+      // next month) left Max looking at the current month wondering where
+      // it went — even though it saved fine.
+      try {
+        var dateParts = String(f.eventDate).split('-');
+        if (dateParts.length === 3) {
+          var y = parseInt(dateParts[0], 10);
+          var m = parseInt(dateParts[1], 10) - 1;
+          var d = parseInt(dateParts[2], 10);
+          if (!isNaN(y) && !isNaN(m) && !isNaN(d)) {
+            setCurDate(new Date(y, m, 1));
+            setSelDate(f.eventDate);
+          }
+        }
+      } catch (_) { /* navigation is best-effort */ }
 
       // User-visible success confirmation so Max knows it saved
       const parts = [];

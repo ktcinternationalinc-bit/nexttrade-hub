@@ -36,9 +36,11 @@ var TEMPLATE_COLUMNS = [
   'Color (Arabic)',
   'Color (English)',
   'Inbound Quantity',       // ← primary input every time
-  'Original Quantity',      // first-time only, or super-admin override
-  'Current Quantity',       // first-time only, or super-admin override
+  'Original Quantity',      // first-time only, or override permission
+  'Current Quantity',       // first-time only, or override permission
   'Expected Quantity',
+  'Unit of Measure',         // S22.11 — kg, ton, m, yd, roll, piece...
+  'Linear Density (g/m)',    // S22.11 — for m/yd products (weight conversion)
   'Gross Weight (kg)',
   'Net Weight (kg)',
   'Unit Price',
@@ -62,12 +64,21 @@ var TEMPLATE_COLUMNS = [
 // columns should be BLANK — system recomputes), and one with an Expected
 // quantity filled in for later reconciliation.
 var TEMPLATE_EXAMPLES = [
-  // Brand new — Inbound, Original and Current all filled
-  ['SKU-001', 'REF-2026-001', 'Textiles', 'Cotton', 'قماش قطن أحمر', 'Red Cotton Fabric', 'أحمر', 'Red', 200, 200, 200, 0,   150, 140, 25, 10, 'SH-2026-01', '2026-04-20', 1200, 'USD', 5000, 'EGP', 800, 'USD', 0, 'EGP', 50, 'First batch — opening balance'],
-  // Existing product — only Inbound is used; Original/Current blank
-  ['SKU-001', 'REF-2026-015', 'Textiles', 'Cotton', 'قماش قطن أحمر', 'Red Cotton Fabric', 'أحمر', 'Red',  80,  '',  '',  0,   150, 140, 25,  4, 'SH-2026-02', '2026-05-10',  500, 'USD', 2000, 'EGP', 300, 'USD', 0, 'EGP', 50, 'Restock — inbound only'],
-  // New product with an Expected Qty for later comparison
-  ['SKU-002', 'REF-2026-002', 'Leather', 'Genuine', 'جلد طبيعي بني', 'Brown Leather', 'بني', 'Brown',    50,  50,  50, 60,   30,  28, 80,  5, 'SH-2026-01', '2026-04-20', 2500, 'USD', 3000, 'EGP', 400, 'USD', 0, 'EGP', 50, 'Expected 60, got 50'],
+  // Columns in order — matches TEMPLATE_COLUMNS:
+  //   Product ID, Reference #, Product Type, Subcategory, Desc AR, Desc EN,
+  //   Color AR, Color EN, Inbound, Original, Current, Expected,
+  //   Unit of Measure, Linear Density (g/m),
+  //   Gross Weight (kg), Net Weight (kg), Unit Price, Roll Count,
+  //   Shipment Reference, Inbound Date,
+  //   Purchase Cost, Purchase Currency, Customs Cost, Customs Currency,
+  //   Shipping Cost, Shipping Currency, Other Cost, Other Currency,
+  //   FX Rate, Notes
+  // Brand new — Inbound, Original and Current all filled. Yard-priced textile.
+  ['SKU-001', 'REF-2026-001', 'Textiles', 'Cotton', 'قماش قطن أحمر', 'Red Cotton Fabric', 'أحمر', 'Red', 200, 200, 200, 0, 'yd', 420, 150, 140, 25, 10, 'SH-2026-01', '2026-04-20', 1200, 'USD', 5000, 'EGP', 800, 'USD', 0, 'EGP', 50, 'First batch — opening balance'],
+  // Existing product — only Inbound is used; Original/Current blank. Yard-priced.
+  ['SKU-001', 'REF-2026-015', 'Textiles', 'Cotton', 'قماش قطن أحمر', 'Red Cotton Fabric', 'أحمر', 'Red',  80,  '',  '',  0, 'yd', 420, 150, 140, 25,  4, 'SH-2026-02', '2026-05-10',  500, 'USD', 2000, 'EGP', 300, 'USD', 0, 'EGP', 50, 'Restock — inbound only'],
+  // New product with Expected Qty for later comparison. Kg-priced leather.
+  ['SKU-002', 'REF-2026-002', 'Leather', 'Genuine', 'جلد طبيعي بني', 'Brown Leather', 'بني', 'Brown',    50,  50,  50, 60, 'kg', '',   30,  28, 80,  5, 'SH-2026-01', '2026-04-20', 2500, 'USD', 3000, 'EGP', 400, 'USD', 0, 'EGP', 50, 'Expected 60, got 50'],
 ];
 
 // Case-insensitive header lookup — users sometimes rename columns.
@@ -275,6 +286,9 @@ export default function InventoryImport({
         current_quantity_requested: currQty,
         current_quantity_provided: currProvided,
         expected_quantity: expectedQty,
+        // S22.11 — multi-unit support
+        uom: String(getCell(raw, 'Unit of Measure') || '').trim() || null,
+        linear_density_g_per_m: parseNumber(getCell(raw, 'Linear Density (g/m)')) || null,
         gross_weight: parseNumber(getCell(raw, 'Gross Weight (kg)')),
         net_weight: parseNumber(getCell(raw, 'Net Weight (kg)')),
         unit_price: parseNumber(getCell(raw, 'Unit Price')),
@@ -430,7 +444,7 @@ export default function InventoryImport({
           // First-time: Original = user value OR Inbound. Current = user value OR Original.
           var firstOrig = r.original_quantity_provided ? r.original_quantity_requested : inboundQty;
           var firstCurr = r.current_quantity_provided ? r.current_quantity_requested : firstOrig;
-          await dbInsert('inventory', {
+          var newInvRecord = {
             product_id: r.product_id,
             reference_number: r.reference_number,
             product_type: r.product_type,
@@ -441,6 +455,9 @@ export default function InventoryImport({
             color_en: r.color_en,
             original_quantity: firstOrig,
             current_quantity: firstCurr,
+            // S22.11 — UoM + linear density
+            uom: r.uom,
+            linear_density_g_per_m: r.linear_density_g_per_m,
             gross_weight: r.gross_weight,
             net_weight: r.net_weight,
             unit_price: r.unit_price,
@@ -456,7 +473,19 @@ export default function InventoryImport({
             other_cost: r.other_cost,
             other_currency: r.other_currency,
             fx_rate: r.fx_rate,
-          }, userId);
+          };
+          try {
+            await dbInsert('inventory', newInvRecord, userId);
+          } catch (colErr) {
+            if (String(colErr.message || '').match(/column.*uom|column.*linear_density/i)) {
+              console.warn('[import] new columns missing — run s22_inventory_uom.sql. Retrying without.');
+              delete newInvRecord.uom;
+              delete newInvRecord.linear_density_g_per_m;
+              await dbInsert('inventory', newInvRecord, userId);
+            } else {
+              throw colErr;
+            }
+          }
         }
 
         // ---- 3. Expected quantity (separate table so it doesn't affect actuals) ----

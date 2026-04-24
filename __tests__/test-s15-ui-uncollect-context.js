@@ -100,14 +100,17 @@ test('S15.C1 handleUncollectCheck function is defined', function() {
 });
 
 test('S15.C2 Uncollect refuses if check not currently collected', function() {
-  assert(/if \(check\.status !== 'collected'\)[\s\S]{0,100}Only collected checks can be uncollected/.test(page),
+  // S22.7 — the new message includes current status for diagnostic clarity
+  assert(/if \(check\.status !== 'collected'\)[\s\S]{0,300}Only collected checks can be uncollected/.test(page),
     'must reject if check is already pending');
 });
 
 test('S15.C3 Uncollect confirms with user before proceeding', function() {
   assert(/const confirmMsg = 'Reverse the collection of this check\?/.test(page),
     'must have a clear confirm message');
-  assert(/if \(!confirm\(confirmMsg\)\) return/.test(page),
+  // S22.7 — there's a console.log('[uncollect] user cancelled') between
+  // the confirm() call and return now
+  assert(/if \(!confirm\(confirmMsg\)\) \{[\s\S]{0,100}return;/.test(page),
     'must wait for user confirmation before proceeding');
 });
 
@@ -148,8 +151,13 @@ test('S15.C9 Uncollect recalculates the invoice collected total', function() {
 });
 
 test('S15.C10 Uncollect flips check back to pending + clears collection fields', function() {
-  assert(/dbUpdate\('checks', check\.id, \{[\s\S]{0,300}status: 'pending',[\s\S]{0,100}collection_date: null,[\s\S]{0,100}linked_treasury_id: null/.test(page),
+  // S22.7 — the new code uses a baseChanges object + Object.assign instead
+  // of a single inline object, so the regex matches the baseChanges literal
+  assert(/const baseChanges = \{[\s\S]{0,300}status: 'pending',[\s\S]{0,100}collection_date: null,[\s\S]{0,100}linked_treasury_id: null/.test(page),
     'check must be set back to pending with nulled collection_date and linked_treasury_id');
+  // New: also verify the fallback update happens when the full update fails
+  assert(/retrying minimal/.test(page),
+    'uncollect falls back to a minimal update if physical_check_returned column is missing');
 });
 
 test('S15.C11 Uncollect writes an audit trail to daily_log', function() {
