@@ -37,6 +37,92 @@ function VoiceSettingsPanel({ userProfile, toast }) {
     } catch (e) { if (toast) toast.error(e.message); }
     setSaving(false);
   };
+
+  // v51.2 — per-user voice customization. Reads users.voice_settings JSONB.
+  // When the column doesn't exist yet (new install), save is a no-op with
+  // a friendly message. Defaults match /api/tts defaults.
+  var initialVoice = {};
+  try {
+    var raw = userProfile && userProfile.voice_settings;
+    if (typeof raw === 'string') raw = JSON.parse(raw);
+    if (raw && typeof raw === 'object') initialVoice = raw;
+  } catch (e) {}
+  var [voiceId, setVoiceId] = useState(initialVoice.voice_id || '');
+  var [stability, setStability] = useState(initialVoice.stability != null ? initialVoice.stability : 0.5);
+  var [similarity, setSimilarity] = useState(initialVoice.similarity != null ? initialVoice.similarity : 0.75);
+  var [style, setStyle] = useState(initialVoice.style != null ? initialVoice.style : 0.0);
+  var [speakerBoost, setSpeakerBoost] = useState(initialVoice.speaker_boost !== false);
+  var [previewing, setPreviewing] = useState(false);
+  var [savingVoice, setSavingVoice] = useState(false);
+
+  // Curated list of well-known ElevenLabs voices. Users can also paste a
+  // custom voice_id from their ElevenLabs account (e.g. a cloned voice).
+  var PRESET_VOICES = [
+    { id: '', label: 'Default (Rachel — professional female)' },
+    { id: '21m00Tcm4TlvDq8ikWAM', label: 'Rachel — calm, professional' },
+    { id: 'AZnzlk1XvdvUeBnXmlld', label: 'Domi — younger, energetic' },
+    { id: 'EXAVITQu4vr4xnSDxMaL', label: 'Bella — soft, friendly' },
+    { id: 'ErXwobaYiN019PkySvjV', label: 'Antoni — warm male' },
+    { id: 'VR6AewLTigWG4xSOukaG', label: 'Arnold — strong male' },
+    { id: 'pNInz6obpgDQGcFmaJgB', label: 'Adam — deep male' },
+    { id: 'yoZ06aMxZJJ28mfd3POQ', label: 'Sam — young, clear male' },
+  ];
+
+  var saveVoice = async function() {
+    if (!myId) return;
+    setSavingVoice(true);
+    try {
+      var prefs = {
+        voice_id: voiceId || null,
+        stability: Number(stability),
+        similarity: Number(similarity),
+        style: Number(style),
+        speaker_boost: !!speakerBoost
+      };
+      var res = await supabase.from('users').update({ voice_settings: prefs }).eq('id', myId);
+      if (res && res.error) {
+        // Likely the column doesn't exist yet.
+        if (/column|schema|voice_settings/i.test(res.error.message || '')) {
+          if (toast) toast.warning('Voice settings column missing. Run: ALTER TABLE users ADD COLUMN IF NOT EXISTS voice_settings JSONB;');
+        } else {
+          throw res.error;
+        }
+      } else if (toast) {
+        toast.success('Voice saved — next thing Nadia says will use it.');
+      }
+    } catch (e) {
+      if (toast) toast.error(e.message || 'Failed to save voice');
+    }
+    setSavingVoice(false);
+  };
+
+  var previewVoice = async function() {
+    setPreviewing(true);
+    try {
+      var res = await fetch('/api/tts', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          text: 'Hello, this is how I will sound when I speak to you.',
+          voiceId: voiceId || undefined,
+          stability: Number(stability),
+          similarity: Number(similarity),
+          style: Number(style),
+          speakerBoost: !!speakerBoost
+        })
+      });
+      if (!res.ok) throw new Error('Preview failed');
+      var blob = await res.blob();
+      var audio = new Audio(URL.createObjectURL(blob));
+      audio.onended = function() { setPreviewing(false); };
+      audio.onerror = function() { setPreviewing(false); };
+      audio.play();
+    } catch (e) {
+      setPreviewing(false);
+      if (toast) toast.error(e.message || 'Preview failed');
+    }
+  };
+
   return (
     <div className="bg-white rounded-xl p-5 max-w-2xl">
       <h3 className="text-lg font-bold mb-2">🎙️ Voice Assistant ("Hey Nadia")</h3>
@@ -54,6 +140,75 @@ function VoiceSettingsPanel({ userProfile, toast }) {
             <div className={'w-5 h-5 bg-white rounded-full shadow transition transform ' + (enabled ? 'translate-x-6' : 'translate-x-0.5') + ' translate-y-0.5'} />
           </div>
         </label>
+      </div>
+
+      {/* v51.2 — Voice customization. Pick a voice + tune delivery. */}
+      <div className="p-4 rounded-lg border border-slate-200 mb-3">
+        <div className="flex items-center justify-between mb-3">
+          <div className="text-sm font-bold">How Nadia sounds</div>
+          <button
+            type="button"
+            onClick={previewVoice}
+            disabled={previewing}
+            className="px-3 py-1 rounded text-[11px] font-semibold bg-indigo-600 hover:bg-indigo-700 text-white disabled:bg-slate-300">
+            {previewing ? 'Playing…' : '🔊 Preview'}
+          </button>
+        </div>
+
+        <label className="block text-[11px] font-semibold text-slate-600 mb-1">Voice</label>
+        <select
+          value={voiceId}
+          onChange={function(e) { setVoiceId(e.target.value); }}
+          className="w-full mb-3 text-xs border border-slate-300 rounded px-2 py-1.5">
+          {PRESET_VOICES.map(function(v) {
+            return <option key={v.id || 'default'} value={v.id}>{v.label}</option>;
+          })}
+        </select>
+
+        <label className="block text-[11px] font-semibold text-slate-600 mb-1">Or paste a custom ElevenLabs voice ID (for cloned voices)</label>
+        <input
+          type="text"
+          value={voiceId}
+          onChange={function(e) { setVoiceId(e.target.value); }}
+          placeholder="e.g. 21m00Tcm4TlvDq8ikWAM"
+          className="w-full mb-3 text-xs border border-slate-300 rounded px-2 py-1.5 font-mono" />
+
+        <label className="block text-[11px] font-semibold text-slate-600 mb-1">
+          Stability: {Number(stability).toFixed(2)} <span className="text-slate-400">(0 = expressive, 1 = monotone)</span>
+        </label>
+        <input type="range" min="0" max="1" step="0.05" value={stability}
+          onChange={function(e) { setStability(e.target.value); }}
+          className="w-full mb-3" />
+
+        <label className="block text-[11px] font-semibold text-slate-600 mb-1">
+          Similarity: {Number(similarity).toFixed(2)} <span className="text-slate-400">(how closely to match the reference voice)</span>
+        </label>
+        <input type="range" min="0" max="1" step="0.05" value={similarity}
+          onChange={function(e) { setSimilarity(e.target.value); }}
+          className="w-full mb-3" />
+
+        <label className="block text-[11px] font-semibold text-slate-600 mb-1">
+          Style: {Number(style).toFixed(2)} <span className="text-slate-400">(0 = neutral, higher = more exaggerated delivery)</span>
+        </label>
+        <input type="range" min="0" max="1" step="0.05" value={style}
+          onChange={function(e) { setStyle(e.target.value); }}
+          className="w-full mb-3" />
+
+        <label className="flex items-center gap-2 text-[11px] text-slate-700 mb-3">
+          <input type="checkbox" checked={speakerBoost} onChange={function(e) { setSpeakerBoost(e.target.checked); }} />
+          Speaker boost (enhanced clarity)
+        </label>
+
+        <button
+          type="button"
+          onClick={saveVoice}
+          disabled={savingVoice}
+          className="px-4 py-1.5 rounded text-xs font-bold bg-emerald-600 hover:bg-emerald-700 text-white disabled:bg-slate-300">
+          {savingVoice ? 'Saving…' : 'Save voice'}
+        </button>
+        <p className="text-[10px] text-slate-400 mt-2">
+          New settings apply to the next thing Nadia says. If you don't have the ElevenLabs paid plan, some voices may be blocked.
+        </p>
       </div>
 
       {/* Browser support */}

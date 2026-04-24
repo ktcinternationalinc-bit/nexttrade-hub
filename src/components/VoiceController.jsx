@@ -71,6 +71,16 @@ export default function VoiceController({ userId, userProfile, enabled, onComman
   // the current wake. Reset when a command finally commits. MUST be declared
   // before `start` (the callback closes over it).
   var ackFiredRef = useRef(false);
+  // v51 — self-suppression window. When Nadia speaks, AIGreeter dispatches
+  // `nadia-tts-start` with a `detail.until` epoch ms. Any wake-word results
+  // that arrive with Date.now() < this timestamp are silently dropped so
+  // her own speech bleeding through the mic can't re-trigger her.
+  var selfSuppressUntilRef = useRef(0);
+  // v51 — hard-stop window. AIGreeter dispatches `nadia-stop-hard` with a
+  // `detail.until` epoch ms when the user clicks the STOP button. During
+  // this window we drop ALL transcripts before they reach the wake engine —
+  // microphone effectively goes deaf.
+  var hardStopUntilRef = useRef(0);
 
   if (!engineRef.current) engineRef.current = createWakeEngine();
 
@@ -121,6 +131,12 @@ export default function VoiceController({ userId, userProfile, enabled, onComman
 
     rec.onresult = function(ev) {
       if (!mountedRef.current) return;
+      // v51 — Self-suppress. Nadia just spoke; ignore anything the mic
+      // picks up for a brief window to prevent audio feedback loops. This
+      // runs BEFORE hard-stop check because her own voice must never wake
+      // her — even a phrase that sounds like "hey nadia" in her tail audio.
+      if (selfSuppressUntilRef.current && Date.now() < selfSuppressUntilRef.current) return;
+
       var transcript = '';
       var isFinal = false;
       for (var i = ev.resultIndex; i < ev.results.length; i++) {
@@ -130,6 +146,20 @@ export default function VoiceController({ userId, userProfile, enabled, onComman
       }
       transcript = transcript.trim();
       if (!transcript) return;
+
+      // v51.1 (Apr 24 2026) — Hard stop: we still process wake-word matches
+      // so "Hey Nadia" wakes her from sleep at any time. Non-wake ambient
+      // transcripts (random speech, follow-up chatter, her own voice) are
+      // dropped so she doesn't re-greet or collect commands during sleep.
+      // When wake IS detected, the command falls through to the regular
+      // handler below, which AIGreeter will catch and immediately clear
+      // the hard-stop state.
+      if (hardStopUntilRef.current && Date.now() < hardStopUntilRef.current) {
+        var wakeCheck = detectWakeWord(transcript);
+        if (!wakeCheck.matched) return; // drop non-wake chatter
+        // Bypass follow-up mode during stop — user hasn't been conversing.
+        followUpActiveRef.current = false;
+      }
 
       setLastTranscript(transcript);
 
@@ -143,22 +173,36 @@ export default function VoiceController({ userId, userProfile, enabled, onComman
         // Fall through to wake-engine processing below
       }
 
-      // S18.2 — follow-up mode: any final result with 2+ words is a command.
-      // Skip the wake engine entirely.
-      if (followUpActiveRef.current && isFinal && !wakeInCurrent.matched) {
-        var words = transcript.split(/\s+/).filter(function(w) {
-          return w.length > 1 && !/^(uh|um|mm|er|ah)$/i.test(w);
-        });
-        if (words.length >= FOLLOWUP_MIN_WORDS && transcript !== followUpLastFiredRef.current) {
-          followUpLastFiredRef.current = transcript;
-          clearFollowUp();
-          setStatus('command');
-          try { window.dispatchEvent(new CustomEvent('hey-bob-command', { detail: { command: transcript, at: Date.now(), followUp: true } })); } catch (e) {}
-          if (onCommand) { try { onCommand(transcript); } catch (e) {} }
-          setTimeout(function() { if (mountedRef.current) setStatus('listening'); }, 800);
-          return;
-        }
-      }
+      // v51.2 — FOLLOW-UP AUTO-SEND DISABLED (Apr 24 2026)
+      // Previously, for 5 seconds after Nadia finished speaking, any 2-word
+      // transcript auto-sent as a command. This created:
+      //   (1) Echo feedback loops when her voice bled through the mic
+      //   (2) Accidental sends when user was typing a follow-up
+      //   (3) Random speech picked up as commands
+      // The 1-second convenience of skipping "Hey Nadia" wasn't worth the
+      // bugs. Commands now require either an explicit wake word or the
+      // mic/record buttons.
+      //
+      // (Code kept commented for fast re-enable if we find a safer design.)
+      //
+      // if (followUpActiveRef.current && isFinal && !wakeInCurrent.matched) {
+      //   var userIsTyping = false;
+      //   try { userIsTyping = !!(typeof window !== 'undefined' && window.__nadiaUserTyping === true); } catch (e) {}
+      //   if (!userIsTyping) {
+      //     var words = transcript.split(/\s+/).filter(function(w) {
+      //       return w.length > 1 && !/^(uh|um|mm|er|ah)$/i.test(w);
+      //     });
+      //     if (words.length >= FOLLOWUP_MIN_WORDS && transcript !== followUpLastFiredRef.current) {
+      //       followUpLastFiredRef.current = transcript;
+      //       clearFollowUp();
+      //       setStatus('command');
+      //       try { window.dispatchEvent(new CustomEvent('hey-bob-command', { detail: { command: transcript, at: Date.now(), followUp: true } })); } catch (e) {}
+      //       if (onCommand) { try { onCommand(transcript); } catch (e) {} }
+      //       setTimeout(function() { if (mountedRef.current) setStatus('listening'); }, 800);
+      //       return;
+      //     }
+      //   }
+      // }
 
       // S17.10 — barge-in path is OFF. Aggressive mic pickup of Nadia's
       // own voice used to cut her off mid-sentence.
@@ -233,28 +277,52 @@ export default function VoiceController({ userId, userProfile, enabled, onComman
 
   // ---------- Listen for AI-speaking events from AIGreeter ----------
   useEffect(function() {
-    var onStart = function() { aiSpeakingRef.current = true; };
-    var onStop  = function() {
+    var onStart = function(ev) {
+      aiSpeakingRef.current = true;
+      // v51 — pick up the self-suppress window from the dispatching event.
+      // v51.2 — FLOOR ONLY: never let an incoming window shorten the
+      // current one. Prevents a quick onStart→onStop cycle from cutting
+      // the tail window short and letting her own echo through.
+      var until = ev && ev.detail && ev.detail.until;
+      if (until && until > selfSuppressUntilRef.current) selfSuppressUntilRef.current = until;
+    };
+    var onStop  = function(ev) {
       aiSpeakingRef.current = false;
-      // S18.2 — Nadia just finished speaking. Open the follow-up window.
-      // During FOLLOWUP_WINDOW_MS, any 2-word final transcript is accepted
-      // as a command without requiring "Hey Nadia".
-      followUpActiveRef.current = true;
+      // Extend suppression by a short tail window so room echo doesn't
+      // leak the last few words into the wake detector.
+      // v51.2 — FLOOR ONLY, same rationale as onStart.
+      var until = ev && ev.detail && ev.detail.until;
+      if (until && until > selfSuppressUntilRef.current) selfSuppressUntilRef.current = until;
+      // v51.2 — Follow-up mode was causing echo feedback. Keep the window
+      // tracking for future use, but DO NOT fire commands from it
+      // (auto-send logic is disabled above in onresult).
+      followUpActiveRef.current = false;
       followUpLastFiredRef.current = '';
-      if (followUpTimerRef.current) clearTimeout(followUpTimerRef.current);
-      followUpTimerRef.current = setTimeout(function() {
-        followUpActiveRef.current = false;
-        followUpTimerRef.current = null;
-        followUpLastFiredRef.current = '';
-        if (mountedRef.current) setStatus('listening');
-      }, FOLLOWUP_WINDOW_MS);
-      if (mountedRef.current) setStatus('followup');
+      if (followUpTimerRef.current) { clearTimeout(followUpTimerRef.current); followUpTimerRef.current = null; }
+      if (mountedRef.current) setStatus('listening');
+    };
+    // v51 — hard-stop coordination. AIGreeter flips the state, we silence
+    // the mic. Wake on either the timer expiring (AIGreeter dispatches
+    // nadia-stop-wake) or the user clicking Start.
+    var onHardStop = function(ev) {
+      var until = ev && ev.detail && ev.detail.until;
+      if (until) hardStopUntilRef.current = until;
+      // Cancel any follow-up so the next interaction is a clean slate.
+      followUpActiveRef.current = false;
+      if (followUpTimerRef.current) { clearTimeout(followUpTimerRef.current); followUpTimerRef.current = null; }
+    };
+    var onHardWake = function() {
+      hardStopUntilRef.current = 0;
     };
     window.addEventListener('nadia-tts-start', onStart);
     window.addEventListener('nadia-tts-stop',  onStop);
+    window.addEventListener('nadia-stop-hard', onHardStop);
+    window.addEventListener('nadia-stop-wake', onHardWake);
     return function() {
       window.removeEventListener('nadia-tts-start', onStart);
       window.removeEventListener('nadia-tts-stop',  onStop);
+      window.removeEventListener('nadia-stop-hard', onHardStop);
+      window.removeEventListener('nadia-stop-wake', onHardWake);
     };
   }, []);
 

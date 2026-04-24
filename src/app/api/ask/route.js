@@ -424,16 +424,79 @@ export async function POST(request) {
       // Surface any UNACKED alerts so Nadia can say "since we last talked,
       // X happened." Only runs on isFirstGreeting to avoid spamming every
       // chat turn.
+      //
+      // v51 (Apr 24 2026) — Stale-alert fix. Previously Nadia would remind
+      // Max about an unacked ticket 14 min after he acked it because the
+      // ai_alerts row was upserted with ignoreDuplicates, never updated when
+      // the ticket state changed. Fix: cross-check each alert's referenced
+      // entity against live state. If the condition is no longer true,
+      // auto-acknowledge the alert and skip it.
       var watcherAlerts = [];
       if (isFirstGreeting && userId) {
         try {
           var alertsRes = await supabase.from('ai_alerts')
-            .select('id, alert_type, severity, subject, body, recommendation, created_at')
+            .select('id, alert_type, severity, subject, body, recommendation, created_at, related_entity_id')
             .eq('target_user_id', userId)
             .or('acknowledged.is.null,acknowledged.eq.false')
             .order('created_at', { ascending: false })
-            .limit(15);
-          watcherAlerts = (alertsRes && alertsRes.data) || [];
+            .limit(30); // pull extra since we may filter some out as stale
+          var rawAlerts = (alertsRes && alertsRes.data) || [];
+
+          // Identify alerts that reference tickets so we can validate them.
+          var ticketAlerts = rawAlerts.filter(function(a) {
+            return a.related_entity_id && /ticket|unack|overdue/i.test(a.alert_type || '');
+          });
+          // Load current state for referenced tickets once.
+          var staleIds = [];
+          if (ticketAlerts.length > 0) {
+            try {
+              var ids = ticketAlerts.map(function(a) { return a.related_entity_id; }).filter(Boolean);
+              var tRes = await supabase.from('tickets')
+                .select('id, status, due_date')
+                .in('id', ids);
+              var liveMap = {};
+              (tRes && tRes.data || []).forEach(function(t) { liveMap[t.id] = t; });
+              var today = new Date().toISOString().substring(0, 10);
+              ticketAlerts.forEach(function(a) {
+                var t = liveMap[a.related_entity_id];
+                var at = String(a.alert_type || '').toLowerCase();
+                // Ticket is gone from DB (deleted) → stale.
+                if (!t) { staleIds.push(a.id); return; }
+                // Unack-type alerts: stale if ticket is no longer in 'New'.
+                if (at.indexOf('unack') >= 0 && t.status && t.status !== 'New') {
+                  staleIds.push(a.id); return;
+                }
+                // Overdue-type: stale if due_date is no longer past OR status is Closed.
+                if (at.indexOf('overdue') >= 0) {
+                  if (t.status === 'Closed') { staleIds.push(a.id); return; }
+                  if (t.due_date && t.due_date >= today) { staleIds.push(a.id); return; }
+                }
+                // Generic ticket-related alerts: stale once ticket is closed.
+                if (at.indexOf('ticket') >= 0 && t.status === 'Closed') {
+                  staleIds.push(a.id); return;
+                }
+              });
+            } catch (e) { /* if cross-check fails, fall through — better to over-surface than silently drop */ }
+          }
+
+          // Fire-and-forget auto-acknowledge for stale alerts. Non-blocking:
+          // we don't wait for the update to finish before continuing the reply.
+          if (staleIds.length > 0) {
+            (function() {
+              try {
+                supabase.from('ai_alerts')
+                  .update({ acknowledged: true, acknowledged_at: new Date().toISOString() })
+                  .in('id', staleIds)
+                  .then(function() {}, function() {});
+              } catch (e) {}
+            })();
+          }
+
+          // Final surfacing list — original order preserved, stale removed, cap at 15.
+          watcherAlerts = rawAlerts
+            .filter(function(a) { return staleIds.indexOf(a.id) === -1; })
+            .slice(0, 15);
+
           if (watcherAlerts.length > 0) {
             crossTeamBlock += '\n\n===== RECENT ALERTS FROM THE PROACTIVE WATCHER =====\n';
             crossTeamBlock += 'I\'ve been monitoring the business between conversations. Here is what I flagged (newest first). Mention only the 1-2 most important ones naturally in your greeting; the full list is visible to the user in their alerts bell.\n';
@@ -779,6 +842,20 @@ export async function POST(request) {
         if (action.type === 'request_quote') {
           return Response.json({ answer: 'Quote request ready.', pending_action: action, action_result: 'pending' });
         }
+        // v51.2 — take_break: client-side hard-stop. Return a pending_action
+        // so AIGreeter can flip its own stop state. We clamp the duration
+        // server-side so the model can't pass absurd values.
+        if (action.type === 'take_break') {
+          var mins = Number(action.minutes);
+          if (!mins || isNaN(mins) || mins < 1) mins = 20;
+          if (mins > 180) mins = 180;
+          var msg = 'OK, sleeping for ' + mins + ' minutes — say "Hey Nadia" anytime to wake me sooner.';
+          return Response.json({
+            answer: msg,
+            pending_action: { type: 'take_break', minutes: mins },
+            action_result: 'success'
+          });
+        }
         return Response.json({ answer: 'Unknown action type: ' + action.type });
       } catch (actionErr) {
         return Response.json({ answer: 'Action failed: ' + actionErr.message, action_result: 'error' });
@@ -943,7 +1020,8 @@ export async function POST(request) {
     context += 'FOR COMMANDS: Respond with JSON wrapped in ---ACTION_START--- and ---ACTION_END--- tags.\n\n';
     context += 'Available actions:\n';
     context += '- create_ticket: {type:"create_ticket", title, description, priority, due_date, assigned_to}\n';
-    context += '- update_ticket: {type:"update_ticket", ticket_number:"TKT-0001", status:"In Progress", priority:"high", assigned_to:"user-id", due_date:"2026-04-15", description:"new details"}\n';
+    context += '- update_ticket: {type:"update_ticket", ticket_number:"TKT-0001", status:"In Progress", priority:"high", assigned_to:"user-id", due_date:"2026-04-15", new_title:"rewritten title", description:"new details", category:"maintenance", add_comment:"customer confirmed by phone"}\n';
+    context += '  update_ticket supports ALL ticket fields. Use new_title to rename, description to replace the body, category to reclassify, add_comment to append a note without changing anything else. Combine any fields in one call.\n';
     context += '  Find ticket by ticket_number (preferred) or title. Only include fields being changed.\n';
     context += '  Valid statuses: New, Acknowledged, In Progress, Blocked, On Hold, Review, Closed, Reopened\n';
     context += '  Valid priorities: high, medium, low\n';
@@ -984,6 +1062,13 @@ export async function POST(request) {
       context += '- send_whatsapp: {type:"send_whatsapp", to:"+phonenumber", body:"message", draft_only:true}\n';
       context += '  IMPORTANT: Always set draft_only:true first so user can approve.\n';
     }
+
+    // v51.2 — take_break action. User says "take a 20 minute break",
+    // "sleep for 10 minutes", "go away for a bit" etc. We parse the
+    // duration and tell the client to enter hard-stop state.
+    context += '- take_break: {type:"take_break", minutes:20}\n';
+    context += '  User asked you to be quiet for a while. Parse the duration in minutes from their phrase. Defaults: "a minute"=1, "a bit"/"a while"=15, "a few minutes"=5, unspecified=20. Max 180 min. Brief reply like "OK, sleeping for 20 minutes — say Hey Nadia to wake me sooner." Then include the action JSON.\n';
+    context += '  Trigger phrases: "take a break", "sleep for N minutes", "be quiet for a while", "go away", "stop for N min", "shut up for N min", "mute for N min", "خذي استراحة", "اسكتي".\n';
 
     context += '\nSAFETY RULES:\n';
     context += '- Tickets, events, and reminders execute IMMEDIATELY — do NOT say "shall I create this?" just create it. Say "Creating ticket..." then include the action JSON.\n';
@@ -1401,13 +1486,50 @@ export async function POST(request) {
               else if (actionData.title) fq = await supabase.from('tickets').select('*').ilike('title', '%' + actionData.title + '%').limit(1).maybeSingle();
               if (!fq || !fq.data) throw new Error('Ticket not found: ' + (actionData.ticket_number || actionData.title));
               var tk = fq.data; var up = {}; var ch = [];
+              // v51.1 — expanded field coverage. Previously only status/priority/assigned_to/due_date
+              // could be updated. Now Nadia can edit any field on Max's request.
               if (actionData.status) { up.status = actionData.status; ch.push('Status → ' + actionData.status); }
               if (actionData.priority) { up.priority = actionData.priority; ch.push('Priority → ' + actionData.priority); }
               if (actionData.assigned_to) { up.assigned_to = actionData.assigned_to; ch.push('Reassigned'); }
               if (actionData.due_date !== undefined) { up.due_date = actionData.due_date || null; ch.push('Due → ' + (actionData.due_date || 'removed')); }
-              up.updated_at = new Date().toISOString();
-              await supabase.from('tickets').update(up).eq('id', tk.id);
-              await supabase.from('ticket_comments').insert({ ticket_id: tk.id, comment_text: '🤖 AI: ' + ch.join(', '), is_system: true, created_by: userId });
+              // v51.1 — title/description/category edits
+              if (actionData.new_title) {
+                up.title = String(actionData.new_title);
+                ch.push('Title → "' + String(actionData.new_title).substring(0, 60) + '"');
+              }
+              if (actionData.description !== undefined) {
+                up.description = actionData.description ? String(actionData.description) : null;
+                ch.push('Description updated');
+              }
+              if (actionData.category) { up.category = String(actionData.category); ch.push('Category → ' + actionData.category); }
+              // Comment-only mode: the user asked to add a note to the ticket without
+              // changing any structural field (e.g. "add a comment to TKT-0142 saying
+              // the customer paid cash"). We still write a ticket_comments row below;
+              // this branch just ensures ch[] isn't empty for the audit message.
+              if (actionData.add_comment || actionData.comment) {
+                ch.push('Note added');
+              }
+              if (ch.length === 0) {
+                throw new Error('update_ticket called with no recognized fields. Accepted: status, priority, assigned_to, due_date, new_title, description, category, add_comment.');
+              }
+              if (Object.keys(up).length > 0) {
+                up.updated_at = new Date().toISOString();
+                await supabase.from('tickets').update(up).eq('id', tk.id);
+              }
+              // Always write a system comment capturing the change + any user note.
+              var commentText = '🤖 AI: ' + ch.join(', ');
+              var userNote = actionData.add_comment || actionData.comment;
+              if (userNote) commentText += '\n— ' + String(userNote);
+              await supabase.from('ticket_comments').insert({ ticket_id: tk.id, comment_text: commentText, is_system: true, created_by: userId });
+              // v51.1 — ack stale alerts for this ticket: if Nadia just changed
+              // the status (ack-ing it), clear any unack/overdue alerts so she
+              // doesn't bring it up 14 minutes later.
+              try {
+                await supabase.from('ai_alerts')
+                  .update({ acknowledged: true, acknowledged_at: new Date().toISOString() })
+                  .eq('related_entity_id', tk.id)
+                  .or('acknowledged.is.null,acknowledged.eq.false');
+              } catch (_) {}
               // Fire-and-forget reassignment notification
               if (actionData.assigned_to && actionData.assigned_to !== tk.assigned_to && actionData.assigned_to !== userId) {
                 notifyTicketReassignedServer([actionData.assigned_to], tk.title || tk.ticket_number, userId).catch(function(){});
