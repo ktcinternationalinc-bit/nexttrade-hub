@@ -88,6 +88,102 @@ export default function AIGreeter({ user, userProfile, users, tickets, invoices,
   var [paused, setPaused] = useState(false);
   var pausedRef = useRef(false);  // for handlers registered once at mount
   useEffect(function() { pausedRef.current = paused; }, [paused]);
+
+  // v51 (Apr 24 2026) — STOPPED = hard off for 30 minutes.
+  //   Whereas paused is transient ("shut up for now"), stopped puts Nadia
+  //   into deep sleep. VoiceController's wake-word listener is fully
+  //   disabled for the sleep window so ambient noise, her own speech, or
+  //   the user casually saying "Nadia" can't wake her.
+  // Wake-up conditions:
+  //   (1) 30 minutes elapsed → auto-wake
+  //   (2) User clicks Start button → immediate wake
+  //   (3) User says "Hey Nadia" (wake-word, once the 30 min is up) — via
+  //       VoiceController resuming naturally
+  // Persisted in localStorage so a refresh doesn't silently wake her.
+  var STOP_WINDOW_MS = 30 * 60 * 1000; // 30 minutes
+  var STOP_KEY = 'nadia:stoppedUntil';
+  var [stoppedUntil, setStoppedUntil] = useState(0); // epoch ms; 0 means not stopped
+  var stoppedRef = useRef(0);
+  useEffect(function() { stoppedRef.current = stoppedUntil; }, [stoppedUntil]);
+
+  // Load persisted stopped state on mount. Honors remaining window only.
+  useEffect(function() {
+    try {
+      var raw = typeof localStorage !== 'undefined' ? localStorage.getItem(STOP_KEY) : null;
+      var until = Number(raw || 0);
+      if (until && until > Date.now()) {
+        setStoppedUntil(until);
+        stoppedRef.current = until;
+      } else if (raw) {
+        // Expired entry — scrub it
+        try { localStorage.removeItem(STOP_KEY); } catch (e) {}
+      }
+    } catch (e) {}
+  }, []);
+
+  // Auto-expire the stop window. Wake up when the timer fires — this
+  // re-enables VoiceController's wake listener naturally (it re-reads
+  // stoppedRef on every result event).
+  useEffect(function() {
+    if (!stoppedUntil) return;
+    var remaining = stoppedUntil - Date.now();
+    if (remaining <= 0) {
+      setStoppedUntil(0);
+      try { localStorage.removeItem(STOP_KEY); } catch (e) {}
+      return;
+    }
+    var t = setTimeout(function() {
+      setStoppedUntil(0);
+      stoppedRef.current = 0;
+      try { localStorage.removeItem(STOP_KEY); } catch (e) {}
+    }, remaining);
+    return function() { clearTimeout(t); };
+  }, [stoppedUntil]);
+
+  // Tick every 15s so the countdown display stays fresh without
+  // a dedicated second-by-second interval.
+  var [stoppedTick, setStoppedTick] = useState(0);
+  useEffect(function() {
+    if (!stoppedUntil) return;
+    var i = setInterval(function() { setStoppedTick(function(n) { return n + 1; }); }, 15000);
+    return function() { clearInterval(i); };
+  }, [stoppedUntil]);
+
+  var goStopped = function(customMinutes) {
+    var windowMs = STOP_WINDOW_MS;
+    if (customMinutes && !isNaN(customMinutes)) {
+      var mins = Math.max(1, Math.min(180, Number(customMinutes)));
+      windowMs = mins * 60 * 1000;
+    }
+    var until = Date.now() + windowMs;
+    setStoppedUntil(until);
+    stoppedRef.current = until;
+    try { localStorage.setItem(STOP_KEY, String(until)); } catch (e) {}
+    // Stopping also clears paused — they're mutually exclusive states.
+    try { setPaused(false); pausedRef.current = false; } catch (e) {}
+    // Dispatch a global event so VoiceController can immediately stop listening.
+    try { window.dispatchEvent(new CustomEvent('nadia-stop-hard', { detail: { until: until } })); } catch (e) {}
+  };
+
+  var wakeFromStopped = function() {
+    setStoppedUntil(0);
+    stoppedRef.current = 0;
+    try { localStorage.removeItem(STOP_KEY); } catch (e) {}
+    try { window.dispatchEvent(new CustomEvent('nadia-stop-wake')); } catch (e) {}
+  };
+
+  // v51 — self-suppression window. While Nadia is speaking (and for 3s
+  // after), ignore any wake-word events. Her own audio coming back
+  // through the mic was triggering "hey nadia" matches, making her
+  // restart herself and making "mute" feel broken. VoiceController reads
+  // this window from the global event stream.
+  //
+  // v51.2 (Apr 24 2026) — Tail extended from 2s to 3s because echo from
+  // laptop speakers can last that long before Web Speech stops returning
+  // fragments. Also: updates always take the MAX — never shrink — so an
+  // early-arriving shorter window can't accidentally reopen the mic.
+  var SELF_SUPPRESS_MS = 3000;
+  var selfSuppressUntilRef = useRef(0);
   var [typingText, setTypingText] = useState('');
   var [typingDone, setTypingDone] = useState(true);
   var chatEndRef = useRef(null);
@@ -436,6 +532,8 @@ export default function AIGreeter({ user, userProfile, users, tickets, invoices,
   // Nadia finished her first paragraph.
   useEffect(function() {
     if (hasGreeted || !enabled || !loginHistoryLoaded) return;
+    // v51 — if user left the tab in hard-stop state, skip the initial greeting too.
+    if (stoppedRef.current && stoppedRef.current > Date.now()) return;
     var t = setTimeout(function() {
       if (onGreeted) onGreeted();
       doSend(null, true);
@@ -463,6 +561,8 @@ export default function AIGreeter({ user, userProfile, users, tickets, invoices,
     // S22.13 — user tapped stop → respect their silence. Don't greet on
     // tab changes while paused. She'll stay quiet until they engage her.
     if (pausedRef.current) return;
+    // v51 — hard-stopped. Same treatment: no proactive tab greetings.
+    if (stoppedRef.current && stoppedRef.current > Date.now()) return;
     lastGreetedTabRef.current = contextTab;
     // Defer slightly so tab content paints first
     var t = setTimeout(function() {
@@ -517,6 +617,12 @@ export default function AIGreeter({ user, userProfile, users, tickets, invoices,
       try { console.log('[nadia] paused — skipping TTS playback until user re-engages'); } catch (e) {}
       return;
     }
+    // v51 — Hard-stopped. User put her to sleep for 30 minutes. No speech
+    // at all until the window expires or the user explicitly wakes her.
+    if (stoppedRef.current && stoppedRef.current > Date.now()) {
+      try { console.log('[nadia] stopped — sleeping until ' + new Date(stoppedRef.current).toLocaleTimeString()); } catch (e) {}
+      return;
+    }
     // S18 (Apr 23 2026) — REVERTED to original simple doSpeak.
     // Max kept reporting Nadia cut off after 2-3 words. The extra machinery
     // I added (nadia-stop-all broadcast, prior-audio pause, speechSynthesis
@@ -527,16 +633,43 @@ export default function AIGreeter({ user, userProfile, users, tickets, invoices,
     // close button, barge-in). No need to auto-stop on every new speech.
     setSpeaking(true);
     speakingStartedAtRef.current = Date.now();
-    try { window.dispatchEvent(new CustomEvent('nadia-tts-start')); } catch (e) {}
+    // v51 — self-suppress the wake-word listener for the duration of this
+    // utterance (recomputed on end to add the tail buffer).
+    // v51.2 — floor-only: take MAX of current vs new so rapid start/stop
+    // events can't shorten the window.
+    var startUntil = Date.now() + 30 * 1000; // conservative upper bound; refined at end
+    if (startUntil > selfSuppressUntilRef.current) selfSuppressUntilRef.current = startUntil;
+    try { window.dispatchEvent(new CustomEvent('nadia-tts-start', { detail: { until: selfSuppressUntilRef.current } })); } catch (e) {}
     var fireStop = function() {
       setSpeaking(false);
       setCurrentAudio(null);
-      try { window.dispatchEvent(new CustomEvent('nadia-tts-stop')); } catch (e) {}
+      // Extend suppression by the tail buffer so the last few words don't
+      // leak into the wake detector through room echo.
+      var stopUntil = Date.now() + SELF_SUPPRESS_MS;
+      if (stopUntil > selfSuppressUntilRef.current) selfSuppressUntilRef.current = stopUntil;
+      try { window.dispatchEvent(new CustomEvent('nadia-tts-stop', { detail: { until: selfSuppressUntilRef.current } })); } catch (e) {}
     };
+    // v51.2 — voice preferences. Read from userProfile.voice_settings JSON
+    // if set by the user, otherwise defaults (Rachel, balanced). The TTS
+    // endpoint clamps values so bad data is safe.
+    var voicePrefs = {};
+    try {
+      var raw = userProfile && userProfile.voice_settings;
+      if (typeof raw === 'string') raw = JSON.parse(raw);
+      if (raw && typeof raw === 'object') voicePrefs = raw;
+    } catch (e) {}
     fetch('/api/tts', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ text: text, language: useLang })
+      body: JSON.stringify({
+        text: text,
+        language: useLang,
+        voiceId:      voicePrefs.voice_id || undefined,
+        stability:    voicePrefs.stability,
+        similarity:   voicePrefs.similarity,
+        style:        voicePrefs.style,
+        speakerBoost: voicePrefs.speaker_boost
+      })
     }).then(function(res) {
       if (!res.ok) throw new Error('TTS failed');
       return res.blob();
@@ -620,6 +753,28 @@ export default function AIGreeter({ user, userProfile, users, tickets, invoices,
       if (!enabled) return;
       var cmd = ev && ev.detail && ev.detail.command;
       if (!cmd) return;
+      // v51.1 (Apr 24 2026) — "Hey Nadia" ALWAYS wakes her, even inside
+      // the 30-minute hard-stop window. The user explicitly said her name
+      // with a command; that's the strongest possible engagement signal.
+      // We just need to clear the stop state before proceeding so the
+      // response doesn't get swallowed by the doSpeak guard.
+      if (stoppedRef.current && stoppedRef.current > Date.now()) {
+        try { console.log('[nadia] wake-word during stop window → waking immediately'); } catch (e) {}
+        // Clear the hard-stop state in-memory, in storage, and in VoiceController.
+        setStoppedUntil(0);
+        stoppedRef.current = 0;
+        try { localStorage.removeItem(STOP_KEY); } catch (e) {}
+        try { window.dispatchEvent(new CustomEvent('nadia-stop-wake')); } catch (e) {}
+        // Fall through to normal processing below.
+      }
+      // v51 — self-suppression. Ignore wake words emitted during her own
+      // speech + 2s after. Prevents her voice bleeding into the mic and
+      // re-triggering her. (VoiceController enforces this too, but guarding
+      // here is belt-and-suspenders.)
+      if (selfSuppressUntilRef.current && Date.now() < selfSuppressUntilRef.current) {
+        try { console.log('[nadia] ignoring wake-word — self-suppress window active'); } catch (e) {}
+        return;
+      }
       // User said a wake-word command — this IS a user action, so it's
       // treated like pressing a button. Stop current speech, then process.
       stopSpeech();
@@ -762,7 +917,14 @@ export default function AIGreeter({ user, userProfile, users, tickets, invoices,
           else { interim += txt; if (txt.trim()) sawContent = true; }
         }
         accumulatedRef.current = finalText;
-        setInput((finalText + interim).trim());
+        // v51.2 — don't stomp on user-typed text. If they're actively typing
+        // in the input, the mic is probably picking up ambient noise or her
+        // own voice tail. Only update input when user is NOT typing.
+        var userTypingNow = false;
+        try { userTypingNow = !!window.__nadiaUserTyping; } catch (e) {}
+        if (!userTypingNow) {
+          setInput((finalText + interim).trim());
+        }
         // Only reset silence timer on real speech progress, not empty ticks.
         if (sawContent) { lastVoiceActivityRef.current = Date.now(); resetSilenceTimer(); }
       };
@@ -1292,6 +1454,20 @@ export default function AIGreeter({ user, userProfile, users, tickets, invoices,
       });
       var data = await res.json();
       var aiText = data.answer || '';
+      // v51.2 — take_break action from Nadia. User said "take a 20 minute
+      // break" or similar. We execute it client-side: schedule the hard-stop
+      // for AFTER she finishes speaking the confirmation message so the
+      // stop doesn't swallow her own "OK, sleeping for X minutes" reply.
+      if (data.pending_action && data.pending_action.type === 'take_break') {
+        var breakMins = Number(data.pending_action.minutes) || 20;
+        // Delay scheduling by ~500ms per spoken word, capped at 30s, so
+        // her confirmation TTS plays fully before the stop window kicks in.
+        var words = String(aiText || '').split(/\s+/).filter(Boolean).length || 6;
+        var delayMs = Math.min(30000, words * 500);
+        setTimeout(function() {
+          try { goStopped(breakMins); } catch (e) {}
+        }, delayMs);
+      }
       // S17.7 — If API returned nothing, retry ONCE. Previously we fell back
       // to "Hey firstName!" which is the exact bug Max flagged: on tab
       // navigation Nadia would ONLY say "good morning mohamed" (the fallback)
@@ -1357,6 +1533,9 @@ export default function AIGreeter({ user, userProfile, users, tickets, invoices,
     // S22.13 — user typed a message → they're engaging Nadia. Clear paused
     // so her reply plays aloud. (stopSpeech always sets paused=true.)
     try { setPaused(false); pausedRef.current = false; } catch (e) {}
+    // v51.2 — the message is on its way; clear the typing flag so the next
+    // voice follow-up can fire normally.
+    try { window.__nadiaUserTyping = false; } catch (_) {}
     doSend(input.trim());
   };
 
@@ -1549,17 +1728,49 @@ export default function AIGreeter({ user, userProfile, users, tickets, invoices,
             is NOT currently speaking. Explains her silence and gives a
             one-tap "wake her up" affordance. */}
         {paused && !speaking && !listening && !recording && (
-          <button
-            onClick={function() {
-              try { setPaused(false); pausedRef.current = false; } catch (e) {}
-            }}
-            className="w-full mb-2 px-3 py-2 rounded-xl bg-slate-700 hover:bg-slate-600 text-slate-200 text-xs font-semibold flex items-center justify-center gap-2 border border-slate-600"
-            title={useLang === 'ar' ? 'ناديا صامتة — اضغط لإيقاظها، أو اكتب رسالة، أو قل مرحبا ناديا' : 'Nadia is paused — tap to wake her, or just type/say "Hey Nadia"'}
-          >
-            <span>🤫</span>
-            <span>{useLang === 'ar' ? 'ناديا صامتة — اضغط لإيقاظها' : 'Nadia is paused — tap to wake her'}</span>
-          </button>
+          <div className="flex gap-2 mb-2">
+            <button
+              onClick={function() {
+                try { setPaused(false); pausedRef.current = false; } catch (e) {}
+              }}
+              className="flex-1 px-3 py-2 rounded-xl bg-slate-700 hover:bg-slate-600 text-slate-200 text-xs font-semibold flex items-center justify-center gap-2 border border-slate-600"
+              title={useLang === 'ar' ? 'ناديا صامتة — اضغط لإيقاظها، أو اكتب رسالة، أو قل مرحبا ناديا' : 'Nadia is paused — tap to wake her, or just type/say "Hey Nadia"'}
+            >
+              <span>🤫</span>
+              <span>{useLang === 'ar' ? 'ناديا صامتة — اضغط لإيقاظها' : 'Nadia is paused — tap to wake her'}</span>
+            </button>
+            {/* v51 — Hard STOP escalation from the pause state. User tapped
+                Stop, realized they want a longer break. One click → 30 min sleep. */}
+            <button
+              onClick={goStopped}
+              className="px-3 py-2 rounded-xl bg-red-800 hover:bg-red-900 text-red-100 text-xs font-semibold flex items-center justify-center gap-1 border border-red-900"
+              title={useLang === 'ar' ? 'إسكات تام لمدة 30 دقيقة' : 'Hard stop for 30 minutes'}
+            >
+              <span>💤</span>
+              <span>30m</span>
+            </button>
+          </div>
         )}
+        {/* v51 — Hard-stopped banner. Shown instead of the paused banner
+            during the 30-min sleep window. Counts down and gives a wake button. */}
+        {stoppedUntil > Date.now() && !speaking && !listening && !recording && (function() {
+          var remainingMs = stoppedUntil - Date.now();
+          var remainingMin = Math.max(1, Math.ceil(remainingMs / 60000));
+          return (
+            <button
+              onClick={wakeFromStopped}
+              className="w-full mb-2 px-3 py-2.5 rounded-xl bg-red-900 hover:bg-red-800 text-red-100 text-xs font-semibold flex items-center justify-center gap-2 border border-red-800"
+              title={useLang === 'ar' ? 'ناديا نائمة — اضغط لإيقاظها' : 'Nadia is sleeping — tap to wake her now'}
+            >
+              <span>💤</span>
+              <span>
+                {useLang === 'ar'
+                  ? 'ناديا نائمة — ' + remainingMin + ' دقيقة متبقية (اضغط لإيقاظها)'
+                  : 'Nadia is sleeping (' + remainingMin + 'm left) — tap to wake her'}
+              </span>
+            </button>
+          );
+        })()}
         {/* Listening status — big obvious STOP & SEND button. Users were missing
             the small mic-icon color change so they'd wait endlessly. Now it's
             a full-width red button with live mic animation + accumulated text. */}
@@ -1640,7 +1851,22 @@ export default function AIGreeter({ user, userProfile, users, tickets, invoices,
           >
             🎙️
           </button>
-          <input value={input} onChange={function(e) { setInput(e.target.value); }}
+          <input value={input}
+            onChange={function(e) {
+              setInput(e.target.value);
+              // v51.2 — flag user-typing so VoiceController's follow-up mode
+              // doesn't auto-send a spoken clarifier while the user is still
+              // finishing a typed message.
+              try { window.__nadiaUserTyping = !!e.target.value; } catch (_) {}
+            }}
+            onFocus={function() {
+              try { window.__nadiaUserTyping = !!input; } catch (_) {}
+            }}
+            onBlur={function() {
+              // Small delay before clearing so the keydown handler still sees
+              // the typing flag when Enter is pressed.
+              try { setTimeout(function() { window.__nadiaUserTyping = false; }, 200); } catch (_) {}
+            }}
             onKeyDown={function(e) { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); handleSubmit(); } }}
             placeholder={useLang === 'ar' ? 'اكتب أو تحدث...' : 'Type or speak to Nadia...'}
             className="flex-1 bg-transparent text-white text-xs outline-none placeholder-white/25"

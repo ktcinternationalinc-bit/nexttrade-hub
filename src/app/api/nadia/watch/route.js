@@ -130,8 +130,89 @@ async function runWatch(specificUserId) {
         }
       }
     } catch (e) { summary.errors.push('briefing ' + uid + ': ' + e.message); }
+
+    // v51.2 — SCAN 3: Gmail inbox monitor. Poll for unread messages and
+    // create ai_alerts so Nadia can surface them in the next chat.
+    // Best-effort: any failure is non-fatal (user may not have connected
+    // Gmail, API may be down, etc.).
+    try {
+      var gmailAlerts = await scanGmailInbox(uid);
+      if (gmailAlerts && gmailAlerts.length > 0) {
+        var gIns = await supabase.from('ai_alerts')
+          .upsert(gmailAlerts, {
+            onConflict: 'target_user_id,alert_type,related_entity_id',
+            ignoreDuplicates: true
+          })
+          .select('id');
+        if (gIns.error) {
+          summary.errors.push('gmail upsert ' + uid + ': ' + gIns.error.message);
+        } else {
+          summary.gmail_alerts_written = (summary.gmail_alerts_written || 0) + ((gIns.data && gIns.data.length) || 0);
+        }
+      }
+    } catch (e) { summary.errors.push('gmail ' + uid + ': ' + e.message); }
   }
   return summary;
+}
+
+// v51.2 — Gmail inbox scan. Poll unread mail and generate alerts for
+// messages from known customers/vendors. Cheap (one HTTP call per user
+// who has connected Gmail). Skips users without tokens.
+async function scanGmailInbox(userId) {
+  var out = [];
+  try {
+    // Check if user has Gmail tokens stored.
+    var tokRes = await supabase.from('user_integrations')
+      .select('access_token, refresh_token')
+      .eq('user_id', userId)
+      .eq('provider', 'gmail')
+      .maybeSingle();
+    if (!tokRes || !tokRes.data || !tokRes.data.access_token) return out;
+
+    // Pull unread from primary inbox, last ~20 messages.
+    var listRes = await fetch(
+      'https://gmail.googleapis.com/gmail/v1/users/me/messages?q=' +
+        encodeURIComponent('is:unread in:inbox category:primary newer_than:1d') +
+        '&maxResults=20',
+      { headers: { Authorization: 'Bearer ' + tokRes.data.access_token } }
+    );
+    if (!listRes.ok) return out;
+    var listData = await listRes.json();
+    var msgs = (listData && listData.messages) || [];
+    if (msgs.length === 0) return out;
+
+    // Pull minimal metadata for each (fromFromHeader + subject).
+    for (var i = 0; i < Math.min(msgs.length, 10); i++) {
+      try {
+        var mRes = await fetch(
+          'https://gmail.googleapis.com/gmail/v1/users/me/messages/' + msgs[i].id +
+            '?format=metadata&metadataHeaders=From&metadataHeaders=Subject',
+          { headers: { Authorization: 'Bearer ' + tokRes.data.access_token } }
+        );
+        if (!mRes.ok) continue;
+        var mData = await mRes.json();
+        var hdrs = (mData && mData.payload && mData.payload.headers) || [];
+        var getH = function(name) {
+          for (var j = 0; j < hdrs.length; j++) if (hdrs[j].name === name) return hdrs[j].value;
+          return '';
+        };
+        var from = getH('From') || '';
+        var subject = getH('Subject') || '(no subject)';
+        if (!from) continue;
+
+        out.push({
+          target_user_id: userId,
+          alert_type: 'gmail_unread',
+          severity: 'low',
+          subject: 'Email from ' + from.substring(0, 80),
+          body: subject.substring(0, 200),
+          recommendation: 'Open Gmail or ask me to read it.',
+          related_entity_id: msgs[i].id, // gmail message id; stable for dedup
+        });
+      } catch (_) {}
+    }
+  } catch (_) {}
+  return out;
 }
 
 export async function GET(req) {

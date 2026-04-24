@@ -353,13 +353,46 @@ export default function TicketsTab({ toast, customers, user, userProfile, users,
   const executeDelete = async () => {
     const ticket = confirmDel;
     if (!ticket) return;
-    setConfirmDel(null);
+    // v51.1 — previous version called setConfirmDel(null) BEFORE the async
+    // work, so any error was invisible: modal closed, ticket stayed. Now we
+    // keep the modal open, show a red error, and only close on success.
+    try { console.log('[delete] starting', ticket.id, ticket.ticket_number); } catch(_) {}
     try {
-      await supabase.from('ticket_comments').delete().eq('ticket_id', ticket.id);
+      // Pre-clear referenced rows that might lack ON DELETE CASCADE on all
+      // environments. Belt-and-suspenders against schema drift.
+      try {
+        await supabase.from('ticket_comments').delete().eq('ticket_id', ticket.id);
+        try { console.log('[delete] comments cleared'); } catch(_) {}
+      } catch (e) {
+        try { console.warn('[delete] comment clear failed (continuing):', e && e.message); } catch(_) {}
+      }
+      // v51.1 — clear per-assignee priority rows if that table exists (s22 schema).
+      try {
+        await supabase.from('ticket_assignee_priorities').delete().eq('ticket_id', ticket.id);
+      } catch (_) { /* table may not exist on older schemas */ }
+      // v51.1 — drop any ai_alerts referencing this ticket so Nadia doesn't
+      // bring it up as a stale reminder after deletion.
+      try {
+        await supabase.from('ai_alerts').delete().eq('related_entity_id', ticket.id);
+      } catch (_) {}
+
       await dbDelete('tickets', ticket.id, myId);
-      await logActivity(myId, 'Deleted ticket: ' + (ticket.ticket_number || '') + ' ' + ticket.title, 'ticket');
-      setSel(null); setComments([]); loadTickets();
-    } catch (err) { toast ? toast.error(err.message) : alert(err.message); }
+      try { console.log('[delete] ticket row deleted'); } catch(_) {}
+
+      await logActivity(myId, 'Deleted ticket: ' + (ticket.ticket_number || '') + ' ' + (ticket.title || ''), 'ticket');
+      setConfirmDel(null);
+      setSel(null);
+      setComments([]);
+      loadTickets();
+      if (toast) toast.success('Ticket deleted');
+    } catch (err) {
+      try { console.error('[delete] FAILED:', err); } catch(_) {}
+      // Keep the modal open and tell the user why. Before: error was swallowed
+      // and the user just saw an unchanged ticket list with no feedback.
+      var msg = (err && (err.message || err.error_description)) || 'Delete failed';
+      if (toast) toast.error('Delete failed: ' + msg);
+      else alert('Delete failed: ' + msg);
+    }
   };
 
   // Bulk actions

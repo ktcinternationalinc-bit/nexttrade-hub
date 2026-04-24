@@ -24,7 +24,7 @@
 // means one priority per ticket is enough.
 // ============================================================
 
-import { useState, useMemo } from 'react';
+import { useState, useMemo, useRef } from 'react';
 import { supabase, dbInsert, dbUpdate, logActivity } from '../lib/supabase';
 
 var STATUS_COLORS_MINI = {
@@ -79,6 +79,15 @@ export default function PriorityBoard({
   var [statusFilter, setStatusFilter] = useState('open'); // open | all
   var [busy, setBusy] = useState(false);
   var [toastMsg, setToastMsg] = useState('');
+  // v52 — priority-number inline edit. Holds the ticket.id currently being
+  // edited (null = no edit). User clicks the #N badge → becomes an input;
+  // types a number + Enter → reorders the ranked pile to that position.
+  var [editingPriorityFor, setEditingPriorityFor] = useState(null);
+  var [priorityEditValue, setPriorityEditValue] = useState('');
+  // v52 — horizontal scroll ref for the board strip so the person-picker
+  // can scroll a specific column into view.
+  var boardStripRef = useRef(null);
+  var columnRefs = useRef({}); // user.id → DOM node of that column
   // Per-column expand/collapse state for the Unranked pile.
   var [expandedUnranked, setExpandedUnranked] = useState({});
   // S22.14 (Apr 24 2026) — Inline quick-create for a new ticket assigned
@@ -220,11 +229,14 @@ export default function PriorityBoard({
     setDragging({ ticketId: t.id, fromUserId: t.assigned_to });
     e.dataTransfer.effectAllowed = 'move';
     try { e.dataTransfer.setData('text/plain', t.id); } catch (_) {}
+    // v52 — flag so drop zones become visible everywhere on the board.
+    try { window.__priorityBoardDragging = true; } catch (_) {}
   }
 
   function onDragEnd() {
     setDragging(null);
     setDropTarget(null);
+    try { window.__priorityBoardDragging = false; } catch (_) {}
   }
 
   function onDragOverCol(e, userId, position, pile) {
@@ -413,6 +425,65 @@ export default function PriorityBoard({
     })();
   }
 
+  // v52 — set a ticket's priority by typed number. User clicks the #N
+  // badge → types a number + Enter. The ranked pile re-sequences to place
+  // the ticket at that rank (clamped to 1..N+1 where N is current pile length).
+  // Other tickets shift to maintain sequential numbering (no gaps).
+  function setPriorityByNumber(ticket, newRank) {
+    if (!canDragTicket(ticket)) {
+      showToast('Only people on this ticket can rank it.');
+      return;
+    }
+    var userId = ticket.assigned_to;
+    var col = columns[userId] || { ranked: [], unranked: [] };
+    // Build fresh list without the ticket, insert it at the new position.
+    var others = col.ranked.filter(function(t) { return t.id !== ticket.id; });
+    var pos = Math.max(0, Math.min(others.length, newRank - 1));
+    var list = others.slice();
+    list.splice(pos, 0, ticket);
+    setBusy(true);
+    (async function() {
+      try {
+        // If the ticket was in the unranked pile, clear its unranked number first.
+        // Then write the new ranked priorities for the whole pile.
+        for (var i = 0; i < list.length; i++) {
+          var newP = i + 1;
+          if (list[i].assignee_priority !== newP) {
+            try { await dbUpdate('tickets', list[i].id, { assignee_priority: newP }, currentUserId); } catch (_) {}
+          }
+        }
+        if (onReorder) onReorder({ typedPriority: newRank });
+        showToast('Priority set to #' + newRank);
+      } finally {
+        setBusy(false);
+      }
+    })();
+  }
+
+  // v52 — star toggle for "today's focus". Max can mark tickets as things
+  // he's committed to working on today. Nadia checks these at 5pm Eastern
+  // and nudges about any that aren't closed. Manual remove only — no
+  // midnight auto-clear per Max's spec.
+  function toggleStar(ticket) {
+    if (!canDragTicket(ticket)) {
+      showToast('Only people on this ticket can star it.');
+      return;
+    }
+    var newStarred = !ticket.starred_today;
+    (async function() {
+      try {
+        await dbUpdate('tickets', ticket.id, {
+          starred_today: newStarred,
+          starred_at: newStarred ? new Date().toISOString() : null
+        }, currentUserId);
+        showToast(newStarred ? '⭐ Starred for today' : 'Star removed');
+        if (onReorder) onReorder({ starred: newStarred });
+      } catch (e) {
+        showToast('Star failed: ' + (e && e.message ? e.message : 'unknown'));
+      }
+    })();
+  }
+
   // ---- Rendering helpers -----------------------------------------------
 
   function renderTicketCard(t, rank) {
@@ -420,21 +491,75 @@ export default function PriorityBoard({
     var statusColor = STATUS_COLORS_MINI[t.status] || '#64748b';
     var canDrag = canDragTicket(t);
     var additional = parseAdditional(t);
+    var isStarred = !!t.starred_today;
+    // v52 — starred cards get an amber glow so they stand out at a glance.
+    var starredCls = isStarred ? 'bg-gradient-to-br from-amber-50 to-white border-amber-300 shadow-amber-100 shadow-md' : 'bg-white border-slate-200';
+    var isEditingPrio = editingPriorityFor === t.id;
     return (
       <div
         key={t.id}
-        draggable={canDrag}
+        draggable={canDrag && !isEditingPrio}
         onDragStart={canDrag ? function(e) { onDragStart(e, t); } : undefined}
         onDragEnd={onDragEnd}
-        onClick={function() { if (onSelectTicket) onSelectTicket(t); }}
-        className={'bg-white border border-slate-200 rounded-lg p-2 mb-1.5 hover:shadow-md hover:border-indigo-300 transition select-none ' + (canDrag ? 'cursor-grab' : 'cursor-pointer')}
+        onClick={function() { if (!isEditingPrio && onSelectTicket) onSelectTicket(t); }}
+        className={'border rounded-lg p-2 mb-1.5 hover:shadow-md hover:border-indigo-300 transition select-none ' + starredCls + ' ' + (canDrag && !isEditingPrio ? 'cursor-grab' : 'cursor-pointer')}
         title={canDrag ? 'Drag to reorder or move to another column; click to open' : 'Click to open (only people on this ticket can drag)'}
       >
         <div className="flex items-center gap-1.5 mb-1">
-          {rank != null && (
+          {rank != null && !isEditingPrio && canDrag && (
+            <button
+              onClick={function(e) {
+                e.stopPropagation();
+                setEditingPriorityFor(t.id);
+                setPriorityEditValue(String(rank));
+              }}
+              className="text-[10px] font-extrabold bg-indigo-600 hover:bg-indigo-700 text-white rounded-full w-5 h-5 flex items-center justify-center"
+              title="Click to type a priority number"
+            >
+              {rank}
+            </button>
+          )}
+          {rank != null && !canDrag && (
             <span className="text-[10px] font-extrabold bg-indigo-600 text-white rounded-full w-5 h-5 flex items-center justify-center">
               {rank}
             </span>
+          )}
+          {isEditingPrio && (
+            <input
+              type="number"
+              min="1"
+              autoFocus
+              value={priorityEditValue}
+              onChange={function(e) { setPriorityEditValue(e.target.value); }}
+              onClick={function(e) { e.stopPropagation(); }}
+              onKeyDown={function(e) {
+                e.stopPropagation();
+                if (e.key === 'Enter') {
+                  e.preventDefault();
+                  var newRank = parseInt(priorityEditValue, 10);
+                  setEditingPriorityFor(null);
+                  if (!isNaN(newRank) && newRank > 0) {
+                    setPriorityByNumber(t, newRank);
+                  }
+                } else if (e.key === 'Escape') {
+                  setEditingPriorityFor(null);
+                }
+              }}
+              onBlur={function() { setEditingPriorityFor(null); }}
+              className="text-[10px] font-extrabold bg-white border border-indigo-500 rounded w-10 h-5 px-1 text-center"
+            />
+          )}
+          {/* v52 — star toggle for "working on this today". Visible to
+              admins and to the user themselves. Starred tickets have an
+              amber glow AND are counted in the Today strip + picker badges. */}
+          {(canDrag || isAdmin) && (
+            <button
+              onClick={function(e) { e.stopPropagation(); toggleStar(t); }}
+              className={'text-[14px] leading-none transition hover:scale-125 ' + (isStarred ? 'text-amber-500' : 'text-slate-300 hover:text-amber-400')}
+              title={isStarred ? 'Remove from today\'s focus' : 'Mark as today\'s focus — Nadia will check on it at end of day'}
+            >
+              {isStarred ? '⭐' : '☆'}
+            </button>
           )}
           <span
             className="text-[8px] font-semibold px-1.5 py-0.5 rounded"
@@ -470,11 +595,25 @@ export default function PriorityBoard({
   function renderDropZone(userId, position, pile) {
     var p = pile || 'ranked';
     var active = dropTarget && dropTarget.userId === userId && dropTarget.position === position && (dropTarget.pile || 'ranked') === p;
+    // v52 — much larger target. While ANY drag is in progress, drop zones
+    // become visible (dashed indigo outline) so the user can see where to
+    // drop. The active zone (hovering directly) is bigger still.
+    // Previous h-2 (8px) was nearly impossible to hit on touch or
+    // imprecise mouse.
+    var dragging = !!window.__priorityBoardDragging;
+    var cls;
+    if (active) {
+      cls = 'h-10 bg-indigo-100 border-2 border-dashed border-indigo-500 my-1 rounded-lg';
+    } else if (dragging) {
+      cls = 'h-6 border border-dashed border-indigo-300 my-0.5 rounded opacity-60 hover:opacity-100 hover:h-8 transition-all';
+    } else {
+      cls = 'h-3 -my-0.5 rounded transition';
+    }
     return (
       <div
         onDragOver={function(e) { onDragOverCol(e, userId, position, p); }}
         onDrop={function(e) { onDropCol(e, userId, position, p); }}
-        className={'h-2 -my-1 rounded transition ' + (active ? 'h-8 bg-indigo-100 border-2 border-dashed border-indigo-400' : '')}
+        className={cls}
       />
     );
   }
@@ -547,16 +686,49 @@ export default function PriorityBoard({
 
       {/* Board */}
       <div>
-        <div className="text-[10px] font-bold uppercase tracking-wide text-slate-500 mb-2">
-          📋 Priority Board
+        <div className="flex items-center justify-between mb-2">
+          <div className="text-[10px] font-bold uppercase tracking-wide text-slate-500">
+            📋 Priority Board
+          </div>
+          {/* v52 — person-picker. Compact row of name chips; click to scroll
+              the horizontal board strip to that person's column. Without this
+              users had to horizontally scroll-search to find e.g. Omar when he
+              was 6 columns to the right. */}
+          {(users || []).length > 3 && (
+            <div className="flex items-center gap-1 overflow-x-auto max-w-[60%] pb-1">
+              <span className="text-[9px] text-slate-400 flex-shrink-0 mr-1">Jump to:</span>
+              {(users || []).map(function(u) {
+                var col = columns[u.id] || { ranked: [], unranked: [] };
+                var starredCount = (col.ranked.concat(col.unranked) || []).filter(function(t) { return t && t.starred_today; }).length;
+                var firstName = (u.name || '?').split(' ')[0] || u.name;
+                return (
+                  <button key={u.id}
+                    onClick={function() {
+                      var node = columnRefs.current[u.id];
+                      if (node && node.scrollIntoView) {
+                        node.scrollIntoView({ behavior: 'smooth', block: 'nearest', inline: 'start' });
+                      }
+                    }}
+                    className="flex-shrink-0 px-2 py-1 rounded-full text-[10px] font-semibold bg-white border border-slate-200 hover:border-indigo-400 hover:bg-indigo-50 transition flex items-center gap-1"
+                    title={'Jump to ' + u.name}>
+                    <span>{firstName}</span>
+                    {starredCount > 0 && <span className="text-amber-500">⭐{starredCount}</span>}
+                  </button>
+                );
+              })}
+            </div>
+          )}
         </div>
-        <div className="flex gap-3 overflow-x-auto pb-3" style={{ scrollSnapType: 'x mandatory' }}>
+        <div ref={boardStripRef} className="flex gap-3 overflow-x-auto pb-3" style={{ scrollSnapType: 'x mandatory' }}>
           {(users || []).map(function(u) {
             var col = columns[u.id] || { ranked: [], unranked: [] };
             var total = col.ranked.length + col.unranked.length;
             var initials = (u.name || '?').split(' ').map(function(p) { return p[0]; }).filter(Boolean).slice(0, 2).join('').toUpperCase();
             return (
-              <div key={u.id} className="flex-shrink-0 w-64 bg-slate-50 rounded-xl p-2.5" style={{ scrollSnapAlign: 'start' }}>
+              <div key={u.id}
+                ref={function(el) { if (el) columnRefs.current[u.id] = el; }}
+                className="flex-shrink-0 w-64 bg-slate-50 rounded-xl p-2.5"
+                style={{ scrollSnapAlign: 'start', scrollMarginLeft: 12 }}>
                 <div className="flex items-center justify-between mb-2">
                   <div className="flex items-center gap-2">
                     <div className="w-7 h-7 bg-gradient-to-br from-indigo-500 to-purple-600 text-white rounded-full flex items-center justify-center text-[10px] font-bold">

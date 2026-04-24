@@ -4938,10 +4938,12 @@ function runSection41_VoiceUX() {
 
   // ---------- AIGreeter integration ----------
   var gSrc = fs.readFileSync(path.join(REPO_ROOT, 'src/components/AIGreeter.jsx'), 'utf8');
-  // TTS dispatches events so controller can barge-in
-  assert(/window\.dispatchEvent\(new CustomEvent\('nadia-tts-start'\)\)/.test(gSrc),
+  // TTS dispatches events so controller can barge-in.
+  // v51: events now carry { detail: { until } } for self-suppression. We
+  // accept either the bare form or the detail-bearing form.
+  assert(/window\.dispatchEvent\(new CustomEvent\('nadia-tts-start'/.test(gSrc),
     '41.tts.1a doSpeak fires nadia-tts-start');
-  assert(/window\.dispatchEvent\(new CustomEvent\('nadia-tts-stop'\)\)/.test(gSrc),
+  assert(/window\.dispatchEvent\(new CustomEvent\('nadia-tts-stop'/.test(gSrc),
     '41.tts.1b audio.onended fires nadia-tts-stop');
   // Listens for Hey Bob commands
   assert(/window\.addEventListener\('hey-bob-command'/.test(gSrc),
