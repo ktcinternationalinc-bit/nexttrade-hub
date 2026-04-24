@@ -499,6 +499,58 @@ test('S22.53 Paused indicator button offers a one-tap wake up', function() {
     'indicator shown only when paused AND nothing else is happening');
 });
 
+// ==== S22.14 — Quick-create a ticket from Priority Board ====
+
+test('S22.54 Priority Board has quick-create state for per-column new tickets', function() {
+  var pb = fs.readFileSync(path.join(REPO, 'src/components/PriorityBoard.jsx'), 'utf8');
+  assert(/var \[quickCreateFor, setQuickCreateFor\]/.test(pb),
+    'quickCreateFor state defined');
+  assert(/var \[quickCreateForm, setQuickCreateForm\]/.test(pb),
+    'quickCreateForm state defined');
+});
+
+test('S22.55 saveQuickTicket writes to tickets table with proper fields', function() {
+  var pb = fs.readFileSync(path.join(REPO, 'src/components/PriorityBoard.jsx'), 'utf8');
+  assert(/async function saveQuickTicket\(\)/.test(pb),
+    'saveQuickTicket exists');
+  // Scoped to the saveQuickTicket body — must set assigned_to, title, status
+  var m = pb.match(/async function saveQuickTicket\(\)[\s\S]*?\n  \}/);
+  assert(m, 'saveQuickTicket body found');
+  assert(/dbInsert\('tickets'/.test(m[0]), 'inserts into tickets table');
+  assert(/assigned_to: uid/.test(m[0]), 'assigned_to targets the specific user');
+  assert(/status: 'New'/.test(m[0]), 'starts as New');
+  assert(/ticket_number:/.test(m[0]), 'generates a ticket number');
+});
+
+test('S22.56 "+ New ticket for [Name]" button visible in each column', function() {
+  var pb = fs.readFileSync(path.join(REPO, 'src/components/PriorityBoard.jsx'), 'utf8');
+  assert(/\+ New ticket for/.test(pb),
+    'button label present');
+  // Button only shown to admins OR to the user themselves
+  assert(/\(isAdmin \|\| u\.id === currentUserId\)/.test(pb),
+    'quick-create button is admin-gated / self-assign-only');
+});
+
+test('S22.57 Empty column shows a direct "+ Add first ticket" button', function() {
+  // Previously the empty state pointed to a button below ("create one below ↓")
+  // but users missed it. Now the empty drop zone has the button right inside.
+  var pb = fs.readFileSync(path.join(REPO, 'src/components/PriorityBoard.jsx'), 'utf8');
+  assert(/has no tickets/.test(pb),
+    'zero-ticket state still explains the situation');
+  assert(/\+ Add first ticket/.test(pb),
+    'direct + Add first ticket button inside the empty drop zone');
+  assert(/Only [\s\S]{1,40}or an admin can create tickets/.test(pb),
+    'non-admins who are not the target user get a clear explanation');
+});
+
+test('S22.58 Quick-create form: Enter submits, Escape cancels', function() {
+  var pb = fs.readFileSync(path.join(REPO, 'src/components/PriorityBoard.jsx'), 'utf8');
+  assert(/if \(e\.key === 'Enter' && !e\.shiftKey\) \{ e\.preventDefault\(\); saveQuickTicket\(\); \}/.test(pb),
+    'Enter key submits');
+  assert(/if \(e\.key === 'Escape'\) \{ setQuickCreateFor\(null\); \}/.test(pb),
+    'Escape key cancels');
+});
+
 test('S22.37 Breakdown replaced with single unified table + dimension switcher', function() {
   var page = fs.readFileSync(path.join(REPO, 'src/app/page.jsx'), 'utf8');
   // Old: 3 side-by-side cards (the "bubble buckets"). New: one table with

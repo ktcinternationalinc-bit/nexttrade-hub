@@ -81,10 +81,70 @@ export default function PriorityBoard({
   var [toastMsg, setToastMsg] = useState('');
   // Per-column expand/collapse state for the Unranked pile.
   var [expandedUnranked, setExpandedUnranked] = useState({});
+  // S22.14 (Apr 24 2026) — Inline quick-create for a new ticket assigned
+  // directly to a team member from their board column. Max: "team members
+  // who have no tickets on priority, I need to have the ability to add a
+  // ticket to those that don't have tickets." Available to admins for any
+  // user, and to a user themselves (self-assign is always allowed).
+  var [quickCreateFor, setQuickCreateFor] = useState(null);  // user.id or null
+  var [quickCreateForm, setQuickCreateForm] = useState({
+    title: '', description: '', priority: 'Medium', dueDate: ''
+  });
 
   function showToast(msg) {
     setToastMsg(msg);
     setTimeout(function() { setToastMsg(''); }, 2800);
+  }
+
+  // S22.14 — Quick-create a ticket assigned to a specific user.
+  // Mirrors the same insert shape the TicketsTab form uses so the new
+  // row shows up correctly in the main tickets list too.
+  async function saveQuickTicket() {
+    if (busy) return;
+    var uid = quickCreateFor;
+    var f = quickCreateForm;
+    if (!uid) return;
+    if (!f.title || !f.title.trim()) {
+      showToast('Please enter a title');
+      return;
+    }
+    setBusy(true);
+    try {
+      // Generate a ticket number mirroring the main form style.
+      // Format: TKT-YYYYMMDD-HHMM-<4 random>. Uniqueness is a soft
+      // property; collisions are astronomically unlikely.
+      var now = new Date();
+      var pad = function(n) { return n < 10 ? '0' + n : String(n); };
+      var stamp = now.getFullYear() + pad(now.getMonth() + 1) + pad(now.getDate())
+        + '-' + pad(now.getHours()) + pad(now.getMinutes());
+      var rand = Math.random().toString(36).substring(2, 6).toUpperCase();
+      var ticketNum = 'TKT-' + stamp + '-' + rand;
+
+      var newTicket = await dbInsert('tickets', {
+        ticket_number: ticketNum,
+        title: f.title.trim(),
+        description: (f.description || '').trim(),
+        priority: f.priority || 'Medium',
+        due_date: f.dueDate || null,
+        status: 'New',
+        assigned_to: uid,
+        created_by: currentUserId || null,
+      }, currentUserId || null);
+
+      try { await logActivity(currentUserId, 'Created ticket from Priority Board: ' + f.title.trim(), 'ticket'); } catch (_) {}
+
+      // Reset form + close inline editor
+      setQuickCreateFor(null);
+      setQuickCreateForm({ title: '', description: '', priority: 'Medium', dueDate: '' });
+      showToast('Ticket created ✓');
+      if (onReorder) onReorder({ created: true });
+      if (onRefresh) onRefresh();
+    } catch (err) {
+      console.error('[priority-board][quick-create]', err);
+      showToast('Could not create: ' + (err && err.message ? err.message : 'unknown error'));
+    } finally {
+      setBusy(false);
+    }
   }
 
   // Only show open / in-progress tickets by default. The board is about
@@ -528,11 +588,39 @@ export default function PriorityBoard({
                     })}
                   </div>
                 ) : (
+                  // S22.14 — Empty state now gives a direct "+ Add ticket"
+                  // button when the column is completely empty. Previously
+                  // the label said "create one below ↓" but the button was
+                  // a separate footer that users missed. Now the empty
+                  // drop zone IS the add-ticket affordance.
                   <div
                     onDragOver={function(e) { onDragOverCol(e, u.id, 0); }}
                     onDrop={function(e) { onDropCol(e, u.id, 0); }}
-                    className={'text-center text-[10px] text-slate-400 italic py-6 rounded-lg border-2 border-dashed ' + (dropTarget && dropTarget.userId === u.id ? 'border-indigo-400 bg-indigo-50' : 'border-slate-200')}>
-                    Drop a ticket here to prioritize
+                    className={'text-center py-6 rounded-lg border-2 border-dashed ' + (dropTarget && dropTarget.userId === u.id ? 'border-indigo-400 bg-indigo-50' : 'border-slate-200')}>
+                    {total === 0 ? (
+                      <div>
+                        <div className="text-[10px] text-slate-400 italic mb-2">
+                          {((u.name || '').split(' ')[0] || 'They')} has no tickets
+                        </div>
+                        {(isAdmin || u.id === currentUserId) && quickCreateFor !== u.id && (
+                          <button
+                            onClick={function() {
+                              setQuickCreateFor(u.id);
+                              setQuickCreateForm({ title: '', description: '', priority: 'Medium', dueDate: '' });
+                            }}
+                            className="px-3 py-1 bg-emerald-500 hover:bg-emerald-600 text-white text-[10px] font-bold rounded-md shadow-sm">
+                            + Add first ticket
+                          </button>
+                        )}
+                        {!(isAdmin || u.id === currentUserId) && (
+                          <div className="text-[9px] text-slate-400">
+                            Only {u.name || 'they'} or an admin can create tickets for this person
+                          </div>
+                        )}
+                      </div>
+                    ) : (
+                      <div className="text-[10px] text-slate-400 italic">Drop a ticket here to prioritize</div>
+                    )}
                   </div>
                 )}
 
@@ -592,6 +680,92 @@ export default function PriorityBoard({
                       className={'text-center text-[9px] text-slate-400 italic py-3 rounded-lg border-2 border-dashed ' + (dropTarget && dropTarget.userId === u.id && dropTarget.pile === 'unranked' ? 'border-indigo-400 bg-indigo-50' : 'border-slate-200')}>
                       Drop here to demote (unranked)
                     </div>
+                  </div>
+                )}
+
+                {/* S22.14 — Quick-create new ticket for this person.
+                    Available to admins (can assign to anyone) and to the
+                    user themselves (self-assign). Small footer button
+                    that expands into an inline form. */}
+                {(isAdmin || u.id === currentUserId) && (
+                  <div className="mt-3 pt-2 border-t border-slate-200">
+                    {quickCreateFor !== u.id ? (
+                      <button
+                        onClick={function() {
+                          setQuickCreateFor(u.id);
+                          setQuickCreateForm({ title: '', description: '', priority: 'Medium', dueDate: '' });
+                        }}
+                        className="w-full py-1.5 text-[10px] font-bold text-emerald-700 border border-dashed border-emerald-300 rounded hover:bg-emerald-50 hover:border-emerald-500 transition"
+                        title={'Create a new ticket assigned to ' + (u.name || 'this person')}>
+                        + New ticket for {(u.name || '').split(' ')[0] || 'them'}
+                      </button>
+                    ) : (
+                      <div className="bg-white border border-emerald-300 rounded-lg p-2 space-y-1.5 shadow-sm">
+                        <div className="text-[10px] font-bold text-emerald-700">New ticket for {u.name || 'user'}</div>
+                        <input
+                          autoFocus
+                          type="text"
+                          placeholder="Title (required)"
+                          value={quickCreateForm.title}
+                          onChange={function(e) {
+                            var v = e.target.value;
+                            setQuickCreateForm(function(prev) { return Object.assign({}, prev, { title: v }); });
+                          }}
+                          onKeyDown={function(e) {
+                            if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); saveQuickTicket(); }
+                            if (e.key === 'Escape') { setQuickCreateFor(null); }
+                          }}
+                          className="w-full px-2 py-1 text-xs rounded border border-slate-200 focus:border-emerald-500 focus:outline-none"
+                        />
+                        <textarea
+                          placeholder="Description (optional)"
+                          value={quickCreateForm.description}
+                          onChange={function(e) {
+                            var v = e.target.value;
+                            setQuickCreateForm(function(prev) { return Object.assign({}, prev, { description: v }); });
+                          }}
+                          rows={2}
+                          className="w-full px-2 py-1 text-[11px] rounded border border-slate-200 focus:border-emerald-500 focus:outline-none resize-none"
+                        />
+                        <div className="flex gap-1.5">
+                          <select
+                            value={quickCreateForm.priority}
+                            onChange={function(e) {
+                              var v = e.target.value;
+                              setQuickCreateForm(function(prev) { return Object.assign({}, prev, { priority: v }); });
+                            }}
+                            className="flex-1 px-1.5 py-1 text-[10px] rounded border border-slate-200">
+                            <option value="Low">Low</option>
+                            <option value="Medium">Medium</option>
+                            <option value="High">High</option>
+                            <option value="Urgent">Urgent</option>
+                          </select>
+                          <input
+                            type="date"
+                            value={quickCreateForm.dueDate}
+                            onChange={function(e) {
+                              var v = e.target.value;
+                              setQuickCreateForm(function(prev) { return Object.assign({}, prev, { dueDate: v }); });
+                            }}
+                            className="flex-1 px-1.5 py-1 text-[10px] rounded border border-slate-200"
+                            title="Due date (optional)"
+                          />
+                        </div>
+                        <div className="flex gap-1.5">
+                          <button
+                            onClick={saveQuickTicket}
+                            disabled={busy || !quickCreateForm.title.trim()}
+                            className="flex-1 py-1 rounded bg-emerald-600 hover:bg-emerald-700 disabled:bg-slate-300 disabled:cursor-not-allowed text-white text-[10px] font-bold">
+                            {busy ? 'Saving…' : 'Save'}
+                          </button>
+                          <button
+                            onClick={function() { setQuickCreateFor(null); }}
+                            className="px-2 py-1 rounded border border-slate-200 text-slate-600 text-[10px] hover:bg-slate-50">
+                            Cancel
+                          </button>
+                        </div>
+                      </div>
+                    )}
                   </div>
                 )}
               </div>
