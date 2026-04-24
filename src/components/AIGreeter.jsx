@@ -76,6 +76,18 @@ export default function AIGreeter({ user, userProfile, users, tickets, invoices,
   var [recording, setRecording] = useState(false); // MediaRecorder session (separate from live-mic `listening`)
   var [transcribing, setTranscribing] = useState(false); // uploading audio to /api/transcribe
   var [minimized, setMinimized] = useState(false);
+  // S22.13 (Apr 23 2026) — "Paused" is separate from "muted":
+  //   muted  = persistent user preference, "I never want to hear her voice"
+  //   paused = transient "shut up right now until I ask again"
+  // Set to true when the user taps the Stop button. Cleared when the user
+  // says "Hey Nadia", types a message, or explicitly engages the mic. While
+  // paused:
+  //   - doSpeak is a no-op (text still shows in chat; just no voice)
+  //   - auto-greetings (login or tab-change) do not fire
+  //   - the wake-word ack ("I'm here") is suppressed too
+  var [paused, setPaused] = useState(false);
+  var pausedRef = useRef(false);  // for handlers registered once at mount
+  useEffect(function() { pausedRef.current = paused; }, [paused]);
   var [typingText, setTypingText] = useState('');
   var [typingDone, setTypingDone] = useState(true);
   var chatEndRef = useRef(null);
@@ -448,9 +460,15 @@ export default function AIGreeter({ user, userProfile, users, tickets, invoices,
     if (!contextTab) return;
     if (contextTab === 'dashboard') return; // dashboard already handled by main greeting
     if (lastGreetedTabRef.current === contextTab) return;  // already greeted this tab
+    // S22.13 — user tapped stop → respect their silence. Don't greet on
+    // tab changes while paused. She'll stay quiet until they engage her.
+    if (pausedRef.current) return;
     lastGreetedTabRef.current = contextTab;
     // Defer slightly so tab content paints first
     var t = setTimeout(function() {
+      // Re-check paused right before firing — user may have re-paused
+      // during the 600ms delay.
+      if (pausedRef.current) return;
       doSend(null, 'tab_greeting');
     }, 600);
     return function() { clearTimeout(t); };
@@ -493,6 +511,12 @@ export default function AIGreeter({ user, userProfile, users, tickets, invoices,
       try { console.log('[nadia] muted — skipping TTS playback'); } catch (e) {}
       return;
     }
+    // S22.13 — same treatment for paused. The user tapped stop; she should
+    // stay quiet until they re-engage.
+    if (pausedRef.current) {
+      try { console.log('[nadia] paused — skipping TTS playback until user re-engages'); } catch (e) {}
+      return;
+    }
     // S18 (Apr 23 2026) — REVERTED to original simple doSpeak.
     // Max kept reporting Nadia cut off after 2-3 words. The extra machinery
     // I added (nadia-stop-all broadcast, prior-audio pause, speechSynthesis
@@ -520,6 +544,9 @@ export default function AIGreeter({ user, userProfile, users, tickets, invoices,
       // S17.6 — re-check muted after the async fetch. If user toggled mute
       // while we were waiting, do not play the blob.
       if (muted) return;
+      // S22.13 — same for paused: user may have tapped Stop while we were
+      // waiting for the blob. Don't play it.
+      if (pausedRef.current) return;
       var url = URL.createObjectURL(blob);
       var audio = new Audio(url);
       audioRef.current = audio;
@@ -550,6 +577,9 @@ export default function AIGreeter({ user, userProfile, users, tickets, invoices,
     // S22 (Apr 23 2026) — Hardened against every failure mode that was
     // crashing Nadia when users clicked buttons mid-conversation.
     // Every sub-step is its own try/catch so one problem doesn't cascade.
+    // S22.13 — Also enter "paused" state. User tapping stop means "stop
+    // talking and DON'T start again on your own." She stays paused until
+    // the user types, taps the mic, or says "Hey Nadia".
     try {
       if (audioRef.current) {
         try { audioRef.current.pause(); } catch (e) {}
@@ -564,6 +594,7 @@ export default function AIGreeter({ user, userProfile, users, tickets, invoices,
     } catch (e) {}
     try { setSpeaking(false); } catch (e) {}
     try { setCurrentAudio(null); } catch (e) {}
+    try { setPaused(true); pausedRef.current = true; } catch (e) {}
     try { window.dispatchEvent(new CustomEvent('nadia-tts-stop')); } catch (e) {}
   };
 
@@ -592,6 +623,9 @@ export default function AIGreeter({ user, userProfile, users, tickets, invoices,
       // User said a wake-word command — this IS a user action, so it's
       // treated like pressing a button. Stop current speech, then process.
       stopSpeech();
+      // S22.13 — "Hey Nadia" is an explicit re-engagement. Clear paused so
+      // her response plays aloud. (stopSpeech set paused=true; we override.)
+      try { setPaused(false); pausedRef.current = false; } catch (e) {}
       // S18.1 — read from ref so we ALWAYS have the latest messages/doSend
       if (doSendRef.current) doSendRef.current(cmd, false);
     };
@@ -601,6 +635,8 @@ export default function AIGreeter({ user, userProfile, users, tickets, invoices,
       var q = ev && ev.detail && ev.detail.question;
       if (!q) return;
       stopSpeech();
+      // S22.13 — user clicked a decision chip → they want a voice answer.
+      try { setPaused(false); pausedRef.current = false; } catch (e) {}
       if (doSendRef.current) doSendRef.current(q, false);
     };
     // S18.2 — acknowledgment on wake word. When VoiceController detects
@@ -610,6 +646,10 @@ export default function AIGreeter({ user, userProfile, users, tickets, invoices,
     var onWakeAck = function() {
       if (!enabled) return;
       if (muted) return;
+      // S22.13 — un-pause on wake word so the ack AND the upcoming
+      // response are audible. Without this, the ack would be swallowed
+      // by the paused guard in doSpeak.
+      try { setPaused(false); pausedRef.current = false; } catch (e) {}
       // Use the same doSpeak pipeline so it respects mute + TTS settings.
       // Very short phrase so it doesn't collide with the user's incoming
       // command (Web Speech tolerates a brief overlap).
@@ -654,6 +694,9 @@ export default function AIGreeter({ user, userProfile, users, tickets, invoices,
     // Pre-flight: barge in on any currently-speaking Nadia so the two audio paths
     // don't collide and so the user gets immediate feedback that the mic is engaged.
     if (speaking) { try { stopSpeech(); } catch (e) {} }
+    // S22.13 — tapping the mic = explicit re-engagement. Clear paused so
+    // her reply will be audible when it comes back.
+    try { setPaused(false); pausedRef.current = false; } catch (e) {}
 
     // Clean up any stale recognition instance from a previous click. This is
     // the #1 cause of "mic doesn't work the first few times" — the browser
@@ -878,6 +921,9 @@ export default function AIGreeter({ user, userProfile, users, tickets, invoices,
     if (speaking) { try { stopSpeech(); } catch (e) {} }
     // Live-mic and recorder are mutually exclusive.
     if (listening) { try { stopListen(); } catch (e) {} }
+    // S22.13 — tapping Record = explicit re-engagement. Un-pause so the
+    // response she gives back is audible.
+    try { setPaused(false); pausedRef.current = false; } catch (e) {}
 
     if (typeof navigator === 'undefined' || !navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
       pushRecordError(
@@ -1305,7 +1351,14 @@ export default function AIGreeter({ user, userProfile, users, tickets, invoices,
     setLoading(false);
   };
 
-  var handleSubmit = function() { if (!input.trim()) return; stopSpeech(); doSend(input.trim()); };
+  var handleSubmit = function() {
+    if (!input.trim()) return;
+    stopSpeech();
+    // S22.13 — user typed a message → they're engaging Nadia. Clear paused
+    // so her reply plays aloud. (stopSpeech always sets paused=true.)
+    try { setPaused(false); pausedRef.current = false; } catch (e) {}
+    doSend(input.trim());
+  };
 
   // S18.1 — keep the ref fresh so hey-bob listeners read the latest doSend
   // (which closes over the latest messages). Without this, voice commands
@@ -1479,15 +1532,32 @@ export default function AIGreeter({ user, userProfile, users, tickets, invoices,
       {/* Input */}
       <div className="px-3 pb-3">
         {/* Floating STOP SPEAKING bar — big and obvious while Nadia is talking.
-            Tapping it (or the mic) interrupts her immediately. */}
+            Tapping it (or the mic) interrupts her immediately.
+            S22.13 — tapping this ALSO enters "paused" mode: she stays silent
+            until the user engages her (type, tap mic, say "Hey Nadia"). */}
         {speaking && (
           <button
             onClick={stopSpeech}
             className="w-full mb-2 px-3 py-2 rounded-xl bg-red-500 hover:bg-red-600 text-white text-xs font-bold flex items-center justify-center gap-2 shadow-lg animate-pulse"
-            title="Stop Nadia from speaking"
+            title="Stop Nadia from speaking (she stays quiet until you engage her)"
           >
             <span>⏹</span>
             <span>{useLang === 'ar' ? 'إيقاف المساعد' : 'Tap to stop Nadia'}</span>
+          </button>
+        )}
+        {/* S22.13 — Paused indicator. Shown when user tapped Stop and Nadia
+            is NOT currently speaking. Explains her silence and gives a
+            one-tap "wake her up" affordance. */}
+        {paused && !speaking && !listening && !recording && (
+          <button
+            onClick={function() {
+              try { setPaused(false); pausedRef.current = false; } catch (e) {}
+            }}
+            className="w-full mb-2 px-3 py-2 rounded-xl bg-slate-700 hover:bg-slate-600 text-slate-200 text-xs font-semibold flex items-center justify-center gap-2 border border-slate-600"
+            title={useLang === 'ar' ? 'ناديا صامتة — اضغط لإيقاظها، أو اكتب رسالة، أو قل مرحبا ناديا' : 'Nadia is paused — tap to wake her, or just type/say "Hey Nadia"'}
+          >
+            <span>🤫</span>
+            <span>{useLang === 'ar' ? 'ناديا صامتة — اضغط لإيقاظها' : 'Nadia is paused — tap to wake her'}</span>
           </button>
         )}
         {/* Listening status — big obvious STOP & SEND button. Users were missing

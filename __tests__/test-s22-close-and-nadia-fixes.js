@@ -423,6 +423,82 @@ test('S22.45 Template download button is available directly on the Inventory tab
     'template header includes the new UoM + linear density columns');
 });
 
+// ==== S22.13 — "Paused" state for Nadia ====
+
+test('S22.46 Paused state separate from muted', function() {
+  var greet = fs.readFileSync(path.join(REPO, 'src/components/AIGreeter.jsx'), 'utf8');
+  assert(/var \[paused, setPaused\] = useState\(false\)/.test(greet),
+    'paused state defined');
+  assert(/pausedRef = useRef\(false\)/.test(greet),
+    'pausedRef for handlers');
+  assert(/pausedRef\.current = paused/.test(greet),
+    'ref kept in sync with state');
+});
+
+test('S22.47 doSpeak is a no-op while paused', function() {
+  var greet = fs.readFileSync(path.join(REPO, 'src/components/AIGreeter.jsx'), 'utf8');
+  // Must check paused BEFORE the fetch (cheap) AND again after the blob
+  // comes back (in case user paused during the async wait).
+  assert(/if \(pausedRef\.current\) \{[\s\S]{0,200}paused — skipping TTS playback/.test(greet),
+    'doSpeak guards on paused at entry');
+  assert(/S22\.13 — same for paused[\s\S]{0,100}if \(pausedRef\.current\) return/.test(greet),
+    'doSpeak re-checks paused after async fetch');
+});
+
+test('S22.48 stopSpeech sets paused=true (so she stays quiet after Stop)', function() {
+  var greet = fs.readFileSync(path.join(REPO, 'src/components/AIGreeter.jsx'), 'utf8');
+  // Scoped to the stopSpeech body
+  var m = greet.match(/var stopSpeech = function\(\) \{[\s\S]*?\n  \};/);
+  assert(m, 'stopSpeech body found');
+  assert(/setPaused\(true\); pausedRef\.current = true/.test(m[0]),
+    'stopSpeech enters paused state');
+});
+
+test('S22.49 Tab-change greeting respects paused (does not speak if user paused)', function() {
+  var greet = fs.readFileSync(path.join(REPO, 'src/components/AIGreeter.jsx'), 'utf8');
+  // Two guards in the tab-greet effect: one before the setTimeout, one
+  // inside the callback (in case user paused during the 600ms delay).
+  assert(/user tapped stop[\s\S]{0,150}if \(pausedRef\.current\) return/.test(greet),
+    'tab-greet skipped when paused');
+  assert(/Re-check paused right before firing[\s\S]{0,100}if \(pausedRef\.current\) return/.test(greet),
+    're-check paused before firing after delay');
+});
+
+test('S22.50 "Hey Nadia" wake word clears paused', function() {
+  var greet = fs.readFileSync(path.join(REPO, 'src/components/AIGreeter.jsx'), 'utf8');
+  // Scoped to onBobCommand body
+  var m = greet.match(/var onBobCommand = function\(ev\) \{[\s\S]*?\n    \};/);
+  assert(m, 'onBobCommand found');
+  assert(/setPaused\(false\); pausedRef\.current = false/.test(m[0]),
+    'wake word un-pauses');
+});
+
+test('S22.51 Typing a message clears paused', function() {
+  var greet = fs.readFileSync(path.join(REPO, 'src/components/AIGreeter.jsx'), 'utf8');
+  // handleSubmit explicitly un-pauses
+  assert(/handleSubmit = function\(\) \{[\s\S]{0,400}setPaused\(false\); pausedRef\.current = false/.test(greet),
+    'handleSubmit un-pauses before calling doSend');
+});
+
+test('S22.52 Tapping the mic (listen or record) clears paused', function() {
+  var greet = fs.readFileSync(path.join(REPO, 'src/components/AIGreeter.jsx'), 'utf8');
+  // startListen body contains the un-pause
+  var sl = greet.match(/var startListen = async function\(\) \{[\s\S]*?\n  \};/);
+  assert(sl && /setPaused\(false\); pausedRef\.current = false/.test(sl[0]),
+    'startListen un-pauses');
+  // startRecording body contains the un-pause too
+  var sr = greet.match(/var startRecording = async function\(\) \{[\s\S]*?try \{ setPaused\(false\); pausedRef\.current = false; \} catch/);
+  assert(sr, 'startRecording un-pauses before doing anything else');
+});
+
+test('S22.53 Paused indicator button offers a one-tap wake up', function() {
+  var greet = fs.readFileSync(path.join(REPO, 'src/components/AIGreeter.jsx'), 'utf8');
+  assert(/Nadia is paused — tap to wake her/.test(greet),
+    'visible paused indicator with wake-up button');
+  assert(/paused && !speaking && !listening && !recording/.test(greet),
+    'indicator shown only when paused AND nothing else is happening');
+});
+
 test('S22.37 Breakdown replaced with single unified table + dimension switcher', function() {
   var page = fs.readFileSync(path.join(REPO, 'src/app/page.jsx'), 'utf8');
   // Old: 3 side-by-side cards (the "bubble buckets"). New: one table with

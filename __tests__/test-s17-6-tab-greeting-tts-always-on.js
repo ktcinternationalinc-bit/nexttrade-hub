@@ -68,8 +68,10 @@ test('S17.6.T4 Tab-greeting fires at most once per tab via ref comparison', func
 });
 
 test('S17.6.T5 Tab-greeting is deferred slightly so tab paints first', function() {
-  // The setTimeout delay for tab greeting
-  var m = greeter.match(/useEffect\(function\(\) \{[\s\S]{0,800}lastGreetedTabRef[\s\S]{0,500}setTimeout\(function\(\) \{\s*doSend\(null, 'tab_greeting'\);\s*\}, 600\)/);
+  // The setTimeout delay for tab greeting. S22.13 added a paused re-check
+  // inside the callback, so the regex can't require doSend to be the very
+  // first statement anymore.
+  var m = greeter.match(/useEffect\(function\(\) \{[\s\S]{0,1000}lastGreetedTabRef[\s\S]{0,800}setTimeout\(function\(\) \{[\s\S]{0,400}doSend\(null, 'tab_greeting'\);\s*\}, 600\)/);
   assert(m, 'tab-greeting must setTimeout 600ms before firing doSend');
 });
 
