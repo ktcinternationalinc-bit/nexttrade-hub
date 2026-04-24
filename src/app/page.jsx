@@ -531,8 +531,18 @@ export default function App() {
   // Session-persistent greeted state: set greeterHasGreeted=true if
   // the current login session already has greeted_at stamped. Prevents
   // re-greeting when user navigates back to dashboard from another tab.
+  // S22.7 (Apr 23 2026) — Added localStorage fallback. If the DB doesn't
+  // have user_sessions.greeted_at (older schema), the query silently fails
+  // and Nadia re-greets on every refresh. localStorage, keyed per-day, is
+  // a belt-and-suspenders safety net.
   useEffect(() => {
     if (!userProfile?.id || greeterHasGreeted) return;
+    // Local check first — fast path, no round trip
+    try {
+      const todayKey = new Date().toISOString().substring(0, 10);
+      const stamped = localStorage.getItem('nadia.greeted.' + userProfile.id + '.' + todayKey);
+      if (stamped) { setGreeterHasGreeted(true); return; }
+    } catch (_) {}
     (async () => {
       try {
         const { data: sess } = await supabase
@@ -550,6 +560,14 @@ export default function App() {
   // subsequent dashboard re-mounts skip the greeting.
   const handleGreeted = useCallback(async () => {
     setGreeterHasGreeted(true);
+    // S22.7 — Stamp localStorage immediately so even if the DB write fails
+    // or the column doesn't exist, the next dashboard visit won't re-greet.
+    try {
+      if (userProfile?.id) {
+        const todayKey = new Date().toISOString().substring(0, 10);
+        localStorage.setItem('nadia.greeted.' + userProfile.id + '.' + todayKey, new Date().toISOString());
+      }
+    } catch (_) {}
     if (!userProfile?.id) return;
     try {
       await supabase
@@ -2755,9 +2773,16 @@ export default function App() {
   // leave the system in a half-reversed state — either everything succeeds
   // or the check stays marked collected with an error toast.
   const handleUncollectCheck = async (check, reason) => {
-    if (!check) return;
+    // S22.7 (Apr 23 2026) — Hardened uncollect. Previous failures were
+    // typically silent: `physical_check_returned` column missing in some
+    // DBs would throw, or a toast would suppress the error. Now every
+    // step logs to the browser console with [uncollect] prefix so the
+    // user can inspect failures in F12.
+    console.log('[uncollect] start', { checkId: check && check.id, status: check && check.status });
+    if (!check) { console.warn('[uncollect] no check given'); return; }
     if (check.status !== 'collected') {
-      toast.error('Only collected checks can be uncollected');
+      console.warn('[uncollect] check is not collected — status=' + check.status);
+      try { toast.error('Only collected checks can be uncollected (current status: ' + check.status + ')'); } catch (_) { alert('Only collected checks can be uncollected.'); }
       return;
     }
 
@@ -2771,65 +2796,89 @@ export default function App() {
       '  • Recalculate the invoice\n' +
       '  • Set check back to Pending\n\n' +
       'Are you sure?';
-    if (!confirm(confirmMsg)) return;
+    if (!confirm(confirmMsg)) { console.log('[uncollect] user cancelled'); return; }
+
+    const actorId = (userProfile && userProfile.id) || (user && user.id) || null;
 
     try {
       // Step 1 — find the linked treasury row
       let treasuryRow = null;
       if (check.linked_treasury_id) {
+        console.log('[uncollect] lookup by linked_treasury_id', check.linked_treasury_id);
         const tRes = await supabase.from('treasury')
           .select('id, source_check_id, payment_source, cash_in, linked_invoice_id')
           .eq('id', check.linked_treasury_id)
           .maybeSingle();
+        if (tRes.error) console.warn('[uncollect] linked_treasury_id query error:', tRes.error.message);
         if (tRes.data) treasuryRow = tRes.data;
       }
-      // Fallback — look up by source_check_id
       if (!treasuryRow) {
+        console.log('[uncollect] fallback lookup by source_check_id', check.id);
         const fbRes = await supabase.from('treasury')
           .select('id, source_check_id, payment_source, cash_in, linked_invoice_id')
           .eq('source_check_id', check.id)
           .maybeSingle();
+        if (fbRes.error) console.warn('[uncollect] source_check_id query error:', fbRes.error.message);
         if (fbRes.data) treasuryRow = fbRes.data;
       }
+      console.log('[uncollect] treasuryRow resolved:', treasuryRow);
 
       // Step 2 — decide: delete vs unstamp
       if (treasuryRow) {
         const wasCreatedByCollect = treasuryRow.source_check_id === check.id;
         if (wasCreatedByCollect) {
-          // Delete the treasury row we created
+          console.log('[uncollect] deleting treasury row', treasuryRow.id);
           const delRes = await supabase.from('treasury').delete().eq('id', treasuryRow.id);
           if (delRes.error) throw new Error('Could not delete treasury row: ' + delRes.error.message);
         } else {
-          // Unstamp an existing treasury row
-          await supabase.from('treasury').update({
+          console.log('[uncollect] unstamping treasury row', treasuryRow.id);
+          const upRes = await supabase.from('treasury').update({
             source_check_id: null,
             payment_source: null,
           }).eq('id', treasuryRow.id);
+          if (upRes.error) throw new Error('Could not unstamp treasury row: ' + upRes.error.message);
         }
 
         // Step 3 — unlink any bank transactions that were matched to this treasury
-        await supabase.from('egypt_bank_transactions').update({
+        console.log('[uncollect] unlinking bank transactions matched to treasury', treasuryRow.id);
+        const bankRes = await supabase.from('egypt_bank_transactions').update({
           matched_treasury_id: null,
           matched_at: null,
           matched_by: null,
         }).eq('matched_treasury_id', treasuryRow.id);
+        if (bankRes.error) console.warn('[uncollect] bank unlink warning (non-fatal):', bankRes.error.message);
       }
 
       // Step 4 — recalc invoice if the check was linked to one
       const invoiceId = check.invoice_id || (treasuryRow && treasuryRow.linked_invoice_id) || null;
       if (invoiceId) {
+        console.log('[uncollect] recalc invoice', invoiceId);
         try { await recalcInvoiceCollected(invoiceId); } catch (e) {
-          console.warn('Invoice recalc after uncollect failed:', e.message);
+          console.warn('[uncollect] Invoice recalc after uncollect failed:', e.message);
         }
       }
 
-      // Step 5 — flip the check back to pending, clear collection fields
-      await dbUpdate('checks', check.id, {
+      // Step 5 — flip the check back to pending.
+      // S22.7 — Defensive: if the DB doesn't have physical_check_returned
+      // column (older schemas), retry WITHOUT it so the uncollect still
+      // succeeds. This is the most likely cause of prior silent failures.
+      const baseChanges = {
         status: 'pending',
         collection_date: null,
         linked_treasury_id: null,
-        physical_check_returned: false,
-      }, (userProfile && userProfile.id) || (user && user.id) || null);
+      };
+      try {
+        console.log('[uncollect] updating check with physical_check_returned=false');
+        await dbUpdate('checks', check.id, Object.assign({}, baseChanges, { physical_check_returned: false }), actorId);
+      } catch (e) {
+        console.warn('[uncollect] full update failed (probably missing column), retrying minimal:', e.message);
+        try {
+          await dbUpdate('checks', check.id, baseChanges, actorId);
+        } catch (e2) {
+          console.error('[uncollect] minimal check update also failed:', e2.message);
+          throw new Error('Could not flip check back to pending: ' + e2.message);
+        }
+      }
 
       // Step 6 — audit trail (optional: write a note)
       const auditNote = 'Check uncollected by ' + ((userProfile && userProfile.name) || 'user') +
@@ -2843,13 +2892,15 @@ export default function App() {
           log_date: new Date().toISOString().substring(0, 10),
           auto_generated: true,
         });
-      } catch (e) { /* non-fatal */ }
+      } catch (e) { console.warn('[uncollect] daily_log insert failed (non-fatal):', e.message); }
 
-      toast.success('Check uncollected successfully ↩︎');
+      console.log('[uncollect] SUCCESS — check', check.id);
+      try { toast.success('Check uncollected successfully ↩︎'); } catch (_) { alert('Check uncollected successfully.'); }
       await loadAllData();
     } catch (err) {
-      console.error('Uncollect error:', err);
-      toast.error('Uncollect failed: ' + (err.message || 'unknown error'));
+      console.error('[uncollect] FAILED', err);
+      try { toast.error('Uncollect failed: ' + (err.message || 'unknown error')); } catch (_) {}
+      alert('⚠️ Uncollect failed.\n\nError: ' + (err.message || 'unknown error') + '\n\nOpen F12 → Console for details.');
     }
   };
 
@@ -7253,6 +7304,10 @@ export default function App() {
               const topPerUser = {};
               (dashTickets || []).forEach(t => {
                 if (!t.assigned_to || t.assignee_priority == null) return;
+                // S22.8 — Priority 1..999 = true ranked. 1000+ = unranked-ordered.
+                // The "Today" strip should show the #1 from the ranked pile only —
+                // the unranked pile is an ordered backlog, not "what they're on today."
+                if (Number(t.assignee_priority) >= 1000) return;
                 const s = (t.status || '').toLowerCase();
                 if (s === 'closed' || s === 'done' || s === 'resolved' || s === 'cancelled') return;
                 const current = topPerUser[t.assigned_to];
@@ -9333,6 +9388,71 @@ export default function App() {
                   title="Bulk import inventory items from Excel">
                   📥 Import
                 </button>
+                {/* S22.12 (Apr 23 2026) — Direct Download Template button on
+                    the Inventory tab itself. Previously the template was
+                    only accessible from inside the Import modal. Per Max:
+                    the template should be a link downloadable from the
+                    portal. This generates the same XLSX as the import
+                    modal's button so the columns are always in sync with
+                    what the importer expects. */}
+                <button onClick={() => {
+                  try {
+                    var cols = [
+                      'Product ID','Reference #','Product Type','Subcategory',
+                      'Description (Arabic)','Description (English)',
+                      'Color (Arabic)','Color (English)',
+                      'Inbound Quantity','Original Quantity','Current Quantity','Expected Quantity',
+                      'Unit of Measure','Linear Density (g/m)',
+                      'Gross Weight (kg)','Net Weight (kg)','Unit Price','Roll Count',
+                      'Shipment Reference','Inbound Date',
+                      'Purchase Cost','Purchase Currency','Customs Cost','Customs Currency',
+                      'Shipping Cost','Shipping Currency','Other Cost','Other Currency',
+                      'FX Rate','Notes',
+                    ];
+                    var examples = [
+                      ['SKU-001','REF-2026-001','Textiles','Cotton','قماش قطن أحمر','Red Cotton Fabric','أحمر','Red',200,200,200,0,'yd',420,150,140,25,10,'SH-2026-01','2026-04-20',1200,'USD',5000,'EGP',800,'USD',0,'EGP',50,'First batch — opening balance'],
+                      ['SKU-001','REF-2026-015','Textiles','Cotton','قماش قطن أحمر','Red Cotton Fabric','أحمر','Red',80,'','',0,'yd',420,150,140,25,4,'SH-2026-02','2026-05-10',500,'USD',2000,'EGP',300,'USD',0,'EGP',50,'Restock — inbound only'],
+                      ['SKU-002','REF-2026-002','Leather','Genuine','جلد طبيعي بني','Brown Leather','بني','Brown',50,50,50,60,'kg','',30,28,80,5,'SH-2026-01','2026-04-20',2500,'USD',3000,'EGP',400,'USD',0,'EGP',50,'Expected 60, got 50'],
+                    ];
+                    var aoa = [cols].concat(examples);
+                    var ws = XLSX.utils.aoa_to_sheet(aoa);
+                    ws['!cols'] = cols.map(function(c) { return { wch: Math.max(14, c.length + 2) }; });
+                    var instr = [
+                      ['KTC Inventory Import Template'],
+                      [''],
+                      ['HOW TO USE'],
+                      ['1. Keep the header row. Fill in one row per product / inbound below.'],
+                      ['2. Save as .xlsx and upload through Inventory → Import.'],
+                      [''],
+                      ['THE THREE QUANTITY COLUMNS'],
+                      ['- Inbound Quantity — ALWAYS the primary input. How much arrived this time.'],
+                      ['- Original Quantity — only used the first time a Product ID is created.'],
+                      ['- Current Quantity — only used the first time a Product ID is created.'],
+                      [''],
+                      ['UNIT OF MEASURE (S22.11)'],
+                      ['- Pick kg, ton, m (meter), yd (yard), roll, piece, pair, or box.'],
+                      ['- For m/yd products, also set Linear Density (g/m) to enable'],
+                      ['  apples-to-apples per-kg P&L math. Example: if 1 meter of your'],
+                      ['  fabric weighs 420 grams, enter 420.'],
+                      [''],
+                      ['EXPECTED QUANTITY'],
+                      ['- Optional. Fill in to compare expected-vs-actual in the report.'],
+                      ['- Does NOT affect your live inventory — stored in a separate table.'],
+                    ];
+                    var iws = XLSX.utils.aoa_to_sheet(instr);
+                    iws['!cols'] = [{ wch: 80 }];
+                    var wb = XLSX.utils.book_new();
+                    XLSX.utils.book_append_sheet(wb, ws, 'Inventory');
+                    XLSX.utils.book_append_sheet(wb, iws, 'Instructions');
+                    XLSX.writeFile(wb, 'KTC_Inventory_Import_Template.xlsx');
+                  } catch (err) {
+                    alert('Could not generate template: ' + (err.message || 'unknown'));
+                  }
+                }}
+                  className="px-3 py-1.5 bg-white border border-emerald-300 text-emerald-700 hover:bg-emerald-50 rounded-lg text-xs font-bold shadow-sm"
+                  title="Download the Excel template for bulk import (with instructions + examples)">
+                  ⬇ Template
+                </button>
                 <button onClick={() => setFormData({...formData, showInvHistorical: true})}
                   className="px-3 py-1.5 bg-slate-200 hover:bg-slate-300 text-slate-700 rounded-lg text-xs font-bold"
                   title="See quantity received as of a specific date">
@@ -9385,62 +9505,103 @@ export default function App() {
                 </div>
               </div>
 
-              {/* S20 — Breakdown panel: group filtered products by type, subcategory, color
-                  so you can see what you have. Toggleable from the header row. */}
+              {/* S22.9 — Cleaner breakdown: single unified table instead of
+                  three side-by-side "bubble bucket" cards. Max: "I don't
+                  really like the bubble buckets. Make it better."
+                  Now it's ONE sortable table with a tab selector for the
+                  grouping dimension (Type / Subcategory / Color). Fewer
+                  visual containers, more data density, easier to scan. */}
               {formData.showInvBreakdown && (() => {
-                const groupBy = (keyFn, label) => {
-                  const map = {};
-                  filtered.forEach(p => {
-                    const k = keyFn(p) || '(none)';
-                    if (!map[k]) map[k] = { key: k, count: 0, orig: 0, curr: 0, value: 0 };
-                    map[k].count += 1;
-                    map[k].orig += Number(p.original_quantity || p.roll_count || 0);
-                    map[k].curr += Number(p.current_quantity || p.roll_count || 0);
-                    map[k].value += Number(p.current_quantity || p.roll_count || 0) * Number(p.unit_price || 0);
-                  });
-                  return { label, rows: Object.values(map).sort((a, b) => b.curr - a.curr) };
+                const activeDim = formData.invBreakdownDim || 'type';
+                const keyFnByDim = {
+                  type: p => p.product_type,
+                  sub: p => p.subcategory,
+                  color: p => p.color_en || p.color,
                 };
-                const byType = groupBy(p => p.product_type, 'Product Type');
-                const bySub = groupBy(p => p.subcategory, 'Subcategory');
-                const byColor = groupBy(p => p.color_en || p.color, 'Color');
-                const renderGroup = (g) => (
-                  <div className="bg-white rounded-xl border border-slate-100 overflow-hidden" key={g.label}>
-                    <div className="bg-gradient-to-r from-indigo-50 to-purple-50 px-3 py-2 border-b border-slate-100">
-                      <div className="text-xs font-bold">{g.label}</div>
-                      <div className="text-[9px] text-slate-500">{g.rows.length} group{g.rows.length === 1 ? '' : 's'}</div>
+                const labelByDim = { type: 'Product Type', sub: 'Subcategory', color: 'Color' };
+                const keyFn = keyFnByDim[activeDim];
+                const map = {};
+                filtered.forEach(p => {
+                  const k = keyFn(p) || '(none)';
+                  if (!map[k]) map[k] = { key: k, count: 0, orig: 0, curr: 0, value: 0 };
+                  map[k].count += 1;
+                  map[k].orig += Number(p.original_quantity || p.roll_count || 0);
+                  map[k].curr += Number(p.current_quantity || p.roll_count || 0);
+                  map[k].value += Number(p.current_quantity || p.roll_count || 0) * Number(p.unit_price || 0);
+                });
+                const rows = Object.values(map).sort((a, b) => b.curr - a.curr);
+                const totals = rows.reduce((a, r) => ({
+                  count: a.count + r.count, orig: a.orig + r.orig, curr: a.curr + r.curr, value: a.value + r.value,
+                }), { count: 0, orig: 0, curr: 0, value: 0 });
+                return (
+                  <div className="mb-4 bg-white rounded-xl border border-slate-200 overflow-hidden">
+                    <div className="px-4 py-3 border-b border-slate-100 flex items-center justify-between flex-wrap gap-2">
+                      <div className="flex items-center gap-3">
+                        <h3 className="text-sm font-bold text-slate-800">Inventory Breakdown</h3>
+                        <span className="text-[10px] text-slate-500">{rows.length} group{rows.length === 1 ? '' : 's'} · {totals.count} products</span>
+                      </div>
+                      {/* Dimension selector — pill row BUT tight, not bubbly */}
+                      <div className="flex rounded-md overflow-hidden border border-slate-200 text-[11px]">
+                        {['type', 'sub', 'color'].map(d => (
+                          <button key={d}
+                            onClick={() => setFormData({...formData, invBreakdownDim: d})}
+                            className={'px-3 py-1 font-semibold transition ' + (activeDim === d ? 'bg-slate-800 text-white' : 'bg-white text-slate-600 hover:bg-slate-50')}>
+                            {labelByDim[d]}
+                          </button>
+                        ))}
+                      </div>
                     </div>
-                    <div className="overflow-auto max-h-[280px]">
-                      <table className="w-full text-[11px] border-collapse">
-                        <thead className="sticky top-0 bg-slate-50"><tr>
-                          <th className="px-2 py-1.5 text-left">{g.label}</th>
-                          <th className="px-2 py-1.5 text-right">#</th>
-                          <th className="px-2 py-1.5 text-right">Original</th>
-                          <th className="px-2 py-1.5 text-right">Current</th>
-                          <th className="px-2 py-1.5 text-right">Value</th>
-                        </tr></thead>
+                    <div className="overflow-auto max-h-[360px]">
+                      <table className="w-full text-xs border-collapse">
+                        <thead className="sticky top-0 bg-slate-50 z-[1]">
+                          <tr className="text-slate-500 text-[10px] uppercase tracking-wide">
+                            <th className="px-3 py-2 text-left font-semibold">{labelByDim[activeDim]}</th>
+                            <th className="px-3 py-2 text-right font-semibold">Products</th>
+                            <th className="px-3 py-2 text-right font-semibold">Original</th>
+                            <th className="px-3 py-2 text-right font-semibold">Current</th>
+                            <th className="px-3 py-2 text-right font-semibold">Est. Value</th>
+                            <th className="px-3 py-2 text-right font-semibold w-[90px]">% Left</th>
+                          </tr>
+                        </thead>
                         <tbody>
-                          {g.rows.map(r => (
-                            <tr key={r.key} className="border-b border-slate-50 hover:bg-slate-50">
-                              <td className="px-2 py-1 font-semibold truncate max-w-[140px]" title={r.key}>{r.key}</td>
-                              <td className="px-2 py-1 text-right text-slate-500">{r.count}</td>
-                              <td className="px-2 py-1 text-right text-blue-600">{r.orig.toLocaleString()}</td>
-                              <td className="px-2 py-1 text-right text-emerald-600 font-bold">{r.curr.toLocaleString()}</td>
-                              <td className="px-2 py-1 text-right text-purple-600">{fE(r.value)}</td>
-                            </tr>
-                          ))}
-                          {g.rows.length === 0 && (
-                            <tr><td colSpan="5" className="text-center text-slate-400 py-3 text-[10px]">No groups.</td></tr>
+                          {rows.map(r => {
+                            const pctLeft = r.orig > 0 ? Math.round((r.curr / r.orig) * 100) : 0;
+                            return (
+                              <tr key={r.key} className="border-b border-slate-100 hover:bg-slate-50">
+                                <td className="px-3 py-1.5 font-semibold text-slate-800 truncate max-w-[200px]" title={r.key}>{r.key}</td>
+                                <td className="px-3 py-1.5 text-right text-slate-500">{r.count}</td>
+                                <td className="px-3 py-1.5 text-right text-slate-600">{r.orig.toLocaleString()}</td>
+                                <td className="px-3 py-1.5 text-right font-bold text-emerald-600">{r.curr.toLocaleString()}</td>
+                                <td className="px-3 py-1.5 text-right text-slate-700">{fE(r.value)}</td>
+                                <td className="px-3 py-1.5 text-right">
+                                  <div className="inline-flex items-center gap-1.5">
+                                    <div className="w-12 h-1 bg-slate-200 rounded overflow-hidden">
+                                      <div className="h-full rounded" style={{ width: pctLeft + '%', background: pctLeft >= 50 ? '#10b981' : pctLeft >= 20 ? '#f59e0b' : '#ef4444' }} />
+                                    </div>
+                                    <span className="text-[10px] text-slate-500 tabular-nums w-7 text-right">{pctLeft}%</span>
+                                  </div>
+                                </td>
+                              </tr>
+                            );
+                          })}
+                          {rows.length === 0 && (
+                            <tr><td colSpan="6" className="text-center text-slate-400 py-6 text-xs">No products in current filter.</td></tr>
                           )}
                         </tbody>
+                        {rows.length > 0 && (
+                          <tfoot>
+                            <tr className="bg-slate-50 border-t-2 border-slate-200 font-bold text-xs">
+                              <td className="px-3 py-2 text-slate-700">Total</td>
+                              <td className="px-3 py-2 text-right">{totals.count}</td>
+                              <td className="px-3 py-2 text-right">{totals.orig.toLocaleString()}</td>
+                              <td className="px-3 py-2 text-right text-emerald-700">{totals.curr.toLocaleString()}</td>
+                              <td className="px-3 py-2 text-right">{fE(totals.value)}</td>
+                              <td className="px-3 py-2 text-right text-slate-400">—</td>
+                            </tr>
+                          </tfoot>
+                        )}
                       </table>
                     </div>
-                  </div>
-                );
-                return (
-                  <div className="grid grid-cols-1 md:grid-cols-3 gap-3 mb-4">
-                    {renderGroup(byType)}
-                    {renderGroup(bySub)}
-                    {renderGroup(byColor)}
                   </div>
                 );
               })()}
@@ -9509,26 +9670,46 @@ export default function App() {
                       <th className="px-2 py-2 text-[10px]">Subcategory</th>
                       <th className="px-2 py-2 text-[10px] text-right">Original</th>
                       <th className="px-2 py-2 text-[10px] text-right">Current</th>
-                      <th className="px-2 py-2 text-[10px] text-right">Weight</th>
+                      <th className="px-2 py-2 text-[10px] text-right" title="Number of inbound batches">Batches</th>
+                      <th className="px-2 py-2 text-[10px] text-right" title="Number of journal adjustments">Adj.</th>
                       <th className="px-2 py-2 text-[10px] text-right">Price</th>
                       <th className="px-2 py-2 text-[10px]">Status</th>
                     </tr></thead>
                     <tbody>
-                      {filtered.map(p => (
-                        <tr key={p.id} className="border-b border-slate-50 hover:bg-slate-50 cursor-pointer"
-                          onClick={() => setFormData({...formData, selectedProduct: p})}>
+                      {filtered.map(p => {
+                        const batchCount = (invInbounds || []).filter(ib => ib.product_id === p.product_id).length;
+                        const adjCount = (invAdjustments || []).filter(a => a.product_id === p.product_id).length;
+                        return (
+                        <tr key={p.id} className="border-b border-slate-50 hover:bg-indigo-50/50 cursor-pointer group"
+                          onClick={() => setFormData({...formData, selectedProduct: p})}
+                          title="Click for full history (batches + adjustments)">
                           <td className="px-2 py-1.5">
                             {p.photo_url ? <img src={p.photo_url} className="w-10 h-10 rounded object-cover" /> : <span className="text-slate-300 text-lg">📦</span>}
                           </td>
                           <td className="px-2 py-1.5">
-                            <div className="text-xs font-bold text-blue-600">{p.reference_number || p.product_id}</div>
+                            <div className="text-xs font-bold text-blue-600 group-hover:underline">{p.reference_number || p.product_id}</div>
                             <div className="text-[10px] text-slate-500">{lang === 'en' && p.description_en ? p.description_en : p.description}</div>
                           </td>
                           <td className="px-2 py-1.5">{p.product_type && <span className="px-1.5 py-0.5 bg-indigo-100 text-indigo-700 rounded text-[9px]">{p.product_type}</span>}</td>
                           <td className="px-2 py-1.5">{p.subcategory && <span className="px-1.5 py-0.5 bg-amber-100 text-amber-700 rounded text-[9px]">{p.subcategory}</span>}</td>
                           <td className="px-2 py-1.5 text-xs text-right">{Number(p.original_quantity || p.roll_count || 0).toLocaleString()}</td>
                           <td className="px-2 py-1.5 text-xs text-right font-bold text-emerald-600">{Number(p.current_quantity || p.roll_count || 0).toLocaleString()}</td>
-                          <td className="px-2 py-1.5 text-xs text-right">{fmt(p.net_weight)} kg</td>
+                          <td className="px-2 py-1.5 text-xs text-right">
+                            {batchCount > 0 ? (
+                              <span className="inline-flex items-center gap-1 text-slate-700 font-semibold">
+                                <span>{batchCount}</span>
+                                <span className="text-[9px] text-indigo-500">▸</span>
+                              </span>
+                            ) : <span className="text-slate-300">—</span>}
+                          </td>
+                          <td className="px-2 py-1.5 text-xs text-right">
+                            {adjCount > 0 ? (
+                              <span className="inline-flex items-center gap-1 text-amber-700 font-semibold">
+                                <span>🧾</span>
+                                <span>{adjCount}</span>
+                              </span>
+                            ) : <span className="text-slate-300">—</span>}
+                          </td>
                           <td className="px-2 py-1.5 text-xs text-right font-semibold text-emerald-600">{fE(p.unit_price)}</td>
                           <td className="px-2 py-1.5">
                             <span className={'px-1.5 py-0.5 rounded-full text-[9px] font-semibold ' +
@@ -9539,7 +9720,8 @@ export default function App() {
                             </span>
                           </td>
                         </tr>
-                      ))}
+                        );
+                      })}
                     </tbody>
                   </table>
                 </div>
@@ -9594,15 +9776,22 @@ export default function App() {
                         //     arrived THIS TIME.
                         //   - Original Qty + Current Qty: editable ONLY the
                         //     first time a product_id is created, OR by a
-                        //     super-admin (who triggers an adjustment journal
-                        //     entry).
+                        //     super-admin / user with "Adjust Inventory
+                        //     Quantities" permission (which triggers an
+                        //     adjustment journal entry).
+                        // S22.10 (Apr 23 2026) — split permissions per Max:
+                        //   "Edit Inventory" = day-to-day (add products,
+                        //     record inbounds, edit descriptions, photos)
+                        //   "Adjust Inventory Quantities" = the rarer,
+                        //     audit-worthy action of overriding Original or
+                        //     Current on an existing product.
                         // Normal rule: add an inbound → current auto-updates.
                         const existingForCurr = formData.prodId
                           ? inventory.find(p => p.product_id === formData.prodId)
                           : null;
-                        const isSuperAdmin = userProfile?.role === 'super_admin';
+                        const canOverrideQty = userProfile?.role === 'super_admin' || modulePerms?.['Adjust Inventory Quantities'] === true;
                         const isFirstTime = !existingForCurr;
-                        const qtyLocked = !isFirstTime && !isSuperAdmin;
+                        const qtyLocked = !isFirstTime && !canOverrideQty;
                         const exOrig = existingForCurr ? Number(existingForCurr.original_quantity) || 0 : 0;
                         const exCurr = existingForCurr ? Number(existingForCurr.current_quantity) || 0 : 0;
                         return (<>
@@ -9634,9 +9823,9 @@ export default function App() {
                               placeholder={isFirstTime ? 'Opening original' : '—'}
                               className={'w-full px-3 py-2 rounded-lg border text-sm ' + (qtyLocked ? 'bg-slate-100 text-slate-500 cursor-not-allowed' : '')} />
                             {qtyLocked && (
-                              <div className="text-[10px] text-slate-400 mt-1">Locked — super-admin only.</div>
+                              <div className="text-[10px] text-slate-400 mt-1">Locked — needs the "Adjust Inventory Quantities" permission.</div>
                             )}
-                            {!isFirstTime && isSuperAdmin && (
+                            {!isFirstTime && canOverrideQty && (
                               <div className="text-[10px] text-amber-600 mt-1">
                                 ⚠️ Any change here writes a journal entry under this product.
                               </div>
@@ -9656,15 +9845,16 @@ export default function App() {
                             {qtyLocked && (
                               <div className="text-[10px] text-slate-400 mt-1">Locked — auto-updates when an inbound is added.</div>
                             )}
-                            {!isFirstTime && isSuperAdmin && (formData.prodCurrQty !== undefined && Number(formData.prodCurrQty) !== exCurr) && (
+                            {!isFirstTime && canOverrideQty && (formData.prodCurrQty !== undefined && Number(formData.prodCurrQty) !== exCurr) && (
                               <div className="text-[10px] text-amber-600 mt-1">
                                 ⚠️ Overrides running total. Needs a reason (below).
                               </div>
                             )}
                           </div>
-                          {/* Super-admin reason for manual adjustment — required when they
-                              change Original or Current away from the computed values. */}
-                          {!isFirstTime && isSuperAdmin && (
+                          {/* Override reason for manual adjustment — required when
+                              super-admin OR permissioned user changes Original or
+                              Current away from the computed values. */}
+                          {!isFirstTime && canOverrideQty && (
                             (formData.prodOrigQty !== undefined && Number(formData.prodOrigQty) !== exOrig) ||
                             (formData.prodCurrQty !== undefined && Number(formData.prodCurrQty) !== exCurr)
                           ) && (
@@ -9679,6 +9869,31 @@ export default function App() {
                           )}
                         </>);
                       })()}
+                      {/* S22.11 — Unit of Measure + Linear Density.
+                          Lets products be billed/tracked in kg, ton, yard,
+                          meter, roll, or piece. Linear density (grams per
+                          meter) lets us convert yards/meters ↔ weight so
+                          per-kg math still works on length-priced items. */}
+                      <div><label className="text-[10px] font-bold text-slate-500">Unit of Measure</label>
+                        <select value={formData.prodUom || ''} onChange={e => setFormData({...formData, prodUom: e.target.value})}
+                          className="w-full px-3 py-2 rounded-lg border text-sm">
+                          <option value="">Select unit...</option>
+                          <option value="kg">kg (kilogram)</option>
+                          <option value="ton">ton (metric ton)</option>
+                          <option value="m">m (meter)</option>
+                          <option value="yd">yd (yard)</option>
+                          <option value="roll">roll</option>
+                          <option value="piece">piece</option>
+                          <option value="pair">pair</option>
+                          <option value="box">box</option>
+                        </select></div>
+                      <div><label className="text-[10px] font-bold text-slate-500">Linear Density (g/m)
+                        <span className="text-slate-400 font-normal"> — for m/yd products</span></label>
+                        <input type="number" step="0.01" value={formData.prodLinearDensity || ''}
+                          onChange={e => setFormData({...formData, prodLinearDensity: e.target.value})}
+                          placeholder="e.g. 450 if 1 meter weighs 450g"
+                          className="w-full px-3 py-2 rounded-lg border text-sm" />
+                      </div>
                       <div><label className="text-[10px] font-bold text-slate-500">Gross Weight (kg)</label>
                         <input type="number" value={formData.prodGross || ''} onChange={e => setFormData({...formData, prodGross: e.target.value})} className="w-full px-3 py-2 rounded-lg border text-sm" /></div>
                       <div><label className="text-[10px] font-bold text-slate-500">Net Weight (kg)</label>
@@ -9754,11 +9969,12 @@ export default function App() {
                             finalOrigQty = exOrig + inboundQty;
                             finalCurrQty = exCurr + inboundQty;
 
-                            if (isSuperAdmin) {
-                              // Super-admin CAN override by typing values different
-                              // from the computed defaults. We detect by comparing
-                              // to exOrig/exCurr (since we pre-fill the inputs with
-                              // the existing values when super-admin opens form).
+                            // S22.10 — super-admin OR anyone with "Adjust
+                            // Inventory Quantities" perm may override
+                            // Original/Current. This is separate from the
+                            // broader "Edit Inventory" day-to-day permission.
+                            const canOverrideQty = isSuperAdmin || modulePerms?.['Adjust Inventory Quantities'] === true;
+                            if (canOverrideQty) {
                               const typedOrig = formData.prodOrigQty;
                               const typedCurr = formData.prodCurrQty;
                               const origChanged = typedOrig !== undefined && Number(typedOrig) !== exOrig;
@@ -9780,7 +9996,7 @@ export default function App() {
                             }
 
                             if (inboundQty === 0 && adjustmentsToLog.length === 0) {
-                              alert('Nothing to save. Enter an Inbound Quantity, or (super-admin) change Original/Current with a reason.');
+                              alert('Nothing to save. Enter an Inbound Quantity, or (if you have the "Adjust Inventory Quantities" permission) change Original/Current with a reason.');
                               return;
                             }
                           }
@@ -9875,11 +10091,29 @@ export default function App() {
                               color: formData.prodColor || '', color_en: formData.prodColorEn || '',
                               roll_count: Number(formData.prodRolls) || 0, gross_weight: Number(formData.prodGross) || 0,
                               net_weight: Number(formData.prodNet) || 0, unit_price: Number(formData.prodPrice) || 0,
+                              // S22.11 — UoM + linear density (for P&L normalization)
+                              uom: formData.prodUom || null,
+                              linear_density_g_per_m: Number(formData.prodLinearDensity) || null,
                               original_quantity: finalOrigQty, current_quantity: finalCurrQty,
                               ...costData,
                               ...(photoUrl ? { photo_url: photoUrl } : {}),
                             };
-                            await dbInsert('inventory', record, user?.id);
+                            // S22.11 — Defensive: if the DB doesn't yet have
+                            // the new columns, retry without them so the save
+                            // still works on older schemas. User just won't see
+                            // per-m/per-yd math until they run the S22 SQL.
+                            try {
+                              await dbInsert('inventory', record, user?.id);
+                            } catch (colErr) {
+                              if (String(colErr.message || '').match(/column.*uom|column.*linear_density/i)) {
+                                console.warn('[inventory] new columns missing — run s22_inventory_uom.sql. Saving without.');
+                                delete record.uom;
+                                delete record.linear_density_g_per_m;
+                                await dbInsert('inventory', record, user?.id);
+                              } else {
+                                throw colErr;
+                              }
+                            }
                           }
                           setFormData({});
                           await loadAllData();
@@ -10077,6 +10311,116 @@ export default function App() {
                                   <div className={'text-lg font-extrabold ' + (profitEGP >= 0 ? 'text-emerald-600' : 'text-red-600')}>{fE(profitEGP)}</div>
                                   <div className="text-xs text-slate-500">${profitUSD.toLocaleString(undefined,{maximumFractionDigits:2})} USD · {margin}% margin</div>
                                 </div>
+
+                                {/* S22.11 (Apr 23 2026) — Apples-to-apples normalization.
+                                    Max: "P&L should show per kg and per ton, and we should
+                                    know how to make it apples-to-apples — could be billed
+                                    by kg, ton, yard, or meter. Also a conversion for
+                                    yards/meters understanding the cost in weight."
+                                    We express the totals in as many units as we can derive:
+                                      - /kg and /ton use net_weight
+                                      - /m uses net_weight + linear_density_g_per_m
+                                      - /yd uses the /m value × 0.9144
+                                    Missing inputs → that row is hidden (not zero-divided).
+                                    Uses origQty as the denominator for per-unit and the
+                                    total net weight (origQty × net_weight_per_unit) for
+                                    /kg /ton. */}
+                                {(() => {
+                                  const netWeightPerUnit = Number(p.net_weight || 0);
+                                  const totalKg = netWeightPerUnit * origQty;
+                                  const totalTon = totalKg / 1000;
+                                  const linearDensityGperM = Number(p.linear_density_g_per_m || 0);
+                                  // Meters per unit = weight per unit (kg) / (g/m) × 1000
+                                  const metersPerUnit = linearDensityGperM > 0 && netWeightPerUnit > 0
+                                    ? (netWeightPerUnit * 1000) / linearDensityGperM
+                                    : 0;
+                                  const totalMeters = metersPerUnit * origQty;
+                                  const totalYards = totalMeters / 0.9144;
+                                  const revenueEGP = actualSalesEGP || salesEGP;
+                                  const rows = [];
+                                  // Per unit (always available as long as qty > 0)
+                                  if (origQty > 0) {
+                                    rows.push({
+                                      label: 'Per unit',
+                                      sub: p.uom ? ('(' + p.uom + ')') : '',
+                                      cost: totalCostEGP / origQty,
+                                      rev: revenueEGP / origQty,
+                                      profit: profitEGP / origQty,
+                                    });
+                                  }
+                                  if (totalKg > 0) {
+                                    rows.push({
+                                      label: 'Per kg',
+                                      sub: totalKg.toLocaleString(undefined,{maximumFractionDigits:1}) + ' kg',
+                                      cost: totalCostEGP / totalKg,
+                                      rev: revenueEGP / totalKg,
+                                      profit: profitEGP / totalKg,
+                                    });
+                                  }
+                                  if (totalTon > 0.01) {
+                                    rows.push({
+                                      label: 'Per ton',
+                                      sub: totalTon.toLocaleString(undefined,{maximumFractionDigits:3}) + ' ton',
+                                      cost: totalCostEGP / totalTon,
+                                      rev: revenueEGP / totalTon,
+                                      profit: profitEGP / totalTon,
+                                    });
+                                  }
+                                  if (totalMeters > 0) {
+                                    rows.push({
+                                      label: 'Per meter',
+                                      sub: totalMeters.toLocaleString(undefined,{maximumFractionDigits:1}) + ' m',
+                                      cost: totalCostEGP / totalMeters,
+                                      rev: revenueEGP / totalMeters,
+                                      profit: profitEGP / totalMeters,
+                                    });
+                                  }
+                                  if (totalYards > 0) {
+                                    rows.push({
+                                      label: 'Per yard',
+                                      sub: totalYards.toLocaleString(undefined,{maximumFractionDigits:1}) + ' yd',
+                                      cost: totalCostEGP / totalYards,
+                                      rev: revenueEGP / totalYards,
+                                      profit: profitEGP / totalYards,
+                                    });
+                                  }
+                                  if (rows.length === 0) return null;
+                                  return (
+                                    <div className="mt-2 pt-2 border-t border-slate-200">
+                                      <div className="text-[9px] font-bold text-slate-500 mb-1">📏 Apples-to-Apples (per unit of measure)</div>
+                                      {netWeightPerUnit === 0 && (
+                                        <div className="text-[9px] text-amber-600 mb-1">⚠ Set Net Weight on this product to unlock /kg and /ton views.</div>
+                                      )}
+                                      {linearDensityGperM === 0 && netWeightPerUnit > 0 && (
+                                        <div className="text-[9px] text-slate-400 mb-1">ℹ To see /meter and /yard, set "Linear Density (g/m)" on the product — converts length ↔ weight.</div>
+                                      )}
+                                      <table className="w-full text-[10px] border-collapse">
+                                        <thead>
+                                          <tr className="text-slate-400 text-[9px] uppercase">
+                                            <th className="text-left py-1">Basis</th>
+                                            <th className="text-right py-1">Cost</th>
+                                            <th className="text-right py-1">Revenue</th>
+                                            <th className="text-right py-1">Profit</th>
+                                          </tr>
+                                        </thead>
+                                        <tbody>
+                                          {rows.map(r => (
+                                            <tr key={r.label} className="border-t border-slate-100">
+                                              <td className="py-1">
+                                                <div className="font-semibold">{r.label}</div>
+                                                {r.sub && <div className="text-[9px] text-slate-400">{r.sub}</div>}
+                                              </td>
+                                              <td className="text-right text-red-600 font-semibold py-1">{fE(r.cost)}</td>
+                                              <td className="text-right text-blue-600 font-semibold py-1">{fE(r.rev)}</td>
+                                              <td className={'text-right font-bold py-1 ' + (r.profit >= 0 ? 'text-emerald-600' : 'text-red-600')}>{fE(r.profit)}</td>
+                                            </tr>
+                                          ))}
+                                        </tbody>
+                                      </table>
+                                    </div>
+                                  );
+                                })()}
+
                                 {/* Customs Cost/kg per Inbound Reference */}
                                 {(() => {
                                   const shipRefs = [...new Set([p.shipment_reference, ...invInbounds.filter(ib => ib.product_id === p.product_id).map(ib => ib.shipment_reference)].filter(Boolean).flatMap(s => s.split(',').map(x => x.trim())).filter(Boolean))];
@@ -10601,6 +10945,93 @@ export default function App() {
                       <button onClick={() => setFormData({...formData, showInvExpected: false, invExpected: undefined})} className="text-slate-400 hover:text-slate-600 text-xl">×</button>
                     </div>
                     <div className="p-5 overflow-auto">
+                      {/* S22.11 (Apr 23 2026) — Manual entry for expected qty.
+                          Previously the only way to populate this was the
+                          Excel import. Max wants to enter it by hand too. */}
+                      <div className="mb-4 bg-slate-50 border border-slate-200 rounded-lg p-3">
+                        <div className="flex items-center justify-between mb-2">
+                          <div className="text-xs font-bold text-slate-700">➕ Add Expected Quantity Manually</div>
+                          {!formData.showExpForm && (
+                            <button onClick={() => setFormData({...formData, showExpForm: true})}
+                              className="px-2.5 py-1 bg-indigo-600 text-white rounded text-[11px] font-bold hover:bg-indigo-700">
+                              + New Entry
+                            </button>
+                          )}
+                        </div>
+                        {formData.showExpForm && (
+                          <div className="grid grid-cols-2 md:grid-cols-5 gap-2">
+                            <div>
+                              <label className="text-[9px] font-bold text-slate-500">Product ID</label>
+                              <input list="inv-exp-products" value={formData.expProdId || ''}
+                                onChange={e => setFormData({...formData, expProdId: e.target.value})}
+                                placeholder="e.g. LEA-001" className="w-full px-2 py-1 rounded border text-xs" />
+                              <datalist id="inv-exp-products">
+                                {[...new Set((inventory || []).map(p => p.product_id).filter(Boolean))].sort().map(id =>
+                                  <option key={id} value={id} />)}
+                              </datalist>
+                            </div>
+                            <div>
+                              <label className="text-[9px] font-bold text-slate-500">Shipment Ref</label>
+                              <input value={formData.expShipRef || ''}
+                                onChange={e => setFormData({...formData, expShipRef: e.target.value})}
+                                placeholder="e.g. SH-2026-04" className="w-full px-2 py-1 rounded border text-xs" />
+                            </div>
+                            <div>
+                              <label className="text-[9px] font-bold text-slate-500">Expected Qty</label>
+                              <input type="number" value={formData.expQty || ''}
+                                onChange={e => setFormData({...formData, expQty: e.target.value})}
+                                className="w-full px-2 py-1 rounded border text-xs" />
+                            </div>
+                            <div>
+                              <label className="text-[9px] font-bold text-slate-500">Expected Date</label>
+                              <input type="date" value={formData.expDate || ''}
+                                onChange={e => setFormData({...formData, expDate: e.target.value})}
+                                className="w-full px-2 py-1 rounded border text-xs" />
+                            </div>
+                            <div>
+                              <label className="text-[9px] font-bold text-slate-500">Notes</label>
+                              <input value={formData.expNotes || ''}
+                                onChange={e => setFormData({...formData, expNotes: e.target.value})}
+                                className="w-full px-2 py-1 rounded border text-xs" />
+                            </div>
+                            <div className="col-span-2 md:col-span-5 flex justify-end gap-2 mt-1">
+                              <button onClick={() => setFormData({...formData, showExpForm: false, expProdId: '', expShipRef: '', expQty: '', expDate: '', expNotes: ''})}
+                                className="px-3 py-1 rounded border text-[11px]">Cancel</button>
+                              <button onClick={async () => {
+                                if (!formData.expProdId || !formData.expShipRef || !formData.expQty) {
+                                  alert('Please fill in Product ID, Shipment Ref, and Expected Qty.');
+                                  return;
+                                }
+                                try {
+                                  const { error } = await supabase.from('inventory_expected').insert({
+                                    product_id: formData.expProdId.trim(),
+                                    shipment_reference: formData.expShipRef.trim(),
+                                    expected_quantity: Number(formData.expQty) || 0,
+                                    expected_date: formData.expDate || null,
+                                    notes: formData.expNotes || null,
+                                    created_by: userProfile?.id || null,
+                                  });
+                                  if (error) throw error;
+                                  toast.success('Expected quantity saved');
+                                  // Reset + reload the panel by flipping the invExpected cache
+                                  setFormData({
+                                    ...formData,
+                                    showExpForm: false,
+                                    expProdId: '', expShipRef: '', expQty: '', expDate: '', expNotes: '',
+                                    invExpected: undefined, // forces re-fetch
+                                  });
+                                } catch (err) {
+                                  alert('Could not save: ' + (err.message || 'unknown error') +
+                                    '\n\nMake sure you ran s19_inventory_expected.sql in Supabase.');
+                                }
+                              }} className="px-3 py-1 rounded bg-indigo-600 text-white text-[11px] font-bold hover:bg-indigo-700">
+                                Save
+                              </button>
+                            </div>
+                          </div>
+                        )}
+                      </div>
+
                       {expected === null && (
                         <div className="text-center py-6 text-sm text-slate-500">Loading…</div>
                       )}

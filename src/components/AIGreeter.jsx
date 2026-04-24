@@ -259,7 +259,23 @@ export default function AIGreeter({ user, userProfile, users, tickets, invoices,
     ctx += 'Full name: ' + fullName + '\n';
     ctx += 'First name: ' + firstName + '\n';
     ctx += 'Role: ' + (userProfile?.role || 'team member') + '\n';
-    ctx += 'Time: Good ' + timeGreeting + ', ' + todayStr + '\n';
+    // S22.7 (Apr 23 2026) — Always include day-of-week. Max reported Nadia
+    // saying "Friday April 25" when April 25 is Saturday. Parsing as local
+    // (not UTC) prevents timezone shift.
+    var _dn = '';
+    try {
+      var _p = String(todayStr).split('-');
+      if (_p.length === 3) {
+        var _d = new Date(Number(_p[0]), Number(_p[1]) - 1, Number(_p[2]), 12, 0, 0);
+        _dn = ['Sunday','Monday','Tuesday','Wednesday','Thursday','Friday','Saturday'][_d.getDay()];
+      }
+    } catch (_) {}
+    ctx += 'Time: Good ' + timeGreeting + ', ' + (_dn ? _dn + ', ' : '') + todayStr + '\n';
+    ctx += 'IMPORTANT: When referring to any date, use ONLY the day-of-week provided in context. Never calculate weekdays yourself.\n';
+    // S22.7 — Timezone awareness for cross-team scheduling.
+    ctx += '\nTIMEZONE CONTEXT:\n';
+    ctx += 'Company HQ: Cairo, Egypt (UTC+2/+3). User may be working from US Eastern (UTC-4/-5). Cairo is typically 6-7 hours ahead of US Eastern.\n';
+    ctx += 'All event_time values are stored in Cairo local time (company convention). When showing a time to the user, mention both zones when it would reduce confusion, e.g. "3:00 PM Cairo (9:00 AM Eastern)". When the user asks you to schedule an event for the Egypt team, default to Cairo time unless they specify otherwise.\n';
     ctx += '\nLOGIN HISTORY:\n';
     if (visitNumberToday <= 1) {
       ctx += 'This is ' + firstName + "'s FIRST login today.\n";

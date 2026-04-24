@@ -52,39 +52,51 @@ test('S21.5 Drag handlers set/clear the dragging state', function() {
   assert(/function onDragEnd\(\)/.test(pb), 'onDragEnd clears state');
 });
 
-test('S21.6 Drop renumbers target column 1..N', function() {
-  assert(/var newPriority = idx \+ 1;/.test(pb),
-    'new priorities are 1-based');
-  assert(/dbUpdate\('tickets', updates\[i\]\.id, updates\[i\]\.changes, currentUserId\)/.test(pb),
+test('S21.6 Drop renumbers target column 1..N (ranked) or 1001..N (unranked)', function() {
+  // S22.8 — pile-aware: base=0 for ranked (priorities 1..N), base=1000 for
+  // unranked (priorities 1001..N). Either way the formula is base + i + 1.
+  assert(/var newPriority = base \+ i \+ 1;/.test(pb),
+    'priority = base + index + 1');
+  assert(/var base = targetPile === 'unranked' \? UNRANKED_FLOOR : 0/.test(pb),
+    'base switches by pile');
+  assert(/dbUpdate\('tickets'/.test(pb),
     'persists via dbUpdate');
 });
 
 test('S21.7 Cross-column drop closes gap in source column', function() {
-  assert(/if \(crossColumn\) \{[\s\S]{0,500}srcRanked\.forEach/.test(pb),
+  assert(/if \(crossColumn\) \{[\s\S]{0,900}srcRanked\[j\]/.test(pb),
     'source column renumbered when ticket moves to another column');
 });
 
-test('S21.8 Non-admin cannot move tickets across columns', function() {
-  assert(/Only admins can move tickets between people/.test(pb),
-    'permission guard message present');
-  assert(/if \(crossColumn && !isAdmin\)/.test(pb),
-    'cross-column guard in place');
+// S22.6 — old rule was "only admins can move across columns". New rule per
+// Max: anyone who is an assignee on the ticket (primary OR additional) can
+// drag. Admins can still drag anything.
+test('S21.8 Anyone on the ticket can move it (not admin-only)', function() {
+  assert(/function canDragTicket\(ticket\)/.test(pb),
+    'canDragTicket permission helper exists');
+  assert(/allAssigneesOf\(ticket\)\.indexOf\(currentUserId\) !== -1/.test(pb),
+    'permission allows any assignee (primary or additional)');
+  assert(/Only people on this ticket can move it/.test(pb),
+    'friendly reject message for non-assignees');
 });
 
-test('S21.9 Non-admin cannot reorder another person\'s column', function() {
-  assert(/You can only reorder your own column/.test(pb),
-    'same-column permission message');
+test('S21.9 Cross-column drop auto-adds the target as assignee if new', function() {
+  assert(/additional_assignees: newAdditional\.length \? JSON\.stringify\(newAdditional\) : null/.test(pb),
+    'writes updated additional_assignees list');
+  assert(/Added as assignee via Priority Board \(auto-added by system\)/.test(pb),
+    'activity log confirms auto-add');
+  assert(/Reassigned on Priority Board — now primary/.test(pb),
+    'existing assignees get a different log message when promoted');
 });
 
 test('S21.10 Today strip shows each person\'s #1 priority', function() {
-  assert(/var top = col && col\.ranked\.length > 0 \? col\.ranked\[0\] : null/.test(pb),
+  assert(/col && col\.ranked\.length > 0 \? col\.ranked\[0\] : null/.test(pb),
     'top priority pulled from rank index 0');
   assert(/🎯 Today — Everyone's #1 Priority/.test(pb),
     'Today strip header');
 });
 
 test('S21.11 Ranked badge shows priority number', function() {
-  // The ticket card renders the rank in a circular badge
   assert(/bg-indigo-600 text-white rounded-full/.test(pb),
     'rank badge styled');
   assert(/\{rank\}/.test(pb),

@@ -307,10 +307,24 @@ export async function POST(request) {
           var cEv = (ceRes && ceRes.data) || [];
           if (cEv.length > 0) {
             superAdminBlock += '\nCALENDAR EVENTS (next 14 days):\n';
+            // S22.7 (Apr 23 2026) — Always include day-of-week inline so the
+            // LLM can't hallucinate the weekday. Max reported Nadia saying
+            // "Friday April 25" when April 25 is actually Saturday.
+            var WEEKDAYS = ['Sunday','Monday','Tuesday','Wednesday','Thursday','Friday','Saturday'];
             cEv.forEach(function(e) {
               var u = gUsersList.find(function(x) { return x.id === e.assigned_to; });
               var uName = (u && u.name) || 'unassigned';
-              superAdminBlock += '- ' + e.event_date + (e.event_time ? ' ' + e.event_time : '') + ' [' + uName + ']: ' + (e.title || '') + ' (' + (e.event_type || 'event') + ')\n';
+              var dayName = '';
+              try {
+                // Parse YYYY-MM-DD as LOCAL (not UTC) — otherwise a 12am UTC
+                // date rolls back to the previous day in Western timezones.
+                var dp = String(e.event_date || '').split('-');
+                if (dp.length === 3) {
+                  var dt = new Date(Number(dp[0]), Number(dp[1]) - 1, Number(dp[2]), 12, 0, 0);
+                  dayName = WEEKDAYS[dt.getDay()];
+                }
+              } catch (_) {}
+              superAdminBlock += '- ' + (dayName ? dayName + ' ' : '') + e.event_date + (e.event_time ? ' at ' + e.event_time : '') + ' [' + uName + ']: ' + (e.title || '') + ' (' + (e.event_type || 'event') + ')\n';
             });
           }
         } catch(e) {}
@@ -863,8 +877,29 @@ export async function POST(request) {
 
     // BUILD CONTEXT
     var context = 'You are the AI Executive Assistant for KTC International (Kandil Trading Company), an Egyptian trading company.\n\n';
-    context += 'TODAY: ' + today + '\n';
-    context += 'CURRENT USER: ' + currentUserName + ' (ID: ' + currentUserId + ', Role: ' + currentUserRole + ')\n';
+    // S22.7 — Include day-of-week on TODAY so Nadia never guesses the
+    // current weekday (and by extension, "tomorrow", "Friday", etc.).
+    var _todayDayName = '';
+    try {
+      var _tp = String(today).split('-');
+      if (_tp.length === 3) {
+        var _td = new Date(Number(_tp[0]), Number(_tp[1]) - 1, Number(_tp[2]), 12, 0, 0);
+        _todayDayName = ['Sunday','Monday','Tuesday','Wednesday','Thursday','Friday','Saturday'][_td.getDay()];
+      }
+    } catch (_) {}
+    context += 'TODAY: ' + (_todayDayName ? _todayDayName + ', ' : '') + today + '\n';
+    context += 'Current User: ' + currentUserName + ' (ID: ' + currentUserId + ', Role: ' + currentUserRole + ')\n';
+    context += 'When computing day-of-week for any date, ALWAYS match the weekday provided in CALENDAR EVENTS. Never compute it yourself.\n';
+    // S22.7 (Apr 23 2026) — Timezone awareness. Max works from US Eastern.
+    // The team is in Cairo (Egypt, UTC+2 / +3 with DST). All event_time
+    // values stored in the DB are Egypt LOCAL TIME (company convention).
+    // Tell Nadia so she can explain times in BOTH zones when it matters.
+    context += '\n===== TIMEZONE CONTEXT =====\n';
+    context += 'Company HQ timezone: Cairo, Egypt (UTC+2 / UTC+3 DST)\n';
+    context += 'User (' + currentUserName + ') appears to work from US Eastern Time (UTC-4 / UTC-5 DST).\n';
+    context += 'All event_time values in calendar_events are Egypt LOCAL TIME (company convention).\n';
+    context += 'When discussing a time with the user, show BOTH: "3:00 PM Cairo (9:00 AM Eastern)". Egypt is typically 6–7 hours ahead of US Eastern.\n';
+    context += 'When the user asks to SCHEDULE an event and they give a time without specifying zone, ASK which zone they mean. Default to Cairo for events involving Egypt team members.\n';
     context += 'When the user says "my tickets" or "assigned to me", match assigned_to against ID: ' + currentUserId + '\n';
     if (restrictedModules.length > 0) {
       context += 'ACCESS RESTRICTIONS: This user does NOT have access to: ' + restrictedModules.join(', ') + '. If they ask about restricted data, politely tell them they do not have access to that information and should contact their manager.\n';

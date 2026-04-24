@@ -232,5 +232,221 @@ test('S22.25 Close button is always clickable + alerts on empty submit', functio
     'the disabled-on-empty attribute is gone from both modals');
 });
 
+// ==== S22.6 — Calendar save on recurring Saturday visibility ====
+
+test('S22.26 Calendar save explicitly sets created_by on the event', function() {
+  var cal = fs.readFileSync(path.join(REPO, 'src/components/CalendarTab.jsx'), 'utf8');
+  // Without this, saving events for another user made them invisible in
+  // Max's "My" view (filter: assigned_to===me OR created_by===me).
+  assert(/created_by: myId/.test(cal),
+    'created_by: myId is set in the insert payload');
+});
+
+test('S22.27 Calendar navigates to the event date after save', function() {
+  var cal = fs.readFileSync(path.join(REPO, 'src/components/CalendarTab.jsx'), 'utf8');
+  assert(/setCurDate\(new Date\(y, m, 1\)\)/.test(cal),
+    'after save, calendar jumps to the event\'s month');
+  assert(/setSelDate\(f\.eventDate\)/.test(cal),
+    'after save, the event\'s day is selected so events on it are visible');
+});
+
+// ==== S22.7 — Priority Board: per-Max rules ====
+
+test('S22.28 PriorityBoard.jsx exists (previous v48 was missing this file)', function() {
+  assert(fs.existsSync(path.join(REPO, 'src/components/PriorityBoard.jsx')),
+    'PriorityBoard.jsx exists on disk');
+});
+
+test('S22.29 Cross-column drag pushes old primary into additional_assignees', function() {
+  var pb = fs.readFileSync(path.join(REPO, 'src/components/PriorityBoard.jsx'), 'utf8');
+  assert(/newAdditional\.push\(oldPrimary\)/.test(pb),
+    'old primary is demoted to additional_assignees');
+});
+
+test('S22.30 Dragged ticket in activity log distinguishes auto-add vs reassign', function() {
+  var pb = fs.readFileSync(path.join(REPO, 'src/components/PriorityBoard.jsx'), 'utf8');
+  // When target was already on the ticket: "now primary"
+  // When target was not on the ticket: "auto-added"
+  assert(/var wasAlreadyOnTicket = existingAdditional\.indexOf\(targetUserId\) !== -1 \|\| oldPrimary === targetUserId/.test(pb),
+    'detection of whether target was already on the ticket');
+  assert(/now primary/.test(pb), 'reassign message');
+  assert(/auto-added by system/.test(pb), 'auto-add message');
+});
+
+// ==== S22.8 — Unranked pile reordering ====
+
+test('S22.31 Priority convention: 1..999 ranked, 1000+ unranked-ordered, null unranked-unordered', function() {
+  var pb = fs.readFileSync(path.join(REPO, 'src/components/PriorityBoard.jsx'), 'utf8');
+  assert(/var UNRANKED_FLOOR = 1000/.test(pb),
+    'UNRANKED_FLOOR constant defined');
+  assert(/p != null && p < UNRANKED_FLOOR/.test(pb),
+    'ranked pile = priority < UNRANKED_FLOOR');
+});
+
+test('S22.32 Unranked pile sorts user-ordered first, then untouched by created_at', function() {
+  var pb = fs.readFileSync(path.join(REPO, 'src/components/PriorityBoard.jsx'), 'utf8');
+  assert(/var aOrdered = pa != null && pa >= UNRANKED_FLOOR/.test(pb),
+    'ordered check for unranked sort');
+  assert(/if \(aOrdered && bOrdered\) return Number\(pa\) - Number\(pb\)/.test(pb),
+    'both ordered → by priority');
+  assert(/if \(aOrdered\) return -1/.test(pb),
+    'ordered before unordered');
+});
+
+test('S22.33 Drop zones added to the unranked pile', function() {
+  var pb = fs.readFileSync(path.join(REPO, 'src/components/PriorityBoard.jsx'), 'utf8');
+  assert(/renderDropZone\(u\.id, 0, 'unranked'\)/.test(pb),
+    'top drop zone in unranked pile');
+  assert(/renderDropZone\(u\.id, idx \+ 1, 'unranked'\)/.test(pb),
+    'inter-card drop zones in unranked pile');
+});
+
+test('S22.34 Renumbering uses pile-aware base offset', function() {
+  var pb = fs.readFileSync(path.join(REPO, 'src/components/PriorityBoard.jsx'), 'utf8');
+  assert(/var base = targetPile === 'unranked' \? UNRANKED_FLOOR : 0/.test(pb),
+    'base = 0 for ranked, 1000 for unranked');
+});
+
+test('S22.35 Dashboard "Today" strip excludes unranked-ordered (1000+) priorities', function() {
+  var page = fs.readFileSync(path.join(REPO, 'src/app/page.jsx'), 'utf8');
+  // The strip should only show #1 from the RANKED pile (< 1000).
+  // Someone with only unranked-ordered tickets shouldn't appear as
+  // having a "top priority for today."
+  assert(/if \(Number\(t\.assignee_priority\) >= 1000\) return/.test(page),
+    'strip skips tickets with priority >= 1000');
+});
+
+// ==== S22.9 — Inventory overhaul ====
+
+test('S22.36 Inventory quantity override uses its own dedicated permission (separate from Edit Inventory)', function() {
+  var page = fs.readFileSync(path.join(REPO, 'src/app/page.jsx'), 'utf8');
+  // S22.10 — Max: "inventory access is a permission outside of updating
+  // inventory values". Two separate permissions:
+  //   - "Edit Inventory" = day-to-day (add products, record inbounds, edit
+  //     descriptions, photos)
+  //   - "Adjust Inventory Quantities" = override Original/Current on an
+  //     existing product (audit-event, writes a journal entry)
+  assert(/canOverrideQty = userProfile\?\.role === 'super_admin' \|\| modulePerms\?\.\['Adjust Inventory Quantities'\] === true/.test(page),
+    'form gate uses Adjust Inventory Quantities');
+  assert(/const canOverrideQty = isSuperAdmin \|\| modulePerms\?\.\['Adjust Inventory Quantities'\] === true/.test(page),
+    'save-flow gate uses Adjust Inventory Quantities');
+  // And the permission is listed in SettingsTab so admins can grant it
+  var settings = fs.readFileSync(path.join(REPO, 'src/components/SettingsTab.jsx'), 'utf8');
+  assert(/'Adjust Inventory Quantities'/.test(settings),
+    'Adjust Inventory Quantities listed in SettingsTab permissions UI');
+});
+
+test('S22.36b P&L / cost machinery is preserved (not accidentally removed)', function() {
+  // Max explicitly flagged: don't break the P&L / cost / weighted-average
+  // feature. This guards against future regressions that would silently
+  // remove the cost fields.
+  var page = fs.readFileSync(path.join(REPO, 'src/app/page.jsx'), 'utf8');
+  assert(/purchase_cost:/.test(page), 'purchase_cost field still written');
+  assert(/weighted-average costs/.test(page), 'weighted-average comment still present');
+  assert(/modulePerms\?\.\['View Costs'\]/.test(page), 'View Costs permission still gates cost fields');
+  assert(/View Financial Reports/.test(page), 'View Financial Reports permission still used');
+});
+
+// ==== S22.11 — Multi-unit + apples-to-apples P&L ====
+
+test('S22.39 Product form has Unit of Measure + Linear Density fields', function() {
+  var page = fs.readFileSync(path.join(REPO, 'src/app/page.jsx'), 'utf8');
+  assert(/Unit of Measure/.test(page), 'UoM label present');
+  assert(/value={formData\.prodUom \|\| ''}/.test(page), 'UoM value bound');
+  assert(/Linear Density \(g\/m\)/.test(page), 'linear density label');
+  assert(/prodLinearDensity/.test(page), 'linear density value bound');
+});
+
+test('S22.40 P&L panel shows per-kg, per-ton, per-meter, per-yard normalized views', function() {
+  var page = fs.readFileSync(path.join(REPO, 'src/app/page.jsx'), 'utf8');
+  assert(/Apples-to-Apples \(per unit of measure\)/.test(page), 'apples-to-apples header');
+  assert(/Per kg/.test(page), 'per-kg row');
+  assert(/Per ton/.test(page), 'per-ton row');
+  assert(/Per meter/.test(page), 'per-meter row');
+  assert(/Per yard/.test(page), 'per-yard row');
+  // The linear density × weight conversion
+  assert(/metersPerUnit = linearDensityGperM > 0 && netWeightPerUnit > 0/.test(page),
+    'length ↔ weight conversion');
+  assert(/totalYards = totalMeters \/ 0\.9144/.test(page),
+    'yard = meter / 0.9144');
+});
+
+test('S22.41 Expected inventory can be entered manually (not just via Excel)', function() {
+  var page = fs.readFileSync(path.join(REPO, 'src/app/page.jsx'), 'utf8');
+  assert(/Add Expected Quantity Manually/.test(page), 'manual entry UI present');
+  assert(/supabase\.from\('inventory_expected'\)\.insert/.test(page),
+    'writes to inventory_expected table');
+});
+
+test('S22.42 Product insert is defensive about missing uom/linear_density columns', function() {
+  // If Max hasn't run the s22 SQL yet, the insert must retry without the
+  // new columns instead of failing outright.
+  var page = fs.readFileSync(path.join(REPO, 'src/app/page.jsx'), 'utf8');
+  assert(/column\.\*uom\|column\.\*linear_density/.test(page),
+    'catches missing-column error');
+  assert(/delete record\.uom[\s\S]{0,80}delete record\.linear_density_g_per_m/.test(page),
+    'retries without the new columns');
+});
+
+test('S22.43 Import template includes Unit of Measure + Linear Density columns', function() {
+  var imp = fs.readFileSync(path.join(REPO, 'src/components/InventoryImport.jsx'), 'utf8');
+  assert(/'Unit of Measure'/.test(imp), 'UoM column in template');
+  assert(/'Linear Density \(g\/m\)'/.test(imp), 'linear density column in template');
+  assert(/uom: String\(getCell\(raw, 'Unit of Measure'\)[^)]*\)\.trim\(\) \|\| null/.test(imp),
+    'uom parsed from template');
+  assert(/linear_density_g_per_m: parseNumber\(getCell\(raw, 'Linear Density \(g\/m\)'\)\) \|\| null/.test(imp),
+    'linear density parsed from template');
+});
+
+test('S22.44 SQL migration for uom + linear_density_g_per_m columns ships with the build', function() {
+  var sqlPath = path.join(REPO, 'sql/s22_inventory_uom.sql');
+  assert(fs.existsSync(sqlPath), 'SQL file exists');
+  var sql = fs.readFileSync(sqlPath, 'utf8');
+  assert(/ADD COLUMN IF NOT EXISTS uom TEXT/.test(sql), 'adds uom column');
+  assert(/ADD COLUMN IF NOT EXISTS linear_density_g_per_m NUMERIC/.test(sql),
+    'adds linear density column');
+});
+
+test('S22.45 Template download button is available directly on the Inventory tab', function() {
+  var page = fs.readFileSync(path.join(REPO, 'src/app/page.jsx'), 'utf8');
+  // Previously the Excel template was only reachable from INSIDE the
+  // Import modal. Max: "make sure the template is a link I can download
+  // from the portal itself." Now there's a button right next to Import
+  // that generates the same XLSX on click.
+  assert(/Download the Excel template for bulk import/.test(page),
+    'tooltip confirms the direct download button');
+  assert(/KTC_Inventory_Import_Template\.xlsx/.test(page),
+    'filename for the download');
+  // The header row must include the new UoM + Linear Density columns so
+  // the direct download stays in sync with the import parser.
+  assert(/'Unit of Measure','Linear Density \(g\/m\)'/.test(page),
+    'template header includes the new UoM + linear density columns');
+});
+
+test('S22.37 Breakdown replaced with single unified table + dimension switcher', function() {
+  var page = fs.readFileSync(path.join(REPO, 'src/app/page.jsx'), 'utf8');
+  // Old: 3 side-by-side cards (the "bubble buckets"). New: one table with
+  // a small pill row to switch between type/subcategory/color.
+  assert(/Inventory Breakdown/.test(page), 'new unified header');
+  assert(/Dimension selector — pill row BUT tight, not bubbly/.test(page),
+    'dimension switcher in place');
+  // The old 3-grid markup is gone
+  assert(!/grid grid-cols-1 md:grid-cols-3 gap-3 mb-4/.test(page),
+    'old 3-card bubble layout removed');
+});
+
+test('S22.38 Table view shows Batches + Adjustments counts for drill-down affordance', function() {
+  var page = fs.readFileSync(path.join(REPO, 'src/app/page.jsx'), 'utf8');
+  // Max: "each entry will have an amount and if you click on that line
+  // item it will drill down." The table now surfaces inbound/adjustment
+  // counts directly so users see there's something to drill into.
+  assert(/batchCount = \(invInbounds \|\| \[\]\)\.filter\(ib => ib\.product_id === p\.product_id\)\.length/.test(page),
+    'batch count per product row');
+  assert(/adjCount = \(invAdjustments \|\| \[\]\)\.filter\(a => a\.product_id === p\.product_id\)\.length/.test(page),
+    'adjustment count per product row');
+  assert(/title="Click for full history/.test(page),
+    'row hover hint shows drill-down is available');
+});
+
 console.log('\n' + passed + ' passed, ' + failed + ' failed');
 process.exit(failed === 0 ? 0 : 1);

@@ -1,92 +1,147 @@
 'use client';
 // ============================================================
-// PriorityBoard — a visual "what everyone is working on" board.
+// PriorityBoard — visual per-person ticket priority board
 //
-// S21 (Apr 23 2026) — Max wanted a way to see every team member's
-// prioritized ticket stack at a glance. One column per person.
-// Within each column, tickets are ordered by `assignee_priority`
-// (1 = top). Drag to reorder within a column. Drag across columns
-// to reassign + reprioritize. A "Today" strip at the top shows each
-// person's current priority-1 ticket — one glance tells you who is
-// on what.
+// RULES (per Max, Apr 23 2026):
+//   1. A ticket lives in its PRIMARY assignee's column (not duplicated)
+//   2. Inside a column, tickets are ranked 1..N by assignee_priority.
+//      Below the ranked pile is an "Unranked" section with everything
+//      that doesn't have a priority number yet.
+//   3. Anyone who is an assignee on the ticket (primary OR additional)
+//      can drag the ticket — they don't have to be an admin.
+//   4. Dragging a ticket to another person's column REASSIGNS it:
+//      - `tickets.assigned_to` becomes the target user
+//      - The old primary is pushed to `additional_assignees` (so they
+//        stay on the ticket as a secondary)
+//      - If the target was NOT already an assignee, they are auto-added
+//        as an assignee by virtue of becoming the new primary
+//   5. Admins and super-admins can drag anything regardless of current
+//      assignees (emergency override).
 //
-// Rules:
-//   - Anyone on the team can SEE the whole board.
-//   - A person can reorder their OWN column freely.
-//   - Admins and super-admins can drag across columns (reassign).
-//   - Non-admins dragging outside their column is disallowed; we
-//     revert the move and show a toast.
+// Storage: still `tickets.assignee_priority` (column from s21 SQL).
+// We did NOT introduce the multi-row ticket_assignee_priorities table
+// in this iteration because the "one ticket per column" rule above
+// means one priority per ticket is enough.
 // ============================================================
 
-import { useEffect, useMemo, useState } from 'react';
-import { supabase, dbUpdate } from '../lib/supabase';
+import { useState, useMemo } from 'react';
+import { supabase, dbInsert, dbUpdate, logActivity } from '../lib/supabase';
 
 var STATUS_COLORS_MINI = {
   'Open': '#3b82f6',
+  'Acknowledged': '#8b5cf6',
   'In Progress': '#f59e0b',
   'Blocked': '#ef4444',
+  'On Hold': '#f97316',
+  'Review': '#06b6d4',
   'Closed': '#64748b',
+  'Reopened': '#eab308',
+  'New': '#3b82f6',
   'Done': '#10b981',
 };
 var PRIORITY_BADGE = {
-  high: { bg: '#fee2e2', fg: '#b91c1c', label: '🔴' },
+  high:   { bg: '#fee2e2', fg: '#b91c1c', label: '🔴' },
   medium: { bg: '#fef3c7', fg: '#a16207', label: '🟡' },
-  low: { bg: '#dcfce7', fg: '#166534', label: '🟢' },
+  low:    { bg: '#dcfce7', fg: '#166534', label: '🟢' },
 };
 
+// Parse additional_assignees (stored as a JSON string in the DB).
+// Always returns an array of user ids (never null).
+function parseAdditional(t) {
+  try {
+    var parsed = JSON.parse(t.additional_assignees || '[]');
+    return Array.isArray(parsed) ? parsed.filter(Boolean) : [];
+  } catch (e) { return []; }
+}
+
+// Full assignee list (primary + additional). Used for "can this user
+// drag this ticket?" permission checks.
+function allAssigneesOf(t) {
+  var list = t.assigned_to ? [t.assigned_to] : [];
+  parseAdditional(t).forEach(function(id) {
+    if (id && list.indexOf(id) === -1) list.push(id);
+  });
+  return list;
+}
+
 export default function PriorityBoard({
-  tickets,           // current array of all tickets
-  users,             // all team users
-  currentUserId,     // caller's id — allowed to reorder own column freely
-  isAdmin,           // allowed to move across columns
-  onReorder,         // async (payload) => void - called when user drops
-  onSelectTicket,    // (ticket) => void - open ticket detail
-  onRefresh,         // manual refresh
-  lang,              // 'ar' | 'en'
+  tickets,
+  users,
+  currentUserId,
+  isAdmin,
+  onReorder,        // callback after successful drag — parent reloads
+  onSelectTicket,   // (ticket) => void - open ticket detail
+  onRefresh,
+  lang,
 }) {
   var [dragging, setDragging] = useState(null); // { ticketId, fromUserId }
   var [dropTarget, setDropTarget] = useState(null); // { userId, position }
   var [statusFilter, setStatusFilter] = useState('open'); // open | all
   var [busy, setBusy] = useState(false);
   var [toastMsg, setToastMsg] = useState('');
-  // S22.3 (Apr 23 2026) — Per-column expand state for the Unranked pile.
-  // Max: "haitham has 10 more to show.. but we cannot open it." Previously
-  // we hid everything past the 6th ticket behind a non-clickable counter.
-  // Now each user's Unranked section can be toggled open to show all.
+  // Per-column expand/collapse state for the Unranked pile.
   var [expandedUnranked, setExpandedUnranked] = useState({});
 
-  // Only show open/in-progress on the board by default — closed tickets
-  // don't need prioritizing. Admins can toggle to see everything.
+  function showToast(msg) {
+    setToastMsg(msg);
+    setTimeout(function() { setToastMsg(''); }, 2800);
+  }
+
+  // Only show open / in-progress tickets by default. The board is about
+  // "what's on deck," not archive.
   var visibleTickets = useMemo(function() {
     return (tickets || []).filter(function(t) {
-      if (!t.assigned_to) return false; // unassigned tickets go in a special column below
+      if (!t.assigned_to) return false;
       if (statusFilter === 'open') {
-        var s = (t.status || '').toLowerCase();
+        var s = String(t.status || '').toLowerCase();
         return s !== 'closed' && s !== 'done' && s !== 'cancelled' && s !== 'resolved';
       }
       return true;
     });
   }, [tickets, statusFilter]);
 
-  // Build per-user columns. Ranked tickets first (by assignee_priority ASC),
-  // then unranked below. An "Unassigned" pseudo-column collects tickets
-  // whose assigned_to is null or unknown.
+  // Build per-user columns. Ranked first (priority 1 at top), then unranked.
+  //
+  // S22.8 (Apr 23 2026) — Priority convention:
+  //   1..999    = RANKED pile (Max's top-N list)
+  //   1001..    = UNRANKED pile with explicit user-set order
+  //   null      = UNRANKED pile, never touched, sorted by creation date
+  //
+  // This lets users reorder the unranked pile too (previously it was
+  // frozen to creation-date sort). When a ticket is dropped into the
+  // unranked section, it gets a priority in the 1001+ range that
+  // encodes its unranked position.
+  var UNRANKED_FLOOR = 1000;
   var columns = useMemo(function() {
     var byUser = {};
     (users || []).forEach(function(u) {
       byUser[u.id] = { user: u, ranked: [], unranked: [] };
     });
     visibleTickets.forEach(function(t) {
-      if (!byUser[t.assigned_to]) return; // assignee not in current team list
-      if (t.assignee_priority != null) {
+      if (!byUser[t.assigned_to]) return;
+      var p = t.assignee_priority;
+      if (p != null && p < UNRANKED_FLOOR) {
         byUser[t.assigned_to].ranked.push(t);
       } else {
         byUser[t.assigned_to].unranked.push(t);
       }
     });
-    Object.values(byUser).forEach(function(col) {
+    Object.keys(byUser).forEach(function(uid) {
+      var col = byUser[uid];
       col.ranked.sort(function(a, b) { return Number(a.assignee_priority) - Number(b.assignee_priority); });
-      col.unranked.sort(function(a, b) { return new Date(b.created_at).getTime() - new Date(a.created_at).getTime(); });
+      // Unranked sort: user-ordered (≥1001) come first in their order,
+      // then untouched (null priority) by creation date. That way, any
+      // tickets Max has hand-ordered stay at the top of the unranked
+      // pile, and freshly-created tickets land below them.
+      col.unranked.sort(function(a, b) {
+        var pa = a.assignee_priority, pb = b.assignee_priority;
+        var aOrdered = pa != null && pa >= UNRANKED_FLOOR;
+        var bOrdered = pb != null && pb >= UNRANKED_FLOOR;
+        if (aOrdered && bOrdered) return Number(pa) - Number(pb);
+        if (aOrdered) return -1;
+        if (bOrdered) return 1;
+        return new Date(b.created_at).getTime() - new Date(a.created_at).getTime();
+      });
     });
     return byUser;
   }, [visibleTickets, users]);
@@ -95,20 +150,15 @@ export default function PriorityBoard({
   var todayStrip = useMemo(function() {
     return (users || []).map(function(u) {
       var col = columns[u.id];
-      var top = col && col.ranked.length > 0 ? col.ranked[0] : null;
-      return { user: u, top: top };
+      return { user: u, top: col && col.ranked.length > 0 ? col.ranked[0] : null };
     });
   }, [columns, users]);
 
-  function showToast(msg) {
-    setToastMsg(msg);
-    setTimeout(function() { setToastMsg(''); }, 2500);
-  }
+  // ---- Drag handlers ---------------------------------------------------
 
   function onDragStart(e, t) {
     setDragging({ ticketId: t.id, fromUserId: t.assigned_to });
     e.dataTransfer.effectAllowed = 'move';
-    // Firefox needs data set to allow drop events
     try { e.dataTransfer.setData('text/plain', t.id); } catch (_) {}
   }
 
@@ -117,14 +167,27 @@ export default function PriorityBoard({
     setDropTarget(null);
   }
 
-  function onDragOverCol(e, userId, position) {
+  function onDragOverCol(e, userId, position, pile) {
     if (!dragging) return;
     e.preventDefault();
     e.dataTransfer.dropEffect = 'move';
-    setDropTarget({ userId: userId, position: position });
+    setDropTarget({ userId: userId, position: position, pile: pile || 'ranked' });
   }
 
-  async function onDropCol(e, targetUserId, targetPosition) {
+  // Check: can the current user drag this ticket?
+  // Rule (per Max): admins can always drag. Anyone on the ticket
+  // (primary OR additional assignee) can drag.
+  function canDragTicket(ticket) {
+    if (isAdmin) return true;
+    if (!ticket) return false;
+    return allAssigneesOf(ticket).indexOf(currentUserId) !== -1;
+  }
+
+  // S22.8 — Pile-aware drop.
+  //   pile = 'ranked'   → set priorities 1..N for the target's ranked list
+  //   pile = 'unranked' → set priorities UNRANKED_FLOOR+1.. for the target's unranked list
+  // Drops also handle cross-column (reassign) when fromUserId !== targetUserId.
+  async function onDropCol(e, targetUserId, targetPosition, pile) {
     e.preventDefault();
     if (!dragging) return;
     var src = dragging;
@@ -132,69 +195,131 @@ export default function PriorityBoard({
     setDropTarget(null);
     if (busy) return;
 
-    // Permission: non-admins can only reorder within their own column
+    var draggedTicket = (tickets || []).find(function(t) { return t.id === src.ticketId; });
+    if (!draggedTicket) return;
+
+    // Permission: current user must be on the ticket OR be an admin.
+    if (!canDragTicket(draggedTicket)) {
+      showToast('Only people on this ticket can move it. Ask to be added first.');
+      return;
+    }
+
+    var targetPile = pile || 'ranked';
     var crossColumn = src.fromUserId !== targetUserId;
-    if (crossColumn && !isAdmin) {
-      showToast('Only admins can move tickets between people.');
-      return;
-    }
-    if (!crossColumn && src.fromUserId !== currentUserId && !isAdmin) {
-      showToast('You can only reorder your own column.');
-      return;
-    }
-
     setBusy(true);
+
     try {
-      // Build the new priority order for the target column
-      var targetCol = columns[targetUserId];
-      var ranked = targetCol ? targetCol.ranked.slice() : [];
-      // If it's a move WITHIN the same column, first remove from current position
-      if (!crossColumn) {
-        ranked = ranked.filter(function(t) { return t.id !== src.ticketId; });
-      }
-      // Find the dragged ticket (from its source column) so we can insert it
-      var draggedTicket = (tickets || []).find(function(t) { return t.id === src.ticketId; });
-      if (!draggedTicket) { setBusy(false); return; }
-      var insertedTicket = Object.assign({}, draggedTicket, {
-        assigned_to: targetUserId,
-      });
-      // Clamp position to valid range [0 .. ranked.length]
-      var pos = Math.max(0, Math.min(ranked.length, targetPosition));
-      ranked.splice(pos, 0, insertedTicket);
+      // --------------------------------------------------------------
+      // CROSS-COLUMN MOVE — reassign
+      // --------------------------------------------------------------
+      if (crossColumn) {
+        var oldPrimary = draggedTicket.assigned_to;
+        var existingAdditional = parseAdditional(draggedTicket);
 
-      // Compute new priorities (1-based) for each ticket in the target column
-      var updates = [];
-      ranked.forEach(function(t, idx) {
-        var newPriority = idx + 1;
-        if (t.assignee_priority !== newPriority || t.assigned_to !== targetUserId) {
-          var changes = { assignee_priority: newPriority };
-          if (t.assigned_to !== targetUserId) changes.assigned_to = targetUserId;
-          updates.push({ id: t.id, changes: changes });
+        var newAdditional = existingAdditional.filter(function(id) {
+          return id && id !== targetUserId;
+        });
+        if (oldPrimary && oldPrimary !== targetUserId && newAdditional.indexOf(oldPrimary) === -1) {
+          newAdditional.push(oldPrimary);
         }
-      });
 
-      // If the dragged ticket came from a different column, we also need to
-      // renumber the SOURCE column to close the gap.
+        var wasAlreadyOnTicket = existingAdditional.indexOf(targetUserId) !== -1 || oldPrimary === targetUserId;
+
+        await dbUpdate('tickets', draggedTicket.id, {
+          assigned_to: targetUserId,
+          additional_assignees: newAdditional.length ? JSON.stringify(newAdditional) : null,
+          updated_by: currentUserId,
+        }, currentUserId);
+
+        try {
+          var commentText;
+          if (wasAlreadyOnTicket) {
+            commentText = '🔀 Reassigned on Priority Board — now primary';
+          } else {
+            commentText = '🔀 Added as assignee via Priority Board (auto-added by system)';
+          }
+          await dbInsert('ticket_comments', {
+            ticket_id: draggedTicket.id,
+            comment_text: commentText,
+            is_system: true,
+            created_by: currentUserId,
+          }, currentUserId);
+        } catch (_) { /* non-fatal */ }
+
+        try { await logActivity(currentUserId, 'Reassigned ticket on Priority Board: ' + draggedTicket.title, 'ticket'); } catch (_) {}
+      }
+
+      // --------------------------------------------------------------
+      // BUILD THE TARGET PILE AFTER THE DROP
+      // --------------------------------------------------------------
+      var targetCol = columns[targetUserId] || { ranked: [], unranked: [] };
+      var listRef = targetPile === 'unranked' ? targetCol.unranked : targetCol.ranked;
+      var list = listRef.slice();
+
+      // Same-column move: remove ticket from its CURRENT position first.
+      // (The ticket might be in either pile of the source column.)
+      if (!crossColumn) {
+        list = list.filter(function(t) { return t.id !== src.ticketId; });
+        // Also remove from the other pile of the same column, in case
+        // the drag is pile→pile within the same column.
+        if (targetPile === 'ranked') {
+          targetCol.unranked = targetCol.unranked.filter(function(t) { return t.id !== src.ticketId; });
+        } else {
+          targetCol.ranked = targetCol.ranked.filter(function(t) { return t.id !== src.ticketId; });
+        }
+      }
+
+      var pos = Math.max(0, Math.min(list.length, targetPosition));
+      var insertedTicket = Object.assign({}, draggedTicket, { assigned_to: targetUserId });
+      list.splice(pos, 0, insertedTicket);
+
+      // Renumber the pile with the right base.
+      //   ranked:   1, 2, 3, ...
+      //   unranked: 1001, 1002, 1003, ...
+      var base = targetPile === 'unranked' ? UNRANKED_FLOOR : 0;
+      for (var i = 0; i < list.length; i++) {
+        var t = list[i];
+        var newPriority = base + i + 1;
+        if (t.assignee_priority !== newPriority) {
+          try {
+            await dbUpdate('tickets', t.id, { assignee_priority: newPriority }, currentUserId);
+          } catch (_) {}
+        }
+      }
+
+      // --------------------------------------------------------------
+      // RENUMBER THE SOURCE COLUMN (gap closed after removal)
+      // Runs for BOTH cross-column AND pile-crossing same-column moves.
+      // --------------------------------------------------------------
       if (crossColumn) {
         var srcCol = columns[src.fromUserId];
         if (srcCol) {
           var srcRanked = srcCol.ranked.filter(function(t) { return t.id !== src.ticketId; });
-          srcRanked.forEach(function(t, idx) {
-            var np = idx + 1;
-            if (t.assignee_priority !== np) {
-              updates.push({ id: t.id, changes: { assignee_priority: np } });
+          for (var j = 0; j < srcRanked.length; j++) {
+            var newP = j + 1;
+            if (srcRanked[j].assignee_priority !== newP) {
+              try { await dbUpdate('tickets', srcRanked[j].id, { assignee_priority: newP }, currentUserId); } catch (_) {}
             }
-          });
+          }
+          // Also renumber the source's unranked ordered pile (keep their
+          // relative order, fill any gap left by removal).
+          var srcUnranked = srcCol.unranked
+            .filter(function(t) { return t.id !== src.ticketId; })
+            .filter(function(t) { return t.assignee_priority != null && t.assignee_priority >= UNRANKED_FLOOR; });
+          for (var k = 0; k < srcUnranked.length; k++) {
+            var newUP = UNRANKED_FLOOR + k + 1;
+            if (srcUnranked[k].assignee_priority !== newUP) {
+              try { await dbUpdate('tickets', srcUnranked[k].id, { assignee_priority: newUP }, currentUserId); } catch (_) {}
+            }
+          }
         }
       }
 
-      // Persist
-      for (var i = 0; i < updates.length; i++) {
-        await dbUpdate('tickets', updates[i].id, updates[i].changes, currentUserId);
-      }
-
-      if (onReorder) onReorder({ affected: updates.length });
-      showToast('Updated ' + updates.length + ' ticket' + (updates.length === 1 ? '' : 's'));
+      var toastMsg = crossColumn
+        ? 'Moved & reassigned ✓'
+        : (targetPile === 'unranked' ? 'Unranked order updated ✓' : 'Priority updated ✓');
+      showToast(toastMsg);
+      if (onReorder) onReorder({ crossColumn: crossColumn, pile: targetPile });
     } catch (err) {
       console.error('[priority-board]', err);
       showToast('Could not save: ' + (err && err.message ? err.message : 'unknown error'));
@@ -203,6 +328,7 @@ export default function PriorityBoard({
     }
   }
 
+  // Clear all priority numbers in a column. Only admins or the column owner.
   function clearRanking(userId) {
     if (!isAdmin && userId !== currentUserId) {
       showToast('You can only clear your own priorities.');
@@ -215,31 +341,34 @@ export default function PriorityBoard({
     (async function() {
       try {
         for (var i = 0; i < col.ranked.length; i++) {
-          await dbUpdate('tickets', col.ranked[i].id, { assignee_priority: null }, currentUserId);
+          try {
+            await dbUpdate('tickets', col.ranked[i].id, { assignee_priority: null }, currentUserId);
+          } catch (_) {}
         }
-        if (onReorder) onReorder({ affected: col.ranked.length });
+        if (onReorder) onReorder({ cleared: col.ranked.length });
         showToast('Cleared ' + col.ranked.length + ' priority ' + (col.ranked.length === 1 ? 'rank' : 'ranks'));
-      } catch (err) {
-        showToast('Could not clear: ' + (err && err.message ? err.message : err));
       } finally {
         setBusy(false);
       }
     })();
   }
 
+  // ---- Rendering helpers -----------------------------------------------
+
   function renderTicketCard(t, rank) {
-    var assignees = (users || []);
     var prio = PRIORITY_BADGE[String(t.priority || 'medium').toLowerCase()] || PRIORITY_BADGE.medium;
     var statusColor = STATUS_COLORS_MINI[t.status] || '#64748b';
+    var canDrag = canDragTicket(t);
+    var additional = parseAdditional(t);
     return (
       <div
         key={t.id}
-        draggable
-        onDragStart={function(e) { onDragStart(e, t); }}
+        draggable={canDrag}
+        onDragStart={canDrag ? function(e) { onDragStart(e, t); } : undefined}
         onDragEnd={onDragEnd}
         onClick={function() { if (onSelectTicket) onSelectTicket(t); }}
-        className="bg-white border border-slate-200 rounded-lg p-2 mb-1.5 cursor-grab hover:shadow-md hover:border-indigo-300 transition select-none"
-        title="Drag to reorder; click to open"
+        className={'bg-white border border-slate-200 rounded-lg p-2 mb-1.5 hover:shadow-md hover:border-indigo-300 transition select-none ' + (canDrag ? 'cursor-grab' : 'cursor-pointer')}
+        title={canDrag ? 'Drag to reorder or move to another column; click to open' : 'Click to open (only people on this ticket can drag)'}
       >
         <div className="flex items-center gap-1.5 mb-1">
           {rank != null && (
@@ -264,23 +393,33 @@ export default function PriorityBoard({
           )}
         </div>
         <div className="text-xs font-semibold text-slate-800 leading-tight line-clamp-2">{t.title}</div>
-        {t.due_date && (
-          <div className="text-[9px] text-slate-500 mt-1">Due {t.due_date}</div>
-        )}
+        <div className="flex items-center gap-1 mt-1">
+          {t.due_date && (
+            <div className="text-[9px] text-slate-500">Due {t.due_date}</div>
+          )}
+          {additional.length > 0 && (
+            <div className="text-[9px] text-slate-400 ml-auto" title="Also assigned to others">
+              +{additional.length} other{additional.length === 1 ? '' : 's'}
+            </div>
+          )}
+        </div>
       </div>
     );
   }
 
-  function renderDropZone(userId, position) {
-    var active = dropTarget && dropTarget.userId === userId && dropTarget.position === position;
+  function renderDropZone(userId, position, pile) {
+    var p = pile || 'ranked';
+    var active = dropTarget && dropTarget.userId === userId && dropTarget.position === position && (dropTarget.pile || 'ranked') === p;
     return (
       <div
-        onDragOver={function(e) { onDragOverCol(e, userId, position); }}
-        onDrop={function(e) { onDropCol(e, userId, position); }}
+        onDragOver={function(e) { onDragOverCol(e, userId, position, p); }}
+        onDrop={function(e) { onDropCol(e, userId, position, p); }}
         className={'h-2 -my-1 rounded transition ' + (active ? 'h-8 bg-indigo-100 border-2 border-dashed border-indigo-400' : '')}
       />
     );
   }
+
+  // ---- Main render -----------------------------------------------------
 
   return (
     <div className="space-y-4">
@@ -311,11 +450,11 @@ export default function PriorityBoard({
           </button>
         )}
         <div className="text-[11px] text-slate-500 flex-1 min-w-[180px]">
-          Drag tickets to reorder within a column. {isAdmin ? 'Drag across columns to reassign.' : 'Only admins can reassign to other people.'}
+          Drag within a column to reorder. Drag across columns to reassign — if the new person wasn't on the ticket, they're added automatically.
         </div>
       </div>
 
-      {/* Today strip — one-glance view of each person's #1 priority */}
+      {/* Today strip */}
       <div>
         <div className="text-[10px] font-bold uppercase tracking-wide text-slate-500 mb-2">
           🎯 Today — Everyone's #1 Priority
@@ -397,15 +536,28 @@ export default function PriorityBoard({
                   </div>
                 )}
 
-                {/* Unranked pile — S22.3: clickable "show all / show less" */}
+                {/* Unranked pile — clickable "show more/less".
+                    S22.8 — Drop zones between cards make the unranked pile
+                    also draggable. Tickets dropped here keep the same
+                    visual treatment (no rank number) but get a stored order
+                    using the UNRANKED_FLOOR+N convention. */}
                 {col.unranked.length > 0 && (function() {
                   var isExpanded = !!expandedUnranked[u.id];
                   var shownCount = isExpanded ? col.unranked.length : Math.min(6, col.unranked.length);
                   var hiddenCount = col.unranked.length - shownCount;
+                  var shown = col.unranked.slice(0, shownCount);
                   return (
                     <div className="mt-3 pt-2 border-t border-slate-200">
                       <div className="text-[9px] font-bold text-slate-400 uppercase mb-1">Unranked ({col.unranked.length})</div>
-                      {col.unranked.slice(0, shownCount).map(function(t) { return renderTicketCard(t, null); })}
+                      {renderDropZone(u.id, 0, 'unranked')}
+                      {shown.map(function(t, idx) {
+                        return (
+                          <div key={t.id}>
+                            {renderTicketCard(t, null)}
+                            {renderDropZone(u.id, idx + 1, 'unranked')}
+                          </div>
+                        );
+                      })}
                       {col.unranked.length > 6 && (
                         <button
                           onClick={function() {
@@ -424,6 +576,24 @@ export default function PriorityBoard({
                     </div>
                   );
                 })()}
+
+                {/* S22.8 — Empty-unranked drop zone.
+                    If a column has a ranked pile but no unranked pile yet,
+                    the user still needs a way to drop a ticket into the
+                    unranked section (e.g. demote a ranked ticket). This
+                    zone appears only when ranked has items AND unranked
+                    is empty, so there's always a target. */}
+                {col.unranked.length === 0 && col.ranked.length > 0 && (
+                  <div className="mt-3 pt-2 border-t border-slate-200">
+                    <div className="text-[9px] font-bold text-slate-400 uppercase mb-1">Unranked (0)</div>
+                    <div
+                      onDragOver={function(e) { onDragOverCol(e, u.id, 0, 'unranked'); }}
+                      onDrop={function(e) { onDropCol(e, u.id, 0, 'unranked'); }}
+                      className={'text-center text-[9px] text-slate-400 italic py-3 rounded-lg border-2 border-dashed ' + (dropTarget && dropTarget.userId === u.id && dropTarget.pile === 'unranked' ? 'border-indigo-400 bg-indigo-50' : 'border-slate-200')}>
+                      Drop here to demote (unranked)
+                    </div>
+                  </div>
+                )}
               </div>
             );
           })}
