@@ -536,12 +536,62 @@ export default function CalendarTab({ customers, user, userProfile, users, ticke
   };
   const closeEditEvent = () => { setEditEvent(null); setEditForm({}); setEditScope('single'); };
 
+  // v54.3 — Permission helpers for meeting actions.
+  //
+  // canCancel: creator, super admin, or primary assignee can cancel
+  //   (soft-delete with audit trail). Cancelled meetings stay on the
+  //   calendar crossed out and can be restored.
+  //
+  // canDelete: only super admin, and only with typed "DELETE" confirm.
+  //   Hard-delete, gone forever.
+  //
+  // canDecline: any attendee who is NOT the creator AND has not already
+  //   declined. Creator shouldn't "decline their own meeting" — that's
+  //   a Cancel action instead.
+  const isSuperAdmin = userProfile && userProfile.role === 'super_admin';
+
+  const canCancel = (ev) => {
+    if (!ev || !myId) return false;
+    if (isSuperAdmin) return true;
+    if (ev.created_by === myId) return true;
+    if (ev.assigned_to === myId) return true;
+    return false;
+  };
+
+  const canDelete = (ev) => {
+    // Hard delete is admin-only for audit safety
+    return !!isSuperAdmin;
+  };
+
+  const canDecline = (ev) => {
+    if (!ev || !myId) return false;
+    // Creator can't decline their own meeting — they cancel instead
+    if (ev.created_by === myId) return false;
+    // Must be an attendee
+    const inAttendees = Array.isArray(ev.attendees) && ev.attendees.indexOf(myId) !== -1;
+    if (!inAttendees) return false;
+    // Already declined?
+    const alreadyDeclined = Array.isArray(ev.declined_by) && ev.declined_by.indexOf(myId) !== -1;
+    if (alreadyDeclined) return false;
+    return true;
+  };
+
+  const hasDeclined = (ev) => {
+    if (!ev || !myId) return false;
+    return Array.isArray(ev.declined_by) && ev.declined_by.indexOf(myId) !== -1;
+  };
+
   // v54.1 — Cancel meeting workflow. Distinct from edit (changes) and
   // hard-delete (admin only, gone forever). Cancel = soft-delete with
   // audit trail: status becomes 'cancelled', shows in calendar with
   // strike-through styling, notes preserved. Can be uncancelled later.
   const cancelMeeting = async () => {
     if (!editEvent) return;
+    // v54.3 — permission check
+    if (!canCancel(editEvent)) {
+      if (toast) toast.error(lang === 'ar' ? 'لا يمكنك إلغاء هذا الاجتماع' : 'You cannot cancel this meeting (only the creator, primary assignee, or admin can)');
+      return;
+    }
     const reason = window.prompt(
       (lang === 'ar' ? 'سبب الإلغاء (اختياري):' : 'Reason for cancelling (optional):'),
       ''
@@ -579,6 +629,123 @@ export default function CalendarTab({ customers, user, userProfile, users, ticke
       if (onRefresh) onRefresh();
     } catch (err) {
       if (toast) toast.error((lang === 'ar' ? 'فشل الإلغاء: ' : 'Cancel failed: ') + (err && err.message));
+    }
+  };
+
+  // v54.3 — Hard DELETE. Super admin only. Gone forever, no recovery.
+  // Requires typing "DELETE" to confirm.
+  const deleteMeeting = async () => {
+    if (!editEvent) return;
+    if (!canDelete(editEvent)) {
+      if (toast) toast.error(lang === 'ar' ? 'الحذف الكامل متاح فقط للمشرف الأعلى' : 'Hard delete is super-admin only');
+      return;
+    }
+    const typed = window.prompt(
+      (lang === 'ar'
+        ? 'سيتم حذف هذا الاجتماع نهائياً ولا يمكن استعادته. اكتب "DELETE" للتأكيد:'
+        : 'This permanently deletes the meeting (no recovery). Type DELETE to confirm:'),
+      ''
+    );
+    if (typed !== 'DELETE') {
+      if (typed !== null && toast) toast.error(lang === 'ar' ? 'تم إلغاء الحذف' : 'Delete cancelled — you must type DELETE exactly');
+      return;
+    }
+    try {
+      // Audit row BEFORE delete so we can still see who/when after removal
+      await logActivity(myId, 'HARD-DELETED event: ' + editEvent.title + ' (id=' + editEvent.id + ')', 'calendar');
+      try { await cancelEventReminders(editEvent.id); } catch (e) {}
+      await supabase.from('calendar_events').delete().eq('id', editEvent.id);
+      if (toast) toast.success(lang === 'ar' ? 'تم حذف الاجتماع نهائياً' : 'Meeting permanently deleted');
+      closeEditEvent();
+      if (onRefresh) onRefresh();
+    } catch (err) {
+      if (toast) toast.error((lang === 'ar' ? 'فشل الحذف: ' : 'Delete failed: ') + (err && err.message));
+    }
+  };
+
+  // v54.3 — Decline an invitation. Any attendee (not creator) can decline.
+  // Adds self to declined_by array, optionally records a reason, emails
+  // the creator. Event stays alive for other attendees.
+  const declineInvite = async () => {
+    if (!editEvent) return;
+    if (!canDecline(editEvent)) {
+      if (toast) toast.error(lang === 'ar' ? 'لا يمكنك رفض هذه الدعوة' : 'You cannot decline this invitation');
+      return;
+    }
+    const reason = window.prompt(
+      (lang === 'ar' ? 'سبب الرفض (اختياري — سيتم إرساله لمنظم الاجتماع):' : 'Reason for declining (optional — sent to the meeting organizer):'),
+      ''
+    );
+    if (reason === null) return;
+    try {
+      // Add myId to declined_by and (if reason provided) to decline_reasons
+      const newDeclinedBy = Array.isArray(editEvent.declined_by) ? editEvent.declined_by.slice() : [];
+      if (newDeclinedBy.indexOf(myId) === -1) newDeclinedBy.push(myId);
+      const newReasons = editEvent.decline_reasons || {};
+      if (reason) newReasons[myId] = reason;
+      await dbUpdate('calendar_events', editEvent.id, {
+        declined_by: newDeclinedBy,
+        decline_reasons: newReasons,
+      }, myId);
+
+      // Cancel reminders for just this user (server handles per-user list
+      // internally; we best-effort call the existing cancel function which
+      // clears all reminders for the event, then the event still stays
+      // scheduled for the rest — reminders will regenerate via cron).
+      try { await cancelEventReminders(editEvent.id); } catch (e) {}
+
+      // Email the creator
+      try {
+        const myName = (userProfile && userProfile.name) || 'Someone';
+        const creator = (users || []).find((u) => u.id === editEvent.created_by);
+        if (creator && creator.id) {
+          // /api/notify supports recipientIds targeting; it looks up the
+          // email from users table server-side.
+          await fetch('/api/notify', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              type: 'event_declined',
+              recipientIds: [creator.id],
+              subject: myName + ' declined: ' + editEvent.title,
+              body:
+                myName + ' declined your meeting "' + editEvent.title + '"' +
+                ' on ' + editEvent.event_date +
+                (editEvent.event_time ? ' at ' + editEvent.event_time : '') + '.' +
+                (reason ? '\n\nReason: ' + reason : '\n\n(No reason provided)'),
+              triggeredBy: myId,
+            }),
+          });
+        }
+      } catch (e) { /* email is best-effort; don't block the decline */ }
+
+      await logActivity(myId, 'Declined invitation: ' + editEvent.title, 'calendar');
+      if (toast) toast.success(lang === 'ar' ? 'تم رفض الدعوة — تم إعلام المنظم' : 'Invitation declined — organizer notified');
+      closeEditEvent();
+      if (onRefresh) onRefresh();
+    } catch (err) {
+      if (toast) toast.error((lang === 'ar' ? 'فشل الرفض: ' : 'Decline failed: ') + (err && err.message));
+    }
+  };
+
+  // v54.3 — Un-decline (accept again after declining). Removes self from
+  // declined_by. No email needed on the reverse action.
+  const undeclineInvite = async () => {
+    if (!editEvent || !hasDeclined(editEvent)) return;
+    try {
+      const newDeclinedBy = (editEvent.declined_by || []).filter((id) => id !== myId);
+      const newReasons = Object.assign({}, editEvent.decline_reasons || {});
+      delete newReasons[myId];
+      await dbUpdate('calendar_events', editEvent.id, {
+        declined_by: newDeclinedBy,
+        decline_reasons: newReasons,
+      }, myId);
+      await logActivity(myId, 'Accepted (undeclined) invitation: ' + editEvent.title, 'calendar');
+      if (toast) toast.success(lang === 'ar' ? 'تم قبول الدعوة' : 'Invitation accepted');
+      closeEditEvent();
+      if (onRefresh) onRefresh();
+    } catch (err) {
+      if (toast) toast.error((lang === 'ar' ? 'فشل القبول: ' : 'Accept failed: ') + (err && err.message));
     }
   };
 
@@ -1150,9 +1317,14 @@ export default function CalendarTab({ customers, user, userProfile, users, ticke
               <button onClick={saveEditEvent} className="flex-1 px-4 py-2.5 bg-emerald-500 text-white rounded-lg text-sm font-bold">💾 Save / حفظ</button>
               <button onClick={closeEditEvent} className="px-4 py-2.5 border-2 border-slate-300 rounded-lg text-sm font-bold">Close / إغلاق</button>
             </div>
-            {/* v54.1 — Cancel/Restore meeting (distinct from closing the
-                modal). Soft-cancel keeps the record + notes thread. */}
-            <div className="mt-3 pt-3 border-t border-slate-200">
+            {/* v54.1/v54.3 — Meeting lifecycle actions. Different buttons
+                appear depending on the user's relationship to the event:
+                - Creator, primary assignee, super admin → can Cancel (soft)
+                - Super admin only → can Delete (hard, permanent)
+                - Non-creator attendees → can Decline
+                - Already declined → can Accept (undecline)
+                - Already cancelled → can Restore */}
+            <div className="mt-3 pt-3 border-t border-slate-200 space-y-2">
               {editEvent.status === 'cancelled' ? (
                 <button
                   onClick={uncancelMeeting}
@@ -1161,16 +1333,62 @@ export default function CalendarTab({ customers, user, userProfile, users, ticke
                   ♻️ {lang === 'ar' ? 'استعادة الاجتماع الملغى' : 'Restore this cancelled meeting'}
                 </button>
               ) : (
-                <button
-                  onClick={cancelMeeting}
-                  className="w-full px-4 py-2 bg-red-50 border border-red-300 text-red-700 rounded-lg text-xs font-semibold hover:bg-red-100"
-                >
-                  ❌ {lang === 'ar' ? 'إلغاء الاجتماع' : 'Cancel this meeting'}
-                </button>
+                <>
+                  {canCancel(editEvent) && (
+                    <button
+                      onClick={cancelMeeting}
+                      className="w-full px-4 py-2 bg-red-50 border border-red-300 text-red-700 rounded-lg text-xs font-semibold hover:bg-red-100"
+                    >
+                      ❌ {lang === 'ar' ? 'إلغاء الاجتماع' : 'Cancel this meeting'}
+                    </button>
+                  )}
+                  {canDecline(editEvent) && (
+                    <button
+                      onClick={declineInvite}
+                      className="w-full px-4 py-2 bg-orange-50 border border-orange-300 text-orange-700 rounded-lg text-xs font-semibold hover:bg-orange-100"
+                      title={lang === 'ar' ? 'رفض الدعوة وإشعار المنظم بالبريد' : 'Decline and email the organizer'}
+                    >
+                      🚫 {lang === 'ar' ? 'رفض الدعوة' : 'Decline invitation'}
+                    </button>
+                  )}
+                  {hasDeclined(editEvent) && (
+                    <button
+                      onClick={undeclineInvite}
+                      className="w-full px-4 py-2 bg-emerald-50 border border-emerald-300 text-emerald-700 rounded-lg text-xs font-semibold hover:bg-emerald-100"
+                    >
+                      ✓ {lang === 'ar' ? 'قبول الدعوة (كنت قد رفضتها)' : 'Accept invitation (you had declined)'}
+                    </button>
+                  )}
+                  {canDelete(editEvent) && (
+                    <button
+                      onClick={deleteMeeting}
+                      className="w-full px-4 py-2 bg-slate-900 border border-slate-900 text-white rounded-lg text-xs font-semibold hover:bg-black"
+                      title={lang === 'ar' ? 'حذف كامل (لا يمكن استعادته)' : 'Permanent delete — no recovery'}
+                    >
+                      🗑 {lang === 'ar' ? 'حذف كامل (للمشرف فقط)' : 'Permanent DELETE (admin only)'}
+                    </button>
+                  )}
+                </>
               )}
               {editEvent.status === 'cancelled' && editEvent.cancellation_reason && (
                 <div className="mt-2 text-[10px] text-slate-500 italic">
                   {lang === 'ar' ? 'السبب: ' : 'Reason: '}{editEvent.cancellation_reason}
+                </div>
+              )}
+              {/* Show decline roster if any attendees declined */}
+              {Array.isArray(editEvent.declined_by) && editEvent.declined_by.length > 0 && (
+                <div className="mt-2 text-[10px] text-slate-600">
+                  <div className="font-semibold mb-1">{lang === 'ar' ? 'رفضوا الدعوة:' : 'Declined by:'}</div>
+                  {editEvent.declined_by.map((uid) => {
+                    const u = (users || []).find((x) => x.id === uid);
+                    const name = u ? u.name : uid;
+                    const reason = editEvent.decline_reasons && editEvent.decline_reasons[uid];
+                    return (
+                      <div key={uid} className="text-slate-500">
+                        • {name}{reason ? ' — ' + reason : ''}
+                      </div>
+                    );
+                  })}
                 </div>
               )}
             </div>

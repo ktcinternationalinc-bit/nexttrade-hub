@@ -172,18 +172,29 @@ export default function AIGreeter({ user, userProfile, users, tickets, invoices,
     try { window.dispatchEvent(new CustomEvent('nadia-stop-wake')); } catch (e) {}
   };
 
-  // v51 — self-suppression window. While Nadia is speaking (and for 3s
+  // v51 — self-suppression window. While Nadia is speaking (and for 500ms
   // after), ignore any wake-word events. Her own audio coming back
   // through the mic was triggering "hey nadia" matches, making her
   // restart herself and making "mute" feel broken. VoiceController reads
   // this window from the global event stream.
   //
-  // v51.2 (Apr 24 2026) — Tail extended from 2s to 3s because echo from
-  // laptop speakers can last that long before Web Speech stops returning
-  // fragments. Also: updates always take the MAX — never shrink — so an
-  // early-arriving shorter window can't accidentally reopen the mic.
-  var SELF_SUPPRESS_MS = 3000;
+  // v54.2 (Apr 24 2026) — Tail SHRUNK from 3s to 500ms. 3 seconds was
+  // eating the user's follow-up command after "I'm here" (command
+  // arrives ~500-2000ms after ack). Real mic echo is under 500ms on
+  // any reasonable device. Combined with the "let wake-words through"
+  // fix in VoiceController, this restores the natural Hey-Nadia-then-
+  // command flow without breaking the echo protection.
+  var SELF_SUPPRESS_MS = 500;
   var selfSuppressUntilRef = useRef(0);
+
+  // v54.2 — Autoplay-blocked detection. Browsers block audio.play()
+  // until the user has interacted with the page. On a fresh morning
+  // tab-reload, the login greeting tries to speak, the browser blocks
+  // it, and the greeting appears silently in the chat. We detect this,
+  // show a "Tap to hear Nadia" banner, and replay the queued audio as
+  // soon as the user taps anything.
+  var [autoplayBlocked, setAutoplayBlocked] = useState(false);
+  var pendingAutoplayRef = useRef(null); // { text, blob, url }
   var [typingText, setTypingText] = useState('');
   var [typingDone, setTypingDone] = useState(true);
   var chatEndRef = useRef(null);
@@ -695,7 +706,33 @@ export default function AIGreeter({ user, userProfile, users, tickets, invoices,
       audioRef.current = audio;
       setCurrentAudio(audio);
       audio.onended = function() { audioRef.current = null; fireStop(); };
-      audio.play().catch(function() { doFallbackSpeak(text); });
+      // v54.2 (Apr 24 2026) — Autoplay-blocked detection.
+      //
+      // Browsers block audio.play() until the user has interacted with
+      // the page. On a fresh morning tab-reload, the login greeting
+      // tries to speak, the browser blocks it, and the greeting appears
+      // silently in the chat with no audio. Users report "she didn't
+      // greet me this morning" — she did, she just couldn't make sound.
+      //
+      // Fix: if play() rejects with NotAllowedError (autoplay policy),
+      // queue the text for replay and flip a flag that shows a
+      // "🔊 Tap to hear Nadia" banner. One tap unlocks audio for the
+      // whole session.
+      audio.play().catch(function(err) {
+        var isAutoplayBlock = err && (err.name === 'NotAllowedError' || err.name === 'AbortError');
+        if (isAutoplayBlock) {
+          try { console.log('[nadia] autoplay blocked — queueing for user-tap unlock'); } catch (e) {}
+          try {
+            pendingAutoplayRef.current = { text: text, blob: blob, url: url };
+            setAutoplayBlocked(true);
+          } catch (e) {}
+          // Don't fall back to SpeechSynthesis — that's also blocked on
+          // autoplay-restricted pages. Wait for user tap.
+          fireStop();
+        } else {
+          doFallbackSpeak(text);
+        }
+      });
     }).catch(function() { doFallbackSpeak(text); });
   }, [useLang, muted]);
 
@@ -777,14 +814,20 @@ export default function AIGreeter({ user, userProfile, users, tickets, invoices,
         try { window.dispatchEvent(new CustomEvent('nadia-stop-wake')); } catch (e) {}
         // Fall through to normal processing below.
       }
-      // v51 — self-suppression. Ignore wake words emitted during her own
-      // speech + 2s after. Prevents her voice bleeding into the mic and
-      // re-triggering her. (VoiceController enforces this too, but guarding
-      // here is belt-and-suspenders.)
-      if (selfSuppressUntilRef.current && Date.now() < selfSuppressUntilRef.current) {
-        try { console.log('[nadia] ignoring wake-word — self-suppress window active'); } catch (e) {}
-        return;
-      }
+      // v54.2 (Apr 24 2026) — REMOVED redundant self-suppress check here.
+      //
+      // VoiceController already does its own self-suppress check before
+      // dispatching hey-bob-command. By the time we get here, this IS a
+      // real user command — re-checking was dropping legit commands
+      // spoken in the 3-second tail buffer after "I'm here". Symptom:
+      // "Hey Nadia" → "I'm here" → user speaks → silence (command
+      // silently discarded).
+      //
+      // Old code (disabled):
+      // if (selfSuppressUntilRef.current && Date.now() < selfSuppressUntilRef.current) {
+      //   return;  // <-- this was eating the user's follow-up command
+      // }
+
       // User said a wake-word command — this IS a user action, so it's
       // treated like pressing a button. Stop current speech, then process.
       stopSpeech();
@@ -1732,6 +1775,34 @@ export default function AIGreeter({ user, userProfile, users, tickets, invoices,
           >
             <span>⏹</span>
             <span>{useLang === 'ar' ? 'إيقاف المساعد' : 'Tap to stop Nadia'}</span>
+          </button>
+        )}
+        {/* v54.2 — Autoplay-unlock banner. Browsers block audio on fresh
+            page load until the user taps something. If Nadia tried to
+            speak and got blocked, we show this big blue "tap to hear"
+            button. One tap plays the queued audio and unlocks the rest
+            of the session. */}
+        {autoplayBlocked && !speaking && (
+          <button
+            onClick={function() {
+              var queued = pendingAutoplayRef.current;
+              setAutoplayBlocked(false);
+              if (!queued) return;
+              try {
+                var audio = new Audio(queued.url);
+                audioRef.current = audio;
+                setCurrentAudio(audio);
+                setSpeaking(true);
+                audio.onended = function() { audioRef.current = null; fireStop(); };
+                audio.play().catch(function() { fireStop(); });
+              } catch (e) { fireStop(); }
+              pendingAutoplayRef.current = null;
+            }}
+            className="w-full mb-2 px-3 py-2 rounded-xl bg-blue-500 hover:bg-blue-600 text-white text-xs font-bold flex items-center justify-center gap-2 shadow-lg animate-pulse"
+            title={useLang === 'ar' ? 'اضغط لتشغيل صوت ناديا' : 'Tap to hear Nadia'}
+          >
+            <span>🔊</span>
+            <span>{useLang === 'ar' ? 'اضغط لسماع تحية ناديا' : 'Tap to hear Nadia\'s greeting'}</span>
           </button>
         )}
         {/* v53.3 (Apr 24 2026) — ALWAYS-VISIBLE break button. Previously this

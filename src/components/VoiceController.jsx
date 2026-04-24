@@ -131,11 +131,6 @@ export default function VoiceController({ userId, userProfile, enabled, onComman
 
     rec.onresult = function(ev) {
       if (!mountedRef.current) return;
-      // v51 — Self-suppress. Nadia just spoke; ignore anything the mic
-      // picks up for a brief window to prevent audio feedback loops. This
-      // runs BEFORE hard-stop check because her own voice must never wake
-      // her — even a phrase that sounds like "hey nadia" in her tail audio.
-      if (selfSuppressUntilRef.current && Date.now() < selfSuppressUntilRef.current) return;
 
       var transcript = '';
       var isFinal = false;
@@ -146,6 +141,27 @@ export default function VoiceController({ userId, userProfile, enabled, onComman
       }
       transcript = transcript.trim();
       if (!transcript) return;
+
+      // v51 — Self-suppress. Nadia just spoke; ignore anything the mic
+      // picks up for a brief window to prevent audio feedback loops.
+      //
+      // v54.2 (Apr 24 2026) — Let wake-word matches through even during
+      // self-suppress. Real mic echo lasts at most 300-500ms, but the
+      // user's follow-up command ("show me my tickets") legitimately
+      // arrives 500-2000ms after "I'm here". Dropping those commands
+      // was breaking the Hey-Nadia-then-command flow. If her own echo
+      // produces a false "hey nadia" match, the handler just wakes her
+      // again harmlessly — worst case, she says "I'm here" a second time,
+      // which is far better than silently eating a real command.
+      if (selfSuppressUntilRef.current && Date.now() < selfSuppressUntilRef.current) {
+        var inSuppressCheck = detectWakeWord(transcript);
+        if (!inSuppressCheck.matched) {
+          // Not a wake word — likely her own voice echo. Drop.
+          return;
+        }
+        // Is a wake word → fall through; the engine + command path will
+        // handle it normally. User's "Hey Nadia" re-wakes cleanly.
+      }
 
       // v51.1 (Apr 24 2026) — Hard stop: we still process wake-word matches
       // so "Hey Nadia" wakes her from sleep at any time. Non-wake ambient

@@ -198,9 +198,22 @@ test('SS3 fireStop REPLACES suppression with now+tail (v51.3 fix)', function() {
     'must NOT gate on take-max — that was the v51.2 bug');
 });
 
-test('SS4 Wake-word handler checks self-suppress before processing', function() {
-  assert(/ignoring wake-word — self-suppress window active/.test(greeter),
-    'explicit log for dropped wake word in self-suppress');
+test('SS4 AIGreeter no longer blocks commands on self-suppress (v54.2)', function() {
+  // v54.2 removed the AIGreeter-level self-suppress re-check in onBobCommand.
+  // VoiceController already filters based on suppress before dispatching;
+  // if a command got here, it's real. Old code had:
+  //   if (selfSuppressUntilRef.current && Date.now() < selfSuppressUntilRef.current) { return; }
+  // with log "ignoring wake-word — self-suppress window active".
+  // Both should be gone (or commented out).
+  var m = greeter.match(/var onBobCommand = function\(ev\)[\s\S]*?if \(doSendRef\.current\) doSendRef\.current\(cmd, false\);/);
+  assert(m, 'onBobCommand body');
+  // No LIVE log line about dropping the wake-word in this handler
+  var lines = m[0].split('\n').filter(function(l) { return l.trim() && !l.trim().startsWith('//'); });
+  var hasActiveSuppressDropLog = lines.some(function(l) {
+    return /ignoring wake-word — self-suppress window active/.test(l);
+  });
+  assert(!hasActiveSuppressDropLog,
+    'no LIVE suppress-drop log in onBobCommand (commented lines ignored)');
 });
 
 test('SS5 VoiceController reads until from nadia-tts-start', function() {

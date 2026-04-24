@@ -28,9 +28,11 @@ test('E1 Follow-up auto-send is disabled (was causing echo loop)', function() {
     'must contain the disable marker so maintainers know why');
 });
 
-test('E2 Self-suppress tail extended to 3 seconds', function() {
-  assert(/SELF_SUPPRESS_MS = 3000/.test(greeter),
-    'tail must be at least 3s to cover laptop-speaker echo');
+test('E2 Self-suppress tail is 500 milliseconds (v54.2 — short enough not to eat real commands)', function() {
+  // v51.2: 3000ms (too long — ate real user commands in the tail)
+  // v54.2: 500ms (real mic echo is under 500ms; commands arrive ~500-2000ms after ack)
+  assert(/SELF_SUPPRESS_MS = 500/.test(greeter),
+    'tail is 500ms (v54.2 fix)');
 });
 
 test('E3 AIGreeter self-suppress: floor on start, REPLACE on stop (v51.3 fix)', function() {

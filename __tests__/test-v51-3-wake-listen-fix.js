@@ -72,12 +72,11 @@ test('W5 Hard-stop wake path falls through to wake engine', function() {
 });
 
 test('W6 Wake-ack does not prevent the next command from being heard', function() {
-  // After doSpeak("I'm here") fires, fireStop sets selfSuppress to now+3s.
-  // The user's command arriving ~2-4s after ack should then not be
-  // suppressed. Verified structurally: fireStop uses SELF_SUPPRESS_MS,
-  // which is 3000ms.
-  assert(/var SELF_SUPPRESS_MS = 3000/.test(greeter),
-    'tail is 3 seconds, matching typical time between "Hey Nadia" ack and the command');
+  // v54.2: tail reduced to 500ms AND wake-word matches fall through even
+  // during the tail. Real commands arrive 500-2000ms after ack; old 3s
+  // tail was eating them. This test pins the new behavior.
+  assert(/var SELF_SUPPRESS_MS = 500/.test(greeter),
+    'tail is 500ms, short enough not to eat legitimate commands');
 });
 
 console.log('');
