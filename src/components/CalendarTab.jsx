@@ -136,11 +136,15 @@ export default function CalendarTab({ customers, user, userProfile, users, ticke
     if (calView === 'my') {
       return allEvents.filter(function(e) {
         if (e._ticket) return e.assigned_to === myId;
-        return e.assigned_to === myId || e.created_by === myId;
+        // v54.1 — include multi-attendee meetings where the user is in
+        // the attendees list. An event with attendees=[uid1, uid2, uid3]
+        // shows on ALL three people's "My calendar" views.
+        var inAttendees = Array.isArray(e.attendees) && e.attendees.indexOf(myId) !== -1;
+        return e.assigned_to === myId || e.created_by === myId || inAttendees;
       });
     }
     return allEvents; // team view shows all
-  }, [allEvents, calView, user]);
+  }, [allEvents, calView, user, myId]);
 
   const dayEvents = (day) => {
     const ds = year + '-' + String(month + 1).padStart(2, '0') + '-' + String(day).padStart(2, '0');
@@ -196,39 +200,51 @@ export default function CalendarTab({ customers, user, userProfile, users, ticke
       const rawInt = Number.isFinite(+f.recurringInterval) ? Math.floor(+f.recurringInterval) : 1;
       const interval = Math.min(99, Math.max(1, rawInt || 1));
 
+      // v54.1 — ONE event, multiple attendees. Previous behavior created
+      // N separate rows (one per invitee), which meant the creator saw
+      // the meeting twice if they also invited themselves, and
+      // cancellation had to be repeated for each copy. Now: one row with
+      // attendees = [uid1, uid2, ...]. Everyone invited sees it.
+      //
+      // `assigned_to` stays as the first attendee (usually the creator)
+      // so legacy queries and the assignee-based reminder system keep
+      // working. `attendees` is authoritative for "who's on this meeting".
+      const attendees = Array.from(new Set(assignees)); // dedupe
+      const ownerUid = attendees[0];
+
       const createdIds = [];
       const seriesIdsToExpand = [];
-      for (const uid of assignees) {
-        const payload = {
-          title: f.title,
-          description: f.description || null,
-          event_date: f.eventDate,
-          event_time: f.eventTime || null,
-          event_type: f.eventType || 'task',
-          assigned_to: uid,
-          customer_id: f.customerId || null,
-          recurring: pattern,
-          recurring_end: f.recurringEnd || null,
-          recurrence_interval: isRecurring ? interval : null,
-          series_id: isRecurring ? newUUID() : null,
-          is_series_master: isRecurring,
-          // S22.6 (Apr 23 2026) — Explicitly set created_by. Without this,
-          // when Max assigned a weekly recurring event to someone else, his
-          // "My" view filter (assigned_to === myId || created_by === myId)
-          // matched neither field, so the event was invisible on his
-          // calendar even though it saved correctly.
-          created_by: myId,
-        };
-        const row = await dbInsert('calendar_events', payload, myId);
-        createdIds.push(row);
+      const payload = {
+        title: f.title,
+        description: f.description || null,
+        event_date: f.eventDate,
+        event_time: f.eventTime || null,
+        event_type: f.eventType || 'task',
+        assigned_to: ownerUid,                // primary owner (first attendee)
+        attendees: attendees,                 // ALL invited users
+        customer_id: f.customerId || null,
+        recurring: pattern,
+        recurring_end: f.recurringEnd || null,
+        recurrence_interval: isRecurring ? interval : null,
+        series_id: isRecurring ? newUUID() : null,
+        is_series_master: isRecurring,
+        // S22.6 (Apr 23 2026) — Explicitly set created_by. Without this,
+        // when Max assigned a weekly recurring event to someone else, his
+        // "My" view filter (assigned_to === myId || created_by === myId)
+        // matched neither field, so the event was invisible on his
+        // calendar even though it saved correctly.
+        created_by: myId,
+      };
+      const row = await dbInsert('calendar_events', payload, myId);
+      createdIds.push(row);
 
-        try {
-          await scheduleEventReminders(row, [uid], myId);
-        } catch (e) { console.log('[calendar] scheduleEventReminders failed: ' + e.message); }
+      // Reminders go to ALL attendees (each gets their own reminder)
+      try {
+        await scheduleEventReminders(row, attendees, myId);
+      } catch (e) { console.log('[calendar] scheduleEventReminders failed: ' + e.message); }
 
-        if (isRecurring && row.series_id) {
-          seriesIdsToExpand.push(row.series_id);
-        }
+      if (isRecurring && row.series_id) {
+        seriesIdsToExpand.push(row.series_id);
       }
 
       // S20.1 — AWAIT the occurrence generator (previously fire-and-forget).
@@ -519,6 +535,71 @@ export default function CalendarTab({ customers, user, userProfile, users, ticke
     setEditScope('single');
   };
   const closeEditEvent = () => { setEditEvent(null); setEditForm({}); setEditScope('single'); };
+
+  // v54.1 — Cancel meeting workflow. Distinct from edit (changes) and
+  // hard-delete (admin only, gone forever). Cancel = soft-delete with
+  // audit trail: status becomes 'cancelled', shows in calendar with
+  // strike-through styling, notes preserved. Can be uncancelled later.
+  const cancelMeeting = async () => {
+    if (!editEvent) return;
+    const reason = window.prompt(
+      (lang === 'ar' ? 'سبب الإلغاء (اختياري):' : 'Reason for cancelling (optional):'),
+      ''
+    );
+    // User clicked Cancel on the prompt → null → abort. Empty string → proceed.
+    if (reason === null) return;
+    if (!confirm(
+      (lang === 'ar'
+        ? 'إلغاء هذا الاجتماع؟ سيبقى في التقويم مع شطب، ويمكن استعادته لاحقاً.'
+        : 'Cancel this meeting? It stays on the calendar (crossed out) and can be restored later.')
+    )) return;
+
+    try {
+      const cancelPatch = {
+        status: 'cancelled',
+        cancelled_at: new Date().toISOString(),
+        cancelled_by: myId,
+        cancellation_reason: reason || null,
+      };
+
+      if (editScope === 'series' && editEvent.series_id) {
+        // Cancel all occurrences in the series
+        await supabase.from('calendar_events')
+          .update(cancelPatch)
+          .eq('series_id', editEvent.series_id);
+        await logActivity(myId, 'Cancelled event series: ' + editEvent.title, 'calendar');
+      } else {
+        await dbUpdate('calendar_events', editEvent.id, cancelPatch, myId);
+        await logActivity(myId, 'Cancelled event: ' + editEvent.title, 'calendar');
+      }
+
+      try { await cancelEventReminders(editEvent.id); } catch (e) {}
+      if (toast) toast.success(lang === 'ar' ? 'تم إلغاء الاجتماع' : 'Meeting cancelled');
+      closeEditEvent();
+      if (onRefresh) onRefresh();
+    } catch (err) {
+      if (toast) toast.error((lang === 'ar' ? 'فشل الإلغاء: ' : 'Cancel failed: ') + (err && err.message));
+    }
+  };
+
+  // v54.1 — Uncancel (restore) a cancelled meeting
+  const uncancelMeeting = async () => {
+    if (!editEvent) return;
+    try {
+      await dbUpdate('calendar_events', editEvent.id, {
+        status: 'scheduled',
+        cancelled_at: null,
+        cancelled_by: null,
+        cancellation_reason: null,
+      }, myId);
+      await logActivity(myId, 'Restored event: ' + editEvent.title, 'calendar');
+      if (toast) toast.success(lang === 'ar' ? 'تم استعادة الاجتماع' : 'Meeting restored');
+      closeEditEvent();
+      if (onRefresh) onRefresh();
+    } catch (err) {
+      if (toast) toast.error((lang === 'ar' ? 'فشل الاستعادة: ' : 'Restore failed: ') + (err && err.message));
+    }
+  };
 
   const saveEditEvent = async () => {
     if (!editEvent) return;
@@ -1067,7 +1148,31 @@ export default function CalendarTab({ customers, user, userProfile, users, ticke
             )}
             <div className="flex gap-2 mt-4">
               <button onClick={saveEditEvent} className="flex-1 px-4 py-2.5 bg-emerald-500 text-white rounded-lg text-sm font-bold">💾 Save / حفظ</button>
-              <button onClick={closeEditEvent} className="px-4 py-2.5 border-2 border-slate-300 rounded-lg text-sm font-bold">Cancel / إلغاء</button>
+              <button onClick={closeEditEvent} className="px-4 py-2.5 border-2 border-slate-300 rounded-lg text-sm font-bold">Close / إغلاق</button>
+            </div>
+            {/* v54.1 — Cancel/Restore meeting (distinct from closing the
+                modal). Soft-cancel keeps the record + notes thread. */}
+            <div className="mt-3 pt-3 border-t border-slate-200">
+              {editEvent.status === 'cancelled' ? (
+                <button
+                  onClick={uncancelMeeting}
+                  className="w-full px-4 py-2 bg-emerald-50 border border-emerald-300 text-emerald-800 rounded-lg text-xs font-semibold hover:bg-emerald-100"
+                >
+                  ♻️ {lang === 'ar' ? 'استعادة الاجتماع الملغى' : 'Restore this cancelled meeting'}
+                </button>
+              ) : (
+                <button
+                  onClick={cancelMeeting}
+                  className="w-full px-4 py-2 bg-red-50 border border-red-300 text-red-700 rounded-lg text-xs font-semibold hover:bg-red-100"
+                >
+                  ❌ {lang === 'ar' ? 'إلغاء الاجتماع' : 'Cancel this meeting'}
+                </button>
+              )}
+              {editEvent.status === 'cancelled' && editEvent.cancellation_reason && (
+                <div className="mt-2 text-[10px] text-slate-500 italic">
+                  {lang === 'ar' ? 'السبب: ' : 'Reason: '}{editEvent.cancellation_reason}
+                </div>
+              )}
             </div>
           </div>
         </div>

@@ -188,6 +188,9 @@ export default function PriorityBoard({
   }
   // Per-column expand/collapse state for the Unranked pile.
   var [expandedUnranked, setExpandedUnranked] = useState({});
+  // v54.1 — Per-column expand/collapse state for the Closed pile. Default
+  // collapsed (show 5, hide rest). Click "+ Show N more" to expand.
+  var [expandedClosed, setExpandedClosed] = useState({});
   // S22.14 (Apr 24 2026) — Inline quick-create for a new ticket assigned
   // directly to a team member from their board column. Max: "team members
   // who have no tickets on priority, I need to have the ability to add a
@@ -259,13 +262,53 @@ export default function PriorityBoard({
   var visibleTickets = useMemo(function() {
     return (tickets || []).filter(function(t) {
       if (!t.assigned_to) return false;
-      if (statusFilter === 'open') {
-        var s = String(t.status || '').toLowerCase();
-        return s !== 'closed' && s !== 'done' && s !== 'cancelled' && s !== 'resolved';
-      }
-      return true;
+      // v54.1 — ALWAYS exclude closed/done/cancelled/resolved from the
+      // ranked/unranked piles. Closed tickets live in their own pile at
+      // the bottom of each column (see closedByUser below). The
+      // statusFilter state is kept for future use (e.g. "hide completely"
+      // vs "show greyed-out"), but the current filter options are:
+      //   - 'open' (default): hide closed (they still show in the closed pile)
+      //   - 'all': show closed inline in the closed pile too (same as 'open'
+      //     for now — closed always shows in the dedicated pile)
+      // The distinction matters once we add a third option like "hide closed
+      // entirely". For now they behave the same because closed always appear
+      // in the bottom pile.
+      var s = String(t.status || '').toLowerCase();
+      return s !== 'closed' && s !== 'done' && s !== 'cancelled' && s !== 'resolved';
     });
-  }, [tickets, statusFilter]);
+  }, [tickets]);
+
+  // v54.1 — Closed tickets are always kept (regardless of statusFilter)
+  // so they can be shown greyed-out at the bottom of each person's
+  // column. Max: "all closed tickets for priority should appear on
+  // bottom of their buckets greyed out and closed... show last 5 and
+  // then drill down for more."
+  //
+  // This is a separate pipeline from `visibleTickets` because:
+  //   - The 'all' filter already includes them (would show as normal
+  //     cards, which defeats the "context at the bottom" pattern)
+  //   - The 'open' filter excludes them entirely (would hide them)
+  // So we always build closedByUser independent of the filter.
+  var closedByUser = useMemo(function() {
+    var result = {};
+    (users || []).forEach(function(u) { result[u.id] = []; });
+    (tickets || []).forEach(function(t) {
+      if (!t.assigned_to || !result[t.assigned_to]) return;
+      var s = String(t.status || '').toLowerCase();
+      if (s === 'closed' || s === 'done' || s === 'cancelled' || s === 'resolved') {
+        result[t.assigned_to].push(t);
+      }
+    });
+    // Sort by most recently closed (falls back to updated_at, then created_at).
+    Object.keys(result).forEach(function(uid) {
+      result[uid].sort(function(a, b) {
+        var ta = new Date(a.closed_at || a.updated_at || a.created_at).getTime();
+        var tb = new Date(b.closed_at || b.updated_at || b.created_at).getTime();
+        return tb - ta;
+      });
+    });
+    return result;
+  }, [tickets, users]);
 
   // Build per-user columns. Ranked first (priority 1 at top), then unranked.
   //
@@ -634,8 +677,14 @@ export default function PriorityBoard({
     var canDrag = canDragTicket(t);
     var additional = parseAdditional(t);
     var isStarred = !!t.starred_today;
-    // v52 — starred cards get an amber glow so they stand out at a glance.
-    var starredCls = isStarred ? 'bg-gradient-to-br from-amber-50 to-white border-amber-300 shadow-amber-100 shadow-md' : 'bg-white border-slate-200';
+    // v54.1 — starred cards need HIGH CONTRAST. Previous amber-50→white
+    // gradient made the card nearly white with dark text on a pale
+    // background — looked good but lacked visual punch when starred.
+    // Now starred cards use amber-200→amber-100 gradient with a bold
+    // amber-600 border so they pop. Non-starred stays clean white.
+    var starredCls = isStarred
+      ? 'bg-gradient-to-br from-amber-200 to-amber-100 border-amber-500 border-2 shadow-amber-300 shadow-md'
+      : 'bg-white border-slate-200';
     var isEditingPrio = editingPriorityFor === t.id;
     return (
       <div
@@ -719,13 +768,22 @@ export default function PriorityBoard({
             <span className="text-[8px] font-bold text-red-600">⏰ overdue</span>
           )}
         </div>
-        <div className="text-xs font-semibold text-slate-800 leading-tight line-clamp-2">{t.title}</div>
+        {/* v54.1 — ticket number + title, displayed together. The ticket
+            number in bold amber-900 (starred) or slate-500 (normal) helps
+            Max + team scan the board and reference tickets by number.
+            Title uses black/slate-900 for maximum readability on amber. */}
+        {t.ticket_number && (
+          <div className={'text-[10px] font-bold mb-0.5 ' + (isStarred ? 'text-amber-900' : 'text-slate-500')}>
+            {t.ticket_number}
+          </div>
+        )}
+        <div className={'text-xs font-semibold leading-tight line-clamp-2 ' + (isStarred ? 'text-slate-900' : 'text-slate-800')}>{t.title}</div>
         <div className="flex items-center gap-1 mt-1">
           {t.due_date && (
-            <div className="text-[9px] text-slate-500">Due {t.due_date}</div>
+            <div className={'text-[9px] ' + (isStarred ? 'text-amber-900 font-semibold' : 'text-slate-500')}>Due {t.due_date}</div>
           )}
           {additional.length > 0 && (
-            <div className="text-[9px] text-slate-400 ml-auto" title="Also assigned to others">
+            <div className={'text-[9px] ml-auto ' + (isStarred ? 'text-amber-800' : 'text-slate-400')} title="Also assigned to others">
               +{additional.length} other{additional.length === 1 ? '' : 's'}
             </div>
           )}
@@ -775,6 +833,38 @@ export default function PriorityBoard({
               </div>
             )}
           </div>
+        )}
+      </div>
+    );
+  }
+
+  // v54.1 — Compact, greyed-out rendering for CLOSED tickets. Shown at
+  // the bottom of each column as read-only context ("what's been done
+  // recently"). Not draggable. Clicking still opens the detail modal
+  // so the user can review/edit/reopen if needed.
+  function renderClosedCard(t) {
+    var closedDate = t.closed_at || t.updated_at || t.created_at;
+    var daysAgo = null;
+    if (closedDate) {
+      var diff = (Date.now() - new Date(closedDate).getTime()) / (1000 * 60 * 60 * 24);
+      daysAgo = Math.floor(diff);
+    }
+    var ago = daysAgo === 0 ? 'today' : daysAgo === 1 ? 'yesterday' : daysAgo != null ? daysAgo + 'd ago' : '';
+    return (
+      <div
+        key={t.id}
+        onClick={function() { if (onSelectTicket) onSelectTicket(t); }}
+        className="bg-slate-100 border border-slate-200 rounded-md px-2 py-1 mb-1 hover:bg-slate-200 transition cursor-pointer opacity-60 hover:opacity-100"
+        title={'Closed ' + ago + ' — click to reopen or review'}
+      >
+        <div className="flex items-center gap-1">
+          <span className="text-[9px] text-slate-500">✓</span>
+          <span className="text-[10px] text-slate-600 font-medium truncate line-through" style={{ textDecorationColor: '#cbd5e1' }}>
+            {t.title}
+          </span>
+        </div>
+        {ago && (
+          <div className="text-[8px] text-slate-400 pl-3">{ago}</div>
         )}
       </div>
     );
@@ -1062,6 +1152,44 @@ export default function PriorityBoard({
                     </div>
                   </div>
                 )}
+
+                {/* v54.1 — CLOSED pile. Shows the 5 most recently closed
+                    tickets greyed-out with a line-through, sorted most
+                    recent first. User can click "+ Show N more" to expand
+                    the full list. Clicking a closed card opens the detail
+                    modal so they can review or reopen. Not draggable. */}
+                {(closedByUser[u.id] || []).length > 0 && (function() {
+                  var closedList = closedByUser[u.id];
+                  var isExpandedC = !!expandedClosed[u.id];
+                  var shownC = isExpandedC ? closedList.length : Math.min(5, closedList.length);
+                  var hiddenC = closedList.length - shownC;
+                  return (
+                    <div className="mt-3 pt-2 border-t border-slate-200">
+                      <div className="text-[9px] font-bold text-slate-400 uppercase mb-1 flex items-center gap-1">
+                        <span>✓</span>
+                        <span>Closed ({closedList.length})</span>
+                      </div>
+                      {closedList.slice(0, shownC).map(function(t) {
+                        return renderClosedCard(t);
+                      })}
+                      {closedList.length > 5 && (
+                        <button
+                          onClick={function() {
+                            setExpandedClosed(function(prev) {
+                              var next = {};
+                              for (var k in prev) next[k] = prev[k];
+                              next[u.id] = !prev[u.id];
+                              return next;
+                            });
+                          }}
+                          className="w-full mt-1 text-[10px] font-bold text-slate-500 hover:bg-slate-100 rounded py-1 transition"
+                        >
+                          {isExpandedC ? '− Show less' : '+ Show ' + hiddenC + ' more'}
+                        </button>
+                      )}
+                    </div>
+                  );
+                })()}
 
                 {/* S22.14 — Quick-create new ticket for this person.
                     Available to admins (can assign to anyone) and to the

@@ -3430,10 +3430,15 @@ function runSection29_CalendarTabAudit() {
   const haeBlock = cSrc.match(/const handleAddEvent = async \(\) =>[\s\S]*?^\s{2}\};/m);
   assert(haeBlock, '29.hae.0a handleAddEvent block found');
   const hae = haeBlock[0];
-  // Currently creates N independent rows for N assignees (loop dbInsert).
-  // This is the limitation R9 (team calendar with attendees table) will solve.
-  assert(/for \(const uid of assignees\)/.test(hae),
-    '29.hae.gap.1a KNOWN LIMITATION: 1 event per assignee (loop dbInsert) — R9 attendees table will replace');
+  // v54.1 — R9 IMPLEMENTED: one event row with `attendees` array instead of
+  // N rows (one per assignee). Old test asserted the LIMITATION ("for const
+  // uid of assignees" loop with dbInsert inside); new test asserts the FIX.
+  assert(!/for \(const uid of assignees\)[\s\S]{0,200}dbInsert/.test(hae),
+    '29.hae.r9.1a R9 IMPLEMENTED: loop-per-assignee dbInsert gone');
+  assert(/const attendees = Array\.from\(new Set\(assignees\)\)/.test(hae),
+    '29.hae.r9.1b attendees array collected');
+  assert(/attendees: attendees/.test(hae),
+    '29.hae.r9.1c attendees written to payload');
 
   // Notify-event-scheduled fires for non-self assignees
   assert(/const otherAssignees = assignees\.filter\(uid => uid !== myId\)/.test(hae),
@@ -4260,17 +4265,21 @@ function runSection35_CalendarTabR1() {
     '35.add.2b is_series_master = isRecurring');
   assert(/recurrence_interval:\s*isRecurring \? interval : null/.test(ab),
     '35.add.2c recurrence_interval only set for recurring');
-  // Schedule reminders for the assignee right after insert
-  assert(/await scheduleEventReminders\(row, \[uid\], myId\)/.test(ab),
-    '35.add.3a reminders scheduled for each assignee');
+  // v54.1 — R9 IMPLEMENTED: scheduleEventReminders called ONCE with the
+  // full attendees array, not in a per-uid loop.
+  assert(/await scheduleEventReminders\(row, attendees, myId\)/.test(ab),
+    '35.add.3a reminders scheduled for all attendees in one call');
   // Fire-and-forget generator POST for immediate lookahead
   assert(/fetch\('\/api\/events\/generate-occurrences'/.test(ab),
     '35.add.3b generator POST fired after recurring insert (immediate lookahead)');
   assert(/series_id:\s*row\.series_id|JSON\.stringify\(\{\s*series_id\s*\}\)/.test(ab),
     '35.add.3c generator POST passes series_id (shorthand or explicit)');
-  // Parallel-series gap (R9 will fix) — each assignee gets independent series
-  assert(/for \(const uid of assignees\)/.test(ab),
-    '35.add.gap.1a DOCUMENTED R9 LIMITATION: N assignees = N parallel series (preserved from pre-session-2)');
+  // v54.1 — R9 IMPLEMENTED: multi-attendee events create ONE row with
+  // attendees array. The old per-assignee loop is gone.
+  assert(!/for \(const uid of assignees\)[\s\S]{0,200}dbInsert/.test(ab),
+    '35.add.r9.1a R9 IMPLEMENTED: per-assignee loop dbInsert removed');
+  assert(/attendees: attendees/.test(ab),
+    '35.add.r9.1b attendees array in payload');
 
   // ---------- markEventStatus / completeEvent / checkInWithNotes cancel reminders ----------
   assert(/const markEventStatus = async \(ev, status\)[\s\S]*?cancelEventReminders\(ev\.id\)/.test(cSrc),
