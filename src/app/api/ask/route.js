@@ -365,7 +365,13 @@ export async function POST(request) {
         actionSyntaxBlock += '  * create_reminder: {"type":"create_reminder","task":"<what>","due_date":"YYYY-MM-DD","priority":"normal|high","target_users":"<user_uuid>"}\n';
         actionSyntaxBlock += '  * send_team_message: {"type":"send_team_message","target_user_id":"<user_uuid>","message":"<text>","urgent":false}\n';
         actionSyntaxBlock += '  * create_ticket: {"type":"create_ticket","title":"<title>","description":"<detail>","priority":"medium","assigned_to":"<user_uuid>","due_date":"YYYY-MM-DD"}\n';
-        actionSyntaxBlock += '  * create_event: {"type":"create_event","title":"<title>","event_date":"YYYY-MM-DD","event_time":"HH:MM","assigned_to":"<user_uuid>"}\n';
+        actionSyntaxBlock += '  * create_event: {"type":"create_event","title":"<title>","event_date":"YYYY-MM-DD","event_time":"HH:MM","assigned_to":"<user_uuid>","force":false}\n';
+        actionSyntaxBlock += '  * update_event: {"type":"update_event","event_id":"<uuid>" OR "title_match":"<partial title>","event_date":"<existing YYYY-MM-DD>","new_title":"<new>","new_event_date":"YYYY-MM-DD","new_event_time":"HH:MM","new_assigned_to":"<user_uuid>","force":false}\n';
+        actionSyntaxBlock += '  * delete_event: {"type":"delete_event","event_id":"<uuid>" OR "title_match":"<partial>","event_date":"YYYY-MM-DD"}\n';
+        actionSyntaxBlock += 'CALENDAR RULES:\n';
+        actionSyntaxBlock += '- create_event and update_event auto-check for time conflicts against existing events for the same person. If there is a conflict you will get a warning back saying "Time conflict: ... Say schedule anyway or override". Tell the user about the conflict and ASK if they want to override. If they say yes/override/anyway/do it/book both, re-emit the action with "force":true.\n';
+        actionSyntaxBlock += '- When the user says "move my 2pm meeting to 3pm" or "reschedule the Tuesday call" → use update_event with title_match + event_date to find it, then new_event_time / new_event_date for the new slot.\n';
+        actionSyntaxBlock += '- When the user says "cancel my 2pm meeting" or "delete the Tuesday event" → use delete_event.\n';
         actionSyntaxBlock += 'Resolve employee names to UUIDs from the USERS list below (case-insensitive, accept nicknames and partial matches). If you cannot confidently resolve a name, ASK the user for clarification instead of guessing.\n';
         actionSyntaxBlock += 'USERS (uuid → name):\n';
         gUsersList.forEach(function(u) {
@@ -553,7 +559,19 @@ export async function POST(request) {
         }
         while (gMessages.length > 0 && gMessages[0].role !== 'user') gMessages.shift();
         gMessages = gMessages.filter(function(m) { return m.content && String(m.content).trim(); });
-        gMessages.push({ role: 'user', content: question });
+        // v53.2 (Apr 24 2026) — CRITICAL FIX: the greeter-mode path (which is
+        // what AIGreeter.jsx actually uses when the user chats) was pushing
+        // `question` on top of the history even when history already contained
+        // the user's message at the tail (the client pushes it into msgs before
+        // sending). Result: Claude saw the user's message twice and correctly
+        // replied "you said that twice" on every turn. The v53.1 fix patched
+        // the OTHER code path further down in this file — not this one.
+        // Check tail and skip duplicate push.
+        var lastG = gMessages[gMessages.length - 1];
+        var greeterAlreadyHas = lastG && lastG.role === 'user' && String(lastG.content || '').trim() === String(question || '').trim();
+        if (!greeterAlreadyHas) {
+          gMessages.push({ role: 'user', content: question });
+        }
 
         var fullSystem = body.systemOverride + superAdminBlock + actionSyntaxBlock + crossTeamBlock;
 
@@ -695,6 +713,29 @@ export async function POST(request) {
             } else if (actionData.type === 'create_event') {
               if (!actionData.title || !actionData.event_date) throw new Error('create_event requires title + event_date');
               var evAssignee = actionData.assigned_to || userId;
+              // v53.3 — Conflict detection. If the assignee already has
+              // an event at the same date + time, warn and require
+              // actionData.force = true to override. This prevents
+              // accidental double-bookings.
+              if (actionData.event_time && !actionData.force) {
+                var conflictRes = await supabase.from('calendar_events')
+                  .select('id, title, event_time, assigned_to')
+                  .eq('event_date', actionData.event_date)
+                  .eq('assigned_to', evAssignee)
+                  .eq('event_time', actionData.event_time)
+                  .limit(1);
+                if (conflictRes && conflictRes.data && conflictRes.data.length > 0) {
+                  var conflict = conflictRes.data[0];
+                  execLine = '⚠️ Time conflict: ' + (conflict.title || 'existing event') + ' is already at ' + actionData.event_time + ' on ' + actionData.event_date + '. Say "schedule anyway" or "override" to book both; say "change to X:XX" to pick a different time.';
+                  actionsExecuted.push({ ok: false, type: 'create_event', conflict: true, error: execLine });
+                  // Short-circuit: do not create. Collapse + append and continue.
+                  var jc1 = beforeBlock && afterBlock ? '\n' : '';
+                  finalText = (beforeBlock + jc1 + afterBlock).trim();
+                  if (finalText) finalText += '\n\n' + execLine;
+                  else finalText = execLine;
+                  continue;
+                }
+              }
               var ceRes = await supabase.from('calendar_events').insert({
                 title: actionData.title,
                 event_date: actionData.event_date,
@@ -711,7 +752,81 @@ export async function POST(request) {
                 notifyEventScheduledServer([evAssignee], actionData.title, actionData.event_date, userId).catch(function(){});
               }
               execLine = '✅ Event created' + evWho + ': ' + actionData.title + ' on ' + actionData.event_date + (actionData.event_time ? ' @ ' + actionData.event_time : '');
+              if (actionData.force) execLine += ' (override — existing meeting at same time kept)';
               actionsExecuted.push({ ok: true, type: 'create_event', message: execLine });
+            } else if (actionData.type === 'update_event') {
+              // v53.3 — Update calendar event by matching title / date / id.
+              // Accepts: event_id (preferred), OR title_match + event_date
+              // Fields that can be updated: title, event_date, event_time,
+              // event_type, assigned_to
+              var uTarget = null;
+              if (actionData.event_id) {
+                var uIdRes = await supabase.from('calendar_events').select('*').eq('id', actionData.event_id).maybeSingle();
+                uTarget = uIdRes && uIdRes.data;
+              } else if (actionData.title_match) {
+                var uQ = supabase.from('calendar_events').select('*').ilike('title', '%' + actionData.title_match + '%');
+                if (actionData.event_date) uQ = uQ.eq('event_date', actionData.event_date);
+                uQ = uQ.order('event_date', { ascending: true }).limit(1);
+                var uMRes = await uQ;
+                uTarget = uMRes && uMRes.data && uMRes.data[0];
+              }
+              if (!uTarget) throw new Error('update_event: no matching event found. Try event_id or title_match + event_date.');
+
+              var newDate = actionData.new_event_date || uTarget.event_date;
+              var newTime = actionData.new_event_time !== undefined ? actionData.new_event_time : uTarget.event_time;
+              var newAssignee = actionData.new_assigned_to || uTarget.assigned_to;
+              // v53.3 — Same conflict check on update: if we're moving this
+              // event to a date+time+person slot that already has another
+              // event, warn unless force=true.
+              if (newTime && !actionData.force &&
+                  (newDate !== uTarget.event_date || newTime !== uTarget.event_time || newAssignee !== uTarget.assigned_to)) {
+                var uConfRes = await supabase.from('calendar_events')
+                  .select('id, title, event_time, assigned_to')
+                  .eq('event_date', newDate)
+                  .eq('assigned_to', newAssignee)
+                  .eq('event_time', newTime)
+                  .neq('id', uTarget.id)
+                  .limit(1);
+                if (uConfRes && uConfRes.data && uConfRes.data.length > 0) {
+                  var uConflict = uConfRes.data[0];
+                  execLine = '⚠️ Cannot move — conflict: ' + (uConflict.title || 'existing event') + ' already at ' + newTime + ' on ' + newDate + '. Say "move anyway" or pick a different time.';
+                  actionsExecuted.push({ ok: false, type: 'update_event', conflict: true, error: execLine });
+                  var jc2 = beforeBlock && afterBlock ? '\n' : '';
+                  finalText = (beforeBlock + jc2 + afterBlock).trim();
+                  if (finalText) finalText += '\n\n' + execLine;
+                  else finalText = execLine;
+                  continue;
+                }
+              }
+              var uPatch = { updated_at: new Date().toISOString() };
+              if (actionData.new_title) uPatch.title = actionData.new_title;
+              if (actionData.new_event_date) uPatch.event_date = actionData.new_event_date;
+              if (actionData.new_event_time !== undefined) uPatch.event_time = actionData.new_event_time || null;
+              if (actionData.new_event_type) uPatch.event_type = actionData.new_event_type;
+              if (actionData.new_assigned_to) uPatch.assigned_to = actionData.new_assigned_to;
+              var uPatchRes = await supabase.from('calendar_events').update(uPatch).eq('id', uTarget.id);
+              if (uPatchRes && uPatchRes.error) throw uPatchRes.error;
+              execLine = '✅ Updated event: ' + (uPatch.title || uTarget.title) + ' → ' + (uPatch.event_date || uTarget.event_date) + (uPatch.event_time || uTarget.event_time ? ' @ ' + (uPatch.event_time || uTarget.event_time) : '');
+              if (actionData.force) execLine += ' (conflict overridden)';
+              actionsExecuted.push({ ok: true, type: 'update_event', message: execLine });
+            } else if (actionData.type === 'delete_event') {
+              // v53.3 — Delete (cancel) a calendar event.
+              var dTarget = null;
+              if (actionData.event_id) {
+                var dIdRes = await supabase.from('calendar_events').select('*').eq('id', actionData.event_id).maybeSingle();
+                dTarget = dIdRes && dIdRes.data;
+              } else if (actionData.title_match) {
+                var dQ = supabase.from('calendar_events').select('*').ilike('title', '%' + actionData.title_match + '%');
+                if (actionData.event_date) dQ = dQ.eq('event_date', actionData.event_date);
+                dQ = dQ.order('event_date', { ascending: true }).limit(1);
+                var dMRes = await dQ;
+                dTarget = dMRes && dMRes.data && dMRes.data[0];
+              }
+              if (!dTarget) throw new Error('delete_event: no matching event found.');
+              var dRes = await supabase.from('calendar_events').delete().eq('id', dTarget.id);
+              if (dRes && dRes.error) throw dRes.error;
+              execLine = '🗑 Cancelled event: ' + dTarget.title + ' on ' + dTarget.event_date + (dTarget.event_time ? ' @ ' + dTarget.event_time : '');
+              actionsExecuted.push({ ok: true, type: 'delete_event', message: execLine });
             } else {
               throw new Error('Unknown action type: ' + actionData.type);
             }

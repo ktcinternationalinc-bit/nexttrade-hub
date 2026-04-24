@@ -89,6 +89,10 @@ export default function PriorityBoard({
   // small "Move to →" button that opens a dropdown of other users.
   // Clicking a user reassigns the ticket (same effect as dragging there).
   var [moveToPickerFor, setMoveToPickerFor] = useState(null);
+  // v52.2 — Brief pulse highlight on a column when user jumps to it from
+  // the person-picker. Gives a visual cue "this is where you asked to go"
+  // so the user doesn't lose their place among 10 columns.
+  var [highlightedColumn, setHighlightedColumn] = useState(null);
   // v52 — horizontal scroll ref for the board strip so the person-picker
   // can scroll a specific column into view.
   var boardStripRef = useRef(null);
@@ -107,10 +111,31 @@ export default function PriorityBoard({
   //
   // Implementation: pointer position is tracked via `dragover` on the
   // container (dragover fires continuously during HTML5 drag). Scroll
-  // is applied via a RAF loop that keeps running as long as we're near
-  // an edge. We stop the loop on dragend/drop.
+  // v52.1 — Edge auto-scroll during drag.
+  //
+  // When Max has many employees, the board scrolls horizontally. To drag
+  // a ticket from person A's column to person F's column (off-screen),
+  // the user drags toward the right edge of the board; we detect this
+  // and auto-scroll horizontally so F comes into view. Source column
+  // slides off the left, drop works normally.
+  //
+  // The scrolling itself is applied via a RAF loop that keeps running as
+  // long as we're near an edge. We stop the loop on dragend/drop.
+  //
+  // v52.2 (Apr 24 2026) — CRITICAL FIX: the original implementation only
+  // fired handleBoardDragOver when the cursor was directly over the
+  // board strip element. But once the cursor enters a column (which is
+  // a child of the strip), dragover events fire on the column, and the
+  // strip-level listener gets inconsistent coverage. Result: edge scroll
+  // only worked in narrow bands where no child was under the cursor.
+  //
+  // Fix: attach a document-level `dragover` listener that fires for
+  // EVERY cursor position during the drag. The listener only does work
+  // when we're actively dragging (dragging state != null) and uses the
+  // same speed-ramp math.
   var edgeScrollRAFRef = useRef(null);
   var edgeScrollSpeedRef = useRef(0); // -N..+N pixels per frame; 0 = not scrolling
+  var documentDragOverRef = useRef(null);
 
   function stopEdgeScroll() {
     if (edgeScrollRAFRef.current) {
@@ -130,22 +155,24 @@ export default function PriorityBoard({
     edgeScrollRAFRef.current = requestAnimationFrame(edgeScrollTick);
   }
 
-  function handleBoardDragOver(e) {
-    if (!dragging) return;
+  function checkEdgeScroll(clientX) {
     var el = boardStripRef.current;
     if (!el) return;
     var rect = el.getBoundingClientRect();
-    var EDGE_ZONE = 80; // px from edge that triggers scrolling
-    var MAX_SPEED = 18; // px per frame at full speed
-    var x = e.clientX;
+    var EDGE_ZONE = 100;  // px from edge that triggers scrolling (was 80, bumped for better reach)
+    var MAX_SPEED = 22;   // px per frame at full speed (was 18)
+    var MIN_SPEED = 5;    // floor so the first few pixels from the edge actually move
     var speed = 0;
-    if (x < rect.left + EDGE_ZONE) {
-      // Near left edge → scroll left. Closer = faster.
-      var leftT = 1 - (x - rect.left) / EDGE_ZONE; // 0..1
-      speed = -Math.max(4, Math.round(leftT * MAX_SPEED));
-    } else if (x > rect.right - EDGE_ZONE) {
-      var rightT = 1 - (rect.right - x) / EDGE_ZONE;
-      speed = Math.max(4, Math.round(rightT * MAX_SPEED));
+    if (clientX < rect.left + EDGE_ZONE) {
+      var leftT = 1 - (clientX - rect.left) / EDGE_ZONE; // 0..1
+      if (leftT < 0) leftT = 0;
+      if (leftT > 1) leftT = 1;
+      speed = -Math.max(MIN_SPEED, Math.round(leftT * MAX_SPEED));
+    } else if (clientX > rect.right - EDGE_ZONE) {
+      var rightT = 1 - (rect.right - clientX) / EDGE_ZONE;
+      if (rightT < 0) rightT = 0;
+      if (rightT > 1) rightT = 1;
+      speed = Math.max(MIN_SPEED, Math.round(rightT * MAX_SPEED));
     }
     edgeScrollSpeedRef.current = speed;
     if (speed !== 0 && !edgeScrollRAFRef.current) {
@@ -153,6 +180,11 @@ export default function PriorityBoard({
     } else if (speed === 0) {
       stopEdgeScroll();
     }
+  }
+
+  function handleBoardDragOver(e) {
+    if (!dragging) return;
+    checkEdgeScroll(e.clientX);
   }
   // Per-column expand/collapse state for the Unranked pile.
   var [expandedUnranked, setExpandedUnranked] = useState({});
@@ -297,6 +329,13 @@ export default function PriorityBoard({
     try { e.dataTransfer.setData('text/plain', t.id); } catch (_) {}
     // v52 — flag so drop zones become visible everywhere on the board.
     try { window.__priorityBoardDragging = true; } catch (_) {}
+    // v52.2 — attach document-level dragover so edge-scroll works even
+    // when cursor is over a child column (not the strip itself).
+    try {
+      var docHandler = function(ev) { checkEdgeScroll(ev.clientX); };
+      documentDragOverRef.current = docHandler;
+      document.addEventListener('dragover', docHandler);
+    } catch (_) {}
   }
 
   function onDragEnd() {
@@ -304,6 +343,13 @@ export default function PriorityBoard({
     setDropTarget(null);
     try { window.__priorityBoardDragging = false; } catch (_) {}
     stopEdgeScroll();
+    // v52.2 — detach document-level dragover listener.
+    try {
+      if (documentDragOverRef.current) {
+        document.removeEventListener('dragover', documentDragOverRef.current);
+        documentDragOverRef.current = null;
+      }
+    } catch (_) {}
   }
 
   function onDragOverCol(e, userId, position, pile) {
@@ -688,15 +734,18 @@ export default function PriorityBoard({
             hover opens). Clicking opens a mini dropdown with all other
             team members; clicking a name reassigns the ticket to them
             (same effect as dragging). Solves the problem where the
-            target person was scrolled off-screen during drag. */}
+            target person was scrolled off-screen during drag.
+            v52.2 — Made always visible (was opacity-0 group-hover) so
+            this works on touch devices too. Subtle styling keeps it out
+            of the way when you don't need it. */}
         {canDrag && (users || []).length > 1 && (
-          <div className="relative mt-1 pt-1 border-t border-slate-100 opacity-0 group-hover:opacity-100 transition">
+          <div className="relative mt-1 pt-1 border-t border-slate-100">
             <button
               onClick={function(e) {
                 e.stopPropagation();
                 setMoveToPickerFor(moveToPickerFor === t.id ? null : t.id);
               }}
-              className="w-full text-[9px] text-slate-500 hover:text-indigo-600 hover:bg-indigo-50 rounded py-0.5 transition"
+              className="w-full text-[9px] text-slate-400 hover:text-indigo-600 hover:bg-indigo-50 rounded py-0.5 transition"
               title="Reassign to someone else without dragging"
             >
               {moveToPickerFor === t.id ? 'Close ▲' : 'Move to → ▾'}
@@ -847,6 +896,10 @@ export default function PriorityBoard({
                       if (node && node.scrollIntoView) {
                         node.scrollIntoView({ behavior: 'smooth', block: 'nearest', inline: 'start' });
                       }
+                      // v52.2 — pulse the column briefly so the user's eye
+                      // lands on it. Clears after 1.5 sec.
+                      setHighlightedColumn(u.id);
+                      setTimeout(function() { setHighlightedColumn(function(cur) { return cur === u.id ? null : cur; }); }, 1500);
                     }}
                     className="flex-shrink-0 px-2 py-1 rounded-full text-[10px] font-semibold bg-white border border-slate-200 hover:border-indigo-400 hover:bg-indigo-50 transition flex items-center gap-1"
                     title={'Jump to ' + u.name}>
@@ -859,8 +912,15 @@ export default function PriorityBoard({
           )}
         </div>
         <div ref={boardStripRef}
-          className="flex gap-3 overflow-x-auto pb-3"
-          style={{ scrollSnapType: 'x mandatory' }}
+          className="flex gap-3 overflow-x-auto pb-3 priority-board-strip"
+          style={{
+            // v52.1 — scroll-snap must be OFF during drag or the edge
+            // auto-scroll logic fights with the snap mandate and nothing
+            // actually moves. We toggle via the window flag set by
+            // onDragStart. When idle, snap is on for nice column alignment
+            // when the user flicks through columns.
+            scrollSnapType: dragging ? 'none' : 'x mandatory',
+          }}
           onDragOver={handleBoardDragOver}
           onDragLeave={stopEdgeScroll}
           onDrop={stopEdgeScroll}
@@ -872,7 +932,10 @@ export default function PriorityBoard({
             return (
               <div key={u.id}
                 ref={function(el) { if (el) columnRefs.current[u.id] = el; }}
-                className="flex-shrink-0 w-64 bg-slate-50 rounded-xl p-2.5"
+                className={
+                  'flex-shrink-0 w-64 bg-slate-50 rounded-xl p-2.5 transition-all ' +
+                  (highlightedColumn === u.id ? 'ring-4 ring-indigo-400 ring-opacity-75 shadow-xl scale-[1.02]' : '')
+                }
                 style={{ scrollSnapAlign: 'start', scrollMarginLeft: 12 }}>
                 <div className="flex items-center justify-between mb-2">
                   <div className="flex items-center gap-2">

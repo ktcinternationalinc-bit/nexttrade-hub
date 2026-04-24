@@ -1734,27 +1734,36 @@ export default function AIGreeter({ user, userProfile, users, tickets, invoices,
             <span>{useLang === 'ar' ? 'إيقاف المساعد' : 'Tap to stop Nadia'}</span>
           </button>
         )}
-        {/* S22.13 — Paused indicator. Shown when user tapped Stop and Nadia
-            is NOT currently speaking. Explains her silence and gives a
-            one-tap "wake her up" affordance. */}
-        {paused && !speaking && !listening && !recording && (
-          <div className="flex gap-2 mb-2">
+        {/* v53.3 (Apr 24 2026) — ALWAYS-VISIBLE break button. Previously this
+            was nested inside the paused banner so users had to first tap
+            Stop, wait for the paused state, then find the 30m button. Max
+            reported the button was "gone" because in practice you'd never
+            see it without two extra taps. Now it's a persistent small row
+            at the top of the chat input area, visible whenever Nadia is NOT
+            currently speaking/listening/recording and NOT already stopped. */}
+        {!speaking && !listening && !recording && !(stoppedUntil > Date.now()) && (
+          <div className="flex gap-2 mb-2 text-[11px]">
+            {paused ? (
+              <button
+                onClick={function() {
+                  try { setPaused(false); pausedRef.current = false; } catch (e) {}
+                }}
+                className="flex-1 px-2 py-1.5 rounded-lg bg-slate-700 hover:bg-slate-600 text-slate-200 font-semibold flex items-center justify-center gap-1 border border-slate-600"
+                title={useLang === 'ar' ? 'ناديا صامتة — اضغط لإيقاظها، أو اكتب رسالة، أو قل مرحبا ناديا' : 'Nadia is paused — tap to wake her, or just type/say "Hey Nadia"'}
+              >
+                <span>🤫</span>
+                <span>{useLang === 'ar' ? 'صامتة — اضغط لإيقاظها' : 'Paused — tap to wake'}</span>
+              </button>
+            ) : (
+              <div className="flex-1 px-2 py-1.5 text-[10px] text-slate-400 flex items-center gap-1">
+                <span>💡</span>
+                <span>{useLang === 'ar' ? 'اطلب منها "خذي استراحة 20 دقيقة"' : 'Say "take a 20 minute break" anytime'}</span>
+              </div>
+            )}
             <button
-              onClick={function() {
-                try { setPaused(false); pausedRef.current = false; } catch (e) {}
-              }}
-              className="flex-1 px-3 py-2 rounded-xl bg-slate-700 hover:bg-slate-600 text-slate-200 text-xs font-semibold flex items-center justify-center gap-2 border border-slate-600"
-              title={useLang === 'ar' ? 'ناديا صامتة — اضغط لإيقاظها، أو اكتب رسالة، أو قل مرحبا ناديا' : 'Nadia is paused — tap to wake her, or just type/say "Hey Nadia"'}
-            >
-              <span>🤫</span>
-              <span>{useLang === 'ar' ? 'ناديا صامتة — اضغط لإيقاظها' : 'Nadia is paused — tap to wake her'}</span>
-            </button>
-            {/* v51 — Hard STOP escalation from the pause state. User tapped
-                Stop, realized they want a longer break. One click → 30 min sleep. */}
-            <button
-              onClick={goStopped}
-              className="px-3 py-2 rounded-xl bg-red-800 hover:bg-red-900 text-red-100 text-xs font-semibold flex items-center justify-center gap-1 border border-red-900"
-              title={useLang === 'ar' ? 'إسكات تام لمدة 30 دقيقة' : 'Hard stop for 30 minutes'}
+              onClick={function() { goStopped(); }}
+              className="px-2 py-1.5 rounded-lg bg-amber-700 hover:bg-amber-800 text-amber-100 font-semibold flex items-center justify-center gap-1 border border-amber-900"
+              title={useLang === 'ar' ? 'إسكات تام لمدة 30 دقيقة' : 'Sleep for 30 minutes'}
             >
               <span>💤</span>
               <span>30m</span>

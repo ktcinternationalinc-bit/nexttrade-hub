@@ -25,13 +25,24 @@ var ask = fs.readFileSync(path.join(REPO, 'src/app/api/ask/route.js'), 'utf8');
 var askV2 = fs.readFileSync(path.join(REPO, 'src/app/api/ask-v2/route.js'), 'utf8');
 
 // ===== CORE FIX =====
-test('D1 /api/ask guards against double-pushing the user message', function() {
+test('D1 /api/ask (main path) guards against double-pushing the user message', function() {
   assert(/var lastMsg = messages\[messages\.length - 1\]/.test(ask),
     'must inspect the tail of history');
   assert(/var alreadyInHistory = lastMsg && lastMsg\.role === 'user' && String\(lastMsg\.content \|\| ''\)\.trim\(\) === String\(question \|\| ''\)\.trim\(\)/.test(ask),
     'must compare last history entry to current question');
   assert(/if \(!alreadyInHistory\) \{[\s\S]{0,80}messages\.push\(\{ role: 'user', content: question \}\)/.test(ask),
     'push only if NOT already present');
+});
+
+test('D1b /api/ask (GREETER MODE path) also guards against double-push', function() {
+  // v53.2 — the greeter path is what AIGreeter.jsx actually uses. v53.1
+  // fixed only the other path; this test pins the greeter fix.
+  assert(/var lastG = gMessages\[gMessages\.length - 1\]/.test(ask),
+    'greeter path inspects tail');
+  assert(/var greeterAlreadyHas = lastG && lastG\.role === 'user' && String\(lastG\.content \|\| ''\)\.trim\(\) === String\(question \|\| ''\)\.trim\(\)/.test(ask),
+    'greeter path compares tail to question');
+  assert(/if \(!greeterAlreadyHas\) \{[\s\S]{0,100}gMessages\.push\(\{ role: 'user', content: question \}\)/.test(ask),
+    'greeter push is guarded');
 });
 
 test('D2 /api/ask-v2 has the same guard', function() {

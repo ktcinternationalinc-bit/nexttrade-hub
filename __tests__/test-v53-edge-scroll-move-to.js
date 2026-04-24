@@ -29,23 +29,25 @@ test('ES1 Board strip listens for dragover to track cursor position', function()
     'stops on drop');
 });
 
-test('ES2 handleBoardDragOver computes speed from edge distance', function() {
-  var m = board.match(/function handleBoardDragOver\(e\) \{[\s\S]*?\n  \}/);
-  assert(m, 'handler defined');
+test('ES2 checkEdgeScroll computes speed from edge distance', function() {
+  // v54: refactored out of handleBoardDragOver into checkEdgeScroll(clientX)
+  // so it can be called from both strip-level and document-level listeners.
+  var m = board.match(/function checkEdgeScroll\(clientX\) \{[\s\S]*?\n  \}/);
+  assert(m, 'checkEdgeScroll defined');
   var body = m[0];
-  assert(/EDGE_ZONE = 80/.test(body), 'defines an edge-zone width (80px)');
-  assert(/MAX_SPEED = 18/.test(body), 'defines a max scroll speed');
-  assert(/x < rect\.left \+ EDGE_ZONE/.test(body), 'detects left edge');
-  assert(/x > rect\.right - EDGE_ZONE/.test(body), 'detects right edge');
+  assert(/EDGE_ZONE = 100/.test(body), 'defines an edge-zone width (100px, bumped from 80 in v54)');
+  assert(/MAX_SPEED = 22/.test(body), 'defines a max scroll speed');
+  assert(/clientX < rect\.left \+ EDGE_ZONE/.test(body), 'detects left edge');
+  assert(/clientX > rect\.right - EDGE_ZONE/.test(body), 'detects right edge');
 });
 
 test('ES3 Speed scales closer-to-edge → faster', function() {
-  var m = board.match(/function handleBoardDragOver\(e\) \{[\s\S]*?\n  \}/);
-  assert(m, 'handler body');
+  var m = board.match(/function checkEdgeScroll\(clientX\) \{[\s\S]*?\n  \}/);
+  assert(m, 'checkEdgeScroll body');
   // Closer to edge means the ratio is higher → speed is higher
-  assert(/leftT = 1 - \(x - rect\.left\) \/ EDGE_ZONE/.test(m[0]),
+  assert(/leftT = 1 - \(clientX - rect\.left\) \/ EDGE_ZONE/.test(m[0]),
     'left-edge speed ramp based on distance');
-  assert(/rightT = 1 - \(rect\.right - x\) \/ EDGE_ZONE/.test(m[0]),
+  assert(/rightT = 1 - \(rect\.right - clientX\) \/ EDGE_ZONE/.test(m[0]),
     'right-edge speed ramp based on distance');
 });
 
@@ -123,9 +125,16 @@ test('MT6 reassignTicketTo drops into target unranked pile at end', function() {
     'pile argument is unranked');
 });
 
-test('MT7 Move-to button shown on hover only (opacity-0 group-hover)', function() {
-  assert(/opacity-0 group-hover:opacity-100/.test(board),
-    'button hidden by default, revealed on card hover');
+test('MT7 Move-to button ALWAYS visible (no hover gate — works on touch)', function() {
+  // v54 changed this: the old opacity-0 group-hover gated the button behind
+  // a hover state, which fails on phones/tablets. Now it's always visible
+  // but subtle (small font, muted color). Test ensures we didn't regress.
+  var m = board.match(/\{canDrag && \(users \|\| \[\]\)\.length > 1 && \(\s*<div className="(relative mt-1 pt-1 border-t border-slate-100[^"]*)"/);
+  assert(m, 'Move-to menu container found');
+  assert(!/opacity-0/.test(m[1]),
+    'container must NOT use opacity-0');
+  assert(!/group-hover/.test(m[1]),
+    'container must NOT use group-hover');
 });
 
 test('MT8 Card wrapper has group class so group-hover triggers', function() {
