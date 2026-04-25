@@ -1019,7 +1019,7 @@ export default function CalendarTab({ customers, user, userProfile, users, ticke
               const assignedName = getUserName(ev.assigned_to);
               return (
                 <div key={ev.id} className={'flex justify-between items-center p-3 rounded-lg mb-2 border ' + (ev.completed ? 'opacity-50' : '')} style={{borderColor:tc,background:tc+'10'}}>
-                  <div>
+                  <div onClick={() => openEditEvent(ev)} className="cursor-pointer flex-1 hover:bg-slate-100 rounded px-1 -mx-1" title="Click to edit / cancel / delete">
                     <div className={'text-sm font-bold ' + (ev.completed ? 'line-through' : '')}>{ev.title}</div>
                     <div className="text-[10px] text-slate-500">
                       {ev.event_time || 'All day'} | {ev.event_type}
@@ -1034,7 +1034,10 @@ export default function CalendarTab({ customers, user, userProfile, users, ticke
                     )}
                   </div>
                   {!ev.completed && <div className="flex gap-1">
-                    {ev.event_status === 'postponed' ? <span className="px-2 py-1 bg-amber-100 text-amber-700 rounded text-[10px] font-bold">Postponed</span> : <>
+                    {ev.event_status === 'postponed' ? <>
+                      <span className="px-2 py-1 bg-amber-100 text-amber-700 rounded text-[10px] font-bold">Postponed</span>
+                      <button onClick={() => openEditEvent(ev)} title="Edit / Cancel / Delete" className="px-2 py-1 bg-slate-200 hover:bg-slate-300 rounded text-[10px]">✏️</button>
+                    </> : <>
                       <button onClick={() => { setNotesEvent(ev); setMeetingNotes(''); setNewNoteKind('note'); }} className="px-2 py-1 bg-emerald-500 text-white rounded text-[10px]">✓ Check In</button>
                       <button onClick={() => markEventStatus(ev, 'postponed')} className="px-2 py-1 bg-amber-500 text-white rounded text-[10px]">⏳ Postpone</button>
                       <button onClick={() => openEditEvent(ev)} title="Edit" className="px-2 py-1 bg-slate-200 hover:bg-slate-300 rounded text-[10px]">✏️</button>
@@ -1096,7 +1099,7 @@ export default function CalendarTab({ customers, user, userProfile, users, ticke
             const assignedName = getUserName(ev.assigned_to);
             return (
               <div key={ev.id} className={'flex justify-between items-center p-2 rounded mb-1 ' + (ev.completed ? 'opacity-50' : '')} style={{background:tc+'10'}}>
-                <div>
+                <div onClick={() => openEditEvent(ev)} className="cursor-pointer flex-1 hover:bg-slate-100 rounded px-1 -mx-1" title="Click to edit / cancel / delete">
                   <div className={'text-xs font-semibold ' + (ev.completed ? 'line-through' : '')}>{ev.title}</div>
                   <div className="text-[10px] text-slate-500">
                     {ev.event_time || 'All day'} | {ev.event_type}
@@ -1109,7 +1112,14 @@ export default function CalendarTab({ customers, user, userProfile, users, ticke
                   <button onClick={() => markEventStatus(ev, 'postponed')} className="px-2 py-0.5 bg-amber-500 text-white rounded text-[10px]">⏳</button>
                   <button onClick={() => openEditEvent(ev)} title="Edit" className="px-2 py-0.5 bg-slate-200 hover:bg-slate-300 rounded text-[10px]">✏️</button>
                 </div>}
-                {ev.event_status === 'postponed' && <span className="text-[9px] text-amber-600 font-bold">Postponed</span>}
+                {ev.event_status === 'postponed' && <div className="flex items-center gap-1">
+                  <span className="text-[9px] text-amber-600 font-bold">Postponed</span>
+                  {/* v54.4 — Always give access to the edit modal (where
+                      cancel/delete/decline live), regardless of completed
+                      or postponed state. Without this, there was no way
+                      to cancel a postponed meeting. */}
+                  <button onClick={() => openEditEvent(ev)} title="Edit / Cancel / Delete" className="px-2 py-0.5 bg-slate-200 hover:bg-slate-300 rounded text-[10px]">✏️</button>
+                </div>}
                 {ev.completed && <div className="flex items-center gap-1">
                   <span className="text-[9px] text-emerald-600 font-bold">✓</span>
                   {/* S18.5 — open an empty composer so user can append
@@ -1118,6 +1128,11 @@ export default function CalendarTab({ customers, user, userProfile, users, ticke
                     title={(ev.notes_count > 0 || ev.meeting_notes) ? 'Add Note — ' + (ev.notes_count || 1) + ' already posted' : 'Add Notes / إضافة ملاحظات'}
                     className="text-[10px] hover:bg-slate-200 rounded px-1 flex items-center gap-0.5">
                     {(ev.notes_count > 0 || ev.meeting_notes) ? <span>📝<span className="text-[8px] font-bold text-emerald-600">{ev.notes_count || 1}</span></span> : '✏️'}
+                  </button>
+                  {/* v54.4 — Always provide access to the edit modal so
+                      user can cancel/delete even a completed event. */}
+                  <button onClick={() => openEditEvent(ev)} title="Edit / Cancel / Delete" className="text-[10px] hover:bg-slate-200 rounded px-1">
+                    ⚙
                   </button>
                 </div>}
               </div>
@@ -1279,8 +1294,15 @@ export default function CalendarTab({ customers, user, userProfile, users, ticke
       {editEvent && (() => {
         const isSeriesItem = !!editEvent.series_id;
         return (
-        <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4" onClick={closeEditEvent}>
-          <div className="bg-white rounded-2xl p-5 w-full max-w-md" onClick={e => e.stopPropagation()}>
+        <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4 overflow-y-auto" onClick={closeEditEvent}>
+          {/* v54.4 — Modal is now SCROLLABLE.
+              Before: max-w-md with no height cap → on laptops/phones with
+              a recurring event, the full form + Cancel/Delete/Decline
+              buttons didn't fit and the bottom of the modal was cut off
+              by the viewport. User reported "no cancel button".
+              Fix: max-h-[90vh] + overflow-y-auto so the modal scrolls when
+              content overflows. */}
+          <div className="bg-white rounded-2xl p-5 w-full max-w-md max-h-[90vh] overflow-y-auto my-4" onClick={e => e.stopPropagation()}>
             <h3 className="text-lg font-bold mb-1">✏️ Edit Event / تعديل الحدث</h3>
             <div className="text-sm text-slate-500 mb-3">{editEvent.title} — {editEvent.event_date}</div>
             <div className="grid grid-cols-2 gap-3">
@@ -1325,6 +1347,12 @@ export default function CalendarTab({ customers, user, userProfile, users, ticke
                 - Already declined → can Accept (undecline)
                 - Already cancelled → can Restore */}
             <div className="mt-3 pt-3 border-t border-slate-200 space-y-2">
+              {/* v54.5 — ALWAYS show these buttons. Previously they were
+                  hidden behind canCancel/canDecline/canDelete predicates,
+                  so a user who didn't pass the check saw NO button and
+                  reported "where's delete?". Now buttons always render;
+                  the click handler enforces permission and shows a clear
+                  toast. Easier to debug, easier to discover. */}
               {editEvent.status === 'cancelled' ? (
                 <button
                   onClick={uncancelMeeting}
@@ -1334,18 +1362,16 @@ export default function CalendarTab({ customers, user, userProfile, users, ticke
                 </button>
               ) : (
                 <>
-                  {canCancel(editEvent) && (
-                    <button
-                      onClick={cancelMeeting}
-                      className="w-full px-4 py-2 bg-red-50 border border-red-300 text-red-700 rounded-lg text-xs font-semibold hover:bg-red-100"
-                    >
-                      ❌ {lang === 'ar' ? 'إلغاء الاجتماع' : 'Cancel this meeting'}
-                    </button>
-                  )}
+                  <button
+                    onClick={cancelMeeting}
+                    className="w-full px-4 py-2 bg-red-50 border-2 border-red-400 text-red-700 rounded-lg text-sm font-bold hover:bg-red-100 hover:border-red-500"
+                  >
+                    ❌ {lang === 'ar' ? 'إلغاء الاجتماع' : 'Cancel this meeting'}
+                  </button>
                   {canDecline(editEvent) && (
                     <button
                       onClick={declineInvite}
-                      className="w-full px-4 py-2 bg-orange-50 border border-orange-300 text-orange-700 rounded-lg text-xs font-semibold hover:bg-orange-100"
+                      className="w-full px-4 py-2 bg-orange-50 border-2 border-orange-400 text-orange-700 rounded-lg text-sm font-bold hover:bg-orange-100"
                       title={lang === 'ar' ? 'رفض الدعوة وإشعار المنظم بالبريد' : 'Decline and email the organizer'}
                     >
                       🚫 {lang === 'ar' ? 'رفض الدعوة' : 'Decline invitation'}
@@ -1359,15 +1385,13 @@ export default function CalendarTab({ customers, user, userProfile, users, ticke
                       ✓ {lang === 'ar' ? 'قبول الدعوة (كنت قد رفضتها)' : 'Accept invitation (you had declined)'}
                     </button>
                   )}
-                  {canDelete(editEvent) && (
-                    <button
-                      onClick={deleteMeeting}
-                      className="w-full px-4 py-2 bg-slate-900 border border-slate-900 text-white rounded-lg text-xs font-semibold hover:bg-black"
-                      title={lang === 'ar' ? 'حذف كامل (لا يمكن استعادته)' : 'Permanent delete — no recovery'}
-                    >
-                      🗑 {lang === 'ar' ? 'حذف كامل (للمشرف فقط)' : 'Permanent DELETE (admin only)'}
-                    </button>
-                  )}
+                  <button
+                    onClick={deleteMeeting}
+                    className="w-full px-4 py-2 bg-slate-900 border-2 border-slate-900 text-white rounded-lg text-sm font-bold hover:bg-black"
+                    title={lang === 'ar' ? 'حذف كامل (لا يمكن استعادته)' : 'Permanent delete — no recovery'}
+                  >
+                    🗑 {lang === 'ar' ? 'حذف كامل نهائي' : 'DELETE permanently'}
+                  </button>
                 </>
               )}
               {editEvent.status === 'cancelled' && editEvent.cancellation_reason && (

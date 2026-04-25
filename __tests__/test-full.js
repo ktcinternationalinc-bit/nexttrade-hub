@@ -4329,11 +4329,14 @@ function runSection35_CalendarTabR1() {
   var editButtons = (cSrc.match(/onClick=\{\(\) => openEditEvent\(ev\)\}/g) || []).length;
   assert(editButtons >= 2, '35.ui.3a ✏️ edit button appears in both day and month-selected views',
     'count=' + editButtons);
-  // But NOT on completed events (can only edit notes there)
+  // v54.5 — completed events NOW expose Edit access (⚙ button) so users
+  // can cancel a completed event if they marked it complete by mistake
+  // or need to add a cancellation reason. The old "completed = no edit"
+  // rule trapped users with no way to fix things.
   var completedBranch = cSrc.match(/\{ev\.completed && <div[\s\S]*?<\/div>\}/g);
   if (completedBranch) {
     var anyEditInCompleted = completedBranch.some(function(b) { return /openEditEvent/.test(b); });
-    assert(!anyEditInCompleted, '35.ui.3b completed events do NOT show ✏️ (only notes-edit)');
+    assert(anyEditInCompleted, '35.ui.3b completed events expose Edit / Cancel / Delete via ⚙ (v54.5)');
   }
 
   // ---------- 🔄 badge surfaced on recurring occurrences ----------

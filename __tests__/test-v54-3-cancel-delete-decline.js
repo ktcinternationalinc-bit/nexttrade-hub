@@ -188,9 +188,14 @@ test('De5 undeclineInvite lets user re-accept a previously declined invite', fun
 
 // ===== UI WIRING =====
 
-test('UI1 Cancel button rendered only when canCancel', function() {
-  assert(/\{canCancel\(editEvent\) && \(\s*<button\s*onClick=\{cancelMeeting\}/.test(calendar),
-    'cancel button gated');
+test('UI1 Cancel button rendered ALWAYS (v54.5 — permission enforced in handler)', function() {
+  // v54.5: cancel button is always visible; canCancel() enforced inside
+  // the click handler with toast.error if user lacks permission. Old
+  // gated render meant users were confused by missing buttons.
+  assert(/onClick=\{cancelMeeting\}/.test(calendar),
+    'cancel handler wired');
+  assert(!/\{canCancel\(editEvent\) && \(\s*<button\s*onClick=\{cancelMeeting\}/.test(calendar),
+    'cancel button no longer gated at render');
 });
 
 test('UI2 Decline button rendered only when canDecline', function() {
@@ -198,9 +203,11 @@ test('UI2 Decline button rendered only when canDecline', function() {
     'decline button gated');
 });
 
-test('UI3 Delete button rendered only when canDelete', function() {
-  assert(/\{canDelete\(editEvent\) && \(\s*<button\s*onClick=\{deleteMeeting\}/.test(calendar),
-    'delete button gated');
+test('UI3 Delete button rendered ALWAYS (v54.5 — permission enforced in handler)', function() {
+  assert(/onClick=\{deleteMeeting\}/.test(calendar),
+    'delete handler wired');
+  assert(!/\{canDelete\(editEvent\) && \(\s*<button\s*onClick=\{deleteMeeting\}/.test(calendar),
+    'delete button no longer gated at render');
 });
 
 test('UI4 Previously-declined users see an Accept button instead of Decline', function() {

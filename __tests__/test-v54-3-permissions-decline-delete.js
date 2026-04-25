@@ -168,17 +168,18 @@ test('DC7 undeclineInvite removes myId and clears reason', function() {
 
 // ===== MODAL UI =====
 
-test('UI1 Cancel button gated by canCancel()', function() {
-  assert(/\{canCancel\(editEvent\) && \(/.test(calendar),
-    'cancel button conditional on permission');
+test('UI1 Cancel button rendered ALWAYS — permission enforced in handler (v54.5)', function() {
+  assert(/onClick=\{cancelMeeting\}/.test(calendar),
+    'cancel handler still wired');
+  assert(!/\{canCancel\(editEvent\) && \(\s*<button\s*onClick=\{cancelMeeting\}/.test(calendar),
+    'no longer gated at render layer (handler shows toast if user lacks rights)');
 });
 
-test('UI2 Delete button gated by canDelete() AND only shown to admin', function() {
-  assert(/\{canDelete\(editEvent\) && \(/.test(calendar),
-    'delete button conditional on permission');
-  // Must have distinct styling (dark) and "admin only" label so it's obvious
-  assert(/Permanent DELETE \(admin only\)/.test(calendar),
-    'admin-only label');
+test('UI2 Delete button rendered ALWAYS — permission enforced in handler (v54.5)', function() {
+  assert(/onClick=\{deleteMeeting\}/.test(calendar),
+    'delete handler still wired');
+  assert(!/\{canDelete\(editEvent\) && \(\s*<button\s*onClick=\{deleteMeeting\}/.test(calendar),
+    'no longer gated at render layer');
 });
 
 test('UI3 Decline button gated by canDecline() (attendees only)', function() {

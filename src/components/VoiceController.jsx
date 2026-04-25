@@ -71,6 +71,13 @@ export default function VoiceController({ userId, userProfile, enabled, onComman
   // the current wake. Reset when a command finally commits. MUST be declared
   // before `start` (the callback closes over it).
   var ackFiredRef = useRef(false);
+  // v54.5 — silence-pause timer. After the user says "Hey Nadia" and
+  // starts speaking a command, this timer is restarted on every transcript
+  // chunk. If no new chunk arrives for 1500ms, we treat that pause as
+  // "user finished" and commit the command immediately. This is the
+  // "wait for me to pause then answer" UX the user requested.
+  var silenceTimerRef = useRef(null);
+  var SILENCE_PAUSE_MS = 1500;
   // v51 — self-suppression window. When Nadia speaks, AIGreeter dispatches
   // `nadia-tts-start` with a `detail.until` epoch ms. Any wake-word results
   // that arrive with Date.now() < this timestamp are silently dropped so
@@ -94,6 +101,7 @@ export default function VoiceController({ userId, userProfile, enabled, onComman
   var stop = useCallback(function() {
     userStoppedRef.current = true;
     if (restartTimerRef.current) { clearTimeout(restartTimerRef.current); restartTimerRef.current = null; }
+    if (silenceTimerRef.current) { clearTimeout(silenceTimerRef.current); silenceTimerRef.current = null; }
     if (recognitionRef.current) {
       try { recognitionRef.current.stop(); } catch (e) {}
       try { recognitionRef.current.abort(); } catch (e) {}
@@ -240,7 +248,30 @@ export default function VoiceController({ userId, userProfile, enabled, onComman
         try { window.dispatchEvent(new CustomEvent('nadia-wake-ack')); } catch (e) {}
       }
 
+      // v54.5 — Silence-pause commit. While collecting, every transcript
+      // chunk resets the silence timer. If the user stops talking for
+      // 1500ms, treat that pause as "user is done" and commit immediately.
+      // This is the human-friendly "wait for me to finish then answer"
+      // behavior. Without it, we'd wait for either Web Speech's flaky
+      // isFinal or the 8-second window to expire — both feel broken.
+      if (engineRef.current.isCollecting()) {
+        if (silenceTimerRef.current) clearTimeout(silenceTimerRef.current);
+        silenceTimerRef.current = setTimeout(function() {
+          if (!mountedRef.current) return;
+          if (!engineRef.current || !engineRef.current.isCollecting()) return;
+          var pending = engineRef.current.commitPending();
+          if (pending) {
+            ackFiredRef.current = false;
+            setStatus('command');
+            try { window.dispatchEvent(new CustomEvent('hey-bob-command', { detail: { command: pending, at: Date.now() } })); } catch (e) {}
+            if (onCommand) { try { onCommand(pending); } catch (e) {} }
+            setTimeout(function() { if (mountedRef.current) setStatus(followUpActiveRef.current ? 'followup' : 'listening'); }, 800);
+          }
+        }, SILENCE_PAUSE_MS);
+      }
+
       if (out.trigger && out.command) {
+        if (silenceTimerRef.current) { clearTimeout(silenceTimerRef.current); silenceTimerRef.current = null; }
         ackFiredRef.current = false; // reset for the next wake
         setStatus('command');
         try { window.dispatchEvent(new CustomEvent('hey-bob-command', { detail: { command: out.command, at: Date.now() } })); } catch (e) {}
@@ -269,6 +300,27 @@ export default function VoiceController({ userId, userProfile, enabled, onComman
       recognitionRef.current = null;
       if (userStoppedRef.current) return;
       if (status === 'denied' || status === 'unsupported' || status === 'disabled') return;
+
+      // v54.5 (Apr 24 2026) — CRITICAL FIX: when the recognizer ends
+      // (which happens naturally when the user stops speaking for ~1-2
+      // seconds), if the engine is still collecting a wake-word command,
+      // force-commit it. Web Speech's `isFinal` is unreliable — it
+      // sometimes never fires, especially in Safari/Chromium variants.
+      // Without this, the user says "Hey Nadia" → ack → speaks command
+      // → goes silent → recognizer ends → command was never committed →
+      // command is silently dropped. Symptom: "she stops listening".
+      try {
+        if (engineRef.current && engineRef.current.isCollecting()) {
+          var pending = engineRef.current.commitPending();
+          if (pending) {
+            ackFiredRef.current = false;
+            setStatus('command');
+            try { window.dispatchEvent(new CustomEvent('hey-bob-command', { detail: { command: pending, at: Date.now() } })); } catch (e) {}
+            if (onCommand) { try { onCommand(pending); } catch (e) {} }
+          }
+        }
+      } catch (e) { /* non-fatal */ }
+
       restartTimerRef.current = setTimeout(function() {
         if (mountedRef.current && !userStoppedRef.current) start();
       }, 250);

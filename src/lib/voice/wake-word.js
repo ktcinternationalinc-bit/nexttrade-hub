@@ -155,7 +155,23 @@ export function createWakeEngine() {
 
   function isCollecting() { return state.activeCommand !== null; }
 
-  return { process: process, reset: reset, isCollecting: isCollecting };
+  // v54.5 — Force-commit any pending command. Called by VoiceController
+  // when the recognizer ends mid-collection (the user paused for 1-2s
+  // and Web Speech terminated the session). The natural pause IS the
+  // user's intent to send, so we commit whatever was collected even
+  // without an isFinal event.
+  // Returns the command text or null if there was nothing meaningful.
+  function commitPending() {
+    if (state.activeCommand === null) return null;
+    var cmd = state.activeCommand.trim();
+    state.activeCommand = null;
+    state.lastFinalTranscript = '';
+    if (cmd.length < MIN_COMMAND_CHARS) return null;
+    state.lastTriggeredAt = Date.now();
+    return cmd;
+  }
+
+  return { process: process, reset: reset, isCollecting: isCollecting, commitPending: commitPending };
 }
 
 // ------------------------------------------------------------
