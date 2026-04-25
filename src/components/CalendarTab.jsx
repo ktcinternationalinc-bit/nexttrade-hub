@@ -44,6 +44,11 @@ export default function CalendarTab({ customers, user, userProfile, users, ticke
   const [editForm, setEditForm] = useState({});
   const [editScope, setEditScope] = useState('single'); // 'single' | 'series'
   const myId = userProfile?.id;
+  // v54.6 — `lang` was referenced throughout this file (28+ times) but
+  // never declared. ANY click that triggered a path using `lang === 'ar'`
+  // crashed with "ReferenceError: lang is not defined". Reading it from
+  // userProfile.preferred_language with safe fallback to English.
+  const lang = (userProfile && userProfile.preferred_language === 'ar') ? 'ar' : 'en';
 
   const loadEvents = async () => {
     const { data } = await supabase.from('calendar_events').select('*').order('event_date');

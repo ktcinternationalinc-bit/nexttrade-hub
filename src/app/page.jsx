@@ -424,6 +424,11 @@ export default function App() {
   const [treasuryReturnState, setTreasuryReturnState] = useState(null);
   // Mini-modal for "order# doesn't exist, create now?" flow
   const [pendingTreasuryRecord, setPendingTreasuryRecord] = useState(null);
+  // Loading flag for the inline "Create Invoice + Save Treasury" button so
+  // the user gets immediate feedback (button disables + shows spinner) and
+  // can't double-tap during the async Supabase round-trip. Was missing
+  // previously — looked like "nothing happens" on slow mobile networks.
+  const [isCreatingInvoice, setIsCreatingInvoice] = useState(false);
   const [formData, setFormData] = useState({});
   const [hideSections, setHideSections] = useState({});
   const [announcements, setAnnouncements] = useState([]);
@@ -11819,40 +11824,115 @@ export default function App() {
 
                   <div className="flex gap-2 pt-2">
                     <button
+                      disabled={isCreatingInvoice}
                       onClick={async () => {
-                        const name = String(formData.__newInvCustomer || '').trim();
-                        const totalAmt = Number(formData.__newInvTotal ?? pendingTreasuryRecord.amount);
-                        if (!name) { toast.warning('Customer name is required / اسم العميل مطلوب'); return; }
-                        if (!(totalAmt > 0)) { toast.warning('Invoice total must be > 0'); return; }
-                        const orderNum = pendingTreasuryRecord.record.order_number;
-                        const invDate = formData.__newInvDate || pendingTreasuryRecord.record.transaction_date || today();
-                        // Belt-and-suspenders: if customer_id wasn't explicitly linked via dropdown,
-                        // try an exact-name match here before saving. Prevents silent orphan invoices
-                        // when the user typed an existing customer's name verbatim but didn't click
-                        // the dropdown suggestion.
-                        var resolvedCustomerId = formData.__newInvCustomerId || null;
-                        if (!resolvedCustomerId) {
-                          var exact = customers.find(function(c) { return String(c.name || '').trim() === name; });
-                          if (exact) resolvedCustomerId = exact.id;
+                        // Guard against double-tap: if already in flight, ignore.
+                        // Without this, slow networks led to duplicate-key errors
+                        // and looked like "nothing happens" because the second
+                        // click's error overwrote the first click's success path.
+                        if (isCreatingInvoice) {
+                          console.log('[create-invoice] click ignored — already in flight');
+                          return;
                         }
+                        console.log('[create-invoice] click fired');
+                        // Move EVERYTHING inside try so any failure surfaces a
+                        // visible error instead of silently throwing pre-await.
+                        // Previously customers.find() was outside the try — a
+                        // malformed customer entry would crash the handler with
+                        // no toast, no log, no feedback whatsoever.
+                        setIsCreatingInvoice(true);
                         try {
-                          const { data: inserted, error } = await supabase.from('invoices').insert({
-                            order_number: sanitize(orderNum),
-                            customer_name: sanitize(name),
-                            customer_id: resolvedCustomerId,
-                            invoice_date: invDate,
-                            total_amount: totalAmt,
-                            total_collected: 0,
-                            outstanding: totalAmt,
-                            source: 'treasury',
-                          }).select('id, order_number, customer_name, total_amount, outstanding').single();
-                          if (error) throw error;
+                          const name = String(formData.__newInvCustomer || '').trim();
+                          const totalAmt = Number(formData.__newInvTotal ?? pendingTreasuryRecord.amount);
+                          if (!name) {
+                            toast.warning('Customer name is required / اسم العميل مطلوب');
+                            setIsCreatingInvoice(false);
+                            return;
+                          }
+                          if (!(totalAmt > 0)) {
+                            toast.warning('Invoice total must be > 0 / الإجمالي يجب أن يكون أكبر من صفر');
+                            setIsCreatingInvoice(false);
+                            return;
+                          }
+                          const orderNum = pendingTreasuryRecord.record.order_number;
+                          if (!orderNum) {
+                            toast.error('Order number missing — please close and re-enter / رقم الأمر مفقود');
+                            setIsCreatingInvoice(false);
+                            return;
+                          }
+                          const invDate = formData.__newInvDate || pendingTreasuryRecord.record.transaction_date || today();
+                          // Belt-and-suspenders: if customer_id wasn't explicitly linked via dropdown,
+                          // try an exact-name match here before saving. Prevents silent orphan invoices
+                          // when the user typed an existing customer's name verbatim but didn't click
+                          // the dropdown suggestion.
+                          var resolvedCustomerId = formData.__newInvCustomerId || null;
+                          if (!resolvedCustomerId && Array.isArray(customers)) {
+                            var exact = customers.find(function(c) { return String(c.name || '').trim() === name; });
+                            if (exact) resolvedCustomerId = exact.id;
+                          }
+                          console.log('[create-invoice] inserting', { orderNum: orderNum, name: name, totalAmt: totalAmt, customerId: resolvedCustomerId });
+                          // Use dbInsert for consistency with finalizePendingTreasury (which
+                          // also uses dbInsert) and to capture an audit-log entry. Direct
+                          // supabase.from().insert() bypasses the audit trail.
+                          var inserted;
+                          try {
+                            inserted = await dbInsert('invoices', {
+                              order_number: sanitize(orderNum),
+                              customer_name: sanitize(name),
+                              customer_id: resolvedCustomerId,
+                              invoice_date: invDate,
+                              total_amount: totalAmt,
+                              total_collected: 0,
+                              outstanding: totalAmt,
+                              source: 'treasury',
+                            }, user?.id);
+                          } catch (dbErr) {
+                            console.error('[create-invoice] dbInsert failed', dbErr);
+                            // Most common failure: unique constraint on order_number means
+                            // the invoice was created in another tab/by another user. Fetch
+                            // the existing one and offer to link to it instead.
+                            var msg = String((dbErr && dbErr.message) || dbErr || 'Unknown error');
+                            if (msg.toLowerCase().indexOf('duplicate') >= 0 || msg.indexOf('unique') >= 0 || msg.indexOf('23505') >= 0) {
+                              try {
+                                var existing = await supabase.from('invoices').select('*').eq('order_number', sanitize(orderNum)).single();
+                                if (existing && existing.data) {
+                                  toast.warning('Invoice #' + orderNum + ' already exists — linking now');
+                                  await finalizePendingTreasury(existing.data);
+                                  setFormData(function(prev) {
+                                    var next = Object.assign({}, prev);
+                                    delete next.__creatingInvoice;
+                                    delete next.__newInvCustomer;
+                                    delete next.__newInvCustomerId;
+                                    delete next.__newInvTotal;
+                                    delete next.__newInvDate;
+                                    return next;
+                                  });
+                                  setIsCreatingInvoice(false);
+                                  return;
+                                }
+                              } catch (e2) {
+                                console.error('[create-invoice] follow-up lookup failed', e2);
+                              }
+                              toast.error('Invoice #' + orderNum + ' already exists. Refresh and link to it.');
+                            } else {
+                              toast.error('Failed to create invoice: ' + msg);
+                            }
+                            setIsCreatingInvoice(false);
+                            return;
+                          }
+                          if (!inserted || !inserted.id) {
+                            console.error('[create-invoice] insert returned no row', inserted);
+                            toast.error('Database did not return the new invoice. Refresh and check Sales tab.');
+                            setIsCreatingInvoice(false);
+                            return;
+                          }
+                          console.log('[create-invoice] inserted ok', inserted.id);
                           toast.success(resolvedCustomerId
                             ? 'Invoice #' + orderNum + ' created + linked to customer ✓'
                             : 'Invoice #' + orderNum + ' created (new customer — no link) ✓');
                           await finalizePendingTreasury(inserted);
-                          setFormData(prev => {
-                            const next = { ...prev };
+                          setFormData(function(prev) {
+                            var next = Object.assign({}, prev);
                             delete next.__creatingInvoice;
                             delete next.__newInvCustomer;
                             delete next.__newInvCustomerId;
@@ -11861,14 +11941,24 @@ export default function App() {
                             return next;
                           });
                         } catch (err) {
-                          toast.error(err.message || 'Failed to create invoice');
+                          // Outer catch — anything that escapes (logic bugs,
+                          // null-deref, etc). Always surface visibly.
+                          console.error('[create-invoice] unexpected error', err);
+                          toast.error('Unexpected error: ' + (err && err.message ? err.message : String(err)));
+                        } finally {
+                          // Ensure button always re-enables, even if we early-returned
+                          // through an unexpected path.
+                          setIsCreatingInvoice(false);
                         }
                       }}
-                      className="flex-1 px-4 py-2.5 bg-emerald-700 text-white rounded-lg text-sm font-extrabold hover:bg-emerald-800 shadow"
+                      className={'flex-1 px-4 py-2.5 rounded-lg text-sm font-extrabold shadow ' + (isCreatingInvoice ? 'bg-emerald-400 text-white cursor-not-allowed' : 'bg-emerald-700 text-white hover:bg-emerald-800')}
                     >
-                      ✓ Create Invoice + Save Treasury / إنشاء وحفظ
+                      {isCreatingInvoice
+                        ? '⏳ Creating... / جارٍ الإنشاء...'
+                        : '✓ Create Invoice + Save Treasury / إنشاء وحفظ'}
                     </button>
                     <button
+                      disabled={isCreatingInvoice}
                       onClick={() => setFormData(prev => {
                         const next = { ...prev };
                         delete next.__creatingInvoice;
@@ -11878,7 +11968,7 @@ export default function App() {
                         delete next.__newInvDate;
                         return next;
                       })}
-                      className="px-4 py-2.5 bg-slate-300 text-slate-900 rounded-lg text-sm font-bold hover:bg-slate-400"
+                      className={'px-4 py-2.5 rounded-lg text-sm font-bold ' + (isCreatingInvoice ? 'bg-slate-200 text-slate-500 cursor-not-allowed' : 'bg-slate-300 text-slate-900 hover:bg-slate-400')}
                     >
                       ← Back
                     </button>

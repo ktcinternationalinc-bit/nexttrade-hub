@@ -854,10 +854,17 @@ export default function AIGreeter({ user, userProfile, users, tickets, invoices,
     var onWakeAck = function() {
       if (!enabled) return;
       if (muted) return;
-      // S22.13 — un-pause on wake word so the ack AND the upcoming
-      // response are audible. Without this, the ack would be swallowed
-      // by the paused guard in doSpeak.
+      // v54.6 — Clear ALL silencing states. Previously this only un-paused.
+      // But if Nadia was hard-stopped (user said "stop for 30 min" earlier),
+      // the doSpeak gate on line 633 silenced the ack and any follow-up.
+      // "Hey Nadia" is an explicit wake — it must override every silence
+      // state, otherwise she stays silent and the user can't get her back.
       try { setPaused(false); pausedRef.current = false; } catch (e) {}
+      try {
+        setStoppedUntil(0);
+        stoppedRef.current = 0;
+        try { localStorage.removeItem(STOP_KEY); } catch (e) {}
+      } catch (e) {}
       // Use the same doSpeak pipeline so it respects mute + TTS settings.
       // Very short phrase so it doesn't collide with the user's incoming
       // command (Web Speech tolerates a brief overlap).
@@ -1505,8 +1512,57 @@ export default function AIGreeter({ user, userProfile, users, tickets, invoices,
         method: 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(payload)
       });
-      var data = await res.json();
+
+      // v54.6 (Apr 24 2026) — Defensive parse. If the server returned an
+      // HTML error page (Cloudflare 503, Vercel cold-start timeout, etc.)
+      // res.json() throws and we'd fall through to "something went wrong"
+      // — which is what was happening on first morning page load. Detect
+      // non-OK / non-JSON responses and either retry (greetings) or show
+      // a clear message (user messages).
+      var data;
+      var contentType = res.headers && res.headers.get && res.headers.get('content-type');
+      var looksLikeJson = contentType && contentType.indexOf('application/json') !== -1;
+      if (!res.ok || !looksLikeJson) {
+        if (anyGreeting) {
+          // Greeting failed. Retry ONCE silently after a short delay.
+          // If retry also fails, just stay quiet — don't pollute the chat
+          // with "something went wrong" before the user has even said hi.
+          try { console.log('[nadia] greeting fetch failed (' + res.status + '), retrying once'); } catch (e) {}
+          await new Promise(function(r) { setTimeout(r, 1500); });
+          var res2 = await fetch(endpoint, {
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(payload)
+          });
+          var ct2 = res2.headers && res2.headers.get && res2.headers.get('content-type');
+          if (!res2.ok || !ct2 || ct2.indexOf('application/json') === -1) {
+            try { console.log('[nadia] greeting retry also failed — staying quiet'); } catch (e) {}
+            setLoading(false);
+            return;
+          }
+          data = await res2.json();
+        } else {
+          // User-initiated message failed. They pressed send, so they need
+          // visible feedback — but make it actionable, not just "oops".
+          var errText = useLang === 'ar'
+            ? 'لم أستطع الوصول إلى الخادم الآن. حاول مرة أخرى بعد لحظة.'
+            : 'I couldn\'t reach the server just now. Try again in a moment.';
+          setMessages([].concat(msgs, [{ role: 'assistant', text: errText }]));
+          doType(errText, null);
+          setLoading(false);
+          return;
+        }
+      } else {
+        data = await res.json();
+      }
       var aiText = data.answer || '';
+      // v54.6 — if the answer is empty during a greeting, stay quiet
+      // rather than speaking nothing or fabricating filler. User can
+      // initiate the conversation themselves.
+      if (anyGreeting && !aiText.trim()) {
+        try { console.log('[nadia] greeting returned empty answer — staying quiet'); } catch (e) {}
+        setLoading(false);
+        return;
+      }
       // v51.2 — take_break action from Nadia. User said "take a 20 minute
       // break" or similar. We execute it client-side: schedule the hard-stop
       // for AFTER she finishes speaking the confirmation message so the
@@ -1573,7 +1629,17 @@ export default function AIGreeter({ user, userProfile, users, tickets, invoices,
       doSpeak(aiText);
       doType(aiText, null);
     } catch(e) {
-      var fb = useLang === 'ar' ? 'عذراً، حدث خطأ.' : 'Sorry, something went wrong.';
+      // v54.6 — same rule as the in-flight error path: be quiet on
+      // greeting failures, give a real message on user-message failures.
+      try { console.log('[nadia] doSend exception:', e && e.message); } catch (er) {}
+      if (anyGreeting) {
+        // Don't pollute the chat with an error before user has said anything
+        setLoading(false);
+        return;
+      }
+      var fb = useLang === 'ar'
+        ? 'عذراً، لم أتمكن من الوصول. حاول مرة أخرى.'
+        : 'Sorry, I couldn\'t connect. Try again.';
       setMessages([].concat(msgs, [{ role: 'assistant', text: fb }]));
       doType(fb, null);
     }
