@@ -11841,51 +11841,95 @@ export default function App() {
                   </div>
 
                   <div>
-                    <label className="text-xs font-bold text-slate-700">Customer Name / اسم العميل *</label>
-                    <input
-                      autoFocus
-                      value={formData.__newInvCustomer || ''}
-                      onChange={e => {
-                        const v = e.target.value;
-                        setFormData({ ...formData, __newInvCustomer: v, __newInvCustomerId: null });
-                      }}
-                      placeholder="Type or pick from customers below"
-                      className="w-full px-3 py-2 rounded-lg border-2 border-slate-300 text-sm font-semibold"
-                      style={{ direction: 'rtl' }}
-                    />
-                    {/* Linked badge — shows when customer_id is set, so user knows the invoice will link correctly */}
+                    <label className="text-xs font-bold text-slate-700">Customer Name / اسم العميل</label>
+                    <div className="relative">
+                      <input
+                        autoFocus
+                        value={formData.__newInvCustomer || ''}
+                        onChange={e => {
+                          const v = e.target.value;
+                          setFormData({ ...formData, __newInvCustomer: v, __newInvCustomerId: null });
+                        }}
+                        placeholder="Type to search or pick from list below / اكتب أو اختر من القائمة"
+                        className="w-full px-3 py-2 pr-8 rounded-lg border-2 border-slate-300 text-sm font-semibold"
+                        style={{ direction: 'rtl' }}
+                      />
+                      {/* Clear button (X) inside the input — taps wipe the name so
+                          user can save unlinked or start typing fresh. Without
+                          this, the auto-prefill from treasury description was
+                          impossible to remove without backspacing every char. */}
+                      {formData.__newInvCustomer && (
+                        <button
+                          type="button"
+                          onClick={() => setFormData({ ...formData, __newInvCustomer: '', __newInvCustomerId: null })}
+                          className="absolute right-1 top-1/2 -translate-y-1/2 w-7 h-7 flex items-center justify-center rounded-full bg-slate-200 hover:bg-slate-300 text-slate-700 text-sm font-bold"
+                          aria-label="Clear customer name"
+                        >
+                          ✕
+                        </button>
+                      )}
+                    </div>
+                    {/* Linked badge — shows when customer_id is set */}
                     {formData.__newInvCustomerId && (
                       <div className="mt-1 inline-flex items-center gap-1 text-[11px] font-bold text-emerald-700 bg-emerald-50 border border-emerald-200 rounded px-2 py-0.5">
                         ✓ Linked to existing customer / مربوط بعميل موجود
                       </div>
                     )}
-                    {/* Suggestion dropdown — only while no customer is linked yet. Hides the "shows my own typing again" visual confusion. */}
-                    {formData.__newInvCustomer && formData.__newInvCustomer.length >= 2 && !formData.__newInvCustomerId && (
-                      <div className="mt-1 max-h-[140px] overflow-auto rounded border border-slate-200 bg-white">
-                        {(() => {
-                          var typed = String(formData.__newInvCustomer || '').trim();
-                          var matches = customers
-                            .filter(function(c) { return String(c.name || '').includes(formData.__newInvCustomer); })
-                            .slice(0, 6);
-                          if (matches.length === 0) {
-                            return (
-                              <div className="px-3 py-2 text-[11px] text-amber-800 bg-amber-50">
-                                ⚠ No match — a new customer won't be auto-created. Type exact existing name or leave unlinked.
-                              </div>
-                            );
-                          }
-                          return matches.map(function(c) {
-                            var isExact = String(c.name || '').trim() === typed;
-                            return (
-                              <div key={c.id}
-                                onClick={function() { setFormData({ ...formData, __newInvCustomer: c.name, __newInvCustomerId: c.id }); }}
-                                className={'px-3 py-2 text-sm cursor-pointer hover:bg-emerald-50 border-b border-slate-100 ' + (isExact ? 'bg-emerald-50' : '')}>
-                                <span className="font-bold text-slate-900" style={{ direction: 'rtl' }}>{c.name}</span>
-                                {isExact && <span className="ml-2 text-[10px] text-emerald-700 font-bold">exact match — click to link</span>}
-                              </div>
-                            );
-                          });
-                        })()}
+                    {/* Always-visible customer picker. Was previously hidden until user
+                        typed 2+ chars AND match found — left users with no way to BROWSE.
+                        Now: list always shows (filtered if user types, full top-8 if not).
+                        Case-insensitive match handles "Ahmed" vs "ahmed" vs the Arabic name. */}
+                    {!formData.__newInvCustomerId && (
+                      <div className="mt-2">
+                        <div className="text-[10px] font-bold text-slate-600 uppercase tracking-wide mb-1">
+                          Tap a name to link / اضغط لاختيار
+                        </div>
+                        <div className="max-h-[180px] overflow-auto rounded border border-slate-200 bg-white">
+                          {(() => {
+                            var typed = String(formData.__newInvCustomer || '').trim().toLowerCase();
+                            var pool = Array.isArray(customers) ? customers : [];
+                            var filtered;
+                            if (typed.length === 0) {
+                              // No typing yet — show first 8 customers as a starting point
+                              filtered = pool.slice(0, 8);
+                            } else {
+                              // Case-insensitive contains-match. The Arabic + English
+                              // names mean we should be lenient; the schema keeps the
+                              // canonical form, so display whatever the DB has.
+                              filtered = pool.filter(function(c) {
+                                return String(c.name || '').toLowerCase().indexOf(typed) >= 0;
+                              }).slice(0, 12);
+                            }
+                            if (filtered.length === 0) {
+                              return (
+                                <div className="px-3 py-2 text-[11px] text-slate-600">
+                                  No customers match "{formData.__newInvCustomer}". You can still save below — the invoice will be created without a customer link, and you can link it later from the Sales tab.
+                                </div>
+                              );
+                            }
+                            return filtered.map(function(c) {
+                              var typedRaw = String(formData.__newInvCustomer || '').trim();
+                              var isExact = String(c.name || '').trim() === typedRaw;
+                              return (
+                                <div key={c.id}
+                                  onClick={function() { setFormData({ ...formData, __newInvCustomer: c.name, __newInvCustomerId: c.id }); }}
+                                  className={'px-3 py-2 text-sm cursor-pointer hover:bg-emerald-50 border-b border-slate-100 ' + (isExact ? 'bg-emerald-50' : '')}>
+                                  <span className="font-bold text-slate-900" style={{ direction: 'rtl' }}>{c.name}</span>
+                                  {isExact && <span className="ml-2 text-[10px] text-emerald-700 font-bold">exact match — tap to link</span>}
+                                </div>
+                              );
+                            });
+                          })()}
+                        </div>
+                        {/* Plain-language warning: tells user EXACTLY what will happen
+                            when they save without picking a customer. Replaces the old
+                            "leave unlinked" jargon that wasn't actionable. */}
+                        {formData.__newInvCustomer && formData.__newInvCustomer.trim().length > 0 && (
+                          <div className="mt-2 p-2 rounded bg-amber-50 border border-amber-300 text-[11px] text-amber-900">
+                            <div className="font-bold mb-0.5">⚠ Saving as: "{formData.__newInvCustomer}"</div>
+                            <div>This name doesn't match any existing customer. The invoice will save without a customer link. You can either: tap a name above to link it, tap ✕ to clear and save anonymously, or just tap the green button to proceed.</div>
+                          </div>
+                        )}
                       </div>
                     )}
                   </div>
@@ -11949,15 +11993,14 @@ export default function App() {
                         try {
                           const name = String(formData.__newInvCustomer || '').trim();
                           const totalAmt = Number(formData.__newInvTotal ?? pendingTreasuryRecord.amount);
-                          if (!name) {
-                            setCreateInvoiceError('Customer name is required. / اسم العميل مطلوب.');
-                            try { window.alert('⚠️ Customer name is empty. Please type a name and try again.'); } catch (_) {}
-                            toast.warning('Customer name is required / اسم العميل مطلوب');
-                            setIsCreatingInvoice(false);
-                            return;
-                          }
+                          // Apr 25 2026 — Customer name is no longer required.
+                          // If the user clears it (X button) or leaves it blank,
+                          // the invoice saves as anonymous and can be linked to
+                          // a customer later from the Sales tab. The redesigned
+                          // picker makes this an explicit choice, not a footgun.
                           if (!(totalAmt > 0)) {
                             setCreateInvoiceError('Invoice total must be greater than zero. / الإجمالي يجب أن يكون أكبر من صفر.');
+                            try { window.alert('⚠️ Invoice total must be greater than zero.'); } catch (_) {}
                             toast.warning('Invoice total must be > 0 / الإجمالي يجب أن يكون أكبر من صفر');
                             setIsCreatingInvoice(false);
                             return;
@@ -11989,7 +12032,7 @@ export default function App() {
                           try {
                             inserted = await dbInsert('invoices', {
                               order_number: sanitize(orderNum),
-                              customer_name: sanitize(name),
+                              customer_name: name ? sanitize(name) : null,
                               customer_id: resolvedCustomerId,
                               invoice_date: invDate,
                               total_amount: totalAmt,
