@@ -223,6 +223,31 @@ export const sanitize = (str) => {
 };
 
 // ============================================================
+// Strip auto-appended bank-reconciliation metadata from a treasury
+// description so the underlying text (typically a customer name or
+// payment note) can be used for things like pre-filling a "Create
+// Invoice" form. WITHOUT this, the customer name field on the new
+// invoice ended up reading e.g. "ايداع اشرف سلطان ✅ matched bank
+// 2026-03-29" — bank-match metadata that doesn't belong on an invoice.
+//
+// Three suffixes are added by the reconciliation system:
+//   1.  [awaiting bank confirmation]                   — placeholder insert
+//   2.  ✅ matched bank YYYY-MM-DD                      — placeholder match
+//   3.  [auto-matched from bank YYYY-MM-DD]            — check auto-match
+//
+// All three live AT THE END of the description with a leading space,
+// so we strip from the first occurrence of any of them onward.
+// ============================================================
+export const stripBankMatchMetadata = (desc) => {
+  if (!desc || typeof desc !== 'string') return desc || '';
+  return desc
+    .replace(/\s*✅\s*matched\s+bank\s+\d{4}-\d{2}-\d{2}.*$/u, '')
+    .replace(/\s*\[awaiting bank confirmation\]/g, '')
+    .replace(/\s*\[auto-matched from bank \d{4}-\d{2}-\d{2}\]/g, '')
+    .trim();
+};
+
+// ============================================================
 // Rich-text sanitizer for ticket comments (R8)
 // Allow-lists exactly the tags produced by the toolbar editor:
 //   b, strong, i, em, u, br, ul, ol, li, p, div, span

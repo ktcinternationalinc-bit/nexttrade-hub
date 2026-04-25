@@ -4296,8 +4296,13 @@ function runSection35_CalendarTabR1() {
   assert(ed, '35.edit.0c saveEditEvent block found');
   var eb = ed ? ed[0] : '';
 
-  // No-op shortcut when nothing changed
-  assert(/if \(!hasDateChange && !hasTimeChange && !hasTitleChange\) \{ closeEditEvent\(\); return; \}/.test(eb),
+  // No-op shortcut when nothing changed.
+  // v55 Stage 1 extended this to include location, join_link, all_day —
+  // any combination of those plus the original three must short-circuit.
+  // Match either the original 3-field check or any superset of it.
+  assert(
+    /if \(!hasDateChange && !hasTimeChange && !hasTitleChange\) \{ closeEditEvent\(\); return; \}/.test(eb)
+    || /if \(!hasDateChange && !hasTimeChange && !hasTitleChange[\s\S]{0,400}?\) \{[\s\S]{0,80}?closeEditEvent\(\);[\s\S]{0,40}?return;[\s\S]{0,20}?\}/.test(eb),
     '35.edit.1a no-op when nothing changed (no audit spam, no reschedule)');
 
   // Series edit must NOT mass-apply a date change (would collapse every

@@ -1,7 +1,7 @@
 'use client';
 import React, { useState, useEffect, useMemo, useCallback, useRef, useContext, createContext } from 'react';
 import { supabase, dbInsert, dbUpdate, dbDelete } from '../lib/supabase';
-import { fmt, fE, COLORS, EXPENSE_CATS, getReconStatus, STATUS_STYLES, today, inRange, monthOf, getWarehouseCat, sanitize, resolveCatName, buildCatOptions, isKnownCat, aggregatePaymentSources, PAYMENT_SOURCE_META } from '../lib/utils';
+import { fmt, fE, COLORS, EXPENSE_CATS, getReconStatus, STATUS_STYLES, today, inRange, monthOf, getWarehouseCat, sanitize, stripBankMatchMetadata, resolveCatName, buildCatOptions, isKnownCat, aggregatePaymentSources, PAYMENT_SOURCE_META } from '../lib/utils';
 import { evaluateCheckReconcile as libEvaluateCheckReconcile } from '../lib/check-reconcile';
 import * as XLSX from 'xlsx';
 import CRMTab from '../components/CRMTab';
@@ -2073,8 +2073,16 @@ export default function App() {
           (isBankPlaceholder && bankEntryMode === 'order')  // bank_in Order mode
         );
       const orderNumTrimmed = String(record.order_number || '').trim();
+      // DIAGNOSTIC LOGGING — added so we can see exactly which branch fires
+      // when the user reports "no modal appeared". The four-line signature
+      // tells us if the modal SHOULD have opened, and if not, why not.
+      console.log('[treasury-add] type=' + formData.type + ' isIncome=' + isIncome
+        + ' isBankPlaceholder=' + isBankPlaceholder + ' bankEntryMode=' + bankEntryMode);
+      console.log('[treasury-add] isOrderLinkable=' + isOrderLinkable
+        + ' orderNumTrimmed="' + orderNumTrimmed + '" invoices.length=' + (invoices ? invoices.length : 'undefined'));
       if (isOrderLinkable && orderNumTrimmed) {
         const matchingInvoice = invoices.find(i => String(i.order_number || '').trim() === orderNumTrimmed);
+        console.log('[treasury-add] matchingInvoice=' + (matchingInvoice ? ('#' + matchingInvoice.order_number + ' (id=' + matchingInvoice.id + ')') : 'NONE'));
         if (matchingInvoice) {
           // Auto-link — set linked_invoice_id so recalcInvoiceCollected picks it up
           record.linked_invoice_id = matchingInvoice.id;
@@ -2097,6 +2105,7 @@ export default function App() {
           return;
         }
         // Order# provided but no matching invoice → open "create now or cancel" flow
+        console.log('[treasury-add] OPENING modal — order#' + orderNumTrimmed + ' not found locally');
         setPendingTreasuryRecord({
           record: record,
           amount: amt,
@@ -2106,6 +2115,8 @@ export default function App() {
       }
 
       // No order# branch covers: expenses with/without order#, non-order bank entries, cash_in without order#
+      console.log('[treasury-add] SILENT SAVE path — no modal will appear. Reason: '
+        + (!isOrderLinkable ? 'not order-linkable (expense or non-order bank)' : 'order# is empty after trim'));
       const inserted = await dbInsert('treasury', record, user?.id);
       // Real UUID from dbInsert (see note above). Fake 'temp-' ids broke Edit/Delete.
       setTreasury(prev => [inserted, ...prev]);
@@ -11989,7 +12000,15 @@ export default function App() {
                         // existing customer, auto-link customer_id so the user doesn't have
                         // to re-pick from the dropdown. Fixes silent-orphan-invoice bug where
                         // invoices were saved with customer_id:null when the dropdown wasn't clicked.
-                        var descText = String(formData.desc || '').trim();
+                        //
+                        // Apr 25 2026 — also strip bank-reconciliation metadata so the
+                        // customer-name field doesn't get filled with text like
+                        // "ايداع اشرف سلطان ✅ matched bank 2026-03-29". The match suffix
+                        // is appended automatically when a placeholder gets reconciled
+                        // against a bank statement; the customer's actual name is the
+                        // part BEFORE that suffix.
+                        var rawDesc = String(formData.desc || '');
+                        var descText = stripBankMatchMetadata(rawDesc).trim();
                         var exactMatch = descText
                           ? customers.find(function(c) { return String(c.name || '').trim() === descText; })
                           : null;

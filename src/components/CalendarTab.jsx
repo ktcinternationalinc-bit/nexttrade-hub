@@ -223,8 +223,16 @@ export default function CalendarTab({ customers, user, userProfile, users, ticke
         title: f.title,
         description: f.description || null,
         event_date: f.eventDate,
-        event_time: f.eventTime || null,
+        // v55 Stage 1 — when all-day is on, event_time MUST be null. Both
+        // the form's time input is disabled and we belt-and-suspenders here
+        // so a stray value can't slip through.
+        event_time: f.allDay ? null : (f.eventTime || null),
         event_type: f.eventType || 'task',
+        // v55 Stage 1 — three new optional fields. Empty strings stored as null
+        // so the DB doesn't fill up with '' values that look meaningful.
+        location: (f.location && f.location.trim()) ? f.location.trim() : null,
+        join_link: (f.joinLink && f.joinLink.trim()) ? f.joinLink.trim() : null,
+        all_day: !!f.allDay,
         assigned_to: ownerUid,                // primary owner (first attendee)
         attendees: attendees,                 // ALL invited users
         customer_id: f.customerId || null,
@@ -536,6 +544,11 @@ export default function CalendarTab({ customers, user, userProfile, users, ticke
       title: ev.title || '',
       eventDate: ev.event_date || '',
       eventTime: ev.event_time || '',
+      // v55 Stage 1 — preload the three new fields so the modal shows
+      // current values and the diff in saveEditEvent works correctly.
+      location: ev.location || '',
+      joinLink: ev.join_link || '',
+      allDay: !!ev.all_day,
     });
     setEditScope('single');
   };
@@ -778,7 +791,22 @@ export default function CalendarTab({ customers, user, userProfile, users, ticke
     const hasDateChange = editForm.eventDate && editForm.eventDate !== editEvent.event_date;
     const hasTimeChange = (editForm.eventTime || null) !== (editEvent.event_time || null);
     const hasTitleChange = (editForm.title || '') !== (editEvent.title || '');
-    if (!hasDateChange && !hasTimeChange && !hasTitleChange) { closeEditEvent(); return; }
+    // v55 Stage 1 — detect changes to the three new fields. Trim/normalize
+    // so trailing spaces don't trigger a phantom "edit".
+    const newLoc = (editForm.location || '').trim();
+    const oldLoc = (editEvent.location || '').trim();
+    const hasLocationChange = newLoc !== oldLoc;
+    const newLink = (editForm.joinLink || '').trim();
+    const oldLink = (editEvent.join_link || '').trim();
+    const hasJoinLinkChange = newLink !== oldLink;
+    const newAllDay = !!editForm.allDay;
+    const oldAllDay = !!editEvent.all_day;
+    const hasAllDayChange = newAllDay !== oldAllDay;
+    if (!hasDateChange && !hasTimeChange && !hasTitleChange
+        && !hasLocationChange && !hasJoinLinkChange && !hasAllDayChange) {
+      closeEditEvent();
+      return;
+    }
 
     try {
       const update = {};
@@ -790,6 +818,17 @@ export default function CalendarTab({ customers, user, userProfile, users, ticke
         if (editScope === 'single' && editEvent.series_id && !editEvent.is_series_master) {
           update.original_event_date = editEvent.event_date;
         }
+      }
+      // v55 Stage 1 — persist new-field changes. Empty strings → null so
+      // the DB doesn't accumulate '' values that look meaningful.
+      if (hasLocationChange)  update.location  = newLoc || null;
+      if (hasJoinLinkChange)  update.join_link = newLink || null;
+      if (hasAllDayChange) {
+        update.all_day = newAllDay;
+        // Switching ON all-day MUST clear the clock time, even if the user
+        // didn't touch the time input. Symmetrical to handleAddEvent's
+        // belt-and-suspenders rule.
+        if (newAllDay) update.event_time = null;
       }
 
       if (editScope === 'series' && editEvent.series_id) {
@@ -888,7 +927,31 @@ export default function CalendarTab({ customers, user, userProfile, users, ticke
             <div><label className="text-[10px] font-semibold">Date / التاريخ</label>
               <input type="date" value={f.eventDate||''} onChange={e=>setF({...f,eventDate:e.target.value})} className="w-full px-3 py-2 rounded border text-sm" /></div>
             <div><label className="text-[10px] font-semibold">Time / الوقت</label>
-              <input type="time" value={f.eventTime||''} onChange={e=>setF({...f,eventTime:e.target.value})} className="w-full px-3 py-2 rounded border text-sm" /></div>
+              <input type="time" value={f.eventTime||''} onChange={e=>setF({...f,eventTime:e.target.value})} disabled={!!f.allDay} className={'w-full px-3 py-2 rounded border text-sm ' + (f.allDay ? 'bg-slate-100 text-slate-400 cursor-not-allowed' : '')} title={f.allDay ? 'Time is disabled for all-day events' : ''} /></div>
+            {/* v55 Stage 1 — All-day toggle. When on, event has no clock time
+                and displays as "All day" everywhere (cards, month grid, edit). */}
+            <div className="col-span-2">
+              <label className="flex items-center gap-2 text-xs font-semibold cursor-pointer select-none">
+                <input type="checkbox" checked={!!f.allDay}
+                  onChange={e => setF({ ...f, allDay: e.target.checked, eventTime: e.target.checked ? '' : f.eventTime })}
+                  className="w-4 h-4" />
+                <span>🌅 All-day event / حدث طوال اليوم</span>
+                <span className="text-[10px] text-slate-400 font-normal">(no specific time)</span>
+              </label>
+            </div>
+            {/* v55 Stage 1 — Location. Free-text, optional. Shows on every
+                view alongside the time. */}
+            <div className="col-span-2"><label className="text-[10px] font-semibold">📍 Location / المكان <span className="text-slate-400 font-normal">(optional)</span></label>
+              <input value={f.location||''} onChange={e=>setF({...f,location:e.target.value})}
+                placeholder="e.g. KTC office, Cairo Marriott, online..."
+                className="w-full px-3 py-2 rounded border text-sm" /></div>
+            {/* v55 Stage 1 — Join link. URL for video/audio meetings. Rendered
+                as a clickable link on event cards (e.stopPropagation so
+                clicking it doesn't trigger the edit modal). */}
+            <div className="col-span-2"><label className="text-[10px] font-semibold">🔗 Join Meeting Link / رابط الاجتماع <span className="text-slate-400 font-normal">(optional)</span></label>
+              <input value={f.joinLink||''} onChange={e=>setF({...f,joinLink:e.target.value})}
+                placeholder="https://zoom.us/j/... or any meeting URL"
+                className="w-full px-3 py-2 rounded border text-sm" /></div>
             <div><label className="text-[10px] font-semibold">Type / النوع</label>
               <select value={f.eventType||'task'} onChange={e=>setF({...f,eventType:e.target.value})} className="w-full px-3 py-2 rounded border text-sm">
                 {EVENT_TYPES.map(t=><option key={t.v} value={t.v}>{t.l}</option>)}</select></div>
@@ -974,7 +1037,7 @@ export default function CalendarTab({ customers, user, userProfile, users, ticke
                       );
                     }
                     const tc = EVENT_TYPES.find(t=>t.v===ev.event_type)?.c || '#3b82f6';
-                    return <div key={ev.id} className={'text-[8px] truncate rounded px-0.5 mb-0.5 ' + (ev.completed ? 'line-through opacity-50' : '')} style={{background:tc+'20',color:tc}}>{ev.series_id ? '🔄 ' : ''}{ev.title}</div>;
+                    return <div key={ev.id} className={'text-[8px] truncate rounded px-0.5 mb-0.5 ' + (ev.completed ? 'line-through opacity-50' : '')} style={{background:tc+'20',color:tc}}>{ev.all_day ? '🌅 ' : ''}{ev.series_id ? '🔄 ' : ''}{ev.location ? '📍 ' : ''}{ev.title}</div>;
                   })}
                   {de.length > 3 && <div className="text-[8px] text-slate-400">+{de.length - 3}</div>}
                 </div>
@@ -1027,11 +1090,35 @@ export default function CalendarTab({ customers, user, userProfile, users, ticke
                   <div onClick={() => openEditEvent(ev)} className="cursor-pointer flex-1 hover:bg-slate-100 rounded px-1 -mx-1" title="Click to edit / cancel / delete">
                     <div className={'text-sm font-bold ' + (ev.completed ? 'line-through' : '')}>{ev.title}</div>
                     <div className="text-[10px] text-slate-500">
-                      {ev.event_time || 'All day'} | {ev.event_type}
+                      {/* v55 Stage 1 — All-day badge replaces the time when set.
+                          Otherwise show clock time, falling back to "All day"
+                          for legacy rows that have no event_time and no all_day. */}
+                      {ev.all_day ? <span className="font-semibold text-blue-600">🌅 All day</span> : (ev.event_time || 'All day')} | {ev.event_type}
                       {calView === 'team' && assignedName && <span className="ml-1 text-purple-600">→ {assignedName}</span>}
                       {ev.recurring && ev.recurring !== 'none' && <span className="ml-1">🔄 {recurrenceLabel(ev.recurring, ev.recurrence_interval)}</span>}
                       {ev.original_event_date && ev.original_event_date !== ev.event_date && <span className="ml-1 text-amber-600" title={'Moved from ' + ev.original_event_date}>↪</span>}
                     </div>
+                    {/* v55 Stage 1 — Location + join link line. Location is plain
+                        text, join link is a real <a> with stopPropagation so a
+                        tap on the link doesn't also open the edit modal. */}
+                    {(ev.location || ev.join_link) && (
+                      <div className="text-[11px] text-slate-600 mt-1 flex flex-wrap items-center gap-x-3 gap-y-1">
+                        {ev.location && (
+                          <span className="inline-flex items-center gap-1" title="Location">
+                            <span>📍</span>
+                            <span className="font-medium truncate max-w-[260px]">{ev.location}</span>
+                          </span>
+                        )}
+                        {ev.join_link && (
+                          <a href={ev.join_link} target="_blank" rel="noreferrer"
+                            onClick={(e) => e.stopPropagation()}
+                            className="inline-flex items-center gap-1 text-blue-600 font-semibold hover:underline">
+                            <span>🔗</span>
+                            <span>Join meeting</span>
+                          </a>
+                        )}
+                      </div>
+                    )}
                     {ev.description && (
                       <div className="text-[11px] text-slate-600 mt-1 pl-0 whitespace-pre-wrap max-w-[520px] leading-snug" title="Agenda / pre-meeting notes">
                         <span className="font-semibold text-slate-500">📋 </span>{ev.description}
@@ -1107,10 +1194,30 @@ export default function CalendarTab({ customers, user, userProfile, users, ticke
                 <div onClick={() => openEditEvent(ev)} className="cursor-pointer flex-1 hover:bg-slate-100 rounded px-1 -mx-1" title="Click to edit / cancel / delete">
                   <div className={'text-xs font-semibold ' + (ev.completed ? 'line-through' : '')}>{ev.title}</div>
                   <div className="text-[10px] text-slate-500">
-                    {ev.event_time || 'All day'} | {ev.event_type}
+                    {/* v55 Stage 1 — All-day badge replaces clock time. */}
+                    {ev.all_day ? <span className="font-semibold text-blue-600">🌅 All day</span> : (ev.event_time || 'All day')} | {ev.event_type}
                     {calView === 'team' && assignedName && <span className="ml-1 text-purple-600">→ {assignedName}</span>}
                     {ev.recurring && ev.recurring !== 'none' ? ' | 🔄 ' + recurrenceLabel(ev.recurring, ev.recurrence_interval) : ''}
                   </div>
+                  {/* v55 Stage 1 — Location + join link line. Same pattern as
+                      day view: stopPropagation on the join link so tapping
+                      it doesn't also open the edit modal. */}
+                  {(ev.location || ev.join_link) && (
+                    <div className="text-[10px] text-slate-600 mt-0.5 flex flex-wrap items-center gap-x-2 gap-y-0.5">
+                      {ev.location && (
+                        <span className="inline-flex items-center gap-1 truncate max-w-[200px]" title={ev.location}>
+                          <span>📍</span><span className="truncate">{ev.location}</span>
+                        </span>
+                      )}
+                      {ev.join_link && (
+                        <a href={ev.join_link} target="_blank" rel="noreferrer"
+                          onClick={(e) => e.stopPropagation()}
+                          className="inline-flex items-center gap-1 text-blue-600 font-semibold hover:underline">
+                          🔗 Join
+                        </a>
+                      )}
+                    </div>
+                  )}
                 </div>
                 {!ev.completed && !ev.event_status && <div className="flex gap-1">
                   <button onClick={() => { setNotesEvent(ev); setMeetingNotes(''); setNewNoteKind('note'); }} className="px-2 py-0.5 bg-emerald-500 text-white rounded text-[10px]">✓ Check In</button>
@@ -1316,7 +1423,28 @@ export default function CalendarTab({ customers, user, userProfile, users, ticke
               <div><label className="text-[10px] font-semibold">Date / التاريخ</label>
                 <input type="date" value={editForm.eventDate||''} onChange={e=>setEditForm({...editForm,eventDate:e.target.value})} className="w-full px-3 py-2 rounded border text-sm" /></div>
               <div><label className="text-[10px] font-semibold">Time / الوقت</label>
-                <input type="time" value={editForm.eventTime||''} onChange={e=>setEditForm({...editForm,eventTime:e.target.value})} className="w-full px-3 py-2 rounded border text-sm" /></div>
+                <input type="time" value={editForm.eventTime||''} onChange={e=>setEditForm({...editForm,eventTime:e.target.value})} disabled={!!editForm.allDay} className={'w-full px-3 py-2 rounded border text-sm ' + (editForm.allDay ? 'bg-slate-100 text-slate-400 cursor-not-allowed' : '')} title={editForm.allDay ? 'Time is disabled for all-day events' : ''} /></div>
+              {/* v55 Stage 1 — All-day toggle. Mirrors Add form. When on,
+                  the time input above becomes disabled and event_time is
+                  cleared on save. */}
+              <div className="col-span-2">
+                <label className="flex items-center gap-2 text-xs font-semibold cursor-pointer select-none">
+                  <input type="checkbox" checked={!!editForm.allDay}
+                    onChange={e => setEditForm({ ...editForm, allDay: e.target.checked, eventTime: e.target.checked ? '' : editForm.eventTime })}
+                    className="w-4 h-4" />
+                  <span>🌅 All-day event / حدث طوال اليوم</span>
+                </label>
+              </div>
+              {/* v55 Stage 1 — Location, optional. */}
+              <div className="col-span-2"><label className="text-[10px] font-semibold">📍 Location / المكان</label>
+                <input value={editForm.location||''} onChange={e=>setEditForm({...editForm,location:e.target.value})}
+                  placeholder="e.g. KTC office, Cairo Marriott, online..."
+                  className="w-full px-3 py-2 rounded border text-sm" /></div>
+              {/* v55 Stage 1 — Join link, optional. */}
+              <div className="col-span-2"><label className="text-[10px] font-semibold">🔗 Join Meeting Link</label>
+                <input value={editForm.joinLink||''} onChange={e=>setEditForm({...editForm,joinLink:e.target.value})}
+                  placeholder="https://zoom.us/j/... or any meeting URL"
+                  className="w-full px-3 py-2 rounded border text-sm" /></div>
             </div>
             {isSeriesItem && (
               <div className="mt-3 bg-amber-50 border border-amber-200 rounded-lg p-3">
