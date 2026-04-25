@@ -429,6 +429,31 @@ export default function App() {
   // can't double-tap during the async Supabase round-trip. Was missing
   // previously — looked like "nothing happens" on slow mobile networks.
   const [isCreatingInvoice, setIsCreatingInvoice] = useState(false);
+  // Apr 25 2026 — Visible error banner for the create-invoice modal. Toasts
+  // disappear in 5s and are easy to miss on mobile. This banner stays in the
+  // modal until dismissed, so any failure surfaces unmissable feedback.
+  const [createInvoiceError, setCreateInvoiceError] = useState(null);
+  // Apr 25 2026 — Helper that cleanly closes the "Order Not Found" mini-modal
+  // AND wipes every piece of stale state that could pollute the next attempt.
+  // Without this, switching between Cash Out → Cash In with the modal having
+  // been open even briefly left __creatingInvoice / __newInvCustomer / etc.
+  // hanging around. Next save would jump straight to the create-invoice form
+  // with stale or empty values, and the green button would silently fail
+  // validation. Using this helper everywhere the modal closes prevents that.
+  const closePendingTreasuryModal = () => {
+    setPendingTreasuryRecord(null);
+    setIsCreatingInvoice(false);
+    setCreateInvoiceError(null);
+    setFormData(function(prev) {
+      var next = Object.assign({}, prev);
+      delete next.__creatingInvoice;
+      delete next.__newInvCustomer;
+      delete next.__newInvCustomerId;
+      delete next.__newInvTotal;
+      delete next.__newInvDate;
+      return next;
+    });
+  };
   const [formData, setFormData] = useState({});
   const [hideSections, setHideSections] = useState({});
   const [announcements, setAnnouncements] = useState([]);
@@ -2106,6 +2131,22 @@ export default function App() {
         }
         // Order# provided but no matching invoice → open "create now or cancel" flow
         console.log('[treasury-add] OPENING modal — order#' + orderNumTrimmed + ' not found locally');
+        // Apr 25 2026 — Wipe any stale invoice-creation state from a prior
+        // unfinished attempt BEFORE opening the modal. Without this, going
+        // Cash Out → Cash In with __creatingInvoice still set from earlier
+        // jumped the modal straight into the create-invoice form with empty
+        // / stale values, and the green button silently failed validation.
+        setIsCreatingInvoice(false);
+        setCreateInvoiceError(null);
+        setFormData(function(prev) {
+          var next = Object.assign({}, prev);
+          delete next.__creatingInvoice;
+          delete next.__newInvCustomer;
+          delete next.__newInvCustomerId;
+          delete next.__newInvTotal;
+          delete next.__newInvDate;
+          return next;
+        });
         setPendingTreasuryRecord({
           record: record,
           amount: amt,
@@ -2147,8 +2188,25 @@ export default function App() {
       // Real UUID from dbInsert. Fake 'temp-' ids broke Edit/Delete during the
       // 500ms window before loadAllData refreshed.
       setTreasury(prev => [inserted, ...prev]);
+      // Apr 25 2026 — Optimistic insert into LOCAL invoices state too, so
+      // the just-created treasury row's "linked invoice" badge shows up
+      // immediately instead of appearing greyed out for the 500ms before
+      // loadAllData refreshes. Other invoice-creation flows already do this
+      // (line ~5279); my fix forgot to. Was the cause of "appears greyed
+      // out in transaction details" symptom.
+      if (invoiceToLink && invoiceToLink.id) {
+        setInvoices(function(prev) {
+          // Avoid double-add if it's already there (e.g. typo-suggestion path)
+          if (prev.some(function(i) { return i.id === invoiceToLink.id; })) return prev;
+          return [invoiceToLink].concat(prev);
+        });
+      }
       setShowAddTreasury(false);
-      setPendingTreasuryRecord(null);
+      // Use the helper so __creatingInvoice and friends are wiped — without
+      // this, a successful create-invoice run left __creatingInvoice=true in
+      // formData, and the NEXT save jumped straight into the create-invoice
+      // form instead of going through validation. (Cash Out → Cash In bug.)
+      closePendingTreasuryModal();
       toast.success(invoiceToLink
         ? 'Transaction saved + linked to ' + (invoiceToLink.customer_name || ('#' + invoiceToLink.order_number)) + ' ✓'
         : 'Transaction saved ✓');
@@ -2156,6 +2214,8 @@ export default function App() {
       setTimeout(() => loadAllData(), 500);
     } catch (err) {
       toast.error(err.message);
+      // Surface in the modal banner too so it's unmissable
+      setCreateInvoiceError('Saving the transaction failed: ' + (err && err.message ? err.message : String(err)));
     }
   };
 
@@ -11697,7 +11757,7 @@ export default function App() {
       {pendingTreasuryRecord && (
         <div
           className="fixed inset-0 z-[60] bg-black/70 backdrop-blur-sm"
-          onClick={() => { setPendingTreasuryRecord(null); }}
+          onClick={() => { closePendingTreasuryModal(); }}
           style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 12 }}
         >
           <div
@@ -11712,13 +11772,34 @@ export default function App() {
                   <div className="text-lg font-bold text-white mt-1" style={{ direction: 'rtl' }}>
                     رقم الأمر #{pendingTreasuryRecord.record.order_number} غير موجود
                   </div>
+                  {/* Build stamp so Max can confirm at a glance that the
+                      latest fix is actually deployed. If he doesn't see this
+                      tag in the modal, his browser is running stale JS. */}
+                  <div className="mt-1.5 inline-block px-2 py-0.5 rounded bg-amber-900/60 text-amber-100 text-[10px] font-mono font-bold tracking-wide">
+                    BUILD v55.5-DIAG
+                  </div>
                 </div>
-                <button onClick={() => setPendingTreasuryRecord(null)}
+                <button onClick={() => closePendingTreasuryModal()}
                   className="px-3 py-1.5 rounded-lg bg-white text-slate-900 text-sm font-extrabold hover:bg-slate-100 shadow">✕</button>
               </div>
             </div>
 
             <div className="p-5 space-y-4" style={{ overflowY: 'auto', flex: '1 1 auto', minHeight: 0 }}>
+              {/* Apr 25 2026 — Visible, persistent error banner. Toasts in
+                  the corner are easy to miss on mobile; this stays in the
+                  modal until dismissed so a failed save can never look like
+                  "nothing happened". */}
+              {createInvoiceError && (
+                <div className="bg-red-100 border-2 border-red-600 rounded-lg p-3 flex items-start gap-2">
+                  <div className="text-2xl flex-shrink-0">⚠️</div>
+                  <div className="flex-1 min-w-0">
+                    <div className="text-sm font-extrabold text-red-900 mb-1">Save failed / فشل الحفظ</div>
+                    <div className="text-xs text-red-800 break-words whitespace-pre-wrap">{createInvoiceError}</div>
+                  </div>
+                  <button onClick={() => setCreateInvoiceError(null)}
+                    className="text-red-700 hover:text-red-900 text-lg font-bold flex-shrink-0">✕</button>
+                </div>
+              )}
               {/* Typo suggestions */}
               {pendingTreasuryRecord.suggestions && pendingTreasuryRecord.suggestions.length > 0 && !formData.__creatingInvoice && (
                 <div className="bg-blue-100 border-2 border-blue-500 rounded-lg p-3">
@@ -11837,15 +11918,28 @@ export default function App() {
                     <button
                       disabled={isCreatingInvoice}
                       onClick={async () => {
+                        // Apr 25 2026 — DIAGNOSTIC alert at the top of the
+                        // handler. If Max sees this popup, the click event
+                        // IS firing and reaching React. If he doesn't see it,
+                        // the button isn't wired up — meaning he's running
+                        // a stale build. This single alert disambiguates the
+                        // two failure modes I cannot otherwise tell apart.
+                        // Once we confirm the click fires, we'll remove this.
+                        try { window.alert('🟢 BUTTON CLICKED — handler is running. Tap OK to continue.'); } catch (_) {}
                         // Guard against double-tap: if already in flight, ignore.
                         // Without this, slow networks led to duplicate-key errors
                         // and looked like "nothing happens" because the second
                         // click's error overwrote the first click's success path.
                         if (isCreatingInvoice) {
                           console.log('[create-invoice] click ignored — already in flight');
+                          try { window.alert('⏸️ Already saving from a previous tap. Please wait.'); } catch (_) {}
                           return;
                         }
                         console.log('[create-invoice] click fired');
+                        // Clear any stale error banner from a previous attempt
+                        // so the user gets a clean slate. If THIS attempt fails,
+                        // the banner repopulates — but stale text never lingers.
+                        setCreateInvoiceError(null);
                         // Move EVERYTHING inside try so any failure surfaces a
                         // visible error instead of silently throwing pre-await.
                         // Previously customers.find() was outside the try — a
@@ -11856,17 +11950,21 @@ export default function App() {
                           const name = String(formData.__newInvCustomer || '').trim();
                           const totalAmt = Number(formData.__newInvTotal ?? pendingTreasuryRecord.amount);
                           if (!name) {
+                            setCreateInvoiceError('Customer name is required. / اسم العميل مطلوب.');
+                            try { window.alert('⚠️ Customer name is empty. Please type a name and try again.'); } catch (_) {}
                             toast.warning('Customer name is required / اسم العميل مطلوب');
                             setIsCreatingInvoice(false);
                             return;
                           }
                           if (!(totalAmt > 0)) {
+                            setCreateInvoiceError('Invoice total must be greater than zero. / الإجمالي يجب أن يكون أكبر من صفر.');
                             toast.warning('Invoice total must be > 0 / الإجمالي يجب أن يكون أكبر من صفر');
                             setIsCreatingInvoice(false);
                             return;
                           }
                           const orderNum = pendingTreasuryRecord.record.order_number;
                           if (!orderNum) {
+                            setCreateInvoiceError('Order number is missing. Close this dialog and re-enter the transaction. / رقم الأمر مفقود.');
                             toast.error('Order number missing — please close and re-enter / رقم الأمر مفقود');
                             setIsCreatingInvoice(false);
                             return;
@@ -11882,10 +11980,12 @@ export default function App() {
                             if (exact) resolvedCustomerId = exact.id;
                           }
                           console.log('[create-invoice] inserting', { orderNum: orderNum, name: name, totalAmt: totalAmt, customerId: resolvedCustomerId });
+                          try { window.alert('💾 About to save invoice #' + orderNum + ' for "' + name + '" — total ' + totalAmt + '. Tap OK to send to database.'); } catch (_) {}
                           // Use dbInsert for consistency with finalizePendingTreasury (which
                           // also uses dbInsert) and to capture an audit-log entry. Direct
                           // supabase.from().insert() bypasses the audit trail.
-                          var inserted;
+                          var inserted = null;
+                          var dbErrorMessage = null;
                           try {
                             inserted = await dbInsert('invoices', {
                               order_number: sanitize(orderNum),
@@ -11898,64 +11998,77 @@ export default function App() {
                               source: 'treasury',
                             }, user?.id);
                           } catch (dbErr) {
-                            console.error('[create-invoice] dbInsert failed', dbErr);
-                            // Most common failure: unique constraint on order_number means
-                            // the invoice was created in another tab/by another user. Fetch
-                            // the existing one and offer to link to it instead.
-                            var msg = String((dbErr && dbErr.message) || dbErr || 'Unknown error');
-                            if (msg.toLowerCase().indexOf('duplicate') >= 0 || msg.indexOf('unique') >= 0 || msg.indexOf('23505') >= 0) {
-                              try {
-                                var existing = await supabase.from('invoices').select('*').eq('order_number', sanitize(orderNum)).single();
-                                if (existing && existing.data) {
-                                  toast.warning('Invoice #' + orderNum + ' already exists — linking now');
-                                  await finalizePendingTreasury(existing.data);
-                                  setFormData(function(prev) {
-                                    var next = Object.assign({}, prev);
-                                    delete next.__creatingInvoice;
-                                    delete next.__newInvCustomer;
-                                    delete next.__newInvCustomerId;
-                                    delete next.__newInvTotal;
-                                    delete next.__newInvDate;
-                                    return next;
-                                  });
-                                  setIsCreatingInvoice(false);
-                                  return;
-                                }
-                              } catch (e2) {
-                                console.error('[create-invoice] follow-up lookup failed', e2);
-                              }
-                              toast.error('Invoice #' + orderNum + ' already exists. Refresh and link to it.');
-                            } else {
-                              toast.error('Failed to create invoice: ' + msg);
-                            }
-                            setIsCreatingInvoice(false);
-                            return;
+                            console.error('[create-invoice] dbInsert threw', dbErr);
+                            dbErrorMessage = String((dbErr && dbErr.message) || dbErr || 'Unknown error');
+                            try { window.alert('❌ Database threw an error: ' + dbErrorMessage + '\n\nNow trying to recover...'); } catch (_) {}
                           }
+                          // Apr 25 2026 — RECOVERY PATH: if dbInsert threw OR returned
+                          // nothing, the invoice MAY still have been written to the
+                          // database. Two known causes:
+                          //   (a) audit_log insert failure inside dbInsert (test-full
+                          //       documented this as 25.src.1b KNOWN GAP) — invoice
+                          //       row succeeded, audit_log failed, error propagates
+                          //   (b) duplicate-key error (concurrent creation by another
+                          //       user / tab) — invoice already exists
+                          // Either way, the right move is: fetch by order_number. If
+                          // it's there, USE IT. Don't make the user retry and risk a
+                          // second invoice. This was the cause of "transaction shows
+                          // greyed out" — the invoice WAS in DB but my fix bailed.
                           if (!inserted || !inserted.id) {
-                            console.error('[create-invoice] insert returned no row', inserted);
-                            toast.error('Database did not return the new invoice. Refresh and check Sales tab.');
+                            console.log('[create-invoice] checking DB for invoice (recovery path)');
+                            try {
+                              var lookup = await supabase.from('invoices').select('*').eq('order_number', sanitize(orderNum)).maybeSingle();
+                              if (lookup && lookup.data && lookup.data.id) {
+                                console.log('[create-invoice] recovered existing invoice', lookup.data.id);
+                                inserted = lookup.data;
+                                if (dbErrorMessage) {
+                                  // Show a non-blocking warning so user knows audit_log
+                                  // didn't fully record the create, but their data is safe.
+                                  toast.warning('Invoice was saved but audit log had a hiccup. Data is safe.');
+                                }
+                              }
+                            } catch (e2) {
+                              console.error('[create-invoice] DB lookup also failed', e2);
+                            }
+                          }
+                          // If we STILL don't have an invoice after the recovery
+                          // attempt, surface a big visible error and stop.
+                          if (!inserted || !inserted.id) {
+                            var visibleMsg = 'Could not create the invoice. '
+                              + (dbErrorMessage ? 'Database said: ' + dbErrorMessage : 'No row was returned and no matching invoice was found.')
+                              + ' / تعذر إنشاء الفاتورة.';
+                            setCreateInvoiceError(visibleMsg);
+                            try { window.alert('❌ FAILED: ' + visibleMsg); } catch (_) {}
+                            toast.error('Failed to create invoice — see the red banner in the dialog');
                             setIsCreatingInvoice(false);
                             return;
                           }
-                          console.log('[create-invoice] inserted ok', inserted.id);
+                          console.log('[create-invoice] invoice ready', inserted.id);
+                          try { window.alert('✅ SUCCESS: Invoice #' + orderNum + ' was saved to the database. Now linking treasury entry...'); } catch (_) {}
+                          // Apr 25 2026 — Optimistic insert into LOCAL invoices state.
+                          // Without this, the just-linked treasury entry showed as
+                          // "greyed out / unlinked" for the 500ms before loadAllData
+                          // refreshed. The Sales tab also missed the new invoice
+                          // until then. Now visible immediately.
+                          setInvoices(function(prev) {
+                            if (prev.some(function(i) { return i.id === inserted.id; })) return prev;
+                            return [inserted].concat(prev);
+                          });
                           toast.success(resolvedCustomerId
                             ? 'Invoice #' + orderNum + ' created + linked to customer ✓'
                             : 'Invoice #' + orderNum + ' created (new customer — no link) ✓');
                           await finalizePendingTreasury(inserted);
-                          setFormData(function(prev) {
-                            var next = Object.assign({}, prev);
-                            delete next.__creatingInvoice;
-                            delete next.__newInvCustomer;
-                            delete next.__newInvCustomerId;
-                            delete next.__newInvTotal;
-                            delete next.__newInvDate;
-                            return next;
-                          });
+                          // No need to manually clear __creatingInvoice etc. here —
+                          // finalizePendingTreasury → closePendingTreasuryModal does it.
                         } catch (err) {
                           // Outer catch — anything that escapes (logic bugs,
-                          // null-deref, etc). Always surface visibly.
+                          // null-deref, etc). Always surface visibly via the banner
+                          // so the user can never miss it.
                           console.error('[create-invoice] unexpected error', err);
-                          toast.error('Unexpected error: ' + (err && err.message ? err.message : String(err)));
+                          var bigMsg = 'Unexpected error: ' + (err && err.message ? err.message : String(err));
+                          setCreateInvoiceError(bigMsg);
+                          try { window.alert('🚨 UNEXPECTED ERROR: ' + bigMsg); } catch (_) {}
+                          toast.error(bigMsg);
                         } finally {
                           // Ensure button always re-enables, even if we early-returned
                           // through an unexpected path.
@@ -12026,7 +12139,7 @@ export default function App() {
                       + Create Invoice Now / إنشاء فاتورة الآن
                     </button>
                     <button
-                      onClick={() => setPendingTreasuryRecord(null)}
+                      onClick={() => closePendingTreasuryModal()}
                       className="px-4 py-2.5 bg-slate-300 text-slate-900 rounded-lg text-sm font-bold hover:bg-slate-400"
                     >
                       Cancel / إلغاء
