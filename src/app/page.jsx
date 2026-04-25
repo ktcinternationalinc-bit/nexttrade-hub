@@ -11776,7 +11776,7 @@ export default function App() {
                       latest fix is actually deployed. If he doesn't see this
                       tag in the modal, his browser is running stale JS. */}
                   <div className="mt-1.5 inline-block px-2 py-0.5 rounded bg-amber-900/60 text-amber-100 text-[10px] font-mono font-bold tracking-wide">
-                    BUILD v55.5-DIAG
+                    BUILD v55.7-FIX
                   </div>
                 </div>
                 <button onClick={() => closePendingTreasuryModal()}
@@ -12038,7 +12038,16 @@ export default function App() {
                               total_amount: totalAmt,
                               total_collected: 0,
                               outstanding: totalAmt,
-                              source: 'treasury',
+                              // Apr 25 2026 — was 'treasury' which violates the
+                              // live DB's invoices_source_check constraint (only
+                              // 'manual' and 'import' are allowed there). The
+                              // schema file adds 'treasury' but production never
+                              // ran that migration. Using 'manual' makes the
+                              // insert succeed today; the optional SQL file
+                              // sql/s27_invoices_source_allow_treasury.sql adds
+                              // 'treasury' to the constraint if you want to
+                              // distinguish treasury-created invoices later.
+                              source: 'manual',
                             }, user?.id);
                           } catch (dbErr) {
                             console.error('[create-invoice] dbInsert threw', dbErr);
