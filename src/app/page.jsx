@@ -12124,7 +12124,7 @@ export default function App() {
                       latest fix is actually deployed. If he doesn't see this
                       tag in the modal, his browser is running stale JS. */}
                   <div className="mt-1.5 inline-block px-2 py-0.5 rounded bg-amber-900/60 text-amber-100 text-[10px] font-mono font-bold tracking-wide">
-                    BUILD v55.14-PHONE-A
+                    BUILD v55.15-PHONE-FIX
                   </div>
                 </div>
                 <button onClick={() => closePendingTreasuryModal()}

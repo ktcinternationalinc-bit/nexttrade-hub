@@ -27,14 +27,12 @@ const supabase = createClient(
 );
 
 function getPublicBaseUrl(req) {
-  if (process.env.VERCEL_URL) return 'https://' + process.env.VERCEL_URL;
-  if (process.env.NEXT_PUBLIC_APP_URL) return process.env.NEXT_PUBLIC_APP_URL;
-  try {
-    var url = new URL(req.url);
-    return url.protocol + '//' + url.host;
-  } catch (e) {
-    return 'https://nexttrade-hub.vercel.app';
+  if (process.env.NEXT_PUBLIC_APP_URL) {
+    var u = process.env.NEXT_PUBLIC_APP_URL;
+    if (u.endsWith('/')) u = u.slice(0, -1);
+    return u;
   }
+  return 'https://nexttrade-hub.vercel.app';
 }
 
 export async function POST(req) {
@@ -50,22 +48,47 @@ export async function POST(req) {
     var recordingDuration = parseInt(String(formData.get('RecordingDuration') || '0'), 10);
     var dialCallStatus = String(formData.get('DialCallStatus') || ''); // 'answered', 'no-answer', 'busy', 'failed'
 
-    // If the call was actually answered, Twilio still hits this URL because
-    // <Dial action=> always fires after <Dial> completes. In that case there
-    // won't be a RecordingUrl since the user didn't leave a voicemail.
+    console.log('[phone/voicemail-record] callback received',
+      'sid=' + recordingSid,
+      'url=' + (recordingUrl ? 'yes' : 'no'),
+      'duration=' + recordingDuration,
+      'dial=' + dialCallStatus
+    );
+
+    // If the call was actually answered (Dial action callback), no voicemail
     if (dialCallStatus === 'completed' || dialCallStatus === 'answered') {
-      // Call was answered — no voicemail to save
       var twiml = '<?xml version="1.0" encoding="UTF-8"?>'
         + '<Response><Hangup /></Response>';
       return new Response(twiml, { headers: { 'Content-Type': 'text/xml' } });
     }
 
-    if (!recordingUrl) {
-      // No voicemail recording — caller hung up before leaving a message
-      console.log('[phone/voicemail-record] no recording (caller hung up)');
+    if (!recordingUrl || !recordingSid) {
+      // No voicemail recording — caller hung up before leaving a message,
+      // OR this is the synchronous action callback firing before the
+      // recording is processed (Twilio fires recordingStatusCallback later)
+      console.log('[phone/voicemail-record] no recording in this callback — waiting for recordingStatusCallback');
       var twiml2 = '<?xml version="1.0" encoding="UTF-8"?>'
         + '<Response><Hangup /></Response>';
       return new Response(twiml2, { headers: { 'Content-Type': 'text/xml' } });
+    }
+
+    // Dedupe — both action and recordingStatusCallback hit this same URL.
+    // Check if we already saved a row for this RecordingSid.
+    var existing = null;
+    try {
+      var existCheck = await supabase
+        .from('phone_voicemails')
+        .select('id')
+        .eq('twilio_recording_sid', recordingSid)
+        .maybeSingle();
+      existing = existCheck.data;
+    } catch (e) {}
+
+    if (existing) {
+      console.log('[phone/voicemail-record] already saved sid=' + recordingSid + ' — skipping');
+      var twimlDup = '<?xml version="1.0" encoding="UTF-8"?>'
+        + '<Response><Hangup /></Response>';
+      return new Response(twimlDup, { headers: { 'Content-Type': 'text/xml' } });
     }
 
     // Save the voicemail row

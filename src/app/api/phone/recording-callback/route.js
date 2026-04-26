@@ -21,14 +21,12 @@ const supabase = createClient(
 );
 
 function getPublicBaseUrl(req) {
-  if (process.env.VERCEL_URL) return 'https://' + process.env.VERCEL_URL;
-  if (process.env.NEXT_PUBLIC_APP_URL) return process.env.NEXT_PUBLIC_APP_URL;
-  try {
-    var url = new URL(req.url);
-    return url.protocol + '//' + url.host;
-  } catch (e) {
-    return 'https://nexttrade-hub.vercel.app';
+  if (process.env.NEXT_PUBLIC_APP_URL) {
+    var u = process.env.NEXT_PUBLIC_APP_URL;
+    if (u.endsWith('/')) u = u.slice(0, -1);
+    return u;
   }
+  return 'https://nexttrade-hub.vercel.app';
 }
 
 export async function POST(req) {

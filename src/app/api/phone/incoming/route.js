@@ -38,17 +38,26 @@ const supabase = createClient(
   process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY
 );
 
-// Build the public base URL Twilio uses for callbacks
+// Build the public base URL Twilio uses for callbacks.
+//
+// IMPORTANT: We do NOT use process.env.VERCEL_URL here, even though it
+// looks tempting. VERCEL_URL is set to the specific deployment hash
+// (e.g. nexttrade-hub-abc123xyz.vercel.app), which:
+//   1. Changes every deploy, so old in-flight calls get 404s
+//   2. Sometimes isn't reachable across deployment scopes
+//
+// Instead we use NEXT_PUBLIC_APP_URL (settable in Vercel env) and fall
+// back to the known production domain. If you ever change the production
+// domain (e.g. cutover to hub.ktcus.com), set NEXT_PUBLIC_APP_URL.
 function getPublicBaseUrl(req) {
-  // Prefer VERCEL_URL (set automatically on Vercel), else infer from request
-  if (process.env.VERCEL_URL) return 'https://' + process.env.VERCEL_URL;
-  if (process.env.NEXT_PUBLIC_APP_URL) return process.env.NEXT_PUBLIC_APP_URL;
-  try {
-    var url = new URL(req.url);
-    return url.protocol + '//' + url.host;
-  } catch (e) {
-    return 'https://nexttrade-hub.vercel.app';
+  if (process.env.NEXT_PUBLIC_APP_URL) {
+    var u = process.env.NEXT_PUBLIC_APP_URL;
+    // Strip any trailing slash
+    if (u.endsWith('/')) u = u.slice(0, -1);
+    return u;
   }
+  // Production fallback — fixed domain that always works
+  return 'https://nexttrade-hub.vercel.app';
 }
 
 // XML escape — Twilio is strict. Single quotes & special chars in names break TwiML.
@@ -214,21 +223,35 @@ export async function POST(req) {
       twiml += '<Dial ' + dialAttrs + '>';
       twiml += '<Number>' + xmlEscape(ringTarget) + '</Number>';
       twiml += '</Dial>';
-      // If <Dial> verb completed without connecting, fall through to voicemail
+      // If <Dial> verb completed without connecting, fall through to voicemail.
+      // Use recordingStatusCallback (not just action) so the recording reaches
+      // us even if the caller hangs up immediately after speaking.
       twiml += '<Say>The team is unavailable right now. Please leave a message after the beep.</Say>';
       twiml += '<Record action="' + xmlEscape(voicemailUrl) + '"';
       twiml += ' method="POST"';
       twiml += ' maxLength="180"';
       twiml += ' playBeep="true"';
-      twiml += ' finishOnKey="#" />';
+      twiml += ' trim="trim-silence"';
+      twiml += ' finishOnKey="#"';
+      twiml += ' recordingStatusCallback="' + xmlEscape(voicemailUrl) + '"';
+      twiml += ' recordingStatusCallbackEvent="completed"';
+      twiml += ' recordingStatusCallbackMethod="POST" />';
     } else {
-      // No one to ring — straight to voicemail
+      // No one to ring — straight to voicemail.
+      // Same dual-callback pattern: action fires when caller stops recording,
+      // recordingStatusCallback fires when Twilio finishes processing the audio.
+      // recordingStatusCallback is the reliable one — Twilio always fires it
+      // even if the caller hung up before action could complete.
       twiml += '<Say>Please leave us a message after the beep, and we will get back to you.</Say>';
       twiml += '<Record action="' + xmlEscape(voicemailUrl) + '"';
       twiml += ' method="POST"';
       twiml += ' maxLength="180"';
       twiml += ' playBeep="true"';
-      twiml += ' finishOnKey="#" />';
+      twiml += ' trim="trim-silence"';
+      twiml += ' finishOnKey="#"';
+      twiml += ' recordingStatusCallback="' + xmlEscape(voicemailUrl) + '"';
+      twiml += ' recordingStatusCallbackEvent="completed"';
+      twiml += ' recordingStatusCallbackMethod="POST" />';
     }
 
     twiml += '<Say>Thank you. Goodbye.</Say>';
