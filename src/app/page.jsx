@@ -429,6 +429,9 @@ export default function App() {
   // can't double-tap during the async Supabase round-trip. Was missing
   // previously — looked like "nothing happens" on slow mobile networks.
   const [isCreatingInvoice, setIsCreatingInvoice] = useState(false);
+  // Apr 26 2026 — Loading flag for "Create new customer" button in the
+  // create-invoice picker. Prevents double-tap creating two customer rows.
+  const [isCreatingCustomer, setIsCreatingCustomer] = useState(false);
   // Apr 25 2026 — Visible error banner for the create-invoice modal. Toasts
   // disappear in 5s and are easy to miss on mobile. This banner stays in the
   // modal until dismissed, so any failure surfaces unmissable feedback.
@@ -12096,7 +12099,7 @@ export default function App() {
                       latest fix is actually deployed. If he doesn't see this
                       tag in the modal, his browser is running stale JS. */}
                   <div className="mt-1.5 inline-block px-2 py-0.5 rounded bg-amber-900/60 text-amber-100 text-[10px] font-mono font-bold tracking-wide">
-                    BUILD v55.9-SAFETOAST
+                    BUILD v55.11-LOCKED
                   </div>
                 </div>
                 <button onClick={() => closePendingTreasuryModal()}
@@ -12161,102 +12164,273 @@ export default function App() {
                   </div>
 
                   <div>
-                    <label className="text-xs font-bold text-slate-700 uppercase tracking-wide">Customer / اسم العميل</label>
+                    <label className="text-xs font-bold text-slate-700 uppercase tracking-wide">Customer / اسم العميل <span className="text-red-600">*</span></label>
 
-                    {/* === LINKED STATE === Customer already picked. Shows as a
-                        clean chip with a clear "Change" action. No X icon — that
-                        was being misread as a delete-the-customer button. */}
+                    {/* ===========================================================
+                        v55.11 CUSTOMER PICKER — Apr 26 2026
+                        ===========================================================
+                        Workflow guarantees (from Max's spec):
+                          1. EVERY invoice gets a customer_id. No orphans.
+                             "Save without link" path is removed.
+                          2. List of customers is ALWAYS visible while picker
+                             is open. Even if user typed text that doesn't match
+                             any customer, the list is still scrollable so they
+                             can pick a different one.
+                          3. Dedicated SEARCH input filters the dropdown live.
+                             It's separate from the typed-name field so search
+                             and name don't fight each other.
+                          4. When typed name has no match: prominent "Create new
+                             customer with this name" button appears. Clicking
+                             it creates the customer record AND links it to the
+                             invoice in one shot.
+                          5. Auto-prefill (case-insensitive match): customer is
+                             pre-selected as a chip, picker stays open below for
+                             optional change.
+                        =========================================================== */}
+
+                    {/* Compute lookup data once per render — used by both states */}
+                    {(() => { return null; })()}
+
                     {formData.__newInvCustomerId ? (
-                      <div className="mt-1 flex items-center gap-2 px-3 py-2.5 rounded-lg bg-white border-2 border-emerald-500 shadow-sm">
-                        <div className="w-7 h-7 rounded-full bg-emerald-500 text-white flex items-center justify-center text-sm font-bold flex-shrink-0">✓</div>
-                        <div className="flex-1 min-w-0">
-                          <div className="text-[10px] font-bold text-emerald-700 uppercase tracking-wide">Linked to existing customer</div>
-                          <div className="text-sm font-extrabold text-slate-900 truncate" style={{ direction: 'rtl' }}>{formData.__newInvCustomer}</div>
-                        </div>
-                        <button
-                          type="button"
-                          onClick={() => setFormData({ ...formData, __newInvCustomer: '', __newInvCustomerId: null })}
-                          className="px-3 py-1.5 rounded-md bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-bold border border-slate-300"
-                        >
-                          Change / تغيير
-                        </button>
-                      </div>
-                    ) : (
+                      // ============================================================
+                      // STATE A: CUSTOMER SELECTED (chip + picker stays open below)
+                      // ============================================================
                       <>
-                        {/* === SEARCHABLE INPUT === With a CHEVRON-DOWN indicator
-                            on the right so it visually reads as "dropdown / picker"
-                            instead of a plain text field. */}
+                        <div className="mt-1 flex items-center gap-2 px-3 py-2.5 rounded-lg bg-white border-2 border-emerald-500 shadow-sm">
+                          <div className="w-7 h-7 rounded-full bg-emerald-500 text-white flex items-center justify-center text-sm font-bold flex-shrink-0">✓</div>
+                          <div className="flex-1 min-w-0">
+                            <div className="text-[10px] font-bold text-emerald-700 uppercase tracking-wide">
+                              {formData.__newInvCustomerAutoLinked ? 'Auto-linked — confirm or pick another below' : 'Linked'}
+                            </div>
+                            <div className="text-sm font-extrabold text-slate-900 truncate" style={{ direction: 'rtl' }}>{formData.__newInvCustomer}</div>
+                          </div>
+                          <button
+                            type="button"
+                            onClick={() => setFormData({ ...formData, __newInvCustomer: '', __newInvCustomerId: null, __newInvCustomerAutoLinked: false, __newInvSearch: '' })}
+                            className="px-3 py-1.5 rounded-md bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-bold border border-slate-300"
+                          >
+                            Change / تغيير
+                          </button>
+                        </div>
+
+                        {/* Picker stays available below the chip so user can change easily */}
+                        <div className="mt-3 rounded-lg overflow-hidden bg-slate-900 border border-slate-700 shadow-md">
+                          <div className="px-3 py-2 bg-slate-800 border-b border-slate-700 flex items-center gap-2">
+                            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="text-slate-400 flex-shrink-0">
+                              <circle cx="11" cy="11" r="8"></circle>
+                              <line x1="21" y1="21" x2="16.65" y2="16.65"></line>
+                            </svg>
+                            <input
+                              type="text"
+                              value={formData.__newInvSearch || ''}
+                              onChange={e => setFormData({ ...formData, __newInvSearch: e.target.value })}
+                              placeholder="Search to change customer..."
+                              className="flex-1 bg-transparent border-0 text-sm text-slate-100 placeholder-slate-500 focus:outline-none"
+                            />
+                          </div>
+                          <div className="max-h-[180px] overflow-auto">
+                            {(() => {
+                              var search = String(formData.__newInvSearch || '').trim().toLowerCase();
+                              var pool = Array.isArray(customers) ? customers : [];
+                              if (pool.length === 0) {
+                                return <div className="px-3 py-4 text-xs text-slate-400 text-center">⏳ Customers loading...</div>;
+                              }
+                              var filtered = search.length === 0
+                                ? pool.slice(0, 20)
+                                : pool.filter(function(c) { return String(c.name || '').toLowerCase().indexOf(search) >= 0; }).slice(0, 30);
+                              if (filtered.length === 0) {
+                                return <div className="px-3 py-4 text-xs text-slate-400 text-center">No customer matches "{formData.__newInvSearch}"</div>;
+                              }
+                              return filtered.map(function(c) {
+                                var isCurrent = c.id === formData.__newInvCustomerId;
+                                return (
+                                  <div key={c.id}
+                                    onClick={function() { setFormData({ ...formData, __newInvCustomer: c.name, __newInvCustomerId: c.id, __newInvCustomerAutoLinked: false, __newInvSearch: '' }); }}
+                                    className={'px-3 py-2.5 cursor-pointer border-b border-slate-800 last:border-0 flex items-center justify-between gap-2 ' + (isCurrent ? 'bg-emerald-900/40' : 'hover:bg-slate-800')}>
+                                    <span className="font-semibold text-slate-100 text-sm truncate" style={{ direction: 'rtl' }}>{c.name}</span>
+                                    {isCurrent
+                                      ? <span className="text-[9px] font-bold text-emerald-300 uppercase">current</span>
+                                      : <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" className="text-slate-500 flex-shrink-0"><polyline points="9 18 15 12 9 6"></polyline></svg>}
+                                  </div>
+                                );
+                              });
+                            })()}
+                          </div>
+                        </div>
+                      </>
+                    ) : (
+                      // ============================================================
+                      // STATE B: NO CUSTOMER YET (typed-name input + dropdown + create-new action)
+                      // ============================================================
+                      <>
+                        {/* Typed name input (this is the customer's NAME — used as
+                            the invoice's customer_name field, AND as the fill-in
+                            for "Create new customer" if user picks that path) */}
                         <div className="relative mt-1">
                           <input
                             autoFocus
                             value={formData.__newInvCustomer || ''}
                             onChange={e => {
                               const v = e.target.value;
-                              setFormData({ ...formData, __newInvCustomer: v, __newInvCustomerId: null });
+                              // Auto-link if exact case-insensitive match exists
+                              var match = Array.isArray(customers)
+                                ? customers.find(function(c) { return String(c.name || '').trim().toLowerCase() === v.trim().toLowerCase(); })
+                                : null;
+                              setFormData({
+                                ...formData,
+                                __newInvCustomer: v,
+                                __newInvCustomerId: match ? match.id : null,
+                                __newInvCustomerAutoLinked: match ? true : false,
+                                __newInvSearch: v, // Also seed search with what they typed
+                              });
                             }}
-                            placeholder="Type to search, or pick from list below / اكتب أو اختر من القائمة"
+                            placeholder="Customer name (or pick from list below) / اسم العميل"
                             className="w-full px-3 py-2.5 pr-10 rounded-lg border-2 border-slate-300 bg-white text-sm font-semibold text-slate-900 placeholder-slate-400 focus:border-emerald-500 focus:outline-none"
                             style={{ direction: 'rtl' }}
                           />
-                          {/* Chevron — purely visual signal that this opens a list */}
-                          <div className="absolute right-3 top-1/2 -translate-y-1/2 pointer-events-none text-slate-400">
-                            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
-                              <polyline points="6 9 12 15 18 9"></polyline>
-                            </svg>
-                          </div>
+                          {formData.__newInvCustomer && (
+                            <button type="button"
+                              onClick={() => setFormData({ ...formData, __newInvCustomer: '', __newInvCustomerId: null, __newInvCustomerAutoLinked: false, __newInvSearch: '' })}
+                              className="absolute right-2 top-1/2 -translate-y-1/2 w-7 h-7 flex items-center justify-center rounded-full bg-slate-100 hover:bg-slate-200 text-slate-700 text-sm font-bold"
+                              aria-label="Clear">✕</button>
+                          )}
                         </div>
 
-                        {/* === CUSTOMER LIST === Dark slate panel that sits cleanly
-                            against the light emerald container. Each row is a tap
-                            target with arrow indicator for "select this". */}
+                        {/* No-match warning + CREATE NEW CUSTOMER button.
+                            When typed text doesn't match anyone in the list, this
+                            is the primary action. Customer record is created on
+                            click and the invoice links to it in one shot. */}
+                        {(() => {
+                          var typedRaw = String(formData.__newInvCustomer || '').trim();
+                          if (!typedRaw) return null;
+                          var pool = Array.isArray(customers) ? customers : [];
+                          var hasAnyMatch = pool.some(function(c) {
+                            return String(c.name || '').toLowerCase().indexOf(typedRaw.toLowerCase()) >= 0;
+                          });
+                          if (hasAnyMatch) return null;
+                          return (
+                            <div className="mt-2 p-3 rounded-lg bg-amber-50 border-2 border-amber-300 space-y-2">
+                              <div className="flex items-start gap-2">
+                                <span className="text-amber-700 text-base flex-shrink-0">⚠</span>
+                                <div className="flex-1 text-[12px] text-amber-900">
+                                  <div className="font-bold">"{typedRaw}" is not in your customers list</div>
+                                  <div>Create them as a new customer, or pick someone different from the list below.</div>
+                                </div>
+                              </div>
+                              <button
+                                type="button"
+                                disabled={isCreatingInvoice || isCreatingCustomer}
+                                onClick={async () => {
+                                  if (isCreatingCustomer) return;
+                                  setIsCreatingCustomer(true);
+                                  try {
+                                    const newCust = await dbInsert('customers', {
+                                      name: sanitize(typedRaw),
+                                    }, user?.id);
+                                    if (newCust && newCust.id) {
+                                      setCustomers(function(prev) { return [newCust].concat(Array.isArray(prev) ? prev : []); });
+                                      setFormData(function(prev) {
+                                        return Object.assign({}, prev, {
+                                          __newInvCustomer: newCust.name,
+                                          __newInvCustomerId: newCust.id,
+                                          __newInvCustomerAutoLinked: false,
+                                          __newInvSearch: '',
+                                        });
+                                      });
+                                      try { (toast && toast.success) && toast.success('Customer "' + newCust.name + '" created and linked ✓'); } catch (_) {}
+                                    } else {
+                                      try { (toast && toast.error) && toast.error('Customer creation returned no record'); } catch (_) {}
+                                    }
+                                  } catch (err) {
+                                    console.error('[create-customer] failed', err);
+                                    var msg = (err && err.message) ? err.message : String(err);
+                                    try { (toast && toast.error) && toast.error('Failed to create customer: ' + msg); } catch (_) {}
+                                  } finally {
+                                    setIsCreatingCustomer(false);
+                                  }
+                                }}
+                                className={'w-full px-3 py-2.5 rounded-lg text-sm font-extrabold shadow flex items-center justify-center gap-2 ' + (isCreatingCustomer ? 'bg-emerald-400 text-white cursor-not-allowed' : 'bg-emerald-600 text-white hover:bg-emerald-700')}
+                              >
+                                {isCreatingCustomer
+                                  ? <span>⏳ Creating customer...</span>
+                                  : <><span>➕</span><span>Create "{typedRaw}" as new customer / إنشاء عميل جديد</span></>}
+                              </button>
+                            </div>
+                          );
+                        })()}
+
+                        {/* ALWAYS-VISIBLE customer dropdown with dedicated search input.
+                            User can pick a different name even if they typed something
+                            else. Search box filters the list live without affecting the
+                            customer-name input above. */}
                         <div className="mt-2 rounded-lg overflow-hidden bg-slate-900 border border-slate-700 shadow-md">
                           <div className="px-3 py-2 bg-slate-800 border-b border-slate-700">
-                            <div className="text-[10px] font-bold text-emerald-300 uppercase tracking-wider flex items-center justify-between">
-                              <span>Tap a name to link / اضغط لاختيار</span>
-                              <span className="text-slate-400 normal-case font-medium">
+                            <div className="flex items-center gap-2">
+                              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="text-emerald-400 flex-shrink-0">
+                                <circle cx="11" cy="11" r="8"></circle>
+                                <line x1="21" y1="21" x2="16.65" y2="16.65"></line>
+                              </svg>
+                              <input
+                                type="text"
+                                value={formData.__newInvSearch || ''}
+                                onChange={e => setFormData({ ...formData, __newInvSearch: e.target.value })}
+                                placeholder="Search customers... / بحث"
+                                className="flex-1 bg-transparent border-0 text-sm text-slate-100 placeholder-slate-500 focus:outline-none"
+                              />
+                              {formData.__newInvSearch && (
+                                <button type="button" onClick={() => setFormData({ ...formData, __newInvSearch: '' })}
+                                  className="text-slate-400 hover:text-slate-200 text-xs">✕</button>
+                              )}
+                              <span className="text-[10px] text-slate-400 font-medium ml-1 whitespace-nowrap">
                                 {(() => {
-                                  var typed = String(formData.__newInvCustomer || '').trim().toLowerCase();
+                                  var s = String(formData.__newInvSearch || '').trim().toLowerCase();
                                   var pool = Array.isArray(customers) ? customers : [];
-                                  if (typed.length === 0) return pool.length + ' customers';
-                                  var n = pool.filter(function(c) { return String(c.name || '').toLowerCase().indexOf(typed) >= 0; }).length;
+                                  if (s.length === 0) return pool.length + ' total';
+                                  var n = pool.filter(function(c) { return String(c.name || '').toLowerCase().indexOf(s) >= 0; }).length;
                                   return n + ' match' + (n === 1 ? '' : 'es');
                                 })()}
                               </span>
                             </div>
                           </div>
-                          <div className="max-h-[200px] overflow-auto">
+                          <div className="max-h-[220px] overflow-auto">
                             {(() => {
-                              var typed = String(formData.__newInvCustomer || '').trim().toLowerCase();
+                              var search = String(formData.__newInvSearch || '').trim().toLowerCase();
                               var pool = Array.isArray(customers) ? customers : [];
+                              if (pool.length === 0) {
+                                return (
+                                  <div className="px-3 py-5 text-xs text-slate-300 text-center">
+                                    <div className="font-bold mb-1 text-amber-300">⏳ Customers list not loaded</div>
+                                    <div className="text-slate-400">If this persists, check your connection. You can still type a name above and create them as a new customer.</div>
+                                  </div>
+                                );
+                              }
                               var filtered;
-                              if (typed.length === 0) {
-                                filtered = pool.slice(0, 12);
+                              if (search.length === 0) {
+                                filtered = pool.slice(0, 20);
                               } else {
                                 filtered = pool.filter(function(c) {
-                                  return String(c.name || '').toLowerCase().indexOf(typed) >= 0;
-                                }).slice(0, 20);
+                                  return String(c.name || '').toLowerCase().indexOf(search) >= 0;
+                                }).slice(0, 30);
                               }
                               if (filtered.length === 0) {
                                 return (
-                                  <div className="px-3 py-4 text-xs text-slate-300 text-center">
-                                    <div className="font-bold mb-1">No matching customer</div>
-                                    <div className="text-slate-400">You can still save — the invoice will be created without a customer link.</div>
+                                  <div className="px-3 py-5 text-xs text-slate-300 text-center">
+                                    <div className="font-bold mb-1">No customer matches "{formData.__newInvSearch}"</div>
+                                    <div className="text-slate-400">Clear the search to see all customers, or type a name in the field above to create a new one.</div>
                                   </div>
                                 );
                               }
                               return filtered.map(function(c) {
                                 var typedRaw = String(formData.__newInvCustomer || '').trim();
-                                var isExact = String(c.name || '').trim() === typedRaw;
+                                var isExact = String(c.name || '').trim().toLowerCase() === typedRaw.toLowerCase() && typedRaw.length > 0;
                                 return (
                                   <div key={c.id}
-                                    onClick={function() { setFormData({ ...formData, __newInvCustomer: c.name, __newInvCustomerId: c.id }); }}
+                                    onClick={function() { setFormData({ ...formData, __newInvCustomer: c.name, __newInvCustomerId: c.id, __newInvCustomerAutoLinked: false, __newInvSearch: '' }); }}
                                     className={'px-3 py-2.5 cursor-pointer border-b border-slate-800 last:border-0 flex items-center justify-between gap-2 ' + (isExact ? 'bg-emerald-900/40 hover:bg-emerald-900/60' : 'hover:bg-slate-800')}>
                                     <span className="font-semibold text-slate-100 text-sm truncate" style={{ direction: 'rtl' }}>{c.name}</span>
                                     <div className="flex items-center gap-2 flex-shrink-0">
-                                      {isExact && <span className="text-[9px] font-bold text-emerald-300 uppercase">exact</span>}
-                                      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" className="text-slate-500">
-                                        <polyline points="9 18 15 12 9 6"></polyline>
-                                      </svg>
+                                      {isExact && <span className="text-[9px] font-bold text-emerald-300 uppercase">match</span>}
+                                      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" className="text-slate-500"><polyline points="9 18 15 12 9 6"></polyline></svg>
                                     </div>
                                   </div>
                                 );
@@ -12264,23 +12438,6 @@ export default function App() {
                             })()}
                           </div>
                         </div>
-
-                        {/* === SAVING-AS WARNING === Shows when user has typed
-                            something that doesn't match. Tells them what'll
-                            happen on save without scary jargon. */}
-                        {formData.__newInvCustomer && formData.__newInvCustomer.trim().length > 0 && (
-                          (() => {
-                            var typed = String(formData.__newInvCustomer || '').trim().toLowerCase();
-                            var hasMatch = Array.isArray(customers) && customers.some(function(c) { return String(c.name || '').toLowerCase().indexOf(typed) >= 0; });
-                            if (hasMatch) return null;
-                            return (
-                              <div className="mt-2 p-2.5 rounded-lg bg-amber-50 border border-amber-300 text-[11px] text-amber-900">
-                                <div className="font-bold mb-0.5">⚠ Will save as "{formData.__newInvCustomer}" without customer link</div>
-                                <div>This name doesn't match any existing customer. You can save now and link it later from the Sales tab, or clear the field to save anonymously.</div>
-                              </div>
-                            );
-                          })()
-                        )}
                       </>
                     )}
                   </div>
@@ -12309,9 +12466,20 @@ export default function App() {
                     </div>
                   </div>
 
-                  <div className="flex gap-2 pt-2">
+                  <div className="flex flex-col gap-2 pt-2">
+                    {/* Hint when button disabled because no customer chosen */}
+                    {!formData.__newInvCustomerId && !isCreatingInvoice && (
+                      <div className="text-[11px] text-slate-700 bg-slate-100 border border-slate-300 rounded-md px-3 py-2 flex items-start gap-2">
+                        <span className="text-slate-500 flex-shrink-0">ℹ</span>
+                        <span>
+                          <span className="font-bold">Pick or create a customer first.</span> Every invoice must be linked so it shows up under that customer in the Customers tab and in reports.
+                        </span>
+                      </div>
+                    )}
+                    <div className="flex gap-2">
                     <button
-                      disabled={isCreatingInvoice}
+                      disabled={isCreatingInvoice || !formData.__newInvCustomerId}
+                      title={!formData.__newInvCustomerId ? 'Pick a customer from the list, or create a new one with the typed name above.' : ''}
                       onClick={async () => {
                         // Apr 25 2026 — Bulletproof local toast wrapper. Same
                         // pattern as finalizePendingTreasury. Prevents the
@@ -12328,6 +12496,15 @@ export default function App() {
                           console.log('[create-invoice] click ignored — already in flight');
                           return;
                         }
+                        // Apr 26 2026 — HARD GATE: require a customer_id.
+                        // The picker also disables the button, but defense in
+                        // depth here in case a stale prop / state bug ever
+                        // re-enables it without a customer_id.
+                        if (!formData.__newInvCustomerId) {
+                          setCreateInvoiceError('Pick a customer from the dropdown first, or create a new one. / اختر عميل من القائمة أو أنشئ عميل جديد.');
+                          safeT.warning('Customer is required / العميل مطلوب');
+                          return;
+                        }
                         console.log('[create-invoice] click fired');
                         setCreateInvoiceError(null);
                         setIsCreatingInvoice(true);
@@ -12336,7 +12513,6 @@ export default function App() {
                           const totalAmt = Number(formData.__newInvTotal ?? pendingTreasuryRecord.amount);
                           if (!(totalAmt > 0)) {
                             setCreateInvoiceError('Invoice total must be greater than zero. / الإجمالي يجب أن يكون أكبر من صفر.');
-                            try { window.alert('⚠️ Invoice total must be greater than zero.'); } catch (_) {}
                             safeT.warning('Invoice total must be > 0 / الإجمالي يجب أن يكون أكبر من صفر');
                             setIsCreatingInvoice(false);
                             return;
@@ -12344,50 +12520,31 @@ export default function App() {
                           const orderNum = pendingTreasuryRecord.record.order_number;
                           if (!orderNum) {
                             setCreateInvoiceError('Order number is missing. Close this dialog and re-enter the transaction. / رقم الأمر مفقود.');
-                            toast.error('Order number missing — please close and re-enter / رقم الأمر مفقود');
+                            safeT.error('Order number missing — please close and re-enter / رقم الأمر مفقود');
                             setIsCreatingInvoice(false);
                             return;
                           }
                           const invDate = formData.__newInvDate || pendingTreasuryRecord.record.transaction_date || today();
-                          // Belt-and-suspenders: if customer_id wasn't explicitly linked via dropdown,
-                          // try an exact-name match here before saving. Prevents silent orphan invoices
-                          // when the user typed an existing customer's name verbatim but didn't click
-                          // the dropdown suggestion.
-                          var resolvedCustomerId = formData.__newInvCustomerId || null;
-                          if (!resolvedCustomerId && Array.isArray(customers)) {
-                            var exact = customers.find(function(c) { return String(c.name || '').trim() === name; });
-                            if (exact) resolvedCustomerId = exact.id;
-                          }
+                          // The customer_id is guaranteed at this point thanks to the
+                          // hard gate above. Apr 26 2026 — no more fallback orphan path.
+                          var resolvedCustomerId = formData.__newInvCustomerId;
                           console.log('[create-invoice] inserting', { orderNum: orderNum, name: name, totalAmt: totalAmt, customerId: resolvedCustomerId });
-                          // Use dbInsert for consistency with finalizePendingTreasury (which
-                          // also uses dbInsert) and to capture an audit-log entry. Direct
-                          // supabase.from().insert() bypasses the audit trail.
                           var inserted = null;
                           var dbErrorMessage = null;
                           try {
                             inserted = await dbInsert('invoices', {
                               order_number: sanitize(orderNum),
-                              customer_name: name ? sanitize(name) : null,
+                              customer_name: sanitize(name),
                               customer_id: resolvedCustomerId,
                               invoice_date: invDate,
                               total_amount: totalAmt,
                               total_collected: 0,
                               outstanding: totalAmt,
-                              // Apr 25 2026 — was 'treasury' which violates the
-                              // live DB's invoices_source_check constraint (only
-                              // 'manual' and 'import' are allowed there). The
-                              // schema file adds 'treasury' but production never
-                              // ran that migration. Using 'manual' makes the
-                              // insert succeed today; the optional SQL file
-                              // sql/s27_invoices_source_allow_treasury.sql adds
-                              // 'treasury' to the constraint if you want to
-                              // distinguish treasury-created invoices later.
                               source: 'manual',
                             }, user?.id);
                           } catch (dbErr) {
                             console.error('[create-invoice] dbInsert threw', dbErr);
                             dbErrorMessage = String((dbErr && dbErr.message) || dbErr || 'Unknown error');
-                            try { window.alert('❌ Database threw an error: ' + dbErrorMessage + '\n\nNow trying to recover...'); } catch (_) {}
                           }
                           // Apr 25 2026 — RECOVERY PATH: if dbInsert threw OR returned
                           // nothing, the invoice MAY still have been written to the
@@ -12425,7 +12582,6 @@ export default function App() {
                               + (dbErrorMessage ? 'Database said: ' + dbErrorMessage : 'No row was returned and no matching invoice was found.')
                               + ' / تعذر إنشاء الفاتورة.';
                             setCreateInvoiceError(visibleMsg);
-                            try { window.alert('❌ FAILED: ' + visibleMsg); } catch (_) {}
                             safeT.error('Failed to create invoice — see the red banner in the dialog');
                             setIsCreatingInvoice(false);
                             return;
@@ -12440,32 +12596,28 @@ export default function App() {
                             if (prev.some(function(i) { return i.id === inserted.id; })) return prev;
                             return [inserted].concat(prev);
                           });
-                          safeT.success(resolvedCustomerId
-                            ? 'Invoice #' + orderNum + ' created + linked to customer ✓'
-                            : 'Invoice #' + orderNum + ' created (new customer — no link) ✓');
+                          safeT.success('Invoice #' + orderNum + ' created + linked to ' + name + ' ✓');
                           await finalizePendingTreasury(inserted);
-                          // No need to manually clear __creatingInvoice etc. here —
-                          // finalizePendingTreasury → closePendingTreasuryModal does it.
                         } catch (err) {
-                          // Outer catch — anything that escapes (logic bugs,
-                          // null-deref, etc). Always surface visibly via the banner
-                          // so the user can never miss it.
                           console.error('[create-invoice] unexpected error', err);
                           var bigMsg = 'Unexpected error: ' + (err && err.message ? err.message : String(err));
                           setCreateInvoiceError(bigMsg);
-                          try { window.alert('🚨 UNEXPECTED ERROR: ' + bigMsg); } catch (_) {}
                           safeT.error(bigMsg);
                         } finally {
-                          // Ensure button always re-enables, even if we early-returned
-                          // through an unexpected path.
                           setIsCreatingInvoice(false);
                         }
                       }}
-                      className={'flex-1 px-4 py-2.5 rounded-lg text-sm font-extrabold shadow ' + (isCreatingInvoice ? 'bg-emerald-400 text-white cursor-not-allowed' : 'bg-emerald-700 text-white hover:bg-emerald-800')}
+                      className={'flex-1 px-4 py-2.5 rounded-lg text-sm font-extrabold shadow ' + (isCreatingInvoice
+                        ? 'bg-emerald-400 text-white cursor-not-allowed'
+                        : !formData.__newInvCustomerId
+                          ? 'bg-slate-300 text-slate-500 cursor-not-allowed'
+                          : 'bg-emerald-700 text-white hover:bg-emerald-800')}
                     >
                       {isCreatingInvoice
                         ? '⏳ Creating... / جارٍ الإنشاء...'
-                        : '✓ Create Invoice + Save Treasury / إنشاء وحفظ'}
+                        : !formData.__newInvCustomerId
+                          ? '🔒 Pick a customer first / اختر عميل'
+                          : '✓ Create Invoice + Save Treasury / إنشاء وحفظ'}
                     </button>
                     <button
                       disabled={isCreatingInvoice}
@@ -12474,6 +12626,8 @@ export default function App() {
                         delete next.__creatingInvoice;
                         delete next.__newInvCustomer;
                         delete next.__newInvCustomerId;
+                        delete next.__newInvCustomerAutoLinked;
+                        delete next.__newInvSearch;
                         delete next.__newInvTotal;
                         delete next.__newInvDate;
                         return next;
@@ -12482,6 +12636,7 @@ export default function App() {
                     >
                       ← Back
                     </button>
+                    </div>
                   </div>
                 </div>
               ) : (
@@ -12495,27 +12650,30 @@ export default function App() {
                   <div className="flex gap-2 pt-2">
                     <button
                       onClick={() => {
-                        // Pre-fill customer from treasury desc. If desc exactly matches an
-                        // existing customer, auto-link customer_id so the user doesn't have
-                        // to re-pick from the dropdown. Fixes silent-orphan-invoice bug where
-                        // invoices were saved with customer_id:null when the dropdown wasn't clicked.
-                        //
-                        // Apr 25 2026 — also strip bank-reconciliation metadata so the
-                        // customer-name field doesn't get filled with text like
-                        // "ايداع اشرف سلطان ✅ matched bank 2026-03-29". The match suffix
-                        // is appended automatically when a placeholder gets reconciled
-                        // against a bank statement; the customer's actual name is the
-                        // part BEFORE that suffix.
+                        // Pre-fill customer from treasury desc.
+                        // v55.11 (Apr 26 2026):
+                        //   • Case-insensitive exact match (was case-sensitive before,
+                        //     so "shawar home" wouldn't match "Shawar Home" — forced
+                        //     unnecessary re-typing).
+                        //   • Sets __newInvCustomerAutoLinked=true so the chip shows
+                        //     "Auto-linked — confirm or pick another" instead of just
+                        //     "Linked", giving user a clear cue to verify the match.
+                        //   • Seeds __newInvSearch with the prefill so if the picker
+                        //     opens and user wants to change, the dropdown is already
+                        //     filtered to similar names.
                         var rawDesc = String(formData.desc || '');
                         var descText = stripBankMatchMetadata(rawDesc).trim();
-                        var exactMatch = descText
-                          ? customers.find(function(c) { return String(c.name || '').trim() === descText; })
+                        var lcDesc = descText.toLowerCase();
+                        var exactMatch = (descText && Array.isArray(customers))
+                          ? customers.find(function(c) { return String(c.name || '').trim().toLowerCase() === lcDesc; })
                           : null;
                         setFormData({
                           ...formData,
                           __creatingInvoice: true,
-                          __newInvCustomer: descText,
+                          __newInvCustomer: exactMatch ? exactMatch.name : descText,
                           __newInvCustomerId: exactMatch ? exactMatch.id : null,
+                          __newInvCustomerAutoLinked: !!exactMatch,
+                          __newInvSearch: '',
                           __newInvTotal: pendingTreasuryRecord.amount,
                           __newInvDate: pendingTreasuryRecord.record.transaction_date || today(),
                         });
