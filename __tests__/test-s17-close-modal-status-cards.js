@@ -213,18 +213,19 @@ test('S17.C9 Progress bars inside Net/Collected/Outstanding cards use bright col
     'progress bars must be on bg-black/30 (readable on dark cards) — found ' + matches);
 });
 
-test('S17.C10 Top header Treasury Net bucket is centered with min-width', function() {
-  // The header Treasury Net card — must be centered and have minWidth
-  assert(/Treasury Net[\s\S]{0,1500}minWidth: 130[\s\S]{0,600}flex flex-col items-center justify-center text-center/.test(page)
-    || /flex flex-col items-center justify-center text-center[\s\S]{0,1500}Treasury Net/.test(page),
-    'header Treasury Net bucket must be centered with minWidth');
+test('S17.C10 Top header Treasury Net bucket renders (v55.8-TERM redesign)', function() {
+  // v55.8-TERM redesign: header Treasury Net is now a terminal-style status block
+  // with a colored dot + sign-prefixed amount. The earlier centered-card layout
+  // is gone — the new layout uses tabular-nums and JetBrains Mono.
+  assert(/NET[\s\S]{0,800}allTimeNet >= 0/.test(page),
+    'header Treasury Net renders with NET label and sign-aware coloring');
 });
 
-test('S17.C11 Header Treasury Net has distinct background per positive/negative', function() {
-  assert(/allTimeNet >= 0[\s\S]{0,200}rgba\(16,185,129,0\.12\)/.test(page),
-    'positive net uses emerald tinted background');
-  assert(/rgba\(239,68,68,0\.12\)/.test(page),
-    'negative net uses red tinted background');
+test('S17.C11 Header Treasury Net has distinct color per positive/negative', function() {
+  // v55.8-TERM uses solid emerald-400 (#34d399) for positive and red-400 (#f87171)
+  // for negative — replacing the old rgba-tinted-card backgrounds.
+  assert(/allTimeNet >= 0\s*\?\s*'#34d399'\s*:\s*'#f87171'/.test(page),
+    'positive net uses #34d399 (emerald-400), negative uses #f87171 (red-400)');
 });
 
 // ======================================================

@@ -1,3 +1,16 @@
+// ============================================================
+// /api/phone/call — CALL LOG QUERY
+// ============================================================
+// What this does:
+//   GET: returns recent calls, optionally filtered by user_id
+//        or customer_id.
+//   POST: log a call manually (used when the team adds a call
+//        that wasn't placed via the system).
+//
+//   The webhooks (/api/phone/incoming + /api/phone/call-status)
+//   handle the bulk of automatic call logging.
+// ============================================================
+
 import { NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
 
@@ -6,42 +19,58 @@ const supabase = createClient(
   process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY
 );
 
-// POST: log a call
-export async function POST(req) {
+// GET: list calls (filterable)
+export async function GET(req) {
   try {
-    const body = await req.json();
-    const { user_id, phone_number, direction, duration, status, caller_name, call_sid } = body;
+    var url = new URL(req.url);
+    var userId = url.searchParams.get('user_id');
+    var customerId = url.searchParams.get('customer_id');
+    var limit = parseInt(url.searchParams.get('limit') || '100', 10);
+    if (limit > 500) limit = 500;
 
-    const { data, error } = await supabase.from('call_logs').insert({
-      user_id,
-      phone_number,
-      direction: direction || 'outbound',
-      duration: duration || 0,
-      status: status || 'completed',
-      caller_name: caller_name || null,
-      call_sid: call_sid || null,
-      called_at: new Date().toISOString(),
-    }).select().single();
+    var query = supabase
+      .from('phone_calls')
+      .select('*')
+      .order('started_at', { ascending: false })
+      .limit(limit);
 
-    if (error) return NextResponse.json({ error: error.message }, { status: 500 });
-    return NextResponse.json({ success: true, log: data });
+    if (userId) query = query.eq('user_id', userId);
+    if (customerId) query = query.eq('customer_id', customerId);
+
+    var res = await query;
+    if (res.error) return NextResponse.json({ error: res.error.message }, { status: 500 });
+    return NextResponse.json({ calls: res.data || [] });
   } catch (e) {
     return NextResponse.json({ error: e.message }, { status: 500 });
   }
 }
 
-// GET: fetch call logs
-export async function GET(req) {
+// POST: log a call manually
+// Body: { user_id, customer_id?, ktc_number, customer_number, direction, status?, duration_seconds?, notes? }
+export async function POST(req) {
   try {
-    const { searchParams } = new URL(req.url);
-    const userId = searchParams.get('user_id');
+    var body = await req.json();
+    if (!body.ktc_number || !body.customer_number) {
+      return NextResponse.json({ error: 'ktc_number and customer_number are required' }, { status: 400 });
+    }
 
-    let query = supabase.from('call_logs').select('*').order('called_at', { ascending: false }).limit(200);
-    if (userId) query = query.eq('user_id', userId);
+    var record = {
+      direction: body.direction || 'outbound',
+      ktc_number: body.ktc_number,
+      customer_number: body.customer_number,
+      customer_id: body.customer_id || null,
+      user_id: body.user_id || null,
+      status: body.status || 'completed',
+      duration_seconds: body.duration_seconds || 0,
+      caller_name: body.caller_name || null,
+      notes: body.notes || null,
+      started_at: body.started_at || new Date().toISOString(),
+      ended_at: body.ended_at || new Date().toISOString(),
+    };
 
-    const { data, error } = await query;
-    if (error) return NextResponse.json({ error: error.message }, { status: 500 });
-    return NextResponse.json({ logs: data });
+    var res = await supabase.from('phone_calls').insert(record).select().single();
+    if (res.error) return NextResponse.json({ error: res.error.message }, { status: 500 });
+    return NextResponse.json({ ok: true, call: res.data });
   } catch (e) {
     return NextResponse.json({ error: e.message }, { status: 500 });
   }

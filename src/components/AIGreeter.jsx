@@ -874,10 +874,27 @@ export default function AIGreeter({ user, userProfile, users, tickets, invoices,
     window.addEventListener('hey-bob-command', onBobCommand);
     window.addEventListener('nadia-push-question', onPushQuestion);
     window.addEventListener('nadia-wake-ack', onWakeAck);
+    // v55.13 (Apr 26 2026) — INSTANT BARGE-IN handler.
+    // VoiceController dispatches this event the moment it picks up real
+    // user speech (3+ char interim transcript) while Nadia is talking.
+    // We immediately cancel her speech so she shuts up the same way
+    // ChatGPT voice and Claude voice do — no waiting for the wake word.
+    var onBargeIn = function(ev) {
+      if (!enabled) return;
+      try { console.log('[nadia] barge-in received — stopping speech'); } catch (e) {}
+      try { stopSpeech(); } catch (e) {}
+      // We do NOT clear paused here. stopSpeech() sets paused=true so she
+      // doesn't auto-resume. The next user action (saying "Hey Nadia",
+      // pressing record, or finishing their command) will un-pause as
+      // appropriate. This matches the user's stated mental model: "stop
+      // talking and listen carefully to what I'm saying."
+    };
+    window.addEventListener('nadia-bargein', onBargeIn);
     return function() {
       window.removeEventListener('hey-bob-command', onBobCommand);
       window.removeEventListener('nadia-push-question', onPushQuestion);
       window.removeEventListener('nadia-wake-ack', onWakeAck);
+      window.removeEventListener('nadia-bargein', onBargeIn);
     };
   }, [enabled, muted, useLang]);
 

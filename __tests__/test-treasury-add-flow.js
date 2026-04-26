@@ -298,8 +298,21 @@ ok('6f: setPendingTreasuryRecord is still called in the no-match branch',
   /setPendingTreasuryRecord\(\{[\s\S]{0,200}record:\s*record/.test(pageSrc)
 );
 
-ok('6g: handleAddTreasury still gates on isIncome',
-  /const isIncome = formData\.type === 'in' \|\| formData\.type === 'bank_in'/.test(pageSrc)
+ok('6g: handleAddTreasury still gates on isIncome (v55.12 — uses txType normalization)',
+  // Code now reads: const txType = formData.type || 'in'; const isIncome = txType === 'in' || txType === 'bank_in';
+  /const txType = formData\.type \|\| 'in'/.test(pageSrc) &&
+  /const isIncome = txType === 'in' \|\| txType === 'bank_in'/.test(pageSrc)
+);
+
+ok('6h: v55.12 default-Cash-In fix — modal-open sets type explicitly',
+  // Without this, formData.type is undefined and isIncome is false, which silently
+  // saves cash-in transactions without triggering the order#/customer gate.
+  /setShowAddTreasury\(true\);\s*setFormData\(\{\s*date:\s*today\(\),\s*type:\s*'in'\s*\}/.test(pageSrc)
+);
+
+ok('6i: v55.12 income-no-order# guard — blocks save unless category is non-order income',
+  /BLOCKING — income without order#/.test(pageSrc) ||
+  /Income transactions need an Order #/.test(pageSrc)
 );
 
 // ---------- Summary ----------

@@ -61,6 +61,11 @@ export default function VoiceController({ userId, userProfile, enabled, onComman
   var mountedRef = useRef(true);
   var userStoppedRef = useRef(false);
   var aiSpeakingRef = useRef(false);
+  // v55.13 (Apr 26 2026) — Refs for INSTANT BARGE-IN logic. Tracked at
+  // component scope so they persist across recognition restarts. See the
+  // big comment in rec.onresult below for the full explanation.
+  var bargeInDispatchedRef = useRef(false);
+  var bargeInLastTextRef = useRef('');
   // S18.2 — follow-up window state. True when Nadia just finished speaking
   // and we're giving the user 5s to continue without saying "Hey Nadia".
   var followUpActiveRef = useRef(false);
@@ -137,6 +142,30 @@ export default function VoiceController({ userId, userProfile, enabled, onComman
       if (mountedRef.current) setStatus(followUpActiveRef.current ? 'followup' : 'listening');
     };
 
+    // v55.13 (Apr 26 2026) — INSTANT BARGE-IN.
+    //
+    // The original design dropped any transcript heard while Nadia was
+    // speaking (self-suppress window) UNLESS it matched "Hey Nadia". That
+    // worked but felt slow: user had to say the wake word AND wait for her
+    // to finish her sentence before recognition would fire onresult.
+    //
+    // Modern voice assistants (ChatGPT voice, Claude voice, Alexa, Siri)
+    // cut themselves off the instant they detect the user starting to talk.
+    // To match that, we listen for ANY interim transcript >= 3 chars while
+    // she's speaking and dispatch a barge-in event immediately. AIGreeter
+    // catches the event and calls stopSpeech() — kills her audio, the
+    // SpeechSynthesis queue, and the playing <audio> element.
+    //
+    // Echo-protection:
+    //   • The 3-char minimum filters out brief audio blips from her own
+    //     voice through speakers (those usually transcribe to a single
+    //     short word like "I" or "the" before the engine corrects itself).
+    //   • Modern Chromium / iOS Safari / Android Chrome all have hardware
+    //     echo cancellation on by default. Devices manufactured in the
+    //     last 5 years rarely produce sustained mic-echo of her own voice.
+    //   • If echo IS triggering false barge-ins on a particular setup,
+    //     muting Nadia (the existing mute button) bypasses TTS entirely.
+
     rec.onresult = function(ev) {
       if (!mountedRef.current) return;
 
@@ -149,6 +178,27 @@ export default function VoiceController({ userId, userProfile, enabled, onComman
       }
       transcript = transcript.trim();
       if (!transcript) return;
+
+      // v55.13 — INSTANT BARGE-IN check. Runs BEFORE self-suppress / hard-stop
+      // so the user's voice cuts her off the moment recognition picks anything
+      // meaningful up. Only fires when:
+      //   (a) She's currently speaking (aiSpeakingRef set by nadia-tts-start)
+      //   (b) Transcript is at least 3 chars (filters echo blips of single words)
+      //   (c) We haven't already dispatched for this utterance (one barge-in
+      //       per spoken response, not per interim chunk)
+      if (aiSpeakingRef.current && !bargeInDispatchedRef.current && transcript.length >= 3) {
+        // Don't double-fire if the same partial transcript repeats. Some
+        // engines emit the same interim text multiple times.
+        if (transcript !== bargeInLastTextRef.current) {
+          bargeInLastTextRef.current = transcript;
+          bargeInDispatchedRef.current = true;
+          try { console.log('[voice] barge-in fired by transcript: "' + transcript + '"'); } catch (e) {}
+          try { window.dispatchEvent(new CustomEvent('nadia-bargein', { detail: { transcript: transcript, at: Date.now() } })); } catch (e) {}
+          // Also clear self-suppress now so the rest of this transcript path
+          // can process the user's command without dropping it.
+          selfSuppressUntilRef.current = 0;
+        }
+      }
 
       // v51 — Self-suppress. Nadia just spoke; ignore anything the mic
       // picks up for a brief window to prevent audio feedback loops.
@@ -347,6 +397,11 @@ export default function VoiceController({ userId, userProfile, enabled, onComman
   useEffect(function() {
     var onStart = function(ev) {
       aiSpeakingRef.current = true;
+      // v55.13 — reset barge-in flag at the START of every new utterance.
+      // Without this, only the FIRST sentence of a session could be cut
+      // off by user voice; subsequent ones would silently ignore barge-in.
+      bargeInDispatchedRef.current = false;
+      bargeInLastTextRef.current = '';
       // v51 — pick up the self-suppress window from the dispatching event.
       // v51.2 — FLOOR ONLY on start: never let an incoming window shorten
       // the current one. Prevents a quick onStart→onStop cycle from cutting
