@@ -2050,7 +2050,14 @@ export default function App() {
       }
     }
     try {
-      const isIncome = formData.type === 'in' || formData.type === 'bank_in';
+      // v55.12 (Apr 26 2026): The Type radio defaults to "Cash In" visually,
+      // but formData.type is `undefined` until the user actually clicks a
+      // radio. Without this normalization, isIncome was false on the silent
+      // save path, which let cash-in transactions slip through the
+      // require-an-invoice gate. Now: if type isn't set, assume cash_in (the
+      // visual default) so the rest of the flow works as the user expects.
+      const txType = formData.type || 'in';
+      const isIncome = txType === 'in' || txType === 'bank_in';
       const currency = formData.currency || 'EGP';
       const amt = Number(formData.amount);
       let cat = formData.category || '';
@@ -2133,9 +2140,6 @@ export default function App() {
           if (!isBankPlaceholder) {
             await recalcInvoiceCollected(matchingInvoice.id);
           }
-          // Use the REAL UUID returned by dbInsert. Previously a fake 'temp-<ts>' id
-          // was used, which broke Edit/Delete during the 500ms window before loadAllData
-          // refreshed — Postgres rejects 'temp-...' as invalid uuid syntax.
           setTreasury(prev => [inserted, ...prev]);
           setShowAddTreasury(false);
           toast.success(
@@ -2148,11 +2152,6 @@ export default function App() {
         }
         // Order# provided but no matching invoice → open "create now or cancel" flow
         console.log('[treasury-add] OPENING modal — order#' + orderNumTrimmed + ' not found locally');
-        // Apr 25 2026 — Wipe any stale invoice-creation state from a prior
-        // unfinished attempt BEFORE opening the modal. Without this, going
-        // Cash Out → Cash In with __creatingInvoice still set from earlier
-        // jumped the modal straight into the create-invoice form with empty
-        // / stale values, and the green button silently failed validation.
         setIsCreatingInvoice(false);
         setCreateInvoiceError(null);
         setFormData(function(prev) {
@@ -2172,11 +2171,37 @@ export default function App() {
         return; // form stays open behind the mini-modal; no insert yet
       }
 
-      // No order# branch covers: expenses with/without order#, non-order bank entries, cash_in without order#
-      console.log('[treasury-add] SILENT SAVE path — no modal will appear. Reason: '
-        + (!isOrderLinkable ? 'not order-linkable (expense or non-order bank)' : 'order# is empty after trim'));
+      // v55.12 (Apr 26 2026) — REQUIRE order# for Cash IN / Bank IN.
+      // Previously, income with no order# was silently saved without any
+      // customer link. The Treasury Inspector then showed it as "greyed out"
+      // because the row implied a customer payment but had nothing to point
+      // to, and downstream reports lost the money trail.
+      // Now: if income has no order#, we block save and force the user to
+      // either (a) provide an order#, or (b) explicitly mark it as non-order
+      // income (refund, advance, owner contribution, etc.) via a category.
+      if (isOrderLinkable && !orderNumTrimmed) {
+        console.log('[treasury-add] BLOCKING — income without order#');
+        // If they picked an income category that's clearly non-order
+        // (refund/advance/owner contribution/loan), we accept the entry as
+        // non-order income. Otherwise we block and prompt.
+        var nonOrderIncomeCats = ['Refund', 'Advance', 'Owner Contribution', 'Owner Draw', 'Loan', 'Loan Received', 'Other Income', 'Inter-Bank Transfer', 'Bank Fee', 'استرداد', 'سلفة', 'إيداع المالك', 'قرض', 'دخل آخر'];
+        var catName = String(record.category || '').trim();
+        var isNonOrderIncome = catName && nonOrderIncomeCats.some(function(n) { return catName.toLowerCase() === n.toLowerCase(); });
+        if (!isNonOrderIncome) {
+          toast.warning(
+            'Income transactions need an Order # so we can link to a customer. ' +
+            'If this is NOT a customer payment (e.g. owner deposit, refund, loan, advance), pick a non-order Category. ' +
+            '/ معاملات الوارد تحتاج رقم أمر للربط بالعميل. لو ليست دفعة عميل، اختر تصنيف.'
+          );
+          return;
+        }
+        // Non-order income with explicit category — fall through to silent save below
+        console.log('[treasury-add] non-order income accepted via category: ' + catName);
+      }
+
+      // No order# branch covers: expenses (cash_out / bank_out), non-order bank entries, and explicitly-classified non-order income
+      console.log('[treasury-add] SILENT SAVE path — no modal will appear.');
       const inserted = await dbInsert('treasury', record, user?.id);
-      // Real UUID from dbInsert (see note above). Fake 'temp-' ids broke Edit/Delete.
       setTreasury(prev => [inserted, ...prev]);
       setShowAddTreasury(false);
       toast.success(isBankPlaceholder ? 'Bank entry saved — awaiting bank statement ✓' : 'Transaction saved ✓');
@@ -8274,7 +8299,7 @@ export default function App() {
                   title="Find and link treasury rows whose order# matches an existing invoice but aren't linked. Fixes the invoice collected totals. / ابحث عن قيود الخزنة التي يطابق رقم أمرها فاتورة موجودة لكنها غير مربوطة، واربطها.">
                   🔗 Fix Links
                 </button>
-                <button onClick={() => { setShowAddTreasury(true); setFormData({ date: today() }); }}
+                <button onClick={() => { setShowAddTreasury(true); setFormData({ date: today(), type: 'in' }); }}
                   className="px-3 py-1.5 bg-blue-500 text-white rounded-lg text-xs font-semibold hover:bg-blue-600">
                   + New Transaction
                 </button>
@@ -12099,7 +12124,7 @@ export default function App() {
                       latest fix is actually deployed. If he doesn't see this
                       tag in the modal, his browser is running stale JS. */}
                   <div className="mt-1.5 inline-block px-2 py-0.5 rounded bg-amber-900/60 text-amber-100 text-[10px] font-mono font-bold tracking-wide">
-                    BUILD v55.11-LOCKED
+                    BUILD v55.12-GATED
                   </div>
                 </div>
                 <button onClick={() => closePendingTreasuryModal()}
