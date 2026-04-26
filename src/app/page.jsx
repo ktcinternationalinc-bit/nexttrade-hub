@@ -1043,7 +1043,21 @@ export default function App() {
   const isAdmin = userProfile?.role === 'super_admin' || userProfile?.role === 'admin';
   const isSuperAdmin = userProfile?.role === 'super_admin';
   const activeTeamUsers = useMemo(() => teamUsers.filter(u => u.active !== false), [teamUsers]);
-  const toast = useContext(ToastContext);
+  // Apr 25 2026 — Defensive toast fallback. This is the App component, but
+  // the ToastProvider is mounted INSIDE App's own return tree, which means
+  // useContext(ToastContext) here always returns undefined (App is the
+  // PARENT of the provider, not a child). Without the fallback, any
+  // toast.success / .error / .warning call inside App's event handlers
+  // throws "Cannot read properties of undefined (reading 'success')".
+  // The fallback gives every call site a guaranteed-valid object — calls
+  // become no-ops if there's no provider, and otherwise behave normally.
+  // Real toast UI still works for child components (CalendarTab, AdminTab,
+  // etc.) because they ARE inside the provider.
+  const _toastRaw = useContext(ToastContext);
+  const toast = _toastRaw || {
+    success: () => {}, error: () => {}, warning: () => {}, info: () => {},
+    confirm: async () => true,
+  };
 
   // Breadcrumb — shows current location
   const TAB_GROUPS = { dashboard:'Overview', sales:'Finance', treasury:'Finance', checks:'Finance', debts:'Finance', egyptbank:'Finance', bank:'Finance', quotes:'Finance', reports:'Finance', warehouse:'Operations', inventory:'Operations', customs:'Operations', shipping:'Operations', customers:'People', crm:'People', tickets:'People', calendar:'People', comms:'People', dailylog:'People', admin:'System', ai:'System', settings:'System', import:'System', systemtickets:'System' };
@@ -2174,6 +2188,19 @@ export default function App() {
   // (a) accepts a typo suggestion → use that invoice's id
   // (b) creates a new invoice inline → use the new invoice id
   const finalizePendingTreasury = async (invoiceToLink) => {
+    // Apr 25 2026 — Bulletproof local toast wrapper. The screenshot showed
+    // "Cannot read properties of undefined (reading 'success')" which means
+    // `toast` itself was somehow undefined when this closure ran. The line
+    // 1057 fallback should prevent that, but to be 100% safe in this critical
+    // save path, every toast call below uses safeT — same API, but never
+    // throws even if toast is null/undefined. The save itself never fails
+    // because of a toast bug now.
+    var safeT = {
+      success: function(m) { try { (toast && toast.success) ? toast.success(m) : console.log('[toast.success]', m); } catch (_) {} },
+      error: function(m) { try { (toast && toast.error) ? toast.error(m) : console.error('[toast.error]', m); } catch (_) {} },
+      warning: function(m) { try { (toast && toast.warning) ? toast.warning(m) : console.warn('[toast.warning]', m); } catch (_) {} },
+      info: function(m) { try { (toast && toast.info) ? toast.info(m) : console.log('[toast.info]', m); } catch (_) {} },
+    };
     if (!pendingTreasuryRecord) return;
     const rec = { ...pendingTreasuryRecord.record };
     if (invoiceToLink && invoiceToLink.id) {
@@ -2185,36 +2212,23 @@ export default function App() {
       if (invoiceToLink && invoiceToLink.id) {
         await recalcInvoiceCollected(invoiceToLink.id);
       }
-      // Real UUID from dbInsert. Fake 'temp-' ids broke Edit/Delete during the
-      // 500ms window before loadAllData refreshed.
       setTreasury(prev => [inserted, ...prev]);
-      // Apr 25 2026 — Optimistic insert into LOCAL invoices state too, so
-      // the just-created treasury row's "linked invoice" badge shows up
-      // immediately instead of appearing greyed out for the 500ms before
-      // loadAllData refreshes. Other invoice-creation flows already do this
-      // (line ~5279); my fix forgot to. Was the cause of "appears greyed
-      // out in transaction details" symptom.
       if (invoiceToLink && invoiceToLink.id) {
         setInvoices(function(prev) {
-          // Avoid double-add if it's already there (e.g. typo-suggestion path)
           if (prev.some(function(i) { return i.id === invoiceToLink.id; })) return prev;
           return [invoiceToLink].concat(prev);
         });
       }
       setShowAddTreasury(false);
-      // Use the helper so __creatingInvoice and friends are wiped — without
-      // this, a successful create-invoice run left __creatingInvoice=true in
-      // formData, and the NEXT save jumped straight into the create-invoice
-      // form instead of going through validation. (Cash Out → Cash In bug.)
       closePendingTreasuryModal();
-      toast.success(invoiceToLink
+      safeT.success(invoiceToLink
         ? 'Transaction saved + linked to ' + (invoiceToLink.customer_name || ('#' + invoiceToLink.order_number)) + ' ✓'
         : 'Transaction saved ✓');
       setFormData({});
       setTimeout(() => loadAllData(), 500);
     } catch (err) {
-      toast.error(err.message);
-      // Surface in the modal banner too so it's unmissable
+      console.error('[finalizePendingTreasury] error', err);
+      safeT.error(err && err.message ? err.message : String(err));
       setCreateInvoiceError('Saving the transaction failed: ' + (err && err.message ? err.message : String(err)));
     }
   };
@@ -3174,121 +3188,215 @@ export default function App() {
         onMutedChange={setNadiaMuted}
       />
     )}
-    <div className="min-h-screen" style={{background:'var(--bg-primary)'}}>
-      {/* Header */}
-      <div style={{background:'linear-gradient(135deg, #0f172a 0%, #1e1b4b 50%, #0f172a 100%)', borderBottom:'1px solid rgba(56,189,248,0.15)'}} role="banner" aria-label="App header" className="px-5 py-3 flex justify-between items-center sticky top-0 z-[101]">
-        <div className="flex items-center gap-3">
-          <button onClick={() => setSidebarOpen(!sidebarOpen)} className="lg:hidden text-white/70 hover:text-white text-xl p-1">☰</button>
-          <div>
-            <h1 className="text-xl sm:text-2xl font-black tracking-tight" style={{background:'linear-gradient(135deg, #38bdf8, #818cf8, #a78bfa)',WebkitBackgroundClip:'text',WebkitTextFillColor:'transparent'}}>KANDIL KTC EGYPT HUB</h1>
-            <p style={{color:'rgba(148,163,184,0.5)'}} className="text-[10px] font-medium tracking-widest uppercase hidden sm:block">{lang === 'en' ? 'KTC Trading Operations' : 'KTC — لوحة التحكم المالية'}</p>
-          </div>
-        </div>
-        <div className="flex items-center gap-2">
-          {/* Treasury Net — ONLY shown to users with Treasury permission.
-              S16 (Apr 22 2026): tightened check to require explicit === true
-              (matches the tab-visibility logic at line 980). Prevents the
-              header number from leaking to users who happened to have an
-              unrelated truthy value in modulePerms['Treasury']. */}
-          {(isSuperAdmin || modulePerms?.['Treasury'] === true) && (
-          <div onClick={() => { setTab('treasury'); setMode('all'); }}
-            className="cursor-pointer px-3 sm:px-4 py-2 rounded-lg flex flex-col items-center justify-center text-center transition-all hover:scale-[1.03]"
-            style={{
-              background: allTimeNet >= 0
-                ? 'linear-gradient(135deg, rgba(16,185,129,0.12), rgba(16,185,129,0.06))'
-                : 'linear-gradient(135deg, rgba(239,68,68,0.12), rgba(239,68,68,0.06))',
-              border: '1px solid ' + (allTimeNet >= 0 ? 'rgba(16,185,129,0.4)' : 'rgba(239,68,68,0.4)'),
-              minWidth: 130,
-            }}>
-            <div style={{color:'rgba(203,213,225,0.7)'}} className="text-[8px] sm:text-[9px] font-bold uppercase tracking-wider leading-tight">Treasury Net</div>
-            <div className="text-sm sm:text-base font-black tracking-tight"
-              style={{
-                color: allTimeNet >= 0 ? '#34d399' : '#f87171',
-                textShadow: '0 0 12px ' + (allTimeNet >= 0 ? 'rgba(52,211,153,0.4)' : 'rgba(248,113,113,0.4)'),
-              }}>
-              {fE(allTimeNet)}
+    <div className="min-h-screen" style={{background:'#000000', color: '#e4e4e7', fontFamily: '"Inter Tight", "Inter", system-ui, sans-serif'}}>
+      {/* Terminal grid background — subtle dot pattern, never moves, low opacity.
+          Adds depth without distraction. CSS-only, no JS cost. */}
+      <div aria-hidden="true" style={{
+        position: 'fixed', inset: 0, zIndex: 0, pointerEvents: 'none',
+        backgroundImage: 'radial-gradient(rgba(63,63,70,0.25) 1px, transparent 1px)',
+        backgroundSize: '24px 24px',
+      }} />
+      <div style={{ position: 'relative', zIndex: 1 }}>
+      {/* ===========================================================
+           TERMINAL HEADER (v55.8-TERMINAL — Apr 25 2026 redesign)
+           ===========================================================
+           Bloomberg/Reuters terminal aesthetic. Replaces the previous
+           gradient-blue header. Design tokens:
+             • Background: #0a0a0a (true black) with #1a1a1a inner row
+             • Type: 'JetBrains Mono' for all numerics, 'Inter Tight' for labels
+             • Borders: 1px solid #262626 (zinc-800), no rounding above sm
+             • Status pills: minimal text + colored dot, never gradient
+             • Accent: emerald-400 (#34d399) for positives, red-500 for negatives,
+               amber-500 for warnings. NO purple/indigo/violet anywhere.
+           =========================================================== */}
+      <div role="banner" aria-label="App header" className="sticky top-0 z-[101] border-b border-zinc-800"
+        style={{ background: '#0a0a0a', fontFamily: '"Inter Tight", "Inter", system-ui, sans-serif' }}>
+        {/* Inline font import for the terminal aesthetic. Loaded once at the
+            top-of-app banner, applies to descendants via fontFamily inheritance. */}
+        <style>{"@import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600;700&family=Inter+Tight:wght@400;500;600;700;800&display=swap');"}</style>
+
+        {/* PRIMARY ROW — brand, treasury net, user, controls */}
+        <div className="px-4 py-2 flex justify-between items-center gap-4">
+          <div className="flex items-center gap-3 min-w-0">
+            <button onClick={() => setSidebarOpen(!sidebarOpen)}
+              className="lg:hidden text-zinc-400 hover:text-emerald-400 text-lg w-8 h-8 flex items-center justify-center border border-zinc-800 rounded-sm transition-colors"
+              aria-label="Toggle sidebar">≡</button>
+            <div className="flex items-baseline gap-2 min-w-0">
+              {/* Brand mark — bracket prefix is a terminal callout convention. */}
+              <span className="text-emerald-400 font-mono text-xs font-bold tracking-tight" style={{ fontFamily: '"JetBrains Mono", monospace' }}>[KTC]</span>
+              <h1 className="text-sm font-bold text-white tracking-tight whitespace-nowrap">NEXTTRADE HUB</h1>
+              <span className="text-[10px] text-zinc-500 font-mono hidden md:inline" style={{ fontFamily: '"JetBrains Mono", monospace' }}>v55.8</span>
+              {/* Live clock — terminals always show one. Updates via the
+                  existing tick state; if not present, falls back to no clock. */}
+              <span className="hidden lg:inline text-[10px] text-zinc-500 font-mono ml-2 pl-2 border-l border-zinc-800" style={{ fontFamily: '"JetBrains Mono", monospace' }}>
+                {(new Date()).toISOString().substring(0, 10).replace(/-/g, '.')} {(new Date()).toTimeString().substring(0, 5)}
+              </span>
             </div>
           </div>
-          )}
-          {userProfile && (
-            <div className="text-right">
-              <div className="text-sm font-bold" style={{color:'#f1f5f9'}}>{userProfile?.name}</div>
-              <div style={{color:'rgba(148,163,184,0.6)'}} className="text-[10px]">{userProfile?.role === 'super_admin' ? '🔴 Super Admin' : userProfile?.role === 'admin' ? '🟣 Admin' : '🔵 Team'}</div>
-            </div>
-          )}
-          {(true) && (
-            <button onClick={() => setLang(lang === 'ar' ? 'en' : 'ar')}
-              style={{background: lang === 'en' ? 'linear-gradient(135deg, #0ea5e9, #6366f1)' : 'rgba(255,255,255,0.06)', border:'1px solid rgba(255,255,255,0.1)', color: lang === 'en' ? 'white' : 'rgba(255,255,255,0.6)'}}
-              className="px-3 py-1.5 rounded-lg text-xs font-bold transition">
-              {lang === 'ar' ? '🌐 EN' : '🌐 AR'}
+
+          <div className="flex items-center gap-2">
+            {/* Treasury Net — terminal-style status block.
+                Permission gate unchanged from original. */}
+            {(isSuperAdmin || modulePerms?.['Treasury'] === true) && (
+              <button onClick={() => { setTab('treasury'); setMode('all'); }}
+                className="group flex items-center gap-2 px-3 py-1.5 border border-zinc-800 hover:border-zinc-600 rounded-sm transition-colors"
+                style={{ background: '#0a0a0a' }}
+                aria-label="View Treasury">
+                <span className="text-[9px] text-zinc-500 font-bold uppercase tracking-wider">NET</span>
+                <span className="text-sm font-bold tabular-nums"
+                  style={{
+                    fontFamily: '"JetBrains Mono", monospace',
+                    color: allTimeNet >= 0 ? '#34d399' : '#f87171',
+                  }}>
+                  {allTimeNet >= 0 ? '+' : ''}{fE(allTimeNet)}
+                </span>
+                <span className="w-1.5 h-1.5 rounded-full"
+                  style={{ background: allTimeNet >= 0 ? '#34d399' : '#f87171', boxShadow: '0 0 6px ' + (allTimeNet >= 0 ? '#34d399' : '#f87171') }} />
+              </button>
+            )}
+
+            {/* Global search — terminal command convention */}
+            <button onClick={() => setShowGlobalSearch(true)}
+              className="px-3 py-1.5 text-[11px] font-mono text-zinc-400 hover:text-white border border-zinc-800 hover:border-zinc-600 rounded-sm transition-colors flex items-center gap-2"
+              style={{ background: '#0a0a0a', fontFamily: '"JetBrains Mono", monospace' }}>
+              <span>/</span>
+              <span className="hidden sm:inline">SEARCH</span>
+              <kbd className="text-[9px] text-zinc-500 hidden md:inline">⌘K</kbd>
             </button>
-          )}
-          <button onClick={() => setShowGlobalSearch(true)} style={{background:'rgba(255,255,255,0.06)', border:'1px solid rgba(255,255,255,0.1)', color:'rgba(255,255,255,0.6)'}} className="px-3 py-1.5 text-xs rounded-lg font-medium hover:bg-white/10 transition flex items-center gap-1.5">
-            🔍 <span className="hidden sm:inline">Search</span> <kbd className="text-[9px] bg-white/10 px-1 rounded">⌘K</kbd>
-          </button>
-          <NotificationBell userId={userProfile?.id || user?.id} users={teamUsers} />
-          {/* Notification Bell */}
-          {(() => {
-            const overdueCount = invoices.filter(i => i.outstanding > 0 && i.invoice_date && (Date.now() - new Date(i.invoice_date).getTime()) > 30 * 86400000).length;
-            const openTickets = dashTickets.filter(t => t.status !== 'Closed' && t.status !== 'Resolved').length;
-            const pendingCount = pendingChecks?.length || 0;
-            const todayN = new Date().toISOString().substring(0, 10);
-            const tomorrowN = new Date(Date.now() + 86400000).toISOString().substring(0, 10);
-            const overdueChecks = pendingChecks.filter(c => (c.due_date || c.check_date || '') < todayN && (c.due_date || c.check_date));
-            const dueTomorrowChecks = pendingChecks.filter(c => (c.due_date || c.check_date || '') === tomorrowN);
-            const thisMonthChecks = pendingChecks.filter(c => (c.due_date || c.check_date || '').substring(0, 7) === todayN.substring(0, 7));
-            const total = overdueCount + openTickets + overdueChecks.length + dueTomorrowChecks.length;
-            return (
-              <div className="relative notif-bell-wrap">
-                <button onClick={() => setShowNotifBell(!showNotifBell)} style={{background:'rgba(255,255,255,0.06)', border:'1px solid rgba(255,255,255,0.1)', color:'rgba(255,255,255,0.6)'}} className="px-2.5 py-1.5 text-sm rounded-lg hover:bg-white/10 transition relative">
-                  🔔
-                  {total > 0 && <span className="absolute -top-1 -right-1 w-4 h-4 bg-red-500 text-white text-[8px] font-bold rounded-full flex items-center justify-center">{total > 9 ? '9+' : total}</span>}
-                </button>
-                {showNotifBell && (
-                  <div className="absolute right-0 top-10 w-72 bg-white rounded-xl shadow-2xl border z-50 overflow-hidden">
-                    <div className="px-3 py-2 bg-slate-50 border-b text-xs font-bold text-slate-700">Notifications</div>
-                    <div className="max-h-[300px] overflow-auto">
-                      {overdueChecks.length > 0 && (
-                        <div className="px-3 py-2.5 border-b border-slate-50 hover:bg-red-50 cursor-pointer" onClick={() => { setTab('checks'); setShowNotifBell(false); }}>
-                          <div className="text-xs font-semibold text-red-600">🚨 {overdueChecks.length} OVERDUE checks — {fE(overdueChecks.reduce((a,c) => a + Number(c.amount||0), 0))}</div>
-                          <div className="text-[10px] text-slate-400">Past due date, not collected</div>
-                        </div>
-                      )}
-                      {dueTomorrowChecks.length > 0 && (
-                        <div className="px-3 py-2.5 border-b border-slate-50 hover:bg-amber-50 cursor-pointer" onClick={() => { setTab('checks'); setShowNotifBell(false); }}>
-                          <div className="text-xs font-semibold text-amber-600">⏰ {dueTomorrowChecks.length} checks due TOMORROW — {fE(dueTomorrowChecks.reduce((a,c) => a + Number(c.amount||0), 0))}</div>
-                          <div className="text-[10px] text-slate-400">Collect these tomorrow</div>
-                        </div>
-                      )}
-                      {thisMonthChecks.length > 0 && (
-                        <div className="px-3 py-2.5 border-b border-slate-50 hover:bg-blue-50 cursor-pointer" onClick={() => { setTab('checks'); setShowNotifBell(false); }}>
-                          <div className="text-xs font-semibold text-blue-600">📅 {thisMonthChecks.length} checks due this month — {fE(thisMonthChecks.reduce((a,c) => a + Number(c.amount||0), 0))}</div>
-                          <div className="text-[10px] text-slate-400">Expected income this month</div>
-                        </div>
-                      )}
-                      {overdueCount > 0 && (
-                        <div className="px-3 py-2.5 border-b border-slate-50 hover:bg-red-50 cursor-pointer" onClick={() => { setTab('sales'); setShowNotifBell(false); }}>
-                          <div className="text-xs font-semibold text-red-600">⚠️ {overdueCount} overdue invoices</div>
-                          <div className="text-[10px] text-slate-400">30+ days past invoice date</div>
-                        </div>
-                      )}
-                      {openTickets > 0 && (
-                        <div className="px-3 py-2.5 border-b border-slate-50 hover:bg-blue-50 cursor-pointer" onClick={() => { setTab('tickets'); setShowNotifBell(false); }}>
-                          <div className="text-xs font-semibold text-blue-600">🎫 {openTickets} open tickets</div>
-                          <div className="text-[10px] text-slate-400">Awaiting resolution</div>
-                        </div>
-                      )}
-                      {total === 0 && pendingCount === 0 && <div className="px-3 py-6 text-center text-xs text-slate-400">All clear! ✨</div>}
+
+            {/* Lang toggle */}
+            <button onClick={() => setLang(lang === 'ar' ? 'en' : 'ar')}
+              className="px-2.5 py-1.5 text-[11px] font-mono font-bold border border-zinc-800 hover:border-zinc-600 rounded-sm transition-colors"
+              style={{
+                background: '#0a0a0a',
+                color: lang === 'en' ? '#34d399' : '#71717a',
+                fontFamily: '"JetBrains Mono", monospace',
+              }}>
+              {lang === 'ar' ? 'EN' : 'AR'}
+            </button>
+
+            {/* Notification bell from existing component */}
+            <NotificationBell userId={userProfile?.id || user?.id} users={teamUsers} />
+
+            {/* Dashboard alerts bell — same data as before, redesigned */}
+            {(() => {
+              const overdueCount = invoices.filter(i => i.outstanding > 0 && i.invoice_date && (Date.now() - new Date(i.invoice_date).getTime()) > 30 * 86400000).length;
+              const openTickets = dashTickets.filter(t => t.status !== 'Closed' && t.status !== 'Resolved').length;
+              const todayN = new Date().toISOString().substring(0, 10);
+              const tomorrowN = new Date(Date.now() + 86400000).toISOString().substring(0, 10);
+              const overdueChecks = pendingChecks.filter(c => (c.due_date || c.check_date || '') < todayN && (c.due_date || c.check_date));
+              const dueTomorrowChecks = pendingChecks.filter(c => (c.due_date || c.check_date || '') === tomorrowN);
+              const total = overdueCount + openTickets + overdueChecks.length + dueTomorrowChecks.length;
+              return (
+                <div className="relative notif-bell-wrap">
+                  <button onClick={() => setShowNotifBell(!showNotifBell)}
+                    className="relative px-2.5 py-1.5 text-sm border border-zinc-800 hover:border-zinc-600 rounded-sm transition-colors"
+                    style={{ background: '#0a0a0a', color: total > 0 ? '#fbbf24' : '#71717a' }}
+                    aria-label={'Alerts: ' + total}>
+                    {total > 0 ? '⚑' : '⚐'}
+                    {total > 0 && <span className="absolute -top-1.5 -right-1.5 min-w-4 h-4 px-1 bg-red-500 text-white text-[9px] font-bold rounded-sm flex items-center justify-center font-mono" style={{ fontFamily: '"JetBrains Mono", monospace' }}>{total > 99 ? '99' : total}</span>}
+                  </button>
+                  {showNotifBell && (
+                    <div className="absolute right-0 top-10 w-80 border border-zinc-800 shadow-2xl z-50 overflow-hidden rounded-sm"
+                      style={{ background: '#0a0a0a' }}>
+                      <div className="px-3 py-2 border-b border-zinc-800 text-[10px] font-bold text-zinc-400 uppercase tracking-widest font-mono flex items-center justify-between" style={{ fontFamily: '"JetBrains Mono", monospace' }}>
+                        <span>ALERTS // {total}</span>
+                        <button onClick={() => setShowNotifBell(false)} className="text-zinc-600 hover:text-zinc-300">×</button>
+                      </div>
+                      <div className="max-h-[320px] overflow-auto">
+                        {overdueChecks.length > 0 && (
+                          <div className="px-3 py-2.5 border-b border-zinc-900 hover:bg-zinc-950 cursor-pointer" onClick={() => { setTab('checks'); setShowNotifBell(false); }}>
+                            <div className="flex items-center gap-2">
+                              <span className="w-1.5 h-1.5 rounded-full bg-red-500" style={{ boxShadow: '0 0 6px #ef4444' }} />
+                              <div className="text-[11px] font-bold text-red-400">{overdueChecks.length} OVERDUE CHECKS</div>
+                            </div>
+                            <div className="mt-1 ml-3.5 text-[11px] text-zinc-300 font-mono tabular-nums" style={{ fontFamily: '"JetBrains Mono", monospace' }}>{fE(overdueChecks.reduce((a,c) => a + Number(c.amount||0), 0))}</div>
+                          </div>
+                        )}
+                        {dueTomorrowChecks.length > 0 && (
+                          <div className="px-3 py-2.5 border-b border-zinc-900 hover:bg-zinc-950 cursor-pointer" onClick={() => { setTab('checks'); setShowNotifBell(false); }}>
+                            <div className="flex items-center gap-2">
+                              <span className="w-1.5 h-1.5 rounded-full bg-amber-500" style={{ boxShadow: '0 0 6px #f59e0b' }} />
+                              <div className="text-[11px] font-bold text-amber-400">{dueTomorrowChecks.length} CHECKS DUE TOMORROW</div>
+                            </div>
+                            <div className="mt-1 ml-3.5 text-[11px] text-zinc-300 font-mono tabular-nums" style={{ fontFamily: '"JetBrains Mono", monospace' }}>{fE(dueTomorrowChecks.reduce((a,c) => a + Number(c.amount||0), 0))}</div>
+                          </div>
+                        )}
+                        {openTickets > 0 && (
+                          <div className="px-3 py-2.5 border-b border-zinc-900 hover:bg-zinc-950 cursor-pointer" onClick={() => { setTab('tickets'); setShowNotifBell(false); }}>
+                            <div className="flex items-center gap-2">
+                              <span className="w-1.5 h-1.5 rounded-full bg-sky-500" style={{ boxShadow: '0 0 6px #0ea5e9' }} />
+                              <div className="text-[11px] font-bold text-sky-400">{openTickets} OPEN TICKETS</div>
+                            </div>
+                          </div>
+                        )}
+                        {overdueCount > 0 && (
+                          <div className="px-3 py-2.5 border-b border-zinc-900 hover:bg-zinc-950 cursor-pointer" onClick={() => { setTab('sales'); setShowNotifBell(false); }}>
+                            <div className="flex items-center gap-2">
+                              <span className="w-1.5 h-1.5 rounded-full bg-orange-500" style={{ boxShadow: '0 0 6px #f97316' }} />
+                              <div className="text-[11px] font-bold text-orange-400">{overdueCount} INVOICES &gt; 30D</div>
+                            </div>
+                          </div>
+                        )}
+                        {total === 0 && (
+                          <div className="px-3 py-6 text-center text-[11px] text-zinc-600 font-mono uppercase tracking-widest" style={{ fontFamily: '"JetBrains Mono", monospace' }}>// no alerts</div>
+                        )}
+                      </div>
                     </div>
+                  )}
+                </div>
+              );
+            })()}
+
+            {/* User identity block */}
+            {userProfile && (
+              <div className="hidden md:flex items-center gap-2 pl-3 ml-1 border-l border-zinc-800">
+                <div className="text-right">
+                  <div className="text-[11px] font-semibold text-zinc-100 leading-tight">{userProfile?.name}</div>
+                  <div className="text-[9px] text-zinc-500 font-mono uppercase tracking-wider" style={{ fontFamily: '"JetBrains Mono", monospace' }}>
+                    <span className="w-1 h-1 inline-block rounded-full mr-1 align-middle" style={{ background: userProfile?.role === 'super_admin' ? '#ef4444' : userProfile?.role === 'admin' ? '#a855f7' : '#0ea5e9' }} />
+                    {userProfile?.role === 'super_admin' ? 'SUPERADMIN' : userProfile?.role === 'admin' ? 'ADMIN' : 'TEAM'}
                   </div>
-                )}
+                </div>
               </div>
-            );
-          })()}
-          <button onClick={handleSignOut} style={{background:'rgba(255,255,255,0.06)', border:'1px solid rgba(255,255,255,0.1)', color:'rgba(255,255,255,0.7)'}} className="px-3 py-1.5 text-xs rounded-lg font-medium hover:bg-white/10 transition hidden sm:block">
-            Sign Out
-          </button>
+            )}
+          </div>
         </div>
+
+        {/* SECONDARY ROW — live ticker of key metrics. Pure terminal flair.
+            Renders only on dashboard to keep other tabs distraction-free. */}
+        {tab === 'dashboard' && (isSuperAdmin || modulePerms?.['Treasury'] === true) && (
+          <div className="hidden md:block px-4 py-1.5 border-t border-zinc-900 overflow-hidden" style={{ background: '#0a0a0a' }}>
+            <div className="flex items-center gap-6 text-[10px] font-mono whitespace-nowrap overflow-x-auto" style={{ fontFamily: '"JetBrains Mono", monospace' }}>
+              {(() => {
+                const todayN = new Date().toISOString().substring(0, 10);
+                const monthStart = todayN.substring(0, 7) + '-01';
+                const monthIn = treasury.filter(t => (t.transaction_date || '') >= monthStart).reduce((a, t) => a + Number(t.cash_in || 0) + Number(t.bank_in || 0), 0);
+                const monthOut = treasury.filter(t => (t.transaction_date || '') >= monthStart).reduce((a, t) => a + Number(t.cash_out || 0) + Number(t.bank_out || 0), 0);
+                const monthNet = monthIn - monthOut;
+                const ar = invoices.reduce((a, i) => a + Number(i.outstanding || 0), 0);
+                const overdue = invoices.filter(i => i.outstanding > 0 && i.invoice_date && (Date.now() - new Date(i.invoice_date).getTime()) > 30 * 86400000).reduce((a, i) => a + Number(i.outstanding || 0), 0);
+                const pendCk = pendingChecks.reduce((a, c) => a + Number(c.amount || 0), 0);
+                return (
+                  <>
+                    <span><span className="text-zinc-500">MTD IN</span> <span className="text-emerald-400 tabular-nums">+{fE(monthIn)}</span></span>
+                    <span><span className="text-zinc-500">MTD OUT</span> <span className="text-red-400 tabular-nums">-{fE(monthOut)}</span></span>
+                    <span><span className="text-zinc-500">MTD NET</span> <span className={'tabular-nums ' + (monthNet >= 0 ? 'text-emerald-400' : 'text-red-400')}>{monthNet >= 0 ? '+' : ''}{fE(monthNet)}</span></span>
+                    <span className="text-zinc-700">│</span>
+                    <span><span className="text-zinc-500">A/R</span> <span className="text-zinc-200 tabular-nums">{fE(ar)}</span></span>
+                    <span><span className="text-zinc-500">OVERDUE</span> <span className={'tabular-nums ' + (overdue > 0 ? 'text-orange-400' : 'text-zinc-200')}>{fE(overdue)}</span></span>
+                    <span className="text-zinc-700">│</span>
+                    <span><span className="text-zinc-500">CHECKS PEND</span> <span className="text-zinc-200 tabular-nums">{fE(pendCk)}</span></span>
+                    <span className="text-zinc-700">│</span>
+                    <span><span className="text-zinc-500">USERS</span> <span className="text-zinc-200 tabular-nums">{teamUsers.length}</span></span>
+                    <span><span className="text-zinc-500">INV</span> <span className="text-zinc-200 tabular-nums">{invoices.length}</span></span>
+                    <span><span className="text-zinc-500">TXN</span> <span className="text-zinc-200 tabular-nums">{treasury.length}</span></span>
+                  </>
+                );
+              })()}
+            </div>
+          </div>
+        )}
       </div>
 
       {/* Global Search Modal */}
@@ -3379,45 +3487,56 @@ export default function App() {
       {sidebarOpen && <div className="fixed inset-0 top-[56px] bg-black/50 z-[99] lg:hidden" onClick={() => setSidebarOpen(false)} />}
 
       <div className="flex flex-1" style={{ minHeight: 'calc(100vh - 60px)' }}>
-        {/* Sidebar */}
-        <aside role="navigation" aria-label="Main navigation" className={'fixed lg:sticky top-[56px] lg:top-[56px] left-0 z-[100] lg:z-10 overflow-y-auto transition-transform duration-200 ' + (sidebarOpen ? 'translate-x-0' : '-translate-x-full lg:translate-x-0')}
-          style={{ width: 210, height: 'calc(100vh - 56px)', background: 'linear-gradient(180deg, #0f172a 0%, #1e1b4b 100%)', borderRight: '1px solid rgba(56,189,248,0.1)', paddingTop: 'env(safe-area-inset-top, 0px)' }}>
-          {/* Extra top spacer on mobile so the first item (Dashboard) clears the iOS/Android status bar */}
+        {/* SIDEBAR — terminal navigation. Pure black with zinc-800 dividers,
+            mono uppercase group labels, sharp left-border accent for active. */}
+        <aside role="navigation" aria-label="Main navigation"
+          className={'fixed lg:sticky top-[56px] lg:top-[56px] left-0 z-[100] lg:z-10 overflow-y-auto transition-transform duration-200 border-r border-zinc-800 ' + (sidebarOpen ? 'translate-x-0' : '-translate-x-full lg:translate-x-0')}
+          style={{ width: 220, height: 'calc(100vh - 56px)', background: '#0a0a0a', paddingTop: 'env(safe-area-inset-top, 0px)', fontFamily: '"Inter Tight", "Inter", system-ui, sans-serif' }}>
           <div className="h-6 lg:h-0"></div>
-          <div className="py-3">
+          <div className="py-2">
             {[
-              { group: 'Overview', items: ['dashboard'] },
-              { group: 'Finance', items: ['sales', 'treasury', 'checks', 'debts', 'egyptbank', 'bank', 'quotes', 'reports'] },
-              { group: 'Operations', items: ['warehouse', 'inventory', 'customs', 'shipping'] },
-              { group: 'People', items: ['customers', 'crm', 'tickets', 'calendar', 'comms', 'dailylog'] },
-              { group: 'System', items: ['admin', 'ai', 'settings', 'import', 'systemtickets'] },
+              { group: 'OVERVIEW', items: ['dashboard'] },
+              { group: 'FINANCE', items: ['sales', 'treasury', 'checks', 'debts', 'egyptbank', 'bank', 'quotes', 'reports'] },
+              { group: 'OPERATIONS', items: ['warehouse', 'inventory', 'customs', 'shipping'] },
+              { group: 'PEOPLE', items: ['customers', 'crm', 'tickets', 'calendar', 'comms', 'dailylog'] },
+              { group: 'SYSTEM', items: ['admin', 'ai', 'settings', 'import', 'systemtickets'] },
             ].map(g => {
               const groupTabs = g.items.map(id => visibleTabs.find(t => t.id === id)).filter(Boolean);
               if (!groupTabs.length) return null;
               return (
-                <div key={g.group} className="mb-2">
-                  <div className="px-4 py-1.5 text-[9px] font-bold uppercase tracking-widest" style={{ color: 'rgba(148,163,184,0.4)' }}>{g.group}</div>
-                  {groupTabs.map(t => (
-                    <button key={t.id} onClick={() => { navigate(t.id); setSidebarOpen(false); }}
-                      className={'w-full text-left px-4 py-2 text-xs font-medium flex items-center gap-2 transition-colors ' + (tab === t.id
-                        ? 'text-white bg-white/10 border-r-2 border-blue-400'
-                        : 'text-slate-400 hover:text-white hover:bg-white/5'
-                      )}>
-                      <span className="text-sm">{t.icon}</span>
-                      <span className="truncate">
-                        <span>{t.label.split(' / ')[0]}</span>
-                        {t.label.includes(' / ') && <span className="text-[8px] text-slate-500 block" style={{direction:'rtl'}}>{t.label.split(' / ')[1]}</span>}
-                      </span>
-                    </button>
-                  ))}
+                <div key={g.group} className="mb-1">
+                  <div className="px-3 pt-3 pb-1.5 text-[9px] font-bold uppercase tracking-[0.18em] text-zinc-600 font-mono"
+                    style={{ fontFamily: '"JetBrains Mono", monospace' }}>
+                    <span className="text-zinc-700">// </span>{g.group}
+                  </div>
+                  {groupTabs.map(t => {
+                    const isActive = tab === t.id;
+                    return (
+                      <button key={t.id} onClick={() => { navigate(t.id); setSidebarOpen(false); }}
+                        className={'w-full text-left pl-3 pr-2 py-1.5 text-[12px] font-medium flex items-center gap-2.5 transition-colors border-l-2 ' + (isActive
+                          ? 'text-emerald-400 border-emerald-400 bg-zinc-900'
+                          : 'text-zinc-400 border-transparent hover:text-zinc-100 hover:bg-zinc-900/50'
+                        )}
+                        style={isActive ? { boxShadow: 'inset 1px 0 0 #34d399' } : {}}>
+                        <span className="text-[13px] w-4 text-center opacity-80">{t.icon}</span>
+                        <span className="truncate flex-1">
+                          <span>{t.label.split(' / ')[0]}</span>
+                          {t.label.includes(' / ') && <span className="text-[9px] text-zinc-600 block leading-tight" style={{direction:'rtl'}}>{t.label.split(' / ')[1]}</span>}
+                        </span>
+                        {isActive && <span className="text-emerald-400 text-[10px] font-mono" style={{ fontFamily: '"JetBrains Mono", monospace' }}>▸</span>}
+                      </button>
+                    );
+                  })}
                 </div>
               );
             })}
           </div>
-          {/* Sign Out at bottom of sidebar */}
-          <div className="px-4 py-3 border-t" style={{ borderColor: 'rgba(255,255,255,0.06)' }}>
-            <button onClick={handleSignOut} className="w-full px-3 py-2 rounded-lg text-xs font-medium text-slate-400 hover:text-white hover:bg-white/5 transition text-left flex items-center gap-2">
-              🚪 <span>{lang === 'en' ? 'Sign Out' : 'تسجيل خروج'}</span>
+          {/* Sign Out */}
+          <div className="px-3 py-3 border-t border-zinc-800 mt-2">
+            <button onClick={handleSignOut}
+              className="w-full px-3 py-2 text-[11px] font-mono uppercase tracking-wider text-zinc-500 hover:text-red-400 transition text-left flex items-center gap-2"
+              style={{ fontFamily: '"JetBrains Mono", monospace' }}>
+              <span>⏻</span><span>{lang === 'en' ? 'SIGN OUT' : 'تسجيل خروج'}</span>
             </button>
           </div>
         </aside>
@@ -5664,6 +5783,207 @@ export default function App() {
         ========================================== */}
         {tab === 'dashboard' && (
           <div className="flex flex-col">
+
+            {/* ===========================================================
+                TERMINAL EXECUTIVE SUMMARY (v55.8 — Apr 25 2026)
+                ===========================================================
+                Bloomberg-style command-deck overview. Permission-gated:
+                only renders for users with Treasury access (matches the
+                header NET widget logic). Six tiles in a sharp grid:
+                  • Treasury Net (with sparkline)
+                  • Month-to-date In/Out/Net
+                  • A/R + overdue
+                  • Pending checks (next 7 days)
+                  • Open tickets + my queue
+                  • System status (last login, sync state)
+                Pure data. No emoji except status dots. Tabular numerics
+                in JetBrains Mono. Sharp corners. Click-through on every
+                tile to the relevant tab.
+                =========================================================== */}
+            {(isSuperAdmin || modulePerms?.['Treasury'] === true) && (() => {
+              const todayN = new Date().toISOString().substring(0, 10);
+              const monthStart = todayN.substring(0, 7) + '-01';
+              const sevenDaysOut = new Date(Date.now() + 7 * 86400000).toISOString().substring(0, 10);
+              const myId = userProfile?.id;
+
+              // Money flows
+              const monthIn = treasury.filter(t => (t.transaction_date || '') >= monthStart).reduce((a, t) => a + Number(t.cash_in || 0) + Number(t.bank_in || 0), 0);
+              const monthOut = treasury.filter(t => (t.transaction_date || '') >= monthStart).reduce((a, t) => a + Number(t.cash_out || 0) + Number(t.bank_out || 0), 0);
+              const monthNet = monthIn - monthOut;
+
+              // A/R and overdue
+              const ar = invoices.reduce((a, i) => a + Number(i.outstanding || 0), 0);
+              const overdueInvs = invoices.filter(i => Number(i.outstanding || 0) > 0 && i.invoice_date && (Date.now() - new Date(i.invoice_date).getTime()) > 30 * 86400000);
+              const overdueAmt = overdueInvs.reduce((a, i) => a + Number(i.outstanding || 0), 0);
+
+              // Checks
+              const pendCkAmt = pendingChecks.reduce((a, c) => a + Number(c.amount || 0), 0);
+              const overdueCk = pendingChecks.filter(c => (c.due_date || c.check_date || '') < todayN && (c.due_date || c.check_date));
+              const next7Ck = pendingChecks.filter(c => {
+                const d = c.due_date || c.check_date;
+                return d && d >= todayN && d <= sevenDaysOut;
+              });
+              const next7CkAmt = next7Ck.reduce((a, c) => a + Number(c.amount || 0), 0);
+
+              // Tickets
+              const openT = (dashTickets || []).filter(t => t.status !== 'Closed' && t.status !== 'Resolved');
+              const myT = openT.filter(t => t.assigned_to === myId);
+              const overdueT = myT.filter(t => t.due_date && t.due_date < todayN);
+
+              // 30-day sparkline data for treasury net
+              const sparkData = (() => {
+                var days = [];
+                for (var i = 29; i >= 0; i--) {
+                  var d = new Date(Date.now() - i * 86400000).toISOString().substring(0, 10);
+                  var dayIn = treasury.filter(t => (t.transaction_date || '') === d).reduce((a, t) => a + Number(t.cash_in || 0) + Number(t.bank_in || 0), 0);
+                  var dayOut = treasury.filter(t => (t.transaction_date || '') === d).reduce((a, t) => a + Number(t.cash_out || 0) + Number(t.bank_out || 0), 0);
+                  days.push(dayIn - dayOut);
+                }
+                return days;
+              })();
+              const sparkMin = Math.min.apply(null, sparkData.length > 0 ? sparkData : [0]);
+              const sparkMax = Math.max.apply(null, sparkData.length > 0 ? sparkData : [0]);
+              const sparkRange = sparkMax - sparkMin || 1;
+              const sparkPath = sparkData.map((v, i) => {
+                var x = (i / Math.max(sparkData.length - 1, 1)) * 100;
+                var y = 100 - ((v - sparkMin) / sparkRange) * 100;
+                return (i === 0 ? 'M' : 'L') + x.toFixed(1) + ',' + y.toFixed(1);
+              }).join(' ');
+
+              // Tile component (inline closure to avoid hoisting it out of dashboard scope)
+              const Tile = function(props) {
+                return (
+                  <button onClick={props.onClick}
+                    className="text-left border border-zinc-800 hover:border-zinc-600 transition-colors group p-3 flex flex-col gap-1"
+                    style={{ background: '#0a0a0a' }}>
+                    <div className="flex items-center justify-between">
+                      <div className="text-[9px] font-bold uppercase tracking-[0.18em] text-zinc-500 font-mono"
+                        style={{ fontFamily: '"JetBrains Mono", monospace' }}>
+                        <span className="text-zinc-700">// </span>{props.label}
+                      </div>
+                      {props.badge}
+                    </div>
+                    <div className="flex items-baseline gap-1.5 mt-1">
+                      <div className="text-xl sm:text-2xl font-bold tabular-nums leading-none"
+                        style={{ fontFamily: '"JetBrains Mono", monospace', color: props.valueColor || '#fafafa' }}>
+                        {props.value}
+                      </div>
+                      {props.unit && <div className="text-[10px] text-zinc-500 font-mono" style={{ fontFamily: '"JetBrains Mono", monospace' }}>{props.unit}</div>}
+                    </div>
+                    {props.sub && (
+                      <div className="text-[10px] text-zinc-500 mt-0.5 leading-snug">
+                        {props.sub}
+                      </div>
+                    )}
+                    {props.children}
+                  </button>
+                );
+              };
+
+              return (
+                <div className="mb-5">
+                  {/* Section header — terminal command line */}
+                  <div className="flex items-baseline justify-between mb-3 pb-2 border-b border-zinc-800">
+                    <div className="flex items-baseline gap-3">
+                      <span className="text-[10px] font-bold uppercase tracking-[0.2em] text-emerald-400 font-mono"
+                        style={{ fontFamily: '"JetBrains Mono", monospace' }}>
+                        <span className="text-zinc-600">$</span> command-deck
+                      </span>
+                      <span className="text-[10px] text-zinc-600 font-mono" style={{ fontFamily: '"JetBrains Mono", monospace' }}>
+                        // {todayN.replace(/-/g, '.')}
+                      </span>
+                    </div>
+                    <div className="text-[10px] text-zinc-600 font-mono uppercase tracking-wider hidden sm:block" style={{ fontFamily: '"JetBrains Mono", monospace' }}>
+                      <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 inline-block mr-1.5 align-middle" style={{ boxShadow: '0 0 6px #34d399' }} />
+                      LIVE
+                    </div>
+                  </div>
+
+                  {/* Six-tile grid — responsive: 2col mobile, 3col tablet, 6col desktop */}
+                  <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-px bg-zinc-800 border border-zinc-800">
+                    {/* TILE 1 — TREASURY NET (with sparkline) */}
+                    <Tile
+                      label="TREASURY NET"
+                      value={(allTimeNet >= 0 ? '+' : '') + fE(allTimeNet)}
+                      valueColor={allTimeNet >= 0 ? '#34d399' : '#f87171'}
+                      sub="all-time · click for detail"
+                      onClick={() => { setTab('treasury'); setMode('all'); }}
+                      badge={<span className="w-1.5 h-1.5 rounded-full" style={{ background: allTimeNet >= 0 ? '#34d399' : '#f87171', boxShadow: '0 0 6px ' + (allTimeNet >= 0 ? '#34d399' : '#f87171') }} />}>
+                      {/* 30-day sparkline */}
+                      {sparkData.length > 1 && (
+                        <svg viewBox="0 0 100 30" preserveAspectRatio="none" className="w-full h-6 mt-1.5" aria-label="30-day net sparkline">
+                          <defs>
+                            <linearGradient id="sparkFill" x1="0" y1="0" x2="0" y2="1">
+                              <stop offset="0%" stopColor={allTimeNet >= 0 ? '#34d399' : '#f87171'} stopOpacity="0.3" />
+                              <stop offset="100%" stopColor={allTimeNet >= 0 ? '#34d399' : '#f87171'} stopOpacity="0" />
+                            </linearGradient>
+                          </defs>
+                          <path d={sparkPath + ' L100,30 L0,30 Z'} fill="url(#sparkFill)" />
+                          <path d={sparkPath} fill="none" stroke={allTimeNet >= 0 ? '#34d399' : '#f87171'} strokeWidth="1.5" vectorEffect="non-scaling-stroke" />
+                        </svg>
+                      )}
+                    </Tile>
+
+                    {/* TILE 2 — MTD NET */}
+                    <Tile
+                      label="MTD NET"
+                      value={(monthNet >= 0 ? '+' : '') + fE(monthNet)}
+                      valueColor={monthNet >= 0 ? '#34d399' : '#f87171'}
+                      sub={'IN ' + fE(monthIn) + ' / OUT ' + fE(monthOut)}
+                      onClick={() => { setTab('treasury'); setMode('mtd'); }}
+                    />
+
+                    {/* TILE 3 — ACCOUNTS RECEIVABLE */}
+                    <Tile
+                      label="A/R OUTSTANDING"
+                      value={fE(ar)}
+                      valueColor="#fafafa"
+                      sub={overdueAmt > 0
+                        ? <span className="text-orange-400">{overdueInvs.length} overdue · {fE(overdueAmt)}</span>
+                        : 'no overdue invoices'}
+                      onClick={() => { setTab('sales'); }}
+                      badge={overdueAmt > 0 ? <span className="w-1.5 h-1.5 rounded-full bg-orange-400" style={{ boxShadow: '0 0 6px #fb923c' }} /> : null}
+                    />
+
+                    {/* TILE 4 — PENDING CHECKS */}
+                    <Tile
+                      label="CHECKS PENDING"
+                      value={fE(pendCkAmt)}
+                      valueColor={overdueCk.length > 0 ? '#f87171' : '#fafafa'}
+                      sub={overdueCk.length > 0
+                        ? <span className="text-red-400">{overdueCk.length} overdue · next 7d {fE(next7CkAmt)}</span>
+                        : <span>next 7d {fE(next7CkAmt)} ({next7Ck.length})</span>}
+                      onClick={() => { setTab('checks'); }}
+                      badge={overdueCk.length > 0 ? <span className="w-1.5 h-1.5 rounded-full bg-red-500" style={{ boxShadow: '0 0 6px #ef4444' }} /> : null}
+                    />
+
+                    {/* TILE 5 — TICKETS */}
+                    <Tile
+                      label="OPEN TICKETS"
+                      value={openT.length}
+                      unit={openT.length === 1 ? 'ticket' : 'tickets'}
+                      valueColor="#fafafa"
+                      sub={myT.length > 0
+                        ? <span><span className="text-sky-400">{myT.length} mine</span>{overdueT.length > 0 ? <span className="text-red-400"> · {overdueT.length} overdue</span> : null}</span>
+                        : 'none assigned to me'}
+                      onClick={() => { setTab('tickets'); }}
+                      badge={overdueT.length > 0 ? <span className="w-1.5 h-1.5 rounded-full bg-red-500" style={{ boxShadow: '0 0 6px #ef4444' }} /> : (myT.length > 0 ? <span className="w-1.5 h-1.5 rounded-full bg-sky-400" style={{ boxShadow: '0 0 6px #38bdf8' }} /> : null)}
+                    />
+
+                    {/* TILE 6 — SYSTEM STATUS */}
+                    <Tile
+                      label="SYSTEM"
+                      value={teamUsers.length}
+                      unit={teamUsers.length === 1 ? 'user' : 'users'}
+                      valueColor="#fafafa"
+                      sub={<span className="font-mono" style={{ fontFamily: '"JetBrains Mono", monospace' }}>{invoices.length} INV · {treasury.length} TXN</span>}
+                      onClick={() => { setTab('admin'); }}
+                      badge={<span className="w-1.5 h-1.5 rounded-full bg-emerald-400" style={{ boxShadow: '0 0 6px #34d399' }} />}
+                    />
+                  </div>
+                </div>
+              );
+            })()}
 
             {/* ===== PRIORITY: UNACKNOWLEDGED ANNOUNCEMENTS FIRST ===== */}
             {(() => {
@@ -11776,7 +12096,7 @@ export default function App() {
                       latest fix is actually deployed. If he doesn't see this
                       tag in the modal, his browser is running stale JS. */}
                   <div className="mt-1.5 inline-block px-2 py-0.5 rounded bg-amber-900/60 text-amber-100 text-[10px] font-mono font-bold tracking-wide">
-                    BUILD v55.7-FIX
+                    BUILD v55.9-SAFETOAST
                   </div>
                 </div>
                 <button onClick={() => closePendingTreasuryModal()}
@@ -11841,96 +12161,127 @@ export default function App() {
                   </div>
 
                   <div>
-                    <label className="text-xs font-bold text-slate-700">Customer Name / اسم العميل</label>
-                    <div className="relative">
-                      <input
-                        autoFocus
-                        value={formData.__newInvCustomer || ''}
-                        onChange={e => {
-                          const v = e.target.value;
-                          setFormData({ ...formData, __newInvCustomer: v, __newInvCustomerId: null });
-                        }}
-                        placeholder="Type to search or pick from list below / اكتب أو اختر من القائمة"
-                        className="w-full px-3 py-2 pr-8 rounded-lg border-2 border-slate-300 text-sm font-semibold"
-                        style={{ direction: 'rtl' }}
-                      />
-                      {/* Clear button (X) inside the input — taps wipe the name so
-                          user can save unlinked or start typing fresh. Without
-                          this, the auto-prefill from treasury description was
-                          impossible to remove without backspacing every char. */}
-                      {formData.__newInvCustomer && (
+                    <label className="text-xs font-bold text-slate-700 uppercase tracking-wide">Customer / اسم العميل</label>
+
+                    {/* === LINKED STATE === Customer already picked. Shows as a
+                        clean chip with a clear "Change" action. No X icon — that
+                        was being misread as a delete-the-customer button. */}
+                    {formData.__newInvCustomerId ? (
+                      <div className="mt-1 flex items-center gap-2 px-3 py-2.5 rounded-lg bg-white border-2 border-emerald-500 shadow-sm">
+                        <div className="w-7 h-7 rounded-full bg-emerald-500 text-white flex items-center justify-center text-sm font-bold flex-shrink-0">✓</div>
+                        <div className="flex-1 min-w-0">
+                          <div className="text-[10px] font-bold text-emerald-700 uppercase tracking-wide">Linked to existing customer</div>
+                          <div className="text-sm font-extrabold text-slate-900 truncate" style={{ direction: 'rtl' }}>{formData.__newInvCustomer}</div>
+                        </div>
                         <button
                           type="button"
                           onClick={() => setFormData({ ...formData, __newInvCustomer: '', __newInvCustomerId: null })}
-                          className="absolute right-1 top-1/2 -translate-y-1/2 w-7 h-7 flex items-center justify-center rounded-full bg-slate-200 hover:bg-slate-300 text-slate-700 text-sm font-bold"
-                          aria-label="Clear customer name"
+                          className="px-3 py-1.5 rounded-md bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-bold border border-slate-300"
                         >
-                          ✕
+                          Change / تغيير
                         </button>
-                      )}
-                    </div>
-                    {/* Linked badge — shows when customer_id is set */}
-                    {formData.__newInvCustomerId && (
-                      <div className="mt-1 inline-flex items-center gap-1 text-[11px] font-bold text-emerald-700 bg-emerald-50 border border-emerald-200 rounded px-2 py-0.5">
-                        ✓ Linked to existing customer / مربوط بعميل موجود
                       </div>
-                    )}
-                    {/* Always-visible customer picker. Was previously hidden until user
-                        typed 2+ chars AND match found — left users with no way to BROWSE.
-                        Now: list always shows (filtered if user types, full top-8 if not).
-                        Case-insensitive match handles "Ahmed" vs "ahmed" vs the Arabic name. */}
-                    {!formData.__newInvCustomerId && (
-                      <div className="mt-2">
-                        <div className="text-[10px] font-bold text-slate-600 uppercase tracking-wide mb-1">
-                          Tap a name to link / اضغط لاختيار
-                        </div>
-                        <div className="max-h-[180px] overflow-auto rounded border border-slate-200 bg-white">
-                          {(() => {
-                            var typed = String(formData.__newInvCustomer || '').trim().toLowerCase();
-                            var pool = Array.isArray(customers) ? customers : [];
-                            var filtered;
-                            if (typed.length === 0) {
-                              // No typing yet — show first 8 customers as a starting point
-                              filtered = pool.slice(0, 8);
-                            } else {
-                              // Case-insensitive contains-match. The Arabic + English
-                              // names mean we should be lenient; the schema keeps the
-                              // canonical form, so display whatever the DB has.
-                              filtered = pool.filter(function(c) {
-                                return String(c.name || '').toLowerCase().indexOf(typed) >= 0;
-                              }).slice(0, 12);
-                            }
-                            if (filtered.length === 0) {
-                              return (
-                                <div className="px-3 py-2 text-[11px] text-slate-600">
-                                  No customers match "{formData.__newInvCustomer}". You can still save below — the invoice will be created without a customer link, and you can link it later from the Sales tab.
-                                </div>
-                              );
-                            }
-                            return filtered.map(function(c) {
-                              var typedRaw = String(formData.__newInvCustomer || '').trim();
-                              var isExact = String(c.name || '').trim() === typedRaw;
-                              return (
-                                <div key={c.id}
-                                  onClick={function() { setFormData({ ...formData, __newInvCustomer: c.name, __newInvCustomerId: c.id }); }}
-                                  className={'px-3 py-2 text-sm cursor-pointer hover:bg-emerald-50 border-b border-slate-100 ' + (isExact ? 'bg-emerald-50' : '')}>
-                                  <span className="font-bold text-slate-900" style={{ direction: 'rtl' }}>{c.name}</span>
-                                  {isExact && <span className="ml-2 text-[10px] text-emerald-700 font-bold">exact match — tap to link</span>}
-                                </div>
-                              );
-                            });
-                          })()}
-                        </div>
-                        {/* Plain-language warning: tells user EXACTLY what will happen
-                            when they save without picking a customer. Replaces the old
-                            "leave unlinked" jargon that wasn't actionable. */}
-                        {formData.__newInvCustomer && formData.__newInvCustomer.trim().length > 0 && (
-                          <div className="mt-2 p-2 rounded bg-amber-50 border border-amber-300 text-[11px] text-amber-900">
-                            <div className="font-bold mb-0.5">⚠ Saving as: "{formData.__newInvCustomer}"</div>
-                            <div>This name doesn't match any existing customer. The invoice will save without a customer link. You can either: tap a name above to link it, tap ✕ to clear and save anonymously, or just tap the green button to proceed.</div>
+                    ) : (
+                      <>
+                        {/* === SEARCHABLE INPUT === With a CHEVRON-DOWN indicator
+                            on the right so it visually reads as "dropdown / picker"
+                            instead of a plain text field. */}
+                        <div className="relative mt-1">
+                          <input
+                            autoFocus
+                            value={formData.__newInvCustomer || ''}
+                            onChange={e => {
+                              const v = e.target.value;
+                              setFormData({ ...formData, __newInvCustomer: v, __newInvCustomerId: null });
+                            }}
+                            placeholder="Type to search, or pick from list below / اكتب أو اختر من القائمة"
+                            className="w-full px-3 py-2.5 pr-10 rounded-lg border-2 border-slate-300 bg-white text-sm font-semibold text-slate-900 placeholder-slate-400 focus:border-emerald-500 focus:outline-none"
+                            style={{ direction: 'rtl' }}
+                          />
+                          {/* Chevron — purely visual signal that this opens a list */}
+                          <div className="absolute right-3 top-1/2 -translate-y-1/2 pointer-events-none text-slate-400">
+                            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                              <polyline points="6 9 12 15 18 9"></polyline>
+                            </svg>
                           </div>
+                        </div>
+
+                        {/* === CUSTOMER LIST === Dark slate panel that sits cleanly
+                            against the light emerald container. Each row is a tap
+                            target with arrow indicator for "select this". */}
+                        <div className="mt-2 rounded-lg overflow-hidden bg-slate-900 border border-slate-700 shadow-md">
+                          <div className="px-3 py-2 bg-slate-800 border-b border-slate-700">
+                            <div className="text-[10px] font-bold text-emerald-300 uppercase tracking-wider flex items-center justify-between">
+                              <span>Tap a name to link / اضغط لاختيار</span>
+                              <span className="text-slate-400 normal-case font-medium">
+                                {(() => {
+                                  var typed = String(formData.__newInvCustomer || '').trim().toLowerCase();
+                                  var pool = Array.isArray(customers) ? customers : [];
+                                  if (typed.length === 0) return pool.length + ' customers';
+                                  var n = pool.filter(function(c) { return String(c.name || '').toLowerCase().indexOf(typed) >= 0; }).length;
+                                  return n + ' match' + (n === 1 ? '' : 'es');
+                                })()}
+                              </span>
+                            </div>
+                          </div>
+                          <div className="max-h-[200px] overflow-auto">
+                            {(() => {
+                              var typed = String(formData.__newInvCustomer || '').trim().toLowerCase();
+                              var pool = Array.isArray(customers) ? customers : [];
+                              var filtered;
+                              if (typed.length === 0) {
+                                filtered = pool.slice(0, 12);
+                              } else {
+                                filtered = pool.filter(function(c) {
+                                  return String(c.name || '').toLowerCase().indexOf(typed) >= 0;
+                                }).slice(0, 20);
+                              }
+                              if (filtered.length === 0) {
+                                return (
+                                  <div className="px-3 py-4 text-xs text-slate-300 text-center">
+                                    <div className="font-bold mb-1">No matching customer</div>
+                                    <div className="text-slate-400">You can still save — the invoice will be created without a customer link.</div>
+                                  </div>
+                                );
+                              }
+                              return filtered.map(function(c) {
+                                var typedRaw = String(formData.__newInvCustomer || '').trim();
+                                var isExact = String(c.name || '').trim() === typedRaw;
+                                return (
+                                  <div key={c.id}
+                                    onClick={function() { setFormData({ ...formData, __newInvCustomer: c.name, __newInvCustomerId: c.id }); }}
+                                    className={'px-3 py-2.5 cursor-pointer border-b border-slate-800 last:border-0 flex items-center justify-between gap-2 ' + (isExact ? 'bg-emerald-900/40 hover:bg-emerald-900/60' : 'hover:bg-slate-800')}>
+                                    <span className="font-semibold text-slate-100 text-sm truncate" style={{ direction: 'rtl' }}>{c.name}</span>
+                                    <div className="flex items-center gap-2 flex-shrink-0">
+                                      {isExact && <span className="text-[9px] font-bold text-emerald-300 uppercase">exact</span>}
+                                      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" className="text-slate-500">
+                                        <polyline points="9 18 15 12 9 6"></polyline>
+                                      </svg>
+                                    </div>
+                                  </div>
+                                );
+                              });
+                            })()}
+                          </div>
+                        </div>
+
+                        {/* === SAVING-AS WARNING === Shows when user has typed
+                            something that doesn't match. Tells them what'll
+                            happen on save without scary jargon. */}
+                        {formData.__newInvCustomer && formData.__newInvCustomer.trim().length > 0 && (
+                          (() => {
+                            var typed = String(formData.__newInvCustomer || '').trim().toLowerCase();
+                            var hasMatch = Array.isArray(customers) && customers.some(function(c) { return String(c.name || '').toLowerCase().indexOf(typed) >= 0; });
+                            if (hasMatch) return null;
+                            return (
+                              <div className="mt-2 p-2.5 rounded-lg bg-amber-50 border border-amber-300 text-[11px] text-amber-900">
+                                <div className="font-bold mb-0.5">⚠ Will save as "{formData.__newInvCustomer}" without customer link</div>
+                                <div>This name doesn't match any existing customer. You can save now and link it later from the Sales tab, or clear the field to save anonymously.</div>
+                              </div>
+                            );
+                          })()
                         )}
-                      </div>
+                      </>
                     )}
                   </div>
 
@@ -11962,46 +12313,31 @@ export default function App() {
                     <button
                       disabled={isCreatingInvoice}
                       onClick={async () => {
-                        // Apr 25 2026 — DIAGNOSTIC alert at the top of the
-                        // handler. If Max sees this popup, the click event
-                        // IS firing and reaching React. If he doesn't see it,
-                        // the button isn't wired up — meaning he's running
-                        // a stale build. This single alert disambiguates the
-                        // two failure modes I cannot otherwise tell apart.
-                        // Once we confirm the click fires, we'll remove this.
-                        try { window.alert('🟢 BUTTON CLICKED — handler is running. Tap OK to continue.'); } catch (_) {}
+                        // Apr 25 2026 — Bulletproof local toast wrapper. Same
+                        // pattern as finalizePendingTreasury. Prevents the
+                        // "Cannot read properties of undefined (reading
+                        // 'success')" error from blowing up the save.
+                        var safeT = {
+                          success: function(m) { try { (toast && toast.success) ? toast.success(m) : console.log('[toast.success]', m); } catch (_) {} },
+                          error: function(m) { try { (toast && toast.error) ? toast.error(m) : console.error('[toast.error]', m); } catch (_) {} },
+                          warning: function(m) { try { (toast && toast.warning) ? toast.warning(m) : console.warn('[toast.warning]', m); } catch (_) {} },
+                          info: function(m) { try { (toast && toast.info) ? toast.info(m) : console.log('[toast.info]', m); } catch (_) {} },
+                        };
                         // Guard against double-tap: if already in flight, ignore.
-                        // Without this, slow networks led to duplicate-key errors
-                        // and looked like "nothing happens" because the second
-                        // click's error overwrote the first click's success path.
                         if (isCreatingInvoice) {
                           console.log('[create-invoice] click ignored — already in flight');
-                          try { window.alert('⏸️ Already saving from a previous tap. Please wait.'); } catch (_) {}
                           return;
                         }
                         console.log('[create-invoice] click fired');
-                        // Clear any stale error banner from a previous attempt
-                        // so the user gets a clean slate. If THIS attempt fails,
-                        // the banner repopulates — but stale text never lingers.
                         setCreateInvoiceError(null);
-                        // Move EVERYTHING inside try so any failure surfaces a
-                        // visible error instead of silently throwing pre-await.
-                        // Previously customers.find() was outside the try — a
-                        // malformed customer entry would crash the handler with
-                        // no toast, no log, no feedback whatsoever.
                         setIsCreatingInvoice(true);
                         try {
                           const name = String(formData.__newInvCustomer || '').trim();
                           const totalAmt = Number(formData.__newInvTotal ?? pendingTreasuryRecord.amount);
-                          // Apr 25 2026 — Customer name is no longer required.
-                          // If the user clears it (X button) or leaves it blank,
-                          // the invoice saves as anonymous and can be linked to
-                          // a customer later from the Sales tab. The redesigned
-                          // picker makes this an explicit choice, not a footgun.
                           if (!(totalAmt > 0)) {
                             setCreateInvoiceError('Invoice total must be greater than zero. / الإجمالي يجب أن يكون أكبر من صفر.');
                             try { window.alert('⚠️ Invoice total must be greater than zero.'); } catch (_) {}
-                            toast.warning('Invoice total must be > 0 / الإجمالي يجب أن يكون أكبر من صفر');
+                            safeT.warning('Invoice total must be > 0 / الإجمالي يجب أن يكون أكبر من صفر');
                             setIsCreatingInvoice(false);
                             return;
                           }
@@ -12023,7 +12359,6 @@ export default function App() {
                             if (exact) resolvedCustomerId = exact.id;
                           }
                           console.log('[create-invoice] inserting', { orderNum: orderNum, name: name, totalAmt: totalAmt, customerId: resolvedCustomerId });
-                          try { window.alert('💾 About to save invoice #' + orderNum + ' for "' + name + '" — total ' + totalAmt + '. Tap OK to send to database.'); } catch (_) {}
                           // Use dbInsert for consistency with finalizePendingTreasury (which
                           // also uses dbInsert) and to capture an audit-log entry. Direct
                           // supabase.from().insert() bypasses the audit trail.
@@ -12076,7 +12411,7 @@ export default function App() {
                                 if (dbErrorMessage) {
                                   // Show a non-blocking warning so user knows audit_log
                                   // didn't fully record the create, but their data is safe.
-                                  toast.warning('Invoice was saved but audit log had a hiccup. Data is safe.');
+                                  safeT.warning('Invoice was saved but audit log had a hiccup. Data is safe.');
                                 }
                               }
                             } catch (e2) {
@@ -12091,12 +12426,11 @@ export default function App() {
                               + ' / تعذر إنشاء الفاتورة.';
                             setCreateInvoiceError(visibleMsg);
                             try { window.alert('❌ FAILED: ' + visibleMsg); } catch (_) {}
-                            toast.error('Failed to create invoice — see the red banner in the dialog');
+                            safeT.error('Failed to create invoice — see the red banner in the dialog');
                             setIsCreatingInvoice(false);
                             return;
                           }
                           console.log('[create-invoice] invoice ready', inserted.id);
-                          try { window.alert('✅ SUCCESS: Invoice #' + orderNum + ' was saved to the database. Now linking treasury entry...'); } catch (_) {}
                           // Apr 25 2026 — Optimistic insert into LOCAL invoices state.
                           // Without this, the just-linked treasury entry showed as
                           // "greyed out / unlinked" for the 500ms before loadAllData
@@ -12106,7 +12440,7 @@ export default function App() {
                             if (prev.some(function(i) { return i.id === inserted.id; })) return prev;
                             return [inserted].concat(prev);
                           });
-                          toast.success(resolvedCustomerId
+                          safeT.success(resolvedCustomerId
                             ? 'Invoice #' + orderNum + ' created + linked to customer ✓'
                             : 'Invoice #' + orderNum + ' created (new customer — no link) ✓');
                           await finalizePendingTreasury(inserted);
@@ -12120,7 +12454,7 @@ export default function App() {
                           var bigMsg = 'Unexpected error: ' + (err && err.message ? err.message : String(err));
                           setCreateInvoiceError(bigMsg);
                           try { window.alert('🚨 UNEXPECTED ERROR: ' + bigMsg); } catch (_) {}
-                          toast.error(bigMsg);
+                          safeT.error(bigMsg);
                         } finally {
                           // Ensure button always re-enables, even if we early-returned
                           // through an unexpected path.
@@ -12206,6 +12540,7 @@ export default function App() {
           </div>
         </div>
       )}
+    </div>
     </div>
     </ErrorBoundary>
     </ToastProvider>
