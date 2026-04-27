@@ -415,11 +415,11 @@ function PhoneSettingsPanel({ users, userProfile, toast, isAdmin, isSuperAdmin }
       const numsData = await numsRes.json();
       setNumbers(numsData.numbers || []);
 
-      // Fetch users with routing data
+      // Fetch users with routing data. The users table column is `name` (not full_name).
       const usersRes = await supabase
         .from('users')
-        .select('id, full_name, email, role, forwarding_number, phone_routing, phone_vacation_mode')
-        .order('full_name');
+        .select('id, name, email, role, forwarding_number, phone_routing, phone_vacation_mode')
+        .order('name');
       setUsersWithRouting(usersRes.data || []);
     } catch (e) {
       safeT.error('Failed to load phone settings: ' + e.message);
@@ -544,7 +544,7 @@ function PhoneSettingsPanel({ users, userProfile, toast, isAdmin, isSuperAdmin }
                       >
                         <option value="">— Unassigned (voicemail only) —</option>
                         {usersWithRouting.map(function(u) {
-                          return <option key={u.id} value={u.id}>{u.full_name || u.email}</option>;
+                          return <option key={u.id} value={u.id}>{u.name || u.email}</option>;
                         })}
                       </select>
                     </div>
@@ -580,7 +580,7 @@ function PhoneSettingsPanel({ users, userProfile, toast, isAdmin, isSuperAdmin }
 
                   {assignee && (
                     <div className="mt-2 text-[11px] text-slate-600">
-                      Calls reach <span className="font-bold">{assignee.full_name || assignee.email}</span> via {' '}
+                      Calls reach <span className="font-bold">{assignee.name || assignee.email}</span> via {' '}
                       <span className="font-bold">
                         {assignee.phone_vacation_mode ? '(vacation mode — voicemail only)' :
                          assignee.phone_routing === 'browser' ? 'browser only' :
@@ -618,7 +618,7 @@ function PhoneSettingsPanel({ users, userProfile, toast, isAdmin, isSuperAdmin }
               <div key={u.id} className="border border-slate-200 rounded-lg p-3 bg-slate-50">
                 <div className="flex items-center justify-between mb-2">
                   <div>
-                    <span className="font-bold text-slate-900 text-sm">{u.full_name || u.email}</span>
+                    <span className="font-bold text-slate-900 text-sm">{u.name || u.email}</span>
                     {u.role && <span className="ml-2 text-[10px] font-semibold text-slate-500 uppercase">{u.role}</span>}
                     {isSelf && <span className="ml-2 text-[10px] font-bold text-blue-700 bg-blue-100 px-1.5 py-0.5 rounded">YOU</span>}
                   </div>
