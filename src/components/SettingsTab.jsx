@@ -1,5 +1,5 @@
 'use client';
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import { supabase, dbInsert, dbUpdate } from '../lib/supabase';
 import { EXPENSE_CATS } from '../lib/utils';
 import TranslationPanel from './TranslationPanel';
@@ -378,6 +378,334 @@ const NOTIF_TYPES = [
   { v: 'reminder', l: 'Team Reminders / تذكيرات الفريق' },
 ];
 
+// ============================================================
+// PhoneSettingsPanel — Phase B (Apr 26 2026)
+// ============================================================
+// Admin-only panel for managing the phone system:
+//   • All KTC Twilio numbers (top section)
+//   • Per-number settings: assignee, recording, voicemail
+//   • Per-user routing settings: forwarding number, mode, vacation
+//
+// Reads/writes:
+//   /api/phone/numbers       — phone_numbers table CRUD
+//   supabase users table     — forwarding_number, phone_routing,
+//                              phone_vacation_mode columns (Phase B)
+//
+// Non-admins see a read-only view of their OWN routing settings.
+// ============================================================
+function PhoneSettingsPanel({ users, userProfile, toast, isAdmin, isSuperAdmin }) {
+  const [numbers, setNumbers] = useState([]);
+  const [usersWithRouting, setUsersWithRouting] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(null); // tracks which row is currently saving
+  const myId = userProfile?.id;
+  const canEdit = isAdmin || isSuperAdmin;
+
+  const safeT = {
+    success: function(m) { try { toast && toast.success && toast.success(m); } catch(e) {} },
+    error:   function(m) { try { toast && toast.error   && toast.error(m);   } catch(e) {} },
+    warning: function(m) { try { toast && toast.warning && toast.warning(m); } catch(e) {} },
+  };
+
+  const reload = useCallback(async function() {
+    setLoading(true);
+    try {
+      // Fetch phone numbers
+      const numsRes = await fetch('/api/phone/numbers');
+      const numsData = await numsRes.json();
+      setNumbers(numsData.numbers || []);
+
+      // Fetch users with routing data
+      const usersRes = await supabase
+        .from('users')
+        .select('id, full_name, email, role, forwarding_number, phone_routing, phone_vacation_mode')
+        .order('full_name');
+      setUsersWithRouting(usersRes.data || []);
+    } catch (e) {
+      safeT.error('Failed to load phone settings: ' + e.message);
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  useEffect(function() { reload(); }, [reload]);
+
+  // Update a phone number's assignment / recording / voicemail
+  const updateNumber = async function(id, field, value) {
+    setSaving('num-' + id);
+    try {
+      const body = { id: id };
+      body[field] = value;
+      const res = await fetch('/api/phone/numbers', {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || 'Update failed');
+      // Optimistic local update
+      setNumbers(function(prev) {
+        return prev.map(function(n) {
+          return n.id === id ? Object.assign({}, n, body) : n;
+        });
+      });
+      safeT.success('Saved ✓');
+    } catch (e) {
+      safeT.error('Save failed: ' + e.message);
+    } finally {
+      setSaving(null);
+    }
+  };
+
+  // Update a user's routing prefs
+  const updateUserRouting = async function(userId, field, value) {
+    setSaving('user-' + userId);
+    try {
+      const updates = {};
+      updates[field] = value;
+      const res = await supabase.from('users').update(updates).eq('id', userId);
+      if (res.error) throw res.error;
+      setUsersWithRouting(function(prev) {
+        return prev.map(function(u) {
+          return u.id === userId ? Object.assign({}, u, updates) : u;
+        });
+      });
+      safeT.success('Saved ✓');
+    } catch (e) {
+      safeT.error('Save failed: ' + (e.message || 'unknown'));
+    } finally {
+      setSaving(null);
+    }
+  };
+
+  if (loading) {
+    return (
+      <div className="bg-white rounded-xl p-6 text-center text-slate-500">
+        Loading phone settings...
+      </div>
+    );
+  }
+
+  return (
+    <div className="space-y-4">
+      {/* Header */}
+      <div className="bg-white rounded-xl p-4">
+        <h3 className="text-sm font-bold mb-1">📞 Phone System</h3>
+        <p className="text-xs text-slate-600">
+          Configure your KTC Twilio numbers and team member call routing.
+          {canEdit ? '' : ' Only admins can change number assignments.'}
+        </p>
+      </div>
+
+      {/* === SECTION 1: PHONE NUMBERS === */}
+      <div className="bg-white rounded-xl p-4">
+        <div className="flex items-center justify-between mb-3">
+          <h3 className="text-sm font-bold">Your KTC Numbers</h3>
+          <span className="text-[10px] text-slate-500 font-medium">
+            {numbers.length} number{numbers.length === 1 ? '' : 's'}
+          </span>
+        </div>
+
+        {numbers.length === 0 ? (
+          <div className="text-xs text-slate-500 text-center py-6">
+            No phone numbers registered. Run the s30 SQL seed to add them.
+          </div>
+        ) : (
+          <div className="space-y-2">
+            {numbers.map(function(n) {
+              const assignee = usersWithRouting.find(function(u) { return u.id === n.assigned_to; });
+              const isSaving = saving === 'num-' + n.id;
+              return (
+                <div key={n.id} className="border border-slate-200 rounded-lg p-3 bg-slate-50">
+                  {/* Number + label */}
+                  <div className="flex items-center justify-between mb-2">
+                    <div>
+                      <div className="font-bold text-slate-900 text-base">
+                        {n.phone_number}
+                        {n.number_type === 'main' && (
+                          <span className="ml-2 text-[10px] font-bold text-emerald-700 bg-emerald-100 px-1.5 py-0.5 rounded">MAIN</span>
+                        )}
+                      </div>
+                      <div className="text-xs text-slate-600">{n.label || '(no label)'}</div>
+                    </div>
+                    {isSaving && <span className="text-[10px] text-slate-500">Saving...</span>}
+                  </div>
+
+                  {/* Settings grid */}
+                  <div className="grid grid-cols-1 md:grid-cols-3 gap-2 text-xs">
+                    {/* Assignee */}
+                    <div>
+                      <label className="block font-semibold text-slate-700 mb-1">Assigned to</label>
+                      <select
+                        disabled={!canEdit || isSaving}
+                        value={n.assigned_to || ''}
+                        onChange={function(e) { updateNumber(n.id, 'assigned_to', e.target.value || null); }}
+                        className="w-full px-2 py-1.5 rounded border border-slate-300 bg-white"
+                      >
+                        <option value="">— Unassigned (voicemail only) —</option>
+                        {usersWithRouting.map(function(u) {
+                          return <option key={u.id} value={u.id}>{u.full_name || u.email}</option>;
+                        })}
+                      </select>
+                    </div>
+
+                    {/* Recording */}
+                    <div>
+                      <label className="block font-semibold text-slate-700 mb-1">Recording</label>
+                      <select
+                        disabled={!canEdit || isSaving}
+                        value={n.recording_enabled ? 'on' : 'off'}
+                        onChange={function(e) { updateNumber(n.id, 'recording_enabled', e.target.value === 'on'); }}
+                        className="w-full px-2 py-1.5 rounded border border-slate-300 bg-white"
+                      >
+                        <option value="on">🔴 On (with disclaimer)</option>
+                        <option value="off">⚫ Off</option>
+                      </select>
+                    </div>
+
+                    {/* Voicemail */}
+                    <div>
+                      <label className="block font-semibold text-slate-700 mb-1">Voicemail</label>
+                      <select
+                        disabled={!canEdit || isSaving}
+                        value={n.voicemail_enabled ? 'on' : 'off'}
+                        onChange={function(e) { updateNumber(n.id, 'voicemail_enabled', e.target.value === 'on'); }}
+                        className="w-full px-2 py-1.5 rounded border border-slate-300 bg-white"
+                      >
+                        <option value="on">📬 On</option>
+                        <option value="off">⚫ Off</option>
+                      </select>
+                    </div>
+                  </div>
+
+                  {assignee && (
+                    <div className="mt-2 text-[11px] text-slate-600">
+                      Calls reach <span className="font-bold">{assignee.full_name || assignee.email}</span> via {' '}
+                      <span className="font-bold">
+                        {assignee.phone_vacation_mode ? '(vacation mode — voicemail only)' :
+                         assignee.phone_routing === 'browser' ? 'browser only' :
+                         assignee.phone_routing === 'cell' ? 'cell only' :
+                         'browser, then cell'}
+                      </span>
+                    </div>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+        )}
+      </div>
+
+      {/* === SECTION 2: PER-USER ROUTING === */}
+      <div className="bg-white rounded-xl p-4">
+        <div className="flex items-center justify-between mb-3">
+          <h3 className="text-sm font-bold">Team Routing Preferences</h3>
+          <span className="text-[10px] text-slate-500 font-medium">
+            {usersWithRouting.length} team member{usersWithRouting.length === 1 ? '' : 's'}
+          </span>
+        </div>
+        <p className="text-[11px] text-slate-600 mb-3">
+          For each team member: set their cell forwarding number, choose how they receive calls,
+          and toggle vacation mode (sends all their calls to voicemail).
+        </p>
+
+        <div className="space-y-2">
+          {usersWithRouting.map(function(u) {
+            const isSaving = saving === 'user-' + u.id;
+            const isSelf = u.id === myId;
+            const editable = canEdit || isSelf;
+            return (
+              <div key={u.id} className="border border-slate-200 rounded-lg p-3 bg-slate-50">
+                <div className="flex items-center justify-between mb-2">
+                  <div>
+                    <span className="font-bold text-slate-900 text-sm">{u.full_name || u.email}</span>
+                    {u.role && <span className="ml-2 text-[10px] font-semibold text-slate-500 uppercase">{u.role}</span>}
+                    {isSelf && <span className="ml-2 text-[10px] font-bold text-blue-700 bg-blue-100 px-1.5 py-0.5 rounded">YOU</span>}
+                  </div>
+                  {isSaving && <span className="text-[10px] text-slate-500">Saving...</span>}
+                </div>
+
+                <div className="grid grid-cols-1 md:grid-cols-3 gap-2 text-xs">
+                  {/* Forwarding number */}
+                  <div>
+                    <label className="block font-semibold text-slate-700 mb-1">Cell phone (for forwarding)</label>
+                    <input
+                      type="tel"
+                      disabled={!editable || isSaving}
+                      defaultValue={u.forwarding_number || ''}
+                      onBlur={function(e) {
+                        const val = e.target.value.trim();
+                        if (val !== (u.forwarding_number || '')) {
+                          updateUserRouting(u.id, 'forwarding_number', val || null);
+                        }
+                      }}
+                      placeholder="+201001234567"
+                      className="w-full px-2 py-1.5 rounded border border-slate-300 bg-white font-mono"
+                    />
+                    <div className="text-[10px] text-slate-500 mt-0.5">E.164 format: + then country code + number</div>
+                  </div>
+
+                  {/* Routing mode */}
+                  <div>
+                    <label className="block font-semibold text-slate-700 mb-1">How calls reach me</label>
+                    <select
+                      disabled={!editable || isSaving}
+                      value={u.phone_routing || 'browser_cell'}
+                      onChange={function(e) { updateUserRouting(u.id, 'phone_routing', e.target.value); }}
+                      className="w-full px-2 py-1.5 rounded border border-slate-300 bg-white"
+                    >
+                      <option value="browser_cell">Browser, then cell (recommended)</option>
+                      <option value="browser">Browser only (cheap)</option>
+                      <option value="cell">Cell only</option>
+                    </select>
+                  </div>
+
+                  {/* Vacation mode */}
+                  <div>
+                    <label className="block font-semibold text-slate-700 mb-1">Vacation mode</label>
+                    <select
+                      disabled={!editable || isSaving}
+                      value={u.phone_vacation_mode ? 'on' : 'off'}
+                      onChange={function(e) { updateUserRouting(u.id, 'phone_vacation_mode', e.target.value === 'on'); }}
+                      className="w-full px-2 py-1.5 rounded border border-slate-300 bg-white"
+                    >
+                      <option value="off">Off — receive calls normally</option>
+                      <option value="on">🌴 On — all calls to voicemail</option>
+                    </select>
+                  </div>
+                </div>
+
+                {u.phone_routing === 'cell' && !u.forwarding_number && (
+                  <div className="mt-2 p-2 rounded bg-amber-50 border border-amber-200 text-[11px] text-amber-900">
+                    ⚠ Cell-only routing but no forwarding number set — calls will go straight to voicemail.
+                  </div>
+                )}
+                {u.phone_routing === 'browser_cell' && !u.forwarding_number && (
+                  <div className="mt-2 p-2 rounded bg-blue-50 border border-blue-200 text-[11px] text-blue-900">
+                    ℹ Browser-only effectively — no cell number set for fallback.
+                  </div>
+                )}
+              </div>
+            );
+          })}
+        </div>
+      </div>
+
+      {/* Cost note */}
+      <div className="bg-slate-50 border border-slate-200 rounded-xl p-3 text-[11px] text-slate-700">
+        <div className="font-bold mb-1">💵 Cost notes</div>
+        <ul className="space-y-1 list-disc list-inside">
+          <li><strong>Browser ringing</strong> — essentially free (uses the inbound minute already paid for)</li>
+          <li><strong>Cell forwarding to Egypt</strong> — about $0.16-0.22 per minute on top of the inbound rate</li>
+          <li><strong>"Browser, then cell"</strong> — only pays the cell rate IF nobody answered in browser first</li>
+          <li><strong>Vacation mode</strong> — fully free (calls go straight to voicemail)</li>
+        </ul>
+      </div>
+    </div>
+  );
+}
+
+
 export default function SettingsTab({ toast, user, users, onReload, isAdmin, userProfile, categoriesList, onCategoriesReload }) {
   const isSuperAdmin = userProfile?.role === 'super_admin';
   const [section, setSection] = useState('roles');
@@ -559,7 +887,7 @@ export default function SettingsTab({ toast, user, users, onReload, isAdmin, use
 
       {/* Section Tabs */}
       <div className="flex gap-1 mb-3 flex-wrap">
-        {[['roles', 'Team & Roles'], ['profiles', '👤 Team Profiles'], ['permissions', 'Module Access'], ['notifications', 'Notifications'], ['voice', '🎙️ Voice'], ['comms', '📬 Communications'], ['greeter', '🤖 AI Greeter'], ...(isSuperAdmin ? [['aimemory', '🧠 AI Memory'], ['admintools', '🛠️ Admin Tools']] : []), ['categories', '🏷️ Categories'], ['rules', 'Category Rules / قواعد'], ['expenses', '📋 Expense Descriptions'], ['translation', '🌐 Translation / ترجمة']].map(([v, l]) => (
+        {[['roles', 'Team & Roles'], ['profiles', '👤 Team Profiles'], ['permissions', 'Module Access'], ['notifications', 'Notifications'], ['voice', '🎙️ Voice'], ['comms', '📬 Communications'], ['phone', '📞 Phone'], ['greeter', '🤖 AI Greeter'], ...(isSuperAdmin ? [['aimemory', '🧠 AI Memory'], ['admintools', '🛠️ Admin Tools']] : []), ['categories', '🏷️ Categories'], ['rules', 'Category Rules / قواعد'], ['expenses', '📋 Expense Descriptions'], ['translation', '🌐 Translation / ترجمة']].map(([v, l]) => (
           <button key={v} onClick={() => setSection(v)}
             className={'px-3 py-1.5 rounded-lg text-xs font-semibold transition ' + (section === v ? 'bg-slate-900 text-white' : 'bg-slate-100 text-slate-500')}>
             {l}
@@ -575,6 +903,17 @@ export default function SettingsTab({ toast, user, users, onReload, isAdmin, use
       {/* ===== VOICE SETTINGS (ALL USERS) ===== */}
       {section === 'voice' && (
         <VoiceSettingsPanel userProfile={userProfile} toast={toast} />
+      )}
+
+      {/* ===== PHONE SETTINGS (Phase B) ===== */}
+      {section === 'phone' && (
+        <PhoneSettingsPanel
+          users={users}
+          userProfile={userProfile}
+          toast={toast}
+          isAdmin={isAdmin}
+          isSuperAdmin={isSuperAdmin}
+        />
       )}
 
       {/* ===== ADMIN TOOLS (SUPER ADMIN ONLY) ===== */}

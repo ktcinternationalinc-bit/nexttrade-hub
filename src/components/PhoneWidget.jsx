@@ -26,7 +26,7 @@ export default function PhoneWidget({ user, userProfile, users, customers }) {
   const loadData = useCallback(async () => {
     try {
       const [{ data: l }, { data: n }] = await Promise.all([
-        supabase.from('call_logs').select('*').eq('user_id', myId).order('called_at', { ascending: false }).limit(50),
+        supabase.from('phone_calls').select('*').eq('user_id', myId).order('started_at', { ascending: false }).limit(50),
         supabase.from('phone_numbers').select('*').order('created_at'),
       ]);
       setLogs(l || []);
@@ -272,18 +272,18 @@ export default function PhoneWidget({ user, userProfile, users, customers }) {
               {logs.length === 0 ? (
                 <div className="text-center py-8 text-slate-400 text-xs">No calls yet</div>
               ) : logs.map(l => {
-                const contactName = getContactName(l.phone_number);
+                const contactName = getContactName(l.customer_number);
                 return (
-                  <div key={l.id} className="flex items-center justify-between p-3 border-b hover:bg-slate-50 cursor-pointer" onClick={() => { setNumber(l.phone_number); setTab('dial'); }}>
+                  <div key={l.id} className="flex items-center justify-between p-3 border-b hover:bg-slate-50 cursor-pointer" onClick={() => { setNumber(l.customer_number); setTab('dial'); }}>
                     <div className="flex items-center gap-2">
                       <span className={l.direction === 'inbound' ? 'text-blue-500' : 'text-green-500'}>{l.direction === 'inbound' ? '📥' : '📤'}</span>
                       <div>
-                        <div className="text-xs font-semibold">{contactName || fmtPhone(l.phone_number)}</div>
-                        {contactName && <div className="text-[10px] text-slate-400">{fmtPhone(l.phone_number)}</div>}
-                        <div className="text-[10px] text-slate-400">{new Date(l.called_at).toLocaleString()}{l.duration ? ` • ${fmtDuration(l.duration)}` : ''}</div>
+                        <div className="text-xs font-semibold">{contactName || fmtPhone(l.customer_number)}</div>
+                        {contactName && <div className="text-[10px] text-slate-400">{fmtPhone(l.customer_number)}</div>}
+                        <div className="text-[10px] text-slate-400">{new Date(l.started_at).toLocaleString()}{l.duration_seconds ? ` • ${fmtDuration(l.duration_seconds)}` : ''}</div>
                       </div>
                     </div>
-                    <button onClick={(e) => { e.stopPropagation(); setNumber(l.phone_number); makeCall(l.phone_number); }}
+                    <button onClick={(e) => { e.stopPropagation(); setNumber(l.customer_number); makeCall(l.customer_number); }}
                       className="text-green-500 text-sm">📞</button>
                   </div>
                 );

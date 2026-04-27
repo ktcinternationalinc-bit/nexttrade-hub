@@ -44,6 +44,9 @@ export default function CRMTab({ toast, customers, invoices, user, userProfile, 
   const [notes, setNotes] = useState([]);
   const [followUps, setFollowUps] = useState([]);
   const [contactLog, setContactLog] = useState([]);
+  // Phase B (Apr 26 2026): per-customer call history + voicemails
+  const [phoneCalls, setPhoneCalls] = useState([]);
+  const [phoneVoicemails, setPhoneVoicemails] = useState([]);
   const [allNotes, setAllNotes] = useState([]);
   const [notesLoaded, setNotesLoaded] = useState(false);
   const [f, setF] = useState({});
@@ -103,14 +106,20 @@ export default function CRMTab({ toast, customers, invoices, user, userProfile, 
   const loadClientData = async (client) => {
     setSel(client);
     if (!client) return;
-    const [n, fu, cl] = await Promise.all([
+    const [n, fu, cl, pc, vm] = await Promise.all([
       supabase.from('client_notes').select('*').eq('customer_id', client.id).order('created_at', { ascending: false }),
       supabase.from('follow_ups').select('*').eq('customer_id', client.id).order('due_date', { ascending: true }),
       supabase.from('contact_log').select('*').eq('customer_id', client.id).order('contacted_at', { ascending: false }).limit(50),
+      // Phase B: phone call history for this customer
+      supabase.from('phone_calls').select('*').eq('customer_id', client.id).order('started_at', { ascending: false }).limit(50),
+      // Phase B: voicemails left for this customer
+      supabase.from('phone_voicemails').select('*').eq('customer_id', client.id).order('created_at', { ascending: false }).limit(20),
     ]);
     setNotes(n.data || []);
     setFollowUps(fu.data || []);
     setContactLog(cl.data || []);
+    setPhoneCalls(pc.data || []);
+    setPhoneVoicemails(vm.data || []);
   };
 
   const logContact = async (type, notes) => {
@@ -758,6 +767,90 @@ export default function CRMTab({ toast, customers, invoices, user, userProfile, 
               </div>
             );
           })}
+        </div>
+      )}
+
+      {/* Phase B (Apr 26 2026) — Phone Calls + Voicemails for this customer */}
+      {(phoneCalls.length > 0 || phoneVoicemails.length > 0) && (
+        <div className="bg-white rounded-xl p-4 mb-3 border border-slate-200">
+          <h4 className="text-sm font-bold mb-2">
+            📞 Calls &amp; Voicemails ({phoneCalls.length + phoneVoicemails.length})
+          </h4>
+
+          {/* Voicemails first — they need attention */}
+          {phoneVoicemails.length > 0 && (
+            <div className="mb-3">
+              <div className="text-[10px] font-bold text-slate-500 uppercase tracking-wider mb-1">Voicemails</div>
+              {phoneVoicemails.map(vm => {
+                const handler = users?.find(u => u.id === vm.assigned_to);
+                return (
+                  <div key={vm.id} className={'rounded-lg p-2 mb-1 border ' + (vm.is_read ? 'bg-slate-50 border-slate-200' : 'bg-amber-50 border-amber-300')}>
+                    <div className="flex items-start gap-2">
+                      <span className="text-base">📬</span>
+                      <div className="flex-1 min-w-0">
+                        <div className="text-xs font-semibold text-slate-900">
+                          {vm.is_read ? 'Voicemail' : '🔴 Unread voicemail'}
+                          {vm.duration_seconds ? <span className="text-slate-500 ml-1 font-normal">({vm.duration_seconds}s)</span> : null}
+                        </div>
+                        {vm.transcript_status === 'completed' && vm.transcript ? (
+                          <div className="text-xs text-slate-700 mt-1 italic">"{vm.transcript}"</div>
+                        ) : vm.transcript_status === 'transcribing' ? (
+                          <div className="text-[11px] text-slate-500 mt-1">⏳ Transcribing…</div>
+                        ) : vm.transcript_status === 'failed' ? (
+                          <div className="text-[11px] text-red-600 mt-1">⚠ Transcription failed</div>
+                        ) : (
+                          <div className="text-[11px] text-slate-500 mt-1">⏳ Pending transcription</div>
+                        )}
+                        {vm.recording_url && (
+                          <audio controls className="mt-1 h-7 w-full max-w-xs" src={vm.recording_url + '.mp3'} preload="none">
+                            Your browser doesn't support audio playback.
+                          </audio>
+                        )}
+                        <div className="text-[10px] text-slate-400 mt-1">
+                          {handler && <span className="font-semibold text-blue-500 mr-1">For {handler.name || handler.email}</span>}
+                          {new Date(vm.created_at).toLocaleString()}
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          )}
+
+          {/* Calls */}
+          {phoneCalls.length > 0 && (
+            <div>
+              <div className="text-[10px] font-bold text-slate-500 uppercase tracking-wider mb-1">Calls</div>
+              {phoneCalls.slice(0, 10).map(c => {
+                const handler = users?.find(u => u.id === c.user_id);
+                const isInbound = c.direction === 'inbound';
+                const dur = c.duration_seconds ? Math.floor(c.duration_seconds / 60) + ':' + String(c.duration_seconds % 60).padStart(2, '0') : null;
+                return (
+                  <div key={c.id} className="flex items-start gap-2 py-1.5 border-b border-slate-50 last:border-0">
+                    <span className="text-sm">{isInbound ? '📥' : '📤'}</span>
+                    <div className="flex-1 min-w-0">
+                      <div className="text-xs">
+                        <span className={'font-semibold ' + (isInbound ? 'text-blue-600' : 'text-emerald-600')}>
+                          {isInbound ? 'Inbound' : 'Outbound'}
+                        </span>
+                        <span className="text-slate-500 ml-1">{c.status}</span>
+                        {dur && <span className="text-slate-700 ml-2 font-mono">{dur}</span>}
+                      </div>
+                      <div className="text-[10px] text-slate-400">
+                        {handler && <span className="font-semibold text-blue-500 mr-1">{handler.name || handler.email}</span>}
+                        {new Date(c.started_at).toLocaleString()}
+                        {c.notes && <span className="text-slate-600 ml-1">— {c.notes}</span>}
+                      </div>
+                    </div>
+                  </div>
+                );
+              })}
+              {phoneCalls.length > 10 && (
+                <div className="text-[10px] text-slate-400 mt-1 italic">…and {phoneCalls.length - 10} older</div>
+              )}
+            </div>
+          )}
         </div>
       )}
       {invs.length > 0 && (

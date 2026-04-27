@@ -12,6 +12,7 @@ import AdminTab from '../components/AdminTab';
 import SettingsTab from '../components/SettingsTab';
 import CustomsTab from '../components/CustomsTab';
 import PersonalDashboard from '../components/PersonalDashboard';
+import VoicemailsWidget from '../components/VoicemailsWidget';
 import AIAssistant from '../components/AIAssistant';
 import AIGreeter, { PERSONALITIES } from '../components/AIGreeter';
 import VoiceController from '../components/VoiceController';
@@ -7778,6 +7779,15 @@ export default function App() {
             <PersonalDashboard user={user} userProfile={userProfile} isAdmin={isAdmin}
               invoices={invoices} customers={customers} navigate={navigate} fE={fE} users={teamUsers} />
 
+            {/* ===== VOICEMAILS WIDGET (Phase B — Apr 26 2026) =====
+                Shows the logged-in user's unread voicemails with audio + Whisper transcript.
+                Auto-refreshes every 30 seconds so new voicemails appear without page reload. */}
+            <div className="mt-4">
+              <SafeSection label="Voicemails">
+                <VoicemailsWidget user={user} userProfile={userProfile} customers={customers} toast={toast} />
+              </SafeSection>
+            </div>
+
           </div>
         )}
 
@@ -12124,7 +12134,7 @@ export default function App() {
                       latest fix is actually deployed. If he doesn't see this
                       tag in the modal, his browser is running stale JS. */}
                   <div className="mt-1.5 inline-block px-2 py-0.5 rounded bg-amber-900/60 text-amber-100 text-[10px] font-mono font-bold tracking-wide">
-                    BUILD v55.15-PHONE-FIX
+                    BUILD v55.17-PHONE-B
                   </div>
                 </div>
                 <button onClick={() => closePendingTreasuryModal()}

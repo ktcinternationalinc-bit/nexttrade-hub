@@ -178,26 +178,36 @@ export async function POST(req) {
     var statusCallbackUrl = baseUrl + '/api/phone/call-status';
     var recordingCallbackUrl = baseUrl + '/api/phone/recording-callback';
 
-    // 5. Decide where to ring. For now, since browser-based calling isn't
-    // wired up yet (Phase B), we ring an actual phone number if one is
-    // configured for the assigned user, otherwise straight to voicemail.
+    // 5. Decide where to ring based on the assigned user's routing preferences.
     //
-    // In Phase B we'll add <Client> dial which rings the team member's
-    // browser via Twilio Voice SDK.
-    var ringTarget = null;
+    // routing modes:
+    //   'browser'      → ring browser only (Twilio Voice SDK, identity = user_id)
+    //   'cell'         → ring forwarding cell only
+    //   'browser_cell' → ring browser first (15s), fall back to cell (15s)
+    //
+    // If vacation mode is on OR no assignment, skip ringing → voicemail.
+    var ringBrowser = false;
+    var ringCell = null;
     if (assignment.assigned_to) {
       try {
-        // Look up the user's personal cell phone for forwarding
         var userLookup = await supabase
-          .from('user_profiles')
-          .select('forwarding_number')
+          .from('users')
+          .select('forwarding_number, phone_routing, phone_vacation_mode')
           .eq('id', assignment.assigned_to)
           .maybeSingle();
-        if (userLookup.data && userLookup.data.forwarding_number) {
-          ringTarget = userLookup.data.forwarding_number;
+        var u = userLookup.data;
+        if (u && !u.phone_vacation_mode) {
+          var routing = u.phone_routing || 'browser_cell';
+          if (routing === 'browser' || routing === 'browser_cell') {
+            ringBrowser = true;
+          }
+          if ((routing === 'cell' || routing === 'browser_cell') && u.forwarding_number) {
+            ringCell = u.forwarding_number;
+          }
         }
       } catch (e) {
-        // user_profiles may not have forwarding_number column yet — that's fine
+        // users may not have phone routing columns yet — fall through to voicemail
+        console.warn('[phone/incoming] user lookup failed:', e.message);
       }
     }
 
@@ -207,13 +217,20 @@ export async function POST(req) {
     twiml += '<Say voice="Polly.Joanna">' + xmlEscape(greetingText) + '</Say>';
     twiml += disclaimer;
 
-    if (ringTarget) {
-      // Ring the assigned user's forwarding phone with 25s timeout
-      // If they don't answer, action= goes to voicemail
+    if (ringBrowser || ringCell) {
+      // Build <Dial> with one or two child verbs:
+      //   • <Client>user_id</Client> rings the browser via Twilio Voice SDK
+      //   • <Number>+...</Number> rings the cell phone via PSTN
+      // When both are present, Twilio rings them in PARALLEL and connects to
+      // whichever picks up first. This is exactly what we want for the
+      // "browser first with cell fallback" experience — if the user is at
+      // their computer, browser wins (cheaper). If not, cell catches it.
+      // Combined timeout is 25s. Action= URL goes to voicemail if neither answers.
       var dialAttrs = 'timeout="25"'
         + ' action="' + xmlEscape(voicemailUrl) + '"'
         + ' method="POST"'
-        + ' callerId="' + xmlEscape(to) + '"';
+        + ' callerId="' + xmlEscape(from) + '"'
+        + ' answerOnBridge="true"';
       if (assignment.recording_enabled) {
         dialAttrs += ' record="record-from-answer"'
           + ' recordingStatusCallback="' + xmlEscape(recordingCallbackUrl) + '"'
@@ -221,11 +238,17 @@ export async function POST(req) {
           + ' recordingStatusCallbackMethod="POST"';
       }
       twiml += '<Dial ' + dialAttrs + '>';
-      twiml += '<Number>' + xmlEscape(ringTarget) + '</Number>';
+      if (ringBrowser) {
+        // Twilio Voice SDK identifies a logged-in client by `identity`.
+        // We use the user's UUID as the identity. The PhoneWidget uses the
+        // same identity when generating its access token, so calls find them.
+        twiml += '<Client>' + xmlEscape(String(assignment.assigned_to)) + '</Client>';
+      }
+      if (ringCell) {
+        twiml += '<Number>' + xmlEscape(ringCell) + '</Number>';
+      }
       twiml += '</Dial>';
       // If <Dial> verb completed without connecting, fall through to voicemail.
-      // Use recordingStatusCallback (not just action) so the recording reaches
-      // us even if the caller hangs up immediately after speaking.
       twiml += '<Say>The team is unavailable right now. Please leave a message after the beep.</Say>';
       twiml += '<Record action="' + xmlEscape(voicemailUrl) + '"';
       twiml += ' method="POST"';
@@ -237,11 +260,7 @@ export async function POST(req) {
       twiml += ' recordingStatusCallbackEvent="completed"';
       twiml += ' recordingStatusCallbackMethod="POST" />';
     } else {
-      // No one to ring — straight to voicemail.
-      // Same dual-callback pattern: action fires when caller stops recording,
-      // recordingStatusCallback fires when Twilio finishes processing the audio.
-      // recordingStatusCallback is the reliable one — Twilio always fires it
-      // even if the caller hung up before action could complete.
+      // No routing configured (or vacation mode) — straight to voicemail.
       twiml += '<Say>Please leave us a message after the beep, and we will get back to you.</Say>';
       twiml += '<Record action="' + xmlEscape(voicemailUrl) + '"';
       twiml += ' method="POST"';
