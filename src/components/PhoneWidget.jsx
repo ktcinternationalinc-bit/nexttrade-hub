@@ -4,6 +4,48 @@ import { supabase } from '../lib/supabase';
 
 const DIAL_KEYS = [['1','2','3'],['4','5','6'],['7','8','9'],['*','0','#']];
 
+// v55.24 — Robust error-to-string formatter.
+//
+// JavaScript "errors" come in many shapes:
+//   • Real Error objects       (have .message)
+//   • DOM Event objects        (no .message — what caused the original
+//                               "[object Event]" bug; thrown by script
+//                               tag onerror, fetch network errors, etc.)
+//   • Plain strings            ("oops")
+//   • Plain objects            ({code:'X',reason:'Y'})
+//   • Twilio errors            (have .code, .message, .twilioError)
+//   • undefined / null         (when something throws nothing)
+//
+// String(e) on an Event yields "[object Event]" with zero info. This
+// helper extracts whatever's actually useful and falls back to a
+// concrete message rather than leaking the type-coercion garbage.
+function formatErr(e) {
+  if (e == null) return 'unknown error (no error value)';
+  if (typeof e === 'string') return e;
+  if (e instanceof Error) {
+    // Twilio errors have a .code in addition to .message; show both
+    if (e.code !== undefined) return '[' + e.code + '] ' + e.message;
+    return e.message || 'Error (no message)';
+  }
+  // DOM Event — try to get the source URL or type
+  if (typeof Event !== 'undefined' && e instanceof Event) {
+    var t = e.target;
+    var src = t && (t.src || t.href || t.tagName) ? (t.src || t.href || t.tagName) : '';
+    return 'Resource load error (' + (e.type || 'event') + ')' + (src ? ' for: ' + src : '');
+  }
+  // Object with a .message — common shape for non-Error errors
+  if (typeof e === 'object' && e !== null) {
+    if (e.message) return String(e.message);
+    if (e.error) return String(e.error);
+    if (e.code) return 'Code ' + String(e.code);
+    try {
+      var s = JSON.stringify(e);
+      if (s && s !== '{}') return s;
+    } catch (_) {}
+  }
+  return String(e);
+}
+
 export default function PhoneWidget({ user, userProfile, users, customers }) {
   const [open, setOpen] = useState(false);
   const [tab, setTab] = useState('dial'); // dial | log | settings
@@ -61,14 +103,57 @@ export default function PhoneWidget({ user, userProfile, users, customers }) {
     if (!myId) return;
 
     try {
-      // 1. Load the Twilio Voice SDK v2 (much newer than v1.14 we had before)
-      if (!window.Twilio?.Device) {
+      // 1. Load the Twilio Voice SDK v2 (much newer than v1.14 we had before).
+      //
+      // v55.24 — When the script tag fails to load, the browser passes a
+      // DOM Event object to onerror. The previous code did `s.onerror = reject`
+      // which propagated that Event through the catch block as `e` — and
+      // since DOM Event has no `.message` field, `e.message || String(e)`
+      // produced the useless "[object Event]" Max saw on screen.
+      //
+      // Fix: in the script onerror, throw a real Error with a concrete
+      // explanation. The most common script-load failures are:
+      //   • Browser/network blocks the Twilio CDN (ad blocker, corporate
+      //     firewall, restricted Wi-Fi, "Block scripts" privacy extension)
+      //   • CSP header on the page disallows scripts from sdk.twilio.com
+      //   • Offline / DNS resolution failure
+      // We tell the user what to check rather than swallowing the error.
+      if (!window.Twilio || !window.Twilio.Device) {
         await new Promise((resolve, reject) => {
-          const s = document.createElement('script');
+          // Did the script tag already get added (e.g. from a prior failed
+          // init) but never finish loading? Avoid duplicate <script> tags.
+          var existing = document.querySelector('script[data-twilio-voice-sdk]');
+          if (existing) {
+            // If a previous attempt is still pending, wait for it.
+            existing.addEventListener('load', resolve);
+            existing.addEventListener('error', () => reject(new Error(
+              'Twilio Voice SDK failed to load (script blocked or unreachable). ' +
+              'Check ad blocker, corporate firewall, or browser script-blocking extensions.'
+            )));
+            return;
+          }
+          var s = document.createElement('script');
           // Voice SDK v2 — actively maintained, supports modern browsers, WebRTC
           s.src = 'https://sdk.twilio.com/js/voice/releases/2.10.2/twilio.min.js';
-          s.onload = resolve;
-          s.onerror = reject;
+          s.async = true;
+          s.setAttribute('data-twilio-voice-sdk', '1');
+          s.onload = function() {
+            // Sanity check that the SDK actually attached to window.
+            // If a script loaded but didn't execute (very rare), we'd
+            // otherwise blow up with "Twilio is not defined" later.
+            if (window.Twilio && window.Twilio.Device) {
+              resolve();
+            } else {
+              reject(new Error('Twilio Voice SDK loaded but did not initialize (window.Twilio missing).'));
+            }
+          };
+          s.onerror = function() {
+            reject(new Error(
+              'Twilio Voice SDK script failed to load from sdk.twilio.com. ' +
+              'Possible causes: ad blocker, browser script-blocking extension, ' +
+              'corporate firewall, or no internet. Try disabling extensions and reloading.'
+            ));
+          };
           document.head.appendChild(s);
         });
       }
@@ -87,8 +172,27 @@ export default function PhoneWidget({ user, userProfile, users, customers }) {
         },
         body: JSON.stringify({ user_id: myId }),
       });
-      const data = await res.json();
-      if (data.error) { setError(data.error); return; }
+      // Read the response defensively. If the backend returned non-JSON
+      // (e.g. a 500 HTML error page from Vercel), .json() throws and we
+      // want a real error message instead of the cryptic [object Event].
+      var data;
+      try {
+        data = await res.json();
+      } catch (parseErr) {
+        var bodyText = '';
+        try { bodyText = (await res.clone().text()).slice(0, 200); } catch (_) {}
+        throw new Error('Token endpoint returned non-JSON (HTTP ' + res.status + '): ' + (bodyText || 'no body'));
+      }
+      if (!res.ok) {
+        // Backend returned an error JSON — surface its message
+        throw new Error(data.error || ('Token endpoint returned HTTP ' + res.status));
+      }
+      if (data.error) {
+        throw new Error(data.error);
+      }
+      if (!data.token) {
+        throw new Error('Token endpoint returned no token.');
+      }
 
       // 3. Create the Device with v2 API
       const device = new window.Twilio.Device(data.token, {
@@ -106,8 +210,10 @@ export default function PhoneWidget({ user, userProfile, users, customers }) {
       device.on('registered', () => { console.warn('📞 Twilio Device registered — ready to receive calls'); });
       device.on('unregistered', () => { console.warn('📞 Twilio Device unregistered'); });
       device.on('error', (err) => {
-        // err.message and err.code in v2
-        var msg = (err && err.message) ? err.message : String(err);
+        // err in v2 is a TwilioError with .code and .message — but it's
+        // sometimes a plain Error or DOM Event depending on what failed.
+        // Format defensively so "[object Event]" can never appear again.
+        var msg = formatErr(err);
         setError('Phone error: ' + msg);
         console.error('📞 Twilio Device error:', err);
       });
@@ -157,7 +263,10 @@ export default function PhoneWidget({ user, userProfile, users, customers }) {
 
       deviceRef.current = device;
     } catch (e) {
-      setError('Phone init failed: ' + (e.message || String(e)));
+      // v55.24 — robust error formatter. Was: `e.message || String(e)`.
+      // That returned "[object Event]" if `e` was a DOM Event (e.g. from
+      // a script-tag onerror). Now we extract whatever's most useful.
+      setError('Phone init failed: ' + formatErr(e));
       console.error('Phone init error:', e);
     }
   }, [myId, customers]);
@@ -233,11 +342,13 @@ export default function PhoneWidget({ user, userProfile, users, customers }) {
       });
       call.on('disconnect', () => { endCallRef.current(); });
       call.on('error', (err) => {
-        setError((err && err.message) ? err.message : 'Call error');
+        // v55.24 — same robust formatter so call errors never show
+        // "[object Event]" either.
+        setError(formatErr(err));
         endCallRef.current();
       });
     } catch (e) {
-      setError('Call failed: ' + (e.message || String(e)));
+      setError('Call failed: ' + formatErr(e));
       setCallState('idle');
     }
   };
