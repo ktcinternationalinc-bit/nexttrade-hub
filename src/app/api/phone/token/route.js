@@ -29,6 +29,7 @@
 
 import { NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
+import { requireUser, checkRateLimit, getRateLimitKey } from '../../../../lib/phone-auth';
 
 const supabase = createClient(
   process.env.NEXT_PUBLIC_SUPABASE_URL,
@@ -57,8 +58,34 @@ export const runtime = 'nodejs';
 
 export async function POST(req) {
   try {
+    // Rate limit — 10 token requests per minute per IP. Tokens are valid
+    // for 1 hour so we shouldn't need many. This blocks DoS / cost-spam.
+    var rl = checkRateLimit(getRateLimitKey(req, 'token'), 10, 60 * 1000);
+    if (!rl.ok) {
+      return NextResponse.json({ error: 'rate limit exceeded' }, {
+        status: 429,
+        headers: { 'Retry-After': String(rl.retryAfter || 60) },
+      });
+    }
+
+    // Auth — require a valid Supabase session. Anonymous requests are blocked.
+    var auth = await requireUser(req);
+    if (!auth.user) {
+      return NextResponse.json({ error: 'authentication required' }, { status: 401 });
+    }
+
     var body = await req.json();
     var user_id = body.user_id;
+
+    // The user_id in the body must match the authenticated user.
+    // Otherwise a logged-in user could request a token AS another user
+    // and intercept their incoming calls.
+    if (user_id && user_id !== auth.user.id) {
+      console.warn('[phone/token] user_id mismatch — auth user', auth.user.id, 'requested', user_id);
+      return NextResponse.json({ error: 'user_id mismatch' }, { status: 403 });
+    }
+    // Default to authenticated user's id if body didn't supply one
+    user_id = user_id || auth.user.id;
 
     var accountSid = process.env.TWILIO_ACCOUNT_SID;
     var apiKeySid = process.env.TWILIO_API_KEY_SID;

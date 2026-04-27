@@ -70,13 +70,27 @@ function xmlEscape(s) {
     .replace(/'/g, '&apos;');
 }
 
-// Build a "no one configured this number yet" fallback TwiML
-function buildFallbackTwiml(reason) {
+// Build a "no one configured this number yet" fallback TwiML.
+// Even though we don't know who this number is for, we still want to
+// capture any voicemail left so it can be reviewed manually. We POST
+// to /api/phone/voicemail-record with no call_id/assigned_to/customer_id
+// query params — the handler tolerates those being missing and creates
+// an orphan voicemail row that admins can investigate.
+function buildFallbackTwiml(reason, baseUrl) {
   var msg = 'Thank you for calling KTC International. We are unable to take your call at this time. Please leave a message after the beep.';
+  var voicemailUrl = (baseUrl || 'https://nexttrade-hub.vercel.app') + '/api/phone/voicemail-record';
   return '<?xml version="1.0" encoding="UTF-8"?>'
     + '<Response>'
     + '<Say voice="Polly.Joanna">' + xmlEscape(msg) + '</Say>'
-    + '<Record maxLength="120" playBeep="true" finishOnKey="#" />'
+    + '<Record action="' + xmlEscape(voicemailUrl) + '"'
+    + ' method="POST"'
+    + ' maxLength="120"'
+    + ' playBeep="true"'
+    + ' trim="trim-silence"'
+    + ' finishOnKey="#"'
+    + ' recordingStatusCallback="' + xmlEscape(voicemailUrl) + '"'
+    + ' recordingStatusCallbackEvent="completed"'
+    + ' recordingStatusCallbackMethod="POST" />'
     + '<Say>Thank you. Goodbye.</Say>'
     + '<Hangup />'
     + '</Response>';
@@ -111,7 +125,7 @@ export async function POST(req) {
     // so customers don't hear silence.
     if (!assignment) {
       console.log('[phone/incoming] number ' + to + ' not registered in phone_numbers');
-      return new Response(buildFallbackTwiml('not-registered'), {
+      return new Response(buildFallbackTwiml('not-registered', baseUrl), {
         headers: { 'Content-Type': 'text/xml' },
       });
     }
@@ -226,11 +240,22 @@ export async function POST(req) {
       // "browser first with cell fallback" experience — if the user is at
       // their computer, browser wins (cheaper). If not, cell catches it.
       // Combined timeout is 25s. Action= URL goes to voicemail if neither answers.
+      // Caller ID for the forwarded leg.
+      // We use the KTC number that was called (`to`) rather than the customer's
+      // number (`from`). Reason: when the team member's cell rings, they need
+      // to see "KTC Main Line" or similar so they know it's a business call,
+      // not a personal one. Showing the customer's number on their cell is
+      // confusing and makes them less likely to answer.
+      // (Twilio's "answerOnBridge" preserves the actual call timing so the
+      //  customer doesn't hear "ringing" twice.)
       var dialAttrs = 'timeout="25"'
         + ' action="' + xmlEscape(voicemailUrl) + '"'
         + ' method="POST"'
-        + ' callerId="' + xmlEscape(from) + '"'
-        + ' answerOnBridge="true"';
+        + ' callerId="' + xmlEscape(to) + '"'
+        + ' answerOnBridge="true"'
+        + ' statusCallback="' + xmlEscape(statusCallbackUrl) + '"'
+        + ' statusCallbackEvent="completed"'
+        + ' statusCallbackMethod="POST"';
       if (assignment.recording_enabled) {
         dialAttrs += ' record="record-from-answer"'
           + ' recordingStatusCallback="' + xmlEscape(recordingCallbackUrl) + '"'
@@ -282,32 +307,18 @@ export async function POST(req) {
     });
   } catch (e) {
     console.error('[phone/incoming] error:', e.message);
-    // Always return TwiML even on error — silence is worse
-    return new Response(buildFallbackTwiml('error'), {
+    // Always return TwiML even on error — silence is worse than an error message.
+    // We may have errored before baseUrl was resolved, so call getPublicBaseUrl again.
+    return new Response(buildFallbackTwiml('error', getPublicBaseUrl(req)), {
       headers: { 'Content-Type': 'text/xml' },
     });
   }
 }
 
-// GET: kept for backwards compat with existing scaffolding (outbound call routing)
-// This is hit by Twilio when someone places an outbound call from the browser.
-// Will be properly implemented in Phase B with the Voice SDK token route.
-export async function GET(req) {
-  var url = new URL(req.url);
-  var to = url.searchParams.get('To') || url.searchParams.get('phone') || '';
-  var callerId = url.searchParams.get('CallerId') || process.env.TWILIO_MAIN_NUMBER || '';
-
-  if (!to) {
-    var errorTwiml = '<?xml version="1.0" encoding="UTF-8"?><Response><Say>No number provided.</Say></Response>';
-    return new Response(errorTwiml, { headers: { 'Content-Type': 'text/xml' } });
-  }
-
-  var twiml = '<?xml version="1.0" encoding="UTF-8"?>';
-  twiml += '<Response>';
-  twiml += '<Dial callerId="' + xmlEscape(callerId) + '">';
-  twiml += '<Number>' + xmlEscape(to) + '</Number>';
-  twiml += '</Dial>';
-  twiml += '</Response>';
-
-  return new Response(twiml, { headers: { 'Content-Type': 'text/xml' } });
-}
+// NOTE: A previous version of this file had a GET handler that accepted
+// `?To=` query params and dialed that number unconditionally. That was a
+// **financial exploit** — any anonymous request could trigger outbound calls
+// billed to the KTC Twilio account. The handler has been REMOVED.
+// Outbound calls are now handled exclusively by /api/phone/outbound, which
+// is invoked by the TwiML App configured in Twilio Console — not by direct
+// HTTP requests from the public internet.

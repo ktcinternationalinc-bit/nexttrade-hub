@@ -233,12 +233,15 @@ export default function VoicemailsWidget({ user, userProfile, customers, toast, 
                   </div>
                 )}
 
-                {/* Audio player */}
+                {/* Audio player — uses our proxy endpoint to avoid Twilio Basic Auth issue.
+                    The browser's <audio> can't supply HTTP auth headers, so we go through
+                    /api/phone/recording-stream which fetches from Twilio with credentials
+                    and re-streams to the browser. */}
                 {vm.recording_url && (
                   <audio
                     controls
                     preload="none"
-                    src={vm.recording_url + '.mp3'}
+                    src={'/api/phone/recording-stream?id=' + encodeURIComponent(vm.id) + '&kind=voicemail'}
                     className="w-full h-8"
                     onPlay={function() {
                       setPlaying(vm.id);

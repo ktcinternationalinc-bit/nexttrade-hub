@@ -114,10 +114,14 @@ export async function POST(req) {
     if (voicemailRow && voicemailRow.id) {
       try {
         var transcribeUrl = getPublicBaseUrl(req) + '/api/phone/transcribe-async';
-        // Don't await — fire and forget
+        // Don't await — fire and forget. The transcribe-cron at /5min will
+        // pick up anything that gets killed mid-flight.
         fetch(transcribeUrl, {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
+          headers: {
+            'Content-Type': 'application/json',
+            'X-Internal-Trigger': process.env.INTERNAL_SECRET || '',
+          },
           body: JSON.stringify({
             kind: 'voicemail',
             id: voicemailRow.id,

@@ -802,7 +802,9 @@ export default function CRMTab({ toast, customers, invoices, user, userProfile, 
                           <div className="text-[11px] text-slate-500 mt-1">⏳ Pending transcription</div>
                         )}
                         {vm.recording_url && (
-                          <audio controls className="mt-1 h-7 w-full max-w-xs" src={vm.recording_url + '.mp3'} preload="none">
+                          <audio controls className="mt-1 h-7 w-full max-w-xs"
+                            src={'/api/phone/recording-stream?id=' + encodeURIComponent(vm.id) + '&kind=voicemail'}
+                            preload="none">
                             Your browser doesn't support audio playback.
                           </audio>
                         )}

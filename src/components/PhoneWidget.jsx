@@ -38,120 +38,211 @@ export default function PhoneWidget({ user, userProfile, users, customers }) {
 
   useEffect(() => { loadData(); }, [loadData]);
 
-  // Initialize Twilio Device
+  // Initialize Twilio Voice SDK v2 Device.
+  //
+  // Major changes vs v1 (which we used previously):
+  //   • Different URL — /js/voice/releases/2.x.x/ not /js/client/...
+  //   • Device is created with a Token, then call .register()
+  //   • Token expiry handled via 'tokenWillExpire' event
+  //   • Incoming call object is named 'Call' not 'Connection' but the event
+  //     is still 'incoming'
+  //
+  // We always init when there's a logged-in user — even if they have no
+  // assigned phone number. They might still need to receive incoming calls
+  // through their browser if someone <Dial><Client>uuid</Client></Dial>'s them.
   const initDevice = useCallback(async () => {
     if (deviceRef.current) return;
     if (typeof window === 'undefined') return;
+    if (!myId) return;
 
     try {
-      // Load Twilio Client JS SDK
+      // 1. Load the Twilio Voice SDK v2 (much newer than v1.14 we had before)
       if (!window.Twilio?.Device) {
         await new Promise((resolve, reject) => {
           const s = document.createElement('script');
-          s.src = 'https://sdk.twilio.com/js/client/releases/1.14.0/twilio.min.js';
+          // Voice SDK v2 — actively maintained, supports modern browsers, WebRTC
+          s.src = 'https://sdk.twilio.com/js/voice/releases/2.10.2/twilio.min.js';
           s.onload = resolve;
           s.onerror = reject;
           document.head.appendChild(s);
         });
       }
 
+      // 2. Get an access token from our backend.
+      //    We pass the Supabase session token in the Authorization header
+      //    so the backend can verify which user is requesting the token
+      //    and reject anonymous or impersonation attempts.
+      const sessionRes = await supabase.auth.getSession();
+      const accessToken = sessionRes?.data?.session?.access_token || '';
       const res = await fetch('/api/phone/token', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': accessToken ? 'Bearer ' + accessToken : '',
+        },
         body: JSON.stringify({ user_id: myId }),
       });
       const data = await res.json();
       if (data.error) { setError(data.error); return; }
 
+      // 3. Create the Device with v2 API
       const device = new window.Twilio.Device(data.token, {
         codecPreferences: ['opus', 'pcmu'],
-        enableRingingState: true,
+        // Sound options
+        sounds: {
+          incoming: undefined, // use default ringtone
+        },
+        // Allow incoming when device registers
+        allowIncomingWhileBusy: false,
+        logLevel: 1, // 1 = errors only; bump higher for debugging
       });
 
-      device.on('ready', () => { console.warn('📞 Twilio Device ready'); });
-      device.on('error', (err) => { setError(err.message); setCallState('idle'); });
+      // 4. Wire up events. v2 uses 'registered' / 'unregistered' / 'tokenWillExpire'
+      device.on('registered', () => { console.warn('📞 Twilio Device registered — ready to receive calls'); });
+      device.on('unregistered', () => { console.warn('📞 Twilio Device unregistered'); });
+      device.on('error', (err) => {
+        // err.message and err.code in v2
+        var msg = (err && err.message) ? err.message : String(err);
+        setError('Phone error: ' + msg);
+        console.error('📞 Twilio Device error:', err);
+      });
 
-      device.on('incoming', (conn) => {
-        connectionRef.current = conn;
-        const from = conn.parameters.From || 'Unknown';
-        // Try to match caller to customer
-        const customer = (customers || []).find(c => c.phone && from.includes(c.phone.replace(/\D/g, '').slice(-10)));
+      // Token will expire in 5 min — refresh it. Critical for keeping the
+      // device alive past the 1-hour token TTL.
+      device.on('tokenWillExpire', async () => {
+        try {
+          const sessionRes2 = await supabase.auth.getSession();
+          const accessToken2 = sessionRes2?.data?.session?.access_token || '';
+          const r2 = await fetch('/api/phone/token', {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+              'Authorization': accessToken2 ? 'Bearer ' + accessToken2 : '',
+            },
+            body: JSON.stringify({ user_id: myId }),
+          });
+          const d2 = await r2.json();
+          if (d2.token) {
+            device.updateToken(d2.token);
+            console.warn('📞 Token refreshed');
+          }
+        } catch (e) {
+          console.error('📞 Token refresh failed:', e);
+        }
+      });
+
+      // Incoming call — in v2 it's a Call object not a Connection
+      device.on('incoming', (call) => {
+        connectionRef.current = call;
+        const from = (call.parameters && call.parameters.From) || 'Unknown';
+        // Try to match caller to customer by last 10 digits
+        const digitsOnly = String(from).replace(/\D/g, '').slice(-10);
+        const customer = (customers || []).find(c => c.phone && String(c.phone).replace(/\D/g, '').includes(digitsOnly));
         setIncomingCaller({ number: from, name: customer?.customer || customer?.name || null });
         setCallState('incoming');
         setOpen(true);
 
-        conn.on('disconnect', () => { endCall(); });
-        conn.on('cancel', () => { setCallState('idle'); setIncomingCaller(null); });
+        call.on('disconnect', () => { endCall(); });
+        call.on('cancel',     () => { setCallState('idle'); setIncomingCaller(null); connectionRef.current = null; });
+        call.on('reject',     () => { setCallState('idle'); setIncomingCaller(null); connectionRef.current = null; });
       });
 
-      device.on('disconnect', () => { endCall(); });
+      // 5. Register so we can RECEIVE calls. (Without this, only outbound works.)
+      await device.register();
 
       deviceRef.current = device;
-    } catch (e) { setError('Phone init failed: ' + e.message); }
+    } catch (e) {
+      setError('Phone init failed: ' + (e.message || String(e)));
+      console.error('Phone init error:', e);
+    }
   }, [myId, customers]);
 
+  // Init as soon as we have a user. Don't gate on myNumber — even users
+  // without an assigned KTC number need to be able to receive incoming
+  // calls in their browser via <Client>uuid</Client> dialing.
   useEffect(() => {
-    if (myNumber) initDevice();
-  }, [myNumber, initDevice]);
+    if (myId) initDevice();
+    // Cleanup on unmount or user change
+    return () => {
+      try {
+        if (deviceRef.current) {
+          deviceRef.current.destroy();
+          deviceRef.current = null;
+        }
+      } catch (e) { /* ignore */ }
+    };
+  }, [myId, initDevice]);
 
-  // Make call
-  const makeCall = (phoneNum) => {
-    if (!deviceRef.current) { setError('Phone not connected. Check Twilio settings.'); return; }
+  // Make outbound call. SDK v2 differences from v1:
+  //   • device.connect() returns a Promise<Call>, not a Connection directly
+  //   • params go in { params: { To, From } } not directly
+  //   • Call uses 'accept' not 'accept' (same name actually) but the
+  //     event firing pattern is slightly different
+  const makeCall = async (phoneNum) => {
+    if (!deviceRef.current) {
+      setError('Phone not connected. Wait for "registered" or check microphone permissions.');
+      return;
+    }
     const num = (phoneNum || number).replace(/[^\d+]/g, '');
     if (!num) return;
 
     setCallState('connecting');
-    const conn = deviceRef.current.connect({ To: num, CallerId: myNumber });
-    connectionRef.current = conn;
+    try {
+      // v2 connect() takes an options object and returns a Promise
+      const call = await deviceRef.current.connect({
+        params: {
+          To: num,
+          // CallerId comes from outbound TwiML lookup, no need to pass here
+        },
+      });
+      connectionRef.current = call;
 
-    conn.on('ringing', () => { setCallState('ringing'); });
-    conn.on('accept', () => {
-      setCallState('active');
-      setCallDuration(0);
-      timerRef.current = setInterval(() => setCallDuration(prev => prev + 1), 1000);
-    });
-    conn.on('disconnect', () => { endCall(); });
-    conn.on('error', (err) => { setError(err.message); endCall(); });
-
-    // Log outbound call
-    fetch('/api/phone/call', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ user_id: myId, phone_number: num, direction: 'outbound', status: 'initiated' }),
-    });
+      call.on('ringing', () => { setCallState('ringing'); });
+      call.on('accept', () => {
+        setCallState('active');
+        setCallDuration(0);
+        if (timerRef.current) clearInterval(timerRef.current);
+        timerRef.current = setInterval(() => setCallDuration(prev => prev + 1), 1000);
+      });
+      call.on('disconnect', () => { endCall(); });
+      call.on('error', (err) => {
+        setError((err && err.message) ? err.message : 'Call error');
+        endCall();
+      });
+    } catch (e) {
+      setError('Call failed: ' + (e.message || String(e)));
+      setCallState('idle');
+    }
   };
 
-  // Answer incoming
+  // Answer incoming call (v2 — same `accept()` method)
   const answerCall = () => {
     if (connectionRef.current) {
       connectionRef.current.accept();
       setCallState('active');
       setCallDuration(0);
+      if (timerRef.current) clearInterval(timerRef.current);
       timerRef.current = setInterval(() => setCallDuration(prev => prev + 1), 1000);
     }
   };
 
   // Reject incoming
   const rejectCall = () => {
-    if (connectionRef.current) connectionRef.current.reject();
+    if (connectionRef.current) {
+      try { connectionRef.current.reject(); } catch (e) { /* might already be rejected */ }
+    }
     setCallState('idle');
     setIncomingCaller(null);
+    connectionRef.current = null;
   };
 
-  // End call
+  // End call (works for both incoming and outgoing in v2)
   const endCall = () => {
-    if (connectionRef.current) { try { connectionRef.current.disconnect(); } catch(e) { console.warn(e); } }
+    if (connectionRef.current) {
+      try { connectionRef.current.disconnect(); } catch (e) { console.warn('disconnect error:', e); }
+    }
     connectionRef.current = null;
     if (timerRef.current) { clearInterval(timerRef.current); timerRef.current = null; }
-
-    // Log duration
-    if (callDuration > 0) {
-      fetch('/api/phone/call', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ user_id: myId, phone_number: number, direction: 'outbound', status: 'completed', duration: callDuration }),
-      });
-    }
 
     setCallState('idle');
     setCallDuration(0);
@@ -160,11 +251,13 @@ export default function PhoneWidget({ user, userProfile, users, customers }) {
     loadData();
   };
 
-  // Toggle mute
+  // Toggle mute (v2 — same `mute()` method)
   const toggleMute = () => {
     if (connectionRef.current) {
-      connectionRef.current.mute(!muted);
-      setMuted(!muted);
+      try {
+        connectionRef.current.mute(!muted);
+        setMuted(!muted);
+      } catch (e) { /* call may have ended */ }
     }
   };
 

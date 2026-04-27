@@ -75,7 +75,10 @@ export async function POST(req) {
         var transcribeUrl = getPublicBaseUrl(req) + '/api/phone/transcribe-async';
         fetch(transcribeUrl, {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
+          headers: {
+            'Content-Type': 'application/json',
+            'X-Internal-Trigger': process.env.INTERNAL_SECRET || '',
+          },
           body: JSON.stringify({
             kind: 'recording',
             id: recRow.id,

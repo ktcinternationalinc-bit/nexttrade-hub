@@ -11,14 +11,34 @@
 
 import { NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
+import { requireUser, checkRateLimit, getRateLimitKey } from '../../../../lib/phone-auth';
 
 const supabase = createClient(
   process.env.NEXT_PUBLIC_SUPABASE_URL,
   process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY
 );
 
-// GET: list all phone numbers
-export async function GET() {
+// Helper: check that the authenticated user is an admin (allowed to mutate numbers)
+async function requireAdmin(req) {
+  var auth = await requireUser(req);
+  if (!auth.user) return { ok: false, response: NextResponse.json({ error: 'auth required' }, { status: 401 }) };
+  // Look up role from users table
+  var roleRes = await supabase
+    .from('users')
+    .select('role')
+    .eq('id', auth.user.id)
+    .maybeSingle();
+  var role = roleRes?.data?.role;
+  if (role !== 'admin' && role !== 'super_admin') {
+    return { ok: false, response: NextResponse.json({ error: 'admin only' }, { status: 403 }) };
+  }
+  return { ok: true, user: auth.user };
+}
+
+// GET: list all phone numbers (any logged-in user can see)
+export async function GET(req) {
+  var auth = await requireUser(req);
+  if (!auth.user) return NextResponse.json({ error: 'auth required' }, { status: 401 });
   try {
     var res = await supabase
       .from('phone_numbers')
@@ -32,9 +52,10 @@ export async function GET() {
   }
 }
 
-// POST: add or upsert a phone number
-// Body: { phone_number, label?, number_type?, assigned_to?, recording_enabled?, voicemail_enabled? }
+// POST: add or upsert a phone number (admin only)
 export async function POST(req) {
+  var adminCheck = await requireAdmin(req);
+  if (!adminCheck.ok) return adminCheck.response;
   try {
     var body = await req.json();
     var phone_number = body.phone_number;
@@ -70,9 +91,10 @@ export async function POST(req) {
   }
 }
 
-// PATCH: update a single field on a phone number (e.g. assign to user, toggle recording)
-// Body: { id, ...fields_to_update }
+// PATCH: update a single field on a phone number (admin only)
 export async function PATCH(req) {
+  var adminCheck = await requireAdmin(req);
+  if (!adminCheck.ok) return adminCheck.response;
   try {
     var body = await req.json();
     var id = body.id;
@@ -93,9 +115,10 @@ export async function PATCH(req) {
   }
 }
 
-// DELETE: remove a phone number record
-// Body: { id }
+// DELETE: remove a phone number record (admin only)
 export async function DELETE(req) {
+  var adminCheck = await requireAdmin(req);
+  if (!adminCheck.ok) return adminCheck.response;
   try {
     var body = await req.json();
     var id = body.id;

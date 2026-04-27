@@ -74,10 +74,37 @@ export async function POST(req) {
       });
     }
 
+    // Validate destination — must be E.164 (start with +) and not premium-rate.
+    // Premium-rate prefixes (like +1-900, +1-976) are common scam targets:
+    // an attacker dialing those racks up high charges to your account. We block
+    // them. If you ever need to call a legit premium number, add an exception.
+    var destNormalized = String(to).trim();
+    if (!destNormalized.startsWith('+')) {
+      console.warn('[phone/outbound] non-E.164 destination rejected:', destNormalized);
+      return new Response(errorTwiml('Destination must be in E.164 format starting with plus sign.'), {
+        headers: { 'Content-Type': 'text/xml' },
+      });
+    }
+    var digitsOnly = destNormalized.replace(/[^0-9]/g, '');
+    if (digitsOnly.length < 7 || digitsOnly.length > 16) {
+      return new Response(errorTwiml('Destination number length is invalid.'), {
+        headers: { 'Content-Type': 'text/xml' },
+      });
+    }
+    // Block US premium-rate (1-900, 1-976) and toll-free fraud-prone patterns
+    if (/^1?9(00|76)/.test(digitsOnly)) {
+      console.error('[phone/outbound] PREMIUM-RATE BLOCK on destination:', destNormalized);
+      return new Response(errorTwiml('Calls to that number are not permitted.'), {
+        headers: { 'Content-Type': 'text/xml' },
+      });
+    }
+    to = destNormalized;
+
     // Look up the team member to get their assigned KTC number (used as caller ID).
     // If they don't have an assigned number, fall back to TWILIO_MAIN_NUMBER.
     var callerId = process.env.TWILIO_MAIN_NUMBER || '';
     var assigned_to = null;
+    var recordingEnabled = true; // default to recording on (with disclaimer)
     if (identity && identity !== 'guest') {
       try {
         var lookup = await supabase
@@ -88,6 +115,7 @@ export async function POST(req) {
         if (lookup.data) {
           callerId = lookup.data.phone_number || callerId;
           assigned_to = lookup.data.assigned_to;
+          recordingEnabled = lookup.data.recording_enabled !== false;
         }
       } catch (e) {
         console.warn('[phone/outbound] number lookup failed:', e.message);
@@ -141,13 +169,20 @@ export async function POST(req) {
     // Brief recording disclaimer — caller hears this when they answer.
     // Some businesses prefer NO disclaimer on outbound (US two-party consent
     // varies). For now we include it for safety; can be made optional later.
-    twiml += '<Say voice="Polly.Joanna">This call may be recorded for quality and training purposes.</Say>';
+    if (recordingEnabled) {
+      twiml += '<Say voice="Polly.Joanna">This call may be recorded for quality and training purposes.</Say>';
+    }
     var dialAttrs = 'callerId="' + xmlEscape(callerId) + '"'
-      + ' record="record-from-answer"'
-      + ' recordingStatusCallback="' + xmlEscape(recordingCallbackUrl) + '"'
-      + ' recordingStatusCallbackEvent="completed"'
-      + ' recordingStatusCallbackMethod="POST"'
-      + ' answerOnBridge="true"';
+      + ' answerOnBridge="true"'
+      + ' statusCallback="' + xmlEscape(statusCallbackUrl) + '"'
+      + ' statusCallbackEvent="completed"'
+      + ' statusCallbackMethod="POST"';
+    if (recordingEnabled) {
+      dialAttrs += ' record="record-from-answer"'
+        + ' recordingStatusCallback="' + xmlEscape(recordingCallbackUrl) + '"'
+        + ' recordingStatusCallbackEvent="completed"'
+        + ' recordingStatusCallbackMethod="POST"';
+    }
     twiml += '<Dial ' + dialAttrs + '>';
     twiml += '<Number>' + xmlEscape(to) + '</Number>';
     twiml += '</Dial>';

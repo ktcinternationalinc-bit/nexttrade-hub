@@ -37,8 +37,39 @@ const supabase = createClient(
 export const runtime = 'nodejs';
 export const maxDuration = 60; // seconds
 
+// Helper: this route is internal-only — called from voicemail-record,
+// recording-callback, and transcribe-cron. We don't want public callers
+// triggering arbitrary URL fetches (SSRF) or burning OpenAI quota.
+//
+// We accept it if either:
+//   • The X-Internal-Trigger header is set with the right secret, OR
+//   • It's a same-origin request (host matches our domain), OR
+//   • It's a Vercel cron (Authorization: Bearer + cron secret)
+function isInternalCall(req) {
+  var internalHeader = req.headers.get('x-internal-trigger');
+  if (internalHeader && internalHeader === process.env.INTERNAL_SECRET) return true;
+
+  var authHeader = req.headers.get('authorization');
+  if (authHeader && process.env.CRON_SECRET && authHeader === 'Bearer ' + process.env.CRON_SECRET) return true;
+
+  // Same-origin check — works for fire-and-forget from our own routes
+  var host = req.headers.get('host') || '';
+  var origin = req.headers.get('origin') || req.headers.get('referer') || '';
+  if (host && origin.indexOf(host) >= 0) return true;
+
+  // In dev, allow always
+  if (process.env.NODE_ENV !== 'production') return true;
+
+  return false;
+}
+
 export async function POST(req) {
   try {
+    if (!isInternalCall(req)) {
+      console.warn('[transcribe-async] rejecting external call');
+      return NextResponse.json({ ok: false, error: 'forbidden' }, { status: 403 });
+    }
+
     var body = await req.json();
     var kind = body.kind;             // 'voicemail' or 'recording'
     var id = body.id;                 // primary key in respective table
@@ -46,6 +77,14 @@ export async function POST(req) {
 
     if (!kind || !id || !recordingUrl) {
       return NextResponse.json({ ok: false, error: 'missing kind, id, or recording_url' }, { status: 400 });
+    }
+
+    // SSRF protection — only allow Twilio recording URLs.
+    // Without this, an attacker who passed our internal check could force us
+    // to fetch arbitrary URLs (intranet probes, exfil etc).
+    if (!recordingUrl.startsWith('https://api.twilio.com/2010-04-01/Accounts/')) {
+      console.warn('[transcribe-async] rejecting non-Twilio URL:', recordingUrl);
+      return NextResponse.json({ ok: false, error: 'invalid recording URL' }, { status: 400 });
     }
 
     var tableName;
