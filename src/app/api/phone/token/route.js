@@ -4,31 +4,47 @@
 // What this does:
 //   The Twilio Voice SDK (running in your team member's browser)
 //   needs a signed JWT "access token" to register as a client
-//   and make/receive calls. This endpoint generates that token,
-//   signed with your API Key + Secret.
+//   and make/receive calls. This endpoint generates that token.
+//
+// v55.23 (Apr 27 2026) — REWRITTEN to use Twilio's official
+// `twilio` npm package instead of a hand-rolled JWT.
+//
+// Background: the previous version built the JWT manually with
+// crypto.subtle.sign(). It validated against a JWT decoder but
+// the Voice SDK v2 client rejected it with "Client version not
+// supported" — the v2 SDK is strict about the exact grant
+// structure, JTI format, and signature algorithm flag, and our
+// hand-rolled token was just slightly off. The official package
+// gets it right by construction and handles version differences
+// internally.
 //
 // How it works:
 //   1. Browser calls POST /api/phone/token with { user_id }
-//   2. We sign a JWT with:
-//        • identity = user_id (so <Client>user_id</Client> in TwiML reaches them)
-//        • voice grants for incoming calls + outgoing via TwiML App
-//   3. Browser uses the token to register with Twilio
-//   4. Browser then rings when a call arrives, and can place outbound
+//   2. We require a valid Supabase session (anti-impersonation)
+//   3. We sign a JWT using twilio.jwt.AccessToken with:
+//        • identity = user_id (so <Client>user_id</Client> reaches them)
+//        • VoiceGrant with incomingAllow + outgoingApplicationSid
+//   4. Browser uses the token to register with Twilio
 //
 // Security:
 //   • API Secret never leaves the server (only used here for signing)
-//   • Tokens expire after 1 hour — browser refreshes as needed
+//   • Tokens expire after 1 hour — browser refreshes via tokenWillExpire
 //   • identity = the team member's UUID, ties to our DB
 //
-// Required env vars (from Phase B Twilio setup):
-//   TWILIO_ACCOUNT_SID     — your account ID (Phase A)
-//   TWILIO_API_KEY_SID     — starts with SK (Phase B)
-//   TWILIO_API_KEY_SECRET  — long random string (Phase B)
-//   TWILIO_TWIML_APP_SID   — starts with AP (Phase B)
+// Required env vars:
+//   TWILIO_ACCOUNT_SID     — your account ID (starts with AC)
+//   TWILIO_API_KEY_SID     — API Key SID (starts with SK)
+//   TWILIO_API_KEY_SECRET  — API Key Secret (long random string)
+//   TWILIO_TWIML_APP_SID   — TwiML App SID (starts with AP)
+//
+// If any are missing, the endpoint returns a clear error listing
+// which ones — so the team member sees a meaningful message
+// instead of a silent SDK failure.
 // ============================================================
 
 import { NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
+import twilio from 'twilio';
 import { requireUser, checkRateLimit, getRateLimitKey } from '../../../../lib/phone-auth';
 
 const supabase = createClient(
@@ -36,24 +52,8 @@ const supabase = createClient(
   process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY
 );
 
-// Convert a string to URL-safe base64 (no padding) — used for JWT parts
-function b64url(str) {
-  return Buffer.from(str)
-    .toString('base64')
-    .replace(/=+$/g, '')
-    .replace(/\+/g, '-')
-    .replace(/\//g, '_');
-}
-
-function b64urlBytes(buffer) {
-  // For binary data (signature)
-  return Buffer.from(buffer)
-    .toString('base64')
-    .replace(/=+$/g, '')
-    .replace(/\+/g, '-')
-    .replace(/\//g, '_');
-}
-
+// Force Node.js runtime — the Twilio SDK uses Node-only APIs (crypto module
+// classes, Buffer). It will not run in Edge runtime.
 export const runtime = 'nodejs';
 
 export async function POST(req) {
@@ -103,78 +103,56 @@ export async function POST(req) {
       }, { status: 500 });
     }
 
-    // identity = the user's UUID (or 'guest' if no user)
+    // identity = the user's UUID
     // This is what <Client>X</Client> uses in TwiML to reach this browser.
-    var identity = user_id || 'guest';
+    var identity = user_id;
 
     // Look up the user's assigned phone number (so the UI can show "you're using +1...")
     var assignedNumber = null;
-    if (user_id) {
-      try {
-        var lookup = await supabase
-          .from('phone_numbers')
-          .select('phone_number, label')
-          .eq('assigned_to', user_id)
-          .maybeSingle();
-        if (lookup.data) {
-          assignedNumber = lookup.data;
-        }
-      } catch (e) {
-        // Non-fatal — token still works without an assigned number
+    try {
+      var lookup = await supabase
+        .from('phone_numbers')
+        .select('phone_number, label')
+        .eq('assigned_to', user_id)
+        .maybeSingle();
+      if (lookup.data) {
+        assignedNumber = lookup.data;
       }
+    } catch (e) {
+      // Non-fatal — token still works without an assigned number
     }
 
-    // Build the JWT — Twilio Voice "fpa;v=1" format
-    var ttl = 3600; // 1 hour
-    var now = Math.floor(Date.now() / 1000);
+    // ---- Build the token using the official Twilio SDK ----
+    var AccessToken = twilio.jwt.AccessToken;
+    var VoiceGrant = AccessToken.VoiceGrant;
 
-    var header = {
-      typ: 'JWT',
-      alg: 'HS256',
-      cty: 'twilio-fpa;v=1', // required by Twilio Voice SDK
-    };
+    // 1 hour TTL — matches what the Voice SDK expects to refresh against
+    var ttl = 3600;
 
-    var grants = {
-      identity: identity,
-      voice: {
-        incoming: { allow: true },
-        outgoing: { application_sid: twimlAppSid },
-      },
-    };
-
-    var payload = {
-      jti: apiKeySid + '-' + now,
-      iss: apiKeySid,
-      sub: accountSid,
-      iat: now,
-      exp: now + ttl,
-      grants: grants,
-    };
-
-    var headerB64 = b64url(JSON.stringify(header));
-    var payloadB64 = b64url(JSON.stringify(payload));
-    var signingInput = headerB64 + '.' + payloadB64;
-
-    // Sign with HMAC-SHA256
-    var encoder = new TextEncoder();
-    var key = await crypto.subtle.importKey(
-      'raw',
-      encoder.encode(apiKeySecret),
-      { name: 'HMAC', hash: 'SHA-256' },
-      false,
-      ['sign']
+    var token = new AccessToken(
+      accountSid,
+      apiKeySid,
+      apiKeySecret,
+      {
+        identity: identity,
+        ttl: ttl,
+      }
     );
-    var sigBuffer = await crypto.subtle.sign('HMAC', key, encoder.encode(signingInput));
-    var sigB64 = b64urlBytes(new Uint8Array(sigBuffer));
 
-    var token = signingInput + '.' + sigB64;
+    var voiceGrant = new VoiceGrant({
+      outgoingApplicationSid: twimlAppSid,
+      incomingAllow: true,
+    });
+    token.addGrant(voiceGrant);
+
+    var jwt = token.toJwt();
 
     return NextResponse.json({
-      token: token,
+      token: jwt,
       identity: identity,
       phone_number: assignedNumber ? assignedNumber.phone_number : null,
       label: assignedNumber ? assignedNumber.label : null,
-      expires_at: now + ttl,
+      expires_at: Math.floor(Date.now() / 1000) + ttl,
     });
   } catch (e) {
     console.error('[phone/token] error:', e.message);

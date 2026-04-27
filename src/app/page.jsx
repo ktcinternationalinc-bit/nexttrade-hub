@@ -3254,7 +3254,7 @@ export default function App() {
               {/* Brand mark — bracket prefix is a terminal callout convention. */}
               <span className="text-emerald-400 font-mono text-xs font-bold tracking-tight" style={{ fontFamily: '"JetBrains Mono", monospace' }}>[KTC]</span>
               <h1 className="text-sm font-bold text-white tracking-tight whitespace-nowrap">NEXTTRADE HUB</h1>
-              <span className="text-[10px] text-zinc-500 font-mono hidden md:inline" style={{ fontFamily: '"JetBrains Mono", monospace' }}>v55.8</span>
+              <span className="text-[10px] text-zinc-500 font-mono hidden md:inline" style={{ fontFamily: '"JetBrains Mono", monospace' }}>v55.23</span>
               {/* Live clock — terminals always show one. Updates via the
                   existing tick state; if not present, falls back to no clock. */}
               <span className="hidden lg:inline text-[10px] text-zinc-500 font-mono ml-2 pl-2 border-l border-zinc-800" style={{ fontFamily: '"JetBrains Mono", monospace' }}>
@@ -3302,6 +3302,23 @@ export default function App() {
                 fontFamily: '"JetBrains Mono", monospace',
               }}>
               {lang === 'ar' ? 'EN' : 'AR'}
+            </button>
+
+            {/* v55.23 — Always-visible LOGOUT in header.
+                Previously logout lived only at the bottom of the left
+                sidebar. On mobile/tablet (<1024px) the sidebar is hidden
+                by default, so users couldn't find logout without first
+                tapping the menu icon and scrolling. Max reported "I lost
+                the ability to logout" — that was the actual cause.
+                Solution: top-right button, visible on every screen size,
+                every tab. Sidebar logout is kept for redundancy. */}
+            <button onClick={handleSignOut}
+              className="px-2.5 py-1.5 text-[11px] font-mono font-bold border border-zinc-800 text-zinc-400 hover:border-red-700 hover:text-red-400 rounded-sm transition-colors flex items-center gap-1.5"
+              style={{ background: '#0a0a0a', fontFamily: '"JetBrains Mono", monospace' }}
+              title={lang === 'en' ? 'Sign out' : 'تسجيل الخروج'}
+              aria-label={lang === 'en' ? 'Sign out' : 'تسجيل الخروج'}>
+              <span>⏻</span>
+              <span className="hidden sm:inline">{lang === 'en' ? 'EXIT' : 'خروج'}</span>
             </button>
 
             {/* Notification bell from existing component */}
@@ -12164,7 +12181,7 @@ export default function App() {
                       latest fix is actually deployed. If he doesn't see this
                       tag in the modal, his browser is running stale JS. */}
                   <div className="mt-1.5 inline-block px-2 py-0.5 rounded bg-amber-900/60 text-amber-100 text-[10px] font-mono font-bold tracking-wide">
-                    BUILD v55.22-FIXES
+                    BUILD v55.23-LOGOUT-JWT
                   </div>
                 </div>
                 <button onClick={() => closePendingTreasuryModal()}
