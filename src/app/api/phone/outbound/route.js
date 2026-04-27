@@ -23,6 +23,7 @@
 
 import { NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
+import { verifyTwilioSignature } from '../../../../lib/phone-auth';
 
 const supabase = createClient(
   process.env.NEXT_PUBLIC_SUPABASE_URL,
@@ -57,10 +58,24 @@ function errorTwiml(msg) {
 
 export async function POST(req) {
   try {
-    var formData = await req.formData();
-    var to = String(formData.get('To') || '');           // destination number — passed by SDK
-    var from = String(formData.get('From') || '');       // identity, e.g. "client:user-uuid"
-    var callSid = String(formData.get('CallSid') || ''); // Twilio's call ID
+    // Read formData ONCE so we can verify the signature AND use the fields
+    var formObj = {};
+    var rawForm = await req.formData();
+    for (var pair of rawForm.entries()) {
+      formObj[pair[0]] = String(pair[1]);
+    }
+
+    // Verify this came from Twilio. Outbound is reached by Twilio when
+    // the browser SDK initiates a call — it's a TwiML Application's
+    // Request URL, and Twilio signs every request to it.
+    if (!verifyTwilioSignature(req, formObj)) {
+      console.warn('[phone/outbound] signature check FAILED — rejecting');
+      return new Response('Forbidden', { status: 403 });
+    }
+
+    var to = String(formObj.To || '');           // destination number — passed by SDK
+    var from = String(formObj.From || '');       // identity, e.g. "client:user-uuid"
+    var callSid = String(formObj.CallSid || ''); // Twilio's call ID
 
     // SDK identities come through as "client:UUID" — strip the prefix
     var identity = from;
@@ -122,8 +137,13 @@ export async function POST(req) {
       }
     }
 
-    // Try to match the destination to a customer in our DB
+    // Try to match the destination to a customer in our DB.
+    // We capture both the id (for linking) AND the name (for caller_name
+    // display in call history). Previously the name was selected but
+    // never used, so the call history showed unfamiliar phone numbers
+    // even when the customer was on file.
     var customer_id = null;
+    var customer_name = null;
     try {
       var normalized = String(to).replace(/[^0-9]/g, '');
       var last10 = normalized.slice(-10);
@@ -135,6 +155,7 @@ export async function POST(req) {
           .limit(1);
         if (custLookup.data && custLookup.data.length > 0) {
           customer_id = custLookup.data[0].id;
+          customer_name = custLookup.data[0].name || null;
         }
       }
     } catch (e) { /* non-fatal */ }
@@ -147,6 +168,7 @@ export async function POST(req) {
         ktc_number: callerId,
         customer_number: to,
         customer_id: customer_id,
+        caller_name: customer_name, // populated when we matched a customer
         user_id: identity && identity !== 'guest' ? identity : null,
         status: 'ringing',
         started_at: new Date().toISOString(),

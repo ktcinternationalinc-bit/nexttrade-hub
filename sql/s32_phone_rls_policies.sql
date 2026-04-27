@@ -1,15 +1,22 @@
 -- ============================================================
 -- s32_phone_rls_policies.sql
 -- v55 Phase B — Row Level Security on phone_* tables
--- Date: 2026-04-26
+--                + UNIQUE INDEXES for race-safe upserts
+-- Date: 2026-04-26 (RLS) / 2026-04-27 (indexes added)
 --
 -- WHY THIS EXISTS:
--- Without RLS, anyone who's logged into the Supabase JS client can
--- query phone_numbers / phone_calls / phone_voicemails / phone_recordings
--- directly, bypassing API-route auth checks. They could read all calls,
--- voicemails, etc. across the whole company.
+-- 1. RLS — Without it, anyone who's logged into the Supabase JS client
+--    can query phone_numbers / phone_calls / phone_voicemails /
+--    phone_recordings directly, bypassing API-route auth checks.
 --
--- This migration enables RLS and adds policies:
+-- 2. Unique indexes — The voicemail-record and recording-callback
+--    webhooks fire TWICE for the same recording (once for the dial
+--    action, once for recordingStatusCallback). The API code uses
+--    upsert with onConflict='twilio_recording_sid' to prevent dupe
+--    rows. That requires a UNIQUE constraint on the column. Without
+--    it, two simultaneous webhook hits can both insert.
+--
+-- This migration enables RLS + adds the unique indexes:
 --   • Service role (used by API routes) → full access (no change)
 --   • Regular logged-in users → only their own data
 --   • Admins/super_admins → see everything
@@ -23,6 +30,27 @@
 --
 -- Safe to re-run.
 -- ============================================================
+
+-- =============================================================
+-- 0. Unique indexes for race-safe upserts
+-- =============================================================
+-- These two indexes back the onConflict='twilio_recording_sid' upsert
+-- in /api/phone/voicemail-record and /api/phone/recording-callback.
+-- Without them, Twilio's two-fire pattern (action callback +
+-- recordingStatusCallback for the same RecordingSid) can race and
+-- create duplicate rows.
+--
+-- We use IF NOT EXISTS so re-running is safe.
+-- We use a partial index (WHERE column IS NOT NULL) so legacy rows
+-- with NULL recording SIDs (from before this column existed) don't
+-- block the index creation.
+CREATE UNIQUE INDEX IF NOT EXISTS phone_voicemails_recording_sid_uniq
+  ON phone_voicemails (twilio_recording_sid)
+  WHERE twilio_recording_sid IS NOT NULL;
+
+CREATE UNIQUE INDEX IF NOT EXISTS phone_recordings_recording_sid_uniq
+  ON phone_recordings (twilio_recording_sid)
+  WHERE twilio_recording_sid IS NOT NULL;
 
 -- =============================================================
 -- Helper: is the calling user an admin?

@@ -7,13 +7,15 @@
 //   audio and POSTs the URL here when the recording is finalized.
 //
 //   We:
-//     1. Look up the parent call by CallSid
-//     2. Save the recording in phone_recordings
-//     3. Fire-and-forget Whisper transcription
+//     1. Verify the signature (it really came from Twilio)
+//     2. Look up the parent call by CallSid
+//     3. Save the recording in phone_recordings
+//     4. Fire-and-forget Whisper transcription
 // ============================================================
 
 import { NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
+import { verifyTwilioSignature } from '../../../../lib/phone-auth';
 
 const supabase = createClient(
   process.env.NEXT_PUBLIC_SUPABASE_URL,
@@ -31,11 +33,23 @@ function getPublicBaseUrl(req) {
 
 export async function POST(req) {
   try {
-    var formData = await req.formData();
-    var callSid = String(formData.get('CallSid') || '');
-    var recordingSid = String(formData.get('RecordingSid') || '');
-    var recordingUrl = String(formData.get('RecordingUrl') || '');
-    var recordingDuration = parseInt(String(formData.get('RecordingDuration') || '0'), 10);
+    // Read formData ONCE so we can verify the signature AND use the fields
+    var formObj = {};
+    var rawForm = await req.formData();
+    for (var pair of rawForm.entries()) {
+      formObj[pair[0]] = String(pair[1]);
+    }
+
+    // Verify this came from Twilio
+    if (!verifyTwilioSignature(req, formObj)) {
+      console.warn('[phone/recording-callback] signature check FAILED — rejecting');
+      return new Response('Forbidden', { status: 403 });
+    }
+
+    var callSid = String(formObj.CallSid || '');
+    var recordingSid = String(formObj.RecordingSid || '');
+    var recordingUrl = String(formObj.RecordingUrl || '');
+    var recordingDuration = parseInt(String(formObj.RecordingDuration || '0'), 10);
 
     if (!recordingUrl || !recordingSid) {
       return NextResponse.json({ ok: false, error: 'missing recording data' }, { status: 400 });
@@ -54,23 +68,52 @@ export async function POST(req) {
       console.warn('[phone/recording-callback] call lookup failed:', e.message);
     }
 
-    // Insert the recording row
+    // Insert the recording row — upsert against the unique RecordingSid
+    // index (s32 migration) so a duplicate fire from Twilio doesn't dupe.
     var recRow = null;
+    var alreadyExisted = false;
     try {
-      var ins = await supabase.from('phone_recordings').insert({
-        call_id: callRow ? callRow.id : null,
-        twilio_recording_sid: recordingSid,
-        recording_url: recordingUrl,
-        duration_seconds: recordingDuration,
-        transcript_status: 'pending',
-      }).select().single();
-      recRow = ins.data;
-    } catch (e) {
-      console.warn('[phone/recording-callback] insert failed:', e.message);
+      var preCheck = await supabase
+        .from('phone_recordings')
+        .select('id')
+        .eq('twilio_recording_sid', recordingSid)
+        .maybeSingle();
+      if (preCheck.data && preCheck.data.id) {
+        alreadyExisted = true;
+        recRow = preCheck.data;
+      }
+    } catch (e) {}
+
+    if (!alreadyExisted) {
+      try {
+        var ins = await supabase.from('phone_recordings').upsert({
+          call_id: callRow ? callRow.id : null,
+          twilio_recording_sid: recordingSid,
+          recording_url: recordingUrl,
+          duration_seconds: recordingDuration,
+          transcript_status: 'pending',
+        }, { onConflict: 'twilio_recording_sid', ignoreDuplicates: false }).select().single();
+        if (ins.error) {
+          console.warn('[phone/recording-callback] upsert error:', ins.error.message);
+          var fb = await supabase
+            .from('phone_recordings')
+            .select('id')
+            .eq('twilio_recording_sid', recordingSid)
+            .maybeSingle();
+          if (fb.data) {
+            recRow = fb.data;
+            alreadyExisted = true;
+          }
+        } else {
+          recRow = ins.data;
+        }
+      } catch (e) {
+        console.warn('[phone/recording-callback] insert failed:', e.message);
+      }
     }
 
-    // Fire transcription async
-    if (recRow && recRow.id) {
+    // Fire transcription async — only if we just created the row (don't double-trigger)
+    if (recRow && recRow.id && !alreadyExisted) {
       try {
         var transcribeUrl = getPublicBaseUrl(req) + '/api/phone/transcribe-async';
         fetch(transcribeUrl, {

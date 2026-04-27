@@ -9,17 +9,24 @@
 //     • RecordingDuration — seconds
 //
 //   We:
-//     1. Save the voicemail row in phone_voicemails
+//     1. Save the voicemail row in phone_voicemails (idempotent
+//        upsert — Twilio fires this URL twice for the same SID,
+//        once for the dial action and once for the recording
+//        callback. The unique index on twilio_recording_sid lets
+//        us safely handle either order without dupes.)
 //     2. Fire-and-forget the Whisper transcription (async)
 //     3. Return a small TwiML "thanks for your message" reply
 //
 // The query string carries call_id, assigned_to, customer_id
 // from the parent call (we set those when we built the action
 // URL in /api/phone/incoming).
+//
+// Twilio webhook signature is verified on every POST.
 // ============================================================
 
 import { NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
+import { verifyTwilioSignature } from '../../../../lib/phone-auth';
 
 const supabase = createClient(
   process.env.NEXT_PUBLIC_SUPABASE_URL,
@@ -42,11 +49,23 @@ export async function POST(req) {
     var assigned_to = url.searchParams.get('assigned_to') || null;
     var customer_id = url.searchParams.get('customer_id') || null;
 
-    var formData = await req.formData();
-    var recordingUrl = String(formData.get('RecordingUrl') || '');
-    var recordingSid = String(formData.get('RecordingSid') || '');
-    var recordingDuration = parseInt(String(formData.get('RecordingDuration') || '0'), 10);
-    var dialCallStatus = String(formData.get('DialCallStatus') || ''); // 'answered', 'no-answer', 'busy', 'failed'
+    // Read formData ONCE as a plain object — same trick as in /incoming
+    var formObj = {};
+    var rawForm = await req.formData();
+    for (var pair of rawForm.entries()) {
+      formObj[pair[0]] = String(pair[1]);
+    }
+
+    // Verify this came from Twilio
+    if (!verifyTwilioSignature(req, formObj)) {
+      console.warn('[phone/voicemail-record] signature check FAILED — rejecting');
+      return new Response('Forbidden', { status: 403 });
+    }
+
+    var recordingUrl = String(formObj.RecordingUrl || '');
+    var recordingSid = String(formObj.RecordingSid || '');
+    var recordingDuration = parseInt(String(formObj.RecordingDuration || '0'), 10);
+    var dialCallStatus = String(formObj.DialCallStatus || ''); // 'completed', 'answered', 'no-answer', 'busy', 'failed', 'canceled'
 
     console.log('[phone/voicemail-record] callback received',
       'sid=' + recordingSid,
@@ -72,50 +91,87 @@ export async function POST(req) {
       return new Response(twiml2, { headers: { 'Content-Type': 'text/xml' } });
     }
 
-    // Dedupe — both action and recordingStatusCallback hit this same URL.
-    // Check if we already saved a row for this RecordingSid.
-    var existing = null;
+    // ---- IDEMPOTENT INSERT (race-safe) ----
+    //
+    // Twilio fires this URL twice for the same recording — once as the
+    // <Record action="..."> callback (synchronous, may have RecordingUrl)
+    // and once as the recordingStatusCallback (async, definitely has it).
+    //
+    // The OLD code did: SELECT to check, then INSERT if missing.
+    // Two callbacks landing within ~10ms of each other could both pass
+    // the check and both insert — creating duplicate rows.
+    //
+    // The FIX: rely on a unique index on twilio_recording_sid and use
+    // upsert with onConflict='ignore'. The DB enforces uniqueness atomically;
+    // we don't get racy double-inserts. If the row already exists we skip
+    // the transcription trigger so we don't kick it off twice.
+    //
+    // (The unique index is created by the s32 SQL migration. Until that
+    // migration runs, we still benefit from the existence check below
+    // as a soft guard.)
+    var voicemailRow = null;
+    var alreadyExisted = false;
     try {
+      // Soft pre-check — cheap, helps avoid pointless writes when the row
+      // is already there. The real race-safety comes from the DB's unique
+      // index (s32 migration).
       var existCheck = await supabase
         .from('phone_voicemails')
         .select('id')
         .eq('twilio_recording_sid', recordingSid)
         .maybeSingle();
-      existing = existCheck.data;
+      if (existCheck.data && existCheck.data.id) {
+        alreadyExisted = true;
+        voicemailRow = existCheck.data;
+      }
     } catch (e) {}
 
-    if (existing) {
-      console.log('[phone/voicemail-record] already saved sid=' + recordingSid + ' — skipping');
-      var twimlDup = '<?xml version="1.0" encoding="UTF-8"?>'
-        + '<Response><Hangup /></Response>';
-      return new Response(twimlDup, { headers: { 'Content-Type': 'text/xml' } });
-    }
-
-    // Save the voicemail row
-    var voicemailRow = null;
-    try {
-      var ins = await supabase.from('phone_voicemails').insert({
-        call_id: call_id || null,
-        twilio_recording_sid: recordingSid,
-        recording_url: recordingUrl,
-        duration_seconds: recordingDuration || 0,
-        transcript_status: 'pending',
-        assigned_to: assigned_to || null,
-        customer_id: customer_id || null,
-      }).select().single();
-      voicemailRow = ins.data;
-    } catch (e) {
-      console.warn('[phone/voicemail-record] insert failed:', e.message);
+    if (!alreadyExisted) {
+      try {
+        // upsert with onConflict — if the unique index catches a duplicate,
+        // we get the existing row back instead of an error.
+        var ins = await supabase.from('phone_voicemails').upsert({
+          call_id: call_id || null,
+          twilio_recording_sid: recordingSid,
+          recording_url: recordingUrl,
+          duration_seconds: recordingDuration || 0,
+          transcript_status: 'pending',
+          assigned_to: assigned_to || null,
+          customer_id: customer_id || null,
+        }, { onConflict: 'twilio_recording_sid', ignoreDuplicates: false }).select().single();
+        if (ins.error) {
+          // If the upsert errored on conflict (older Postgres or missing
+          // unique index), fall back to fetching the existing row.
+          console.warn('[phone/voicemail-record] upsert returned error:', ins.error.message);
+          var fb = await supabase
+            .from('phone_voicemails')
+            .select('id')
+            .eq('twilio_recording_sid', recordingSid)
+            .maybeSingle();
+          if (fb.data) {
+            voicemailRow = fb.data;
+            alreadyExisted = true;
+          }
+        } else {
+          voicemailRow = ins.data;
+        }
+      } catch (e) {
+        console.warn('[phone/voicemail-record] upsert failed:', e.message);
+      }
+    } else {
+      console.log('[phone/voicemail-record] already saved sid=' + recordingSid + ' — skipping insert + transcribe');
     }
 
     // Fire-and-forget Whisper transcription. We don't await — Twilio's
     // expecting our TwiML response within ~5 seconds, and Whisper can take
-    // 10-30 seconds. The transcribe-async route does its own background work.
-    if (voicemailRow && voicemailRow.id) {
+    // 10-30 seconds. The transcribe-cron at /5min will pick up anything
+    // that gets killed mid-flight.
+    //
+    // Skip if we already saw this row (the first callback already kicked
+    // off transcription) so we don't run Whisper twice on the same audio.
+    if (voicemailRow && voicemailRow.id && !alreadyExisted) {
       try {
         var transcribeUrl = getPublicBaseUrl(req) + '/api/phone/transcribe-async';
-        // Don't await — fire and forget. The transcribe-cron at /5min will
-        // pick up anything that gets killed mid-flight.
         fetch(transcribeUrl, {
           method: 'POST',
           headers: {

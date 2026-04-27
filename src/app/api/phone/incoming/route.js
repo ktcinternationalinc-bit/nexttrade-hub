@@ -22,9 +22,11 @@
 //   • TwiML is XML — Twilio is strict about syntax. We use
 //     string concatenation rather than template literals to
 //     avoid SWC compiler issues.
-//   • We do NOT validate Twilio webhook signatures yet — that's
-//     a Phase B hardening step. For now, Vercel's HTTPS + the
-//     URL not being public knowledge is reasonable security.
+//   • Twilio webhook signature validation IS now enforced —
+//     every inbound POST is checked against X-Twilio-Signature.
+//     If TWILIO_AUTH_TOKEN isn't set we fail open (fall through)
+//     so we don't accidentally break production during setup.
+//     Set SKIP_TWILIO_SIGNATURE=true in env to disable for local dev.
 //   • If anything goes wrong, fall back to a generic "please
 //     leave a message" voicemail prompt so customers don't get
 //     dead air.
@@ -32,6 +34,7 @@
 
 import { NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
+import { verifyTwilioSignature } from '../../../../lib/phone-auth';
 
 const supabase = createClient(
   process.env.NEXT_PUBLIC_SUPABASE_URL,
@@ -99,11 +102,28 @@ function buildFallbackTwiml(reason, baseUrl) {
 // POST: Twilio webhook — incoming call arrives here
 export async function POST(req) {
   try {
-    var formData = await req.formData();
-    var to = String(formData.get('To') || '');           // Your KTC number that was called
-    var from = String(formData.get('From') || '');       // Customer's number
-    var callSid = String(formData.get('CallSid') || ''); // Twilio's unique ID
-    var callerName = String(formData.get('CallerName') || ''); // CNAM if enabled
+    // Read formData ONCE as an object so we can both verify the
+    // Twilio signature AND extract the fields we care about.
+    // (You can't call req.formData() twice — the body stream is consumed.)
+    var formObj = {};
+    var rawForm = await req.formData();
+    for (var pair of rawForm.entries()) {
+      formObj[pair[0]] = String(pair[1]);
+    }
+
+    // Verify this request really came from Twilio.
+    // verifyTwilioSignature() returns true if signature is valid,
+    // OR if TWILIO_AUTH_TOKEN isn't set (fail-open during setup),
+    // OR if SKIP_TWILIO_SIGNATURE=true in env (for local dev).
+    if (!verifyTwilioSignature(req, formObj)) {
+      console.warn('[phone/incoming] signature check FAILED — rejecting');
+      return new Response('Forbidden', { status: 403 });
+    }
+
+    var to = String(formObj.To || '');           // Your KTC number that was called
+    var from = String(formObj.From || '');       // Customer's number
+    var callSid = String(formObj.CallSid || ''); // Twilio's unique ID
+    var callerName = String(formObj.CallerName || ''); // CNAM if enabled
 
     var baseUrl = getPublicBaseUrl(req);
 

@@ -66,6 +66,13 @@ export default function VoiceController({ userId, userProfile, enabled, onComman
   // big comment in rec.onresult below for the full explanation.
   var bargeInDispatchedRef = useRef(false);
   var bargeInLastTextRef = useRef('');
+  // v55.22 (Apr 27 2026) — When Nadia STARTED speaking, in epoch ms.
+  // Used to enforce an "echo guard" at the beginning of every utterance:
+  // any transcript that arrives in the first BARGE_IN_GUARD_MS after she
+  // starts is almost certainly the microphone picking up her OWN voice
+  // through the speakers, not the user. Without this guard, she cuts
+  // herself off after 2-3 words on every response.
+  var aiSpeakingStartedAtRef = useRef(0);
   // S18.2 — follow-up window state. True when Nadia just finished speaking
   // and we're giving the user 5s to continue without saying "Hey Nadia".
   var followUpActiveRef = useRef(false);
@@ -179,14 +186,40 @@ export default function VoiceController({ userId, userProfile, enabled, onComman
       transcript = transcript.trim();
       if (!transcript) return;
 
-      // v55.13 — INSTANT BARGE-IN check. Runs BEFORE self-suppress / hard-stop
-      // so the user's voice cuts her off the moment recognition picks anything
-      // meaningful up. Only fires when:
-      //   (a) She's currently speaking (aiSpeakingRef set by nadia-tts-start)
-      //   (b) Transcript is at least 3 chars (filters echo blips of single words)
-      //   (c) We haven't already dispatched for this utterance (one barge-in
-      //       per spoken response, not per interim chunk)
-      if (aiSpeakingRef.current && !bargeInDispatchedRef.current && transcript.length >= 3) {
+      // v55.22 (Apr 27 2026) — INSTANT BARGE-IN: DISABLED.
+      //
+      // Background: v55.13 added a feature where ANY interim transcript
+      // (>=3 chars) detected while Nadia is speaking would dispatch a
+      // barge-in event and stop her audio. The intent was to match the
+      // ChatGPT/Claude voice UX where you can talk over the assistant.
+      //
+      // In practice this fires constantly on Nadia's own voice echoing
+      // through the speakers and back into the mic. Hardware echo
+      // cancellation isn't perfect — laptop speakers, Bluetooth, low
+      // ambient noise, all cause speech-recognition to pick up her own
+      // words and "transcribe" them. That looks identical to a real user
+      // interrupt, so barge-in fires and she cuts herself off after 2-3
+      // words. Confirmed by Max: "she stops after a few words, just on
+      // wake up and after I ask her a question."
+      //
+      // A short time-guard (e.g. ignore the first 1.5s) doesn't fix this
+      // because longer responses still produce mic echo past the guard.
+      //
+      // Real fix would require: comparing the live transcript against
+      // Nadia's own utterance text and only barging when they differ.
+      // That's a bigger change.
+      //
+      // FOR NOW: barge-in is disabled. Users can still interrupt by:
+      //   (1) Saying "Hey Nadia [new question]" — wake-word path below
+      //       cleanly stops her and processes the new command.
+      //   (2) Clicking the stop button on her panel.
+      // Both are explicit user actions with no echo-loop risk.
+      //
+      // To re-enable instant barge-in once we have transcript-matching,
+      // restore the original block — see git history for v55.13.
+      //
+      // (Refs are still kept around because the wake-word path uses them.)
+      if (false /* barge-in disabled */) {
         // Don't double-fire if the same partial transcript repeats. Some
         // engines emit the same interim text multiple times.
         if (transcript !== bargeInLastTextRef.current) {
@@ -397,6 +430,9 @@ export default function VoiceController({ userId, userProfile, enabled, onComman
   useEffect(function() {
     var onStart = function(ev) {
       aiSpeakingRef.current = true;
+      // v55.22 — record the moment she started speaking so the barge-in
+      // check below can ignore mic-echo that arrives in the first ~2s.
+      aiSpeakingStartedAtRef.current = Date.now();
       // v55.13 — reset barge-in flag at the START of every new utterance.
       // Without this, only the FIRST sentence of a session could be cut
       // off by user voice; subsequent ones would silently ignore barge-in.

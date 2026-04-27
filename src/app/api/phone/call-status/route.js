@@ -7,10 +7,15 @@
 //
 //   We update phone_calls.status and duration_seconds + ended_at
 //   so the UI shows accurate call history.
+//
+//   Twilio webhook signature is verified on every POST so a
+//   spoofed request can't fake call statuses (which would mess
+//   up duration tracking + billing reconciliation).
 // ============================================================
 
 import { NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
+import { verifyTwilioSignature } from '../../../../lib/phone-auth';
 
 const supabase = createClient(
   process.env.NEXT_PUBLIC_SUPABASE_URL,
@@ -19,10 +24,22 @@ const supabase = createClient(
 
 export async function POST(req) {
   try {
-    var formData = await req.formData();
-    var callSid = String(formData.get('CallSid') || '');
-    var callStatus = String(formData.get('CallStatus') || '');
-    var callDuration = String(formData.get('CallDuration') || '');
+    // Read formData ONCE so we can verify the signature AND use the fields
+    var formObj = {};
+    var rawForm = await req.formData();
+    for (var pair of rawForm.entries()) {
+      formObj[pair[0]] = String(pair[1]);
+    }
+
+    // Verify this came from Twilio
+    if (!verifyTwilioSignature(req, formObj)) {
+      console.warn('[phone/call-status] signature check FAILED — rejecting');
+      return new Response('Forbidden', { status: 403 });
+    }
+
+    var callSid = String(formObj.CallSid || '');
+    var callStatus = String(formObj.CallStatus || '');
+    var callDuration = String(formObj.CallDuration || '');
 
     if (!callSid) {
       return NextResponse.json({ ok: false, error: 'missing CallSid' }, { status: 400 });

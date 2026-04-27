@@ -43,6 +43,26 @@ export default function CalendarTab({ customers, user, userProfile, users, ticke
   const [editEvent, setEditEvent] = useState(null);
   const [editForm, setEditForm] = useState({});
   const [editScope, setEditScope] = useState('single'); // 'single' | 'series'
+  // v55.22 — In-modal cancel/delete confirmation flow.
+  //
+  // Background: cancelMeeting and deleteMeeting used window.prompt() and
+  // window.confirm() for the reason/confirmation step. Modern Chromium
+  // SILENTLY SUPPRESSES those dialogs after the user dismisses them too
+  // many times in a session — they return null/false with no UI shown.
+  // Symptom: Max clicks "Cancel meeting" → nothing happens. He's been
+  // reporting this for multiple iterations and the cause was the browser,
+  // not our code.
+  //
+  // Fix: replace prompt+confirm with an in-app inline form that lives
+  // INSIDE the existing edit-event modal. State machine:
+  //   actionStage = 'idle'    — show normal Cancel / Delete buttons
+  //                'cancel'   — show "Cancel? type optional reason + Confirm"
+  //                'delete'   — show "Type DELETE to confirm hard-delete"
+  // The user always sees real UI; no browser dialog can be hidden.
+  const [actionStage, setActionStage] = useState('idle');
+  const [actionReason, setActionReason] = useState('');
+  const [actionTyped, setActionTyped] = useState(''); // for delete confirm
+  const [actionBusy, setActionBusy] = useState(false);
   const myId = userProfile?.id;
   // v54.6 — `lang` was referenced throughout this file (28+ times) but
   // never declared. ANY click that triggered a path using `lang === 'ar'`
@@ -552,7 +572,16 @@ export default function CalendarTab({ customers, user, userProfile, users, ticke
     });
     setEditScope('single');
   };
-  const closeEditEvent = () => { setEditEvent(null); setEditForm({}); setEditScope('single'); };
+  const closeEditEvent = () => {
+    setEditEvent(null);
+    setEditForm({});
+    setEditScope('single');
+    // v55.22 — reset in-modal cancel/delete flow state
+    setActionStage('idle');
+    setActionReason('');
+    setActionTyped('');
+    setActionBusy(false);
+  };
 
   // v54.3 — Permission helpers for meeting actions.
   //
@@ -599,35 +628,31 @@ export default function CalendarTab({ customers, user, userProfile, users, ticke
     return Array.isArray(ev.declined_by) && ev.declined_by.indexOf(myId) !== -1;
   };
 
-  // v54.1 — Cancel meeting workflow. Distinct from edit (changes) and
-  // hard-delete (admin only, gone forever). Cancel = soft-delete with
-  // audit trail: status becomes 'cancelled', shows in calendar with
-  // strike-through styling, notes preserved. Can be uncancelled later.
-  const cancelMeeting = async () => {
+  // v55.22 — Cancel meeting workflow.
+  //
+  // Two-step UX: clicking the "Cancel meeting" button switches the modal
+  // to actionStage='cancel' (renders an inline reason input + Confirm
+  // button). Clicking Confirm calls performCancel(). This avoids
+  // window.prompt/confirm which Chromium silently suppresses after a
+  // few uses on the same page — that was the root cause of "I click
+  // cancel and nothing happens."
+  //
+  // Cancel = soft-delete with audit trail. status becomes 'cancelled',
+  // shows in calendar with strike-through styling, notes preserved,
+  // can be uncancelled later.
+  const performCancel = async () => {
     if (!editEvent) return;
-    // v54.3 — permission check
     if (!canCancel(editEvent)) {
       if (toast) toast.error(lang === 'ar' ? 'لا يمكنك إلغاء هذا الاجتماع' : 'You cannot cancel this meeting (only the creator, primary assignee, or admin can)');
       return;
     }
-    const reason = window.prompt(
-      (lang === 'ar' ? 'سبب الإلغاء (اختياري):' : 'Reason for cancelling (optional):'),
-      ''
-    );
-    // User clicked Cancel on the prompt → null → abort. Empty string → proceed.
-    if (reason === null) return;
-    if (!confirm(
-      (lang === 'ar'
-        ? 'إلغاء هذا الاجتماع؟ سيبقى في التقويم مع شطب، ويمكن استعادته لاحقاً.'
-        : 'Cancel this meeting? It stays on the calendar (crossed out) and can be restored later.')
-    )) return;
-
+    setActionBusy(true);
     try {
       const cancelPatch = {
         status: 'cancelled',
         cancelled_at: new Date().toISOString(),
         cancelled_by: myId,
-        cancellation_reason: reason || null,
+        cancellation_reason: actionReason || null,
       };
 
       if (editScope === 'series' && editEvent.series_id) {
@@ -646,28 +671,26 @@ export default function CalendarTab({ customers, user, userProfile, users, ticke
       closeEditEvent();
       if (onRefresh) onRefresh();
     } catch (err) {
+      setActionBusy(false);
       if (toast) toast.error((lang === 'ar' ? 'فشل الإلغاء: ' : 'Cancel failed: ') + (err && err.message));
     }
   };
 
-  // v54.3 — Hard DELETE. Super admin only. Gone forever, no recovery.
-  // Requires typing "DELETE" to confirm.
-  const deleteMeeting = async () => {
+  // v55.22 — Hard DELETE. Super admin only. Gone forever, no recovery.
+  // In-modal version: clicking the Delete button switches modal to
+  // actionStage='delete' (renders DELETE-typing confirm). Same reason
+  // as cancelMeeting — window.prompt was getting silently suppressed.
+  const performDelete = async () => {
     if (!editEvent) return;
     if (!canDelete(editEvent)) {
       if (toast) toast.error(lang === 'ar' ? 'الحذف الكامل متاح فقط للمشرف الأعلى' : 'Hard delete is super-admin only');
       return;
     }
-    const typed = window.prompt(
-      (lang === 'ar'
-        ? 'سيتم حذف هذا الاجتماع نهائياً ولا يمكن استعادته. اكتب "DELETE" للتأكيد:'
-        : 'This permanently deletes the meeting (no recovery). Type DELETE to confirm:'),
-      ''
-    );
-    if (typed !== 'DELETE') {
-      if (typed !== null && toast) toast.error(lang === 'ar' ? 'تم إلغاء الحذف' : 'Delete cancelled — you must type DELETE exactly');
+    if (actionTyped !== 'DELETE') {
+      if (toast) toast.error(lang === 'ar' ? 'اكتب DELETE تماماً للتأكيد' : 'Type DELETE exactly to confirm');
       return;
     }
+    setActionBusy(true);
     try {
       // Audit row BEFORE delete so we can still see who/when after removal
       await logActivity(myId, 'HARD-DELETED event: ' + editEvent.title + ' (id=' + editEvent.id + ')', 'calendar');
@@ -677,6 +700,7 @@ export default function CalendarTab({ customers, user, userProfile, users, ticke
       closeEditEvent();
       if (onRefresh) onRefresh();
     } catch (err) {
+      setActionBusy(false);
       if (toast) toast.error((lang === 'ar' ? 'فشل الحذف: ' : 'Delete failed: ') + (err && err.message));
     }
   };
@@ -1493,10 +1517,98 @@ export default function CalendarTab({ customers, user, userProfile, users, ticke
                 >
                   ♻️ {lang === 'ar' ? 'استعادة الاجتماع الملغى' : 'Restore this cancelled meeting'}
                 </button>
+              ) : actionStage === 'cancel' ? (
+                /* v55.22 — In-modal Cancel confirmation. Replaces window.prompt
+                   + window.confirm which Chromium silently suppresses after
+                   repeated dismissals. Always-visible UI inside the modal
+                   removes any browser-level interference. */
+                <div className="bg-red-50 border-2 border-red-400 rounded-lg p-3 space-y-2">
+                  <div className="text-sm font-bold text-red-800">
+                    {lang === 'ar' ? '❌ تأكيد إلغاء الاجتماع' : '❌ Confirm Cancel Meeting'}
+                  </div>
+                  <div className="text-[11px] text-red-700">
+                    {lang === 'ar'
+                      ? 'سيبقى الاجتماع في التقويم مع شطب، ويمكن استعادته لاحقاً.'
+                      : 'The meeting will stay on the calendar (crossed out) and can be restored later.'}
+                  </div>
+                  <input
+                    type="text"
+                    value={actionReason}
+                    onChange={e => setActionReason(e.target.value)}
+                    placeholder={lang === 'ar' ? 'سبب الإلغاء (اختياري)' : 'Reason for cancelling (optional)'}
+                    className="w-full px-3 py-2 rounded border border-red-300 text-sm bg-white"
+                    autoFocus
+                  />
+                  <div className="flex gap-2">
+                    <button
+                      onClick={performCancel}
+                      disabled={actionBusy}
+                      className="flex-1 px-3 py-2 bg-red-600 text-white rounded-lg text-sm font-bold hover:bg-red-700 disabled:opacity-50"
+                    >
+                      {actionBusy
+                        ? (lang === 'ar' ? 'جاري الإلغاء...' : 'Cancelling...')
+                        : (lang === 'ar' ? 'تأكيد الإلغاء' : 'Confirm Cancel')}
+                    </button>
+                    <button
+                      onClick={() => { setActionStage('idle'); setActionReason(''); }}
+                      disabled={actionBusy}
+                      className="px-3 py-2 border-2 border-slate-300 rounded-lg text-sm font-bold bg-white disabled:opacity-50"
+                    >
+                      {lang === 'ar' ? 'تراجع' : 'Back'}
+                    </button>
+                  </div>
+                </div>
+              ) : actionStage === 'delete' ? (
+                /* v55.22 — In-modal hard-delete confirmation. Same reason. */
+                <div className="bg-slate-900 text-white rounded-lg p-3 space-y-2">
+                  <div className="text-sm font-bold">
+                    🗑 {lang === 'ar' ? 'حذف نهائي — لا يمكن التراجع' : 'Permanent Delete — No Undo'}
+                  </div>
+                  <div className="text-[11px] text-red-300">
+                    {lang === 'ar'
+                      ? 'هذا الاجتماع سيختفي للأبد. لا يمكن استعادته بعد ذلك. اكتب DELETE تماماً للتأكيد:'
+                      : 'This meeting will be gone forever. There is no recovery. Type DELETE exactly to confirm:'}
+                  </div>
+                  <input
+                    type="text"
+                    value={actionTyped}
+                    onChange={e => setActionTyped(e.target.value)}
+                    placeholder="DELETE"
+                    className="w-full px-3 py-2 rounded border border-red-400 text-sm bg-slate-800 text-white font-mono tracking-wider"
+                    autoFocus
+                  />
+                  <div className="flex gap-2">
+                    <button
+                      onClick={performDelete}
+                      disabled={actionBusy || actionTyped !== 'DELETE'}
+                      className="flex-1 px-3 py-2 bg-red-600 text-white rounded-lg text-sm font-bold hover:bg-red-700 disabled:opacity-30 disabled:cursor-not-allowed"
+                    >
+                      {actionBusy
+                        ? (lang === 'ar' ? 'جاري الحذف...' : 'Deleting...')
+                        : (lang === 'ar' ? 'حذف نهائي' : 'Delete Forever')}
+                    </button>
+                    <button
+                      onClick={() => { setActionStage('idle'); setActionTyped(''); }}
+                      disabled={actionBusy}
+                      className="px-3 py-2 border-2 border-slate-500 rounded-lg text-sm font-bold bg-slate-700 disabled:opacity-50"
+                    >
+                      {lang === 'ar' ? 'تراجع' : 'Back'}
+                    </button>
+                  </div>
+                </div>
               ) : (
                 <>
                   <button
-                    onClick={cancelMeeting}
+                    onClick={() => {
+                      // v55.22 — permission check happens BEFORE entering the
+                      // confirmation stage so users without permission get an
+                      // immediate toast rather than a useless input form.
+                      if (!canCancel(editEvent)) {
+                        if (toast) toast.error(lang === 'ar' ? 'لا يمكنك إلغاء هذا الاجتماع' : 'You cannot cancel this meeting (only the creator, primary assignee, or admin can)');
+                        return;
+                      }
+                      setActionStage('cancel');
+                    }}
                     className="w-full px-4 py-2 bg-red-50 border-2 border-red-400 text-red-700 rounded-lg text-sm font-bold hover:bg-red-100 hover:border-red-500"
                   >
                     ❌ {lang === 'ar' ? 'إلغاء الاجتماع' : 'Cancel this meeting'}
@@ -1519,7 +1631,13 @@ export default function CalendarTab({ customers, user, userProfile, users, ticke
                     </button>
                   )}
                   <button
-                    onClick={deleteMeeting}
+                    onClick={() => {
+                      if (!canDelete(editEvent)) {
+                        if (toast) toast.error(lang === 'ar' ? 'الحذف الكامل متاح فقط للمشرف الأعلى' : 'Hard delete is super-admin only');
+                        return;
+                      }
+                      setActionStage('delete');
+                    }}
                     className="w-full px-4 py-2 bg-slate-900 border-2 border-slate-900 text-white rounded-lg text-sm font-bold hover:bg-black"
                     title={lang === 'ar' ? 'حذف كامل (لا يمكن استعادته)' : 'Permanent delete — no recovery'}
                   >

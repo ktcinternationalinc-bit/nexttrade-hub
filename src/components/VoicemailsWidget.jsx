@@ -95,9 +95,44 @@ export default function VoicemailsWidget({ user, userProfile, customers, toast, 
 
   // Auto-refresh every 30 seconds so new voicemails appear without page reload.
   // Also refreshes the transcript display as Whisper finishes processing.
+  //
+  // We pause polling while the browser tab is hidden — there's no point
+  // hammering the API when the user can't see the result, and on slow
+  // networks the orphaned timers can pile up if the tab is left open
+  // for hours. When the tab regains focus we do an immediate fetch so
+  // the user sees current data right away, then resume the 30s cadence.
   useEffect(function() {
-    var t = setInterval(function() { load(); }, 30000);
-    return function() { clearInterval(t); };
+    var t = null;
+    var startPolling = function() {
+      if (t) return; // already running
+      t = setInterval(function() { load(); }, 30000);
+    };
+    var stopPolling = function() {
+      if (t) { clearInterval(t); t = null; }
+    };
+    var onVisibilityChange = function() {
+      if (typeof document === 'undefined') return;
+      if (document.hidden) {
+        stopPolling();
+      } else {
+        load();          // catch up immediately on focus
+        startPolling();
+      }
+    };
+
+    // Start in the right state based on the tab's current visibility
+    if (typeof document !== 'undefined' && !document.hidden) {
+      startPolling();
+    }
+    if (typeof document !== 'undefined') {
+      document.addEventListener('visibilitychange', onVisibilityChange);
+    }
+    return function() {
+      stopPolling();
+      if (typeof document !== 'undefined') {
+        document.removeEventListener('visibilitychange', onVisibilityChange);
+      }
+    };
   }, [load]);
 
   // Mark a voicemail as read

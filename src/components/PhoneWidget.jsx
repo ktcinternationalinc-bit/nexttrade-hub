@@ -20,6 +20,11 @@ export default function PhoneWidget({ user, userProfile, users, customers }) {
   const deviceRef = useRef(null);
   const connectionRef = useRef(null);
   const timerRef = useRef(null);
+  // endCall is defined further down (it depends on state setters), but it
+  // gets referenced from inside Twilio event callbacks set up earlier.
+  // We hold it in a ref so the callbacks always reach the latest version
+  // without any source-order dependency or stale-closure bugs.
+  const endCallRef = useRef(() => {});
   const myId = userProfile?.id || user?.id;
 
   // Load call logs and phone numbers
@@ -142,7 +147,7 @@ export default function PhoneWidget({ user, userProfile, users, customers }) {
         setCallState('incoming');
         setOpen(true);
 
-        call.on('disconnect', () => { endCall(); });
+        call.on('disconnect', () => { endCallRef.current(); });
         call.on('cancel',     () => { setCallState('idle'); setIncomingCaller(null); connectionRef.current = null; });
         call.on('reject',     () => { setCallState('idle'); setIncomingCaller(null); connectionRef.current = null; });
       });
@@ -157,12 +162,25 @@ export default function PhoneWidget({ user, userProfile, users, customers }) {
     }
   }, [myId, customers]);
 
-  // Init as soon as we have a user. Don't gate on myNumber — even users
-  // without an assigned KTC number need to be able to receive incoming
-  // calls in their browser via <Client>uuid</Client> dialing.
+  // Init when the user actually opens the widget. We deliberately do NOT
+  // auto-init on page load anymore. Reasons:
+  //
+  //   1. device.register() can throw if microphone is blocked, Twilio env
+  //      vars aren't configured, or the access token can't be obtained.
+  //      An unhandled throw on every page load would take down the whole
+  //      dashboard (logout button, sidebar, everything) for users who
+  //      can't or don't want to use the phone system.
+  //
+  //   2. The microphone permission prompt is jarring as a side-effect of
+  //      opening the dashboard. Users should only see it after they've
+  //      explicitly chosen to use the phone (e.g. clicked the phone icon).
+  //
+  // Trade-off: incoming calls won't ring in the browser until the user
+  // opens the widget at least once per session. For now that's acceptable —
+  // cell forwarding still rings their phone. We can revisit once browser
+  // dialing is fully validated.
   useEffect(() => {
-    if (myId) initDevice();
-    // Cleanup on unmount or user change
+    // Cleanup on unmount or user change. We don't init here.
     return () => {
       try {
         if (deviceRef.current) {
@@ -171,7 +189,16 @@ export default function PhoneWidget({ user, userProfile, users, customers }) {
         }
       } catch (e) { /* ignore */ }
     };
-  }, [myId, initDevice]);
+  }, [myId]);
+
+  // Init lazily when the user opens the widget for the first time.
+  // initDevice itself is idempotent (early-returns if deviceRef is set)
+  // so calling it multiple times is safe.
+  useEffect(() => {
+    if (open && myId && !deviceRef.current) {
+      initDevice();
+    }
+  }, [open, myId, initDevice]);
 
   // Make outbound call. SDK v2 differences from v1:
   //   • device.connect() returns a Promise<Call>, not a Connection directly
@@ -204,10 +231,10 @@ export default function PhoneWidget({ user, userProfile, users, customers }) {
         if (timerRef.current) clearInterval(timerRef.current);
         timerRef.current = setInterval(() => setCallDuration(prev => prev + 1), 1000);
       });
-      call.on('disconnect', () => { endCall(); });
+      call.on('disconnect', () => { endCallRef.current(); });
       call.on('error', (err) => {
         setError((err && err.message) ? err.message : 'Call error');
-        endCall();
+        endCallRef.current();
       });
     } catch (e) {
       setError('Call failed: ' + (e.message || String(e)));
@@ -236,7 +263,10 @@ export default function PhoneWidget({ user, userProfile, users, customers }) {
     connectionRef.current = null;
   };
 
-  // End call (works for both incoming and outgoing in v2)
+  // End call (works for both incoming and outgoing in v2).
+  // We also write this to endCallRef so async Twilio callbacks set up
+  // earlier (e.g. inside initDevice) can reach the latest version
+  // without depending on JavaScript declaration order.
   const endCall = () => {
     if (connectionRef.current) {
       try { connectionRef.current.disconnect(); } catch (e) { console.warn('disconnect error:', e); }
@@ -250,6 +280,10 @@ export default function PhoneWidget({ user, userProfile, users, customers }) {
     setMuted(false);
     loadData();
   };
+  // Keep the ref pointing at the freshest endCall every render so the
+  // callbacks set up inside Twilio Device events always see the latest
+  // state (e.g. so loadData closes over the current myId).
+  endCallRef.current = endCall;
 
   // Toggle mute (v2 — same `mute()` method)
   const toggleMute = () => {

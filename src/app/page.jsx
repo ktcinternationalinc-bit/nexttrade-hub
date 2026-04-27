@@ -3434,16 +3434,39 @@ export default function App() {
           <div className="bg-white rounded-2xl shadow-2xl w-full max-w-lg overflow-hidden" onClick={e => e.stopPropagation()}>
             <div className="flex items-center gap-3 px-4 py-3 border-b">
               <span className="text-lg">🔍</span>
-              <input autoFocus value={globalSearch} onChange={e => setGlobalSearch(e.target.value)} placeholder="Search invoices, customers, tickets, bank..." aria-label="Global search" className="flex-1 outline-none text-sm" />
+              <input autoFocus value={globalSearch} onChange={e => setGlobalSearch(e.target.value)}
+                placeholder={(isSuperAdmin || modulePerms?.['Treasury'] === true || modulePerms?.['Egypt Bank'] === true)
+                  ? 'Search invoices, customers, tickets, bank...'
+                  : 'Search customers, tickets...'}
+                aria-label="Global search" className="flex-1 outline-none text-sm" />
               <button onClick={() => setShowGlobalSearch(false)} className="text-xs text-slate-400 bg-slate-100 px-2 py-1 rounded">ESC</button>
             </div>
             {globalSearch.length >= 2 && (() => {
               const q = globalSearch.toLowerCase();
-              const invResults = (invoices || []).filter(i => [i.invoice_number, i.order_number, i.customer, i.customer_name, i.customer_name_en].filter(Boolean).join(' ').toLowerCase().includes(q)).slice(0, 5);
+              // v55.22 — Permission gates for financial categories.
+              // Previously, EVERY logged-in user could search treasury and
+              // Egypt-bank rows from the global search modal, regardless
+              // of whether they had Treasury permission. That leaked
+              // sensitive amounts/descriptions to non-finance team members.
+              // Now we mirror the same gates used by the dashboard tiles
+              // and top-bar Treasury widget: super_admin OR explicit
+              // module permission. Sales (invoice amounts) gets its own
+              // gate so non-sales people don't see invoice totals either.
+              const canSeeTreasury = isSuperAdmin || modulePerms?.['Treasury'] === true;
+              const canSeeBank = isSuperAdmin || modulePerms?.['Egypt Bank'] === true || modulePerms?.['Treasury'] === true;
+              const canSeeSales = isSuperAdmin || modulePerms?.['Sales'] === true;
+
+              const invResults = canSeeSales
+                ? (invoices || []).filter(i => [i.invoice_number, i.order_number, i.customer, i.customer_name, i.customer_name_en].filter(Boolean).join(' ').toLowerCase().includes(q)).slice(0, 5)
+                : [];
               const custResults = (customers || []).filter(c => [c.name, c.customer_name, c.phone, c.email].filter(Boolean).join(' ').toLowerCase().includes(q)).slice(0, 5);
               const tickResults = (dashTickets || []).filter(t => [t.title, t.ticket_number, t.description].filter(Boolean).join(' ').toLowerCase().includes(q)).slice(0, 5);
-              const bankResults = (egyptBankTxns || []).filter(t => [t.description, t.date, String(t.amount||'')].filter(Boolean).join(' ').toLowerCase().includes(q)).slice(0, 5);
-              const tresResults = (treasury || []).filter(t => [t.description, t.order_number, t.transaction_date].filter(Boolean).join(' ').toLowerCase().includes(q)).slice(0, 5);
+              const bankResults = canSeeBank
+                ? (egyptBankTxns || []).filter(t => [t.description, t.date, String(t.amount||'')].filter(Boolean).join(' ').toLowerCase().includes(q)).slice(0, 5)
+                : [];
+              const tresResults = canSeeTreasury
+                ? (treasury || []).filter(t => [t.description, t.order_number, t.transaction_date].filter(Boolean).join(' ').toLowerCase().includes(q)).slice(0, 5)
+                : [];
               const total = invResults.length + custResults.length + tickResults.length + bankResults.length + tresResults.length;
               return (
                 <div className="max-h-[50vh] overflow-auto">
@@ -12069,8 +12092,15 @@ export default function App() {
         </div>
       )}
 
-      {/* Phone Widget - floating on all tabs */}
-      <PhoneWidget user={user} userProfile={userProfile} users={teamUsers} customers={customers} />
+      {/* Phone Widget - floating on all tabs.
+          Wrapped in its own ErrorBoundary so a Twilio SDK crash, a
+          missing-env-var error, or a microphone-blocked browser CANNOT
+          take down the whole dashboard (which would hide the sidebar +
+          logout button). If the widget crashes, this boundary swallows
+          it silently and we render nothing in its place. */}
+      <ErrorBoundary label="Phone widget unavailable">
+        <PhoneWidget user={user} userProfile={userProfile} users={teamUsers} customers={customers} />
+      </ErrorBoundary>
 
       {/* Treasury Inspector Modal — bilingual AR/EN transaction explainer */}
       {inspectedTreasury && (
@@ -12134,7 +12164,7 @@ export default function App() {
                       latest fix is actually deployed. If he doesn't see this
                       tag in the modal, his browser is running stale JS. */}
                   <div className="mt-1.5 inline-block px-2 py-0.5 rounded bg-amber-900/60 text-amber-100 text-[10px] font-mono font-bold tracking-wide">
-                    BUILD v55.19-PHONE-WIP
+                    BUILD v55.22-FIXES
                   </div>
                 </div>
                 <button onClick={() => closePendingTreasuryModal()}
