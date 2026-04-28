@@ -292,6 +292,41 @@ export default function PhoneWidget({ user, userProfile, users, customers }) {
     }
   }, [open, myId, initDevice]);
 
+  // v55.29 — toE164(): auto-format whatever the user typed into a proper
+  // E.164 number (the "+1..." format Twilio requires).
+  //
+  // The dial-pad UI strips the + when typing numerics, so users typing on
+  // the keypad always end up with no plus sign. Twilio's outbound endpoint
+  // strictly requires E.164 ("Destination must be in E.164 format starting
+  // with plus sign") so without this normalization, every dialed call from
+  // the on-screen keypad would be rejected.
+  //
+  // Rules:
+  //   • If the input already starts with +, treat it as fully-qualified —
+  //     just strip non-digits after the + and trust the caller knows what
+  //     country code they want.
+  //   • If it's 10 digits (NXXNXXXXXX), assume US/Canada and prepend +1.
+  //   • If it's 11 digits and starts with 1, assume US/Canada with the
+  //     country code already typed, just prepend +.
+  //   • Anything else (7-9 digits, 12+ digits without +) is ambiguous —
+  //     return null so we surface a clear error to the user instead of
+  //     silently calling the wrong country.
+  const toE164 = (raw) => {
+    var s = String(raw || '').trim();
+    if (!s) return null;
+    // Already E.164
+    if (s.startsWith('+')) {
+      var afterPlus = s.slice(1).replace(/\D/g, '');
+      if (afterPlus.length < 7 || afterPlus.length > 15) return null;
+      return '+' + afterPlus;
+    }
+    // No plus — strip non-digits and decide
+    var digits = s.replace(/\D/g, '');
+    if (digits.length === 10) return '+1' + digits;          // US/Canada local
+    if (digits.length === 11 && digits.charAt(0) === '1') return '+' + digits; // US/Canada with country code
+    return null; // ambiguous — let the caller show an error
+  };
+
   // Make outbound call. SDK v2 differences from v1:
   //   • device.connect() returns a Promise<Call>, not a Connection directly
   //   • params go in { params: { To, From } } not directly
@@ -302,8 +337,16 @@ export default function PhoneWidget({ user, userProfile, users, customers }) {
       setError('Phone not connected. Wait for "registered" or check microphone permissions.');
       return;
     }
-    const num = (phoneNum || number).replace(/[^\d+]/g, '');
-    if (!num) return;
+    var raw = phoneNum || number;
+    var num = toE164(raw);
+    if (!num) {
+      setError(
+        'Could not understand "' + raw + '" as a phone number. ' +
+        'Either type a 10-digit US/Canada number (the system will add +1) ' +
+        'or include the full international format starting with + and country code.'
+      );
+      return;
+    }
 
     setCallState('connecting');
     try {
@@ -472,7 +515,19 @@ export default function PhoneWidget({ user, userProfile, users, customers }) {
           {tab === 'dial' && (
             <div className="p-4">
               <input value={number} onChange={e => setNumber(e.target.value)} placeholder="+1 (555) 123-4567"
-                className="w-full text-center text-xl font-bold border-b-2 border-slate-200 pb-2 mb-3 outline-none" />
+                className="w-full text-center text-xl font-bold border-b-2 border-slate-200 pb-2 mb-1 outline-none" />
+              {/* v55.29 — live E.164 preview. Shows the user exactly what number
+                  will be dialed. If they type just 10 digits, this confirms
+                  +1 will be added. If their input is ambiguous, it warns them. */}
+              <div className="text-[10px] text-center mb-3 min-h-[14px]">
+                {number ? (
+                  toE164(number) ? (
+                    <span className="text-emerald-600">Will dial: {toE164(number)}</span>
+                  ) : (
+                    <span className="text-amber-600">Add country code (e.g. +1 for US, +20 for Egypt)</span>
+                  )
+                ) : null}
+              </div>
               <div className="grid grid-cols-3 gap-2 mb-3">
                 {DIAL_KEYS.flat().map(k => (
                   <button key={k} onClick={() => setNumber(n => n + k)}
@@ -481,7 +536,10 @@ export default function PhoneWidget({ user, userProfile, users, customers }) {
               </div>
               <div className="flex gap-2">
                 <button onClick={() => setNumber(n => n.slice(0, -1))} className="flex-1 py-3 rounded-lg bg-slate-100 text-sm font-semibold">⌫ Delete</button>
-                <button onClick={() => makeCall()} disabled={!number || callState !== 'idle'}
+                {/* v55.29 — disable Call if the typed number can't be normalized.
+                    Better to grey out the button than send to /outbound and get
+                    the "must be in E.164" rejection. */}
+                <button onClick={() => makeCall()} disabled={!number || !toE164(number) || callState !== 'idle'}
                   className="flex-1 py-3 rounded-lg bg-green-500 text-white font-bold text-sm disabled:opacity-50">📞 Call</button>
               </div>
             </div>

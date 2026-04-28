@@ -116,8 +116,15 @@ export async function POST(req) {
     to = destNormalized;
 
     // Look up the team member to get their assigned KTC number (used as caller ID).
-    // If they don't have an assigned number, fall back to TWILIO_MAIN_NUMBER.
-    var callerId = process.env.TWILIO_MAIN_NUMBER || '';
+    //
+    // v55.29 — three-tier fallback so users who haven't been assigned a
+    // personal number can still place outbound calls:
+    //   1. The user's assigned phone_numbers row (preferred — shows them as the caller)
+    //   2. TWILIO_MAIN_NUMBER env var (legacy override)
+    //   3. The shared "main" line in phone_numbers (the company toll-free)
+    // If all three fail we surface a clear error to the user instead of
+    // letting Twilio reject the call with no useful message.
+    var callerId = '';
     var assigned_to = null;
     var recordingEnabled = true; // default to recording on (with disclaimer)
     if (identity && identity !== 'guest') {
@@ -128,13 +135,41 @@ export async function POST(req) {
           .eq('assigned_to', identity)
           .maybeSingle();
         if (lookup.data) {
-          callerId = lookup.data.phone_number || callerId;
+          callerId = lookup.data.phone_number || '';
           assigned_to = lookup.data.assigned_to;
           recordingEnabled = lookup.data.recording_enabled !== false;
         }
       } catch (e) {
         console.warn('[phone/outbound] number lookup failed:', e.message);
       }
+    }
+    // Tier 2: env var fallback
+    if (!callerId && process.env.TWILIO_MAIN_NUMBER) {
+      callerId = process.env.TWILIO_MAIN_NUMBER;
+    }
+    // Tier 3: shared "main" line from phone_numbers — works without env var
+    if (!callerId) {
+      try {
+        var mainLookup = await supabase
+          .from('phone_numbers')
+          .select('phone_number')
+          .eq('number_type', 'main')
+          .limit(1)
+          .maybeSingle();
+        if (mainLookup.data && mainLookup.data.phone_number) {
+          callerId = mainLookup.data.phone_number;
+        }
+      } catch (e) {
+        console.warn('[phone/outbound] main number lookup failed:', e.message);
+      }
+    }
+    // If all three tiers failed, refuse the call with a clear voice message
+    // instead of letting Twilio fail silently with no caller ID.
+    if (!callerId) {
+      console.error('[phone/outbound] no caller ID available — user has no assigned number, no TWILIO_MAIN_NUMBER, no main line in DB');
+      return new Response(errorTwiml(
+        'No phone number is configured for outgoing calls. Please ask an admin to assign you a phone number in Settings.'
+      ), { headers: { 'Content-Type': 'text/xml' } });
     }
 
     // Try to match the destination to a customer in our DB.
