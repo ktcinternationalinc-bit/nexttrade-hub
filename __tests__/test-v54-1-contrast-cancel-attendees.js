@@ -95,12 +95,14 @@ test('CM3 performCancel reads reason from inline overlay input (not window.promp
 });
 
 test('CM4 performCancel honors scope (single vs series)', function() {
+  // v55.33 — the old `editScope === 'series' && .eq('series_id', ...)` was
+  // replaced by resolveScopedIds(cancelScope) which returns an array of IDs.
   var m = calendar.match(/const performCancel = async[\s\S]*?\n  \};/);
   assert(m, 'body');
-  assert(/if \(editScope === 'series' && editEvent\.series_id\)/.test(m[0]),
-    'series-wide cancel path');
-  assert(/\.eq\('series_id', editEvent\.series_id\)/.test(m[0]),
-    'bulk update by series_id');
+  assert(/resolveScopedIds\(cancelScope\)/.test(m[0]),
+    'uses resolveScopedIds with cancelScope');
+  assert(/for \(const id of ids\)/.test(m[0]),
+    'loops resolved ids');
 });
 
 test('CM5 uncancelMeeting (restore) exists and clears all cancellation fields', function() {
@@ -124,10 +126,12 @@ test('CM6 Edit modal shows Cancel button when event is scheduled', function() {
 });
 
 test('CM7 Edit modal shows Restore button when event is cancelled', function() {
+  // v55.33 — Restore button now opens a confirmation stage (with scope picker
+  // for recurring meetings) instead of calling uncancelMeeting directly.
   assert(/editEvent\.status === 'cancelled' \?/.test(calendar),
     'conditional on status');
-  assert(/onClick=\{uncancelMeeting\}/.test(calendar),
-    'restore button wired');
+  assert(/setActionStage\('restore'\)/.test(calendar),
+    'restore button transitions to actionStage restore');
   assert(/Restore this cancelled meeting/.test(calendar),
     'restore label');
 });

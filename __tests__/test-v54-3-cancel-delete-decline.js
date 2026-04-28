@@ -132,42 +132,46 @@ test('D3 performDelete writes audit row BEFORE deleting', function() {
 test('D4 performDelete physically removes the row', function() {
   var m = calendar.match(/const performDelete = async[\s\S]*?\n  \};/);
   assert(m, 'body');
-  assert(/supabase\.from\('calendar_events'\)\.delete\(\)\.eq\('id', editEvent\.id\)/.test(m[0]),
-    'hard delete via DB');
+  // v55.33 — bulk delete via .in('id', ids) instead of .eq('id', editEvent.id)
+  // so 'following' and 'series' scope work too.
+  assert(/supabase\.from\('calendar_events'\)\.delete\(\)\.in\('id', ids\)/.test(m[0]),
+    'hard delete via DB using .in(id, ids)');
 });
 
 // ===== DECLINE =====
 
-test('De1 declineInvite gated by canDecline', function() {
-  var m = calendar.match(/const declineInvite = async[\s\S]*?\n  \};/);
-  assert(m, 'declineInvite defined');
+test('De1 performDecline gated by canDecline', function() {
+  // v55.33 — declineInvite renamed to performDecline (matches performCancel/performDelete naming)
+  var m = calendar.match(/const performDecline = async[\s\S]*?\n  \};/);
+  assert(m, 'performDecline defined');
   assert(/if \(!canDecline\(editEvent\)\)/.test(m[0]),
     'permission check');
 });
 
-test('De2 declineInvite adds self to declined_by[] without removing from attendees', function() {
-  var m = calendar.match(/const declineInvite = async[\s\S]*?\n  \};/);
+test('De2 performDecline adds self to declined_by[] without removing from attendees', function() {
+  // v55.33 — declinePatch is now built as a separate const so the test can
+  // verify the patch shape directly. attendees: must NOT appear in declinePatch.
+  var m = calendar.match(/const performDecline = async[\s\S]*?\n  \};/);
   assert(m, 'body');
   // declined_by gets the user pushed
   assert(/newDeclinedBy\.push\(myId\)/.test(m[0]),
     'adds self to declined_by');
-  // attendees[] is NOT mutated — event still shows (crossed out) on user's cal
-  // The dbUpdate payload contains declined_by but not attendees
-  var update = m[0].match(/dbUpdate\('calendar_events', editEvent\.id, \{[\s\S]*?\}, myId\)/);
-  assert(update, 'dbUpdate call');
-  assert(!/attendees:/.test(update[0]),
-    'does NOT strip user from attendees (kept for history + re-accept)');
+  // The patch is stored in declinePatch — verify it exists and does NOT include attendees
+  var declinePatchBlock = m[0].match(/declinePatch\s*=\s*\{[\s\S]*?\}/);
+  assert(declinePatchBlock, 'declinePatch object literal found');
+  assert(!/attendees:/.test(declinePatchBlock[0]),
+    'declinePatch does NOT include attendees (kept in attendees[] for history + re-accept)');
 });
 
-test('De3 declineInvite records reason in decline_reasons{} if provided', function() {
-  var m = calendar.match(/const declineInvite = async[\s\S]*?\n  \};/);
+test('De3 performDecline records reason in decline_reasons{} if provided', function() {
+  var m = calendar.match(/const performDecline = async[\s\S]*?\n  \};/);
   assert(m, 'body');
   assert(/newReasons\[myId\] = reason/.test(m[0]),
     'reason stored keyed by user id');
 });
 
-test('De4 declineInvite sends email to creator via /api/notify', function() {
-  var m = calendar.match(/const declineInvite = async[\s\S]*?\n  \};/);
+test('De4 performDecline sends email to creator via /api/notify', function() {
+  var m = calendar.match(/const performDecline = async[\s\S]*?\n  \};/);
   assert(m, 'body');
   assert(/fetch\('\/api\/notify'/.test(m[0]),
     'calls notify API');
@@ -209,8 +213,12 @@ test('UI1 Cancel button rendered ALWAYS — permission checked in click handler 
 });
 
 test('UI2 Decline button rendered only when canDecline', function() {
-  assert(/\{canDecline\(editEvent\) && \(\s*<button\s*onClick=\{declineInvite\}/.test(calendar),
-    'decline button gated');
+  // v55.33 — decline button now opens an in-modal stage instead of calling
+  // declineInvite directly (window.prompt was getting silently suppressed)
+  assert(/\{canDecline\(editEvent\) && \(/.test(calendar),
+    'decline button gated on permission');
+  assert(/setActionStage\('decline'\)/.test(calendar),
+    'decline button transitions to actionStage decline');
 });
 
 test('UI3 Delete button rendered ALWAYS — permission checked in click handler (v55.25 state-machine)', function() {
@@ -232,9 +240,10 @@ test('UI4 Previously-declined users see an Accept button instead of Decline', fu
 });
 
 test('UI5 Cancelled events show a Restore button instead of Cancel', function() {
-  // Already wired in v54.1
-  assert(/editEvent\.status === 'cancelled' \?[\s\S]{0,500}onClick=\{uncancelMeeting\}/.test(calendar),
-    'restore flow preserved');
+  // v55.33 — Restore button now opens setActionStage('restore') for the in-modal
+  // confirmation flow with scope picker (was direct uncancelMeeting call)
+  assert(/editEvent\.status === 'cancelled' \?[\s\S]{0,500}setActionStage\('restore'\)/.test(calendar),
+    'restore flow uses actionStage');
 });
 
 // ===== SQL MIGRATION =====

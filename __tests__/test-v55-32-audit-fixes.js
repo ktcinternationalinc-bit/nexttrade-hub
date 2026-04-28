@@ -147,29 +147,33 @@ test('Cal Bug 3: saveEditEvent reschedules reminders for ALL attendees', functio
 });
 
 test('Cal Bug 6: series cancellation uses dbUpdate per row (audit trail)', function() {
-  // Old code did a single `.from(...).update().eq(series_id, ...)` which
-  // bypassed the audited dbUpdate helper. New code loops siblings and
-  // calls dbUpdate on each so every cancellation is audited.
+  // v55.33 — performCancel was rewritten to use resolveScopedIds(cancelScope)
+  // which returns an array of IDs, then loops dbUpdate per ID. This is still
+  // the audited pattern (no bulk .update().eq() bypass), just structured around
+  // the new scope vocabulary that supports 'single' / 'following' / 'series'.
   var cancelFn = calTab.match(/performCancel = async \(\) => \{[\s\S]+?\n  \};/);
   assert(cancelFn, 'performCancel fn found');
-  assert(/for \(const sib of \(siblings \|\| \[\]\)\)/.test(cancelFn[0]),
-    'series cancel loops through siblings');
-  assert(/dbUpdate\('calendar_events', sib\.id, cancelPatch/.test(cancelFn[0]),
-    'each sibling cancel goes through dbUpdate (audited)');
+  assert(/resolveScopedIds\(cancelScope\)/.test(cancelFn[0]),
+    'series cancel uses resolveScopedIds(cancelScope)');
+  assert(/for \(const id of ids\)/.test(cancelFn[0]),
+    'cancel loops through resolved ids');
+  assert(/dbUpdate\('calendar_events', id, cancelPatch/.test(cancelFn[0]),
+    'each id cancel goes through dbUpdate (audited)');
   // And the OLD bypass pattern should NOT be present anymore
   assert(!/\.update\(cancelPatch\)\s*\.eq\('series_id'/.test(cancelFn[0]),
     'old un-audited bulk update is GONE');
 });
 
-test('Cal Bug 7 (calendar): performDelete respects editScope', function() {
-  // Old code always deleted only the single row, even when scope=series.
-  // That orphaned all child occurrences with broken series_id pointers.
+test('Cal Bug 7 (calendar): performDelete respects scope', function() {
+  // v55.33 — performDelete now uses resolveScopedIds(deleteScope) and a single
+  // bulk .delete().in('id', ids) call. The old branch on `editScope === 'series'`
+  // is gone — scope is now resolved up-front into an id list.
   var deleteFn = calTab.match(/performDelete = async \(\) => \{[\s\S]+?\n  \};/);
   assert(deleteFn, 'performDelete fn found');
-  assert(/editScope === 'series' && editEvent\.series_id/.test(deleteFn[0]),
-    'performDelete branches on editScope');
-  assert(/\.delete\(\)\.eq\('series_id', editEvent\.series_id\)/.test(deleteFn[0]),
-    'series-scope delete removes by series_id (not just single row id)');
+  assert(/resolveScopedIds\(deleteScope\)/.test(deleteFn[0]),
+    'performDelete uses resolveScopedIds(deleteScope)');
+  assert(/\.delete\(\)\.in\('id', ids\)/.test(deleteFn[0]),
+    'delete uses .in(id, ids) bulk pattern (handles single, following, and series)');
 });
 
 test('Cal Bug 8: actionBusy reset on success in performCancel + performDelete', function() {
@@ -209,9 +213,9 @@ test('Cal Bug 14: side-attendee posting note does NOT mark event completed', fun
 // BUILD STAMP
 // ============================================================
 
-test('Build stamp bumped to v55.32', function() {
-  assert(/>v55\.32</.test(page),
-    'page.jsx build stamp shows v55.32');
+test('Build stamp bumped to v55.33', function() {
+  assert(/>v55\.33</.test(page),
+    'page.jsx build stamp shows v55.33');
 });
 
 // ============================================================

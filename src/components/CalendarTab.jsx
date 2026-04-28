@@ -79,6 +79,16 @@ export default function CalendarTab({ customers, user, userProfile, users, ticke
   const [actionReason, setActionReason] = useState('');
   const [actionTyped, setActionTyped] = useState(''); // for delete confirm
   const [actionBusy, setActionBusy] = useState(false);
+  // v55.33 — Each lifecycle action (cancel / delete / restore) has its OWN
+  // scope picker. Previously editScope (used for Save) was awkwardly reused,
+  // and there was no way to cancel just one occurrence of a recurring meeting
+  // while keeping the rest. Each confirmation dialog now has its own picker
+  // (single / following / all-in-series) and shows a live "Will affect N
+  // meetings" preview. Reset to 'single' when the modal closes so the next
+  // event opens fresh.
+  const [cancelScope, setCancelScope] = useState('single');
+  const [deleteScope, setDeleteScope] = useState('single');
+  const [restoreScope, setRestoreScope] = useState('single');
   const myId = userProfile?.id;
   // v54.6 — `lang` was referenced throughout this file (28+ times) but
   // never declared. ANY click that triggered a path using `lang === 'ar'`
@@ -637,6 +647,12 @@ export default function CalendarTab({ customers, user, userProfile, users, ticke
       location: ev.location || '',
       joinLink: ev.join_link || '',
       allDay: !!ev.all_day,
+      // v55.33 — three more fields exposed in the edit modal:
+      // description (agenda), event_type (task/meeting/call/visit),
+      // customer_id (link to a customer record).
+      description: ev.description || '',
+      eventType: ev.event_type || 'task',
+      customerId: ev.customer_id || '',
     });
     setEditScope('single');
   };
@@ -649,6 +665,10 @@ export default function CalendarTab({ customers, user, userProfile, users, ticke
     setActionReason('');
     setActionTyped('');
     setActionBusy(false);
+    // v55.33 — reset per-action scope pickers so the next event opens fresh
+    setCancelScope('single');
+    setDeleteScope('single');
+    setRestoreScope('single');
   };
 
   // v54.3 — Permission helpers for meeting actions.
@@ -696,6 +716,48 @@ export default function CalendarTab({ customers, user, userProfile, users, ticke
     return Array.isArray(ev.declined_by) && ev.declined_by.indexOf(myId) !== -1;
   };
 
+  // v55.33 — Resolve which row IDs to operate on for a given scope.
+  // Used by cancel/delete/restore so they all speak the same vocabulary.
+  //   'single'    → just this row
+  //   'following' → this row and every later sibling in the series
+  //   'series'    → every row in the series
+  // Falls back to 'single' for non-recurring events (no series_id).
+  const resolveScopedIds = async (scope) => {
+    if (!editEvent) return [];
+    if (scope === 'single' || !editEvent.series_id) return [editEvent.id];
+    if (scope === 'series') {
+      const { data } = await supabase
+        .from('calendar_events')
+        .select('id')
+        .eq('series_id', editEvent.series_id);
+      return (data || []).map(function(r) { return r.id; });
+    }
+    if (scope === 'following') {
+      const { data } = await supabase
+        .from('calendar_events')
+        .select('id')
+        .eq('series_id', editEvent.series_id)
+        .gte('event_date', editEvent.event_date);
+      return (data || []).map(function(r) { return r.id; });
+    }
+    return [editEvent.id];
+  };
+
+  // v55.33 — Live-preview count of rows for the picker. Reads from
+  // already-loaded `events` so we don't fire a DB query on every click.
+  const scopedCount = (scope) => {
+    if (!editEvent || !editEvent.series_id || scope === 'single') return 1;
+    if (scope === 'series') {
+      return events.filter(function(e) { return e.series_id === editEvent.series_id; }).length || 1;
+    }
+    if (scope === 'following') {
+      return events.filter(function(e) {
+        return e.series_id === editEvent.series_id && e.event_date >= editEvent.event_date;
+      }).length || 1;
+    }
+    return 1;
+  };
+
   // v55.22 — Cancel meeting workflow.
   //
   // Two-step UX: clicking the "Cancel meeting" button switches the modal
@@ -716,40 +778,44 @@ export default function CalendarTab({ customers, user, userProfile, users, ticke
     }
     setActionBusy(true);
     try {
+      // v55.33 — resolve the actual rows to cancel from the scope picker.
+      // 'single' = just this row; 'following' = this + all later in series;
+      // 'series' = every row in the series. Each row goes through dbUpdate
+      // individually so EVERY cancellation is audited.
+      const ids = await resolveScopedIds(cancelScope);
       const cancelPatch = {
         status: 'cancelled',
         cancelled_at: new Date().toISOString(),
         cancelled_by: myId,
         cancellation_reason: actionReason || null,
       };
-
-      if (editScope === 'series' && editEvent.series_id) {
-        // v55.31 — cancel each occurrence individually via dbUpdate so EVERY
-        // row gets an audit entry. Previously a direct `.update()` on the
-        // whole series bypassed the audit log — bulk cancellations left no
-        // trace of who cancelled what or why.
-        const { data: siblings } = await supabase
-          .from('calendar_events').select('id')
-          .eq('series_id', editEvent.series_id);
-        for (const sib of (siblings || [])) {
-          try {
-            await dbUpdate('calendar_events', sib.id, cancelPatch, myId);
-            try { await cancelEventReminders(sib.id); } catch (e) {}
-          } catch (e) { /* per-row swallow */ }
-        }
-        await logActivity(myId, 'Cancelled event series: ' + editEvent.title, 'calendar');
-      } else {
-        await dbUpdate('calendar_events', editEvent.id, cancelPatch, myId);
-        try { await cancelEventReminders(editEvent.id); } catch (e) {}
-        await logActivity(myId, 'Cancelled event: ' + editEvent.title, 'calendar');
+      for (const id of ids) {
+        try {
+          await dbUpdate('calendar_events', id, cancelPatch, myId);
+          try { await cancelEventReminders(id); } catch (e) {}
+        } catch (e) { /* per-row swallow so one bad row doesn't kill the rest */ }
       }
+      await logActivity(myId,
+        (ids.length > 1
+          ? 'Cancelled ' + ids.length + ' events in series: '
+          : 'Cancelled event: ') + editEvent.title,
+        'calendar');
 
-      if (toast) toast.success(lang === 'ar' ? 'تم إلغاء الاجتماع' : 'Meeting cancelled');
+      if (toast) {
+        const okMsg = ids.length > 1
+          ? (lang === 'ar' ? 'تم إلغاء ' + ids.length + ' اجتماعات' : 'Cancelled ' + ids.length + ' meetings')
+          : (lang === 'ar' ? 'تم إلغاء الاجتماع' : 'Meeting cancelled');
+        toast.success(okMsg);
+      }
       // v55.31 — reset busy state on success too. Previously only the catch
       // path cleared it, so quick-reopening another event saw frozen buttons
       // until the next render cycle.
       setActionBusy(false);
       closeEditEvent();
+      // v55.33 — refresh local calendar state so the cancelled event(s)
+      // immediately show with strike-through. Previously only onRefresh()
+      // on the parent fired, which didn't always propagate back here.
+      await loadEvents();
       if (onRefresh) onRefresh();
     } catch (err) {
       setActionBusy(false);
@@ -773,29 +839,36 @@ export default function CalendarTab({ customers, user, userProfile, users, ticke
     }
     setActionBusy(true);
     try {
-      // v55.31 — respect editScope. Previously this deleted only the single
-      // row regardless of scope, so picking "delete whole series" would
-      // leave child occurrences orphaned with broken series_id pointers.
-      if (editScope === 'series' && editEvent.series_id) {
-        // Audit row first so we can still see what was wiped
-        await logActivity(myId, 'HARD-DELETED event series: ' + editEvent.title + ' (series_id=' + editEvent.series_id + ')', 'calendar');
-        // Cancel all reminders for every occurrence in the series before the rows go
-        const { data: siblings } = await supabase
-          .from('calendar_events').select('id')
-          .eq('series_id', editEvent.series_id);
-        for (const sib of (siblings || [])) {
-          try { await cancelEventReminders(sib.id); } catch (e) {}
-        }
-        await supabase.from('calendar_events').delete().eq('series_id', editEvent.series_id);
-      } else {
-        await logActivity(myId, 'HARD-DELETED event: ' + editEvent.title + ' (id=' + editEvent.id + ')', 'calendar');
-        try { await cancelEventReminders(editEvent.id); } catch (e) {}
-        await supabase.from('calendar_events').delete().eq('id', editEvent.id);
+      // v55.33 — resolve the rows to delete from the scope picker.
+      // 'single' = just this row; 'following' = this + all later;
+      // 'series' = every row in the series.
+      const ids = await resolveScopedIds(deleteScope);
+      // Audit row first so we can still see what was wiped after the rows are gone.
+      await logActivity(myId,
+        (ids.length > 1
+          ? 'HARD-DELETED ' + ids.length + ' events in series: '
+          : 'HARD-DELETED event: ') + editEvent.title +
+        (editEvent.series_id ? ' (series_id=' + editEvent.series_id + ')' : ' (id=' + editEvent.id + ')'),
+        'calendar');
+      // Cancel all reminders for every affected occurrence before the rows go.
+      for (const id of ids) {
+        try { await cancelEventReminders(id); } catch (e) {}
       }
-      if (toast) toast.success(lang === 'ar' ? 'تم حذف الاجتماع نهائياً' : 'Meeting permanently deleted');
+      // v55.33 — single bulk delete using `.in('id', ids)` instead of
+      // `.eq('series_id', ...)`. That way 'following' scope works too
+      // (it has a list of specific ids, not a single series filter).
+      await supabase.from('calendar_events').delete().in('id', ids);
+      if (toast) {
+        const okMsg = ids.length > 1
+          ? (lang === 'ar' ? 'تم حذف ' + ids.length + ' اجتماعات نهائياً' : 'Permanently deleted ' + ids.length + ' meetings')
+          : (lang === 'ar' ? 'تم حذف الاجتماع نهائياً' : 'Meeting permanently deleted');
+        toast.success(okMsg);
+      }
       // v55.31 — reset busy state on success too (matches performCancel)
       setActionBusy(false);
       closeEditEvent();
+      // v55.33 — refresh local calendar so the deleted rows disappear immediately
+      await loadEvents();
       if (onRefresh) onRefresh();
     } catch (err) {
       setActionBusy(false);
@@ -803,30 +876,33 @@ export default function CalendarTab({ customers, user, userProfile, users, ticke
     }
   };
 
-  // v54.3 — Decline an invitation. Any attendee (not creator) can decline.
-  // Adds self to declined_by array, optionally records a reason, emails
-  // the creator. Event stays alive for other attendees.
-  const declineInvite = async () => {
+  // v55.33 — Decline an invitation. Renamed from declineInvite for
+  // consistency with performCancel/performDelete. The reason is now read
+  // from `actionReason` state (set by the in-modal decline stage), not
+  // from window.prompt. window.prompt was being silently suppressed by
+  // Chromium after a few uses on the same page, leaving the user with no
+  // dialog at all and no decline.
+  const performDecline = async () => {
     if (!editEvent) return;
     if (!canDecline(editEvent)) {
       if (toast) toast.error(lang === 'ar' ? 'لا يمكنك رفض هذه الدعوة' : 'You cannot decline this invitation');
       return;
     }
-    const reason = window.prompt(
-      (lang === 'ar' ? 'سبب الرفض (اختياري — سيتم إرساله لمنظم الاجتماع):' : 'Reason for declining (optional — sent to the meeting organizer):'),
-      ''
-    );
-    if (reason === null) return;
+    setActionBusy(true);
+    const reason = (actionReason || '').trim();
     try {
-      // Add myId to declined_by and (if reason provided) to decline_reasons
+      // Add myId to declined_by and (if reason provided) to decline_reasons.
+      // attendees[] is intentionally NOT touched — the decline shows on the
+      // user's calendar (crossed out) for history and so they can re-accept.
       const newDeclinedBy = Array.isArray(editEvent.declined_by) ? editEvent.declined_by.slice() : [];
       if (newDeclinedBy.indexOf(myId) === -1) newDeclinedBy.push(myId);
       const newReasons = editEvent.decline_reasons || {};
       if (reason) newReasons[myId] = reason;
-      await dbUpdate('calendar_events', editEvent.id, {
+      const declinePatch = {
         declined_by: newDeclinedBy,
         decline_reasons: newReasons,
-      }, myId);
+      };
+      await dbUpdate('calendar_events', editEvent.id, declinePatch, myId);
 
       // Cancel reminders for just this user (server handles per-user list
       // internally; we best-effort call the existing cancel function which
@@ -861,9 +937,13 @@ export default function CalendarTab({ customers, user, userProfile, users, ticke
 
       await logActivity(myId, 'Declined invitation: ' + editEvent.title, 'calendar');
       if (toast) toast.success(lang === 'ar' ? 'تم رفض الدعوة — تم إعلام المنظم' : 'Invitation declined — organizer notified');
+      setActionBusy(false);
       closeEditEvent();
+      // v55.33 — refresh so the now-declined event flips immediately
+      await loadEvents();
       if (onRefresh) onRefresh();
     } catch (err) {
+      setActionBusy(false);
       if (toast) toast.error((lang === 'ar' ? 'فشل الرفض: ' : 'Decline failed: ') + (err && err.message));
     }
   };
@@ -883,27 +963,50 @@ export default function CalendarTab({ customers, user, userProfile, users, ticke
       await logActivity(myId, 'Accepted (undeclined) invitation: ' + editEvent.title, 'calendar');
       if (toast) toast.success(lang === 'ar' ? 'تم قبول الدعوة' : 'Invitation accepted');
       closeEditEvent();
+      // v55.33 — refresh so the now-accepted event re-appears
+      await loadEvents();
       if (onRefresh) onRefresh();
     } catch (err) {
       if (toast) toast.error((lang === 'ar' ? 'فشل القبول: ' : 'Accept failed: ') + (err && err.message));
     }
   };
 
-  // v54.1 — Uncancel (restore) a cancelled meeting
+  // v54.1 — Uncancel (restore) a cancelled meeting.
+  // v55.33 — now scope-aware. The restore stage shows a picker so a user
+  // who cancelled a whole series can selectively restore only some
+  // occurrences.
   const uncancelMeeting = async () => {
     if (!editEvent) return;
+    setActionBusy(true);
     try {
-      await dbUpdate('calendar_events', editEvent.id, {
+      const ids = await resolveScopedIds(restoreScope);
+      const restorePatch = {
         status: 'scheduled',
         cancelled_at: null,
         cancelled_by: null,
         cancellation_reason: null,
-      }, myId);
-      await logActivity(myId, 'Restored event: ' + editEvent.title, 'calendar');
-      if (toast) toast.success(lang === 'ar' ? 'تم استعادة الاجتماع' : 'Meeting restored');
+      };
+      for (const id of ids) {
+        try { await dbUpdate('calendar_events', id, restorePatch, myId); } catch (e) {}
+      }
+      await logActivity(myId,
+        (ids.length > 1
+          ? 'Restored ' + ids.length + ' events in series: '
+          : 'Restored event: ') + editEvent.title,
+        'calendar');
+      if (toast) {
+        const okMsg = ids.length > 1
+          ? (lang === 'ar' ? 'تم استعادة ' + ids.length + ' اجتماعات' : 'Restored ' + ids.length + ' meetings')
+          : (lang === 'ar' ? 'تم استعادة الاجتماع' : 'Meeting restored');
+        toast.success(okMsg);
+      }
+      setActionBusy(false);
       closeEditEvent();
+      // v55.33 — refresh so the now-restored events show correctly
+      await loadEvents();
       if (onRefresh) onRefresh();
     } catch (err) {
+      setActionBusy(false);
       if (toast) toast.error((lang === 'ar' ? 'فشل الاستعادة: ' : 'Restore failed: ') + (err && err.message));
     }
   };
@@ -924,71 +1027,87 @@ export default function CalendarTab({ customers, user, userProfile, users, ticke
     const newAllDay = !!editForm.allDay;
     const oldAllDay = !!editEvent.all_day;
     const hasAllDayChange = newAllDay !== oldAllDay;
+    // v55.33 — three more editable fields exposed in the modal.
+    const newDesc = (editForm.description || '').trim();
+    const oldDesc = (editEvent.description || '').trim();
+    const hasDescChange = newDesc !== oldDesc;
+    const newType = editForm.eventType || editEvent.event_type || 'task';
+    const oldType = editEvent.event_type || 'task';
+    const hasTypeChange = newType !== oldType;
+    const newCust = editForm.customerId || null;
+    const oldCust = editEvent.customer_id || null;
+    const hasCustChange = newCust !== oldCust;
+
     if (!hasDateChange && !hasTimeChange && !hasTitleChange
-        && !hasLocationChange && !hasJoinLinkChange && !hasAllDayChange) {
+        && !hasLocationChange && !hasJoinLinkChange && !hasAllDayChange
+        && !hasDescChange && !hasTypeChange && !hasCustChange) {
       closeEditEvent();
       return;
     }
 
     try {
-      const update = {};
-      if (hasTitleChange) update.title = editForm.title;
-      if (hasTimeChange)  update.event_time = editForm.eventTime || null;
-      if (hasDateChange) {
-        update.event_date = editForm.eventDate;
-        // R2 prep: remember the original date if this is a single-occurrence move
-        if (editScope === 'single' && editEvent.series_id && !editEvent.is_series_master) {
-          update.original_event_date = editEvent.event_date;
-        }
-      }
-      // v55 Stage 1 — persist new-field changes. Empty strings → null so
-      // the DB doesn't accumulate '' values that look meaningful.
-      if (hasLocationChange)  update.location  = newLoc || null;
-      if (hasJoinLinkChange)  update.join_link = newLink || null;
+      // v55.33 — fieldUpdate carries every NON-DATE change. These propagate
+      // to ALL affected rows when scope is series/following. Date stays
+      // single-row to avoid merging every occurrence onto the same day.
+      const fieldUpdate = {};
+      if (hasTitleChange)    fieldUpdate.title       = editForm.title;
+      if (hasTimeChange)     fieldUpdate.event_time  = editForm.eventTime || null;
+      if (hasLocationChange) fieldUpdate.location    = newLoc || null;
+      if (hasJoinLinkChange) fieldUpdate.join_link   = newLink || null;
       if (hasAllDayChange) {
-        update.all_day = newAllDay;
+        fieldUpdate.all_day = newAllDay;
         // Switching ON all-day MUST clear the clock time, even if the user
         // didn't touch the time input. Symmetrical to handleAddEvent's
         // belt-and-suspenders rule.
-        if (newAllDay) update.event_time = null;
+        if (newAllDay) fieldUpdate.event_time = null;
+      }
+      if (hasDescChange)     fieldUpdate.description = newDesc || null;
+      if (hasTypeChange)     fieldUpdate.event_type  = newType;
+      if (hasCustChange)     fieldUpdate.customer_id = newCust || null;
+
+      // singleUpdate adds the date change for single-row writes.
+      const singleUpdate = Object.assign({}, fieldUpdate);
+      if (hasDateChange) {
+        singleUpdate.event_date = editForm.eventDate;
+        // R2 prep: remember the original date if this is a single-occurrence move
+        if (editScope === 'single' && editEvent.series_id && !editEvent.is_series_master) {
+          singleUpdate.original_event_date = editEvent.event_date;
+        }
       }
 
-      if (editScope === 'series' && editEvent.series_id) {
-        // Apply title/time to ALL rows in the series. Don't mass-apply date (would
-        // move every occurrence to the same day, which is wrong).
-        const seriesUpdate = {};
-        if (hasTitleChange) seriesUpdate.title = editForm.title;
-        if (hasTimeChange)  seriesUpdate.event_time = editForm.eventTime || null;
-        if (Object.keys(seriesUpdate).length > 0) {
-          // bulk update (no audit row — this is an intentional trade-off for UX;
-          // individual occurrences don't each warrant an audit row)
-          await supabase.from('calendar_events').update(seriesUpdate).eq('series_id', editEvent.series_id);
-        }
-        // If the master's date moved, also move the master (but not all children)
-        if (hasDateChange && editEvent.is_series_master) {
-          await dbUpdate('calendar_events', editEvent.id, { event_date: editForm.eventDate }, myId);
-        }
-        await logActivity(myId, 'Edited event series: ' + (editForm.title || editEvent.title), 'calendar');
-      } else {
-        // Single row update
-        await dbUpdate('calendar_events', editEvent.id, update, myId);
-        await logActivity(myId, 'Edited event: ' + (editForm.title || editEvent.title), 'calendar');
-      }
+      if ((editScope === 'series' || editScope === 'following') && editEvent.series_id) {
+        // v55.33 — resolve which siblings are affected. 'series' = all,
+        // 'following' = this row + every later one. Date change still
+        // applies only to the current row to avoid merging dates.
+        let q = supabase
+          .from('calendar_events')
+          .select('id, event_date, event_time, attendees, assigned_to')
+          .eq('series_id', editEvent.series_id);
+        if (editScope === 'following') q = q.gte('event_date', editEvent.event_date);
+        const sibRes = await q;
+        const sibList = sibRes.data || [];
+        const sibIds = sibList.map(function(s) { return s.id; });
 
-      // Reschedule reminders if date or time moved.
-      // For series-edit with time change: ALL children's 30min_before reminders are
-      // anchored to their (old) event_time, so cancel + reschedule for every child.
-      //
-      // v55.31 — for both series and single edits, reschedule reminders for
-      // EVERY attendee, not just the primary owner. Previously only
-      // `editEvent.assigned_to` got fresh reminders, leaving every other
-      // attendee with stale reminders pointing at the old date/time.
-      if (editScope === 'series' && editEvent.series_id && hasTimeChange) {
-        try {
-          const { data: siblings } = await supabase
-            .from('calendar_events').select('*')
-            .eq('series_id', editEvent.series_id);
-          for (const sib of (siblings || [])) {
+        // v55.33 — propagate ALL non-date changes to every affected sibling
+        // in one bulk update. Previously only title/event_time were
+        // propagated, so editing location, join link, all-day, description,
+        // event type, or customer at series scope silently did nothing.
+        if (sibIds.length > 0 && Object.keys(fieldUpdate).length > 0) {
+          await supabase.from('calendar_events').update(fieldUpdate).in('id', sibIds);
+        }
+        // Date change still goes only to the current row.
+        if (hasDateChange) {
+          const datePatch = { event_date: editForm.eventDate };
+          if (!editEvent.is_series_master) datePatch.original_event_date = editEvent.event_date;
+          await dbUpdate('calendar_events', editEvent.id, datePatch, myId);
+        }
+        const scopeLabel = editScope === 'following' ? 'series (this and following)' : 'series';
+        await logActivity(myId, 'Edited event ' + scopeLabel + ': ' + (editForm.title || editEvent.title), 'calendar');
+
+        // Reschedule reminders for every affected sibling on time change.
+        // For date change, only the current row's reminders need refresh.
+        if (hasTimeChange) {
+          for (const sib of sibList) {
             // Build the recipient list: union of assigned_to + attendees[].
             var sibRecipients = [];
             if (Array.isArray(sib.attendees) && sib.attendees.length) {
@@ -998,25 +1117,43 @@ export default function CalendarTab({ customers, user, userProfile, users, ticke
               sibRecipients.push(sib.assigned_to);
             }
             if (!sibRecipients.length) continue;
-            // Use the updated time if series-wide, else keep sib's own time.
             const asIf = { ...sib, event_time: editForm.eventTime || null };
             try { await rescheduleEventReminders(asIf, sibRecipients, myId); }
             catch (e) { /* per-row swallow */ }
           }
-        } catch (e) { console.log('[calendar] series reschedule failed: ' + e.message); }
-      } else if (hasDateChange || hasTimeChange) {
-        const fresh = { ...editEvent, ...update };
-        // Same union: attendees + assigned_to
-        var freshRecipients = [];
-        if (Array.isArray(fresh.attendees) && fresh.attendees.length) {
-          freshRecipients = fresh.attendees.slice();
+        } else if (hasDateChange) {
+          const fresh = { ...editEvent, ...singleUpdate };
+          // Same union: attendees + assigned_to
+          var freshRecipients = [];
+          if (Array.isArray(fresh.attendees) && fresh.attendees.length) {
+            freshRecipients = fresh.attendees.slice();
+          }
+          if (fresh.assigned_to && freshRecipients.indexOf(fresh.assigned_to) === -1) {
+            freshRecipients.push(fresh.assigned_to);
+          }
+          if (freshRecipients.length) {
+            try { await rescheduleEventReminders(fresh, freshRecipients, myId); }
+            catch (e) { console.log('[calendar] reschedule failed: ' + e.message); }
+          }
         }
-        if (fresh.assigned_to && freshRecipients.indexOf(fresh.assigned_to) === -1) {
-          freshRecipients.push(fresh.assigned_to);
-        }
-        if (freshRecipients.length) {
-          try { await rescheduleEventReminders(fresh, freshRecipients, myId); }
-          catch (e) { console.log('[calendar] reschedule failed: ' + e.message); }
+      } else {
+        // Single row update
+        await dbUpdate('calendar_events', editEvent.id, singleUpdate, myId);
+        await logActivity(myId, 'Edited event: ' + (editForm.title || editEvent.title), 'calendar');
+
+        if (hasDateChange || hasTimeChange) {
+          const fresh = { ...editEvent, ...singleUpdate };
+          var freshRecipients = [];
+          if (Array.isArray(fresh.attendees) && fresh.attendees.length) {
+            freshRecipients = fresh.attendees.slice();
+          }
+          if (fresh.assigned_to && freshRecipients.indexOf(fresh.assigned_to) === -1) {
+            freshRecipients.push(fresh.assigned_to);
+          }
+          if (freshRecipients.length) {
+            try { await rescheduleEventReminders(fresh, freshRecipients, myId); }
+            catch (e) { console.log('[calendar] reschedule failed: ' + e.message); }
+          }
         }
       }
 
@@ -1601,6 +1738,36 @@ export default function CalendarTab({ customers, user, userProfile, users, ticke
                 <input value={editForm.joinLink||''} onChange={e=>setEditForm({...editForm,joinLink:e.target.value})}
                   placeholder="https://zoom.us/j/... or any meeting URL"
                   className="w-full px-3 py-2 rounded border text-sm" /></div>
+              {/* v55.33 — Description / agenda. Free-text notes about the meeting. */}
+              <div className="col-span-2"><label className="text-[10px] font-semibold">📝 Description / Agenda</label>
+                <textarea
+                  value={editForm.description||''}
+                  onChange={e=>setEditForm({...editForm,description:e.target.value})}
+                  placeholder="What's this meeting about? Add agenda items, links, or notes..."
+                  rows={3}
+                  className="w-full px-3 py-2 rounded border text-sm" /></div>
+              {/* v55.33 — Event type. Categorizes the entry on the calendar. */}
+              <div><label className="text-[10px] font-semibold">🏷️ Type</label>
+                <select
+                  value={editForm.eventType||'task'}
+                  onChange={e=>setEditForm({...editForm,eventType:e.target.value})}
+                  className="w-full px-3 py-2 rounded border text-sm">
+                  <option value="task">Task</option>
+                  <option value="meeting">Meeting</option>
+                  <option value="call">Call</option>
+                  <option value="visit">Visit</option>
+                  <option value="reminder">Reminder</option>
+                  <option value="deadline">Deadline</option>
+                </select></div>
+              {/* v55.33 — Customer link. Optional pointer to a customer record. */}
+              <div><label className="text-[10px] font-semibold">👤 Customer / العميل</label>
+                <select
+                  value={editForm.customerId||''}
+                  onChange={e=>setEditForm({...editForm,customerId:e.target.value})}
+                  className="w-full px-3 py-2 rounded border text-sm">
+                  <option value="">— None —</option>
+                  {(customers||[]).map(c=>(<option key={c.id} value={c.id}>{c.name}</option>))}
+                </select></div>
             </div>
             {isSeriesItem && (
               <div className="mt-3 bg-amber-50 border border-amber-200 rounded-lg p-3">
@@ -1608,19 +1775,19 @@ export default function CalendarTab({ customers, user, userProfile, users, ticke
                 <div className="flex flex-col gap-1.5">
                   <label className="flex items-center gap-2 text-xs">
                     <input type="radio" name="editScope" checked={editScope==='single'} onChange={()=>setEditScope('single')} />
-                    <span>This occurrence only / هذه المرة فقط</span>
+                    <span>This occurrence only / هذه المرة فقط ({scopedCount('single')})</span>
                   </label>
-                  <label className="flex items-center gap-2 text-xs opacity-60" title="Coming in Session 3 (R2)">
-                    <input type="radio" disabled />
-                    <span>This and following / هذه وما بعدها <span className="text-[9px] text-amber-600">(Session 3)</span></span>
+                  <label className="flex items-center gap-2 text-xs">
+                    <input type="radio" name="editScope" checked={editScope==='following'} onChange={()=>setEditScope('following')} />
+                    <span>This and following / هذه وما بعدها ({scopedCount('following')})</span>
                   </label>
                   <label className="flex items-center gap-2 text-xs">
                     <input type="radio" name="editScope" checked={editScope==='series'} onChange={()=>setEditScope('series')} />
-                    <span>All in series / كل التكرارات</span>
+                    <span>All in series / كل التكرارات ({scopedCount('series')})</span>
                   </label>
                 </div>
-                {editScope === 'series' && (
-                  <div className="text-[10px] text-amber-700 mt-2">Note: title/time apply to all occurrences. Date change applies only to this row to avoid merging all occurrences to a single day.</div>
+                {(editScope === 'series' || editScope === 'following') && (
+                  <div className="text-[10px] text-amber-700 mt-2">Note: all changes except date apply to the affected occurrences. Date change applies only to this row to avoid merging occurrences to a single day.</div>
                 )}
               </div>
             )}
@@ -1644,7 +1811,7 @@ export default function CalendarTab({ customers, user, userProfile, users, ticke
                   toast. Easier to debug, easier to discover. */}
               {editEvent.status === 'cancelled' ? (
                 <button
-                  onClick={uncancelMeeting}
+                  onClick={() => setActionStage('restore')}
                   className="w-full px-4 py-2 bg-emerald-50 border border-emerald-300 text-emerald-800 rounded-lg text-xs font-semibold hover:bg-emerald-100"
                 >
                   ♻️ {lang === 'ar' ? 'استعادة الاجتماع الملغى' : 'Restore this cancelled meeting'}
@@ -1669,7 +1836,7 @@ export default function CalendarTab({ customers, user, userProfile, users, ticke
                   </button>
                   {canDecline(editEvent) && (
                     <button
-                      onClick={declineInvite}
+                      onClick={() => setActionStage('decline')}
                       className="w-full px-4 py-2 bg-orange-50 border-2 border-orange-400 text-orange-700 rounded-lg text-sm font-bold hover:bg-orange-100"
                       title={lang === 'ar' ? 'رفض الدعوة وإشعار المنظم بالبريد' : 'Decline and email the organizer'}
                     >
@@ -1775,6 +1942,34 @@ export default function CalendarTab({ customers, user, userProfile, users, ticke
               />
             </div>
 
+            {/* v55.33 — Scope picker for recurring meetings. Lets the user
+                cancel just this occurrence, this and all later, or every
+                occurrence in the series. Live count next to each option. */}
+            {editEvent.series_id && (
+              <div className="bg-red-50 border border-red-200 rounded-lg p-3">
+                <label className="text-xs font-semibold text-red-800 block mb-2">
+                  {lang === 'ar' ? 'تطبيق الإلغاء على' : 'Cancel which meetings?'}
+                </label>
+                <div className="flex flex-col gap-1.5">
+                  <label className="flex items-center gap-2 text-xs">
+                    <input type="radio" name="cancelScope" checked={cancelScope==='single'} onChange={()=>setCancelScope('single')} disabled={actionBusy} />
+                    <span>{lang === 'ar' ? 'هذه المرة فقط' : 'This occurrence only'} ({scopedCount('single')})</span>
+                  </label>
+                  <label className="flex items-center gap-2 text-xs">
+                    <input type="radio" name="cancelScope" checked={cancelScope==='following'} onChange={()=>setCancelScope('following')} disabled={actionBusy} />
+                    <span>{lang === 'ar' ? 'هذه وما بعدها' : 'This and following'} ({scopedCount('following')})</span>
+                  </label>
+                  <label className="flex items-center gap-2 text-xs">
+                    <input type="radio" name="cancelScope" checked={cancelScope==='series'} onChange={()=>setCancelScope('series')} disabled={actionBusy} />
+                    <span>{lang === 'ar' ? 'كل التكرارات' : 'All in series'} ({scopedCount('series')})</span>
+                  </label>
+                </div>
+                <div className="text-[11px] text-red-700 mt-2 font-semibold">
+                  {lang === 'ar' ? 'سيتم إلغاء ' : 'Will cancel '}{scopedCount(cancelScope)}{lang === 'ar' ? ' اجتماع' : ' meetings'}
+                </div>
+              </div>
+            )}
+
             <div className="flex gap-2 pt-2">
               <button
                 onClick={() => { setActionStage('idle'); setActionReason(''); }}
@@ -1831,6 +2026,34 @@ export default function CalendarTab({ customers, user, userProfile, users, ticke
               />
             </div>
 
+            {/* v55.33 — Scope picker for recurring meetings. Lets the user
+                delete just this occurrence, this and all later, or every
+                occurrence in the series. */}
+            {editEvent.series_id && (
+              <div className="bg-red-900/40 border border-red-600 rounded-lg p-3">
+                <label className="text-xs font-semibold text-red-300 block mb-2">
+                  {lang === 'ar' ? 'تطبيق الحذف على' : 'Delete which meetings?'}
+                </label>
+                <div className="flex flex-col gap-1.5 text-red-100">
+                  <label className="flex items-center gap-2 text-xs">
+                    <input type="radio" name="deleteScope" checked={deleteScope==='single'} onChange={()=>setDeleteScope('single')} disabled={actionBusy} />
+                    <span>{lang === 'ar' ? 'هذه المرة فقط' : 'This occurrence only'} ({scopedCount('single')})</span>
+                  </label>
+                  <label className="flex items-center gap-2 text-xs">
+                    <input type="radio" name="deleteScope" checked={deleteScope==='following'} onChange={()=>setDeleteScope('following')} disabled={actionBusy} />
+                    <span>{lang === 'ar' ? 'هذه وما بعدها' : 'This and following'} ({scopedCount('following')})</span>
+                  </label>
+                  <label className="flex items-center gap-2 text-xs">
+                    <input type="radio" name="deleteScope" checked={deleteScope==='series'} onChange={()=>setDeleteScope('series')} disabled={actionBusy} />
+                    <span>{lang === 'ar' ? 'كل التكرارات' : 'All in series'} ({scopedCount('series')})</span>
+                  </label>
+                </div>
+                <div className="text-[11px] text-red-200 mt-2 font-semibold">
+                  {lang === 'ar' ? 'سيتم حذف ' : 'Will permanently delete '}{scopedCount(deleteScope)}{lang === 'ar' ? ' اجتماع نهائياً' : ' meetings'}
+                </div>
+              </div>
+            )}
+
             <div className="flex gap-2 pt-2">
               <button
                 onClick={() => { setActionStage('idle'); setActionTyped(''); }}
@@ -1847,6 +2070,133 @@ export default function CalendarTab({ customers, user, userProfile, users, ticke
                 {actionBusy
                   ? (lang === 'ar' ? 'جاري الحذف...' : 'Deleting...')
                   : (lang === 'ar' ? '🗑 احذف نهائياً' : '🗑 Delete Forever')}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* v55.33 — Decline stage dialog. Replaces the old window.prompt flow.
+          window.prompt was getting silently suppressed by Chromium after a
+          few uses, leaving the user with no dialog at all and no decline. */}
+      {actionStage === 'decline' && editEvent && (
+        <div className="fixed inset-0 bg-black/70 z-[200] flex items-center justify-center p-4">
+          <div className="bg-white rounded-2xl shadow-2xl border-4 border-orange-500 max-w-md w-full p-6 space-y-4">
+            <div className="flex items-center gap-3">
+              <div className="text-3xl">🚫</div>
+              <div>
+                <div className="text-lg font-bold text-orange-800">
+                  {lang === 'ar' ? 'رفض الدعوة' : 'Decline This Invitation?'}
+                </div>
+                <div className="text-xs text-slate-600 mt-0.5">{editEvent.title}</div>
+              </div>
+            </div>
+
+            <div className="text-sm text-slate-700 bg-orange-50 border border-orange-200 rounded-lg p-3">
+              {lang === 'ar'
+                ? 'سيبقى الاجتماع مجدولاً للآخرين، وسيتم إعلام المنظم بالبريد. يمكنك القبول مرة أخرى لاحقاً.'
+                : 'The meeting stays scheduled for everyone else and the organizer is notified by email. You can accept again later.'}
+            </div>
+
+            <div>
+              <label className="text-xs font-semibold text-slate-700 block mb-1">
+                {lang === 'ar' ? 'سبب الرفض (اختياري — يُرسل للمنظم)' : 'Reason (optional — sent to the organizer)'}
+              </label>
+              <input
+                type="text"
+                value={actionReason}
+                onChange={e => setActionReason(e.target.value)}
+                placeholder={lang === 'ar' ? 'مثال: لدي اجتماع آخر' : 'e.g. conflict, sick, in transit...'}
+                className="w-full px-3 py-2.5 rounded-lg border-2 border-slate-300 text-sm bg-white focus:border-orange-400 outline-none"
+                autoFocus
+                disabled={actionBusy}
+              />
+            </div>
+
+            <div className="flex gap-2 pt-2">
+              <button
+                onClick={() => { setActionStage('idle'); setActionReason(''); }}
+                disabled={actionBusy}
+                className="px-4 py-3 border-2 border-slate-300 rounded-lg text-sm font-bold bg-white hover:bg-slate-50 disabled:opacity-50"
+              >
+                {lang === 'ar' ? 'تراجع' : 'Back'}
+              </button>
+              <button
+                onClick={performDecline}
+                disabled={actionBusy}
+                className="flex-1 px-4 py-3 bg-orange-600 text-white rounded-lg text-sm font-bold hover:bg-orange-700 disabled:opacity-50"
+              >
+                {actionBusy
+                  ? (lang === 'ar' ? 'جاري الرفض...' : 'Declining...')
+                  : (lang === 'ar' ? '🚫 رفض وإعلام المنظم' : '🚫 Decline and notify organizer')}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* v55.33 — Restore stage dialog. Replaces the direct uncancelMeeting call.
+          For recurring meetings, lets the user pick which occurrences to restore. */}
+      {actionStage === 'restore' && editEvent && (
+        <div className="fixed inset-0 bg-black/70 z-[200] flex items-center justify-center p-4">
+          <div className="bg-white rounded-2xl shadow-2xl border-4 border-emerald-500 max-w-md w-full p-6 space-y-4">
+            <div className="flex items-center gap-3">
+              <div className="text-3xl">♻️</div>
+              <div>
+                <div className="text-lg font-bold text-emerald-800">
+                  {lang === 'ar' ? 'استعادة الاجتماع' : 'Restore This Meeting?'}
+                </div>
+                <div className="text-xs text-slate-600 mt-0.5">{editEvent.title}</div>
+              </div>
+            </div>
+
+            <div className="text-sm text-slate-700 bg-emerald-50 border border-emerald-200 rounded-lg p-3">
+              {lang === 'ar'
+                ? 'سيُعاد تنشيط الاجتماع ويظهر بشكل طبيعي مرة أخرى.'
+                : 'The meeting becomes active again and shows normally on the calendar.'}
+            </div>
+
+            {editEvent.series_id && (
+              <div className="bg-emerald-50 border border-emerald-200 rounded-lg p-3">
+                <label className="text-xs font-semibold text-emerald-800 block mb-2">
+                  {lang === 'ar' ? 'تطبيق الاستعادة على' : 'Restore which meetings?'}
+                </label>
+                <div className="flex flex-col gap-1.5">
+                  <label className="flex items-center gap-2 text-xs">
+                    <input type="radio" name="restoreScope" checked={restoreScope==='single'} onChange={()=>setRestoreScope('single')} disabled={actionBusy} />
+                    <span>{lang === 'ar' ? 'هذه المرة فقط' : 'This occurrence only'} ({scopedCount('single')})</span>
+                  </label>
+                  <label className="flex items-center gap-2 text-xs">
+                    <input type="radio" name="restoreScope" checked={restoreScope==='following'} onChange={()=>setRestoreScope('following')} disabled={actionBusy} />
+                    <span>{lang === 'ar' ? 'هذه وما بعدها' : 'This and following'} ({scopedCount('following')})</span>
+                  </label>
+                  <label className="flex items-center gap-2 text-xs">
+                    <input type="radio" name="restoreScope" checked={restoreScope==='series'} onChange={()=>setRestoreScope('series')} disabled={actionBusy} />
+                    <span>{lang === 'ar' ? 'كل التكرارات' : 'All in series'} ({scopedCount('series')})</span>
+                  </label>
+                </div>
+                <div className="text-[11px] text-emerald-700 mt-2 font-semibold">
+                  {lang === 'ar' ? 'سيتم استعادة ' : 'Will restore '}{scopedCount(restoreScope)}{lang === 'ar' ? ' اجتماع' : ' meetings'}
+                </div>
+              </div>
+            )}
+
+            <div className="flex gap-2 pt-2">
+              <button
+                onClick={() => { setActionStage('idle'); }}
+                disabled={actionBusy}
+                className="px-4 py-3 border-2 border-slate-300 rounded-lg text-sm font-bold bg-white hover:bg-slate-50 disabled:opacity-50"
+              >
+                {lang === 'ar' ? 'تراجع' : 'Back'}
+              </button>
+              <button
+                onClick={uncancelMeeting}
+                disabled={actionBusy}
+                className="flex-1 px-4 py-3 bg-emerald-600 text-white rounded-lg text-sm font-bold hover:bg-emerald-700 disabled:opacity-50"
+              >
+                {actionBusy
+                  ? (lang === 'ar' ? 'جاري الاستعادة...' : 'Restoring...')
+                  : (lang === 'ar' ? '♻️ استعادة' : '♻️ Restore')}
               </button>
             </div>
           </div>

@@ -3406,12 +3406,14 @@ function runSection29_CalendarTabAudit() {
     '29.cin.1b each submission creates a new note row (no accidental duplicates — user must click Post)');
 
   // First-time post stamps attendance fields on the parent event
-  assert(/if \(!wasCompleted\) \{[\s\S]*?completed: true[\s\S]*?event_status: 'attended'[\s\S]*?checked_in_at[\s\S]*?checked_in_by/.test(cb),
+  // v55.32 — also gated by isOwnerOrCreator so a side-attendee posting a quick
+  // note doesn't mark the event "attended" for everyone.
+  assert(/if \(!wasCompleted(?:\s*&&\s*isOwnerOrCreator)?\) \{[\s\S]*?completed: true[\s\S]*?event_status: 'attended'[\s\S]*?checked_in_at[\s\S]*?checked_in_by/.test(cb),
     '29.cin.2a first-time check-in stamps completed + event_status + checked_in_at + checked_in_by');
 
   // Edit-after-completion (posting an additional note) does NOT overwrite
   // attendance stamps — the `if (!wasCompleted)` gate ensures it
-  assert(/if \(!wasCompleted\)/.test(cb),
+  assert(/if \(!wasCompleted/.test(cb),
     '29.cin.2b attendance stamps only applied when !wasCompleted (later notes don\'t overwrite)');
 
   // Daily log archive fires on every post (with different verb for first vs later)
@@ -4293,7 +4295,7 @@ function runSection35_CalendarTabR1() {
     '35.cancel.1a markEventStatus(attended|cancelled) cancels pending reminders');
   assert(/const completeEvent[\s\S]*?cancelEventReminders\(ev\.id\)/.test(cSrc),
     '35.cancel.1b completeEvent cancels pending reminders');
-  assert(/postNewNote[\s\S]*?if \(!wasCompleted\)[\s\S]*?cancelEventReminders\(notesEvent\.id\)/.test(cSrc),
+  assert(/postNewNote[\s\S]*?if \(!wasCompleted(?:\s*&&\s*isOwnerOrCreator)?\)[\s\S]*?cancelEventReminders\(notesEvent\.id\)/.test(cSrc),
     '35.cancel.1c first-time note post cancels reminders (not on subsequent notes — already sent)');
 
   // ---------- openEditEvent / saveEditEvent ----------
@@ -4314,18 +4316,31 @@ function runSection35_CalendarTabR1() {
 
   // Series edit must NOT mass-apply a date change (would collapse every
   // occurrence onto one day — catastrophic UX bug if missed)
-  assert(/Don't mass-apply date \(would/.test(eb) || /seriesUpdate = \{\};[\s\S]*?if \(hasTitleChange\) seriesUpdate\.title[\s\S]*?if \(hasTimeChange\)  seriesUpdate\.event_time/.test(eb),
+  // v55.33: replaced seriesUpdate with fieldUpdate (carries all non-date changes
+  // to siblings) + singleUpdate (adds date for the current row only). Date
+  // change still goes single-row only.
+  assert(/Don't mass-apply date \(would/.test(eb)
+      || /seriesUpdate = \{\};[\s\S]*?if \(hasTitleChange\) seriesUpdate\.title[\s\S]*?if \(hasTimeChange\)  seriesUpdate\.event_time/.test(eb)
+      || (/fieldUpdate = \{\}/.test(eb) && /singleUpdate = Object\.assign\(\{\}, fieldUpdate\)/.test(eb) && /if \(hasDateChange\)[\s\S]{0,200}?singleUpdate\.event_date = editForm\.eventDate/.test(eb)),
     '35.edit.2a SERIES edit never mass-applies event_date (prevents occurrence collapse)');
 
   // R2 prep: when moving a single occurrence inside a series, remember original
-  assert(/update\.original_event_date = editEvent\.event_date/.test(eb),
+  // v55.33: stored on singleUpdate (not `update`)
+  assert(/update\.original_event_date = editEvent\.event_date/.test(eb)
+      || /singleUpdate\.original_event_date = editEvent\.event_date/.test(eb)
+      || /datePatch\.original_event_date = editEvent\.event_date/.test(eb),
     '35.edit.3a single-move inside series stamps original_event_date (R2 prep)');
 
   // Reschedule on date/time change
-  assert(/rescheduleEventReminders\(fresh, \[editEvent\.assigned_to\], myId\)/.test(eb),
+  // v55.33: reminders now fire for ALL attendees (union of attendees[] +
+  // assigned_to), not just assigned_to. Look for the freshRecipients pattern.
+  assert(/rescheduleEventReminders\(fresh, \[editEvent\.assigned_to\], myId\)/.test(eb)
+      || /rescheduleEventReminders\(fresh, freshRecipients, myId\)/.test(eb),
     '35.edit.4a single-row date/time change reschedules reminders');
   // Series time change: iterates every sibling and reschedules each
-  assert(/for \(const sib of \(siblings \|\| \[\]\)\)[\s\S]*?rescheduleEventReminders\(asIf, \[sib\.assigned_to\], myId\)/.test(eb),
+  // v55.33: uses sibList + sibRecipients (union of attendees + assigned_to per sibling)
+  assert(/for \(const sib of \(siblings \|\| \[\]\)\)[\s\S]*?rescheduleEventReminders\(asIf, \[sib\.assigned_to\], myId\)/.test(eb)
+      || /for \(const sib of sibList\)[\s\S]*?rescheduleEventReminders\(asIf, sibRecipients, myId\)/.test(eb),
     '35.edit.4b series time change reschedules EVERY sibling (each has its own reminder rows)');
 
   // ---------- Client-side dispatcher fallback on mount ----------
@@ -5637,7 +5652,7 @@ function runSection48_Session5Finish() {
     '48.thr.3a postNewNote function present');
   assert(/await supabase\.from\('meeting_notes'\)\.insert/.test(cal),
     '48.thr.3b posts to meeting_notes table');
-  assert(/if \(!wasCompleted\)/.test(cal),
+  assert(/if \(!wasCompleted(?:\s*&&\s*isOwnerOrCreator)?\)/.test(cal),
     '48.thr.3c first-post stamps attendance on the parent event');
 
   // edit + delete + action-item toggle

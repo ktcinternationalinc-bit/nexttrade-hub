@@ -101,30 +101,36 @@ test('D3 performDelete writes audit log BEFORE deleting the row', function() {
 test('D4 performDelete uses hard DELETE (not soft cancel)', function() {
   var m = calendar.match(/const performDelete = async[\s\S]*?\n  \};/);
   assert(m, 'body');
-  assert(/supabase\.from\('calendar_events'\)\.delete\(\)\.eq\('id', editEvent\.id\)/.test(m[0]),
-    'actually deletes the row');
+  // v55.33 — bulk delete via .in('id', ids) instead of .eq('id', editEvent.id)
+  // so 'following' and 'series' scope work too.
+  assert(/supabase\.from\('calendar_events'\)\.delete\(\)\.in\('id', ids\)/.test(m[0]),
+    'actually deletes via .in(id, ids)');
 });
 
 // ===== DECLINE =====
 
-test('DC1 declineInvite exists with permission gate', function() {
-  var m = calendar.match(/const declineInvite = async[\s\S]*?\n  \};/);
-  assert(m, 'declineInvite defined');
+test('DC1 performDecline exists with permission gate', function() {
+  // v55.33 — declineInvite renamed to performDecline (consistency with performCancel/performDelete)
+  var m = calendar.match(/const performDecline = async[\s\S]*?\n  \};/);
+  assert(m, 'performDecline defined');
   assert(/if \(!canDecline\(editEvent\)\)/.test(m[0]),
     'permission check');
 });
 
-test('DC2 declineInvite prompts for optional reason', function() {
-  var m = calendar.match(/const declineInvite = async[\s\S]*?\n  \};/);
+test('DC2 performDecline reads reason from actionReason state (no window.prompt)', function() {
+  // v55.33 — window.prompt removed because Chromium silently suppressed it
+  // after a few uses on the same page. Reason now read from actionReason
+  // state, populated by the in-modal decline stage input.
+  var m = calendar.match(/const performDecline = async[\s\S]*?\n  \};/);
   assert(m, 'body');
-  assert(/window\.prompt\(/.test(m[0]),
-    'reason prompt');
-  assert(/if \(reason === null\) return/.test(m[0]),
-    'null → abort, empty string → proceed');
+  assert(!/window\.prompt\(/.test(m[0]),
+    'no window.prompt in performDecline (was getting suppressed by browsers)');
+  assert(/actionReason/.test(m[0]),
+    'reads reason from actionReason state');
 });
 
-test('DC3 declineInvite appends myId to declined_by array', function() {
-  var m = calendar.match(/const declineInvite = async[\s\S]*?\n  \};/);
+test('DC3 performDecline appends myId to declined_by array', function() {
+  var m = calendar.match(/const performDecline = async[\s\S]*?\n  \};/);
   assert(m, 'body');
   assert(/newDeclinedBy = Array\.isArray\(editEvent\.declined_by\) \? editEvent\.declined_by\.slice\(\) : \[\]/.test(m[0]),
     'defensive copy of existing decline list');
@@ -132,15 +138,15 @@ test('DC3 declineInvite appends myId to declined_by array', function() {
     'avoids duplicates');
 });
 
-test('DC4 declineInvite stores reason in decline_reasons JSONB', function() {
-  var m = calendar.match(/const declineInvite = async[\s\S]*?\n  \};/);
+test('DC4 performDecline stores reason in decline_reasons JSONB', function() {
+  var m = calendar.match(/const performDecline = async[\s\S]*?\n  \};/);
   assert(m, 'body');
   assert(/if \(reason\) newReasons\[myId\] = reason/.test(m[0]),
     'reason keyed by user id; only stored when provided');
 });
 
-test('DC5 declineInvite emails the creator via /api/notify', function() {
-  var m = calendar.match(/const declineInvite = async[\s\S]*?\n  \};/);
+test('DC5 performDecline emails the creator via /api/notify', function() {
+  var m = calendar.match(/const performDecline = async[\s\S]*?\n  \};/);
   assert(m, 'body');
   assert(/fetch\('\/api\/notify'/.test(m[0]),
     'hits the notify endpoint');
@@ -153,8 +159,8 @@ test('DC5 declineInvite emails the creator via /api/notify', function() {
     'audit trail: who declined');
 });
 
-test('DC6 declineInvite email failure does NOT block the decline', function() {
-  var m = calendar.match(/const declineInvite = async[\s\S]*?\n  \};/);
+test('DC6 performDecline email failure does NOT block the decline', function() {
+  var m = calendar.match(/const performDecline = async[\s\S]*?\n  \};/);
   assert(m, 'body');
   // The email fetch is inside its own try/catch that just swallows errors
   assert(/\} catch \(e\) \{ \/\* email is best-effort; don't block the decline \*\/ \}/.test(m[0]),

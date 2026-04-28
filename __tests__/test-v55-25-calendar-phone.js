@@ -219,9 +219,16 @@ test('C23 toast.error is called (not just logged) for permission denials', funct
 });
 
 test('C24 toast.success is called on successful cancel/delete', function() {
-  assert(/toast\.success[\s\S]{0,200}Meeting cancelled/.test(calendar),
+  // v55.33 — toast messages are now built into an `okMsg` const right above
+  // the toast.success call (single + plural variants), so 'Meeting cancelled'
+  // and 'Meeting permanently deleted' may appear shortly BEFORE toast.success
+  // rather than as inline arguments. Check that both strings exist near a
+  // toast.success call (in either direction).
+  assert(/Meeting cancelled[\s\S]{0,200}toast\.success/.test(calendar)
+      || /toast\.success[\s\S]{0,200}Meeting cancelled/.test(calendar),
     'Successful cancel must show success toast');
-  assert(/toast\.success[\s\S]{0,200}permanently deleted|Meeting permanently/.test(calendar),
+  assert(/(?:permanently deleted|Meeting permanently)[\s\S]{0,200}toast\.success/.test(calendar)
+      || /toast\.success[\s\S]{0,200}(?:permanently deleted|Meeting permanently)/.test(calendar),
     'Successful delete must show success toast');
 });
 

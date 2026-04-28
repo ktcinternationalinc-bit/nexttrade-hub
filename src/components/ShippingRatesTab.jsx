@@ -645,15 +645,29 @@ export default function ShippingRatesTab({ toast, user, userProfile, isAdmin, cu
     setImportStep('importing'); setImportProgress(0);
     let ok = 0, failed = 0;
     const errors = [];
-    for (let i = 0; i < importData.length; i++) {
+    // v55.33 — batched at 50 rows per insert (was per-row, slow on large imports).
+    // If a batch fails, fall back to per-row so we don't lose the whole 50.
+    const BATCH_SIZE = 50;
+    for (let i = 0; i < importData.length; i += BATCH_SIZE) {
+      const batch = importData.slice(i, i + BATCH_SIZE);
       try {
-        await dbInsert('shipping_rates', importData[i], myId);
-        ok++;
-      } catch(e) {
-        failed++;
-        if (errors.length < 5) errors.push(e.message || String(e));
+        const { error } = await supabase.from('shipping_rates').insert(batch);
+        if (error) throw error;
+        ok += batch.length;
+      } catch (e) {
+        // Per-row fallback: try each row individually so a single bad row
+        // doesn't kill the whole batch
+        for (const row of batch) {
+          try {
+            await dbInsert('shipping_rates', row, myId);
+            ok++;
+          } catch (err) {
+            failed++;
+            if (errors.length < 5) errors.push(err.message || String(err));
+          }
+        }
       }
-      if (i % 10 === 0) setImportProgress(Math.round((i / importData.length) * 100));
+      setImportProgress(Math.round(((i + batch.length) / importData.length) * 100));
     }
     setImportProgress(100); setImportStep('done');
     if (failed > 0) {
@@ -983,16 +997,37 @@ Date: ${today}`;
   // ========== ROUTE DETAIL ==========
   if (view === 'route_detail' && selectedRoute) {
     const bk = routeHistory.filter(r=>r.booked); const active = routeHistory.filter(r=>!isExpired(r.expiry_date)); const byVL = {}; active.forEach(r => { const k=(r.vendor_name||'?')+' / '+(r.shipping_line||'N/A'); if(!byVL[k])byVL[k]=[]; byVL[k].push(r); });
+    // v55.33 — figure out the PRIMARY currency for this route. When rates
+    // come in mixed currencies (USD + EUR for example), comparing min/max/avg
+    // across currencies is meaningless. We pick the most-common currency
+    // and only count rates in that currency for the summary cards.
+    var routeCurrencyCounts = {};
+    routeHistory.forEach(function(r) {
+      var c = r.currency || 'USD';
+      routeCurrencyCounts[c] = (routeCurrencyCounts[c] || 0) + 1;
+    });
+    var routeCurrencies = Object.keys(routeCurrencyCounts);
+    var primaryCurrency = routeCurrencies.length > 0
+      ? routeCurrencies.reduce(function(a, b) { return routeCurrencyCounts[a] > routeCurrencyCounts[b] ? a : b; })
+      : 'USD';
+    var routeMixedCurrency = routeCurrencies.length > 1;
+    var primaryActive = active.filter(function(r) { return (r.currency || 'USD') === primaryCurrency; });
+    var primaryHistory = routeHistory.filter(function(r) { return (r.currency || 'USD') === primaryCurrency; });
     // S17.11 — The old compact bar chart was replaced by the new LineChart
     // trend below. chartData/chartSorted no longer needed.
     return (<div>
       <button onClick={()=>{setSelectedRoute(null);setView('routes');}} className="px-3 py-1 rounded border border-slate-200 text-xs font-semibold mb-3">← Back</button>
       <h2 className="text-xl font-extrabold mb-1">🚢 {selectedRoute.origin} → {selectedRoute.destination}</h2>
       <p className="text-xs text-slate-500 mb-3">{routeHistory.length} rates • {active.length} active • {bk.length} booked</p>
+      {routeMixedCurrency && (
+        <div className="bg-amber-50 border border-amber-300 rounded-lg p-2 mb-3 text-[11px] text-amber-800">
+          ⚠️ Mixed currencies on this route ({routeCurrencies.join(', ')}). Summary cards below show only {primaryCurrency} rates ({primaryHistory.length} of {routeHistory.length}).
+        </div>
+      )}
       <div className="grid grid-cols-5 gap-3 mb-4">
-        <div className="bg-white rounded-lg p-3" style={{borderLeftWidth:3,borderLeftColor:'#10b981'}}><div className="text-[10px] text-slate-500">Best Active</div><div className="text-lg font-extrabold text-emerald-600">{active.length>0?fCur(Math.min(...active.map(r=>r.rate_amount||Infinity)),active[0]?.currency):'—'}</div></div>
-        <div className="bg-white rounded-lg p-3" style={{borderLeftWidth:3,borderLeftColor:'#ef4444'}}><div className="text-[10px] text-slate-500">Highest</div><div className="text-lg font-extrabold text-red-500">{fCur(Math.max(...routeHistory.map(r=>r.rate_amount||0)),routeHistory[0]?.currency)}</div></div>
-        <div className="bg-white rounded-lg p-3" style={{borderLeftWidth:3,borderLeftColor:'#0ea5e9'}}><div className="text-[10px] text-slate-500">Avg</div><div className="text-lg font-extrabold">{fCur(Math.round(routeHistory.reduce((a,r)=>a+Number(r.rate_amount||0),0)/routeHistory.length),routeHistory[0]?.currency)}</div></div>
+        <div className="bg-white rounded-lg p-3" style={{borderLeftWidth:3,borderLeftColor:'#10b981'}}><div className="text-[10px] text-slate-500">Best Active ({primaryCurrency})</div><div className="text-lg font-extrabold text-emerald-600">{primaryActive.length>0?fCur(Math.min(...primaryActive.map(r=>r.rate_amount||Infinity)),primaryCurrency):'—'}</div></div>
+        <div className="bg-white rounded-lg p-3" style={{borderLeftWidth:3,borderLeftColor:'#ef4444'}}><div className="text-[10px] text-slate-500">Highest ({primaryCurrency})</div><div className="text-lg font-extrabold text-red-500">{primaryHistory.length>0?fCur(Math.max(...primaryHistory.map(r=>r.rate_amount||0)),primaryCurrency):'—'}</div></div>
+        <div className="bg-white rounded-lg p-3" style={{borderLeftWidth:3,borderLeftColor:'#0ea5e9'}}><div className="text-[10px] text-slate-500">Avg ({primaryCurrency})</div><div className="text-lg font-extrabold">{primaryHistory.length>0?fCur(Math.round(primaryHistory.reduce((a,r)=>a+Number(r.rate_amount||0),0)/primaryHistory.length),primaryCurrency):'—'}</div></div>
         <div className="bg-white rounded-lg p-3" style={{borderLeftWidth:3,borderLeftColor:'#8b5cf6'}}><div className="text-[10px] text-slate-500">Vendors</div><div className="text-lg font-extrabold">{Object.keys(byVL).length}</div></div>
         <div className="bg-white rounded-lg p-3" style={{borderLeftWidth:3,borderLeftColor:'#f59e0b'}}><div className="text-[10px] text-slate-500">Bookings</div><div className="text-lg font-extrabold">{routeBookings(selectedRoute.origin,selectedRoute.destination).length}</div></div>
       </div>
@@ -1005,13 +1040,59 @@ Date: ${today}`;
         if (rateHistoryDt) trendRates = trendRates.filter(r => (r.effective_date || '') <= rateHistoryDt);
         if (hideExpired) trendRates = trendRates.filter(r => !isExpired(r.expiry_date));
 
+        // v55.33 — figure out the primary currency for the trend window so
+        // the Y-axis and tooltip can use the right symbol (was hardcoded '$'
+        // before, which read wrong on EUR / EGP / GBP routes). Currency
+        // symbol map mirrors fCur() at line 15.
+        var SYM = { USD: '$', EUR: '€', EGP: 'E£', GBP: '£', CNY: '¥', TRY: '₺', SAR: 'SR', AED: 'AED ' };
+        var trendCurrencyCounts = {};
+        trendRates.forEach(function(r) {
+          var c = r.currency || 'USD';
+          trendCurrencyCounts[c] = (trendCurrencyCounts[c] || 0) + 1;
+        });
+        var trendCurrencies = Object.keys(trendCurrencyCounts);
+        var chartCurrency = trendCurrencies.length > 0
+          ? trendCurrencies.reduce(function(a, b) { return trendCurrencyCounts[a] > trendCurrencyCounts[b] ? a : b; })
+          : 'USD';
+        var chartSym = SYM[chartCurrency] || (chartCurrency + ' ');
+        var chartMixed = trendCurrencies.length > 1;
+        // Restrict the chart points to the primary currency so we're not
+        // averaging across $ and € on the same bar.
+        var trendRatesForChart = trendRates.filter(function(r) { return (r.currency || 'USD') === chartCurrency; });
+
+        // v55.33 — period-over-period: compute the same-length window
+        // immediately preceding the current one and compare averages.
+        var priorAvg = null;
+        var currentAvg = null;
+        if (rateHistoryDf && rateHistoryDt) {
+          var df = new Date(rateHistoryDf);
+          var dt = new Date(rateHistoryDt);
+          var msPerDay = 24 * 60 * 60 * 1000;
+          var spanDays = Math.max(1, Math.round((dt - df) / msPerDay));
+          var priorEnd = new Date(df.getTime() - msPerDay);
+          var priorStart = new Date(priorEnd.getTime() - spanDays * msPerDay);
+          var pStartIso = priorStart.toISOString().substring(0,10);
+          var pEndIso = priorEnd.toISOString().substring(0,10);
+          var priorRates = routeHistory.filter(function(r) {
+            return (r.currency || 'USD') === chartCurrency
+              && (r.effective_date || '') >= pStartIso
+              && (r.effective_date || '') <= pEndIso;
+          });
+          if (priorRates.length > 0) {
+            priorAvg = priorRates.reduce(function(a,r){ return a + Number(r.rate_amount||0); }, 0) / priorRates.length;
+          }
+          if (trendRatesForChart.length > 0) {
+            currentAvg = trendRatesForChart.reduce(function(a,r){ return a + Number(r.rate_amount||0); }, 0) / trendRatesForChart.length;
+          }
+        }
+
         // Available shipping lines in the full route history (not just filtered) so
         // user can always see the dropdown options.
         var allLinesInRoute = Array.from(new Set(routeHistory.map(r => r.shipping_line || '(no line)'))).sort();
 
         // Build: [{month, <line1>: avg, <line2>: avg, _avg: overall}]
         var monthsSet = new Set();
-        trendRates.forEach(r => { var m = (r.effective_date || '').substring(0,7); if (m) monthsSet.add(m); });
+        trendRatesForChart.forEach(r => { var m = (r.effective_date || '').substring(0,7); if (m) monthsSet.add(m); });
         var months = Array.from(monthsSet).sort();
 
         // Distinct color palette for up to 8 lines.
@@ -1019,7 +1100,7 @@ Date: ${today}`;
 
         var linesToPlot = [];
         if (chartShippingLine === 'all') {
-          linesToPlot = allLinesInRoute.filter(L => trendRates.some(r => (r.shipping_line || '(no line)') === L));
+          linesToPlot = allLinesInRoute.filter(L => trendRatesForChart.some(r => (r.shipping_line || '(no line)') === L));
         } else {
           linesToPlot = [chartShippingLine];
         }
@@ -1027,14 +1108,14 @@ Date: ${today}`;
         var trendPoints = months.map(function(m) {
           var point = { month: m };
           linesToPlot.forEach(function(L) {
-            var ratesForLine = trendRates.filter(r => (r.effective_date||'').substring(0,7) === m && (r.shipping_line || '(no line)') === L);
+            var ratesForLine = trendRatesForChart.filter(r => (r.effective_date||'').substring(0,7) === m && (r.shipping_line || '(no line)') === L);
             if (ratesForLine.length) {
               var sum = ratesForLine.reduce((a,b) => a + Number(b.rate_amount||0), 0);
               point[L] = Math.round(sum / ratesForLine.length);
             }
           });
           // Overall avg across ALL lines in this month
-          var monthRates = trendRates.filter(r => (r.effective_date||'').substring(0,7) === m);
+          var monthRates = trendRatesForChart.filter(r => (r.effective_date||'').substring(0,7) === m);
           if (monthRates.length) {
             point._avg = Math.round(monthRates.reduce((a,b) => a + Number(b.rate_amount||0), 0) / monthRates.length);
           }
@@ -1052,7 +1133,7 @@ Date: ${today}`;
 
         return (<div className="bg-white rounded-xl p-4 mb-4 border border-slate-200">
           <div className="flex justify-between items-center mb-3 flex-wrap gap-2">
-            <h3 className="text-sm font-bold">📈 Rate Trend Over Time</h3>
+            <h3 className="text-sm font-bold">📈 Rate Trend Over Time ({chartCurrency})</h3>
             <div className="flex items-center gap-2">
               <span className="text-[10px] text-slate-500">Shipping line:</span>
               <select value={chartShippingLine} onChange={function(e){ setChartShippingLine(e.target.value); }} className="px-2 py-1 rounded border text-xs">
@@ -1061,13 +1142,23 @@ Date: ${today}`;
               </select>
             </div>
           </div>
+          {chartMixed && (
+            <div className="bg-amber-50 border border-amber-300 rounded p-2 mb-2 text-[11px] text-amber-800">
+              ⚠️ This route has rates in multiple currencies ({trendCurrencies.join(', ')}). Chart shows {chartCurrency} only.
+            </div>
+          )}
+          {priorAvg !== null && currentAvg !== null && (
+            <div className={'rounded p-2 mb-2 text-[11px] ' + (currentAvg > priorAvg ? 'bg-red-50 border border-red-200 text-red-800' : 'bg-emerald-50 border border-emerald-200 text-emerald-800')}>
+              {currentAvg > priorAvg ? '↗' : '↘'} Period-over-period: avg {chartSym}{Math.round(currentAvg).toLocaleString()} vs prior {chartSym}{Math.round(priorAvg).toLocaleString()} ({(((currentAvg - priorAvg) / priorAvg) * 100).toFixed(1)}%)
+            </div>
+          )}
           <div style={{width: '100%', height: 280}}>
             <ResponsiveContainer>
               <LineChart data={trendPoints} margin={{top: 10, right: 20, left: 0, bottom: 10}}>
                 <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" />
                 <XAxis dataKey="month" tick={{fontSize: 10}} />
-                <YAxis tick={{fontSize: 10}} tickFormatter={function(v){ return '$' + v; }} />
-                <RTooltip formatter={function(v){ return '$' + Number(v).toLocaleString(); }} />
+                <YAxis tick={{fontSize: 10}} tickFormatter={function(v){ return chartSym + v; }} />
+                <RTooltip formatter={function(v){ return chartSym + Number(v).toLocaleString(); }} />
                 <RLegend wrapperStyle={{fontSize: 11}} />
                 {chartShippingLine === 'all'
                   ? linesToPlot.map(function(L, i) {
@@ -1080,7 +1171,7 @@ Date: ${today}`;
             </ResponsiveContainer>
           </div>
           <div className="text-[10px] text-slate-500 mt-1">
-            {trendRates.length} rates plotted across {months.length} month{months.length === 1 ? '' : 's'}
+            {trendRatesForChart.length} rates plotted across {months.length} month{months.length === 1 ? '' : 's'}
             {hideExpired && <span className="ml-2 text-amber-600">• Expired rates hidden</span>}
           </div>
         </div>);
@@ -1138,12 +1229,39 @@ Date: ${today}`;
         if (rateHistoryDf) filtered = filtered.filter(r => (r.effective_date || '') >= rateHistoryDf);
         if (rateHistoryDt) filtered = filtered.filter(r => (r.effective_date || '') <= rateHistoryDt);
         if (hideExpired) filtered = filtered.filter(r => !isExpired(r.expiry_date));
-        var bestRate = filtered.length > 0 ? filtered.reduce((a,b) => (a.rate_amount||Infinity) < (b.rate_amount||Infinity) ? a : b) : null;
+        // v55.33 — best-rate must be currency-aware. Compute primary currency
+        // for the filtered window, restrict best-rate calc to that currency.
+        // Otherwise picking min across mixed currencies is meaningless ($100 < €1000 numerically but not value-wise).
+        var fCounts = {};
+        filtered.forEach(function(r){ var c = r.currency || 'USD'; fCounts[c] = (fCounts[c]||0)+1; });
+        var fCurs = Object.keys(fCounts);
+        var bestCurrency = fCurs.length > 0
+          ? fCurs.reduce(function(a,b){ return fCounts[a] > fCounts[b] ? a : b; })
+          : 'USD';
+        var filteredPrimary = filtered.filter(function(r){ return (r.currency || 'USD') === bestCurrency; });
+        var bestRate = filteredPrimary.length > 0 ? filteredPrimary.reduce((a,b) => (a.rate_amount||Infinity) < (b.rate_amount||Infinity) ? a : b) : null;
         var expiredCount = filtered.filter(r => isExpired(r.expiry_date)).length;
         var bookedCount = filtered.filter(r => r.booked).length;
+        // v55.33 — sort filtered by date ascending to compute per-row Δ vs prev
+        // for the same vendor + line + container + currency combination.
+        var sortedByDate = filtered.slice().sort(function(a,b){ return (a.effective_date||'').localeCompare(b.effective_date||''); });
+        var deltas = {};
+        sortedByDate.forEach(function(r){
+          var key = (r.vendor_name||'') + '|' + (r.shipping_line||'') + '|' + (r.container_type||'') + '|' + (r.currency||'USD');
+          var prevSameKey = sortedByDate.filter(function(p){
+            var pKey = (p.vendor_name||'') + '|' + (p.shipping_line||'') + '|' + (p.container_type||'') + '|' + (p.currency||'USD');
+            return pKey === key && (p.effective_date||'') < (r.effective_date||'');
+          });
+          if (prevSameKey.length > 0) {
+            var prev = prevSameKey[prevSameKey.length - 1];
+            var diff = Number(r.rate_amount||0) - Number(prev.rate_amount||0);
+            var pct = prev.rate_amount ? (diff / prev.rate_amount) * 100 : null;
+            deltas[r.id] = { diff: diff, pct: pct, prevRate: prev.rate_amount, prevDate: prev.effective_date };
+          }
+        });
         return (<>
         {bestRate && <div className="bg-emerald-50 rounded-lg px-3 py-2 mb-2 border border-emerald-200 flex justify-between items-center">
-          <span className="text-[10px] font-bold text-emerald-700">🏆 Best rate in period: {bestRate.vendor_name} {bestRate.shipping_line ? '/ '+bestRate.shipping_line : ''}</span>
+          <span className="text-[10px] font-bold text-emerald-700">🏆 Best rate in period ({bestCurrency}): {bestRate.vendor_name} {bestRate.shipping_line ? '/ '+bestRate.shipping_line : ''}</span>
           <span className="text-sm font-extrabold text-emerald-600">{fCur(bestRate.rate_amount, bestRate.currency)} <span className="text-[10px] font-normal">({bestRate.effective_date})</span></span>
         </div>}
       <div className="overflow-auto max-h-[420px] rounded-lg border border-slate-200">
@@ -1154,6 +1272,7 @@ Date: ${today}`;
             <th className="px-2 py-2 text-[10px] text-left">Shipping Line</th>
             <th className="px-2 py-2 text-[10px]">Container</th>
             <th className="px-2 py-2 text-[10px] text-right">Rate</th>
+            <th className="px-2 py-2 text-[10px] text-right">Δ vs prev</th>
             <th className="px-2 py-2 text-[10px] text-right">Total</th>
             <th className="px-2 py-2 text-[10px] text-left">Status</th>
             <th className="px-2 py-2 text-[10px] text-left">Booked</th>
@@ -1162,12 +1281,21 @@ Date: ${today}`;
           <tbody>{filtered.map(r => {
             const exp = isExpired(r.expiry_date);
             const isBest = bestRate && r.id === bestRate.id;
+            const dlt = deltas[r.id];
             return (<tr key={r.id} className={'border-b border-slate-50 ' + (isBest ? 'bg-emerald-50 ' : exp ? 'bg-slate-50 ' : '') + (r.booked ? ' bg-green-50' : '')}>
               <td className="px-2 py-1.5">{r.effective_date}</td>
               <td className="px-2 py-1.5 font-semibold">{isBest && <span className="text-emerald-500 mr-1">★</span>}{r.vendor_name}</td>
               <td className="px-2 py-1.5">{r.shipping_line || '—'}</td>
               <td className="px-2 py-1.5 text-center"><span className="px-1.5 py-0.5 bg-blue-100 text-blue-700 rounded text-[9px]">{r.container_type}</span></td>
               <td className={'px-2 py-1.5 text-right font-bold ' + (exp ? 'text-slate-500' : 'text-blue-600')}>{fCur(r.rate_amount, r.currency)}</td>
+              <td className="px-2 py-1.5 text-right text-[10px]" title={dlt ? ('Previous: ' + fCur(dlt.prevRate, r.currency) + ' on ' + dlt.prevDate) : 'No prior rate for this vendor + line + container + currency'}>
+                {dlt
+                  ? (<span className={dlt.diff > 0 ? 'text-red-600 font-semibold' : dlt.diff < 0 ? 'text-emerald-600 font-semibold' : 'text-slate-500'}>
+                      {dlt.diff > 0 ? '▲' : dlt.diff < 0 ? '▼' : '='} {fCur(Math.abs(dlt.diff), r.currency)}
+                      {dlt.pct !== null && <span className="ml-1 text-[9px]">({dlt.pct > 0 ? '+' : ''}{dlt.pct.toFixed(1)}%)</span>}
+                    </span>)
+                  : <span className="text-slate-400">—</span>}
+              </td>
               <td className={'px-2 py-1.5 text-right font-bold ' + (exp ? 'text-slate-500' : 'text-amber-600')}>{fCur(r.total_cost, r.currency)}</td>
               <td className="px-2 py-1.5">
                 {exp
