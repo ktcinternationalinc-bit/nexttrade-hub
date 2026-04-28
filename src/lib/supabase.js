@@ -20,23 +20,105 @@ export async function dbQuery(table, options = {}) {
 }
 
 // Helper: insert with audit
+//
+// v55.30 — resilient to missing columns. If Postgres rejects the insert
+// because a column doesn't exist (typically because a SQL migration wasn't
+// run yet), we strip that column from the record and retry ONCE. The
+// missing column is logged so it's still visible in dev tools, but the
+// user-visible save succeeds. This prevents the entire feature from
+// breaking when one optional column is added to the UI before the DB
+// migration has been applied. (The concrete trigger was the "Could not
+// find the 'all_day' column of 'calendar_events' in the schema cache"
+// error after the s26 migration hadn't been run.)
+//
+// We only strip ONE column per attempt and retry once — if a second
+// missing-column error appears after the retry, we surface it normally
+// so the developer knows to fix the migration. This is intentional:
+// silently stripping fields forever could mask real schema drift.
+function extractMissingColumn(error) {
+  if (!error || !error.message) return null;
+  // Postgres / supabase-js error messages we care about:
+  //   "Could not find the 'all_day' column of 'calendar_events' in the schema cache"
+  //   "column \"all_day\" of relation \"calendar_events\" does not exist"
+  var m1 = error.message.match(/Could not find the '([^']+)' column/);
+  if (m1) return m1[1];
+  var m2 = error.message.match(/column "([^"]+)" of relation .* does not exist/);
+  if (m2) return m2[1];
+  return null;
+}
+
 export async function dbInsert(table, record, userId) {
-  const { data, error } = await supabase.from(table).insert(record).select().single();
+  var attemptRecord = record;
+  var strippedColumns = [];
+  var data, error;
+
+  // First attempt
+  var first = await supabase.from(table).insert(attemptRecord).select().single();
+  data = first.data;
+  error = first.error;
+
+  // If the error is a missing column, strip it and retry ONCE
+  if (error) {
+    var missing = extractMissingColumn(error);
+    if (missing && missing in attemptRecord) {
+      console.warn('[dbInsert] ' + table + ' missing column "' + missing + '" — stripping and retrying. Run the SQL migration that adds this column.');
+      var retryRecord = Object.assign({}, attemptRecord);
+      delete retryRecord[missing];
+      strippedColumns.push(missing);
+      var retry = await supabase.from(table).insert(retryRecord).select().single();
+      data = retry.data;
+      error = retry.error;
+      attemptRecord = retryRecord;
+    }
+  }
+
   if (error) throw error;
   if (userId) {
     await supabase.from('audit_log').insert({
       table_name: table, record_id: data.id, action: 'create',
-      changed_by: userId, new_values: record
+      changed_by: userId, new_values: attemptRecord
     });
+  }
+  // Tag the returned row with diagnostic info so callers can see what was
+  // dropped without changing the public API. Read-only consumers ignore
+  // this; tools that want to surface a migration warning can check it.
+  if (strippedColumns.length > 0 && data && typeof data === 'object') {
+    try { Object.defineProperty(data, '__strippedColumns', { value: strippedColumns, enumerable: false }); } catch (_) {}
   }
   return data;
 }
 
 // Helper: update with audit
+//
+// v55.30 — same missing-column resilience as dbInsert. See comment there.
 export async function dbUpdate(table, id, changes, userId) {
   // Get old values for audit
   const { data: old } = await supabase.from(table).select('*').eq('id', id).single();
-  const { data, error } = await supabase.from(table).update(changes).eq('id', id).select().single();
+
+  var attemptChanges = changes;
+  var strippedColumns = [];
+  var first = await supabase.from(table).update(attemptChanges).eq('id', id).select().single();
+  var data = first.data;
+  var error = first.error;
+
+  if (error) {
+    var missing = extractMissingColumn(error);
+    if (missing && missing in attemptChanges) {
+      console.warn('[dbUpdate] ' + table + ' missing column "' + missing + '" — stripping and retrying. Run the SQL migration that adds this column.');
+      var retryChanges = Object.assign({}, attemptChanges);
+      delete retryChanges[missing];
+      strippedColumns.push(missing);
+      // If stripping the only field leaves nothing to update, just return the row
+      if (Object.keys(retryChanges).length === 0) {
+        return old;
+      }
+      var retry = await supabase.from(table).update(retryChanges).eq('id', id).select().single();
+      data = retry.data;
+      error = retry.error;
+      attemptChanges = retryChanges;
+    }
+  }
+
   if (error) throw error;
   if (userId) {
     // Check if this is a late edit (24h+ after creation)
@@ -57,16 +139,20 @@ export async function dbUpdate(table, id, changes, userId) {
       'transaction_date', 'invoice_date', 'due_date', 'check_date', 'collection_date',
       'customer_name', 'customer_name_en', 'check_number',
     ];
-    const changedFields = Object.keys(changes).filter(k => old && old[k] !== changes[k]);
+    const changedFields = Object.keys(attemptChanges).filter(k => old && old[k] !== attemptChanges[k]);
     const sensitiveChanges = changedFields.filter(f => SENSITIVE_FIELDS.includes(f));
 
     await supabase.from('audit_log').insert({
       table_name: table, record_id: id, action: 'update',
-      changed_by: userId, old_values: old, new_values: changes,
+      changed_by: userId, old_values: old, new_values: attemptChanges,
       is_late_edit: isLateEdit,
       hours_since_creation: Math.round(hoursSinceCreation),
       sensitive_fields_changed: sensitiveChanges.length > 0 ? sensitiveChanges : null,
     });
+  }
+  // Same diagnostic tag as dbInsert
+  if (strippedColumns.length > 0 && data && typeof data === 'object') {
+    try { Object.defineProperty(data, '__strippedColumns', { value: strippedColumns, enumerable: false }); } catch (_) {}
   }
   return data;
 }

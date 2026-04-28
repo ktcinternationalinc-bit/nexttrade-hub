@@ -1721,7 +1721,14 @@ function runSection22_TempIdRegression() {
   // 22.6 — dbInsert in supabase.js still returns the data row so callers can rely on it
   const supaSrc = fs.readFileSync(path.join(REPO_ROOT, 'src/lib/supabase.js'), 'utf8');
   assert(/export async function dbInsert/.test(supaSrc), '22.6a dbInsert still exported');
-  assert(/\.insert\(record\)\.select\(\)\.single\(\)/.test(supaSrc), '22.6b dbInsert uses .select().single() so returned data carries the real uuid');
+  // v55.30 — was: /\.insert\(record\)\.select\(\)\.single\(\)/
+  // Now: dbInsert splits the call across an assignment so it can retry on
+  // missing-column errors. The invariant is unchanged — every insert path
+  // still runs .select().single() so the returned row has the real UUID.
+  // Match the chain regardless of variable name (record vs attemptRecord)
+  // and allow attribute access between insert and select.
+  assert(/\.insert\([a-zA-Z_]+\)\.select\(\)\.single\(\)/.test(supaSrc),
+    '22.6b dbInsert uses .insert(...).select().single() so returned data carries the real uuid');
   assert(/return data;/.test(supaSrc), '22.6c dbInsert returns data');
 
   // 22.7 — handleSaveTreasuryEdit still passes the txn.id it was given (no preprocessing)
