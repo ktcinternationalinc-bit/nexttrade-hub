@@ -38,8 +38,11 @@ test('S8.1 Nadia watch cron runs every 5 minutes', function() {
   assert.strictEqual(nadia.schedule, '*/5 * * * *', 'schedule must be every 5 min, was ' + nadia.schedule);
 });
 
-test('S8.1b Other crons still preserved (Pro plan — 4 crons total)', function() {
-  assert.strictEqual(vercelJson.crons.length, 4, 'should have 4 crons: categorize, generate-occurrences, reminders/dispatch, nadia/watch');
+test('S8.1b Other crons still preserved (the 4 original crons must still exist)', function() {
+  // Note: cron count grew to 5+ when phone/transcribe-cron was added for
+  // voicemail/recording transcription. The invariant we care about is that
+  // the original 4 crons remain present; new crons are allowed.
+  assert(vercelJson.crons.length >= 4, 'should have at least 4 crons, has ' + vercelJson.crons.length);
   var paths = vercelJson.crons.map(function(c) { return c.path; });
   ['/api/categorize', '/api/events/generate-occurrences', '/api/reminders/dispatch', '/api/nadia/watch']
     .forEach(function(p) { assert(paths.indexOf(p) >= 0, 'missing cron: ' + p); });

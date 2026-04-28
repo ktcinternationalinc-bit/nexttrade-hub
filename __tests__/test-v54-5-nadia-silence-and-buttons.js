@@ -125,38 +125,53 @@ test('V6 onresult clears silence timer when full command commits via engine', fu
 // ===== CALENDAR: always-visible Cancel + Delete buttons =====
 
 test('C1 Cancel button is rendered UNCONDITIONALLY (no canCancel gate)', function() {
-  // The visible button is always there. canCancel is enforced INSIDE
-  // cancelMeeting() via toast.error, not at the render layer. This
-  // ensures user always sees the button so they're never confused.
-  var modalBlock = calendar.match(/v54\.5[\s\S]*?Already cancelled[\s\S]*?\}\)\}/);
-  // Simpler: the cancel button block must NOT be wrapped in {canCancel...}
-  var buttons = calendar.match(/Cancel this meeting[\s\S]{0,200}/);
-  // Ensure no canCancel(editEvent) wrapper IMMEDIATELY before the button
-  assert(!/\{canCancel\(editEvent\) && \(\s*<button\s*onClick=\{cancelMeeting\}/.test(calendar),
+  // v55.25 — button always visible; click handler does the canCancel() check
+  // (with toast on denial) before transitioning to actionStage='cancel'.
+  // The z-200 overlay then appears with a reason input + confirm button that
+  // calls performCancel().
+  assert(!/\{canCancel\(editEvent\) && \(\s*<button[^>]*setActionStage\('cancel'\)/.test(calendar),
     'cancel button is no longer gated by canCancel at render');
-  assert(/onClick=\{cancelMeeting\}/.test(calendar),
-    'cancel handler still wired');
+  assert(/setActionStage\('cancel'\)/.test(calendar),
+    'cancel button transitions to actionStage cancel');
+  assert(/onClick=\{performCancel\}/.test(calendar),
+    'overlay confirm wires performCancel');
 });
 
 test('C2 Delete button is rendered UNCONDITIONALLY (no canDelete gate)', function() {
-  assert(!/\{canDelete\(editEvent\) && \(\s*<button\s*onClick=\{deleteMeeting\}/.test(calendar),
+  // Same pattern as C1.
+  assert(!/\{canDelete\(editEvent\) && \(\s*<button[^>]*setActionStage\('delete'\)/.test(calendar),
     'delete button is no longer gated by canDelete at render');
-  assert(/onClick=\{deleteMeeting\}/.test(calendar),
-    'delete handler still wired');
+  assert(/setActionStage\('delete'\)/.test(calendar),
+    'delete button transitions to actionStage delete');
+  assert(/onClick=\{performDelete\}/.test(calendar),
+    'overlay confirm wires performDelete');
 });
 
 test('C3 Permission checks remain INSIDE the click handlers (defense in depth)', function() {
-  var cancelBody = calendar.match(/const cancelMeeting = async[\s\S]*?\n  \};/);
-  assert(cancelBody, 'cancelMeeting');
+  // v55.25 — defense in depth happens in TWO places:
+  //   1. The inline button onClick wrapper (checks canCancel/canDelete BEFORE
+  //      entering the confirmation stage, so the user gets the error toast
+  //      without having to type DELETE first).
+  //   2. The performCancel/performDelete handlers (check again, in case the
+  //      stage was somehow entered without going through the wrapper).
+  var cancelBody = calendar.match(/const performCancel = async[\s\S]*?\n  \};/);
+  assert(cancelBody, 'performCancel');
   assert(/if \(!canCancel\(editEvent\)\)/.test(cancelBody[0]),
-    'cancelMeeting still checks canCancel internally');
+    'performCancel still checks canCancel internally');
   assert(/toast\.error/.test(cancelBody[0]),
     'shows clear error if user lacks permission');
 
-  var deleteBody = calendar.match(/const deleteMeeting = async[\s\S]*?\n  \};/);
-  assert(deleteBody, 'deleteMeeting');
+  var deleteBody = calendar.match(/const performDelete = async[\s\S]*?\n  \};/);
+  assert(deleteBody, 'performDelete');
   assert(/if \(!canDelete\(editEvent\)\)/.test(deleteBody[0]),
-    'deleteMeeting still checks canDelete internally');
+    'performDelete still checks canDelete internally');
+
+  // The button-side check is also present (so the user sees the toast
+  // immediately on click, not only after typing DELETE):
+  assert(/if \(!canCancel\(editEvent\)\)[\s\S]{0,300}setActionStage\('cancel'\)/.test(calendar),
+    'cancel button-side canCancel check before stage transition');
+  assert(/if \(!canDelete\(editEvent\)\)[\s\S]{0,300}setActionStage\('delete'\)/.test(calendar),
+    'delete button-side canDelete check before stage transition');
 });
 
 test('C4 Cancel button uses bold red styling (impossible to miss)', function() {

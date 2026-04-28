@@ -36,30 +36,40 @@ test('PB2 Starred cards use stronger amber for visibility', function() {
 });
 
 test('PB3 Starred cards use darker text for readability', function() {
-  // Title text switches to slate-900 (near-black) when starred
-  assert(/isStarred \? 'text-slate-900' : 'text-slate-800'/.test(board),
-    'title darker on amber');
-  // Ticket number uses amber-900 on starred (very dark, readable on amber-200)
+  // v55.26 — Title used to use class `text-slate-900`, but globals.css forces
+  // `.text-slate-900` to var(--text-primary) (near-white) for the dark theme.
+  // On the amber starred-card background that made the title invisible.
+  // The fix is an inline style on the starred branch that beats the global
+  // !important rule. The ticket number above the title uses text-amber-900,
+  // which globals.css does NOT override, so that one keeps the class form.
+  assert(/style=\{isStarred \? \{ color: '#0f172a' \}/.test(board),
+    'title uses inline near-black on starred (beats globals.css text-slate-900 override)');
   assert(/isStarred \? 'text-amber-900' : 'text-slate-500'/.test(board),
-    'ticket number contrast');
+    'ticket number uses amber-900 (not globally overridden)');
 });
 
 test('PB4 Due date + "+N others" also have contrast-adjusted colors on starred', function() {
+  // v55.26 — Due date stays amber-900 (not overridden). The "+N others"
+  // count was using text-amber-800, which globals.css forces to a light
+  // yellow (#fde68a) — invisible on the amber card. Switched to inline
+  // style with dark amber (#78350f) on the starred branch.
   assert(/isStarred \? 'text-amber-900 font-semibold' : 'text-slate-500'/.test(board),
     'due date readable on amber');
-  assert(/isStarred \? 'text-amber-800' : 'text-slate-400'/.test(board),
-    'other-assignees count readable');
+  assert(/style=\{isStarred \? \{ color: '#78350f'/.test(board),
+    'other-assignees count uses inline dark-amber on starred (beats globals.css text-amber-800 override)');
 });
 
 // ===== CALENDAR — CANCEL MEETING =====
 
-test('CM1 cancelMeeting handler exists', function() {
-  assert(/const cancelMeeting = async \(\) => \{/.test(calendar),
-    'cancelMeeting function');
+test('CM1 performCancel handler exists', function() {
+  // v55.25 — cancelMeeting renamed to performCancel as part of the
+  // state-machine refactor (button → setActionStage('cancel') → overlay → performCancel).
+  assert(/const performCancel = async \(\) => \{/.test(calendar),
+    'performCancel function');
 });
 
-test('CM2 cancelMeeting writes status + cancelled_at + cancelled_by + reason', function() {
-  var m = calendar.match(/const cancelMeeting = async[\s\S]*?\n  \};/);
+test('CM2 performCancel writes status + cancelled_at + cancelled_by + reason', function() {
+  var m = calendar.match(/const performCancel = async[\s\S]*?\n  \};/);
   assert(m, 'handler body');
   assert(/status: 'cancelled'/.test(m[0]), 'sets cancelled status');
   assert(/cancelled_at: new Date\(\)\.toISOString\(\)/.test(m[0]), 'timestamp');
@@ -67,19 +77,25 @@ test('CM2 cancelMeeting writes status + cancelled_at + cancelled_by + reason', f
   assert(/cancellation_reason/.test(m[0]), 'reason field');
 });
 
-test('CM3 cancelMeeting prompts for reason (optional) and confirms', function() {
-  var m = calendar.match(/const cancelMeeting = async[\s\S]*?\n  \};/);
+test('CM3 performCancel reads reason from inline overlay input (not window.prompt)', function() {
+  // v55.25 — window.prompt was getting silently suppressed by some browsers.
+  // The reason is now collected by an inline <input> in the z-200 overlay,
+  // and stored in `actionReason` state. The overlay also has its own confirm
+  // button, so the legacy in-handler `confirm()` is gone too.
+  var m = calendar.match(/const performCancel = async[\s\S]*?\n  \};/);
   assert(m, 'body');
-  assert(/window\.prompt\(/.test(m[0]),
-    'prompts user for optional reason');
-  assert(/if \(reason === null\) return/.test(m[0]),
-    'pressing Cancel on prompt aborts (vs empty string which proceeds)');
-  assert(/if \(!confirm\(/.test(m[0]),
-    'secondary confirm');
+  assert(/cancellation_reason: actionReason/.test(m[0]),
+    'handler uses actionReason state (not local prompt)');
+  // Overlay has the input wired to setActionReason:
+  assert(/value=\{actionReason\}[\s\S]{0,100}onChange=\{e => setActionReason/.test(calendar),
+    'overlay has input wired to setActionReason');
+  // No window.prompt fallback should remain in performCancel:
+  assert(!/window\.prompt\(/.test(m[0]),
+    'no leftover window.prompt in performCancel');
 });
 
-test('CM4 cancelMeeting honors scope (single vs series)', function() {
-  var m = calendar.match(/const cancelMeeting = async[\s\S]*?\n  \};/);
+test('CM4 performCancel honors scope (single vs series)', function() {
+  var m = calendar.match(/const performCancel = async[\s\S]*?\n  \};/);
   assert(m, 'body');
   assert(/if \(editScope === 'series' && editEvent\.series_id\)/.test(m[0]),
     'series-wide cancel path');
@@ -97,8 +113,12 @@ test('CM5 uncancelMeeting (restore) exists and clears all cancellation fields', 
 });
 
 test('CM6 Edit modal shows Cancel button when event is scheduled', function() {
-  assert(/onClick=\{cancelMeeting\}/.test(calendar),
-    'cancel button wired');
+  // v55.25 — button click transitions to actionStage='cancel'; overlay's
+  // confirm button calls performCancel. Both wirings must be present.
+  assert(/setActionStage\('cancel'\)/.test(calendar),
+    'cancel button transitions to actionStage cancel');
+  assert(/onClick=\{performCancel\}/.test(calendar),
+    'overlay confirm button wires performCancel');
   assert(/Cancel this meeting/.test(calendar),
     'user-facing label');
 });

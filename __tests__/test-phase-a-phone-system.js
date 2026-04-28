@@ -84,7 +84,10 @@ ok('B10: defensive fallback when phone number not registered',
   /buildFallbackTwiml/.test(incoming)
 );
 ok('B11: defensive fallback on errors (always returns TwiML)',
-  /catch \(e\)[\s\S]{0,200}buildFallbackTwiml/.test(incoming)
+  // Window relaxed: code now has security/safety comments between the catch
+  // and the fallback call. Functional invariant unchanged: outer catch must
+  // still produce TwiML so Twilio never gets a bare 500.
+  /catch \(e\)[\s\S]{0,500}buildFallbackTwiml/.test(incoming)
 );
 ok('B12: dial timeout set to 25 seconds',
   /timeout="25"/.test(incoming)
@@ -104,8 +107,10 @@ ok('C1: file exists', vmRecord.length > 100);
 ok('C2: handles answered-call case (no voicemail)',
   /completed[\s\S]{0,100}answered/.test(vmRecord)
 );
-ok('C3: inserts to phone_voicemails',
-  /from\('phone_voicemails'\)[\s\S]{0,200}\.insert\(/.test(vmRecord)
+ok('C3: writes to phone_voicemails (insert or upsert)',
+  // Hardened to upsert against s32 unique index (twilio_recording_sid).
+  // Both insert() and upsert() satisfy the invariant: the row gets created.
+  /from\('phone_voicemails'\)[\s\S]{0,200}\.(insert|upsert)\(/.test(vmRecord)
 );
 ok('C4: triggers async transcription via fetch',
   /transcribe-async/.test(vmRecord) && /fetch\(/.test(vmRecord)
@@ -129,8 +134,10 @@ ok('D1: file exists', recCb.length > 100);
 ok('D2: looks up parent call by twilio_call_sid',
   /from\('phone_calls'\)[\s\S]{0,200}\.eq\('twilio_call_sid'/.test(recCb)
 );
-ok('D3: inserts into phone_recordings',
-  /from\('phone_recordings'\)[\s\S]{0,200}\.insert\(/.test(recCb)
+ok('D3: writes to phone_recordings (insert or upsert)',
+  // Hardened to upsert against s32 unique index. Either form satisfies
+  // the "row gets created" invariant.
+  /from\('phone_recordings'\)[\s\S]{0,200}\.(insert|upsert)\(/.test(recCb)
 );
 ok('D4: triggers Whisper transcription',
   /transcribe-async/.test(recCb)

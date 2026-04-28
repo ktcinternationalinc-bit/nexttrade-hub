@@ -67,26 +67,30 @@ test('P7 hasDeclined helper for undecline button visibility', function() {
 
 // ===== HARD DELETE =====
 
-test('D1 deleteMeeting requires typed DELETE confirmation', function() {
-  var m = calendar.match(/const deleteMeeting = async[\s\S]*?\n  \};/);
-  assert(m, 'deleteMeeting defined');
-  assert(/window\.prompt\(/.test(m[0]),
-    'prompts for typed confirmation');
-  assert(/if \(typed !== 'DELETE'\)/.test(m[0]),
-    'must type DELETE exactly');
+test('D1 performDelete requires typed DELETE confirmation', function() {
+  // v55.25 — typed-confirmation moved from window.prompt() to an inline
+  // <input> in the z-200 overlay (window.prompt was being silently suppressed
+  // by some browsers). The state variable is `actionTyped`.
+  var m = calendar.match(/const performDelete = async[\s\S]*?\n  \};/);
+  assert(m, 'performDelete defined');
+  assert(/if \(actionTyped !== 'DELETE'\)/.test(m[0]),
+    'must type DELETE exactly (actionTyped state)');
+  // And confirm the overlay has the input wired:
+  assert(/value=\{actionTyped\}[\s\S]{0,100}onChange=\{e => setActionTyped/.test(calendar),
+    'overlay has input wired to setActionTyped');
 });
 
-test('D2 deleteMeeting gated by canDelete (admin only)', function() {
-  var m = calendar.match(/const deleteMeeting = async[\s\S]*?\n  \};/);
+test('D2 performDelete gated by canDelete (admin only)', function() {
+  var m = calendar.match(/const performDelete = async[\s\S]*?\n  \};/);
   assert(m, 'body');
   assert(/if \(!canDelete\(editEvent\)\)/.test(m[0]),
     'permission check first');
 });
 
-test('D3 deleteMeeting writes audit log BEFORE deleting the row', function() {
+test('D3 performDelete writes audit log BEFORE deleting the row', function() {
   // Critical: after the row is gone you can't reconstruct who deleted it,
   // so the audit entry must happen first.
-  var m = calendar.match(/const deleteMeeting = async[\s\S]*?\n  \};/);
+  var m = calendar.match(/const performDelete = async[\s\S]*?\n  \};/);
   assert(m, 'body');
   var logIdx = m[0].indexOf('logActivity');
   var deleteIdx = m[0].indexOf(".delete()");
@@ -94,8 +98,8 @@ test('D3 deleteMeeting writes audit log BEFORE deleting the row', function() {
     'logActivity called before the hard delete');
 });
 
-test('D4 deleteMeeting uses hard DELETE (not soft cancel)', function() {
-  var m = calendar.match(/const deleteMeeting = async[\s\S]*?\n  \};/);
+test('D4 performDelete uses hard DELETE (not soft cancel)', function() {
+  var m = calendar.match(/const performDelete = async[\s\S]*?\n  \};/);
   assert(m, 'body');
   assert(/supabase\.from\('calendar_events'\)\.delete\(\)\.eq\('id', editEvent\.id\)/.test(m[0]),
     'actually deletes the row');
@@ -168,17 +172,26 @@ test('DC7 undeclineInvite removes myId and clears reason', function() {
 
 // ===== MODAL UI =====
 
-test('UI1 Cancel button rendered ALWAYS — permission enforced in handler (v54.5)', function() {
-  assert(/onClick=\{cancelMeeting\}/.test(calendar),
-    'cancel handler still wired');
-  assert(!/\{canCancel\(editEvent\) && \(\s*<button\s*onClick=\{cancelMeeting\}/.test(calendar),
+test('UI1 Cancel button rendered ALWAYS — permission enforced in handler (v55.25 state-machine)', function() {
+  // v55.25 — button click does the canCancel() check (toast on denial),
+  // then transitions to actionStage='cancel'. The z-200 overlay's confirm
+  // button calls performCancel().
+  assert(/setActionStage\('cancel'\)/.test(calendar),
+    'cancel button transitions to actionStage cancel');
+  assert(/onClick=\{performCancel\}/.test(calendar),
+    'overlay confirm wires performCancel');
+  assert(!/\{canCancel\(editEvent\) && \(\s*<button[^>]*setActionStage\('cancel'\)/.test(calendar),
     'no longer gated at render layer (handler shows toast if user lacks rights)');
 });
 
-test('UI2 Delete button rendered ALWAYS — permission enforced in handler (v54.5)', function() {
-  assert(/onClick=\{deleteMeeting\}/.test(calendar),
-    'delete handler still wired');
-  assert(!/\{canDelete\(editEvent\) && \(\s*<button\s*onClick=\{deleteMeeting\}/.test(calendar),
+test('UI2 Delete button rendered ALWAYS — permission enforced in handler (v55.25 state-machine)', function() {
+  // v55.25 — same pattern as cancel; click → canDelete() check → setActionStage('delete')
+  // → typing DELETE in the overlay enables the confirm button → performDelete().
+  assert(/setActionStage\('delete'\)/.test(calendar),
+    'delete button transitions to actionStage delete');
+  assert(/onClick=\{performDelete\}/.test(calendar),
+    'overlay confirm wires performDelete');
+  assert(!/\{canDelete\(editEvent\) && \(\s*<button[^>]*setActionStage\('delete'\)/.test(calendar),
     'no longer gated at render layer');
 });
 

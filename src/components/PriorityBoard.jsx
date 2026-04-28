@@ -777,13 +777,25 @@ export default function PriorityBoard({
             {t.ticket_number}
           </div>
         )}
-        <div className={'text-xs font-semibold leading-tight line-clamp-2 ' + (isStarred ? 'text-slate-900' : 'text-slate-800')}>{t.title}</div>
+        {/* v55.26 — globals.css forces text-slate-900 to near-white for the
+            dark theme, which would make the title invisible on the amber
+            starred-card background. Inline style on the starred branch beats
+            the global !important rule. Non-starred branch stays as-is so the
+            dark-theme override correctly lights up text on the dark glass card. */}
+        <div
+          className={'text-xs font-semibold leading-tight line-clamp-2 ' + (isStarred ? '' : 'text-slate-800')}
+          style={isStarred ? { color: '#0f172a' } : undefined}
+        >{t.title}</div>
         <div className="flex items-center gap-1 mt-1">
           {t.due_date && (
             <div className={'text-[9px] ' + (isStarred ? 'text-amber-900 font-semibold' : 'text-slate-500')}>Due {t.due_date}</div>
           )}
           {additional.length > 0 && (
-            <div className={'text-[9px] ml-auto ' + (isStarred ? 'text-amber-800' : 'text-slate-400')} title="Also assigned to others">
+            <div
+              className={'text-[9px] ml-auto ' + (isStarred ? '' : 'text-slate-400')}
+              style={isStarred ? { color: '#78350f' /* dark amber, beats globals.css text-amber-800 → light-yellow override */ } : undefined}
+              title="Also assigned to others"
+            >
               +{additional.length} other{additional.length === 1 ? '' : 's'}
             </div>
           )}

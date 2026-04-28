@@ -1,9 +1,10 @@
 'use client';
-import { useState, useMemo, useEffect } from 'react';
+import { useState, useMemo, useEffect, useContext } from 'react';
 import { supabase, dbInsert, dbUpdate, logActivity } from '../lib/supabase';
 import { notifyEventScheduled } from '../lib/notify';
 import { newUUID, VALID_PATTERNS } from '../lib/recurrence';
 import { scheduleEventReminders, rescheduleEventReminders, cancelEventReminders } from '../lib/reminders';
+import { ToastContext } from '../lib/toast-context';
 
 const EVENT_TYPES = [{v:'task',l:'Task / مهمة',c:'#3b82f6'},{v:'meeting',l:'Meeting / اجتماع',c:'#8b5cf6'},{v:'call',l:'Call / مكالمة',c:'#f59e0b'},{v:'visit',l:'Visit / زيارة',c:'#10b981'}];
 const DAYS = ['Sun','Mon','Tue','Wed','Thu','Fri','Sat'];
@@ -19,7 +20,22 @@ function recurrenceLabel(pattern, interval) {
   return '';
 }
 
-export default function CalendarTab({ customers, user, userProfile, users, tickets, onOpenTicket, onReload }) {
+export default function CalendarTab({ customers, user, userProfile, users, tickets, onOpenTicket, onReload, onRefresh: onRefreshProp }) {
+  // v55.25 — Two long-standing bugs that made cancel/delete look broken:
+  //
+  //   (1) `toast` was referenced throughout this file but never declared
+  //       or destructured. Every `if (toast) toast.error(...)` silently
+  //       no-op'd, leaving the user with NO feedback when permission
+  //       denied them or when an action succeeded. We now consume
+  //       ToastContext properly so toasts actually fire.
+  //
+  //   (2) page.jsx passed `onReload`, but this file's code called
+  //       `onRefresh`. Result: the cancel/delete DB write succeeded,
+  //       but the calendar grid never re-fetched, so the cancelled
+  //       event still appeared "live" on screen — looking exactly like
+  //       "nothing happened." We accept either prop name and unify them.
+  const toast = useContext(ToastContext);
+  const onRefresh = onRefreshProp || onReload;
   const [events, setEvents] = useState([]);
   const [loaded, setLoaded] = useState(false);
   const [view, setView] = useState('month');
@@ -1517,92 +1533,14 @@ export default function CalendarTab({ customers, user, userProfile, users, ticke
                 >
                   ♻️ {lang === 'ar' ? 'استعادة الاجتماع الملغى' : 'Restore this cancelled meeting'}
                 </button>
-              ) : actionStage === 'cancel' ? (
-                /* v55.22 — In-modal Cancel confirmation. Replaces window.prompt
-                   + window.confirm which Chromium silently suppresses after
-                   repeated dismissals. Always-visible UI inside the modal
-                   removes any browser-level interference. */
-                <div className="bg-red-50 border-2 border-red-400 rounded-lg p-3 space-y-2">
-                  <div className="text-sm font-bold text-red-800">
-                    {lang === 'ar' ? '❌ تأكيد إلغاء الاجتماع' : '❌ Confirm Cancel Meeting'}
-                  </div>
-                  <div className="text-[11px] text-red-700">
-                    {lang === 'ar'
-                      ? 'سيبقى الاجتماع في التقويم مع شطب، ويمكن استعادته لاحقاً.'
-                      : 'The meeting will stay on the calendar (crossed out) and can be restored later.'}
-                  </div>
-                  <input
-                    type="text"
-                    value={actionReason}
-                    onChange={e => setActionReason(e.target.value)}
-                    placeholder={lang === 'ar' ? 'سبب الإلغاء (اختياري)' : 'Reason for cancelling (optional)'}
-                    className="w-full px-3 py-2 rounded border border-red-300 text-sm bg-white"
-                    autoFocus
-                  />
-                  <div className="flex gap-2">
-                    <button
-                      onClick={performCancel}
-                      disabled={actionBusy}
-                      className="flex-1 px-3 py-2 bg-red-600 text-white rounded-lg text-sm font-bold hover:bg-red-700 disabled:opacity-50"
-                    >
-                      {actionBusy
-                        ? (lang === 'ar' ? 'جاري الإلغاء...' : 'Cancelling...')
-                        : (lang === 'ar' ? 'تأكيد الإلغاء' : 'Confirm Cancel')}
-                    </button>
-                    <button
-                      onClick={() => { setActionStage('idle'); setActionReason(''); }}
-                      disabled={actionBusy}
-                      className="px-3 py-2 border-2 border-slate-300 rounded-lg text-sm font-bold bg-white disabled:opacity-50"
-                    >
-                      {lang === 'ar' ? 'تراجع' : 'Back'}
-                    </button>
-                  </div>
-                </div>
-              ) : actionStage === 'delete' ? (
-                /* v55.22 — In-modal hard-delete confirmation. Same reason. */
-                <div className="bg-slate-900 text-white rounded-lg p-3 space-y-2">
-                  <div className="text-sm font-bold">
-                    🗑 {lang === 'ar' ? 'حذف نهائي — لا يمكن التراجع' : 'Permanent Delete — No Undo'}
-                  </div>
-                  <div className="text-[11px] text-red-300">
-                    {lang === 'ar'
-                      ? 'هذا الاجتماع سيختفي للأبد. لا يمكن استعادته بعد ذلك. اكتب DELETE تماماً للتأكيد:'
-                      : 'This meeting will be gone forever. There is no recovery. Type DELETE exactly to confirm:'}
-                  </div>
-                  <input
-                    type="text"
-                    value={actionTyped}
-                    onChange={e => setActionTyped(e.target.value)}
-                    placeholder="DELETE"
-                    className="w-full px-3 py-2 rounded border border-red-400 text-sm bg-slate-800 text-white font-mono tracking-wider"
-                    autoFocus
-                  />
-                  <div className="flex gap-2">
-                    <button
-                      onClick={performDelete}
-                      disabled={actionBusy || actionTyped !== 'DELETE'}
-                      className="flex-1 px-3 py-2 bg-red-600 text-white rounded-lg text-sm font-bold hover:bg-red-700 disabled:opacity-30 disabled:cursor-not-allowed"
-                    >
-                      {actionBusy
-                        ? (lang === 'ar' ? 'جاري الحذف...' : 'Deleting...')
-                        : (lang === 'ar' ? 'حذف نهائي' : 'Delete Forever')}
-                    </button>
-                    <button
-                      onClick={() => { setActionStage('idle'); setActionTyped(''); }}
-                      disabled={actionBusy}
-                      className="px-3 py-2 border-2 border-slate-500 rounded-lg text-sm font-bold bg-slate-700 disabled:opacity-50"
-                    >
-                      {lang === 'ar' ? 'تراجع' : 'Back'}
-                    </button>
-                  </div>
-                </div>
               ) : (
                 <>
                   <button
                     onClick={() => {
-                      // v55.22 — permission check happens BEFORE entering the
-                      // confirmation stage so users without permission get an
-                      // immediate toast rather than a useless input form.
+                      // v55.25 — permission check happens BEFORE entering the
+                      // confirmation stage. With the toast context now properly
+                      // wired, users without permission get a clear toast
+                      // instead of silent failure.
                       if (!canCancel(editEvent)) {
                         if (toast) toast.error(lang === 'ar' ? 'لا يمكنك إلغاء هذا الاجتماع' : 'You cannot cancel this meeting (only the creator, primary assignee, or admin can)');
                         return;
@@ -1671,6 +1609,133 @@ export default function CalendarTab({ customers, user, userProfile, users, ticke
         </div>
         );
       })()}
+
+      {/* ============================================================
+          v55.25 — PROMINENT CONFIRMATION DIALOGS
+          ============================================================
+          These dialogs render OUTSIDE and ABOVE the edit modal at z-[200]
+          so they're impossible to miss. Previous version used inline
+          replacement at the bottom of the edit modal — but on smaller
+          screens that area was below the fold and looked like nothing
+          happened when the button was clicked.
+
+          - Click outside to dismiss = stays open (user must click Back
+            or Confirm — backdrop is decorative, not dismissive)
+          - Sticky bright color so it's visually obvious
+          - Action button is huge and unmistakable
+          - Disabled with reason while busy
+          ============================================================ */}
+      {actionStage === 'cancel' && editEvent && (
+        <div className="fixed inset-0 bg-black/70 z-[200] flex items-center justify-center p-4">
+          <div className="bg-white rounded-2xl shadow-2xl border-4 border-red-500 max-w-md w-full p-6 space-y-4">
+            <div className="flex items-center gap-3">
+              <div className="text-3xl">❌</div>
+              <div>
+                <div className="text-lg font-bold text-red-800">
+                  {lang === 'ar' ? 'تأكيد إلغاء الاجتماع' : 'Cancel This Meeting?'}
+                </div>
+                <div className="text-xs text-slate-600 mt-0.5">{editEvent.title}</div>
+              </div>
+            </div>
+
+            <div className="text-sm text-slate-700 bg-red-50 border border-red-200 rounded-lg p-3">
+              {lang === 'ar'
+                ? 'سيبقى الاجتماع في التقويم مع شطب، ويمكن استعادته لاحقاً.'
+                : 'The meeting will stay on the calendar (crossed out) and can be restored later if needed.'}
+            </div>
+
+            <div>
+              <label className="text-xs font-semibold text-slate-700 block mb-1">
+                {lang === 'ar' ? 'سبب الإلغاء (اختياري)' : 'Reason (optional)'}
+              </label>
+              <input
+                type="text"
+                value={actionReason}
+                onChange={e => setActionReason(e.target.value)}
+                placeholder={lang === 'ar' ? 'مثال: تم تأجيله' : 'e.g. rescheduled, customer no-show'}
+                className="w-full px-3 py-2.5 rounded-lg border-2 border-slate-300 text-sm bg-white focus:border-red-400 outline-none"
+                autoFocus
+                disabled={actionBusy}
+              />
+            </div>
+
+            <div className="flex gap-2 pt-2">
+              <button
+                onClick={() => { setActionStage('idle'); setActionReason(''); }}
+                disabled={actionBusy}
+                className="px-4 py-3 border-2 border-slate-300 rounded-lg text-sm font-bold bg-white hover:bg-slate-50 disabled:opacity-50"
+              >
+                {lang === 'ar' ? 'تراجع' : 'Back'}
+              </button>
+              <button
+                onClick={performCancel}
+                disabled={actionBusy}
+                className="flex-1 px-4 py-3 bg-red-600 text-white rounded-lg text-sm font-bold hover:bg-red-700 disabled:opacity-50"
+              >
+                {actionBusy
+                  ? (lang === 'ar' ? 'جاري الإلغاء...' : 'Cancelling...')
+                  : (lang === 'ar' ? '✓ نعم، ألغِ الاجتماع' : '✓ Yes, Cancel This Meeting')}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {actionStage === 'delete' && editEvent && (
+        <div className="fixed inset-0 bg-black/80 z-[200] flex items-center justify-center p-4">
+          <div className="bg-slate-900 text-white rounded-2xl shadow-2xl border-4 border-red-600 max-w-md w-full p-6 space-y-4">
+            <div className="flex items-center gap-3">
+              <div className="text-3xl">🗑️</div>
+              <div>
+                <div className="text-lg font-bold text-red-300">
+                  {lang === 'ar' ? 'حذف نهائي — لا يمكن التراجع' : 'Permanent Delete — No Undo'}
+                </div>
+                <div className="text-xs text-slate-400 mt-0.5">{editEvent.title}</div>
+              </div>
+            </div>
+
+            <div className="text-sm bg-red-900/40 border border-red-600 rounded-lg p-3 text-red-100">
+              {lang === 'ar'
+                ? 'هذا الاجتماع سيختفي للأبد. لن يكون هناك سجل، ولا سبيل للاستعادة. إذا كنت غير متأكد، اضغط تراجع واستخدم "إلغاء" بدلاً من ذلك.'
+                : 'This meeting will be erased forever. There will be no record and no recovery. If you\'re not sure, click Back and use Cancel instead.'}
+            </div>
+
+            <div>
+              <label className="text-xs font-semibold text-red-300 block mb-1">
+                {lang === 'ar' ? 'اكتب DELETE تماماً للتأكيد:' : 'Type DELETE exactly to confirm:'}
+              </label>
+              <input
+                type="text"
+                value={actionTyped}
+                onChange={e => setActionTyped(e.target.value)}
+                placeholder="DELETE"
+                className="w-full px-3 py-2.5 rounded-lg border-2 border-red-500 text-sm bg-slate-800 text-white font-mono tracking-widest text-center outline-none focus:border-red-400"
+                autoFocus
+                disabled={actionBusy}
+              />
+            </div>
+
+            <div className="flex gap-2 pt-2">
+              <button
+                onClick={() => { setActionStage('idle'); setActionTyped(''); }}
+                disabled={actionBusy}
+                className="px-4 py-3 border-2 border-slate-500 rounded-lg text-sm font-bold bg-slate-700 hover:bg-slate-600 text-white disabled:opacity-50"
+              >
+                {lang === 'ar' ? 'تراجع' : 'Back'}
+              </button>
+              <button
+                onClick={performDelete}
+                disabled={actionBusy || actionTyped !== 'DELETE'}
+                className="flex-1 px-4 py-3 bg-red-600 text-white rounded-lg text-sm font-bold hover:bg-red-700 disabled:opacity-30 disabled:cursor-not-allowed"
+              >
+                {actionBusy
+                  ? (lang === 'ar' ? 'جاري الحذف...' : 'Deleting...')
+                  : (lang === 'ar' ? '🗑 احذف نهائياً' : '🗑 Delete Forever')}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

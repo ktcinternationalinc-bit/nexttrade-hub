@@ -39,8 +39,19 @@ ok('2: bargeInLastTextRef declared at component top level',
   /var bargeInLastTextRef = useRef\(''\)/.test(voiceCtrl)
 );
 
-ok('3: barge-in checks aiSpeakingRef before firing',
-  /if \(aiSpeakingRef\.current && !bargeInDispatchedRef\.current && transcript\.length >= 3\)/.test(voiceCtrl)
+// NOTE: barge-in was disabled in a session prior to v55.25. The mic was
+// picking up Nadia's own TTS output during longer responses, treating
+// the echo as a user interrupt and cutting her off mid-sentence. Real
+// fix requires transcript-matching against Nadia's utterance, which
+// hasn't been built yet. The infrastructure (refs, event names, listener
+// in AIGreeter) is kept intact so re-enabling is one flag flip.
+//
+// Tests 3 and 8 below now verify the disabled-state pattern AND that the
+// infrastructure remains in place. If someone re-enables barge-in without
+// adding the transcript-matching guard, the next session's QA should
+// note the disabled gate is gone — that's intentional.
+ok('3: barge-in is intentionally gated off (disabled until echo-matching is built)',
+  /if \(false \/\* barge-in disabled \*\/\)/.test(voiceCtrl)
 );
 
 ok('4: barge-in fires the nadia-bargein CustomEvent',
@@ -59,8 +70,10 @@ ok('7: barge-in deduplicates against repeated identical interim transcripts',
   /if \(transcript !== bargeInLastTextRef\.current\)/.test(voiceCtrl)
 );
 
-ok('8: 3-char minimum filters echo blips',
-  /transcript\.length >= 3/.test(voiceCtrl)
+ok('8: barge-in inner branch still preserves dispatch logic (ready for re-enable)',
+  // The dead branch must still contain the dispatch + ref-update sequence,
+  // so re-enabling is just changing `if (false ...)` to a real condition.
+  /if \(false \/\* barge-in disabled \*\/\) \{[\s\S]{0,800}dispatchEvent\(new CustomEvent\('nadia-bargein'/.test(voiceCtrl)
 );
 
 // ----- AIGreeter side -----

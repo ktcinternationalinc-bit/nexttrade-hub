@@ -327,7 +327,7 @@ CREATE TABLE IF NOT EXISTS tickets (
   description TEXT,
   customer_id UUID REFERENCES customers(id),
   order_number TEXT,
-  status TEXT NOT NULL DEFAULT 'New' CHECK (status IN ('New','Acknowledged','In Progress','Waiting','Review','Testing','Ready','Closed','Reopened')),
+  status TEXT NOT NULL DEFAULT 'New' CHECK (status IN ('New','Acknowledged','In Progress','Blocked','On Hold','Waiting','Review','Testing','Ready','Closed','Reopened')),
   priority TEXT DEFAULT 'medium' CHECK (priority IN ('high','medium','low')),
   assigned_to UUID REFERENCES users(id),
   due_date DATE,

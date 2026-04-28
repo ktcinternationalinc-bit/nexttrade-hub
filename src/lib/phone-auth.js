@@ -74,19 +74,50 @@ export async function requireUser(req) {
       token = authHeader.substring(7);
     }
 
-    // If no Bearer, try to extract sb-access-token from cookies
+    // If no Bearer, try to extract sb-access-token from cookies.
+    //
+    // Supabase ships several cookie formats depending on client version:
+    //   • sb-<project>-auth-token         (legacy single cookie)
+    //   • sb-<project>-auth-token.0/.1    (split for size — modern SSR)
+    //   • sb-<project>-auth-token-code-verifier (PKCE flow, NOT what we want)
+    // We try the legacy single-cookie first, then assemble split cookies if
+    // present, then JSON-parse. v55.25 — added split-cookie support so users
+    // who don't pass an Authorization header still authenticate via cookie.
     if (!token && cookieHeader) {
+      // Try single cookie first
       var cookieMatch = cookieHeader.match(/sb-[^=]*-auth-token=([^;]+)/);
-      if (cookieMatch) {
+      var rawCookieValue = null;
+      if (cookieMatch && !/-code-verifier=/.test(cookieMatch[0])) {
+        rawCookieValue = decodeURIComponent(cookieMatch[1]);
+      } else {
+        // Try split cookies sb-...auth-token.0, .1, ... in order
+        var parts = [];
+        var splitRe = /sb-[^=]*-auth-token\.(\d+)=([^;]+)/g;
+        var m;
+        while ((m = splitRe.exec(cookieHeader)) !== null) {
+          parts[parseInt(m[1], 10)] = decodeURIComponent(m[2]);
+        }
+        if (parts.length > 0) {
+          rawCookieValue = parts.join('');
+          // base64-prefixed values from supabase-js
+          if (rawCookieValue.startsWith('base64-')) {
+            try {
+              rawCookieValue = Buffer.from(rawCookieValue.substring(7), 'base64').toString('utf-8');
+            } catch (e) { /* fall through */ }
+          }
+        }
+      }
+
+      if (rawCookieValue) {
         try {
-          var raw = decodeURIComponent(cookieMatch[1]);
-          // Sometimes wrapped in quotes / array
-          if (raw.startsWith('[')) {
-            var arr = JSON.parse(raw);
-            token = arr[0];
-          } else {
-            var obj = JSON.parse(raw);
+          if (rawCookieValue.startsWith('[')) {
+            var arr = JSON.parse(rawCookieValue);
+            token = typeof arr[0] === 'string' ? arr[0] : (arr[0] && arr[0].access_token);
+          } else if (rawCookieValue.startsWith('{')) {
+            var obj = JSON.parse(rawCookieValue);
             token = obj.access_token || obj;
+          } else {
+            token = rawCookieValue;
           }
         } catch (e) {
           // Fall through — token stays null

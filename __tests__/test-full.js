@@ -3348,8 +3348,8 @@ function runSection29_CalendarTabAudit() {
   // Previously: `if (!loaded) loadEvents();` in render body → fires every render
   // until async resolves → burst of redundant network calls.
   // Fixed: `useEffect(() => { loadEvents(); }, []);` fires once.
-  assert(/import \{ useState, useMemo, useEffect \} from 'react'/.test(cSrc),
-    '29.mount.1a useEffect imported');
+  assert(/import \{[^}]*\buseState\b[^}]*\buseMemo\b[^}]*\buseEffect\b[^}]*\} from 'react'/.test(cSrc),
+    '29.mount.1a useEffect imported (along with useState, useMemo; v55.25 also added useContext for ToastContext)');
   assert(/useEffect\(\(\) => \{ loadEvents\(\); \}, \[\]\)/.test(cSrc),
     '29.mount.1b loadEvents wired in useEffect with [] deps (fires once on mount)');
   assert(!/^\s+if \(!loaded\) loadEvents\(\);/m.test(cSrc),

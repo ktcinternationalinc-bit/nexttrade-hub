@@ -398,6 +398,13 @@ function PhoneSettingsPanel({ users, userProfile, toast, isAdmin, isSuperAdmin }
   const [usersWithRouting, setUsersWithRouting] = useState([]);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(null); // tracks which row is currently saving
+  // v55.28 — diagnostics state. When the user clicks "Run Diagnostics" we
+  // hit /api/phone/diagnose and show the per-check results inline. Lets
+  // admins verify the phone system is wired up end-to-end (env vars set,
+  // Twilio API reachable, phone numbers registered properly) without
+  // having to actually place a real call.
+  const [diagRunning, setDiagRunning] = useState(false);
+  const [diagResult, setDiagResult] = useState(null);
   const myId = userProfile?.id;
   const canEdit = isAdmin || isSuperAdmin;
 
@@ -410,10 +417,25 @@ function PhoneSettingsPanel({ users, userProfile, toast, isAdmin, isSuperAdmin }
   const reload = useCallback(async function() {
     setLoading(true);
     try {
+      // v55.25 — Send Supabase session bearer token so /api/phone/numbers
+      // can authenticate the request. Without this, requireUser() returns
+      // null → 401 → empty numbers list → "No phone numbers registered"
+      // even though the SQL seed already populated 4 rows. Max ran the SQL
+      // multiple times trying to fix what was actually an auth bug.
+      const sessionRes = await supabase.auth.getSession();
+      const accessToken = sessionRes?.data?.session?.access_token || '';
+      const authHeader = accessToken ? { 'Authorization': 'Bearer ' + accessToken } : {};
+
       // Fetch phone numbers
-      const numsRes = await fetch('/api/phone/numbers');
+      const numsRes = await fetch('/api/phone/numbers', { headers: authHeader });
       const numsData = await numsRes.json();
-      setNumbers(numsData.numbers || []);
+      if (numsData.error) {
+        // Surface the real error so we don't silently fall back to "no numbers"
+        safeT.error('Could not load phone numbers: ' + numsData.error);
+        setNumbers([]);
+      } else {
+        setNumbers(numsData.numbers || []);
+      }
 
       // Fetch users with routing data. The users table column is `name` (not full_name).
       const usersRes = await supabase
@@ -434,11 +456,17 @@ function PhoneSettingsPanel({ users, userProfile, toast, isAdmin, isSuperAdmin }
   const updateNumber = async function(id, field, value) {
     setSaving('num-' + id);
     try {
+      // v55.25 — Send bearer token, same reason as the GET fetch above.
+      const sessionRes = await supabase.auth.getSession();
+      const accessToken = sessionRes?.data?.session?.access_token || '';
       const body = { id: id };
       body[field] = value;
       const res = await fetch('/api/phone/numbers', {
         method: 'PATCH',
-        headers: { 'Content-Type': 'application/json' },
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': accessToken ? 'Bearer ' + accessToken : '',
+        },
         body: JSON.stringify(body),
       });
       const data = await res.json();
@@ -478,6 +506,42 @@ function PhoneSettingsPanel({ users, userProfile, toast, isAdmin, isSuperAdmin }
     }
   };
 
+  // v55.28 — runDiagnostics
+  // Calls /api/phone/diagnose and displays the per-check results inline.
+  // Designed so the admin can verify everything is hooked up end-to-end
+  // BEFORE placing a real test call, since real calls cost money and
+  // troubleshooting "why didn't this work" after the fact is harder.
+  const runDiagnostics = async function() {
+    setDiagRunning(true);
+    setDiagResult(null);
+    try {
+      var sessionRes = await supabase.auth.getSession();
+      var accessToken = sessionRes && sessionRes.data && sessionRes.data.session
+        ? sessionRes.data.session.access_token : '';
+      var res = await fetch('/api/phone/diagnose', {
+        headers: accessToken ? { 'Authorization': 'Bearer ' + accessToken } : {},
+      });
+      var data = await res.json();
+      if (!res.ok) {
+        safeT.error('Diagnostics failed: ' + (data.error || ('HTTP ' + res.status)));
+        setDiagResult(null);
+      } else {
+        setDiagResult(data);
+        if (data.overall === 'ok') {
+          safeT.success('All checks passed ✓');
+        } else if (data.overall === 'warn') {
+          safeT.warning(data.summary.warn + ' warning(s) found — see report below');
+        } else {
+          safeT.error(data.summary.fail + ' problem(s) found — see report below');
+        }
+      }
+    } catch (e) {
+      safeT.error('Diagnostics request crashed: ' + e.message);
+    } finally {
+      setDiagRunning(false);
+    }
+  };
+
   if (loading) {
     return (
       <div className="bg-white rounded-xl p-6 text-center text-slate-500">
@@ -496,6 +560,86 @@ function PhoneSettingsPanel({ users, userProfile, toast, isAdmin, isSuperAdmin }
           {canEdit ? '' : ' Only admins can change number assignments.'}
         </p>
       </div>
+
+      {/* === SYSTEM HEALTH (v55.28) === */}
+      {/* Lets admins verify the entire phone system is wired up end-to-end
+          before placing a real test call. Each row tells you what's right,
+          what's wrong, and what to do about it. */}
+      {canEdit && (
+        <div className="bg-white rounded-xl p-4">
+          <div className="flex items-center justify-between mb-2">
+            <div>
+              <h3 className="text-sm font-bold">🔍 System Health</h3>
+              <p className="text-[11px] text-slate-500 mt-0.5">
+                Verifies every piece of the phone system without making a real call.
+              </p>
+            </div>
+            <button
+              onClick={runDiagnostics}
+              disabled={diagRunning}
+              className="px-4 py-2 bg-blue-500 text-white rounded-lg text-xs font-bold hover:bg-blue-600 disabled:opacity-50"
+            >
+              {diagRunning ? '⏳ Checking...' : '▶ Run Diagnostics'}
+            </button>
+          </div>
+
+          {diagResult && (
+            <div className="mt-3">
+              {/* Overall summary banner */}
+              <div className={'rounded-lg px-3 py-2 mb-3 text-xs font-bold ' + (
+                diagResult.overall === 'ok'
+                  ? 'bg-green-100 text-green-800 border border-green-300'
+                  : diagResult.overall === 'warn'
+                    ? 'bg-amber-100 text-amber-800 border border-amber-300'
+                    : 'bg-red-100 text-red-800 border border-red-300'
+              )}>
+                {diagResult.overall === 'ok'
+                  ? '✅ Everything is working — phone system ready'
+                  : diagResult.overall === 'warn'
+                    ? '⚠️ Phone system mostly works, but some things need attention'
+                    : '❌ Phone system is not functional — fix the items below'}
+                <span className="font-normal ml-2">
+                  ({diagResult.summary.ok} ok, {diagResult.summary.warn} warning, {diagResult.summary.fail} failed)
+                </span>
+              </div>
+
+              {/* Per-check results */}
+              <div className="space-y-1.5">
+                {(diagResult.results || []).map(function(r, idx) {
+                  var bg = r.status === 'ok' ? 'bg-green-50 border-green-200'
+                    : r.status === 'warn' ? 'bg-amber-50 border-amber-200'
+                    : 'bg-red-50 border-red-200';
+                  var icon = r.status === 'ok' ? '✓' : r.status === 'warn' ? '⚠' : '✗';
+                  var iconColor = r.status === 'ok' ? 'text-green-600'
+                    : r.status === 'warn' ? 'text-amber-600' : 'text-red-600';
+                  return (
+                    <div key={idx} className={'rounded border p-2.5 ' + bg}>
+                      <div className="flex items-start gap-2">
+                        <span className={'text-base font-bold ' + iconColor}>{icon}</span>
+                        <div className="flex-1 min-w-0">
+                          <div className="font-semibold text-slate-900 text-xs">{r.label}</div>
+                          <div className="text-[11px] text-slate-700 mt-0.5">{r.message}</div>
+                          {r.fix && (
+                            <div className="text-[11px] text-slate-600 mt-1 italic">
+                              <strong>Fix:</strong> {r.fix}
+                            </div>
+                          )}
+                        </div>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          )}
+
+          {!diagResult && !diagRunning && (
+            <div className="text-[11px] text-slate-500 mt-1">
+              Click <strong>Run Diagnostics</strong> to verify your Twilio credentials, phone numbers, and database tables are all configured correctly.
+            </div>
+          )}
+        </div>
+      )}
 
       {/* === SECTION 1: PHONE NUMBERS === */}
       <div className="bg-white rounded-xl p-4">

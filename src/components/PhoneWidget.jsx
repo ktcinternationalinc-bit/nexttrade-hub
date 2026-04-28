@@ -103,59 +103,42 @@ export default function PhoneWidget({ user, userProfile, users, customers }) {
     if (!myId) return;
 
     try {
-      // 1. Load the Twilio Voice SDK v2 (much newer than v1.14 we had before).
+      // 1. Load the Twilio Voice SDK v2.
       //
-      // v55.24 — When the script tag fails to load, the browser passes a
-      // DOM Event object to onerror. The previous code did `s.onerror = reject`
-      // which propagated that Event through the catch block as `e` — and
-      // since DOM Event has no `.message` field, `e.message || String(e)`
-      // produced the useless "[object Event]" Max saw on screen.
+      // v55.25 — REWRITTEN. We now import the SDK from the npm package
+      // `@twilio/voice-sdk` bundled with the app, instead of loading
+      // it from sdk.twilio.com via a script tag.
       //
-      // Fix: in the script onerror, throw a real Error with a concrete
-      // explanation. The most common script-load failures are:
-      //   • Browser/network blocks the Twilio CDN (ad blocker, corporate
-      //     firewall, restricted Wi-Fi, "Block scripts" privacy extension)
-      //   • CSP header on the page disallows scripts from sdk.twilio.com
-      //   • Offline / DNS resolution failure
-      // We tell the user what to check rather than swallowing the error.
-      if (!window.Twilio || !window.Twilio.Device) {
-        await new Promise((resolve, reject) => {
-          // Did the script tag already get added (e.g. from a prior failed
-          // init) but never finish loading? Avoid duplicate <script> tags.
-          var existing = document.querySelector('script[data-twilio-voice-sdk]');
-          if (existing) {
-            // If a previous attempt is still pending, wait for it.
-            existing.addEventListener('load', resolve);
-            existing.addEventListener('error', () => reject(new Error(
-              'Twilio Voice SDK failed to load (script blocked or unreachable). ' +
-              'Check ad blocker, corporate firewall, or browser script-blocking extensions.'
-            )));
-            return;
-          }
-          var s = document.createElement('script');
-          // Voice SDK v2 — actively maintained, supports modern browsers, WebRTC
-          s.src = 'https://sdk.twilio.com/js/voice/releases/2.10.2/twilio.min.js';
-          s.async = true;
-          s.setAttribute('data-twilio-voice-sdk', '1');
-          s.onload = function() {
-            // Sanity check that the SDK actually attached to window.
-            // If a script loaded but didn't execute (very rare), we'd
-            // otherwise blow up with "Twilio is not defined" later.
-            if (window.Twilio && window.Twilio.Device) {
-              resolve();
-            } else {
-              reject(new Error('Twilio Voice SDK loaded but did not initialize (window.Twilio missing).'));
-            }
-          };
-          s.onerror = function() {
-            reject(new Error(
-              'Twilio Voice SDK script failed to load from sdk.twilio.com. ' +
-              'Possible causes: ad blocker, browser script-blocking extension, ' +
-              'corporate firewall, or no internet. Try disabling extensions and reloading.'
-            ));
-          };
-          document.head.appendChild(s);
-        });
+      // Why: Max's network repeatedly failed to fetch the script from
+      // sdk.twilio.com. Common causes that we cannot fix at our end:
+      //   • Corporate / hotel / cafe firewalls blocking *.twilio.com
+      //   • Ad blockers categorizing twilio.com as a tracker
+      //   • Browser privacy extensions blocking external scripts
+      //   • Country-level filtering (some Mideast/EG ISPs)
+      //
+      // By bundling the SDK with our app, the SDK code is served from
+      // OUR Vercel domain (the same origin that already loaded the
+      // dashboard), so any network that can reach the dashboard can
+      // also reach the SDK. Ad blockers and firewalls don't see
+      // "sdk.twilio.com" anywhere — they just see the dashboard's
+      // own JavaScript.
+      //
+      // We use a dynamic import() so the SDK only downloads when
+      // someone actually opens the phone widget, not on every page
+      // load. This keeps the initial dashboard bundle lean.
+      var DeviceClass;
+      try {
+        var mod = await import('@twilio/voice-sdk');
+        DeviceClass = mod.Device || (mod.default && mod.default.Device);
+        if (!DeviceClass) {
+          throw new Error('Voice SDK loaded but Device class not found in module exports.');
+        }
+      } catch (importErr) {
+        throw new Error(
+          'Could not load the phone software. ' +
+          'This usually means the deploy is missing the @twilio/voice-sdk package. ' +
+          'Original: ' + (importErr && importErr.message ? importErr.message : String(importErr))
+        );
       }
 
       // 2. Get an access token from our backend.
@@ -194,8 +177,8 @@ export default function PhoneWidget({ user, userProfile, users, customers }) {
         throw new Error('Token endpoint returned no token.');
       }
 
-      // 3. Create the Device with v2 API
-      const device = new window.Twilio.Device(data.token, {
+      // 3. Create the Device with the imported class
+      const device = new DeviceClass(data.token, {
         codecPreferences: ['opus', 'pcmu'],
         // Sound options
         sounds: {
