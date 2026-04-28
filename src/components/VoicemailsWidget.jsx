@@ -71,24 +71,39 @@ export default function VoicemailsWidget({ user, userProfile, customers, toast, 
     setError('');
     var url = '/api/phone/voicemails?assigned_to=' + encodeURIComponent(myId);
     if (!showAll) url += '&unread=true';
-    fetch(url)
-      .then(function(r) { return r.json(); })
-      .then(function(data) {
-        if (data.error) {
-          setError(data.error);
-          setVoicemails([]);
-        } else {
-          setVoicemails(data.voicemails || []);
-        }
-        setLoading(false);
-        if (typeof onLoadComplete === 'function') {
-          try { onLoadComplete(data.voicemails || []); } catch (e) {}
-        }
-      })
-      .catch(function(e) {
-        setError(e.message);
-        setLoading(false);
-      });
+    function doFetch(headers) {
+      fetch(url, { headers: headers || {} })
+        .then(function(r) { return r.json(); })
+        .then(function(data) {
+          if (data.error) {
+            if (data.error === 'auth required') {
+              setVoicemails([]);
+            } else {
+              setError(data.error);
+              setVoicemails([]);
+            }
+          } else {
+            setVoicemails(data.voicemails || []);
+          }
+          setLoading(false);
+          if (typeof onLoadComplete === 'function') {
+            try { onLoadComplete(data.voicemails || []); } catch (e) {}
+          }
+        })
+        .catch(function(e) {
+          setError(e.message);
+          setLoading(false);
+        });
+    }
+    try {
+      import('../lib/supabase').then(function(mod) {
+        mod.supabase.auth.getSession().then(function(res) {
+          var token = res && res.data && res.data.session && res.data.session.access_token;
+          var headers = token ? { 'Authorization': 'Bearer ' + token } : {};
+          doFetch(headers);
+        }).catch(function() { doFetch({}); });
+      }).catch(function() { doFetch({}); });
+    } catch (_) { doFetch({}); }
   }, [myId, showAll]);
 
   useEffect(function() { load(); }, [load]);

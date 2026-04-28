@@ -1,6 +1,7 @@
 'use client';
 import { useState, useMemo, useEffect, useRef } from 'react';
 import { supabase, dbUpdate, dbDelete } from '../lib/supabase';
+import HRReport from './HRReport';
 
 const STATUS_COLORS = {New:'#3b82f6',Acknowledged:'#8b5cf6','In Progress':'#f59e0b',Waiting:'#6b7280',Review:'#ec4899',Testing:'#14b8a6',Ready:'#10b981',Closed:'#374151',Reopened:'#ef4444'};
 const CAT_ICONS = { ticket:'🎫', crm:'🤝', shipping:'🛳️', customs:'🚢', calendar:'📅', finance:'💰', inventory:'📦', communication:'📬', ai:'🤖', manual:'✏️', other:'⚡', login:'🟢' };
@@ -16,7 +17,7 @@ const PIPELINE_STAGES = [
   { v: 'lost', l: 'Lost', c: '#ef4444', icon: '❌' },
 ];
 
-export default function AdminTab({ user, userProfile, users, isAdmin, customers }) {
+export default function AdminTab({ user, userProfile, users, isAdmin, customers, modulePerms }) {
   const [logs, setLogs] = useState([]);
   const [tickets, setTickets] = useState([]);
   const [rates, setRates] = useState([]);
@@ -43,6 +44,7 @@ export default function AdminTab({ user, userProfile, users, isAdmin, customers 
 
   const myId = userProfile?.id || user?.id;
   const isSuperAdmin = userProfile?.role === 'super_admin';
+  const canSeeHR = isSuperAdmin || (modulePerms && modulePerms['HR Report'] === true);
   const getUserName = (id) => (users || []).find(u => u.id === id)?.name || '';
 
   // Helper: resolve UUIDs in text to human-readable names
@@ -262,7 +264,16 @@ export default function AdminTab({ user, userProfile, users, isAdmin, customers 
 
     {/* Section tabs */}
     <div className="flex gap-1 mb-3 flex-wrap">
-      {[['scorecards','📊 Scorecards'],['pipeline','🏆 Sales Pipeline'],['logins','🕐 Logins'],['messages','📢 Messages'],['activity','📋 Activity'],['tickets','🎫 Tickets'],['audit','🔍 Audit']].map(([v,l]) => (
+      {[
+        ['scorecards','📊 Scorecards'],
+        ...(canSeeHR ? [['hr_report','📋 HR Report']] : []),
+        ['pipeline','🏆 Sales Pipeline'],
+        ['logins','🕐 Logins'],
+        ['messages','📢 Messages'],
+        ['activity','📋 Activity'],
+        ['tickets','🎫 Tickets'],
+        ['audit','🔍 Audit'],
+      ].map(([v,l]) => (
         <button key={v} onClick={() => setSection(v)}
           className={'px-3 py-1.5 rounded-lg text-xs font-semibold transition ' + (section === v ? 'bg-slate-900 text-white' : 'bg-slate-100 text-slate-500')}>{l}</button>
       ))}
@@ -271,6 +282,16 @@ export default function AdminTab({ user, userProfile, users, isAdmin, customers 
     {!isSuperAdmin && visibleUsers.length <= 1 && (
       <div className="bg-amber-50 rounded-lg px-3 py-2 mb-3 border border-amber-200 text-xs text-amber-700">
         You can see your direct reports only. Ask a Super Admin to assign team members to you via the <strong>reports_to</strong> field.
+      </div>
+    )}
+
+    {/* ===== HR REPORT ===== */}
+    {section === 'hr_report' && canSeeHR && (
+      <HRReport user={user} userProfile={userProfile} users={users} customers={customers} />
+    )}
+    {section === 'hr_report' && !canSeeHR && (
+      <div className="bg-amber-50 rounded-lg px-3 py-2 mb-3 border border-amber-200 text-xs text-amber-700">
+        You don't have permission to view the HR Report. Ask a super admin to enable the "HR Report" permission for you in Settings.
       </div>
     )}
 

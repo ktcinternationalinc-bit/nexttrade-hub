@@ -1,6 +1,7 @@
 'use client';
 import { useState, useEffect } from 'react';
 import { supabase, dbInsert, dbUpdate } from '../lib/supabase';
+import MyPerformance from './MyPerformance';
 
 const STATUS_COLORS = { New:'#3b82f6', Acknowledged:'#8b5cf6', 'In Progress':'#f59e0b', Waiting:'#6b7280', Review:'#ec4899', Testing:'#14b8a6', Ready:'#10b981', Closed:'#374151', Reopened:'#ef4444' };
 const PIPELINE_STAGES = [
@@ -80,6 +81,11 @@ export default function PersonalDashboard({ user, userProfile, isAdmin, invoices
               <div className="text-[10px] text-red-600">Due: {item.due}{item.assignee&&' • 👤 '+item.assignee}{item.customer&&' • '+item.customer}{item.status&&' • '+item.status}</div></div></div>
           <span className="text-xs font-extrabold text-red-700 whitespace-nowrap">{d}d late</span></div>);
       })}</div></div>)}
+
+    {/* My Performance — self-view scorecard with coach feedback */}
+    <div className="mb-4">
+      <MyPerformance user={user} userProfile={userProfile} />
+    </div>
 
     <div className="grid grid-cols-2 md:grid-cols-5 gap-2 mb-4">
       <div className="bg-white rounded-lg p-3 cursor-pointer hover:shadow" onClick={()=>navigate('tickets')} style={{borderLeftWidth:3,borderLeftColor:needsAck.length>0?'#ef4444':'#3b82f6'}}><div className="text-[10px] text-slate-500">My Tickets</div><div className="text-lg font-extrabold">{myTickets.length}</div>{needsAck.length>0&&<div className="text-[10px] text-red-600 font-bold">⚠️ {needsAck.length} new</div>}</div>

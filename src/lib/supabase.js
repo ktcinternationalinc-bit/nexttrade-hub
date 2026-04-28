@@ -3,7 +3,17 @@ import { createClient } from '@supabase/supabase-js';
 const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
 const supabaseKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
 
-export const supabase = createClient(supabaseUrl, supabaseKey);
+export const supabase = createClient(supabaseUrl, supabaseKey, {
+  auth: {
+    persistSession: true,
+    autoRefreshToken: true,
+    detectSessionInUrl: false,
+    storageKey: 'sb-ktc-auth',
+    // Opt out of the buggy LockManager. Falls back to a direct
+    // passthrough that has never produced the orphaned-lock symptom.
+    lock: async (name, acquireTimeout, fn) => fn(),
+  },
+});
 
 // Helper: fetch with error handling
 export async function dbQuery(table, options = {}) {

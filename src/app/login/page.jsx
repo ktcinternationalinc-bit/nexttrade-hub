@@ -91,20 +91,35 @@ export default function LoginPage() {
     if (!email || !password) { setError('Enter email and password'); return; }
     setLoading(true); setError('');
     try {
-      const { data, error } = await supabase.auth.signInWithPassword({ email, password });
+      const { data, error } = await supabase.auth.signInWithPassword({
+        email: email.trim(),
+        password,
+      });
       if (error) throw error;
       let name = email.split('@')[0];
+      // v55.33 — profile lookup must NEVER block the redirect. Auth
+      // already succeeded; a profile-lookup hiccup must not undo it.
       if (data?.user) {
-        const { data: profile } = await supabase.from('users').select('id, name').eq('email', email.toLowerCase().trim()).single();
-        if (profile?.name) name = profile.name;
-        var sessionUserId = profile?.id || data.user.id;
-        await supabase.from('user_sessions').insert({
-          user_id: sessionUserId, login_at: new Date().toISOString(),
-          last_seen: new Date().toISOString(),
-          // ET, not UTC. Late-night ET logins (after ~7pm) used to land on
-          // tomorrow UTC and cause AI's "you weren't here yesterday" bug.
-          date: new Intl.DateTimeFormat('en-CA', { timeZone: 'America/New_York' }).format(new Date()),
-        });
+        try {
+          const lookupEmail = (email || '').toLowerCase().trim();
+          const { data: profile } = await supabase
+            .from('users')
+            .select('id, name')
+            .ilike('email', lookupEmail)
+            .maybeSingle();
+          if (profile?.name) name = profile.name;
+          var sessionUserId = profile?.id || data.user.id;
+          await supabase.from('user_sessions').insert({
+            user_id: sessionUserId,
+            login_at: new Date().toISOString(),
+            last_seen: new Date().toISOString(),
+            // ET, not UTC. Late-night ET logins (after ~7pm) used to land on
+            // tomorrow UTC and cause AI's "you weren't here yesterday" bug.
+            date: new Intl.DateTimeFormat('en-CA', { timeZone: 'America/New_York' }).format(new Date()),
+          });
+        } catch (profileErr) {
+          try { console.warn('[login] profile lookup soft-fail:', profileErr?.message || profileErr); } catch(_){}
+        }
       }
       setUserName(name); setClockedIn(true); spawnBurst();
       setTimeout(() => { window.location.href = '/'; }, 2400);

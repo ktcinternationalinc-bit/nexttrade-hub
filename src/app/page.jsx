@@ -868,8 +868,12 @@ export default function App() {
         // Find current user's profile
         const authUser = (await supabase.auth.getUser())?.data?.user;
         if (authUser && usrs) {
-          const authEmail = (authUser.email || '').toLowerCase();
-          const profile = usrs.find(u => (u.email || '').toLowerCase() === authEmail);
+          // v55.33 — case-insensitive match with trim, plus auth-id fallback
+          const authEmail = (authUser.email || '').toLowerCase().trim();
+          let profile = usrs.find(u => (u.email || '').toLowerCase().trim() === authEmail);
+          if (!profile && authUser.id) {
+            profile = usrs.find(u => u.id === authUser.id);
+          }
           if (profile) {
             setUserProfile(profile);
             profileIdRef.current = profile.id;
@@ -3257,7 +3261,7 @@ export default function App() {
               {/* Brand mark — bracket prefix is a terminal callout convention. */}
               <span className="text-emerald-400 font-mono text-xs font-bold tracking-tight" style={{ fontFamily: '"JetBrains Mono", monospace' }}>[KTC]</span>
               <h1 className="text-sm font-bold text-white tracking-tight whitespace-nowrap">NEXTTRADE HUB</h1>
-              <span className="text-[10px] text-zinc-500 font-mono hidden md:inline" style={{ fontFamily: '"JetBrains Mono", monospace' }}>v55.33</span>
+              <span className="text-[10px] text-zinc-500 font-mono hidden md:inline" style={{ fontFamily: '"JetBrains Mono", monospace' }}>v55.35</span>
               {/* Live clock — terminals always show one. Updates via the
                   existing tick state; if not present, falls back to no clock. */}
               <span className="hidden lg:inline text-[10px] text-zinc-500 font-mono ml-2 pl-2 border-l border-zinc-800" style={{ fontFamily: '"JetBrains Mono", monospace' }}>
@@ -11763,7 +11767,7 @@ export default function App() {
             ADMIN TAB
         ========================================== */}
         {tab === 'admin' && (
-          <SafeSection label="Admin"><AdminTab user={user} userProfile={userProfile} users={teamUsers} isAdmin={isAdmin} customers={customers} /></SafeSection>
+          <SafeSection label="Admin"><AdminTab user={user} userProfile={userProfile} users={teamUsers} isAdmin={isAdmin} customers={customers} modulePerms={modulePerms} /></SafeSection>
         )}
 
         {/* ==========================================
@@ -12184,7 +12188,7 @@ export default function App() {
                       latest fix is actually deployed. If he doesn't see this
                       tag in the modal, his browser is running stale JS. */}
                   <div className="mt-1.5 inline-block px-2 py-0.5 rounded bg-amber-900/60 text-amber-100 text-[10px] font-mono font-bold tracking-wide">
-                    BUILD v55.33-CALENDAR-RECURRING-FIXES
+                    BUILD v55.35-HR-REPORT+AUTH-BOUNCE-FIX
                   </div>
                 </div>
                 <button onClick={() => closePendingTreasuryModal()}
