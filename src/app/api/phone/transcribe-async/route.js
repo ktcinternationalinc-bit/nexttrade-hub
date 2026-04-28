@@ -41,23 +41,25 @@ export const maxDuration = 60; // seconds
 // recording-callback, and transcribe-cron. We don't want public callers
 // triggering arbitrary URL fetches (SSRF) or burning OpenAI quota.
 //
-// We accept it if either:
-//   • The X-Internal-Trigger header is set with the right secret, OR
-//   • It's a same-origin request (host matches our domain), OR
-//   • It's a Vercel cron (Authorization: Bearer + cron secret)
+// v55.31 SECURITY FIX:
+//   The previous implementation also accepted "same-origin" requests
+//   based on the Origin/Referer/Host headers. Those headers are
+//   user-controllable from any HTTP client — an attacker can set them
+//   to anything. So the same-origin path was a phony auth gate that
+//   provided zero real protection. Removed entirely.
+//
+// We now accept the request only if either:
+//   • The X-Internal-Trigger header equals INTERNAL_SECRET, OR
+//   • It's a Vercel cron call (Authorization: Bearer + CRON_SECRET), OR
+//   • We're running in development (NODE_ENV !== 'production')
 function isInternalCall(req) {
   var internalHeader = req.headers.get('x-internal-trigger');
-  if (internalHeader && internalHeader === process.env.INTERNAL_SECRET) return true;
+  if (internalHeader && process.env.INTERNAL_SECRET && internalHeader === process.env.INTERNAL_SECRET) return true;
 
   var authHeader = req.headers.get('authorization');
   if (authHeader && process.env.CRON_SECRET && authHeader === 'Bearer ' + process.env.CRON_SECRET) return true;
 
-  // Same-origin check — works for fire-and-forget from our own routes
-  var host = req.headers.get('host') || '';
-  var origin = req.headers.get('origin') || req.headers.get('referer') || '';
-  if (host && origin.indexOf(host) >= 0) return true;
-
-  // In dev, allow always
+  // In dev, allow always (no production secrets locally)
   if (process.env.NODE_ENV !== 'production') return true;
 
   return false;

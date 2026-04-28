@@ -169,10 +169,18 @@ export default function CalendarTab({ customers, user, userProfile, users, ticke
   }, [events, ticketEvents]);
 
   // Filter events based on calView.
-  // Real events: "my" = assigned OR created by me (either connection to me matters).
+  // Real events: "my" = assigned OR created by me OR I'm an attendee
+  //              MINUS events I've declined.
   // Ticket pseudo-events: "my" = assigned to me ONLY. A ticket creator who
   // handed the work off shouldn't see their own past tickets cluttering
   // their personal calendar — the assignee owns the due-date.
+  //
+  // v55.31 — additional cleanup:
+  //   • Don't show events I've declined on my "My" view (used to clutter
+  //     the calendar even after Decline)
+  //   • Cancelled events stay in BOTH views (so people can see what was
+  //     called off and reach the audit trail), but the render paths below
+  //     give them strikethrough styling so they're visually distinct
   const visibleEvents = useMemo(() => {
     if (calView === 'my') {
       return allEvents.filter(function(e) {
@@ -181,7 +189,14 @@ export default function CalendarTab({ customers, user, userProfile, users, ticke
         // the attendees list. An event with attendees=[uid1, uid2, uid3]
         // shows on ALL three people's "My calendar" views.
         var inAttendees = Array.isArray(e.attendees) && e.attendees.indexOf(myId) !== -1;
-        return e.assigned_to === myId || e.created_by === myId || inAttendees;
+        var matches = e.assigned_to === myId || e.created_by === myId || inAttendees;
+        if (!matches) return false;
+        // v55.31 — hide events I declined. They can still be reviewed via
+        // the "Team" calendar view if needed, but they don't pollute my
+        // day-to-day calendar.
+        var iDeclined = Array.isArray(e.declined_by) && e.declined_by.indexOf(myId) !== -1;
+        if (iDeclined) return false;
+        return true;
       });
     }
     return allEvents; // team view shows all
@@ -436,6 +451,15 @@ export default function CalendarTab({ customers, user, userProfile, users, ticke
 
   // Post a new note to the thread. Also stamps check-in state on the FIRST
   // post for a not-yet-attended event (preserves the old "Check In" semantic).
+  //
+  // v55.31 — Bug 14 fix. Used to stamp `completed: true` for ANY first
+  // poster, including a side-attendee on a multi-person meeting. So
+  // someone other than the owner adding a quick note would mark the
+  // whole event "attended" before the owner even joined. Now the
+  // attendance stamp only fires when the poster is the event owner
+  // (assigned_to) or the creator. Other attendees can still post notes
+  // freely; the parent event just stays scheduled until the owner
+  // marks it complete (which happens automatically when THEY post).
   const postNewNote = async () => {
     if (!notesEvent) return;
     const text = meetingNotes.trim();
@@ -451,8 +475,11 @@ export default function CalendarTab({ customers, user, userProfile, users, ticke
         note_text: text,
         note_kind: newNoteKind || 'note',
       });
-      // First-time post also stamps attendance on the parent event.
-      if (!wasCompleted) {
+      // First-time post also stamps attendance on the parent event —
+      // BUT ONLY when the poster is the owner or creator. Side-attendees
+      // posting their own notes shouldn't decide attendance for everyone.
+      const isOwnerOrCreator = (notesEvent.assigned_to === myId) || (notesEvent.created_by === myId);
+      if (!wasCompleted && isOwnerOrCreator) {
         await dbUpdate('calendar_events', notesEvent.id, {
           completed: true,
           event_status: 'attended',
@@ -483,11 +510,31 @@ export default function CalendarTab({ customers, user, userProfile, users, ticke
     setNotesPosting(false);
   };
 
+  // v55.31 — only the author or an admin can edit/delete a note.
+  //
+  // Background: this used to be a wide-open path. Any logged-in user
+  // could edit or delete anyone else's meeting note by simply having
+  // the row in their thread view. With many people on a meeting that's
+  // not a defensible default. Now: the note's author_id must match the
+  // current user, OR the current user must be an admin/super_admin.
+  const isAdmin = !!(userProfile && (userProfile.role === 'admin' || userProfile.role === 'super_admin'));
+  const canModifyNote = (n) => {
+    if (!n) return false;
+    if (n._legacy) return isAdmin; // legacy single-column notes have no real author
+    return n.author_id === myId || isAdmin;
+  };
+
   // Edit your own note (or any, if admin). Does NOT create a new row.
   const saveEditedNote = async () => {
     if (!editingNoteId) return;
     const text = (editingNoteDraft || '').trim();
     if (!text) return;
+    // Find the note in the thread to verify ownership before sending the update.
+    var note = (notesThread || []).find(function (n) { return n.id === editingNoteId; });
+    if (!canModifyNote(note)) {
+      if (toast) toast.error(lang === 'ar' ? 'لا يمكنك تعديل ملاحظة شخص آخر' : "You can only edit your own notes");
+      return;
+    }
     try {
       await supabase.from('meeting_notes').update({ note_text: text }).eq('id', editingNoteId);
       setEditingNoteId(null); setEditingNoteDraft('');
@@ -496,6 +543,11 @@ export default function CalendarTab({ customers, user, userProfile, users, ticke
   };
 
   const deleteNote = async (noteId) => {
+    var note = (notesThread || []).find(function (n) { return n.id === noteId; });
+    if (!canModifyNote(note)) {
+      if (toast) toast.error(lang === 'ar' ? 'لا يمكنك حذف ملاحظة شخص آخر' : "You can only delete your own notes");
+      return;
+    }
     if (!confirm('Delete this note? / حذف هذه الملاحظة؟')) return;
     try {
       await supabase.from('meeting_notes').delete().eq('id', noteId);
@@ -672,18 +724,31 @@ export default function CalendarTab({ customers, user, userProfile, users, ticke
       };
 
       if (editScope === 'series' && editEvent.series_id) {
-        // Cancel all occurrences in the series
-        await supabase.from('calendar_events')
-          .update(cancelPatch)
+        // v55.31 — cancel each occurrence individually via dbUpdate so EVERY
+        // row gets an audit entry. Previously a direct `.update()` on the
+        // whole series bypassed the audit log — bulk cancellations left no
+        // trace of who cancelled what or why.
+        const { data: siblings } = await supabase
+          .from('calendar_events').select('id')
           .eq('series_id', editEvent.series_id);
+        for (const sib of (siblings || [])) {
+          try {
+            await dbUpdate('calendar_events', sib.id, cancelPatch, myId);
+            try { await cancelEventReminders(sib.id); } catch (e) {}
+          } catch (e) { /* per-row swallow */ }
+        }
         await logActivity(myId, 'Cancelled event series: ' + editEvent.title, 'calendar');
       } else {
         await dbUpdate('calendar_events', editEvent.id, cancelPatch, myId);
+        try { await cancelEventReminders(editEvent.id); } catch (e) {}
         await logActivity(myId, 'Cancelled event: ' + editEvent.title, 'calendar');
       }
 
-      try { await cancelEventReminders(editEvent.id); } catch (e) {}
       if (toast) toast.success(lang === 'ar' ? 'تم إلغاء الاجتماع' : 'Meeting cancelled');
+      // v55.31 — reset busy state on success too. Previously only the catch
+      // path cleared it, so quick-reopening another event saw frozen buttons
+      // until the next render cycle.
+      setActionBusy(false);
       closeEditEvent();
       if (onRefresh) onRefresh();
     } catch (err) {
@@ -708,11 +773,28 @@ export default function CalendarTab({ customers, user, userProfile, users, ticke
     }
     setActionBusy(true);
     try {
-      // Audit row BEFORE delete so we can still see who/when after removal
-      await logActivity(myId, 'HARD-DELETED event: ' + editEvent.title + ' (id=' + editEvent.id + ')', 'calendar');
-      try { await cancelEventReminders(editEvent.id); } catch (e) {}
-      await supabase.from('calendar_events').delete().eq('id', editEvent.id);
+      // v55.31 — respect editScope. Previously this deleted only the single
+      // row regardless of scope, so picking "delete whole series" would
+      // leave child occurrences orphaned with broken series_id pointers.
+      if (editScope === 'series' && editEvent.series_id) {
+        // Audit row first so we can still see what was wiped
+        await logActivity(myId, 'HARD-DELETED event series: ' + editEvent.title + ' (series_id=' + editEvent.series_id + ')', 'calendar');
+        // Cancel all reminders for every occurrence in the series before the rows go
+        const { data: siblings } = await supabase
+          .from('calendar_events').select('id')
+          .eq('series_id', editEvent.series_id);
+        for (const sib of (siblings || [])) {
+          try { await cancelEventReminders(sib.id); } catch (e) {}
+        }
+        await supabase.from('calendar_events').delete().eq('series_id', editEvent.series_id);
+      } else {
+        await logActivity(myId, 'HARD-DELETED event: ' + editEvent.title + ' (id=' + editEvent.id + ')', 'calendar');
+        try { await cancelEventReminders(editEvent.id); } catch (e) {}
+        await supabase.from('calendar_events').delete().eq('id', editEvent.id);
+      }
       if (toast) toast.success(lang === 'ar' ? 'تم حذف الاجتماع نهائياً' : 'Meeting permanently deleted');
+      // v55.31 — reset busy state on success too (matches performCancel)
+      setActionBusy(false);
       closeEditEvent();
       if (onRefresh) onRefresh();
     } catch (err) {
@@ -896,23 +978,46 @@ export default function CalendarTab({ customers, user, userProfile, users, ticke
       // Reschedule reminders if date or time moved.
       // For series-edit with time change: ALL children's 30min_before reminders are
       // anchored to their (old) event_time, so cancel + reschedule for every child.
+      //
+      // v55.31 — for both series and single edits, reschedule reminders for
+      // EVERY attendee, not just the primary owner. Previously only
+      // `editEvent.assigned_to` got fresh reminders, leaving every other
+      // attendee with stale reminders pointing at the old date/time.
       if (editScope === 'series' && editEvent.series_id && hasTimeChange) {
         try {
           const { data: siblings } = await supabase
             .from('calendar_events').select('*')
             .eq('series_id', editEvent.series_id);
           for (const sib of (siblings || [])) {
-            if (!sib.assigned_to) continue;
+            // Build the recipient list: union of assigned_to + attendees[].
+            var sibRecipients = [];
+            if (Array.isArray(sib.attendees) && sib.attendees.length) {
+              sibRecipients = sib.attendees.slice();
+            }
+            if (sib.assigned_to && sibRecipients.indexOf(sib.assigned_to) === -1) {
+              sibRecipients.push(sib.assigned_to);
+            }
+            if (!sibRecipients.length) continue;
             // Use the updated time if series-wide, else keep sib's own time.
             const asIf = { ...sib, event_time: editForm.eventTime || null };
-            try { await rescheduleEventReminders(asIf, [sib.assigned_to], myId); }
+            try { await rescheduleEventReminders(asIf, sibRecipients, myId); }
             catch (e) { /* per-row swallow */ }
           }
         } catch (e) { console.log('[calendar] series reschedule failed: ' + e.message); }
-      } else if ((hasDateChange || hasTimeChange) && editEvent.assigned_to) {
+      } else if (hasDateChange || hasTimeChange) {
         const fresh = { ...editEvent, ...update };
-        try { await rescheduleEventReminders(fresh, [editEvent.assigned_to], myId); }
-        catch (e) { console.log('[calendar] reschedule failed: ' + e.message); }
+        // Same union: attendees + assigned_to
+        var freshRecipients = [];
+        if (Array.isArray(fresh.attendees) && fresh.attendees.length) {
+          freshRecipients = fresh.attendees.slice();
+        }
+        if (fresh.assigned_to && freshRecipients.indexOf(fresh.assigned_to) === -1) {
+          freshRecipients.push(fresh.assigned_to);
+        }
+        if (freshRecipients.length) {
+          try { await rescheduleEventReminders(fresh, freshRecipients, myId); }
+          catch (e) { console.log('[calendar] reschedule failed: ' + e.message); }
+        }
       }
 
       closeEditEvent();
@@ -1077,7 +1182,12 @@ export default function CalendarTab({ customers, user, userProfile, users, ticke
                       );
                     }
                     const tc = EVENT_TYPES.find(t=>t.v===ev.event_type)?.c || '#3b82f6';
-                    return <div key={ev.id} className={'text-[8px] truncate rounded px-0.5 mb-0.5 ' + (ev.completed ? 'line-through opacity-50' : '')} style={{background:tc+'20',color:tc}}>{ev.all_day ? '🌅 ' : ''}{ev.series_id ? '🔄 ' : ''}{ev.location ? '📍 ' : ''}{ev.title}</div>;
+                    // v55.31 — visual indicator for cancelled events.
+                    // Used to render identical to scheduled events on the
+                    // grid, which made cancellations confusing.
+                    const isCancelled = ev.status === 'cancelled';
+                    const visualClasses = (ev.completed || isCancelled) ? 'line-through opacity-50' : '';
+                    return <div key={ev.id} className={'text-[8px] truncate rounded px-0.5 mb-0.5 ' + visualClasses} style={{background:tc+'20',color:tc}}>{isCancelled ? '❌ ' : ''}{ev.all_day ? '🌅 ' : ''}{ev.series_id ? '🔄 ' : ''}{ev.location ? '📍 ' : ''}{ev.title}</div>;
                   })}
                   {de.length > 3 && <div className="text-[8px] text-slate-400">+{de.length - 3}</div>}
                 </div>
@@ -1125,10 +1235,13 @@ export default function CalendarTab({ customers, user, userProfile, users, ticke
               }
               const tc = EVENT_TYPES.find(t=>t.v===ev.event_type)?.c || '#3b82f6';
               const assignedName = getUserName(ev.assigned_to);
+              // v55.31 — same cancelled-event treatment as month view
+              const isCancelled = ev.status === 'cancelled';
+              const dimmed = (ev.completed || isCancelled);
               return (
-                <div key={ev.id} className={'flex justify-between items-center p-3 rounded-lg mb-2 border ' + (ev.completed ? 'opacity-50' : '')} style={{borderColor:tc,background:tc+'10'}}>
+                <div key={ev.id} className={'flex justify-between items-center p-3 rounded-lg mb-2 border ' + (dimmed ? 'opacity-50' : '')} style={{borderColor:tc,background:tc+'10'}}>
                   <div onClick={() => openEditEvent(ev)} className="cursor-pointer flex-1 hover:bg-slate-100 rounded px-1 -mx-1" title="Click to edit / cancel / delete">
-                    <div className={'text-sm font-bold ' + (ev.completed ? 'line-through' : '')}>{ev.title}</div>
+                    <div className={'text-sm font-bold ' + (dimmed ? 'line-through' : '')}>{isCancelled ? '❌ ' : ''}{ev.title}</div>
                     <div className="text-[10px] text-slate-500">
                       {/* v55 Stage 1 — All-day badge replaces the time when set.
                           Otherwise show clock time, falling back to "All day"
@@ -1229,10 +1342,13 @@ export default function CalendarTab({ customers, user, userProfile, users, ticke
             }
             const tc = EVENT_TYPES.find(t=>t.v===ev.event_type)?.c || '#3b82f6';
             const assignedName = getUserName(ev.assigned_to);
+            // v55.31 — cancelled-event visual treatment
+            const isCancelled = ev.status === 'cancelled';
+            const dimmed = (ev.completed || isCancelled);
             return (
-              <div key={ev.id} className={'flex justify-between items-center p-2 rounded mb-1 ' + (ev.completed ? 'opacity-50' : '')} style={{background:tc+'10'}}>
+              <div key={ev.id} className={'flex justify-between items-center p-2 rounded mb-1 ' + (dimmed ? 'opacity-50' : '')} style={{background:tc+'10'}}>
                 <div onClick={() => openEditEvent(ev)} className="cursor-pointer flex-1 hover:bg-slate-100 rounded px-1 -mx-1" title="Click to edit / cancel / delete">
-                  <div className={'text-xs font-semibold ' + (ev.completed ? 'line-through' : '')}>{ev.title}</div>
+                  <div className={'text-xs font-semibold ' + (dimmed ? 'line-through' : '')}>{isCancelled ? '❌ ' : ''}{ev.title}</div>
                   <div className="text-[10px] text-slate-500">
                     {/* v55 Stage 1 — All-day badge replaces clock time. */}
                     {ev.all_day ? <span className="font-semibold text-blue-600">🌅 All day</span> : (ev.event_time || 'All day')} | {ev.event_type}

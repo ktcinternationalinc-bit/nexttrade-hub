@@ -71,9 +71,14 @@ export async function GET(req) {
       for (var i = 0; i < vmQuery.data.length; i++) {
         var vm = vmQuery.data[i];
         try {
+          // v55.31 — must pass INTERNAL_SECRET so transcribe-async accepts
+          // the call. (The previous same-origin shortcut was removed as a
+          // security fix; all internal callers now use the secret.)
+          var vmHeaders = { 'Content-Type': 'application/json' };
+          if (process.env.INTERNAL_SECRET) vmHeaders['X-Internal-Trigger'] = process.env.INTERNAL_SECRET;
           var res = await fetch(baseUrl + '/api/phone/transcribe-async', {
             method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
+            headers: vmHeaders,
             body: JSON.stringify({ kind: 'voicemail', id: vm.id, recording_url: vm.recording_url }),
           });
           if (res.ok) {
@@ -100,9 +105,11 @@ export async function GET(req) {
       for (var j = 0; j < recQuery.data.length; j++) {
         var rec = recQuery.data[j];
         try {
+          var recHeaders = { 'Content-Type': 'application/json' };
+          if (process.env.INTERNAL_SECRET) recHeaders['X-Internal-Trigger'] = process.env.INTERNAL_SECRET;
           var res2 = await fetch(baseUrl + '/api/phone/transcribe-async', {
             method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
+            headers: recHeaders,
             body: JSON.stringify({ kind: 'recording', id: rec.id, recording_url: rec.recording_url }),
           });
           if (res2.ok) {
