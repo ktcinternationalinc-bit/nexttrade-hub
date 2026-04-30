@@ -499,6 +499,10 @@ export default function App() {
   const [globalSearch, setGlobalSearch] = useState('');
   const [showGlobalSearch, setShowGlobalSearch] = useState(false);
   const [showNotifBell, setShowNotifBell] = useState(false);
+  // v55.40 — Unread voicemail count for the header badge. Polled every
+  // 30 seconds via the same endpoint the dashboard widget uses, so the
+  // header and the dashboard stay in sync within a window.
+  const [unreadVoicemails, setUnreadVoicemails] = useState(0);
   const [showFAB, setShowFAB] = useState(false);
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [welcomeDismissed, setWelcomeDismissed] = useState(false);
@@ -696,6 +700,39 @@ export default function App() {
     }, 60000);
     return () => clearInterval(pollAnn);
   }, []);
+
+  // v55.40 — Poll the unread voicemail count for the header badge.
+  // Mirrors the dashboard VoicemailsWidget's 30s refresh cadence so
+  // when the user marks one read in the widget, the header badge
+  // catches up within a window. Uses the same /api/phone/voicemails
+  // endpoint with limit=1 so it stays a cheap query.
+  useEffect(() => {
+    var myId = user?.id;
+    if (!myId) return;
+    var cancelled = false;
+
+    var fetchCount = async function () {
+      try {
+        var sess = await supabase.auth.getSession();
+        var tok = sess && sess.data && sess.data.session ? sess.data.session.access_token : '';
+        var url = '/api/phone/voicemails?assigned_to=' + encodeURIComponent(myId)
+          + '&unread=true&limit=200';
+        var r = await fetch(url, {
+          headers: tok ? { 'Authorization': 'Bearer ' + tok } : {},
+        });
+        if (!r.ok) return; // 401 during logout etc — silent
+        var d = await r.json();
+        if (cancelled) return;
+        // The API may return {voicemails: [...]} or [...] depending on shape.
+        var list = Array.isArray(d) ? d : (d.voicemails || d.data || []);
+        setUnreadVoicemails(Array.isArray(list) ? list.length : 0);
+      } catch (_e) { /* silent — header badge is best-effort */ }
+    };
+
+    fetchCount();
+    var interval = setInterval(fetchCount, 30 * 1000);
+    return function () { cancelled = true; clearInterval(interval); };
+  }, [user]);
 
   // Import
   const [importStep, setImportStep] = useState('select'); // select, preview, importing, done
@@ -3261,7 +3298,7 @@ export default function App() {
               {/* Brand mark — bracket prefix is a terminal callout convention. */}
               <span className="text-emerald-400 font-mono text-xs font-bold tracking-tight" style={{ fontFamily: '"JetBrains Mono", monospace' }}>[KTC]</span>
               <h1 className="text-sm font-bold text-white tracking-tight whitespace-nowrap">NEXTTRADE HUB</h1>
-              <span className="text-[10px] text-zinc-500 font-mono hidden md:inline" style={{ fontFamily: '"JetBrains Mono", monospace' }}>v55.35</span>
+              <span className="text-[10px] text-zinc-500 font-mono hidden md:inline" style={{ fontFamily: '"JetBrains Mono", monospace' }}>v55.40</span>
               {/* Live clock — terminals always show one. Updates via the
                   existing tick state; if not present, falls back to no clock. */}
               <span className="hidden lg:inline text-[10px] text-zinc-500 font-mono ml-2 pl-2 border-l border-zinc-800" style={{ fontFamily: '"JetBrains Mono", monospace' }}>
@@ -3330,6 +3367,38 @@ export default function App() {
 
             {/* Notification bell from existing component */}
             <NotificationBell userId={userProfile?.id || user?.id} users={teamUsers} />
+
+            {/* v55.40 — Unread voicemail badge.
+                Shows whenever the current user has unread voicemails assigned
+                to them. Click → switch to dashboard (where the VoicemailsWidget
+                lives) and scroll to it. Hidden when zero unread, so it doesn't
+                add noise for users without voicemails to handle. */}
+            {unreadVoicemails > 0 && (
+              <button
+                onClick={() => {
+                  setTab('dashboard');
+                  // Scroll after the dashboard finishes mounting/painting.
+                  setTimeout(() => {
+                    var el = document.getElementById('voicemails-widget');
+                    if (el && el.scrollIntoView) {
+                      el.scrollIntoView({ behavior: 'smooth', block: 'start' });
+                    }
+                  }, 200);
+                }}
+                className="px-2.5 py-1.5 text-[11px] font-mono font-bold border border-zinc-800 hover:border-amber-500 rounded-sm transition-colors flex items-center gap-1.5"
+                style={{
+                  background: '#0a0a0a',
+                  color: '#fbbf24',
+                  fontFamily: '"JetBrains Mono", monospace',
+                }}
+                title={unreadVoicemails === 1
+                  ? '1 unread voicemail — click to view'
+                  : unreadVoicemails + ' unread voicemails — click to view'}
+                aria-label={unreadVoicemails + ' unread voicemails'}>
+                <span>📬</span>
+                <span>{unreadVoicemails}</span>
+              </button>
+            )}
 
             {/* Dashboard alerts bell — same data as before, redesigned */}
             {(() => {
@@ -7828,8 +7897,9 @@ export default function App() {
 
             {/* ===== VOICEMAILS WIDGET (Phase B — Apr 26 2026) =====
                 Shows the logged-in user's unread voicemails with audio + Whisper transcript.
-                Auto-refreshes every 30 seconds so new voicemails appear without page reload. */}
-            <div className="mt-4">
+                Auto-refreshes every 30 seconds so new voicemails appear without page reload.
+                v55.40 — `id` anchor so the header voicemail badge can scroll to it. */}
+            <div className="mt-4" id="voicemails-widget">
               <SafeSection label="Voicemails">
                 <VoicemailsWidget user={user} userProfile={userProfile} customers={customers} toast={toast} />
               </SafeSection>
@@ -11778,7 +11848,7 @@ export default function App() {
         )}
 
         {tab === 'comms' && (
-          <SafeSection label="Communications"><CommunicationsTab user={user} supabase={supabase} /></SafeSection>
+          <SafeSection label="Communications"><CommunicationsTab user={user} userProfile={userProfile} customers={customers} supabase={supabase} /></SafeSection>
         )}
 
         {/* ==========================================
@@ -12188,7 +12258,7 @@ export default function App() {
                       latest fix is actually deployed. If he doesn't see this
                       tag in the modal, his browser is running stale JS. */}
                   <div className="mt-1.5 inline-block px-2 py-0.5 rounded bg-amber-900/60 text-amber-100 text-[10px] font-mono font-bold tracking-wide">
-                    BUILD v55.35-HR-REPORT+AUTH-BOUNCE-FIX
+                    BUILD v55.40-PHONE-AUTO-INBOUND
                   </div>
                 </div>
                 <button onClick={() => closePendingTreasuryModal()}

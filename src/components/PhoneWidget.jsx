@@ -62,6 +62,11 @@ export default function PhoneWidget({ user, userProfile, users, customers }) {
   const deviceRef = useRef(null);
   const connectionRef = useRef(null);
   const timerRef = useRef(null);
+  // v55.40 — deviceReady = true once Twilio registers us as a Client.
+  // Used to render a green "ready" dot on the floating phone button so
+  // team members can see at a glance whether the system can actually
+  // route inbound calls to them right now.
+  const [deviceReady, setDeviceReady] = useState(false);
   // endCall is defined further down (it depends on state setters), but it
   // gets referenced from inside Twilio event callbacks set up earlier.
   // We hold it in a ref so the callbacks always reach the latest version
@@ -190,8 +195,14 @@ export default function PhoneWidget({ user, userProfile, users, customers }) {
       });
 
       // 4. Wire up events. v2 uses 'registered' / 'unregistered' / 'tokenWillExpire'
-      device.on('registered', () => { console.warn('📞 Twilio Device registered — ready to receive calls'); });
-      device.on('unregistered', () => { console.warn('📞 Twilio Device unregistered'); });
+      device.on('registered', () => {
+        console.warn('📞 Twilio Device registered — ready to receive calls');
+        setDeviceReady(true);
+      });
+      device.on('unregistered', () => {
+        console.warn('📞 Twilio Device unregistered');
+        setDeviceReady(false);
+      });
       device.on('error', (err) => {
         // err in v2 is a TwilioError with .code and .message — but it's
         // sometimes a plain Error or DOM Event depending on what failed.
@@ -278,6 +289,7 @@ export default function PhoneWidget({ user, userProfile, users, customers }) {
         if (deviceRef.current) {
           deviceRef.current.destroy();
           deviceRef.current = null;
+          setDeviceReady(false);
         }
       } catch (e) { /* ignore */ }
     };
@@ -291,6 +303,91 @@ export default function PhoneWidget({ user, userProfile, users, customers }) {
       initDevice();
     }
   }, [open, myId, initDevice]);
+
+  // v55.40 — AUTO-REGISTER on app load when it's safe to do so.
+  //
+  // The original lazy-init policy (only register when the user opens the
+  // phone widget) had an unintended consequence: nobody's browser was
+  // ever registered, so EVERY inbound call went to voicemail. Customers
+  // calling KTC would never reach a live person.
+  //
+  // The fix: try to auto-register, but ONLY when all of the following are
+  // true. Skipping any of these makes the silent attempt impossible:
+  //
+  //   1. The browser supports the Permissions API for 'microphone'
+  //      (Chromium, Firefox, modern Safari).
+  //   2. Mic permission is already 'granted' (i.e. the user has used
+  //      the phone widget or another mic feature like Nadia previously
+  //      and said yes). If state is 'prompt', registering would force a
+  //      jarring browser dialog the user didn't ask for. If 'denied',
+  //      registering would just throw.
+  //   3. The user's `phone_routing` is NOT 'cell' (browser disabled).
+  //   4. The user is not in vacation mode.
+  //
+  // When all conditions hold, we silently call initDevice() in the
+  // background. The Twilio Device's 'registered' event flips deviceReady
+  // to true, which lights up the green dot on the floating phone button.
+  // No prompts, no UI takeover. Inbound calls now find a live browser.
+  //
+  // If any condition isn't met, we fall back to the original lazy behavior:
+  // user has to open the widget once per session to enable inbound.
+  useEffect(() => {
+    if (!myId) return;
+    if (deviceRef.current) return;
+    if (typeof window === 'undefined') return;
+
+    var cancelled = false;
+
+    var tryAutoRegister = async function () {
+      try {
+        // Step 1+2 — check Permissions API. If unavailable or not granted,
+        // bail silently.
+        if (!navigator.permissions || !navigator.permissions.query) return;
+        var perm;
+        try {
+          perm = await navigator.permissions.query({ name: 'microphone' });
+        } catch (_e) {
+          return;
+        }
+        if (!perm || perm.state !== 'granted') return;
+
+        if (cancelled) return;
+
+        // Step 3+4 — check the user's routing prefs. If they explicitly
+        // chose 'cell only' or are on vacation, skip auto-register
+        // (registering would still work, but it'd be wasted setup).
+        try {
+          var routing = await supabase
+            .from('users')
+            .select('phone_routing, phone_vacation_mode')
+            .eq('id', myId)
+            .maybeSingle();
+          if (routing && routing.data) {
+            if (routing.data.phone_vacation_mode) return;
+            if (routing.data.phone_routing === 'cell') return;
+          }
+        } catch (_e) {
+          // Column may not exist yet (s31 not run) — fall through.
+        }
+
+        if (cancelled) return;
+        if (deviceRef.current) return;
+
+        console.warn('📞 [auto-register] mic pre-granted; registering for inbound calls');
+        // initDevice has its own try/catch — failures here are silent
+        // by design (we don't want a background attempt to spam errors
+        // at the user). When they open the widget, any persistent issue
+        // surfaces in the existing error UI.
+        await initDevice();
+      } catch (e) {
+        console.warn('[auto-register] skipped:', e && e.message ? e.message : e);
+      }
+    };
+
+    // Tiny delay so we don't race the auth handshake on initial app load.
+    var t = setTimeout(tryAutoRegister, 1200);
+    return function () { cancelled = true; clearTimeout(t); };
+  }, [myId, initDevice]);
 
   // v55.29 — toE164(): auto-format whatever the user typed into a proper
   // E.164 number (the "+1..." format Twilio requires).
@@ -466,9 +563,23 @@ export default function PhoneWidget({ user, userProfile, users, customers }) {
       <button onClick={() => setOpen(!open)}
         className="fixed bottom-6 left-20 w-12 h-12 rounded-full bg-green-500 text-white text-xl shadow-xl z-50 flex items-center justify-center hover:bg-green-600 transition"
         style={{ boxShadow: '0 4px 20px rgba(34,197,94,0.4)' }}
-        title="Phone">
+        title={deviceReady
+          ? 'Phone (ready to receive calls)'
+          : 'Phone (open to enable inbound calls)'}>
         📞
+        {/* v55.40 — Active call indicator (red, pulsing). Highest priority. */}
         {callState === 'active' && <span className="absolute -top-1 -right-1 w-4 h-4 bg-red-500 rounded-full animate-pulse" />}
+        {/* v55.40 — Ready-for-inbound indicator (green dot). Only shown when
+            no active call is in progress and the Twilio Device is registered.
+            Tells team members at a glance that customers calling them right
+            now WILL ring this browser. */}
+        {callState !== 'active' && deviceReady && (
+          <span
+            className="absolute -top-1 -right-1 w-3 h-3 bg-emerald-400 rounded-full border-2 border-white"
+            style={{ boxShadow: '0 0 6px rgba(52,211,153,0.7)' }}
+            title="Ready to receive calls"
+          />
+        )}
       </button>
 
       {/* Phone panel — anchored to the left now, matching the button */}

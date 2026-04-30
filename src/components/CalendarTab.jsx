@@ -45,6 +45,11 @@ export default function CalendarTab({ customers, user, userProfile, users, ticke
   const [f, setF] = useState({});
   const [selectedUsers, setSelectedUsers] = useState([]);
   const [calView, setCalView] = useState('my');
+  // v55.36 — Pick a specific team member to view their calendar.
+  // null = current user (default for everyone). For super admin only,
+  // the dropdown lets them pick any other team member to see THEIR
+  // personal calendar and create events directly on it.
+  const [calViewUser, setCalViewUser] = useState(null);
   const [notesEvent, setNotesEvent] = useState(null);
   const [meetingNotes, setMeetingNotes] = useState(''); // draft for new note being typed
   // Multi-note thread state. An array of note rows from meeting_notes table,
@@ -192,25 +197,35 @@ export default function CalendarTab({ customers, user, userProfile, users, ticke
   //     called off and reach the audit trail), but the render paths below
   //     give them strikethrough styling so they're visually distinct
   const visibleEvents = useMemo(() => {
+    // v55.36 — When super admin picks a specific team member from the
+    // calendar dropdown, filter events to that person's personal calendar
+    // (events they're assigned, attending, or created). Falls back to the
+    // current user when no one is picked.
+    const focusUserId = calViewUser || myId;
     if (calView === 'my') {
       return allEvents.filter(function(e) {
-        if (e._ticket) return e.assigned_to === myId;
+        if (e._ticket) return e.assigned_to === focusUserId;
         // v54.1 — include multi-attendee meetings where the user is in
         // the attendees list. An event with attendees=[uid1, uid2, uid3]
         // shows on ALL three people's "My calendar" views.
-        var inAttendees = Array.isArray(e.attendees) && e.attendees.indexOf(myId) !== -1;
-        var matches = e.assigned_to === myId || e.created_by === myId || inAttendees;
+        var inAttendees = Array.isArray(e.attendees) && e.attendees.indexOf(focusUserId) !== -1;
+        var matches = e.assigned_to === focusUserId || e.created_by === focusUserId || inAttendees;
         if (!matches) return false;
         // v55.31 — hide events I declined. They can still be reviewed via
         // the "Team" calendar view if needed, but they don't pollute my
         // day-to-day calendar.
-        var iDeclined = Array.isArray(e.declined_by) && e.declined_by.indexOf(myId) !== -1;
-        if (iDeclined) return false;
+        // v55.36 — only hide declined events when viewing one's OWN calendar.
+        // If super admin is looking at someone else's calendar, show their
+        // declined events too (factual record of what they declined).
+        if (focusUserId === myId) {
+          var iDeclined = Array.isArray(e.declined_by) && e.declined_by.indexOf(myId) !== -1;
+          if (iDeclined) return false;
+        }
         return true;
       });
     }
     return allEvents; // team view shows all
-  }, [allEvents, calView, user, myId]);
+  }, [allEvents, calView, user, myId, calViewUser]);
 
   const dayEvents = (day) => {
     const ds = year + '-' + String(month + 1).padStart(2, '0') + '-' + String(day).padStart(2, '0');
@@ -722,9 +737,38 @@ export default function CalendarTab({ customers, user, userProfile, users, ticke
   //   'following' → this row and every later sibling in the series
   //   'series'    → every row in the series
   // Falls back to 'single' for non-recurring events (no series_id).
+  //
+  // v55.36 — added orphan-recurring fallback: if the event was created
+  // recurring but somehow has no series_id (legacy data, failed migration,
+  // creation race), match siblings by title + recurring + created_by so
+  // "All in series" still does the right thing.
   const resolveScopedIds = async (scope) => {
     if (!editEvent) return [];
-    if (scope === 'single' || !editEvent.series_id) return [editEvent.id];
+    if (scope === 'single') return [editEvent.id];
+
+    // v55.36 — orphan-recurring fallback path.
+    // If this event has no series_id but IS recurring, find sibling rows
+    // by the heuristic key (title + recurring + created_by). This catches
+    // legacy data where the link was never written.
+    if (!editEvent.series_id) {
+      if (!editEvent.recurring || editEvent.recurring === 'none') {
+        return [editEvent.id];
+      }
+      let q = supabase
+        .from('calendar_events')
+        .select('id, event_date')
+        .eq('title', editEvent.title)
+        .eq('recurring', editEvent.recurring)
+        .is('series_id', null);
+      if (editEvent.created_by) q = q.eq('created_by', editEvent.created_by);
+      if (scope === 'following') q = q.gte('event_date', editEvent.event_date);
+      const { data } = await q;
+      const ids = (data || []).map(function (r) { return r.id; });
+      // Always include the current row even if the heuristic missed it
+      if (ids.indexOf(editEvent.id) < 0) ids.push(editEvent.id);
+      return ids;
+    }
+
     if (scope === 'series') {
       const { data } = await supabase
         .from('calendar_events')
@@ -745,14 +789,27 @@ export default function CalendarTab({ customers, user, userProfile, users, ticke
 
   // v55.33 — Live-preview count of rows for the picker. Reads from
   // already-loaded `events` so we don't fire a DB query on every click.
+  // v55.36 — handles orphan-recurring (no series_id) by matching on
+  // title + recurring + created_by, same heuristic as resolveScopedIds.
   const scopedCount = (scope) => {
-    if (!editEvent || !editEvent.series_id || scope === 'single') return 1;
+    if (!editEvent || scope === 'single') return 1;
+    const isOrphanRecurring = !editEvent.series_id && editEvent.recurring && editEvent.recurring !== 'none';
+    const seriesMatch = editEvent.series_id
+      ? function(e) { return e.series_id === editEvent.series_id; }
+      : (isOrphanRecurring
+        ? function(e) {
+          return !e.series_id
+            && e.recurring === editEvent.recurring
+            && e.title === editEvent.title
+            && (!editEvent.created_by || e.created_by === editEvent.created_by);
+        }
+        : function(e) { return e.id === editEvent.id; });
     if (scope === 'series') {
-      return events.filter(function(e) { return e.series_id === editEvent.series_id; }).length || 1;
+      return events.filter(seriesMatch).length || 1;
     }
     if (scope === 'following') {
       return events.filter(function(e) {
-        return e.series_id === editEvent.series_id && e.event_date >= editEvent.event_date;
+        return seriesMatch(e) && e.event_date >= editEvent.event_date;
       }).length || 1;
     }
     return 1;
@@ -854,15 +911,46 @@ export default function CalendarTab({ customers, user, userProfile, users, ticke
       for (const id of ids) {
         try { await cancelEventReminders(id); } catch (e) {}
       }
-      // v55.33 — single bulk delete using `.in('id', ids)` instead of
-      // `.eq('series_id', ...)`. That way 'following' scope works too
-      // (it has a list of specific ids, not a single series filter).
-      await supabase.from('calendar_events').delete().in('id', ids);
+      // v55.36 — capture the error from the bulk delete instead of throwing
+      // the result away. Without this, RLS rejections or partial failures
+      // returned success and the user saw "✓ deleted 8" when only 1 actually
+      // got deleted. That was the "deletes only the current occurrence" bug.
+      const delRes = await supabase.from('calendar_events').delete().in('id', ids).select('id');
+      if (delRes.error) {
+        throw new Error(delRes.error.message || 'delete returned error');
+      }
+      const actuallyDeletedCount = (delRes.data && delRes.data.length) || 0;
+
+      // v55.36 — Independent verification: re-query the series and count
+      // anything left. If rows survived (e.g. due to RLS, race with cron,
+      // or the picker not catching all sibling rows), tell the user the
+      // truth instead of claiming success.
+      let survivors = 0;
+      if (editEvent.series_id && deleteScope === 'series') {
+        try {
+          const verifyRes = await supabase
+            .from('calendar_events')
+            .select('id', { count: 'exact', head: true })
+            .eq('series_id', editEvent.series_id);
+          survivors = verifyRes.count || 0;
+        } catch (e) { /* non-fatal — best-effort verification */ }
+      }
+
       if (toast) {
-        const okMsg = ids.length > 1
-          ? (lang === 'ar' ? 'تم حذف ' + ids.length + ' اجتماعات نهائياً' : 'Permanently deleted ' + ids.length + ' meetings')
-          : (lang === 'ar' ? 'تم حذف الاجتماع نهائياً' : 'Meeting permanently deleted');
-        toast.success(okMsg);
+        if (survivors > 0) {
+          toast.error(
+            (lang === 'ar'
+              ? 'تم حذف ' + actuallyDeletedCount + ' فقط، ' + survivors + ' اجتماعات لا تزال موجودة في السلسلة. قد يكون السبب صلاحيات أو بيانات قديمة.'
+              : 'Deleted ' + actuallyDeletedCount + ' rows but ' + survivors + ' still remain in the series. Likely a permissions or legacy-data issue — try again or contact admin.')
+          );
+        } else if (actuallyDeletedCount === 0) {
+          toast.error(lang === 'ar' ? 'لم يتم حذف أي اجتماع. تحقق من الصلاحيات.' : 'Nothing was deleted. Check your permissions.');
+        } else {
+          const okMsg = actuallyDeletedCount > 1
+            ? (lang === 'ar' ? 'تم حذف ' + actuallyDeletedCount + ' اجتماعات نهائياً' : 'Permanently deleted ' + actuallyDeletedCount + ' meetings')
+            : (lang === 'ar' ? 'تم حذف الاجتماع نهائياً' : 'Meeting permanently deleted');
+          toast.success(okMsg);
+        }
       }
       // v55.31 — reset busy state on success too (matches performCancel)
       setActionBusy(false);
@@ -1170,17 +1258,57 @@ export default function CalendarTab({ customers, user, userProfile, users, ticke
         <h2 className="text-xl font-extrabold">Calendar / التقويم</h2>
         <div className="flex gap-2 items-center flex-wrap">
           <div className="flex bg-slate-100 rounded-lg p-0.5">
-            <button onClick={() => setCalView('my')}
-              className={'px-3 py-1 rounded text-xs font-semibold transition ' + (calView === 'my' ? 'bg-white shadow text-slate-900' : 'text-slate-500')}>My Calendar</button>
-            <button onClick={() => setCalView('team')}
+            <button onClick={() => { setCalView('my'); setCalViewUser(null); }}
+              className={'px-3 py-1 rounded text-xs font-semibold transition ' + (calView === 'my' && !calViewUser ? 'bg-white shadow text-slate-900' : 'text-slate-500')}>My Calendar</button>
+            <button onClick={() => { setCalView('team'); setCalViewUser(null); }}
               className={'px-3 py-1 rounded text-xs font-semibold transition ' + (calView === 'team' ? 'bg-white shadow text-slate-900' : 'text-slate-500')}>Team</button>
           </div>
+          {/* v55.36 — Super admin can drop into any team member's personal calendar.
+              When a person is picked, the calendar filters to their events and the
+              "+ Event" button pre-fills them as primary attendee. */}
+          {isSuperAdmin && Array.isArray(users) && users.length > 1 && (
+            <select
+              value={calViewUser || ''}
+              onChange={(e) => { const v = e.target.value || null; setCalViewUser(v); if (v) setCalView('my'); }}
+              className="px-2 py-1.5 rounded-lg border border-slate-200 bg-white text-xs font-semibold text-slate-700 max-w-[200px]"
+              title={lang === 'ar' ? 'عرض تقويم شخص آخر' : "View someone else's calendar"}
+            >
+              <option value="">{lang === 'ar' ? '👤 تقويمي' : '👤 My calendar'}</option>
+              {users.filter(u => u.id !== myId && u.active !== false).map(u => (
+                <option key={u.id} value={u.id}>👁️ {u.name}'s calendar</option>
+              ))}
+            </select>
+          )}
           <button onClick={() => setView(view === 'month' ? 'day' : 'month')}
             className="px-3 py-1.5 bg-slate-100 rounded-lg text-xs font-semibold">{view === 'month' ? 'Day View' : 'Month View'}</button>
-          <button onClick={() => { setShowAdd(true); setF({eventDate: selDate || todayStr, recurringInterval: 1}); setSelectedUsers([]); }}
+          <button onClick={() => {
+            setShowAdd(true);
+            // v55.36 — when looking at a teammate's calendar, pre-fill them as
+            // the primary attendee so the new event lands on their calendar
+            // instead of the current user's.
+            const presetUsers = (calViewUser && calViewUser !== myId) ? [calViewUser] : [];
+            setF({eventDate: selDate || todayStr, recurringInterval: 1});
+            setSelectedUsers(presetUsers);
+          }}
             className="px-3 py-1.5 bg-blue-500 text-white rounded-lg text-xs font-semibold">+ Event / حدث</button>
         </div>
       </div>
+
+      {/* v55.36 — Banner when looking at a teammate's calendar.
+          Clearly indicates the focus user so you don't accidentally
+          make a calendar entry under the wrong assumption. */}
+      {calViewUser && calViewUser !== myId && (
+        <div className="bg-purple-50 border border-purple-300 rounded-lg p-2.5 mb-3 flex justify-between items-center">
+          <div className="text-xs text-purple-900">
+            <span className="font-extrabold">👁️ Viewing {getUserName(calViewUser)}'s calendar.</span>
+            <span className="ml-2 text-purple-700">New events you create here will be added to their calendar.</span>
+          </div>
+          <button onClick={() => setCalViewUser(null)}
+            className="text-xs px-2 py-1 rounded bg-white border border-purple-300 text-purple-700 font-semibold hover:bg-purple-100">
+            ← Back to my calendar
+          </button>
+        </div>
+      )}
 
       {/* Month Navigation */}
       <div className="flex justify-between items-center bg-white rounded-xl p-3 mb-3">
@@ -1945,7 +2073,7 @@ export default function CalendarTab({ customers, user, userProfile, users, ticke
             {/* v55.33 — Scope picker for recurring meetings. Lets the user
                 cancel just this occurrence, this and all later, or every
                 occurrence in the series. Live count next to each option. */}
-            {editEvent.series_id && (
+            {(editEvent.series_id || (editEvent.recurring && editEvent.recurring !== 'none')) && (
               <div className="bg-red-50 border border-red-200 rounded-lg p-3">
                 <label className="text-xs font-semibold text-red-800 block mb-2">
                   {lang === 'ar' ? 'تطبيق الإلغاء على' : 'Cancel which meetings?'}
@@ -2029,7 +2157,7 @@ export default function CalendarTab({ customers, user, userProfile, users, ticke
             {/* v55.33 — Scope picker for recurring meetings. Lets the user
                 delete just this occurrence, this and all later, or every
                 occurrence in the series. */}
-            {editEvent.series_id && (
+            {(editEvent.series_id || (editEvent.recurring && editEvent.recurring !== 'none')) && (
               <div className="bg-red-900/40 border border-red-600 rounded-lg p-3">
                 <label className="text-xs font-semibold text-red-300 block mb-2">
                   {lang === 'ar' ? 'تطبيق الحذف على' : 'Delete which meetings?'}
@@ -2156,7 +2284,7 @@ export default function CalendarTab({ customers, user, userProfile, users, ticke
                 : 'The meeting becomes active again and shows normally on the calendar.'}
             </div>
 
-            {editEvent.series_id && (
+            {(editEvent.series_id || (editEvent.recurring && editEvent.recurring !== 'none')) && (
               <div className="bg-emerald-50 border border-emerald-200 rounded-lg p-3">
                 <label className="text-xs font-semibold text-emerald-800 block mb-2">
                   {lang === 'ar' ? 'تطبيق الاستعادة على' : 'Restore which meetings?'}

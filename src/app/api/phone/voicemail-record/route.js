@@ -74,11 +74,70 @@ export async function POST(req) {
       'dial=' + dialCallStatus
     );
 
-    // If the call was actually answered (Dial action callback), no voicemail
+    // ----------------------------------------------------------------
+    // v55.39 — There are THREE distinct callback shapes that hit this
+    // endpoint, not two. The original code handled cases 1 and 3 but
+    // missed case 2 entirely, so customers heard the disclaimer then
+    // an immediate hangup whenever the team member's browser wasn't
+    // currently registered with Twilio.
+    //
+    //   Case 1 — <Dial action="..."> callback after Dial completed:
+    //            DialCallStatus = 'completed' or 'answered'
+    //            → call was successfully connected, just hang up.
+    //
+    //   Case 2 — <Dial action="..."> callback after Dial DID NOT connect:
+    //            DialCallStatus = 'no-answer' | 'failed' | 'busy' | 'canceled'
+    //            → return TwiML that records a voicemail. (NEW)
+    //
+    //   Case 3 — <Record action="..."> or recordingStatusCallback after
+    //            voicemail audio is recorded:
+    //            recordingUrl + recordingSid are set
+    //            → save voicemail row + trigger Whisper transcription.
+    // ----------------------------------------------------------------
+
+    // CASE 1 — call was answered. Just hang up.
     if (dialCallStatus === 'completed' || dialCallStatus === 'answered') {
       var twiml = '<?xml version="1.0" encoding="UTF-8"?>'
         + '<Response><Hangup /></Response>';
       return new Response(twiml, { headers: { 'Content-Type': 'text/xml' } });
+    }
+
+    // CASE 2 — Dial failed for any reason. THIS is what was missing.
+    // Without this branch, customers heard the disclaimer then an immediate
+    // line drop. Now we send them to voicemail with a clear prompt.
+    //
+    // Re-build the same voicemailUrl Twilio will hit when the recording
+    // finishes — it carries the original call_id/assigned_to/customer_id
+    // so the saved voicemail row knows who it was for.
+    if (dialCallStatus === 'no-answer' || dialCallStatus === 'failed'
+        || dialCallStatus === 'busy' || dialCallStatus === 'canceled') {
+      console.log('[phone/voicemail-record] Dial did not connect ('
+        + dialCallStatus + ') — sending caller to voicemail');
+
+      var voicemailRecordUrl = getPublicBaseUrl(req) + '/api/phone/voicemail-record'
+        + '?call_id=' + encodeURIComponent(call_id || '')
+        + '&assigned_to=' + encodeURIComponent(assigned_to || '')
+        + '&customer_id=' + encodeURIComponent(customer_id || '');
+
+      var vmTwiml = '<?xml version="1.0" encoding="UTF-8"?>';
+      vmTwiml += '<Response>';
+      vmTwiml += '<Say voice="Polly.Joanna">'
+        + 'The team is unavailable right now. '
+        + 'Please leave a message after the beep, and we will get back to you.'
+        + '</Say>';
+      vmTwiml += '<Record action="' + voicemailRecordUrl + '"'
+        + ' method="POST"'
+        + ' maxLength="180"'
+        + ' playBeep="true"'
+        + ' trim="trim-silence"'
+        + ' finishOnKey="#"'
+        + ' recordingStatusCallback="' + voicemailRecordUrl + '"'
+        + ' recordingStatusCallbackEvent="completed"'
+        + ' recordingStatusCallbackMethod="POST" />';
+      vmTwiml += '<Say voice="Polly.Joanna">Thank you. Goodbye.</Say>';
+      vmTwiml += '<Hangup />';
+      vmTwiml += '</Response>';
+      return new Response(vmTwiml, { headers: { 'Content-Type': 'text/xml' } });
     }
 
     if (!recordingUrl || !recordingSid) {

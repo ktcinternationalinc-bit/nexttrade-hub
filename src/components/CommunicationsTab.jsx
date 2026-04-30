@@ -1,7 +1,9 @@
 'use client';
 import { useState, useEffect } from 'react';
+import WhatsAppInbox from './WhatsAppInbox';
 
-export default function CommunicationsTab({ user, supabase }) {
+export default function CommunicationsTab({ user, userProfile, customers, supabase }) {
+  const [section, setSection] = useState('inbox'); // 'inbox' | 'legacy' — inbox is the new WhatsApp inbox
   const [activeChannel, setActiveChannel] = useState('all');
   const [messages, setMessages] = useState([]);
   const [emails, setEmails] = useState([]);
@@ -166,6 +168,30 @@ export default function CommunicationsTab({ user, supabase }) {
           <button onClick={function() { setShowAudit(!showAudit); }} style={btnStyle(showAudit)}>📋 Audit</button>
         </div>
       </div>
+
+      {/* v55.37 — Section toggle: WhatsApp Inbox is the new full inbox view.
+          Legacy view keeps the Gmail/compose/history UI for email + the
+          one-shot WhatsApp send. */}
+      <div className="flex gap-2 border-b border-slate-200 pb-2">
+        <button
+          onClick={function() { setSection('inbox'); }}
+          className={'px-4 py-2 rounded-lg text-sm font-semibold transition ' + (section === 'inbox' ? 'bg-emerald-600 text-white' : 'bg-slate-100 text-slate-600 hover:bg-slate-200')}
+        >
+          💬 WhatsApp Inbox
+        </button>
+        <button
+          onClick={function() { setSection('legacy'); }}
+          className={'px-4 py-2 rounded-lg text-sm font-semibold transition ' + (section === 'legacy' ? 'bg-emerald-600 text-white' : 'bg-slate-100 text-slate-600 hover:bg-slate-200')}
+        >
+          📨 Email & History
+        </button>
+      </div>
+
+      {section === 'inbox' && (
+        <WhatsAppInbox user={user} userProfile={userProfile} customers={customers} />
+      )}
+
+      {section === 'legacy' && (<>
 
       {/* Gmail Connection Status */}
       {gmailStatus === 'disconnected' && (
@@ -366,6 +392,7 @@ export default function CommunicationsTab({ user, supabase }) {
           </div>
         </div>
       )}
+      </>)}
     </div>
   );
 }
