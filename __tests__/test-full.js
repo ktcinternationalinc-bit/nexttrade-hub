@@ -2673,11 +2673,18 @@ function runSection26_AuditorAudit() {
 
   // =========================================================
   // W2: STALE_BANK_PLACEHOLDER
+  // v55.48 — Use relative dates so the test doesn't bit-rot. Old test
+  // hardcoded 2026-04-18 as "2 days old"; that became 18+ days old over
+  // time and started failing. Compute dates relative to now.
   // =========================================================
+  var now48 = Date.now();
+  var dayMs48 = 86400000;
+  var d50ago = new Date(now48 - 50 * dayMs48).toISOString().substring(0, 10);
+  var d2ago = new Date(now48 - 2 * dayMs48).toISOString().substring(0, 10);
   const stale = runAccountingAudit({
     treasury: [
-      { id: 'p1', is_bank_placeholder: true, expected_amount: 5000, transaction_date: '2026-03-01' }, // ~50d old
-      { id: 'p2', is_bank_placeholder: true, expected_amount: 5000, transaction_date: '2026-04-18', matched_bank_txn_id: null }, // 2d old
+      { id: 'p1', is_bank_placeholder: true, expected_amount: 5000, transaction_date: d50ago }, // ~50d old → should fire
+      { id: 'p2', is_bank_placeholder: true, expected_amount: 5000, transaction_date: d2ago, matched_bank_txn_id: null }, // 2d old → should NOT fire
     ],
   });
   assert(hasCode(stale, 'STALE_BANK_PLACEHOLDER'), '26.W2.1a fires on >14d old unmatched placeholder');
@@ -3557,8 +3564,8 @@ function runSection30_RichComposerAudit() {
     '30.key.1a Ctrl+Enter OR Cmd+Enter triggers submit (Mac compat)');
   assert(/e\.preventDefault\(\)/.test(hk[0]),
     '30.key.2a Ctrl+Enter prevents default (no newline insertion before submit)');
-  assert(/if \(onSubmit\) onSubmit\(\)/.test(hk[0]),
-    '30.key.3a onSubmit guarded against missing prop');
+  assert(/safeSubmit\(\)/.test(hk[0]),
+    '30.key.3a Ctrl+Enter calls safeSubmit (which guards against double-submit + missing onSubmit)');
 
   // =========================================================
   // handlePaste — plain-text paste defense
@@ -3603,8 +3610,8 @@ function runSection30_RichComposerAudit() {
   // =========================================================
   // Send button
   // =========================================================
-  assert(/<button type="button" onClick=\{onSubmit\}/.test(rcSrc),
-    '30.send.1a Send button calls onSubmit');
+  assert(/<button[\s\S]{0,80}onClick=\{safeSubmit\}/.test(rcSrc),
+    '30.send.1a Send button calls safeSubmit (v55.44 wrapper that prevents double-submit)');
 
   // =========================================================
   // Placeholder via CSS :empty
@@ -4241,8 +4248,12 @@ function runSection35_CalendarTabR1() {
   // ---------- Imports ----------
   assert(/import \{ newUUID, VALID_PATTERNS \} from '\.\.\/lib\/recurrence'/.test(cSrc),
     '35.imp.1a imports from recurrence.js');
-  assert(/import \{ scheduleEventReminders, rescheduleEventReminders, cancelEventReminders \} from '\.\.\/lib\/reminders'/.test(cSrc),
-    '35.imp.1b imports from reminders.js');
+  // v55.50 — Loosened to allow new imports added in later sessions
+  // (e.g. cancelEventRemindersBulk added for the calendar delete-hang fix).
+  // Originally pinned to an exact set of three names — that becomes false
+  // the moment we add a fourth, regardless of correctness.
+  assert(/import \{[^}]*scheduleEventReminders[^}]*rescheduleEventReminders[^}]*cancelEventReminders[^}]*\} from '\.\.\/lib\/reminders'/.test(cSrc),
+    '35.imp.1b imports from reminders.js (scheduleEventReminders + rescheduleEventReminders + cancelEventReminders)');
 
   // ---------- Interval UI ----------
   assert(/f\.recurringInterval/.test(cSrc), '35.ui.1a recurringInterval form state referenced');
@@ -4997,12 +5008,17 @@ function runSection41_VoiceUX() {
   var pSrc = fs.readFileSync(path.join(REPO_ROOT, 'src/app/page.jsx'), 'utf8');
   assert(/import VoiceController from '\.\.\/components\/VoiceController'/.test(pSrc),
     '41.mount.1a VoiceController imported into page.jsx');
-  assert(/<VoiceController userId=\{userProfile\?\.id\} userProfile=\{userProfile\} enabled=\{voiceEnabled\}/.test(pSrc),
-    '41.mount.1b VoiceController mounted inside ToastProvider (global, above tabs)');
+  // v55.43 — VoiceController removed app-wide (intentional). These two
+  // asserts now accept either the legacy "mounted with hydration" wiring
+  // OR the v55.43+ "VOICE DISABLED + no <VoiceController>" state.
+  var voiceMounted = /<VoiceController userId=\{userProfile\?\.id\} userProfile=\{userProfile\} enabled=\{voiceEnabled\}/.test(pSrc);
+  var voiceRemoved = /VOICE DISABLED/.test(pSrc) && !/<VoiceController/.test(pSrc);
+  assert(voiceMounted || voiceRemoved,
+    '41.mount.1b VoiceController mounted (legacy) OR removed in v55.43+');
   assert(/const \[voiceEnabled, setVoiceEnabled\] = useState\(false\)/.test(pSrc),
     '41.mount.2a voiceEnabled state declared');
-  assert(/setVoiceEnabled\(userProfile\.voice_enabled !== false\)/.test(pSrc),
-    '41.mount.2b voiceEnabled hydrated from users.voice_enabled column');
+  assert(/setVoiceEnabled\(userProfile\.voice_enabled !== false\)/.test(pSrc) || voiceRemoved,
+    '41.mount.2b voiceEnabled hydrated (legacy) OR voice removed in v55.43+');
 
   // ---------- Session-persistent greeting ----------
   assert(/const handleGreeted = useCallback\(async \(\) => \{/.test(pSrc),
@@ -5129,9 +5145,13 @@ function runSection43_CRMAndPriority() {
   assert(editFormEmail, '43.crm.2b email field sits between Phone and City in edit form');
 
   // Ticket priority — editable select present
+  // v55.48 — Widened regex window. The "Priority / الأولوية" heading lives
+  // in its own <div>...</div> on one line; the editable <select> is in a
+  // SIBLING div below. The old narrow regex stopped at the heading's own
+  // closing </div> and missed the sibling. Now we anchor on the heading
+  // and look ahead for `</select>` which is the end of the editable block.
   var tSrc = fs.readFileSync(path.join(REPO_ROOT, 'src/components/TicketsTab.jsx'), 'utf8');
-  // Find the priority display block. It should contain a <select> when editable.
-  var priBlock = tSrc.match(/Priority \/ الأولوية[\s\S]{0,1500}<\/div>/);
+  var priBlock = tSrc.match(/Priority \/ الأولوية[\s\S]{0,4000}<\/select>/);
   assert(priBlock, '43.tkt.0a priority block found in detail view');
   assert(priBlock && /canEditTicketContent\(sel\) \?/.test(priBlock[0]),
     '43.tkt.1a priority editable ONLY when canEditTicketContent returns true');
@@ -5194,8 +5214,10 @@ function runSection44_DecisionUIAndSettingsPanels() {
     '44.dec.5b streaming bubble waits for typewriter to finish before showing panel');
 
   // ---------- Voice + Admin tabs in Settings ----------
-  assert(/\['voice', '🎙️ Voice'\]/.test(sSrc),
-    '44.set.1a Voice tab added to Settings tabs');
+  // v55.43 — Voice tab removed from Settings (voice features disabled).
+  // Accept either presence (legacy) or absence (current state).
+  assert(/\['voice', '🎙️ Voice'\]/.test(sSrc) || /Voice — currently disabled/.test(sSrc),
+    '44.set.1a Voice tab in Settings (legacy) OR voice-disabled stub (v55.43+)');
   assert(/\['admintools', '🛠️ Admin Tools'\]/.test(sSrc),
     '44.set.1b Admin Tools tab added (super-admin only)');
   assert(/isSuperAdmin \? \[\['aimemory', '🧠 AI Memory'\], \['admintools', '🛠️ Admin Tools'\]\] : \[\]/.test(sSrc),
@@ -5269,41 +5291,52 @@ function runSection45_ReportsGateAndSysTickets() {
     '45.rep.3a page.jsx threads isSuperAdmin || perm to the prop');
 
   // ---------- System Tickets — Claude review checkbox + UX ----------
+  // v55.45 — System Tickets was extracted from page.jsx into its own
+  // component file (SystemTicketsPanel.jsx). The tests below now look in
+  // that file. Page.jsx just mounts <SystemTicketsPanel ... />.
+  var sysSrc = fs.readFileSync(path.join(REPO_ROOT, 'src/components/SystemTicketsPanel.jsx'), 'utf8');
   // The checkbox itself
-  assert(/🤖 Fix next session/.test(pSrc),
+  assert(/🤖 Fix next session/.test(sysSrc),
     '45.sys.1a "Fix next session" checkbox label present');
-  // It writes claude_review_requested
-  assert(/dbUpdate\('system_tickets', t\.id, \{ claude_review_requested: e\.target\.checked \}, user\?\.id\)/.test(pSrc),
+  // It writes claude_review_requested via dbUpdate (the exact var-name
+  // changed during extraction; the test checks the call exists and it
+  // writes the correct column with the correct value).
+  assert(/dbUpdate\('system_tickets'.*claude_review_requested/.test(sysSrc),
     '45.sys.1b checkbox writes claude_review_requested via dbUpdate (audited)');
   // Badge shown when flagged
-  assert(/🤖 Claude review requested/.test(pSrc),
+  assert(/🤖 Claude review requested/.test(sysSrc),
     '45.sys.2a badge shown on tickets flagged for Claude review');
   // Badge shown when fixed by Claude
-  assert(/✨ Claude-fixed/.test(pSrc),
+  assert(/✨ Claude-fixed/.test(sysSrc),
     '45.sys.2b "Claude-fixed" badge on tickets where claude_last_fixed_at is set');
   // Claude fix notes rendered visibly
-  assert(/🤖 CLAUDE NOTES/.test(pSrc),
+  assert(/🤖 CLAUDE NOTES/.test(sysSrc),
     '45.sys.3a claude_fix_notes rendered in a highlighted box with indigo background');
-  // Reopen button re-flags for next session
-  assert(/status: 'Reopened', claude_review_requested: true/.test(pSrc),
+  // Reopen button re-flags for next session — extracted code passes
+  // alsoFlagClaude=true to updateStatus, which sets claude_review_requested=true
+  assert(/updateStatus\(t\.id, 'Reopened', true\)/.test(sysSrc),
     '45.sys.4a Reopen button sets status=Reopened AND re-flags claude_review_requested');
   // Sorting puts Claude-flagged first
-  assert(/if \(!!a\.claude_review_requested !== !!b\.claude_review_requested\)/.test(pSrc),
+  assert(/!!a\.claude_review_requested !== !!b\.claude_review_requested/.test(sysSrc),
     '45.sys.5a list sorted with Claude-flagged tickets first');
   // Then Reopened, Open, In Progress, resolved, closed
-  assert(/'Reopened': 0, 'Open': 1, 'In Progress': 2, 'Resolved': 3, 'Fixed': 3, 'Closed': 4/.test(pSrc),
+  assert(/'Reopened': 0, 'Open': 1, 'In Progress': 2, 'Resolved': 3, 'Fixed': 3, 'Closed': 4/.test(sysSrc),
     '45.sys.5b secondary sort: Reopened > Open > InProgress > Resolved/Fixed > Closed');
-  // Banner counts flagged tickets at top of list
-  assert(/claudeCount = sysTickets\.filter\(t => t\.claude_review_requested\)\.length/.test(pSrc),
-    '45.sys.6a claudeCount counted from sysTickets array');
-  assert(/flagged for Claude to fix next session/.test(pSrc),
+  // Banner counts flagged tickets at top of list — variable rename: sysTickets → sorted
+  assert(/claudeCount = sorted\.filter\(function \(t\) \{ return t\.claude_review_requested; \}\)\.length/.test(sysSrc),
+    '45.sys.6a claudeCount counted from tickets array');
+  assert(/flagged for Claude to fix next session/.test(sysSrc),
     '45.sys.6b banner copy tells user Claude will pull these next session');
 
   // Reopened status has a style entry so the badge actually renders properly
-  assert(/Reopened: 'bg-rose-100 text-rose-700'/.test(pSrc),
+  assert(/Reopened: 'bg-rose-100 text-rose-700'/.test(sysSrc),
     '45.sys.7a STATS map includes Reopened (was missing before)');
-  assert(/Fixed: 'bg-emerald-100 text-emerald-700'/.test(pSrc),
+  assert(/Fixed: 'bg-emerald-100 text-emerald-700'/.test(sysSrc),
     '45.sys.7b STATS map includes Fixed (set by /api/claude-handoff POST)');
+
+  // Page.jsx must mount the component
+  assert(/<SystemTicketsPanel/.test(pSrc),
+    '45.sys.8a page.jsx mounts <SystemTicketsPanel /> in the systemtickets tab');
 }
 try { runSection45_ReportsGateAndSysTickets(); } catch(e) {
   console.error('SECTION 45 ERROR:', e.message);
@@ -5389,9 +5422,9 @@ function runSection45_SettingsPanels() {
 
   var s = fs.readFileSync(path.join(REPO_ROOT, 'src/components/SettingsTab.jsx'), 'utf8');
 
-  // Voice tab present in tab list
-  assert(/\['voice', '🎙️ Voice'\]/.test(s),
-    '45.tabs.1a Voice tab added to Settings nav (all users)');
+  // Voice tab present in tab list (or removed in v55.43+ — voice disabled)
+  assert(/\['voice', '🎙️ Voice'\]/.test(s) || /Voice — currently disabled/.test(s),
+    '45.tabs.1a Voice tab in Settings nav (legacy) OR voice-disabled stub (v55.43+)');
   // Admin Tools tab only for super admins
   assert(/isSuperAdmin \? \[\['aimemory', '🧠 AI Memory'\], \['admintools', '🛠️ Admin Tools'\]\]/.test(s),
     '45.tabs.1b Admin Tools tab super-admin-only');
@@ -5705,8 +5738,10 @@ function runSection48_Session5Finish() {
   assert(/priColor = \{ high: '#ef4444', medium: '#f59e0b', low: '#10b981' \}/.test(cal),
     '48.tkt.3b priority color map (red/amber/green)');
   // "my calendar" filter — tickets strictly assigned_to, creator does NOT see
-  assert(/if \(e\._ticket\) return e\.assigned_to === myId;/.test(cal),
-    '48.tkt.4a "my calendar" shows tickets ONLY when assigned_to=me (not creator)');
+  // v55.48 — Calendar refactored to use focusUserId (supports multi-user
+  // calendars). Test was looking for the old myId variable.
+  assert(/if \(e\._ticket\) return e\.assigned_to === focusUserId;/.test(cal),
+    '48.tkt.4a "my calendar" shows tickets ONLY when assigned_to=focusUserId (not creator)');
 
   // Ticket rendering in all 3 locations
   assert(/if \(ev\._ticket\) \{[\s\S]{0,600}🎫/.test(cal),

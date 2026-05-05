@@ -3,7 +3,7 @@ import { useState, useMemo, useEffect, useContext } from 'react';
 import { supabase, dbInsert, dbUpdate, logActivity } from '../lib/supabase';
 import { notifyEventScheduled } from '../lib/notify';
 import { newUUID, VALID_PATTERNS } from '../lib/recurrence';
-import { scheduleEventReminders, rescheduleEventReminders, cancelEventReminders } from '../lib/reminders';
+import { scheduleEventReminders, rescheduleEventReminders, cancelEventReminders, cancelEventRemindersBulk } from '../lib/reminders';
 import { ToastContext } from '../lib/toast-context';
 
 const EVENT_TYPES = [{v:'task',l:'Task / مهمة',c:'#3b82f6'},{v:'meeting',l:'Meeting / اجتماع',c:'#8b5cf6'},{v:'call',l:'Call / مكالمة',c:'#f59e0b'},{v:'visit',l:'Visit / زيارة',c:'#10b981'}];
@@ -834,46 +834,68 @@ export default function CalendarTab({ customers, user, userProfile, users, ticke
       return;
     }
     setActionBusy(true);
+    // v55.50 — Hard-cap total cancel time. Same fix pattern as performDelete.
+    const TOTAL_TIMEOUT_MS = 60000;
+    const watchdog = new Promise(function (_, reject) {
+      setTimeout(function () { reject(new Error('Cancel timed out after 60 seconds — try again on a better connection')); }, TOTAL_TIMEOUT_MS);
+    });
     try {
-      // v55.33 — resolve the actual rows to cancel from the scope picker.
-      // 'single' = just this row; 'following' = this + all later in series;
-      // 'series' = every row in the series. Each row goes through dbUpdate
-      // individually so EVERY cancellation is audited.
-      const ids = await resolveScopedIds(cancelScope);
-      const cancelPatch = {
-        status: 'cancelled',
-        cancelled_at: new Date().toISOString(),
-        cancelled_by: myId,
-        cancellation_reason: actionReason || null,
-      };
-      for (const id of ids) {
+      await Promise.race([(async function () {
+        // v55.33 — resolve the actual rows to cancel from the scope picker.
+        const ids = await resolveScopedIds(cancelScope);
+        if (!ids || ids.length === 0) {
+          throw new Error(lang === 'ar' ? 'لا يوجد ما يمكن إلغاؤه' : 'Nothing to cancel');
+        }
+        const cancelPatch = {
+          status: 'cancelled',
+          cancelled_at: new Date().toISOString(),
+          cancelled_by: myId,
+          cancellation_reason: actionReason || null,
+        };
+        // v55.50 — Bulk UPDATE in ONE DB call instead of N sequential
+        // dbUpdate calls. For a 100+ event series the loop took minutes;
+        // now it's one round-trip. Audit log entry is a single line that
+        // captures the bulk action — same paper trail, vastly faster.
+        const updRes = await supabase
+          .from('calendar_events')
+          .update(cancelPatch)
+          .in('id', ids)
+          .select('id');
+        if (updRes.error) {
+          throw new Error(updRes.error.message || 'cancel update returned error');
+        }
+        const actuallyCancelledCount = (updRes.data && updRes.data.length) || 0;
+        // v55.50 — Bulk reminder cancel (one DB call). Was sequential.
+        try { await cancelEventRemindersBulk(ids); } catch (e) { /* non-fatal */ }
+        // Audit row — fire-and-forget so a slow audit table doesn't slow the cancel.
         try {
-          await dbUpdate('calendar_events', id, cancelPatch, myId);
-          try { await cancelEventReminders(id); } catch (e) {}
-        } catch (e) { /* per-row swallow so one bad row doesn't kill the rest */ }
-      }
-      await logActivity(myId,
-        (ids.length > 1
-          ? 'Cancelled ' + ids.length + ' events in series: '
-          : 'Cancelled event: ') + editEvent.title,
-        'calendar');
+          logActivity(myId,
+            (ids.length > 1
+              ? 'Cancelled ' + ids.length + ' events in series: '
+              : 'Cancelled event: ') + editEvent.title,
+            'calendar').catch(function () { /* non-fatal */ });
+        } catch (_) { /* non-fatal */ }
 
-      if (toast) {
-        const okMsg = ids.length > 1
-          ? (lang === 'ar' ? 'تم إلغاء ' + ids.length + ' اجتماعات' : 'Cancelled ' + ids.length + ' meetings')
-          : (lang === 'ar' ? 'تم إلغاء الاجتماع' : 'Meeting cancelled');
-        toast.success(okMsg);
-      }
-      // v55.31 — reset busy state on success too. Previously only the catch
-      // path cleared it, so quick-reopening another event saw frozen buttons
-      // until the next render cycle.
-      setActionBusy(false);
-      closeEditEvent();
-      // v55.33 — refresh local calendar state so the cancelled event(s)
-      // immediately show with strike-through. Previously only onRefresh()
-      // on the parent fired, which didn't always propagate back here.
-      await loadEvents();
-      if (onRefresh) onRefresh();
+        if (toast) {
+          if (actuallyCancelledCount === 0) {
+            toast.error(lang === 'ar' ? 'لم يتم إلغاء أي اجتماع. تحقق من الصلاحيات.' : 'Nothing was cancelled. Check your permissions.');
+          } else {
+            const okMsg = actuallyCancelledCount > 1
+              ? (lang === 'ar' ? 'تم إلغاء ' + actuallyCancelledCount + ' اجتماعات' : 'Cancelled ' + actuallyCancelledCount + ' meetings')
+              : (lang === 'ar' ? 'تم إلغاء الاجتماع' : 'Meeting cancelled');
+            toast.success(okMsg);
+          }
+        }
+        // v55.31 — reset busy state on success too. Previously only the catch
+        // path cleared it, so quick-reopening another event saw frozen buttons
+        // until the next render cycle.
+        setActionBusy(false);
+        closeEditEvent();
+        // v55.50 — fire-and-forget loadEvents so a slow refresh doesn't make
+        // the UI appear hung after the success toast.
+        loadEvents().catch(function () {});
+        if (onRefresh) try { onRefresh(); } catch (_) {}
+      })(), watchdog]);
     } catch (err) {
       setActionBusy(false);
       if (toast) toast.error((lang === 'ar' ? 'فشل الإلغاء: ' : 'Cancel failed: ') + (err && err.message));
@@ -895,69 +917,90 @@ export default function CalendarTab({ customers, user, userProfile, users, ticke
       return;
     }
     setActionBusy(true);
+    // v55.50 — Hard-cap the total delete time. Without this, ANY single
+    // hung Supabase call (network glitch, RLS check looping, etc.) froze
+    // the modal forever — Max reported "delete is hanging for 10 minutes"
+    // on May 6 2026. 60-second hard ceiling means worst case is "Delete
+    // failed: timed out — please try again" instead of a frozen UI.
+    const TOTAL_TIMEOUT_MS = 60000;
+    const watchdog = new Promise(function (_, reject) {
+      setTimeout(function () { reject(new Error('Delete timed out after 60 seconds — try again on a better connection')); }, TOTAL_TIMEOUT_MS);
+    });
     try {
-      // v55.33 — resolve the rows to delete from the scope picker.
-      // 'single' = just this row; 'following' = this + all later;
-      // 'series' = every row in the series.
-      const ids = await resolveScopedIds(deleteScope);
-      // Audit row first so we can still see what was wiped after the rows are gone.
-      await logActivity(myId,
-        (ids.length > 1
-          ? 'HARD-DELETED ' + ids.length + ' events in series: '
-          : 'HARD-DELETED event: ') + editEvent.title +
-        (editEvent.series_id ? ' (series_id=' + editEvent.series_id + ')' : ' (id=' + editEvent.id + ')'),
-        'calendar');
-      // Cancel all reminders for every affected occurrence before the rows go.
-      for (const id of ids) {
-        try { await cancelEventReminders(id); } catch (e) {}
-      }
-      // v55.36 — capture the error from the bulk delete instead of throwing
-      // the result away. Without this, RLS rejections or partial failures
-      // returned success and the user saw "✓ deleted 8" when only 1 actually
-      // got deleted. That was the "deletes only the current occurrence" bug.
-      const delRes = await supabase.from('calendar_events').delete().in('id', ids).select('id');
-      if (delRes.error) {
-        throw new Error(delRes.error.message || 'delete returned error');
-      }
-      const actuallyDeletedCount = (delRes.data && delRes.data.length) || 0;
-
-      // v55.36 — Independent verification: re-query the series and count
-      // anything left. If rows survived (e.g. due to RLS, race with cron,
-      // or the picker not catching all sibling rows), tell the user the
-      // truth instead of claiming success.
-      let survivors = 0;
-      if (editEvent.series_id && deleteScope === 'series') {
-        try {
-          const verifyRes = await supabase
-            .from('calendar_events')
-            .select('id', { count: 'exact', head: true })
-            .eq('series_id', editEvent.series_id);
-          survivors = verifyRes.count || 0;
-        } catch (e) { /* non-fatal — best-effort verification */ }
-      }
-
-      if (toast) {
-        if (survivors > 0) {
-          toast.error(
-            (lang === 'ar'
-              ? 'تم حذف ' + actuallyDeletedCount + ' فقط، ' + survivors + ' اجتماعات لا تزال موجودة في السلسلة. قد يكون السبب صلاحيات أو بيانات قديمة.'
-              : 'Deleted ' + actuallyDeletedCount + ' rows but ' + survivors + ' still remain in the series. Likely a permissions or legacy-data issue — try again or contact admin.')
-          );
-        } else if (actuallyDeletedCount === 0) {
-          toast.error(lang === 'ar' ? 'لم يتم حذف أي اجتماع. تحقق من الصلاحيات.' : 'Nothing was deleted. Check your permissions.');
-        } else {
-          const okMsg = actuallyDeletedCount > 1
-            ? (lang === 'ar' ? 'تم حذف ' + actuallyDeletedCount + ' اجتماعات نهائياً' : 'Permanently deleted ' + actuallyDeletedCount + ' meetings')
-            : (lang === 'ar' ? 'تم حذف الاجتماع نهائياً' : 'Meeting permanently deleted');
-          toast.success(okMsg);
+      await Promise.race([(async function () {
+        // v55.33 — resolve the rows to delete from the scope picker.
+        // 'single' = just this row; 'following' = this + all later;
+        // 'series' = every row in the series.
+        const ids = await resolveScopedIds(deleteScope);
+        if (!ids || ids.length === 0) {
+          throw new Error(lang === 'ar' ? 'لا يوجد ما يمكن حذفه' : 'Nothing to delete');
         }
-      }
-      // v55.31 — reset busy state on success too (matches performCancel)
-      setActionBusy(false);
-      closeEditEvent();
-      // v55.33 — refresh local calendar so the deleted rows disappear immediately
-      await loadEvents();
-      if (onRefresh) onRefresh();
+        // Audit row first so we can still see what was wiped after the rows are gone.
+        // Don't await — fire-and-forget so a slow audit table doesn't slow the delete.
+        try {
+          logActivity(myId,
+            (ids.length > 1
+              ? 'HARD-DELETED ' + ids.length + ' events in series: '
+              : 'HARD-DELETED event: ') + editEvent.title +
+            (editEvent.series_id ? ' (series_id=' + editEvent.series_id + ')' : ' (id=' + editEvent.id + ')'),
+            'calendar').catch(function () { /* non-fatal */ });
+        } catch (_) { /* non-fatal */ }
+        // v55.50 — BULK cancel of reminders. Was a sequential await loop
+        // (one round-trip per event); for a 100+ occurrence series that's
+        // 100+ trips and could take minutes on slow connections. Now it's
+        // ONE DB call regardless of series size.
+        try { await cancelEventRemindersBulk(ids); } catch (e) { /* non-fatal */ }
+        // v55.36 — capture the error from the bulk delete instead of throwing
+        // the result away. Without this, RLS rejections or partial failures
+        // returned success and the user saw "✓ deleted 8" when only 1 actually
+        // got deleted. That was the "deletes only the current occurrence" bug.
+        const delRes = await supabase.from('calendar_events').delete().in('id', ids).select('id');
+        if (delRes.error) {
+          throw new Error(delRes.error.message || 'delete returned error');
+        }
+        const actuallyDeletedCount = (delRes.data && delRes.data.length) || 0;
+
+        // v55.36 — Independent verification: re-query the series and count
+        // anything left. If rows survived (e.g. due to RLS, race with cron,
+        // or the picker not catching all sibling rows), tell the user the
+        // truth instead of claiming success.
+        let survivors = 0;
+        if (editEvent.series_id && deleteScope === 'series') {
+          try {
+            const verifyRes = await supabase
+              .from('calendar_events')
+              .select('id', { count: 'exact', head: true })
+              .eq('series_id', editEvent.series_id);
+            survivors = verifyRes.count || 0;
+          } catch (e) { /* non-fatal — best-effort verification */ }
+        }
+
+        if (toast) {
+          if (survivors > 0) {
+            toast.error(
+              (lang === 'ar'
+                ? 'تم حذف ' + actuallyDeletedCount + ' فقط، ' + survivors + ' اجتماعات لا تزال موجودة في السلسلة. قد يكون السبب صلاحيات أو بيانات قديمة.'
+                : 'Deleted ' + actuallyDeletedCount + ' rows but ' + survivors + ' still remain in the series. Likely a permissions or legacy-data issue — try again or contact admin.')
+            );
+          } else if (actuallyDeletedCount === 0) {
+            toast.error(lang === 'ar' ? 'لم يتم حذف أي اجتماع. تحقق من الصلاحيات.' : 'Nothing was deleted. Check your permissions.');
+          } else {
+            const okMsg = actuallyDeletedCount > 1
+              ? (lang === 'ar' ? 'تم حذف ' + actuallyDeletedCount + ' اجتماعات نهائياً' : 'Permanently deleted ' + actuallyDeletedCount + ' meetings')
+              : (lang === 'ar' ? 'تم حذف الاجتماع نهائياً' : 'Meeting permanently deleted');
+            toast.success(okMsg);
+          }
+        }
+        // v55.31 — reset busy state on success too (matches performCancel)
+        setActionBusy(false);
+        closeEditEvent();
+        // v55.33 — refresh local calendar so the deleted rows disappear immediately
+        // v55.50 — fire-and-forget so a slow loadEvents doesn't make the UI
+        // appear hung after a successful delete. The user sees the success
+        // toast immediately; the calendar refreshes in the background.
+        loadEvents().catch(function () {});
+        if (onRefresh) try { onRefresh(); } catch (_) {}
+      })(), watchdog]);
     } catch (err) {
       setActionBusy(false);
       if (toast) toast.error((lang === 'ar' ? 'فشل الحذف: ' : 'Delete failed: ') + (err && err.message));

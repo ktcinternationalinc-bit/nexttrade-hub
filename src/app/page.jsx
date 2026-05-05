@@ -6,6 +6,9 @@ import { evaluateCheckReconcile as libEvaluateCheckReconcile } from '../lib/chec
 import * as XLSX from 'xlsx';
 import CRMTab from '../components/CRMTab';
 import TicketsTab from '../components/TicketsTab';
+import SystemTicketsPanel from '../components/SystemTicketsPanel';
+import WhatsNewWidget from '../components/WhatsNewWidget';
+import PendingNadiaMessages from '../components/PendingNadiaMessages';
 import CalendarTab from '../components/CalendarTab';
 import DailyLogTab from '../components/DailyLogTab';
 import AdminTab from '../components/AdminTab';
@@ -428,6 +431,28 @@ export default function App() {
   const [treasuryReturnState, setTreasuryReturnState] = useState(null);
   // Mini-modal for "order# doesn't exist, create now?" flow
   const [pendingTreasuryRecord, setPendingTreasuryRecord] = useState(null);
+  // v55.41 — Suspected-duplicate confirmation modal.
+  // When the user tries to save a treasury row whose date + amount +
+  // description match an existing row, instead of silently saving (which
+  // could create a real duplicate) OR silently blocking (which loses
+  // legitimate same-amount-same-day repeat payments), we open this modal
+  // showing the existing match(es) and ask the user to confirm. They can
+  // either:
+  //   • Cancel  — they'll edit the row to make it unique
+  //   • Confirm — it really IS a separate payment that happens to look
+  //               identical (common with regular weekly cash payments,
+  //               two identical fuel purchases, etc.). The save proceeds
+  //               and the new row is stamped confirmed_not_duplicate=true
+  //               so the AI auditor doesn't flag it later.
+  const [duplicateConfirm, setDuplicateConfirm] = useState(null);
+  // v55.47 — Persistent in-form validation errors for the New Transaction
+  // modal. Toasts at the screen corner are easy to miss on mobile (Amad
+  // reported "I tap Submit and nothing happens" — actually amount was blank
+  // and the toast pop-and-disappeared in 2s). This state drives a red
+  // banner INSIDE the modal listing every missing/invalid field, plus per-
+  // field highlighting. Cleared whenever the form is reset or submitted OK.
+  const [treasuryFormErrors, setTreasuryFormErrors] = useState([]);
+  // shape: { record, amount, txDate, matches: [...existing rows], invoiceToLink }
   // Loading flag for the inline "Create Invoice + Save Treasury" button so
   // the user gets immediate feedback (button disables + shows spinner) and
   // can't double-tap during the async Supabase round-trip. Was missing
@@ -562,13 +587,16 @@ export default function App() {
     } catch (e) {}
   }, [nadiaMuted]);
   const [greeterSettings, setGreeterSettings] = useState({ personality: 'friendly', language: 'en', enabled: true });
-  // Voice system ("Hey Bob"). Defaults to ON for super_admin, but each
-  // user can toggle in Settings. Off entirely in browsers without support.
+  // v55.42 — VOICE DISABLED.
+  // After many sessions chasing Web Speech API quirks (wake-word reliability,
+  // OFF button bugs, transcription dropping, mobile mic permissions), we're
+  // taking voice off the surface. The typed Nadia chat is unchanged and
+  // works perfectly. If we revisit voice later, it'll be a clean rebuild
+  // on a more reliable foundation than browser-side Web Speech.
   const [voiceEnabled, setVoiceEnabled] = useState(false);
-  // Hydrate voiceEnabled from user profile once loaded
-  useEffect(() => {
-    if (userProfile) setVoiceEnabled(userProfile.voice_enabled !== false);
-  }, [userProfile?.id, userProfile?.voice_enabled]);
+  // Hydration intentionally removed — voice stays off regardless of what's
+  // stored on the user profile. Re-enabling would require more than just
+  // flipping this back, since the underlying issues weren't fully resolved.
   // Session-persistent greeted state: set greeterHasGreeted=true if
   // the current login session already has greeted_at stamped. Prevents
   // re-greeting when user navigates back to dashboard from another tab.
@@ -1988,15 +2016,39 @@ export default function App() {
   };
 
   const handleAddInvoice = async () => {
-    if (!formData.orderNumber) { toast.warning('Order number is required / رقم الأمر مطلوب'); return; }
-    if (!formData.customerName) { toast.warning('Customer name is required / اسم العميل مطلوب'); return; }
+    // v55.47 — Same custSearch→customerName promotion as the inline invoice
+    // form, applied here. Without this, users who typed a customer name and
+    // tabbed away (instead of clicking a dropdown row) would see "Customer
+    // name is required" even though the field clearly had their text.
+    let resolvedCustomerName = formData.customerName;
+    let resolvedCustomerId = formData.customerId;
+    if (!resolvedCustomerName && formData.custSearch && String(formData.custSearch).trim()) {
+      const typed = String(formData.custSearch).trim();
+      const exact = (customers || []).find(c =>
+        (c.name && c.name.toLowerCase() === typed.toLowerCase()) ||
+        (c.name_ar && c.name_ar === typed)
+      );
+      if (exact) {
+        resolvedCustomerName = exact.name || exact.name_ar;
+        resolvedCustomerId = exact.id;
+      } else {
+        resolvedCustomerName = typed;
+      }
+    }
+
+    // v55.49 — Friendly error wrapping. Previously the catch block surfaced
+    // the raw Supabase error (e.g. "duplicate key value violates unique
+    // constraint 'invoices_order_number_key'") which confused users. Now
+    // we detect common database errors and translate to plain language.
+    if (!formData.orderNumber || !String(formData.orderNumber).trim()) { toast.warning('Order number is required / رقم الأمر مطلوب'); return; }
+    if (!resolvedCustomerName) { toast.warning('Customer name is required / اسم العميل مطلوب'); return; }
     if (!formData.amount || Number(formData.amount) <= 0) { toast.warning('Amount must be greater than zero / المبلغ يجب أن يكون أكبر من صفر'); return; }
     try {
       const orderNum = sanitize(formData.orderNumber);
-      const { data: inserted } = await supabase.from('invoices').insert({
+      const { data: inserted, error: insErr } = await supabase.from('invoices').insert({
         order_number: orderNum,
-        customer_name: sanitize(formData.customerName),
-        customer_id: formData.customerId || null,
+        customer_name: sanitize(resolvedCustomerName),
+        customer_id: resolvedCustomerId || null,
         invoice_date: formData.date || today(),
         total_amount: Number(formData.amount),
         total_collected: 0,
@@ -2004,6 +2056,20 @@ export default function App() {
         notes: sanitize(formData.notes || ''),
         source: 'manual',
       }).select('id').single();
+      // v55.49 — Surface insert errors in plain language. The raw DB error
+      // "duplicate key value violates unique constraint" was the most
+      // common confusing message users saw.
+      if (insErr) {
+        var msg = String(insErr.message || '');
+        if (/duplicate key|unique constraint/i.test(msg)) {
+          toast.error('Order #' + orderNum + ' already exists as an invoice. Open it from the Sales tab if you want to edit it. / رقم الأمر #' + orderNum + ' موجود بالفعل كفاتورة. افتحها من تبويب المبيعات للتعديل.');
+        } else if (/permission|policy|rls/i.test(msg)) {
+          toast.error('You do not have permission to create invoices. / ليس لديك إذن لإنشاء فواتير.');
+        } else {
+          toast.error('Could not save invoice: ' + msg + ' / تعذر حفظ الفاتورة');
+        }
+        return;
+      }
 
       // BACKFILL: link any existing treasury rows that reference this order_number
       // but don't yet have linked_invoice_id. Recalc collected afterward.
@@ -2030,7 +2096,16 @@ export default function App() {
       setFormData({});
       await loadAllData();
     } catch (err) {
-      toast.error(err.message);
+      // v55.49 — Friendly error wrapping for thrown exceptions (network
+      // drops, Supabase client crashes, etc). Raw err.message was scary.
+      var emsg = String((err && err.message) || err || 'Unknown error');
+      if (/network|fetch|failed/i.test(emsg)) {
+        toast.error('Network problem saving the invoice. Check your connection and try again. / مشكلة في الاتصال أثناء حفظ الفاتورة.');
+      } else if (/duplicate key|unique constraint/i.test(emsg)) {
+        toast.error('This order number already exists as an invoice. Open it from the Sales tab to edit. / رقم الأمر موجود بالفعل كفاتورة.');
+      } else {
+        toast.error('Could not save invoice: ' + emsg + ' / تعذر حفظ الفاتورة');
+      }
     }
   };
 
@@ -2065,12 +2140,63 @@ export default function App() {
     return scored.slice(0, 3).map(x => x.inv);
   };
 
-  const handleAddTreasury = async () => {
+  // v55.41 — Helper: find treasury rows that look like potential duplicates
+  // of what the user is about to save.
+  //
+  // "Potential duplicate" = same calendar date, same amount in the same
+  // direction (cash_in/cash_out/bank_in/bank_out), same trimmed/case-insensitive
+  // description. Order# and category are NOT part of the match because two
+  // legitimate same-amount payments could land on the same invoice.
+  //
+  // Returns an array of matching rows (capped at 5 for UI sanity).
+  // Returns [] if nothing matches — the save proceeds normally.
+  const findPotentialDuplicates = (txDate, amount, descRaw, isIncome, isBankPlaceholder) => {
+    var amt = Number(amount || 0);
+    if (!amt || amt <= 0) return [];
+    var desc = String(descRaw || '').trim().toLowerCase();
+    if (!desc) return []; // empty description — never block, no signal to dedup on
+    var dateStr = String(txDate || '').substring(0, 10);
+    var matches = (treasury || []).filter(function(t) {
+      if (!t) return false;
+      // Date must match exactly
+      var tDate = String(t.transaction_date || '').substring(0, 10);
+      if (tDate !== dateStr) return false;
+      // Direction must match — cash_in row dedups against cash_in/bank_in,
+      // cash_out against cash_out/bank_out
+      var tIn = Number(t.cash_in || 0) + Number(t.bank_in || 0) + Number(t.expected_amount || 0) * (t.expected_direction === 'in' ? 1 : 0);
+      var tOut = Number(t.cash_out || 0) + Number(t.bank_out || 0) + Number(t.expected_amount || 0) * (t.expected_direction === 'out' ? 1 : 0);
+      var tAmt = isIncome ? tIn : tOut;
+      // 1 EGP tolerance for FX rounding
+      if (Math.abs(tAmt - amt) > 1) return false;
+      // Description match — case-insensitive, trim, ignore the bank-confirmation suffix
+      var tDesc = String(t.description || '')
+        .replace(' [awaiting bank confirmation]', '')
+        .replace(/\s*\[bank confirmation[^\]]*\]/g, '')
+        .trim().toLowerCase();
+      if (!tDesc) return false;
+      return tDesc === desc;
+    });
+    return matches.slice(0, 5);
+  };
+
+  const handleAddTreasury = async (opts) => {
+    opts = opts || {};
     if (!canEditTreasury) { toast.error('You do not have permission to add treasury entries.'); return; }
+    // v55.47 — Collect ALL validation errors first instead of bailing on
+    // the first one with a toast. The user sees every problem at once in
+    // a persistent banner inside the modal, plus per-field highlighting.
+    // Toasts at the screen corner were getting missed on mobile (Amad
+    // reported "I tap Submit and nothing happens" — actually the Amount
+    // field was blank and the toast popped and died in 2s).
+    const errs = [];
     const txDate = formData.date || today();
-    if (!formData.amount) { toast.warning('Please enter an amount / الرجاء إدخال المبلغ'); return; }
+    if (!formData.amount || Number(formData.amount) <= 0) {
+      errs.push({ field: 'amount', label: 'Amount / المبلغ', msg: 'Required — type the amount of money for this transaction.' });
+    }
     const isBankPlaceholder = formData.type === 'bank_in' || formData.type === 'bank_out';
-    if (isBankPlaceholder && !formData.bankAccountId) { toast.warning('Please select a bank account'); return; }
+    if (isBankPlaceholder && !formData.bankAccountId) {
+      errs.push({ field: 'bankAccountId', label: 'Bank Account / الحساب البنكي', msg: 'Required — pick which bank account this entry is against.' });
+    }
     // Bank entries must declare their identity: either an Order (links to a
     // sales invoice) or a Non-Order category (owner draw, inter-bank transfer,
     // bank fee, loan, refund, other). Prevents orderless mystery rows that
@@ -2080,20 +2206,38 @@ export default function App() {
       if (mode === 'order') {
         const orderTrim = String(formData.orderNumber || '').trim();
         if (!orderTrim) {
-          toast.warning('Order mode requires an order number. Switch to Non-Order and pick a category if this is not an invoice payment. / وضع الأمر يتطلب رقم أمر.');
-          return;
+          errs.push({ field: 'orderNumber', label: 'Order # / رقم الأمر', msg: 'Required for Order mode. If this is not a customer payment (owner draw, transfer, fee, etc.), switch to "Non-Order" above.' });
         }
       } else {
         if (!formData.bankNonOrderCategory) {
-          toast.warning('Non-Order bank entries require a category (Owner Draw, Inter-Bank Transfer, Bank Fee, Loan, Refund, or Other). / قيد بنكي بدون أمر يتطلب تصنيف.');
-          return;
+          errs.push({ field: 'bankNonOrderCategory', label: 'Non-Order Category', msg: 'Required for Non-Order mode — pick Owner Draw, Inter-Bank Transfer, Bank Fee, Loan, Refund, or Other.' });
         }
       }
       if (!String(formData.desc || '').trim()) {
-        toast.warning('Description is required for bank entries. / الوصف مطلوب للقيود البنكية.');
-        return;
+        errs.push({ field: 'desc', label: 'Description / الوصف', msg: 'Required for bank entries.' });
       }
     }
+    if (errs.length > 0) {
+      // Persistent in-form banner + corner toast (belt + suspenders so the
+      // user sees the failure at least one of the two ways).
+      setTreasuryFormErrors(errs);
+      try {
+        toast.warning('Cannot save — ' + errs.length + ' field' + (errs.length === 1 ? '' : 's') + ' need attention. See the red box at the top of the form.');
+      } catch (_) {}
+      // Scroll the first missing field into view so the user can't miss it
+      try {
+        var firstField = errs[0].field;
+        setTimeout(function () {
+          try {
+            var el = document.querySelector('[data-treasury-field="' + firstField + '"]');
+            if (el && el.scrollIntoView) el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+          } catch (_) {}
+        }, 50);
+      } catch (_) {}
+      return;
+    }
+    // All checks passed — clear any stale errors from a previous attempt
+    if (treasuryFormErrors.length > 0) setTreasuryFormErrors([]);
     try {
       // v55.12 (Apr 26 2026): The Type radio defaults to "Cash In" visually,
       // but formData.type is `undefined` until the user actually clicks a
@@ -2105,6 +2249,35 @@ export default function App() {
       const isIncome = txType === 'in' || txType === 'bank_in';
       const currency = formData.currency || 'EGP';
       const amt = Number(formData.amount);
+
+      // v55.41 — DUPLICATE PREFLIGHT.
+      // Open a confirmation modal if an existing treasury row matches
+      // (same date + same amount + same direction + same description).
+      // The save is paused until the user explicitly confirms it's a
+      // legitimate separate payment. Skipped on retry (opts.bypassDupCheck
+      // is set when the user has already confirmed in the modal).
+      // Only runs for fresh inserts — never for edits, never for the
+      // pending-invoice retry path.
+      if (!opts.bypassDupCheck) {
+        var dupMatches = findPotentialDuplicates(
+          txDate, amt, formData.desc, isIncome, isBankPlaceholder
+        );
+        if (dupMatches && dupMatches.length > 0) {
+          // Capture the form snapshot so the modal's "Confirm" button can
+          // re-call handleAddTreasury with bypassDupCheck=true and the
+          // exact same values, even if the user pokes the form behind it.
+          setDuplicateConfirm({
+            txDate: txDate,
+            amount: amt,
+            description: formData.desc,
+            isIncome: isIncome,
+            matches: dupMatches,
+          });
+          // Don't insert. The modal calls handleAddTreasury({bypassDupCheck:true}) on confirm.
+          return;
+        }
+      }
+
       let cat = formData.category || '';
       let subcat = formData.subcategory || '';
       if (!cat && formData.desc) {
@@ -2123,6 +2296,14 @@ export default function App() {
         subcategory: subcat,
         currency: currency,
       };
+      // v55.41 — If the user confirmed past the duplicate-warning modal,
+      // stamp the row so the AI auditor doesn't flag it again later.
+      // The column is added by sql/s38_treasury_confirmed_not_duplicate.sql.
+      // dbInsert.js auto-strips unknown columns and retries — so this is
+      // safe to set even if the migration hasn't been run yet.
+      if (opts.bypassDupCheck) {
+        record.confirmed_not_duplicate = true;
+      }
       // Tag cash_method for safe-channel rows so Vodafone/InstaPay flows
       // can be reconciled separately from physical cash.
       if (!isBankPlaceholder && (formData.type === 'in' || formData.type === 'out' || !formData.type)) {
@@ -2197,6 +2378,13 @@ export default function App() {
         }
         // Order# provided but no matching invoice → open "create now or cancel" flow
         console.log('[treasury-add] OPENING modal — order#' + orderNumTrimmed + ' not found locally');
+        // v55.48 — Visible toast so user gets immediate feedback. Combined
+        // with the form Modal hiding itself when pendingTreasuryRecord is
+        // set, the user now sees a clear state transition: form goes away,
+        // toast pops, "Order # not found" modal appears.
+        try {
+          toast.info('Order #' + orderNumTrimmed + ' not found in your invoice list — see modal to create or pick a typo suggestion.');
+        } catch (_) {}
         setIsCreatingInvoice(false);
         setCreateInvoiceError(null);
         setFormData(function(prev) {
@@ -2253,6 +2441,39 @@ export default function App() {
       setFormData({});
       setTimeout(() => loadAllData(), 500);
     } catch (err) {
+      // v55.41 — If Postgres rejected the insert because of a unique
+      // constraint (e.g. the optional dedup-hardening unique index that
+      // some Supabase projects have enabled on date+amount+order#), don't
+      // surface a cryptic SQL error to the user. Open the same
+      // confirmation modal we'd open from the JS-side preflight, so the
+      // user can decide whether it really is a separate payment that
+      // happens to look identical. If they confirm, we re-call with
+      // bypassDupCheck=true; the row gets stamped confirmed_not_duplicate
+      // and saved.
+      var msg = err && err.message ? String(err.message) : '';
+      var pgcode = err && err.code ? String(err.code) : '';
+      var isUniqueViolation = pgcode === '23505'
+        || /duplicate key value/i.test(msg)
+        || /unique constraint/i.test(msg);
+      if (isUniqueViolation && !opts.bypassDupCheck) {
+        console.warn('[treasury-add] DB unique-constraint violation — opening duplicate confirmation modal');
+        var probableMatches = findPotentialDuplicates(
+          formData.date || today(),
+          Number(formData.amount),
+          formData.desc,
+          formData.type === 'in' || formData.type === 'bank_in' || !formData.type,
+          formData.type === 'bank_in' || formData.type === 'bank_out'
+        );
+        setDuplicateConfirm({
+          txDate: formData.date || today(),
+          amount: Number(formData.amount),
+          description: formData.desc,
+          isIncome: formData.type === 'in' || formData.type === 'bank_in' || !formData.type,
+          matches: probableMatches,
+          fromDbError: true,
+        });
+        return;
+      }
       toast.error(err.message);
     }
   };
@@ -2308,11 +2529,23 @@ export default function App() {
 
   const handleEditTreasury = async (txn) => {
     try {
+      // v55.42 — Detect row type so we read the right inputs and write the
+      // right columns. Without this, editing a bank row from the inline
+      // table converted it into a cash row (the cash inputs read 0, the
+      // bank fields were never preserved, and is_bank_placeholder was
+      // implicitly cleared on next data flow).
+      var hasBankIn  = Number(txn.bank_in  || 0) > 0;
+      var hasBankOut = Number(txn.bank_out || 0) > 0;
+      var isPlaceholder = !!txn.is_bank_placeholder;
+      var isBankRow = hasBankIn || hasBankOut || isPlaceholder;
+
       const fd = {
         date: formData.txEditDate || txn.transaction_date,
         desc: document.getElementById('tx-desc')?.value,
-        cashIn: document.getElementById('tx-in')?.value,
-        cashOut: document.getElementById('tx-out')?.value,
+        cashIn:  isBankRow ? null : document.getElementById('tx-in')?.value,
+        cashOut: isBankRow ? null : document.getElementById('tx-out')?.value,
+        bankIn:  isBankRow ? document.getElementById('tx-bank-in')?.value  : null,
+        bankOut: isBankRow ? document.getElementById('tx-bank-out')?.value : null,
         orderNumber: document.getElementById('tx-order')?.value,
         category: document.getElementById('tx-cat')?.value,
         subcategory: document.getElementById('tx-subcat')?.value,
@@ -2320,17 +2553,51 @@ export default function App() {
       // Guard against placeholder values
       if (fd.category === '__custom') fd.category = txn.category || '';
       if (fd.subcategory === '__custom') fd.subcategory = txn.subcategory || '';
-      const updates = {
-        transaction_date: fd.date || txn.transaction_date,
-        description: fd.desc || txn.description,
-        cash_in: fd.cashIn != null ? Number(fd.cashIn) : txn.cash_in,
-        cash_out: fd.cashOut != null ? Number(fd.cashOut) : txn.cash_out,
-        bank_in:  fd.bankIn  != null ? Number(fd.bankIn)  : txn.bank_in,
-        bank_out: fd.bankOut != null ? Number(fd.bankOut) : txn.bank_out,
-        order_number: fd.orderNumber != null ? fd.orderNumber : txn.order_number,
-        category: fd.category != null ? fd.category : txn.category,
-        subcategory: fd.subcategory != null ? fd.subcategory : txn.subcategory,
-      };
+
+      // v55.42 — Build updates by ROW TYPE so we never cross-contaminate
+      // cash and bank fields. Bank rows never write cash_in/cash_out;
+      // cash rows never write bank_in/bank_out. is_bank_placeholder and
+      // bank_account_id are NEVER included in the update — they're
+      // intrinsic identity fields and must not change via this edit.
+      var updates;
+      if (isBankRow) {
+        updates = {
+          transaction_date: fd.date || txn.transaction_date,
+          description: fd.desc || txn.description,
+          order_number: fd.orderNumber != null ? fd.orderNumber : txn.order_number,
+          category: fd.category != null ? fd.category : txn.category,
+          subcategory: fd.subcategory != null ? fd.subcategory : txn.subcategory,
+        };
+        if (isPlaceholder) {
+          // Pending placeholder — amount lives in expected_amount
+          var inAmt  = Number(fd.bankIn  || 0);
+          var outAmt = Number(fd.bankOut || 0);
+          if (inAmt > 0) {
+            updates.expected_amount = inAmt;
+            updates.expected_direction = 'in';
+          } else if (outAmt > 0) {
+            updates.expected_amount = outAmt;
+            updates.expected_direction = 'out';
+          } else {
+            updates.expected_amount = Number(txn.expected_amount) || 0;
+          }
+        } else {
+          // Confirmed bank row — amount lives in bank_in/bank_out
+          updates.bank_in  = fd.bankIn  != null ? Number(fd.bankIn)  : Number(txn.bank_in  || 0);
+          updates.bank_out = fd.bankOut != null ? Number(fd.bankOut) : Number(txn.bank_out || 0);
+        }
+      } else {
+        // Cash row — original behavior preserved
+        updates = {
+          transaction_date: fd.date || txn.transaction_date,
+          description: fd.desc || txn.description,
+          cash_in:  fd.cashIn  != null ? Number(fd.cashIn)  : txn.cash_in,
+          cash_out: fd.cashOut != null ? Number(fd.cashOut) : txn.cash_out,
+          order_number: fd.orderNumber != null ? fd.orderNumber : txn.order_number,
+          category: fd.category != null ? fd.category : txn.category,
+          subcategory: fd.subcategory != null ? fd.subcategory : txn.subcategory,
+        };
+      }
       await dbUpdate('treasury', txn.id, updates, user?.id);
 
       // BUG 2 fix: if amounts changed AND row is linked to an invoice, the
@@ -2342,7 +2609,8 @@ export default function App() {
         Number(updates.cash_in  || 0) !== Number(txn.cash_in  || 0) ||
         Number(updates.cash_out || 0) !== Number(txn.cash_out || 0) ||
         Number(updates.bank_in  || 0) !== Number(txn.bank_in  || 0) ||
-        Number(updates.bank_out || 0) !== Number(txn.bank_out || 0);
+        Number(updates.bank_out || 0) !== Number(txn.bank_out || 0) ||
+        Number(updates.expected_amount || 0) !== Number(txn.expected_amount || 0);
       if (amountsChanged && txn.linked_invoice_id) {
         try { await recalcInvoiceCollected(txn.linked_invoice_id); } catch (e) { /* don't block UI */ }
       }
@@ -2463,8 +2731,29 @@ export default function App() {
   // ── Save Treasury Edit from Modal ──
   const handleSaveTreasuryEdit = async (txnId, updates) => {
     try {
+      // v55.42 — Find the original row so we can detect amount changes and
+      // recalc any linked invoice. Without this, edits to bank_in/bank_out
+      // (or cash_in/cash_out) on a linked row left the invoice's
+      // total_collected stale until a manual "Fix Links" pass.
+      var original = (treasury || []).find(function(t) { return t.id === txnId; });
       await dbUpdate('treasury', txnId, updates, userProfile?.id || user?.id);
       setTreasury(prev => prev.map(t => t.id === txnId ? { ...t, ...updates } : t));
+
+      // Recalc the linked invoice if any money-bearing field changed.
+      // We compare the OLD row's totals to what's in `updates` for fields
+      // that are present (Object.prototype.hasOwnProperty so a missing
+      // field counts as "unchanged" — never overwrite with 0 by accident).
+      if (original && original.linked_invoice_id) {
+        var moneyFields = ['cash_in', 'cash_out', 'bank_in', 'bank_out', 'expected_amount'];
+        var changed = moneyFields.some(function(f) {
+          if (!Object.prototype.hasOwnProperty.call(updates, f)) return false;
+          return Number(updates[f] || 0) !== Number(original[f] || 0);
+        });
+        if (changed) {
+          try { await recalcInvoiceCollected(original.linked_invoice_id); }
+          catch (e) { console.warn('[treasury-edit] invoice recalc failed:', e && e.message); }
+        }
+      }
       setEditTreasuryModal(null);
     } catch (err) { alert('Save error / خطأ حفظ: ' + err.message); }
   };
@@ -3229,9 +3518,12 @@ export default function App() {
   return (
     <ToastProvider>
     <ErrorBoundary label="KTC Hub encountered an error" showDetails>
-    {/* Global voice controller — "Hey Nadia" listens across all tabs,
-        cross-browser, per-user opt-out via voiceEnabled state. */}
-    <VoiceController userId={userProfile?.id} userProfile={userProfile} enabled={voiceEnabled} />
+    {/* v55.42 — VOICE DISABLED.
+        VoiceController (the "Hey Nadia" wake-word listener with the
+        bottom-left pill and OFF button) is no longer mounted. Reasoning
+        in the voiceEnabled state declaration above. The typed Nadia chat
+        is unaffected — only the voice surface is removed.
+        Component file kept on disk for ease of future reactivation. */}
     {/* Action bridge — catches nadia-decision-action events from the Decision
         Engine's chips and executes them (draft email, create reminder, flag
         invoice, etc.). Headless component, safe to mount once globally. */}
@@ -3298,7 +3590,7 @@ export default function App() {
               {/* Brand mark — bracket prefix is a terminal callout convention. */}
               <span className="text-emerald-400 font-mono text-xs font-bold tracking-tight" style={{ fontFamily: '"JetBrains Mono", monospace' }}>[KTC]</span>
               <h1 className="text-sm font-bold text-white tracking-tight whitespace-nowrap">NEXTTRADE HUB</h1>
-              <span className="text-[10px] text-zinc-500 font-mono hidden md:inline" style={{ fontFamily: '"JetBrains Mono", monospace' }}>v55.40</span>
+              <span className="text-[10px] text-zinc-500 font-mono hidden md:inline" style={{ fontFamily: '"JetBrains Mono", monospace' }}>v55.50</span>
               {/* Live clock — terminals always show one. Updates via the
                   existing tick state; if not present, falls back to no clock. */}
               <span className="hidden lg:inline text-[10px] text-zinc-500 font-mono ml-2 pl-2 border-l border-zinc-800" style={{ fontFamily: '"JetBrains Mono", monospace' }}>
@@ -4592,10 +4884,45 @@ export default function App() {
                                 <option value="__custom">+ New Subcategory</option>
                               </select>
                             </td>
-                            <td className="px-2 py-1.5"><input type="number" id="tx-in" defaultValue={txn.cash_in || 0}
-                              className="w-20 text-xs border rounded px-1 py-1" /></td>
-                            <td className="px-2 py-1.5"><input type="number" id="tx-out" defaultValue={txn.cash_out || 0}
-                              className="w-20 text-xs border rounded px-1 py-1" /></td>
+                            {/* v55.42 — Inline edit row is bank-aware. The
+                                old code always showed cash_in/cash_out, which
+                                read 0 for bank rows and tricked users into
+                                typing the amount in the wrong field. */}
+                            {(() => {
+                              var hasBankIn  = Number(txn.bank_in  || 0) > 0;
+                              var hasBankOut = Number(txn.bank_out || 0) > 0;
+                              var isPlaceholder = !!txn.is_bank_placeholder;
+                              var isBankRow = hasBankIn || hasBankOut || isPlaceholder;
+                              if (isBankRow) {
+                                var bankInVal  = isPlaceholder && txn.expected_direction === 'in'  ? (txn.expected_amount || 0) : (txn.bank_in  || 0);
+                                var bankOutVal = isPlaceholder && txn.expected_direction === 'out' ? (txn.expected_amount || 0) : (txn.bank_out || 0);
+                                return (
+                                  <>
+                                    <td className="px-2 py-1.5">
+                                      <input type="number" id="tx-bank-in" defaultValue={bankInVal}
+                                        className="w-20 text-xs border-2 border-indigo-300 rounded px-1 py-1 bg-indigo-50 text-indigo-700"
+                                        title="Bank In — bank-side row" />
+                                      <div className="text-[8px] text-indigo-600 font-bold mt-0.5">🏦 Bank</div>
+                                    </td>
+                                    <td className="px-2 py-1.5">
+                                      <input type="number" id="tx-bank-out" defaultValue={bankOutVal}
+                                        className="w-20 text-xs border-2 border-indigo-300 rounded px-1 py-1 bg-indigo-50 text-indigo-700"
+                                        title="Bank Out — bank-side row" />
+                                      <div className="text-[8px] text-indigo-600 font-bold mt-0.5">🏦 Bank</div>
+                                    </td>
+                                  </>
+                                );
+                              }
+                              // Cash row — original behavior preserved
+                              return (
+                                <>
+                                  <td className="px-2 py-1.5"><input type="number" id="tx-in" defaultValue={txn.cash_in || 0}
+                                    className="w-20 text-xs border rounded px-1 py-1" /></td>
+                                  <td className="px-2 py-1.5"><input type="number" id="tx-out" defaultValue={txn.cash_out || 0}
+                                    className="w-20 text-xs border rounded px-1 py-1" /></td>
+                                </>
+                              );
+                            })()}
                             <td className="px-2 py-1.5 flex gap-1">
                               <button onClick={() => handleEditTreasury(txn)}
                                 className="px-2 py-0.5 rounded bg-emerald-500 text-white text-[10px]">Save</button>
@@ -4706,8 +5033,42 @@ export default function App() {
                     </div>
                     )}
                   </div>
-                ) : (
+                ) : (() => {
+                  // v55.42 — DETECT what KIND of treasury row we're editing.
+                  // The legacy modal only showed Cash In / Cash Out fields.
+                  // For bank rows (matched bank statement OR pending placeholder)
+                  // it showed 0 / 0 because cash_in and cash_out are zero on
+                  // bank rows — the money lives in bank_in / bank_out. Users
+                  // typed the amount into the cash field thinking the system
+                  // had the wrong value, which DOUBLED the amount AND silently
+                  // converted a bank row into a cash row (losing the bank
+                  // matching, the bank account link, and the audit trail).
+                  //
+                  // Now we detect row type and show the correct fields.
+                  var hasBankIn  = Number(txn.bank_in  || 0) > 0;
+                  var hasBankOut = Number(txn.bank_out || 0) > 0;
+                  var isPlaceholder = !!txn.is_bank_placeholder;
+                  var isBankRow = hasBankIn || hasBankOut || isPlaceholder;
+                  var isMatched = !!txn.matched_bank_txn_id;
+                  return (
                   <div className="p-4 space-y-3">
+                    {/* v55.42 — Big visible badge so the user knows what
+                        kind of row this is. Without this, bank rows looked
+                        identical to cash rows in the edit modal. */}
+                    {isBankRow && (
+                      <div className={'rounded-lg p-3 border-2 ' + (isMatched ? 'bg-indigo-50 border-indigo-300' : 'bg-amber-50 border-amber-300')}>
+                        <div className={'text-xs font-extrabold uppercase ' + (isMatched ? 'text-indigo-800' : 'text-amber-800')}>
+                          {isMatched
+                            ? '🏦 Bank Transaction (matched bank statement)'
+                            : '🏦 Bank Transaction (placeholder — awaiting statement)'}
+                        </div>
+                        <div className={'text-[11px] mt-0.5 ' + (isMatched ? 'text-indigo-700' : 'text-amber-700')}>
+                          The money for this entry is tracked in <code>bank_in</code> / <code>bank_out</code>, not cash.
+                          {isMatched ? ' Editing the amount here will update the bank-side total and recalc any linked invoice.' : ''}
+                        </div>
+                      </div>
+                    )}
+
                     <div>
                       <label className="text-[10px] font-bold text-slate-500">Date / التاريخ</label>
                       <DatePickerSelect value={txn.transaction_date || today()} onChange={v => setEditTreasuryModal({...txn, transaction_date: v})} />
@@ -4722,18 +5083,51 @@ export default function App() {
                       <input value={txn.description || ''} onChange={e => setEditTreasuryModal({...txn, description: e.target.value})}
                         className="w-full px-3 py-2 rounded-lg border text-sm" style={{direction:'rtl'}} />
                     </div>
-                    <div className="grid grid-cols-2 gap-2">
-                      <div>
-                        <label className="text-[10px] font-bold text-emerald-600">Cash In / وارد</label>
-                        <input type="number" value={txn.cash_in || 0} onChange={e => setEditTreasuryModal({...txn, cash_in: Number(e.target.value) || 0})}
-                          className="w-full px-3 py-2 rounded-lg border text-sm text-emerald-600 font-semibold" />
+                    {isBankRow ? (
+                      // BANK row — show bank_in / bank_out fields
+                      <div className="grid grid-cols-2 gap-2">
+                        <div>
+                          <label className="text-[10px] font-bold text-indigo-600">🏦 Bank In / وارد بنكي</label>
+                          <input type="number" value={isPlaceholder ? (txn.expected_amount || 0) : (txn.bank_in || 0)}
+                            onChange={e => {
+                              var v = Number(e.target.value) || 0;
+                              if (isPlaceholder) {
+                                setEditTreasuryModal({...txn, expected_amount: v, expected_direction: v > 0 ? 'in' : txn.expected_direction});
+                              } else {
+                                setEditTreasuryModal({...txn, bank_in: v});
+                              }
+                            }}
+                            className="w-full px-3 py-2 rounded-lg border-2 border-indigo-300 text-sm text-indigo-700 font-semibold bg-indigo-50" />
+                        </div>
+                        <div>
+                          <label className="text-[10px] font-bold text-indigo-600">🏦 Bank Out / صادر بنكي</label>
+                          <input type="number" value={isPlaceholder && txn.expected_direction === 'out' ? (txn.expected_amount || 0) : (txn.bank_out || 0)}
+                            onChange={e => {
+                              var v = Number(e.target.value) || 0;
+                              if (isPlaceholder) {
+                                setEditTreasuryModal({...txn, expected_amount: v, expected_direction: v > 0 ? 'out' : txn.expected_direction});
+                              } else {
+                                setEditTreasuryModal({...txn, bank_out: v});
+                              }
+                            }}
+                            className="w-full px-3 py-2 rounded-lg border-2 border-indigo-300 text-sm text-indigo-700 font-semibold bg-indigo-50" />
+                        </div>
                       </div>
-                      <div>
-                        <label className="text-[10px] font-bold text-red-500">Cash Out / منصرف</label>
-                        <input type="number" value={txn.cash_out || 0} onChange={e => setEditTreasuryModal({...txn, cash_out: Number(e.target.value) || 0})}
-                          className="w-full px-3 py-2 rounded-lg border text-sm text-red-500 font-semibold" />
+                    ) : (
+                      // CASH row — show cash_in / cash_out fields (unchanged)
+                      <div className="grid grid-cols-2 gap-2">
+                        <div>
+                          <label className="text-[10px] font-bold text-emerald-600">Cash In / وارد</label>
+                          <input type="number" value={txn.cash_in || 0} onChange={e => setEditTreasuryModal({...txn, cash_in: Number(e.target.value) || 0})}
+                            className="w-full px-3 py-2 rounded-lg border text-sm text-emerald-600 font-semibold" />
+                        </div>
+                        <div>
+                          <label className="text-[10px] font-bold text-red-500">Cash Out / منصرف</label>
+                          <input type="number" value={txn.cash_out || 0} onChange={e => setEditTreasuryModal({...txn, cash_out: Number(e.target.value) || 0})}
+                            className="w-full px-3 py-2 rounded-lg border text-sm text-red-500 font-semibold" />
+                        </div>
                       </div>
-                    </div>
+                    )}
                     <div>
                       <label className="text-[10px] font-bold text-slate-500">Category / التصنيف</label>
                       <select value={txn.category || ''} onChange={e => setEditTreasuryModal({...txn, category: e.target.value})}
@@ -4750,15 +5144,37 @@ export default function App() {
                       <datalist id="edit-subcats">{uniqueSubcats.map(s => <option key={s} value={s} />)}</datalist>
                     </div>
                     <div className="flex gap-2 pt-2">
-                      <button onClick={() => handleSaveTreasuryEdit(txn.id, {
-                        transaction_date: txn.transaction_date,
-                        order_number: txn.order_number || '',
-                        description: txn.description || '',
-                        cash_in: Number(txn.cash_in) || 0,
-                        cash_out: Number(txn.cash_out) || 0,
-                        category: txn.category || null,
-                        subcategory: txn.subcategory || null,
-                      })} className="flex-1 px-4 py-2.5 bg-blue-500 text-white rounded-lg font-bold text-sm hover:bg-blue-600">
+                      <button onClick={() => {
+                        // v55.42 — Build the update payload based on row type.
+                        // Bank rows preserve their bank-side fields and do
+                        // NOT touch cash_in/cash_out. Cash rows preserve
+                        // their cash fields and do NOT touch bank_in/bank_out.
+                        var payload = {
+                          transaction_date: txn.transaction_date,
+                          order_number: txn.order_number || '',
+                          description: txn.description || '',
+                          category: txn.category || null,
+                          subcategory: txn.subcategory || null,
+                        };
+                        if (isBankRow) {
+                          // Preserve all bank-side identity fields, only
+                          // update the amount the user actually changed.
+                          if (isPlaceholder) {
+                            payload.expected_amount = Number(txn.expected_amount) || 0;
+                            if (txn.expected_direction) payload.expected_direction = txn.expected_direction;
+                          } else {
+                            payload.bank_in  = Number(txn.bank_in)  || 0;
+                            payload.bank_out = Number(txn.bank_out) || 0;
+                          }
+                          // Cash side stays at zero; we do NOT include it
+                          // in the update so any value already there
+                          // (which would be a data anomaly) isn't disturbed.
+                        } else {
+                          payload.cash_in  = Number(txn.cash_in)  || 0;
+                          payload.cash_out = Number(txn.cash_out) || 0;
+                        }
+                        handleSaveTreasuryEdit(txn.id, payload);
+                      }} className="flex-1 px-4 py-2.5 bg-blue-500 text-white rounded-lg font-bold text-sm hover:bg-blue-600">
                         Save / حفظ
                       </button>
                       {canDeleteTxn && (
@@ -4773,7 +5189,8 @@ export default function App() {
                       </button>
                     </div>
                   </div>
-                )}
+                  );
+                })()}
               </div>
             </div>
           );
@@ -5389,6 +5806,46 @@ export default function App() {
                       <input value={formData.custSearch !== undefined ? formData.custSearch : (formData.customerName || '')}
                         onChange={e => setFormData({...formData, custSearch: e.target.value, showCustDropdown: true})}
                         onFocus={() => setFormData({...formData, showCustDropdown: true})}
+                        onBlur={(e) => {
+                          // v55.47 — Auto-commit typed text on blur. If the
+                          // user typed a customer name and clicked elsewhere
+                          // without picking from the dropdown, this rescues
+                          // them by committing the typed text (or matching
+                          // an existing customer) into customerName so the
+                          // submit doesn't fail with "missing customer."
+                          // Use a small timeout so a click on a dropdown row
+                          // still gets to fire its onClick handler first.
+                          setTimeout(() => {
+                            const typed = (e.target.value || '').trim();
+                            if (!typed) return;
+                            // If a customer was already picked AND the typed
+                            // text matches their name, do nothing.
+                            if (formData.customerName && typed === formData.customerName) return;
+                            // Try to find an exact match in the customers list
+                            const exact = (customers || []).find(c =>
+                              (c.name && c.name.toLowerCase() === typed.toLowerCase()) ||
+                              (c.name_ar && c.name_ar === typed)
+                            );
+                            if (exact) {
+                              setFormData(prev => ({...prev,
+                                customerId: exact.id,
+                                customerName: exact.name || exact.name_ar,
+                                custSearch: undefined,
+                                showCustDropdown: false,
+                                salesRep: prev.salesRep || exact.assigned_rep || '',
+                              }));
+                            } else {
+                              // No match → keep typed text as the customer name
+                              // (legacy free-text path). Submit will accept it.
+                              setFormData(prev => ({...prev,
+                                customerName: typed,
+                                customerId: null,
+                                custSearch: undefined,
+                                showCustDropdown: false,
+                              }));
+                            }
+                          }, 150);
+                        }}
                         placeholder="Search or select customer..."
                         className="w-full px-3 py-2 rounded-lg border border-slate-200 text-sm" />
                       {formData.showCustDropdown && (
@@ -5547,15 +6004,59 @@ export default function App() {
 
             <div className="flex gap-2">
               <button onClick={async () => {
+                // v55.47 — Smarter validation. The "Please fill order#, customer,
+                // and add items" alert was firing even when the user clearly had
+                // all three filled in. Root cause: the customer search input
+                // writes typed text to `formData.custSearch`, and `customerName`
+                // is ONLY set when the user explicitly taps a row in the
+                // dropdown. If they typed and the dropdown closed (or they
+                // clicked elsewhere) without picking, customerName stayed
+                // empty even though the visible field had their text.
+                //
+                // The fix: if customerName is empty but custSearch has text,
+                // promote custSearch to customerName here. Also try to match
+                // against the customers list so we set customerId too. Plus
+                // a specific error per missing field instead of the generic
+                // "fill all" message.
                 const items = formData.invoiceItems || [];
                 const totalAmt = items.reduce((a, i) => a + (i.inv_total || 0), 0) || Number(formData.amount) || 0;
-                if (!formData.orderNumber || !formData.customerName || totalAmt <= 0) {
-                  alert('Please fill order#, customer, and add items / الرجاء ملء رقم الأمر والعميل وإضافة بنود'); return;
+
+                // Promote custSearch → customerName if needed
+                let resolvedCustomerName = formData.customerName;
+                let resolvedCustomerId = formData.customerId;
+                if (!resolvedCustomerName && formData.custSearch && String(formData.custSearch).trim()) {
+                  const typed = String(formData.custSearch).trim();
+                  // Try exact-match against customers list (case-insensitive,
+                  // English or Arabic name). If found, use that customer's id.
+                  const exact = (customers || []).find(c =>
+                    (c.name && c.name.toLowerCase() === typed.toLowerCase()) ||
+                    (c.name_ar && c.name_ar === typed)
+                  );
+                  if (exact) {
+                    resolvedCustomerName = exact.name || exact.name_ar;
+                    resolvedCustomerId = exact.id;
+                  } else {
+                    // No match → use typed text as the customer name (legacy
+                    // free-text path; the invoices.customer_name column is
+                    // just text so this is fine).
+                    resolvedCustomerName = typed;
+                  }
+                }
+
+                // Specific error per missing field
+                const missing = [];
+                if (!formData.orderNumber || !String(formData.orderNumber).trim()) missing.push('Order #');
+                if (!resolvedCustomerName) missing.push('Customer');
+                if (totalAmt <= 0) missing.push('Items (or amount)');
+                if (missing.length > 0) {
+                  alert('Missing: ' + missing.join(', ') + '\n\nPlease fill these fields and try again. / يرجى ملء الحقول المفقودة.');
+                  return;
                 }
                 try {
                   const orderNum = sanitize(formData.orderNumber);
                   const { data: newInv } = await supabase.from('invoices').insert({
-                    order_number: orderNum, customer_name: sanitize(formData.customerName),
+                    order_number: orderNum, customer_name: sanitize(resolvedCustomerName),
+                    customer_id: resolvedCustomerId || null,
                     invoice_date: formData.date || today(), total_amount: totalAmt,
                     total_collected: 0, outstanding: totalAmt, sales_rep: formData.salesRep || '',
                     notes: sanitize(formData.notes || ''), source: 'manual',
@@ -5631,9 +6132,47 @@ export default function App() {
 
         {/* ==========================================
             ADD TREASURY MODAL
+            v55.49 — Hides itself when ANY child modal is open
+            (duplicateConfirm OR pendingTreasuryRecord). Previously the
+            form Modal at z-50 could trap child modals behind it on iOS
+            Safari due to a backdrop-filter stacking-context quirk —
+            user reported "I tap Confirm on the duplicate warning, the
+            invoice form opens, I fill it, tap Save, nothing happens"
+            (actually the next modal was opening invisibly). Now: only
+            ONE modal on screen at a time. formData is preserved in
+            state so when the child closes via Cancel, the form returns
+            with all values intact.
         ========================================== */}
-        {showAddTreasury && (
-          <Modal onClose={() => { setShowAddTreasury(false); setFormData({}); }} title="New Transaction / معاملة جديدة">
+        {showAddTreasury && !pendingTreasuryRecord && !duplicateConfirm && (
+          <Modal onClose={() => { setShowAddTreasury(false); setFormData({}); setTreasuryFormErrors([]); }} title="New Transaction / معاملة جديدة">
+            {/* v55.47 — Persistent in-form validation error banner. When the
+                user taps Save and validation fails, this red box appears at
+                the top of the form listing every missing field. The user
+                cannot miss this even if they don't see the corner toast.
+                Cleared automatically the next time validation passes. */}
+            {treasuryFormErrors.length > 0 && (
+              <div className="mb-3 rounded-lg border-2 border-red-500 bg-red-50 p-3" role="alert">
+                <div className="flex items-start gap-2">
+                  <span className="text-2xl flex-shrink-0">⚠️</span>
+                  <div className="flex-1 min-w-0">
+                    <div className="text-sm font-extrabold text-red-900 mb-1">
+                      Cannot save — please fix {treasuryFormErrors.length} item{treasuryFormErrors.length === 1 ? '' : 's'}:
+                    </div>
+                    <ul className="text-xs text-red-800 space-y-1 mt-1">
+                      {treasuryFormErrors.map((e, i) => (
+                        <li key={i} className="flex items-start gap-1.5">
+                          <span className="font-bold flex-shrink-0">•</span>
+                          <span><b>{e.label}:</b> {e.msg}</span>
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+                  <button onClick={() => setTreasuryFormErrors([])}
+                    className="text-red-600 hover:text-red-800 text-lg leading-none px-1 flex-shrink-0"
+                    aria-label="Dismiss errors">×</button>
+                </div>
+              </div>
+            )}
             <div className="grid grid-cols-2 gap-3">
               <div className="col-span-2">
                 <label className="text-xs font-semibold text-slate-600 block mb-2">Type / النوع</label>
@@ -5699,18 +6238,26 @@ export default function App() {
 
                       {/* Non-Order category selector — only in non-order mode */}
                       {mode === 'nonorder' && (
-                        <div className="p-2 bg-indigo-50 border border-indigo-200 rounded">
+                        <div className="p-2 bg-indigo-50 border border-indigo-200 rounded" data-treasury-field="bankNonOrderCategory">
                           <label className="text-[11px] font-bold text-indigo-900 block mb-1">
                             What is this? / ما نوع هذا القيد؟ *
                           </label>
                           <select value={formData.bankNonOrderCategory || ''}
-                            onChange={e => setFormData({ ...formData, bankNonOrderCategory: e.target.value })}
-                            className="w-full px-2 py-1.5 rounded border border-indigo-300 text-sm bg-white">
+                            onChange={e => {
+                              setFormData({ ...formData, bankNonOrderCategory: e.target.value });
+                              if (treasuryFormErrors.length > 0 && e.target.value) {
+                                setTreasuryFormErrors(prev => prev.filter(x => x.field !== 'bankNonOrderCategory'));
+                              }
+                            }}
+                            className={'w-full px-2 py-1.5 rounded border text-sm bg-white ' + (treasuryFormErrors.some(x => x.field === 'bankNonOrderCategory') ? 'border-red-500' : 'border-indigo-300')}>
                             <option value="">Select a category…</option>
                             {BANK_NONORDER_CATS.map(c => (
                               <option key={c.v} value={c.v}>{c.en} / {c.ar}</option>
                             ))}
                           </select>
+                          {treasuryFormErrors.some(x => x.field === 'bankNonOrderCategory') && (
+                            <div className="text-[10px] text-red-600 font-semibold mt-0.5">⚠️ Required</div>
+                          )}
                         </div>
                       )}
 
@@ -5731,11 +6278,24 @@ export default function App() {
                 <label className="text-xs font-semibold text-slate-600">Date / التاريخ</label>
                 <DatePickerSelect value={formData.date || today()} onChange={v => setFormData({ ...formData, date: v })} />
               </div>
-              <div>
-                <label className="text-xs font-semibold text-slate-600">{(formData.type === 'bank_in' || formData.type === 'bank_out') ? 'Expected Amount / المبلغ المتوقع' : 'Amount / المبلغ'}</label>
+              <div data-treasury-field="amount">
+                <label className="text-xs font-semibold text-slate-600">
+                  {(formData.type === 'bank_in' || formData.type === 'bank_out') ? 'Expected Amount / المبلغ المتوقع' : 'Amount / المبلغ'}
+                  <span className="text-red-500 ml-0.5">*</span>
+                </label>
                 <input type="number" value={formData.amount || ''}
-                  onChange={e => setFormData({ ...formData, amount: e.target.value })}
-                  className="w-full px-3 py-2 rounded-lg border border-slate-200 text-sm" />
+                  onChange={e => {
+                    setFormData({ ...formData, amount: e.target.value });
+                    // v55.47 — clear the amount error as soon as the user types something valid
+                    if (treasuryFormErrors.length > 0 && e.target.value && Number(e.target.value) > 0) {
+                      setTreasuryFormErrors(prev => prev.filter(x => x.field !== 'amount'));
+                    }
+                  }}
+                  placeholder="0.00"
+                  className={'w-full px-3 py-2 rounded-lg border text-sm ' + (treasuryFormErrors.some(x => x.field === 'amount') ? 'border-red-500 bg-red-50' : 'border-slate-200')} />
+                {treasuryFormErrors.some(x => x.field === 'amount') && (
+                  <div className="text-[10px] text-red-600 font-semibold mt-0.5">⚠️ Required</div>
+                )}
               </div>
               <div>
                 <label className="text-xs font-semibold text-slate-600">Currency / العملة</label>
@@ -5751,11 +6311,16 @@ export default function App() {
                 </select>
               </div>
               {(formData.type === 'bank_in' || formData.type === 'bank_out') && (
-                <div className="col-span-2">
+                <div className="col-span-2" data-treasury-field="bankAccountId">
                   <label className="text-xs font-semibold text-slate-600">Bank Account / الحساب البنكي *</label>
                   <select value={formData.bankAccountId || ''}
-                    onChange={e => setFormData({ ...formData, bankAccountId: e.target.value })}
-                    className="w-full px-3 py-2 rounded-lg border border-indigo-300 text-sm bg-indigo-50">
+                    onChange={e => {
+                      setFormData({ ...formData, bankAccountId: e.target.value });
+                      if (treasuryFormErrors.length > 0 && e.target.value) {
+                        setTreasuryFormErrors(prev => prev.filter(x => x.field !== 'bankAccountId'));
+                      }
+                    }}
+                    className={'w-full px-3 py-2 rounded-lg border text-sm bg-indigo-50 ' + (treasuryFormErrors.some(x => x.field === 'bankAccountId') ? 'border-red-500' : 'border-indigo-300')}>
                     <option value="">Select bank account...</option>
                     {egyptBankAccounts.map(a => (
                       <option key={a.id} value={a.id}>
@@ -5763,6 +6328,9 @@ export default function App() {
                       </option>
                     ))}
                   </select>
+                  {treasuryFormErrors.some(x => x.field === 'bankAccountId') && (
+                    <div className="text-[10px] text-red-600 font-semibold mt-0.5">⚠️ Required</div>
+                  )}
                   {egyptBankAccounts.length === 0 && (
                     <div className="text-[10px] text-red-500 mt-1">⚠️ No bank accounts configured. Add them in Egypt Bank tab first. / لا توجد حسابات بنكية. أضفها في تبويب بنك مصر أولاً.</div>
                   )}
@@ -5804,12 +6372,20 @@ export default function App() {
                 // Hide Order# in non-order bank mode — it doesn't apply.
                 if (isBank && bankMode === 'nonorder') return null;
                 return (
-                  <div>
+                  <div data-treasury-field="orderNumber">
                     <label className="text-xs font-semibold text-slate-600">Order # / رقم{isBank ? ' *' : ''}</label>
                     <input value={formData.orderNumber || ''}
-                      onChange={e => setFormData({ ...formData, orderNumber: e.target.value })}
+                      onChange={e => {
+                        setFormData({ ...formData, orderNumber: e.target.value });
+                        if (treasuryFormErrors.length > 0 && e.target.value.trim()) {
+                          setTreasuryFormErrors(prev => prev.filter(x => x.field !== 'orderNumber'));
+                        }
+                      }}
                       placeholder="Type to search..."
-                      className="w-full px-3 py-2 rounded-lg border border-slate-200 text-sm" />
+                      className={'w-full px-3 py-2 rounded-lg border text-sm ' + (treasuryFormErrors.some(x => x.field === 'orderNumber') ? 'border-red-500 bg-red-50' : 'border-slate-200')} />
+                    {treasuryFormErrors.some(x => x.field === 'orderNumber') && (
+                      <div className="text-[10px] text-red-600 font-semibold mt-0.5">⚠️ Required</div>
+                    )}
                     {formData.orderNumber && formData.orderNumber.length >= 2 && (
                       <div className="mt-1 max-h-[120px] overflow-auto rounded border border-slate-200 bg-white">
                         {invoices
@@ -5827,11 +6403,22 @@ export default function App() {
                   </div>
                 );
               })()}
-              <div className="col-span-2">
-                <label className="text-xs font-semibold text-slate-600">Description / الوصف</label>
+              <div className="col-span-2" data-treasury-field="desc">
+                <label className="text-xs font-semibold text-slate-600">
+                  Description / الوصف
+                  {(formData.type === 'bank_in' || formData.type === 'bank_out') && <span className="text-red-500 ml-0.5">*</span>}
+                </label>
                 <input value={formData.desc || ''}
-                  onChange={e => setFormData({ ...formData, desc: e.target.value })}
-                  className="w-full px-3 py-2 rounded-lg border border-slate-200 text-sm" />
+                  onChange={e => {
+                    setFormData({ ...formData, desc: e.target.value });
+                    if (treasuryFormErrors.length > 0 && e.target.value.trim()) {
+                      setTreasuryFormErrors(prev => prev.filter(x => x.field !== 'desc'));
+                    }
+                  }}
+                  className={'w-full px-3 py-2 rounded-lg border text-sm ' + (treasuryFormErrors.some(x => x.field === 'desc') ? 'border-red-500 bg-red-50' : 'border-slate-200')} />
+                {treasuryFormErrors.some(x => x.field === 'desc') && (
+                  <div className="text-[10px] text-red-600 font-semibold mt-0.5">⚠️ Required for bank entries</div>
+                )}
               </div>
               {(formData.type === 'out' || formData.type === 'in' || formData.type === 'bank_in' || formData.type === 'bank_out' || !formData.type) && (
                 <div className="col-span-2">
@@ -5928,6 +6515,19 @@ export default function App() {
         ========================================== */}
         {tab === 'dashboard' && (
           <div className="flex flex-col">
+
+            {/* v55.45 — "What's New" pill. Click to see the changelog of
+                recent builds with an expandable section per release. */}
+            <div className="mb-3 flex justify-end">
+              <WhatsNewWidget />
+            </div>
+
+            {/* v55.45 — Pending team messages + reminders, with per-item
+                Acknowledge buttons. Renders nothing if nothing pending. */}
+            <PendingNadiaMessages
+              userId={userProfile?.id || user?.id}
+              getUserName={getUserName}
+            />
 
             {/* ===========================================================
                 TERMINAL EXECUTIVE SUMMARY (v55.8 — Apr 25 2026)
@@ -11865,170 +12465,18 @@ export default function App() {
 
         {/* ==========================================
             SYSTEM TICKETS TAB
+            v55.45 — extracted to SystemTicketsPanel component (clean
+            React state, no window globals, no setState-during-render).
         ========================================== */}
         {tab === 'systemtickets' && (
           <SafeSection label="System Tickets">
-          <div>
-            <div className="flex justify-between items-center mb-3">
-              <h2 className="text-xl font-extrabold">🐛 System Tickets / تذاكر النظام</h2>
-              <button onClick={() => setFormData({ showSysTicket: true, sysTitle: '', sysDesc: '', sysPriority: 'medium', sysCategory: 'bug' })}
-                className="px-4 py-2 bg-red-500 text-white rounded-lg text-xs font-bold">+ New System Ticket / تذكرة جديدة</button>
-            </div>
-            <div className="text-xs text-slate-400 mb-3">Report bugs, feature requests, and system issues / الإبلاغ عن الأخطاء وطلبات الميزات</div>
-
-            {formData.showSysTicket && (
-              <div className="bg-white rounded-xl p-4 mb-4 border-2 border-red-200">
-                <h3 className="text-sm font-bold mb-2">New System Ticket / تذكرة نظام جديدة</h3>
-                <div className="grid grid-cols-2 gap-3 mb-3">
-                  <div>
-                    <label className="text-[10px] font-semibold text-slate-500 block mb-1">Category / الفئة</label>
-                    <select value={formData.sysCategory || 'bug'} onChange={e => setFormData({...formData, sysCategory: e.target.value})} className="dark-input">
-                      <option value="bug">🐛 Bug / خطأ</option>
-                      <option value="feature">✨ Feature Request / ميزة</option>
-                      <option value="improvement">📈 Improvement / تحسين</option>
-                      <option value="question">❓ Question / سؤال</option>
-                      <option value="urgent">🚨 Urgent Fix / إصلاح عاجل</option>
-                    </select>
-                  </div>
-                  <div>
-                    <label className="text-[10px] font-semibold text-slate-500 block mb-1">Priority / الأولوية</label>
-                    <select value={formData.sysPriority || 'medium'} onChange={e => setFormData({...formData, sysPriority: e.target.value})} className="dark-input">
-                      <option value="low">🟢 Low / منخفض</option>
-                      <option value="medium">🟡 Medium / متوسط</option>
-                      <option value="high">🔴 High / عالي</option>
-                      <option value="critical">🚨 Critical / حرج</option>
-                    </select>
-                  </div>
-                </div>
-                <input value={formData.sysTitle || ''} onChange={e => setFormData({...formData, sysTitle: e.target.value})}
-                  placeholder="Title / العنوان *" className="dark-input mb-3" />
-                <textarea value={formData.sysDesc || ''} onChange={e => setFormData({...formData, sysDesc: e.target.value})}
-                  placeholder="Description — steps to reproduce, expected vs actual behavior&#10;الوصف — خطوات إعادة الإنتاج، السلوك المتوقع مقابل الفعلي"
-                  rows={4} className="dark-input mb-3" />
-                <div className="flex gap-2">
-                  <button onClick={async () => {
-                    if (!formData.sysTitle) { toast.warning('Title is required / العنوان مطلوب'); return; }
-                    try {
-                      const count = (await supabase.from('system_tickets').select('*', { count: 'exact', head: true })).count || 0;
-                      await dbInsert('system_tickets', {
-                        ticket_number: 'SYS-' + String(count + 1).padStart(4, '0'),
-                        title: sanitize(formData.sysTitle),
-                        description: sanitize(formData.sysDesc || ''),
-                        category: formData.sysCategory || 'bug',
-                        priority: formData.sysPriority || 'medium',
-                        status: 'Open',
-                        created_by: userProfile?.id || user?.id,
-                        assigned_to: null,
-                      }, user?.id);
-                      toast.success('System ticket created ✓');
-                      setFormData({});
-                      await loadAllData();
-                    } catch(err) { toast.error(err.message); }
-                  }} className="px-5 py-2.5 bg-red-500 text-white rounded-lg text-sm font-bold">Submit / إرسال</button>
-                  <button onClick={() => setFormData({})} className="px-4 py-2.5 border-2 border-slate-300 rounded-lg text-sm font-bold">Cancel</button>
-                </div>
-              </div>
-            )}
-
-            {(() => {
-              const sysTicketsRaw = (window.__sysTickets || []);
-              // Load system tickets on first render
-              if (!window.__sysTicketsLoaded) {
-                window.__sysTicketsLoaded = true;
-                supabase.from('system_tickets').select('*').order('created_at', { ascending: false }).then(({ data }) => {
-                  window.__sysTickets = data || [];
-                  setFormData(prev => ({...prev, _sysRefresh: Date.now()}));
-                });
-              }
-              // Sort: Claude-flagged first, then Reopened, then Open, then In Progress,
-              // then Resolved/Fixed/Closed. Within each bucket, newest first.
-              const statusOrder = { 'Reopened': 0, 'Open': 1, 'In Progress': 2, 'Resolved': 3, 'Fixed': 3, 'Closed': 4 };
-              const sysTickets = [...sysTicketsRaw].sort((a, b) => {
-                if (!!a.claude_review_requested !== !!b.claude_review_requested) {
-                  return a.claude_review_requested ? -1 : 1;
-                }
-                const sa = statusOrder[a.status] ?? 5;
-                const sb = statusOrder[b.status] ?? 5;
-                if (sa !== sb) return sa - sb;
-                return (b.created_at || '').localeCompare(a.created_at || '');
-              });
-              const CATS = { bug: '🐛', feature: '✨', improvement: '📈', question: '❓', urgent: '🚨' };
-              const PRIS = { critical: '🚨', high: '🔴', medium: '🟡', low: '🟢' };
-              const STATS = { Open: 'bg-blue-100 text-blue-700', 'In Progress': 'bg-amber-100 text-amber-700', Resolved: 'bg-emerald-100 text-emerald-700', Fixed: 'bg-emerald-100 text-emerald-700', Reopened: 'bg-rose-100 text-rose-700', Closed: 'bg-slate-100 text-slate-500' };
-              const claudeCount = sysTickets.filter(t => t.claude_review_requested).length;
-              return (
-                <div className="space-y-2">
-                  {claudeCount > 0 && (
-                    <div className="rounded-xl p-3 bg-gradient-to-r from-indigo-50 to-purple-50 border border-indigo-200">
-                      <div className="flex items-center gap-2">
-                        <span className="text-lg">🤖</span>
-                        <div className="flex-1">
-                          <div className="text-sm font-bold text-indigo-700">{claudeCount} ticket{claudeCount === 1 ? '' : 's'} flagged for Claude to fix next session</div>
-                          <div className="text-[11px] text-indigo-600">Claude will pull these automatically at the start of your next chat session if CLAUDE_HANDOFF_TOKEN is set.</div>
-                        </div>
-                      </div>
-                    </div>
-                  )}
-                  {sysTickets.length === 0 && <div className="text-center text-slate-400 text-sm py-8">No system tickets yet / لا توجد تذاكر نظام</div>}
-                  {sysTickets.map(t => (
-                    <div key={t.id} className="bg-white rounded-xl p-4 border border-slate-100">
-                      <div className="flex justify-between items-start">
-                        <div className="flex-1">
-                          <div className="flex items-center gap-2 mb-1 flex-wrap">
-                            <span className="text-xs font-mono text-slate-400">{t.ticket_number}</span>
-                            <span>{CATS[t.category] || '🐛'}</span>
-                            <span>{PRIS[t.priority] || '🟡'}</span>
-                            <span className={'px-2 py-0.5 rounded text-[10px] font-bold ' + (STATS[t.status] || STATS.Open)}>{t.status}</span>
-                            {t.claude_review_requested && <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-indigo-100 text-indigo-700">🤖 Claude review requested</span>}
-                            {t.claude_last_fixed_at && <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-emerald-50 text-emerald-700" title={'Fixed by Claude: ' + t.claude_last_fixed_at}>✨ Claude-fixed</span>}
-                          </div>
-                          <div className="text-sm font-bold">{t.title}</div>
-                          {t.description && <div className="text-xs text-slate-500 mt-1 line-clamp-2">{t.description}</div>}
-                          {t.claude_fix_notes && (
-                            <div className="mt-2 p-2 rounded bg-indigo-50 border-l-2 border-indigo-400">
-                              <div className="text-[9px] font-bold text-indigo-600 mb-0.5">🤖 CLAUDE NOTES</div>
-                              <div className="text-[11px] text-indigo-900 whitespace-pre-wrap">{t.claude_fix_notes}</div>
-                            </div>
-                          )}
-                          <div className="text-[10px] text-slate-400 mt-1">
-                            {t.created_at ? new Date(t.created_at).toLocaleDateString() : ''} · {getUserName(t.created_by) || 'Unknown'}
-                          </div>
-                        </div>
-                        <div className="flex flex-col gap-1 flex-shrink-0 ml-2">
-                          {isAdmin && (
-                            <label className="flex items-center gap-1 text-[10px] font-semibold text-indigo-600 cursor-pointer select-none px-2 py-1 rounded hover:bg-indigo-50">
-                              <input
-                                type="checkbox"
-                                checked={!!t.claude_review_requested}
-                                onChange={async (e) => {
-                                  try {
-                                    await dbUpdate('system_tickets', t.id, { claude_review_requested: e.target.checked }, user?.id);
-                                    window.__sysTicketsLoaded = false;
-                                    setFormData(prev => ({...prev, _r: Date.now()}));
-                                  } catch (err) { alert(err.message); }
-                                }}
-                              />
-                              🤖 Fix next session
-                            </label>
-                          )}
-                          {isAdmin && t.status !== 'Closed' && (
-                            <div className="flex gap-1 flex-shrink-0">
-                              {t.status === 'Open' && <button onClick={async () => { await dbUpdate('system_tickets', t.id, { status: 'In Progress' }, user?.id); window.__sysTicketsLoaded = false; setFormData(prev => ({...prev, _r: Date.now()})); }} className="px-2 py-1 bg-amber-500 text-white rounded text-[10px]">Start</button>}
-                              {(t.status === 'Open' || t.status === 'In Progress') && <button onClick={async () => { await dbUpdate('system_tickets', t.id, { status: 'Resolved' }, user?.id); window.__sysTicketsLoaded = false; setFormData(prev => ({...prev, _r: Date.now()})); }} className="px-2 py-1 bg-emerald-500 text-white rounded text-[10px]">Resolve</button>}
-                              <button onClick={async () => { await dbUpdate('system_tickets', t.id, { status: 'Closed' }, user?.id); window.__sysTicketsLoaded = false; setFormData(prev => ({...prev, _r: Date.now()})); }} className="px-2 py-1 bg-slate-500 text-white rounded text-[10px]">Close</button>
-                            </div>
-                          )}
-                          {isAdmin && (t.status === 'Closed' || t.status === 'Resolved' || t.status === 'Fixed') && (
-                            <button onClick={async () => { await dbUpdate('system_tickets', t.id, { status: 'Reopened', claude_review_requested: true }, user?.id); window.__sysTicketsLoaded = false; setFormData(prev => ({...prev, _r: Date.now()})); }} className="px-2 py-1 bg-rose-500 text-white rounded text-[10px]">Reopen</button>
-                          )}
-                        </div>
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              );
-            })()}
-          </div>
+            <SystemTicketsPanel
+              userId={userProfile?.id || user?.id}
+              isAdmin={isAdmin}
+              getUserName={getUserName}
+              sanitize={sanitize}
+              toast={toast}
+            />
           </SafeSection>
         )}
 
@@ -12235,10 +12683,14 @@ export default function App() {
         />
       )}
 
-      {/* "Order # not found — create invoice now?" Modal */}
+      {/* "Order # not found — create invoice now?" Modal
+          v55.48 — z-[200] (was z-[60]) so it's unambiguously above the
+          form Modal even on devices that exhibit weird stacking-context
+          behavior. Plus the form Modal now hides itself when this modal
+          is open, so there's no overlap to worry about anyway. */}
       {pendingTreasuryRecord && (
         <div
-          className="fixed inset-0 z-[60] bg-black/70 backdrop-blur-sm"
+          className="fixed inset-0 z-[200] bg-black/70"
           onClick={() => { closePendingTreasuryModal(); }}
           style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 12 }}
         >
@@ -12258,7 +12710,7 @@ export default function App() {
                       latest fix is actually deployed. If he doesn't see this
                       tag in the modal, his browser is running stale JS. */}
                   <div className="mt-1.5 inline-block px-2 py-0.5 rounded bg-amber-900/60 text-amber-100 text-[10px] font-mono font-bold tracking-wide">
-                    BUILD v55.40-PHONE-AUTO-INBOUND
+                    BUILD v55.50-CALENDAR-DELETE-BULK-FIX
                   </div>
                 </div>
                 <button onClick={() => closePendingTreasuryModal()}
@@ -12853,6 +13305,126 @@ export default function App() {
                   </div>
                 </>
               )}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* v55.41 — Duplicate-confirmation modal.
+          Opens when handleAddTreasury detects an existing row with the same
+          date + amount + direction + description, OR when Postgres rejects
+          the insert with a unique-constraint violation. The user sees the
+          existing match(es) clearly and can either:
+            • Cancel — they'll edit the row to make it distinct
+            • Confirm — it really is a separate payment that happens to look
+              identical (regular weekly cash, two identical fuel runs, etc.).
+              The save proceeds with confirmed_not_duplicate=true stamped on
+              the new row so the AI auditor doesn't flag it later. */}
+      {duplicateConfirm && (
+        <div
+          className="fixed inset-0 z-[200] bg-black/70"
+          onClick={() => setDuplicateConfirm(null)}
+          style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 12 }}
+        >
+          <div
+            className="bg-white rounded-2xl shadow-2xl w-full max-w-xl flex flex-col"
+            style={{ maxHeight: 'calc(100vh - 24px)' }}
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="px-5 py-4 rounded-t-2xl bg-amber-600 border-b-4 border-amber-800" style={{ flexShrink: 0 }}>
+              <div className="flex justify-between items-start gap-3">
+                <div className="flex-1">
+                  <div className="text-xl font-extrabold text-white">⚠️ Possible Duplicate Transaction</div>
+                  <div className="text-lg font-bold text-white mt-1" style={{ direction: 'rtl' }}>
+                    معاملة قد تكون مكررة
+                  </div>
+                  <div className="mt-1.5 inline-block px-2 py-0.5 rounded bg-amber-900/60 text-amber-100 text-[10px] font-mono font-bold tracking-wide">
+                    BUILD v55.50-CALENDAR-DELETE-BULK-FIX
+                  </div>
+                </div>
+                <button
+                  onClick={() => setDuplicateConfirm(null)}
+                  className="text-white/90 hover:text-white text-2xl leading-none px-2"
+                  title="Close">
+                  ×
+                </button>
+              </div>
+            </div>
+
+            <div className="p-5 overflow-y-auto" style={{ minHeight: 0 }}>
+              <div className="text-sm text-slate-700 mb-3">
+                {duplicateConfirm.fromDbError
+                  ? 'The database flagged this entry as a potential duplicate. We found '
+                  : 'We found '}
+                <span className="font-extrabold text-amber-700">
+                  {duplicateConfirm.matches.length} existing transaction{duplicateConfirm.matches.length === 1 ? '' : 's'}
+                </span>
+                {' '}with the same date, amount, and description:
+              </div>
+              <div className="text-sm text-slate-700 mb-3" style={{ direction: 'rtl' }}>
+                وجدنا <span className="font-extrabold text-amber-700">{duplicateConfirm.matches.length} معاملة موجودة</span> بنفس التاريخ والمبلغ والوصف.
+              </div>
+
+              {/* List of existing matches */}
+              <div className="space-y-2 mb-4">
+                {duplicateConfirm.matches.length === 0 && (
+                  <div className="bg-slate-50 border border-slate-200 rounded-lg p-3 text-xs text-slate-600">
+                    The database constraint blocked the save, but we couldn't pull up the matching row to show you. You can still confirm this is a legitimate separate payment to proceed.
+                  </div>
+                )}
+                {duplicateConfirm.matches.map(function(t) {
+                  var direction = Number(t.cash_in || 0) + Number(t.bank_in || 0) > 0 ? 'IN' : 'OUT';
+                  var amt = Number(t.cash_in || 0) + Number(t.cash_out || 0) + Number(t.bank_in || 0) + Number(t.bank_out || 0) + Number(t.expected_amount || 0);
+                  return (
+                    <div key={t.id} className="bg-amber-50 border-2 border-amber-300 rounded-lg p-3">
+                      <div className="flex justify-between items-start gap-2 mb-1">
+                        <span className="text-[10px] font-mono font-bold text-amber-800 uppercase">
+                          {direction === 'IN' ? '💵 Cash In' : '💸 Cash Out'}
+                          {t.is_bank_placeholder ? ' (Bank — pending statement)' : ''}
+                        </span>
+                        <span className="text-sm font-extrabold text-slate-900 font-mono">
+                          {fE(amt)}
+                        </span>
+                      </div>
+                      <div className="text-xs text-slate-800 font-semibold mb-1">{t.description || '(no description)'}</div>
+                      <div className="flex items-center gap-3 text-[10px] text-slate-600 font-mono">
+                        <span>📅 {t.transaction_date}</span>
+                        {t.order_number ? <span>📄 #{t.order_number}</span> : null}
+                        {t.category ? <span>🏷️ {t.category}</span> : null}
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+
+              {/* Question + buttons */}
+              <div className="bg-blue-50 border border-blue-200 rounded-lg p-3 mb-4">
+                <div className="text-sm font-bold text-blue-900 mb-1">Is this a real separate payment, or did you accidentally enter the same one twice?</div>
+                <div className="text-sm font-bold text-blue-900 mt-1" style={{ direction: 'rtl' }}>
+                  هل هذه دفعة منفصلة فعلاً، أم أنك أدخلت نفس المعاملة مرتين بالخطأ؟
+                </div>
+                <div className="text-[11px] text-blue-700 italic mt-2">
+                  Choose &quot;Cancel&quot; if it&apos;s a typo. Choose &quot;Yes, save anyway&quot; if it really is a separate payment that happens to look identical (e.g. weekly cash, two identical fuel runs).
+                </div>
+              </div>
+
+              <div className="flex flex-col-reverse sm:flex-row gap-2 sm:justify-end">
+                <button
+                  onClick={() => setDuplicateConfirm(null)}
+                  className="px-4 py-2.5 bg-slate-100 text-slate-700 rounded-lg text-sm font-bold hover:bg-slate-200 border border-slate-300">
+                  Cancel — let me edit / إلغاء
+                </button>
+                <button
+                  onClick={async () => {
+                    setDuplicateConfirm(null);
+                    // Re-call the save with the bypass flag — same form data,
+                    // confirmed_not_duplicate stamp gets written.
+                    await handleAddTreasury({ bypassDupCheck: true });
+                  }}
+                  className="px-4 py-2.5 bg-amber-600 text-white rounded-lg text-sm font-extrabold hover:bg-amber-700 shadow">
+                  ✓ Yes, save anyway — it&apos;s a separate payment
+                </button>
+              </div>
             </div>
           </div>
         </div>
