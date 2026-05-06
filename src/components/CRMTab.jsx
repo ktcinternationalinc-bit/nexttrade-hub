@@ -1,5 +1,6 @@
 'use client';
 import { useState, useMemo } from 'react';
+import { filterActiveUsers } from '../lib/active-users';
 import { supabase, dbInsert, dbUpdate, logActivity } from '../lib/supabase';
 import { notifyClientAssigned, notifyFollowUp, notifyCRMStatus } from '../lib/notify';
 import EmailComposer from './EmailComposer';
@@ -23,7 +24,7 @@ export default function CRMTab({ toast, customers, invoices, user, userProfile, 
   // v55.52 — Active users only, for assignee dropdowns. `users` (full list)
   // remains available for resolving historical assigned-rep names of
   // deactivated teammates so existing records still display correctly.
-  const activeUsers = (users || []).filter(u => u && u.active !== false);
+  const activeUsers = filterActiveUsers(users); // v55.62 — handles active=NULL
   const canViewAll = isAdmin || modulePerms?.['CRM View All'] === true;
   const canViewContacts = isAdmin || modulePerms?.['CRM View Contacts'] === true;
   // Can see contact info if: admin, has CRM View Contacts perm, or is the assigned rep

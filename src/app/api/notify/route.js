@@ -77,7 +77,7 @@ export async function POST(req) {
         users = d2 || [];
       } else {
         // Filter out inactive users if active column exists
-        users = (data || []).filter(u => u.active !== false);
+        users = (data || []).filter(u => u && u.active !== false && u.active !== null);
       }
     } catch (e) {
       console.log('[notify] User fetch error:', e.message);

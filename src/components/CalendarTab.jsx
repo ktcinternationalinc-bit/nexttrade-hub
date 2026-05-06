@@ -1,5 +1,6 @@
 'use client';
 import { useState, useMemo, useEffect, useContext } from 'react';
+import { filterActiveUsers } from '../lib/active-users';
 import { supabase, dbInsert, dbUpdate, logActivity } from '../lib/supabase';
 import { notifyEventScheduled } from '../lib/notify';
 import { newUUID, VALID_PATTERNS } from '../lib/recurrence';
@@ -98,7 +99,7 @@ export default function CalendarTab({ customers, user, userProfile, users, ticke
   // v55.52 — Active users only, for assignee dropdowns / picker buttons.
   // `users` (full list) remains for name lookups so historical event
   // assignees still resolve to their name even if deactivated.
-  const activeUsers = (users || []).filter(u => u && u.active !== false);
+  const activeUsers = filterActiveUsers(users); // v55.62 — handles active=NULL
   // v54.6 — `lang` was referenced throughout this file (28+ times) but
   // never declared. ANY click that triggered a path using `lang === 'ar'`
   // crashed with "ReferenceError: lang is not defined". Reading it from
@@ -1321,7 +1322,7 @@ export default function CalendarTab({ customers, user, userProfile, users, ticke
               title={lang === 'ar' ? 'عرض تقويم شخص آخر' : "View someone else's calendar"}
             >
               <option value="">{lang === 'ar' ? '👤 تقويمي' : '👤 My calendar'}</option>
-              {users.filter(u => u.id !== myId && u.active !== false).map(u => (
+              {filterActiveUsers(users).filter(u => u.id !== myId).map(u => (
                 <option key={u.id} value={u.id}>👁️ {u.name}'s calendar</option>
               ))}
             </select>

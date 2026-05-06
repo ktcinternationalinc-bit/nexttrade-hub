@@ -1,5 +1,6 @@
 'use client';
 import { useState, useMemo, useEffect, useRef } from 'react';
+import { filterActiveUsers } from '../lib/active-users';
 import { supabase, dbInsert, dbUpdate, dbDelete, logActivity } from '../lib/supabase';
 import { notifyTicketAssigned, notifyTicketStatus, notifyTicketComment, notifyTicketReassigned, notifyTicketPriority, notifyTicketDueDate, ticketRecipients } from '../lib/notify';
 import { sanitizeRichText, isHtmlComment, richTextToPlain } from '../lib/utils';
@@ -98,7 +99,7 @@ export default function TicketsTab({ toast, customers, user, userProfile, users,
   // the full list so historical assignments still resolve to a name even
   // for terminated/deactivated teammates. `activeUsers` is what shows up in
   // every "pick a person" UI so deactivated users disappear from selection.
-  const activeUsers = (users || []).filter(u => u && u.active !== false);
+  const activeUsers = filterActiveUsers(users); // v55.62 — handles active=NULL
   const fmtDate = (d) => d ? new Date(d).toLocaleString() : '';
 
   const startVoice = () => {

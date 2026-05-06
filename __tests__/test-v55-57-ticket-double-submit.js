@@ -87,7 +87,7 @@ check('G.1 v55.56 phone health route still present',
 check('G.2 v55.55 monthly drill-down still wired',
   /navigate\('sales', \{ from: monthFrom, to: monthTo \}\)/.test(read('src/components/PersonalDashboard.jsx')));
 check('G.3 v55.52 activeUsers helper still in TicketsTab',
-  /const activeUsers = \(users \|\| \[\]\)\.filter\(u => u && u\.active !== false\)/.test(src));
+  /(const activeUsers = filterActiveUsers\(users\)|const activeUsers = \(users \|\| \[\]\)\.filter\(u => u && u\.active !== false\))/.test(src));
 check('G.4 v55.51 customs SQL still present',
   fs.existsSync(path.join(REPO, 'supabase/customs-phase-1.sql')));
 

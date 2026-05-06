@@ -50,12 +50,13 @@ check('B.2 rendered above PendingNadiaMessages',
 // ---------- C: Archived announcements — active-only filter ----------
 console.log('\nC. Archived announcements filter to active users');
 check('C.1 dashboard archived view filters to active users',
-  /const activeTeamUsers = \(teamUsers \|\| \[\]\)\.filter\(u => u && u\.active !== false\)/.test(pageSrc));
+  /(const activeTeamUsers = filterActiveUsers\(teamUsers\)|const activeTeamUsers = \(teamUsers \|\| \[\]\)\.filter\(u => u && u\.active !== false\))/.test(pageSrc));
 check('C.2 dashboard archived uses activeTeamUsers for targets',
   /a\.target_user[\s\S]{0,80}activeTeamUsers\.filter\(u => u\.id === a\.target_user\)[\s\S]{0,40}activeTeamUsers/.test(pageSrc));
 var adminSrc = read('src/components/AdminTab.jsx');
 check('C.3 AdminTab announcements filter to active users',
-  /var activeUsers = \(users \|\| \[\]\)\.filter\(u => u && u\.active !== false\);[\s\S]{0,200}var targetUsers = a\.target_user \? activeUsers/.test(adminSrc));
+  /var activeUsers = \(users \|\| \[\]\)\.filter\(u => u && u\.active !== false\);[\s\S]{0,200}var targetUsers = a\.target_user \? activeUsers/.test(adminSrc) ||
+  /var activeUsers = filterActiveUsers\(users\);[\s\S]{0,200}var targetUsers = a\.target_user \? activeUsers/.test(adminSrc));
 
 // ---------- D: Archived announcement ack display improved ----------
 console.log('\nD. Archived announcement acknowledgment block improved');

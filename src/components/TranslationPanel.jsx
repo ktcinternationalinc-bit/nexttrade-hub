@@ -1,5 +1,6 @@
 'use client';
 import { useState, useEffect } from 'react';
+import { filterActiveUsers } from '../lib/active-users';
 import { supabase, dbUpdate } from '../lib/supabase';
 
 const TRANSLATE_TABLES = [
@@ -219,7 +220,7 @@ export default function TranslationPanel({ user, users, isAdmin }) {
           <p className="text-[10px] text-slate-400 mb-3">Control which users can see the English toggle. Super Admin always has access.</p>
           <div className="space-y-2">
             {/* v55.52 — Active users only. Deactivated users don't need language config. */}
-            {users.filter(u => u && u.active !== false).map(u => (
+            {filterActiveUsers(users).map(u => (
               <div key={u.id} className="flex justify-between items-center py-2 border-b border-slate-50">
                 <div>
                   <div className="text-xs font-semibold">{u.name}</div>

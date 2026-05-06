@@ -1,6 +1,7 @@
 'use client';
 import React, { useState, useEffect, useMemo, useCallback, useRef, useContext, createContext } from 'react';
 import { supabase, dbInsert, dbUpdate, dbDelete } from '../lib/supabase';
+import { filterActiveUsers } from '../lib/active-users';
 import { fmt, fE, COLORS, EXPENSE_CATS, getReconStatus, STATUS_STYLES, today, inRange, monthOf, getWarehouseCat, sanitize, stripBankMatchMetadata, resolveCatName, buildCatOptions, isKnownCat, aggregatePaymentSources, PAYMENT_SOURCE_META } from '../lib/utils';
 import { evaluateCheckReconcile as libEvaluateCheckReconcile } from '../lib/check-reconcile';
 import * as XLSX from 'xlsx';
@@ -789,12 +790,22 @@ export default function App() {
       else setUser(session.user);
     });
 
-    // Heartbeat: update last_seen every 5 min
-    const heartbeat = setInterval(async () => {
-      const { data: { session: s } } = await supabase.auth.getSession();
-      if (s?.user) {
-        const today = new Intl.DateTimeFormat('en-CA', { timeZone: 'America/New_York' }).format(new Date()); // ET, not UTC — fixes 'you werent here yesterday' bug
-        const uid = profileIdRef.current || s.user.id;
+    // v55.61 — Heartbeat fires IMMEDIATELY on login + every 2 minutes
+    // (was: only every 5 minutes, no initial pulse). Effects:
+    //   1) "Online" status appears within seconds of login instead of
+    //      taking up to 5 minutes for the first heartbeat.
+    //   2) The 10-minute online window now tolerates 4 consecutive missed
+    //      heartbeats (was tolerating only 1) — far less likely to flip
+    //      a logged-in user to "Offline" from a single network blip.
+    // Reported by Max May 7 2026: "admin page.. login. why is online
+    // status offline if I am online".
+    var heartbeatTick = async function () {
+      try {
+        var sessRes = await supabase.auth.getSession();
+        var s = sessRes && sessRes.data && sessRes.data.session;
+        if (!s || !s.user) return;
+        var today = new Intl.DateTimeFormat('en-CA', { timeZone: 'America/New_York' }).format(new Date());
+        var uid = profileIdRef.current || s.user.id;
         await supabase.from('user_sessions')
           .update({ last_seen: new Date().toISOString() })
           .eq('user_id', uid)
@@ -809,10 +820,15 @@ export default function App() {
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ user_id: uid, event_type: 'heartbeat' }),
             keepalive: true,
-          }).catch(() => {});
-        } catch(e) {}
-      }
-    }, 5 * 60 * 1000);
+          }).catch(function () {});
+        } catch (e) {}
+      } catch (e) { /* never let a heartbeat error crash the page */ }
+    };
+    // Fire FIRST heartbeat right away — don't wait 5 minutes for online status
+    heartbeatTick();
+    // Then every 2 minutes. With the SQL view's 10-minute online window,
+    // up to 4 consecutive misses are tolerated before flipping to Offline.
+    const heartbeat = setInterval(heartbeatTick, 2 * 60 * 1000);
 
     // Keyboard shortcuts
     const handleKey = (e) => {
@@ -1119,7 +1135,7 @@ export default function App() {
   // ==========================================
   const isAdmin = userProfile?.role === 'super_admin' || userProfile?.role === 'admin';
   const isSuperAdmin = userProfile?.role === 'super_admin';
-  const activeTeamUsers = useMemo(() => teamUsers.filter(u => u.active !== false), [teamUsers]);
+  const activeTeamUsers = useMemo(() => filterActiveUsers(teamUsers), [teamUsers]);
   // Apr 25 2026 — Defensive toast fallback. This is the App component, but
   // the ToastProvider is mounted INSIDE App's own return tree, which means
   // useContext(ToastContext) here always returns undefined (App is the
@@ -3604,7 +3620,7 @@ export default function App() {
               {/* Brand mark — bracket prefix is a terminal callout convention. */}
               <span className="text-emerald-400 font-mono text-xs font-bold tracking-tight" style={{ fontFamily: '"JetBrains Mono", monospace' }}>[KTC]</span>
               <h1 className="text-sm font-bold text-white tracking-tight whitespace-nowrap">NEXTTRADE HUB</h1>
-              <span className="text-[10px] text-zinc-500 font-mono hidden md:inline" style={{ fontFamily: '"JetBrains Mono", monospace' }}>v55.60</span>
+              <span className="text-[10px] text-zinc-500 font-mono hidden md:inline" style={{ fontFamily: '"JetBrains Mono", monospace' }}>v55.62</span>
               {/* Live clock — terminals always show one. Updates via the
                   existing tick state; if not present, falls back to no clock. */}
               <span className="hidden lg:inline text-[10px] text-zinc-500 font-mono ml-2 pl-2 border-l border-zinc-800" style={{ fontFamily: '"JetBrains Mono", monospace' }}>
@@ -7515,7 +7531,7 @@ export default function App() {
                           // user from months ago shouldn't show as "didn't acknowledge"
                           // forever. Their original acknowledgment (if any) still appears
                           // in the acked list because the ack row exists in the DB.
-                          const activeTeamUsers = (teamUsers || []).filter(u => u && u.active !== false);
+                          const activeTeamUsers = filterActiveUsers(teamUsers);
                           const targetUsers2 = a.target_user
                             ? activeTeamUsers.filter(u => u.id === a.target_user)
                             : activeTeamUsers;
@@ -12765,7 +12781,7 @@ export default function App() {
                       latest fix is actually deployed. If he doesn't see this
                       tag in the modal, his browser is running stale JS. */}
                   <div className="mt-1.5 inline-block px-2 py-0.5 rounded bg-amber-900/60 text-amber-100 text-[10px] font-mono font-bold tracking-wide">
-                    BUILD v55.60-NADIA-NEW-BUILD
+                    BUILD v55.62-ACTIVE-USER-NULL-FIX
                   </div>
                 </div>
                 <button onClick={() => closePendingTreasuryModal()}
@@ -13394,7 +13410,7 @@ export default function App() {
                     معاملة قد تكون مكررة
                   </div>
                   <div className="mt-1.5 inline-block px-2 py-0.5 rounded bg-amber-900/60 text-amber-100 text-[10px] font-mono font-bold tracking-wide">
-                    BUILD v55.60-NADIA-NEW-BUILD
+                    BUILD v55.62-ACTIVE-USER-NULL-FIX
                   </div>
                 </div>
                 <button

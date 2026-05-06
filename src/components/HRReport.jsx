@@ -11,6 +11,7 @@
 // Mounts as a section inside AdminTab.
 
 import { useState, useEffect, useMemo } from 'react';
+import { filterActiveUsers } from '../lib/active-users';
 import { supabase } from '../lib/supabase';
 import {
   resolvePeriod,
@@ -43,8 +44,8 @@ export default function HRReport({ user, userProfile, users, customers }) {
   // Visibility filter: super admin sees all, privileged sees all except self
   const visibleUsers = useMemo(() => {
     if (!users) return [];
-    if (isSuperAdmin) return users.filter(u => u.active !== false);
-    return users.filter(u => u.active !== false && u.id !== myId);
+    if (isSuperAdmin) return filterActiveUsers(users);
+    return filterActiveUsers(users).filter(u => u.id !== myId);
   }, [users, myId, isSuperAdmin]);
 
   // Fetch underlying data tables, scoped to a year for max period flex

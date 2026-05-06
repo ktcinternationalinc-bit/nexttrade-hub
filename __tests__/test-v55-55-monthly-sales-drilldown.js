@@ -77,7 +77,7 @@ console.log('\nE. Earlier session fixes still intact (no regression)');
 check('E.1 v55.54 SafeSection wraps MyPerformance',
   /<SafeSection label="My Performance">[\s\S]{0,100}<MyPerformance/.test(pdSrc));
 check('E.2 v55.52 activeUsers helper still in TicketsTab',
-  /const activeUsers = \(users \|\| \[\]\)\.filter\(u => u && u\.active !== false\)/.test(read('src/components/TicketsTab.jsx')));
+  /(const activeUsers = filterActiveUsers\(users\)|const activeUsers = \(users \|\| \[\]\)\.filter\(u => u && u\.active !== false\))/.test(read('src/components/TicketsTab.jsx')));
 check('E.3 v55.51 customs SQL file present',
   fs.existsSync(path.join(REPO, 'supabase/customs-phase-1.sql')));
 check('E.4 v55.50 cancelEventRemindersBulk import',

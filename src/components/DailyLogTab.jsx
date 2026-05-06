@@ -1,5 +1,6 @@
 'use client';
 import { useState, useMemo, useCallback, useEffect } from 'react';
+import { filterActiveUsers } from '../lib/active-users';
 import { supabase, dbInsert, dbUpdate } from '../lib/supabase';
 
 const CAT_ICONS = {
@@ -97,7 +98,7 @@ export default function DailyLogTab({ user, userProfile, users, isAdmin }) {
     if (!users) return [];
     // v55.52 — Only include active teammates. Deactivated users are not
     // logging activity anymore and should not appear in the daily team view.
-    const activeUsers = users.filter(u => u && u.active !== false);
+    const activeUsers = filterActiveUsers(users); // v55.62 — handles active=NULL
     return activeUsers.map(u => {
       const userLogs = logs.filter(l => l.user_id === u.id && (l.log_date || '').substring(0, 10) === selDate);
       const autoCount = userLogs.filter(l => l.auto_generated).length;

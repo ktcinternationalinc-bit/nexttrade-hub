@@ -1,5 +1,6 @@
 'use client';
 import { useState, useMemo, useEffect, useRef } from 'react';
+import { filterActiveUsers } from '../lib/active-users';
 import { supabase, dbUpdate, dbDelete } from '../lib/supabase';
 import HRReport from './HRReport';
 import EmailStatusPanel from './EmailStatusPanel';
@@ -28,6 +29,11 @@ export default function AdminTab({ user, userProfile, users, isAdmin, customers,
   const [annAcks, setAnnAcks] = useState([]);
   const [sessions, setSessions] = useState([]);
   const [loginSummary, setLoginSummary] = useState([]);  // user_login_summary view (ET-aware)
+  // v55.61 — Track whether the login_events table is set up. If the SQL
+  // wasn't run, every user appears "Offline" forever even when they're
+  // actively using the portal. We need to surface this clearly to admins
+  // instead of silently lying about who's online.
+  var [loginSummaryWarning, setLoginSummaryWarning] = useState(null);
   const [msgFilter, setMsgFilter] = useState('all');
   const [loaded, setLoaded] = useState(false);
   const [selUser, setSelUser] = useState('all');
@@ -90,9 +96,25 @@ export default function AdminTab({ user, userProfile, users, isAdmin, customers,
   // Filter visible team members based on role
   const visibleUsers = useMemo(() => {
     if (!users) return [];
-    if (isSuperAdmin) return users;
-    // Admin/manager sees only direct reports
-    return users.filter(u => u.reports_to === myId || u.id === myId);
+    // v55.62 — Stricter "active" check: a user counts as active only if
+    // active is explicitly true OR undefined (legacy rows that never had
+    // the column set). null and false BOTH disqualify them. Reported by
+    // Max May 7 2026: deactivated users were still appearing on the admin
+    // scorecard after v55.61 deployed. Root cause: a deactivated user with
+    // active=NULL passed the `u.active !== false` test (NULL !== false is
+    // true). New test rejects NULL too.
+    var activeOnly = users.filter(function (u) {
+      if (!u) return false;
+      // active is either true, false, or null. Anything not strictly !== true
+      // when present is treated as inactive — UNLESS the column was never set
+      // (undefined), in which case we keep the row to preserve legacy data.
+      if (u.active === false) return false;
+      if (u.active === null) return false;
+      return true;
+    });
+    if (isSuperAdmin) return activeOnly;
+    // Admin/manager sees only direct reports (still active-only)
+    return activeOnly.filter(u => u.reports_to === myId || u.id === myId);
   }, [users, myId, isSuperAdmin]);
 
   const loadData = async () => {
@@ -109,6 +131,9 @@ export default function AdminTab({ user, userProfile, users, isAdmin, customers,
       const r = await fetch('/api/login-event?summary=1');
       const d = await r.json();
       if (d && d.summary) setLoginSummary(d.summary);
+      // v55.61 — Surface the "table not found" warning so admin can run SQL
+      if (d && d.warning) setLoginSummaryWarning(d.warning);
+      else setLoginSummaryWarning(null);
     } catch(e) { console.warn('login summary unavailable:', e.message); }
     setLoaded(true);
   };
@@ -123,6 +148,8 @@ export default function AdminTab({ user, userProfile, users, isAdmin, customers,
         const r = await fetch('/api/login-event?summary=1');
         const d = await r.json();
         if (d && d.summary) setLoginSummary(d.summary);
+        if (d && d.warning) setLoginSummaryWarning(d.warning);
+        else setLoginSummaryWarning(null);
       } catch (e) { /* non-fatal — next tick will retry */ }
     };
     const id = setInterval(refreshLoginSummary, 60 * 1000);
@@ -426,7 +453,7 @@ export default function AdminTab({ user, userProfile, users, isAdmin, customers,
         const day = new Date(yesterday).getDay();
         if (day === 5 || day === 6) return null;
         const loggedInYesterday = new Set(sessions.filter(s => s.date === yesterday).map(s => s.user_id));
-        const missing = (users || []).filter(u => u.active !== false && !loggedInYesterday.has(u.id) && u.role !== 'super_admin');
+        const missing = filterActiveUsers(users).filter(u => !loggedInYesterday.has(u.id) && u.role !== 'super_admin');
         if (!missing.length) return null;
         return (
           <div className="bg-red-50 border border-red-200 rounded-xl p-4 mt-4">
@@ -663,7 +690,11 @@ export default function AdminTab({ user, userProfile, users, isAdmin, customers,
         const cust = customers || [];
 
         // Per-user pipeline stats
-        const userStats = (users || []).map(u => {
+        // v55.61 — Filter out deactivated teammates so they don't show on
+        // the pipeline-by-rep table with stale assigned counts. Active
+        // reps only.
+        const pipelineActiveUsers = filterActiveUsers(users);
+        const userStats = pipelineActiveUsers.map(u => {
           const assigned = cust.filter(c => c.assigned_rep === u.id);
           const byStage = {};
           PIPELINE_STAGES.forEach(s => { byStage[s.v] = assigned.filter(c => (c.pipeline_stage || 'lead') === s.v).length; });
@@ -787,7 +818,7 @@ export default function AdminTab({ user, userProfile, users, isAdmin, customers,
             // users don't pollute the "not acknowledged" list. Past acks
             // from now-deactivated users still display correctly because
             // the ack row remains in the DB.
-            var activeUsers = (users || []).filter(u => u && u.active !== false);
+            var activeUsers = filterActiveUsers(users);
             var targetUsers = a.target_user ? activeUsers.filter(u => u.id === a.target_user) : activeUsers;
             var ackedUsers = targetUsers.filter(u => thisAcks.some(ak => ak.user_id === u.id));
             var unackedUsers = targetUsers.filter(u => !thisAcks.some(ak => ak.user_id === u.id));
@@ -1083,6 +1114,24 @@ export default function AdminTab({ user, userProfile, users, isAdmin, customers,
           {selUser === 'all' && (
             <div className="bg-white rounded-xl p-4 mb-3">
               <h3 className="text-sm font-bold mb-3">👥 Team Login Summary</h3>
+
+              {/* v55.61 — Warning banner when login_events table isn't set up.
+                  Without it, the Online column shows everyone as Offline forever
+                  even when actively using the portal. Reported by Max May 7
+                  2026: "admin page.. login. why is online status offline if I
+                  am online". */}
+              {loginSummaryWarning && (
+                <div className="bg-amber-50 border-2 border-amber-300 rounded-lg p-3 mb-3">
+                  <div className="font-bold text-amber-900 text-xs mb-1">⚠️ Online status not working — database setup needed</div>
+                  <div className="text-[11px] text-amber-800 mb-2">
+                    Everyone shows as "Offline" because the login-events table doesn't exist in Supabase yet. To fix:
+                    open Supabase → SQL Editor → New query, paste the SQL from <code className="bg-amber-100 px-1 rounded">supabase/login-events.sql</code> in the project repo, click Run. Then refresh this page. Logins from this point forward will track correctly.
+                  </div>
+                  <div className="text-[10px] font-mono bg-amber-100 text-amber-900 p-2 rounded border border-amber-200 break-all">
+                    Server returned: {loginSummaryWarning}
+                  </div>
+                </div>
+              )}
               <div className="overflow-auto max-h-[300px] rounded-lg border border-slate-200">
                 <table className="w-full border-collapse text-xs">
                   <thead className="sticky top-0"><tr className="bg-slate-50">

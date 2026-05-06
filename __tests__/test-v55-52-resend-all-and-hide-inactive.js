@@ -75,7 +75,7 @@ check('B.9 each row shows ✅ Sent or ❌ failure reason',
 console.log('\nC. TicketsTab — activeUsers in dropdowns');
 var ticketsSrc = read('src/components/TicketsTab.jsx');
 check('C.1 activeUsers helper defined inside the component',
-  /const activeUsers = \(users \|\| \[\]\)\.filter\(u => u && u\.active !== false\)/.test(ticketsSrc));
+  /(const activeUsers = filterActiveUsers\(users\)|const activeUsers = \(users \|\| \[\]\)\.filter\(u => u && u\.active !== false\))/.test(ticketsSrc));
 check('C.2 getUserName still reads from the FULL users list (so historical records still resolve names)',
   /const getUserName = \(id\) => \(users \|\| \[\]\)\.find\(u => u\.id === id\)\?\.name/.test(ticketsSrc));
 check('C.3 reassign-inside-ticket uses activeUsers',
@@ -96,7 +96,7 @@ check('C.8 NO remaining `(users||[]).map(u=><option`',
 console.log('\nD. CRMTab — activeUsers in dropdowns');
 var crmSrc = read('src/components/CRMTab.jsx');
 check('D.1 activeUsers helper defined',
-  /const activeUsers = \(users \|\| \[\]\)\.filter\(u => u && u\.active !== false\)/.test(crmSrc));
+  /(const activeUsers = filterActiveUsers\(users\)|const activeUsers = \(users \|\| \[\]\)\.filter\(u => u && u\.active !== false\))/.test(crmSrc));
 check('D.2 NO remaining `(users || []).map(u => <option`',
   !/\(users \|\| \[\]\)\.map\(u => <option/.test(crmSrc));
 check('D.3 NO remaining `(users||[]).map(u=><option`',
@@ -106,22 +106,25 @@ check('D.3 NO remaining `(users||[]).map(u=><option`',
 console.log('\nE. CalendarTab — activeUsers in dropdowns');
 var calSrc = read('src/components/CalendarTab.jsx');
 check('E.1 activeUsers helper defined',
-  /const activeUsers = \(users \|\| \[\]\)\.filter\(u => u && u\.active !== false\)/.test(calSrc));
+  /(const activeUsers = filterActiveUsers\(users\)|const activeUsers = \(users \|\| \[\]\)\.filter\(u => u && u\.active !== false\))/.test(calSrc));
 check('E.2 selectAllUsers picks active users only',
   /setSelectedUsers\(activeUsers\.map\(u => u\.id\)\)/.test(calSrc));
 check('E.3 "All Team" highlight compared against activeUsers.length',
   /selectedUsers\.length === activeUsers\.length/.test(calSrc));
 check('E.4 assignee picker buttons render activeUsers',
   /\{activeUsers\.map\(u => \(\s*<button key=\{u\.id\} onClick=\{\(\) => toggleUser\(u\.id\)\}/.test(calSrc));
-// Existing v55.40-era filter is still there (super-admin user-switcher) and that one already filtered active
+// Existing v55.40-era filter is still there (super-admin user-switcher).
+// v55.62 — accept EITHER the old inline pattern OR the new filterActiveUsers helper.
 check('E.5 super-admin user-switcher still filters active (v55.40 fix preserved)',
-  /users\.filter\(u => u\.id !== myId && u\.active !== false\)/.test(calSrc));
+  /users\.filter\(u => u\.id !== myId && u\.active !== false\)/.test(calSrc) ||
+  /filterActiveUsers\(users\)\.filter\(u => u\.id !== myId\)/.test(calSrc));
 
 // ---------- F: Hide deactivated users — DailyLogTab ----------
 console.log('\nF. DailyLogTab — only active users in team summary');
 var dailySrc = read('src/components/DailyLogTab.jsx');
 check('F.1 teamSummary filters to active users',
-  /const activeUsers = users\.filter\(u => u && u\.active !== false\)/.test(dailySrc));
+  /const activeUsers = users\.filter\(u => u && u\.active !== false\)/.test(dailySrc) ||
+  /const activeUsers = filterActiveUsers\(users\)/.test(dailySrc));
 check('F.2 teamSummary maps activeUsers (not the full users array)',
   /return activeUsers\.map\(u => \{/.test(dailySrc));
 
@@ -129,7 +132,8 @@ check('F.2 teamSummary maps activeUsers (not the full users array)',
 console.log('\nG. TranslationPanel — only active users get language config');
 var transSrc = read('src/components/TranslationPanel.jsx');
 check('G.1 language access list filters to active users',
-  /users\.filter\(u => u && u\.active !== false\)\.map\(u => \(/.test(transSrc));
+  /users\.filter\(u => u && u\.active !== false\)\.map\(u => \(/.test(transSrc) ||
+  /filterActiveUsers\(users\)\.map\(u => \(/.test(transSrc));
 
 // ---------- H: Build stamp + page wiring ----------
 console.log('\nH. Build stamp current');

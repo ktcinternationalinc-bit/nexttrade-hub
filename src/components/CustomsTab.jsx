@@ -97,8 +97,16 @@ export default function CustomsTab({ customers, user, fxRate }) {
     } catch (e) { /* tables may not exist yet */ }
   }, []);
 
-  if (!shipLoaded) loadShipments();
-  if (!clrLoaded) { loadClearances(); loadConfig(); }
+  // v55.61 — Moved data loaders into useEffect. The previous version called
+  // loadShipments() / loadClearances() / loadConfig() DURING render with
+  // `if (!loaded) load()`. That set state during render which triggered
+  // another render which fired the loaders again — React error #301
+  // ("too many re-renders"). useEffect runs AFTER render so it's safe.
+  useEffect(function () {
+    loadShipments();
+    loadClearances();
+    loadConfig();
+  }, [loadShipments, loadClearances, loadConfig]);
 
   // ===== Live calculations =====
   var calcs = useMemo(function () {
