@@ -77,12 +77,19 @@ export async function GET() {
 }
 
 // POST /api/notify/test — actually send a test email
-// Body: { user_id: '<uuid>' }  (optional: { email: 'override@example.com' })
+// Body modes:
+//   { user_id: '<uuid>' }                        — send to one teammate
+//   { email: 'override@example.com' }             — send to a typed address
+//   { all: true }                                 — v55.52: send to EVERY active teammate
+//                                                   (super admin only — guarded by user_id)
+//   { all: true, triggered_by_user_id: '<uuid>' } — same, with audit
 export async function POST(req) {
   try {
     var body = await req.json();
     var userId = body && body.user_id;
     var emailOverride = body && body.email;
+    var sendAll = body && body.all === true;
+    var triggeredBy = (body && body.triggered_by_user_id) || userId || null;
 
     var keySet = !!process.env.RESEND_API_KEY;
     if (!keySet) {
@@ -95,6 +102,119 @@ export async function POST(req) {
     }
 
     var supabase = getSupabase();
+
+    // ---------- v55.52 — Bulk "test all teammates" path ----------
+    if (sendAll) {
+      // Pull every active user with an email address
+      var allRes;
+      try {
+        allRes = await supabase.from('users')
+          .select('id, name, email, active')
+          .or('active.is.null,active.eq.true')
+          .not('email', 'is', null)
+          .order('name', { ascending: true });
+      } catch (qe) {
+        return Response.json({ ok: false, error: 'Could not load users: ' + ((qe && qe.message) || 'unknown') }, { status: 500 });
+      }
+      if (allRes.error) {
+        return Response.json({ ok: false, error: allRes.error.message }, { status: 500 });
+      }
+      var teammates = (allRes.data || []).filter(function (u) { return !!u.email && String(u.email).trim() !== ''; });
+      if (teammates.length === 0) {
+        return Response.json({ ok: false, error: 'No active users with email addresses on file' });
+      }
+
+      var FROM_EMAIL_ALL = process.env.NOTIFICATION_FROM_EMAIL || 'notifications@ktcus.com';
+      var nowStrAll = new Date().toLocaleString();
+      var results = [];
+      var bulkStart = Date.now();
+
+      // Send sequentially so we never exceed Resend's rate limit (~10/s).
+      // Adds a small delay between sends as belt-and-suspenders.
+      for (var ti = 0; ti < teammates.length; ti++) {
+        var teammate = teammates[ti];
+        var perStart = Date.now();
+        var perResult = {
+          user_id: teammate.id,
+          name: teammate.name || '(no name)',
+          email: teammate.email,
+        };
+        try {
+          var htmlAll = ''
+            + '<div style="font-family: -apple-system, sans-serif; max-width: 560px; margin: 0 auto; padding: 24px;">'
+            + '  <div style="background: linear-gradient(135deg,#0f172a,#1e293b); padding: 20px 24px; border-radius: 12px 12px 0 0;">'
+            + '    <h2 style="color:#10b981; margin:0; font-size:18px;">✅ Resend Bulk Test — NextTrade Hub</h2>'
+            + '    <p style="color:#94a3b8; margin:6px 0 0; font-size:12px;">Sent ' + nowStrAll + '</p>'
+            + '  </div>'
+            + '  <div style="background:#fff; border:1px solid #e2e8f0; border-top:none; padding:24px;">'
+            + '    <p style="margin:0 0 12px; color:#1e293b; font-size:15px;">Hi ' + (teammate.name || 'there') + ',</p>'
+            + '    <p style="margin:0 0 12px; color:#475569; line-height:1.6;">An admin sent this test to verify email notifications reach you. If you can read this, your email is working with NextTrade Hub.</p>'
+            + '    <p style="margin:12px 0 0; color:#94a3b8; font-size:12px;">This is a test message — safe to ignore. No action needed.</p>'
+            + '  </div>'
+            + '</div>';
+          var resAll = await fetch('https://api.resend.com/emails', {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+              Authorization: 'Bearer ' + process.env.RESEND_API_KEY,
+            },
+            body: JSON.stringify({
+              from: FROM_EMAIL_ALL,
+              to: teammate.email,
+              subject: '[NextTrade] Resend test — ' + nowStrAll,
+              html: htmlAll,
+            }),
+          });
+          var dataAll = await resAll.json();
+          var okAll = resAll.ok && dataAll && dataAll.id;
+          perResult.ok = !!okAll;
+          perResult.elapsed_ms = Date.now() - perStart;
+          if (okAll) {
+            perResult.resend_id = dataAll.id;
+          } else {
+            perResult.error = (dataAll && (dataAll.message || dataAll.error || dataAll.name)) || 'Resend rejected the message';
+            perResult.http_status = resAll.status;
+          }
+          // Log to notification_log so GET stats reflect this
+          try {
+            await supabase.from('notification_log').insert({
+              user_id: teammate.id,
+              notif_type: 'test',
+              subject: '[NextTrade] Bulk Resend test',
+              sent: !!okAll,
+              triggered_by: triggeredBy,
+            });
+          } catch (_) {}
+        } catch (perErr) {
+          perResult.ok = false;
+          perResult.error = 'Network error: ' + ((perErr && perErr.message) || 'unknown');
+          perResult.elapsed_ms = Date.now() - perStart;
+        }
+        results.push(perResult);
+        // 100ms gap between sends — well under Resend's 10/sec rate limit
+        if (ti < teammates.length - 1) {
+          await new Promise(function (r) { setTimeout(r, 100); });
+        }
+      }
+
+      var sentCount = results.filter(function (r) { return r.ok; }).length;
+      var failCount = results.length - sentCount;
+      return Response.json({
+        ok: failCount === 0,
+        all: true,
+        total: results.length,
+        succeeded: sentCount,
+        failed: failCount,
+        from: FROM_EMAIL_ALL,
+        elapsed_ms: Date.now() - bulkStart,
+        results: results,
+        message: failCount === 0
+          ? 'Test email sent to all ' + sentCount + ' teammates. Each should arrive within a minute.'
+          : sentCount + ' of ' + results.length + ' teammates received the test. ' + failCount + ' failed — see results below.',
+      });
+    }
+
+    // ---------- single-recipient path (unchanged) ----------
     var recipientEmail = emailOverride;
     var recipientName = 'Test recipient';
 

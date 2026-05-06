@@ -218,7 +218,8 @@ export default function TranslationPanel({ user, users, isAdmin }) {
           <h3 className="text-sm font-bold mb-2">Language Access / صلاحيات اللغة</h3>
           <p className="text-[10px] text-slate-400 mb-3">Control which users can see the English toggle. Super Admin always has access.</p>
           <div className="space-y-2">
-            {users.map(u => (
+            {/* v55.52 — Active users only. Deactivated users don't need language config. */}
+            {users.filter(u => u && u.active !== false).map(u => (
               <div key={u.id} className="flex justify-between items-center py-2 border-b border-slate-50">
                 <div>
                   <div className="text-xs font-semibold">{u.name}</div>

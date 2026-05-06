@@ -107,10 +107,16 @@ check('F.2 performCancel calls loadEvents().catch — not await loadEvents()',
 console.log('\nG. Build stamps current');
 
 var pSrc = fs.readFileSync(path.join(REPO, 'src/app/page.jsx'), 'utf8');
-check('G.1 header pill bumped to v55.50',
-  />v55\.50</.test(pSrc));
-check('G.2 build modal stamp shows v55.50',
-  /BUILD v55\.50-CALENDAR-DELETE-BULK-FIX/.test(pSrc));
+check('G.1 header pill bumped to v55.50 or later',
+  />v55\.(5[0-9]|[6-9]\d)</.test(pSrc));
+// v55.51+ replaced the v55.50 build label; the bulk-fix is still in place
+// if the bulk DB calls (verified in C and E) are present.
+var anyBuildLabel = pSrc.match(/BUILD v55\.\d+-/g);
+check('G.2 build modal stamp version is at least v55.50',
+  anyBuildLabel && anyBuildLabel.some(function(s) {
+    var m = s.match(/v55\.(\d+)/);
+    return m && parseInt(m[1], 10) >= 50;
+  }));
 
 // ---------- H: Earlier session fixes still intact ----------
 console.log('\nH. Earlier session fixes still intact (no regression)');

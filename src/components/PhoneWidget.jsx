@@ -557,11 +557,14 @@ export default function PhoneWidget({ user, userProfile, users, customers }) {
 
   return (
     <>
-      {/* Floating phone button — moved to LEFT side to stop obstructing
-          action buttons on the right side of cards (calendar check-in,
-          ticket action buttons, FAB). Smaller footprint. */}
+      {/* v55.58 — Floating phone button moved to bottom-left corner.
+          Previously at left-20 (80px in) which put it weirdly between
+          the voice pill (at left-4) and the rest of the screen. Now
+          at left-4 like every other corner anchor. The voice pill
+          gets pushed UP (bottom-24 on mobile) to make room — see
+          VoiceController.jsx. */}
       <button onClick={() => setOpen(!open)}
-        className="fixed bottom-6 left-20 w-12 h-12 rounded-full bg-green-500 text-white text-xl shadow-xl z-50 flex items-center justify-center hover:bg-green-600 transition"
+        className="fixed bottom-4 left-4 w-12 h-12 rounded-full bg-green-500 text-white text-xl shadow-xl z-50 flex items-center justify-center hover:bg-green-600 transition"
         style={{ boxShadow: '0 4px 20px rgba(34,197,94,0.4)' }}
         title={deviceReady
           ? 'Phone (ready to receive calls)'

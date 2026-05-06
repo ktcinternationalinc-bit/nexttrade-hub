@@ -5762,8 +5762,12 @@ function runSection48_Session5Finish() {
     '48.page.1b CalendarTab destructures tickets + onOpenTicket props');
 
   // ---------- Phone widget move ----------
-  assert(/fixed bottom-6 left-20/.test(phone),
-    '48.phone.1a phone button moved to left side (clears right-side action buttons)');
+  // v55.58 — phone button moved from `bottom-6 left-20` to true bottom-left
+  // corner (`bottom-4 left-4`) as part of the floating-button layout cleanup.
+  // The intent is the same (button on left side away from right-side action
+  // buttons), the exact pixels just changed. Accept either form.
+  assert(/fixed bottom-4 left-4/.test(phone) || /fixed bottom-6 left-20/.test(phone),
+    '48.phone.1a phone button on the left side (clears right-side action buttons)');
   assert(!/fixed bottom-6 right-6/.test(phone),
     '48.phone.1b old right-6 position GONE');
   assert(/fixed bottom-20 left-4/.test(phone),

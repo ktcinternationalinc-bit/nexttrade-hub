@@ -60,6 +60,14 @@ export default function TicketsTab({ toast, customers, user, userProfile, users,
   // Set true on entry to addComment, released in finally. Passed to the
   // composer so the Send button disables visually too.
   const [submittingComment, setSubmittingComment] = useState(false);
+  // v55.57 — creating + closing state to prevent double-submit on Create
+  // Ticket and Close-with-Comment buttons. Reported by Max May 6 2026:
+  // "entering tickets sometimes are duplicated when I send" — a quick
+  // double-tap on the Create button created two tickets with sequential
+  // numbers (TKT-0042 + TKT-0043) for the same submission. Same risk on
+  // the close-with-comment button.
+  const [creatingTicket, setCreatingTicket] = useState(false);
+  const [closingTicket, setClosingTicket] = useState(false);
   const [sel, setSel] = useState(null);
   const [q, setQ] = useState('');
   const [statusF, setStatusF] = useState(() => isAdmin ? 'all' : 'open');
@@ -86,6 +94,11 @@ export default function TicketsTab({ toast, customers, user, userProfile, users,
 
   const todayStr = new Date().toISOString().substring(0, 10);
   const getUserName = (id) => (users || []).find(u => u.id === id)?.name || '';
+  // v55.52 — Active users only, for assignee dropdowns. We keep `users` as
+  // the full list so historical assignments still resolve to a name even
+  // for terminated/deactivated teammates. `activeUsers` is what shows up in
+  // every "pick a person" UI so deactivated users disappear from selection.
+  const activeUsers = (users || []).filter(u => u && u.active !== false);
   const fmtDate = (d) => d ? new Date(d).toLocaleString() : '';
 
   const startVoice = () => {
@@ -139,6 +152,13 @@ export default function TicketsTab({ toast, customers, user, userProfile, users,
 
   const handleAddTicket = async () => {
     if (!f.title) return;
+    // v55.57 — Double-submit guard. Without this, a quick double-tap on
+    // Create created two tickets with sequential ticket numbers because
+    // both clicks ran past the count-query and inserted before either
+    // had finished. Now: first click flips creatingTicket true and the
+    // button disables; the second click bails out at this top guard.
+    if (creatingTicket) return;
+    setCreatingTicket(true);
     try {
       // Auto-generate ticket number
       const { count } = await supabase.from('tickets').select('*', { count: 'exact', head: true });
@@ -151,7 +171,11 @@ export default function TicketsTab({ toast, customers, user, userProfile, users,
       const allToNotify = [f.assignedTo, ...extraAssignees].filter(id => id && id !== myId);
       if (allToNotify.length) notifyTicketAssigned(allToNotify, ticketNum + ' ' + f.title, myId);
       setShowAdd(false); setF({}); loadTickets();
-    } catch (err) { toast ? toast.error(err.message) : alert(err.message); }
+    } catch (err) {
+      toast ? toast.error(err.message) : alert(err.message);
+    } finally {
+      setCreatingTicket(false);
+    }
   };
 
   const updateStatus = async (ticket, newStatus) => {
@@ -183,6 +207,10 @@ export default function TicketsTab({ toast, customers, user, userProfile, users,
   // Called by the close modal's Submit button after validation.
   const finalizeClose = async () => {
     if (!closeModal) return;
+    // v55.57 — Double-submit guard. Without this, a quick double-tap on
+    // "Close" added two closing comments + ran two status updates back
+    // to back. First click flips closingTicket true; second click bails.
+    if (closingTicket) return;
     const { ticket, comment, link } = closeModal;
     const trimmed = (comment || '').trim();
     if (!trimmed) {
@@ -205,6 +233,7 @@ export default function TicketsTab({ toast, customers, user, userProfile, users,
       toast ? toast.error('Link must start with http://, https://, /, or mailto:') : alert('Link must start with http://, https://, /, or mailto:');
       return;
     }
+    setClosingTicket(true);
     try {
       const myName = getUserName(myId) || 'Unknown';
       // S22 (Apr 23 2026) — Resilient close. Some tickets tables don't have
@@ -252,6 +281,8 @@ export default function TicketsTab({ toast, customers, user, userProfile, users,
     } catch (err) {
       const m = err && err.message ? err.message : String(err);
       toast ? toast.error('Could not close: ' + m) : alert('Could not close: ' + m);
+    } finally {
+      setClosingTicket(false);
     }
   };
 
@@ -535,9 +566,10 @@ export default function TicketsTab({ toast, customers, user, userProfile, users,
                 comment field into view. No more silent non-responsive
                 button. */}
             <button onClick={finalizeClose}
-              className="px-5 py-2.5 rounded-lg text-sm font-extrabold text-white shadow-md transition hover:shadow-lg"
-              style={{ background: !closeModal.comment.trim() ? '#94a3b8' : 'linear-gradient(135deg, #059669, #047857)' }}>
-              ✓ Close Ticket
+              disabled={closingTicket}
+              className={'px-5 py-2.5 rounded-lg text-sm font-extrabold text-white shadow-md transition hover:shadow-lg ' + (closingTicket ? 'cursor-not-allowed' : '')}
+              style={{ background: closingTicket ? '#94a3b8' : (!closeModal.comment.trim() ? '#94a3b8' : 'linear-gradient(135deg, #059669, #047857)') }}>
+              {closingTicket ? '⏳ Closing…' : '✓ Close Ticket'}
             </button>
           </div>
         </div>
@@ -668,7 +700,7 @@ export default function TicketsTab({ toast, customers, user, userProfile, users,
                 loadTickets(); loadComments(sel.id); setSel({...sel, assigned_to: primary, additional_assignees: extras.length ? JSON.stringify(extras) : null});
               }} className="w-full px-2 py-1 rounded border border-purple-200 text-[10px] bg-white mt-1">
                 <option value="">+ Add assignee...</option>
-                {(users || []).filter(u => !parseAssignees(sel).includes(u.id)).map(u => <option key={u.id} value={u.id}>{u.name}</option>)}
+                {activeUsers.filter(u => !parseAssignees(sel).includes(u.id)).map(u => <option key={u.id} value={u.id}>{u.name}</option>)}
               </select>
             )}
           </div>
@@ -979,12 +1011,12 @@ export default function TicketsTab({ toast, customers, user, userProfile, users,
     <div className="flex gap-2 mb-3 items-center flex-wrap">
       <select value={ownerF} onChange={e => { setOwnerF(e.target.value); }} className="px-2 py-1 rounded-lg border text-xs font-semibold">
         <option value="all">👤 Owner: All</option>
-        {(users || []).map(u => <option key={u.id} value={u.id}>{u.name}</option>)}
+        {activeUsers.map(u => <option key={u.id} value={u.id}>{u.name}</option>)}
       </select>
       <select value={assignedF} onChange={e => { setAssignedF(e.target.value); }} className="px-2 py-1 rounded-lg border text-xs font-semibold">
         <option value="all">🎯 Assigned: All</option>
         <option value="unassigned">Unassigned</option>
-        {(users || []).map(u => <option key={u.id} value={u.id}>{u.name}</option>)}
+        {activeUsers.map(u => <option key={u.id} value={u.id}>{u.name}</option>)}
       </select>
       <select value={priorityF} onChange={e => { setPriorityF(e.target.value); }} className="px-2 py-1 rounded-lg border text-xs font-semibold">
         <option value="all">⚡ Priority: All</option>
@@ -1048,11 +1080,11 @@ export default function TicketsTab({ toast, customers, user, userProfile, users,
           <input type="date" value={f.dueDate||''} onChange={e=>setF({...f,dueDate:e.target.value})} className="w-full px-3 py-2 rounded border text-sm" /></div>
         <div><label className="text-[10px] font-semibold">Assign To</label>
           <select value={f.assignedTo||''} onChange={e=>setF({...f,assignedTo:e.target.value})} className="w-full px-3 py-2 rounded border text-sm">
-            <option value="">Unassigned</option>{(users||[]).map(u=><option key={u.id} value={u.id}>{u.name}</option>)}</select>
+            <option value="">Unassigned</option>{activeUsers.map(u=><option key={u.id} value={u.id}>{u.name}</option>)}</select>
           {f.assignedTo && (<div className="mt-1">
             <div className="text-[9px] text-slate-500 font-semibold mb-1">Additional assignees:</div>
             <div className="flex flex-wrap gap-1">
-              {(users||[]).filter(u => u.id !== f.assignedTo).map(u => {
+              {activeUsers.filter(u => u.id !== f.assignedTo).map(u => {
                 const checked = (f.extraAssignees || []).includes(u.id);
                 return <label key={u.id} className={'inline-flex items-center gap-1 px-2 py-0.5 rounded border text-[10px] cursor-pointer ' + (checked ? 'bg-purple-100 border-purple-300 text-purple-700 font-bold' : 'bg-white border-slate-200 text-slate-500')}>
                   <input type="checkbox" className="w-3 h-3" checked={checked} onChange={() => {
@@ -1070,7 +1102,11 @@ export default function TicketsTab({ toast, customers, user, userProfile, users,
           <datalist id="tkt-cl">{customers.map(c=><option key={c.id} value={c.name}/>)}</datalist></div>
       </div>
       <div className="flex gap-2 mt-3">
-        <button onClick={handleAddTicket} className="px-4 py-2 bg-emerald-500 text-white rounded-lg text-sm font-semibold">Create</button>
+        <button onClick={handleAddTicket}
+          disabled={creatingTicket}
+          className={'px-4 py-2 rounded-lg text-sm font-semibold transition ' + (creatingTicket ? 'bg-slate-300 text-slate-500 cursor-not-allowed' : 'bg-emerald-500 text-white hover:bg-emerald-600')}>
+          {creatingTicket ? '⏳ Creating…' : 'Create'}
+        </button>
         <button onClick={()=>setShowAdd(false)} className="px-4 py-2 border border-slate-200 rounded-lg text-sm">Cancel</button>
       </div>
     </div>)}
@@ -1105,7 +1141,7 @@ export default function TicketsTab({ toast, customers, user, userProfile, users,
           className="px-2 py-1 rounded text-xs text-slate-800 font-semibold">
           <option value="">Reassign...</option>
           <option value="_none">Unassign</option>
-          {(users || []).map(u => <option key={u.id} value={u.id}>{u.name}</option>)}
+          {activeUsers.map(u => <option key={u.id} value={u.id}>{u.name}</option>)}
         </select>
         {canManage && (
           <button onClick={async () => { const ok = window.confirm('Delete ' + bulkSelected.size + ' tickets permanently?'); if (ok) await executeBulk('delete'); }}

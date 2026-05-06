@@ -1715,12 +1715,25 @@ export default function App() {
     };
   }, []);
 
-  const navigate = (t) => {
+  // v55.55 — `navigate` now accepts an optional opts object with { from, to }.
+  // When supplied, mode is set to 'custom' and the date pickers are pre-filled
+  // so the destination tab opens already filtered to that exact range.
+  // Used by the Monthly Sales Report click-to-drill: tap a month → land on
+  // the Sales tab showing only that month's invoices.
+  const navigate = (t, opts) => {
     setTabLoading(true);
     setTab(t); setQuery(''); setCustomerFilter(''); setSelectedCustomer(null); setSelectedDebtor(null);
     setSelectedInvoice(null); setDrillType(null); setTreasuryDrill(null); setSelectedMonth(null);
-    if (t === 'treasury') setMode('all');
-    else if (t === 'sales' || t === 'checks') setMode('ytd');
+    if (opts && opts.from && opts.to) {
+      // Custom date range supplied — honor it on whatever tab we're going to.
+      setMode('custom');
+      setDf(opts.from);
+      setDt(opts.to);
+    } else if (t === 'treasury') {
+      setMode('all');
+    } else if (t === 'sales' || t === 'checks') {
+      setMode('ytd');
+    }
     setTimeout(() => setTabLoading(false), 300);
   };
 
@@ -3590,7 +3603,7 @@ export default function App() {
               {/* Brand mark — bracket prefix is a terminal callout convention. */}
               <span className="text-emerald-400 font-mono text-xs font-bold tracking-tight" style={{ fontFamily: '"JetBrains Mono", monospace' }}>[KTC]</span>
               <h1 className="text-sm font-bold text-white tracking-tight whitespace-nowrap">NEXTTRADE HUB</h1>
-              <span className="text-[10px] text-zinc-500 font-mono hidden md:inline" style={{ fontFamily: '"JetBrains Mono", monospace' }}>v55.50</span>
+              <span className="text-[10px] text-zinc-500 font-mono hidden md:inline" style={{ fontFamily: '"JetBrains Mono", monospace' }}>v55.58</span>
               {/* Live clock — terminals always show one. Updates via the
                   existing tick state; if not present, falls back to no clock. */}
               <span className="hidden lg:inline text-[10px] text-zinc-500 font-mono ml-2 pl-2 border-l border-zinc-800" style={{ fontFamily: '"JetBrains Mono", monospace' }}>
@@ -8088,9 +8101,17 @@ export default function App() {
                       <tbody>
                         {sorted.map(m => {
                           running += m.invoiced;
+                          // v55.55 — Click month → drill to Sales tab filtered to that month.
+                          const [yr2, mo2] = m.month.split('-').map(Number);
+                          const lastDay2 = new Date(yr2, mo2, 0).getDate();
+                          const monthFrom2 = m.month + '-01';
+                          const monthTo2 = m.month + '-' + String(lastDay2).padStart(2, '0');
                           return (
-                            <tr key={m.month} className="border-b border-slate-50">
-                              <td className="px-2 py-1 text-xs font-semibold">{m.month}</td>
+                            <tr key={m.month}
+                                onClick={() => navigate('sales', { from: monthFrom2, to: monthTo2 })}
+                                title={'Click to see all ' + m.count + ' orders from ' + m.month}
+                                className="border-b border-slate-50 hover:bg-blue-50 cursor-pointer">
+                              <td className="px-2 py-1 text-xs font-semibold">{m.month} <span className="text-[9px] text-blue-500 ml-1">→ view orders</span></td>
                               <td className="px-2 py-1 text-xs text-right text-blue-600">{fE(m.invoiced)}</td>
                               <td className="px-2 py-1 text-xs text-right text-emerald-600">{fE(m.collected)}</td>
                               <td className="px-2 py-1 text-xs text-right text-red-500">{m.outstanding > 0 ? fE(m.outstanding) : '-'}</td>
@@ -12400,7 +12421,7 @@ export default function App() {
             CUSTOMS / BROKER TAB
         ========================================== */}
         {tab === 'customs' && (
-          <SafeSection label="Customs"><CustomsTab customers={customers} user={user} /></SafeSection>
+          <SafeSection label="Customs"><CustomsTab customers={customers} user={user} fxRate={fxRate} /></SafeSection>
         )}
 
         {/* ==========================================
@@ -12623,9 +12644,14 @@ export default function App() {
         </button>
       </div>
 
-      {/* Data Freshness Indicator */}
+      {/* Data Freshness Indicator
+          v55.58 — Hidden on mobile (overlapped voice pill + phone button on
+          phones). Still visible on desktop where there's room. Was at
+          bottom-4 left-4 which collided with VoiceController + PhoneWidget.
+          The data is still accurate; it's just not worth the screen real
+          estate on a phone where the user can pull-to-refresh anyway. */}
       {lastLoaded && (
-        <div className="fixed bottom-4 left-4 lg:left-[220px] z-30 flex items-center gap-2">
+        <div className="hidden lg:flex fixed bottom-4 lg:left-[220px] z-30 items-center gap-2">
           <button onClick={() => loadAllData()} className="px-2.5 py-1 bg-white/90 border border-slate-200 rounded-lg shadow-sm text-[10px] text-slate-500 hover:bg-slate-50 transition flex items-center gap-1.5">
             <span className="w-1.5 h-1.5 rounded-full bg-green-400" />
             Synced {Math.floor((Date.now() - lastLoaded.getTime()) / 60000)}m ago
@@ -12710,7 +12736,7 @@ export default function App() {
                       latest fix is actually deployed. If he doesn't see this
                       tag in the modal, his browser is running stale JS. */}
                   <div className="mt-1.5 inline-block px-2 py-0.5 rounded bg-amber-900/60 text-amber-100 text-[10px] font-mono font-bold tracking-wide">
-                    BUILD v55.50-CALENDAR-DELETE-BULK-FIX
+                    BUILD v55.58-FLOATING-LAYOUT
                   </div>
                 </div>
                 <button onClick={() => closePendingTreasuryModal()}
@@ -13339,7 +13365,7 @@ export default function App() {
                     معاملة قد تكون مكررة
                   </div>
                   <div className="mt-1.5 inline-block px-2 py-0.5 rounded bg-amber-900/60 text-amber-100 text-[10px] font-mono font-bold tracking-wide">
-                    BUILD v55.50-CALENDAR-DELETE-BULK-FIX
+                    BUILD v55.58-FLOATING-LAYOUT
                   </div>
                 </div>
                 <button

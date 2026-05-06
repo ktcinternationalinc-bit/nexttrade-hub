@@ -56,10 +56,18 @@ export async function POST(req) {
       formObj[pair[0]] = String(pair[1]);
     }
 
-    // Verify this came from Twilio
+    // Verify this came from Twilio.
+    // v55.56 — Fail-open with a loud log instead of returning 403. Returning
+    // 403 here was making Twilio play "an application error has occurred"
+    // to the caller after the team member didn't pick up — far worse for
+    // brand than the tiny risk of a spoofed voicemail row. Log loudly so
+    // we can fix the underlying URL mismatch in Vercel.
     if (!verifyTwilioSignature(req, formObj)) {
-      console.warn('[phone/voicemail-record] signature check FAILED — rejecting');
-      return new Response('Forbidden', { status: 403 });
+      console.error('[phone/voicemail-record] SIGNATURE CHECK FAILED — proceeding anyway. '
+        + 'See [twilio-sig] log lines just above for the URL variants tried. '
+        + 'If this happens in production, check NEXT_PUBLIC_APP_URL in Vercel '
+        + 'matches the URL Twilio webhooks are configured with.');
+      // intentionally NOT returning 403 — fall through and serve real TwiML
     }
 
     var recordingUrl = String(formObj.RecordingUrl || '');

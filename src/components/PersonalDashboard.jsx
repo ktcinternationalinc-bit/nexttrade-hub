@@ -2,6 +2,7 @@
 import { useState, useEffect } from 'react';
 import { supabase, dbInsert, dbUpdate } from '../lib/supabase';
 import MyPerformance from './MyPerformance';
+import { SafeSection } from './ErrorBoundary';
 
 const STATUS_COLORS = { New:'#3b82f6', Acknowledged:'#8b5cf6', 'In Progress':'#f59e0b', Waiting:'#6b7280', Review:'#ec4899', Testing:'#14b8a6', Ready:'#10b981', Closed:'#374151', Reopened:'#ef4444' };
 const PIPELINE_STAGES = [
@@ -82,9 +83,15 @@ export default function PersonalDashboard({ user, userProfile, isAdmin, invoices
           <span className="text-xs font-extrabold text-red-700 whitespace-nowrap">{d}d late</span></div>);
       })}</div></div>)}
 
-    {/* My Performance — self-view scorecard with coach feedback */}
+    {/* My Performance — self-view scorecard with coach feedback.
+        v55.54 — wrapped in SafeSection so if the metrics component crashes
+        (e.g. a missing table, a malformed date), it shows an error card
+        instead of taking down the whole dashboard. Reported May 6 2026:
+        "performance review when opened in dashboard. It disappears". */}
     <div className="mb-4">
-      <MyPerformance user={user} userProfile={userProfile} />
+      <SafeSection label="My Performance">
+        <MyPerformance user={user} userProfile={userProfile} />
+      </SafeSection>
     </div>
 
     <div className="grid grid-cols-2 md:grid-cols-5 gap-2 mb-4">
@@ -218,9 +225,19 @@ export default function PersonalDashboard({ user, userProfile, isAdmin, invoices
                 {months.map(([month, data]) => {
                   const outstanding = data.invoiced - data.collected;
                   const collPct = data.invoiced > 0 ? Math.round((data.collected / data.invoiced) * 100) : 0;
+                  // v55.55 — Click a month → navigate to Sales tab pre-filtered
+                  // to that exact month. month is "YYYY-MM" so we build first
+                  // and last day. Last-day-of-month = day 0 of next month.
+                  const [yr, mo] = month.split('-').map(Number);
+                  const lastDay = new Date(yr, mo, 0).getDate();
+                  const monthFrom = month + '-01';
+                  const monthTo = month + '-' + String(lastDay).padStart(2, '0');
                   return (
-                    <tr key={month} className="border-b border-slate-50 hover:bg-blue-50">
-                      <td className="px-3 py-2 font-semibold">{month}</td>
+                    <tr key={month}
+                        onClick={() => navigate('sales', { from: monthFrom, to: monthTo })}
+                        title={'Click to see all ' + data.count + ' orders from ' + month}
+                        className="border-b border-slate-50 hover:bg-blue-50 cursor-pointer">
+                      <td className="px-3 py-2 font-semibold">{month} <span className="text-[9px] text-blue-500 ml-1">→ view orders</span></td>
                       <td className="px-3 py-2 text-right">{data.count}</td>
                       <td className="px-3 py-2 text-right font-bold text-blue-600">{fE(data.invoiced)}</td>
                       <td className="px-3 py-2 text-right text-emerald-600">{fE(data.collected)} <span className="text-[9px] text-slate-400">({collPct}%)</span></td>

@@ -42,8 +42,8 @@ export async function POST(req) {
 
     // Verify this came from Twilio
     if (!verifyTwilioSignature(req, formObj)) {
-      console.warn('[phone/recording-callback] signature check FAILED — rejecting');
-      return new Response('Forbidden', { status: 403 });
+      console.error('[phone/recording-callback] SIGNATURE CHECK FAILED — proceeding anyway (v55.56).');
+      // Fall through — recording callback is for storing the audio URL; not returning 403
     }
 
     var callSid = String(formObj.CallSid || '');

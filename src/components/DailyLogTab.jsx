@@ -95,7 +95,10 @@ export default function DailyLogTab({ user, userProfile, users, isAdmin }) {
 
   const teamSummary = useMemo(() => {
     if (!users) return [];
-    return users.map(u => {
+    // v55.52 — Only include active teammates. Deactivated users are not
+    // logging activity anymore and should not appear in the daily team view.
+    const activeUsers = users.filter(u => u && u.active !== false);
+    return activeUsers.map(u => {
       const userLogs = logs.filter(l => l.user_id === u.id && (l.log_date || '').substring(0, 10) === selDate);
       const autoCount = userLogs.filter(l => l.auto_generated).length;
       const manualCount = userLogs.filter(l => !l.auto_generated).length;

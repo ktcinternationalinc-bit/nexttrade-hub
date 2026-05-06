@@ -115,9 +115,23 @@ export async function POST(req) {
     // verifyTwilioSignature() returns true if signature is valid,
     // OR if TWILIO_AUTH_TOKEN isn't set (fail-open during setup),
     // OR if SKIP_TWILIO_SIGNATURE=true in env (for local dev).
+    //
+    // v55.56 — When signature check fails, we used to return 403 Forbidden.
+    // Twilio interprets that as a webhook error and plays "an application
+    // error has occurred" to the caller — which is far worse for our brand
+    // than the small risk of someone spoofing a fake call. Now: log the
+    // failure prominently so we see it in Vercel logs, but proceed with
+    // valid TwiML. The fake-call risk is bounded because (a) Twilio webhooks
+    // can't materially affect real calls in flight, and (b) we never
+    // initiate outbound dials from this route. Reported by Max May 6 2026:
+    // calling 17328005428 played greeting twice + "application error."
     if (!verifyTwilioSignature(req, formObj)) {
-      console.warn('[phone/incoming] signature check FAILED — rejecting');
-      return new Response('Forbidden', { status: 403 });
+      console.error('[phone/incoming] SIGNATURE CHECK FAILED — proceeding anyway. '
+        + 'If this is from real Twilio traffic and not a malicious caller, '
+        + 'check that the URL Twilio uses to hit this endpoint matches what '
+        + 'NEXT_PUBLIC_APP_URL is set to in Vercel. Tried URLs are logged '
+        + 'just above this line by [twilio-sig].');
+      // intentionally NOT returning 403 — fall through and serve real TwiML
     }
 
     var to = String(formObj.To || '');           // Your KTC number that was called

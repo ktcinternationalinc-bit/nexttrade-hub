@@ -183,8 +183,14 @@ export default function NadiaFloatingOverlay(props) {
         <div
           style={{
             position: 'fixed',
-            bottom: 20,
-            right: 20,
+            // v55.58 — Moved to LEFT side of screen entirely so it never
+            // conflicts with the FAB (which owns the bottom-right corner
+            // including its expanding menu). Stacked above the phone
+            // button (bottom 4) + voice pill (bottom 72). Nadia bubble
+            // sits at bottom 124 — above both, comfortably below the
+            // top of the screen.
+            bottom: 124,
+            left: 16,
             zIndex: 9998,
             display: 'flex',
             alignItems: 'center',
@@ -229,7 +235,11 @@ export default function NadiaFloatingOverlay(props) {
 
   // EXPANDED state — the full AIGreeter inside a floating panel
   return (
-    <div style={{ position: 'fixed', bottom: 20, right: 20, zIndex: 9998, maxWidth: 400, width: 'calc(100vw - 40px)' }}>
+    // v55.58 — Anchored to LEFT side to match the collapsed bubble.
+    // bottom: 124 sits cleanly above the voice pill (bottom 72-110)
+    // and phone button (bottom 4-52). Width capped so it doesn't
+    // bleed into the right edge where the FAB lives.
+    <div style={{ position: 'fixed', bottom: 124, left: 16, zIndex: 9998, maxWidth: 380, width: 'calc(100vw - 96px)' }}>
       {/* Floating control bar ABOVE the chat (collapse + mute toggle) */}
       <div style={{
         display: 'flex', alignItems: 'center', justifyContent: 'space-between',

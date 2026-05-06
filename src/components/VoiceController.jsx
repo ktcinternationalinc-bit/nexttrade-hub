@@ -556,7 +556,12 @@ export default function VoiceController({ userId, userProfile, enabled, onComman
 
   return (
     <div style={{
-      position: 'fixed', bottom: 16, left: 16, zIndex: 60,
+      // v55.58 — Was bottom: 16, left: 16 — sat directly on top of the
+      // phone button (also at left: 16, bottom: 16). Now: bottom: 72px
+      // so it stacks ABOVE the 48px phone button + 8px gap. left: 16
+      // unchanged. Reported by Max May 6 2026: "calling icon overlaps
+      // with this other icon for Nadia."
+      position: 'fixed', bottom: 72, left: 16, zIndex: 60,
       background: 'rgba(15,23,42,0.92)', color: 'white', padding: '6px 12px',
       borderRadius: 20, fontSize: 11, fontWeight: 600,
       display: 'flex', alignItems: 'center', gap: 8, cursor: 'default',

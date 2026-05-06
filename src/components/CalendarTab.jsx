@@ -95,6 +95,10 @@ export default function CalendarTab({ customers, user, userProfile, users, ticke
   const [deleteScope, setDeleteScope] = useState('single');
   const [restoreScope, setRestoreScope] = useState('single');
   const myId = userProfile?.id;
+  // v55.52 — Active users only, for assignee dropdowns / picker buttons.
+  // `users` (full list) remains for name lookups so historical event
+  // assignees still resolve to their name even if deactivated.
+  const activeUsers = (users || []).filter(u => u && u.active !== false);
   // v54.6 — `lang` was referenced throughout this file (28+ times) but
   // never declared. ANY click that triggered a path using `lang === 'ar'`
   // crashed with "ReferenceError: lang is not defined". Reading it from
@@ -243,7 +247,7 @@ export default function CalendarTab({ customers, user, userProfile, users, ticke
 
   const selectAllUsers = () => {
     if (!users) return;
-    setSelectedUsers(users.map(u => u.id));
+    setSelectedUsers(activeUsers.map(u => u.id));
   };
 
   // S20.1 (Apr 23 2026) — Hardened save flow. Previously:
@@ -1438,10 +1442,10 @@ export default function CalendarTab({ customers, user, userProfile, users, ticke
             <label className="text-[10px] font-semibold block mb-1">Assign To / تعيين إلى</label>
             <div className="flex gap-2 flex-wrap items-center">
               <button onClick={selectAllUsers}
-                className={'px-3 py-1.5 rounded-lg text-xs font-semibold border-2 transition ' + (selectedUsers.length === (users||[]).length ? 'border-blue-500 bg-blue-50 text-blue-700' : 'border-slate-200 text-slate-500')}>
+                className={'px-3 py-1.5 rounded-lg text-xs font-semibold border-2 transition ' + (selectedUsers.length === activeUsers.length ? 'border-blue-500 bg-blue-50 text-blue-700' : 'border-slate-200 text-slate-500')}>
                 All Team / كل الفريق
               </button>
-              {(users || []).map(u => (
+              {activeUsers.map(u => (
                 <button key={u.id} onClick={() => toggleUser(u.id)}
                   className={'px-3 py-1.5 rounded-lg text-xs font-semibold border-2 transition ' + (selectedUsers.includes(u.id) ? 'border-blue-500 bg-blue-50 text-blue-700' : 'border-slate-200 text-slate-500')}>
                   {selectedUsers.includes(u.id) ? '✓ ' : ''}{u.name}

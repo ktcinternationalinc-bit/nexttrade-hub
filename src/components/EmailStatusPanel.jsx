@@ -15,6 +15,11 @@ export default function EmailStatusPanel({ userId, userEmail, userName }) {
   var [testResult, setTestResult] = useState(null);
   var [error, setError] = useState(null);
 
+  // v55.52 — Bulk "test all teammates" mode
+  var [bulkTesting, setBulkTesting] = useState(false);
+  var [bulkResult, setBulkResult] = useState(null);
+  var [bulkConfirming, setBulkConfirming] = useState(false);
+
   var loadStatus = useCallback(async function () {
     setError(null);
     try {
@@ -49,6 +54,28 @@ export default function EmailStatusPanel({ userId, userEmail, userName }) {
       setTestResult({ sent: false, ok: false, error: (e && e.message) || 'Network error' });
     } finally {
       setTesting(false);
+    }
+  };
+
+  // v55.52 — Send a test email to EVERY active teammate. Results show per-person.
+  var sendTestToAll = async function () {
+    if (bulkTesting) return;
+    setBulkTesting(true);
+    setBulkResult(null);
+    try {
+      var res = await fetch('/api/notify/test', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ all: true, triggered_by_user_id: userId || null }),
+      });
+      var data = await res.json();
+      setBulkResult(data);
+      await loadStatus();
+    } catch (e) {
+      setBulkResult({ ok: false, error: (e && e.message) || 'Network error' });
+    } finally {
+      setBulkTesting(false);
+      setBulkConfirming(false);
     }
   };
 
@@ -149,6 +176,28 @@ export default function EmailStatusPanel({ userId, userEmail, userName }) {
           <span className="text-[10px] text-slate-500">
             → {userEmail || '(no email on your user record)'}
           </span>
+
+          {/* v55.52 — Bulk test for all teammates */}
+          {!bulkConfirming ? (
+            <button
+              onClick={() => setBulkConfirming(true)}
+              disabled={bulkTesting}
+              className={'px-3 py-1.5 rounded-lg text-xs font-bold transition ml-auto ' + (bulkTesting ? 'bg-slate-300 text-slate-500' : 'bg-indigo-500 text-white hover:bg-indigo-600')}
+              title="Send a test email to every active teammate"
+            >
+              {bulkTesting ? '⏳ Sending to all…' : '📬 Test all teammates'}
+            </button>
+          ) : (
+            <div className="ml-auto flex items-center gap-1 bg-amber-50 border border-amber-300 rounded-lg px-2 py-1">
+              <span className="text-[10px] text-amber-800 font-semibold">Send a real email to every active teammate?</span>
+              <button onClick={sendTestToAll} disabled={bulkTesting} className="px-2 py-0.5 text-[10px] font-bold bg-emerald-500 text-white rounded hover:bg-emerald-600">
+                {bulkTesting ? '⏳' : 'Yes'}
+              </button>
+              <button onClick={() => setBulkConfirming(false)} disabled={bulkTesting} className="px-2 py-0.5 text-[10px] font-bold border border-slate-300 rounded hover:bg-slate-50">
+                Cancel
+              </button>
+            </div>
+          )}
         </div>
       )}
 
@@ -185,6 +234,56 @@ export default function EmailStatusPanel({ userId, userEmail, userName }) {
               )}
             </>
           )}
+        </div>
+      )}
+
+      {/* v55.52 — Bulk test result — per-teammate table */}
+      {bulkResult && (
+        <div className={'mt-3 rounded-lg p-3 border text-xs ' + (bulkResult.ok ? 'bg-emerald-50 border-emerald-300' : (bulkResult.succeeded > 0 ? 'bg-amber-50 border-amber-300' : 'bg-red-50 border-red-300'))}>
+          <div className="font-bold mb-1">
+            {bulkResult.ok ? (
+              <span className="text-emerald-700">✅ Test email sent to all {bulkResult.succeeded} teammates</span>
+            ) : bulkResult.succeeded > 0 ? (
+              <span className="text-amber-800">⚠️ {bulkResult.succeeded} of {bulkResult.total} teammates received the test — {bulkResult.failed} failed</span>
+            ) : (
+              <span className="text-red-700">❌ All {bulkResult.total || 0} sends failed</span>
+            )}
+          </div>
+          {bulkResult.message && <div className="text-slate-700 mb-2">{bulkResult.message}</div>}
+          {bulkResult.error && <div className="text-red-700 mb-2"><b>Reason:</b> {bulkResult.error}</div>}
+          {Array.isArray(bulkResult.results) && bulkResult.results.length > 0 && (
+            <div className="bg-white rounded border border-slate-200 overflow-hidden mt-2">
+              <table className="w-full text-[11px]">
+                <thead className="bg-slate-50">
+                  <tr>
+                    <th className="text-left px-2 py-1 font-semibold text-slate-600">Teammate</th>
+                    <th className="text-left px-2 py-1 font-semibold text-slate-600">Email</th>
+                    <th className="text-left px-2 py-1 font-semibold text-slate-600">Result</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {bulkResult.results.map(function (r, i) {
+                    return (
+                      <tr key={r.user_id || i} className={i % 2 ? 'bg-slate-50' : ''}>
+                        <td className="px-2 py-1 text-slate-800">{r.name}</td>
+                        <td className="px-2 py-1 text-slate-600 font-mono text-[10px]">{r.email}</td>
+                        <td className="px-2 py-1">
+                          {r.ok ? (
+                            <span className="text-emerald-700 font-semibold">✅ Sent ({r.elapsed_ms}ms)</span>
+                          ) : (
+                            <span className="text-red-700 font-semibold" title={r.error}>❌ {r.error || 'failed'}</span>
+                          )}
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+          )}
+          <div className="text-slate-500 mt-2 text-[10px]">
+            Each teammate should check their inbox (including spam) within a minute. If a row shows ❌, share the reason with them — usually it's an email typo on their user profile or their domain blocking external mail.
+          </div>
         </div>
       )}
 

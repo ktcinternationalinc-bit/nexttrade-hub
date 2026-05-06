@@ -20,6 +20,10 @@ const PIPELINE_STAGES = [
 
 export default function CRMTab({ toast, customers, invoices, user, userProfile, users, onReload, isAdmin, onSelectInvoice, lang, modulePerms, initialClient }) {
   const myId = userProfile?.id;
+  // v55.52 — Active users only, for assignee dropdowns. `users` (full list)
+  // remains available for resolving historical assigned-rep names of
+  // deactivated teammates so existing records still display correctly.
+  const activeUsers = (users || []).filter(u => u && u.active !== false);
   const canViewAll = isAdmin || modulePerms?.['CRM View All'] === true;
   const canViewContacts = isAdmin || modulePerms?.['CRM View Contacts'] === true;
   // Can see contact info if: admin, has CRM View Contacts perm, or is the assigned rep
@@ -363,7 +367,7 @@ export default function CRMTab({ toast, customers, invoices, user, userProfile, 
         </select>
         <select value={repF} onChange={e => setRepF(e.target.value)} className="px-3 py-1.5 rounded-lg border border-slate-200 text-[11px] bg-white">
           <option value="all">All Reps</option>
-          {(users || []).map(u => <option key={u.id} value={u.id}>{u.name}</option>)}
+          {activeUsers.map(u => <option key={u.id} value={u.id}>{u.name}</option>)}
           <option value="unassigned">Unassigned</option>
         </select>
         <select value={sortBy} onChange={e => setSortBy(e.target.value)} className="px-3 py-1.5 rounded-lg border border-slate-200 text-[11px] bg-white">
@@ -580,7 +584,7 @@ export default function CRMTab({ toast, customers, invoices, user, userProfile, 
             <div><label className="text-[10px] font-semibold">Assigned Rep / الممثل</label>
               <select value={f.assignedRep!==undefined?f.assignedRep:(sel.assigned_rep||'')} onChange={e=>setF({...f,assignedRep:e.target.value})} className="w-full px-2 py-1.5 border rounded text-sm">
                 <option value="">Unassigned / غير معيّن</option>
-                {(users||[]).map(u=><option key={u.id} value={u.id}>{u.name}</option>)}
+                {activeUsers.map(u=><option key={u.id} value={u.id}>{u.name}</option>)}
               </select></div>
             <div className="col-span-2 flex gap-2">
               <button onClick={handleEditClient} className="px-3 py-1.5 bg-emerald-500 text-white rounded text-xs font-semibold">Save / حفظ</button>
@@ -695,7 +699,7 @@ export default function CRMTab({ toast, customers, invoices, user, userProfile, 
             <input type="time" value={f.dueTime||'09:00'} onChange={e=>setF({...f,dueTime:e.target.value})} className="px-3 py-2 rounded border text-sm" />
             <select value={f.assignTo||''} onChange={e=>setF({...f,assignTo:e.target.value})} className="col-span-2 px-3 py-2 rounded border text-sm">
               <option value="">Assign to me / تعيين لي</option>
-              {(users || []).map(u => <option key={u.id} value={u.id}>{u.name}</option>)}
+              {activeUsers.map(u => <option key={u.id} value={u.id}>{u.name}</option>)}
             </select>
           </div>
           <div className="flex gap-2">

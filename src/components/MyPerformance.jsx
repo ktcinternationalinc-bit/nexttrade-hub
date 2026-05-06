@@ -36,6 +36,11 @@ export default function MyPerformance({ user, userProfile }) {
   const [coachLoading, setCoachLoading] = useState(false);
   const [coachError, setCoachError] = useState('');
   const [expanded, setExpanded] = useState(false);
+  // v55.54 — capture ANY load error so the user sees it instead of
+  // a blank/disappearing card. Previously, errors silently produced an
+  // empty data state and the component would render with zeros (which
+  // looked like it disappeared on phones).
+  const [loadError, setLoadError] = useState('');
 
   const myId = userProfile?.id || user?.id;
   const myName = userProfile?.name || user?.email || 'You';
@@ -46,20 +51,44 @@ export default function MyPerformance({ user, userProfile }) {
     let cancelled = false;
     const load = async () => {
       setLoading(true);
+      setLoadError('');
+      console.log('[my-perf] starting load for user', myId);
       const period180 = resolvePeriod('1y'); // grab a year back so any selected period fits
       // Fetch in parallel; each query in its own try/catch so one failure doesn't kill all
-      const safe = async (fn) => { try { return await fn(); } catch(e) { console.warn('[mp] query fail', e); return []; } };
-      const [tickets, ticketComments, dailyLog, auditLog, customerQuotes, calendarEvents] = await Promise.all([
-        safe(async () => (await supabase.from('tickets').select('*').or('assigned_to.eq.' + myId + ',created_by.eq.' + myId + ',closed_by.eq.' + myId)).data || []),
-        safe(async () => (await supabase.from('ticket_comments').select('*').eq('created_by', myId).gte('created_at', period180.from)).data || []),
-        safe(async () => (await supabase.from('daily_log').select('*').eq('user_id', myId).gte('log_date', period180.from)).data || []),
-        safe(async () => (await supabase.from('audit_log').select('*').eq('changed_by', myId).gte('created_at', period180.from + 'T00:00:00')).data || []),
-        safe(async () => (await supabase.from('customer_quotes').select('*').eq('created_by', myId).gte('created_at', period180.from)).data || []),
-        safe(async () => (await supabase.from('calendar_events').select('*').gte('event_date', period180.from)).data || []),
-      ]);
-      if (cancelled) return;
-      setData({ tickets, ticketComments, dailyLog, auditLog, customerQuotes, calendarEvents });
-      setLoading(false);
+      const safe = async (label, fn) => {
+        try { return await fn(); }
+        catch(e) {
+          console.warn('[my-perf] query fail:', label, e?.message || e);
+          return [];
+        }
+      };
+      try {
+        const [tickets, ticketComments, dailyLog, auditLog, customerQuotes, calendarEvents] = await Promise.all([
+          safe('tickets', async () => (await supabase.from('tickets').select('*').or('assigned_to.eq.' + myId + ',created_by.eq.' + myId + ',closed_by.eq.' + myId)).data || []),
+          safe('ticket_comments', async () => (await supabase.from('ticket_comments').select('*').eq('created_by', myId).gte('created_at', period180.from)).data || []),
+          safe('daily_log', async () => (await supabase.from('daily_log').select('*').eq('user_id', myId).gte('log_date', period180.from)).data || []),
+          safe('audit_log', async () => (await supabase.from('audit_log').select('*').eq('changed_by', myId).gte('created_at', period180.from + 'T00:00:00')).data || []),
+          safe('customer_quotes', async () => (await supabase.from('customer_quotes').select('*').eq('created_by', myId).gte('created_at', period180.from)).data || []),
+          safe('calendar_events', async () => (await supabase.from('calendar_events').select('*').gte('event_date', period180.from)).data || []),
+        ]);
+        if (cancelled) return;
+        console.log('[my-perf] load complete', {
+          tickets: tickets.length,
+          ticketComments: ticketComments.length,
+          dailyLog: dailyLog.length,
+          auditLog: auditLog.length,
+          customerQuotes: customerQuotes.length,
+          calendarEvents: calendarEvents.length,
+        });
+        setData({ tickets, ticketComments, dailyLog, auditLog, customerQuotes, calendarEvents });
+        setLoading(false);
+      } catch (e) {
+        console.error('[my-perf] LOAD CRASHED:', e);
+        if (!cancelled) {
+          setLoadError((e && e.message) || 'Could not load your performance data');
+          setLoading(false);
+        }
+      }
     };
     load();
     return () => { cancelled = true; };
@@ -154,6 +183,27 @@ export default function MyPerformance({ user, userProfile }) {
 
       {loading && (
         <div className="text-center py-12 text-slate-400 text-sm">Loading your activity…</div>
+      )}
+
+      {/* v55.54 — Show load errors so the user knows what went wrong instead
+          of seeing an empty card. Previously errors were silently swallowed
+          and the component looked blank. */}
+      {!loading && loadError && (
+        <div className="bg-rose-50 border border-rose-200 rounded-lg p-4 text-sm text-rose-800">
+          <div className="font-bold mb-1">Could not load your performance data</div>
+          <div className="text-xs">{loadError}</div>
+          <div className="text-[10px] text-rose-600 mt-2">Try collapsing and re-opening. If it keeps failing, check the browser console for the [my-perf] log lines and share them.</div>
+        </div>
+      )}
+
+      {/* v55.54 — Fallback when current metrics object is null (data
+          loaded but couldn't compute). Catches any silent failure inside
+          calcMetricsForUser. */}
+      {!loading && !loadError && !current && data && (
+        <div className="bg-amber-50 border border-amber-200 rounded-lg p-4 text-sm text-amber-800">
+          <div className="font-bold mb-1">No activity to show yet</div>
+          <div className="text-xs">Once you've created a ticket, written a comment, or logged daily activity, your metrics will appear here.</div>
+        </div>
       )}
 
       {!loading && current && (

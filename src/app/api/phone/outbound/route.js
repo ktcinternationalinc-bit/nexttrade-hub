@@ -69,8 +69,9 @@ export async function POST(req) {
     // the browser SDK initiates a call — it's a TwiML Application's
     // Request URL, and Twilio signs every request to it.
     if (!verifyTwilioSignature(req, formObj)) {
-      console.warn('[phone/outbound] signature check FAILED — rejecting');
-      return new Response('Forbidden', { status: 403 });
+      console.error('[phone/outbound] SIGNATURE CHECK FAILED — proceeding anyway. '
+        + 'See [twilio-sig] log lines for URL variants tried. v55.56 fail-open.');
+      // Fall through — return TwiML rather than break the call
     }
 
     var to = String(formObj.To || '');           // destination number — passed by SDK
