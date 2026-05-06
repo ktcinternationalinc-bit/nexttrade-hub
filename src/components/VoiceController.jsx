@@ -527,17 +527,22 @@ export default function VoiceController({ userId, userProfile, enabled, onComman
   // ---------- Indicator UI ----------
   var caps = getCaps();
   var label, dotColor, title;
-  if (!caps.supported) {
-    label = '🎙️ Voice unavailable'; dotColor = '#64748b';
-    title = caps.isFirefox ? 'Voice recognition not supported in Firefox. Use Chrome, Safari, or Edge.'
-                           : 'Voice recognition not supported in this browser.';
-  } else if (!enabled) {
-    label = '🎙️ Voice off'; dotColor = '#64748b';
-    title = 'Voice disabled. Toggle on in Settings → Voice.';
-  } else if (status === 'denied') {
-    label = '🎙️ Permission denied'; dotColor = '#ef4444';
-    title = 'Microphone access was blocked. Unblock in your browser site settings.';
-  } else if (status === 'command') {
+
+  // v55.59 — When voice is disabled at the system level (the default since
+  // v55.42 — voice has been off the surface pending a rebuild), don't render
+  // the pill at all. Previously we rendered "🎙️ Voice off" which looked
+  // tappable but had no click handler — Max reported "there is something
+  // for Nadia of off on for Nadia on the bottom left of the screen which
+  // when clicked does absolutely nothing." Hiding the pill removes the
+  // dead element entirely. If voice is ever re-enabled (page.jsx
+  // voiceEnabled flipped to true), the pill re-appears with working
+  // controls. Same logic for unsupported / permission-denied browsers —
+  // showing a pill the user cannot act on is just clutter.
+  if (!caps.supported || !enabled || status === 'denied') {
+    return null;
+  }
+
+  if (status === 'command') {
     label = '✨ Got it'; dotColor = '#10b981';
     title = 'Command received. Processing...';
   } else if (status === 'followup') {

@@ -162,6 +162,37 @@ export default function EmailStatusPanel({ userId, userEmail, userName }) {
         </div>
       )}
 
+      {/* v55.60 — When the FROM address is still the Resend default
+          (onboarding@resend.dev), email only delivers to the account owner.
+          Show clear, step-by-step instructions inline so the user doesn't
+          have to chase external docs. */}
+      {isReady && status && status.from_email && /onboarding@resend\.dev/i.test(status.from_email) && (
+        <div className="mt-3 bg-amber-50 border border-amber-300 rounded-lg p-3">
+          <div className="text-xs font-bold text-amber-900 mb-2">⚠️ Team emails won't deliver until your domain is verified</div>
+          <div className="text-[11px] text-amber-800 mb-2">
+            You're currently using Resend's testing address (<code className="bg-amber-100 px-1 rounded">onboarding@resend.dev</code>),
+            which only delivers to the account owner ({userEmail || 'you'}). To send to teammates, verify <b>ktcus.com</b> and switch the FROM address.
+          </div>
+          <details className="text-[11px] text-amber-900">
+            <summary className="cursor-pointer font-semibold hover:underline">▸ Step-by-step instructions</summary>
+            <ol className="list-decimal ml-4 mt-2 space-y-1.5">
+              <li>Open <a href="https://resend.com/domains" target="_blank" rel="noopener noreferrer" className="text-blue-600 underline">resend.com/domains</a> and log in</li>
+              <li>Click <b>Add Domain</b> → type <code className="bg-amber-100 px-1 rounded">ktcus.com</code> → click Add</li>
+              <li>Resend shows you DNS records (a TXT for <code className="bg-amber-100 px-1 rounded">resend._domainkey</code>, an MX and a TXT for <code className="bg-amber-100 px-1 rounded">send</code>)</li>
+              <li>Add those exact records at Bluehost → Domains → DNS Zone Editor for ktcus.com</li>
+              <li>Wait 15 minutes to 2 hours for DNS to propagate</li>
+              <li>Back in Resend, click <b>Verify DNS Records</b> — should turn green ✓</li>
+              <li>In Vercel → Settings → Environment Variables → change <code className="bg-amber-100 px-1 rounded">NOTIFICATION_FROM_EMAIL</code> from <code className="bg-amber-100 px-1 rounded">onboarding@resend.dev</code> to <code className="bg-amber-100 px-1 rounded">notifications@ktcus.com</code></li>
+              <li>Redeploy</li>
+              <li>Come back here and click <b>📬 Test all teammates</b> — should now deliver to everyone</li>
+            </ol>
+            <div className="mt-2 text-amber-700">
+              <b>Stuck on step 4?</b> Take a screenshot of the Resend domain page (the one showing your DNS records as ✓ Verified or ✗ Not Verified) and ask Claude — I'll tell you exactly which record is wrong.
+            </div>
+          </details>
+        </div>
+      )}
+
       {/* Test button — only useful when Resend is configured AND we have a user with email */}
       {isReady && (
         <div className="mt-3 flex items-center gap-2 flex-wrap">

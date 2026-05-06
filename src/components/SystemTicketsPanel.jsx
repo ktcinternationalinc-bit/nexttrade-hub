@@ -43,6 +43,12 @@ export default function SystemTicketsPanel({ userId, isAdmin, getUserName, sanit
   var [submitting, setSubmitting] = useState(false);
   var [confirmDel, setConfirmDel] = useState(null);
   var [busyId, setBusyId] = useState(null);
+  // v55.59 — persistent error banner. Toast disappears in 2s, leaving
+  // an empty panel and no clue what failed. Now we surface the error
+  // visibly so the user knows whether it's a missing-table issue (run
+  // SQL), a permissions issue, or a network blip (try again).
+  var [loadError, setLoadError] = useState(null);
+  var [createError, setCreateError] = useState(null);
   var [form, setForm] = useState({
     title: '',
     description: '',
@@ -52,13 +58,22 @@ export default function SystemTicketsPanel({ userId, isAdmin, getUserName, sanit
 
   var load = useCallback(async function () {
     setLoading(true);
+    setLoadError(null);
     try {
       var res = await supabase.from('system_tickets').select('*').order('created_at', { ascending: false });
       if (res.error) throw res.error;
       setTickets(res.data || []);
     } catch (e) {
-      try { console.warn('[sys-tickets] load failed:', e && e.message); } catch (_) {}
-      if (toast) toast.error('Could not load system tickets: ' + ((e && e.message) || 'unknown error'));
+      var rawMsg = (e && e.message) || String(e || 'unknown error');
+      try { console.warn('[sys-tickets] load failed:', rawMsg); } catch (_) {}
+      // Detect "table does not exist" / "relation does not exist" / "schema cache" — all
+      // signs the SQL setup hasn't been run yet. Show a specific, actionable banner.
+      var isMissingTable = /does not exist|schema cache|could not find.*table|404|column .* does not exist/i.test(rawMsg);
+      setLoadError({
+        kind: isMissingTable ? 'missing-table' : 'load-error',
+        message: rawMsg,
+      });
+      if (toast) toast.error('Could not load system tickets — see the panel for details');
     } finally {
       setLoading(false);
     }
@@ -81,6 +96,7 @@ export default function SystemTicketsPanel({ userId, isAdmin, getUserName, sanit
       return;
     }
     setSubmitting(true);
+    setCreateError(null);
     try {
       // Number the new ticket sequentially based on the current count.
       // Using count as the suffix is what the previous implementation did;
@@ -103,8 +119,14 @@ export default function SystemTicketsPanel({ userId, isAdmin, getUserName, sanit
       await load();
     } catch (err) {
       var msg = (err && err.message) || String(err);
-      if (toast) toast.error('Could not create ticket: ' + msg);
-      else alert('Could not create ticket: ' + msg);
+      // v55.59 — Same persistent error pattern as load(). User can see
+      // what went wrong without chasing a 2-second toast.
+      var isMissingTable = /does not exist|schema cache|could not find.*table|column .* does not exist/i.test(msg);
+      setCreateError({
+        kind: isMissingTable ? 'missing-table' : 'create-error',
+        message: msg,
+      });
+      if (toast) toast.error('Could not create ticket — see the form for details');
     } finally {
       setSubmitting(false);
     }
@@ -187,9 +209,60 @@ export default function SystemTicketsPanel({ userId, isAdmin, getUserName, sanit
       </div>
       <div className="text-xs text-slate-400 mb-3">Report bugs, feature requests, and system issues / الإبلاغ عن الأخطاء وطلبات الميزات</div>
 
+      {/* v55.59 — Persistent load-error banner. If the system_tickets table
+          doesn't exist or RLS is blocking reads, you used to see a 2-second
+          toast then an empty panel forever. Now we show what failed AND
+          what to do about it. */}
+      {loadError && (
+        <div className={'rounded-xl p-4 mb-4 border-2 ' + (loadError.kind === 'missing-table' ? 'bg-amber-50 border-amber-300' : 'bg-rose-50 border-rose-300')}>
+          {loadError.kind === 'missing-table' ? (
+            <>
+              <div className="font-bold text-amber-900 mb-1">⚠️ Database setup required</div>
+              <div className="text-xs text-amber-800 mb-3">
+                The system_tickets table is missing or has missing columns. To fix, open Supabase → SQL Editor → New query, paste the SQL from <code className="bg-amber-100 px-1 rounded">supabase/system-tickets-setup.sql</code> in the v55.59 zip, click Run. Then refresh this page.
+              </div>
+              <div className="text-[10px] font-mono bg-amber-100 text-amber-900 p-2 rounded border border-amber-200 break-all">
+                Error: {loadError.message}
+              </div>
+            </>
+          ) : (
+            <>
+              <div className="font-bold text-rose-900 mb-1">❌ Could not load system tickets</div>
+              <div className="text-[10px] font-mono bg-rose-100 text-rose-900 p-2 rounded border border-rose-200 break-all mb-2">
+                {loadError.message}
+              </div>
+              <button onClick={load} className="px-3 py-1 bg-rose-500 text-white rounded text-xs font-bold hover:bg-rose-600">
+                Try again
+              </button>
+            </>
+          )}
+        </div>
+      )}
+
       {showForm && (
         <div className="bg-white rounded-xl p-4 mb-4 border-2 border-red-200">
           <h3 className="text-sm font-bold mb-2">New System Ticket / تذكرة نظام جديدة</h3>
+
+          {/* v55.59 — Persistent create-error banner inside the form so
+              the user can see exactly why their submission failed without
+              losing their typed text. */}
+          {createError && (
+            <div className={'rounded-lg p-3 mb-3 border ' + (createError.kind === 'missing-table' ? 'bg-amber-50 border-amber-300' : 'bg-rose-50 border-rose-300')}>
+              {createError.kind === 'missing-table' ? (
+                <>
+                  <div className="font-bold text-amber-900 text-xs mb-1">⚠️ Database setup required</div>
+                  <div className="text-[11px] text-amber-800">
+                    Run <code className="bg-amber-100 px-1 rounded">supabase/system-tickets-setup.sql</code> in Supabase, then try again.
+                  </div>
+                </>
+              ) : (
+                <>
+                  <div className="font-bold text-rose-900 text-xs mb-1">❌ Could not save</div>
+                  <div className="text-[10px] font-mono text-rose-800 break-all">{createError.message}</div>
+                </>
+              )}
+            </div>
+          )}
           <div className="grid grid-cols-2 gap-3 mb-3">
             <div>
               <label className="text-[10px] font-semibold text-slate-500 block mb-1">Category / الفئة</label>

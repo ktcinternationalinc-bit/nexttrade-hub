@@ -9,6 +9,7 @@ import TicketsTab from '../components/TicketsTab';
 import SystemTicketsPanel from '../components/SystemTicketsPanel';
 import WhatsNewWidget from '../components/WhatsNewWidget';
 import PendingNadiaMessages from '../components/PendingNadiaMessages';
+import NadiaNewBuildCard from '../components/NadiaNewBuildCard';
 import CalendarTab from '../components/CalendarTab';
 import DailyLogTab from '../components/DailyLogTab';
 import AdminTab from '../components/AdminTab';
@@ -3603,7 +3604,7 @@ export default function App() {
               {/* Brand mark — bracket prefix is a terminal callout convention. */}
               <span className="text-emerald-400 font-mono text-xs font-bold tracking-tight" style={{ fontFamily: '"JetBrains Mono", monospace' }}>[KTC]</span>
               <h1 className="text-sm font-bold text-white tracking-tight whitespace-nowrap">NEXTTRADE HUB</h1>
-              <span className="text-[10px] text-zinc-500 font-mono hidden md:inline" style={{ fontFamily: '"JetBrains Mono", monospace' }}>v55.58</span>
+              <span className="text-[10px] text-zinc-500 font-mono hidden md:inline" style={{ fontFamily: '"JetBrains Mono", monospace' }}>v55.60</span>
               {/* Live clock — terminals always show one. Updates via the
                   existing tick state; if not present, falls back to no clock. */}
               <span className="hidden lg:inline text-[10px] text-zinc-500 font-mono ml-2 pl-2 border-l border-zinc-800" style={{ fontFamily: '"JetBrains Mono", monospace' }}>
@@ -6535,6 +6536,12 @@ export default function App() {
               <WhatsNewWidget />
             </div>
 
+            {/* v55.60 — Nadia highlights when a new build has deployed.
+                Shows the latest build version, label, and top 3 highlights
+                in a Nadia-styled card. User taps "Got it" and it disappears
+                until the next build. */}
+            <NadiaNewBuildCard />
+
             {/* v55.45 — Pending team messages + reminders, with per-item
                 Acknowledge buttons. Renders nothing if nothing pending. */}
             <PendingNadiaMessages
@@ -7504,7 +7511,14 @@ export default function App() {
                           const icon = a.priority === 'urgent' ? '🚨' : a.priority === 'warning' ? '⚠️' : 'ℹ️';
                           const poster = teamUsers.find(u => u.id === a.posted_by);
                           const thisAcks = announcementAcks.filter(ak => ak.announcement_id === a.id);
-                          const targetUsers2 = a.target_user ? teamUsers.filter(u => u.id === a.target_user) : teamUsers;
+                          // v55.60 — Only count ACTIVE teammates as targets. A deactivated
+                          // user from months ago shouldn't show as "didn't acknowledge"
+                          // forever. Their original acknowledgment (if any) still appears
+                          // in the acked list because the ack row exists in the DB.
+                          const activeTeamUsers = (teamUsers || []).filter(u => u && u.active !== false);
+                          const targetUsers2 = a.target_user
+                            ? activeTeamUsers.filter(u => u.id === a.target_user)
+                            : activeTeamUsers;
                           const ackedNames = targetUsers2.filter(u => thisAcks.some(ak => ak.user_id === u.id));
                           const unackedNames = targetUsers2.filter(u => !thisAcks.some(ak => ak.user_id === u.id));
                           return (
@@ -7517,13 +7531,28 @@ export default function App() {
                                     {poster ? poster.name : 'Admin'} • {new Date(a.created_at).toLocaleDateString()}
                                   </div>
                                   {isAdmin && (
-                                    <div style={{ fontSize: '0.6rem', marginTop: 4 }}>
-                                      {ackedNames.length > 0 && <div style={{ color: '#16a34a' }}>✅ {ackedNames.map(u => {
-                                        const ack = thisAcks.find(ak => ak.user_id === u.id);
-                                        return u.name + (ack ? ' (' + new Date(ack.acked_at).toLocaleString([], {month:'short',day:'numeric',hour:'2-digit',minute:'2-digit'}) + ')' : '');
-                                      }).join(', ')}</div>}
-                                      {unackedNames.length > 0 && <div style={{ color: '#dc2626', fontWeight: 700 }}>⏳ {unackedNames.map(u => u.name).join(', ')}</div>}
-                                      <div style={{ color: '#94a3b8' }}>{ackedNames.length}/{targetUsers2.length} acknowledged</div>
+                                    <div style={{ marginTop: 8, padding: '8px 10px', background: 'rgba(255,255,255,0.6)', borderRadius: 8, border: '1px solid rgba(0,0,0,0.05)' }}>
+                                      {/* v55.60 — Acknowledgment block in archived announcements
+                                          made more prominent. Was a small inline line; now a
+                                          clear pull-out box showing who acked + when, who didn't,
+                                          and a count summary. */}
+                                      <div style={{ fontSize: '0.7rem', fontWeight: 700, color: '#475569', marginBottom: 4 }}>
+                                        Acknowledgments: <span style={{ color: ackedNames.length === targetUsers2.length && targetUsers2.length > 0 ? '#16a34a' : '#94a3b8' }}>{ackedNames.length}/{targetUsers2.length}</span>
+                                        {ackedNames.length === targetUsers2.length && targetUsers2.length > 0 && <span style={{ color: '#16a34a', marginLeft: 8 }}>✅ ALL ACKNOWLEDGED</span>}
+                                      </div>
+                                      {ackedNames.length > 0 && (
+                                        <div style={{ fontSize: '0.65rem', color: '#16a34a', marginBottom: 2 }}>
+                                          <b>✅ Acknowledged by:</b> {ackedNames.map(u => {
+                                            const ack = thisAcks.find(ak => ak.user_id === u.id);
+                                            return u.name + (ack ? ' (' + new Date(ack.acked_at).toLocaleString([], {month:'short',day:'numeric',hour:'2-digit',minute:'2-digit'}) + ')' : '');
+                                          }).join(', ')}
+                                        </div>
+                                      )}
+                                      {unackedNames.length > 0 && (
+                                        <div style={{ fontSize: '0.65rem', color: '#dc2626', fontWeight: 700 }}>
+                                          ⏳ <b>Not acknowledged:</b> {unackedNames.map(u => u.name).join(', ')}
+                                        </div>
+                                      )}
                                     </div>
                                   )}
                                 </div>
@@ -12736,7 +12765,7 @@ export default function App() {
                       latest fix is actually deployed. If he doesn't see this
                       tag in the modal, his browser is running stale JS. */}
                   <div className="mt-1.5 inline-block px-2 py-0.5 rounded bg-amber-900/60 text-amber-100 text-[10px] font-mono font-bold tracking-wide">
-                    BUILD v55.58-FLOATING-LAYOUT
+                    BUILD v55.60-NADIA-NEW-BUILD
                   </div>
                 </div>
                 <button onClick={() => closePendingTreasuryModal()}
@@ -13365,7 +13394,7 @@ export default function App() {
                     معاملة قد تكون مكررة
                   </div>
                   <div className="mt-1.5 inline-block px-2 py-0.5 rounded bg-amber-900/60 text-amber-100 text-[10px] font-mono font-bold tracking-wide">
-                    BUILD v55.58-FLOATING-LAYOUT
+                    BUILD v55.60-NADIA-NEW-BUILD
                   </div>
                 </div>
                 <button

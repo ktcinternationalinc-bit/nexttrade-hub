@@ -783,7 +783,12 @@ export default function AdminTab({ user, userProfile, users, isAdmin, customers,
           }).map(a => {
             var poster = getUserName(a.posted_by);
             var thisAcks = annAcks.filter(ak => ak.announcement_id === a.id);
-            var targetUsers = a.target_user ? (users || []).filter(u => u.id === a.target_user) : (users || []);
+            // v55.60 — Only count ACTIVE teammates as targets so deactivated
+            // users don't pollute the "not acknowledged" list. Past acks
+            // from now-deactivated users still display correctly because
+            // the ack row remains in the DB.
+            var activeUsers = (users || []).filter(u => u && u.active !== false);
+            var targetUsers = a.target_user ? activeUsers.filter(u => u.id === a.target_user) : activeUsers;
             var ackedUsers = targetUsers.filter(u => thisAcks.some(ak => ak.user_id === u.id));
             var unackedUsers = targetUsers.filter(u => !thisAcks.some(ak => ak.user_id === u.id));
             var priorityStyle = a.priority === 'urgent' ? { bg: '#fef2f2', border: '#ef4444', color: '#dc2626', icon: '🚨' }

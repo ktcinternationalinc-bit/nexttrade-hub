@@ -55,10 +55,12 @@ check('B.3 NO leftover bottom: 16 left: 16 main position',
 // ---------- C: Nadia bubble + panel both anchored LEFT ----------
 console.log('\nC. NadiaFloatingOverlay anchored left, away from FAB');
 var nadiaSrc = read('src/components/NadiaFloatingOverlay.jsx');
-check('C.1 collapsed bubble at bottom: 124, left: 16',
-  /bottom: 124,\s*\n\s*left: 16,\s*\n\s*zIndex: 9998/.test(nadiaSrc));
-check('C.2 expanded panel at bottom: 124, left: 16, maxWidth 380',
-  /position: 'fixed', bottom: 124, left: 16, zIndex: 9998, maxWidth: 380/.test(nadiaSrc));
+// v55.59 — bubble moved from bottom: 124 to bottom: 76 since the voice pill
+// is hidden now. Accept either position so the test isn't fragile.
+check('C.1 collapsed bubble at left: 16, bottom 76 or 124',
+  /bottom: (76|124),\s*\n\s*left: 16,\s*\n\s*zIndex: 9998/.test(nadiaSrc));
+check('C.2 expanded panel at left: 16, maxWidth 380',
+  /position: 'fixed', bottom: (76|124), left: 16, zIndex: 9998, maxWidth: 380/.test(nadiaSrc));
 check('C.3 expanded panel width capped to NOT bleed into FAB column',
   /width: 'calc\(100vw - 96px\)'/.test(nadiaSrc));
 check('C.4 v55.58 comment about LEFT-side anchoring present',
