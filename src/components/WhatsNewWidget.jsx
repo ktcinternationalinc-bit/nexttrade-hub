@@ -18,7 +18,7 @@
 //       'Bullet describing fix two',
 //   ] }
 // ============================================================
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 
 // IMPORTANT: latest release goes at the TOP. Newest-first order.
 //
@@ -31,6 +31,22 @@ import { useState } from 'react';
 //   - OK to mention business-side things: invoice, customs, FX rate, EGP, USD,
 //     WhatsApp, the calendar, the Sales tab.
 export const BUILD_HISTORY = [
+  {
+    version: 'v55.64',
+    date: '2026-05-07',
+    label: 'Customs — bulk import from Excel + template; AI Performance Coach back on dashboard; Shipping rates by EXACT port + What\'s New consolidates everything since your last login',
+    items: [
+      'CUSTOMS — Bulk import historical clearances from an Excel file. New green "📥 Import from Excel" button on the Customs tab opens a file picker. The system reads your sheet, shows every row in a preview table where you can edit cells in place and drop bad rows BEFORE saving anything. Status shows green ✓ for valid rows and red ⚠ for rows missing required fields (with a tooltip explaining what\'s wrong).',
+      'CUSTOMS — Download a blank template with the new "📄 Download Template" button. The template includes a "Shipment Reference" column as the first field — exactly what you asked for, so each historical clearance is tied to its shipment / invoice / B/L number. Two sheets in the file: "Customs Clearances" with all 20 columns + sample row, and "Read me" with step-by-step instructions and the calculation formulas.',
+      'CUSTOMS — Import handles the math automatically. You only need to fill USD/kg, quantity, FX rate, and product (everything else has sensible defaults). VAT, Income Tax, and Bank Commission percentages are pulled from your Customs Settings if blank. Customs Duty % is auto-resolved from your Customs Rates library by Product Name. All eight fixed fees are optional.',
+      'CUSTOMS — Header rows in your file are matched flexibly. "Shipment Reference", "B/L", "BL Number", "Invoice Number", "Reference" all map to the same field. "USD/kg", "Price USD", "Price/kg" all map to the price column. So you don\'t have to use the exact template wording if you\'re importing from your own historical spreadsheet.',
+      'AI PERFORMANCE COACH IS BACK on the dashboard. The "📊 My Performance · AI Coach" card now opens by default for everyone (was collapsed to a tiny pill before, which is why people thought it was missing). You see your activity numbers for the period you pick, your trend vs the prior period, and the "Get coach feedback" button gives you an AI-generated pep talk with growth-oriented suggestions. Available to every team member, no permission needed.',
+      'WHAT\'S NEW pill — when there are builds you haven\'t seen since your last visit, the pill turns red, pulses, and shows "+N new since your last visit" with a count badge. Open the modal and every unseen build is auto-expanded with a NEW tag, so you get one consolidated view of everything that changed instead of having to dig through each version. Closing the modal marks them all as seen.',
+      'WHAT\'S NEW history — the changelog now caps display at the most recent 100 builds. Older entries stay in the file but aren\'t rendered, so the modal stays fast even after years of releases.',
+      'SHIPPING RATES — filter by EXACT port instead of just country. Two new dropdowns at the top of the Rates tab: "All POL" (loading port) and "All POD" (discharge port). Pick one and the route cards rebuild around the exact port — Damietta and Alexandria become separate cards instead of being lumped into "Egypt". Inside the route detail, the rate history table now shows POL, POD, ETD, TT, and FT as their own columns. A "✕ Clear ports" button snaps you back to country grouping in one click.',
+      'SYSTEM TICKETS table — if you\'re still seeing the "table not found" error, run supabase/system-tickets-setup.sql in Supabase SQL Editor (one-time only). The file is included in this build under the supabase/ folder.',
+    ],
+  },
   {
     version: 'v55.62',
     date: '2026-05-07',
@@ -610,11 +626,54 @@ export const BUILD_HISTORY = [
   },
 ];
 
+// v55.64 — cap how many builds we render to keep the modal snappy.
+// Older entries stay in the array (good for searchability and history)
+// but only the most recent N are shown in the UI.
+var DISPLAY_LIMIT = 100;
+
 export default function WhatsNewWidget() {
   var [open, setOpen] = useState(false);
   var [expanded, setExpanded] = useState({}); // map of version → bool
+  // v55.64 — track which version this user has already seen (per browser).
+  // We compare BUILD_HISTORY against this to figure out which entries are
+  // NEW since their last visit. Closing the modal saves the latest as seen.
+  var [lastSeen, setLastSeen] = useState(null);
+  var [hasMounted, setHasMounted] = useState(false);
+
+  var STORAGE_KEY = 'ktc_whatsnew_last_seen_version';
+
+  useEffect(function () {
+    try {
+      var v = window.localStorage.getItem(STORAGE_KEY);
+      setLastSeen(v || null);
+    } catch (_) {}
+    setHasMounted(true);
+  }, []);
 
   var latest = BUILD_HISTORY[0];
+  // Only render the most recent N builds. Everything older is preserved
+  // in the source file but not shown.
+  var visibleBuilds = BUILD_HISTORY.slice(0, DISPLAY_LIMIT);
+
+  // Build the list of "unseen" version strings — every version published
+  // AFTER (i.e. higher up in the array than) the last one this user saw.
+  // If they've never opened it before, EVERYTHING since their first visit
+  // counts as new (we cap to most-recent build to avoid overwhelming them).
+  var unseenVersions = [];
+  if (hasMounted) {
+    if (!lastSeen) {
+      // First-time visitor — only flag the most recent build so they're
+      // not buried in years of history on day one.
+      unseenVersions = [latest.version];
+    } else {
+      for (var i = 0; i < visibleBuilds.length; i++) {
+        if (visibleBuilds[i].version === lastSeen) break;
+        unseenVersions.push(visibleBuilds[i].version);
+      }
+    }
+  }
+  var unseenCount = unseenVersions.length;
+  var hasUnseen = unseenCount > 0;
 
   var fmtDate = function (iso) {
     if (!iso) return '';
@@ -633,24 +692,54 @@ export default function WhatsNewWidget() {
     });
   };
 
+  // When opening the modal, auto-expand every unseen build so the user
+  // can scan everything that changed since they were last here without
+  // clicking each one.
+  var openModal = function () {
+    var initialExpand = {};
+    if (unseenVersions.length > 0) {
+      unseenVersions.forEach(function (v) { initialExpand[v] = true; });
+    } else {
+      initialExpand[latest.version] = true;
+    }
+    setExpanded(initialExpand);
+    setOpen(true);
+  };
+
+  // When closing, mark everything as seen by remembering the latest version.
+  var closeModal = function () {
+    try { window.localStorage.setItem(STORAGE_KEY, latest.version); } catch (_) {}
+    setLastSeen(latest.version);
+    setOpen(false);
+  };
+
   return (
     <>
       {/* Inline pill — visible on the dashboard. */}
       <button
-        onClick={function () { setOpen(true); setExpanded({ [latest.version]: true }); }}
-        title="What's new in this build"
-        className="inline-flex items-center gap-2 px-3 py-1.5 rounded-lg bg-gradient-to-r from-indigo-500 to-violet-500 text-white text-xs font-bold shadow hover:shadow-md hover:from-indigo-600 hover:to-violet-600 transition"
+        onClick={openModal}
+        title={hasUnseen ? (unseenCount + ' update' + (unseenCount === 1 ? '' : 's') + ' since you were last here') : "What's new in this build"}
+        className={'inline-flex items-center gap-2 px-3 py-1.5 rounded-lg text-white text-xs font-bold shadow hover:shadow-md transition ' + (hasUnseen ? 'bg-gradient-to-r from-rose-500 to-pink-500 hover:from-rose-600 hover:to-pink-600 ring-2 ring-rose-200 animate-pulse' : 'bg-gradient-to-r from-indigo-500 to-violet-500 hover:from-indigo-600 hover:to-violet-600')}
       >
         <span>✨</span>
-        <span>What's new in {latest.version}</span>
+        <span>
+          {hasUnseen
+            ? ('+' + unseenCount + ' new since your last visit')
+            : ('What\'s new in ' + latest.version)}
+        </span>
         <span className="opacity-70 text-[10px] font-normal">· {fmtDate(latest.date)}</span>
+        {hasUnseen && (
+          <span className="ml-1 inline-flex items-center justify-center min-w-[20px] h-5 px-1.5 rounded-full bg-white text-rose-600 text-[10px] font-extrabold">
+            {unseenCount}
+          </span>
+        )}
       </button>
 
       {/* Modal */}
       {open && (
         <div
           className="fixed inset-0 bg-black/60 z-[300] flex items-center justify-center p-4"
-          onClick={function () { setOpen(false); }}
+          onClick={closeModal}
         >
           <div
             className="bg-white rounded-2xl shadow-2xl w-full max-w-2xl flex flex-col"
@@ -662,11 +751,20 @@ export default function WhatsNewWidget() {
               <div>
                 <h2 className="text-lg font-extrabold text-slate-900 flex items-center gap-2">
                   <span>✨</span> What's new in NextTrade Hub
+                  {hasUnseen && (
+                    <span className="ml-2 px-2 py-0.5 rounded-full bg-rose-100 text-rose-700 text-[10px] font-bold uppercase tracking-wide">
+                      {unseenCount} new for you
+                    </span>
+                  )}
                 </h2>
-                <p className="text-xs text-slate-500 mt-0.5">Latest builds and what changed in each.</p>
+                <p className="text-xs text-slate-500 mt-0.5">
+                  {hasUnseen
+                    ? ('Highlights below are everything that changed since you were last here. They\'ll be marked as seen when you close this.')
+                    : 'Latest builds and what changed in each.'}
+                </p>
               </div>
               <button
-                onClick={function () { setOpen(false); }}
+                onClick={closeModal}
                 className="text-slate-400 hover:text-slate-600 text-xl leading-none px-2"
                 aria-label="Close"
               >
@@ -677,24 +775,26 @@ export default function WhatsNewWidget() {
             {/* Body — scrollable */}
             <div className="overflow-auto p-5" style={{ flex: '1 1 auto', minHeight: 0 }}>
               <div className="space-y-3">
-                {BUILD_HISTORY.map(function (b, i) {
+                {visibleBuilds.map(function (b, i) {
                   var isOpen = !!expanded[b.version];
                   var isLatest = i === 0;
+                  var isNewForUser = unseenVersions.indexOf(b.version) !== -1;
                   return (
                     <div
-                      key={b.version}
-                      className={'rounded-xl border ' + (isLatest ? 'border-indigo-200 bg-gradient-to-br from-indigo-50/40 to-violet-50/40' : 'border-slate-200 bg-white')}
+                      key={b.version + '_' + i}
+                      className={'rounded-xl border ' + (isNewForUser ? 'border-rose-300 bg-gradient-to-br from-rose-50/60 to-pink-50/40 shadow-sm' : isLatest ? 'border-indigo-200 bg-gradient-to-br from-indigo-50/40 to-violet-50/40' : 'border-slate-200 bg-white')}
                     >
                       <button
                         onClick={function () { togglePanel(b.version); }}
                         className="w-full flex items-center justify-between p-3 text-left hover:bg-slate-50/40 transition rounded-xl"
                       >
                         <div className="flex items-center gap-3 min-w-0 flex-1">
-                          <span className={'text-xs font-mono font-bold px-2 py-0.5 rounded ' + (isLatest ? 'bg-indigo-500 text-white' : 'bg-slate-100 text-slate-700')}>
+                          <span className={'text-xs font-mono font-bold px-2 py-0.5 rounded ' + (isNewForUser ? 'bg-rose-500 text-white' : isLatest ? 'bg-indigo-500 text-white' : 'bg-slate-100 text-slate-700')}>
                             {b.version}
                           </span>
                           <span className="text-xs text-slate-500 flex-shrink-0">{fmtDate(b.date)}</span>
-                          {isLatest && <span className="text-[10px] font-bold text-indigo-600 uppercase tracking-wide flex-shrink-0">Latest</span>}
+                          {isNewForUser && <span className="text-[10px] font-bold text-rose-600 uppercase tracking-wide flex-shrink-0">NEW for you</span>}
+                          {!isNewForUser && isLatest && <span className="text-[10px] font-bold text-indigo-600 uppercase tracking-wide flex-shrink-0">Latest</span>}
                           <span className="text-xs text-slate-700 truncate">{b.label}</span>
                         </div>
                         <span className="text-slate-400 ml-2 flex-shrink-0">{isOpen ? '▾' : '▸'}</span>
@@ -705,7 +805,7 @@ export default function WhatsNewWidget() {
                             {b.items.map(function (item, idx) {
                               return (
                                 <li key={idx} className="flex items-start gap-2 text-sm text-slate-700">
-                                  <span className="text-indigo-400 mt-0.5 flex-shrink-0">•</span>
+                                  <span className={(isNewForUser ? 'text-rose-400' : 'text-indigo-400') + ' mt-0.5 flex-shrink-0'}>•</span>
                                   <span>{item}</span>
                                 </li>
                               );
@@ -716,16 +816,24 @@ export default function WhatsNewWidget() {
                     </div>
                   );
                 })}
+                {BUILD_HISTORY.length > DISPLAY_LIMIT && (
+                  <div className="text-center text-[10px] text-slate-400 pt-2">
+                    Older entries ({BUILD_HISTORY.length - DISPLAY_LIMIT}) are archived in the source file but not shown here.
+                  </div>
+                )}
               </div>
             </div>
 
             {/* Footer */}
-            <div className="border-t border-slate-100 p-3 flex justify-end">
+            <div className="border-t border-slate-100 p-3 flex justify-between items-center">
+              <span className="text-[10px] text-slate-400">
+                {hasUnseen ? 'Closing this marks all ' + unseenCount + ' as seen.' : ''}
+              </span>
               <button
-                onClick={function () { setOpen(false); }}
+                onClick={closeModal}
                 className="px-4 py-2 bg-slate-700 text-white rounded-lg text-sm font-bold hover:bg-slate-800"
               >
-                Close
+                {hasUnseen ? 'Got it — mark all seen' : 'Close'}
               </button>
             </div>
           </div>

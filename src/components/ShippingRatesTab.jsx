@@ -292,6 +292,13 @@ export default function ShippingRatesTab({ toast, user, userProfile, isAdmin, cu
   const [q, setQ] = useState('');
   const [filterOrigin, setFilterOrigin] = useState('all');
   const [filterDest, setFilterDest] = useState('all');
+  // v55.63 — separate Port of Loading and Port of Discharge filters.
+  // Previously you could only filter by destination COUNTRY, so picking
+  // "Egypt" lumped Alexandria, Damietta, Sokhna, and Port Said into the
+  // same card — confusing when you only care about one specific port.
+  // These two filters now narrow results to the exact port.
+  const [filterPol, setFilterPol] = useState('all');
+  const [filterPod, setFilterPod] = useState('all');
   const [filterVendor, setFilterVendor] = useState('all');
   const [filterLine, setFilterLine] = useState('all');
   const [filterMode, setFilterMode] = useState('all');
@@ -339,6 +346,10 @@ export default function ShippingRatesTab({ toast, user, userProfile, isAdmin, cu
   const filtered = useMemo(() => rates.filter(r => {
     if (filterOrigin !== 'all' && r.origin !== filterOrigin) return false;
     if (filterDest !== 'all' && r.destination !== filterDest) return false;
+    // v55.63 — POL and POD now actually filter (previously the dropdowns
+    // could be added to the UI but didn't narrow results).
+    if (filterPol !== 'all' && r.port_of_loading !== filterPol) return false;
+    if (filterPod !== 'all' && r.port_of_discharge !== filterPod) return false;
     if (filterVendor !== 'all' && r.vendor_name !== filterVendor) return false;
     if (filterLine !== 'all' && r.shipping_line !== filterLine) return false;
     if (filterMode !== 'all' && r.transport_mode !== filterMode) return false;
@@ -346,18 +357,59 @@ export default function ShippingRatesTab({ toast, user, userProfile, isAdmin, cu
     if (filterExpiry === 'expired' && !isExpired(r.expiry_date)) return false;
     if (q) { const hay = [r.origin, r.destination, r.vendor_name, r.shipping_line, r.port_of_loading, r.port_of_discharge, r.container_type, r.notes, r.shipment_reference].filter(Boolean).join(' ').toLowerCase(); return q.toLowerCase().split(/\s+/).every(w => hay.includes(w)); }
     return true;
-  }), [rates, filterOrigin, filterDest, filterVendor, filterLine, filterMode, filterExpiry, q]);
+  }), [rates, filterOrigin, filterDest, filterPol, filterPod, filterVendor, filterLine, filterMode, filterExpiry, q]);
 
+  // v55.63 — when the user picks a specific Port of Discharge (or POL), the
+  // route cards now group by that PORT rather than by country. So picking
+  // POD = "Alexandria" gives you a card per (origin → Alexandria), no longer
+  // bundling Damietta or Port Said into the same "Egypt" card. When no port
+  // is picked, behaviour is unchanged (group by origin → destination country).
+  const groupByPort = filterPod !== 'all' || filterPol !== 'all';
   const routeGroups = useMemo(() => {
     const groups = {};
-    filtered.forEach(r => { const key = (r.origin||'?') + ' → ' + (r.destination||'?'); if (!groups[key]) groups[key] = { origin: r.origin, destination: r.destination, rates: [], vendors: new Set(), lines: new Set(), modes: new Set() }; groups[key].rates.push(r); if (r.vendor_name) groups[key].vendors.add(r.vendor_name); if (r.shipping_line) groups[key].lines.add(r.shipping_line); if (r.transport_mode) groups[key].modes.add(r.transport_mode); });
+    filtered.forEach(r => {
+      var leftLabel = groupByPort ? ((r.port_of_loading || r.origin || '?') + (r.port_of_loading && r.origin && r.port_of_loading !== r.origin ? ' (' + r.origin + ')' : '')) : (r.origin || '?');
+      var rightLabel = groupByPort ? ((r.port_of_discharge || r.destination || '?') + (r.port_of_discharge && r.destination && r.port_of_discharge !== r.destination ? ' (' + r.destination + ')' : '')) : (r.destination || '?');
+      const key = leftLabel + ' → ' + rightLabel;
+      if (!groups[key]) groups[key] = {
+        origin: r.origin,
+        destination: r.destination,
+        pol: groupByPort ? (r.port_of_loading || null) : null,
+        pod: groupByPort ? (r.port_of_discharge || null) : null,
+        leftLabel: leftLabel,
+        rightLabel: rightLabel,
+        rates: [], vendors: new Set(), lines: new Set(), modes: new Set()
+      };
+      groups[key].rates.push(r);
+      if (r.vendor_name) groups[key].vendors.add(r.vendor_name);
+      if (r.shipping_line) groups[key].lines.add(r.shipping_line);
+      if (r.transport_mode) groups[key].modes.add(r.transport_mode);
+    });
     return Object.entries(groups).map(([key, data]) => { const ar = data.rates.filter(r => !isExpired(r.expiry_date)); const ch = ar.length > 0 ? ar.reduce((a,b) => (a.rate_amount||Infinity) < (b.rate_amount||Infinity) ? a : b) : null; return { key, ...data, cheapest: ch, activeCount: ar.length, expiredCount: data.rates.length - ar.length, count: data.rates.length }; }).sort((a,b) => b.count - a.count);
-  }, [filtered]);
+  }, [filtered, groupByPort]);
 
-  const routeHistory = useMemo(() => { if (!selectedRoute) return []; return rates.filter(r => r.origin === selectedRoute.origin && r.destination === selectedRoute.destination).sort((a,b) => (b.effective_date||'').localeCompare(a.effective_date||'')); }, [selectedRoute, rates]);
+  // v55.63 — routeHistory now respects POL/POD too. When a user clicks into
+  // a route card while filtered to POD = Alexandria, the detail view stays
+  // scoped to Alexandria; it doesn't widen back to all Egypt ports.
+  const routeHistory = useMemo(() => { if (!selectedRoute) return []; return rates.filter(r => {
+    if (selectedRoute.origin && r.origin !== selectedRoute.origin) return false;
+    if (selectedRoute.destination && r.destination !== selectedRoute.destination) return false;
+    if (selectedRoute.pol && r.port_of_loading !== selectedRoute.pol) return false;
+    if (selectedRoute.pod && r.port_of_discharge !== selectedRoute.pod) return false;
+    return true;
+  }).sort((a,b) => (b.effective_date||'').localeCompare(a.effective_date||'')); }, [selectedRoute, rates]);
   const routeQuotes = useMemo(() => { if (!selectedRoute) return []; return quotes.filter(q => q.origin === selectedRoute.origin && q.destination === selectedRoute.destination).sort((a,b) => (b.quote_date||'').localeCompare(a.quote_date||'')); }, [selectedRoute, quotes]);
   const rateBookings = (rateId) => bookings.filter(b => b.rate_id === rateId);
-  const routeBookings = (origin, dest) => { const rateIds = new Set(rates.filter(r => r.origin === origin && r.destination === dest).map(r => r.id)); return bookings.filter(b => rateIds.has(b.rate_id)); };
+  const routeBookings = (origin, dest, pol, pod) => {
+    const rateIds = new Set(rates.filter(r => {
+      if (origin && r.origin !== origin) return false;
+      if (dest && r.destination !== dest) return false;
+      if (pol && r.port_of_loading !== pol) return false;
+      if (pod && r.port_of_discharge !== pod) return false;
+      return true;
+    }).map(r => r.id));
+    return bookings.filter(b => rateIds.has(b.rate_id));
+  };
 
   const handleSaveRate = async () => {
     if (!f.origin || !f.destination || !f.vendorName) { alert('Fill Origin, Destination, Vendor'); return; }
@@ -1165,7 +1217,14 @@ Date: ${today}`;
     // trend below. chartData/chartSorted no longer needed.
     return (<div>
       <button onClick={()=>{setSelectedRoute(null);setView('routes');}} className="px-3 py-1 rounded border border-slate-200 text-xs font-semibold mb-3">← Back</button>
-      <h2 className="text-xl font-extrabold mb-1">🚢 {selectedRoute.origin} → {selectedRoute.destination}</h2>
+      <h2 className="text-xl font-extrabold mb-1">🚢 {(selectedRoute.pol || selectedRoute.origin)} → {(selectedRoute.pod || selectedRoute.destination)}</h2>
+      {(selectedRoute.pol || selectedRoute.pod) && (
+        <p className="text-[11px] text-slate-500 mb-1">
+          Country pair: <strong>{selectedRoute.origin || '—'} → {selectedRoute.destination || '—'}</strong>
+          {selectedRoute.pol && <span className="ml-3">Loading port (POL): <strong>{selectedRoute.pol}</strong></span>}
+          {selectedRoute.pod && <span className="ml-3">Discharge port (POD): <strong>{selectedRoute.pod}</strong></span>}
+        </p>
+      )}
       <p className="text-xs text-slate-500 mb-3">{routeHistory.length} rates • {active.length} active • {bk.length} booked</p>
       {routeMixedCurrency && (
         <div className="bg-amber-50 border border-amber-300 rounded-lg p-2 mb-3 text-[11px] text-amber-800">
@@ -1177,7 +1236,7 @@ Date: ${today}`;
         <div className="bg-white rounded-lg p-3" style={{borderLeftWidth:3,borderLeftColor:'#ef4444'}}><div className="text-[10px] text-slate-500">Highest ({primaryCurrency})</div><div className="text-lg font-extrabold text-red-500">{primaryHistory.length>0?fCur(Math.max(...primaryHistory.map(r=>r.rate_amount||0)),primaryCurrency):'—'}</div></div>
         <div className="bg-white rounded-lg p-3" style={{borderLeftWidth:3,borderLeftColor:'#0ea5e9'}}><div className="text-[10px] text-slate-500">Avg ({primaryCurrency})</div><div className="text-lg font-extrabold">{primaryHistory.length>0?fCur(Math.round(primaryHistory.reduce((a,r)=>a+Number(r.rate_amount||0),0)/primaryHistory.length),primaryCurrency):'—'}</div></div>
         <div className="bg-white rounded-lg p-3" style={{borderLeftWidth:3,borderLeftColor:'#8b5cf6'}}><div className="text-[10px] text-slate-500">Vendors</div><div className="text-lg font-extrabold">{Object.keys(byVL).length}</div></div>
-        <div className="bg-white rounded-lg p-3" style={{borderLeftWidth:3,borderLeftColor:'#f59e0b'}}><div className="text-[10px] text-slate-500">Bookings</div><div className="text-lg font-extrabold">{routeBookings(selectedRoute.origin,selectedRoute.destination).length}</div></div>
+        <div className="bg-white rounded-lg p-3" style={{borderLeftWidth:3,borderLeftColor:'#f59e0b'}}><div className="text-[10px] text-slate-500">Bookings</div><div className="text-lg font-extrabold">{routeBookings(selectedRoute.origin,selectedRoute.destination,selectedRoute.pol,selectedRoute.pod).length}</div></div>
       </div>
       {(() => {
         // S17.11 — proper rate trend chart with time-period + shipping-line filters.
@@ -1419,6 +1478,13 @@ Date: ${today}`;
             <th className="px-2 py-2 text-[10px] text-left">Vendor / Forwarder</th>
             <th className="px-2 py-2 text-[10px] text-left">Shipping Line</th>
             <th className="px-2 py-2 text-[10px]">Container</th>
+            {/* v55.63 — surface port + transit + free-time data inline so you
+                don't have to hunt for them in the edit modal. */}
+            <th className="px-2 py-2 text-[10px] text-left" title="Port of Loading">POL</th>
+            <th className="px-2 py-2 text-[10px] text-left" title="Port of Discharge">POD</th>
+            <th className="px-2 py-2 text-[10px] text-center" title="Estimated Time of Departure (effective date)">ETD</th>
+            <th className="px-2 py-2 text-[10px] text-center" title="Transit Time in days">TT</th>
+            <th className="px-2 py-2 text-[10px] text-center" title="Free Time / free days at destination">FT</th>
             <th className="px-2 py-2 text-[10px] text-right">Rate</th>
             <th className="px-2 py-2 text-[10px] text-right">Δ vs prev</th>
             <th className="px-2 py-2 text-[10px] text-right">Total</th>
@@ -1435,6 +1501,12 @@ Date: ${today}`;
               <td className="px-2 py-1.5 font-semibold">{isBest && <span className="text-emerald-500 mr-1">★</span>}{r.vendor_name}</td>
               <td className="px-2 py-1.5">{r.shipping_line || '—'}</td>
               <td className="px-2 py-1.5 text-center"><span className="px-1.5 py-0.5 bg-blue-100 text-blue-700 rounded text-[9px]">{r.container_type}</span></td>
+              {/* v55.63 — POL / POD / ETD / TT / FT inline. */}
+              <td className="px-2 py-1.5 text-[10px]">{r.port_of_loading || <span className="text-slate-300">—</span>}</td>
+              <td className="px-2 py-1.5 text-[10px]">{r.port_of_discharge || <span className="text-slate-300">—</span>}</td>
+              <td className="px-2 py-1.5 text-center text-[10px] text-violet-600">{r.effective_date || <span className="text-slate-300">—</span>}</td>
+              <td className="px-2 py-1.5 text-center text-[10px]">{r.transit_days != null ? <span className="font-semibold text-sky-700">{r.transit_days}d</span> : <span className="text-slate-300">—</span>}</td>
+              <td className="px-2 py-1.5 text-center text-[10px]">{r.free_days != null ? <span className="font-semibold text-amber-700">{r.free_days}d</span> : <span className="text-slate-300">—</span>}</td>
               <td className={'px-2 py-1.5 text-right font-bold ' + (exp ? 'text-slate-500' : 'text-blue-600')}>{fCur(r.rate_amount, r.currency)}</td>
               <td className="px-2 py-1.5 text-right text-[10px]" title={dlt ? ('Previous: ' + fCur(dlt.prevRate, r.currency) + ' on ' + dlt.prevDate) : 'No prior rate for this vendor + line + container + currency'}>
                 {dlt
@@ -1794,17 +1866,43 @@ Date: ${today}`;
       <div className="bg-white rounded-lg p-3" style={{borderLeftWidth:3,borderLeftColor:'#8b5cf6'}}><div className="text-[10px] text-slate-500">Routes</div><div className="text-lg font-extrabold">{routeGroups.length}</div></div>
       <div className="bg-white rounded-lg p-3" style={{borderLeftWidth:3,borderLeftColor:'#f59e0b'}}><div className="text-[10px] text-slate-500">Bookings</div><div className="text-lg font-extrabold">{bookings.length}</div></div>
     </div>
-    <div className="flex gap-2 mb-3 flex-wrap">
-      <select value={filterOrigin} onChange={e=>setFilterOrigin(e.target.value)} className="px-2 py-1 rounded border text-xs"><option value="all">All Origins</option>{origins.map(o=><option key={o} value={o}>{o}</option>)}</select>
-      <select value={filterDest} onChange={e=>setFilterDest(e.target.value)} className="px-2 py-1 rounded border text-xs"><option value="all">All Destinations</option>{destinations.map(d=><option key={d} value={d}>{d}</option>)}</select>
+    <div className="flex gap-2 mb-3 flex-wrap items-center">
+      <select value={filterOrigin} onChange={e=>setFilterOrigin(e.target.value)} className="px-2 py-1 rounded border text-xs"><option value="all">All Origin Countries</option>{origins.map(o=><option key={o} value={o}>{o}</option>)}</select>
+      <select value={filterDest} onChange={e=>setFilterDest(e.target.value)} className="px-2 py-1 rounded border text-xs"><option value="all">All Destination Countries</option>{destinations.map(d=><option key={d} value={d}>{d}</option>)}</select>
+      {/* v55.63 — POL / POD now actually narrow results AND change the
+          card grouping so you only see the exact port you picked. */}
+      <select value={filterPol} onChange={e=>setFilterPol(e.target.value)} className={'px-2 py-1 rounded border text-xs ' + (filterPol !== 'all' ? 'border-blue-400 bg-blue-50 text-blue-700 font-semibold' : '')}><option value="all">All POL (loading ports)</option>{pols.map(p=><option key={p} value={p}>{p}</option>)}</select>
+      <select value={filterPod} onChange={e=>setFilterPod(e.target.value)} className={'px-2 py-1 rounded border text-xs ' + (filterPod !== 'all' ? 'border-emerald-400 bg-emerald-50 text-emerald-700 font-semibold' : '')}><option value="all">All POD (discharge ports)</option>{pods.map(p=><option key={p} value={p}>{p}</option>)}</select>
       <select value={filterVendor} onChange={e=>setFilterVendor(e.target.value)} className="px-2 py-1 rounded border text-xs"><option value="all">All Vendors</option>{vendors.map(v=><option key={v} value={v}>{v}</option>)}</select>
       <select value={filterLine} onChange={e=>setFilterLine(e.target.value)} className="px-2 py-1 rounded border text-xs"><option value="all">All Lines</option>{lines.map(l=><option key={l} value={l}>{l}</option>)}</select>
       <select value={filterExpiry} onChange={e=>setFilterExpiry(e.target.value)} className="px-2 py-1 rounded border text-xs"><option value="all">All Rates</option><option value="active">Active Only</option><option value="expired">Expired Only</option></select>
+      {(filterPol !== 'all' || filterPod !== 'all') && (
+        <button
+          onClick={() => { setFilterPol('all'); setFilterPod('all'); }}
+          className="px-2 py-1 rounded border text-xs text-slate-600 hover:bg-slate-100"
+          title="Clear port filters and return to country-level grouping">
+          ✕ Clear ports
+        </button>
+      )}
+      {(filterPol !== 'all' || filterPod !== 'all') && (
+        <span className="text-[10px] text-emerald-700 font-semibold">
+          Showing rates by port only — Damietta vs Alexandria etc. are now separate cards.
+        </span>
+      )}
     </div>
-    {routeGroups.length===0?(<div className="bg-white rounded-xl p-8 text-center border"><div className="text-4xl mb-2">🚢</div><p className="text-sm text-slate-400">No rates yet</p></div>):(<div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">{routeGroups.map(rg=>{const c=rg.cheapest; return (<div key={rg.key} onClick={()=>{setSelectedRoute({origin:rg.origin,destination:rg.destination});setView('route_detail');}} className="bg-white rounded-xl p-4 cursor-pointer border border-slate-200 hover:shadow-lg hover:-translate-y-0.5 transition-all">
-      <div className="flex justify-between items-start mb-2"><div><div className="text-sm font-extrabold text-blue-700">{rg.origin}</div><div className="text-[10px] text-slate-400">↓</div><div className="text-sm font-extrabold text-emerald-700">{rg.destination}</div></div><div className="text-right">{c?(<><div className="text-[9px] text-slate-400">Best Active</div><div className="text-lg font-extrabold text-emerald-600">{fCur(c.rate_amount,c.currency)}</div><div className="text-[9px] text-blue-500">{c.vendor_name}{c.shipping_line?' / '+c.shipping_line:''}</div><ExpiryBadge date={c.expiry_date}/></>):(<div className="text-xs text-red-400 font-bold">All Expired</div>)}</div></div>
+    {routeGroups.length===0?(<div className="bg-white rounded-xl p-8 text-center border"><div className="text-4xl mb-2">🚢</div><p className="text-sm text-slate-400">No rates yet</p></div>):(<div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">{routeGroups.map(rg=>{const c=rg.cheapest; return (<div key={rg.key} onClick={()=>{setSelectedRoute({origin:rg.origin,destination:rg.destination,pol:rg.pol||null,pod:rg.pod||null});setView('route_detail');}} className="bg-white rounded-xl p-4 cursor-pointer border border-slate-200 hover:shadow-lg hover:-translate-y-0.5 transition-all">
+      <div className="flex justify-between items-start mb-2"><div><div className="text-sm font-extrabold text-blue-700">{groupByPort && rg.pol ? rg.pol : rg.origin}{groupByPort && rg.pol && rg.origin && rg.pol !== rg.origin && <span className="text-[9px] text-slate-400 font-normal ml-1">({rg.origin})</span>}</div><div className="text-[10px] text-slate-400">↓</div><div className="text-sm font-extrabold text-emerald-700">{groupByPort && rg.pod ? rg.pod : rg.destination}{groupByPort && rg.pod && rg.destination && rg.pod !== rg.destination && <span className="text-[9px] text-slate-400 font-normal ml-1">({rg.destination})</span>}</div></div><div className="text-right">{c?(<><div className="text-[9px] text-slate-400">Best Active</div><div className="text-lg font-extrabold text-emerald-600">{fCur(c.rate_amount,c.currency)}</div><div className="text-[9px] text-blue-500">{c.vendor_name}{c.shipping_line?' / '+c.shipping_line:''}</div><ExpiryBadge date={c.expiry_date}/></>):(<div className="text-xs text-red-400 font-bold">All Expired</div>)}</div></div>
+      {/* v55.63 — show TT / FT / ETD on the cheapest active rate when a port
+          is picked, so you can compare at a glance without opening the card. */}
+      {groupByPort && c && (
+        <div className="flex gap-2 flex-wrap text-[10px] mb-2">
+          {c.transit_days != null && <span className="px-1.5 py-0.5 bg-sky-50 text-sky-700 rounded"><strong>TT:</strong> {c.transit_days}d</span>}
+          {c.free_days != null && <span className="px-1.5 py-0.5 bg-amber-50 text-amber-700 rounded"><strong>FT:</strong> {c.free_days}d</span>}
+          {c.effective_date && <span className="px-1.5 py-0.5 bg-violet-50 text-violet-700 rounded"><strong>ETD:</strong> {c.effective_date}</span>}
+        </div>
+      )}
       <div className="flex gap-1 flex-wrap mb-2">{[...rg.lines].filter(Boolean).map(l=><span key={l} className="px-1.5 py-0.5 bg-purple-100 text-purple-700 rounded text-[9px]">{l}</span>)}{[...rg.modes].map(m=><span key={m} className="px-1.5 py-0.5 bg-blue-100 text-blue-700 rounded text-[9px]">{m}</span>)}</div>
-      <div className="flex justify-between text-[10px] text-slate-500 border-t border-slate-100 pt-2"><span>{rg.activeCount} active{rg.expiredCount>0&&<span className="text-red-400 ml-1">({rg.expiredCount} exp)</span>}</span><span>{[...rg.vendors].length} vendors</span>{(() => { const rb = routeBookings(rg.origin,rg.destination); return rb.length > 0 && <span className="text-emerald-600">✓ {rb.length}x</span>; })()}</div>
+      <div className="flex justify-between text-[10px] text-slate-500 border-t border-slate-100 pt-2"><span>{rg.activeCount} active{rg.expiredCount>0&&<span className="text-red-400 ml-1">({rg.expiredCount} exp)</span>}</span><span>{[...rg.vendors].length} vendors</span>{(() => { const rb = routeBookings(rg.origin,rg.destination,rg.pol,rg.pod); return rb.length > 0 && <span className="text-emerald-600">✓ {rb.length}x</span>; })()}</div>
     </div>);})}</div>)}
     {previewQuote && <QuotePrintView quote={previewQuote} onClose={() => setPreviewQuote(null)} />}
     {requestQuoteData && <RequestQuoteModal data={requestQuoteData} onClose={()=>setRequestQuoteData(null)} origins={origins} destinations={destinations} openWhatsApp={openWhatsApp} openEmail={openEmail} generateQuoteRequest={generateQuoteRequest} userId={myId} allVendors={vendorContacts} />}

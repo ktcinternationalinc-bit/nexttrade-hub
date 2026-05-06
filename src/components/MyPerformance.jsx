@@ -35,7 +35,11 @@ export default function MyPerformance({ user, userProfile }) {
   const [coachMsg, setCoachMsg] = useState('');
   const [coachLoading, setCoachLoading] = useState(false);
   const [coachError, setCoachError] = useState('');
-  const [expanded, setExpanded] = useState(false);
+  // v55.64 — default to EXPANDED. Previously this defaulted to false so
+  // the card on the dashboard looked like a tiny placeholder pill, and
+  // people forgot the AI coach + scorecard even existed. Open by default
+  // surfaces it for everyone. Users can still tap "Collapse" to hide it.
+  const [expanded, setExpanded] = useState(true);
   // v55.54 — capture ANY load error so the user sees it instead of
   // a blank/disappearing card. Previously, errors silently produced an
   // empty data state and the component would render with zeros (which
@@ -156,8 +160,8 @@ export default function MyPerformance({ user, userProfile }) {
       {/* Header */}
       <div className="flex items-center justify-between mb-4">
         <div>
-          <div className="font-extrabold text-lg text-slate-800">📊 My Performance</div>
-          <div className="text-xs text-slate-500">Your activity, your trends, your growth</div>
+          <div className="font-extrabold text-lg text-slate-800">📊 My Performance · AI Coach</div>
+          <div className="text-xs text-slate-500">Your activity, your trends, your growth — with an AI pep talk on demand</div>
         </div>
         <button
           onClick={() => setExpanded(false)}
