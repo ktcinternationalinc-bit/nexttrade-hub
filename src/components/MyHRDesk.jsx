@@ -27,35 +27,58 @@
 import { useState, useEffect } from 'react';
 import { supabase, dbInsert } from '../lib/supabase';
 
+// v55.69 — Each category now has a `routing` field that determines where
+// the request lands automatically:
+//   'manager'      = your line manager / admins can see + super_admin
+//   'super_admin'  = super_admin ONLY (HR-sensitive; admins can't see)
+//
+// Per Max May 7 2026: only routine operational stuff like vacation, sick
+// leave, schedule changes, and recognition go to managers/admins. Anything
+// HR-sensitive (raises, promotions, complaints, transfers, training that
+// touches development plans, etc.) goes straight to super_admin and stays
+// hidden from regular admins.
+//
+// `icon` field is the emoji we render in the topic-tile picker.
 var REQUEST_CATEGORIES = [
-  { id: 'vacation',         label: '🏖️ Vacation / Time off',          hint: 'Vacation days, personal time, leave of absence' },
-  { id: 'sick_leave',       label: '🤒 Sick leave',                    hint: 'Already taken or upcoming medical leave' },
-  { id: 'equipment',        label: '💻 Equipment / Tools',             hint: 'Laptop, phone, headset, software license, etc.' },
-  { id: 'schedule_change',  label: '🕐 Schedule change',               hint: 'Change start/end times, days off, work pattern' },
-  { id: 'raise',            label: '💰 Raise / Compensation review',  hint: 'Salary review or pay-related ask' },
-  { id: 'promotion',        label: '🚀 Promotion consideration',       hint: 'Title change, role expansion, new responsibilities' },
-  { id: 'training',         label: '📚 Training / Course',             hint: 'A course, certification, or learning opportunity' },
-  { id: 'expense',          label: '🧾 Expense reimbursement',         hint: 'Travel, supplies, client meal, etc.' },
-  { id: 'transfer',         label: '🔄 Department transfer',           hint: 'Move to another team or location' },
-  { id: 'flexible_hours',   label: '⏱️ Flexible hours',                hint: 'Flex schedule, compressed week, etc.' },
-  { id: 'remote_work',      label: '🏠 Remote work',                   hint: 'Work-from-home day, hybrid schedule' },
-  { id: 'recognition',      label: '🏆 Recognition for a teammate',    hint: 'Nominate someone who did great work' },
-  { id: 'other',            label: '📋 Other',                          hint: 'Anything else' },
+  // — Operational stuff your manager handles —
+  { id: 'vacation',         icon: '🏖️',  label: 'Vacation / Time off',         hint: 'Vacation days, personal time off, leave of absence', routing: 'manager' },
+  { id: 'sick_leave',       icon: '🤒',  label: 'Sick leave',                  hint: 'Medical leave, already taken or upcoming',           routing: 'manager' },
+  { id: 'schedule_change',  icon: '🕐',  label: 'Schedule change',             hint: 'Start/end times, days off, work pattern',            routing: 'manager' },
+  { id: 'recognition',      icon: '🏆',  label: 'Recognize a teammate',         hint: 'Nominate someone who did great work',                routing: 'manager' },
+  // — HR-sensitive, super_admin only —
+  { id: 'raise',            icon: '💰',  label: 'Raise / Compensation',        hint: 'Salary review or pay-related ask',                   routing: 'super_admin' },
+  { id: 'promotion',        icon: '🚀',  label: 'Promotion',                   hint: 'Title change, role expansion, new responsibilities', routing: 'super_admin' },
+  { id: 'training',         icon: '📚',  label: 'Training / Course',           hint: 'A course, certification, or learning opportunity',   routing: 'super_admin' },
+  { id: 'expense',          icon: '🧾',  label: 'Expense reimbursement',       hint: 'Travel, supplies, client meal, etc.',                routing: 'super_admin' },
+  { id: 'transfer',         icon: '🔄',  label: 'Department transfer',         hint: 'Move to another team or location',                   routing: 'super_admin' },
+  { id: 'flexible_hours',   icon: '⏱️',  label: 'Flexible hours',              hint: 'Flex schedule, compressed week, etc.',               routing: 'super_admin' },
+  { id: 'remote_work',      icon: '🏠',  label: 'Remote work',                 hint: 'Work-from-home day, hybrid schedule',                routing: 'super_admin' },
+  { id: 'equipment',        icon: '💻',  label: 'Equipment / Tools',           hint: 'Laptop, phone, headset, software license, etc.',     routing: 'super_admin' },
+  { id: 'other',            icon: '📋',  label: 'Other',                       hint: 'Anything else',                                      routing: 'super_admin' },
 ];
 
+// Concerns are ALWAYS super_admin only — they're sensitive by definition.
 var COMPLAINT_CATEGORIES = [
-  { id: 'interpersonal_conflict', label: '👥 Conflict with a coworker',  hint: 'Tension, disagreement, communication issue' },
-  { id: 'manager_issue',          label: '👔 Issue with my manager',     hint: 'Concerns about how a manager is treating you or the team' },
-  { id: 'harassment',             label: '🚫 Harassment',                hint: 'Unwelcome behavior of any kind' },
-  { id: 'discrimination',         label: '⚖️ Discrimination',            hint: 'Unfair treatment based on who you are' },
-  { id: 'safety',                 label: '⚠️ Safety concern',             hint: 'Workplace safety, equipment, environment' },
-  { id: 'workload',               label: '📈 Workload / Burnout',        hint: 'Unsustainable hours or pressure' },
-  { id: 'pay_concern',            label: '💵 Pay or compensation issue', hint: 'Concern about pay accuracy, equity, or process' },
-  { id: 'work_environment',       label: '🏢 Work environment',          hint: 'Office, equipment, conditions' },
-  { id: 'retaliation',            label: '🛡️ Retaliation',                hint: 'Punished for raising a concern' },
-  { id: 'process_issue',          label: '🔧 Process or policy issue',   hint: 'Something the company should change' },
-  { id: 'other',                  label: '📋 Other',                      hint: 'Anything else' },
+  { id: 'interpersonal_conflict', icon: '👥', label: 'Conflict with a coworker',   hint: 'Tension, disagreement, communication issue' },
+  { id: 'manager_issue',          icon: '👔', label: 'Issue with my manager',      hint: 'Concerns about how a manager is treating you or the team' },
+  { id: 'harassment',             icon: '🚫', label: 'Harassment',                 hint: 'Unwelcome behavior of any kind' },
+  { id: 'discrimination',         icon: '⚖️', label: 'Discrimination',             hint: 'Unfair treatment based on who you are' },
+  { id: 'safety',                 icon: '⚠️', label: 'Safety concern',             hint: 'Workplace safety, equipment, environment' },
+  { id: 'workload',               icon: '📈', label: 'Workload / Burnout',         hint: 'Unsustainable hours or pressure' },
+  { id: 'pay_concern',            icon: '💵', label: 'Pay or compensation issue',  hint: 'Concern about pay accuracy, equity, or process' },
+  { id: 'work_environment',       icon: '🏢', label: 'Work environment',           hint: 'Office, equipment, conditions' },
+  { id: 'retaliation',            icon: '🛡️', label: 'Retaliation',                hint: 'Punished for raising a concern' },
+  { id: 'process_issue',          icon: '🔧', label: 'Process or policy issue',    hint: 'Something the company should change' },
+  { id: 'other',                  icon: '📋', label: 'Other',                      hint: 'Anything else' },
 ];
+
+// Helper: derive visibility from category (so the user never has to choose
+// — picking the topic IS the routing decision).
+function visibilityFromCategory(cat) {
+  var found = REQUEST_CATEGORIES.find(function (c) { return c.id === cat; });
+  if (found && found.routing === 'manager') return 'admin';
+  return 'super_admin_only';
+}
 
 var STATUS_COLORS = {
   submitted:         { bg: 'bg-blue-100',     text: 'text-blue-700',    label: 'Submitted' },
@@ -93,7 +116,9 @@ export default function MyHRDesk({ user, userProfile, users }) {
     ends_on: '',
     severity: 'medium',
     anonymous_to_admins: true,
-    visibility: 'admin',
+    // v55.69 — visibility is auto-derived from category, not user-picked.
+    // Initial value matches default category 'vacation' (manager-routed).
+    visibility: visibilityFromCategory('vacation'),
   });
 
   // Load the user's recent HR items so they can see status at a glance.
@@ -141,7 +166,9 @@ export default function MyHRDesk({ user, userProfile, users }) {
   var openRequest = function () {
     setForm({
       category: 'vacation', title: '', description: '', priority: 'normal',
-      starts_on: '', ends_on: '', severity: 'medium', anonymous_to_admins: true, visibility: 'admin',
+      starts_on: '', ends_on: '', severity: 'medium', anonymous_to_admins: true,
+      // v55.69 — auto-derived from category (vacation = manager-routed)
+      visibility: visibilityFromCategory('vacation'),
     });
     setSubmitOk(null);
     setOpenModal('request');
@@ -149,7 +176,9 @@ export default function MyHRDesk({ user, userProfile, users }) {
   var openComplaint = function () {
     setForm({
       category: 'interpersonal_conflict', title: '', description: '', priority: 'normal',
-      starts_on: '', ends_on: '', severity: 'medium', anonymous_to_admins: true, visibility: 'admin',
+      starts_on: '', ends_on: '', severity: 'medium', anonymous_to_admins: true,
+      // Complaints are ALWAYS super_admin-only regardless of category.
+      visibility: 'super_admin_only',
     });
     setSubmitOk(null);
     setOpenModal('complaint');
@@ -162,11 +191,16 @@ export default function MyHRDesk({ user, userProfile, users }) {
   var submitRequest = async function () {
     if (loading) return;
     if (!form.title.trim()) {
-      alert('Please add a short title so super_admin knows what this is about.');
+      alert('Please add a short title so the reviewer knows what this is about.');
       return;
     }
     setLoading(true);
     try {
+      // v55.69 — visibility is ALWAYS derived from category at submit time
+      // (belt-and-braces — even if form state somehow got stale, the routing
+      // matches the picked topic). This is the single source of truth for
+      // who can see this request.
+      var derivedVisibility = visibilityFromCategory(form.category);
       var payload = {
         submitted_by: myId,
         category: form.category,
@@ -175,7 +209,7 @@ export default function MyHRDesk({ user, userProfile, users }) {
         priority: form.priority,
         starts_on: form.starts_on || null,
         ends_on: form.ends_on || null,
-        visibility: form.visibility,
+        visibility: derivedVisibility,
         status: 'submitted',
       };
       var res = await supabase.from('hr_requests').insert(payload).select().maybeSingle();
@@ -379,7 +413,7 @@ export default function MyHRDesk({ user, userProfile, users }) {
           <div className="bg-white rounded-xl shadow-2xl w-full max-w-lg flex flex-col" style={{ maxHeight: '90vh' }} onClick={function (e) { e.stopPropagation(); }}>
             <div className="p-5 border-b border-slate-100">
               <h2 className="text-lg font-extrabold text-amber-900 flex items-center gap-2">📝 File a Request</h2>
-              <p className="text-xs text-slate-500 mt-0.5">Goes to super_admin and the relevant admin for review.</p>
+              <p className="text-xs text-slate-500 mt-0.5">Pick a topic — the system routes it to the right person automatically.</p>
             </div>
             {submitOk ? (
               <div className="p-8 text-center">
@@ -392,13 +426,85 @@ export default function MyHRDesk({ user, userProfile, users }) {
             ) : (
               <>
                 <div className="overflow-auto p-5 space-y-3" style={{ flex: '1 1 auto' }}>
+                  {/* v55.69 — icon-tile topic picker. Tap an icon to pick.
+                      Each topic is grouped by where it routes to so the user
+                      sees at a glance "manager handles this" vs "super_admin
+                      only". This replaces the old dropdown + visibility
+                      selector (the user no longer has to choose visibility
+                      manually — picking the topic IS the routing decision). */}
                   <div>
-                    <label className="text-[10px] font-bold text-slate-700 block mb-1">What kind of request?</label>
-                    <select value={form.category} onChange={function (e) { setForm(Object.assign({}, form, { category: e.target.value })); }} className="w-full px-3 py-2 border border-slate-300 rounded text-sm">
-                      {REQUEST_CATEGORIES.map(function (c) { return <option key={c.id} value={c.id}>{c.label}</option>; })}
-                    </select>
-                    <div className="text-[10px] text-slate-500 mt-1">{(REQUEST_CATEGORIES.find(function (c) { return c.id === form.category; }) || {}).hint}</div>
+                    <label className="text-[10px] font-bold text-slate-700 block mb-2">What's this about?</label>
+
+                    {/* Manager-routed topics */}
+                    <div className="mb-3">
+                      <div className="text-[10px] font-bold text-blue-700 uppercase tracking-wide mb-1.5 flex items-center gap-1">
+                        <span>👤</span> Goes to your manager
+                      </div>
+                      <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+                        {REQUEST_CATEGORIES.filter(function (c) { return c.routing === 'manager'; }).map(function (c) {
+                          var selected = form.category === c.id;
+                          return (
+                            <button
+                              key={c.id}
+                              type="button"
+                              onClick={function () { setForm(Object.assign({}, form, { category: c.id, visibility: visibilityFromCategory(c.id) })); }}
+                              className={'flex flex-col items-center gap-1 p-2 rounded-lg border-2 transition text-center ' + (selected ? 'border-blue-500 bg-blue-50 shadow-sm' : 'border-slate-200 bg-white hover:border-slate-300')}
+                              title={c.hint}
+                            >
+                              <span className="text-2xl">{c.icon}</span>
+                              <span className={'text-[10px] font-bold leading-tight ' + (selected ? 'text-blue-800' : 'text-slate-600')}>{c.label}</span>
+                            </button>
+                          );
+                        })}
+                      </div>
+                    </div>
+
+                    {/* super_admin-routed topics (HR-sensitive) */}
+                    <div>
+                      <div className="text-[10px] font-bold text-violet-700 uppercase tracking-wide mb-1.5 flex items-center gap-1">
+                        <span>🔒</span> Goes to super_admin only (HR-sensitive — admins can't see)
+                      </div>
+                      <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+                        {REQUEST_CATEGORIES.filter(function (c) { return c.routing === 'super_admin'; }).map(function (c) {
+                          var selected = form.category === c.id;
+                          return (
+                            <button
+                              key={c.id}
+                              type="button"
+                              onClick={function () { setForm(Object.assign({}, form, { category: c.id, visibility: visibilityFromCategory(c.id) })); }}
+                              className={'flex flex-col items-center gap-1 p-2 rounded-lg border-2 transition text-center ' + (selected ? 'border-violet-500 bg-violet-50 shadow-sm' : 'border-slate-200 bg-white hover:border-slate-300')}
+                              title={c.hint}
+                            >
+                              <span className="text-2xl">{c.icon}</span>
+                              <span className={'text-[10px] font-bold leading-tight ' + (selected ? 'text-violet-800' : 'text-slate-600')}>{c.label}</span>
+                            </button>
+                          );
+                        })}
+                      </div>
+                    </div>
+
+                    {/* Hint for the chosen topic */}
+                    <div className="text-[10px] text-slate-500 mt-2 italic">{(REQUEST_CATEGORIES.find(function (c) { return c.id === form.category; }) || {}).hint}</div>
                   </div>
+
+                  {/* Auto-routing badge — visible confirmation of where it goes */}
+                  {(function () {
+                    var cat = REQUEST_CATEGORIES.find(function (c) { return c.id === form.category; });
+                    if (!cat) return null;
+                    if (cat.routing === 'manager') {
+                      return (
+                        <div className="bg-blue-50 border border-blue-200 rounded-lg p-2 text-[11px] text-blue-900">
+                          <strong>📨 Goes to:</strong> Your manager + super_admin can see this. (Manager handles operational items like vacation/sick leave/schedule.)
+                        </div>
+                      );
+                    }
+                    return (
+                      <div className="bg-violet-50 border border-violet-200 rounded-lg p-2 text-[11px] text-violet-900">
+                        <strong>🔒 Goes to:</strong> super_admin only. Regular admins (including your manager) won't see this. Use this for anything HR-sensitive.
+                      </div>
+                    );
+                  })()}
+
                   <div>
                     <label className="text-[10px] font-bold text-slate-700 block mb-1">Short title</label>
                     <input value={form.title} onChange={function (e) { setForm(Object.assign({}, form, { title: e.target.value })); }} placeholder="e.g. Vacation request: June 5-12" maxLength={120} className="w-full px-3 py-2 border border-slate-300 rounded text-sm" />
@@ -417,25 +523,18 @@ export default function MyHRDesk({ user, userProfile, users }) {
                   )}
                   <div>
                     <label className="text-[10px] font-bold text-slate-700 block mb-1">Details</label>
-                    <textarea value={form.description} onChange={function (e) { setForm(Object.assign({}, form, { description: e.target.value })); }} rows={5} placeholder="Anything that helps super_admin decide quickly." className="w-full px-3 py-2 border border-slate-300 rounded text-sm" />
+                    <textarea value={form.description} onChange={function (e) { setForm(Object.assign({}, form, { description: e.target.value })); }} rows={5} placeholder="Anything that helps the reviewer decide quickly." className="w-full px-3 py-2 border border-slate-300 rounded text-sm" />
                   </div>
-                  <div className="grid grid-cols-2 gap-2">
-                    <div>
-                      <label className="text-[10px] font-bold text-slate-700 block mb-1">Priority</label>
-                      <select value={form.priority} onChange={function (e) { setForm(Object.assign({}, form, { priority: e.target.value })); }} className="w-full px-3 py-2 border border-slate-300 rounded text-sm">
-                        <option value="low">Low — whenever</option>
-                        <option value="normal">Normal</option>
-                        <option value="high">High — soon please</option>
-                        <option value="urgent">Urgent — needs response today</option>
-                      </select>
-                    </div>
-                    <div>
-                      <label className="text-[10px] font-bold text-slate-700 block mb-1">Visibility</label>
-                      <select value={form.visibility} onChange={function (e) { setForm(Object.assign({}, form, { visibility: e.target.value })); }} className="w-full px-3 py-2 border border-slate-300 rounded text-sm">
-                        <option value="admin">Admins + super_admin can see</option>
-                        <option value="super_admin_only">super_admin only (private)</option>
-                      </select>
-                    </div>
+                  <div>
+                    {/* v55.69 — visibility dropdown removed; routing is now
+                        derived from the category. Priority alone here. */}
+                    <label className="text-[10px] font-bold text-slate-700 block mb-1">Priority</label>
+                    <select value={form.priority} onChange={function (e) { setForm(Object.assign({}, form, { priority: e.target.value })); }} className="w-full px-3 py-2 border border-slate-300 rounded text-sm">
+                      <option value="low">Low — whenever</option>
+                      <option value="normal">Normal</option>
+                      <option value="high">High — soon please</option>
+                      <option value="urgent">Urgent — needs response today</option>
+                    </select>
                   </div>
                 </div>
                 <div className="p-3 border-t border-slate-100 flex justify-end gap-2">
@@ -475,7 +574,7 @@ export default function MyHRDesk({ user, userProfile, users }) {
                   <div>
                     <label className="text-[10px] font-bold text-slate-700 block mb-1">What's this about?</label>
                     <select value={form.category} onChange={function (e) { setForm(Object.assign({}, form, { category: e.target.value })); }} className="w-full px-3 py-2 border border-slate-300 rounded text-sm">
-                      {COMPLAINT_CATEGORIES.map(function (c) { return <option key={c.id} value={c.id}>{c.label}</option>; })}
+                      {COMPLAINT_CATEGORIES.map(function (c) { return <option key={c.id} value={c.id}>{c.icon + ' ' + c.label}</option>; })}
                     </select>
                     <div className="text-[10px] text-slate-500 mt-1">{(COMPLAINT_CATEGORIES.find(function (c) { return c.id === form.category; }) || {}).hint}</div>
                   </div>

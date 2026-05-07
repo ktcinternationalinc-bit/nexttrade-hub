@@ -133,16 +133,20 @@ check('3.12 detects missing-table → friendly setup banner',
 // ============================================================
 // 4. PersonalDashboard — MyHRDesk mounted prominently
 // ============================================================
-group('4. PersonalDashboard wires MyHRDesk above MyPerformance');
+group('4. AssistantsBar wires MyHRDesk + MyPerformance (v55.71 architecture)');
 
 var pd = read('src/components/PersonalDashboard.jsx');
-check('4.1 imports MyHRDesk', /import MyHRDesk from '\.\/MyHRDesk'/.test(pd));
-check('4.2 MyHRDesk mounted', /<MyHRDesk[\s\S]{0,200}\/>/.test(pd));
-check('4.3 MyHRDesk wrapped in SafeSection', /SafeSection label="My HR Desk"[\s\S]{0,100}<MyHRDesk/.test(pd));
-check('4.4 MyHRDesk appears BEFORE MyPerformance',
-  pd.indexOf('<MyHRDesk') < pd.indexOf('<MyPerformance'));
-check('4.5 user props passed (user, userProfile, users)',
-  /<MyHRDesk user=\{user\} userProfile=\{userProfile\} users=\{users\}/.test(pd));
+var ab = read('src/components/AssistantsBar.jsx');
+check('4.1 v55.71 — AssistantsBar imports MyHRDesk (was PersonalDashboard)',
+  /import MyHRDesk from '\.\/MyHRDesk'/.test(ab));
+check('4.2 v55.71 — MyHRDesk mounted inside AssistantsBar Jenna panel',
+  /<MyHRDesk[\s\S]{0,200}\/>/.test(ab));
+check('4.3 v55.71 — Jenna panel wraps MyHRDesk in expand block',
+  /openPanel === 'jenna'[\s\S]{0,1500}<MyHRDesk/.test(ab));
+check('4.4 v55.71 — MyHRDesk + MyPerformance both inside AssistantsBar (in Jenna and Sara panels)',
+  /<MyHRDesk[\s\S]{0,5000}<MyPerformance/.test(ab));
+check('4.5 user props passed to MyHRDesk inside AssistantsBar',
+  /<MyHRDesk user=\{user\} userProfile=\{userProfile\} users=\{users\}/.test(ab));
 
 // ============================================================
 // 5. AdminTab — HR Inbox section

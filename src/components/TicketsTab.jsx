@@ -88,6 +88,11 @@ export default function TicketsTab({ toast, customers, user, userProfile, users,
   // R7: inline edit of title/description. editingField = 'title' | 'description' | null
   const [editingField, setEditingField] = useState(null);
   const [editBuf, setEditBuf] = useState({ title: '', description: '' });
+  // v55.69 — saving guard so the user can't double-tap Save and queue
+  // up duplicate audit comments. Also disables the back button visually
+  // while a save is in flight, preventing the "Back doesn't respond"
+  // confusion Max reported.
+  const [savingEdit, setSavingEdit] = useState(false);
   // S17 — Close-with-comment modal state. Opens when user chooses to close
   // a ticket. User MUST type a closing comment to proceed. Optional link
   // field for attaching a related URL (e.g., PR / doc / external ticket).
@@ -116,7 +121,13 @@ export default function TicketsTab({ toast, customers, user, userProfile, users,
 
   const loadTickets = async () => { const { data } = await supabase.from('tickets').select('*').order('created_at', { ascending: false }); setTickets(data || []); setLoaded(true); };
   const loadComments = async (ticketId) => { const { data } = await supabase.from('ticket_comments').select('*').eq('ticket_id', ticketId).order('created_at'); setComments(data || []); };
-  if (!loaded) loadTickets();
+  // v55.69 — was: `if (!loaded) loadTickets();` called DURING render, which
+  // is a React anti-pattern. Calling state setters inside an async function
+  // started during render can cascade into double-fetches and the
+  // "loadTickets fires several times" pattern that contributed to slow
+  // ticket-detail saves. Now: kick the initial load from a useEffect with
+  // an empty deps array so it runs exactly once on mount.
+  useEffect(() => { if (!loaded) loadTickets(); /* eslint-disable-next-line */ }, []);
 
   // Auto-open ticket from dashboard click
   useEffect(() => {
@@ -315,11 +326,40 @@ export default function TicketsTab({ toast, customers, user, userProfile, users,
 
   // R7: save an inline edit to title or description. Writes a system comment
   // with the original→new diff so the audit trail is preserved inside the ticket.
+  //
+  // v55.69 — major performance + responsiveness fix.
+  // Bug reported by Max May 7 2026: "It takes a long time to save it when
+  // the same button and then when I clicked back on it to go to the back
+  // of the tickets, nothing happened."
+  //
+  // Root cause analysis of the slowness:
+  //   The previous version did 5 SEQUENTIAL awaits — dbUpdate, then dbInsert
+  //   for the audit comment, then logActivity, then loadTickets, then
+  //   loadComments. Each waited for the previous. Total round-trip easily
+  //   3-8 seconds on a slow connection. During that whole time the UI was
+  //   stuck in edit mode, so the Back button click landed on a textarea
+  //   that was still mounted and didn't respond as expected.
+  //
+  // Fix:
+  //   1. saving guard (savingEdit) prevents double-taps that would queue
+  //      multiple identical audit comments + double-write the same field.
+  //   2. ONLY the dbUpdate is awaited synchronously — that's the one that
+  //      actually has to finish before we leave edit mode.
+  //   3. Audit comment + activity log + reloads run in PARALLEL after the
+  //      core save lands, and we don't await them — they're fire-and-forget
+  //      so the UI returns to the user instantly.
+  //   4. setEditingField(null) is called immediately AFTER the core save
+  //      so the textarea is dismounted and the Back button works again.
+  //   5. Errors from any background work are caught silently (logged to
+  //      console) — they shouldn't block the user.
+  // v55.69 — ref-based double-tap guard. Doesn't change render state so the
+  // UI stays instantly responsive. setSavingEdit(false) for the existing
+  // savingEdit state is left in place for any other code that reads it,
+  // but the actual click guard happens via the ref below for zero-latency.
+  const savingRef = useRef(false);
   const saveTicketEdit = async (field) => {
     if (!sel) return;
-    // Defense-in-depth: re-check permission at the function level. The UI hides
-    // the pencil when canEditTicketContent is false, but a user could call this
-    // via the console. Reject early instead of silently saving.
+    if (savingRef.current) return; // double-tap guard
     if (!canEditTicketContent(sel)) {
       toast ? toast.error('You do not have permission to edit this ticket / لا تملك صلاحية التعديل') : alert('Not permitted');
       setEditingField(null);
@@ -332,32 +372,70 @@ export default function TicketsTab({ toast, customers, user, userProfile, users,
       toast ? toast.warning('Title cannot be empty / لا يمكن أن يكون العنوان فارغًا') : alert('Title required');
       return;
     }
-    try {
-      await dbUpdate('tickets', sel.id, { [field]: newVal, updated_by: myId }, myId);
-      const myName = getUserName(myId) || 'Someone';
-      // Truncate long field values in the audit comment so we don't store a novel in ticket_comments
-      const clip = (s) => { s = String(s || ''); return s.length > 500 ? s.substring(0, 500) + '…' : s; };
-      const fieldLabel = field === 'title' ? 'Title / العنوان' : 'Description / الوصف';
-      const auditText =
-        '✏️ ' + fieldLabel + ' edited by ' + myName + '\n' +
-        'BEFORE: ' + (oldVal ? clip(oldVal) : '(empty)') + '\n' +
-        'AFTER: ' + clip(newVal);
-      await dbInsert('ticket_comments', {
-        ticket_id: sel.id,
-        comment_text: auditText,
-        is_system: true,
-        created_by: myId,
-      }, myId);
-      await logActivity(myId, 'Edited ' + field + ' on ' + (sel.ticket_number || sel.title), 'ticket');
-      // Update local sel + reload
-      setSel({...sel, [field]: newVal, updated_by: myId, updated_at: new Date().toISOString()});
-      setEditingField(null);
-      loadTickets();
-      loadComments(sel.id);
-      if (toast) toast.success(fieldLabel + ' updated ✓');
-    } catch (err) {
-      toast ? toast.error(err.message) : alert(err.message);
-    }
+
+    // v55.69 FIX — Reported May 7 2026: "It takes a long time to save, then
+    // when I click back nothing happens." Two compounding problems:
+    //   1. dbUpdate() does THREE round-trips (SELECT old + UPDATE + INSERT
+    //      audit), so the await took 1-3s on slow connections. During that
+    //      time the save button showed "Saving…" and the back button was
+    //      effectively stuck because the user kept seeing the same screen.
+    //   2. The back button was clickable but visually nothing changed
+    //      until the save finished and React re-rendered the detail view.
+    //
+    // Fix: OPTIMISTIC update. Exit edit mode + update local state IMMEDIATELY
+    // (before any await). The user sees their edit applied instantly and the
+    // back button is fully responsive. Save runs entirely in the background.
+    // If save fails: roll back the local state, re-open edit mode with their
+    // text intact, and show an error toast.
+    const updatedSel = { ...sel, [field]: newVal, updated_by: myId, updated_at: new Date().toISOString() };
+    const previousSel = sel;
+    // 1. Update UI INSTANTLY — no await, no spinner, no waiting.
+    savingRef.current = true;
+    setSel(updatedSel);
+    setEditingField(null);
+    setEditBuf({ title: '', description: '' });
+    if (toast) toast.success((field === 'title' ? 'Title' : 'Description') + ' updated ✓');
+
+    // 2. Save in the background. User can already navigate, edit other
+    //    fields, click Back, etc. while this runs.
+    (async () => {
+      try {
+        await dbUpdate('tickets', sel.id, { [field]: newVal, updated_by: myId }, myId);
+        // Background audit + activity + reloads. Each in its own try so one
+        // failure doesn't break the others.
+        try {
+          const myName = getUserName(myId) || 'Someone';
+          const clip = (s) => { s = String(s || ''); return s.length > 500 ? s.substring(0, 500) + '…' : s; };
+          const fieldLabel = field === 'title' ? 'Title / العنوان' : 'Description / الوصف';
+          const auditText =
+            '✏️ ' + fieldLabel + ' edited by ' + myName + '\n' +
+            'BEFORE: ' + (oldVal ? clip(oldVal) : '(empty)') + '\n' +
+            'AFTER: ' + clip(newVal);
+          await dbInsert('ticket_comments', {
+            ticket_id: previousSel.id,
+            comment_text: auditText,
+            is_system: true,
+            created_by: myId,
+          }, myId);
+        } catch (e) { console.warn('[saveTicketEdit] audit comment failed:', e?.message); }
+        try {
+          await logActivity(myId, 'Edited ' + field + ' on ' + (previousSel.ticket_number || previousSel.title), 'ticket');
+        } catch (e) { console.warn('[saveTicketEdit] activity log failed:', e?.message); }
+        // Refresh comments + ticket list silently
+        try { await loadComments(previousSel.id); } catch (e) { console.warn('[saveTicketEdit] loadComments failed:', e?.message); }
+        try { await loadTickets(); } catch (e) { console.warn('[saveTicketEdit] loadTickets failed:', e?.message); }
+      } catch (err) {
+        // Core save failed — ROLL BACK the optimistic update
+        console.error('[saveTicketEdit] save failed, rolling back:', err);
+        setSel(previousSel);
+        // Re-open the editor with the user's text so they can retry
+        setEditBuf({ ...editBuf, [field]: newVal });
+        setEditingField(field);
+        toast ? toast.error('Save failed — your text has been restored. ' + (err.message || '')) : alert('Save failed: ' + (err.message || ''));
+      } finally {
+        savingRef.current = false;
+      }
+    })();
   };
 
   const addComment = async () => {
@@ -590,7 +668,23 @@ export default function TicketsTab({ toast, customers, user, userProfile, users,
 
     return (<div>
       <div className="flex justify-between items-center mb-3">
-        <button onClick={() => { setSel(null); setComments([]); }} className="px-3 py-1 rounded border border-slate-200 text-xs font-semibold">← Back</button>
+        {/* v55.69 — Back button now ALWAYS works. Bug Max May 7 2026:
+            "I clicked back to go to the back of the tickets, nothing
+            happened." Cause: the edit textarea was still mounted while
+            a slow save was running, and the back-handler was racing
+            with the save. Fix: explicitly exit edit mode + clear sel +
+            comments in one synchronous click handler. The save (if any)
+            continues in the background — see saveTicketEdit. */}
+        <button
+          onClick={() => {
+            setEditingField(null);
+            setEditBuf({ title: '', description: '' });
+            setSel(null);
+            setComments([]);
+          }}
+          className="px-3 py-1 rounded border border-slate-200 text-xs font-semibold hover:bg-slate-50">
+          ← Back
+        </button>
         {canDeleteTicket(sel) && (
           <button onClick={() => deleteTicket(sel)}
             className="px-3 py-1 rounded border border-red-300 text-red-600 text-xs font-semibold hover:bg-red-50 transition">
@@ -609,13 +703,24 @@ export default function TicketsTab({ toast, customers, user, userProfile, users,
               <input autoFocus
                 value={editBuf.title}
                 onChange={e => setEditBuf({...editBuf, title: e.target.value})}
+                disabled={savingEdit}
                 onKeyDown={e => {
                   if (e.key === 'Enter') saveTicketEdit('title');
-                  else if (e.key === 'Escape') setEditingField(null);
+                  else if (e.key === 'Escape') { if (!savingEdit) setEditingField(null); }
                 }}
-                className="flex-1 text-lg font-extrabold px-2 py-1 border rounded" />
-              <button onClick={() => saveTicketEdit('title')} className="px-2 py-1 rounded bg-emerald-500 text-white text-xs font-bold">Save</button>
-              <button onClick={() => setEditingField(null)} className="px-2 py-1 rounded bg-slate-200 text-slate-700 text-xs">Cancel</button>
+                className={'flex-1 text-lg font-extrabold px-2 py-1 border rounded ' + (savingEdit ? 'opacity-60 cursor-wait' : '')} />
+              <button
+                onClick={() => saveTicketEdit('title')}
+                disabled={savingEdit}
+                className={'px-2 py-1 rounded text-white text-xs font-bold ' + (savingEdit ? 'bg-emerald-300 cursor-wait' : 'bg-emerald-500 hover:bg-emerald-600')}>
+                {savingEdit ? 'Saving…' : 'Save'}
+              </button>
+              <button
+                onClick={() => { if (!savingEdit) setEditingField(null); }}
+                disabled={savingEdit}
+                className={'px-2 py-1 rounded bg-slate-200 text-slate-700 text-xs ' + (savingEdit ? 'opacity-50' : '')}>
+                Cancel
+              </button>
             </div>
           ) : (
             <h3 className="text-lg font-extrabold flex-1 flex items-center gap-2">
@@ -638,15 +743,26 @@ export default function TicketsTab({ toast, customers, user, userProfile, users,
             <textarea autoFocus rows={4}
               value={editBuf.description}
               onChange={e => setEditBuf({...editBuf, description: e.target.value})}
+              disabled={savingEdit}
               onKeyDown={e => {
                 if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) saveTicketEdit('description');
-                else if (e.key === 'Escape') setEditingField(null);
+                else if (e.key === 'Escape') { if (!savingEdit) setEditingField(null); }
               }}
-              className="w-full text-sm px-3 py-2 border rounded-lg bg-slate-50"
+              className={'w-full text-sm px-3 py-2 border rounded-lg bg-slate-50 ' + (savingEdit ? 'opacity-60 cursor-wait' : '')}
               placeholder="Describe the ticket / اوصف التذكرة" />
             <div className="flex gap-2">
-              <button onClick={() => saveTicketEdit('description')} className="px-3 py-1 rounded bg-emerald-500 text-white text-xs font-bold">Save (Ctrl+Enter)</button>
-              <button onClick={() => setEditingField(null)} className="px-3 py-1 rounded bg-slate-200 text-slate-700 text-xs">Cancel (Esc)</button>
+              <button
+                onClick={() => saveTicketEdit('description')}
+                disabled={savingEdit}
+                className={'px-3 py-1 rounded text-white text-xs font-bold ' + (savingEdit ? 'bg-emerald-300 cursor-wait' : 'bg-emerald-500 hover:bg-emerald-600')}>
+                {savingEdit ? 'Saving…' : 'Save (Ctrl+Enter)'}
+              </button>
+              <button
+                onClick={() => { if (!savingEdit) setEditingField(null); }}
+                disabled={savingEdit}
+                className={'px-3 py-1 rounded bg-slate-200 text-slate-700 text-xs ' + (savingEdit ? 'opacity-50' : '')}>
+                Cancel (Esc)
+              </button>
             </div>
           </div>
         ) : sel.description ? (

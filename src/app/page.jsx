@@ -537,6 +537,17 @@ export default function App() {
   const [tabLoading, setTabLoading] = useState(false);
   const [greeterDismissed, setGreeterDismissed] = useState(false);
   const [greeterHasGreeted, setGreeterHasGreeted] = useState(false);
+  // v55.70 — when the user clicks the "Nadia" tile in the AssistantsBar
+  // on the dashboard, we receive a ktc:open-nadia event. If Nadia is
+  // currently dismissed (collapsed), un-dismiss her so the chat is visible
+  // for the click-through. Listener is mounted once per session.
+  useEffect(() => {
+    var handler = function () { setGreeterDismissed(false); };
+    if (typeof window !== 'undefined') {
+      window.addEventListener('ktc:open-nadia', handler);
+      return function () { window.removeEventListener('ktc:open-nadia', handler); };
+    }
+  }, []);
   // S22 (Apr 23 2026) — Persistent chat memory.
   // Previously greeterMessages started empty on every reload, so every
   // "Hey Nadia" felt like a fresh introduction. Now we hydrate from
@@ -6573,7 +6584,7 @@ export default function App() {
             {/* v55.45 — "What's New" pill. Click to see the changelog of
                 recent builds with an expandable section per release. */}
             <div className="mb-3 flex justify-end">
-              <WhatsNewWidget />
+              <WhatsNewWidget isAdmin={isAdmin} isSuperAdmin={isSuperAdmin} />
             </div>
 
             {/* v55.60 — Nadia highlights when a new build has deployed.
@@ -7004,7 +7015,7 @@ export default function App() {
                 S17.8 (Apr 23): Reverted to original props only — no context
                 props, no muted prop. This is Nadia's ORIGINAL dashboard behavior,
                 unchanged from before any of the recent tab/overlay work. */}
-            <div className="max-md:order-last">
+            <div className="max-md:order-last" id="nadia-greeter-anchor">
             {!greeterDismissed && greeterSettings.enabled ? (
               <div className="mb-4">
                 <SafeSection label="Nadia">
@@ -7210,7 +7221,13 @@ export default function App() {
                         <div key={r.id} className="rounded-xl p-4" style={bgStyle}>
                           <div className="flex justify-between items-start">
                             <div className="flex-1">
-                              <div style={{ fontSize: '15px', lineHeight: '1.4', fontWeight: 900, color: '#ffffff' }}>
+                              {/* v55.72 — whiteSpace: pre-wrap preserves the line breaks
+                                  + blank lines + bullet markers the sender typed. Was a single
+                                  flat div which collapsed everything into one running line.
+                                  Reported by Max May 7 2026: "I should be able to format
+                                  it the way I submit it. I don't want one running message
+                                  which is hard to read if it's a long message." */}
+                              <div style={{ fontSize: '15px', lineHeight: '1.5', fontWeight: 900, color: '#ffffff', whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>
                                 📢 {r.message || r.title}
                               </div>
                               <div className="flex gap-3 mt-2" style={{ fontSize: '10px', color: 'rgba(255,255,255,0.7)' }}>
@@ -7257,9 +7274,13 @@ export default function App() {
                   {showReminderForm && (isAdmin || modulePerms?.['Post Reminders']) && (
                     <div className="bg-white rounded-xl p-4 border border-amber-200 mb-3">
                       <h4 className="text-sm font-bold mb-2">📢 Post Team Reminder</h4>
+                      {/* v55.72 — bigger textarea + formatting hint so Max knows
+                          that line breaks, blank lines, and bullet/numbered lists
+                          are preserved exactly as typed. */}
                       <textarea value={formData.reminderMsg || ''} onChange={e => setFormData({...formData, reminderMsg: e.target.value})}
-                        placeholder="Type your reminder message..."
-                        rows={3} className="w-full px-3 py-2 rounded-lg border text-sm mb-2" />
+                        placeholder={"Type your reminder message...\n\nFormatting is preserved:\n- bullets become a list\n- so do 1. numbered items\n\nBlank lines become paragraphs."}
+                        rows={6} className="w-full px-3 py-2 rounded-lg border text-sm mb-1 font-sans" style={{ whiteSpace: 'pre-wrap', lineHeight: 1.5 }} />
+                      <div className="text-[10px] text-slate-400 mb-2 italic">✓ Line breaks, paragraphs, and bullet/numbered lists preserved in the email and in-app view</div>
                       <div className="flex gap-2 flex-wrap items-center mb-3">
                         <div>
                           <label className="text-[9px] text-slate-500">Date</label>
@@ -7295,15 +7316,25 @@ export default function App() {
                             created_by: userProfile?.id,
                           }, userProfile?.id);
                           // Send email notification
+                          // v55.72 — was: only sent the subject (truncated to 60 chars).
+                          // Now: pass the FULL message body so recipients see exactly what
+                          // was typed, with line breaks / bullets / paragraphs preserved
+                          // (notify route formats plain text → HTML).
                           try {
                             const targetIds = formData.reminderTarget === 'all'
                               ? (teamUsers || []).map(u => u.id)
                               : [formData.reminderTarget];
+                            const fullBody = formData.reminderMsg.trim();
+                            // Use a SHORT subject (preview line) and the full text as body
+                            const shortSubject = (formData.reminderPriority === 'urgent' ? '🔴 URGENT: ' : '📢 ')
+                              + fullBody.split('\n')[0].substring(0, 80)
+                              + (fullBody.split('\n')[0].length > 80 || fullBody.indexOf('\n') >= 0 ? '…' : '');
                             await fetch('/api/notify', {
                               method: 'POST', headers: { 'Content-Type': 'application/json' },
                               body: JSON.stringify({
                                 type: 'reminder', recipientIds: targetIds,
-                                subject: (formData.reminderPriority === 'urgent' ? '🔴 URGENT: ' : '📢 ') + formData.reminderMsg.trim().substring(0, 60),
+                                subject: shortSubject,
+                                body: fullBody,
                                 triggeredBy: userProfile?.id,
                               })
                             });
@@ -7380,8 +7411,12 @@ export default function App() {
                 <h4 className="text-lg font-extrabold text-red-800 mb-3">📢 New Message / رسالة جديدة</h4>
                 <input value={formData.annTitle || ''} onChange={e => setFormData({...formData, annTitle: e.target.value})}
                   placeholder="Subject / الموضوع *" className="w-full px-4 py-3 rounded-lg border-2 border-red-200 text-base font-bold mb-3" aria-label="Message subject" />
+                {/* v55.72 — bigger textarea + formatting hint. Line breaks,
+                    blank-line paragraphs, and bullet/numbered lists are preserved
+                    in the email body. */}
                 <textarea value={formData.annBody || ''} onChange={e => setFormData({...formData, annBody: e.target.value})}
-                  placeholder="Message details / تفاصيل الرسالة" rows={4} className="w-full px-4 py-3 rounded-lg border-2 border-red-200 text-sm mb-3" aria-label="Message body" />
+                  placeholder={"Message details / تفاصيل الرسالة\n\nFormatting tips:\n- Use bullets like this\n- Or numbered: 1. 2. 3.\n\nBlank lines become paragraphs."} rows={6} className="w-full px-4 py-3 rounded-lg border-2 border-red-200 text-sm mb-1 font-sans" style={{ whiteSpace: 'pre-wrap', lineHeight: 1.5 }} aria-label="Message body" />
+                <div className="text-[10px] text-red-500 mb-3 italic">✓ Line breaks, paragraphs, and bullet/numbered lists preserved in the email recipients see</div>
                 <div className="grid grid-cols-2 gap-3 mb-3">
                   <div>
                     <label className="text-xs font-bold text-red-800 block mb-1">Priority / الأهمية</label>
@@ -7426,11 +7461,25 @@ export default function App() {
                       if (sendEmail) {
                         try {
                           const recipients = target === 'all' ? teamUsers : teamUsers.filter(u => u.id === target);
+                          // v55.72 — preserve sender's formatting in the email body.
+                          // Was: body.replace(/\n/g,'<br/>') which collapsed blank-line
+                          // paragraph breaks. Now: split on blank lines → wrap each
+                          // chunk in <p>, single newlines inside become <br/>.
+                          const formatBody = (raw) => {
+                            const s = String(raw || '');
+                            if (!s.trim()) return '';
+                            const escapeHtml = (t) => String(t).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+                            const paragraphs = escapeHtml(s).split(/\r?\n\s*\r?\n/);
+                            return paragraphs
+                              .filter(p => p.trim())
+                              .map(p => '<p style="margin:8px 0;line-height:1.6;">' + p.split(/\r?\n/).join('<br/>') + '</p>')
+                              .join('');
+                          };
                           for (const r of recipients) {
                             if (r.email) {
                               await fetch('/api/notify', {
                                 method: 'POST', headers: {'Content-Type':'application/json'},
-                                body: JSON.stringify({ to: r.email, subject: (priority === 'urgent' ? '🚨 URGENT: ' : priority === 'warning' ? '⚠️ ':'') + title, html: '<div style="font-family:sans-serif;padding:20px;'+(priority==='urgent'?'background:#fef2f2;border:3px solid #ef4444;':priority==='warning'?'background:#fffbeb;border:2px solid #f59e0b;':'background:#eff6ff;border:1px solid #3b82f6;')+'border-radius:12px;"><h2 style="margin:0 0 10px;font-size:18px;">'+(priority==='urgent'?'🚨':'⚠️')+' '+title+'</h2>'+(body?'<p style="font-size:14px;color:#333;">'+body.replace(/\n/g,'<br/>')+'</p>':'')+'<hr style="margin:15px 0;border-color:#eee;"/><p style="font-size:11px;color:#999;">From KTC Hub — '+(userProfile?.name||'Admin')+'</p></div>' })
+                                body: JSON.stringify({ to: r.email, subject: (priority === 'urgent' ? '🚨 URGENT: ' : priority === 'warning' ? '⚠️ ':'') + title, html: '<div style="font-family:sans-serif;padding:20px;'+(priority==='urgent'?'background:#fef2f2;border:3px solid #ef4444;':priority==='warning'?'background:#fffbeb;border:2px solid #f59e0b;':'background:#eff6ff;border:1px solid #3b82f6;')+'border-radius:12px;"><h2 style="margin:0 0 10px;font-size:18px;">'+(priority==='urgent'?'🚨':'⚠️')+' '+title+'</h2>'+(body?'<div style="font-size:14px;color:#333;">'+formatBody(body)+'</div>':'')+'<hr style="margin:15px 0;border-color:#eee;"/><p style="font-size:11px;color:#999;">From KTC Hub — '+(userProfile?.name||'Admin')+'</p></div>' })
                               });
                             }
                           }
@@ -8582,7 +8631,7 @@ export default function App() {
             })()}
 
             {/* ===== PERSONAL DASHBOARD (tickets, reminders, calendar — after financial for admins, first for team) ===== */}
-            <PersonalDashboard user={user} userProfile={userProfile} isAdmin={isAdmin}
+            <PersonalDashboard user={user} userProfile={userProfile} isAdmin={isAdmin} isSuperAdmin={isSuperAdmin}
               invoices={invoices} customers={customers} navigate={navigate} fE={fE} users={teamUsers} />
 
             {/* ===== VOICEMAILS WIDGET (Phase B — Apr 26 2026) =====

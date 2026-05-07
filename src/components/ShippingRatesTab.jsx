@@ -289,6 +289,24 @@ export default function ShippingRatesTab({ toast, user, userProfile, isAdmin, cu
   const [bookings, setBookings] = useState([]);
   const [loading, setLoading] = useState(true);
   const [view, setView] = useState('routes');
+  // v55.66 — restore the missing "list" sub-view inside the routes screen.
+  // Reported by Max May 7 2026: "I can't find the list view now under
+  // shipping rates". Toggle between 🗂 Routes (the bucket card grid by
+  // route) and 📋 List (every individual rate as one row, sortable,
+  // filterable). All filters (POL, POD, vendor, line, expiry, search)
+  // apply to both views — only the rendering changes.
+  const [routesViewMode, setRoutesViewMode] = useState(function () {
+    try { return (typeof window !== 'undefined' && window.localStorage.getItem('ktc_shipping_routes_view_mode')) || 'routes'; }
+    catch (_) { return 'routes'; }
+  });
+  // Persist the user's preference so it sticks across sessions
+  var setRoutesViewModePersist = function (mode) {
+    setRoutesViewMode(mode);
+    try { if (typeof window !== 'undefined') window.localStorage.setItem('ktc_shipping_routes_view_mode', mode); } catch (_) {}
+  };
+  // List-view sort state
+  var [listSortKey, setListSortKey] = useState('effective_date');
+  var [listSortDir, setListSortDir] = useState('desc');
   const [q, setQ] = useState('');
   const [filterOrigin, setFilterOrigin] = useState('all');
   const [filterDest, setFilterDest] = useState('all');
@@ -1890,6 +1908,30 @@ Date: ${today}`;
         </span>
       )}
     </div>
+
+    {/* v55.66 — Routes / List view toggle. The card grid is the default
+        (intuitive at-a-glance browse), the list view is for when you want
+        every rate in one sortable, scannable table — back by popular
+        demand. The same filtered dataset feeds both views; only the
+        rendering changes. Preference persists in localStorage. */}
+    <div className="flex items-center gap-1 mb-3 bg-slate-100 rounded-lg p-1 w-fit">
+      <button
+        onClick={function () { setRoutesViewModePersist('routes'); }}
+        className={'px-3 py-1.5 rounded text-xs font-bold transition ' + (routesViewMode === 'routes' ? 'bg-white text-blue-700 shadow' : 'text-slate-500 hover:text-slate-700')}
+        title="Group rates by route (origin → destination cards)">
+        🗂 Routes
+      </button>
+      <button
+        onClick={function () { setRoutesViewModePersist('list'); }}
+        className={'px-3 py-1.5 rounded text-xs font-bold transition ' + (routesViewMode === 'list' ? 'bg-white text-blue-700 shadow' : 'text-slate-500 hover:text-slate-700')}
+        title="Show every rate as a row in a sortable list">
+        📋 List ({filtered.length})
+      </button>
+    </div>
+
+    {/* ROUTES VIEW (the card grid by route) — original layout */}
+    {routesViewMode === 'routes' && (
+      <>
     {routeGroups.length===0?(<div className="bg-white rounded-xl p-8 text-center border"><div className="text-4xl mb-2">🚢</div><p className="text-sm text-slate-400">No rates yet</p></div>):(<div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">{routeGroups.map(rg=>{const c=rg.cheapest; return (<div key={rg.key} onClick={()=>{setSelectedRoute({origin:rg.origin,destination:rg.destination,pol:rg.pol||null,pod:rg.pod||null});setView('route_detail');}} className="bg-white rounded-xl p-4 cursor-pointer border border-slate-200 hover:shadow-lg hover:-translate-y-0.5 transition-all">
       <div className="flex justify-between items-start mb-2"><div><div className="text-sm font-extrabold text-blue-700">{groupByPort && rg.pol ? rg.pol : rg.origin}{groupByPort && rg.pol && rg.origin && rg.pol !== rg.origin && <span className="text-[9px] text-slate-400 font-normal ml-1">({rg.origin})</span>}</div><div className="text-[10px] text-slate-400">↓</div><div className="text-sm font-extrabold text-emerald-700">{groupByPort && rg.pod ? rg.pod : rg.destination}{groupByPort && rg.pod && rg.destination && rg.pod !== rg.destination && <span className="text-[9px] text-slate-400 font-normal ml-1">({rg.destination})</span>}</div></div><div className="text-right">{c?(<><div className="text-[9px] text-slate-400">Best Active</div><div className="text-lg font-extrabold text-emerald-600">{fCur(c.rate_amount,c.currency)}</div><div className="text-[9px] text-blue-500">{c.vendor_name}{c.shipping_line?' / '+c.shipping_line:''}</div><ExpiryBadge date={c.expiry_date}/></>):(<div className="text-xs text-red-400 font-bold">All Expired</div>)}</div></div>
       {/* v55.63 — show TT / FT / ETD on the cheapest active rate when a port
@@ -1904,6 +1946,101 @@ Date: ${today}`;
       <div className="flex gap-1 flex-wrap mb-2">{[...rg.lines].filter(Boolean).map(l=><span key={l} className="px-1.5 py-0.5 bg-purple-100 text-purple-700 rounded text-[9px]">{l}</span>)}{[...rg.modes].map(m=><span key={m} className="px-1.5 py-0.5 bg-blue-100 text-blue-700 rounded text-[9px]">{m}</span>)}</div>
       <div className="flex justify-between text-[10px] text-slate-500 border-t border-slate-100 pt-2"><span>{rg.activeCount} active{rg.expiredCount>0&&<span className="text-red-400 ml-1">({rg.expiredCount} exp)</span>}</span><span>{[...rg.vendors].length} vendors</span>{(() => { const rb = routeBookings(rg.origin,rg.destination,rg.pol,rg.pod); return rb.length > 0 && <span className="text-emerald-600">✓ {rb.length}x</span>; })()}</div>
     </div>);})}</div>)}
+      </>
+    )}
+
+    {/* v55.66 — LIST VIEW. Every individual rate as a row. Click a row to
+        open the same route detail screen the card grid would. Sortable
+        columns, expired rates dimmed but visible. */}
+    {routesViewMode === 'list' && (
+      <div className="bg-white rounded-xl border border-slate-200 overflow-hidden">
+        {filtered.length === 0 ? (
+          <div className="p-8 text-center"><div className="text-4xl mb-2">🚢</div><p className="text-sm text-slate-400">No rates match your filters</p></div>
+        ) : (
+          <div className="overflow-auto" style={{maxHeight: '70vh'}}>
+            <table className="w-full text-xs border-collapse">
+              <thead className="bg-slate-50 sticky top-0 z-10">
+                <tr>
+                  {[
+                    {k:'effective_date', l:'ETD', w:'88px'},
+                    {k:'origin', l:'Origin', w:''},
+                    {k:'destination', l:'Destination', w:''},
+                    {k:'port_of_loading', l:'POL', w:''},
+                    {k:'port_of_discharge', l:'POD', w:''},
+                    {k:'vendor_name', l:'Vendor', w:''},
+                    {k:'shipping_line', l:'Line', w:''},
+                    {k:'container_type', l:'Container', w:'70px'},
+                    {k:'transit_days', l:'TT', w:'40px', align:'right'},
+                    {k:'free_days', l:'FT', w:'40px', align:'right'},
+                    {k:'rate_amount', l:'Rate', w:'90px', align:'right'},
+                    {k:'expiry_date', l:'Expires', w:'88px'},
+                  ].map(function (col) {
+                    var active = listSortKey === col.k;
+                    return (
+                      <th
+                        key={col.k}
+                        onClick={function () {
+                          if (active) { setListSortDir(listSortDir === 'asc' ? 'desc' : 'asc'); }
+                          else { setListSortKey(col.k); setListSortDir('desc'); }
+                        }}
+                        className={'px-2 py-2 text-[10px] font-bold uppercase tracking-wide cursor-pointer hover:bg-slate-100 select-none ' + (col.align === 'right' ? 'text-right' : 'text-left')}
+                        style={{minWidth: col.w}}
+                        title={'Sort by ' + col.l}>
+                        {col.l}
+                        {active && <span className="ml-1 text-blue-500">{listSortDir === 'asc' ? '▲' : '▼'}</span>}
+                      </th>
+                    );
+                  })}
+                  <th className="px-2 py-2"></th>
+                </tr>
+              </thead>
+              <tbody>
+                {(function () {
+                  var sorted = filtered.slice().sort(function (a, b) {
+                    var av = a[listSortKey];
+                    var bv = b[listSortKey];
+                    if (av == null && bv == null) return 0;
+                    if (av == null) return 1;
+                    if (bv == null) return -1;
+                    var cmp;
+                    if (typeof av === 'number' && typeof bv === 'number') cmp = av - bv;
+                    else cmp = String(av).localeCompare(String(bv));
+                    return listSortDir === 'asc' ? cmp : -cmp;
+                  });
+                  return sorted.map(function (r) {
+                    var exp = isExpired(r.expiry_date);
+                    return (
+                      <tr
+                        key={r.id}
+                        onClick={function () { setSelectedRoute({origin: r.origin, destination: r.destination, pol: r.port_of_loading || null, pod: r.port_of_discharge || null}); setView('route_detail'); }}
+                        className={'border-t border-slate-100 cursor-pointer hover:bg-blue-50/40 ' + (exp ? 'opacity-60' : '')}>
+                        <td className="px-2 py-1.5 font-mono text-[10px] text-violet-600">{r.effective_date || '—'}</td>
+                        <td className="px-2 py-1.5 font-semibold text-blue-700">{r.origin || '—'}</td>
+                        <td className="px-2 py-1.5 font-semibold text-emerald-700">{r.destination || '—'}</td>
+                        <td className="px-2 py-1.5 text-[10px]">{r.port_of_loading || <span className="text-slate-300">—</span>}</td>
+                        <td className="px-2 py-1.5 text-[10px]">{r.port_of_discharge || <span className="text-slate-300">—</span>}</td>
+                        <td className="px-2 py-1.5">{r.vendor_name || <span className="text-slate-300">—</span>}</td>
+                        <td className="px-2 py-1.5">{r.shipping_line || <span className="text-slate-300">—</span>}</td>
+                        <td className="px-2 py-1.5 text-center"><span className="px-1.5 py-0.5 bg-blue-100 text-blue-700 rounded text-[9px]">{r.container_type || '—'}</span></td>
+                        <td className="px-2 py-1.5 text-right text-[10px]">{r.transit_days != null ? <span className="font-semibold text-sky-700">{r.transit_days}d</span> : <span className="text-slate-300">—</span>}</td>
+                        <td className="px-2 py-1.5 text-right text-[10px]">{r.free_days != null ? <span className="font-semibold text-amber-700">{r.free_days}d</span> : <span className="text-slate-300">—</span>}</td>
+                        <td className={'px-2 py-1.5 text-right font-extrabold ' + (exp ? 'text-slate-500' : 'text-emerald-600')}>{fCur(r.rate_amount, r.currency)}</td>
+                        <td className="px-2 py-1.5 text-[10px]"><ExpiryBadge date={r.expiry_date} /></td>
+                        <td className="px-2 py-1.5 text-right">
+                          <button
+                            onClick={function (e) { e.stopPropagation(); setEditingRate(r); setF({rateType: r.rate_type, origin: r.origin, destination: r.destination, vendorName: r.vendor_name, shippingLine: r.shipping_line, portOfLoading: r.port_of_loading, portOfDischarge: r.port_of_discharge, containerType: r.container_type, rateAmount: r.rate_amount, currency: r.currency, effectiveDate: r.effective_date, expiryDate: r.expiry_date, transitDays: r.transit_days, freeDays: r.free_days, transportMode: r.transport_mode, notes: r.notes}); setView('add_rate'); }}
+                            className="text-[10px] text-blue-600 hover:underline">edit</button>
+                        </td>
+                      </tr>
+                    );
+                  });
+                })()}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </div>
+    )}
     {previewQuote && <QuotePrintView quote={previewQuote} onClose={() => setPreviewQuote(null)} />}
     {requestQuoteData && <RequestQuoteModal data={requestQuoteData} onClose={()=>setRequestQuoteData(null)} origins={origins} destinations={destinations} openWhatsApp={openWhatsApp} openEmail={openEmail} generateQuoteRequest={generateQuoteRequest} userId={myId} allVendors={vendorContacts} />}
   </div>);

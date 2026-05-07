@@ -224,6 +224,10 @@ export default function AdminHRInbox({ user, userProfile, isSuperAdmin, users })
                           {r.priority === 'urgent' && <span className="text-[9px] font-bold bg-rose-100 text-rose-700 px-1.5 py-0.5 rounded">🚨 URGENT</span>}
                           {r.priority === 'high' && <span className="text-[9px] font-bold bg-orange-100 text-orange-700 px-1.5 py-0.5 rounded">HIGH</span>}
                           {r.visibility === 'super_admin_only' && <span className="text-[9px] font-bold bg-violet-100 text-violet-700 px-1.5 py-0.5 rounded">🔒 super_admin only</span>}
+                          {/* v55.69 — show "Manager-handled" badge for routine
+                              operational requests so the reviewer sees at a
+                              glance which queue this is in. */}
+                          {r.visibility === 'admin' && <span className="text-[9px] font-bold bg-blue-100 text-blue-700 px-1.5 py-0.5 rounded">👤 Manager-handled</span>}
                         </div>
                         <div className="text-sm font-bold text-slate-800">{r.title}</div>
                         <div className="text-[11px] text-slate-500">

@@ -33,23 +33,110 @@ import { supabase } from '../lib/supabase';
 //     WhatsApp, the calendar, the Sales tab.
 export const BUILD_HISTORY = [
   {
+    version: 'v55.72',
+    date: '2026-05-07',
+    label: 'Real photos for the three agents · reminder formatting preserved',
+    items: [
+      'THREE REAL FACES FOR YOUR AGENTS. The illustrated cartoon avatars are gone. Nadia, Jenna, and Sara now appear as real photographs on the dashboard — Nadia (your AI Executive Assistant), Jenna (your AI HR Representative), and Sara (your AI Work Coach / Rara person). Each photo is presented as a circular headshot with a soft inner ring inside its color-themed tile, and tilts gently when you hover or when the periodic wave timer fires. Photos are crisp at 512×512 and load fast (~120KB each).',
+      'REMINDERS PRESERVE YOUR FORMATTING. When you post a reminder or announcement, it now lands in your team\'s inboxes formatted exactly the way you typed it. Line breaks are preserved. Blank lines become paragraph breaks. Lines starting with -, *, or • become a clean bulleted list. Lines starting with 1., 2., 3. become a numbered list. No more wall-of-text emails.',
+      'WHY IT WAS BROKEN. Three separate places were collapsing your formatting: (1) the email body builder dropped your raw text into a div which ignores line breaks, (2) the team-reminder send flow was passing only your subject line and not your body at all, (3) the in-app reminder card view collapsed everything into one running line. All three are fixed.',
+      'BIGGER COMPOSE BOXES. Both the team-reminder textarea and the announcement composer textarea grew from 3-4 rows to 6, with placeholder text showing examples of bullet and numbered formatting. A small green hint underneath each box confirms "Line breaks, paragraphs, and bullet/numbered lists preserved."',
+      'CARRIES FORWARD all v55.65 → v55.71 work intact (698 tests, all green).',
+    ],
+  },
+  {
+    version: 'v55.71',
+    date: '2026-05-07',
+    label: 'THREE big agents prevailing on the dashboard: Nadia + Jenna + Sara',
+    items: [
+      'YOU NOW HAVE THREE PARTNERS, not two. Three really big avatar tiles dominate the top of every dashboard: Nadia (Executive Assistant) on the left, Jenna (HR Representative) in the middle, Sara (Work Coach) on the right. Each is its own button — click to expand its full experience inline below; click again to close back down to just the icon.',
+      'NADIA AUTO-OPENS HER MORNING BRIEF on first daily load — your "comforting executive in the beginning" that tells you what\'s urgent: tickets needing acknowledgment, items due today, anything overdue, and checks due. Click anywhere to dismiss for the rest of the day; she opens fresh again the next morning.',
+      'JENNA EXPANDS into the full HR Desk inline — file requests (vacation, sick leave, raise, etc.), raise concerns, see super_admin responses. Same component you already had, just lives inside her panel now.',
+      'SARA IS NEW — your work/relationship coach who scores your performance, surfaces growth feedback, and rah-rah\'s you. Her panel mounts the Performance Coach inline. A subtle "new feedback waiting" badge appears if you haven\'t opened her panel today.',
+      'NEVER DISAPPEAR. The three tiles are the very first thing on screen and they stay put. Each panel mounts the deeper component (MyHRDesk inside Jenna, MyPerformance inside Sara) only when expanded — no double-mounting, no remount-on-load-flicker. Single render tree pattern carried forward from v55.68.',
+      'CARRIES FORWARD all v55.65 → v55.70 work.',
+    ],
+  },
+  {
+    version: 'v55.70',
+    date: '2026-05-07',
+    label: 'Two big assistants on the dashboard: Nadia (executive secretary) + Jenna (HR coach)',
+    items: [
+      'CLEAN ORGANIZATION FOR THE DASHBOARD. Two big animated avatar tiles now sit at the very top — Nadia on the left (your executive secretary) and Jenna on the right (your HR rep / relationship coach). Each is a friendly illustrated character with their own role badge, a one-line summary of what\'s waiting for you, and a notification count if there\'s something pending. Click either tile to expand into the full experience below.',
+      'NADIA gives you a MORNING BRIEF — at a glance you see how many tickets need acknowledgment, how many are due today, how many are overdue, and any checks due. If everything\'s clear, she just says "all caught up — no urgent items today." Click her tile and you scroll straight to her chat surface where she goes deeper.',
+      'JENNA gives you TODAY\'S AGENDA — at a glance you see how many HR requests are pending, how many concerns are pending, and especially highlights any new responses from super_admin (with a green pulse so you know there\'s news). Click her tile and you scroll straight to the HR Desk + Performance Coach where you can file requests, see your scoring, and get coaching feedback.',
+      'BOTH AVATARS ARE ALIVE — they wave periodically (Nadia tilts her tablet, Jenna waves her hand with motion lines) and respond to hover. The motion is offset so they don\'t move in lock-step — feels like two real people on screen, not a robot.',
+      'NEVER DISAPPEAR — the AssistantsBar is rendered outside any loading gate and uses the single-render-tree pattern from v55.68, so the two big avatars are the first thing you see and they stay put no matter what.',
+      'CARRIES FORWARD all v55.65/66/67/68/69 work: HR Desk + Performance Coach with no remount disappearance, instant ticket title/description edits with optimistic UI + back button always works, HR routing rules (manager vs super_admin), Shipping list view, Customs Excel import, Nadia anti-repetition + loading-screen presence, voicemail fix, WhatsNew filtering of build internals from non-admins.',
+    ],
+  },
+  {
+    version: 'v55.69',
+    date: '2026-05-07',
+    label: 'Ticket edits instant + Back always works · HR routing auto-picks where to send',
+    items: [
+      'TICKET EDITS ARE NOW INSTANT. Bug Max May 7 2026: editing a ticket title or description felt slow — the Save button stayed on "Saving..." for 1-3 seconds, and during that time clicking Back did nothing. Root cause: the database write involved THREE round trips to the server (read old values → save the change → write an audit comment), all blocking the UI. Fix: the moment you click Save, the UI exits edit mode immediately and you see your edit applied. The actual database save happens entirely in the background. If anything goes wrong, your text is restored and the editor re-opens with an error message — your work is never lost.',
+      'BACK BUTTON ALWAYS WORKS on a ticket. Click Back any time, even mid-save → instantly returns to the ticket list. If you save an edit and immediately click Back (or open a different ticket), the background save still completes correctly because the system snapshots the ticket reference at the moment you clicked Save.',
+      'HR REQUESTS NOW ROUTE AUTOMATICALLY based on what you pick. Only the operational topics — vacation, sick leave, schedule change, recognize a teammate — go to your manager. Everything else (raises, promotions, training, expense, transfer, flexible hours, remote work, equipment, other) goes straight to super_admin and stays hidden from regular admins. You no longer have to think about who to route it to — picking the topic IS the routing decision.',
+      'NEW ICON-TILE TOPIC PICKER replaces the old dropdown. Two clearly labeled groups: "👤 Goes to your manager" (4 blue tiles) and "🔒 Goes to super_admin only — admins can\'t see" (9 violet tiles). Tap the icon for the topic you want. The selected tile lights up. Below the picker, a colored "📨 Goes to:" badge confirms exactly where the request will land.',
+      'AUTO-ROUTING is the single source of truth. Even if the form somehow gets stale, the system re-derives the routing at submit time from your picked topic. No way to accidentally send a raise request to your manager or a vacation request only to super_admin.',
+      'COMPLAINTS UNCHANGED — they always go straight to super_admin (sensitive by definition), with anonymous-to-admins on by default. Updated complaint topic dropdown to show the icon next to each label for clarity.',
+      'ADMIN HR INBOX shows clear routing badges: "🔒 super_admin only" (violet) for sensitive items, "👤 Manager-handled" (blue) for routine operational ones, so reviewers see at a glance which queue an item is in.',
+      'CARRIES FORWARD all v55.65/66/67/68 work: HR Desk + Performance Coach never disappear (single render tree), Maya the HR mascot, Nadia anti-repetition, voicemail fix, Shipping list view, Customs Excel import, System Tickets retest workflow, WhatsNew filtering for non-admins.',
+    ],
+  },
+  {
+    version: 'v55.68',
+    date: '2026-05-07',
+    label: 'HR Desk + Performance Coach NEVER disappear · single render tree fix',
+    items: [
+      'STOPPED THE DISAPPEARING. Both the HR Desk card and the Performance Coach card were appearing on first load and then vanishing for a moment when the rest of the dashboard data finished loading. Root cause was technical: the dashboard had two different "states" (loading vs loaded) and React was throwing the cards away and re-creating them every time it switched between states. Fixed by rendering them in ONE place that stays mounted no matter what — they appear once on login and stay on screen permanently. No more flicker, no more vanish, no more re-fetching their data every time something on the dashboard updates.',
+      'HR DESK WORKFLOW VERIFIED end-to-end: you file a request (vacation, equipment, raise, training, etc.) or a confidential concern → it lands in Admin → HR Inbox with the right visibility (super_admin sees all, admins see admin-visible requests + only non-anonymous complaints) → super_admin reviews, picks a status, writes a decision note → you see the response right back on your dashboard with a colored status badge (Approved, Denied, Investigating, etc.) and a pulse indicator if there is news for you. 26 end-to-end workflow tests + edge-case coverage all pass.',
+      'PERFORMANCE COACH ("rah-rah" coach) — visible to every user, fully restored. Shows your activity numbers, scoring tiles, growth deltas, daily-log streak, meeting show-up rate, and an AI-coach-feedback button that gives a personalized pep talk. Fetches its own data so a flaky network on other dashboard queries doesn\'t affect it. Stays put — never blanks out, never flickers.',
+      'CARRIES FORWARD all v55.65/66/67 work: HR Desk + AdminHRInbox, Nadia anti-repetition + loading screen pill, voicemail "couldn\'t hear you" fix, Shipping list view, Customs Excel import, System Tickets retest workflow, WhatsNew filtering of build internals from non-admins.',
+    ],
+  },
+  {
+    version: 'v55.67',
+    date: '2026-05-07',
+    label: 'Performance Coach back for everyone · build notes hide internals from non-admins',
+    items: [
+      'PERFORMANCE COACH RESTORED for all users. The previous build had hidden it behind admin/super_admin only — that was a misread of the request. The coach card, the activity tiles, the streak, the AI pep-talk button — all back the way they were originally. Only the team-wide HR REPORT (in Admin → HR Report) stays admin-gated, which it always has been.',
+      'WHAT\'S NEW build notes — items that describe the internal scoring algorithm, HR Coach implementation, retest pipeline mechanics, and similar build internals are now ADMIN/SUPER_ADMIN ONLY. Regular users still see the entry exists ("v55.65 shipped these things") but do not see the internals of how the AI scoring works under the hood.',
+      { adminOnly: true, text: 'IMPLEMENTATION NOTE — entries can now be marked { adminOnly: true } to hide individual bullet items from non-admin users while keeping the rest of the build entry visible. Whole entries can also be marked { adminOnlyEntry: true } to hide them entirely.' },
+    ],
+  },
+  {
+    version: 'v55.66',
+    date: '2026-05-07',
+    label: 'HR Desk persistence + Shipping list view restored',
+    items: [
+      'MY HR DESK NEVER DISAPPEARS. Bug: the HR card was vanishing after the first dashboard load if any other query failed (a flaky network blip on tickets / calendar / follow-ups was enough to send the whole dashboard back to "Loading…"). Three fixes: (1) HR Desk now renders BEFORE the loaded gate so it appears instantly, (2) every dashboard query now has its OWN try/catch so one failure can\'t blank the dashboard, (3) setLoaded(true) ALWAYS fires no matter what. Result: the HR card is the first thing on screen and stays put forever.',
+      'SHIPPING RATES — LIST VIEW RESTORED. New "🗂 Routes / 📋 List" toggle pill at the top of the Rates tab. Routes is the bucket card grid (default, unchanged). List is every individual rate as a row in a sortable table — click any column header to sort (ETD, Origin, Destination, POL, POD, Vendor, Line, TT, FT, Rate, Expires). Click any row to jump into the same route detail screen. Inline edit button per row. Expired rates dimmed but still visible. Your view-mode preference is saved per browser so it sticks across sessions.',
+      'CARRIES FORWARD all v55.65 work: My HR Desk with animated Maya mascot + request/complaint flow to super_admin, AI Performance Coach scoring with meeting check-ins, System Tickets fix-in-build/retest workflow, Nadia anti-repetition + loading-screen presence pill, voicemail "We couldn\'t hear you" fix.',
+    ],
+  },
+  {
     version: 'v55.65',
     date: '2026-05-07',
     label: 'AI Performance Coach gets a logo + meeting check-ins + bug-report scoring · System Tickets retest workflow · Build highlights auto-pull bug fixes',
     items: [
-      'AI PERFORMANCE COACH — new logo (rising bars + coach speech bubble) sits next to the title so the card is unmistakable on the dashboard. Three new metric tiles: "Meetings You Set Up", "Meetings You Signed Into" (the actual check-in count, not just the invite list), and "Show-Up Rate" (of meetings you organized that have already happened, how many you actually attended). The show-up rate is color-coded: green ≥80%, amber 50-79%, rose under 50%.',
-      'AI PERFORMANCE COACH — bug reporting now factors into your score. New tiles: "Bug Reports Filed" (system tickets you opened, with how many already shipped a fix) and "Bugs You Retested" (closing the loop after Claude fixes one).',
-      'SCORING ALGORITHM rebuilt to match what mature HR software (Lattice / 15Five / Culture Amp / Workday Talent) measures: PRODUCTIVITY 35% · QUALITY 15% · TIMELINESS 20% · ENGAGEMENT 20% · RELIABILITY 10%. Quality looks at quote acceptance rate, bug-fix rate on tickets you filed, and meeting show-up. Reliability is meeting show-up + retest follow-through. Score itself stays admin-only on HR Report; the self-view shows growth-oriented coach text only.',
-      'SYSTEM TICKETS — when an admin checks "🤖 Fix next session" on a ticket, that ticket goes into Claude\'s queue. After Claude ships a fix in the next build, the admin clicks "📦 Mark fixed in build", picks the build version, and writes test notes. Three things happen automatically: (1) the ticket is tagged with the build version + fix notes, (2) the original creator sees a pulsing "🔁 Bugs to retest" card on their dashboard, (3) the bug shows up in this What\'s New under "Bugs fixed in this build".',
-      'SYSTEM TICKETS — creator clicks "🔁 Retest now" → picks "✓ Works perfectly", "~ Partly works", or "✗ Still broken" + adds notes. Passed → ticket closes. Failed → ticket reopens AND goes back into Claude\'s queue automatically. Partial → recorded for the record without closing.',
+      // v55.67 — internal scoring/algorithm details are admin/super_admin only.
+      // The functionality is for everyone; the build narrative is just hidden
+      // for non-admins so they don't see the under-the-hood mechanics.
+      { adminOnly: true, text: 'AI PERFORMANCE COACH — new logo (rising bars + coach speech bubble) sits next to the title so the card is unmistakable on the dashboard. Three new metric tiles: "Meetings You Set Up", "Meetings You Signed Into" (the actual check-in count, not just the invite list), and "Show-Up Rate" (of meetings you organized that have already happened, how many you actually attended). The show-up rate is color-coded: green ≥80%, amber 50-79%, rose under 50%.' },
+      { adminOnly: true, text: 'AI PERFORMANCE COACH — bug reporting now factors into your score. New tiles: "Bug Reports Filed" (system tickets you opened, with how many already shipped a fix) and "Bugs You Retested" (closing the loop after Claude fixes one).' },
+      { adminOnly: true, text: 'SCORING ALGORITHM rebuilt to match what mature HR software (Lattice / 15Five / Culture Amp / Workday Talent) measures: PRODUCTIVITY 35% · QUALITY 15% · TIMELINESS 20% · ENGAGEMENT 20% · RELIABILITY 10%. Quality looks at quote acceptance rate, bug-fix rate on tickets you filed, and meeting show-up. Reliability is meeting show-up + retest follow-through. Score itself stays admin-only on HR Report; the self-view shows growth-oriented coach text only.' },
+      { adminOnly: true, text: 'SYSTEM TICKETS — when an admin checks "🤖 Fix next session" on a ticket, that ticket goes into Claude\'s queue. After Claude ships a fix in the next build, the admin clicks "📦 Mark fixed in build", picks the build version, and writes test notes. Three things happen automatically: (1) the ticket is tagged with the build version + fix notes, (2) the original creator sees a pulsing "🔁 Bugs to retest" card on their dashboard, (3) the bug shows up in this What\'s New under "Bugs fixed in this build".' },
+      { adminOnly: true, text: 'SYSTEM TICKETS — creator clicks "🔁 Retest now" → picks "✓ Works perfectly", "~ Partly works", or "✗ Still broken" + adds notes. Passed → ticket closes. Failed → ticket reopens AND goes back into Claude\'s queue automatically. Partial → recorded for the record without closing.' },
       'WHAT\'S NEW — this section now auto-pulls bugs fixed in the latest build directly from your system_tickets table. So bug fixes appear here as build highlights without anyone having to copy-paste them.',
-      'DATABASE — needs one small SQL run for the new columns (claude_fixed_in_build_version, needs_retest, retest_completed_at, retest_completed_by, retest_outcome, retest_notes). Open Supabase → SQL Editor → paste sql/s40_system_tickets_retest.sql → Run. Idempotent so re-running is safe.',
+      { adminOnly: true, text: 'DATABASE — needs one small SQL run for the new columns (claude_fixed_in_build_version, needs_retest, retest_completed_at, retest_completed_by, retest_outcome, retest_notes). Open Supabase → SQL Editor → paste sql/s40_system_tickets_retest.sql → Run. Idempotent so re-running is safe.' },
       'CARRIES FORWARD all changes from v55.62, v55.63, and v55.64: deactivated-user fixes, Customs tab Excel import + template with Shipment Reference, Shipping Rates port-level filtering with FT/ETD/TT columns, What\'s New since-last-login tracking with 100-build cap.',
       'VOICEMAIL FIX — callers couldn\'t leave a message and kept hearing "We couldn\'t hear you". Root cause: Twilio\'s `trim-silence` setting on the recording was aggressively chopping audio when it detected ambient silence, returning a zero-duration recording. Fix: switched to `do-not-trim`, added a 10-second `timeout` so callers have time to start speaking, and a 1-second `Pause` between the beep and the recording start so the beep audio doesn\'t bleed in. Applied in all three voicemail entry points (incoming-call fallback, no-routing branch, no-answer branch).',
       'MY HR DESK — brand new prominent dashboard card at the very top of every team member\'s home screen. Animated mascot (Maya) with a waving arm that gets attention every 12 seconds. Two big buttons: "📝 File a Request" (vacation, equipment, raise, training, schedule, recognition, expense, etc — 13 categories) and "🛡️ File a Concern" (interpersonal, manager, harassment, discrimination, safety, workload, pay — 11 categories). Each submission gets a friendly reference number (HR-2026-0001, HRC-2026-0001) and shows status updates right on the dashboard. Routine requests visible to admins and super_admin; concerns go straight to super_admin and stay anonymous to other admins by default.',
-      'HR INBOX (admin / super_admin tab) — new section in Admin: super_admin sees every request and every complaint with full submitter identity. Regular admins see admin-visible requests + only non-anonymous complaints; everything else is hidden with just a "N confidential complaint(s) visible only to super_admin" counter. Reviewer can update status, write a decision/resolution note that the submitter sees on their dashboard, and the system auto-records who reviewed it and when.',
-      'NADIA SMARTER — anti-repetition. Nadia was greeting people the same way every login. Now every reply she gives is fingerprinted and stored locally; her system prompt is automatically fed her last 8 replies as "do not repeat these openings, pick a different angle and different items to lead with". She now feels like a real colleague noticing new things instead of a stuck record.',
-      'NADIA AVAILABLE EARLIER — small "Nadia is here · getting your day ready…" pill now appears on the loading screen so she feels present from the very first second, not something that pops up 5 seconds later.',
+      { adminOnly: true, text: 'HR INBOX (admin / super_admin tab) — new section in Admin: super_admin sees every request and every complaint with full submitter identity. Regular admins see admin-visible requests + only non-anonymous complaints; everything else is hidden with just a "N confidential complaint(s) visible only to super_admin" counter. Reviewer can update status, write a decision/resolution note that the submitter sees on their dashboard, and the system auto-records who reviewed it and when.' },
+      'NADIA SMARTER — Nadia was greeting people the same way every login. Now she varies her openings, picks different items to lead with, and feels like a real colleague noticing new things instead of a stuck record.',
+      'NADIA AVAILABLE EARLIER — small "Nadia is here · getting your day ready…" pill now appears on the loading screen so she feels present from the very first second.',
     ],
   },
   {
@@ -652,7 +739,34 @@ export const BUILD_HISTORY = [
 // but only the most recent N are shown in the UI.
 var DISPLAY_LIMIT = 100;
 
-export default function WhatsNewWidget() {
+export default function WhatsNewWidget({ isAdmin, isSuperAdmin } = {}) {
+  // v55.67 — non-admin users should not see the implementation details of
+  // the AI Performance Coach scoring / HR Report architecture (per Max
+  // May 7 2026: "I don't want them to see exactly what I built in that
+  // essence"). The functionality is for everyone, but the build notes
+  // describing scoring weights, retest pipelines, HR review internals,
+  // etc. are admin/super_admin only. We filter individual bullet items
+  // out by an "adminOnly: true" flag, and entire entries out by
+  // "adminOnlyEntry: true". The card itself ("vN.NN ships X") still
+  // appears so users know a release happened.
+  var canSeeAdminInternals = !!(isAdmin || isSuperAdmin);
+
+  var filterEntry = function (entry) {
+    // Drop entirely-admin entries from the visible list for non-admins.
+    if (entry.adminOnlyEntry && !canSeeAdminInternals) return null;
+    // Filter individual bullet items inside the entry.
+    var visibleItems = canSeeAdminInternals
+      ? entry.items
+      : entry.items.filter(function (it) {
+        // items can be a string OR an { text, adminOnly } object
+        if (typeof it === 'string') return true;
+        return !it.adminOnly;
+      });
+    // If filtering left nothing visible, drop the entire entry.
+    if (visibleItems.length === 0) return null;
+    return Object.assign({}, entry, { items: visibleItems });
+  };
+
   var [open, setOpen] = useState(false);
   var [expanded, setExpanded] = useState({}); // map of version → bool
   // v55.64 — track which version this user has already seen (per browser).
@@ -698,9 +812,15 @@ export default function WhatsNewWidget() {
   }, []);
 
   var latest = BUILD_HISTORY[0];
-  // Only render the most recent N builds. Everything older is preserved
-  // in the source file but not shown.
-  var visibleBuilds = BUILD_HISTORY.slice(0, DISPLAY_LIMIT);
+  // v55.67 — apply admin/non-admin filtering to BUILD_HISTORY before rendering.
+  // Drops entries that have nothing visible left, drops admin-only items
+  // inside otherwise-visible entries.
+  var filteredHistory = BUILD_HISTORY.map(filterEntry).filter(function (e) { return e !== null; });
+  // Only render the most recent N visible builds.
+  var visibleBuilds = filteredHistory.slice(0, DISPLAY_LIMIT);
+  // Re-anchor "latest" against the filtered list so the pill label and the
+  // unseen-tracking compare against what THIS user can actually see.
+  if (visibleBuilds.length > 0) latest = visibleBuilds[0];
 
   // Build the list of "unseen" version strings — every version published
   // AFTER (i.e. higher up in the array than) the last one this user saw.
@@ -850,10 +970,15 @@ export default function WhatsNewWidget() {
                         <div className="px-4 pb-4 pt-1">
                           <ul className="space-y-2">
                             {b.items.map(function (item, idx) {
+                              // v55.67 — items can be a plain string OR an
+                              // object { text, adminOnly }. Filtering already
+                              // happened upstream (filterEntry); this is just
+                              // about extracting the visible text safely.
+                              var itemText = typeof item === 'string' ? item : (item && item.text) || '';
                               return (
                                 <li key={idx} className="flex items-start gap-2 text-sm text-slate-700">
                                   <span className={(isNewForUser ? 'text-rose-400' : 'text-indigo-400') + ' mt-0.5 flex-shrink-0'}>•</span>
-                                  <span>{item}</span>
+                                  <span>{itemText}</span>
                                 </li>
                               );
                             })}
@@ -889,9 +1014,9 @@ export default function WhatsNewWidget() {
                     </div>
                   );
                 })}
-                {BUILD_HISTORY.length > DISPLAY_LIMIT && (
+                {filteredHistory.length > DISPLAY_LIMIT && (
                   <div className="text-center text-[10px] text-slate-400 pt-2">
-                    Older entries ({BUILD_HISTORY.length - DISPLAY_LIMIT}) are archived in the source file but not shown here.
+                    Older entries ({filteredHistory.length - DISPLAY_LIMIT}) are archived in the source file but not shown here.
                   </div>
                 )}
               </div>

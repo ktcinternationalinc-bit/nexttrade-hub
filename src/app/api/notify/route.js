@@ -5,6 +5,72 @@ const supabase = createClient(
   process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY
 );
 
+// v55.72 — Plain-text-to-HTML formatter that PRESERVES the formatting the
+// sender typed: line breaks, blank-line paragraph breaks, bullet lists
+// (lines starting with -, *, •), numbered lists (1. 2. 3.), and basic
+// indentation. Reported by Max May 7 2026: "When I post a reminder, it
+// should be formatted the way I submit it. I don't want one running
+// message which is hard to read if it's a long message."
+//
+// Rules:
+//   1. If the body already looks like HTML (starts with <), return as-is.
+//   2. Escape HTML special chars FIRST (so user can't inject markup).
+//   3. Split on blank lines (\n\s*\n) → each chunk becomes a <p> or <ul>.
+//   4. Within a chunk, lines starting with -, *, • become <li> items in <ul>.
+//   5. Within a chunk, lines starting with "N." become <li> items in <ol>.
+//   6. Mixed/normal lines just get \n→<br/> inside <p>.
+//   7. Trim trailing whitespace on lines so leading spaces (indent)
+//      get preserved via white-space:pre-wrap on the wrapper div.
+function escapeHtml(s) {
+  return String(s || '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
+function formatBodyAsHtml(raw) {
+  var s = String(raw || '');
+  if (!s.trim()) return '';
+  // If body already looks like HTML (sender or upstream already formatted it),
+  // pass through untouched. Heuristic: starts with a tag.
+  if (/^\s*<(p|div|ul|ol|h[1-6]|table|br|strong|em|span)\b/i.test(s)) return s;
+  // Escape first. Then process formatting.
+  var escaped = escapeHtml(s);
+  // Split on blank lines (one or more empty/whitespace-only lines)
+  var paragraphs = escaped.split(/\r?\n\s*\r?\n/);
+  var html = '';
+  for (var p = 0; p < paragraphs.length; p++) {
+    var chunk = paragraphs[p];
+    if (!chunk.trim()) continue;
+    var lines = chunk.split(/\r?\n/);
+    // Detect bullet/numbered list: every non-empty line starts with a marker
+    var bulletRe = /^\s*[-*•]\s+(.+)$/;
+    var numRe = /^\s*\d+[\.\)]\s+(.+)$/;
+    var allBullets = lines.every(function (ln) { return !ln.trim() || bulletRe.test(ln); });
+    var allNumbered = lines.every(function (ln) { return !ln.trim() || numRe.test(ln); });
+    if (allBullets && lines.some(function (ln) { return bulletRe.test(ln); })) {
+      html += '<ul style="margin:8px 0;padding-left:24px;">';
+      for (var i = 0; i < lines.length; i++) {
+        var m = lines[i].match(bulletRe);
+        if (m) html += '<li style="margin:4px 0;">' + m[1] + '</li>';
+      }
+      html += '</ul>';
+    } else if (allNumbered && lines.some(function (ln) { return numRe.test(ln); })) {
+      html += '<ol style="margin:8px 0;padding-left:24px;">';
+      for (var j = 0; j < lines.length; j++) {
+        var n = lines[j].match(numRe);
+        if (n) html += '<li style="margin:4px 0;">' + n[1] + '</li>';
+      }
+      html += '</ol>';
+    } else {
+      // Plain paragraph — preserve single line breaks within as <br/>
+      html += '<p style="margin:8px 0;line-height:1.6;">' + lines.join('<br/>') + '</p>';
+    }
+  }
+  return html;
+}
+
 // POST /api/notify
 export async function POST(req) {
   try {
@@ -132,7 +198,7 @@ export async function POST(req) {
         </div>
         <div style="background: #ffffff; padding: 24px; border: 1px solid #e2e8f0; border-top: none;">
           <h3 style="margin: 0 0 12px; color: #1e293b; font-size: 16px;">${subject}</h3>
-          <div style="color: #475569; font-size: 14px; line-height: 1.6;">${body}</div>
+          <div style="color: #475569; font-size: 14px; line-height: 1.6; white-space: normal;">${formatBodyAsHtml(body)}</div>
           ${triggeredByName ? `<p style="color: #94a3b8; font-size: 12px; margin-top: 16px; border-top: 1px solid #f1f5f9; padding-top: 12px;">Action by: ${triggeredByName}</p>` : ''}
         </div>
         <div style="background: #f8fafc; padding: 12px 24px; border-radius: 0 0 12px 12px; border: 1px solid #e2e8f0; border-top: none;">

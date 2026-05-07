@@ -1,8 +1,7 @@
 'use client';
 import { useState, useEffect } from 'react';
 import { supabase, dbInsert, dbUpdate } from '../lib/supabase';
-import MyPerformance from './MyPerformance';
-import MyHRDesk from './MyHRDesk';
+import AssistantsBar from './AssistantsBar';
 import { SafeSection } from './ErrorBoundary';
 
 const STATUS_COLORS = { New:'#3b82f6', Acknowledged:'#8b5cf6', 'In Progress':'#f59e0b', Waiting:'#6b7280', Review:'#ec4899', Testing:'#14b8a6', Ready:'#10b981', Closed:'#374151', Reopened:'#ef4444' };
@@ -16,7 +15,7 @@ const PIPELINE_STAGES = [
   { v: 'lost', l: 'Lost', c: '#ef4444', icon: '❌' },
 ];
 
-export default function PersonalDashboard({ user, userProfile, isAdmin, invoices, customers, navigate, fE, users }) {
+export default function PersonalDashboard({ user, userProfile, isAdmin, isSuperAdmin, invoices, customers, navigate, fE, users }) {
   const [tickets, setTickets] = useState([]);
   const [events, setEvents] = useState([]);
   const [followUps, setFollowUps] = useState([]);
@@ -31,52 +30,85 @@ export default function PersonalDashboard({ user, userProfile, isAdmin, invoices
   const getUserName = (id) => (users || []).find(u => u.id === id)?.name || '';
   const myId = userProfile?.id || user?.id;
 
-  useEffect(() => { const load = async () => {
-    const pid = userProfile?.id || user?.id;
-    const [t, e, fu] = await Promise.all([
-      supabase.from('tickets').select('*').order('created_at', { ascending: false }),
-      supabase.from('calendar_events').select('*').gte('event_date', todayStr).order('event_date').order('event_time').limit(30),
-      supabase.from('follow_ups').select('*, customers(name, name_en)').eq('completed', false).order('due_date'),
-    ]);
-    setTickets(t.data || []); setEvents(e.data || []); setFollowUps(fu.data || []);
-    try { const { data: rm } = await supabase.from('reminders').select('*').eq('user_id', pid).eq('completed', false).order('due_date'); setReminders(rm || []); } catch(e) { console.warn(e); }
-    // v55.65 — load system tickets needing retest by this user.
-    // Independent try/catch — if system_tickets table doesn't exist (SQL not
-    // run yet) the rest of the dashboard still renders.
-    try {
-      const { data: bugs } = await supabase.from('system_tickets')
-        .select('*')
-        .eq('created_by', pid)
-        .eq('needs_retest', true)
-        .order('claude_last_fixed_at', { ascending: false });
-      setBugsToRetest(bugs || []);
-    } catch (err) { console.warn('[dashboard] bugsToRetest load failed (non-fatal):', err && err.message); }
-    setLoaded(true);
-  }; load(); }, [user, userProfile]);
+  // v55.68 — Bulletproof load with STABLE dependency.
+  //
+  // Why stable: previously `[user, userProfile]` re-fired the effect whenever
+  // page.jsx re-created either object reference (which happens on most
+  // re-renders), causing dashboard data to refetch and the `loaded` flag to
+  // briefly flip false again on each remount. That flicker was unmounting
+  // MyHRDesk + MyPerformance and resetting their internal state.
+  //
+  // myId is a primitive string, so the effect ONLY re-fires when the actual
+  // logged-in user changes — not on every parent re-render.
+  useEffect(() => {
+    if (!myId) return;
+    let cancelled = false;
+    const load = async () => {
+      const pid = myId;
+      // tickets
+      try {
+        const r = await supabase.from('tickets').select('*').order('created_at', { ascending: false });
+        if (!cancelled) setTickets(r.data || []);
+      } catch (err) { console.warn('[dashboard] tickets load failed:', err && err.message); }
+      // calendar_events
+      try {
+        const r = await supabase.from('calendar_events').select('*').gte('event_date', todayStr).order('event_date').order('event_time').limit(30);
+        if (!cancelled) setEvents(r.data || []);
+      } catch (err) { console.warn('[dashboard] events load failed:', err && err.message); }
+      // follow_ups
+      try {
+        const r = await supabase.from('follow_ups').select('*, customers(name, name_en)').eq('completed', false).order('due_date');
+        if (!cancelled) setFollowUps(r.data || []);
+      } catch (err) { console.warn('[dashboard] follow_ups load failed:', err && err.message); }
+      // reminders
+      try {
+        const { data: rm } = await supabase.from('reminders').select('*').eq('user_id', pid).eq('completed', false).order('due_date');
+        if (!cancelled) setReminders(rm || []);
+      } catch (err) { console.warn('[dashboard] reminders load failed:', err && err.message); }
+      // v55.65 — system tickets needing retest. Independent try/catch.
+      try {
+        const { data: bugs } = await supabase.from('system_tickets')
+          .select('*')
+          .eq('created_by', pid)
+          .eq('needs_retest', true)
+          .order('claude_last_fixed_at', { ascending: false });
+        if (!cancelled) setBugsToRetest(bugs || []);
+      } catch (err) { console.warn('[dashboard] bugsToRetest load failed (non-fatal):', err && err.message); }
+      // ALWAYS flip loaded — never leave the dashboard stuck on "Loading..."
+      if (!cancelled) setLoaded(true);
+    };
+    load();
+    return () => { cancelled = true; };
+  }, [myId]);
 
   const addReminder = async () => { if (!newReminder.trim()) return; try { await dbInsert('reminders', { user_id: myId, text: newReminder, due_date: reminderDue || null }, myId); setNewReminder(''); setReminderDue(''); const { data } = await supabase.from('reminders').select('*').eq('user_id', myId).eq('completed', false).order('due_date'); setReminders(data || []); } catch(e) { console.warn(e); } };
   const completeReminder = async (id) => { try { await dbUpdate('reminders', id, { completed: true }, myId); setReminders(reminders.filter(r => r.id !== id)); } catch(e) { console.warn(e); } };
 
-  if (!loaded) return <div className="text-center text-slate-400 py-4 text-sm">Loading...</div>;
-
-  const myTickets = tickets.filter(t => t.assigned_to === myId && t.status !== 'Closed');
-  const ticketsICreated = tickets.filter(t => t.created_by === myId && t.assigned_to !== myId && t.status !== 'Closed');
-  const teamTickets = tickets.filter(t => t.status !== 'Closed' && t.assigned_to !== myId && t.created_by !== myId);
+  // v55.68 — derived values computed defensively. All array accessors guard
+  // for missing data so the SAME render tree works whether data has loaded
+  // yet or not. We no longer use a dual return path (early "Loading..." vs
+  // main return) because that was causing React to unmount/remount MyHRDesk
+  // and MyPerformance every time `loaded` flipped — which is what made them
+  // appear, then disappear, then reappear. Now there's ONE return tree, the
+  // dashboard cards just show their own inline loading spinners.
+  const myTickets = (tickets || []).filter(t => t.assigned_to === myId && t.status !== 'Closed');
+  const ticketsICreated = (tickets || []).filter(t => t.created_by === myId && t.assigned_to !== myId && t.status !== 'Closed');
+  const teamTickets = (tickets || []).filter(t => t.status !== 'Closed' && t.assigned_to !== myId && t.created_by !== myId);
   const needsAck = myTickets.filter(t => t.status === 'New');
-  const myEvents = events.filter(e => e.assigned_to === myId || e.created_by === myId);
+  const myEvents = (events || []).filter(e => e.assigned_to === myId || e.created_by === myId);
   const todayEvents = myEvents.filter(e => e.event_date === todayStr);
   const upcomingEvents = myEvents.filter(e => e.event_date > todayStr).slice(0, 5);
-  const myFollowUps = followUps.filter(fu => fu.assigned_to === myId || fu.created_by === myId);
+  const myFollowUps = (followUps || []).filter(fu => fu.assigned_to === myId || fu.created_by === myId);
   const overdueFollowUps = myFollowUps.filter(fu => fu.due_date && fu.due_date < todayStr);
   const overdueTickets = [...myTickets, ...ticketsICreated].filter(t => t.due_date && t.due_date < todayStr);
-  const overdueReminders = reminders.filter(r => r.due_date && r.due_date < todayStr);
+  const overdueReminders = (reminders || []).filter(r => r.due_date && r.due_date < todayStr);
 
-  const myCustomers = customers.filter(c => c.assigned_rep === myId);
+  const myCustomers = (customers || []).filter(c => c.assigned_rep === myId);
   const pipelineStats = {};
   PIPELINE_STAGES.forEach(s => { pipelineStats[s.v] = myCustomers.filter(c => (c.pipeline_stage || 'lead') === s.v).length; });
-  const notContacted30 = customers.filter(c => { if (c.assigned_rep && c.assigned_rep !== myId && !isAdmin) return false; if (!c.last_contact_date) return c.assigned_rep === myId; return Math.floor((Date.now() - new Date(c.last_contact_date).getTime()) / 86400000) > 30; });
+  const notContacted30 = (customers || []).filter(c => { if (c.assigned_rep && c.assigned_rep !== myId && !isAdmin) return false; if (!c.last_contact_date) return c.assigned_rep === myId; return Math.floor((Date.now() - new Date(c.last_contact_date).getTime()) / 86400000) > 30; });
 
-  const mySales = invoices.filter(inv => inv.sales_rep === userProfile?.name || inv.created_by === myId);
+  const mySales = (invoices || []).filter(inv => inv.sales_rep === userProfile?.name || inv.created_by === myId);
   const thisMonth = todayStr.substring(0, 7);
   const monthlyTotal = mySales.filter(inv => (inv.invoice_date || '').startsWith(thisMonth)).reduce((a, i) => a + Number(i.total_amount || 0), 0);
 
@@ -87,6 +119,43 @@ export default function PersonalDashboard({ user, userProfile, isAdmin, invoices
   ].sort((a, b) => (a.due || '').localeCompare(b.due || ''));
 
   return (<div className="mb-4">
+    {/* v55.70 — AssistantsBar: two big avatar tiles for Nadia (executive
+        secretary) and Jenna (HR/relationship coach). Per Max May 7 2026:
+        "There should be a big large person that's Nadia and a large
+        person that is the HR rep [Jenna]... organized in a way that's
+        clear in the dashboard."
+
+        Behavior:
+        - Both tiles ALWAYS render (no loaded gate, never disappear).
+        - Click Nadia → smooth-scroll to her chat surface (AIGreeter
+          mounts in page.jsx), highlighted briefly.
+        - Click Jenna → smooth-scroll to her HR Desk + Performance
+          Coach section, highlighted briefly.
+        - Each tile shows a one-line summary (urgent items count for
+          Nadia, pending HR items + new responses for Jenna). */}
+    <AssistantsBar
+      user={user} userProfile={userProfile} users={users}
+      tickets={tickets} checks={[]}
+      onTalkToNadia={function () {
+        // The AIGreeter lives in page.jsx (outside PersonalDashboard).
+        // We dispatch a simple custom event that page.jsx listens for,
+        // and we also try to scroll-focus its element if it's already
+        // present in the DOM (it usually is — it mounts on dashboard load).
+        try {
+          var el = document.getElementById('nadia-greeter-anchor');
+          if (el && el.scrollIntoView) el.scrollIntoView({ behavior: 'smooth', block: 'start' });
+          // Tell page.jsx to un-dismiss / focus Nadia
+          window.dispatchEvent(new CustomEvent('ktc:open-nadia'));
+        } catch (_) {}
+      }}
+      onTalkToJenna={function () {
+        try {
+          var el = document.getElementById('jenna-section-anchor');
+          if (el && el.scrollIntoView) el.scrollIntoView({ behavior: 'smooth', block: 'start' });
+        } catch (_) {}
+      }}
+    />
+
     {allOverdue.length > 0 && (<div className="bg-red-50 rounded-xl p-4 mb-4 border-2 border-red-300">
       <h3 className="text-sm font-extrabold text-red-700 mb-2">🚨 OVERDUE ({allOverdue.length})</h3>
       <div className="space-y-1.5 max-h-[200px] overflow-auto">{allOverdue.map((item, i) => {
@@ -98,25 +167,19 @@ export default function PersonalDashboard({ user, userProfile, isAdmin, invoices
           <span className="text-xs font-extrabold text-red-700 whitespace-nowrap">{d}d late</span></div>);
       })}</div></div>)}
 
-    {/* v55.65 — My HR Desk. Sits at the very top of the dashboard above
-        the AI Performance Coach so it's the first thing every team member
-        sees on login. Animated mascot draws focus, and routine
-        requests/complaints flow direct to super_admin (and visible admins
-        for non-confidential items). */}
-    <SafeSection label="My HR Desk">
-      <MyHRDesk user={user} userProfile={userProfile} users={users} />
-    </SafeSection>
+    {/* v55.71 — MyHRDesk and MyPerformance NO LONGER mount here directly.
+        They mount INSIDE the AssistantsBar's expanded Jenna and Sara panels
+        respectively (so they only render when the user explicitly expands
+        the corresponding avatar). This avoids double-mounting and keeps
+        the dashboard clean — three big avatars are the visual organization,
+        the deeper experiences open on demand. */}
 
-    {/* My Performance — self-view scorecard with coach feedback.
-        v55.54 — wrapped in SafeSection so if the metrics component crashes
-        (e.g. a missing table, a malformed date), it shows an error card
-        instead of taking down the whole dashboard. Reported May 6 2026:
-        "performance review when opened in dashboard. It disappears". */}
-    <div className="mb-4">
-      <SafeSection label="My Performance">
-        <MyPerformance user={user} userProfile={userProfile} />
-      </SafeSection>
-    </div>
+    {/* v55.68 — subtle inline loading hint while the rest of the dashboard
+        data populates. Doesn't block or remount anything; the cards
+        below just stay empty/skeleton until their data arrives. */}
+    {!loaded && (
+      <div className="text-center text-slate-400 py-2 text-xs">Loading the rest of your dashboard…</div>
+    )}
 
     {/* v55.65 — Bugs you reported that Claude fixed in the latest build.
         Card pulses gently to draw attention. Click any item to jump to
