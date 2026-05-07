@@ -2,6 +2,7 @@
 import { useState, useEffect } from 'react';
 import { supabase, dbInsert, dbUpdate } from '../lib/supabase';
 import MyPerformance from './MyPerformance';
+import MyHRDesk from './MyHRDesk';
 import { SafeSection } from './ErrorBoundary';
 
 const STATUS_COLORS = { New:'#3b82f6', Acknowledged:'#8b5cf6', 'In Progress':'#f59e0b', Waiting:'#6b7280', Review:'#ec4899', Testing:'#14b8a6', Ready:'#10b981', Closed:'#374151', Reopened:'#ef4444' };
@@ -23,6 +24,9 @@ export default function PersonalDashboard({ user, userProfile, isAdmin, invoices
   const [loaded, setLoaded] = useState(false);
   const [newReminder, setNewReminder] = useState('');
   const [reminderDue, setReminderDue] = useState('');
+  // v55.65 — bugs the user filed that Claude shipped a fix for and that
+  // are now waiting for the creator to retest.
+  const [bugsToRetest, setBugsToRetest] = useState([]);
   const todayStr = new Date().toISOString().substring(0, 10);
   const getUserName = (id) => (users || []).find(u => u.id === id)?.name || '';
   const myId = userProfile?.id || user?.id;
@@ -36,6 +40,17 @@ export default function PersonalDashboard({ user, userProfile, isAdmin, invoices
     ]);
     setTickets(t.data || []); setEvents(e.data || []); setFollowUps(fu.data || []);
     try { const { data: rm } = await supabase.from('reminders').select('*').eq('user_id', pid).eq('completed', false).order('due_date'); setReminders(rm || []); } catch(e) { console.warn(e); }
+    // v55.65 — load system tickets needing retest by this user.
+    // Independent try/catch — if system_tickets table doesn't exist (SQL not
+    // run yet) the rest of the dashboard still renders.
+    try {
+      const { data: bugs } = await supabase.from('system_tickets')
+        .select('*')
+        .eq('created_by', pid)
+        .eq('needs_retest', true)
+        .order('claude_last_fixed_at', { ascending: false });
+      setBugsToRetest(bugs || []);
+    } catch (err) { console.warn('[dashboard] bugsToRetest load failed (non-fatal):', err && err.message); }
     setLoaded(true);
   }; load(); }, [user, userProfile]);
 
@@ -83,6 +98,15 @@ export default function PersonalDashboard({ user, userProfile, isAdmin, invoices
           <span className="text-xs font-extrabold text-red-700 whitespace-nowrap">{d}d late</span></div>);
       })}</div></div>)}
 
+    {/* v55.65 — My HR Desk. Sits at the very top of the dashboard above
+        the AI Performance Coach so it's the first thing every team member
+        sees on login. Animated mascot draws focus, and routine
+        requests/complaints flow direct to super_admin (and visible admins
+        for non-confidential items). */}
+    <SafeSection label="My HR Desk">
+      <MyHRDesk user={user} userProfile={userProfile} users={users} />
+    </SafeSection>
+
     {/* My Performance — self-view scorecard with coach feedback.
         v55.54 — wrapped in SafeSection so if the metrics component crashes
         (e.g. a missing table, a malformed date), it shows an error card
@@ -93,6 +117,46 @@ export default function PersonalDashboard({ user, userProfile, isAdmin, invoices
         <MyPerformance user={user} userProfile={userProfile} />
       </SafeSection>
     </div>
+
+    {/* v55.65 — Bugs you reported that Claude fixed in the latest build.
+        Card pulses gently to draw attention. Click any item to jump to
+        the system tickets tab where you can submit your retest result. */}
+    {bugsToRetest && bugsToRetest.length > 0 && (
+      <div className="mb-4 bg-gradient-to-br from-amber-50 to-orange-50 rounded-xl p-4 border-2 border-amber-300 shadow-sm">
+        <div className="flex items-center justify-between mb-3">
+          <div className="flex items-center gap-2">
+            <span className="text-2xl">🔁</span>
+            <div>
+              <div className="text-sm font-extrabold text-amber-900">{bugsToRetest.length} bug{bugsToRetest.length === 1 ? '' : 's'} you filed {bugsToRetest.length === 1 ? 'is' : 'are'} ready to retest</div>
+              <div className="text-[11px] text-amber-700">Claude shipped a fix. Verify it works and close the loop — it counts toward your reliability score.</div>
+            </div>
+          </div>
+          <button
+            onClick={() => navigate && navigate('admin')}
+            className="text-xs px-3 py-1.5 bg-amber-600 text-white rounded-lg font-bold hover:bg-amber-700 whitespace-nowrap">
+            Open System Tickets →
+          </button>
+        </div>
+        <div className="space-y-1.5">
+          {bugsToRetest.slice(0, 5).map(b => (
+            <div key={b.id} className="bg-white rounded p-2 border border-amber-200">
+              <div className="flex items-center justify-between gap-2 flex-wrap">
+                <div className="flex-1 min-w-0">
+                  <div className="text-xs font-bold text-slate-800 truncate">{b.title}</div>
+                  <div className="text-[10px] text-slate-500">
+                    {b.claude_fixed_in_build_version && <span className="font-mono bg-violet-100 text-violet-700 px-1 rounded mr-1">{b.claude_fixed_in_build_version}</span>}
+                    Fixed {b.claude_last_fixed_at ? new Date(b.claude_last_fixed_at).toLocaleDateString() : 'recently'}
+                  </div>
+                </div>
+              </div>
+            </div>
+          ))}
+          {bugsToRetest.length > 5 && (
+            <div className="text-[10px] text-amber-700 text-center pt-1">…and {bugsToRetest.length - 5} more — see System Tickets</div>
+          )}
+        </div>
+      </div>
+    )}
 
     <div className="grid grid-cols-2 md:grid-cols-5 gap-2 mb-4">
       <div className="bg-white rounded-lg p-3 cursor-pointer hover:shadow" onClick={()=>navigate('tickets')} style={{borderLeftWidth:3,borderLeftColor:needsAck.length>0?'#ef4444':'#3b82f6'}}><div className="text-[10px] text-slate-500">My Tickets</div><div className="text-lg font-extrabold">{myTickets.length}</div>{needsAck.length>0&&<div className="text-[10px] text-red-600 font-bold">⚠️ {needsAck.length} new</div>}</div>

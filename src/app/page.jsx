@@ -3539,6 +3539,30 @@ export default function App() {
         <div className="w-6 h-6 border-2 border-blue-400 border-t-transparent rounded-full animate-spin" />
       </div>
       <DashboardSkeleton />
+      {/* v55.65 — Nadia presence on the loading screen. Just a small pill
+          telling the user "I'm here and getting your day ready" so the
+          assistant feels available from the very first moment, not
+          something that appears 5 seconds later. Pure decoration: full
+          chat lives in AIGreeter once data has loaded. */}
+      <div className="fixed bottom-4 left-4 z-50 flex items-center gap-2 px-3 py-2 rounded-full shadow-lg"
+        style={{background:'linear-gradient(135deg, rgba(139,92,246,0.95), rgba(236,72,153,0.95))', backdropFilter:'blur(8px)'}}>
+        <div className="relative" style={{width:24, height:24}}>
+          <svg width="24" height="24" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
+            <circle cx="12" cy="12" r="11" fill="white" />
+            <circle cx="9" cy="11" r="1.2" fill="#1f2937">
+              <animate attributeName="r" values="1.2;0.4;1.2" dur="3s" repeatCount="indefinite" />
+            </circle>
+            <circle cx="15" cy="11" r="1.2" fill="#1f2937">
+              <animate attributeName="r" values="1.2;0.4;1.2" dur="3s" repeatCount="indefinite" />
+            </circle>
+            <path d="M 8 15 Q 12 17 16 15" stroke="#1f2937" strokeWidth="1.4" fill="none" strokeLinecap="round" />
+          </svg>
+          <span className="absolute -bottom-0.5 -right-0.5 w-2 h-2 rounded-full bg-emerald-400 ring-2 ring-white animate-pulse"></span>
+        </div>
+        <div className="text-white text-xs font-bold">
+          Nadia is here · getting your day ready…
+        </div>
+      </div>
     </div>
   );
 

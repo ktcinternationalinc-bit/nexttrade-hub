@@ -133,11 +133,21 @@ export async function POST(req) {
         + 'The team is unavailable right now. '
         + 'Please leave a message after the beep, and we will get back to you.'
         + '</Say>';
+      // v55.65 — Pause before <Record> so the beep audio doesn't bleed into
+      // recording, and trim="do-not-trim" so Twilio doesn't aggressively
+      // chop the caller's voice as "silence". Also bumped timeout to 10s
+      // so people pausing to gather thoughts don't get cut off.
+      // Bug report Max May 7 2026: "Voice mail comes up but can't hear me
+      // leaving a message and keeps saying We couldn't hear you" — the
+      // "couldn't hear" prompt is Twilio's fallback when trim-silence
+      // returns a zero-duration recording.
+      vmTwiml += '<Pause length="1" />';
       vmTwiml += '<Record action="' + voicemailRecordUrl + '"'
         + ' method="POST"'
         + ' maxLength="180"'
+        + ' timeout="10"'
         + ' playBeep="true"'
-        + ' trim="trim-silence"'
+        + ' trim="do-not-trim"'
         + ' finishOnKey="#"'
         + ' recordingStatusCallback="' + voicemailRecordUrl + '"'
         + ' recordingStatusCallbackEvent="completed"'

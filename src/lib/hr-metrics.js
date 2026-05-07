@@ -252,6 +252,13 @@ function calcMetricsForUser(userId, period, data) {
   var manualFillRatePct = workingDays > 0 ? Math.round((manualDays / workingDays) * 100) : 0;
 
   // ---- CALENDAR ----
+  // Events the user CREATED in period (request from Max v55.65: count meetings
+  // they organized as a productivity signal)
+  var createdEvents = calendarEvents.filter(function (e) {
+    if (e.created_by !== userId) return false;
+    if (!inPeriod(e.event_date, period)) return false;
+    return e.status !== 'cancelled';
+  });
   // Events the user was assigned to (primary owner) in period
   var assignedEvents = calendarEvents.filter(function (e) {
     if (e.assigned_to !== userId) return false;
@@ -261,6 +268,31 @@ function calcMetricsForUser(userId, period, data) {
   var completedEvents = assignedEvents.filter(function (e) {
     return e.completed === true;
   });
+  // v55.65 — Meetings the user actually CHECKED IN to (sign-in proof of
+  // attendance). The schema stores one checked_in_by UUID per event row,
+  // so this counts meetings where THIS user was the one who checked in.
+  // For recurring meetings each occurrence is its own row, so this works
+  // for both one-off and series events.
+  var checkedInEvents = calendarEvents.filter(function (e) {
+    if (e.checked_in_by !== userId) return false;
+    if (!inPeriod(e.event_date, period)) return false;
+    return true;
+  });
+  // Of meetings the user CREATED, how many did they actually show up to?
+  // This is the "meeting reliability" or show-up rate.
+  var createdAndAttended = createdEvents.filter(function (e) {
+    return e.checked_in_by === userId
+      || (e.checked_in_at != null && e.assigned_to === userId)
+      || e.event_status === 'attended';
+  });
+  var createdEventsThatHaveOccurred = createdEvents.filter(function (e) {
+    // Only count toward show-up rate if the meeting date is on/before today.
+    var todayLocal = new Intl.DateTimeFormat('en-CA', { timeZone: 'America/New_York' }).format(new Date());
+    return (e.event_date || '') <= todayLocal;
+  });
+  var meetingShowUpPct = createdEventsThatHaveOccurred.length > 0
+    ? Math.round((createdAndAttended.length / createdEventsThatHaveOccurred.length) * 100)
+    : null; // null = no meetings yet held → don't penalize
   // Events the user was an ATTENDEE of (broader meeting attendance)
   var attendedEvents = calendarEvents.filter(function (e) {
     if (!Array.isArray(e.attendees) || e.attendees.indexOf(userId) < 0) return false;
@@ -269,6 +301,25 @@ function calcMetricsForUser(userId, period, data) {
   });
   var declinedEvents = attendedEvents.filter(function (e) {
     return Array.isArray(e.declined_by) && e.declined_by.indexOf(userId) >= 0;
+  });
+
+  // ---- SYSTEM TICKETS ----
+  // v55.65 — bug-reports the user filed factor into the score. People who
+  // surface issues that get fixed are doing valuable QA work for the team.
+  // Pulled from data.systemTickets if the caller provided it (caller is
+  // optional — older HR reports won't pass it, in which case we treat as 0).
+  var systemTicketsAll = data.systemTickets || [];
+  var systemTicketsCreated = systemTicketsAll.filter(function (t) {
+    return t.created_by === userId && inPeriod(t.created_at, period);
+  });
+  // Of those, how many were actually fixed (a quality signal — not just
+  // dumping noise into the queue, but reporting real reproducible bugs).
+  var systemTicketsFixed = systemTicketsCreated.filter(function (t) {
+    return t.claude_fixed_in_build_version || t.status === 'Resolved' || t.status === 'Closed' || t.status === 'Fixed';
+  });
+  // Tickets they retested in period — closes the loop, also a quality signal.
+  var systemTicketsRetested = systemTicketsAll.filter(function (t) {
+    return t.retest_completed_by === userId && t.retest_completed_at && inPeriod(t.retest_completed_at, period);
   });
 
   // ---- TOTAL ACTIVITY (umbrella signal) ----
@@ -328,10 +379,19 @@ function calcMetricsForUser(userId, period, data) {
     workingDays: workingDays,
     manualFillRatePct: manualFillRatePct,
     // Calendar
+    meetingsCreated: createdEvents.length,
+    meetingsCreatedAndAttended: createdAndAttended.length,
+    meetingsHeldFromMine: createdEventsThatHaveOccurred.length,
+    meetingShowUpPct: meetingShowUpPct,
+    meetingsCheckedIn: checkedInEvents.length,
     assignedEvents: assignedEvents.length,
     completedEvents: completedEvents.length,
     attendedEvents: attendedEvents.length,
     declinedEvents: declinedEvents.length,
+    // System Tickets (v55.65)
+    systemTicketsCreated: systemTicketsCreated.length,
+    systemTicketsFixed: systemTicketsFixed.length,
+    systemTicketsRetested: systemTicketsRetested.length,
     // Umbrella
     totalActions: totalActions,
   };
@@ -341,22 +401,31 @@ function calcMetricsForUser(userId, period, data) {
 // SCORING — provisional formula. Tunable.
 // ----------------------------------------------------------------------
 //
-// Score is 0–100, broken into 3 sub-scores of equal weight:
-//   PRODUCTIVITY  (volume of output)
-//   TIMELINESS    (closes things on time, comments often, low overdue)
-//   ENGAGEMENT    (variety + daily log + meetings attended)
+// v55.65 — algorithm refresh based on what mature HR software (Lattice,
+// 15Five, Culture Amp, Workday Talent) actually measures:
 //
-// Each sub-score is normalized 0–100 against the team — relative scoring,
-// not absolute.  The team-best in each metric scores 100; everyone else
-// scales down.  This is fairer than absolute thresholds.
+//   PRODUCTIVITY  (35%)   — output volume across all categories
+//   QUALITY       (15%)   — your output is good (low rework, low overdue,
+//                            tickets you file actually get fixed, you
+//                            attend the meetings you organize, etc.)
+//   TIMELINESS    (20%)   — closes things on time, low overdue, replies fast
+//   ENGAGEMENT    (20%)   — variety + daily log + meetings attended
+//   RELIABILITY   (10%)   — meeting show-up rate + retest follow-through
 //
-// The "scaleAgainst" parameter is the set of all-team metrics so the same
-// person's score is comparable to teammates' scores.
+// Each sub-score is normalized 0–100 against the team where applicable
+// (relative scoring) — except QUALITY/RELIABILITY which use absolute
+// percentages because a 100% show-up rate should score 100 even on a
+// small team.
+//
+// Coaching tone: the message you see on screen NEVER calls out a low
+// score harshly. The MyPerformance UI deliberately keeps the score
+// hidden from the self-view; only growth-oriented coach text is shown.
+// The numeric score is admin-only via HRReport.
 
 function calcScore(myMetrics, allTeamMetrics) {
   if (!myMetrics) return null;
   if (!Array.isArray(allTeamMetrics) || allTeamMetrics.length === 0) {
-    return { score: null, productivity: null, timeliness: null, engagement: null };
+    return { score: null, productivity: null, quality: null, timeliness: null, engagement: null, reliability: null };
   }
 
   var maxOf = function (key) {
@@ -372,42 +441,90 @@ function calcScore(myMetrics, allTeamMetrics) {
     return Math.min(1, Math.max(0, val / max));
   };
 
-  // --- PRODUCTIVITY (5 inputs, equal weight) ---
-  // ticketsClosed, ratesAdded, quotesCreated, bookings, ticketsCreated
+  // --- PRODUCTIVITY (volume across all categories, equal weight) ---
+  // Includes meetings created (Max v55.65 request) + system tickets created.
   var prodInputs = [
     safeRatio(myMetrics.ticketsClosed, maxOf('ticketsClosed')),
     safeRatio(myMetrics.ratesAdded, maxOf('ratesAdded')),
     safeRatio(myMetrics.quotesCreated, maxOf('quotesCreated')),
     safeRatio(myMetrics.bookings, maxOf('bookings')),
     safeRatio(myMetrics.ticketsCreated, maxOf('ticketsCreated')),
+    safeRatio(myMetrics.meetingsCreated || 0, maxOf('meetingsCreated')),
+    safeRatio(myMetrics.systemTicketsCreated || 0, maxOf('systemTicketsCreated')),
   ];
   var productivity = Math.round((prodInputs.reduce(function (a, b) { return a + b; }, 0) / prodInputs.length) * 100);
 
+  // --- QUALITY (v55.65 — new sub-score) ---
+  // Signals: bugs you filed actually got fixed; quotes you sent got accepted;
+  // tickets you closed weren't reopened; you ATTENDED meetings you organized.
+  // Each of these is an absolute % so a small-team person isn't hurt.
+  var quality_quoteAccept = (myMetrics.quotesSent > 0)
+    ? Math.round((myMetrics.quotesAccepted / myMetrics.quotesSent) * 100)
+    : null;
+  var quality_bugFixRate = ((myMetrics.systemTicketsCreated || 0) > 0)
+    ? Math.round(((myMetrics.systemTicketsFixed || 0) / myMetrics.systemTicketsCreated) * 100)
+    : null;
+  var quality_meetingShowup = (myMetrics.meetingShowUpPct == null) ? null : myMetrics.meetingShowUpPct;
+  // overdue is bad — invert it
+  var quality_lowOverdue = Math.max(0, 100 - 15 * (myMetrics.overdueNow || 0));
+  // late-edits is bad — invert it (capped at 0)
+  var quality_fewLateEdits = Math.max(0, 100 - 5 * (myMetrics.lateEdits || 0));
+  var qualityInputs = [quality_quoteAccept, quality_bugFixRate, quality_meetingShowup, quality_lowOverdue, quality_fewLateEdits];
+  var qualityValid = qualityInputs.filter(function (q) { return q != null; });
+  var quality = qualityValid.length > 0
+    ? Math.round(qualityValid.reduce(function (a, b) { return a + b; }, 0) / qualityValid.length)
+    : 70; // baseline if no quality signals available yet
+
   // --- TIMELINESS (on-time closes %, low overdue, comments/ticket) ---
-  // onTimePct (0-100, treat null as 70 baseline so they're not punished for no closures)
   var ot = myMetrics.onTimePct == null ? 70 : myMetrics.onTimePct;
-  // overdue penalty: 100 if 0 overdue; -10 per overdue capped at 0
   var overdueSig = Math.max(0, 100 - 10 * (myMetrics.overdueNow || 0));
-  // comments-per-ticket scaled
   var commentsSig = Math.round(safeRatio(myMetrics.commentsPerTicket, maxOf('commentsPerTicket')) * 100);
   var timeliness = Math.round((ot + overdueSig + commentsSig) / 3);
 
   // --- ENGAGEMENT (daily log fill, meetings attended, variety of activity) ---
   var fillSig = myMetrics.manualFillRatePct || 0;  // already 0-100
   var meetingSig = Math.round(safeRatio(myMetrics.attendedEvents, maxOf('attendedEvents')) * 100);
+  var checkInSig = Math.round(safeRatio(myMetrics.meetingsCheckedIn || 0, maxOf('meetingsCheckedIn')) * 100);
   var variety = 0; // count categories with non-zero activity
   if (myMetrics.ticketsClosed > 0) variety++;
   if (myMetrics.ratesAdded > 0) variety++;
   if (myMetrics.quotesCreated > 0) variety++;
   if (myMetrics.crmLogEntries > 0 || myMetrics.contactTouches > 0) variety++;
-  if (myMetrics.attendedEvents > 0) variety++;
+  if (myMetrics.attendedEvents > 0 || myMetrics.meetingsCheckedIn > 0) variety++;
   if (myMetrics.manualEntries > 0) variety++;
-  var varietySig = Math.round((variety / 6) * 100);
-  var engagement = Math.round((fillSig + meetingSig + varietySig) / 3);
+  if ((myMetrics.systemTicketsCreated || 0) > 0) variety++;
+  var varietySig = Math.round((variety / 7) * 100);
+  var engagement = Math.round((fillSig + meetingSig + checkInSig + varietySig) / 4);
 
-  var score = Math.round((productivity + timeliness + engagement) / 3);
+  // --- RELIABILITY (v55.65 — new sub-score, absolute) ---
+  // Meeting show-up rate + retesting bugs you reported. Pure follow-through.
+  var reliability_show = (myMetrics.meetingShowUpPct == null) ? null : myMetrics.meetingShowUpPct;
+  var reliability_retest = ((myMetrics.systemTicketsCreated || 0) > 0)
+    ? Math.round(((myMetrics.systemTicketsRetested || 0) / Math.max(1, (myMetrics.systemTicketsFixed || 0))) * 100)
+    : null;
+  var reliabilityInputs = [reliability_show, reliability_retest];
+  var reliabilityValid = reliabilityInputs.filter(function (q) { return q != null; });
+  var reliability = reliabilityValid.length > 0
+    ? Math.min(100, Math.round(reliabilityValid.reduce(function (a, b) { return a + b; }, 0) / reliabilityValid.length))
+    : 70;
 
-  return { score: score, productivity: productivity, timeliness: timeliness, engagement: engagement };
+  // Weighted total — matches the % weights in the comment block above.
+  var score = Math.round(
+    productivity * 0.35
+    + quality * 0.15
+    + timeliness * 0.20
+    + engagement * 0.20
+    + reliability * 0.10
+  );
+
+  return {
+    score: score,
+    productivity: productivity,
+    quality: quality,
+    timeliness: timeliness,
+    engagement: engagement,
+    reliability: reliability,
+  };
 }
 
 // ----------------------------------------------------------------------
@@ -418,7 +535,10 @@ function computeDeltas(currentMetrics, priorMetrics) {
   if (!currentMetrics || !priorMetrics) return {};
   var keys = ['ticketsClosed', 'ticketsCreated', 'ratesAdded', 'bookings',
     'quotesCreated', 'ticketComments', 'manualEntries', 'pipelineMoves',
-    'attendedEvents', 'totalActions'];
+    'attendedEvents',
+    // v55.65 — new metrics in delta view
+    'meetingsCreated', 'meetingsCheckedIn', 'systemTicketsCreated', 'systemTicketsRetested',
+    'totalActions'];
   var out = {};
   keys.forEach(function (k) {
     var cur = currentMetrics[k] || 0;

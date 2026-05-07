@@ -528,6 +528,20 @@ export default function AIGreeter({ user, userProfile, users, tickets, invoices,
     + '- You have access to their tickets, invoices, treasury data, and checks. Answer business questions if asked.\n'
     + '- PROACTIVELY surface urgent items in your greeting: unacknowledged tickets, tickets due today, overdue tickets, checks due today. Lead with these — do not make the user ask. Be direct: "You have 3 tickets waiting for your acknowledgment and 2 due today."\n'
     + '- If there are NO urgent items, say so warmly ("all clear today") — do not invent urgency.\n'
+    // v55.65 — Anti-repetition. Without this Nadia greets people the same
+    // way every single time ("Good morning Max!" → "Good morning Max!").
+    // We feed her the last 8 things she said so she can vary her openings,
+    // pick different items to lead with, and not feel like a stuck record.
+    + (function () {
+      try {
+        if (typeof window === 'undefined' || !window.localStorage) return '';
+        var raw = window.localStorage.getItem('nadia_recent_phrases') || '[]';
+        var arr = JSON.parse(raw);
+        if (!Array.isArray(arr) || arr.length === 0) return '';
+        var lines = arr.slice(0, 8).map(function (p) { return '- "' + (p.fp || '').substring(0, 80) + '..."'; }).join('\n');
+        return '\n\nIMPORTANT — DO NOT REPEAT YOURSELF. Here are the openings/phrases you used in your last few replies. Pick a DIFFERENT opening, a DIFFERENT angle, and DIFFERENT items to lead with. Variety matters — feel like a real colleague who notices new things, not a stuck record:\n' + lines + '\n';
+      } catch (_) { return ''; }
+    })()
     + (function() {
       var mem = parsedMemory();
       var result = '';
@@ -1810,6 +1824,24 @@ export default function AIGreeter({ user, userProfile, users, tickets, invoices,
       var final = [].concat(msgs, [assistantMsg]);
       setMessages(final);
       saveMemory(final);
+      // v55.65 — Anti-repetition: persist a fingerprint of every reply so
+      // future greetings can be told "do not start with these phrases
+      // and do not lead with these same items". Each fingerprint is the
+      // first 80 chars normalized + timestamp. Cap at last 8.
+      try {
+        var fingerprint = aiText.replace(/\s+/g, ' ').substring(0, 80).toLowerCase().trim();
+        if (fingerprint && typeof window !== 'undefined' && window.localStorage) {
+          var prevRaw = window.localStorage.getItem('nadia_recent_phrases') || '[]';
+          var prev = [];
+          try { prev = JSON.parse(prevRaw); if (!Array.isArray(prev)) prev = []; } catch (_) { prev = []; }
+          // Drop dupes of THIS fingerprint
+          prev = prev.filter(function (p) { return p && p.fp !== fingerprint; });
+          prev.unshift({ fp: fingerprint, ts: Date.now() });
+          // Cap at 8
+          prev = prev.slice(0, 8);
+          window.localStorage.setItem('nadia_recent_phrases', JSON.stringify(prev));
+        }
+      } catch (_) {}
       doSpeak(aiText);
       doType(aiText, null);
     } catch(e) {

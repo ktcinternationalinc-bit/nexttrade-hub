@@ -3,6 +3,7 @@ import { useState, useMemo, useEffect, useRef } from 'react';
 import { filterActiveUsers } from '../lib/active-users';
 import { supabase, dbUpdate, dbDelete } from '../lib/supabase';
 import HRReport from './HRReport';
+import AdminHRInbox from './AdminHRInbox';
 import EmailStatusPanel from './EmailStatusPanel';
 
 const STATUS_COLORS = {New:'#3b82f6',Acknowledged:'#8b5cf6','In Progress':'#f59e0b',Waiting:'#6b7280',Review:'#ec4899',Testing:'#14b8a6',Ready:'#10b981',Closed:'#374151',Reopened:'#ef4444'};
@@ -304,6 +305,9 @@ export default function AdminTab({ user, userProfile, users, isAdmin, customers,
       {[
         ['scorecards','📊 Scorecards'],
         ...(canSeeHR ? [['hr_report','📋 HR Report']] : []),
+        // v55.65 — HR Inbox: routine requests + sensitive complaints from team.
+        // super_admin sees ALL; regular admins see admin-visible requests + non-anonymous complaints only.
+        ['hr_inbox','📬 HR Inbox'],
         ['pipeline','🏆 Sales Pipeline'],
         ['logins','🕐 Logins'],
         ['messages','📢 Messages'],
@@ -330,6 +334,11 @@ export default function AdminTab({ user, userProfile, users, isAdmin, customers,
       <div className="bg-amber-50 rounded-lg px-3 py-2 mb-3 border border-amber-200 text-xs text-amber-700">
         You don't have permission to view the HR Report. Ask a super admin to enable the "HR Report" permission for you in Settings.
       </div>
+    )}
+
+    {/* ===== HR INBOX (v55.65) ===== */}
+    {section === 'hr_inbox' && (
+      <AdminHRInbox user={user} userProfile={userProfile} isSuperAdmin={isSuperAdmin} users={users} />
     )}
 
     {/* ===== SCORECARDS ===== */}

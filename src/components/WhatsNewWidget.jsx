@@ -19,6 +19,7 @@
 //   ] }
 // ============================================================
 import { useState, useEffect } from 'react';
+import { supabase } from '../lib/supabase';
 
 // IMPORTANT: latest release goes at the TOP. Newest-first order.
 //
@@ -31,6 +32,26 @@ import { useState, useEffect } from 'react';
 //   - OK to mention business-side things: invoice, customs, FX rate, EGP, USD,
 //     WhatsApp, the calendar, the Sales tab.
 export const BUILD_HISTORY = [
+  {
+    version: 'v55.65',
+    date: '2026-05-07',
+    label: 'AI Performance Coach gets a logo + meeting check-ins + bug-report scoring · System Tickets retest workflow · Build highlights auto-pull bug fixes',
+    items: [
+      'AI PERFORMANCE COACH — new logo (rising bars + coach speech bubble) sits next to the title so the card is unmistakable on the dashboard. Three new metric tiles: "Meetings You Set Up", "Meetings You Signed Into" (the actual check-in count, not just the invite list), and "Show-Up Rate" (of meetings you organized that have already happened, how many you actually attended). The show-up rate is color-coded: green ≥80%, amber 50-79%, rose under 50%.',
+      'AI PERFORMANCE COACH — bug reporting now factors into your score. New tiles: "Bug Reports Filed" (system tickets you opened, with how many already shipped a fix) and "Bugs You Retested" (closing the loop after Claude fixes one).',
+      'SCORING ALGORITHM rebuilt to match what mature HR software (Lattice / 15Five / Culture Amp / Workday Talent) measures: PRODUCTIVITY 35% · QUALITY 15% · TIMELINESS 20% · ENGAGEMENT 20% · RELIABILITY 10%. Quality looks at quote acceptance rate, bug-fix rate on tickets you filed, and meeting show-up. Reliability is meeting show-up + retest follow-through. Score itself stays admin-only on HR Report; the self-view shows growth-oriented coach text only.',
+      'SYSTEM TICKETS — when an admin checks "🤖 Fix next session" on a ticket, that ticket goes into Claude\'s queue. After Claude ships a fix in the next build, the admin clicks "📦 Mark fixed in build", picks the build version, and writes test notes. Three things happen automatically: (1) the ticket is tagged with the build version + fix notes, (2) the original creator sees a pulsing "🔁 Bugs to retest" card on their dashboard, (3) the bug shows up in this What\'s New under "Bugs fixed in this build".',
+      'SYSTEM TICKETS — creator clicks "🔁 Retest now" → picks "✓ Works perfectly", "~ Partly works", or "✗ Still broken" + adds notes. Passed → ticket closes. Failed → ticket reopens AND goes back into Claude\'s queue automatically. Partial → recorded for the record without closing.',
+      'WHAT\'S NEW — this section now auto-pulls bugs fixed in the latest build directly from your system_tickets table. So bug fixes appear here as build highlights without anyone having to copy-paste them.',
+      'DATABASE — needs one small SQL run for the new columns (claude_fixed_in_build_version, needs_retest, retest_completed_at, retest_completed_by, retest_outcome, retest_notes). Open Supabase → SQL Editor → paste sql/s40_system_tickets_retest.sql → Run. Idempotent so re-running is safe.',
+      'CARRIES FORWARD all changes from v55.62, v55.63, and v55.64: deactivated-user fixes, Customs tab Excel import + template with Shipment Reference, Shipping Rates port-level filtering with FT/ETD/TT columns, What\'s New since-last-login tracking with 100-build cap.',
+      'VOICEMAIL FIX — callers couldn\'t leave a message and kept hearing "We couldn\'t hear you". Root cause: Twilio\'s `trim-silence` setting on the recording was aggressively chopping audio when it detected ambient silence, returning a zero-duration recording. Fix: switched to `do-not-trim`, added a 10-second `timeout` so callers have time to start speaking, and a 1-second `Pause` between the beep and the recording start so the beep audio doesn\'t bleed in. Applied in all three voicemail entry points (incoming-call fallback, no-routing branch, no-answer branch).',
+      'MY HR DESK — brand new prominent dashboard card at the very top of every team member\'s home screen. Animated mascot (Maya) with a waving arm that gets attention every 12 seconds. Two big buttons: "📝 File a Request" (vacation, equipment, raise, training, schedule, recognition, expense, etc — 13 categories) and "🛡️ File a Concern" (interpersonal, manager, harassment, discrimination, safety, workload, pay — 11 categories). Each submission gets a friendly reference number (HR-2026-0001, HRC-2026-0001) and shows status updates right on the dashboard. Routine requests visible to admins and super_admin; concerns go straight to super_admin and stay anonymous to other admins by default.',
+      'HR INBOX (admin / super_admin tab) — new section in Admin: super_admin sees every request and every complaint with full submitter identity. Regular admins see admin-visible requests + only non-anonymous complaints; everything else is hidden with just a "N confidential complaint(s) visible only to super_admin" counter. Reviewer can update status, write a decision/resolution note that the submitter sees on their dashboard, and the system auto-records who reviewed it and when.',
+      'NADIA SMARTER — anti-repetition. Nadia was greeting people the same way every login. Now every reply she gives is fingerprinted and stored locally; her system prompt is automatically fed her last 8 replies as "do not repeat these openings, pick a different angle and different items to lead with". She now feels like a real colleague noticing new things instead of a stuck record.',
+      'NADIA AVAILABLE EARLIER — small "Nadia is here · getting your day ready…" pill now appears on the loading screen so she feels present from the very first second, not something that pops up 5 seconds later.',
+    ],
+  },
   {
     version: 'v55.64',
     date: '2026-05-07',
@@ -639,6 +660,9 @@ export default function WhatsNewWidget() {
   // NEW since their last visit. Closing the modal saves the latest as seen.
   var [lastSeen, setLastSeen] = useState(null);
   var [hasMounted, setHasMounted] = useState(false);
+  // v55.65 — live-pull bugs that Claude fixed for each build version.
+  // Shape: { 'v55.65': [{title, ticket_number, claude_fix_notes, ...}, ...] }
+  var [bugsByBuild, setBugsByBuild] = useState({});
 
   var STORAGE_KEY = 'ktc_whatsnew_last_seen_version';
 
@@ -648,6 +672,29 @@ export default function WhatsNewWidget() {
       setLastSeen(v || null);
     } catch (_) {}
     setHasMounted(true);
+    // v55.65 — fetch the bug-fixes attached to recent builds. Independent
+    // try/catch so a missing system_tickets table doesn't break What's New.
+    (async function () {
+      try {
+        var res = await supabase.from('system_tickets')
+          .select('id,ticket_number,title,claude_fix_notes,claude_fixed_in_build_version,created_by,retest_outcome')
+          .not('claude_fixed_in_build_version', 'is', null)
+          .order('claude_last_fixed_at', { ascending: false })
+          .limit(200);
+        if (res && res.data) {
+          var grouped = {};
+          res.data.forEach(function (b) {
+            var v = b.claude_fixed_in_build_version;
+            if (!v) return;
+            if (!grouped[v]) grouped[v] = [];
+            grouped[v].push(b);
+          });
+          setBugsByBuild(grouped);
+        }
+      } catch (e) {
+        // Table missing or RLS blocked — fail silent, this is decorative.
+      }
+    })();
   }, []);
 
   var latest = BUILD_HISTORY[0];
@@ -811,6 +858,32 @@ export default function WhatsNewWidget() {
                               );
                             })}
                           </ul>
+                          {/* v55.65 — live bug-fixes pulled from system_tickets */}
+                          {bugsByBuild[b.version] && bugsByBuild[b.version].length > 0 && (
+                            <div className="mt-3 pt-3 border-t border-slate-200">
+                              <div className="text-[10px] font-bold text-violet-700 uppercase tracking-wide mb-2">
+                                🐛 Bug fixes shipped in this build ({bugsByBuild[b.version].length})
+                              </div>
+                              <ul className="space-y-1.5">
+                                {bugsByBuild[b.version].map(function (bug) {
+                                  return (
+                                    <li key={bug.id} className="flex items-start gap-2 text-xs text-slate-700 bg-violet-50/40 rounded p-2">
+                                      <span className="text-violet-400 mt-0.5">🐛</span>
+                                      <div className="flex-1">
+                                        <span className="font-bold">{bug.title}</span>
+                                        {bug.ticket_number && <span className="text-[9px] text-violet-500 ml-2 font-mono">{bug.ticket_number}</span>}
+                                        {bug.retest_outcome === 'passed' && <span className="ml-2 text-[9px] text-emerald-700 font-bold">✓ verified</span>}
+                                        {bug.retest_outcome === 'failed' && <span className="ml-2 text-[9px] text-rose-700 font-bold">✗ retest failed</span>}
+                                        {bug.claude_fix_notes && (
+                                          <div className="text-[10px] text-slate-600 mt-0.5 whitespace-pre-wrap">{bug.claude_fix_notes}</div>
+                                        )}
+                                      </div>
+                                    </li>
+                                  );
+                                })}
+                              </ul>
+                            </div>
+                          )}
                         </div>
                       )}
                     </div>

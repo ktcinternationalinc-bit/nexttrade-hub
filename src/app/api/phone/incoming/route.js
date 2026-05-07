@@ -82,14 +82,18 @@ function xmlEscape(s) {
 function buildFallbackTwiml(reason, baseUrl) {
   var msg = 'Thank you for calling KTC International. We are unable to take your call at this time. Please leave a message after the beep.';
   var voicemailUrl = (baseUrl || 'https://nexttrade-hub.vercel.app') + '/api/phone/voicemail-record';
+  // v55.65 — see voicemail-record/route.js for why trim-silence is removed
+  // and timeout is set explicitly. Pause gives the beep room to play.
   return '<?xml version="1.0" encoding="UTF-8"?>'
     + '<Response>'
     + '<Say voice="Polly.Joanna">' + xmlEscape(msg) + '</Say>'
+    + '<Pause length="1" />'
     + '<Record action="' + xmlEscape(voicemailUrl) + '"'
     + ' method="POST"'
     + ' maxLength="120"'
+    + ' timeout="10"'
     + ' playBeep="true"'
-    + ' trim="trim-silence"'
+    + ' trim="do-not-trim"'
     + ' finishOnKey="#"'
     + ' recordingStatusCallback="' + xmlEscape(voicemailUrl) + '"'
     + ' recordingStatusCallbackEvent="completed"'
@@ -309,11 +313,16 @@ export async function POST(req) {
       twiml += '</Dial>';
       // If <Dial> verb completed without connecting, fall through to voicemail.
       twiml += '<Say>The team is unavailable right now. Please leave a message after the beep.</Say>';
+      // v55.65 — Pause + timeout + do-not-trim. See voicemail-record/route.js
+      // for full explanation. Without these the caller's voice gets chopped
+      // and Twilio plays its default "couldn't hear you" prompt.
+      twiml += '<Pause length="1" />';
       twiml += '<Record action="' + xmlEscape(voicemailUrl) + '"';
       twiml += ' method="POST"';
       twiml += ' maxLength="180"';
+      twiml += ' timeout="10"';
       twiml += ' playBeep="true"';
-      twiml += ' trim="trim-silence"';
+      twiml += ' trim="do-not-trim"';
       twiml += ' finishOnKey="#"';
       twiml += ' recordingStatusCallback="' + xmlEscape(voicemailUrl) + '"';
       twiml += ' recordingStatusCallbackEvent="completed"';
@@ -321,11 +330,13 @@ export async function POST(req) {
     } else {
       // No routing configured (or vacation mode) — straight to voicemail.
       twiml += '<Say>Please leave us a message after the beep, and we will get back to you.</Say>';
+      twiml += '<Pause length="1" />';
       twiml += '<Record action="' + xmlEscape(voicemailUrl) + '"';
       twiml += ' method="POST"';
       twiml += ' maxLength="180"';
+      twiml += ' timeout="10"';
       twiml += ' playBeep="true"';
-      twiml += ' trim="trim-silence"';
+      twiml += ' trim="do-not-trim"';
       twiml += ' finishOnKey="#"';
       twiml += ' recordingStatusCallback="' + xmlEscape(voicemailUrl) + '"';
       twiml += ' recordingStatusCallbackEvent="completed"';

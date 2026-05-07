@@ -67,13 +67,16 @@ export default function MyPerformance({ user, userProfile }) {
         }
       };
       try {
-        const [tickets, ticketComments, dailyLog, auditLog, customerQuotes, calendarEvents] = await Promise.all([
+        const [tickets, ticketComments, dailyLog, auditLog, customerQuotes, calendarEvents, systemTickets] = await Promise.all([
           safe('tickets', async () => (await supabase.from('tickets').select('*').or('assigned_to.eq.' + myId + ',created_by.eq.' + myId + ',closed_by.eq.' + myId)).data || []),
           safe('ticket_comments', async () => (await supabase.from('ticket_comments').select('*').eq('created_by', myId).gte('created_at', period180.from)).data || []),
           safe('daily_log', async () => (await supabase.from('daily_log').select('*').eq('user_id', myId).gte('log_date', period180.from)).data || []),
           safe('audit_log', async () => (await supabase.from('audit_log').select('*').eq('changed_by', myId).gte('created_at', period180.from + 'T00:00:00')).data || []),
           safe('customer_quotes', async () => (await supabase.from('customer_quotes').select('*').eq('created_by', myId).gte('created_at', period180.from)).data || []),
           safe('calendar_events', async () => (await supabase.from('calendar_events').select('*').gte('event_date', period180.from)).data || []),
+          // v55.65 — fetch system tickets the user created or retested so the
+          // scoring formula can credit bug-reporting + retest follow-through.
+          safe('system_tickets', async () => (await supabase.from('system_tickets').select('*').or('created_by.eq.' + myId + ',retest_completed_by.eq.' + myId).gte('created_at', period180.from)).data || []),
         ]);
         if (cancelled) return;
         console.log('[my-perf] load complete', {
@@ -83,8 +86,9 @@ export default function MyPerformance({ user, userProfile }) {
           auditLog: auditLog.length,
           customerQuotes: customerQuotes.length,
           calendarEvents: calendarEvents.length,
+          systemTickets: systemTickets.length,
         });
-        setData({ tickets, ticketComments, dailyLog, auditLog, customerQuotes, calendarEvents });
+        setData({ tickets, ticketComments, dailyLog, auditLog, customerQuotes, calendarEvents, systemTickets });
         setLoading(false);
       } catch (e) {
         console.error('[my-perf] LOAD CRASHED:', e);
@@ -157,11 +161,41 @@ export default function MyPerformance({ user, userProfile }) {
 
   return (
     <div className="bg-white rounded-xl p-5 border border-slate-200 shadow-sm">
-      {/* Header */}
+      {/* Header — v55.65 added the logo (SVG inline so no asset file needed) */}
       <div className="flex items-center justify-between mb-4">
-        <div>
-          <div className="font-extrabold text-lg text-slate-800">📊 My Performance · AI Coach</div>
-          <div className="text-xs text-slate-500">Your activity, your trends, your growth — with an AI pep talk on demand</div>
+        <div className="flex items-center gap-3">
+          {/* Inline SVG logo: stylized rising bars + speech bubble = "performance + coach" */}
+          <div className="relative flex-shrink-0" style={{ width: 44, height: 44 }}>
+            <svg width="44" height="44" viewBox="0 0 44 44" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+              <defs>
+                <linearGradient id="mp-grad-bg" x1="0" y1="0" x2="1" y2="1">
+                  <stop offset="0%" stopColor="#8b5cf6" />
+                  <stop offset="100%" stopColor="#ec4899" />
+                </linearGradient>
+                <linearGradient id="mp-grad-bar" x1="0" y1="1" x2="0" y2="0">
+                  <stop offset="0%" stopColor="#fbbf24" />
+                  <stop offset="100%" stopColor="#fde68a" />
+                </linearGradient>
+              </defs>
+              {/* Rounded square background */}
+              <rect x="1" y="1" width="42" height="42" rx="11" fill="url(#mp-grad-bg)" />
+              {/* Three rising bars (performance metaphor) */}
+              <rect x="9"  y="24" width="6" height="11" rx="1.5" fill="url(#mp-grad-bar)" />
+              <rect x="18" y="18" width="6" height="17" rx="1.5" fill="url(#mp-grad-bar)" />
+              <rect x="27" y="12" width="6" height="23" rx="1.5" fill="url(#mp-grad-bar)" />
+              {/* Coach speech bubble dot top-right */}
+              <circle cx="34" cy="11" r="5" fill="#ffffff" opacity="0.95" />
+              <circle cx="32" cy="11" r="0.9" fill="#8b5cf6" />
+              <circle cx="34" cy="11" r="0.9" fill="#8b5cf6" />
+              <circle cx="36" cy="11" r="0.9" fill="#8b5cf6" />
+            </svg>
+            {/* Tiny notification pulse to signal "the coach has feedback for you" */}
+            <span className="absolute -bottom-0.5 -right-0.5 w-3 h-3 rounded-full bg-emerald-400 ring-2 ring-white animate-pulse"></span>
+          </div>
+          <div>
+            <div className="font-extrabold text-lg text-slate-800">My Performance · AI Coach</div>
+            <div className="text-xs text-slate-500">Your activity, your trends, your growth — with an AI pep talk on demand</div>
+          </div>
         </div>
         <button
           onClick={() => setExpanded(false)}
@@ -224,7 +258,22 @@ export default function MyPerformance({ user, userProfile }) {
             <SelfStat label="Bookings Made" value={current.bookings} delta={deltas.bookings} suffix="bookings" tone="emerald" />
             <SelfStat label="Quotes Created" value={current.quotesCreated} delta={deltas.quotesCreated} suffix="quotes" tone="amber" />
             <SelfStat label="Customer Touches" value={current.contactTouches + current.pipelineMoves} delta={null} suffix="touches" tone="rose" hint="Pipeline moves + contact updates" />
-            <SelfStat label="Meetings Attended" value={current.attendedEvents} delta={deltas.attendedEvents} suffix="meetings" tone="indigo" />
+            {/* v55.65 — split "Meetings" into the three signals Max asked for:
+                created (you organized), attended (you were invited & showed),
+                checked-in (you actually signed in to confirm presence) */}
+            <SelfStat label="Meetings You Set Up" value={current.meetingsCreated || 0} delta={deltas.meetingsCreated} suffix="meetings" tone="indigo" hint="Meetings you organized in this period" />
+            <SelfStat label="Meetings Attended" value={current.attendedEvents} delta={deltas.attendedEvents} suffix="meetings" tone="indigo" hint="Meetings where you were on the invite list" />
+            <SelfStat label="Meetings You Signed Into" value={current.meetingsCheckedIn || 0} delta={deltas.meetingsCheckedIn} suffix="check-ins" tone="emerald" hint="Meetings you actively checked into — the strongest 'I was there' signal" />
+            {current.meetingShowUpPct != null && (
+              <SelfStat label="Show-Up Rate" value={current.meetingShowUpPct + '%'} delta={null} suffix={'of ' + (current.meetingsHeldFromMine || 0) + ' you set up'} tone={current.meetingShowUpPct >= 80 ? 'emerald' : current.meetingShowUpPct >= 50 ? 'amber' : 'rose'} hint="Of the meetings you organized that have already happened, how many you actually showed up to" />
+            )}
+            {/* v55.65 — bug-reporting + retest follow-through */}
+            {(current.systemTicketsCreated || 0) > 0 && (
+              <SelfStat label="Bug Reports Filed" value={current.systemTicketsCreated} delta={deltas.systemTicketsCreated} suffix={current.systemTicketsFixed > 0 ? '· ' + current.systemTicketsFixed + ' already fixed' : 'reports'} tone="purple" hint="System tickets you've opened — your QA contribution to the team" />
+            )}
+            {(current.systemTicketsRetested || 0) > 0 && (
+              <SelfStat label="Bugs You Retested" value={current.systemTicketsRetested} delta={deltas.systemTicketsRetested} suffix="closed loop" tone="teal" hint="Bugs you reported, then verified the fix on. Closing the loop matters." />
+            )}
             <SelfStat label="Daily Log Streak" value={current.manualDays} delta={deltas.manualEntries} suffix={'/' + current.workingDays + ' work days'} tone="teal" hint="Days you wrote a manual entry" />
           </div>
 

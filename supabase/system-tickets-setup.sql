@@ -44,6 +44,17 @@ ALTER TABLE system_tickets ADD COLUMN IF NOT EXISTS updated_by UUID;
 ALTER TABLE system_tickets ADD COLUMN IF NOT EXISTS resolved_at TIMESTAMPTZ;
 ALTER TABLE system_tickets ADD COLUMN IF NOT EXISTS resolved_by UUID;
 ALTER TABLE system_tickets ADD COLUMN IF NOT EXISTS resolution_notes TEXT;
+-- v55.65 — Claude-fix tracking + retest workflow columns
+ALTER TABLE system_tickets ADD COLUMN IF NOT EXISTS claude_last_fixed_at TIMESTAMPTZ;
+ALTER TABLE system_tickets ADD COLUMN IF NOT EXISTS claude_last_read_at TIMESTAMPTZ;
+ALTER TABLE system_tickets ADD COLUMN IF NOT EXISTS claude_session_id TEXT;
+ALTER TABLE system_tickets ADD COLUMN IF NOT EXISTS claude_fix_notes TEXT;
+ALTER TABLE system_tickets ADD COLUMN IF NOT EXISTS claude_fixed_in_build_version TEXT;
+ALTER TABLE system_tickets ADD COLUMN IF NOT EXISTS needs_retest BOOLEAN DEFAULT FALSE;
+ALTER TABLE system_tickets ADD COLUMN IF NOT EXISTS retest_completed_at TIMESTAMPTZ;
+ALTER TABLE system_tickets ADD COLUMN IF NOT EXISTS retest_completed_by UUID;
+ALTER TABLE system_tickets ADD COLUMN IF NOT EXISTS retest_outcome TEXT;
+ALTER TABLE system_tickets ADD COLUMN IF NOT EXISTS retest_notes TEXT;
 
 -- 3. Indexes for fast lookup
 CREATE INDEX IF NOT EXISTS idx_system_tickets_status ON system_tickets(status);
