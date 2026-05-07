@@ -143,15 +143,18 @@ check('3.3 openComplaint hardcodes super_admin_only (complaints always sensitive
 
 // ============================================================
 // 4. Submit-time derivation (belt-and-braces)
+//    NOTE v55.73: visibility is now derived from form.recipient
+//    (radio-button choice), NOT from category. This is BY DESIGN
+//    per Max's spec: "users should be able to override the routing".
 // ============================================================
 group('4. submitRequest derives visibility at submit time');
 
-check('4.1 derivedVisibility variable computed in submitRequest',
-  /var derivedVisibility = visibilityFromCategory\(form\.category\)/.test(hr));
+check('4.1 v55.73 — derivedVisibility computed in submitRequest from form.recipient',
+  /var derivedVisibility = form\.recipient === 'super_admin' \? 'super_admin_only' : 'admin'/.test(hr));
 check('4.2 Payload uses derivedVisibility, NOT form.visibility',
   /visibility: derivedVisibility,/.test(hr) && !/visibility: form\.visibility,/.test(hr));
-check('4.3 Comment explains belt-and-braces single source of truth',
-  /single source of truth/.test(hr));
+check('4.3 v55.73 — Comment explains user choice is source of truth',
+  /source of[\s\S]{0,40}truth|user.s choice wins/.test(hr));
 
 // ============================================================
 // 5. Icon-tile topic picker UI
@@ -172,8 +175,8 @@ check('5.5 Group header "Goes to your manager"',
   /Goes to your manager/.test(hr));
 check('5.6 Group header explains super_admin-only "admins can\'t see"',
   /Goes to super_admin only[\s\S]{0,80}admins can't see/.test(hr));
-check('5.7 Each tile is a real button (tappable, not just decorative)',
-  /<button[\s\S]{0,200}type="button"[\s\S]{0,300}onClick=\{function \(\) \{ setForm\(Object\.assign\(\{\}, form, \{ category: c\.id, visibility: visibilityFromCategory\(c\.id\) \}\)\); \}\}/.test(hr));
+check('5.7 v55.73 — Each tile is a real button (also sets recipient: manager/super_admin)',
+  /<button[\s\S]{0,200}type="button"[\s\S]{0,300}onClick=\{function \(\) \{ setForm\(Object\.assign\(\{\}, form, \{ category: c\.id, visibility: visibilityFromCategory\(c\.id\), recipient: '(manager|super_admin)' \}\)\); \}\}/.test(hr));
 check('5.8 Selected tile has visual selected state (border-blue or border-violet)',
   /selected \? 'border-blue-500/.test(hr) && /selected \? 'border-violet-500/.test(hr));
 check('5.9 Tile renders icon (text-2xl) AND label',
@@ -184,18 +187,19 @@ check('5.11 Hint paragraph below the picker reflects selected category',
   /REQUEST_CATEGORIES\.find\(function \(c\) \{ return c\.id === form\.category; \}\) \|\| \{\}\)\.hint/.test(hr));
 
 // ============================================================
-// 6. Auto-routing confirmation badge
+// 6. Recipient picker (v55.73 replaced the v55.69 auto-routing badge
+//    with explicit radio buttons per Max's feedback)
 // ============================================================
-group('6. "Goes to:" badge under picker');
+group('6. v55.73 — recipient radio buttons replaced auto-routing badge');
 
-check('6.1 Badge for manager routing — blue, says "Your manager + super_admin"',
-  /bg-blue-50[\s\S]{0,400}Goes to:.*Your manager/.test(hr));
-check('6.2 Badge for super_admin_only routing — violet, says "super_admin only"',
-  /bg-violet-50[\s\S]{0,400}Goes to:.*super_admin only/.test(hr));
-check('6.3 Badge text mentions admins (including manager) won\'t see super_admin items',
+check('6.1 v55.73 — Manager radio option present (replaces blue badge)',
+  /name="hr-recipient"[\s\S]{0,300}value="manager"/.test(hr));
+check('6.2 v55.73 — Super-admin radio option present (replaces violet badge)',
+  /name="hr-recipient"[\s\S]{0,300}value="super_admin"/.test(hr));
+check('6.3 v55.73 — Hint about admins (including manager) won\'t see super_admin items',
   /Regular admins \(including your manager\) won't see this/.test(hr));
-check('6.4 Badge logic switches by category routing',
-  /if \(cat\.routing === 'manager'\)/.test(hr));
+check('6.4 v55.73 — User can override category default (heads-up if mismatched)',
+  /Heads up: most/.test(hr) && /usually go to/.test(hr));
 
 // ============================================================
 // 7. COMPLAINT_CATEGORIES still always super_admin
@@ -233,11 +237,11 @@ check('8.3 Visibility filter still hides super_admin_only from regular admins',
 // ============================================================
 group('9. Edge cases');
 
-check('9.1 If form somehow has stale category, submit still derives correctly',
-  // submitRequest computes derivedVisibility right before insert
-  /setLoading\(true\);\s*try \{[\s\S]{0,300}var derivedVisibility = visibilityFromCategory\(form\.category\)/.test(hr));
-check('9.2 Tile click sets BOTH category and visibility together (atomic update)',
-  /setForm\(Object\.assign\(\{\}, form, \{ category: c\.id, visibility: visibilityFromCategory\(c\.id\) \}\)\)/.test(hr));
+check('9.1 v55.73 — submitRequest derives visibility from form.recipient (user choice)',
+  // submitRequest computes derivedVisibility right before insert based on recipient radio
+  /setLoading\(true\);\s*try \{[\s\S]{0,500}var derivedVisibility = form\.recipient === 'super_admin' \? 'super_admin_only' : 'admin'/.test(hr));
+check('9.2 v55.73 — Tile click sets category + visibility + recipient atomically',
+  /setForm\(Object\.assign\(\{\}, form, \{ category: c\.id, visibility: visibilityFromCategory\(c\.id\), recipient: '(manager|super_admin)' \}\)\)/.test(hr));
 check('9.3 Default category "vacation" routes to manager (so first-render is correct)',
   /id: 'vacation',[\s\S]{0,250}routing: 'manager'/.test(hr));
 check('9.4 No hardcoded "visibility: \'admin\'" left in form initialization',
@@ -246,10 +250,10 @@ check('9.4 No hardcoded "visibility: \'admin\'" left in form initialization',
 check('9.5 visibilityFromCategory handles null/undefined category gracefully',
   // The helper uses .find which returns undefined; the if-check guards it
   /var found = REQUEST_CATEGORIES\.find\([\s\S]{0,200}if \(found && found\.routing === 'manager'\)/.test(hr));
-check('9.6 Header text reflects new auto-routing model (not "goes to super_admin and admin for review")',
-  // Old description "Goes to super_admin and the relevant admin for review."
-  // should be replaced with something about the system routing automatically.
-  /system routes it to the right person automatically/.test(hr));
+check('9.6 v55.73 — Header text says "Pick a topic, then choose who you want it sent to"',
+  // v55.73 changed from "system routes it to the right person automatically"
+  // to language acknowledging the new explicit recipient choice.
+  /Pick a topic, then choose who you want it sent to/.test(hr));
 
 // ============================================================
 // 10. Carry-forward — earlier work intact

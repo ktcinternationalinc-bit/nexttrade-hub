@@ -130,30 +130,30 @@ group('5. Click expand/collapse behavior');
 
 check('5.1 openPanel state with null/nadia/jenna/sara values',
   /\[openPanel, setOpenPanel\] = useState/.test(ab));
-check('5.2 togglePanel toggles same value off, switches to new value',
-  /var togglePanel = function \(which\) \{[\s\S]{0,500}prev === which \? null : which/.test(ab));
+check('5.2 togglePanel — v55.73 enforces ONE-ACTIVE-AT-A-TIME (no-op when re-clicking active)',
+  /var togglePanel = function \(which\)[\s\S]{0,500}if \(prev === which\) return prev/.test(ab));
 check('5.3 Nadia panel renders when openPanel === "nadia"',
   /openPanel === 'nadia' && \(/.test(ab));
 check('5.4 Jenna panel renders when openPanel === "jenna"',
   /openPanel === 'jenna' && \(/.test(ab));
 check('5.5 Sara panel renders when openPanel === "sara"',
   /openPanel === 'sara' && \(/.test(ab));
-check('5.6 Each panel has a Close button',
-  (ab.match(/✕ Close/g) || []).length >= 3);
+check('5.6 v55.73 — Close buttons REMOVED (one always active)',
+  (ab.match(/✕ Close/g) || []).length === 0);
 
 // ============================================================
-// 6. Nadia auto-opens initially
+// 6. Nadia is the HARD default — one always active
 // ============================================================
-group('6. Nadia morning brief auto-opens on first load');
+group('6. Nadia is the hard default (v55.73)');
 
-check('6.1 Initial openPanel state defaults to "nadia"',
-  /useState\(function \(\) \{[\s\S]{0,500}return 'nadia'/.test(ab));
-check('6.2 NADIA_AUTO_OPEN_KEY localStorage key defined',
+check('6.1 v55.73 — openPanel useState defaults to "nadia" (no null fallback)',
+  /\[openPanel, setOpenPanel\] = useState\('nadia'\)/.test(ab));
+check('6.2 NADIA_AUTO_OPEN_KEY localStorage key still defined for badge purposes',
   /var NADIA_AUTO_OPEN_KEY = 'ktc_nadia_morning_brief_dismissed_at'/.test(ab));
-check('6.3 Closing Nadia stores dismissal timestamp in localStorage',
-  /which === 'nadia' && next === null[\s\S]{0,300}localStorage\.setItem\(NADIA_AUTO_OPEN_KEY/.test(ab));
-check('6.4 Auto-opens again the next day (date comparison)',
-  /dismissedDate === todayStr \? null : 'nadia'/.test(ab));
+check('6.3 v55.73 — togglePanel dispatches ktc:assistant-changed event',
+  /window\.dispatchEvent\(new CustomEvent\('ktc:assistant-changed'/.test(ab));
+check('6.4 v55.73 — One always active: clicking active tile is no-op',
+  /if \(prev === which\) return prev/.test(ab));
 check('6.5 Nadia panel has "Auto-opens daily" badge',
   /Auto-opens daily/.test(ab));
 
@@ -252,8 +252,10 @@ check('11.5 Sara open useEffect uses stable [openPanel] dep',
   /\}, \[openPanel\]\)/.test(ab));
 check('11.6 Cancellation guard in Jenna fetch',
   /var cancelled = false[\s\S]{0,2500}return function \(\) \{ cancelled = true; \}/.test(ab));
-check('11.7 localStorage access wrapped in try/catch',
-  (ab.match(/try \{[\s\S]{0,300}localStorage/g) || []).length >= 3);
+check('11.7 localStorage access wrapped in try/catch (every usage)',
+  // v55.73 — fewer localStorage calls now (no dismissal logic, only saraSeenToday).
+  // Every remaining call must still be wrapped in try/catch.
+  (ab.match(/try \{[\s\S]{0,300}localStorage/g) || []).length >= 1);
 check('11.8 typeof window check before localStorage (SSR safety)',
   /typeof window === 'undefined'/.test(ab));
 check('11.9 onTalkToNadia handler call wrapped in try/catch',

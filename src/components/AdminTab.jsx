@@ -5,6 +5,7 @@ import { supabase, dbUpdate, dbDelete } from '../lib/supabase';
 import HRReport from './HRReport';
 import AdminHRInbox from './AdminHRInbox';
 import EmailStatusPanel from './EmailStatusPanel';
+import BackupsPanel from './BackupsPanel';
 
 const STATUS_COLORS = {New:'#3b82f6',Acknowledged:'#8b5cf6','In Progress':'#f59e0b',Waiting:'#6b7280',Review:'#ec4899',Testing:'#14b8a6',Ready:'#10b981',Closed:'#374151',Reopened:'#ef4444'};
 const CAT_ICONS = { ticket:'🎫', crm:'🤝', shipping:'🛳️', customs:'🚢', calendar:'📅', finance:'💰', inventory:'📦', communication:'📬', ai:'🤖', manual:'✏️', other:'⚡', login:'🟢' };
@@ -314,6 +315,10 @@ export default function AdminTab({ user, userProfile, users, isAdmin, customers,
         ['activity','📋 Activity'],
         ['tickets','🎫 Tickets'],
         ['audit','🔍 Audit'],
+        // v55.74 — Backups: super_admin only. Contains snapshots of every
+        // business-critical table (treasury, invoices, customers, etc.) so
+        // it MUST NOT be visible to regular admins.
+        ...(isSuperAdmin ? [['backups','💾 Backups']] : []),
       ].map(([v,l]) => (
         <button key={v} onClick={() => setSection(v)}
           className={'px-3 py-1.5 rounded-lg text-xs font-semibold transition ' + (section === v ? 'bg-slate-900 text-white' : 'bg-slate-100 text-slate-500')}>{l}</button>
@@ -339,6 +344,16 @@ export default function AdminTab({ user, userProfile, users, isAdmin, customers,
     {/* ===== HR INBOX (v55.65) ===== */}
     {section === 'hr_inbox' && (
       <AdminHRInbox user={user} userProfile={userProfile} isSuperAdmin={isSuperAdmin} users={users} />
+    )}
+
+    {/* ===== BACKUPS (v55.74) — super_admin only ===== */}
+    {section === 'backups' && isSuperAdmin && (
+      <BackupsPanel user={user} userProfile={userProfile} />
+    )}
+    {section === 'backups' && !isSuperAdmin && (
+      <div className="bg-amber-50 rounded-lg px-3 py-2 mb-3 border border-amber-200 text-xs text-amber-700">
+        Backups are only available to super_admin. They contain sensitive financial and personnel data.
+      </div>
     )}
 
     {/* ===== SCORECARDS ===== */}

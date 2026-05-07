@@ -137,7 +137,52 @@ CREATE TRIGGER trg_hr_complaint_autonumber
   FOR EACH ROW EXECUTE FUNCTION hr_complaint_autonumber();
 
 -- ============================================================
--- 3. Sanity check
+-- 3. RLS policies (added v55.72 — the original s41 forgot these)
+--
+-- Supabase auto-enables RLS on new tables when project-level RLS
+-- is on. Without explicit policies, every INSERT/SELECT/UPDATE is
+-- denied. Filing a request would error: "new row violates row-level
+-- security policy for table hr_requests".
+--
+-- KTC pattern (matches s32 phone, s35 whatsapp): any authenticated
+-- user can read/write at the database level. Privacy (super_admin
+-- sees all, complaints anonymous to admins, admin scoping) is
+-- enforced at the application layer.
+-- ============================================================
+ALTER TABLE hr_requests ENABLE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS hr_requests_select ON hr_requests;
+CREATE POLICY hr_requests_select ON hr_requests FOR SELECT
+  USING (auth.uid() IS NOT NULL);
+DROP POLICY IF EXISTS hr_requests_insert ON hr_requests;
+CREATE POLICY hr_requests_insert ON hr_requests FOR INSERT
+  WITH CHECK (auth.uid() IS NOT NULL);
+DROP POLICY IF EXISTS hr_requests_update ON hr_requests;
+CREATE POLICY hr_requests_update ON hr_requests FOR UPDATE
+  USING (auth.uid() IS NOT NULL)
+  WITH CHECK (auth.uid() IS NOT NULL);
+DROP POLICY IF EXISTS hr_requests_delete ON hr_requests;
+CREATE POLICY hr_requests_delete ON hr_requests FOR DELETE
+  USING (auth.uid() IS NOT NULL);
+
+ALTER TABLE hr_complaints ENABLE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS hr_complaints_select ON hr_complaints;
+CREATE POLICY hr_complaints_select ON hr_complaints FOR SELECT
+  USING (auth.uid() IS NOT NULL);
+DROP POLICY IF EXISTS hr_complaints_insert ON hr_complaints;
+CREATE POLICY hr_complaints_insert ON hr_complaints FOR INSERT
+  WITH CHECK (auth.uid() IS NOT NULL);
+DROP POLICY IF EXISTS hr_complaints_update ON hr_complaints;
+CREATE POLICY hr_complaints_update ON hr_complaints FOR UPDATE
+  USING (auth.uid() IS NOT NULL)
+  WITH CHECK (auth.uid() IS NOT NULL);
+DROP POLICY IF EXISTS hr_complaints_delete ON hr_complaints;
+CREATE POLICY hr_complaints_delete ON hr_complaints FOR DELETE
+  USING (auth.uid() IS NOT NULL);
+
+NOTIFY pgrst, 'reload schema';
+
+-- ============================================================
+-- 4. Sanity check
 -- ============================================================
 SELECT
   (SELECT COUNT(*) FROM hr_requests) AS requests_total,

@@ -4,6 +4,11 @@ import { supabase } from '../lib/supabase';
 import { todayET, etGreetingWord, cmpETDays } from '../lib/et-time';
 import NadiaFace from './NadiaFace';
 import MorningBriefing from './MorningBriefing';
+// v55.73 — Persona layer. AIGreeter remains the SAME engine (voice,
+// listening, recording, response, decisions). When a non-default persona
+// is selected, the header swaps to that persona's photo/name/greeting.
+// The recording / Whisper / TTS / message-state machinery is untouched.
+import { AGENT_PERSONALITIES, getAgent } from '../lib/agent-personalities';
 
 var PERSONALITIES = [
   { id: 'professional', label: '🎩 Professional', labelAr: 'محترف', desc: 'Formal, concise, business-focused', color: '#1e40af', prompt: 'You are a professional executive assistant named Nadia. Speak formally, be concise and data-driven. Use business language. Be respectful and efficient.' },
@@ -64,7 +69,14 @@ function renderDecisionPanel(d, keyId, lang) {
   );
 }
 
-export default function AIGreeter({ user, userProfile, users, tickets, invoices, treasury, checks, loginHistory, loginHistoryLoaded, lang, personality, greeterLang, onToggle, toast, enabled, hasGreeted, onGreeted, sessionMessages, onMessagesUpdate, contextTab, contextSelectedCustomer, contextSelectedInvoice, contextOpenTicketId, muted }) {
+export default function AIGreeter({ user, userProfile, users, tickets, invoices, treasury, checks, loginHistory, loginHistoryLoaded, lang, personality, greeterLang, onToggle, toast, enabled, hasGreeted, onGreeted, sessionMessages, onMessagesUpdate, contextTab, contextSelectedCustomer, contextSelectedInvoice, contextOpenTicketId, muted, selectedAssistant }) {
+  // v55.73 — Persona resolution. SAFE NADIA DEFAULT so the file behaves
+  // identically when selectedAssistant is omitted (e.g. older mounts).
+  // The voice/listening/recording engine continues to use the existing
+  // PERSONALITIES preset selected by `personality` prop — that's a tone
+  // overlay (professional/friendly/etc) that stacks on top of the persona.
+  var activeAgentKey = (selectedAssistant === 'jenna' || selectedAssistant === 'sara') ? selectedAssistant : 'nadia';
+  var activeAgent = getAgent(activeAgentKey);
   // Use parent's session messages — persist across tab switches
   var messages = sessionMessages || [];
   var setMessages = function(msgs) { if (onMessagesUpdate) onMessagesUpdate(msgs); };
@@ -1944,20 +1956,45 @@ export default function AIGreeter({ user, userProfile, users, tickets, invoices,
 
   return (
     <div ref={containerRef} className="mt-8 mb-4 rounded-2xl overflow-hidden shadow-2xl scroll-mt-32" style={{ border: '2px solid ' + persona.color + '30', background: 'linear-gradient(135deg, rgba(15,23,42,0.97), rgba(30,27,75,0.97))' }}>
-      {/* Header */}
+      {/* Header
+          v55.73 — Persona-aware header. Nadia keeps her existing animated
+          NadiaFace SVG (with all its lip-sync logic). Jenna and Sara show
+          their photo with a speaking-state ring. The voice/listening/
+          recording engine below is unchanged — only the visual header swaps. */}
       <div className="px-4 py-3 flex items-center gap-3" style={{ background: persona.color + '18', borderBottom: '1px solid ' + persona.color + '25' }}>
-        <NadiaFace
-          speaking={speaking}
-          listening={listening}
-          loading={loading}
-          color={persona.color}
-          size={56}
-          audioElement={currentAudio}
-          lang={useLang}
-        />
+        {activeAgentKey === 'nadia' ? (
+          <NadiaFace
+            speaking={speaking}
+            listening={listening}
+            loading={loading}
+            color={persona.color}
+            size={56}
+            audioElement={currentAudio}
+            lang={useLang}
+          />
+        ) : (
+          <div style={{
+            width: 56, height: 56, borderRadius: '50%', overflow: 'hidden',
+            position: 'relative', flexShrink: 0,
+            boxShadow: speaking
+              ? '0 0 0 3px ' + activeAgent.colors.primary + ', 0 0 16px ' + activeAgent.colors.primary
+              : listening
+                ? '0 0 0 3px #ef4444, 0 0 12px rgba(239,68,68,0.6)'
+                : '0 0 0 2px ' + activeAgent.colors.primary + '60',
+            transition: 'box-shadow 250ms ease-in-out',
+          }}>
+            <img
+              src={activeAgent.photo}
+              alt={activeAgent.name}
+              style={{ width: '100%', height: '100%', objectFit: 'cover' }}
+              draggable={false}
+            />
+          </div>
+        )}
         <div className="flex-1">
           <div className="text-sm font-bold text-white flex items-center gap-2">
-            Nadia
+            {activeAgent.name}
+            <span className="text-[10px] font-bold uppercase tracking-wider px-1.5 py-0.5 rounded bg-white/15 text-white/80">{activeAgent.role}</span>
             {speaking && <span className="flex items-end gap-0.5 h-4">{[0,1,2,3,4].map(function(i) { return <span key={i} className="w-0.5 rounded-full bg-emerald-400" style={{ height: 4 + Math.random() * 12, animation: 'pulse 0.6s infinite', animationDelay: i * 80 + 'ms' }} />; })}</span>}
             {listening && <span className="px-2 py-0.5 rounded-full bg-red-500 text-[8px] font-bold animate-pulse">● LISTENING</span>}
           </div>

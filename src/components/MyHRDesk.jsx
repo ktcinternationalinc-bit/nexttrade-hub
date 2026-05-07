@@ -26,6 +26,7 @@
 // ============================================================
 import { useState, useEffect } from 'react';
 import { supabase, dbInsert } from '../lib/supabase';
+import { AGENT_PERSONALITIES } from '../lib/agent-personalities';
 
 // v55.69 — Each category now has a `routing` field that determines where
 // the request lands automatically:
@@ -119,7 +120,23 @@ export default function MyHRDesk({ user, userProfile, users }) {
     // v55.69 — visibility is auto-derived from category, not user-picked.
     // Initial value matches default category 'vacation' (manager-routed).
     visibility: visibilityFromCategory('vacation'),
+    // v55.73 — explicit recipient choice. User can override the auto-default.
+    //   'manager'      = send to my reports_to user (super_admin always CC'd)
+    //   'super_admin'  = send to Mr. Kandil only (admins never see)
+    // Auto-defaults from category but user can change via radio.
+    recipient: 'manager', // initial = manager (matches default category 'vacation')
   });
+
+  // v55.73 — resolve who the manager is for the current user, and who the
+  // super_admin is. Used to actually dispatch the notification at submit time.
+  var safeUsers = users || [];
+  var myProfile = safeUsers.find(function (u) { return u.id === myId; });
+  var managerId = (myProfile && myProfile.reports_to) || null;
+  var manager = managerId ? safeUsers.find(function (u) { return u.id === managerId; }) : null;
+  var managerName = (manager && manager.name) || 'your manager';
+  var superAdmin = safeUsers.find(function (u) { return u.role === 'super_admin' && u.active !== false; });
+  var superAdminName = (superAdmin && superAdmin.name) || 'Mr. Kandil';
+  var superAdminId = (superAdmin && superAdmin.id) || null;
 
   // Load the user's recent HR items so they can see status at a glance.
   // Independent try/catch so a missing table doesn't break the dashboard.
@@ -196,11 +213,11 @@ export default function MyHRDesk({ user, userProfile, users }) {
     }
     setLoading(true);
     try {
-      // v55.69 — visibility is ALWAYS derived from category at submit time
-      // (belt-and-braces — even if form state somehow got stale, the routing
-      // matches the picked topic). This is the single source of truth for
-      // who can see this request.
-      var derivedVisibility = visibilityFromCategory(form.category);
+      // v55.73 — RECIPIENT IS USER-PICKED VIA RADIO. Visibility derives from
+      // recipient (not from category) so the user's choice is the source of
+      // truth. If they picked "manager" → admin-visible; if they picked
+      // "super_admin" → super_admin only.
+      var derivedVisibility = form.recipient === 'super_admin' ? 'super_admin_only' : 'admin';
       var payload = {
         submitted_by: myId,
         category: form.category,
@@ -214,7 +231,54 @@ export default function MyHRDesk({ user, userProfile, users }) {
       };
       var res = await supabase.from('hr_requests').insert(payload).select().maybeSingle();
       if (res.error) throw new Error(res.error.message);
-      setSubmitOk({ kind: 'request', number: (res.data && res.data.request_number) || 'submitted' });
+      var requestNumber = (res.data && res.data.request_number) || 'submitted';
+
+      // v55.73 — ACTUALLY DISPATCH the notification. This was missing in
+      // earlier builds: the row got inserted but no email ever went out, so
+      // the recipient never knew anything was waiting for them.
+      // Reported by Max May 8 2026: "you're not sending it to everyone,
+      // you're sending it to me. No matter if they selected the radio button."
+      // Now: build the recipient list from the user's radio choice + always
+      // CC super_admin (so nothing falls through the cracks). Fire-and-forget;
+      // a notification failure must NOT block the submit confirmation since
+      // the row is already in Supabase.
+      try {
+        var recipientIds = [];
+        if (form.recipient === 'manager' && managerId) recipientIds.push(managerId);
+        if (superAdminId) recipientIds.push(superAdminId);
+        // De-dupe + drop self-notify
+        recipientIds = recipientIds.filter(function (rid, i, arr) {
+          return rid && rid !== myId && arr.indexOf(rid) === i;
+        });
+        if (recipientIds.length > 0) {
+          var senderName = (myProfile && myProfile.name) || ((user && user.email) || 'A teammate').split('@')[0];
+          var catLabel = ((REQUEST_CATEGORIES.find(function (c) { return c.id === form.category; }) || {}).label) || form.category;
+          var subject = '📝 HR Request: ' + form.title.trim();
+          var body =
+            senderName + ' filed an HR request via Jenna.\n\n' +
+            'Topic: ' + catLabel + '\n' +
+            'Reference: ' + requestNumber + '\n' +
+            'Priority: ' + form.priority + '\n' +
+            (form.starts_on ? 'Dates: ' + form.starts_on + (form.ends_on && form.ends_on !== form.starts_on ? ' to ' + form.ends_on : '') + '\n' : '') +
+            (form.description ? '\nDetails:\n' + form.description.trim() + '\n' : '') +
+            '\nReview it in KTC Hub → Admin → HR Inbox.';
+          fetch('/api/notify', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              type: 'hr_request',
+              recipientIds: recipientIds,
+              subject: subject,
+              body: body,
+              triggeredBy: myId,
+            }),
+          }).catch(function (e) { console.warn('[hr_request notify] dispatch failed:', e && e.message); });
+        }
+      } catch (notifyErr) {
+        console.warn('[hr_request notify] build/dispatch error:', notifyErr && notifyErr.message);
+      }
+
+      setSubmitOk({ kind: 'request', number: requestNumber });
       await loadRecent();
     } catch (e) {
       alert('Could not submit your request: ' + (e.message || 'unknown'));
@@ -242,7 +306,46 @@ export default function MyHRDesk({ user, userProfile, users }) {
       };
       var res = await supabase.from('hr_complaints').insert(payload).select().maybeSingle();
       if (res.error) throw new Error(res.error.message);
-      setSubmitOk({ kind: 'complaint', number: (res.data && res.data.complaint_number) || 'submitted' });
+      var complaintNumber = (res.data && res.data.complaint_number) || 'submitted';
+
+      // v55.73 — Complaints ALWAYS route to super_admin (Mr. Kandil) only.
+      // Regardless of anonymous_to_admins, the super_admin always sees the
+      // submitter's name (legal/HR-handling necessity). Anonymous mode just
+      // hides the submitter from any regular admins down the chain — but
+      // since complaints never go to admins anyway, anonymous_to_admins is
+      // a property of how the AdminHRInbox renders the row, not whether
+      // super_admin gets notified.
+      try {
+        if (superAdminId && superAdminId !== myId) {
+          var senderLabel = form.anonymous_to_admins
+            ? 'A teammate (anonymous to admins, identified to super_admin)'
+            : ((myProfile && myProfile.name) || ((user && user.email) || 'A teammate').split('@')[0]);
+          var catLabel = ((COMPLAINT_CATEGORIES.find(function (c) { return c.id === form.category; }) || {}).label) || form.category;
+          var subject = '🚨 HR Concern (' + form.severity + '): ' + form.title.trim();
+          var body =
+            senderLabel + ' filed an HR concern via Jenna.\n\n' +
+            'Topic: ' + catLabel + '\n' +
+            'Reference: ' + complaintNumber + '\n' +
+            'Severity: ' + form.severity + '\n' +
+            (form.description ? '\nDetails:\n' + form.description.trim() + '\n' : '') +
+            '\nReview it in KTC Hub → Admin → HR Inbox (Concerns tab).';
+          fetch('/api/notify', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              type: 'hr_complaint',
+              recipientIds: [superAdminId],
+              subject: subject,
+              body: body,
+              triggeredBy: myId,
+            }),
+          }).catch(function (e) { console.warn('[hr_complaint notify] dispatch failed:', e && e.message); });
+        }
+      } catch (notifyErr) {
+        console.warn('[hr_complaint notify] build/dispatch error:', notifyErr && notifyErr.message);
+      }
+
+      setSubmitOk({ kind: 'complaint', number: complaintNumber });
       await loadRecent();
     } catch (e) {
       alert('Could not submit your complaint: ' + (e.message || 'unknown'));
@@ -411,9 +514,28 @@ export default function MyHRDesk({ user, userProfile, users }) {
       {openModal === 'request' && (
         <div className="fixed inset-0 bg-black/60 z-[280] flex items-center justify-center p-4" onClick={closeModal}>
           <div className="bg-white rounded-xl shadow-2xl w-full max-w-lg flex flex-col" style={{ maxHeight: '90vh' }} onClick={function (e) { e.stopPropagation(); }}>
-            <div className="p-5 border-b border-slate-100">
-              <h2 className="text-lg font-extrabold text-amber-900 flex items-center gap-2">📝 File a Request</h2>
-              <p className="text-xs text-slate-500 mt-0.5">Pick a topic — the system routes it to the right person automatically.</p>
+            {/* v55.73 — personable Jenna intro at the top of the modal so the
+                user knows WHO is helping them with this request, not just a
+                faceless form. Photo + name + role + warm one-line greeting.
+                Voice-mode is wired into agent-personalities.js for future
+                ElevenLabs TTS. */}
+            <div className="p-4 border-b border-slate-100 bg-gradient-to-br from-amber-50 via-rose-50 to-fuchsia-50">
+              <div className="flex items-start gap-3">
+                <img
+                  src={AGENT_PERSONALITIES.jenna.photo}
+                  alt={AGENT_PERSONALITIES.jenna.name}
+                  className="w-14 h-14 rounded-full ring-2 ring-white shadow-md flex-shrink-0"
+                  style={{ objectFit: 'cover' }} />
+                <div className="flex-1 min-w-0">
+                  <div className="flex items-baseline gap-2 flex-wrap">
+                    <h2 className="text-base font-extrabold text-rose-900">Hi, I'm {AGENT_PERSONALITIES.jenna.name}</h2>
+                    <span className="text-[10px] font-bold uppercase tracking-wide px-1.5 py-0.5 rounded bg-rose-200 text-rose-800">{AGENT_PERSONALITIES.jenna.role}</span>
+                  </div>
+                  <p className="text-xs text-rose-800 mt-1 leading-snug">{AGENT_PERSONALITIES.jenna.greeting}</p>
+                </div>
+              </div>
+              <h3 className="text-sm font-extrabold text-amber-900 mt-3 flex items-center gap-1.5">📝 File a Request</h3>
+              <p className="text-[11px] text-slate-600 mt-0.5">Pick a topic, then choose who you want it sent to.</p>
             </div>
             {submitOk ? (
               <div className="p-8 text-center">
@@ -447,7 +569,7 @@ export default function MyHRDesk({ user, userProfile, users }) {
                             <button
                               key={c.id}
                               type="button"
-                              onClick={function () { setForm(Object.assign({}, form, { category: c.id, visibility: visibilityFromCategory(c.id) })); }}
+                              onClick={function () { setForm(Object.assign({}, form, { category: c.id, visibility: visibilityFromCategory(c.id), recipient: 'manager' })); }}
                               className={'flex flex-col items-center gap-1 p-2 rounded-lg border-2 transition text-center ' + (selected ? 'border-blue-500 bg-blue-50 shadow-sm' : 'border-slate-200 bg-white hover:border-slate-300')}
                               title={c.hint}
                             >
@@ -471,7 +593,7 @@ export default function MyHRDesk({ user, userProfile, users }) {
                             <button
                               key={c.id}
                               type="button"
-                              onClick={function () { setForm(Object.assign({}, form, { category: c.id, visibility: visibilityFromCategory(c.id) })); }}
+                              onClick={function () { setForm(Object.assign({}, form, { category: c.id, visibility: visibilityFromCategory(c.id), recipient: 'super_admin' })); }}
                               className={'flex flex-col items-center gap-1 p-2 rounded-lg border-2 transition text-center ' + (selected ? 'border-violet-500 bg-violet-50 shadow-sm' : 'border-slate-200 bg-white hover:border-slate-300')}
                               title={c.hint}
                             >
@@ -487,23 +609,72 @@ export default function MyHRDesk({ user, userProfile, users }) {
                     <div className="text-[10px] text-slate-500 mt-2 italic">{(REQUEST_CATEGORIES.find(function (c) { return c.id === form.category; }) || {}).hint}</div>
                   </div>
 
-                  {/* Auto-routing badge — visible confirmation of where it goes */}
-                  {(function () {
-                    var cat = REQUEST_CATEGORIES.find(function (c) { return c.id === form.category; });
-                    if (!cat) return null;
-                    if (cat.routing === 'manager') {
-                      return (
-                        <div className="bg-blue-50 border border-blue-200 rounded-lg p-2 text-[11px] text-blue-900">
-                          <strong>📨 Goes to:</strong> Your manager + super_admin can see this. (Manager handles operational items like vacation/sick leave/schedule.)
+                  {/* v55.73 — RECIPIENT PICKER. The user explicitly chooses
+                      who this goes to via radio buttons. Auto-defaults from
+                      category (manager-routed topics → manager, sensitive
+                      topics → super_admin) but always overridable.
+                      Reported by Max May 8 2026: "There should be radio
+                      buttons of who you want to message to — manager or
+                      Mr. Kandil. In the background you're not telling him
+                      where it actually goes." Now: explicit radio buttons,
+                      high-contrast badge, AND actual notification dispatch
+                      at submit time (was a no-op before). */}
+                  <div className="rounded-lg border-2 border-slate-300 bg-white p-3">
+                    <div className="text-[11px] font-extrabold text-slate-800 uppercase tracking-wide mb-2">📨 Send this request to</div>
+                    <div className="space-y-2">
+                      <label className={'flex items-start gap-2.5 p-2.5 rounded-lg border-2 cursor-pointer transition ' + (form.recipient === 'manager' ? 'border-blue-500 bg-blue-50' : 'border-slate-200 bg-white hover:border-slate-300')}>
+                        <input
+                          type="radio"
+                          name="hr-recipient"
+                          value="manager"
+                          checked={form.recipient === 'manager'}
+                          onChange={function () { setForm(Object.assign({}, form, { recipient: 'manager' })); }}
+                          className="mt-1 flex-shrink-0"
+                          disabled={!managerId} />
+                        <div className="flex-1 min-w-0">
+                          <div className="text-sm font-bold text-slate-900">
+                            👤 My manager{manager ? ': ' + managerName : ''}
+                          </div>
+                          <div className="text-[11px] text-slate-700 mt-0.5">
+                            {managerId
+                              ? superAdminName + ' is also CC\'d so it doesn\'t fall through the cracks.'
+                              : 'You don\'t have a manager assigned. Ask super_admin to set your "reports_to" in Settings.'}
+                          </div>
                         </div>
-                      );
-                    }
-                    return (
-                      <div className="bg-violet-50 border border-violet-200 rounded-lg p-2 text-[11px] text-violet-900">
-                        <strong>🔒 Goes to:</strong> super_admin only. Regular admins (including your manager) won't see this. Use this for anything HR-sensitive.
-                      </div>
-                    );
-                  })()}
+                      </label>
+                      <label className={'flex items-start gap-2.5 p-2.5 rounded-lg border-2 cursor-pointer transition ' + (form.recipient === 'super_admin' ? 'border-violet-500 bg-violet-50' : 'border-slate-200 bg-white hover:border-slate-300')}>
+                        <input
+                          type="radio"
+                          name="hr-recipient"
+                          value="super_admin"
+                          checked={form.recipient === 'super_admin'}
+                          onChange={function () { setForm(Object.assign({}, form, { recipient: 'super_admin' })); }}
+                          className="mt-1 flex-shrink-0" />
+                        <div className="flex-1 min-w-0">
+                          <div className="text-sm font-bold text-slate-900">
+                            🔒 {superAdminName} only (super_admin)
+                          </div>
+                          <div className="text-[11px] text-slate-700 mt-0.5">
+                            Goes straight to {superAdminName}. Regular admins (including your manager) won't see this. Use for HR-sensitive topics: raise, promotion, transfer, complaints, anything personal.
+                          </div>
+                        </div>
+                      </label>
+                    </div>
+                    {/* Hint based on what the category suggests */}
+                    {(function () {
+                      var cat = REQUEST_CATEGORIES.find(function (c) { return c.id === form.category; });
+                      if (!cat) return null;
+                      var suggested = cat.routing === 'manager' ? 'manager' : 'super_admin';
+                      if (form.recipient !== suggested) {
+                        return (
+                          <div className="mt-2 px-2 py-1.5 rounded bg-amber-100 border border-amber-300 text-[11px] text-amber-900 font-semibold">
+                            ⚠️ Heads up: most "{cat.label}" requests usually go to {suggested === 'manager' ? 'a manager' : superAdminName}. You can keep your choice — just confirming.
+                          </div>
+                        );
+                      }
+                      return null;
+                    })()}
+                  </div>
 
                   <div>
                     <label className="text-[10px] font-bold text-slate-700 block mb-1">Short title</label>
@@ -553,9 +724,27 @@ export default function MyHRDesk({ user, userProfile, users }) {
       {openModal === 'complaint' && (
         <div className="fixed inset-0 bg-black/60 z-[280] flex items-center justify-center p-4" onClick={closeModal}>
           <div className="bg-white rounded-xl shadow-2xl w-full max-w-lg flex flex-col" style={{ maxHeight: '90vh' }} onClick={function (e) { e.stopPropagation(); }}>
-            <div className="p-5 border-b border-slate-100">
-              <h2 className="text-lg font-extrabold text-rose-900 flex items-center gap-2">🛡️ File a Concern</h2>
-              <p className="text-xs text-slate-500 mt-0.5">Goes <strong>directly to super_admin</strong>. Hidden from regular admins by default.</p>
+            {/* v55.73 — Jenna intro for complaints. Same warm tone, but the
+                greeting acknowledges this is sensitive. */}
+            <div className="p-4 border-b border-slate-100 bg-gradient-to-br from-rose-50 via-pink-50 to-fuchsia-50">
+              <div className="flex items-start gap-3">
+                <img
+                  src={AGENT_PERSONALITIES.jenna.photo}
+                  alt={AGENT_PERSONALITIES.jenna.name}
+                  className="w-14 h-14 rounded-full ring-2 ring-white shadow-md flex-shrink-0"
+                  style={{ objectFit: 'cover' }} />
+                <div className="flex-1 min-w-0">
+                  <div className="flex items-baseline gap-2 flex-wrap">
+                    <h2 className="text-base font-extrabold text-rose-900">Hi, I'm {AGENT_PERSONALITIES.jenna.name}</h2>
+                    <span className="text-[10px] font-bold uppercase tracking-wide px-1.5 py-0.5 rounded bg-rose-200 text-rose-800">{AGENT_PERSONALITIES.jenna.role}</span>
+                  </div>
+                  <p className="text-xs text-rose-800 mt-1 leading-snug">
+                    I'll take this directly to {superAdminName}. Whatever you share stays between you and super_admin — regular admins won't see it. You can also stay anonymous to admins (toggle below).
+                  </p>
+                </div>
+              </div>
+              <h3 className="text-sm font-extrabold text-rose-900 mt-3 flex items-center gap-1.5">🛡️ File a Concern</h3>
+              <p className="text-[11px] text-slate-600 mt-0.5">Goes <strong>directly to {superAdminName}</strong>. Hidden from regular admins by default.</p>
             </div>
             {submitOk ? (
               <div className="p-8 text-center">

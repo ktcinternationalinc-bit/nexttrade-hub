@@ -89,7 +89,8 @@ check('2.3 filterEntry function defined to drop admin-only content',
 check('2.4 filterEntry checks adminOnlyEntry on whole entries',
   /entry\.adminOnlyEntry && !canSeeAdminInternals/.test(wnw));
 check('2.5 filterEntry filters individual items by item.adminOnly flag',
-  /entry\.items\.filter[\s\S]{0,200}!it\.adminOnly/.test(wnw));
+  // v55.73 — pattern simplified, now: if (it.adminOnly && !canSeeAdminInternals) return false
+  /it\.adminOnly && !canSeeAdminInternals/.test(wnw));
 check('2.6 filterEntry handles items as either string OR object',
   /typeof it === 'string'/.test(wnw));
 check('2.7 filteredHistory pipeline — applies filterEntry then drops nulls',

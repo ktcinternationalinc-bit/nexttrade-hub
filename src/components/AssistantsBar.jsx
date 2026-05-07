@@ -26,6 +26,7 @@ import { useState, useEffect } from 'react';
 import { supabase } from '../lib/supabase';
 import MyHRDesk from './MyHRDesk';
 import MyPerformance from './MyPerformance';
+import { AGENT_PERSONALITIES } from '../lib/agent-personalities';
 
 var NADIA_AUTO_OPEN_KEY = 'ktc_nadia_morning_brief_dismissed_at';
 
@@ -38,27 +39,36 @@ export default function AssistantsBar({
   var firstName = ((userProfile && userProfile.name) || (user && user.email) || 'there').split(' ')[0].split('@')[0];
 
   // Expansion state
-  var [openPanel, setOpenPanel] = useState(function () {
-    try {
-      if (typeof window === 'undefined') return 'nadia';
-      var dismissedAt = window.localStorage.getItem(NADIA_AUTO_OPEN_KEY);
-      if (!dismissedAt) return 'nadia';
-      var dismissedDate = new Date(dismissedAt).toISOString().substring(0, 10);
-      var todayStr = new Date().toISOString().substring(0, 10);
-      return dismissedDate === todayStr ? null : 'nadia';
-    } catch (_) { return 'nadia'; }
-  });
+  // v55.73 — Per Max's spec: ONE ASSISTANT ALWAYS ACTIVE. Nadia is the
+  // default. The dismissed-today flag is no longer used to close her —
+  // it just informs whether her morning brief shows the auto-open badge.
+  // Initial state is always 'nadia' on first render.
+  var [openPanel, setOpenPanel] = useState('nadia');
 
+  // v55.73 — One assistant ALWAYS active. Per Max May 8 2026:
+  //   "Only one assistant can be active at a time. Default: Nadia is
+  //   active first. The user should clearly understand which assistant
+  //   is currently in control."
+  // togglePanel(which) now SELECTS that assistant. Clicking the already-
+  // active tile is a no-op (instead of closing the panel) because we
+  // want at least one always active.
   var togglePanel = function (which) {
     setOpenPanel(function (prev) {
-      var next = prev === which ? null : which;
-      if (which === 'nadia' && next === null) {
-        try { if (typeof window !== 'undefined') window.localStorage.setItem(NADIA_AUTO_OPEN_KEY, new Date().toISOString()); } catch (_) {}
-      }
-      if (which === 'nadia' && next === 'nadia' && onTalkToNadia) {
+      // No-op when clicking already-active
+      if (prev === which) return prev;
+      // Notify external listeners (e.g. AIGreeter) that the active
+      // persona changed. Single source of truth lives in this component.
+      try {
+        if (typeof window !== 'undefined') {
+          window.dispatchEvent(new CustomEvent('ktc:assistant-changed', { detail: { agent: which } }));
+        }
+      } catch (_) {}
+      // Auto-talk to Nadia when she becomes active (preserves existing
+      // scroll-to-greeter behavior from v55.70).
+      if (which === 'nadia' && onTalkToNadia) {
         try { onTalkToNadia(); } catch (_) {}
       }
-      return next;
+      return which;
     });
   };
 
@@ -173,21 +183,45 @@ export default function AssistantsBar({
   var saraLine = saraSeenToday ? 'See your scoring + growth feedback.' : 'New coach feedback waiting for you.';
 
   // Tile component
+  // v55.73 — Strong "active" visual feedback per Max's spec:
+  //   "Soft glow around her photo, subtle pulsing light, active border,
+  //   speaking animation, words/text appearing in her response area."
+  // The active assistant gets:
+  //   - A glowing colored shadow that pulses gently
+  //   - A bold ring in their accent color
+  //   - "▸ ACTIVE" badge instead of "▸ Open"
+  //   - Slightly elevated scale
+  // Inactive tiles look quieter so the active one clearly dominates.
   function Tile(props) {
     var who = props.who;
-    var isOpen = openPanel === who;
+    var isActive = openPanel === who;
     return (
       <button
         onClick={function () { togglePanel(who); }}
-        aria-pressed={isOpen}
-        className={'group relative flex flex-col items-center text-center rounded-3xl p-4 sm:p-6 transition-all duration-200 ' +
-          (isOpen
-            ? 'shadow-2xl scale-[1.02] ring-4 ring-offset-2 ring-offset-white ' + props.ringColor
-            : 'hover:shadow-2xl hover:-translate-y-1 ring-2 ring-transparent shadow-lg')}
-        style={{ background: props.bg }}>
+        aria-pressed={isActive}
+        aria-label={isActive ? props.name + ' is the active assistant' : 'Switch to ' + props.name}
+        className={'group relative flex flex-col items-center text-center rounded-3xl p-4 sm:p-6 transition-all duration-300 ' +
+          (isActive
+            ? 'shadow-2xl scale-[1.04] ring-4 ring-offset-2 ring-offset-white ' + props.ringColor + ' ktc-assistant-active-pulse'
+            : 'hover:shadow-2xl hover:-translate-y-1 ring-2 ring-transparent shadow-lg opacity-90')}
+        style={{
+          background: props.bg,
+          // v55.73 — gentle glow on active assistant. The keyframes are
+          // declared inline below the bar so they're scoped to this component.
+          boxShadow: isActive ? props.activeGlow : undefined,
+        }}>
         {props.notifCount > 0 && (
           <span className={'absolute top-3 right-3 px-2.5 min-w-[28px] h-7 rounded-full text-white text-sm font-extrabold flex items-center justify-center ring-2 ring-white z-10 ' + props.badgeColor + (props.notifPulse ? ' animate-pulse' : '')}>
             {props.notifCount}
+          </span>
+        )}
+        {/* Active indicator dot — subtle pulsing dot top-left so the user
+            sees at a glance which assistant is "in control" without having
+            to look for the ring. */}
+        {isActive && (
+          <span className="absolute top-3 left-3 flex items-center gap-1.5 px-2 py-1 rounded-full bg-white/95 backdrop-blur shadow-md z-10">
+            <span className="w-2 h-2 rounded-full animate-pulse" style={{ background: props.dotColor }} />
+            <span className="text-[10px] font-extrabold uppercase tracking-wider" style={{ color: props.dotColor }}>Active</span>
           </span>
         )}
         {/* v55.71 PREVAILING — avatars sized to dominate the dashboard
@@ -206,8 +240,10 @@ export default function AssistantsBar({
         <p className="text-sm text-white font-semibold mt-2 px-2 leading-snug min-h-[2.5em]" style={{ textShadow: '0 1px 3px rgba(0,0,0,0.4)' }}>
           {props.line}
         </p>
-        <div className="mt-2 inline-flex items-center gap-1 text-xs font-bold text-white bg-white/25 backdrop-blur px-3 py-1.5 rounded-full" style={{ textShadow: '0 1px 2px rgba(0,0,0,0.3)' }}>
-          {isOpen ? '▾ Close' : '▸ Open'}
+        <div className={'mt-2 inline-flex items-center gap-1 text-xs font-bold px-3 py-1.5 rounded-full ' +
+          (isActive ? 'bg-white text-slate-900 shadow-md' : 'text-white bg-white/25 backdrop-blur')}
+          style={isActive ? {} : { textShadow: '0 1px 2px rgba(0,0,0,0.3)' }}>
+          {isActive ? '▸ IN CONTROL' : '▸ Tap to activate'}
         </div>
       </button>
     );
@@ -264,6 +300,8 @@ export default function AssistantsBar({
           notifCount={nadiaUrgentCount} notifPulse={true}
           bg="linear-gradient(135deg, #6366f1 0%, #8b5cf6 50%, #ec4899 100%)"
           ringColor="ring-indigo-400" badgeColor="bg-rose-500"
+          activeGlow="0 0 0 4px rgba(99,102,241,0.3), 0 8px 32px rgba(99,102,241,0.5)"
+          dotColor="#6366f1"
           avatar={NadiaAvatar}
         />
         <Tile
@@ -274,6 +312,8 @@ export default function AssistantsBar({
           bg="linear-gradient(135deg, #f59e0b 0%, #f43f5e 50%, #d946ef 100%)"
           ringColor="ring-rose-400"
           badgeColor={jennaSummary.newResponses > 0 ? 'bg-emerald-500' : 'bg-amber-500'}
+          activeGlow="0 0 0 4px rgba(244,63,94,0.3), 0 8px 32px rgba(244,63,94,0.5)"
+          dotColor="#f43f5e"
           avatar={JennaAvatar}
         />
         <Tile
@@ -282,6 +322,8 @@ export default function AssistantsBar({
           notifCount={saraSeenToday ? 0 : 1} notifPulse={false}
           bg="linear-gradient(135deg, #06b6d4 0%, #0ea5e9 50%, #6366f1 100%)"
           ringColor="ring-cyan-400" badgeColor="bg-cyan-300"
+          activeGlow="0 0 0 4px rgba(6,182,212,0.3), 0 8px 32px rgba(6,182,212,0.5)"
+          dotColor="#06b6d4"
           avatar={SaraAvatar}
         />
       </div>
@@ -289,19 +331,25 @@ export default function AssistantsBar({
       {/* EXPANDED PANEL */}
       {openPanel === 'nadia' && (
         <div className="mt-3 rounded-2xl border-2 border-indigo-200 bg-gradient-to-br from-indigo-50 via-purple-50 to-pink-50 p-4">
-          <div className="flex items-start justify-between gap-2 mb-2">
-            <div>
-              <div className="flex items-center gap-2">
-                <h4 className="text-base font-extrabold text-indigo-900">Nadia — Morning Brief</h4>
-                <span className="text-[10px] font-bold bg-indigo-200 text-indigo-800 px-1.5 py-0.5 rounded uppercase">Auto-opens daily</span>
+          {/* v55.73 — Nadia personality greeting at top of expanded panel.
+              Photo + name + warm intro so the user sees WHO is helping them. */}
+          <div className="flex items-start justify-between gap-2 mb-3">
+            <div className="flex items-start gap-3 flex-1 min-w-0">
+              <img
+                src={AGENT_PERSONALITIES.nadia.photo}
+                alt={AGENT_PERSONALITIES.nadia.name}
+                className="w-12 h-12 rounded-full ring-2 ring-white shadow flex-shrink-0"
+                style={{ objectFit: 'cover' }} />
+              <div className="flex-1 min-w-0">
+                <div className="flex items-center gap-2 flex-wrap">
+                  <h4 className="text-base font-extrabold text-indigo-900">Hi, I'm {AGENT_PERSONALITIES.nadia.name}</h4>
+                  <span className="text-[10px] font-bold bg-indigo-200 text-indigo-800 px-1.5 py-0.5 rounded uppercase">{AGENT_PERSONALITIES.nadia.role}</span>
+                  <span className="text-[10px] font-bold bg-emerald-200 text-emerald-800 px-1.5 py-0.5 rounded uppercase">Auto-opens daily</span>
+                </div>
+                <p className="text-xs text-indigo-800 mt-1 leading-snug">{AGENT_PERSONALITIES.nadia.greeting}</p>
+                <p className="text-[11px] font-semibold text-indigo-900 mt-2">{nadiaLine}</p>
               </div>
-              <p className="text-xs text-indigo-700 mt-0.5">{nadiaLine}</p>
             </div>
-            <button
-              onClick={function () { togglePanel('nadia'); }}
-              className="text-xs font-bold text-indigo-600 hover:text-indigo-800 px-2 py-1 rounded hover:bg-white/50">
-              ✕ Close
-            </button>
           </div>
           <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 mb-3">
             <StatCard label="Need Ack" value={myAck} color="amber" />
@@ -324,16 +372,22 @@ export default function AssistantsBar({
 
       {openPanel === 'jenna' && (
         <div className="mt-3 rounded-2xl border-2 border-rose-200 bg-gradient-to-br from-amber-50 via-rose-50 to-fuchsia-50 p-4">
+          {/* v55.73 — Jenna personality greeting at top of expanded panel. */}
           <div className="flex items-start justify-between gap-2 mb-3">
-            <div>
-              <h4 className="text-base font-extrabold text-rose-900">Jenna — HR Desk</h4>
-              <p className="text-xs text-rose-700 mt-0.5">File requests, raise concerns, see super_admin responses.</p>
+            <div className="flex items-start gap-3 flex-1 min-w-0">
+              <img
+                src={AGENT_PERSONALITIES.jenna.photo}
+                alt={AGENT_PERSONALITIES.jenna.name}
+                className="w-12 h-12 rounded-full ring-2 ring-white shadow flex-shrink-0"
+                style={{ objectFit: 'cover' }} />
+              <div className="flex-1 min-w-0">
+                <div className="flex items-center gap-2 flex-wrap">
+                  <h4 className="text-base font-extrabold text-rose-900">Hi, I'm {AGENT_PERSONALITIES.jenna.name}</h4>
+                  <span className="text-[10px] font-bold bg-rose-200 text-rose-800 px-1.5 py-0.5 rounded uppercase">{AGENT_PERSONALITIES.jenna.role}</span>
+                </div>
+                <p className="text-xs text-rose-800 mt-1 leading-snug">{AGENT_PERSONALITIES.jenna.greeting}</p>
+              </div>
             </div>
-            <button
-              onClick={function () { togglePanel('jenna'); }}
-              className="text-xs font-bold text-rose-600 hover:text-rose-800 px-2 py-1 rounded hover:bg-white/50">
-              ✕ Close
-            </button>
           </div>
           <MyHRDesk user={user} userProfile={userProfile} users={users} />
         </div>
@@ -341,16 +395,22 @@ export default function AssistantsBar({
 
       {openPanel === 'sara' && (
         <div className="mt-3 rounded-2xl border-2 border-cyan-200 bg-gradient-to-br from-cyan-50 via-sky-50 to-indigo-50 p-4">
+          {/* v55.73 — Sara personality greeting at top of expanded panel. */}
           <div className="flex items-start justify-between gap-2 mb-3">
-            <div>
-              <h4 className="text-base font-extrabold text-cyan-900">Sara — Work Coach</h4>
-              <p className="text-xs text-cyan-700 mt-0.5">Your scoring, growth feedback, and AI coaching to level up your performance.</p>
+            <div className="flex items-start gap-3 flex-1 min-w-0">
+              <img
+                src={AGENT_PERSONALITIES.sara.photo}
+                alt={AGENT_PERSONALITIES.sara.name}
+                className="w-12 h-12 rounded-full ring-2 ring-white shadow flex-shrink-0"
+                style={{ objectFit: 'cover' }} />
+              <div className="flex-1 min-w-0">
+                <div className="flex items-center gap-2 flex-wrap">
+                  <h4 className="text-base font-extrabold text-cyan-900">Hey, I'm {AGENT_PERSONALITIES.sara.name}</h4>
+                  <span className="text-[10px] font-bold bg-cyan-200 text-cyan-800 px-1.5 py-0.5 rounded uppercase">{AGENT_PERSONALITIES.sara.role}</span>
+                </div>
+                <p className="text-xs text-cyan-800 mt-1 leading-snug">{AGENT_PERSONALITIES.sara.greeting}</p>
+              </div>
             </div>
-            <button
-              onClick={function () { togglePanel('sara'); }}
-              className="text-xs font-bold text-cyan-600 hover:text-cyan-800 px-2 py-1 rounded hover:bg-white/50">
-              ✕ Close
-            </button>
           </div>
           <MyPerformance user={user} userProfile={userProfile} />
         </div>

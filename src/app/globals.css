@@ -368,6 +368,17 @@ h3 { letter-spacing: -0.02em; }
 }
 .animate-pulse { animation: gentlePulse 2s ease-in-out infinite; }
 
+/* v55.73 — Active assistant pulse. Subtle pulsing glow on the IN-CONTROL
+   tile so it's visually clear which assistant is active without being
+   distracting. Uses opacity-cycling on the ring for a soft heartbeat. */
+@keyframes ktcAssistantActivePulse {
+  0%, 100% { filter: brightness(1) saturate(1); }
+  50%      { filter: brightness(1.05) saturate(1.1); }
+}
+.ktc-assistant-active-pulse {
+  animation: ktcAssistantActivePulse 3s ease-in-out infinite;
+}
+
 /* Active tab glow animation */
 .tab-nav button[class*="text-blue-600"] {
   animation: glowPulse 3s ease-in-out infinite;

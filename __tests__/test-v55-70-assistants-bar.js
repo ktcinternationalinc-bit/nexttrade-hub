@@ -79,7 +79,9 @@ check('2.6 v55.71 — Grid uses 3 columns on tablet+ (was 2 in v55.70)',
 check('2.7a v55.71 — Tile click triggers togglePanel (replaces v55.70 onTalkTo*)',
   /onClick=\{function \(\) \{ togglePanel\(who\); \}\}/.test(ab));
 check('2.7b v55.71 — togglePanel handles all three avatars uniformly',
-  /var togglePanel = function \(which\) \{[\s\S]{0,200}prev === which \? null : which/.test(ab));
+  // v55.73 — togglePanel now no-ops on already-active (instead of toggling
+  // off), per Max: "Only one assistant active at a time."
+  /var togglePanel = function \(which\)[\s\S]{0,500}if \(prev === which\) return prev/.test(ab));
 check('2.8 v55.71 — Hover lifts card (transform/translate when not open)',
   /hover:-translate-y/.test(ab) && /hover:shadow-2xl/.test(ab));
 check('2.9 v55.71 — Three distinct gradients distinguish all three avatars (asserted in suite 1.1-1.3 of v55.71)',
@@ -112,8 +114,8 @@ check('3.6 v55.71 — Three-avatar offsets so they don\'t move in lock-step (Nad
 // ============================================================
 group('4. Summary lines (morning brief / today\'s agenda)');
 
-check('4.1 v55.71 — Nadia panel labeled "Morning Brief"',
-  /Morning Brief/.test(ab));
+check('4.1 v55.73 — Nadia panel shows persona greeting + Auto-opens daily badge',
+  /Hi, I'm \{AGENT_PERSONALITIES\.nadia\.name\}/.test(ab) && /Auto-opens daily/.test(ab));
 check('4.2 v55.71 — Greeting line uses greetTime (Good morning/afternoon/evening)',
   /greetTime \+ ', ' \+ firstName/.test(ab));
 check('4.3 Nadia summary computes urgent count from tickets',

@@ -50,13 +50,50 @@ export default function MyPerformance({ user, userProfile }) {
   const myName = userProfile?.name || user?.email || 'You';
 
   // Load all relevant tables for this user (self only — narrower than admin view)
+  // v55.73 — fixed "stuck on Loading your activity..." hang reported by Max.
+  // Three fixes combined:
+  //   (1) If myId is undefined on first render (userProfile still hydrating),
+  //       the effect was bailing out at line 54 and leaving loading=true
+  //       forever. Now: also clear loading + show a soft "no data yet" state
+  //       so the user never sees an infinite spinner.
+  //   (2) Hard 8-second timeout. If the parallel fetches stall (network /
+  //       Supabase blip), surface a clean professional error and let the
+  //       user retry, rather than spin indefinitely.
+  //   (3) Defensive: every safe() wrapper guarantees a return value, and the
+  //       outer try/catch ALWAYS hits setLoading(false) via finally — so no
+  //       error path leaves loading=true.
   useEffect(() => {
-    if (!myId || !expanded) return;
+    if (!expanded) {
+      // Component collapsed — leave whatever state we had
+      return;
+    }
+    // v55.73 — myId not ready yet (userProfile still hydrating). Don't get
+    // stuck on the spinner. Exit loading so the empty-state UI shows; when
+    // myId arrives, the effect re-runs and we fetch then.
+    if (!myId) {
+      setLoading(false);
+      return;
+    }
+
     let cancelled = false;
+    let timeoutId = null;
+
     const load = async () => {
       setLoading(true);
       setLoadError('');
       console.log('[my-perf] starting load for user', myId);
+
+      // v55.73 — hard timeout. If something stalls, give the user a clean
+      // out instead of an infinite spinner. 8 seconds is generous enough
+      // for a slow Supabase round-trip but short enough to not feel broken.
+      const TIMEOUT_MS = 8000;
+      timeoutId = setTimeout(() => {
+        if (cancelled) return;
+        console.warn('[my-perf] load timeout — bailing to clean state');
+        setLoadError('Sara is having trouble loading your activity right now. Please try again in a moment.');
+        setLoading(false);
+      }, TIMEOUT_MS);
+
       const period180 = resolvePeriod('1y'); // grab a year back so any selected period fits
       // Fetch in parallel; each query in its own try/catch so one failure doesn't kill all
       const safe = async (label, fn) => {
@@ -79,6 +116,7 @@ export default function MyPerformance({ user, userProfile }) {
           safe('system_tickets', async () => (await supabase.from('system_tickets').select('*').or('created_by.eq.' + myId + ',retest_completed_by.eq.' + myId).gte('created_at', period180.from)).data || []),
         ]);
         if (cancelled) return;
+        if (timeoutId) { clearTimeout(timeoutId); timeoutId = null; }
         console.log('[my-perf] load complete', {
           tickets: tickets.length,
           ticketComments: ticketComments.length,
@@ -91,15 +129,22 @@ export default function MyPerformance({ user, userProfile }) {
         setData({ tickets, ticketComments, dailyLog, auditLog, customerQuotes, calendarEvents, systemTickets });
         setLoading(false);
       } catch (e) {
+        // Should rarely fire — safe() catches per-query errors. This is the
+        // last line of defense for an unforeseen crash (e.g. Promise.all itself).
         console.error('[my-perf] LOAD CRASHED:', e);
         if (!cancelled) {
-          setLoadError((e && e.message) || 'Could not load your performance data');
+          if (timeoutId) { clearTimeout(timeoutId); timeoutId = null; }
+          // Sanitized message for the user; technical detail in console for debugging.
+          setLoadError('Sara is having trouble loading your activity. Please refresh or try again later.');
           setLoading(false);
         }
       }
     };
     load();
-    return () => { cancelled = true; };
+    return () => {
+      cancelled = true;
+      if (timeoutId) clearTimeout(timeoutId);
+    };
   }, [myId, expanded]);
 
   // Compute metrics for current + prior period
@@ -223,14 +268,26 @@ export default function MyPerformance({ user, userProfile }) {
         <div className="text-center py-12 text-slate-400 text-sm">Loading your activity…</div>
       )}
 
-      {/* v55.54 — Show load errors so the user knows what went wrong instead
-          of seeing an empty card. Previously errors were silently swallowed
-          and the component looked blank. */}
+      {/* v55.73 — clean professional error message instead of raw error
+          text. Reported by Max May 8 2026: "user should not see strange
+          technical errors. Show a clean professional message and log the
+          real error in the backend." Real error stays in console for debug. */}
       {!loading && loadError && (
         <div className="bg-rose-50 border border-rose-200 rounded-lg p-4 text-sm text-rose-800">
-          <div className="font-bold mb-1">Could not load your performance data</div>
-          <div className="text-xs">{loadError}</div>
-          <div className="text-[10px] text-rose-600 mt-2">Try collapsing and re-opening. If it keeps failing, check the browser console for the [my-perf] log lines and share them.</div>
+          <div className="font-bold mb-1">👋 Sara here — couldn't load your activity</div>
+          <div className="text-xs leading-relaxed">{loadError}</div>
+          <button
+            onClick={function () {
+              setLoadError('');
+              setData(null);
+              setLoading(true);
+              // Force re-trigger of the load effect
+              setExpanded(false);
+              setTimeout(function () { setExpanded(true); }, 50);
+            }}
+            className="mt-3 px-3 py-1.5 bg-rose-600 text-white text-xs font-bold rounded hover:bg-rose-700">
+            Try again
+          </button>
         </div>
       )}
 
@@ -241,6 +298,19 @@ export default function MyPerformance({ user, userProfile }) {
         <div className="bg-amber-50 border border-amber-200 rounded-lg p-4 text-sm text-amber-800">
           <div className="font-bold mb-1">No activity to show yet</div>
           <div className="text-xs">Once you've created a ticket, written a comment, or logged daily activity, your metrics will appear here.</div>
+        </div>
+      )}
+
+      {/* v55.73 — Sara-voice empty state for when myId hasn't arrived yet
+          OR when load completed but data state is null (rare — means the
+          Promise.all returned but data wasn't set). Per Max's spec:
+          "If no data exists, Sara shows a clean empty state." */}
+      {!loading && !loadError && !data && (
+        <div className="bg-cyan-50 border border-cyan-200 rounded-lg p-4 text-sm text-cyan-900">
+          <div className="font-bold mb-1">👋 Hey, I'm Sara</div>
+          <div className="text-xs leading-relaxed">
+            I don't see enough activity data yet to score your performance, but I can still help you set goals and improve your workflow. Once you've worked through some tickets, written a few comments, or logged daily activity, your metrics will appear here automatically.
+          </div>
         </div>
       )}
 

@@ -241,7 +241,8 @@ check('5.8 MyPerformance has fallback when no activity yet (no blank card)',
   /No activity to show yet/.test(mp));
 
 check('5.9 MyPerformance shows load errors clearly (no silent failures)',
-  /Could not load your performance data/.test(mp));
+  // v55.73 — error message replaced with Sara-voiced clean professional version
+  /Sara here — couldn't load your activity/.test(mp));
 
 // ============================================================
 // 6. Edge cases — disappearance scenarios

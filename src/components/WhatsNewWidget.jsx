@@ -33,28 +33,54 @@ import { supabase } from '../lib/supabase';
 //     WhatsApp, the calendar, the Sales tab.
 export const BUILD_HISTORY = [
   {
+    version: 'v55.73',
+    date: '2026-05-08',
+    label: 'AI assistant experience improvements',
+    items: [
+      // PUBLIC bullet — high-level wording only, no internal details
+      'Improvements were made to the AI assistant experience for Nadia, Ms. Jenna, and Sara. The Executive Assistant, HR Representative, and Work Coach experiences are now more polished, more responsive, and easier to use.',
+      // SUPER_ADMIN ONLY — confidential AI architecture
+      { superAdminOnly: true, text: 'AssistantController architecture: ONE BRAIN, THREE PERSONAS. The existing Nadia voice/listening/recording/execution engine is preserved. A new persona layer reads from src/lib/agent-personalities.js and swaps avatar, name, role, greeting, voice ID, system prompt, allowed actions, forms, dashboard modules, routing rules, and confirmation messages based on which agent is active.' },
+      { superAdminOnly: true, text: 'Active-state visual feedback per Max\'s spec: only one assistant active at a time; Nadia is the default; the active tile gets a colored glow, pulsing animation, accent ring, "IN CONTROL" badge, and a top-left "ACTIVE" dot. Inactive tiles are slightly dimmed (opacity-90).' },
+      { superAdminOnly: true, text: 'Sara loading hang fixed: when myId hadn\'t hydrated yet (userProfile still loading), the effect bailed at line 54 leaving loading=true forever. Now: clean exit to empty-state UI, 8-second hard timeout with retry button, and a Sara-voiced "I don\'t see enough activity data yet" fallback.' },
+      { superAdminOnly: true, text: 'HR Desk routing now actually dispatches /api/notify (was a no-op before — row inserted but nobody notified). Recipients built from radio choice + super_admin always CC\'d, deduped, self excluded. Complaint dispatch always to super_admin only. Routing per persona codified in agent-personalities.js routingRules.' },
+      { superAdminOnly: true, text: 'High-contrast radio button picker replaces yellow-on-yellow auto-routing badge in HR forms. Manager radio shows manager name; Mr. Kandil radio shows super_admin name. Friendly heads-up when user picks against category default.' },
+      { superAdminOnly: true, text: 'RLS policies for hr_requests + hr_complaints — fixes "TypeError: Load failed" on submit. Complete idempotent SQL bundle delivered (v55_73_SQL_BUNDLE_RUN_THIS.sql) with BEFORE/AFTER state notices.' },
+      { superAdminOnly: true, text: 'Voice infrastructure future-ready: each persona has a voice config block (provider, voiceId, pitch, speed, style, browserFallback). ElevenLabs placeholder voice IDs in place; swap to KTC-licensed voices is a one-file edit. See docs/VOICE-INFRASTRUCTURE.md.' },
+      { superAdminOnly: true, text: 'Personality intros at top of every panel and modal: photo + "Hi, I\'m [Name]" + role badge + warm greeting from agent-personalities.js. Sara opens with "Hey," (energetic-coach tone) instead of "Hi,".' },
+      { superAdminOnly: true, text: 'Build notes filter: introduces superAdminOnly tier on top of existing adminOnly. AI architecture details are super_admin only; admins + employees see only the high-level public bullet.' },
+      { superAdminOnly: true, text: 'Clean professional error messages replace raw technical errors: "We couldn\'t submit this right now. Please try again, or contact your manager." Real error stays in console for debug.' },
+    ],
+  },
+  {
     version: 'v55.72',
     date: '2026-05-07',
     label: 'Real photos for the three agents · reminder formatting preserved',
     items: [
-      'THREE REAL FACES FOR YOUR AGENTS. The illustrated cartoon avatars are gone. Nadia, Jenna, and Sara now appear as real photographs on the dashboard — Nadia (your AI Executive Assistant), Jenna (your AI HR Representative), and Sara (your AI Work Coach / Rara person). Each photo is presented as a circular headshot with a soft inner ring inside its color-themed tile, and tilts gently when you hover or when the periodic wave timer fires. Photos are crisp at 512×512 and load fast (~120KB each).',
+      // PUBLIC bullet — high-level wording about AI work, no internals
+      'Updates were made to the AI assistant experience for Nadia, Ms. Jenna, and Sara — including how they appear on the dashboard.',
+      // PUBLIC bullet — non-AI work everyone can see in detail
       'REMINDERS PRESERVE YOUR FORMATTING. When you post a reminder or announcement, it now lands in your team\'s inboxes formatted exactly the way you typed it. Line breaks are preserved. Blank lines become paragraph breaks. Lines starting with -, *, or • become a clean bulleted list. Lines starting with 1., 2., 3. become a numbered list. No more wall-of-text emails.',
-      'WHY IT WAS BROKEN. Three separate places were collapsing your formatting: (1) the email body builder dropped your raw text into a div which ignores line breaks, (2) the team-reminder send flow was passing only your subject line and not your body at all, (3) the in-app reminder card view collapsed everything into one running line. All three are fixed.',
-      'BIGGER COMPOSE BOXES. Both the team-reminder textarea and the announcement composer textarea grew from 3-4 rows to 6, with placeholder text showing examples of bullet and numbered formatting. A small green hint underneath each box confirms "Line breaks, paragraphs, and bullet/numbered lists preserved."',
-      'CARRIES FORWARD all v55.65 → v55.71 work intact (698 tests, all green).',
+      // PUBLIC — non-AI
+      'BIGGER COMPOSE BOXES for reminders and announcements with placeholder text showing examples of bullet and numbered formatting. A small green hint underneath each box confirms "Line breaks, paragraphs, and bullet/numbered lists preserved."',
+      // SUPER_ADMIN ONLY — AI internals
+      { superAdminOnly: true, text: 'THREE REAL FACES FOR YOUR AGENTS. The illustrated cartoon avatars are replaced. Nadia, Jenna, and Sara now appear as real photographs on the dashboard. Each photo is a circular headshot with a soft inner ring inside its color-themed tile, and tilts gently when you hover. Photos are crisp at 512×512 and load fast (~120KB each).' },
+      { superAdminOnly: true, text: 'WHY REMINDERS WERE BROKEN. Three separate places were collapsing formatting: (1) the email body builder dropped raw text into a div which ignores line breaks, (2) the team-reminder send flow was passing only the subject line and not the body, (3) the in-app reminder card view collapsed everything into one line. All three fixed.' },
     ],
   },
   {
     version: 'v55.71',
     date: '2026-05-07',
-    label: 'THREE big agents prevailing on the dashboard: Nadia + Jenna + Sara',
+    label: 'AI assistant experience improvements',
     items: [
-      'YOU NOW HAVE THREE PARTNERS, not two. Three really big avatar tiles dominate the top of every dashboard: Nadia (Executive Assistant) on the left, Jenna (HR Representative) in the middle, Sara (Work Coach) on the right. Each is its own button — click to expand its full experience inline below; click again to close back down to just the icon.',
-      'NADIA AUTO-OPENS HER MORNING BRIEF on first daily load — your "comforting executive in the beginning" that tells you what\'s urgent: tickets needing acknowledgment, items due today, anything overdue, and checks due. Click anywhere to dismiss for the rest of the day; she opens fresh again the next morning.',
-      'JENNA EXPANDS into the full HR Desk inline — file requests (vacation, sick leave, raise, etc.), raise concerns, see super_admin responses. Same component you already had, just lives inside her panel now.',
-      'SARA IS NEW — your work/relationship coach who scores your performance, surfaces growth feedback, and rah-rah\'s you. Her panel mounts the Performance Coach inline. A subtle "new feedback waiting" badge appears if you haven\'t opened her panel today.',
-      'NEVER DISAPPEAR. The three tiles are the very first thing on screen and they stay put. Each panel mounts the deeper component (MyHRDesk inside Jenna, MyPerformance inside Sara) only when expanded — no double-mounting, no remount-on-load-flicker. Single render tree pattern carried forward from v55.68.',
-      'CARRIES FORWARD all v55.65 → v55.70 work.',
+      // PUBLIC — high-level only
+      'Work was completed on the AI world-class assistant feature. The HR Representative, Work Coach, and Executive AI Assistant experiences are now more visible and easier to use from the dashboard.',
+      // SUPER_ADMIN ONLY — internals
+      { superAdminOnly: true, text: 'YOU NOW HAVE THREE PARTNERS. Three really big avatar tiles dominate the top of every dashboard: Nadia (Executive Assistant) on the left, Jenna (HR Representative) in the middle, Sara (Work Coach) on the right.' },
+      { superAdminOnly: true, text: 'NADIA AUTO-OPENS HER MORNING BRIEF on first daily load — tells you what\'s urgent: tickets needing acknowledgment, items due today, anything overdue, and checks due.' },
+      { superAdminOnly: true, text: 'JENNA EXPANDS into the full HR Desk inline — file requests (vacation, sick leave, raise, etc.), raise concerns, see super_admin responses.' },
+      { superAdminOnly: true, text: 'SARA IS NEW — your work coach who scores your performance, surfaces growth feedback. Her panel mounts the Performance Coach inline.' },
+      { superAdminOnly: true, text: 'NEVER DISAPPEAR. The three tiles are the very first thing on screen and they stay put. Each panel mounts the deeper component only when expanded — single render tree pattern from v55.68.' },
     ],
   },
   {
@@ -740,28 +766,34 @@ export const BUILD_HISTORY = [
 var DISPLAY_LIMIT = 100;
 
 export default function WhatsNewWidget({ isAdmin, isSuperAdmin } = {}) {
-  // v55.67 — non-admin users should not see the implementation details of
-  // the AI Performance Coach scoring / HR Report architecture (per Max
-  // May 7 2026: "I don't want them to see exactly what I built in that
-  // essence"). The functionality is for everyone, but the build notes
-  // describing scoring weights, retest pipelines, HR review internals,
-  // etc. are admin/super_admin only. We filter individual bullet items
-  // out by an "adminOnly: true" flag, and entire entries out by
-  // "adminOnlyEntry: true". The card itself ("vN.NN ships X") still
-  // appears so users know a release happened.
+  // v55.67 — non-admin users should not see implementation details.
+  // v55.73 — Three tiers per Max May 8 2026:
+  //   PUBLIC      — everyone sees this (default)
+  //   adminOnly   — admins + super_admin only
+  //   superAdminOnly — super_admin ONLY (AI architecture details)
+  // For AI-related changes (Nadia/Jenna/Sara/HR Rep/Work Coach internals),
+  // Max's rule: "Only super admin sees all details. He sees all details
+  // regardless. For all other team members they will see the build with
+  // the exception of any AI-related changes, in which use only high-level
+  // wording." So AI internals are superAdminOnly; a high-level public
+  // bullet should also be present so non-super-admins see something.
   var canSeeAdminInternals = !!(isAdmin || isSuperAdmin);
+  var canSeeAiConfidential = !!isSuperAdmin;
 
   var filterEntry = function (entry) {
-    // Drop entirely-admin entries from the visible list for non-admins.
+    // Drop entirely-superAdminOnly entries for non-super-admins.
+    if (entry.superAdminOnlyEntry && !canSeeAiConfidential) return null;
+    // Drop entirely-admin entries for non-admins.
     if (entry.adminOnlyEntry && !canSeeAdminInternals) return null;
     // Filter individual bullet items inside the entry.
-    var visibleItems = canSeeAdminInternals
-      ? entry.items
-      : entry.items.filter(function (it) {
-        // items can be a string OR an { text, adminOnly } object
-        if (typeof it === 'string') return true;
-        return !it.adminOnly;
-      });
+    var visibleItems = entry.items.filter(function (it) {
+      if (typeof it === 'string') return true;
+      // superAdminOnly bullets only visible to super_admin
+      if (it.superAdminOnly && !canSeeAiConfidential) return false;
+      // adminOnly bullets visible to admin + super_admin
+      if (it.adminOnly && !canSeeAdminInternals) return false;
+      return true;
+    });
     // If filtering left nothing visible, drop the entire entry.
     if (visibleItems.length === 0) return null;
     return Object.assign({}, entry, { items: visibleItems });

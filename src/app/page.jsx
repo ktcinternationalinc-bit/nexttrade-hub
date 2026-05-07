@@ -537,6 +537,29 @@ export default function App() {
   const [tabLoading, setTabLoading] = useState(false);
   const [greeterDismissed, setGreeterDismissed] = useState(false);
   const [greeterHasGreeted, setGreeterHasGreeted] = useState(false);
+  // v55.73 — Active assistant persona ('nadia' | 'jenna' | 'sara').
+  // The AssistantsBar drives this via ktc:assistant-changed event so a
+  // single source of truth lives in this top-level component. AIGreeter
+  // receives selectedAssistant as a prop — it uses it to swap header
+  // photo, name, greeting, voice ID, and personality prompt — but the
+  // underlying voice/listening/recording engine is unchanged.
+  // Nadia is the default per Max's spec.
+  const [selectedAssistant, setSelectedAssistant] = useState('nadia');
+  useEffect(() => {
+    var handler = function (e) {
+      var who = e && e.detail && e.detail.agent;
+      if (who === 'nadia' || who === 'jenna' || who === 'sara') {
+        setSelectedAssistant(who);
+        // When user activates an assistant, ensure the AIGreeter is visible
+        // (un-dismiss). The AIGreeter is the chat surface for ALL three.
+        setGreeterDismissed(false);
+      }
+    };
+    if (typeof window !== 'undefined') {
+      window.addEventListener('ktc:assistant-changed', handler);
+      return function () { window.removeEventListener('ktc:assistant-changed', handler); };
+    }
+  }, []);
   // v55.70 — when the user clicks the "Nadia" tile in the AssistantsBar
   // on the dashboard, we receive a ktc:open-nadia event. If Nadia is
   // currently dismissed (collapsed), un-dismiss her so the chat is visible
@@ -7030,6 +7053,7 @@ export default function App() {
                     sessionMessages={greeterMessages} onMessagesUpdate={setGreeterMessages}
                     onToggle={(on) => { if (!on) setGreeterDismissed(true); }}
                     toast={toast}
+                    selectedAssistant={selectedAssistant}
                   />
                 </SafeSection>
               </div>
