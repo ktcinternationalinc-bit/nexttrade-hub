@@ -29,7 +29,14 @@ import { BUILD_HISTORY } from './WhatsNewWidget';
 
 var STORAGE_KEY = 'nadia_seen_build_version';
 
-export default function NadiaNewBuildCard() {
+export default function NadiaNewBuildCard({ isAdmin, isSuperAdmin } = {}) {
+  // v55.74 — Privacy + crash fix.
+  // (1) BUILD_HISTORY items can be plain string OR { text, adminOnly,
+  //     superAdminOnly } objects. Rendering raw objects crashes React (#31).
+  // (2) Items tagged superAdminOnly must NOT be shown to non-super-admins.
+  // We filter the same way WhatsNewWidget does.
+  var canSeeAdminInternals = !!(isAdmin || isSuperAdmin);
+  var canSeeAiConfidential = !!isSuperAdmin;
   var [shouldShow, setShouldShow] = useState(false);
   var [latest, setLatest] = useState(null);
 
@@ -60,8 +67,15 @@ export default function NadiaNewBuildCard() {
 
   if (!shouldShow || !latest) return null;
 
-  // Pick top 3 items from the changelog — usually the most user-visible
-  var highlights = (latest.items || []).slice(0, 3);
+  // v55.74 — Pick top 3 items from the changelog, filtered by admin level.
+  // Items tagged superAdminOnly hidden from non-super-admins. Items tagged
+  // adminOnly hidden from non-admins. Plain strings always shown.
+  var highlights = (latest.items || []).filter(function (it) {
+    if (typeof it === 'string') return true;
+    if (it && it.superAdminOnly && !canSeeAiConfidential) return false;
+    if (it && it.adminOnly && !canSeeAdminInternals) return false;
+    return true;
+  }).slice(0, 3);
 
   return (
     <div style={{
@@ -100,8 +114,15 @@ export default function NadiaNewBuildCard() {
           </div>
           <ul style={{ margin: 0, paddingLeft: 18, fontSize: 11.5, lineHeight: 1.5 }}>
             {highlights.map(function (h, i) {
+              // v55.74 CRASH FIX — items can be plain string OR
+              // { text, adminOnly, superAdminOnly } object since v55.73.
+              // Rendering {h} directly when h is an object throws
+              // React error #31 ("object with keys {superAdminOnly, text}")
+              // and crashes the entire portal at startup. Extract the text safely.
+              var itemText = typeof h === 'string' ? h : (h && h.text) || '';
+              if (!itemText) return null;
               return (
-                <li key={i} style={{ marginBottom: i < highlights.length - 1 ? 4 : 0 }}>{h}</li>
+                <li key={i} style={{ marginBottom: i < highlights.length - 1 ? 4 : 0 }}>{itemText}</li>
               );
             })}
           </ul>

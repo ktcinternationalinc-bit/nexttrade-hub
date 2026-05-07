@@ -33,6 +33,19 @@ import { supabase } from '../lib/supabase';
 //     WhatsApp, the calendar, the Sales tab.
 export const BUILD_HISTORY = [
   {
+    version: 'v55.74',
+    date: '2026-05-08',
+    label: 'AI assistant experience improvements',
+    items: [
+      // PUBLIC — high-level only
+      'Stability fix for the dashboard so the portal loads cleanly for everyone. Improvements to the AI assistant experience.',
+      // SUPER_ADMIN ONLY
+      { superAdminOnly: true, text: 'CRITICAL CRASH FIX: NadiaNewBuildCard was rendering BUILD_HISTORY items raw, including the new {text, superAdminOnly} object shape introduced in v55.73 — which crashed React (#31 — "object with keys") and blocked the entire portal at startup. Fix: extract .text safely from each item; also accept isAdmin/isSuperAdmin props and filter items the same way WhatsNewWidget does.' },
+      { superAdminOnly: true, text: 'Privacy fix: NadiaNewBuildCard previously read raw BUILD_HISTORY[0] without filtering — non-super-admins could have seen super-admin-only build details in the "new build" highlight card. Now filtered correctly.' },
+      { superAdminOnly: true, text: 'Defensive item rendering pattern: any future code reading BUILD_HISTORY items must use typeof item === "string" ? item : item.text — both consumer files (WhatsNewWidget + NadiaNewBuildCard) now follow this pattern.' },
+    ],
+  },
+  {
     version: 'v55.73',
     date: '2026-05-08',
     label: 'AI assistant experience improvements',

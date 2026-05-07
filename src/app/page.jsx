@@ -6614,7 +6614,7 @@ export default function App() {
                 Shows the latest build version, label, and top 3 highlights
                 in a Nadia-styled card. User taps "Got it" and it disappears
                 until the next build. */}
-            <NadiaNewBuildCard />
+            <NadiaNewBuildCard isAdmin={isAdmin} isSuperAdmin={isSuperAdmin} />
 
             {/* v55.45 — Pending team messages + reminders, with per-item
                 Acknowledge buttons. Renders nothing if nothing pending. */}
