@@ -83,19 +83,30 @@ function visibilityFromCategory(cat) {
 
 var STATUS_COLORS = {
   submitted:         { bg: 'bg-blue-100',     text: 'text-blue-700',    label: 'Submitted' },
-  under_review:      { bg: 'bg-amber-100',    text: 'text-amber-700',   label: 'Under review' },
+  under_review:      { bg: 'bg-amber-100',    text: 'text-amber-900',   label: 'Under review' },
   approved:          { bg: 'bg-emerald-100',  text: 'text-emerald-700', label: 'Approved' },
   denied:            { bg: 'bg-rose-100',     text: 'text-rose-700',    label: 'Denied' },
   more_info_needed:  { bg: 'bg-purple-100',   text: 'text-purple-700',  label: 'Needs more info' },
   withdrawn:         { bg: 'bg-slate-100',    text: 'text-slate-600',   label: 'Withdrawn' },
   completed:         { bg: 'bg-emerald-100',  text: 'text-emerald-700', label: 'Completed' },
-  investigating:     { bg: 'bg-amber-100',    text: 'text-amber-700',   label: 'Investigating' },
+  investigating:     { bg: 'bg-amber-100',    text: 'text-amber-900',   label: 'Investigating' },
   resolved:          { bg: 'bg-emerald-100',  text: 'text-emerald-700', label: 'Resolved' },
   dismissed:         { bg: 'bg-slate-100',    text: 'text-slate-600',   label: 'Dismissed' },
   escalated:         { bg: 'bg-rose-100',     text: 'text-rose-700',    label: 'Escalated' },
 };
 
-export default function MyHRDesk({ user, userProfile, users }) {
+export default function MyHRDesk({ user, userProfile, users, active }) {
+  // v55.77 — Fix #G — `active` prop signals whether Jenna's panel is the
+  // currently open persona. Defaults to true for backward compat (older
+  // mounts). When false on first render, the HR table fetches are deferred
+  // until the user actually opens Jenna. Once opened, data stays loaded so
+  // re-opens don't re-fetch.
+  var isActive = active === undefined ? true : !!active;
+  var [hasBeenActive, setHasBeenActive] = useState(isActive);
+  useEffect(function () {
+    if (isActive && !hasBeenActive) setHasBeenActive(true);
+  }, [isActive, hasBeenActive]);
+
   var myId = (userProfile && userProfile.id) || (user && user.id);
   var myFirstName = ((userProfile && userProfile.name) || (user && user.email) || 'there').split(' ')[0].split('@')[0];
 
@@ -105,7 +116,8 @@ export default function MyHRDesk({ user, userProfile, users }) {
   var [submitOk, setSubmitOk] = useState(null); // { kind, number }
   var [tableMissing, setTableMissing] = useState(false);
   // hover state for mascot animation
-  var [mascotWaving, setMascotWaving] = useState(false);
+  // v55.77 — mascotWaving state removed (Fix #11). Was driving the cartoon
+  // "Maya" SVG mascot which got replaced by the real Jenna photo above.
 
   // Form state
   var [form, setForm] = useState({
@@ -169,16 +181,38 @@ export default function MyHRDesk({ user, userProfile, users }) {
     }
   };
 
-  useEffect(function () { loadRecent(); }, [myId]);
-
-  // Periodic mascot wave to draw eyes to the card. Every 12s for 2s.
   useEffect(function () {
-    var t = setInterval(function () {
-      setMascotWaving(true);
-      setTimeout(function () { setMascotWaving(false); }, 2000);
-    }, 12000);
-    return function () { clearInterval(t); };
-  }, []);
+    // v55.77 — Fix #G — Defer until Jenna's panel has been opened at least
+    // once. Without this gate, MyHRDesk fetched HR tables on every page
+    // load even when the user never clicked Jenna — wasted Supabase round
+    // trips and console errors if hr_requests / hr_complaints aren't set up.
+    if (!hasBeenActive) return;
+    loadRecent();
+  }, [myId, hasBeenActive]);
+
+  // v55.77 — Fix #L — Close any open modal when the user switches persona,
+  // but PRESERVE the form draft. The unified module's display:none would
+  // hide the modal anyway, but if the user switches BACK to Jenna, the
+  // modal would pop back open with their draft — surprising behavior.
+  // Better: collapse the modal so they see the desk, but keep the form
+  // state. If they tap "File a Request" again, their draft re-loads.
+  useEffect(function () {
+    if (typeof window === 'undefined') return;
+    var handler = function (ev) {
+      var to = ev && ev.detail && ev.detail.to;
+      // Only close the modal if the user switched AWAY from Jenna.
+      // If they switched TO Jenna, leave whatever was open (rare path).
+      if (to && to !== 'jenna' && openModal) {
+        setOpenModal(null);
+      }
+    };
+    window.addEventListener('ktc:assistant-changed-cleanup', handler);
+    return function () { window.removeEventListener('ktc:assistant-changed-cleanup', handler); };
+  }, [openModal]);
+
+  // v55.77 — Removed mascotWaving state + interval. The cartoon "Maya" SVG
+  // mascot was deleted (Fix #11) — the real Jenna photo lives in the unified
+  // module header. State + periodic timer are now dead code.
 
   var openRequest = function () {
     setForm({
@@ -290,7 +324,7 @@ export default function MyHRDesk({ user, userProfile, users }) {
   var submitComplaint = async function () {
     if (loading) return;
     if (!form.title.trim()) {
-      alert('Please add a short title so super_admin knows what this is about.');
+      alert('Please add a short title so ' + (superAdminName || 'Mr. Kandil') + ' knows what this is about.');
       return;
     }
     setLoading(true);
@@ -318,7 +352,7 @@ export default function MyHRDesk({ user, userProfile, users }) {
       try {
         if (superAdminId && superAdminId !== myId) {
           var senderLabel = form.anonymous_to_admins
-            ? 'A teammate (anonymous to admins, identified to super_admin)'
+            ? 'A teammate (your identity stays private from other team leads)'
             : ((myProfile && myProfile.name) || ((user && user.email) || 'A teammate').split('@')[0]);
           var catLabel = ((COMPLAINT_CATEGORIES.find(function (c) { return c.id === form.category; }) || {}).label) || form.category;
           var subject = '🚨 HR Concern (' + form.severity + '): ' + form.title.trim();
@@ -364,87 +398,30 @@ export default function MyHRDesk({ user, userProfile, users }) {
         background: 'linear-gradient(white, white) padding-box, linear-gradient(135deg, #f59e0b, #ec4899, #8b5cf6) border-box',
       }}>
       <div className="p-5">
-        {/* Header — title + animated mascot + logo */}
+        {/* Header — title + status counters.
+            v55.77 — Fix #11 — Removed the legacy cartoon "Maya" SVG mascot.
+            The real Jenna photo + greeting now live in the unified module
+            header above (see AssistantsBar). Two Jennas on the same screen
+            was visually confusing. The HR Desk header is now compact:
+            title + status counters only. */}
         <div className="flex items-start justify-between mb-4 gap-4">
           <div className="flex items-center gap-3 flex-1 min-w-0">
-            {/* Animated mascot — Maya, the HR assistant */}
-            <div
-              className="relative flex-shrink-0"
-              style={{ width: 64, height: 64 }}
-              onMouseEnter={function () { setMascotWaving(true); }}
-              onMouseLeave={function () { setMascotWaving(false); }}>
-              <svg width="64" height="64" viewBox="0 0 64 64" xmlns="http://www.w3.org/2000/svg">
-                <defs>
-                  <linearGradient id="hr-bg" x1="0" y1="0" x2="1" y2="1">
-                    <stop offset="0%" stopColor="#f59e0b" />
-                    <stop offset="50%" stopColor="#ec4899" />
-                    <stop offset="100%" stopColor="#8b5cf6" />
-                  </linearGradient>
-                  <linearGradient id="hr-skin" x1="0" y1="0" x2="0" y2="1">
-                    <stop offset="0%" stopColor="#fde68a" />
-                    <stop offset="100%" stopColor="#fbbf24" />
-                  </linearGradient>
-                </defs>
-                {/* Background */}
-                <rect x="2" y="2" width="60" height="60" rx="14" fill="url(#hr-bg)" />
-                {/* Body / blouse */}
-                <rect x="18" y="38" width="28" height="22" rx="6" fill="#ffffff" />
-                <rect x="22" y="42" width="20" height="3" rx="1" fill="#8b5cf6" opacity="0.3" />
-                {/* Head */}
-                <circle cx="32" cy="26" r="11" fill="url(#hr-skin)" />
-                {/* Hair */}
-                <path d="M 22 22 Q 22 14 32 14 Q 42 14 42 22 Q 42 18 32 18 Q 22 18 22 22 Z" fill="#7c2d12" />
-                {/* Eyes */}
-                <circle cx="28" cy="26" r="1.4" fill="#1f2937" />
-                <circle cx="36" cy="26" r="1.4" fill="#1f2937" />
-                {/* Smile */}
-                <path d="M 28 30 Q 32 33 36 30" stroke="#1f2937" strokeWidth="1.4" fill="none" strokeLinecap="round" />
-                {/* Cheek blush */}
-                <circle cx="25" cy="29" r="1.2" fill="#fb7185" opacity="0.4" />
-                <circle cx="39" cy="29" r="1.2" fill="#fb7185" opacity="0.4" />
-                {/* Waving arm — animated */}
-                <g style={{
-                  transformOrigin: '46px 42px',
-                  transform: mascotWaving ? 'rotate(-30deg)' : 'rotate(15deg)',
-                  transition: 'transform 350ms cubic-bezier(0.34, 1.56, 0.64, 1)',
-                }}>
-                  <rect x="44" y="38" width="5" height="14" rx="2.5" fill="url(#hr-skin)" />
-                  {mascotWaving && (
-                    <>
-                      <circle cx="46.5" cy="33" r="1" fill="#ffffff" opacity="0.7">
-                        <animate attributeName="opacity" values="0;0.8;0" dur="0.8s" repeatCount="indefinite" />
-                      </circle>
-                      <circle cx="49" cy="35" r="0.7" fill="#ffffff" opacity="0.5">
-                        <animate attributeName="opacity" values="0;0.7;0" dur="0.8s" begin="0.2s" repeatCount="indefinite" />
-                      </circle>
-                    </>
-                  )}
-                </g>
-                {/* Other arm at rest */}
-                <rect x="15" y="38" width="5" height="12" rx="2.5" fill="url(#hr-skin)" />
-                {/* Speech bubble badge — top right */}
-                <circle cx="53" cy="11" r="6" fill="#ffffff" />
-                <text x="53" y="14" textAnchor="middle" fontSize="8" fontWeight="bold" fill="#8b5cf6">HR</text>
-              </svg>
-              {/* Pulse dot if there's a pending update for the user */}
-              {hasUpdate && (
-                <span className="absolute -top-0.5 -right-0.5 w-3.5 h-3.5 rounded-full bg-emerald-400 ring-2 ring-white animate-pulse"></span>
-              )}
-            </div>
             <div className="min-w-0">
               <div className="flex items-center gap-2 flex-wrap">
                 <div className="font-extrabold text-lg text-slate-900">My HR Desk</div>
-                <span className="px-1.5 py-0.5 bg-violet-100 text-violet-700 text-[9px] font-bold rounded uppercase">Direct line to super_admin</span>
+                <span className="px-1.5 py-0.5 bg-violet-100 text-violet-700 text-[9px] font-bold rounded uppercase">Direct line to {superAdminName}</span>
+                {hasUpdate && (
+                  <span className="px-1.5 py-0.5 bg-emerald-100 text-emerald-700 text-[9px] font-bold rounded uppercase animate-pulse">✨ New update</span>
+                )}
               </div>
               <div className="text-xs text-slate-500">
-                Hi {myFirstName} — Maya is here for requests, time off, equipment, raises, recognitions, and any concerns.
+                File requests, raise concerns, and see responses below.
               </div>
               {/* Status counters */}
               <div className="flex gap-3 mt-1.5 flex-wrap text-[10px]">
-                {pendingReq > 0 && <span className="text-amber-700 font-bold">⏳ {pendingReq} request{pendingReq === 1 ? '' : 's'} pending</span>}
-                {pendingCmp > 0 && <span className="text-rose-700 font-bold">⏳ {pendingCmp} complaint{pendingCmp === 1 ? '' : 's'} pending</span>}
-                {pendingReq === 0 && pendingCmp === 0 && myRecent.length === 0 && <span className="text-slate-400">No items filed yet</span>}
-                {hasUpdate && <span className="text-emerald-700 font-bold">✨ You have updates below</span>}
+                {pendingReq > 0 && <span className="text-amber-800 font-bold">⏳ {pendingReq} request{pendingReq === 1 ? '' : 's'} pending</span>}
+                {pendingCmp > 0 && <span className="text-rose-800 font-bold">⏳ {pendingCmp} concern{pendingCmp === 1 ? '' : 's'} pending</span>}
+                {pendingReq === 0 && pendingCmp === 0 && myRecent.length === 0 && <span className="text-slate-500">No items filed yet</span>}
               </div>
             </div>
           </div>
@@ -467,7 +444,7 @@ export default function MyHRDesk({ user, userProfile, users }) {
             <div className="text-3xl flex-shrink-0">🛡️</div>
             <div className="min-w-0">
               <div className="text-sm font-extrabold text-rose-900">File a Concern</div>
-              <div className="text-[11px] text-rose-700">Confidential. Goes straight to super_admin. Anonymous to admins by default.</div>
+              <div className="text-xs text-rose-800">Confidential. Goes straight to {superAdminName}. Stays private from other team leads.</div>
             </div>
           </button>
         </div>
@@ -492,14 +469,14 @@ export default function MyHRDesk({ user, userProfile, users }) {
                     <div className="flex items-center justify-between gap-2 flex-wrap">
                       <div className="flex items-center gap-2 flex-1 min-w-0">
                         <span className="text-base flex-shrink-0">{r.kind === 'complaint' ? '🛡️' : '📝'}</span>
-                        <span className="text-[10px] font-mono text-slate-400">{r.number}</span>
+                        <span className="text-[10px] font-mono text-slate-500">{r.number}</span>
                         <span className="text-xs font-bold text-slate-800 truncate">{r.title}</span>
                       </div>
                       <span className={'px-2 py-0.5 rounded text-[10px] font-bold ' + sc.bg + ' ' + sc.text}>{sc.label}</span>
                     </div>
                     {notes && (
                       <div className="mt-1.5 ml-6 p-1.5 rounded bg-white border-l-2 border-violet-300 text-[10px] text-slate-700 whitespace-pre-wrap">
-                        <span className="font-bold text-violet-700">super_admin response:</span> {notes}
+                        <span className="font-bold text-violet-700">{superAdminName} response:</span> {notes}
                       </div>
                     )}
                   </div>
@@ -535,13 +512,15 @@ export default function MyHRDesk({ user, userProfile, users }) {
                 </div>
               </div>
               <h3 className="text-sm font-extrabold text-amber-900 mt-3 flex items-center gap-1.5">📝 File a Request</h3>
-              <p className="text-[11px] text-slate-600 mt-0.5">Pick a topic, then choose who you want it sent to.</p>
+              <p className="text-xs text-slate-700 mt-0.5">Pick a topic, then choose who you want it sent to.</p>
             </div>
             {submitOk ? (
               <div className="p-8 text-center">
                 <div className="text-5xl mb-3">✅</div>
-                <h3 className="font-extrabold text-emerald-700 mb-1">Submitted</h3>
-                <p className="text-sm text-slate-600 mb-1">Reference number: <strong className="font-mono">{submitOk.number}</strong></p>
+                <h3 className="font-extrabold text-emerald-700 mb-2">Thank you</h3>
+                {/* v55.75 (A2) — Polished wording. Symmetrical with concern flow. */}
+                <p className="text-sm text-slate-700 mb-1">Your request has been submitted.</p>
+                <p className="text-sm text-slate-700 mb-4">Your reference number is <strong className="font-mono">{submitOk.number}</strong>.</p>
                 <p className="text-xs text-slate-500 mb-4">You'll see status updates right here on your dashboard.</p>
                 <button onClick={closeModal} className="px-5 py-2 bg-amber-500 text-white rounded-lg font-bold hover:bg-amber-600">Done</button>
               </div>
@@ -555,7 +534,7 @@ export default function MyHRDesk({ user, userProfile, users }) {
                       selector (the user no longer has to choose visibility
                       manually — picking the topic IS the routing decision). */}
                   <div>
-                    <label className="text-[10px] font-bold text-slate-700 block mb-2">What's this about?</label>
+                    <label className="text-xs font-bold text-slate-800 block mb-2">What's this about?</label>
 
                     {/* Manager-routed topics */}
                     <div className="mb-3">
@@ -584,7 +563,7 @@ export default function MyHRDesk({ user, userProfile, users }) {
                     {/* super_admin-routed topics (HR-sensitive) */}
                     <div>
                       <div className="text-[10px] font-bold text-violet-700 uppercase tracking-wide mb-1.5 flex items-center gap-1">
-                        <span>🔒</span> Goes to super_admin only (HR-sensitive — admins can't see)
+                        <span>🔒</span> Goes to {superAdminName} only (private — other team leads can't see)
                       </div>
                       <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
                         {REQUEST_CATEGORIES.filter(function (c) { return c.routing === 'super_admin'; }).map(function (c) {
@@ -606,7 +585,7 @@ export default function MyHRDesk({ user, userProfile, users }) {
                     </div>
 
                     {/* Hint for the chosen topic */}
-                    <div className="text-[10px] text-slate-500 mt-2 italic">{(REQUEST_CATEGORIES.find(function (c) { return c.id === form.category; }) || {}).hint}</div>
+                    <div className="text-xs text-slate-700 mt-2 italic">{(REQUEST_CATEGORIES.find(function (c) { return c.id === form.category; }) || {}).hint}</div>
                   </div>
 
                   {/* v55.73 — RECIPIENT PICKER. The user explicitly chooses
@@ -635,10 +614,10 @@ export default function MyHRDesk({ user, userProfile, users }) {
                           <div className="text-sm font-bold text-slate-900">
                             👤 My manager{manager ? ': ' + managerName : ''}
                           </div>
-                          <div className="text-[11px] text-slate-700 mt-0.5">
+                          <div className="text-xs text-slate-700 mt-0.5">
                             {managerId
-                              ? superAdminName + ' is also CC\'d so it doesn\'t fall through the cracks.'
-                              : 'You don\'t have a manager assigned. Ask super_admin to set your "reports_to" in Settings.'}
+                              ? superAdminName + ' is also notified so it doesn\'t fall through the cracks.'
+                              : 'You don\'t have a manager assigned. Ask ' + (superAdminName || 'Mr. Kandil') + ' to set your reporting line in Settings.'}
                           </div>
                         </div>
                       </label>
@@ -652,10 +631,10 @@ export default function MyHRDesk({ user, userProfile, users }) {
                           className="mt-1 flex-shrink-0" />
                         <div className="flex-1 min-w-0">
                           <div className="text-sm font-bold text-slate-900">
-                            🔒 {superAdminName} only (super_admin)
+                            🔒 {superAdminName}
                           </div>
-                          <div className="text-[11px] text-slate-700 mt-0.5">
-                            Goes straight to {superAdminName}. Regular admins (including your manager) won't see this. Use for HR-sensitive topics: raise, promotion, transfer, complaints, anything personal.
+                          <div className="text-xs text-slate-700 mt-0.5">
+                            Goes straight to {superAdminName}. Other team leads (including your manager) won't see this. Use for sensitive topics: raise, promotion, transfer, concerns, anything personal.
                           </div>
                         </div>
                       </label>
@@ -677,29 +656,29 @@ export default function MyHRDesk({ user, userProfile, users }) {
                   </div>
 
                   <div>
-                    <label className="text-[10px] font-bold text-slate-700 block mb-1">Short title</label>
+                    <label className="text-xs font-bold text-slate-800 block mb-1">Short title</label>
                     <input value={form.title} onChange={function (e) { setForm(Object.assign({}, form, { title: e.target.value })); }} placeholder="e.g. Vacation request: June 5-12" maxLength={120} className="w-full px-3 py-2 border border-slate-300 rounded text-sm" />
                   </div>
                   {(form.category === 'vacation' || form.category === 'sick_leave' || form.category === 'training' || form.category === 'flexible_hours' || form.category === 'remote_work') && (
                     <div className="grid grid-cols-2 gap-2">
                       <div>
-                        <label className="text-[10px] font-bold text-slate-700 block mb-1">Start date</label>
+                        <label className="text-xs font-bold text-slate-800 block mb-1">Start date</label>
                         <input type="date" value={form.starts_on} onChange={function (e) { setForm(Object.assign({}, form, { starts_on: e.target.value })); }} className="w-full px-3 py-2 border border-slate-300 rounded text-sm" />
                       </div>
                       <div>
-                        <label className="text-[10px] font-bold text-slate-700 block mb-1">End date</label>
+                        <label className="text-xs font-bold text-slate-800 block mb-1">End date</label>
                         <input type="date" value={form.ends_on} onChange={function (e) { setForm(Object.assign({}, form, { ends_on: e.target.value })); }} className="w-full px-3 py-2 border border-slate-300 rounded text-sm" />
                       </div>
                     </div>
                   )}
                   <div>
-                    <label className="text-[10px] font-bold text-slate-700 block mb-1">Details</label>
+                    <label className="text-xs font-bold text-slate-800 block mb-1">Details</label>
                     <textarea value={form.description} onChange={function (e) { setForm(Object.assign({}, form, { description: e.target.value })); }} rows={5} placeholder="Anything that helps the reviewer decide quickly." className="w-full px-3 py-2 border border-slate-300 rounded text-sm" />
                   </div>
                   <div>
                     {/* v55.69 — visibility dropdown removed; routing is now
                         derived from the category. Priority alone here. */}
-                    <label className="text-[10px] font-bold text-slate-700 block mb-1">Priority</label>
+                    <label className="text-xs font-bold text-slate-800 block mb-1">Priority</label>
                     <select value={form.priority} onChange={function (e) { setForm(Object.assign({}, form, { priority: e.target.value })); }} className="w-full px-3 py-2 border border-slate-300 rounded text-sm">
                       <option value="low">Low — whenever</option>
                       <option value="normal">Normal</option>
@@ -739,44 +718,53 @@ export default function MyHRDesk({ user, userProfile, users }) {
                     <span className="text-[10px] font-bold uppercase tracking-wide px-1.5 py-0.5 rounded bg-rose-200 text-rose-800">{AGENT_PERSONALITIES.jenna.role}</span>
                   </div>
                   <p className="text-xs text-rose-800 mt-1 leading-snug">
-                    I'll take this directly to {superAdminName}. Whatever you share stays between you and super_admin — regular admins won't see it. You can also stay anonymous to admins (toggle below).
+                    {/* v55.75 (A2) — Final wording approved by Max May 8 2026:
+                        clean professional language. No "super_admin", no
+                        "anonymous", no internal jargon. Confidentiality
+                        toggle below still works under the hood. */}
+                    I'm sorry you're dealing with this. I'll take it directly to {superAdminName}. Only {superAdminName} will see it — other team leads won't. You can also keep your identity confidential (toggle below).
                   </p>
                 </div>
               </div>
               <h3 className="text-sm font-extrabold text-rose-900 mt-3 flex items-center gap-1.5">🛡️ File a Concern</h3>
-              <p className="text-[11px] text-slate-600 mt-0.5">Goes <strong>directly to {superAdminName}</strong>. Hidden from regular admins by default.</p>
+              <p className="text-xs text-slate-700 mt-0.5">This concern will go <strong>directly to {superAdminName}</strong>. It stays private from other team leads.</p>
             </div>
             {submitOk ? (
               <div className="p-8 text-center">
                 <div className="text-5xl mb-3">✅</div>
-                <h3 className="font-extrabold text-emerald-700 mb-1">Received</h3>
-                <p className="text-sm text-slate-600 mb-1">Reference number: <strong className="font-mono">{submitOk.number}</strong></p>
-                <p className="text-xs text-slate-500 mb-4">super_admin will review and respond. Status updates appear here.</p>
+                <h3 className="font-extrabold text-emerald-700 mb-2">Thank you</h3>
+                {/* v55.75 (A2) — exact wording per Max's spec May 8 2026:
+                    "Thank you. Your concern has been submitted. Your reference
+                    number is HRC-2026-0001. Mr. Kandil has been notified." */}
+                <p className="text-sm text-slate-700 mb-1">Your concern has been submitted.</p>
+                <p className="text-sm text-slate-700 mb-1">Your reference number is <strong className="font-mono">{submitOk.number}</strong>.</p>
+                <p className="text-sm text-slate-700 mb-4">{superAdminName} has been notified.</p>
+                <p className="text-xs text-slate-500 mb-4">Status updates will appear right here on your dashboard.</p>
                 <button onClick={closeModal} className="px-5 py-2 bg-rose-500 text-white rounded-lg font-bold hover:bg-rose-600">Done</button>
               </div>
             ) : (
               <>
                 <div className="overflow-auto p-5 space-y-3" style={{ flex: '1 1 auto' }}>
-                  <div className="bg-rose-50 border border-rose-200 rounded p-2 text-[11px] text-rose-800">
-                    <strong>Privacy:</strong> Only super_admin sees who submitted this. Regular admins do not see complaints unless super_admin shares them. You can also keep your identity hidden from admins entirely (toggle below).
+                  <div className="bg-rose-50 border border-rose-200 rounded p-2 text-xs text-rose-900">
+                    <strong>Privacy:</strong> Only {superAdminName} sees who submitted this. Other team leads do not see concerns unless {superAdminName} chooses to share them. You can also keep your identity hidden entirely (toggle below).
                   </div>
                   <div>
-                    <label className="text-[10px] font-bold text-slate-700 block mb-1">What's this about?</label>
+                    <label className="text-xs font-bold text-slate-800 block mb-1">What's this about?</label>
                     <select value={form.category} onChange={function (e) { setForm(Object.assign({}, form, { category: e.target.value })); }} className="w-full px-3 py-2 border border-slate-300 rounded text-sm">
                       {COMPLAINT_CATEGORIES.map(function (c) { return <option key={c.id} value={c.id}>{c.icon + ' ' + c.label}</option>; })}
                     </select>
-                    <div className="text-[10px] text-slate-500 mt-1">{(COMPLAINT_CATEGORIES.find(function (c) { return c.id === form.category; }) || {}).hint}</div>
+                    <div className="text-xs text-slate-700 mt-1">{(COMPLAINT_CATEGORIES.find(function (c) { return c.id === form.category; }) || {}).hint}</div>
                   </div>
                   <div>
-                    <label className="text-[10px] font-bold text-slate-700 block mb-1">Short title</label>
+                    <label className="text-xs font-bold text-slate-800 block mb-1">Short title</label>
                     <input value={form.title} onChange={function (e) { setForm(Object.assign({}, form, { title: e.target.value })); }} placeholder="e.g. Concerns about workload pressure" maxLength={120} className="w-full px-3 py-2 border border-slate-300 rounded text-sm" />
                   </div>
                   <div>
-                    <label className="text-[10px] font-bold text-slate-700 block mb-1">What happened? (use as much detail as you're comfortable with)</label>
-                    <textarea value={form.description} onChange={function (e) { setForm(Object.assign({}, form, { description: e.target.value })); }} rows={6} placeholder="Dates, times, who was involved, what was said, how it affected you. The more specific, the better super_admin can help." className="w-full px-3 py-2 border border-slate-300 rounded text-sm" />
+                    <label className="text-xs font-bold text-slate-800 block mb-1">What happened? (use as much detail as you're comfortable with)</label>
+                    <textarea value={form.description} onChange={function (e) { setForm(Object.assign({}, form, { description: e.target.value })); }} rows={6} placeholder={"Dates, times, who was involved, what was said, how it affected you. The more specific, the better " + superAdminName + " can help."} className="w-full px-3 py-2 border border-slate-300 rounded text-sm" />
                   </div>
                   <div>
-                    <label className="text-[10px] font-bold text-slate-700 block mb-1">How serious is this?</label>
+                    <label className="text-xs font-bold text-slate-800 block mb-1">How serious is this?</label>
                     <select value={form.severity} onChange={function (e) { setForm(Object.assign({}, form, { severity: e.target.value })); }} className="w-full px-3 py-2 border border-slate-300 rounded text-sm">
                       <option value="low">Low — wanted to flag it</option>
                       <option value="medium">Medium — should be looked at</option>
@@ -786,8 +774,15 @@ export default function MyHRDesk({ user, userProfile, users }) {
                   </div>
                   <label className="flex items-start gap-2 cursor-pointer">
                     <input type="checkbox" checked={form.anonymous_to_admins} onChange={function (e) { setForm(Object.assign({}, form, { anonymous_to_admins: e.target.checked })); }} className="mt-0.5" />
+                    {/* v55.75 (A2) — Per Max May 8 2026: "Keep [the toggle],
+                        but under the hood you send to Mr Kandil but do not
+                        put in label." Toggle keeps its function (the
+                        anonymous_to_admins flag still flows through), but
+                        the label no longer mentions "super_admin" or
+                        "anonymous to admins" — both confusing internal
+                        jargon. Replaced with: only Mr. Kandil sees you. */}
                     <span className="text-xs text-slate-700">
-                      <strong>Keep my identity hidden from regular admins.</strong> super_admin will still see who I am, but admins will only see "anonymous". (Recommended.)
+                      <strong>Keep my identity confidential.</strong> Only {superAdminName} will see your name on this concern. (Recommended.)
                     </span>
                   </label>
                 </div>

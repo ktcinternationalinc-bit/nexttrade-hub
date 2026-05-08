@@ -368,16 +368,28 @@ h3 { letter-spacing: -0.02em; }
 }
 .animate-pulse { animation: gentlePulse 2s ease-in-out infinite; }
 
-/* v55.73 — Active assistant pulse. Subtle pulsing glow on the IN-CONTROL
-   tile so it's visually clear which assistant is active without being
-   distracting. Uses opacity-cycling on the ring for a soft heartbeat. */
-@keyframes ktcAssistantActivePulse {
-  0%, 100% { filter: brightness(1) saturate(1); }
-  50%      { filter: brightness(1.05) saturate(1.1); }
+/* v55.75 — Active assistant pulse — Build A item #2.
+   Previous version cycled brightness + saturation which made the entire
+   tile (including the inactive sibling area, due to backdrop-filter spill)
+   appear to "blink." Replaced with a soft outline pulse that only animates
+   the box-shadow, never the colors. Subtle, clean, premium-feeling. */
+/* v55.75 — A1 (Phase A) — CALM IDLE + speaking-only pulse.
+   Per Max May 8 2026: "Soft premium glow / Pulsing/wave effect while
+   speaking / Listening indicator while listening / Calm idle glow when
+   active." Previous v55.73 transform animation conflicted with the hover
+   scale + caused all three avatars to appear to blink in sync. Now:
+   - IDLE active = static glow only, no animation (calm)
+   - SPEAKING = box-shadow pulse (the only continuous animation)
+   - HOVER = independent per-tile reaction (already correct)
+   Animating box-shadow not transform = no conflict with hover scale. */
+@keyframes ktcAssistantSpeakingPulse {
+  0%, 100% { box-shadow: 0 0 0 4px var(--ktc-glow-color), 0 8px 32px var(--ktc-glow-color); }
+  50%      { box-shadow: 0 0 0 8px var(--ktc-glow-color), 0 16px 48px var(--ktc-glow-color); }
 }
-.ktc-assistant-active-pulse {
-  animation: ktcAssistantActivePulse 3s ease-in-out infinite;
+.ktc-assistant-speaking {
+  animation: ktcAssistantSpeakingPulse 1.4s ease-in-out infinite;
 }
+/* Removed .ktc-assistant-active-pulse — idle active no longer pulses. */
 
 /* Active tab glow animation */
 .tab-nav button[class*="text-blue-600"] {
@@ -425,3 +437,13 @@ h3 { letter-spacing: -0.02em; }
 .opacity-50 { opacity: 0.6 !important; }
 
 @keyframes slideIn { from { transform: translateX(100px); opacity: 0; } to { transform: translateX(0); opacity: 1; } }
+
+/* v55.79 — PortraitAvatar listening ring pulse + speaking subtle scale.
+   Used by Jenna and Sara (not Nadia, who has her own animated SVG). */
+@keyframes avatarListeningBreath {
+  0%, 100% { transform: scale(1.0); opacity: 0.85; }
+  50%      { transform: scale(1.08); opacity: 1.0; }
+}
+.avatar-listening-pulse {
+  animation: avatarListeningBreath 1.4s ease-in-out infinite;
+}

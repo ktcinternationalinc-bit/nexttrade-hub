@@ -6,6 +6,7 @@ import { notifyEventScheduled } from '../lib/notify';
 import { newUUID, VALID_PATTERNS } from '../lib/recurrence';
 import { scheduleEventReminders, rescheduleEventReminders, cancelEventReminders, cancelEventRemindersBulk } from '../lib/reminders';
 import { ToastContext } from '../lib/toast-context';
+import { fmtET, todayET } from '../lib/et-time';
 
 const EVENT_TYPES = [{v:'task',l:'Task / مهمة',c:'#3b82f6'},{v:'meeting',l:'Meeting / اجتماع',c:'#8b5cf6'},{v:'call',l:'Call / مكالمة',c:'#f59e0b'},{v:'visit',l:'Visit / زيارة',c:'#10b981'}];
 const DAYS = ['Sun','Mon','Tue','Wed','Thu','Fri','Sat'];
@@ -130,7 +131,7 @@ export default function CalendarTab({ customers, user, userProfile, users, ticke
   const month = curDate.getMonth();
   const daysInMonth = new Date(year, month + 1, 0).getDate();
   const firstDay = new Date(year, month, 1).getDay();
-  const todayStr = new Date().toISOString().substring(0, 10);
+  const todayStr = todayET();
 
   // ============================================================
   // Ticket due-dates as calendar entries
@@ -521,7 +522,7 @@ export default function CalendarTab({ customers, user, userProfile, users, ticke
       // Archive this specific note to the daily log (so Daily Log stays a full timeline)
       await dbInsert('daily_log', {
         user_id: myId,
-        log_date: notesEvent.event_date || new Date().toISOString().substring(0, 10),
+        log_date: notesEvent.event_date || todayET(),
         entry_text: (wasCompleted ? '📋 Added to meeting notes — ' : '📋 Meeting notes — ') + notesEvent.title + ': ' + text,
         log_category: 'meeting',
         auto_generated: false,
@@ -611,11 +612,11 @@ export default function CalendarTab({ customers, user, userProfile, users, ticke
     lines.push('MEETING: ' + notesEvent.title);
     lines.push('DATE: ' + notesEvent.event_date + (notesEvent.event_time ? ' ' + notesEvent.event_time : ''));
     lines.push('NOTES COUNT: ' + notesThread.length);
-    lines.push('EXPORTED: ' + new Date().toLocaleString());
+    lines.push('EXPORTED: ' + fmtET(new Date(), 'datetime'));
     lines.push('---');
     notesThread.forEach(n => {
       const kindLabel = n.note_kind === 'action_item' ? (n.is_completed ? '[✓] ACTION' : '[ ] ACTION') : n.note_kind === 'decision' ? 'DECISION' : 'NOTE';
-      const when = new Date(n.created_at).toLocaleString();
+      const when = fmtET(n.created_at, 'datetime');
       lines.push('[' + when + '] ' + authorName(n.author_id) + ' — ' + kindLabel);
       lines.push(n.note_text);
       lines.push('');
@@ -1362,7 +1363,7 @@ export default function CalendarTab({ customers, user, userProfile, users, ticke
       <div className="flex justify-between items-center bg-white rounded-xl p-3 mb-3">
         <button onClick={prevMonth} className="px-3 py-1 rounded border border-slate-200 text-xs font-semibold">←</button>
         <div className="text-center">
-          <div className="text-lg font-extrabold">{MONTHS_AR[month]} / {curDate.toLocaleDateString('en', {month:'long'})}</div>
+          <div className="text-lg font-extrabold">{MONTHS_AR[month]} / {fmtET(curDate, 'monthlong', { tag: false })}</div>
           <div className="text-xs text-slate-500">{year}</div>
         </div>
         <button onClick={nextMonth} className="px-3 py-1 rounded border border-slate-200 text-xs font-semibold">→</button>
@@ -1394,7 +1395,7 @@ export default function CalendarTab({ customers, user, userProfile, users, ticke
                   onChange={e => setF({ ...f, allDay: e.target.checked, eventTime: e.target.checked ? '' : f.eventTime })}
                   className="w-4 h-4" />
                 <span>🌅 All-day event / حدث طوال اليوم</span>
-                <span className="text-[10px] text-slate-400 font-normal">(no specific time)</span>
+                <span className="text-[10px] text-slate-500 font-normal">(no specific time)</span>
               </label>
             </div>
             {/* v55 Stage 1 — Location. Free-text, optional. Shows on every
@@ -1453,7 +1454,7 @@ export default function CalendarTab({ customers, user, userProfile, users, ticke
                 </button>
               ))}
             </div>
-            {selectedUsers.length === 0 && <div className="text-[10px] text-slate-400 mt-1">No selection = assigned to you</div>}
+            {selectedUsers.length === 0 && <div className="text-[10px] text-slate-500 mt-1">No selection = assigned to you</div>}
           </div>
           <div className="flex gap-2 mt-3">
             <button onClick={handleAddEvent}
@@ -1502,7 +1503,7 @@ export default function CalendarTab({ customers, user, userProfile, users, ticke
                     const visualClasses = (ev.completed || isCancelled) ? 'line-through opacity-50' : '';
                     return <div key={ev.id} className={'text-[8px] truncate rounded px-0.5 mb-0.5 ' + visualClasses} style={{background:tc+'20',color:tc}}>{isCancelled ? '❌ ' : ''}{ev.all_day ? '🌅 ' : ''}{ev.series_id ? '🔄 ' : ''}{ev.location ? '📍 ' : ''}{ev.title}</div>;
                   })}
-                  {de.length > 3 && <div className="text-[8px] text-slate-400">+{de.length - 3}</div>}
+                  {de.length > 3 && <div className="text-[8px] text-slate-500">+{de.length - 3}</div>}
                 </div>
               );
             })}
@@ -1514,9 +1515,9 @@ export default function CalendarTab({ customers, user, userProfile, users, ticke
       {view === 'day' && (
         <div className="bg-white rounded-xl p-4">
           <div className="flex justify-between items-center mb-3">
-            <button onClick={() => {const d = new Date(selDate || todayStr); d.setDate(d.getDate()-1); setSelDate(d.toISOString().substring(0,10));}} className="px-2 py-1 border rounded text-xs">←</button>
+            <button onClick={() => {var d = new Date(selDate || todayStr); d.setDate(d.getDate()-1); setSelDate(fmtET(d, 'iso'));}} className="px-2 py-1 border rounded text-xs">←</button>
             <div className="text-sm font-bold">{selDate || todayStr}</div>
-            <button onClick={() => {const d = new Date(selDate || todayStr); d.setDate(d.getDate()+1); setSelDate(d.toISOString().substring(0,10));}} className="px-2 py-1 border rounded text-xs">→</button>
+            <button onClick={() => {var d = new Date(selDate || todayStr); d.setDate(d.getDate()+1); setSelDate(fmtET(d, 'iso'));}} className="px-2 py-1 border rounded text-xs">→</button>
           </div>
           {(visibleEvents.filter(e => e.event_date === (selDate || todayStr))).length > 0 ? (
             visibleEvents.filter(e => e.event_date === (selDate || todayStr)).sort((a,b) => (a.event_time||'').localeCompare(b.event_time||'')).map(ev => {
@@ -1542,7 +1543,7 @@ export default function CalendarTab({ customers, user, userProfile, users, ticke
                         {calView === 'team' && assignedName && <span className="text-purple-600">→ {assignedName}</span>}
                       </div>
                     </div>
-                    <div className="ml-2 text-[10px] font-bold text-slate-400">Open →</div>
+                    <div className="ml-2 text-[10px] font-bold text-slate-500">Open →</div>
                   </div>
                 );
               }
@@ -1562,7 +1563,7 @@ export default function CalendarTab({ customers, user, userProfile, users, ticke
                       {ev.all_day ? <span className="font-semibold text-blue-600">🌅 All day</span> : (ev.event_time || 'All day')} | {ev.event_type}
                       {calView === 'team' && assignedName && <span className="ml-1 text-purple-600">→ {assignedName}</span>}
                       {ev.recurring && ev.recurring !== 'none' && <span className="ml-1">🔄 {recurrenceLabel(ev.recurring, ev.recurrence_interval)}</span>}
-                      {ev.original_event_date && ev.original_event_date !== ev.event_date && <span className="ml-1 text-amber-600" title={'Moved from ' + ev.original_event_date}>↪</span>}
+                      {ev.original_event_date && ev.original_event_date !== ev.event_date && <span className="ml-1 text-amber-800 font-bold" title={'Moved from ' + ev.original_event_date}>↪</span>}
                     </div>
                     {/* v55 Stage 1 — Location + join link line. Location is plain
                         text, join link is a real <a> with stopPropagation so a
@@ -1593,7 +1594,7 @@ export default function CalendarTab({ customers, user, userProfile, users, ticke
                   </div>
                   {!ev.completed && <div className="flex gap-1">
                     {ev.event_status === 'postponed' ? <>
-                      <span className="px-2 py-1 bg-amber-100 text-amber-700 rounded text-[10px] font-bold">Postponed</span>
+                      <span className="px-2 py-1 bg-amber-100 text-amber-900 rounded text-[10px] font-bold border border-amber-300">Postponed</span>
                       <button onClick={() => openEditEvent(ev)} title="Edit / Cancel / Delete" className="px-2 py-1 bg-slate-200 hover:bg-slate-300 rounded text-[10px]">✏️</button>
                     </> : <>
                       <button onClick={() => { setNotesEvent(ev); setMeetingNotes(''); setNewNoteKind('note'); }} className="px-2 py-1 bg-emerald-500 text-white rounded text-[10px]">✓ Check In</button>
@@ -1649,7 +1650,7 @@ export default function CalendarTab({ customers, user, userProfile, users, ticke
                       {calView === 'team' && assignedName && <span className="ml-1 text-purple-600">→ {assignedName}</span>}
                     </div>
                   </div>
-                  <span className="text-[9px] font-bold text-slate-400">Open →</span>
+                  <span className="text-[9px] font-bold text-slate-500">Open →</span>
                 </div>
               );
             }
@@ -1694,7 +1695,7 @@ export default function CalendarTab({ customers, user, userProfile, users, ticke
                   <button onClick={() => openEditEvent(ev)} title="Edit" className="px-2 py-0.5 bg-slate-200 hover:bg-slate-300 rounded text-[10px]">✏️</button>
                 </div>}
                 {ev.event_status === 'postponed' && <div className="flex items-center gap-1">
-                  <span className="text-[9px] text-amber-600 font-bold">Postponed</span>
+                  <span className="text-[9px] text-amber-800 font-extrabold">Postponed</span>
                   {/* v54.4 — Always give access to the edit modal (where
                       cancel/delete/decline live), regardless of completed
                       or postponed state. Without this, there was no way
@@ -1748,7 +1749,7 @@ export default function CalendarTab({ customers, user, userProfile, users, ticke
                       : '📝 Add Meeting Notes / إضافة ملاحظات'}
                 </h3>
                 <div className="text-xs text-slate-500 truncate">{notesEvent.title}</div>
-                <div className="text-[10px] text-slate-400">{notesEvent.event_date} {notesEvent.event_time || ''} · {notesThread.length} note{notesThread.length === 1 ? '' : 's'}</div>
+                <div className="text-[10px] text-slate-500">{notesEvent.event_date} {notesEvent.event_time || ''} · {notesThread.length} note{notesThread.length === 1 ? '' : 's'}</div>
                 {notesEvent.description && (
                   <div className="mt-2 px-2 py-1.5 rounded bg-blue-50 border border-blue-100 text-[11px] text-blue-900 whitespace-pre-wrap leading-snug">
                     <span className="font-semibold">📋 Agenda: </span>{notesEvent.description}
@@ -1788,7 +1789,7 @@ export default function CalendarTab({ customers, user, userProfile, users, ticke
                     <div className="flex items-center justify-between mb-1">
                       <div className="flex items-center gap-1.5 text-[10px]">
                         <span className="font-bold text-slate-700">{authorName(n.author_id)}</span>
-                        <span className="text-slate-400">{new Date(n.created_at).toLocaleString()}</span>
+                        <span className="text-slate-400">{fmtET(n.created_at, 'datetime')}</span>
                         {n.updated_at && n.updated_at !== n.created_at && <span className="text-slate-400 italic">(edited)</span>}
                         {kindStyle.label && <span className={'font-bold ' + kindStyle.lbl}>{kindStyle.label}</span>}
                         {n._legacy && <span className="font-bold text-slate-400">(legacy)</span>}
@@ -1864,7 +1865,7 @@ export default function CalendarTab({ customers, user, userProfile, users, ticke
                   </button>
                 )}
               </div>
-              <div className="text-[9px] text-slate-400 mt-1 text-center">All notes visible to team · Each post archived to Daily Log</div>
+              <div className="text-[9px] text-slate-500 mt-1 text-center">All notes visible to team · Each post archived to Daily Log</div>
             </div>
           </div>
         </div>
@@ -1946,24 +1947,28 @@ export default function CalendarTab({ customers, user, userProfile, users, ticke
                 </select></div>
             </div>
             {isSeriesItem && (
-              <div className="mt-3 bg-amber-50 border border-amber-200 rounded-lg p-3">
-                <label className="text-[10px] font-semibold text-amber-800 block mb-2">Apply changes to / تطبيق التغييرات على</label>
+              <div className="mt-3 bg-slate-50 border-2 border-slate-300 rounded-lg p-3">
+                {/* v55.75 — Was amber-on-amber (unreadable per Max). Now high-
+                    contrast: slate-50 background, slate-900 label, slate-700
+                    note. Per Max May 8: "agenda pencil/edit area has yellow
+                    text on a yellow background. This is unreadable." */}
+                <label className="text-xs font-bold text-slate-900 block mb-2">Apply changes to / تطبيق التغييرات على</label>
                 <div className="flex flex-col gap-1.5">
-                  <label className="flex items-center gap-2 text-xs">
+                  <label className="flex items-center gap-2 text-sm text-slate-800">
                     <input type="radio" name="editScope" checked={editScope==='single'} onChange={()=>setEditScope('single')} />
                     <span>This occurrence only / هذه المرة فقط ({scopedCount('single')})</span>
                   </label>
-                  <label className="flex items-center gap-2 text-xs">
+                  <label className="flex items-center gap-2 text-sm text-slate-800">
                     <input type="radio" name="editScope" checked={editScope==='following'} onChange={()=>setEditScope('following')} />
                     <span>This and following / هذه وما بعدها ({scopedCount('following')})</span>
                   </label>
-                  <label className="flex items-center gap-2 text-xs">
+                  <label className="flex items-center gap-2 text-sm text-slate-800">
                     <input type="radio" name="editScope" checked={editScope==='series'} onChange={()=>setEditScope('series')} />
                     <span>All in series / كل التكرارات ({scopedCount('series')})</span>
                   </label>
                 </div>
                 {(editScope === 'series' || editScope === 'following') && (
-                  <div className="text-[10px] text-amber-700 mt-2">Note: all changes except date apply to the affected occurrences. Date change applies only to this row to avoid merging occurrences to a single day.</div>
+                  <div className="text-xs text-slate-700 mt-2 font-medium">Note: all changes except date apply to the affected occurrences. Date change applies only to this row to avoid merging occurrences to a single day.</div>
                 )}
               </div>
             )}

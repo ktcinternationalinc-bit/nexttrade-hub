@@ -172,8 +172,8 @@ check('7.1 Three Tiles still rendered (Nadia/Jenna/Sara)',
   && /<Tile[\s\S]{0,200}who="sara"/.test(ab));
 check('7.2 togglePanel logic still in place',
   /var togglePanel = function \(which\) \{/.test(ab));
-check('7.3 Nadia auto-open on first daily load preserved',
-  /useState\(function \(\) \{[\s\S]{0,500}return 'nadia'/.test(ab));
+check('7.3 Nadia auto-open on first daily load preserved (v55.80 BD-audit: defaults to "nadia")',
+  /var \[openPanel, setOpenPanel\] = useState\('nadia'\)/.test(ab));
 check('7.4 MyHRDesk still mounts inside Jenna panel',
   /openPanel === 'jenna'[\s\S]{0,1500}<MyHRDesk/.test(ab));
 check('7.5 MyPerformance still mounts inside Sara panel',

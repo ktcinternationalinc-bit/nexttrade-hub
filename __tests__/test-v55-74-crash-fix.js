@@ -79,8 +79,8 @@ check('5.2 WhatsNewWidget uses {itemText}, not {item}',
 
 group('6. v55.74 entry exists at top of BUILD_HISTORY');
 
-check('6.1 v55.74 is the newest entry',
-  /export const BUILD_HISTORY = \[\s*\{\s*version: 'v55\.74'/.test(wnw));
+check('6.1 v55.74 entry still present in BUILD_HISTORY (now after v55.75)',
+  /version: 'v55\.74'/.test(wnw));
 check('6.2 v55.74 has a public-safe high-level bullet',
   /'Stability fix for the dashboard so the portal loads cleanly/.test(wnw));
 check('6.3 v55.74 documents the crash root cause as superAdminOnly',

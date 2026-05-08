@@ -54,8 +54,9 @@ check('1.7 systemTicketsRetested counted (retest_completed_by === userId)',
   /retest_completed_by === userId && t\.retest_completed_at/.test(hrm));
 check('1.8 calcScore returns new 5-axis object',
   /score:.*productivity:.*quality:.*timeliness:.*engagement:.*reliability:/.test(hrm.replace(/\s+/g, ' ')));
-check('1.9 score uses weighted formula (0.35/0.15/0.20/0.20/0.10)',
-  /productivity \* 0\.35[\s\S]*quality \* 0\.15[\s\S]*timeliness \* 0\.20[\s\S]*engagement \* 0\.20[\s\S]*reliability \* 0\.10/.test(hrm));
+check('1.9 score uses weighted formula (v55.80 PHASE-B: Activity 0.35 / Timeliness 0.20 / Presence 0.15 / Quality 0.15 / Reliability 0.10 / Productivity 0.05)',
+  /activity \* 0\.35[\s\S]*timeliness \* 0\.20[\s\S]*quality \* 0\.15[\s\S]*reliability \* 0\.10[\s\S]*productivity \* 0\.05/.test(hrm)
+  && /presence \* 0\.15/.test(hrm));
 check('1.10 quality sub-score uses absolute % (not relative)', /quality_meetingShowup/.test(hrm) && /quality_quoteAccept/.test(hrm));
 check('1.11 reliability sub-score includes show-up + retest follow-through',
   /reliability_show/.test(hrm) && /reliability_retest/.test(hrm));

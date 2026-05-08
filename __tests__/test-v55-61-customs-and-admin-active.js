@@ -34,19 +34,19 @@ check('A.5 useEffect imported (still required)',
 // ---------- B: AdminTab — visibleUsers filters out deactivated ----------
 console.log('\nB. AdminTab — visibleUsers active-only');
 var at = read('src/components/AdminTab.jsx');
-check('B.1 visibleUsers builds activeOnly first',
-  /var activeOnly = users\.filter\(function \(u\) \{ return u && u\.active !== false; \}\)/.test(at));
+check('B.1 visibleUsers builds activeOnly first (v55.80: now also rejects NULL)',
+  /var activeOnly = users\.filter\(function \(u\)[\s\S]{0,400}u\.active === false[\s\S]{0,200}u\.active === null/.test(at));
 check('B.2 super_admin path returns activeOnly (not all users)',
   /if \(isSuperAdmin\) return activeOnly;/.test(at));
 check('B.3 admin/manager path filters from activeOnly',
   /return activeOnly\.filter\(u => u\.reports_to === myId \|\| u\.id === myId\);/.test(at));
-check('B.4 explanatory comment present',
-  /v55\.61 — Filter out deactivated teammates from the admin scorecard/.test(at));
+check('B.4 explanatory v55.61 comment present',
+  /v55\.61 — Filter out deactivated teammates/.test(at));
 
 // ---------- C: AdminTab pipeline scorecard — also filters ----------
 console.log('\nC. AdminTab pipeline scorecard — active-only');
-check('C.1 pipelineActiveUsers helper defined',
-  /const pipelineActiveUsers = \(users \|\| \[\]\)\.filter\(function \(u\) \{ return u && u\.active !== false; \}\)/.test(at));
+check('C.1 pipelineActiveUsers helper defined (v55.80: refactored to filterActiveUsers helper)',
+  /const pipelineActiveUsers = filterActiveUsers\(users\)/.test(at));
 check('C.2 userStats builds from pipelineActiveUsers (not raw users)',
   /const userStats = pipelineActiveUsers\.map\(u => \{/.test(at));
 check('C.3 NO leftover "(users || []).map(u => {" for pipeline',

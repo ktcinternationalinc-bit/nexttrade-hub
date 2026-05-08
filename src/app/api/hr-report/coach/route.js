@@ -11,6 +11,8 @@
 // var instead of const, string concatenation. Vercel SWC compiler is
 // fragile on this route family.
 
+import { sanitizeErr } from '../../../../lib/sanitize-error';
+
 export async function POST(req) {
   try {
     var body = await req.json();
@@ -108,6 +110,6 @@ export async function POST(req) {
     return Response.json({ message: text.trim() });
   } catch (err) {
     console.error('[hr-coach] error:', err);
-    return Response.json({ error: err.message || 'Coach unavailable' }, { status: 500 });
+    return Response.json({ error: sanitizeErr(err) || 'Coach unavailable' }, { status: 500 });
   }
 }

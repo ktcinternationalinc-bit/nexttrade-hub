@@ -173,8 +173,9 @@ check('5.4 super_admin-routed tile group rendered',
   /REQUEST_CATEGORIES\.filter\(function \(c\) \{ return c\.routing === 'super_admin'; \}\)\.map/.test(hr));
 check('5.5 Group header "Goes to your manager"',
   /Goes to your manager/.test(hr));
-check('5.6 Group header explains super_admin-only "admins can\'t see"',
-  /Goes to super_admin only[\s\S]{0,80}admins can't see/.test(hr));
+check('5.6 v55.75 — Group header explains "private from other team leads"',
+  // v55.75 — wording softened from "admins can't see" to "team leads can't see"
+  /Goes to .{0,40}only \(private — other team leads can't see\)/.test(hr));
 check('5.7 v55.73 — Each tile is a real button (also sets recipient: manager/super_admin)',
   /<button[\s\S]{0,200}type="button"[\s\S]{0,300}onClick=\{function \(\) \{ setForm\(Object\.assign\(\{\}, form, \{ category: c\.id, visibility: visibilityFromCategory\(c\.id\), recipient: '(manager|super_admin)' \}\)\); \}\}/.test(hr));
 check('5.8 Selected tile has visual selected state (border-blue or border-violet)',
@@ -196,8 +197,9 @@ check('6.1 v55.73 — Manager radio option present (replaces blue badge)',
   /name="hr-recipient"[\s\S]{0,300}value="manager"/.test(hr));
 check('6.2 v55.73 — Super-admin radio option present (replaces violet badge)',
   /name="hr-recipient"[\s\S]{0,300}value="super_admin"/.test(hr));
-check('6.3 v55.73 — Hint about admins (including manager) won\'t see super_admin items',
-  /Regular admins \(including your manager\) won't see this/.test(hr));
+check('6.3 v55.75 — Hint about other team leads won\'t see super-admin items',
+  // v55.75 — softer wording: "team leads (including your manager)"
+  /team leads \(including your manager\) won't see this/.test(hr));
 check('6.4 v55.73 — User can override category default (heads-up if mismatched)',
   /Heads up: most/.test(hr) && /usually go to/.test(hr));
 
@@ -217,8 +219,9 @@ check('7.3 Complaint dropdown renders icon + label together',
   /COMPLAINT_CATEGORIES\.map\(function \(c\) \{ return <option key=\{c\.id\} value=\{c\.id\}>\{c\.icon \+ ' ' \+ c\.label\}<\/option>; \}\)/.test(hr));
 check('7.4 openComplaint sets super_admin_only regardless of which complaint topic',
   /openComplaint[\s\S]{0,400}visibility: 'super_admin_only'/.test(hr));
-check('7.5 Privacy notice still present in complaint modal',
-  /Only super_admin sees who submitted this/.test(hr));
+check('7.5 v55.75 — Privacy notice present in complaint modal (softer wording)',
+  // v55.75 — wording: "Only {superAdminName} sees who submitted this"
+  /Only \{superAdminName\} sees who submitted this/.test(hr));
 
 // ============================================================
 // 8. AdminHRInbox — Manager-handled badge added

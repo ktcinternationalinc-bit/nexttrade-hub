@@ -19,6 +19,7 @@
 // ============================================================
 
 import { createClient } from '@supabase/supabase-js';
+import { sanitizeErr } from '../../../lib/sanitize-error';
 
 var supabase = createClient(
   process.env.NEXT_PUBLIC_SUPABASE_URL,
@@ -127,7 +128,7 @@ export async function GET(req) {
       .order('created_at', { ascending: false })
       .limit(100);
     if (tkRes.error) {
-      bundle.warnings.push('system_tickets read failed: ' + tkRes.error.message);
+      bundle.warnings.push('system_tickets read failed: ' + sanitizeErr(tkRes.error));
     } else {
       bundle.tickets = (tkRes.data || []).map(function(t) {
         return {
@@ -286,7 +287,7 @@ export async function POST(req) {
     if (action !== 'comment' && Object.keys(update).length > 0) {
       var upRes = await supabase.from('system_tickets').update(update).eq('id', ticketId).select().single();
       if (upRes.error) {
-        return new Response(JSON.stringify({ ok: false, error: upRes.error.message }), {
+        return new Response(JSON.stringify({ ok: false, error: sanitizeErr(upRes.error) }), {
           status: 500, headers: { 'Content-Type': 'application/json' },
         });
       }

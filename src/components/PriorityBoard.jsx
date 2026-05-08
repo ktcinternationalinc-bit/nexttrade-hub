@@ -26,6 +26,7 @@
 
 import { useState, useMemo, useRef } from 'react';
 import { supabase, dbInsert, dbUpdate, logActivity } from '../lib/supabase';
+import { todayET } from '../lib/et-time';
 
 var STATUS_COLORS_MINI = {
   'Open': '#3b82f6',
@@ -764,7 +765,7 @@ export default function PriorityBoard({
           >
             {t.status}
           </span>
-          {t.due_date && new Date(t.due_date) < new Date(new Date().toISOString().substring(0, 10)) && (
+          {t.due_date && t.due_date < todayET() && (
             <span className="text-[8px] font-bold text-red-600">⏰ overdue</span>
           )}
         </div>
@@ -792,7 +793,7 @@ export default function PriorityBoard({
           )}
           {additional.length > 0 && (
             <div
-              className={'text-[9px] ml-auto ' + (isStarred ? '' : 'text-slate-400')}
+              className={'text-[9px] ml-auto ' + (isStarred ? '' : 'text-slate-500')}
               style={isStarred ? { color: '#78350f' /* dark amber, beats globals.css text-amber-800 → light-yellow override */ } : undefined}
               title="Also assigned to others"
             >
@@ -815,7 +816,7 @@ export default function PriorityBoard({
                 e.stopPropagation();
                 setMoveToPickerFor(moveToPickerFor === t.id ? null : t.id);
               }}
-              className="w-full text-[9px] text-slate-400 hover:text-indigo-600 hover:bg-indigo-50 rounded py-0.5 transition"
+              className="w-full text-[9px] text-slate-500 hover:text-indigo-600 hover:bg-indigo-50 rounded py-0.5 transition"
               title="Reassign to someone else without dragging"
             >
               {moveToPickerFor === t.id ? 'Close ▲' : 'Move to → ▾'}
@@ -876,7 +877,7 @@ export default function PriorityBoard({
           </span>
         </div>
         {ago && (
-          <div className="text-[8px] text-slate-400 pl-3">{ago}</div>
+          <div className="text-[8px] text-slate-500 pl-3">{ago}</div>
         )}
       </div>
     );
@@ -964,7 +965,7 @@ export default function PriorityBoard({
                     {s.top ? (
                       <div className="text-[11px] font-semibold text-slate-800 truncate" title={s.top.title}>{s.top.title}</div>
                     ) : (
-                      <div className="text-[10px] text-slate-400 italic">No priority set</div>
+                      <div className="text-[10px] text-slate-500 italic">No priority set</div>
                     )}
                   </div>
                 </div>
@@ -986,7 +987,7 @@ export default function PriorityBoard({
               was 6 columns to the right. */}
           {(users || []).length > 3 && (
             <div className="flex items-center gap-1 overflow-x-auto max-w-[60%] pb-1">
-              <span className="text-[9px] text-slate-400 flex-shrink-0 mr-1">Jump to:</span>
+              <span className="text-[9px] text-slate-500 flex-shrink-0 mr-1">Jump to:</span>
               {(users || []).map(function(u) {
                 var col = columns[u.id] || { ranked: [], unranked: [] };
                 var starredCount = (col.ranked.concat(col.unranked) || []).filter(function(t) { return t && t.starred_today; }).length;
@@ -1051,7 +1052,7 @@ export default function PriorityBoard({
                   </div>
                   {(isAdmin || u.id === currentUserId) && col.ranked.length > 0 && (
                     <button onClick={function() { clearRanking(u.id); }}
-                      className="text-[9px] text-slate-400 hover:text-red-500"
+                      className="text-[9px] text-slate-500 hover:text-red-500"
                       title="Clear all priority ranks for this person">↺</button>
                   )}
                 </div>
@@ -1081,7 +1082,7 @@ export default function PriorityBoard({
                     className={'text-center py-6 rounded-lg border-2 border-dashed ' + (dropTarget && dropTarget.userId === u.id ? 'border-indigo-400 bg-indigo-50' : 'border-slate-200')}>
                     {total === 0 ? (
                       <div>
-                        <div className="text-[10px] text-slate-400 italic mb-2">
+                        <div className="text-[10px] text-slate-500 italic mb-2">
                           {((u.name || '').split(' ')[0] || 'They')} has no tickets
                         </div>
                         {(isAdmin || u.id === currentUserId) && quickCreateFor !== u.id && (
@@ -1095,13 +1096,13 @@ export default function PriorityBoard({
                           </button>
                         )}
                         {!(isAdmin || u.id === currentUserId) && (
-                          <div className="text-[9px] text-slate-400">
+                          <div className="text-[9px] text-slate-500">
                             Only {u.name || 'they'} or an admin can create tickets for this person
                           </div>
                         )}
                       </div>
                     ) : (
-                      <div className="text-[10px] text-slate-400 italic">Drop a ticket here to prioritize</div>
+                      <div className="text-[10px] text-slate-500 italic">Drop a ticket here to prioritize</div>
                     )}
                   </div>
                 )}
@@ -1118,7 +1119,7 @@ export default function PriorityBoard({
                   var shown = col.unranked.slice(0, shownCount);
                   return (
                     <div className="mt-3 pt-2 border-t border-slate-200">
-                      <div className="text-[9px] font-bold text-slate-400 uppercase mb-1">Unranked ({col.unranked.length})</div>
+                      <div className="text-[9px] font-bold text-slate-500 uppercase mb-1">Unranked ({col.unranked.length})</div>
                       {renderDropZone(u.id, 0, 'unranked')}
                       {shown.map(function(t, idx) {
                         return (
@@ -1155,11 +1156,11 @@ export default function PriorityBoard({
                     is empty, so there's always a target. */}
                 {col.unranked.length === 0 && col.ranked.length > 0 && (
                   <div className="mt-3 pt-2 border-t border-slate-200">
-                    <div className="text-[9px] font-bold text-slate-400 uppercase mb-1">Unranked (0)</div>
+                    <div className="text-[9px] font-bold text-slate-500 uppercase mb-1">Unranked (0)</div>
                     <div
                       onDragOver={function(e) { onDragOverCol(e, u.id, 0, 'unranked'); }}
                       onDrop={function(e) { onDropCol(e, u.id, 0, 'unranked'); }}
-                      className={'text-center text-[9px] text-slate-400 italic py-3 rounded-lg border-2 border-dashed ' + (dropTarget && dropTarget.userId === u.id && dropTarget.pile === 'unranked' ? 'border-indigo-400 bg-indigo-50' : 'border-slate-200')}>
+                      className={'text-center text-[9px] text-slate-500 italic py-3 rounded-lg border-2 border-dashed ' + (dropTarget && dropTarget.userId === u.id && dropTarget.pile === 'unranked' ? 'border-indigo-400 bg-indigo-50' : 'border-slate-200')}>
                       Drop here to demote (unranked)
                     </div>
                   </div>
@@ -1177,7 +1178,7 @@ export default function PriorityBoard({
                   var hiddenC = closedList.length - shownC;
                   return (
                     <div className="mt-3 pt-2 border-t border-slate-200">
-                      <div className="text-[9px] font-bold text-slate-400 uppercase mb-1 flex items-center gap-1">
+                      <div className="text-[9px] font-bold text-slate-500 uppercase mb-1 flex items-center gap-1">
                         <span>✓</span>
                         <span>Closed ({closedList.length})</span>
                       </div>

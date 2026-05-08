@@ -137,8 +137,10 @@ check('3.6 Has radio option for super_admin',
   /value="super_admin"[\s\S]{0,300}checked=\{form\.recipient === 'super_admin'\}/.test(hr));
 check('3.7 Manager radio is disabled when user has no manager assigned',
   /disabled=\{!managerId\}/.test(hr));
-check('3.8 super_admin radio shows actual super_admin name (e.g. Mr. Kandil)',
-  /\{superAdminName\} only \(super_admin\)/.test(hr));
+check('3.8 v55.75 (A2) — super_admin radio shows ONLY name, no "(President)" suffix',
+  // Per Max May 8 2026 decision C: "Mr. Kandil only (not 'President,
+  // Mr. Kandil'). Cleaner."
+  /🔒 \{superAdminName\}\s*<\/div>/.test(hr) && !/\{superAdminName\} \(President\)/.test(hr));
 check('3.9 Radio panel uses high-contrast slate-300 border + white bg (not yellow-on-yellow)',
   /rounded-lg border-2 border-slate-300 bg-white/.test(hr));
 check('3.10 Selected radio gets accent border (blue for manager, violet for super_admin)',
@@ -217,8 +219,10 @@ check('6.3 Complaint dispatch type is \'hr_complaint\'',
   /type: 'hr_complaint'/.test(hr));
 check('6.4 Complaint subject includes severity',
   /'🚨 HR Concern \(' \+ form\.severity/.test(hr));
-check('6.5 Anonymous-to-admins flag is respected in the email signature',
-  /form\.anonymous_to_admins[\s\S]{0,200}'A teammate \(anonymous to admins/.test(hr));
+check('6.5 v55.75 — Anonymous flag respected (clean "stays private from other team leads" wording)',
+  // v55.75 — wording changed from "anonymous to admins, identified to super_admin"
+  // to "your identity stays private from other team leads"
+  /form\.anonymous_to_admins[\s\S]{0,250}your identity stays private/.test(hr));
 check('6.6 Complaint dispatch is fire-and-forget',
   /\.catch\(function \(e\) \{ console\.warn\('\[hr_complaint notify\]/.test(hr));
 check('6.7 No self-dispatch for complaints (super_admin filing for themselves wouldn\'t notify)',
@@ -265,7 +269,7 @@ group('8. Dashboard ordering: AssistantsBar first, Nadia auto-opens');
 var pd = read('src/components/PersonalDashboard.jsx');
 check('8.1 AssistantsBar is mounted at the top of PersonalDashboard',
   pd.indexOf('<AssistantsBar') < pd.indexOf('OVERDUE'));
-check('8.2 v55.73 — Nadia is the HARD DEFAULT (one always active, no null state)',
+check('8.2 v55.80 — Nadia is the HARD DEFAULT (defaults to "nadia"; per-user hydrate after auth)',
   /var \[openPanel, setOpenPanel\] = useState\('nadia'\)/.test(ab));
 check('8.3 v55.73 — togglePanel switches active assistant (no-op on already-active)',
   /var togglePanel = function \(which\)[\s\S]{0,500}if \(prev === which\) return prev/.test(ab));
@@ -285,8 +289,10 @@ check('9.2 If NO super_admin exists in users, submitRequest doesn\'t crash',
   /if \(superAdminId\) recipientIds\.push\(superAdminId\)/.test(hr));
 check('9.3 If recipientIds is empty after dedupe, no notify call is made (skip silently)',
   /if \(recipientIds\.length > 0\)/.test(hr));
-check('9.4 Manager radio is visually disabled (not just behaviorally) when no manager',
-  /You don\\?'t have a manager assigned\. Ask super_admin to set your "reports_to"/.test(hr));
+check('9.4 v55.75 — Manager radio shows clean disabled-state message (no "super_admin" tech jargon)',
+  // v55.75 — message changed from "Ask super_admin to set your "reports_to" in Settings."
+  // to "Ask Mr. Kandil to set your reporting line in Settings."
+  /You don\\?'t have a manager assigned\. Ask.*to set your reporting line/.test(hr));
 check('9.5 Default form.recipient = "manager" is overridden by category click handlers',
   // First click on a super_admin-routed icon (e.g. raise) flips recipient
   // to 'super_admin' so the form starts in a coherent state.

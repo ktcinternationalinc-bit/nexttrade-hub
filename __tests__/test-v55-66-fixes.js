@@ -124,8 +124,8 @@ check('3.10 List has inline edit button per row',
   /onClick=\{function \(e\) \{ e\.stopPropagation\(\); setEditingRate\(r\)/.test(srt));
 check('3.11 Expired rates dimmed (opacity-60) but still visible in list',
   /exp \? 'opacity-60' : ''/.test(srt));
-check('3.12 List view respects ALL existing filters (filtered, not raw)',
-  /📋 List \(\{filtered\.length\}\)/.test(srt));
+check('3.12 Detail Line View respects ALL existing filters (filtered, not raw)',
+  /📋 Detail Line View \(\{filtered\.length\}\)/.test(srt));
 check('3.13 Routes (card) view STILL preserved as default',
   /routesViewMode === 'routes' && \([\s\S]{0,4000}routeGroups\.map/.test(srt));
 

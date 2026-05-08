@@ -2,6 +2,7 @@
 import { useState, useMemo, useEffect, useRef } from 'react';
 import { filterActiveUsers } from '../lib/active-users';
 import { supabase, dbUpdate, dbDelete } from '../lib/supabase';
+import { fmtET, todayET, yesterdayET, fmtETRange } from '../lib/et-time';
 import HRReport from './HRReport';
 import AdminHRInbox from './AdminHRInbox';
 import EmailStatusPanel from './EmailStatusPanel';
@@ -46,9 +47,29 @@ export default function AdminTab({ user, userProfile, users, isAdmin, customers,
   const [bubbleDrill, setBubbleDrill] = useState(null); // { userId, type, label } — open when not null
   const [viewTicket, setViewTicket] = useState(null);
   const [ticketComments, setTicketComments] = useState([]);
-  const [dateFrom, setDateFrom] = useState(() => new Intl.DateTimeFormat('en-CA', { timeZone: 'America/New_York' }).format(new Date()));
-  const [dateTo, setDateTo] = useState(() => new Intl.DateTimeFormat('en-CA', { timeZone: 'America/New_York' }).format(new Date()));
+  const [dateFrom, setDateFrom] = useState(() => todayET());
+  const [dateTo, setDateTo] = useState(() => todayET());
   const [datePreset, setDatePreset] = useState('today'); // today | yesterday | 7d | 30d | 3mo | all | custom
+  // v55.80 (Phase B / Section 3 — Admin focus mode)
+  // ----------------------------------------------------------------
+  // viewMode: 'team' (the wide team-scorecard grid, default) vs
+  // 'me' (focus on YOUR cards — selUser is auto-set to the viewer).
+  // viewMode is global to the Admin tab and persists in localStorage so
+  // toggling it survives a refresh. The toggle lives at the top of the
+  // tab next to the date filters so it's a single tap to switch.
+  const [viewMode, setViewMode] = useState(() => {
+    if (typeof window === 'undefined') return 'team';
+    try { return window.localStorage.getItem('ktc.adminViewMode') || 'team'; }
+    catch (e) { return 'team'; }
+  });
+  // v55.80 (Phase B / Section 6 — pagination)
+  // ----------------------------------------------------------------
+  // Activity feed and audit log can each grow into hundreds of rows.
+  // Render a window: 50 visible, "Load 50 more" extends it. Resets to
+  // 50 whenever the filter or selUser changes.
+  const ACTIVITY_PAGE = 50;
+  const [activityVisible, setActivityVisible] = useState(ACTIVITY_PAGE);
+  const [auditVisible, setAuditVisible] = useState(ACTIVITY_PAGE);
   const drillRef = useRef(null);
 
   const myId = userProfile?.id || user?.id;
@@ -142,6 +163,38 @@ export default function AdminTab({ user, userProfile, users, isAdmin, customers,
 
   useEffect(() => { if (!loaded) loadData(); }, [loaded]);
 
+  // v55.80 (Phase B / Section 2 — cache invalidation on filter change)
+  // ----------------------------------------------------------------
+  // When the date window changes, immediately clear the visible rows so
+  // the old data doesn't linger on screen during the refetch. Without
+  // this, switching from "Today" to "Yesterday" briefly shows yesterday
+  // labels with today's rows underneath them — looks wrong, erodes trust.
+  // We only clear the time-windowed slices (logs / audit / sessions);
+  // tickets/quotes/announcements are not date-filtered server-side so
+  // they don't suffer from the stale-reuse bug.
+  // Also resets pagination windows so a filter change always shows the
+  // first page of results.
+  useEffect(() => {
+    if (loaded) {
+      setLogs([]);
+      setAuditLogs([]);
+      setSessions([]);
+    }
+    setActivityVisible(ACTIVITY_PAGE);
+    setAuditVisible(ACTIVITY_PAGE);
+    // intentionally narrow deps — only react to the date window changing
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [dateFrom, dateTo]);
+
+  // v55.80 (Phase B / Section 6) — also reset pagination when the user
+  // filter changes so flipping between "All Team" and a single person
+  // doesn't show row #87 first.
+  useEffect(() => {
+    setActivityVisible(ACTIVITY_PAGE);
+    setAuditVisible(ACTIVITY_PAGE);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selUser]);
+
   // Poll login_summary every 60s so Team Activity feels realtime.
   // Refreshes only the login-summary slice (not the whole dataset) — cheap call.
   useEffect(() => {
@@ -162,23 +215,41 @@ export default function AdminTab({ user, userProfile, users, isAdmin, customers,
 
   // Apply one of the preset date ranges. ET-aware so "today" is today in New York.
   const applyDatePreset = (preset) => {
-    const fmt = new Intl.DateTimeFormat('en-CA', { timeZone: 'America/New_York' });
-    const todayET = fmt.format(new Date());
+    const today = todayET();
     const shiftDays = (n) => {
       const d = new Date();
       d.setDate(d.getDate() - n);
-      return fmt.format(d);
+      return new Intl.DateTimeFormat('en-CA', { timeZone: 'America/New_York' }).format(d);
     };
     setDatePreset(preset);
-    if (preset === 'today') { setDateFrom(todayET); setDateTo(todayET); }
+    if (preset === 'today') { setDateFrom(today); setDateTo(today); }
     else if (preset === 'yesterday') { const y = shiftDays(1); setDateFrom(y); setDateTo(y); }
-    else if (preset === '7d') { setDateFrom(shiftDays(6)); setDateTo(todayET); }
-    else if (preset === '30d') { setDateFrom(shiftDays(29)); setDateTo(todayET); }
-    else if (preset === '3mo') { setDateFrom(shiftDays(89)); setDateTo(todayET); }
-    else if (preset === 'all') { setDateFrom('2020-01-01'); setDateTo(todayET); }
+    else if (preset === '7d') { setDateFrom(shiftDays(6)); setDateTo(today); }
+    else if (preset === '30d') { setDateFrom(shiftDays(29)); setDateTo(today); }
+    else if (preset === '3mo') { setDateFrom(shiftDays(89)); setDateTo(today); }
+    else if (preset === 'all') { setDateFrom('2020-01-01'); setDateTo(today); }
     setLoaded(false);
   };
-  const todayStr = new Date().toISOString().substring(0, 10);
+  const todayStr = todayET();
+
+  // v55.80 (Phase B / Section 3 — Admin focus mode side-effect)
+  // ----------------------------------------------------------------
+  // When viewMode flips to 'me', auto-set selUser = me and persist.
+  // When it flips to 'team', restore selUser to 'all'. Either way
+  // the change is silent (no reload) — selUser already drives the
+  // already-loaded data through useMemo filters.
+  useEffect(() => {
+    if (typeof window !== 'undefined') {
+      try { window.localStorage.setItem('ktc.adminViewMode', viewMode); } catch (e) {}
+    }
+    if (viewMode === 'me' && myId) {
+      if (selUser !== myId) setSelUser(myId);
+    } else if (viewMode === 'team') {
+      if (selUser !== 'all') setSelUser('all');
+      if (drillUser) setDrillUser(null);
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [viewMode, myId]);
 
   // Enhanced scorecards
   const scorecards = useMemo(() => {
@@ -250,6 +321,14 @@ export default function AdminTab({ user, userProfile, users, isAdmin, customers,
   return (<div>
     <h2 className="text-xl font-extrabold mb-3">Admin Dashboard / لوحة الإدارة</h2>
 
+    {/* v55.80 (Phase B / Section 1 — ET disclosure)
+        A persistent reminder near the top of Admin so the viewer always
+        knows which clock the dates and times below are on. Quiet styling
+        — the goal is to inform, not nag. */}
+    <div className="text-[10px] text-slate-500 mb-2 font-semibold tracking-wide">
+      🕐 All dates and times below are in U.S. Eastern Time (New York)
+    </div>
+
     {/* v55.46 — Resend health + test-email so admin can verify email is
         actually working end-to-end. Renders as a status pill with stats
         + a Send-test-email-to-me button. */}
@@ -261,7 +340,30 @@ export default function AdminTab({ user, userProfile, users, isAdmin, customers,
 
     {/* Filters */}
     <div className="flex gap-2 flex-wrap mb-3 items-center">
-      <select value={selUser} onChange={e => setSelUser(e.target.value)} className="px-3 py-1.5 rounded-lg border border-slate-200 text-xs font-semibold">
+      {/* v55.80 (Phase B / Section 3) — Focus-mode toggle. Persists in
+          localStorage. 'me' auto-pins selUser to the viewer; 'team'
+          restores the wide team view. */}
+      <div className="flex gap-0 rounded-lg border-2 border-slate-300 overflow-hidden">
+        <button
+          onClick={() => setViewMode('team')}
+          className={'px-3 py-1.5 text-[11px] font-bold transition ' +
+            (viewMode === 'team' ? 'bg-slate-900 text-white' : 'bg-white text-slate-600 hover:bg-slate-50')}
+          title="See the whole team's scorecards"
+        >
+          👥 Team
+        </button>
+        <button
+          onClick={() => setViewMode('me')}
+          disabled={!myId}
+          className={'px-3 py-1.5 text-[11px] font-bold transition ' +
+            (!myId ? 'bg-slate-100 text-slate-400 cursor-not-allowed' :
+            (viewMode === 'me' ? 'bg-blue-600 text-white' : 'bg-white text-slate-600 hover:bg-slate-50'))}
+          title={myId ? 'Focus on YOUR scorecard only' : 'Loading user...'}
+        >
+          👤 Just me
+        </button>
+      </div>
+      <select value={selUser} onChange={e => { setSelUser(e.target.value); if (e.target.value !== myId && viewMode === 'me') setViewMode('team'); }} className="px-3 py-1.5 rounded-lg border border-slate-200 text-xs font-semibold">
         <option value="all">👥 All Team ({visibleUsers.length})</option>
         {visibleUsers.map(u => <option key={u.id} value={u.id}>👤 {u.name} ({u.role})</option>)}
       </select>
@@ -295,11 +397,37 @@ export default function AdminTab({ user, userProfile, users, isAdmin, customers,
       )}
       <div className="text-[11px] text-slate-500 font-semibold">
         {dateFrom === dateTo
-          ? (dateFrom === new Intl.DateTimeFormat('en-CA', { timeZone: 'America/New_York' }).format(new Date()) ? 'Today (ET)' : dateFrom)
-          : (dateFrom + ' → ' + dateTo)}
+          ? (dateFrom === todayET() ? 'Today (ET)' : (dateFrom === yesterdayET() ? 'Yesterday (ET)' : fmtET(dateFrom, 'shortdate') + ' (ET)'))
+          : fmtETRange(dateFrom, dateTo, 'shortdate') + ' (ET)'}
       </div>
       <button onClick={() => setLoaded(false)} className="px-3 py-1.5 bg-blue-500 text-white rounded-lg text-xs font-semibold">Refresh</button>
     </div>
+
+    {/* v55.80 (Phase B / Section 3) — "Reviewing X" header when drilled in.
+        Big, calm, unambiguous: when Max has clicked into one person OR
+        toggled Just-me, the page reads as a focused review. Single tap
+        to clear. */}
+    {(drillUser || (selUser !== 'all' && viewMode !== 'team')) && (() => {
+      var focusId = drillUser || selUser;
+      var focusName = getUserName(focusId);
+      if (!focusName) return null;
+      return (
+        <div className="bg-blue-50 border-2 border-blue-200 rounded-xl px-4 py-2.5 mb-3 flex items-center justify-between">
+          <div className="flex items-center gap-2">
+            <span className="text-base">🔍</span>
+            <span className="text-xs text-blue-700 font-semibold">Reviewing:</span>
+            <span className="text-sm font-extrabold text-blue-900">{focusName}</span>
+            <span className="text-[10px] text-blue-500 ml-1">— scorecards, activity, tickets, audit, logins below all filtered to this person</span>
+          </div>
+          <button
+            onClick={() => { setDrillUser(null); setSelUser('all'); setViewMode('team'); }}
+            className="text-[10px] font-bold text-blue-700 bg-white border border-blue-300 rounded px-2 py-1 hover:bg-blue-100"
+          >
+            ✕ Back to team view
+          </button>
+        </div>
+      );
+    })()}
 
     {/* Section tabs */}
     <div className="flex gap-1 mb-3 flex-wrap">
@@ -359,7 +487,10 @@ export default function AdminTab({ user, userProfile, users, isAdmin, customers,
     {/* ===== SCORECARDS ===== */}
     {section === 'scorecards' && (<div>
       <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-        {scorecards.map(u => (
+        {(viewMode === 'me' && myId
+          ? scorecards.filter(u => u.id === myId)
+          : scorecards
+        ).map(u => (
           <div key={u.id} onClick={() => {
               const newDrill = drillUser === u.id ? null : u.id;
               setDrillUser(newDrill);
@@ -379,7 +510,7 @@ export default function AdminTab({ user, userProfile, users, isAdmin, customers,
               </div>
               <div className="text-right">
                 <div className="text-2xl font-extrabold">{u.totalActivities}</div>
-                <div className="text-[9px] text-slate-400">actions ({dateFrom.substring(5)} – {dateTo.substring(5)})</div>
+                <div className="text-[9px] text-slate-500">actions ({dateFrom.substring(5)} – {dateTo.substring(5)})</div>
               </div>
             </div>
 
@@ -451,7 +582,7 @@ export default function AdminTab({ user, userProfile, users, isAdmin, customers,
 
             {/* Activity breakdown by category */}
             <div className="border-t border-slate-100 pt-2 mb-2">
-              <div className="text-[9px] font-bold text-slate-400 mb-1.5">Activity Breakdown</div>
+              <div className="text-[9px] font-bold text-slate-500 mb-1.5">Activity Breakdown</div>
               <div className="flex gap-1.5 flex-wrap">
                 {(u.topCats || []).map(([cat, count]) => (
                   <div key={cat} className="flex items-center gap-1 px-2 py-1 rounded-md text-[10px] font-semibold"
@@ -459,7 +590,7 @@ export default function AdminTab({ user, userProfile, users, isAdmin, customers,
                     {CAT_ICONS[cat] || '⚡'} {CAT_LABELS[cat] || cat} <span className="font-extrabold ml-0.5">{count}</span>
                   </div>
                 ))}
-                {(u.topCats || []).length === 0 && <span className="text-[10px] text-slate-400">No activity</span>}
+                {(u.topCats || []).length === 0 && <span className="text-[10px] text-slate-500">No activity</span>}
               </div>
             </div>
 
@@ -472,16 +603,17 @@ export default function AdminTab({ user, userProfile, users, isAdmin, customers,
 
       {/* Login Alerts — who didn't log in yesterday */}
       {(() => {
-        const yesterday = new Date(Date.now() - 86400000).toISOString().substring(0, 10);
-        const dayName = new Date(yesterday).toLocaleDateString('en-US', { weekday: 'long' });
-        const day = new Date(yesterday).getDay();
-        if (day === 5 || day === 6) return null;
+        const yesterday = yesterdayET();
+        const dayName = fmtET(yesterday, 'weekday', { tag: false });
+        // Skip Saturday/Sunday in the alert (most teammates don't work weekends).
+        const dayOfWeek = new Date(yesterday + 'T12:00:00Z').getUTCDay();
+        if (dayOfWeek === 5 || dayOfWeek === 6) return null;
         const loggedInYesterday = new Set(sessions.filter(s => s.date === yesterday).map(s => s.user_id));
         const missing = filterActiveUsers(users).filter(u => !loggedInYesterday.has(u.id) && u.role !== 'super_admin');
         if (!missing.length) return null;
         return (
           <div className="bg-red-50 border border-red-200 rounded-xl p-4 mt-4">
-            <div className="text-sm font-bold text-red-700 mb-2">⚠️ Did Not Login Yesterday ({dayName} {yesterday})</div>
+            <div className="text-sm font-bold text-red-700 mb-2">⚠️ Did Not Login Yesterday ({dayName} {fmtET(yesterday, 'shortdate')} ET)</div>
             <div className="flex flex-wrap gap-2">
               {missing.map(u => (
                 <span key={u.id} className="px-3 py-1.5 bg-red-100 rounded-lg text-xs font-semibold text-red-800">{u.name}</span>
@@ -538,9 +670,8 @@ export default function AdminTab({ user, userProfile, users, isAdmin, customers,
         const fmtCell = (col, val) => {
           if (val == null) return '—';
           if (col === 'assigned_to' || col === 'created_by') return getUserName(val) || String(val).substring(0, 8) + '…';
-          if (col === 'created_at' || col === 'closed_at') {
-            try { return new Date(val).toLocaleString([], { month: 'short', day: 'numeric', year: 'numeric', hour: '2-digit', minute: '2-digit' }); } catch { return String(val); }
-          }
+          if (col === 'created_at' || col === 'closed_at') return fmtET(val, 'datetime');
+          if (col === 'due_date') return fmtET(val, 'shortdate');
           if (col === 'title') return String(val).substring(0, 70);
           if (col === 'total_amount' || col === 'rate_amount') return Number(val).toLocaleString() + ' ' + (val.currency || '');
           return String(val);
@@ -655,7 +786,7 @@ export default function AdminTab({ user, userProfile, users, isAdmin, customers,
                     {items.map(l => (
                       <div key={l.id} className="flex justify-between items-start text-[11px] py-1 border-b border-slate-50">
                         <div className="flex-1 text-slate-700">{resolveIds(l.entry_text)}</div>
-                        <div className="text-[9px] text-slate-400 ml-2 whitespace-nowrap">{l.log_time || new Date(l.created_at).toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' })}</div>
+                        <div className="text-[9px] text-slate-500 ml-2 whitespace-nowrap">{l.log_time ? l.log_time.substring(0, 5) : fmtET(l.created_at, 'time')}</div>
                       </div>
                     ))}
                   </div>
@@ -664,19 +795,19 @@ export default function AdminTab({ user, userProfile, users, isAdmin, customers,
             </div>
 
             <div className="mb-4">
-              <div className="text-sm font-bold mb-2">🕐 Login History (last 7 days)</div>
+              <div className="text-sm font-bold mb-2">🕐 Login History (last 7 days, ET)</div>
               <div className="grid grid-cols-7 gap-1">
                 {Array.from({ length: 7 }, (_, i) => {
                   const d = new Date(); d.setDate(d.getDate() - (6 - i));
-                  const ds = d.toISOString().substring(0, 10);
-                  const dayLabel = d.toLocaleDateString('en-US', { weekday: 'short' });
+                  const ds = fmtET(d, 'iso');
+                  const dayLabel = fmtET(d, 'weekday', { tag: false }).substring(0, 3);
                   const sess = uSessions.find(s => s.date === ds);
                   return (
                     <div key={ds} className={'rounded-lg p-2 text-center text-[9px] ' + (sess ? 'bg-emerald-50 border border-emerald-200' : 'bg-red-50 border border-red-200')}>
                       <div className="font-bold">{dayLabel}</div>
-                      <div className="text-[8px] text-slate-400">{ds.substring(5)}</div>
+                      <div className="text-[8px] text-slate-500">{fmtET(ds, 'monthday')}</div>
                       <div className="mt-0.5">{sess ? '✅' : '❌'}</div>
-                      {sess && <div className="text-[8px] text-emerald-600">{(sess.login_at || '').substring(11, 16)}</div>}
+                      {sess && <div className="text-[8px] text-emerald-600">{fmtET(sess.login_at, 'time', { tag: false })}</div>}
                     </div>
                   );
                 })}
@@ -688,14 +819,14 @@ export default function AdminTab({ user, userProfile, users, isAdmin, customers,
               <div className="max-h-[400px] overflow-auto rounded-lg border border-slate-200">
                 {dateEntries.map(([date, items]) => (
                   <div key={date}>
-                    <div className="sticky top-0 bg-slate-100 px-3 py-1.5 text-[10px] font-bold text-slate-600 border-b">{date} — {items.length} entries</div>
+                    <div className="sticky top-0 bg-slate-100 px-3 py-1.5 text-[10px] font-bold text-slate-600 border-b">{fmtET(date, 'shortdate')} — {items.length} entries</div>
                     {items.sort((a, b) => (b.created_at || '').localeCompare(a.created_at || '')).map(l => {
                       const cat = l.log_category || (l.auto_generated ? 'other' : 'manual');
                       return (
                         <div key={l.id} className="flex items-start gap-2 px-3 py-1.5 border-b border-slate-50 hover:bg-blue-50/30">
                           <span className="text-[10px] mt-0.5" style={{ color: CAT_COLORS[cat] || '#94a3b8' }}>{CAT_ICONS[cat] || '⚡'}</span>
                           <div className="flex-1 text-[11px] text-slate-700">{resolveIds(l.entry_text)}</div>
-                          <div className="text-[9px] text-slate-400 whitespace-nowrap">{l.log_time || new Date(l.created_at).toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' })}</div>
+                          <div className="text-[9px] text-slate-500 whitespace-nowrap">{l.log_time ? l.log_time.substring(0, 5) : fmtET(l.created_at, 'time')}</div>
                         </div>
                       );
                     })}
@@ -805,7 +936,7 @@ export default function AdminTab({ user, userProfile, users, isAdmin, customers,
                       </div>
                       <div className="text-right">
                         {rep && <div className="text-[10px] text-indigo-600 font-semibold">{rep.name}</div>}
-                        {c.phone && <div className="text-[10px] text-slate-400">{c.phone}</div>}
+                        {c.phone && <div className="text-[10px] text-slate-500">{c.phone}</div>}
                       </div>
                     </div>
                   );
@@ -860,7 +991,7 @@ export default function AdminTab({ user, userProfile, users, isAdmin, customers,
                     </div>
                     {a.body && <div style={{ fontSize: '0.8rem', marginTop: '0.3rem', color: '#475569', whiteSpace: 'pre-wrap' }}>{a.body}</div>}
                     <div style={{ fontSize: '0.65rem', marginTop: '0.3rem', color: '#94a3b8' }}>
-                      By {poster || 'Admin'} • {new Date(a.created_at).toLocaleString()}
+                      By {poster || 'Admin'} • {fmtET(a.created_at, 'datetime')}
                       {a.target_user ? ' • 👤 Direct to: ' + getUserName(a.target_user) : ' • 👥 Everyone'}
                       {a.send_email && ' • 📧'}{a.send_whatsapp && ' • 💬'}
                     </div>
@@ -874,7 +1005,7 @@ export default function AdminTab({ user, userProfile, users, isAdmin, customers,
                         <div className="text-[10px] text-green-600 mb-0.5">
                           ✅ {ackedUsers.map(u => {
                             var ack = thisAcks.find(ak => ak.user_id === u.id);
-                            return u.name + (ack ? ' (' + new Date(ack.acked_at).toLocaleTimeString([], {hour:'2-digit',minute:'2-digit'}) + ')' : '');
+                            return u.name + (ack ? ' (' + fmtET(ack.acked_at, 'time') + ')' : '');
                           }).join(', ')}
                         </div>
                       )}
@@ -914,9 +1045,15 @@ export default function AdminTab({ user, userProfile, users, isAdmin, customers,
         <div className="bg-white rounded-lg p-3" style={{borderLeftWidth:3,borderLeftColor:'#10b981'}}><div className="text-[10px] text-slate-500">Manual Entries</div><div className="text-lg font-extrabold">{filteredLogs.filter(l=>!l.auto_generated).length}</div></div>
       </div>
       <div className="bg-white rounded-xl p-4">
-        <h3 className="text-sm font-bold mb-3">{selUserName} — Activity Feed ({filteredLogs.length})</h3>
+        <h3 className="text-sm font-bold mb-3">
+          {selUserName} — Activity Feed
+          {/* v55.80 (Phase B / Section 6) — pagination summary */}
+          <span className="text-slate-500 font-normal text-xs ml-1">
+            (showing {Math.min(activityVisible, filteredLogs.length)} of {filteredLogs.length})
+          </span>
+        </h3>
         <div className="space-y-1 max-h-[600px] overflow-auto">
-          {filteredLogs.map(l => {
+          {filteredLogs.slice(0, activityVisible).map(l => {
             var userName = getUserName(l.user_id);
             var cat = l.log_category || 'other';
             var icons = {ticket:'🎫',crm:'🤝',shipping:'🛳️',customs:'🚢',calendar:'📅',finance:'💰',manual:'✏️',other:'⚡',login:'🟢'};
@@ -941,9 +1078,9 @@ export default function AdminTab({ user, userProfile, users, isAdmin, customers,
                       return <span key={idx}>{part}</span>;
                     })}
                   </div>
-                  <div className="text-[10px] text-slate-400 mt-0.5">
+                  <div className="text-[10px] text-slate-500 mt-0.5">
                     <span className="text-blue-500 font-semibold mr-2">{userName}</span>
-                    {l.log_date} {l.log_time ? l.log_time.substring(0, 5) : ''}
+                    {fmtET(l.log_date, 'shortdate')} {l.log_time ? l.log_time.substring(0, 5) + ' ET' : ''}
                     {cat !== 'other' && <span className="ml-2 px-1 py-0.5 bg-slate-100 rounded text-[9px]">{cat}</span>}
                   </div>
                 </div>
@@ -951,6 +1088,17 @@ export default function AdminTab({ user, userProfile, users, isAdmin, customers,
             );
           })}
           {filteredLogs.length === 0 && <div className="text-center text-slate-400 text-sm py-6">No activity</div>}
+          {/* v55.80 (Phase B / Section 6) — Load More */}
+          {activityVisible < filteredLogs.length && (
+            <div className="text-center pt-2">
+              <button
+                onClick={() => setActivityVisible(activityVisible + ACTIVITY_PAGE)}
+                className="px-4 py-2 bg-blue-50 hover:bg-blue-100 border border-blue-200 rounded-lg text-xs font-bold text-blue-700"
+              >
+                Load 50 more ({filteredLogs.length - activityVisible} remaining)
+              </button>
+            </div>
+          )}
         </div>
       </div>
     </div>)}
@@ -1016,13 +1164,22 @@ export default function AdminTab({ user, userProfile, users, isAdmin, customers,
             <div className="text-[10px] text-red-600">Changes made 24+ hours after original entry</div>
           </div>
         ) : null; })()}
-        <div className="space-y-1 max-h-[600px] overflow-auto">
-          {filteredAudit.filter(a => {
+        {(() => {
+          // v55.80 (Phase B / Section 6) — pagination wrapping the filter chain.
+          // The filter result is materialized once so we know the full count
+          // for the "showing X of Y" line and the Load More button.
+          var auditFiltered = filteredAudit.filter(a => {
             if (auditFilter === 'late') return a.is_late_edit;
             if (auditFilter === 'sensitive') return a.sensitive_fields_changed && a.sensitive_fields_changed.length > 0;
             if (auditFilter === 'delete') return a.action === 'delete';
             return true;
-          }).map(a => {
+          });
+          var auditPaged = auditFiltered.slice(0, auditVisible);
+          return (
+            <>
+              <div className="text-[10px] text-slate-500 mb-2">Showing {auditPaged.length} of {auditFiltered.length}</div>
+              <div className="space-y-1 max-h-[600px] overflow-auto">
+                {auditPaged.map(a => {
             var userName = getUserName(a.changed_by);
             var actionColors = { create: 'text-emerald-600', update: 'text-blue-600', delete: 'text-red-600' };
             var actionIcons = { create: '✨', update: '✏️', delete: '🗑️' };
@@ -1072,7 +1229,7 @@ export default function AdminTab({ user, userProfile, users, isAdmin, customers,
                     <span className="text-slate-500">{friendlyTarget}</span>
                   )}
                   <span className="text-blue-500 font-semibold ml-auto">{userName}</span>
-                  <span className="text-slate-400">{a.created_at ? new Date(a.created_at).toLocaleString([], { month:'short', day:'numeric', hour:'2-digit', minute:'2-digit' }) : ''}</span>
+                  <span className="text-slate-400">{fmtET(a.created_at, 'datetime')}</span>
                 </div>
 
                 {/* User-friendly change details */}
@@ -1100,8 +1257,22 @@ export default function AdminTab({ user, userProfile, users, isAdmin, customers,
               </div>
             );
           })}
-          {filteredAudit.length === 0 && <div className="text-center text-slate-400 text-sm py-6">No audit entries</div>}
-        </div>
+                {auditFiltered.length === 0 && <div className="text-center text-slate-400 text-sm py-6">No audit entries</div>}
+                {/* v55.80 (Phase B / Section 6) — Load More */}
+                {auditVisible < auditFiltered.length && (
+                  <div className="text-center pt-2">
+                    <button
+                      onClick={() => setAuditVisible(auditVisible + ACTIVITY_PAGE)}
+                      className="px-4 py-2 bg-blue-50 hover:bg-blue-100 border border-blue-200 rounded-lg text-xs font-bold text-blue-700"
+                    >
+                      Load 50 more ({auditFiltered.length - auditVisible} remaining)
+                    </button>
+                  </div>
+                )}
+              </div>
+            </>
+          );
+        })()}
       </div>
     </div>)}
 
@@ -1180,18 +1351,18 @@ export default function AdminTab({ user, userProfile, users, isAdmin, customers,
                       // ET-aware data from user_login_summary view
                       const lsRow = loginSummary.find(l => l.id === u.id) || {};
                       const lastLoginAt = lsRow.last_login_at || uSess[0]?.login_at;
-                      const lastLogin = lastLoginAt ? new Date(lastLoginAt).toLocaleString([], { month:'short', day:'numeric', hour:'2-digit', minute:'2-digit' }) : '—';
+                      const lastLogin = lastLoginAt ? fmtET(lastLoginAt, 'datetime') : '—';
                       const isOnline = !!lsRow.is_online;
                       // Belt-and-suspenders: if login_events count is 0 but the user actually has an
                       // active session today (from the older user_sessions table), use the session count.
                       // Prevents the "0 logins today" bug when login_events writes fail silently.
-                      const etTodayStr = new Intl.DateTimeFormat('en-CA', { timeZone: 'America/New_York' }).format(new Date());
-                      const etYesterdayStr = (function() { const d = new Date(); d.setDate(d.getDate() - 1); return new Intl.DateTimeFormat('en-CA', { timeZone: 'America/New_York' }).format(d); })();
+                      const etTodayStr = todayET();
+                      const etYesterdayStr = yesterdayET();
                       const sessionsTodayCount = uSess.filter(s => (s.date || '') === etTodayStr).length;
                       const sessionsYesterdayCount = uSess.filter(s => (s.date || '') === etYesterdayStr).length;
-                      const todayET = Math.max(Number(lsRow.logins_today_et || 0), sessionsTodayCount);
-                      const yesterdayET = Math.max(Number(lsRow.logins_yesterday_et || 0), sessionsYesterdayCount);
-                      const sevenDayET = Number(lsRow.logins_last_7d_et || 0);
+                      const todayCnt = Math.max(Number(lsRow.logins_today_et || 0), sessionsTodayCount);
+                      const yesterdayCnt = Math.max(Number(lsRow.logins_yesterday_et || 0), sessionsYesterdayCount);
+                      const sevenDayCnt = Number(lsRow.logins_last_7d_et || 0);
                       return (
                         <tr key={u.id} className="border-b border-slate-50 hover:bg-blue-50 cursor-pointer" onClick={() => setSelUser(u.id)}>
                           <td className="px-3 py-2 font-semibold">{u.name}</td>
@@ -1200,9 +1371,9 @@ export default function AdminTab({ user, userProfile, users, isAdmin, customers,
                               ? <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded bg-emerald-100 text-emerald-700 text-[10px] font-bold">🟢 Online</span>
                               : <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded bg-slate-100 text-slate-500 text-[10px]">⚪ Offline</span>}
                           </td>
-                          <td className="px-3 py-2 text-center font-bold text-blue-600">{todayET}</td>
-                          <td className="px-3 py-2 text-center text-slate-600">{yesterdayET}</td>
-                          <td className="px-3 py-2 text-center text-slate-600">{sevenDayET}</td>
+                          <td className="px-3 py-2 text-center font-bold text-blue-600">{todayCnt}</td>
+                          <td className="px-3 py-2 text-center text-slate-600">{yesterdayCnt}</td>
+                          <td className="px-3 py-2 text-center text-slate-600">{sevenDayCnt}</td>
                           <td className="px-3 py-2 text-center font-bold text-emerald-600">{uSess.length}</td>
                           <td className="px-3 py-2 text-center">{uDays}</td>
                           <td className="px-3 py-2 text-center"><span className={uAuto > 0 ? 'text-red-500 font-bold' : 'text-slate-400'}>{uAuto}</span></td>
@@ -1227,7 +1398,7 @@ export default function AdminTab({ user, userProfile, users, isAdmin, customers,
                 return (
                   <div key={date} className="border border-slate-100 rounded-lg overflow-hidden">
                     <div className="bg-slate-50 px-3 py-2 flex justify-between items-center">
-                      <span className="text-xs font-bold text-slate-700">📅 {date} <span className="text-slate-400 font-normal">({new Date(date + 'T12:00:00').toLocaleDateString('en-US', { weekday: 'short' })})</span></span>
+                      <span className="text-xs font-bold text-slate-700">📅 {fmtET(date, 'date')} <span className="text-slate-400 font-normal">({fmtET(date, 'weekday', { tag: false })})</span></span>
                       <div className="flex gap-3 text-[10px]">
                         <span className="text-emerald-600 font-semibold">🟢 {daySessions.length} login{daySessions.length !== 1 ? 's' : ''}</span>
                         {dayAutoLogouts > 0 && <span className="text-red-500 font-bold">⏱️ {dayAutoLogouts} auto-timeout{dayAutoLogouts !== 1 ? 's' : ''}</span>}
@@ -1235,8 +1406,8 @@ export default function AdminTab({ user, userProfile, users, isAdmin, customers,
                     </div>
                     <div className="divide-y divide-slate-50">
                       {daySessions.map((s, i) => {
-                        const loginTime = s.login_at ? new Date(s.login_at).toLocaleTimeString([], { hour:'2-digit', minute:'2-digit' }) : '—';
-                        const logoutTime = s.logout_at ? new Date(s.logout_at).toLocaleTimeString([], { hour:'2-digit', minute:'2-digit' }) : '—';
+                        const loginTime = s.login_at ? fmtET(s.login_at, 'time', { tag: false }) : '—';
+                        const logoutTime = s.logout_at ? fmtET(s.logout_at, 'time', { tag: false }) : '—';
                         const duration = s.login_at && s.logout_at ? Math.round((new Date(s.logout_at) - new Date(s.login_at)) / 60000) : null;
                         const isTimeout = s.logout_reason === 'auto_timeout';
                         return (
@@ -1247,7 +1418,7 @@ export default function AdminTab({ user, userProfile, users, isAdmin, customers,
                             <span className={isTimeout ? 'text-red-500 font-bold font-mono' : 'text-slate-500 font-mono'}>
                               {isTimeout ? '⏱️' : '🔴'} {logoutTime}
                             </span>
-                            {duration !== null && <span className="text-slate-400 text-[10px]">({duration}m)</span>}
+                            {duration !== null && <span className="text-slate-500 text-[10px]">({duration}m)</span>}
                             {isTimeout && <span className="px-1.5 py-0.5 bg-red-50 text-red-600 rounded text-[9px] font-bold">AUTO TIMEOUT</span>}
                             {s.logout_reason === 'manual' && <span className="px-1.5 py-0.5 bg-blue-50 text-blue-600 rounded text-[9px] font-bold">CLOCKED OUT</span>}
                             {!s.logout_at && <span className="px-1.5 py-0.5 bg-emerald-50 text-emerald-600 rounded text-[9px] font-bold animate-pulse">ACTIVE</span>}
@@ -1296,18 +1467,18 @@ export default function AdminTab({ user, userProfile, users, isAdmin, customers,
           <div className="p-4 overflow-auto" style={{ maxHeight: 'calc(85vh - 120px)' }}>
             {/* Status / Priority / Dates */}
             <div className="grid grid-cols-2 gap-3 mb-4">
-              <div><div className="text-[9px] text-slate-400 uppercase font-semibold">Status</div><span className="px-2 py-0.5 rounded-full text-[10px] font-bold text-white" style={{background:STATUS_COLORS[viewTicket.status]||'#6b7280'}}>{viewTicket.status}</span></div>
-              <div><div className="text-[9px] text-slate-400 uppercase font-semibold">Priority</div><span className={'text-sm font-bold ' + (viewTicket.priority==='high'?'text-red-500':viewTicket.priority==='low'?'text-green-500':'text-amber-500')}>{viewTicket.priority || '—'}</span></div>
-              <div><div className="text-[9px] text-slate-400 uppercase font-semibold">Assigned To</div><div className="text-xs font-semibold text-purple-600">{getUserName(viewTicket.assigned_to) || 'Unassigned'}</div></div>
-              <div><div className="text-[9px] text-slate-400 uppercase font-semibold">Created By</div><div className="text-xs font-semibold">{getUserName(viewTicket.created_by) || '—'}</div></div>
-              <div><div className="text-[9px] text-slate-400 uppercase font-semibold">Due Date</div><div className={'text-xs font-semibold ' + (viewTicket.due_date && viewTicket.due_date < todayStr ? 'text-red-600' : '')}>{viewTicket.due_date || '—'}</div></div>
-              <div><div className="text-[9px] text-slate-400 uppercase font-semibold">Created</div><div className="text-xs text-slate-500">{viewTicket.created_at ? new Date(viewTicket.created_at).toLocaleDateString() : '—'}</div></div>
+              <div><div className="text-[9px] text-slate-500 uppercase font-semibold">Status</div><span className="px-2 py-0.5 rounded-full text-[10px] font-bold text-white" style={{background:STATUS_COLORS[viewTicket.status]||'#6b7280'}}>{viewTicket.status}</span></div>
+              <div><div className="text-[9px] text-slate-500 uppercase font-semibold">Priority</div><span className={'text-sm font-bold ' + (viewTicket.priority==='high'?'text-red-500':viewTicket.priority==='low'?'text-green-500':'text-amber-500')}>{viewTicket.priority || '—'}</span></div>
+              <div><div className="text-[9px] text-slate-500 uppercase font-semibold">Assigned To</div><div className="text-xs font-semibold text-purple-600">{getUserName(viewTicket.assigned_to) || 'Unassigned'}</div></div>
+              <div><div className="text-[9px] text-slate-500 uppercase font-semibold">Created By</div><div className="text-xs font-semibold">{getUserName(viewTicket.created_by) || '—'}</div></div>
+              <div><div className="text-[9px] text-slate-500 uppercase font-semibold">Due Date</div><div className={'text-xs font-semibold ' + (viewTicket.due_date && viewTicket.due_date < todayStr ? 'text-red-600' : '')}>{viewTicket.due_date ? fmtET(viewTicket.due_date, 'shortdate') : '—'}</div></div>
+              <div><div className="text-[9px] text-slate-500 uppercase font-semibold">Created</div><div className="text-xs text-slate-500">{fmtET(viewTicket.created_at, 'datetime')}</div></div>
             </div>
 
             {/* Description */}
             {viewTicket.description && (
               <div className="mb-4">
-                <div className="text-[9px] text-slate-400 uppercase font-semibold mb-1">Description</div>
+                <div className="text-[9px] text-slate-500 uppercase font-semibold mb-1">Description</div>
                 <div className="text-xs text-slate-600 bg-slate-50 rounded-lg p-3 whitespace-pre-wrap">{viewTicket.description}</div>
               </div>
             )}
@@ -1315,7 +1486,7 @@ export default function AdminTab({ user, userProfile, users, isAdmin, customers,
             {/* Attachments */}
             {viewTicket.attachments && viewTicket.attachments.length > 0 && (
               <div className="mb-4">
-                <div className="text-[9px] text-slate-400 uppercase font-semibold mb-1">📎 Attachments</div>
+                <div className="text-[9px] text-slate-500 uppercase font-semibold mb-1">📎 Attachments</div>
                 <div className="space-y-1">
                   {(Array.isArray(viewTicket.attachments) ? viewTicket.attachments : []).map((att, i) => (
                     <a key={i} href={att.url || att} target="_blank" rel="noopener noreferrer"
@@ -1329,7 +1500,7 @@ export default function AdminTab({ user, userProfile, users, isAdmin, customers,
 
             {/* Comments / Notes */}
             <div>
-              <div className="text-[9px] text-slate-400 uppercase font-semibold mb-2">💬 Notes & Updates ({ticketComments.length})</div>
+              <div className="text-[9px] text-slate-500 uppercase font-semibold mb-2">💬 Notes & Updates ({ticketComments.length})</div>
               {ticketComments.length > 0 ? (
                 <div className="space-y-2 max-h-[250px] overflow-auto">
                   {ticketComments.map(c => (
@@ -1338,7 +1509,7 @@ export default function AdminTab({ user, userProfile, users, isAdmin, customers,
                         <span className="font-bold" style={{ color: c.is_system ? '#64748b' : '#2563eb' }}>
                           {c.is_system ? '🤖 System' : '💬 ' + (getUserName(c.created_by) || 'User')}
                         </span>
-                        <span className="text-[10px] text-slate-400">{c.created_at ? new Date(c.created_at).toLocaleString([], { month:'short', day:'numeric', hour:'2-digit', minute:'2-digit' }) : ''}</span>
+                        <span className="text-[10px] text-slate-500">{fmtET(c.created_at, 'datetime')}</span>
                       </div>
                       <div className="text-slate-600 whitespace-pre-wrap">{c.comment_text}</div>
                     </div>

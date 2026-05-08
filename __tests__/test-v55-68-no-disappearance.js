@@ -118,10 +118,10 @@ check('1.15 cancellation guard prevents stale setState',
 group('2. MyHRDesk rendering & lifecycle');
 
 var hr = read('src/components/MyHRDesk.jsx');
-check('2.1 MyHRDesk useEffect dep is stable [myId]',
-  /useEffect\(function \(\) \{ loadRecent\(\); \}, \[myId\]\);/.test(hr));
-check('2.2 mascot wave timer cleans up on unmount',
-  /var t = setInterval\([\s\S]{0,400}return function \(\) \{ clearInterval\(t\); \}/.test(hr));
+check('2.1 MyHRDesk useEffect dep is stable [myId, hasBeenActive] (v55.77 — added defer-load gate)',
+  /\}, \[myId, hasBeenActive\]\);/.test(hr));
+check('2.2 [v55.77] mascot wave timer REMOVED (Fix #11 — cartoon Maya replaced by real Jenna photo)',
+  !/var t = setInterval\([\s\S]{0,400}setMascotWaving/.test(hr));
 check('2.3 loadRecent in independent try/catch',
   /var loadRecent = async function[\s\S]{0,1200}try \{[\s\S]{0,1200}catch \(e\)/.test(hr));
 check('2.4 missing-table case produces friendly hint, not crash',
@@ -138,7 +138,8 @@ check('3.1 [SUBMIT] MyHRDesk has openRequest action',
 check('3.2 [SUBMIT] Request modal renders 13 categories',
   (hr.match(/REQUEST_CATEGORIES = \[[\s\S]*?\];/) || [''])[0].match(/{ id:/g).length === 13);
 check('3.3 [SUBMIT] Required title field on submit',
-  /Please add a short title so super_admin knows what this is about/.test(hr));
+  // v55.75 — message rephrased to use Mr. Kandil's name instead of "super_admin"
+  /Please add a short title so.*knows what this is about/.test(hr));
 check('3.4 [SUBMIT] Inserts into hr_requests with submitter ID',
   /submitted_by: myId/.test(hr) && /from\('hr_requests'\)\.insert/.test(hr));
 check('3.5 [SUBMIT] Sets status to "submitted" on insert',
@@ -166,7 +167,8 @@ check('3.13 [REVIEW] Regular admins do NOT see super_admin_only requests',
 
 // 3c. User sees response back on dashboard
 check('3.14 [RESPONSE] MyHRDesk shows decision_notes from super_admin',
-  /super_admin response:/.test(hr));
+  // v55.75 — wording changed from "super_admin response:" to "{name} response:"
+  /\{superAdminName\} response:/.test(hr));
 check('3.15 [RESPONSE] Status colors visualize the decision',
   /STATUS_COLORS/.test(hr) && /approved/.test(hr) && /denied/.test(hr));
 check('3.16 [RESPONSE] Pulse indicator if status changed (hasUpdate flag)',
@@ -182,15 +184,18 @@ check('4.1 [SUBMIT] MyHRDesk has openComplaint action',
 check('4.2 [SUBMIT] Complaint defaults to ANONYMOUS-to-admins',
   /anonymous_to_admins: true,?/.test(hr));
 check('4.3 [SUBMIT] User can OPT-OUT of anonymity (checkbox)',
-  /Keep my identity hidden from regular admins/.test(hr));
+  // v55.75 (A2) — wording rewritten per Max May 8 2026: removed
+  // "regular admins" jargon. Toggle still functionally same; checkbox
+  // label now reads "Keep my identity confidential".
+  /Keep my identity confidential/.test(hr));
 check('4.4 [SUBMIT] Severity selector (low/medium/high/critical)',
   /Critical — urgent \/ safety \/ harm/.test(hr));
 check('4.5 [SUBMIT] Inserts into hr_complaints (separate table from requests)',
   /from\('hr_complaints'\)\.insert/.test(hr));
 check('4.6 [REVIEW] Regular admin only sees non-anonymous complaints',
   /isSuperAdmin\) return true[\s\S]{0,150}anonymous_to_admins === false/.test(ai));
-check('4.7 [REVIEW] Anonymous complaints display "(anonymous to admins)" to non-super_admin',
-  /\(anonymous to admins\)/.test(ai));
+check('4.7 [v55.77] Anonymous complaints display "(identity confidential)" to non-super_admin (was "(anonymous to admins)")',
+  /\(identity confidential\)/.test(ai) && !/\(anonymous to admins\)/.test(ai));
 check('4.8 [REVIEW] super_admin always sees real submitter name',
   /isSuperAdmin\) return true/.test(ai));
 check('4.9 [REVIEW] Hidden-count surfaced to regular admin so they know things exist',

@@ -17,6 +17,7 @@
 // ============================================================
 import { useState, useEffect, useCallback } from 'react';
 import { supabase, dbUpdate } from '../lib/supabase';
+import { fmtET } from '../lib/et-time';
 
 var REQ_STATUSES = ['submitted', 'under_review', 'more_info_needed', 'approved', 'denied', 'completed', 'withdrawn'];
 var CMP_STATUSES = ['submitted', 'investigating', 'resolved', 'dismissed', 'escalated', 'withdrawn'];
@@ -164,8 +165,8 @@ export default function AdminHRInbox({ user, userProfile, isSuperAdmin, users })
           </h2>
           <p className="text-xs text-slate-500">
             {isSuperAdmin
-              ? 'You see everything. Identities are visible to you on all items.'
-              : 'You see admin-visible requests + non-anonymous complaints. ' + (hiddenComplaintsCount > 0 ? hiddenComplaintsCount + ' confidential complaint(s) are visible only to super_admin.' : '')}
+              ? 'You see everything. Submitter identities are visible to you on all items.'
+              : 'You see admin-visible requests and non-confidential concerns. ' + (hiddenComplaintsCount > 0 ? hiddenComplaintsCount + ' confidential concern(s) are visible only to Mr. Kandil.' : '')}
           </p>
         </div>
         <button onClick={load} className="px-3 py-1.5 border border-slate-300 rounded-lg text-xs font-bold hover:bg-slate-50">↻ Refresh</button>
@@ -187,7 +188,7 @@ export default function AdminHRInbox({ user, userProfile, isSuperAdmin, users })
         <button
           onClick={function () { setTab('complaints'); }}
           className={'px-4 py-2 text-xs font-bold border-b-2 transition ' + (tab === 'complaints' ? 'border-rose-500 text-rose-700 bg-rose-50' : 'border-transparent text-slate-500 hover:text-slate-700')}>
-          🛡️ Complaints ({visibleComplaints.length}{pendingCmpCount > 0 ? ' · ' + pendingCmpCount + ' pending' : ''})
+          🛡️ Concerns ({visibleComplaints.length}{pendingCmpCount > 0 ? ' · ' + pendingCmpCount + ' pending' : ''})
         </button>
       </div>
 
@@ -220,7 +221,7 @@ export default function AdminHRInbox({ user, userProfile, isSuperAdmin, users })
                     <div className="flex items-start justify-between gap-2 flex-wrap">
                       <div className="flex-1 min-w-0">
                         <div className="flex items-center gap-2 flex-wrap mb-0.5">
-                          <span className="text-[10px] font-mono text-slate-400">{r.request_number}</span>
+                          <span className="text-[10px] font-mono text-slate-500">{r.request_number}</span>
                           {r.priority === 'urgent' && <span className="text-[9px] font-bold bg-rose-100 text-rose-700 px-1.5 py-0.5 rounded">🚨 URGENT</span>}
                           {r.priority === 'high' && <span className="text-[9px] font-bold bg-orange-100 text-orange-700 px-1.5 py-0.5 rounded">HIGH</span>}
                           {r.visibility === 'super_admin_only' && <span className="text-[9px] font-bold bg-violet-100 text-violet-700 px-1.5 py-0.5 rounded">🔒 super_admin only</span>}
@@ -231,7 +232,7 @@ export default function AdminHRInbox({ user, userProfile, isSuperAdmin, users })
                         </div>
                         <div className="text-sm font-bold text-slate-800">{r.title}</div>
                         <div className="text-[11px] text-slate-500">
-                          {getUserName(r.submitted_by)} · {r.category} · {r.submitted_at ? new Date(r.submitted_at).toLocaleDateString() : ''}
+                          {getUserName(r.submitted_by)} · {r.category} · {r.submitted_at ? fmtET(r.submitted_at, 'shortdate') : ''}
                           {r.starts_on && <span> · {r.starts_on}{r.ends_on && r.ends_on !== r.starts_on ? ' → ' + r.ends_on : ''}</span>}
                         </div>
                       </div>
@@ -254,20 +255,20 @@ export default function AdminHRInbox({ user, userProfile, isSuperAdmin, users })
                 var sc = STATUS_COLORS[c.status] || STATUS_COLORS.submitted;
                 var sevC = SEVERITY_COLORS[c.severity] || SEVERITY_COLORS.medium;
                 var displayName = c.anonymous_to_admins && !isSuperAdmin
-                  ? '(anonymous to admins)'
-                  : getUserName(c.submitted_by) + (c.anonymous_to_admins ? ' (anonymous to other admins)' : '');
+                  ? '(identity confidential)'
+                  : getUserName(c.submitted_by) + (c.anonymous_to_admins ? ' (identity confidential to other team leads)' : '');
                 return (
                   <div key={c.id} onClick={function () { openItem('complaint', c); }} className="rounded-lg border border-rose-200 hover:border-rose-400 hover:shadow-sm transition cursor-pointer p-3 bg-rose-50/30">
                     <div className="flex items-start justify-between gap-2 flex-wrap">
                       <div className="flex-1 min-w-0">
                         <div className="flex items-center gap-2 flex-wrap mb-0.5">
-                          <span className="text-[10px] font-mono text-slate-400">{c.complaint_number}</span>
+                          <span className="text-[10px] font-mono text-slate-500">{c.complaint_number}</span>
                           <span className={'text-[9px] font-bold px-1.5 py-0.5 rounded ' + sevC}>{(c.severity || 'medium').toUpperCase()}</span>
                           {c.anonymous_to_admins && <span className="text-[9px] font-bold bg-violet-100 text-violet-700 px-1.5 py-0.5 rounded">🕶️ Confidential</span>}
                         </div>
                         <div className="text-sm font-bold text-slate-800">{c.title}</div>
                         <div className="text-[11px] text-slate-500">
-                          {displayName} · {c.category} · {c.submitted_at ? new Date(c.submitted_at).toLocaleDateString() : ''}
+                          {displayName} · {c.category} · {c.submitted_at ? fmtET(c.submitted_at, 'shortdate') : ''}
                         </div>
                       </div>
                       <span className={'px-2 py-1 rounded text-[10px] font-bold whitespace-nowrap ' + sc.bg + ' ' + sc.text}>{sc.label}</span>
@@ -289,8 +290,8 @@ export default function AdminHRInbox({ user, userProfile, isSuperAdmin, users })
               </h2>
               <p className="text-[11px] text-slate-500 mt-0.5">
                 {reviewing.kind === 'request' ? reviewing.item.request_number : reviewing.item.complaint_number} ·
-                Submitted by {reviewing.kind === 'complaint' && reviewing.item.anonymous_to_admins && !isSuperAdmin ? '(anonymous to admins)' : getUserName(reviewing.item.submitted_by)} ·
-                {reviewing.item.submitted_at ? ' ' + new Date(reviewing.item.submitted_at).toLocaleString() : ''}
+                Submitted by {reviewing.kind === 'complaint' && reviewing.item.anonymous_to_admins && !isSuperAdmin ? '(identity confidential)' : getUserName(reviewing.item.submitted_by)} ·
+                {reviewing.item.submitted_at ? ' ' + fmtET(reviewing.item.submitted_at, 'datetime') : ''}
               </p>
             </div>
             <div className="overflow-auto p-5 space-y-3" style={{ flex: '1 1 auto' }}>

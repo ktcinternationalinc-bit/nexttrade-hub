@@ -23,6 +23,7 @@
 
 import { createClient } from '@supabase/supabase-js';
 import { getToolsForAPI, validateToolCall } from '../../../lib/nadia-tools';
+import { sanitizeErr } from '../../../lib/sanitize-error';
 
 var supabase = createClient(
   process.env.NEXT_PUBLIC_SUPABASE_URL,
@@ -41,7 +42,7 @@ async function toolSearchCustomers(input) {
     .select('id, name, name_en, phone, email, assigned_rep, last_contact_at')
     .or('name.ilike.%' + q + '%,name_en.ilike.%' + q + '%')
     .limit(lim);
-  if (r.error) return { error: r.error.message };
+  if (r.error) return { error: sanitizeErr(r.error) };
   return { customers: r.data || [], count: (r.data || []).length };
 }
 
@@ -56,7 +57,7 @@ async function toolQueryInvoices(input) {
   if (input.date_from) q = q.gte('invoice_date', input.date_from);
   if (input.date_to)   q = q.lte('invoice_date', input.date_to);
   var r = await q.limit(Math.min(100, Math.max(1, Number(input.limit) || 25))).order('invoice_date', { ascending: false });
-  if (r.error) return { error: r.error.message };
+  if (r.error) return { error: sanitizeErr(r.error) };
   var now = Date.now();
   var enriched = (r.data || []).map(function(inv) {
     var dd = inv.due_date ? Math.floor((now - new Date(inv.due_date).getTime()) / 86400000) : null;
@@ -76,7 +77,7 @@ async function toolQueryChecks(input) {
          .lte('due_date', cutoff.toISOString().substring(0, 10));
   }
   var r = await q.limit(Math.min(100, Number(input.limit) || 25)).order('due_date', { ascending: true });
-  if (r.error) return { error: r.error.message };
+  if (r.error) return { error: sanitizeErr(r.error) };
   return { checks: r.data || [], count: (r.data || []).length };
 }
 
@@ -89,7 +90,7 @@ async function toolQueryTreasury(input) {
   if (input.category) q = q.eq('category', input.category);
   if (input.customer_id) q = q.eq('customer_id', input.customer_id);
   var r = await q.limit(Math.min(200, Number(input.limit) || 50)).order('transaction_date', { ascending: false });
-  if (r.error) return { error: r.error.message };
+  if (r.error) return { error: sanitizeErr(r.error) };
   var rows = r.data || [];
   var totIn = rows.reduce(function(a, t) { return a + Number(t.cash_in || 0); }, 0);
   var totOut = rows.reduce(function(a, t) { return a + Number(t.cash_out || 0); }, 0);
@@ -104,7 +105,7 @@ async function toolSearchTickets(input) {
   if (input.assigned_to) q = q.eq('assigned_to', input.assigned_to);
   if (input.query) q = q.or('title.ilike.%' + input.query + '%,description.ilike.%' + input.query + '%');
   var r = await q.limit(Math.min(50, Number(input.limit) || 20)).order('created_at', { ascending: false });
-  if (r.error) return { error: r.error.message };
+  if (r.error) return { error: sanitizeErr(r.error) };
   return { tickets: r.data || [], count: (r.data || []).length };
 }
 
@@ -116,7 +117,7 @@ async function toolGetCalendar(input) {
     .lte('event_date', input.date_to);
   if (input.user_id) q = q.eq('assigned_to', input.user_id);
   var r = await q.limit(Math.min(100, Number(input.limit) || 30)).order('event_date', { ascending: true });
-  if (r.error) return { error: r.error.message };
+  if (r.error) return { error: sanitizeErr(r.error) };
   return { events: r.data || [], count: (r.data || []).length };
 }
 
@@ -126,7 +127,7 @@ async function toolGetAIAlerts(input) {
     .is('resolved_at', null);
   if (input.severity && input.severity !== 'all') q = q.eq('severity', input.severity);
   var r = await q.limit(Math.min(50, Number(input.limit) || 20)).order('created_at', { ascending: false });
-  if (r.error) return { error: r.error.message };
+  if (r.error) return { error: sanitizeErr(r.error) };
   return { alerts: r.data || [], count: (r.data || []).length };
 }
 
@@ -146,7 +147,7 @@ async function toolPredictCategory(input) {
       body: JSON.stringify({ action: 'predict', invoice_id: input.invoice_id }),
     });
     return await res.json();
-  } catch (e) { return { error: e.message }; }
+  } catch (e) { return { error: sanitizeErr(e) }; }
 }
 
 // DRAFT / WRITE tools — these mostly signal back to the client. The actual UI
@@ -187,9 +188,9 @@ async function toolCreateTicket(input, ctx) {
       status: 'New',
       created_by: ctx.userId,
     }).select('id, ticket_number').maybeSingle();
-    if (r.error) return { error: r.error.message };
+    if (r.error) return { error: sanitizeErr(r.error) };
     return { created: true, ticket_number: tktNum, id: r.data && r.data.id };
-  } catch (e) { return { error: e.message }; }
+  } catch (e) { return { error: sanitizeErr(e) }; }
 }
 
 async function toolCreateReminder(input, ctx) {
@@ -203,9 +204,9 @@ async function toolCreateReminder(input, ctx) {
       completed: false,
       source: 'nadia_v2',
     }).select('id').maybeSingle();
-    if (r.error) return { error: r.error.message };
+    if (r.error) return { error: sanitizeErr(r.error) };
     return { created: true, id: r.data && r.data.id, due_date: input.due_date };
-  } catch (e) { return { error: e.message }; }
+  } catch (e) { return { error: sanitizeErr(e) }; }
 }
 
 async function toolFlagInvoice(input, ctx) {
@@ -216,9 +217,9 @@ async function toolFlagInvoice(input, ctx) {
     if (input.flag === 'priority') fields.priority = 'high';
     else fields.at_risk = true;
     var r = await supabase.from('invoices').update(fields).eq('id', input.invoice_id);
-    if (r.error) return { error: r.error.message };
+    if (r.error) return { error: sanitizeErr(r.error) };
     return { flagged: true, invoice_id: input.invoice_id, flag: input.flag || 'at_risk' };
-  } catch (e) { return { error: e.message }; }
+  } catch (e) { return { error: sanitizeErr(e) }; }
 }
 
 var HANDLERS = {
@@ -371,7 +372,8 @@ export async function POST(request) {
     var result = await runToolLoop(apiKey, system, messages, { userId: userId });
     return Response.json({ ok: true, answer: result.answer, iterations: result.iterations, tool_calls: result.tool_calls, drafts: result.drafts, hit_ceiling: !!result.hit_ceiling });
   } catch (e) {
-    return Response.json({ ok: false, error: e.message || String(e) });
+    console.error('[ask-v2] error:', e);
+    return Response.json({ ok: false, error: sanitizeErr(e) });
   }
 }
 

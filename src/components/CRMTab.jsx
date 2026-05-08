@@ -3,6 +3,7 @@ import { useState, useMemo } from 'react';
 import { filterActiveUsers } from '../lib/active-users';
 import { supabase, dbInsert, dbUpdate, logActivity } from '../lib/supabase';
 import { notifyClientAssigned, notifyFollowUp, notifyCRMStatus } from '../lib/notify';
+import { fmtET, todayET } from '../lib/et-time';
 import EmailComposer from './EmailComposer';
 import { fE, fmt } from '../lib/utils';
 
@@ -376,14 +377,14 @@ export default function CRMTab({ toast, customers, invoices, user, userProfile, 
           <option value="most_orders">Most Orders</option><option value="top_sales">Top Sales</option>
           <option value="latest_note">Latest Note</option><option value="no_notes">No Notes</option>
         </select>
-        <span className="text-[10px] text-slate-400 ml-auto">{filtered.length} results</span>
+        <span className="text-[10px] text-slate-500 ml-auto">{filtered.length} results</span>
       </div>
 
       {/* Stats Row */}
       <div className="grid grid-cols-4 gap-3 mb-4">
-        <div className="bg-white rounded-xl p-3 border border-slate-100"><div className="text-[9px] text-slate-400 uppercase tracking-wide">Total</div>
+        <div className="bg-white rounded-xl p-3 border border-slate-100"><div className="text-[9px] text-slate-500 uppercase tracking-wide">Total</div>
           <div className="text-xl font-extrabold">{filtered.length}</div></div>
-        <div className="bg-white rounded-xl p-3 border border-slate-100"><div className="text-[9px] text-slate-400 uppercase tracking-wide">Active</div>
+        <div className="bg-white rounded-xl p-3 border border-slate-100"><div className="text-[9px] text-slate-500 uppercase tracking-wide">Active</div>
           <div className="text-xl font-extrabold text-blue-600">{filtered.filter(c=>!['won','lost'].includes(c.pipeline_stage||'lead')).length}</div></div>
         <div className="bg-white rounded-xl p-3 border border-slate-100"><div className="text-[9px] text-emerald-500 uppercase tracking-wide">Won</div>
           <div className="text-xl font-extrabold text-emerald-600">{filtered.filter(c=>(c.pipeline_stage)==='won').length}</div></div>
@@ -491,21 +492,21 @@ export default function CRMTab({ toast, customers, invoices, user, userProfile, 
 
                 {/* Tags */}
                 <div className="flex gap-1 mb-3 flex-wrap">
-                  {c.industry && <span className="px-2 py-0.5 bg-amber-50 text-amber-700 rounded-md text-[9px] font-medium">{c.industry}</span>}
+                  {c.industry && <span className="px-2 py-0.5 bg-amber-100 text-amber-900 rounded-md text-[9px] font-bold border border-amber-200">{c.industry}</span>}
                   {c.group_name && <span className="px-2 py-0.5 bg-purple-50 text-purple-700 rounded-md text-[9px] font-medium">{c.group_name}</span>}
                 </div>
 
                 {/* Sales — hidden for non-assigned unless permitted */}
                 {showSales ? (
                   <div className="flex justify-between items-end mb-3 px-3 py-2 rounded-xl bg-slate-50">
-                    <div><div className="text-[8px] text-slate-400 uppercase tracking-wider">Sales</div>
+                    <div><div className="text-[8px] text-slate-500 uppercase tracking-wider">Sales</div>
                       <div className="text-sm font-extrabold text-slate-800">{total > 0 ? fmt(total) : '—'}</div></div>
-                    <div className="text-right"><div className="text-[8px] text-slate-400 uppercase tracking-wider">{invs.length} orders</div>
+                    <div className="text-right"><div className="text-[8px] text-slate-500 uppercase tracking-wider">{invs.length} orders</div>
                       <div className={'text-sm font-extrabold ' + (owed > 0 ? 'text-red-500' : 'text-emerald-500')}>{owed > 0 ? fmt(owed) : '✓ Paid'}</div></div>
                   </div>
                 ) : (
                   <div className="flex items-center justify-center mb-3 px-3 py-2 rounded-xl bg-slate-50">
-                    <span className="text-[10px] text-slate-400">🔒 Sales restricted</span>
+                    <span className="text-[10px] text-slate-500">🔒 Sales restricted</span>
                   </div>
                 )}
 
@@ -517,13 +518,13 @@ export default function CRMTab({ toast, customers, invoices, user, userProfile, 
                         <span className="w-1.5 h-1.5 rounded-full bg-indigo-400" />{rep.name}
                       </span>
                     ) : (
-                      <span className="text-[10px] text-slate-400">No rep</span>
+                      <span className="text-[10px] text-slate-500">No rep</span>
                     )}
                   </div>
                   <div className="text-right">
                     {lastNote ? (
-                      <div className="text-[9px] text-slate-400">
-                        {new Date(lastNote.created_at).toLocaleDateString()}
+                      <div className="text-[9px] text-slate-500">
+                        {fmtET(lastNote.created_at, 'shortdate')}
                         {noteUser && <span className="ml-0.5 text-blue-400">{noteUser.name}</span>}
                       </div>
                     ) : (
@@ -599,7 +600,7 @@ export default function CRMTab({ toast, customers, invoices, user, userProfile, 
                 <h3 className="text-xl font-extrabold" style={{direction: lang === 'ar' ? 'rtl' : 'ltr'}}>{lang === 'en' && sel.name_en ? sel.name_en : sel.name}</h3>
                 {lang === 'ar' && sel.name_en && <div className="text-sm text-blue-500">{sel.name_en}</div>}
                 <div className="flex gap-1 mt-1 flex-wrap">
-                  {sel.industry && <span className="px-2 py-0.5 bg-amber-100 text-amber-700 rounded text-xs font-semibold">{sel.industry}</span>}
+                  {sel.industry && <span className="px-2 py-0.5 bg-amber-100 text-amber-900 rounded text-xs font-bold border border-amber-200">{sel.industry}</span>}
                   {sel.group_name && <span className="px-2 py-0.5 bg-purple-100 text-purple-700 rounded text-xs">{sel.group_name}</span>}
                   {sel.lead_source && <span className="px-2 py-0.5 bg-green-100 text-green-700 rounded text-xs">{sel.lead_source}</span>}
                   {sel.city && <span className="px-2 py-0.5 bg-slate-100 text-slate-600 rounded text-xs">{sel.city}</span>}
@@ -680,7 +681,7 @@ export default function CRMTab({ toast, customers, invoices, user, userProfile, 
         <button onClick={() => { const note = prompt('Visit notes / ملاحظات الزيارة:'); if(note) logContact('visit', note); }}
           className="px-3 py-1.5 bg-cyan-500 text-white rounded-lg text-xs font-semibold">🚗 Visit</button>
         </>) : (
-          <span className="text-[10px] text-slate-400 bg-slate-100 px-3 py-1.5 rounded-lg">🔒 Contact info restricted — assigned reps only</span>
+          <span className="text-[10px] text-amber-900 bg-amber-100 font-bold border border-amber-200 px-3 py-1.5 rounded-lg">🔒 Contact info restricted — assigned reps only</span>
         )}
       </div>
       {showNote && (
@@ -713,7 +714,7 @@ export default function CRMTab({ toast, customers, invoices, user, userProfile, 
         <div className="bg-amber-50 rounded-xl p-4 mb-3 border border-amber-200">
           <h4 className="text-sm font-bold text-amber-800 mb-2">Follow-ups ({pendingFU.length})</h4>
           {pendingFU.map(fu => {
-            const isOverdue = fu.due_date && fu.due_date < new Date().toISOString().substring(0, 10);
+            const isOverdue = fu.due_date && fu.due_date < todayET();
             const assignedName = users?.find(u => u.id === fu.assigned_to)?.name;
             return (
               <div key={fu.id} className={'flex justify-between items-center py-2 border-b border-amber-100 ' + (isOverdue ? 'bg-red-50 -mx-2 px-2 rounded' : '')}>
@@ -739,9 +740,9 @@ export default function CRMTab({ toast, customers, invoices, user, userProfile, 
             return (
               <div key={n.id} className="py-2 border-b border-slate-50">
                 <div className="text-xs">{n.note_text}</div>
-                <div className="text-[10px] text-slate-400 mt-1">
+                <div className="text-[10px] text-slate-500 mt-1">
                   {noteUser && <span className="font-semibold text-blue-500 mr-1">{noteUser.name}</span>}
-                  {new Date(n.created_at).toLocaleString()}
+                  {fmtET(n.created_at, 'datetime')}
                 </div>
               </div>
             );
@@ -764,9 +765,9 @@ export default function CRMTab({ toast, customers, invoices, user, userProfile, 
                     <span className={'font-semibold ' + (colors[c.contact_type] || '')}>{c.contact_type}</span>
                     {c.notes && <span className="text-slate-600 ml-1">— {c.notes}</span>}
                   </div>
-                  <div className="text-[10px] text-slate-400">
+                  <div className="text-[10px] text-slate-500">
                     {contactUser && <span className="font-semibold text-blue-500 mr-1">{contactUser.name}</span>}
-                    {new Date(c.contacted_at).toLocaleString()}
+                    {fmtET(c.contacted_at, 'datetime')}
                   </div>
                 </div>
               </div>
@@ -813,9 +814,9 @@ export default function CRMTab({ toast, customers, invoices, user, userProfile, 
                             Your browser doesn't support audio playback.
                           </audio>
                         )}
-                        <div className="text-[10px] text-slate-400 mt-1">
+                        <div className="text-[10px] text-slate-500 mt-1">
                           {handler && <span className="font-semibold text-blue-500 mr-1">For {handler.name || handler.email}</span>}
-                          {new Date(vm.created_at).toLocaleString()}
+                          {fmtET(vm.created_at, 'datetime')}
                         </div>
                       </div>
                     </div>
@@ -844,9 +845,9 @@ export default function CRMTab({ toast, customers, invoices, user, userProfile, 
                         <span className="text-slate-500 ml-1">{c.status}</span>
                         {dur && <span className="text-slate-700 ml-2 font-mono">{dur}</span>}
                       </div>
-                      <div className="text-[10px] text-slate-400">
+                      <div className="text-[10px] text-slate-500">
                         {handler && <span className="font-semibold text-blue-500 mr-1">{handler.name || handler.email}</span>}
-                        {new Date(c.started_at).toLocaleString()}
+                        {fmtET(c.started_at, 'datetime')}
                         {c.notes && <span className="text-slate-600 ml-1">— {c.notes}</span>}
                       </div>
                     </div>
@@ -854,7 +855,7 @@ export default function CRMTab({ toast, customers, invoices, user, userProfile, 
                 );
               })}
               {phoneCalls.length > 10 && (
-                <div className="text-[10px] text-slate-400 mt-1 italic">…and {phoneCalls.length - 10} older</div>
+                <div className="text-[10px] text-slate-500 mt-1 italic">…and {phoneCalls.length - 10} older</div>
               )}
             </div>
           )}

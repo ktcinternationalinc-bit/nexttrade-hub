@@ -1,6 +1,7 @@
 import { createClient } from '@supabase/supabase-js';
 import { notifyTicketAssignedServer, notifyTicketReassignedServer, notifyEventScheduledServer, notifyReminderServer, notifyTeamMessageServer, notifyShippingRateServer } from '../../../lib/notify-server';
 import { loadMemorySettings, loadMemoryForUser, buildMemoryContext, extractMemoryCandidates, persistMemoryCandidates } from '../../../lib/ai-memory';
+import { sanitizeErr } from '../../../lib/sanitize-error';
 import { runDecisionEngine, detectIntent } from '../../../lib/decision-engine';
 // Phase 2 / S13 — Morning briefing engine. Computes top 3 things needing
 // attention when the user logs in for the first time today. See
@@ -702,7 +703,7 @@ export async function POST(request) {
           try {
             actionData = JSON.parse(rawJson);
           } catch (parseErr) {
-            var errLine = '⚠️ Could not parse action JSON: ' + parseErr.message;
+            var errLine = '⚠️ Could not parse action JSON: ' + sanitizeErr(parseErr);
             var joinerP = beforeBlock && afterBlock ? '\n' : '';
             finalText = (beforeBlock + joinerP + afterBlock).trim();
             if (finalText) finalText += '\n\n' + errLine;
@@ -899,8 +900,10 @@ export async function POST(request) {
               throw new Error('Unknown action type: ' + actionData.type);
             }
           } catch (execErr) {
-            execLine = '⚠️ Action failed (' + (actionData.type || 'unknown') + '): ' + (execErr.message || String(execErr));
-            actionsExecuted.push({ ok: false, type: actionData.type, error: execErr.message || String(execErr) });
+            console.error('[ask] action execution failed:', execErr);
+            var safeMsg = sanitizeErr(execErr);
+            execLine = '⚠️ Action failed (' + (actionData.type || 'unknown') + '): ' + safeMsg;
+            actionsExecuted.push({ ok: false, type: actionData.type, error: safeMsg });
           }
 
           // Collapse block out and append the exec line.
@@ -1047,7 +1050,8 @@ export async function POST(request) {
         }
         return Response.json({ answer: 'Unknown action type: ' + action.type });
       } catch (actionErr) {
-        return Response.json({ answer: 'Action failed: ' + actionErr.message, action_result: 'error' });
+        console.error('[ask] action error:', actionErr);
+        return Response.json({ answer: 'Action failed: ' + sanitizeErr(actionErr), action_result: 'error' });
       }
     }
 
@@ -1871,7 +1875,8 @@ export async function POST(request) {
             var finalAnswer = (cleanText.trim() ? cleanText.trim() + '\n\n' : '') + (execResult || 'Done.');
             return Response.json({ answer: finalAnswer, action_result: 'success' });
           } catch(execErr) {
-            return Response.json({ answer: (cleanText.trim() || '') + '\n\n❌ Execution failed: ' + execErr.message, pending_action: actionData });
+            console.error('[ask] meeting-notes execution failed:', execErr);
+            return Response.json({ answer: (cleanText.trim() || '') + '\n\n❌ Execution failed: ' + sanitizeErr(execErr), pending_action: actionData });
           }
         }
 
@@ -1884,6 +1889,7 @@ export async function POST(request) {
 
     return Response.json({ answer: aiText });
   } catch (err) {
-    return Response.json({ answer: 'Error: ' + err.message });
+    console.error('[ask] error:', err);
+    return Response.json({ answer: 'Error: ' + sanitizeErr(err) });
   }
 }

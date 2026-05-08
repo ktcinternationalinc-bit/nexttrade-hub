@@ -96,18 +96,20 @@ group('3. Animated avatars — wave + hover');
 
 check('3.1 v55.71 — Unified waveState object covers all three avatars (Nadia, Jenna, Sara)',
   /\[waveState, setWaveState\] = useState\(\{ nadia: false, jenna: false, sara: false \}\)/.test(ab));
-check('3.2a Periodic wave scheduled for Nadia',
-  /schedule\('nadia',/.test(ab));
-check('3.2b Periodic wave scheduled for Jenna',
-  /schedule\('jenna',/.test(ab));
+check('3.2a v55.75 — NO periodic auto-wave on Nadia (per Max: "all 3 blink at once was wrong")',
+  // Per Max May 8 2026 Build A item #2: hover-only, no periodic timer.
+  // Was: schedule('nadia', 1000) firing on a 16s loop.
+  !/schedule\('nadia',/.test(ab));
+check('3.2b v55.75 — NO periodic auto-wave on Jenna',
+  !/schedule\('jenna',/.test(ab));
 check('3.3 v55.71 — Wave animation uses CSS transform with smooth transition (now on photo tilt + scale)',
   /transition: 'transform 400ms cubic-bezier/.test(ab));
 check('3.4 v55.71 — Hover triggers wave via setWave(who, true) for any avatar',
   /onMouseEnter=\{function \(\) \{ setWave\(who, true\); \}\}/.test(ab));
-check('3.5 v55.71 — Cleanup on unmount (clearInterval + clearTimeout)',
-  /clearInterval\(loop\); triggers\.forEach\(function \(t\) \{ clearTimeout\(t\); \}\)/.test(ab));
-check('3.6 v55.71 — Three-avatar offsets so they don\'t move in lock-step (Nadia 0s, Jenna 5s, Sara 10s)',
-  /schedule\('nadia', 0\)[\s\S]{0,100}schedule\('jenna', 5000\)[\s\S]{0,100}schedule\('sara', 10000\)/.test(ab));
+check('3.5 v55.75 — No timer cleanup needed (no timer to clean up)',
+  !/clearInterval\(loop\)/.test(ab));
+check('3.6 v55.75 — No staggered offsets (no auto-fire on any avatar)',
+  !/schedule\('sara', 10000\)/.test(ab) && !/setInterval\(function \(\) \{[\s\S]{0,200}schedule/.test(ab));
 
 // ============================================================
 // 4. Summary lines — morning brief + agenda
@@ -130,11 +132,12 @@ check('4.6 Jenna summary handles missing hr_requests/complaints tables gracefull
 check('4.7 Jenna summary handles "nothing pending" empty state',
   // v55.71 — empty state text is "File a request, raise a concern, or just say hi."
   /File a request, raise a concern, or just say hi/.test(ab));
-check('4.8 Notification count pulse on Nadia tile if urgent items > 0',
-  // v55.71 — Nadia tile gets notifCount={nadiaUrgentCount} + notifPulse={true}.
-  // The Tile's badge applies animate-pulse when notifPulse is true.
+check('4.8 v55.75 — Nadia tile carries notifPulse intent + speaking-only pulse on badge',
+  // v55.75 (A1) — Per Max May 8 2026: "Only the active assistant glows.
+  // No synchronized blinking." Badge no longer pulses by default; only
+  // when active+speaking. notifPulse prop is preserved as INTENT signal.
   /notifCount=\{nadiaUrgentCount\}[\s\S]{0,80}notifPulse=\{true\}/.test(ab)
-  && /props\.notifPulse \? ' animate-pulse' : ''/.test(ab));
+  && /isSpeaking \? ' animate-pulse' : ''/.test(ab));
 check('4.9 Notification count pulse on Jenna tile if pending items > 0',
   // v55.71 — sum of pending counts is passed as notifCount prop on the Jenna Tile
   /notifCount=\{jennaSummary\.newResponses \+ jennaSummary\.pendingReq \+ jennaSummary\.pendingCmp\}/.test(ab));
@@ -154,14 +157,18 @@ check('5.1 PersonalDashboard imports AssistantsBar',
   /import AssistantsBar from '\.\/AssistantsBar'/.test(pd));
 check('5.2 AssistantsBar mounted at the TOP of dashboard (before overdue or anything)',
   pd.indexOf('<AssistantsBar') < pd.indexOf('OVERDUE'));
-check('5.3 onTalkToNadia handler scrolls to #nadia-greeter-anchor',
-  /onTalkToNadia=\{function \(\) \{[\s\S]{0,400}getElementById\('nadia-greeter-anchor'\)/.test(pd));
+check('5.3 v55.75 — onTalkToNadia is now a no-op safety net (chat is INLINE, no scroll)',
+  // Per Max May 8 2026 Build A item #1: chat lives directly under the
+  // avatars in the same GUI. Old behavior: scroll to a separate AIGreeter
+  // location. New behavior: AIGreeter is rendered inline inside AssistantsBar
+  // via the chatSurface slot, so there's nothing to scroll to.
+  /v55\.75 — chat is now INLINE/.test(pd));
 check('5.4 onTalkToNadia dispatches ktc:open-nadia event',
   /window\.dispatchEvent\(new CustomEvent\('ktc:open-nadia'\)\)/.test(pd));
 check('5.5 v55.71 SUPERSEDES — Jenna no longer needs scroll handler (panel mounts inline via togglePanel)',
   /togglePanel\('jenna'\)|togglePanel\(who\)/.test(read('src/components/AssistantsBar.jsx')));
-check('5.6 Smooth-scroll behavior used (still wired for Nadia chat scroll)',
-  /scrollIntoView\(\{ behavior: 'smooth'/.test(pd));
+check('5.6 v55.75 — chatSurface slot wires AIGreeter inline (no scrollIntoView dependency)',
+  /chatSurface=\{chatSurface\}/.test(pd));
 
 // page.jsx anchors + listener
 var pg = read('src/app/page.jsx');
@@ -236,15 +243,19 @@ check('8.4 Jenna useEffect has stable [myId] dep (not user/userProfile objects)'
   /\}, \[myId\]\)/.test(ab));
 check('8.5 Jenna useEffect cancellation guard',
   /var cancelled = false;[\s\S]{0,3000}return function \(\) \{ cancelled = true; \}/.test(ab));
-check('8.6 If onTalkToNadia handler not provided, click is a no-op (no crash)',
-  /if \(onTalkToNadia\) onTalkToNadia\(\)/.test(ab));
+check('8.6 v55.75 — onTalkToNadia handler removed from in-panel UI (chat is inline now)',
+  // The old "💬 Open Nadia Chat" button + safety check are gone in v55.75
+  // because chat is rendered inline. The safety net handler is still passed
+  // from PersonalDashboard for legacy listeners.
+  !/💬 Open Nadia Chat/.test(ab));
 check('8.7 v55.71 — Jenna is fully self-contained (no onTalkToJenna handler needed; MyHRDesk mounts inline in panel)',
   // In v55.71 architecture, clicking Jenna toggles her panel which mounts
   // MyHRDesk inline. No external scroll/event needed. Verify she doesn't
   // require an external onTalkToJenna prop and instead toggles her panel.
   /togglePanel\('jenna'\)|togglePanel\(who\)/.test(ab) && /openPanel === 'jenna'[\s\S]{0,1500}<MyHRDesk/.test(ab));
-check('8.8 scrollIntoView wrapped in try/catch (no crash on missing element)',
-  /try \{[\s\S]{0,200}scrollIntoView/.test(pd));
+check('8.8 v55.75 — No scrollIntoView in PersonalDashboard (chat is inline, no scroll needed)',
+  // scrollIntoView removed in v55.75 since chat doesn't live elsewhere on the page
+  !/scrollIntoView/.test(pd));
 
 // ============================================================
 // 9. Carry-forward — earlier work intact

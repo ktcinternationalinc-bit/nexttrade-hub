@@ -41,7 +41,8 @@ var engine   = fs.readFileSync(path.join(REPO, 'src/lib/voice/wake-word.js'), 'u
 test('E1 wake engine exposes commitPending() method', function() {
   assert(/function commitPending\(\)/.test(engine),
     'commitPending defined');
-  assert(/return \{ process: process, reset: reset, isCollecting: isCollecting, commitPending: commitPending \}/.test(engine),
+  // v55.78: getActiveAgent added. Accept return with or without it.
+  assert(/return \{ process: process, reset: reset, isCollecting: isCollecting, commitPending: commitPending(?:, getActiveAgent: getActiveAgent)? \}/.test(engine),
     'exported in factory return');
 });
 

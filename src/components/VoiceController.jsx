@@ -342,12 +342,14 @@ export default function VoiceController({ userId, userProfile, enabled, onComman
         silenceTimerRef.current = setTimeout(function() {
           if (!mountedRef.current) return;
           if (!engineRef.current || !engineRef.current.isCollecting()) return;
+          // v55.78 — Read agent BEFORE commitPending (commit clears it).
+          var pendingAgent = engineRef.current.getActiveAgent && engineRef.current.getActiveAgent();
           var pending = engineRef.current.commitPending();
           if (pending) {
             ackFiredRef.current = false;
             setStatus('command');
-            try { window.dispatchEvent(new CustomEvent('hey-bob-command', { detail: { command: pending, at: Date.now() } })); } catch (e) {}
-            if (onCommand) { try { onCommand(pending); } catch (e) {} }
+            try { window.dispatchEvent(new CustomEvent('hey-bob-command', { detail: { command: pending, agent: pendingAgent || null, at: Date.now() } })); } catch (e) {}
+            if (onCommand) { try { onCommand(pending, pendingAgent || null); } catch (e) {} }
             setTimeout(function() { if (mountedRef.current) setStatus(followUpActiveRef.current ? 'followup' : 'listening'); }, 800);
           }
         }, SILENCE_PAUSE_MS);
@@ -357,8 +359,9 @@ export default function VoiceController({ userId, userProfile, enabled, onComman
         if (silenceTimerRef.current) { clearTimeout(silenceTimerRef.current); silenceTimerRef.current = null; }
         ackFiredRef.current = false; // reset for the next wake
         setStatus('command');
-        try { window.dispatchEvent(new CustomEvent('hey-bob-command', { detail: { command: out.command, at: Date.now() } })); } catch (e) {}
-        if (onCommand) { try { onCommand(out.command); } catch (e) {} }
+        // v55.78 — out.agent comes from the engine's wake-word match.
+        try { window.dispatchEvent(new CustomEvent('hey-bob-command', { detail: { command: out.command, agent: out.agent || null, at: Date.now() } })); } catch (e) {}
+        if (onCommand) { try { onCommand(out.command, out.agent || null); } catch (e) {} }
         setTimeout(function() { if (mountedRef.current) setStatus(followUpActiveRef.current ? 'followup' : 'listening'); }, 800);
       }
     };
@@ -394,12 +397,14 @@ export default function VoiceController({ userId, userProfile, enabled, onComman
       // command is silently dropped. Symptom: "she stops listening".
       try {
         if (engineRef.current && engineRef.current.isCollecting()) {
+          // v55.78 — read agent before commit (commit clears it).
+          var pendingAgent = engineRef.current.getActiveAgent && engineRef.current.getActiveAgent();
           var pending = engineRef.current.commitPending();
           if (pending) {
             ackFiredRef.current = false;
             setStatus('command');
-            try { window.dispatchEvent(new CustomEvent('hey-bob-command', { detail: { command: pending, at: Date.now() } })); } catch (e) {}
-            if (onCommand) { try { onCommand(pending); } catch (e) {} }
+            try { window.dispatchEvent(new CustomEvent('hey-bob-command', { detail: { command: pending, agent: pendingAgent || null, at: Date.now() } })); } catch (e) {}
+            if (onCommand) { try { onCommand(pending, pendingAgent || null); } catch (e) {} }
           }
         }
       } catch (e) { /* non-fatal */ }

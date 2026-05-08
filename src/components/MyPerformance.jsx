@@ -28,7 +28,18 @@ const PERIOD_LABELS = [
   ['1y', 'Last Year'],
 ];
 
-export default function MyPerformance({ user, userProfile }) {
+export default function MyPerformance({ user, userProfile, active }) {
+  // v55.77 — `active` prop signals whether Sara's panel is the currently
+  // open persona. Defaults to true for backward compat (older mounts).
+  // When false on first render, the heavy 7-query Supabase fetch is
+  // deferred until the user actually opens Sara. Once opened, data stays
+  // loaded so re-opens don't re-fetch.
+  const isActive = active === undefined ? true : !!active;
+  const [hasBeenActive, setHasBeenActive] = useState(isActive);
+  useEffect(() => {
+    if (isActive && !hasBeenActive) setHasBeenActive(true);
+  }, [isActive, hasBeenActive]);
+
   const [period, setPeriod] = useState('30d');
   const [data, setData] = useState(null);
   const [loading, setLoading] = useState(true);
@@ -63,6 +74,11 @@ export default function MyPerformance({ user, userProfile }) {
   //       outer try/catch ALWAYS hits setLoading(false) via finally — so no
   //       error path leaves loading=true.
   useEffect(() => {
+    if (!hasBeenActive) {
+      // Sara hasn't been opened yet this session — skip the heavy fetch.
+      // This avoids loading 7 Supabase queries for users who never click Sara.
+      return;
+    }
     if (!expanded) {
       // Component collapsed — leave whatever state we had
       return;
@@ -145,7 +161,7 @@ export default function MyPerformance({ user, userProfile }) {
       cancelled = true;
       if (timeoutId) clearTimeout(timeoutId);
     };
-  }, [myId, expanded]);
+  }, [myId, expanded, hasBeenActive]);
 
   // Compute metrics for current + prior period
   const { current, prior, deltas } = useMemo(() => {

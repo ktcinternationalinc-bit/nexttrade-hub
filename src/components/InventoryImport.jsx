@@ -19,6 +19,7 @@
 import { useState, useRef, useMemo } from 'react';
 import * as XLSX from 'xlsx';
 import { supabase, dbInsert, dbUpdate } from '../lib/supabase';
+import { todayET } from '../lib/et-time';
 
 // The template columns. Keep these in sync with the TEMPLATE_EXAMPLES below
 // and with the parse map in parseRows().
@@ -294,7 +295,7 @@ export default function InventoryImport({
         unit_price: parseNumber(getCell(raw, 'Unit Price')),
         roll_count: parseNumber(getCell(raw, 'Roll Count')),
         shipment_reference: String(getCell(raw, 'Shipment Reference') || '').trim(),
-        inbound_date: parseDate(getCell(raw, 'Inbound Date')) || new Date().toISOString().substring(0, 10),
+        inbound_date: parseDate(getCell(raw, 'Inbound Date')) || todayET(),
         purchase_cost: parseNumber(getCell(raw, 'Purchase Cost')),
         purchase_currency: String(getCell(raw, 'Purchase Currency') || 'USD').trim().toUpperCase() || 'USD',
         customs_cost: parseNumber(getCell(raw, 'Customs Cost')),
@@ -665,7 +666,7 @@ export default function InventoryImport({
                   </tbody>
                 </table>
               </div>
-              <div className="text-[10px] text-slate-400 mt-1">
+              <div className="text-[10px] text-slate-500 mt-1">
                 * = super-admin override — journal entry will be written for the change.
                 Emerald = Inbound Qty (the primary input). Blue rows = existing products.
               </div>

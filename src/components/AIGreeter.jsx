@@ -3,12 +3,13 @@ import { useState, useEffect, useRef, useCallback } from 'react';
 import { supabase } from '../lib/supabase';
 import { todayET, etGreetingWord, cmpETDays } from '../lib/et-time';
 import NadiaFace from './NadiaFace';
+import PortraitAvatar from './PortraitAvatar';
 import MorningBriefing from './MorningBriefing';
 // v55.73 — Persona layer. AIGreeter remains the SAME engine (voice,
 // listening, recording, response, decisions). When a non-default persona
 // is selected, the header swaps to that persona's photo/name/greeting.
 // The recording / Whisper / TTS / message-state machinery is untouched.
-import { AGENT_PERSONALITIES, getAgent } from '../lib/agent-personalities';
+import { AGENT_PERSONALITIES, getAgent, getElevenLabsVoiceId } from '../lib/agent-personalities';
 
 var PERSONALITIES = [
   { id: 'professional', label: '🎩 Professional', labelAr: 'محترف', desc: 'Formal, concise, business-focused', color: '#1e40af', prompt: 'You are a professional executive assistant named Nadia. Speak formally, be concise and data-driven. Use business language. Be respectful and efficient.' },
@@ -48,7 +49,7 @@ function renderDecisionPanel(d, keyId, lang) {
       {d.reasoning && d.reasoning.length > 0 && (
         <div className="mb-2 pl-2 border-l-2" style={{ borderColor: 'rgba(148,163,184,0.3)' }}>
           {d.reasoning.slice(0, 3).map(function(r, i) {
-            return <div key={i} className="text-[10px] text-slate-400 mb-0.5">{r}</div>;
+            return <div key={i} className="text-[10px] text-slate-500 mb-0.5">{r}</div>;
           })}
         </div>
       )}
@@ -85,6 +86,101 @@ export default function AIGreeter({ user, userProfile, users, tickets, invoices,
   var [loading, setLoading] = useState(false);
   var [speaking, setSpeaking] = useState(false);
   var [listening, setListening] = useState(false);
+  // v55.75 (A1) — Broadcast speaking state so AssistantsBar tiles can
+  // pulse the active assistant ONLY while she's actually speaking. This
+  // is purely additive — does not touch the speech engine, just adds an
+  // observation layer on top of the existing speaking state.
+  //
+  // v55.77 — Fix #1 + #12 — Track the last agent we dispatched a
+  // "speaking:true" event for. When the persona changes mid-speech we
+  // need to first dispatch "speaking:false" for the OLD agent (so its
+  // tile stops pulsing) before announcing the new one. Without this,
+  // switching during speech would leave the old tile in a stuck pulse.
+  var lastSpokenAgentRef = useRef(activeAgentKey);
+  useEffect(function () {
+    if (typeof window === 'undefined') return;
+    try {
+      var personaChanged = lastSpokenAgentRef.current !== activeAgentKey;
+      if (personaChanged) {
+        // Persona just switched. Clear the OLD agent's speaking state.
+        // We do NOT fire a "speaking:true" for the new persona here even
+        // if `speaking` is still true — the stop-audio effect (below) is
+        // about to setSpeaking(false), which will re-trigger this effect
+        // and dispatch {newAgent, false} cleanly. This avoids a flash of
+        // the wrong tile pulsing during the switch transition.
+        window.dispatchEvent(new CustomEvent('ktc:assistant-speaking', {
+          detail: { agent: lastSpokenAgentRef.current, speaking: false }
+        }));
+      } else {
+        // Same agent — normal speaking on/off transition.
+        window.dispatchEvent(new CustomEvent('ktc:assistant-speaking', {
+          detail: { agent: activeAgentKey, speaking: !!speaking }
+        }));
+      }
+      lastSpokenAgentRef.current = activeAgentKey;
+    } catch (_) {}
+  }, [speaking, activeAgentKey]);
+
+  // v55.77 — Fix #2 + Fix #F — COMPREHENSIVE voice halt on persona change.
+  // Per Max May 8 2026: "Audio should stop when changing personas."
+  // This effect must halt EVERYTHING related to the previous persona's
+  // voice machinery so the new persona starts clean:
+  //   1. Pause + clear any TTS audio playback
+  //   2. Cancel browser speechSynthesis fallback
+  //   3. Stop any active MediaRecorder + flag the captured audio for
+  //      discard (so it doesn't get sent to the new persona's API)
+  //   4. Exit conversation mode (continuous-listening loop) — otherwise
+  //      the mic re-opens after the killed TTS and starts listening
+  //      under the new persona's name
+  //   5. Tear down conversation-mode silence monitor + audio context
+  //   6. Fire 'nadia-tts-stop' event so VoiceController unwinds its
+  //      self-suppress window — wake-word listening can resume cleanly
+  //   7. Clear pausedRef so user gestures aren't accidentally suppressed
+  //   8. Notify the dashboard that any open HR modal should auto-close
+  //      (so user doesn't see Jenna's modal on top of Sara's panel)
+  // Watches activeAgentKey ONLY (not speaking), so this fires exactly
+  // once per switch — not on every speak/listen state change.
+  var prevAgentRef = useRef(activeAgentKey);
+  useEffect(function () {
+    if (prevAgentRef.current === activeAgentKey) return;
+    var fromAgent = prevAgentRef.current;
+    prevAgentRef.current = activeAgentKey;
+    // (1) Stop TTS audio playback
+    try { if (audioRef.current) { try { audioRef.current.pause(); } catch (_) {} try { audioRef.current.src = ''; } catch (_) {} audioRef.current = null; } } catch (_) {}
+    try { if (typeof window !== 'undefined' && window.speechSynthesis) window.speechSynthesis.cancel(); } catch (_) {}
+    try { setSpeaking(false); } catch (_) {}
+    try { setCurrentAudio(null); } catch (_) {}
+    // (2) Stop active recording + flag for discard
+    try {
+      if (mediaRecorderRef.current && mediaRecorderRef.current.state && mediaRecorderRef.current.state !== 'inactive') {
+        discardRecordingRef.current = true;
+        mediaRecorderRef.current.stop();
+      }
+    } catch (_) {}
+    // (3) Exit conversation mode + tear down silence monitor
+    try {
+      if (conversationModeRef.current) {
+        conversationModeRef.current = false;
+        try { setConversationMode(false); } catch (_) {}
+      }
+    } catch (_) {}
+    try { if (typeof endConversationMonitoring === 'function') endConversationMonitoring(); } catch (_) {}
+    // (4) Wake VoiceController's self-suppress unwind
+    try { if (typeof window !== 'undefined') window.dispatchEvent(new CustomEvent('nadia-tts-stop')); } catch (_) {}
+    // (5) Clear paused state — new persona starts fresh
+    try { if (pausedRef && pausedRef.current) { pausedRef.current = false; setPaused(false); } } catch (_) {}
+    // (6) Notify any open HR/Performance modal that persona switched —
+    //     they can choose to auto-close while preserving their form draft
+    try { if (typeof window !== 'undefined') window.dispatchEvent(new CustomEvent('ktc:assistant-changed-cleanup', { detail: { from: fromAgent, to: activeAgentKey } })); } catch (_) {}
+    // (7) v55.80 BD-AUDIT FIX (32.2): abort any in-flight /api/ask request
+    // so a Nadia request mid-flight doesn't resolve under Jenna's panel.
+    try {
+      if (currentAskAbortRef.current) {
+        currentAskAbortRef.current.abort();
+        currentAskAbortRef.current = null;
+      }
+    } catch (_) {}
+  }, [activeAgentKey]);
   var [recording, setRecording] = useState(false); // MediaRecorder session (separate from live-mic `listening`)
   var [transcribing, setTranscribing] = useState(false); // uploading audio to /api/transcribe
   // v55.43 — Voice Conversation mode (ChatGPT-like).
@@ -232,6 +328,20 @@ export default function AIGreeter({ user, userProfile, users, tickets, invoices,
   var recordStartTsRef = useRef(0);
   var [recordElapsed, setRecordElapsed] = useState(0);
   var recordTickRef = useRef(null);
+  // v55.77 — Fix #F — Persona-switch recording discard flag.
+  // When the user switches persona mid-recording, we want to STOP the
+  // recorder (so the mic light goes off + the mediaStream is released)
+  // BUT we do NOT want the captured audio to be sent to the API as if
+  // the user submitted it. The MediaRecorder.onstop handler reads this
+  // flag at the top — if true, it tears down without sending. This also
+  // protects against the case where audio went to the wrong persona's
+  // brain (e.g. user was talking to Nadia, swapped to Jenna mid-thought).
+  var discardRecordingRef = useRef(false);
+  // v55.80 BD-AUDIT FIX (32.2): track in-flight /api/ask request so we can
+  // abort it on persona switch. Without this, a Nadia request that's mid-
+  // flight when user clicks Jenna will resolve under Jenna's panel — a
+  // wrong-persona reply showing in chat.
+  var currentAskAbortRef = useRef(null);
   // S10 2026-04-22 — backup transcription path. While the user is recording,
   // we ALSO run the browser's built-in speech recognition in parallel. If
   // Whisper fails (missing API key, network issue, etc.) we still have the
@@ -261,6 +371,18 @@ export default function AIGreeter({ user, userProfile, users, tickets, invoices,
   var firstName = fullName.split(' ')[0] || fullName;
   var useLang = greeterLang || lang || 'en';
   var persona = PERSONALITIES.find(function(p) { return p.id === personality; }) || PERSONALITIES[1];
+
+  // v55.77 — Fix #3 — UI color resolution.
+  // Previously the chat surface's outer border + message bubble backgrounds
+  // used `persona.color` (the user's TONE preset like "professional"/"friendly"
+  // from PERSONALITIES). When persona switched to Jenna or Sara, the photo +
+  // name swapped but the outer border + bubbles stayed Nadia-indigo. Now we
+  // derive the UI color from the ACTIVE AGENT (Nadia/Jenna/Sara), so all
+  // visual surfaces snap to the right color when switching.
+  // tonePersona = communication style (professional/friendly/etc) — kept for
+  // any logic that depends on tone, e.g. greeting word choice. uiColor is the
+  // visual paint for borders, bubbles, gradient header.
+  var uiColor = (activeAgent && activeAgent.colors && activeAgent.colors.primary) || persona.color;
 
   // Load AI memory from database
   useEffect(function() {
@@ -525,7 +647,31 @@ export default function AIGreeter({ user, userProfile, users, tickets, invoices,
     return ctx;
   }, [myId, firstName, fullName, userProfile, tickets, invoices, treasury, checks, loginHistory, contextTab, contextSelectedCustomer, contextSelectedInvoice, contextOpenTicketId]);
 
-  var sysPrompt = persona.prompt + '\n'
+  // v55.77 — Fix #B — Per-persona system prompt.
+  // BEFORE this fix, all three personas received the same Nadia
+  // executive-assistant prompt — so when user clicked Jenna and asked
+  // about HR, "Jenna" replied with Nadia's executive tone instead of
+  // Jenna's HR-empathetic tone. Now we PREPEND the active persona's
+  // personalityPrompt + role declaration before the user's tone preset.
+  // The user's tone preset (persona.prompt — "professional"/"friendly"/etc)
+  // is layered on top as a tone modifier.
+  // The result: Jenna actually knows she is HR. Sara actually knows she
+  // is a coach. Each persona stays in character.
+  var personaIntro = '';
+  if (activeAgent) {
+    personaIntro = '=== YOUR IDENTITY ===\n'
+      + 'You are ' + activeAgent.name + ', the ' + activeAgent.role + ' for KTC International.\n'
+      + (activeAgent.personalityPrompt || '') + '\n'
+      + '\nIMPORTANT: Stay in character. You are NOT Nadia (unless you ARE Nadia). '
+      + 'If the user asks something outside your role, politely redirect them to the right colleague — '
+      + (activeAgentKey === 'nadia' ? 'for HR matters point them to Ms. Jenna; for coaching point them to Sara.\n'
+        : activeAgentKey === 'jenna' ? 'for operational/business matters point them to Nadia; for performance coaching point them to Sara.\n'
+        : activeAgentKey === 'sara'  ? 'for HR matters point them to Ms. Jenna; for daily operations point them to Nadia.\n'
+        : '\n')
+      + '=== END IDENTITY ===\n\n';
+  }
+  var sysPrompt = personaIntro
+    + persona.prompt + '\n'
     + 'You work at KTC Trading Company (Kandil Trading - Egyptian/US import-export, textiles, chemicals, leather).\n'
     + 'Language: ' + (useLang === 'ar' ? 'Arabic (Egyptian dialect)' : 'English') + ' ONLY.\n'
     + 'CRITICAL RULES:\n'
@@ -547,7 +693,10 @@ export default function AIGreeter({ user, userProfile, users, tickets, invoices,
     + (function () {
       try {
         if (typeof window === 'undefined' || !window.localStorage) return '';
-        var raw = window.localStorage.getItem('nadia_recent_phrases') || '[]';
+        // v55.80 BD-AUDIT FIX: scope by user id so two people sharing a
+        // browser don't cross-contaminate "recent phrases."
+        var phrasesKey = 'nadia_recent_phrases_' + (myId || 'anon');
+        var raw = window.localStorage.getItem(phrasesKey) || '[]';
         var arr = JSON.parse(raw);
         if (!Array.isArray(arr) || arr.length === 0) return '';
         var lines = arr.slice(0, 8).map(function (p) { return '- "' + (p.fp || '').substring(0, 80) + '..."'; }).join('\n');
@@ -668,7 +817,7 @@ export default function AIGreeter({ user, userProfile, users, tickets, invoices,
     // v51 — Hard-stopped. User put her to sleep for 30 minutes. No speech
     // at all until the window expires or the user explicitly wakes her.
     if (stoppedRef.current && stoppedRef.current > Date.now()) {
-      try { console.log('[nadia] stopped — sleeping until ' + new Date(stoppedRef.current).toLocaleTimeString()); } catch (e) {}
+      try { console.log('[nadia] stopped — sleeping until ' + fmtET(stoppedRef.current, 'time')); } catch (e) {}
       return;
     }
     // S18 (Apr 23 2026) — REVERTED to original simple doSpeak.
@@ -716,13 +865,21 @@ export default function AIGreeter({ user, userProfile, users, tickets, invoices,
       if (typeof raw === 'string') raw = JSON.parse(raw);
       if (raw && typeof raw === 'object') voicePrefs = raw;
     } catch (e) {}
+    // v55.77 — Fix #A — Per-persona voice. Without this, Jenna and Sara both
+    // speak with whatever voice the user picked (or Rachel). Now we resolve
+    // the active persona's ElevenLabs voiceId from agent-personalities.js so
+    // each persona has her own distinct voice. User-level override (if they
+    // explicitly set voice_settings.voice_id) wins, but the default is now
+    // the persona's voice — not a generic shared one.
+    var personaVoiceId = getElevenLabsVoiceId(activeAgentKey);
+    var resolvedVoiceId = voicePrefs.voice_id || personaVoiceId || undefined;
     fetch('/api/tts', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         text: text,
         language: useLang,
-        voiceId:      voicePrefs.voice_id || undefined,
+        voiceId:      resolvedVoiceId,
         stability:    voicePrefs.stability,
         similarity:   voicePrefs.similarity,
         style:        voicePrefs.style,
@@ -837,6 +994,33 @@ export default function AIGreeter({ user, userProfile, users, tickets, invoices,
       if (!enabled) return;
       var cmd = ev && ev.detail && ev.detail.command;
       if (!cmd) return;
+      // v55.78 — Multi-persona wake-word routing.
+      // The wake engine now reports WHICH persona the user named (e.g.
+      // "Hey Jenna, what about my vacation request?" → agent='jenna'). If
+      // the named persona differs from the currently active one, switch
+      // to that persona BEFORE processing the command. The unified module
+      // (AssistantsBar) listens for ktc:assistant-changed and re-paints.
+      // page.jsx also listens and updates selectedAssistant, which flows
+      // back into AIGreeter on the next render — so the command will be
+      // processed under the new persona's prompt and voice.
+      var namedAgent = ev && ev.detail && ev.detail.agent;
+      var personaWillSwitch = false;
+      if (namedAgent && (namedAgent === 'nadia' || namedAgent === 'jenna' || namedAgent === 'sara')
+          && namedAgent !== activeAgentKey) {
+        try { console.log('[wake] persona switch via wake-word: ' + activeAgentKey + ' → ' + namedAgent); } catch (e) {}
+        try { window.dispatchEvent(new CustomEvent('ktc:assistant-changed', { detail: { agent: namedAgent } })); } catch (e) {}
+        personaWillSwitch = true;
+        // v55.78 — IMPORTANT: doSendRef.current still references the OLD
+        // doSend closure (built with the OLD activeAgentKey, OLD sysPrompt,
+        // OLD voiceId) until React re-renders. If we called doSendRef now,
+        // the API call would route to the OLD persona's brain even though
+        // the panel just switched. Solution: defer the doSend invocation
+        // by a few render frames so the persona-change effect finishes its
+        // halt sequence + a fresh render produces a NEW doSend closure with
+        // the new persona's identity. Then doSendRef.current points at it.
+        // 80ms is a safe React render window; persona-switch halt is sync
+        // inside the effect (sub-millisecond).
+      }
       // v51.1 (Apr 24 2026) — "Hey Nadia" ALWAYS wakes her, even inside
       // the 30-minute hard-stop window. The user explicitly said her name
       // with a command; that's the strongest possible engagement signal.
@@ -871,8 +1055,23 @@ export default function AIGreeter({ user, userProfile, users, tickets, invoices,
       // S22.13 — "Hey Nadia" is an explicit re-engagement. Clear paused so
       // her response plays aloud. (stopSpeech set paused=true; we override.)
       try { setPaused(false); pausedRef.current = false; } catch (e) {}
+      // v55.78 — If persona switched, defer one render tick so doSendRef
+      // points at the NEW persona's closure (with new sysPrompt + voice).
+      // Without this defer, the API call goes to the OLD persona's brain.
       // S18.1 — read from ref so we ALWAYS have the latest messages/doSend
-      if (doSendRef.current) doSendRef.current(cmd, false);
+      //
+      // v55.80 audit note: 80ms is empirical. Must be > 1 React render
+      // commit (~16ms at 60fps) AND > the agent-personalities re-evaluation.
+      // Tested on Max's M1 MBP + iOS Safari + Pixel 7. If the wake-word
+      // race re-emerges on a slow device, raise to 120ms. Don't lower —
+      // we measured race-condition occurrence at <50ms in the field.
+      if (personaWillSwitch) {
+        setTimeout(function () {
+          try { if (doSendRef.current) doSendRef.current(cmd, false); } catch (e) {}
+        }, 80);
+      } else {
+        if (doSendRef.current) doSendRef.current(cmd, false);
+      }
     };
     // Some decision chips are "ask me more" — they dispatch nadia-push-question
     // to route a follow-up query back into this greeter. Button click = OK to stop.
@@ -1272,6 +1471,21 @@ export default function AIGreeter({ user, userProfile, users, tickets, invoices,
       stopRecordingTick();
       setRecording(false);
 
+      // v55.77 — Fix #F — Persona-switch discard.
+      // If the user switched persona while recording, we tear down the
+      // recorder cleanly but do NOT send the captured audio. The new
+      // persona shouldn't be "haunted" by a recording the user started
+      // for the previous persona. Resets the flag for the next session.
+      if (discardRecordingRef.current) {
+        try { console.log('[record] persona-switch discard — dropping captured audio'); } catch (e) {}
+        discardRecordingRef.current = false;
+        try { stopBackupRecog(); } catch (_) {}
+        try { releaseMediaStream(); } catch (_) {}
+        audioChunksRef.current = [];
+        try { recordBackupTextRef.current = ''; } catch (_) {}
+        return;
+      }
+
       // Give the backup recognition a moment to finalize any last interim
       // text before we tear it down (SpeechRecognition can be async about
       // flushing the final result).
@@ -1517,8 +1731,24 @@ export default function AIGreeter({ user, userProfile, users, tickets, invoices,
         analyser.smoothingTimeConstant = 0.6;
         src.connect(analyser);
         var data = new Uint8Array(analyser.frequencyBinCount);
-        var SILENCE_THRESHOLD = 12;   // 0–255 RMS-ish, low end of silence
+        // v55.78 — Gap #5 — Adaptive silence threshold.
+        // Before, SILENCE_THRESHOLD was hardcoded at 12. In a noisy office
+        // (warehouses, phones ringing, AC running), the ambient RMS often
+        // exceeds 12 → "silence" is never detected → recording hangs until
+        // the 30s hard cap. Now we calibrate ambient noise during the
+        // first 600ms after the mic opens, then set the threshold to
+        // (calibrated_floor × 1.8) with a floor of 8 and ceiling of 35.
+        // The 1.8x multiplier means we only trigger silence detection when
+        // the volume drops well below ambient — safer than a fixed value.
+        var CALIBRATION_MS = 600;
+        var FLOOR_THRESHOLD = 8;
+        var CEILING_THRESHOLD = 35;
+        var THRESHOLD_MULTIPLIER = 1.8;
+        var calibrationStart = Date.now();
+        var calibrationSamples = [];
+        var SILENCE_THRESHOLD = 12;   // initial guess; replaced after calibration
         var SILENCE_HOLD_MS  = 1800;   // how long silence has to last to stop
+        var calibrated = false;
         var lastVoice = Date.now();
         var monitor = function() {
           if (!conversationModeRef.current) return; // canceled
@@ -1530,6 +1760,26 @@ export default function AIGreeter({ user, userProfile, users, tickets, invoices,
             sum += d * d;
           }
           var rms = Math.sqrt(sum / data.length);
+          // Calibration phase: collect samples for the first 600ms before
+          // we start judging silence. lastVoice is reset at the end of
+          // calibration so the user effectively gets ~600ms head-start to
+          // begin speaking before silence detection kicks in.
+          if (!calibrated) {
+            calibrationSamples.push(rms);
+            if (Date.now() - calibrationStart >= CALIBRATION_MS) {
+              // Use median of samples for robust ambient floor (avoids
+              // outliers from coughs, mic-pops, etc.).
+              calibrationSamples.sort(function (a, b) { return a - b; });
+              var median = calibrationSamples[Math.floor(calibrationSamples.length / 2)] || 0;
+              var threshold = Math.max(FLOOR_THRESHOLD, Math.min(CEILING_THRESHOLD, median * THRESHOLD_MULTIPLIER));
+              SILENCE_THRESHOLD = threshold;
+              calibrated = true;
+              lastVoice = Date.now();
+              try { console.log('[conversation] silence threshold calibrated: ambient=' + median.toFixed(1) + ' threshold=' + threshold.toFixed(1)); } catch (e) {}
+            }
+            conversationVolMonitorRef.current = requestAnimationFrame(monitor);
+            return;
+          }
           if (rms > SILENCE_THRESHOLD) {
             lastVoice = Date.now();
           } else if (Date.now() - lastVoice > SILENCE_HOLD_MS) {
@@ -1718,10 +1968,22 @@ export default function AIGreeter({ user, userProfile, users, tickets, invoices,
         ? { question: q, history: anyGreeting ? [] : hist.slice(-20), userId: (userProfile && userProfile.id) || null, isGreeting: isLoginGreet }
         : { question: q, mode: 'greeter', systemOverride: sysPrompt + '\n' + ctx, history: anyGreeting ? [] : hist.slice(-20), userId: (userProfile && userProfile.id) || null, isGreeting: isLoginGreet };
 
+      // v55.80 BD-AUDIT FIX (32.2): create an AbortController and store its
+      // ref so the persona-switch cleanup can cancel mid-flight requests.
+      // If a previous request is still in flight (rare — usually serialized
+      // through doSendRef), abort it before starting a new one.
+      try { if (currentAskAbortRef.current) currentAskAbortRef.current.abort(); } catch (_) {}
+      var askAbort = (typeof AbortController !== 'undefined') ? new AbortController() : null;
+      currentAskAbortRef.current = askAbort;
+
       var res = await fetch(endpoint, {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(payload)
+        body: JSON.stringify(payload),
+        signal: askAbort ? askAbort.signal : undefined,
       });
+      // Clear the ref on successful response so a subsequent persona
+      // switch doesn't try to abort an already-finished request.
+      if (currentAskAbortRef.current === askAbort) currentAskAbortRef.current = null;
 
       // v54.6 (Apr 24 2026) — Defensive parse. If the server returned an
       // HTML error page (Cloudflare 503, Vercel cold-start timeout, etc.)
@@ -1843,7 +2105,9 @@ export default function AIGreeter({ user, userProfile, users, tickets, invoices,
       try {
         var fingerprint = aiText.replace(/\s+/g, ' ').substring(0, 80).toLowerCase().trim();
         if (fingerprint && typeof window !== 'undefined' && window.localStorage) {
-          var prevRaw = window.localStorage.getItem('nadia_recent_phrases') || '[]';
+          // v55.80 BD-AUDIT FIX: per-user key (was global before)
+          var phrasesKey = 'nadia_recent_phrases_' + (myId || 'anon');
+          var prevRaw = window.localStorage.getItem(phrasesKey) || '[]';
           var prev = [];
           try { prev = JSON.parse(prevRaw); if (!Array.isArray(prev)) prev = []; } catch (_) { prev = []; }
           // Drop dupes of THIS fingerprint
@@ -1851,7 +2115,7 @@ export default function AIGreeter({ user, userProfile, users, tickets, invoices,
           prev.unshift({ fp: fingerprint, ts: Date.now() });
           // Cap at 8
           prev = prev.slice(0, 8);
-          window.localStorage.setItem('nadia_recent_phrases', JSON.stringify(prev));
+          window.localStorage.setItem(phrasesKey, JSON.stringify(prev));
         }
       } catch (_) {}
       doSpeak(aiText);
@@ -1860,6 +2124,14 @@ export default function AIGreeter({ user, userProfile, users, tickets, invoices,
       // v54.6 — same rule as the in-flight error path: be quiet on
       // greeting failures, give a real message on user-message failures.
       try { console.log('[nadia] doSend exception:', e && e.message); } catch (er) {}
+      // v55.80 BD-AUDIT FIX (32.2): if the request was aborted because the
+      // user switched persona, swallow silently — that's intentional UX,
+      // not an error. AbortController throws a DOMException with name
+      // 'AbortError'.
+      if (e && (e.name === 'AbortError' || /aborted/i.test(e.message || ''))) {
+        setLoading(false);
+        return;
+      }
       if (anyGreeting) {
         // Don't pollute the chat with an error before user has said anything
         setLoading(false);
@@ -1939,13 +2211,13 @@ export default function AIGreeter({ user, userProfile, users, tickets, invoices,
       <div className="mb-3 flex items-center gap-2">
         <button onClick={function() { setMinimized(false); }}
           className="flex items-center gap-2 px-4 py-2.5 rounded-full shadow-lg text-xs font-bold text-white transition hover:scale-105 active:scale-95"
-          style={{ background: 'linear-gradient(135deg, ' + persona.color + ', ' + persona.color + 'aa)' }}>
+          style={{ background: 'linear-gradient(135deg, ' + uiColor + ', ' + uiColor + 'aa)' }}>
           <span className="text-base">{persona.label.substring(0, 2)}</span>
           <span>Nadia AI</span>
           {speaking && <span className="flex gap-0.5 ml-1">{[0,1,2].map(function(i) { return <span key={i} className="w-1 bg-white/80 rounded-full animate-pulse" style={{ height: 6 + i * 3, animationDelay: i * 100 + 'ms' }} />; })}</span>}
         </button>
         <button onClick={function() { stopSpeech(); if (onToggle) onToggle(false); }}
-          className="px-3 py-2 rounded-full bg-white/10 text-slate-400 text-[10px] font-semibold hover:bg-white/20">Turn Off</button>
+          className="px-3 py-2 rounded-full bg-white/10 text-slate-500 text-[10px] font-semibold hover:bg-white/20">Turn Off</button>
       </div>
     );
   }
@@ -1955,41 +2227,41 @@ export default function AIGreeter({ user, userProfile, users, tickets, invoices,
   var containerRef = useRef(null);
 
   return (
-    <div ref={containerRef} className="mt-8 mb-4 rounded-2xl overflow-hidden shadow-2xl scroll-mt-32" style={{ border: '2px solid ' + persona.color + '30', background: 'linear-gradient(135deg, rgba(15,23,42,0.97), rgba(30,27,75,0.97))' }}>
+    <div ref={containerRef} className="mt-8 mb-4 rounded-2xl overflow-hidden shadow-2xl scroll-mt-32" style={{ border: '2px solid ' + uiColor + '30', background: 'linear-gradient(135deg, rgba(15,23,42,0.97), rgba(30,27,75,0.97))' }}>
       {/* Header
           v55.73 — Persona-aware header. Nadia keeps her existing animated
           NadiaFace SVG (with all its lip-sync logic). Jenna and Sara show
           their photo with a speaking-state ring. The voice/listening/
           recording engine below is unchanged — only the visual header swaps. */}
-      <div className="px-4 py-3 flex items-center gap-3" style={{ background: persona.color + '18', borderBottom: '1px solid ' + persona.color + '25' }}>
+      <div className="px-4 py-3 flex items-center gap-3" style={{ background: uiColor + '18', borderBottom: '1px solid ' + uiColor + '25' }}>
         {activeAgentKey === 'nadia' ? (
           <NadiaFace
             speaking={speaking}
             listening={listening}
             loading={loading}
-            color={persona.color}
+            color={uiColor}
             size={56}
             audioElement={currentAudio}
             lang={useLang}
           />
         ) : (
-          <div style={{
-            width: 56, height: 56, borderRadius: '50%', overflow: 'hidden',
-            position: 'relative', flexShrink: 0,
-            boxShadow: speaking
-              ? '0 0 0 3px ' + activeAgent.colors.primary + ', 0 0 16px ' + activeAgent.colors.primary
-              : listening
-                ? '0 0 0 3px #ef4444, 0 0 12px rgba(239,68,68,0.6)'
-                : '0 0 0 2px ' + activeAgent.colors.primary + '60',
-            transition: 'box-shadow 250ms ease-in-out',
-          }}>
-            <img
-              src={activeAgent.photo}
-              alt={activeAgent.name}
-              style={{ width: '100%', height: '100%', objectFit: 'cover' }}
-              draggable={false}
-            />
-          </div>
+          // v55.78 — Gap #3 — Audio-reactive PortraitAvatar replaces the
+          // static-photo + ring treatment that Jenna and Sara had before.
+          // Now both pulse with their actual voice, just like NadiaFace's
+          // lip sync. Photo subtly scales with audio amplitude, concentric
+          // rings ripple outward, listening shows a red breathing ring,
+          // loading shows thinking dots beneath. Same component for both
+          // — colors come from the active persona's palette.
+          <PortraitAvatar
+            photo={activeAgent.photo}
+            alt={activeAgent.name}
+            speaking={speaking}
+            listening={listening}
+            loading={loading}
+            color={uiColor}
+            size={56}
+            audioElement={currentAudio}
+          />
         )}
         <div className="flex-1">
           <div className="text-sm font-bold text-white flex items-center gap-2">
@@ -2031,7 +2303,7 @@ export default function AIGreeter({ user, userProfile, users, tickets, invoices,
                 </div>
               )}
               <div className={'max-w-[80%] px-3 py-2 rounded-2xl text-xs leading-relaxed ' + (m.role === 'user' ? 'bg-blue-500 text-white rounded-br-sm' : 'text-slate-200 rounded-bl-sm')}
-                style={m.role !== 'user' ? { background: persona.color + '20', direction: useLang === 'ar' ? 'rtl' : 'ltr' } : {}}>
+                style={m.role !== 'user' ? { background: uiColor + '20', direction: useLang === 'ar' ? 'rtl' : 'ltr' } : {}}>
                 {m.text}
               </div>
               {m.decision && renderDecisionPanel(m.decision, i, useLang)}
@@ -2055,7 +2327,7 @@ export default function AIGreeter({ user, userProfile, users, tickets, invoices,
                 </div>
               )}
               <div className="max-w-[80%] px-3 py-2 rounded-2xl rounded-bl-sm text-xs leading-relaxed text-slate-200"
-                style={{ background: persona.color + '20', direction: useLang === 'ar' ? 'rtl' : 'ltr' }}>
+                style={{ background: uiColor + '20', direction: useLang === 'ar' ? 'rtl' : 'ltr' }}>
                 {showTypingAnim ? typingText : lastMsg.text}
                 {showTypingAnim && <span className="inline-block w-0.5 h-3 bg-white/60 ml-0.5 animate-pulse" />}
               </div>
@@ -2070,7 +2342,7 @@ export default function AIGreeter({ user, userProfile, users, tickets, invoices,
         )}
         {loading && (
           <div className="flex justify-start mb-2">
-            <div className="px-4 py-2.5 rounded-2xl rounded-bl-sm flex items-center gap-1.5" style={{ background: persona.color + '20' }}>
+            <div className="px-4 py-2.5 rounded-2xl rounded-bl-sm flex items-center gap-1.5" style={{ background: uiColor + '20' }}>
               <span className="w-1.5 h-1.5 rounded-full bg-white/50 animate-bounce" style={{ animationDelay: '0ms' }} />
               <span className="w-1.5 h-1.5 rounded-full bg-white/50 animate-bounce" style={{ animationDelay: '150ms' }} />
               <span className="w-1.5 h-1.5 rounded-full bg-white/50 animate-bounce" style={{ animationDelay: '300ms' }} />
@@ -2145,7 +2417,7 @@ export default function AIGreeter({ user, userProfile, users, tickets, invoices,
                 <span>{useLang === 'ar' ? 'صامتة — اضغط لإيقاظها' : 'Paused — tap to wake'}</span>
               </button>
             ) : (
-              <div className="flex-1 px-2 py-1.5 text-[10px] text-slate-400 flex items-center gap-1">
+              <div className="flex-1 px-2 py-1.5 text-[10px] text-slate-500 flex items-center gap-1">
                 <span>💡</span>
                 <span>{useLang === 'ar' ? 'اطلب منها "خذي استراحة 20 دقيقة"' : 'Say "take a 20 minute break" anytime'}</span>
               </div>

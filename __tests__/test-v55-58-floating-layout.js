@@ -100,8 +100,8 @@ check('G.2 v55.56 phone health route present',
   fs.existsSync(path.join(REPO, 'src/app/api/phone/health/route.js')));
 check('G.3 v55.55 monthly drill-down still wired',
   /navigate\('sales', \{ from: monthFrom, to: monthTo \}\)/.test(read('src/components/PersonalDashboard.jsx')));
-check('G.4 v55.54 SafeSection wraps MyPerformance',
-  /<SafeSection label="My Performance">/.test(read('src/components/PersonalDashboard.jsx')));
+check('G.4 SafeSection wraps MyPerformance (in AssistantsBar after v55.71 move)',
+  /<SafeSection label="My Performance">/.test(read('src/components/AssistantsBar.jsx')));
 check('G.5 v55.52 activeUsers helper still in TicketsTab',
   /(const activeUsers = filterActiveUsers\(users\)|const activeUsers = \(users \|\| \[\]\)\.filter\(u => u && u\.active !== false\))/.test(read('src/components/TicketsTab.jsx')));
 check('G.6 v55.51 customs SQL file present',

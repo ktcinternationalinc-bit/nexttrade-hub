@@ -72,12 +72,14 @@ assert(!inPeriod('2026-03-31', period), 'S2.4 — date before period excluded');
 assert(!inPeriod('2026-04-08', period), 'S2.5 — date after period excluded');
 assert(!inPeriod(null, period), 'S2.6 — null date never in period');
 
-// 2026-04-01 is a Wednesday. Apr 1-7 = Wed, Thu, Fri, Sat, Sun, Mon, Tue → 5 weekdays
+// v55.80 PHASE-B+ (Max May 8 2026):
+//   workingDays = 6 of every 7 calendar days (any 6, not Mon-Fri).
+//   No more weekday filter. A 7-day period gives 6, 14-day gives 12.
 const wd = countWorkingDaysInPeriod(period);
-eq(wd, 5, 'S2.7 — Apr 1-7 2026 has 5 working days (Mon-Fri)');
+eq(wd, 6, 'S2.7 — Apr 1-7 2026 has 6 expected work days (any 6 of 7)');
 
 const wd1 = countWorkingDaysInPeriod({ from: '2026-04-04', to: '2026-04-05' });
-eq(wd1, 1, 'S2.8 — Sat-Sun has 0 working days but minimum 1 returned');
+eq(wd1, 2, 'S2.8 — 2-day window has 2 expected work days (rounded from 2*6/7=1.7→2)');
 
 // ----------------------------------------------------------------------
 // Section 3: Ticket metrics
@@ -218,8 +220,8 @@ const mLog = calcMetricsForUser(USER_A, periodApr1to7, { tickets: [], dailyLog }
 eq(mLog.manualEntries, 4, 'S8.1 — 4 manual entries');
 eq(mLog.autoEntries, 2, 'S8.2 — 2 auto entries');
 eq(mLog.manualDays, 4, 'S8.3 — 4 unique days with manual entries');
-// 5 working days in period, 4 manual = 80%
-eq(mLog.manualFillRatePct, 80, 'S8.4 — manual fill rate = 80%');
+// v55.80 PHASE-B+: 6 working days in period (any 6 of 7), 4 manual = 67%
+eq(mLog.manualFillRatePct, 67, 'S8.4 — manual fill rate = 67% (4 of 6 expected days)');
 
 // ----------------------------------------------------------------------
 // Section 9: Calendar

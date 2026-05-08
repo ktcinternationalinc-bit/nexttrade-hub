@@ -72,10 +72,13 @@ check('2.3 declares 13 request categories',
   (hr.match(/REQUEST_CATEGORIES = \[[\s\S]*?\];/) || [''])[0].match(/{ id:/g).length === 13);
 check('2.4 declares 11 complaint categories',
   (hr.match(/COMPLAINT_CATEGORIES = \[[\s\S]*?\];/) || [''])[0].match(/{ id:/g).length === 11);
-check('2.5 has animated mascot SVG with waving arm',
-  /viewBox="0 0 64 64"/.test(hr) && /transform: mascotWaving/.test(hr));
-check('2.6 mascot waves periodically (every 12s)',
-  /setInterval\(function \(\) \{[\s\S]{0,200}setMascotWaving\(true\)/.test(hr));
+// v55.77 — Mascot SVG removed (Fix #11). The unified module shows the
+// real Jenna photo above MyHRDesk, so the cartoon Maya mascot was a
+// duplicate. We assert the OPPOSITE now.
+check('2.5 [v55.77] cartoon Maya mascot REMOVED (replaced by real Jenna photo above)',
+  !/transform: mascotWaving/.test(hr) && !/viewBox="0 0 64 64"/.test(hr));
+check('2.6 [v55.77] periodic mascot wave interval REMOVED (was driving the deleted SVG)',
+  !/setInterval\(function \(\) \{[\s\S]{0,200}setMascotWaving\(true\)/.test(hr));
 check('2.7 file-request modal renders with date pickers for vacation/training',
   /openModal === 'request'/.test(hr) && /form\.category === 'vacation'/.test(hr));
 check('2.8 file-complaint modal renders with privacy toggle',
@@ -91,11 +94,13 @@ check('2.12 detects missing-table error and shows setup hint',
 check('2.13 shows recent submissions with status colors',
   /STATUS_COLORS/.test(hr) && /myRecent\.map/.test(hr));
 check('2.14 shows decision_notes / resolution_notes from super_admin',
-  /super_admin response:/.test(hr));
+  // v55.75 — text changed from "super_admin response:" to "{name} response:"
+  /\{superAdminName\} response:|response:.*notes/.test(hr));
 check('2.15 priority + severity selectors in respective modals',
   /Low — wanted to flag it/.test(hr) && /Critical — urgent \/ safety \/ harm/.test(hr));
 check('2.16 friendly first-name greeting in header', /myFirstName/.test(hr));
-check('2.17 logo "HR" badge in mascot', /HR<\/text>/.test(hr));
+check('2.17 [v55.77] HR badge in mascot REMOVED (mascot deleted, see Fix #11)',
+  !/HR<\/text>/.test(hr));
 check('2.18 status COLORS use literal Tailwind class strings (JIT-safe)',
   !/'bg-' \+ \w+ \+ '-/.test(hr),
   'dynamic Tailwind class concatenation found — JIT will skip those classes');
@@ -115,8 +120,8 @@ check('3.3 anonymous complaints hidden from non-super_admin',
   /isSuperAdmin\) return true[\s\S]{0,150}anonymous_to_admins === false/.test(inb));
 check('3.4 hidden-complaint count surfaced to admin',
   /hiddenComplaintsCount/.test(inb));
-check('3.5 anonymous complaint shows "(anonymous to admins)" to non-super_admin',
-  /\(anonymous to admins\)/.test(inb));
+check('3.5 [v55.77] anonymous complaint shows "(identity confidential)" to non-super_admin (was "(anonymous to admins)")',
+  /\(identity confidential\)/.test(inb) && !/\(anonymous to admins\)/.test(inb));
 check('3.6 status changes via dbUpdate', /dbUpdate\('hr_requests'/.test(inb) && /dbUpdate\('hr_complaints'/.test(inb));
 check('3.7 reviewed_by + reviewed_at recorded on save',
   /reviewed_by: myId/.test(inb) && /reviewed_at: nowIso/.test(inb));

@@ -6,6 +6,8 @@
 // Returns: { en: "...", ar: "...", prioritized: [...] }
 // ============================================================
 
+import { sanitizeErr } from '../../../lib/sanitize-error';
+
 export async function POST(req) {
   try {
     var body = await req.json();
@@ -108,7 +110,7 @@ export async function POST(req) {
       headers: { 'Content-Type': 'application/json' }
     });
   } catch (err) {
-    return new Response(JSON.stringify({ error: String(err && err.message || err) }), {
+    return new Response(JSON.stringify({ error: sanitizeErr(err) }), {
       status: 500,
       headers: { 'Content-Type': 'application/json' }
     });

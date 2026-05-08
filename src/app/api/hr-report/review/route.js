@@ -8,6 +8,8 @@
 // Build constraints: no template literals/backticks, var instead of const,
 // string concatenation. Vercel SWC compiler.
 
+import { sanitizeErr } from '../../../../lib/sanitize-error';
+
 export async function POST(req) {
   try {
     var body = await req.json();
@@ -36,11 +38,16 @@ export async function POST(req) {
     lines.push('Subject: ' + name);
     lines.push('Period: ' + periodLabel);
     lines.push('');
-    lines.push('=== SCORES (0-100, relative to team) ===');
+    lines.push('=== SCORES (0-100, mostly absolute thresholds) ===');
     lines.push('Overall: ' + (score.score != null ? score.score : 'n/a'));
-    lines.push('Productivity: ' + (score.productivity != null ? score.productivity : 'n/a'));
-    lines.push('Timeliness: ' + (score.timeliness != null ? score.timeliness : 'n/a'));
-    lines.push('Engagement: ' + (score.engagement != null ? score.engagement : 'n/a'));
+    lines.push('Activity (35%): ' + (score.activity != null ? score.activity : 'n/a'));
+    lines.push('Timeliness (20%): ' + (score.timeliness != null ? score.timeliness : 'n/a'));
+    lines.push('Presence (15%): ' + (score.presence != null ? score.presence : 'n/a (no session data)'));
+    lines.push('Quality (15%): ' + (score.quality != null ? score.quality : 'n/a'));
+    lines.push('Reliability (10%): ' + (score.reliability != null ? score.reliability : 'n/a'));
+    lines.push('Productivity (5%, relative): ' + (score.productivity != null ? score.productivity : 'n/a'));
+    lines.push('');
+    lines.push('NOTE: Score philosophy is ABSOLUTE — graded against personal targets (logins per week, daily-log entries per week, etc.), not against teammates. Productivity is the only relative input and is intentionally weighted at just 5% so specialists who do other things aren\'t punished. Working week = 6 days, ANY 6 of 7 calendar days.');
     lines.push('');
     lines.push('=== TICKET ACTIVITY ===');
     lines.push('Created: ' + (metrics.ticketsCreated || 0));
@@ -65,6 +72,12 @@ export async function POST(req) {
     lines.push('=== DAILY LOG ===');
     lines.push('Manual entries: ' + (metrics.manualEntries || 0) + ' on ' + (metrics.manualDays || 0) + ' / ' + (metrics.workingDays || 0) + ' working days (' + (metrics.manualFillRatePct || 0) + '%)');
     lines.push('Auto entries: ' + (metrics.autoEntries || 0));
+    lines.push('');
+    lines.push('=== PRESENCE (time on system) ===');
+    lines.push('Showed up on: ' + (metrics.presentDays != null ? metrics.presentDays : 0) + ' / ' + (metrics.workingDays || 0) + ' expected working days (' + (metrics.presenceRatePct != null ? metrics.presenceRatePct : 0) + '%)');
+    lines.push('Login frequency: ' + (metrics.loginCount != null ? metrics.loginCount : 0) + ' / ' + (metrics.expectedLogins || 0) + ' expected (' + (metrics.loginRatePct != null ? metrics.loginRatePct : 0) + '%)');
+    lines.push('Avg hours/day on system: ' + (metrics.avgHoursPerDay != null ? metrics.avgHoursPerDay : 0));
+    lines.push('NOTE: Working week = 6 days, ANY 6 of 7 calendar days. Min target = 6 logins per week.');
     lines.push('');
     lines.push('=== CALENDAR ===');
     lines.push('Owned events: ' + (metrics.assignedEvents || 0) + ' (completed: ' + (metrics.completedEvents || 0) + ')');
@@ -139,6 +152,6 @@ export async function POST(req) {
     return Response.json({ message: text.trim() });
   } catch (err) {
     console.error('[hr-review] error:', err);
-    return Response.json({ error: err.message || 'Review unavailable' }, { status: 500 });
+    return Response.json({ error: sanitizeErr(err) || 'Review unavailable' }, { status: 500 });
   }
 }

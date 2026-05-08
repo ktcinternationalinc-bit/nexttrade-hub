@@ -359,7 +359,7 @@ function ConversationRow({ conv, selected, myId, onSelect }) {
       </div>
       <div className="flex gap-1 mt-1">
         {isMine && <span className="text-[9px] bg-violet-100 text-violet-700 px-1.5 py-0.5 rounded font-semibold">Mine</span>}
-        {isUnclaimed && <span className="text-[9px] bg-amber-100 text-amber-700 px-1.5 py-0.5 rounded font-semibold">Unclaimed</span>}
+        {isUnclaimed && <span className="text-[9px] bg-amber-100 text-amber-900 px-1.5 py-0.5 rounded font-bold border border-amber-200">Unclaimed</span>}
         {!isMine && !isUnclaimed && conv.assigned_to_name && (
           <span className="text-[9px] bg-slate-100 text-slate-600 px-1.5 py-0.5 rounded">→ {conv.assigned_to_name}</span>
         )}
@@ -420,7 +420,7 @@ function MessageBubble({ msg }) {
         (isFailed ? 'bg-rose-100 border border-rose-300 text-rose-900'
           : isOut ? 'bg-emerald-600 text-white' : 'bg-white border border-slate-200 text-slate-800')}>
         {msg.message_type === 'template' && (
-          <div className={'text-[9px] font-bold uppercase mb-1 ' + (isOut ? 'text-emerald-100' : 'text-slate-400')}>
+          <div className={'text-[9px] font-bold uppercase mb-1 ' + (isOut ? 'text-emerald-100' : 'text-slate-500')}>
             Template: {msg.template_name}
           </div>
         )}
@@ -434,7 +434,7 @@ function MessageBubble({ msg }) {
           </div>
         )}
         <div className="whitespace-pre-wrap break-words">{msg.body}</div>
-        <div className={'text-[9px] mt-1 ' + (isOut ? 'text-emerald-100' : 'text-slate-400')}>
+        <div className={'text-[9px] mt-1 ' + (isOut ? 'text-emerald-100' : 'text-slate-500')}>
           {formatMsgTime(msg.created_at)}
           {isOut && <span className="ml-2">{statusIcon(status)}</span>}
           {isFailed && msg.error_message && <span className="block mt-1 text-[10px]">{msg.error_message}</span>}

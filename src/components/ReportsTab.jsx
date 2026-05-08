@@ -1,6 +1,7 @@
 'use client';
 import { useState, useMemo } from 'react';
 import { EXPENSE_CATS, COLORS } from '../lib/utils';
+import { todayET, daysAgoET } from '../lib/et-time';
 
 const MONTHS = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
 
@@ -22,8 +23,8 @@ export default function ReportsTab({ treasury, invoices, warehouseExpenses, egyp
       </div>
     );
   }
-  const [dateFrom, setDateFrom] = useState(() => { const d = new Date(); d.setFullYear(d.getFullYear() - 1); return d.toISOString().substring(0, 10); });
-  const [dateTo, setDateTo] = useState(new Date().toISOString().substring(0, 10));
+  const [dateFrom, setDateFrom] = useState(() => daysAgoET(365));
+  const [dateTo, setDateTo] = useState(() => todayET());
   const [view, setView] = useState('overview'); // overview | income | expenses | categories | comparison
   const [selCategory, setSelCategory] = useState(null);
   const [chartType, setChartType] = useState('bar'); // bar | line
@@ -250,14 +251,14 @@ export default function ReportsTab({ treasury, invoices, warehouseExpenses, egyp
 
   // Quick date presets
   const setPreset = (p) => {
-    const now = new Date();
-    const to = now.toISOString().substring(0, 10);
-    let from;
+    var now = new Date();
+    var to = todayET();
+    var from;
     if (p === 'ytd') { from = now.getFullYear() + '-01-01'; }
-    else if (p === '1y') { const d = new Date(); d.setFullYear(d.getFullYear() - 1); from = d.toISOString().substring(0, 10); }
-    else if (p === '6m') { const d = new Date(); d.setMonth(d.getMonth() - 6); from = d.toISOString().substring(0, 10); }
-    else if (p === '3m') { const d = new Date(); d.setMonth(d.getMonth() - 3); from = d.toISOString().substring(0, 10); }
-    else if (p === '1m') { const d = new Date(); d.setMonth(d.getMonth() - 1); from = d.toISOString().substring(0, 10); }
+    else if (p === '1y') { from = daysAgoET(365); }
+    else if (p === '6m') { from = daysAgoET(180); }
+    else if (p === '3m') { from = daysAgoET(90); }
+    else if (p === '1m') { from = daysAgoET(30); }
     else if (p === 'all') { from = '2014-01-01'; }
     setDateFrom(from); setDateTo(to);
   };
@@ -370,9 +371,9 @@ export default function ReportsTab({ treasury, invoices, warehouseExpenses, egyp
                       <div className="flex items-center gap-2">
                         <div className="w-3 h-3 rounded" style={{ background: COLORS[i % COLORS.length] }} />
                         <span className="text-xs font-bold">{c.category}</span>
-                        <span className="text-[10px] text-slate-400">{c.count} txns</span>
+                        <span className="text-[10px] text-slate-500">{c.count} txns</span>
                       </div>
-                      <span className="text-sm font-bold text-red-600">{fmtE(c.total)} <span className="text-[10px] text-slate-400">({pct.toFixed(1)}%)</span></span>
+                      <span className="text-sm font-bold text-red-600">{fmtE(c.total)} <span className="text-[10px] text-slate-500">({pct.toFixed(1)}%)</span></span>
                     </div>
                     <div className="h-2 bg-slate-100 rounded-full overflow-hidden">
                       <div className="h-full rounded-full" style={{ width: pct + '%', background: COLORS[i % COLORS.length] }} />

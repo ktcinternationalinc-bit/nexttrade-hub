@@ -93,7 +93,7 @@ export default function NotificationBell({ userId, users }) {
                     <div className="flex-1 min-w-0">
                       <div className="text-xs font-semibold text-slate-800">{n.title}</div>
                       {n.body && <div className="text-[11px] text-slate-500 mt-0.5 line-clamp-2">{n.body}</div>}
-                      <div className="text-[10px] text-slate-400 mt-1 flex items-center gap-2">
+                      <div className="text-[10px] text-slate-500 mt-1 flex items-center gap-2">
                         <span>{timeAgo(n.created_at)}</span>
                         {n.created_by && <span>· {getUserName(n.created_by)}</span>}
                         {!n.read_at && <span className="w-2 h-2 bg-blue-500 rounded-full" />}

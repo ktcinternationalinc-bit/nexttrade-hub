@@ -164,7 +164,7 @@ export default function PendingNadiaMessages({ userId, getUserName }) {
             var dateRef = r.reminder_date || (r.created_at && r.created_at.substring(0, 10));
             var age = ageInDays(r.created_at);
             var pri = r.priority || 'normal';
-            var priColor = pri === 'urgent' || pri === 'high' ? 'text-red-700 bg-red-100' : pri === 'low' ? 'text-slate-500 bg-slate-100' : 'text-amber-700 bg-amber-100';
+            var priColor = pri === 'urgent' || pri === 'high' ? 'text-red-700 bg-red-100' : pri === 'low' ? 'text-slate-500 bg-slate-100' : 'text-amber-900 bg-amber-100';
             return (
               <div key={r.id} className="bg-white rounded-lg p-3 border border-amber-100 flex items-start gap-3">
                 <span className="text-lg flex-shrink-0">⏰</span>

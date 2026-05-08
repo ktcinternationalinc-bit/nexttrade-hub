@@ -19,6 +19,7 @@ import {
   calcMetricsForUser,
   calcScore,
   computeDeltas,
+  explainScore,
 } from '../lib/hr-metrics';
 
 const PERIOD_LABELS = [
@@ -55,16 +56,20 @@ export default function HRReport({ user, userProfile, users, customers }) {
       setLoading(true);
       const window = resolvePeriod('1y');
       const safe = async (fn) => { try { return await fn(); } catch(e) { console.warn('[hr] query fail', e); return []; } };
-      const [tickets, ticketComments, dailyLog, auditLog, customerQuotes, calendarEvents] = await Promise.all([
+      const [tickets, ticketComments, dailyLog, auditLog, customerQuotes, calendarEvents, userSessions] = await Promise.all([
         safe(async () => (await supabase.from('tickets').select('*').gte('created_at', window.from + 'T00:00:00')).data || []),
         safe(async () => (await supabase.from('ticket_comments').select('*').gte('created_at', window.from + 'T00:00:00')).data || []),
         safe(async () => (await supabase.from('daily_log').select('*').gte('log_date', window.from)).data || []),
         safe(async () => (await supabase.from('audit_log').select('*').gte('created_at', window.from + 'T00:00:00').limit(20000)).data || []),
         safe(async () => (await supabase.from('customer_quotes').select('*').gte('created_at', window.from)).data || []),
         safe(async () => (await supabase.from('calendar_events').select('*').gte('event_date', window.from)).data || []),
+        // v55.80 — Presence: per-day login sessions feed the "active days" +
+        // "avg hours/day" sub-score. Independent try/catch (via `safe`) so
+        // a missing table on older deployments doesn't zero everything else.
+        safe(async () => (await supabase.from('user_sessions').select('user_id, date, login_at, logout_at, last_seen, logout_reason').gte('date', window.from).limit(20000)).data || []),
       ]);
       if (cancelled) return;
-      setData({ tickets, ticketComments, dailyLog, auditLog, customerQuotes, calendarEvents, customers: customers || [] });
+      setData({ tickets, ticketComments, dailyLog, auditLog, customerQuotes, calendarEvents, customers: customers || [], userSessions });
       setLoading(false);
     };
     load();
@@ -93,9 +98,21 @@ export default function HRReport({ user, userProfile, users, customers }) {
   const sortedReport = useMemo(() => {
     const sorted = [...teamReport];
     if (sort === 'name') sorted.sort((a, b) => (a.user.name || '').localeCompare(b.user.name || ''));
+    else if (sort === 'activity') sorted.sort((a, b) => (b.score?.activity || 0) - (a.score?.activity || 0));
     else if (sort === 'timeliness') sorted.sort((a, b) => (b.score?.timeliness || 0) - (a.score?.timeliness || 0));
     else if (sort === 'productivity') sorted.sort((a, b) => (b.score?.productivity || 0) - (a.score?.productivity || 0));
     else if (sort === 'engagement') sorted.sort((a, b) => (b.score?.engagement || 0) - (a.score?.engagement || 0));
+    // v55.80 BUG-11 FIX: when sorting by presence, push null-presence rows
+    // to the bottom (they're "no data", not "0 score"). Otherwise legacy
+    // deployments without user_sessions look like everyone has 0% presence.
+    else if (sort === 'presence') sorted.sort((a, b) => {
+      var aP = a.score?.presence;
+      var bP = b.score?.presence;
+      if (aP == null && bP == null) return 0;
+      if (aP == null) return 1;  // a goes to end
+      if (bP == null) return -1; // b goes to end
+      return bP - aP;
+    });
     else sorted.sort((a, b) => (b.score?.score || 0) - (a.score?.score || 0));
     return sorted;
   }, [teamReport, sort]);
@@ -121,10 +138,15 @@ export default function HRReport({ user, userProfile, users, customers }) {
       quotesCreated: avg('quotesCreated'),
       manualFillRatePct: avg('manualFillRatePct'),
       ticketComments: avg('ticketComments'),
+      // v55.80 — presence team averages
+      presenceRatePct: avg('presenceRatePct'),
+      avgHoursPerDay: avg('avgHoursPerDay'),
       score: scoreAvg('score'),
+      activity: scoreAvg('activity'),
       productivity: scoreAvg('productivity'),
       timeliness: scoreAvg('timeliness'),
       engagement: scoreAvg('engagement'),
+      presence: scoreAvg('presence'),
     };
   }, [teamReport]);
 
@@ -185,7 +207,7 @@ export default function HRReport({ user, userProfile, users, customers }) {
       {/* Sort + sub-score toggle */}
       <div className="flex flex-wrap gap-2 mb-4 items-center">
         <span className="text-xs text-slate-500">Sort by:</span>
-        {[['score', 'Overall'], ['productivity', 'Productivity'], ['timeliness', 'Timeliness'], ['engagement', 'Engagement'], ['name', 'Name']].map(([v, l]) => (
+        {[['score', 'Overall'], ['activity', 'Activity'], ['timeliness', 'Timeliness'], ['presence', 'Presence'], ['productivity', 'Productivity'], ['name', 'Name']].map(([v, l]) => (
           <button
             key={v}
             onClick={() => setSort(v)}
@@ -212,22 +234,26 @@ export default function HRReport({ user, userProfile, users, customers }) {
         <div className="space-y-3">
           {/* Team summary banner */}
           {teamAvg && (
-            <div className="bg-slate-50 rounded-lg p-3 border border-slate-200 grid grid-cols-2 md:grid-cols-5 gap-3 text-center">
+            <div className="bg-slate-50 rounded-lg p-3 border border-slate-200 grid grid-cols-2 md:grid-cols-6 gap-3 text-center">
               <div>
                 <div className="text-[10px] text-slate-500 uppercase font-semibold">Team Avg Score</div>
                 <div className="text-xl font-extrabold text-slate-700">{teamAvg.score}</div>
               </div>
               <div>
-                <div className="text-[10px] text-slate-500 uppercase font-semibold">Avg Productivity</div>
-                <div className="text-xl font-extrabold text-blue-600">{teamAvg.productivity}</div>
+                <div className="text-[10px] text-slate-500 uppercase font-semibold">Avg Activity</div>
+                <div className="text-xl font-extrabold text-purple-600">{teamAvg.activity}</div>
               </div>
               <div>
                 <div className="text-[10px] text-slate-500 uppercase font-semibold">Avg Timeliness</div>
                 <div className="text-xl font-extrabold text-emerald-600">{teamAvg.timeliness}</div>
               </div>
               <div>
-                <div className="text-[10px] text-slate-500 uppercase font-semibold">Avg Engagement</div>
-                <div className="text-xl font-extrabold text-purple-600">{teamAvg.engagement}</div>
+                <div className="text-[10px] text-slate-500 uppercase font-semibold">Avg Presence</div>
+                <div className="text-xl font-extrabold text-cyan-600">{teamAvg.presence != null ? teamAvg.presence : '—'}</div>
+              </div>
+              <div>
+                <div className="text-[10px] text-slate-500 uppercase font-semibold">Avg Productivity</div>
+                <div className="text-xl font-extrabold text-blue-600">{teamAvg.productivity}</div>
               </div>
               <div>
                 <div className="text-[10px] text-slate-500 uppercase font-semibold">Avg Tickets Closed</div>
@@ -263,6 +289,10 @@ function PersonRow({ row, showSubScores, expanded, onToggle, onRequestReview, re
   const d = row.deltas;
   if (!m) return null;
 
+  // v55.80 (Phase B / Section 4) — score breakdown.
+  // Computed once per row render. Pure function so no hooks needed.
+  const breakdown = (s && s.score != null) ? explainScore(s, m) : null;
+
   const scoreColor = (n) => {
     if (n == null) return 'text-slate-400';
     if (n >= 75) return 'text-emerald-600';
@@ -276,6 +306,16 @@ function PersonRow({ row, showSubScores, expanded, onToggle, onRequestReview, re
     if (n >= 50) return 'border-blue-300';
     if (n >= 25) return 'border-amber-300';
     return 'border-rose-300';
+  };
+
+  // v55.80 — tone → background+text classes for the driver pills
+  // and the wins/concerns chips.
+  const toneClasses = (t) => {
+    if (t === 'good') return { bg: 'bg-emerald-50', text: 'text-emerald-700', ring: 'ring-emerald-200' };
+    if (t === 'ok') return { bg: 'bg-blue-50', text: 'text-blue-700', ring: 'ring-blue-200' };
+    if (t === 'low') return { bg: 'bg-amber-50', text: 'text-amber-700', ring: 'ring-amber-200' };
+    if (t === 'poor') return { bg: 'bg-rose-50', text: 'text-rose-700', ring: 'ring-rose-200' };
+    return { bg: 'bg-slate-50', text: 'text-slate-700', ring: 'ring-slate-200' };
   };
 
   return (
@@ -301,22 +341,30 @@ function PersonRow({ row, showSubScores, expanded, onToggle, onRequestReview, re
           {showSubScores && s?.score != null && (
             <div className="flex gap-3 text-center">
               <div>
-                <div className="text-[9px] text-slate-500 uppercase">Productivity</div>
-                <div className={'text-base font-bold ' + scoreColor(s.productivity)}>{s.productivity}</div>
+                <div className="text-[9px] text-slate-500 uppercase">Activity</div>
+                <div className={'text-base font-bold ' + scoreColor(s.activity)}>{s.activity}</div>
               </div>
               <div>
                 <div className="text-[9px] text-slate-500 uppercase">Timeliness</div>
                 <div className={'text-base font-bold ' + scoreColor(s.timeliness)}>{s.timeliness}</div>
               </div>
               <div>
-                <div className="text-[9px] text-slate-500 uppercase">Engagement</div>
-                <div className={'text-base font-bold ' + scoreColor(s.engagement)}>{s.engagement}</div>
+                <div className="text-[9px] text-slate-500 uppercase">Presence</div>
+                <div className={'text-base font-bold ' + scoreColor(s.presence)}>{s.presence != null ? s.presence : '—'}</div>
               </div>
             </div>
           )}
 
-          <div className="text-xs text-slate-400">{expanded ? '▴ Hide' : '▾ Details'}</div>
+          <div className="text-xs text-slate-400">{expanded ? '▴ Hide' : '▾ Why this score?'}</div>
         </div>
+
+        {/* v55.80 (Phase B / Section 4) — One-line explanation under the score
+            so Max sees the WHY immediately without expanding. */}
+        {breakdown && !expanded && (
+          <div className="mt-2 text-[11px] text-slate-600 italic">
+            {breakdown.summary}
+          </div>
+        )}
 
         {/* Compact metric line */}
         <div className="flex flex-wrap gap-3 mt-3 text-[11px] text-slate-600">
@@ -331,12 +379,79 @@ function PersonRow({ row, showSubScores, expanded, onToggle, onRequestReview, re
           {m.overdueNow > 0 && <Pill label="overdue" value={m.overdueNow} tone="rose" />}
           {m.lateEdits > 0 && <Pill label="late edits" value={m.lateEdits} tone="amber" />}
           <Pill label="log fill" value={m.manualFillRatePct + '%'} />
+          {/* v55.80 — Presence pills: present-day rate + avg hours/day */}
+          {m.presenceRatePct != null && m.workingDays > 0 && <Pill label="present" value={m.presenceRatePct + '%'} />}
+          {m.avgHoursPerDay != null && m.avgHoursPerDay > 0 && <Pill label="hrs/day" value={m.avgHoursPerDay + 'h'} />}
         </div>
       </div>
 
       {/* Expanded detail */}
       {expanded && (
         <div className="mt-4 pt-4 border-t border-slate-200">
+          {/* v55.80 (Phase B / Section 4) — Why-this-score breakdown.
+              Renders ABOVE the dense metric grid because the question
+              "why is this number what it is?" is the first question
+              someone asks when they expand the row. */}
+          {breakdown && (
+            <div className="bg-slate-50 rounded-lg p-3 border border-slate-200 mb-4">
+              <div className="flex items-center justify-between mb-2">
+                <div className="text-sm font-bold text-slate-800">📊 Why this score?</div>
+                <div className="text-[10px] text-slate-500">
+                  Scored {s.score} out of 100
+                </div>
+              </div>
+
+              {/* Plain-English summary line */}
+              <div className="text-xs text-slate-700 mb-3 leading-relaxed">
+                {breakdown.summary}
+              </div>
+
+              {/* Wins + concerns row — green/red chips, scannable */}
+              {(breakdown.wins.length > 0 || breakdown.concerns.length > 0) && (
+                <div className="flex flex-wrap gap-1.5 mb-3">
+                  {breakdown.wins.map((w, i) => (
+                    <span key={'w' + i} className="inline-flex items-center gap-1 px-2 py-1 rounded-md text-[10px] font-semibold bg-emerald-50 text-emerald-700 border border-emerald-200">
+                      ✓ {w}
+                    </span>
+                  ))}
+                  {breakdown.concerns.map((c, i) => (
+                    <span key={'c' + i} className="inline-flex items-center gap-1 px-2 py-1 rounded-md text-[10px] font-semibold bg-rose-50 text-rose-700 border border-rose-200">
+                      ⚠ {c}
+                    </span>
+                  ))}
+                </div>
+              )}
+
+              {/* Five drivers — each with weight, value, contribution, signals */}
+              <div className="grid grid-cols-1 md:grid-cols-5 gap-2">
+                {breakdown.drivers.map((dr, i) => {
+                  const tc = toneClasses(dr.tone);
+                  return (
+                    <div key={i} className={'rounded-lg p-2 ring-1 ' + tc.bg + ' ' + tc.ring} title={dr.explainer}>
+                      <div className="flex items-baseline justify-between mb-1">
+                        <div className={'text-[10px] font-extrabold uppercase tracking-wide ' + tc.text}>{dr.label}</div>
+                        <div className="text-[9px] text-slate-500 font-semibold">{Math.round(dr.weight * 100)}%</div>
+                      </div>
+                      <div className="flex items-baseline gap-1.5 mb-1.5">
+                        <div className={'text-lg font-extrabold ' + tc.text}>{dr.value}</div>
+                        <div className="text-[9px] text-slate-500">→ +{dr.contribution} pts</div>
+                      </div>
+                      <ul className="text-[10px] text-slate-700 space-y-0.5">
+                        {dr.lines.slice(0, 4).map((line, j) => (
+                          <li key={j} className="leading-snug">• {line}</li>
+                        ))}
+                      </ul>
+                    </div>
+                  );
+                })}
+              </div>
+
+              <div className="text-[9px] text-slate-400 mt-2 italic">
+                Score = Productivity×30% + Timeliness×20% + Engagement×15% + Quality×15% + Reliability×10% + Presence×10%
+              </div>
+            </div>
+          )}
+
           <div className="grid grid-cols-2 md:grid-cols-3 gap-3 mb-4">
             <DetailBlock title="Tickets" rows={[
               ['Created in period', m.ticketsCreated],
@@ -368,6 +483,12 @@ function PersonRow({ row, showSubScores, expanded, onToggle, onRequestReview, re
               ['Auto entries', m.autoEntries],
               ['Active days', m.activeDays + ' / ' + m.workingDays + ' working'],
               ['Manual day rate', m.manualFillRatePct + '%'],
+            ]} />
+            <DetailBlock title="Presence" rows={[
+              ['Working days', m.workingDays || 0],
+              ['Days logged in', (m.presentDays != null ? m.presentDays : 0) + ' / ' + (m.workingDays || 0)],
+              ['Presence rate', (m.presenceRatePct != null ? m.presenceRatePct : 0) + '%'],
+              ['Avg hours/day', (m.avgHoursPerDay != null ? m.avgHoursPerDay : 0) + 'h'],
             ]} />
             <DetailBlock title="Calendar" rows={[
               ['Owned events', m.assignedEvents],

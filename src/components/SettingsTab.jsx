@@ -207,7 +207,7 @@ function VoiceSettingsPanel({ userProfile, toast }) {
           className="px-4 py-1.5 rounded text-xs font-bold bg-emerald-600 hover:bg-emerald-700 text-white disabled:bg-slate-300">
           {savingVoice ? 'Saving…' : 'Save voice'}
         </button>
-        <p className="text-[10px] text-slate-400 mt-2">
+        <p className="text-[10px] text-slate-500 mt-2">
           New settings apply to the next thing Nadia says. If you don't have the ElevenLabs paid plan, some voices may be blocked.
         </p>
       </div>
@@ -216,7 +216,7 @@ function VoiceSettingsPanel({ userProfile, toast }) {
       <div className="p-4 rounded-lg border border-slate-200 mb-3">
         <div className="text-xs font-bold mb-2">Browser support</div>
         {support.kind === 'ok' && <div className="text-[11px] text-emerald-600">✅ This browser supports continuous voice — "Hey Nadia" will listen automatically.</div>}
-        {support.kind === 'safari' && <div className="text-[11px] text-amber-600">⚠️ Safari supports voice but re-starts after each utterance. Works — just slightly less seamless than Chrome.</div>}
+        {support.kind === 'safari' && <div className="text-[11px] text-amber-800 font-semibold">⚠️ Safari supports voice but re-starts after each utterance. Works — just slightly less seamless than Chrome.</div>}
         {support.kind === 'firefox' && <div className="text-[11px] text-rose-600">❌ Firefox does NOT support speech recognition. Use Chrome/Safari/Edge for voice. Push-to-talk via Space bar still works.</div>}
         {support.kind === 'unsupported' && <div className="text-[11px] text-rose-600">❌ No speech recognition in this browser. Update browser or switch to Chrome.</div>}
         {support.kind === 'checking' && <div className="text-[11px] text-slate-400">Checking...</div>}
@@ -612,7 +612,7 @@ function PhoneSettingsPanel({ users, userProfile, toast, isAdmin, isSuperAdmin }
                     : 'bg-red-50 border-red-200';
                   var icon = r.status === 'ok' ? '✓' : r.status === 'warn' ? '⚠' : '✗';
                   var iconColor = r.status === 'ok' ? 'text-green-600'
-                    : r.status === 'warn' ? 'text-amber-600' : 'text-red-600';
+                    : r.status === 'warn' ? 'text-amber-800' : 'text-red-700';
                   return (
                     <div key={idx} className={'rounded border p-2.5 ' + bg}>
                       <div className="flex items-start gap-2">
@@ -1129,7 +1129,7 @@ export default function SettingsTab({ toast, user, users, onReload, isAdmin, use
                 </div>
                 <div className="flex gap-1 mt-1">
                   <button onClick={() => setSelectedModules([...MODULES])} className="text-[9px] text-blue-500 hover:underline">Select All</button>
-                  <button onClick={() => setSelectedModules([])} className="text-[9px] text-slate-400 hover:underline">Clear</button>
+                  <button onClick={() => setSelectedModules([])} className="text-[9px] text-slate-500 hover:underline">Clear</button>
                 </div>
               </div>
               <div className="flex gap-2 mt-3">
@@ -1139,7 +1139,7 @@ export default function SettingsTab({ toast, user, users, onReload, isAdmin, use
                 </button>
                 <button onClick={() => { setShowAddMember(false); setAddError(''); }} className="px-4 py-2 border border-slate-200 rounded-lg text-sm">Cancel</button>
               </div>
-              <div className="text-[9px] text-slate-400 mt-2">This creates a login account + sets their role and permissions. They can sign in immediately.</div>
+              <div className="text-[9px] text-slate-500 mt-2">This creates a login account + sets their role and permissions. They can sign in immediately.</div>
             </div>
           )}
 
@@ -1161,7 +1161,7 @@ export default function SettingsTab({ toast, user, users, onReload, isAdmin, use
                           <input defaultValue={u.name_ar||''} id={'edit-namear-'+u.id} className="w-full px-3 py-2 rounded border text-sm" style={{direction:'rtl'}} /></div>
                         <div><label className="text-[10px] font-semibold">Email</label>
                           <input defaultValue={u.email} className="w-full px-3 py-2 rounded border text-sm bg-slate-50" disabled />
-                          <div className="text-[9px] text-slate-400">Email cannot be changed</div></div>
+                          <div className="text-[9px] text-slate-500">Email cannot be changed</div></div>
                         <div><label className="text-[10px] font-semibold">Phone</label>
                           <input defaultValue={u.phone||''} id={'edit-phone-'+u.id} className="w-full px-3 py-2 rounded border text-sm" placeholder="+20..." /></div>
                         <div><label className="text-[10px] font-semibold">Role</label>
@@ -1202,8 +1202,8 @@ export default function SettingsTab({ toast, user, users, onReload, isAdmin, use
                           <div className="text-sm font-bold">{u.name} {u.active === false && <span className="text-red-500 text-[10px]">(Deactivated)</span>}</div>
                           {u.name_ar && <div className="text-xs text-slate-500" style={{ direction: 'rtl' }}>{u.name_ar}</div>}
                           <div className="text-xs text-slate-400">{u.email}</div>
-                          {u.phone && <div className="text-[10px] text-slate-400">📱 {u.phone}</div>}
-                          {reportsToUser && <div className="text-[10px] text-slate-400">Reports to: {reportsToUser.name}</div>}
+                          {u.phone && <div className="text-[10px] text-slate-500">📱 {u.phone}</div>}
+                          {reportsToUser && <div className="text-[10px] text-slate-500">Reports to: {reportsToUser.name}</div>}
                         </div>
                         <span className={'text-xs font-bold ' + roleInfo.c}>{roleInfo.l}</span>
                       </div>
@@ -1214,7 +1214,7 @@ export default function SettingsTab({ toast, user, users, onReload, isAdmin, use
                           var pw = prompt('New password for ' + u.name + ' (min 6 chars):');
                           if (pw && pw.length >= 6) handleUpdateUser(u.id, { new_password: pw });
                           else if (pw) alert('Password must be at least 6 characters');
-                        }} className="px-2 py-1 rounded border border-amber-300 text-amber-600 text-[10px] font-semibold">🔑 Reset Password</button>
+                        }} className="px-2 py-1 rounded border border-amber-400 text-amber-800 text-[10px] font-bold">🔑 Reset Password</button>
                         {u.active !== false && <button onClick={() => handleDeactivateUser(u.id, u.name)}
                           className="px-2 py-1 rounded border border-red-300 text-red-500 text-[10px] font-semibold">Deactivate</button>}
                         {u.active === false && <button onClick={() => handleUpdateUser(u.id, { active: true })}
@@ -1235,7 +1235,7 @@ export default function SettingsTab({ toast, user, users, onReload, isAdmin, use
       {section === 'profiles' && (
         <div className="bg-white rounded-xl p-4">
           <h3 className="text-sm font-bold mb-1">Team Profiles / \u0645\u0644\u0641\u0627\u062a \u0627\u0644\u0641\u0631\u064a\u0642</h3>
-          <p className="text-[10px] text-slate-400 mb-3">Add personal info about team members. AI Secretary uses this for personalized conversations.</p>
+          <p className="text-[10px] text-slate-500 mb-3">Add personal info about team members. AI Secretary uses this for personalized conversations.</p>
 
           {editingProfile ? (() => {
             const u = users.find(x => x.id === editingProfile);
@@ -1316,7 +1316,7 @@ export default function SettingsTab({ toast, user, users, onReload, isAdmin, use
                         {p.conversation_starters && <div className="text-[10px] text-blue-500">\ud83d\udcac {p.conversation_starters}</div>}
                       </div>
                     ) : (
-                      <div className="text-[10px] text-slate-400 mt-1">No profile yet</div>
+                      <div className="text-[10px] text-slate-500 mt-1">No profile yet</div>
                     )}
                   </div>
                   <button onClick={() => { setEditingProfile(u.id); setProfileForm(profiles[u.id] || {}); }}
@@ -1334,7 +1334,7 @@ export default function SettingsTab({ toast, user, users, onReload, isAdmin, use
       {section === 'permissions' && (
         <div className="bg-white rounded-xl p-4 overflow-auto">
           <h3 className="text-sm font-bold mb-3">Module Access / صلاحيات الوحدات</h3>
-          <p className="text-[10px] text-slate-400 mb-3">Super Admin always has full access. Toggle modules for other users.</p>
+          <p className="text-[10px] text-slate-500 mb-3">Super Admin always has full access. Toggle modules for other users.</p>
           <table className="w-full border-collapse text-xs">
             <thead>
               <tr className="bg-slate-50">
@@ -1431,7 +1431,7 @@ export default function SettingsTab({ toast, user, users, onReload, isAdmin, use
               className="px-4 py-2 rounded-lg text-sm font-bold text-white" style={{background:'linear-gradient(135deg, #0ea5e9, #3b82f6)'}}>
               Connect Gmail Account
             </button>
-            <div className="mt-2 text-[10px] text-slate-400">Requires: GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET, GOOGLE_REDIRECT_URI in Vercel env vars</div>
+            <div className="mt-2 text-[10px] text-slate-500">Requires: GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET, GOOGLE_REDIRECT_URI in Vercel env vars</div>
           </div>
           <div className="bg-white rounded-xl p-4">
             <h3 className="text-sm font-bold mb-3">💬 WhatsApp Business (Twilio)</h3>
@@ -1454,7 +1454,7 @@ export default function SettingsTab({ toast, user, users, onReload, isAdmin, use
               <div>• Send WhatsApp: <em>&quot;Send WhatsApp to Omar confirming the shipment&quot;</em></div>
               <div>• Create tickets from messages: <em>&quot;Create a ticket from that email&quot;</em></div>
             </div>
-            <p className="text-[10px] text-slate-400 mt-2">All sends require your approval first. Full audit log in Communications tab.</p>
+            <p className="text-[10px] text-slate-500 mt-2">All sends require your approval first. Full audit log in Communications tab.</p>
           </div>
         </div>
       )}
@@ -1472,7 +1472,7 @@ export default function SettingsTab({ toast, user, users, onReload, isAdmin, use
                 <div className="flex items-center justify-between mb-3">
                   <div>
                     <div className="text-sm font-bold">{u.name}</div>
-                    <div className="text-[10px] text-slate-400">{u.email}</div>
+                    <div className="text-[10px] text-slate-500">{u.email}</div>
                   </div>
                   <label className="flex items-center gap-2 cursor-pointer">
                     <span className="text-[10px] text-slate-500">Greeter</span>
@@ -1525,7 +1525,7 @@ export default function SettingsTab({ toast, user, users, onReload, isAdmin, use
                     </select>
                   </div>
                 </div>
-                <div className="mt-2 text-[10px] text-slate-400">
+                <div className="mt-2 text-[10px] text-slate-500">
                   Current: {(PERSONALITIES || []).find(p => p.id === (u.greeter_personality || 'friendly'))?.label || 'Friendly'} · {u.greeter_language === 'ar' ? 'Arabic' : 'English'}
                 </div>
               </div>
@@ -1551,7 +1551,7 @@ export default function SettingsTab({ toast, user, users, onReload, isAdmin, use
           <div className="flex justify-between items-center mb-4">
             <div>
               <h3 className="text-sm font-bold">🏷️ Manage Categories & Subcategories</h3>
-              <p className="text-[10px] text-slate-400">Categories are stored bilingually in the <code className="bg-slate-100 px-1 rounded">categories</code> table. Arabic is the stable internal key; English is the display label. New categories appear in all dropdowns immediately.</p>
+              <p className="text-[10px] text-slate-500">Categories are stored bilingually in the <code className="bg-slate-100 px-1 rounded">categories</code> table. Arabic is the stable internal key; English is the display label. New categories appear in all dropdowns immediately.</p>
             </div>
           </div>
           {/* Add New Category — bilingual with auto-translate */}
@@ -1653,7 +1653,7 @@ export default function SettingsTab({ toast, user, users, onReload, isAdmin, use
                 } catch(err) { alert('Error: ' + (err.message || err)); }
               }} className="px-3 py-1.5 bg-blue-500 text-white rounded text-xs font-bold">+ Add</button>
             </div>
-            <div className="text-[9px] text-slate-400 mt-2">💡 Fill one side and tap 🌐 to auto-translate. Internal storage key is always the Arabic name for stability across language switches.</div>
+            <div className="text-[9px] text-slate-500 mt-2">💡 Fill one side and tap 🌐 to auto-translate. Internal storage key is always the Arabic name for stability across language switches.</div>
           </div>
           {/* Add New Subcategory (unchanged storage — still uses expense_rules subcat convention) */}
           <div className="bg-orange-50 rounded-lg p-3 mb-4 border border-orange-200">
@@ -1752,7 +1752,7 @@ export default function SettingsTab({ toast, user, users, onReload, isAdmin, use
                         </span>
                       </div>
                       <div className="flex items-center gap-2">
-                        <span className="text-[10px] text-slate-400">{subs.length} subcategories</span>
+                        <span className="text-[10px] text-slate-500">{subs.length} subcategories</span>
                         {canEdit && (
                           <button onClick={async () => {
                             if (!confirm('Deactivate "' + (c.name_en || c.name_ar) + '"? It will be hidden from dropdowns but existing rows keep their tag.')) return;
@@ -1836,7 +1836,7 @@ export default function SettingsTab({ toast, user, users, onReload, isAdmin, use
                                     alert('Reversed ' + (matching || []).length + ' transactions');
                                     onReload();
                                   } catch(err) { toast ? toast.error(err.message) : toast ? toast.error(err.message) : alert(err.message); }
-                                }} className="px-2 py-0.5 rounded border border-amber-300 text-amber-600 text-[10px] hover:bg-amber-50">Reverse</button>
+                                }} className="px-2 py-0.5 rounded border border-amber-400 text-amber-800 text-[10px] font-bold hover:bg-amber-50">Reverse</button>
                                 <button onClick={async () => {
                                   if (!confirm('Delete this rule?\nحذف هذه القاعدة؟')) return;
                                   try {
@@ -1883,7 +1883,7 @@ export default function SettingsTab({ toast, user, users, onReload, isAdmin, use
             <div className="flex justify-between items-center flex-wrap gap-2 mb-3">
               <div>
                 <h3 className="text-sm font-bold">📋 Expense Descriptions ({expDescs.length} unique)</h3>
-                <p className="text-[10px] text-slate-400">Every unique expense description. Update category/subcategory here — changes apply to ALL matching treasury entries and create rules for future entries.</p>
+                <p className="text-[10px] text-slate-500">Every unique expense description. Update category/subcategory here — changes apply to ALL matching treasury entries and create rules for future entries.</p>
               </div>
               <div className="flex gap-2 items-center">
                 <input value={expSearch} onChange={e => setExpSearch(e.target.value)} placeholder="Search..."
@@ -2011,7 +2011,7 @@ export default function SettingsTab({ toast, user, users, onReload, isAdmin, use
                 </tbody>
               </table>
             </div>
-            <div className="mt-2 text-[10px] text-slate-400">
+            <div className="mt-2 text-[10px] text-slate-500">
               Showing {expDescs.filter(d => {
                 if (expSearch && !(d.description || '').includes(expSearch) && !(d.description || '').toLowerCase().includes(expSearch.toLowerCase())) return false;
                 if (expCatFilter === 'uncategorized' && d.category) return false;

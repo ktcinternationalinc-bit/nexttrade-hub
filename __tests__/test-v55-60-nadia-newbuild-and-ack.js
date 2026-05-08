@@ -29,8 +29,8 @@ if (fs.existsSync(cardPath)) {
     /localStorage\.getItem\(STORAGE_KEY\)/.test(card));
   check('A.4 dismiss persists current version to localStorage',
     /localStorage\.setItem\(STORAGE_KEY, latest\.version\)/.test(card));
-  check('A.5 picks top 3 highlights from items',
-    /\.items \|\| \[\]\)\.slice\(0, 3\)/.test(card));
+  check('A.5 picks top 3 highlights from items (filtered by admin level since v55.74)',
+    /\.items \|\| \[\]\)\.filter\(function[\s\S]+?\}\)\.slice\(0, 3\)/.test(card));
   check('A.6 has "Got it" dismiss button',
     /✓ Got it/.test(card));
   check('A.7 displays the build version prominently',
@@ -45,7 +45,7 @@ var pageSrc = read('src/app/page.jsx');
 check('B.1 imported in page.jsx',
   /import NadiaNewBuildCard from '\.\.\/components\/NadiaNewBuildCard'/.test(pageSrc));
 check('B.2 rendered above PendingNadiaMessages',
-  /<NadiaNewBuildCard \/>[\s\S]{0,800}<PendingNadiaMessages/.test(pageSrc));
+  /<NadiaNewBuildCard\b[^>]*\/>[\s\S]{0,800}<PendingNadiaMessages/.test(pageSrc));
 
 // ---------- C: Archived announcements — active-only filter ----------
 console.log('\nC. Archived announcements filter to active users');

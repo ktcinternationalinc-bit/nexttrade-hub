@@ -3,9 +3,11 @@ import { useState, useMemo, useEffect, useCallback, useRef } from 'react';
 import { supabase, dbInsert, dbUpdate, dbDelete, logActivity } from '../lib/supabase';
 import { notifyShippingRate, notifyShippingBooked } from '../lib/notify';
 import { fE, fmt } from '../lib/utils';
+import { fmtET, todayET, daysAgoET } from '../lib/et-time';
 import EmailComposer from './EmailComposer';
 import * as XLSX from 'xlsx';
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip as RTooltip, Legend as RLegend, ResponsiveContainer } from 'recharts';
+import { parseNumberSmart as _parseNumberSmartShared, parseDate as _parseDateShared, normalizeContainer as _normalizeContainerShared } from '../lib/shipping-import-helpers';
 
 const CONTAINER_TYPES = ['20ft', '40ft', '40ft HC', '45ft', 'LCL', 'Bulk', 'Flatbed', 'Reefer', 'Open Top', 'Truck', 'Trailer'];
 const TRANSPORT_MODES = ['Ocean', 'Trucking', 'Air', 'Rail', 'Multi-modal'];
@@ -13,13 +15,13 @@ const RATE_TYPES = ['Shipping', 'Trucking', 'Customs/Brokerage'];
 const CURRENCIES = ['USD', 'EUR', 'EGP', 'GBP', 'SAR', 'AED', 'CNY', 'TRY'];
 const QUOTE_STATUSES = ['draft', 'sent', 'accepted', 'rejected', 'expired', 'booked'];
 const fCur = (amount, currency) => { if (!amount && amount !== 0) return '—'; const sym = { USD: '\$', EUR: '€', EGP: 'E£', GBP: '£', CNY: '¥', TRY: '₺', SAR: 'SR', AED: 'AED ' }; return (sym[currency] || currency + ' ') + Number(amount).toLocaleString(); };
-const isExpired = (d) => d && d < new Date().toISOString().substring(0, 10);
+const isExpired = (d) => d && d < todayET();
 const daysUntil = (d) => { if (!d) return null; return Math.ceil((new Date(d) - new Date()) / 86400000); };
 
 function ExpiryBadge({ date }) {
-  if (!date) return <span className="text-[9px] text-slate-400">No expiry</span>;
+  if (!date) return <span className="text-[9px] text-slate-500">No expiry</span>;
   const d = daysUntil(date); const exp = d < 0; const soon = d >= 0 && d <= 7;
-  return <span className={'px-1.5 py-0.5 rounded text-[9px] font-bold ' + (exp ? 'bg-red-100 text-red-600' : soon ? 'bg-amber-100 text-amber-600' : 'bg-green-100 text-green-700')}>{exp ? 'Expired ' + Math.abs(d) + 'd ago' : d === 0 ? 'Expires today' : d + 'd left'}</span>;
+  return <span className={'px-1.5 py-0.5 rounded text-[9px] font-bold ' + (exp ? 'bg-red-100 text-red-600' : soon ? 'bg-amber-100 text-amber-900' : 'bg-green-100 text-green-700')}>{exp ? 'Expired ' + Math.abs(d) + 'd ago' : d === 0 ? 'Expires today' : d + 'd left'}</span>;
 }
 
 // ========== RATE PICKER ==========
@@ -89,7 +91,7 @@ function RatePicker({ rates, label, rateType, origin, destination, selected, onS
           </div>
         ); })}</div>
       )}
-      <div className="text-center mt-2"><button onClick={() => { onSelect(null); setExpanded(false); }} className="text-[10px] text-slate-400 underline">Enter manually instead</button></div>
+      <div className="text-center mt-2"><button onClick={() => { onSelect(null); setExpanded(false); }} className="text-[10px] text-slate-500 underline">Enter manually instead</button></div>
     </div>)}
   </div>);
 }
@@ -158,7 +160,7 @@ function QuotePrintView({ quote, onClose }) {
         </div>
         {quote.valid_until&&<div className="vl">This quote is valid until <strong>{quote.valid_until}</strong></div>}
         {quote.notes&&<div className="nt"><strong>Notes:</strong> {quote.notes}</div>}
-        <div className="ft"><div>KTC Trading Operations — International Trading & Logistics</div><div style={{marginTop:4}}>Generated {new Date().toLocaleDateString()}</div></div>
+        <div className="ft"><div>KTC Trading Operations — International Trading & Logistics</div><div style={{marginTop:4}}>Generated {fmtET(new Date(), 'date')} (ET)</div></div>
       </div>
     </div>
   </div>);
@@ -208,7 +210,7 @@ function RequestQuoteModal({ data, onClose, origins, destinations, openWhatsApp,
             <label className="text-xs font-bold">Select Vendors</label>
             <div className="flex gap-2">
               <button onClick={selectAll} className="text-[10px] text-blue-600 font-bold hover:underline">Select All</button>
-              <button onClick={selectNone} className="text-[10px] text-slate-400 hover:underline">Clear</button>
+              <button onClick={selectNone} className="text-[10px] text-slate-500 hover:underline">Clear</button>
             </div>
           </div>
           <div className="max-h-[200px] overflow-auto rounded-lg border border-slate-200">
@@ -223,7 +225,7 @@ function RequestQuoteModal({ data, onClose, origins, destinations, openWhatsApp,
                   </div>
                   <div className="flex-1 min-w-0">
                     <div className="text-xs font-semibold truncate">{v.company_name}{v.contact_name ? ' — ' + v.contact_name : ''}</div>
-                    <div className="text-[10px] text-slate-400 flex gap-2">
+                    <div className="text-[10px] text-slate-500 flex gap-2">
                       {v.email && <span>📧 {v.email}</span>}
                       {v.whatsapp && <span>💬 WhatsApp</span>}
                     </div>
@@ -316,6 +318,21 @@ export default function ShippingRatesTab({ toast, user, userProfile, isAdmin, cu
   // same card — confusing when you only care about one specific port.
   // These two filters now narrow results to the exact port.
   const [filterPol, setFilterPol] = useState('all');
+  // v55.80 — Trends view filters (all default to 'all'/'12m')
+  const [trendRange, setTrendRange] = useState('12m');
+  const [trendOrigin, setTrendOrigin] = useState('all');
+  const [trendDest, setTrendDest] = useState('all');
+  const [trendCurrency, setTrendCurrency] = useState('USD');
+  // v55.80 — Trends: chart vs table toggle. Persisted in localStorage like
+  // the bubble/list toggle on the routes view.
+  const [trendsViewMode, setTrendsViewModeRaw] = useState(function () {
+    try { return (typeof window !== 'undefined' && window.localStorage.getItem('ktc_shipping_trends_view_mode')) || 'chart'; }
+    catch (_) { return 'chart'; }
+  });
+  var setTrendsViewMode = function (mode) {
+    setTrendsViewModeRaw(mode);
+    try { if (typeof window !== 'undefined') window.localStorage.setItem('ktc_shipping_trends_view_mode', mode); } catch (_) {}
+  };
   const [filterPod, setFilterPod] = useState('all');
   const [filterVendor, setFilterVendor] = useState('all');
   const [filterLine, setFilterLine] = useState('all');
@@ -432,7 +449,7 @@ export default function ShippingRatesTab({ toast, user, userProfile, isAdmin, cu
   const handleSaveRate = async () => {
     if (!f.origin || !f.destination || !f.vendorName) { alert('Fill Origin, Destination, Vendor'); return; }
     if (!f.rateType) { alert('Rate Type is required! Select Shipping, Trucking, or Customs/Brokerage.\n\nنوع السعر مطلوب! اختر شحن أو نقل بري أو جمارك'); return; }
-    const record = { origin: f.origin, destination: f.destination, vendor_name: f.vendorName, shipping_line: f.shippingLine || '', transport_mode: f.transportMode || 'Ocean', rate_type: f.rateType, container_type: f.containerType || '40ft', rate_amount: Number(f.rateAmount) || 0, currency: f.currency || 'USD', transit_days: f.transitDays ? Number(f.transitDays) : null, free_days: f.freeDays ? Number(f.freeDays) : null, port_fees: Number(f.portFees) || 0, thc_fees: Number(f.thcFees) || 0, documentation_fees: Number(f.docFees) || 0, customs_fees: Number(f.customsFees) || 0, other_fees: Number(f.otherFees) || 0, other_fees_desc: f.otherFeesDesc || '', total_cost: Number(f.rateAmount||0)+Number(f.portFees||0)+Number(f.thcFees||0)+Number(f.docFees||0)+Number(f.customsFees||0)+Number(f.otherFees||0), effective_date: f.effectiveDate || new Date().toISOString().substring(0,10), expiry_date: f.expiryDate || null, port_of_loading: f.pol || '', port_of_discharge: f.pod || '', notes: f.notes || '', booked: f.booked || false, shipment_reference: f.shipmentRef || '', booking_date: f.bookingDate || null, booking_notes: f.bookingNotes || '' };
+    const record = { origin: f.origin, destination: f.destination, vendor_name: f.vendorName, shipping_line: f.shippingLine || '', transport_mode: f.transportMode || 'Ocean', rate_type: f.rateType, container_type: f.containerType || '40ft', rate_amount: Number(f.rateAmount) || 0, currency: f.currency || 'USD', transit_days: f.transitDays ? Number(f.transitDays) : null, free_days: f.freeDays ? Number(f.freeDays) : null, port_fees: Number(f.portFees) || 0, thc_fees: Number(f.thcFees) || 0, documentation_fees: Number(f.docFees) || 0, customs_fees: Number(f.customsFees) || 0, other_fees: Number(f.otherFees) || 0, other_fees_desc: f.otherFeesDesc || '', total_cost: Number(f.rateAmount||0)+Number(f.portFees||0)+Number(f.thcFees||0)+Number(f.docFees||0)+Number(f.customsFees||0)+Number(f.otherFees||0), effective_date: f.effectiveDate || todayET(), expiry_date: f.expiryDate || null, port_of_loading: f.pol || '', port_of_discharge: f.pod || '', notes: f.notes || '', booked: f.booked || false, shipment_reference: f.shipmentRef || '', booking_date: f.bookingDate || null, booking_notes: f.bookingNotes || '' };
     try { if (editingRate) await dbUpdate('shipping_rates', editingRate.id, record, myId); else { await dbInsert('shipping_rates', record, myId); notifyShippingRate('all', f.origin, f.destination, myId); } await logActivity(myId, (editingRate ? 'Updated' : 'Created') + ' ' + (f.rateType || 'shipping') + ' rate: ' + f.origin + ' → ' + f.destination + ' (' + f.vendorName + ', ' + (f.currency || 'USD') + ' ' + (f.rateAmount || 0) + ')', 'shipping'); setF({}); setEditingRate(null); setView(selectedRoute ? 'route_detail' : 'routes'); await loadData(); } catch (err) { toast ? toast.error(err.message) : toast ? toast.error(err.message) : alert(err.message); }
   };
 
@@ -441,15 +458,15 @@ export default function ShippingRatesTab({ toast, user, userProfile, isAdmin, cu
   const confirmBooking = async () => {
     if (!bookingModal || !f.bookRef) return;
     try {
-      await dbInsert('shipping_bookings', { rate_id: bookingModal.id, shipment_reference: f.bookRef, customer_name: f.bookCustomer || '', order_number: f.bookOrder || '', booking_date: new Date().toISOString().substring(0,10), notes: f.bookNotes || '', booked_by: myId }, myId);
-      await dbUpdate('shipping_rates', bookingModal.id, { booked: true, shipment_reference: f.bookRef, booking_date: new Date().toISOString().substring(0,10), booking_notes: (f.bookCustomer ? 'Customer: ' + f.bookCustomer + ' | ' : '') + (f.bookOrder ? 'Order: ' + f.bookOrder : '') }, myId);
+      await dbInsert('shipping_bookings', { rate_id: bookingModal.id, shipment_reference: f.bookRef, customer_name: f.bookCustomer || '', order_number: f.bookOrder || '', booking_date: todayET(), notes: f.bookNotes || '', booked_by: myId }, myId);
+      await dbUpdate('shipping_rates', bookingModal.id, { booked: true, shipment_reference: f.bookRef, booking_date: todayET(), booking_notes: (f.bookCustomer ? 'Customer: ' + f.bookCustomer + ' | ' : '') + (f.bookOrder ? 'Order: ' + f.bookOrder : '') }, myId);
       await logActivity(myId, 'Booked rate: ' + bookingModal.vendor_name + ' ' + bookingModal.origin + '→' + bookingModal.destination + ' Ref: ' + f.bookRef + (f.bookCustomer ? ' for ' + f.bookCustomer : ''), 'shipping');
       notifyShippingBooked('all', f.bookRef, myId);
       setBookingModal(null); setF(prev => ({...prev, bookRef:'', bookCustomer:'', bookOrder:'', bookNotes:''})); await loadData();
     } catch (err) { toast ? toast.error(err.message) : alert(err.message); }
   };
   const [rateHistoryMode, setRateHistoryMode] = useState('1y');
-  const [rateHistoryDf, setRateHistoryDf] = useState(() => new Date(Date.now() - 365 * 86400000).toISOString().substring(0, 10));
+  const [rateHistoryDf, setRateHistoryDf] = useState(() => daysAgoET(365));
   const [rateHistoryDt, setRateHistoryDt] = useState('');
   // S17.11 (Apr 23 2026) — historical rates UX overhaul.
   // hideExpired: separate checkbox, NOT tied to the time-period buttons.
@@ -466,7 +483,7 @@ export default function ShippingRatesTab({ toast, user, userProfile, isAdmin, cu
     const iT = Number(f.qShipCost||0)+Number(f.qTruckCost||0)+Number(f.qCustomsCost||0)+Number(f.qOtherInternal||0);
     const cT = Number(f.qClientShip||0)+Number(f.qClientTruck||0)+Number(f.qClientCustoms||0)+Number(f.qClientService||0)+Number(f.qClientOther||0);
     const profit = cT - iT;
-    const record = { quote_number: f.qNumber || ('Q-' + Date.now().toString(36).toUpperCase()), quote_date: f.qDate || new Date().toISOString().substring(0,10), customer_name: f.qCustomer, customer_email: f.qEmail || '', origin: f.qOrigin, destination: f.qDest, port_of_loading: f.qPol || '', port_of_discharge: f.qPod || '', container_type: f.qContainer || '40ft', shipping_rate_id: pickedShipRate || f.qRateId || null, shipping_cost: Number(f.qShipCost)||0, shipping_vendor: f.qShipVendor || '', shipping_line: f.qShipLine || '', trucking_cost: Number(f.qTruckCost)||0, trucking_vendor: f.qTruckVendor || '', customs_cost: Number(f.qCustomsCost)||0, other_internal_cost: Number(f.qOtherInternal)||0, other_internal_desc: f.qOtherInternalDesc || '', total_internal_cost: iT, client_shipping_fee: Number(f.qClientShip)||0, client_trucking_fee: Number(f.qClientTruck)||0, client_customs_fee: Number(f.qClientCustoms)||0, client_service_fee: Number(f.qClientService)||0, client_other_fee: Number(f.qClientOther)||0, client_other_desc: f.qClientOtherDesc || '', client_total: cT, client_display_text: f.qDisplayText || '', client_show_breakdown: f.qShowBreakdown || false, profit, profit_pct: iT > 0 ? Math.round((profit/iT)*10000)/100 : 0, currency: f.qCurrency || 'USD', status: f.qStatus || 'draft', valid_until: f.qValidUntil || null, notes: f.qNotes || '' };
+    const record = { quote_number: f.qNumber || ('Q-' + Date.now().toString(36).toUpperCase()), quote_date: f.qDate || todayET(), customer_name: f.qCustomer, customer_email: f.qEmail || '', origin: f.qOrigin, destination: f.qDest, port_of_loading: f.qPol || '', port_of_discharge: f.qPod || '', container_type: f.qContainer || '40ft', shipping_rate_id: pickedShipRate || f.qRateId || null, shipping_cost: Number(f.qShipCost)||0, shipping_vendor: f.qShipVendor || '', shipping_line: f.qShipLine || '', trucking_cost: Number(f.qTruckCost)||0, trucking_vendor: f.qTruckVendor || '', customs_cost: Number(f.qCustomsCost)||0, other_internal_cost: Number(f.qOtherInternal)||0, other_internal_desc: f.qOtherInternalDesc || '', total_internal_cost: iT, client_shipping_fee: Number(f.qClientShip)||0, client_trucking_fee: Number(f.qClientTruck)||0, client_customs_fee: Number(f.qClientCustoms)||0, client_service_fee: Number(f.qClientService)||0, client_other_fee: Number(f.qClientOther)||0, client_other_desc: f.qClientOtherDesc || '', client_total: cT, client_display_text: f.qDisplayText || '', client_show_breakdown: f.qShowBreakdown || false, profit, profit_pct: iT > 0 ? Math.round((profit/iT)*10000)/100 : 0, currency: f.qCurrency || 'USD', status: f.qStatus || 'draft', valid_until: f.qValidUntil || null, notes: f.qNotes || '' };
     try { if (editingQuote) await dbUpdate('shipping_quotes', editingQuote.id, record, myId); else await dbInsert('shipping_quotes', record, myId); await logActivity(myId, `Quote ${record.quote_number} ${editingQuote?'updated':'created'} for ${record.customer_name}`); resetQuoteForm(); setView('quotes'); await loadData(); } catch (err) { toast ? toast.error(err.message) : toast ? toast.error(err.message) : alert(err.message); }
   };
 
@@ -479,38 +496,11 @@ export default function ShippingRatesTab({ toast, user, userProfile, isAdmin, cu
 
     const headers = Object.keys(rows[0]);
 
-    // ---- NUMERIC-AWARE STRING PARSER ----
-    // Handles: "$2,500.00", "USD 2500", "2.500,00" (EU), "2,500", plain numbers
-    // Returns NaN if the string has no digits at all (so we can tell "empty" from "zero").
-    const parseNumberSmart = (raw) => {
-      if (raw == null || raw === '') return NaN;
-      if (typeof raw === 'number') return raw;
-      const s = String(raw).trim();
-      if (!s) return NaN;
-      // strip everything that isn't a digit, dot, comma, or minus
-      let clean = s.replace(/[^0-9.,\-]/g, '');
-      if (!clean) return NaN;
-      // Detect EU format: last separator is a comma AND there's a period before it
-      // → "1.234,56" → swap. Otherwise assume US/intl format and strip commas.
-      const lastComma = clean.lastIndexOf(',');
-      const lastDot = clean.lastIndexOf('.');
-      if (lastComma > -1 && lastDot > -1 && lastComma > lastDot) {
-        // EU: . = thousands, , = decimal → remove dots, swap comma for dot
-        clean = clean.replace(/\./g, '').replace(',', '.');
-      } else if (lastComma > -1 && lastDot === -1) {
-        // Only commas present. If there are multiple OR the comma is followed by
-        // 3+ digits → thousands separator. Otherwise decimal.
-        const commaCount = (clean.match(/,/g) || []).length;
-        const afterComma = clean.length - lastComma - 1;
-        if (commaCount > 1 || afterComma >= 3) clean = clean.replace(/,/g, '');
-        else clean = clean.replace(',', '.');
-      } else {
-        // US format or no separators at all
-        clean = clean.replace(/,/g, '');
-      }
-      const n = Number(clean);
-      return isNaN(n) ? NaN : n;
-    };
+    // v55.80 BD-AUDIT FIX: parseDate / parseNumberSmart / normalizeContainer
+    // are all imported from src/lib/shipping-import-helpers.js — one source
+    // of truth. Previously they were duplicated inline AND inside
+    // reparseFromMapping, so bug fixes only landed in one place.
+    const parseNumberSmart = _parseNumberSmartShared;
 
     // ---- COLUMN SCORING ----
     // For each candidate column, count how many of the first 20 non-empty rows
@@ -605,33 +595,19 @@ export default function ShippingRatesTab({ toast, user, userProfile, isAdmin, cu
       const n = parseNumberSmart(row[col]);
       return isNaN(n) ? null : n;
     };
-    const parseDate = (row, col) => {
-      const raw = col ? row[col] : null;
-      if (raw == null || raw === '') return '';
-      // Excel serial date (days since 1899-12-30)
-      if (typeof raw === 'number' && raw > 20000 && raw < 80000) {
-        return new Date((raw - 25569) * 86400000).toISOString().substring(0, 10);
-      }
-      const s = String(raw).trim();
-      if (!s) return '';
-      if (!isNaN(s) && Number(s) > 20000) {
-        return new Date((Number(s) - 25569) * 86400000).toISOString().substring(0, 10);
-      }
-      const dt = new Date(s);
-      return isNaN(dt.getTime()) ? '' : dt.toISOString().substring(0, 10);
-    };
+    // ---- DATE PARSER (v55.80 BD-AUDIT FIX) ----
+    // Handles:
+    //   - Excel serial date (e.g. 45567 = 2024-09-01)
+    //   - ISO format YYYY-MM-DD or YYYY/MM/DD
+    //   - US format MM/DD/YYYY or M/D/YYYY
+    //   - DD-MMM-YYYY (e.g. "5-Oct-2024", "05-OCT-2024")
+    //   - DD/MM/YYYY (when day > 12 makes the format unambiguous)
+    //   - Plain Date object
+    // Returns YYYY-MM-DD string OR null if unparseable.
+    // NEVER returns "today" — that masks parser bugs.
+    const parseDate = (row, col) => _parseDateShared(row, col);
 
-    const normalizeContainer = (v) => {
-      if (!v) return '40ft';
-      v = v.toString().toLowerCase().replace(/[^a-z0-9]/g, '');
-      if ((v.includes('20') && v.includes('gp')) || v === '20' || v.includes('20ft') || v.includes('20st')) return "20' GP";
-      if ((v.includes('40') && v.includes('hc')) || v.includes('40hc') || v.includes('40hq')) return "40' HC";
-      if ((v.includes('40') && v.includes('gp')) || v === '40' || v.includes('40ft') || v.includes('40st')) return "40' GP";
-      if (v.includes('45')) return "45' HC";
-      if ((v.includes('20') && v.includes('rf')) || v.includes('20reefer')) return "20' RF";
-      if ((v.includes('40') && v.includes('rf')) || v.includes('40reefer')) return "40' RF";
-      return v.length > 0 ? v : '40ft';
-    };
+    const normalizeContainer = _normalizeContainerShared;
 
     // ---- ROW PARSING ----
     // If the sheet has container-specific rate columns (20GP, 40HC, etc.) AND there
@@ -648,6 +624,19 @@ export default function ShippingRatesTab({ toast, user, userProfile, isAdmin, cu
       const dest = getVal(row, colMap.destination) || getVal(row, colMap.pod);
       if (!origin && !dest) continue; // skip empty rows
 
+      // v55.80 BD-AUDIT FIX: NEVER silently overwrite a historical date
+      // with todayET(). If the source has a date column, USE IT (even if
+      // it's in the past). If parsing fails (returns null), only THEN
+      // fall back to today, AND log a warning so we can debug bad rows.
+      const parsedEffective = parseDate(row, colMap.date);
+      const parsedExpiry = parseDate(row, colMap.expiry);
+      if (colMap.date && parsedEffective === null) {
+        console.warn('[shipping-import] could not parse effective_date in row:', row[colMap.date]);
+      }
+      if (colMap.expiry && parsedExpiry === null) {
+        console.warn('[shipping-import] could not parse expiry_date in row:', row[colMap.expiry]);
+      }
+
       const baseFields = {
         origin: origin,
         destination: dest,
@@ -662,8 +651,11 @@ export default function ShippingRatesTab({ toast, user, userProfile, isAdmin, cu
         documentation_fees: getNum(row, colMap.docFees),
         customs_fees: getNum(row, colMap.customsFees),
         other_fees: getNum(row, colMap.otherFees),
-        effective_date: parseDate(row, colMap.date) || new Date().toISOString().substring(0, 10),
-        expiry_date: parseDate(row, colMap.expiry) || null,
+        // Use parsed historical date if present. ONLY fall back to today if
+        // there's literally no date in the source. Historical dates pass
+        // through and stay historical — even if already expired.
+        effective_date: parsedEffective || todayET(),
+        expiry_date: parsedExpiry,
         port_of_loading: getVal(row, colMap.pol),
         port_of_discharge: getVal(row, colMap.pod),
         notes: getVal(row, colMap.notes),
@@ -735,58 +727,15 @@ export default function ShippingRatesTab({ toast, user, userProfile, isAdmin, cu
     const containerRateCols = importContainerCols;
     if (!rows || !rows.length) return;
 
-    // Local copies of the same numeric/date helpers used in processImportFile.
-    // Kept inline so this function is self-contained.
-    const parseNumberSmart = (raw) => {
-      if (raw == null || raw === '') return NaN;
-      if (typeof raw === 'number') return raw;
-      const s = String(raw).trim();
-      if (!s) return NaN;
-      let clean = s.replace(/[^0-9.,\-]/g, '');
-      if (!clean) return NaN;
-      const lastComma = clean.lastIndexOf(',');
-      const lastDot = clean.lastIndexOf('.');
-      if (lastComma > -1 && lastDot > -1 && lastComma > lastDot) {
-        clean = clean.replace(/\./g, '').replace(',', '.');
-      } else if (lastComma > -1 && lastDot === -1) {
-        const commaCount = (clean.match(/,/g) || []).length;
-        const afterComma = clean.length - lastComma - 1;
-        if (commaCount > 1 || afterComma >= 3) clean = clean.replace(/,/g, '');
-        else clean = clean.replace(',', '.');
-      } else {
-        clean = clean.replace(/,/g, '');
-      }
-      const n = Number(clean);
-      return isNaN(n) ? NaN : n;
-    };
+    // v55.80 BD-AUDIT FIX: use shared helpers (was a hand-written copy of
+    // processImportFile's helpers, leading to drift). Now imports from
+    // src/lib/shipping-import-helpers.js.
+    const parseNumberSmart = _parseNumberSmartShared;
     const getVal = (row, col) => col ? String(row[col] == null ? '' : row[col]).trim() : '';
     const getNum = (row, col) => { const n = parseNumberSmart(row[col]); return isNaN(n) ? 0 : n; };
     const getNumOrNull = (row, col) => { const n = parseNumberSmart(row[col]); return isNaN(n) ? null : n; };
-    const parseDate = (row, col) => {
-      const raw = col ? row[col] : null;
-      if (raw == null || raw === '') return '';
-      if (typeof raw === 'number' && raw > 20000 && raw < 80000) {
-        return new Date((raw - 25569) * 86400000).toISOString().substring(0, 10);
-      }
-      const s = String(raw).trim();
-      if (!s) return '';
-      if (!isNaN(s) && Number(s) > 20000) {
-        return new Date((Number(s) - 25569) * 86400000).toISOString().substring(0, 10);
-      }
-      const dt = new Date(s);
-      return isNaN(dt.getTime()) ? '' : dt.toISOString().substring(0, 10);
-    };
-    const normalizeContainer = (v) => {
-      if (!v) return '40ft';
-      v = v.toString().toLowerCase().replace(/[^a-z0-9]/g, '');
-      if ((v.includes('20') && v.includes('gp')) || v === '20' || v.includes('20ft') || v.includes('20st')) return "20' GP";
-      if ((v.includes('40') && v.includes('hc')) || v.includes('40hc') || v.includes('40hq')) return "40' HC";
-      if ((v.includes('40') && v.includes('gp')) || v === '40' || v.includes('40ft') || v.includes('40st')) return "40' GP";
-      if (v.includes('45')) return "45' HC";
-      if ((v.includes('20') && v.includes('rf')) || v.includes('20reefer')) return "20' RF";
-      if ((v.includes('40') && v.includes('rf')) || v.includes('40reefer')) return "40' RF";
-      return v.length > 0 ? v : '40ft';
-    };
+    const parseDate = (row, col) => _parseDateShared(row, col);
+    const normalizeContainer = _normalizeContainerShared;
     // If user picked an explicit rate column, disable container-expansion
     // (their choice wins). Otherwise fall back to expansion when applicable.
     const useContainerExpansion = !newColMap.rate && containerRateCols.length >= 2;
@@ -796,6 +745,18 @@ export default function ShippingRatesTab({ toast, user, userProfile, isAdmin, cu
       const origin = getVal(row, newColMap.origin) || getVal(row, newColMap.pol);
       const dest = getVal(row, newColMap.destination) || getVal(row, newColMap.pod);
       if (!origin && !dest) continue;
+      // v55.80 BD-AUDIT FIX: preserve historical dates. Same logic as
+      // processImportFile — only fall back to today() if there's literally
+      // no date in the source. Log a warning if parsing fails so we can
+      // debug bad rows.
+      const parsedEffective = parseDate(row, newColMap.date);
+      const parsedExpiry = parseDate(row, newColMap.expiry);
+      if (newColMap.date && parsedEffective === null) {
+        console.warn('[shipping-reparse] could not parse effective_date in row:', row[newColMap.date]);
+      }
+      if (newColMap.expiry && parsedExpiry === null) {
+        console.warn('[shipping-reparse] could not parse expiry_date in row:', row[newColMap.expiry]);
+      }
       const baseFields = {
         origin: origin,
         destination: dest,
@@ -810,8 +771,8 @@ export default function ShippingRatesTab({ toast, user, userProfile, isAdmin, cu
         documentation_fees: getNum(row, newColMap.docFees),
         customs_fees: getNum(row, newColMap.customsFees),
         other_fees: getNum(row, newColMap.otherFees),
-        effective_date: parseDate(row, newColMap.date) || new Date().toISOString().substring(0, 10),
-        expiry_date: parseDate(row, newColMap.expiry) || null,
+        effective_date: parsedEffective || todayET(),
+        expiry_date: parsedExpiry,
         port_of_loading: getVal(row, newColMap.pol),
         port_of_discharge: getVal(row, newColMap.pod),
         notes: getVal(row, newColMap.notes),
@@ -921,7 +882,7 @@ export default function ShippingRatesTab({ toast, user, userProfile, isAdmin, cu
   };
 
   const generateQuoteRequest = (vendor, origin, destination, containerType) => {
-    const today = new Date().toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: 'numeric' });
+    const today = fmtET(new Date(), 'longdate', { tag: false });
     const subject = 'Rate Request — ' + (origin || 'Origin') + ' to ' + (destination || 'Egypt') + ' — KTC International';
     const body = `Dear ${vendor?.contact_name || vendor?.company_name || 'Team'},
 
@@ -976,8 +937,8 @@ Date: ${today}`;
               <div className="text-sm font-bold">{vc.company_name}</div>
               {vc.contact_name && <div className="text-xs text-slate-500">{vc.contact_name}{vc.role ? ' — ' + vc.role : ''}</div>}
               <div className="flex gap-1 mt-1">
-                <span className={'px-1.5 py-0.5 rounded text-[9px] font-semibold ' + (vc.vendor_type === 'Shipping' ? 'bg-blue-100 text-blue-700' : vc.vendor_type === 'Trucking' ? 'bg-amber-100 text-amber-700' : 'bg-purple-100 text-purple-700')}>{vc.vendor_type}</span>
-                {vc.origin_regions && <span className="text-[9px] text-slate-400">📍 {vc.origin_regions}</span>}
+                <span className={'px-1.5 py-0.5 rounded text-[9px] font-semibold ' + (vc.vendor_type === 'Shipping' ? 'bg-blue-100 text-blue-700' : vc.vendor_type === 'Trucking' ? 'bg-amber-100 text-amber-900' : 'bg-purple-100 text-purple-700')}>{vc.vendor_type}</span>
+                {vc.origin_regions && <span className="text-[9px] text-slate-500">📍 {vc.origin_regions}</span>}
               </div>
             </div>
             <div className="flex gap-1.5">
@@ -987,7 +948,7 @@ Date: ${today}`;
               <button onClick={()=>{setEditingVendor(vc);setF({vcCompany:vc.company_name,vcContact:vc.contact_name,vcRole:vc.role,vcType:vc.vendor_type,vcEmail:vc.email,vcPhone:vc.phone,vcWhatsapp:vc.whatsapp,vcOrigins:vc.origin_regions,vcDests:vc.destination_regions,vcNotes:vc.notes});setView('add_vendor');}} className="px-2 py-1.5 rounded-lg text-xs border border-slate-200">Edit</button>
             </div>
           </div>
-          <div className="flex gap-2 mt-2 text-[10px] text-slate-400">
+          <div className="flex gap-2 mt-2 text-[10px] text-slate-500">
             {vc.email && <span>📧 {vc.email}</span>}
             {vc.phone && <span>📞 {vc.phone}</span>}
           </div>
@@ -1087,7 +1048,7 @@ Date: ${today}`;
         </div>
         <div className="mt-2 text-right"><span className="text-xs text-slate-500">Total: </span><span className="text-lg font-extrabold text-amber-700">{fCur(Number(f.rateAmount||0)+Number(f.portFees||0)+Number(f.thcFees||0)+Number(f.docFees||0)+Number(f.customsFees||0)+Number(f.otherFees||0), f.currency||'USD')}</span></div></div>
       <div className="grid grid-cols-4 gap-3 mb-4">
-        <div><label className="text-[10px] font-semibold">Effective Date</label><input type="date" value={f.effectiveDate||new Date().toISOString().substring(0,10)} onChange={e=>setF({...f,effectiveDate:e.target.value})} className="w-full px-3 py-2 rounded-lg border text-sm" /></div>
+        <div><label className="text-[10px] font-semibold">Effective Date</label><input type="date" value={f.effectiveDate||todayET()} onChange={e=>setF({...f,effectiveDate:e.target.value})} className="w-full px-3 py-2 rounded-lg border text-sm" /></div>
         <div><label className="text-[10px] font-semibold text-red-600">Expiry Date</label><input type="date" value={f.expiryDate||''} onChange={e=>setF({...f,expiryDate:e.target.value})} className="w-full px-3 py-2 rounded-lg border text-sm border-red-200" /></div>
         <div><label className="text-[10px] font-semibold">Notes</label><input value={f.notes||''} onChange={e=>setF({...f,notes:e.target.value})} className="w-full px-3 py-2 rounded-lg border text-sm" /></div>
         <div className="flex items-end"><label className="flex items-center gap-2 text-xs"><input type="checkbox" checked={f.booked||false} onChange={e=>setF({...f,booked:e.target.checked})} className="w-4 h-4" /> Booked</label></div>
@@ -1107,7 +1068,7 @@ Date: ${today}`;
     <div className="grid grid-cols-4 gap-3 mb-4">
       <div className="bg-white rounded-lg p-3" style={{borderLeftWidth:3,borderLeftColor:'#0ea5e9'}}><div className="text-[10px] text-slate-500">Total</div><div className="text-lg font-extrabold">{quotes.length}</div></div>
       <div className="bg-white rounded-lg p-3" style={{borderLeftWidth:3,borderLeftColor:'#10b981'}}><div className="text-[10px] text-slate-500">Accepted</div><div className="text-lg font-extrabold text-emerald-600">{quotes.filter(q=>q.status==='accepted'||q.status==='booked').length}</div></div>
-      <div className="bg-white rounded-lg p-3" style={{borderLeftWidth:3,borderLeftColor:'#f59e0b'}}><div className="text-[10px] text-slate-500">Pending</div><div className="text-lg font-extrabold text-amber-600">{quotes.filter(q=>q.status==='draft'||q.status==='sent').length}</div></div>
+      <div className="bg-white rounded-lg p-3" style={{borderLeftWidth:3,borderLeftColor:'#f59e0b'}}><div className="text-[10px] text-slate-500">Pending</div><div className="text-lg font-extrabold text-amber-700">{quotes.filter(q=>q.status==='draft'||q.status==='sent').length}</div></div>
       <div className="bg-white rounded-lg p-3" style={{borderLeftWidth:3,borderLeftColor:'#10b981'}}><div className="text-[10px] text-slate-500">Total Profit</div><div className="text-lg font-extrabold text-emerald-600">{fCur(quotes.reduce((a,q)=>a+Number(q.profit||0),0),'USD')}</div></div>
     </div>
     <div className="overflow-auto rounded-lg border bg-white max-h-[500px]"><table className="w-full border-collapse text-xs"><thead className="sticky top-0"><tr className="bg-slate-50">
@@ -1397,7 +1358,7 @@ Date: ${today}`;
           </div>
           <div className="text-[10px] text-slate-500 mt-1">
             {trendRatesForChart.length} rates plotted across {months.length} month{months.length === 1 ? '' : 's'}
-            {hideExpired && <span className="ml-2 text-amber-600">• Expired rates hidden</span>}
+            {hideExpired && <span className="ml-2 text-amber-800 font-semibold">• Expired rates hidden</span>}
           </div>
         </div>);
       })()}
@@ -1422,7 +1383,7 @@ Date: ${today}`;
           const url = URL.createObjectURL(blob);
           const a = document.createElement('a');
           a.href = url;
-          a.download = 'rates_' + selectedRoute.origin + '_to_' + selectedRoute.destination + '_' + new Date().toISOString().substring(0, 10) + '.csv';
+          a.download = 'rates_' + selectedRoute.origin + '_to_' + selectedRoute.destination + '_' + todayET() + '.csv';
           a.click();
           URL.revokeObjectURL(url);
         };
@@ -1434,7 +1395,7 @@ Date: ${today}`;
           var v = row[0], l = row[1], days = row[2];
           return (<button key={v} onClick={function(){
             setRateHistoryMode(v);
-            if (days > 0) { setRateHistoryDf(new Date(Date.now() - days*86400000).toISOString().substring(0,10)); setRateHistoryDt(''); }
+            if (days > 0) { setRateHistoryDf(daysAgoET(days)); setRateHistoryDt(""); }
             else if (days === 0) { setRateHistoryDf(''); setRateHistoryDt(''); }
             else { setRateHistoryDf(''); setRateHistoryDt(''); }
           }}
@@ -1534,7 +1495,7 @@ Date: ${today}`;
                     </span>)
                   : <span className="text-slate-400">—</span>}
               </td>
-              <td className={'px-2 py-1.5 text-right font-bold ' + (exp ? 'text-slate-500' : 'text-amber-600')}>{fCur(r.total_cost, r.currency)}</td>
+              <td className={'px-2 py-1.5 text-right font-bold ' + (exp ? 'text-slate-500' : 'text-amber-800')}>{fCur(r.total_cost, r.currency)}</td>
               <td className="px-2 py-1.5">
                 {exp
                   ? <span className="px-1.5 py-0.5 bg-red-100 text-red-700 rounded text-[9px] font-bold" title={'Expired ' + (r.expiry_date || '')}>EXPIRED</span>
@@ -1545,9 +1506,9 @@ Date: ${today}`;
                   ? <div className="flex flex-col">
                       <span className="px-1.5 py-0.5 bg-green-100 text-green-700 rounded text-[9px] font-bold w-fit">✓ BOOKED</span>
                       {r.shipment_reference && <span className="text-[9px] text-slate-500 mt-0.5">Ref: {r.shipment_reference}</span>}
-                      {r.booking_date && <span className="text-[9px] text-slate-400">{r.booking_date}</span>}
+                      {r.booking_date && <span className="text-[9px] text-slate-500">{r.booking_date}</span>}
                     </div>
-                  : <span className="text-[9px] text-slate-400">—</span>}
+                  : <span className="text-[9px] text-slate-500">—</span>}
               </td>
               <td className="px-2 py-1.5 flex gap-1">
                 {!exp && !r.booked && <button onClick={() => handleMarkBooked(r)} className="px-2 py-0.5 rounded border border-green-300 text-green-600 text-[10px]">Book</button>}
@@ -1606,7 +1567,7 @@ Date: ${today}`;
                       {b.order_number && <span>• Order: {b.order_number} </span>}
                       • {b.booking_date} • {rate ? rate.vendor_name : 'Unknown vendor'}
                     </div>
-                    {b.notes && <div className="text-[10px] text-slate-400">{b.notes}</div>}
+                    {b.notes && <div className="text-[10px] text-slate-500">{b.notes}</div>}
                   </div>
                   {rate && <div className="text-sm font-bold text-emerald-600">{fCur(rate.total_cost || rate.rate_amount, rate.currency)}</div>}
                 </div>
@@ -1618,6 +1579,196 @@ Date: ${today}`;
     </div>);
   }
 
+  // ========== TRENDS (v55.80 — line chart of rates over time per container) ==========
+  // Per Max May 8 2026: "create a graph showing how the rates have changed
+  // for a 40 footer or a 20 footer over a period of time with a line graph"
+  if (view === 'trends') {
+    // Build trend data: group by month + container_type, average rates.
+    // Default window: last 12 months. Optionally filter by route.
+    const TREND_RANGES = [
+      { key: '6m',  label: '6 months',  days: 180 },
+      { key: '12m', label: '12 months', days: 365 },
+      { key: '24m', label: '2 years',   days: 730 },
+      { key: 'all', label: 'All time',  days: 99999 },
+    ];
+    const cutoffDays = trendRange === '6m' ? 180 : trendRange === '24m' ? 730 : trendRange === 'all' ? 99999 : 365;
+    const cutoffStr = daysAgoET(cutoffDays);
+
+    // Filter rates by date + optional route + currency
+    const trendRates = rates.filter(r => {
+      if (!r.effective_date || r.effective_date < cutoffStr) return false;
+      if (trendCurrency !== 'all' && (r.currency || 'USD') !== trendCurrency) return false;
+      if (trendOrigin !== 'all' && r.origin !== trendOrigin) return false;
+      if (trendDest !== 'all' && r.destination !== trendDest) return false;
+      return true;
+    });
+
+    // Group by year-month, then by container type. Average rate per group.
+    // Container types of interest: 20' GP, 40' GP, 40' HC. Other types
+    // pooled into "Other".
+    const TARGETS = ["20' GP", "40' GP", "40' HC"];
+    const byMonth = {};   // { 'YYYY-MM': { "20' GP": [rate, rate, ...], ... } }
+    trendRates.forEach(r => {
+      const ym = (r.effective_date || '').substring(0, 7);
+      if (!ym) return;
+      let ct = r.container_type || '40ft';
+      // Map legacy values to the TARGETS list
+      const ctLower = ct.toLowerCase().replace(/[^a-z0-9]/g, '');
+      if (ctLower.includes('20') && (ctLower.includes('gp') || ctLower === '20' || ctLower.includes('20ft'))) ct = "20' GP";
+      else if (ctLower.includes('40') && (ctLower.includes('hc') || ctLower.includes('hq'))) ct = "40' HC";
+      else if (ctLower.includes('40') && (ctLower.includes('gp') || ctLower === '40' || ctLower.includes('40ft'))) ct = "40' GP";
+      if (!byMonth[ym]) byMonth[ym] = {};
+      if (!byMonth[ym][ct]) byMonth[ym][ct] = [];
+      byMonth[ym][ct].push(Number(r.rate_amount) || 0);
+    });
+
+    // Convert to chart-friendly array: [{month: '2024-01', "20' GP": 1500, "40' GP": 2200, "40' HC": 2400}, ...]
+    const trendData = Object.keys(byMonth).sort().map(ym => {
+      const point = { month: ym };
+      TARGETS.forEach(ct => {
+        const vals = byMonth[ym][ct];
+        if (vals && vals.length > 0) {
+          const avg = vals.reduce((a, b) => a + b, 0) / vals.length;
+          point[ct] = Math.round(avg);
+        }
+      });
+      return point;
+    });
+
+    // Per-container summary (latest, oldest, % change)
+    const summaryByCT = TARGETS.map(ct => {
+      const allWithCT = trendData.filter(p => p[ct] != null);
+      if (allWithCT.length === 0) return { ct, latest: null, oldest: null, change: null, count: 0 };
+      const latest = allWithCT[allWithCT.length - 1][ct];
+      const oldest = allWithCT[0][ct];
+      const change = oldest > 0 ? Math.round(((latest - oldest) / oldest) * 100) : null;
+      return { ct, latest, oldest, change, count: allWithCT.length };
+    });
+
+    return (<div>
+      <button onClick={() => setView('routes')} className="px-3 py-1 rounded border border-slate-200 text-xs font-semibold mb-3">← Back</button>
+      <h2 className="text-xl font-extrabold mb-1">📈 Rate Trends</h2>
+      <p className="text-xs text-slate-500 mb-4">How shipping rates have changed over time. Each line is a container size; each point is the average rate that month.</p>
+
+      {/* v55.80 — Trends view also has Bubble (chart) vs Detail (table) toggle */}
+      <div className="flex items-center gap-1 mb-3 bg-slate-100 rounded-lg p-1 w-fit">
+        <button
+          onClick={() => setTrendsViewMode('chart')}
+          className={'px-3 py-1.5 rounded text-xs font-bold transition ' + (trendsViewMode === 'chart' ? 'bg-white text-pink-700 shadow' : 'text-slate-500 hover:text-slate-700')}
+          title="Show as line chart">
+          📈 Chart View
+        </button>
+        <button
+          onClick={() => setTrendsViewMode('table')}
+          className={'px-3 py-1.5 rounded text-xs font-bold transition ' + (trendsViewMode === 'table' ? 'bg-white text-pink-700 shadow' : 'text-slate-500 hover:text-slate-700')}
+          title="Show monthly average prices as a table">
+          📋 Table View
+        </button>
+      </div>
+
+      {/* Filters */}
+      <div className="flex gap-2 flex-wrap mb-4 items-center">
+        <div className="flex gap-1">
+          {TREND_RANGES.map(r => (
+            <button
+              key={r.key}
+              onClick={() => setTrendRange(r.key)}
+              className={'px-3 py-1 rounded text-xs font-semibold ' + (trendRange === r.key ? 'bg-pink-500 text-white' : 'bg-white border border-slate-200 text-slate-700')}
+            >
+              {r.label}
+            </button>
+          ))}
+        </div>
+        <select value={trendOrigin} onChange={e => setTrendOrigin(e.target.value)} className="px-2 py-1 rounded border text-xs">
+          <option value="all">All Origin Countries</option>
+          {origins.map(o => <option key={o} value={o}>{o}</option>)}
+        </select>
+        <select value={trendDest} onChange={e => setTrendDest(e.target.value)} className="px-2 py-1 rounded border text-xs">
+          <option value="all">All Destinations</option>
+          {destinations.map(d => <option key={d} value={d}>{d}</option>)}
+        </select>
+        <select value={trendCurrency} onChange={e => setTrendCurrency(e.target.value)} className="px-2 py-1 rounded border text-xs">
+          <option value="all">All Currencies</option>
+          {Array.from(new Set(rates.map(r => r.currency || 'USD'))).map(c => <option key={c} value={c}>{c}</option>)}
+        </select>
+        <span className="text-[10px] text-slate-500 ml-auto">{trendRates.length} of {rates.length} rates in window</span>
+      </div>
+
+      {/* Per-container summary cards */}
+      <div className="grid grid-cols-1 md:grid-cols-3 gap-3 mb-4">
+        {summaryByCT.map(s => {
+          const tone = s.change == null ? 'text-slate-500' : s.change > 0 ? 'text-red-600' : s.change < 0 ? 'text-emerald-600' : 'text-slate-700';
+          const arrow = s.change == null ? '' : s.change > 0 ? '↑' : s.change < 0 ? '↓' : '→';
+          return (
+            <div key={s.ct} className="bg-white rounded-lg p-3 border border-slate-200">
+              <div className="text-[11px] text-slate-500 font-semibold">{s.ct}</div>
+              <div className="text-lg font-extrabold">
+                {s.latest != null ? s.latest.toLocaleString() : '—'}
+                <span className={'text-xs ml-2 ' + tone}>{arrow} {s.change != null ? Math.abs(s.change) + '%' : 'no data'}</span>
+              </div>
+              <div className="text-[10px] text-slate-500">
+                {s.count > 0 ? s.count + ' month' + (s.count === 1 ? '' : 's') + ' of data' : 'no rates in window'}
+              </div>
+            </div>
+          );
+        })}
+      </div>
+
+      {/* The chart itself */}
+      {trendData.length === 0 ? (
+        <div className="bg-white rounded-xl p-8 text-center border">
+          <div className="text-4xl mb-2">📉</div>
+          <p className="text-sm text-slate-400">No rates in this window. Try widening the range or removing filters.</p>
+        </div>
+      ) : trendsViewMode === 'chart' ? (
+        <div className="bg-white rounded-xl p-4 border" style={{height: 380}}>
+          <ResponsiveContainer width="100%" height="100%">
+            <LineChart data={trendData} margin={{ top: 10, right: 30, left: 0, bottom: 5 }}>
+              <CartesianGrid strokeDasharray="3 3" />
+              <XAxis dataKey="month" tick={{ fontSize: 11 }} />
+              <YAxis tick={{ fontSize: 11 }} />
+              <RTooltip />
+              <RLegend />
+              <Line type="monotone" dataKey="20' GP" stroke="#0ea5e9" strokeWidth={2} dot={{ r: 3 }} connectNulls />
+              <Line type="monotone" dataKey="40' GP" stroke="#10b981" strokeWidth={2} dot={{ r: 3 }} connectNulls />
+              <Line type="monotone" dataKey="40' HC" stroke="#8b5cf6" strokeWidth={2} dot={{ r: 3 }} connectNulls />
+            </LineChart>
+          </ResponsiveContainer>
+        </div>
+      ) : (
+        // v55.80 — Table mode: same data, shown as a sortable monthly grid.
+        <div className="bg-white rounded-xl border overflow-hidden">
+          <div className="overflow-auto" style={{maxHeight: '60vh'}}>
+            <table className="w-full text-xs">
+              <thead className="bg-slate-50 sticky top-0">
+                <tr>
+                  <th className="px-3 py-2 text-left font-semibold text-slate-600">Month</th>
+                  <th className="px-3 py-2 text-right font-semibold text-sky-700">20' GP</th>
+                  <th className="px-3 py-2 text-right font-semibold text-emerald-700">40' GP</th>
+                  <th className="px-3 py-2 text-right font-semibold text-purple-700">40' HC</th>
+                </tr>
+              </thead>
+              <tbody>
+                {trendData.slice().reverse().map(point => (
+                  <tr key={point.month} className="border-t border-slate-100 hover:bg-slate-50">
+                    <td className="px-3 py-2 font-bold">{point.month}</td>
+                    <td className="px-3 py-2 text-right">{point["20' GP"] != null ? point["20' GP"].toLocaleString() : <span className="text-slate-300">—</span>}</td>
+                    <td className="px-3 py-2 text-right">{point["40' GP"] != null ? point["40' GP"].toLocaleString() : <span className="text-slate-300">—</span>}</td>
+                    <td className="px-3 py-2 text-right">{point["40' HC"] != null ? point["40' HC"].toLocaleString() : <span className="text-slate-300">—</span>}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
+
+      <p className="text-[10px] text-slate-500 mt-3 text-center">
+        Data points = average rate per month per container type • {trendCurrency === 'all' ? 'mixed currencies' : trendCurrency + ' only'}
+      </p>
+    </div>);
+  }
+
   // ========== IMPORT ==========
   if (view === 'import') return (<div>
     <button onClick={()=>{setView('routes');setImportData([]);setImportStep('select');setImportRawRows([]);setImportHeaders([]);setImportContainerCols([]);}} className="px-3 py-1 rounded border border-slate-200 text-xs font-semibold mb-3">← Back</button>
@@ -1625,8 +1776,8 @@ Date: ${today}`;
     {importStep==='select'&&<div className="bg-white rounded-xl p-6 text-center border-2 border-dashed border-blue-300">
       <div className="text-4xl mb-2">📁</div>
       <p className="text-sm font-bold mb-2">Upload shipping rates spreadsheet</p>
-      <p className="text-[10px] text-slate-400 mb-1">Auto-detects columns by name (any order). Supports:</p>
-      <div className="text-[9px] text-slate-400 mb-3 leading-relaxed">
+      <p className="text-[10px] text-slate-500 mb-1">Auto-detects columns by name (any order). Supports:</p>
+      <div className="text-[9px] text-slate-500 mb-3 leading-relaxed">
         <span className="font-semibold text-slate-500">Origin/Destination:</span> Origin, From, Destination, To, POL, POD, Port of Loading, Port of Discharge<br/>
         <span className="font-semibold text-slate-500">Shipping:</span> Vendor, Forwarder, Shipping Line, Carrier, Container, Container Type/Size<br/>
         <span className="font-semibold text-slate-500">Pricing:</span> Rate, Price, Amount, Freight, Port Fees, THC, Doc Fees, Customs<br/>
@@ -1708,12 +1859,17 @@ Date: ${today}`;
         XLSX.utils.book_append_sheet(twb, wsInst, 'Field Guide');
         XLSX.writeFile(twb, 'Shipping-Rates-Import-Template.xlsx');
       }} className="ml-2 px-4 py-3 bg-slate-100 text-slate-600 rounded-lg text-sm font-semibold cursor-pointer inline-block hover:bg-slate-200">📄 Download Full Template</button>
-      <p className="text-[9px] text-slate-400 mt-2">Template has 21 columns covering rates, dates, fees + a Field Guide sheet</p>
+      <p className="text-[9px] text-slate-500 mt-2">Template has 21 columns covering rates, dates, fees + a Field Guide sheet</p>
     </div>}
     {importStep==='preview'&&importData.length>0&&(()=>{
       const zeroRateCount = importData.filter(r => !r.rate_amount || Number(r.rate_amount) === 0).length;
       const noDateCount = importData.filter(r => !r.effective_date).length;
       const noExpiryCount = importData.filter(r => !r.expiry_date).length;
+      // v55.80 — Surface how many rows are historical / already expired
+      // BEFORE the user clicks Import, so they know what's getting saved.
+      const todayStrPv = todayET();
+      const expiredCount = importData.filter(r => r.expiry_date && r.expiry_date < todayStrPv).length;
+      const historicalCount = importData.filter(r => r.effective_date && r.effective_date < todayStrPv).length;
       // Field name → human label for the remap UI. Order matches importance.
       const FIELD_LABELS = [
         ['origin', 'Origin'],
@@ -1744,7 +1900,11 @@ Date: ${today}`;
           <div>
             <span className="text-sm font-bold text-slate-800">Found {importData.length} rate{importData.length!==1?'s':''} ready to import</span>
             {zeroRateCount > 0 && <div className="text-[11px] text-amber-700 font-semibold mt-0.5">⚠️ {zeroRateCount} row{zeroRateCount!==1?'s':''} have rate = 0 — fix or remove them below before importing</div>}
+            {noDateCount > 0 && <div className="text-[11px] text-amber-700 font-semibold mt-0.5">⚠️ {noDateCount} row{noDateCount!==1?'s':''} couldn't parse the effective date — they'll save with today's date as a fallback. Check the source data.</div>}
             {noExpiryCount > 0 && <div className="text-[10px] text-slate-500 mt-0.5">{noExpiryCount} row{noExpiryCount!==1?'s':''} missing expiry date — they'll never auto-expire</div>}
+            {/* v55.80 — Surface historical / already-expired counts so user knows what they're importing */}
+            {historicalCount > 0 && <div className="text-[10px] text-blue-600 mt-0.5">📅 {historicalCount} row{historicalCount!==1?'s':''} have historical effective dates — they'll be saved as-is for trend analysis</div>}
+            {expiredCount > 0 && <div className="text-[10px] text-rose-600 mt-0.5">⏰ {expiredCount} row{expiredCount!==1?'s':''} are already expired — kept in the record but won't show as active rates</div>}
           </div>
           <div className="flex gap-2">
             <button onClick={()=>{setImportStep('select');setImportData([]);}} className="px-3 py-1.5 border rounded-lg text-xs">Cancel</button>
@@ -1757,7 +1917,7 @@ Date: ${today}`;
       <div className="bg-white rounded-xl p-3 mb-3 border border-slate-200">
         <div className="flex items-center justify-between mb-2">
           <span className="text-xs font-bold text-slate-700">Column Mapping</span>
-          <span className="text-[9px] text-slate-400">If a column was picked wrong, change it here — the preview updates</span>
+          <span className="text-[9px] text-slate-500">If a column was picked wrong, change it here — the preview updates</span>
         </div>
         <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-1.5">
           {FIELD_LABELS.map(([fld, lbl]) => {
@@ -1775,7 +1935,7 @@ Date: ${today}`;
                     const next = Object.assign({}, importColMap, { [fld]: nv });
                     reparseFromMapping(next);
                   }}
-                  className={'px-1.5 py-1 border rounded text-[10px] bg-white ' + (isMissing && !isCriticalRate ? 'border-slate-200 text-slate-400' : isCriticalRate && isMissing ? 'border-red-300 text-red-600' : 'border-slate-300')}
+                  className={'px-1.5 py-1 border rounded text-[10px] bg-white ' + (isMissing && !isCriticalRate ? 'border-slate-200 text-slate-500' : isCriticalRate && isMissing ? 'border-red-300 text-red-600' : 'border-slate-300')}
                 >
                   <option value="">— not mapped —</option>
                   {importHeaders.map(h => <option key={h} value={h}>{h}</option>)}
@@ -1819,7 +1979,7 @@ Date: ${today}`;
             const cellInput = 'w-full px-1 py-0.5 border-0 bg-transparent text-[10px] focus:bg-yellow-50 focus:outline-1 outline-blue-400';
             return (
             <tr key={i} className={'border-b border-slate-50 hover:bg-slate-50 ' + (isZero ? 'bg-red-50' : '')}>
-              <td className="px-2 py-0.5 text-[9px] text-slate-400">{i+1}</td>
+              <td className="px-2 py-0.5 text-[9px] text-slate-500">{i+1}</td>
               <td className="px-1"><input value={r.origin||''} onChange={e=>updateImportRow(i,'origin',e.target.value)} className={cellInput} /></td>
               <td className="px-1"><input value={r.destination||''} onChange={e=>updateImportRow(i,'destination',e.target.value)} className={cellInput} /></td>
               <td className="px-1"><input value={r.port_of_loading||''} onChange={e=>updateImportRow(i,'port_of_loading',e.target.value)} className={cellInput+' text-slate-500'} /></td>
@@ -1846,7 +2006,7 @@ Date: ${today}`;
             </tr>
           );})}</tbody>
         </table>
-        {importData.length>100&&<div className="text-center py-2 text-[10px] text-slate-400">Showing 100 of {importData.length} — all rows will be imported</div>}
+        {importData.length>100&&<div className="text-center py-2 text-[10px] text-slate-500">Showing 100 of {importData.length} — all rows will be imported</div>}
       </div>
       <p className="text-[10px] text-slate-500 mt-2">💡 Tap any cell to edit. Red rows have rate = 0. Click ✕ to drop a row before importing.</p>
     </div>);})()}
@@ -1872,6 +2032,7 @@ Date: ${today}`;
         <button onClick={()=>{setView('add_rate');setF({});setEditingRate(null);}} className="px-3 py-1.5 bg-blue-500 text-white rounded-lg text-xs font-semibold">+ Rate</button>
         <button onClick={()=>setView('quotes')} className="px-3 py-1.5 bg-purple-500 text-white rounded-lg text-xs font-semibold">📋 Quotes</button>
         <button onClick={()=>setView('import')} className="px-3 py-1.5 bg-amber-500 text-white rounded-lg text-xs font-semibold">📥 Import</button>
+        <button onClick={()=>setView('trends')} className="px-3 py-1.5 bg-pink-500 text-white rounded-lg text-xs font-semibold">📈 Trends</button>
         <button onClick={()=>setView('ai')} className="px-3 py-1.5 bg-emerald-500 text-white rounded-lg text-xs font-semibold">🤖 AI</button>
         <button onClick={()=>setView('vendors')} className="px-3 py-1.5 bg-indigo-500 text-white rounded-lg text-xs font-semibold">📇 Vendors</button>
         <button onClick={()=>{setRequestQuoteData({vendor:null,origin:'',destination:'Egypt',container:'40ft'});}} className="px-3 py-1.5 bg-cyan-500 text-white rounded-lg text-xs font-semibold">📋 Request Rate</button>
@@ -1914,18 +2075,22 @@ Date: ${today}`;
         every rate in one sortable, scannable table — back by popular
         demand. The same filtered dataset feeds both views; only the
         rendering changes. Preference persists in localStorage. */}
+    {/* v55.80 — Toggle: Bubble view (grouped by route) vs Detail line view
+        (one row per rate). Per Max May 8 2026: "Need also toggle to show
+        bubble view vs detail line view." Same data feeds both — only the
+        rendering changes. Preference persists in localStorage. */}
     <div className="flex items-center gap-1 mb-3 bg-slate-100 rounded-lg p-1 w-fit">
       <button
         onClick={function () { setRoutesViewModePersist('routes'); }}
         className={'px-3 py-1.5 rounded text-xs font-bold transition ' + (routesViewMode === 'routes' ? 'bg-white text-blue-700 shadow' : 'text-slate-500 hover:text-slate-700')}
-        title="Group rates by route (origin → destination cards)">
-        🗂 Routes
+        title="Group rates by route — one bubble per origin → destination">
+        🫧 Bubble View
       </button>
       <button
         onClick={function () { setRoutesViewModePersist('list'); }}
         className={'px-3 py-1.5 rounded text-xs font-bold transition ' + (routesViewMode === 'list' ? 'bg-white text-blue-700 shadow' : 'text-slate-500 hover:text-slate-700')}
-        title="Show every rate as a row in a sortable list">
-        📋 List ({filtered.length})
+        title="Show every individual rate as a row in a sortable list">
+        📋 Detail Line View ({filtered.length})
       </button>
     </div>
 
@@ -1933,7 +2098,7 @@ Date: ${today}`;
     {routesViewMode === 'routes' && (
       <>
     {routeGroups.length===0?(<div className="bg-white rounded-xl p-8 text-center border"><div className="text-4xl mb-2">🚢</div><p className="text-sm text-slate-400">No rates yet</p></div>):(<div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">{routeGroups.map(rg=>{const c=rg.cheapest; return (<div key={rg.key} onClick={()=>{setSelectedRoute({origin:rg.origin,destination:rg.destination,pol:rg.pol||null,pod:rg.pod||null});setView('route_detail');}} className="bg-white rounded-xl p-4 cursor-pointer border border-slate-200 hover:shadow-lg hover:-translate-y-0.5 transition-all">
-      <div className="flex justify-between items-start mb-2"><div><div className="text-sm font-extrabold text-blue-700">{groupByPort && rg.pol ? rg.pol : rg.origin}{groupByPort && rg.pol && rg.origin && rg.pol !== rg.origin && <span className="text-[9px] text-slate-400 font-normal ml-1">({rg.origin})</span>}</div><div className="text-[10px] text-slate-400">↓</div><div className="text-sm font-extrabold text-emerald-700">{groupByPort && rg.pod ? rg.pod : rg.destination}{groupByPort && rg.pod && rg.destination && rg.pod !== rg.destination && <span className="text-[9px] text-slate-400 font-normal ml-1">({rg.destination})</span>}</div></div><div className="text-right">{c?(<><div className="text-[9px] text-slate-400">Best Active</div><div className="text-lg font-extrabold text-emerald-600">{fCur(c.rate_amount,c.currency)}</div><div className="text-[9px] text-blue-500">{c.vendor_name}{c.shipping_line?' / '+c.shipping_line:''}</div><ExpiryBadge date={c.expiry_date}/></>):(<div className="text-xs text-red-400 font-bold">All Expired</div>)}</div></div>
+      <div className="flex justify-between items-start mb-2"><div><div className="text-sm font-extrabold text-blue-700">{groupByPort && rg.pol ? rg.pol : rg.origin}{groupByPort && rg.pol && rg.origin && rg.pol !== rg.origin && <span className="text-[9px] text-slate-500 font-normal ml-1">({rg.origin})</span>}</div><div className="text-[10px] text-slate-500">↓</div><div className="text-sm font-extrabold text-emerald-700">{groupByPort && rg.pod ? rg.pod : rg.destination}{groupByPort && rg.pod && rg.destination && rg.pod !== rg.destination && <span className="text-[9px] text-slate-500 font-normal ml-1">({rg.destination})</span>}</div></div><div className="text-right">{c?(<><div className="text-[9px] text-slate-500">Best Active</div><div className="text-lg font-extrabold text-emerald-600">{fCur(c.rate_amount,c.currency)}</div><div className="text-[9px] text-blue-500">{c.vendor_name}{c.shipping_line?' / '+c.shipping_line:''}</div><ExpiryBadge date={c.expiry_date}/></>):(<div className="text-xs text-red-400 font-bold">All Expired</div>)}</div></div>
       {/* v55.63 — show TT / FT / ETD on the cheapest active rate when a port
           is picked, so you can compare at a glance without opening the card. */}
       {groupByPort && c && (

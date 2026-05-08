@@ -1,6 +1,7 @@
 'use client';
 import { useState, useEffect } from 'react';
 import WhatsAppInbox from './WhatsAppInbox';
+import { fmtET } from '../lib/et-time';
 
 export default function CommunicationsTab({ user, userProfile, customers, supabase }) {
   const [section, setSection] = useState('inbox'); // 'inbox' | 'legacy' — inbox is the new WhatsApp inbox
@@ -331,7 +332,7 @@ export default function CommunicationsTab({ user, userProfile, customers, supaba
                       <div className="text-xs truncate mt-0.5" style={{ color: 'var(--text-muted)' }}>{e.snippet}</div>
                     </div>
                     <div className="text-[10px] ml-2 flex-shrink-0" style={{ color: 'var(--text-muted)' }}>
-                      {e.date ? new Date(e.date).toLocaleDateString() : ''}
+                      {e.date ? fmtET(e.date, 'shortdate') : ''}
                     </div>
                   </div>
                 </div>

@@ -95,14 +95,15 @@ test('CM3 performCancel reads reason from inline overlay input (not window.promp
 });
 
 test('CM4 performCancel honors scope (single vs series)', function() {
-  // v55.33 — the old `editScope === 'series' && .eq('series_id', ...)` was
-  // replaced by resolveScopedIds(cancelScope) which returns an array of IDs.
+  // v55.33 used a per-row loop; v55.50 refactored to a single bulk
+  // .update().in('id', ids) call for performance. Either is acceptable
+  // — what matters is that the resolved scope drives the operation.
   var m = calendar.match(/const performCancel = async[\s\S]*?\n  \};/);
   assert(m, 'body');
   assert(/resolveScopedIds\(cancelScope\)/.test(m[0]),
     'uses resolveScopedIds with cancelScope');
-  assert(/for \(const id of ids\)/.test(m[0]),
-    'loops resolved ids');
+  assert(/for \(const id of ids\)/.test(m[0]) || /\.update\([\s\S]+?\)\s*\.in\(['"]id['"],\s*ids\)/.test(m[0]),
+    'either loops resolved ids OR uses bulk .update().in()');
 });
 
 test('CM5 uncancelMeeting (restore) exists and clears all cancellation fields', function() {
@@ -176,11 +177,14 @@ test('MA4 Reminders scheduled for ALL attendees at once (not per-user loop)', fu
 });
 
 test('MA5 visibleEvents (My calendar) includes events where user is in attendees', function() {
-  var m = calendar.match(/const visibleEvents = useMemo[\s\S]*?\n  \}, \[allEvents, calView, user, myId\]\);/);
+  // v55.36 — `myId` reference renamed to `focusUserId` to support admin
+  // focus-mode (super admin can view a specific team member's calendar).
+  // The attendees-membership and OR-with-attendees logic still applies.
+  var m = calendar.match(/const visibleEvents = useMemo[\s\S]*?\n  \},\s*\[[^\]]+\]\);/);
   assert(m, 'visibleEvents memo');
-  assert(/var inAttendees = Array\.isArray\(e\.attendees\) && e\.attendees\.indexOf\(myId\) !== -1/.test(m[0]),
-    'checks attendees membership');
-  assert(/e\.assigned_to === myId \|\| e\.created_by === myId \|\| inAttendees/.test(m[0]),
+  assert(/var inAttendees = Array\.isArray\(e\.attendees\) && e\.attendees\.indexOf\((?:myId|focusUserId)\) !== -1/.test(m[0]),
+    'checks attendees membership (against myId or focusUserId)');
+  assert(/(?:e\.assigned_to === (?:myId|focusUserId)).*\|\|.*(?:e\.created_by === (?:myId|focusUserId)).*\|\|.*inAttendees/.test(m[0]),
     'OR condition includes attendees');
 });
 

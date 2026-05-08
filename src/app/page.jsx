@@ -4,6 +4,7 @@ import { supabase, dbInsert, dbUpdate, dbDelete } from '../lib/supabase';
 import { filterActiveUsers } from '../lib/active-users';
 import { fmt, fE, COLORS, EXPENSE_CATS, getReconStatus, STATUS_STYLES, today, inRange, monthOf, getWarehouseCat, sanitize, stripBankMatchMetadata, resolveCatName, buildCatOptions, isKnownCat, aggregatePaymentSources, PAYMENT_SOURCE_META } from '../lib/utils';
 import { evaluateCheckReconcile as libEvaluateCheckReconcile } from '../lib/check-reconcile';
+import { fmtET, todayET, etDateStr } from '../lib/et-time';
 import * as XLSX from 'xlsx';
 import CRMTab from '../components/CRMTab';
 import TicketsTab from '../components/TicketsTab';
@@ -208,7 +209,7 @@ function DatePickerSelect({ value, onChange, className }) {
 // PAYMENT FORM (isolated state to prevent focus loss)
 // ============================================
 function PaymentForm({ invoice, categories, catOptions, existingSubcats, onSave, onCancel, formData, setFormData }) {
-  const [pf, setPf] = useState({ date: formData.date || new Date().toISOString().substring(0, 10), amount: formData.amount || '', payMethod: formData.payMethod || 'cash', desc: formData.desc || '', category: formData.category || 'مبيعات', subcategory: formData.subcategory || '' });
+  const [pf, setPf] = useState({ date: formData.date || todayET(), amount: formData.amount || '', payMethod: formData.payMethod || 'cash', desc: formData.desc || '', category: formData.category || 'مبيعات', subcategory: formData.subcategory || '' });
   // Option source chain (first non-empty wins):
   //   1. catOptions prop  (new, from buildCatOptions via parent)
   //   2. categories tuple prop  (legacy callers passing [[ar,en],...])
@@ -544,7 +545,38 @@ export default function App() {
   // photo, name, greeting, voice ID, and personality prompt — but the
   // underlying voice/listening/recording engine is unchanged.
   // Nadia is the default per Max's spec.
+  // v55.78 — Gap #4 — Persist last-active persona across page reloads.
+  // Before, every reload reset to Nadia. If a user spent most of their
+  // time with Sara (coaching) or Jenna (HR), they had to manually re-click
+  // every refresh. Now we read the last-active persona from localStorage
+  // on mount. Default = 'nadia'. Falls back to 'nadia' on any read error.
+  //
+  // v55.80 BD-AUDIT FIX: persona preference is per-user. The lazy-init
+  // can't see userProfile.id yet (auth hasn't resolved), so we open with
+  // 'nadia' as the safe default. Once auth completes, the useEffect below
+  // hydrates from the per-user key. The OLD global key is intentionally
+  // ignored — anything saved there belongs to whoever last used the
+  // browser, not necessarily the current user.
   const [selectedAssistant, setSelectedAssistant] = useState('nadia');
+  // Hydrate per-user preference once user id is known.
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    var uid = userProfile && userProfile.id;
+    if (!uid) return;
+    try {
+      var saved = window.localStorage.getItem('ktc.lastPersona.' + uid);
+      if (saved === 'nadia' || saved === 'jenna' || saved === 'sara') {
+        setSelectedAssistant(saved);
+      }
+    } catch (_) {}
+  }, [userProfile?.id]);
+  // Persist whenever it changes — writes to PER-USER key only.
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    var uid = userProfile && userProfile.id;
+    if (!uid) return; // don't write before auth resolves
+    try { window.localStorage.setItem('ktc.lastPersona.' + uid, selectedAssistant); } catch (_) {}
+  }, [selectedAssistant, userProfile?.id]);
   useEffect(() => {
     var handler = function (e) {
       var who = e && e.detail && e.detail.agent;
@@ -576,52 +608,112 @@ export default function App() {
   // "Hey Nadia" felt like a fresh introduction. Now we hydrate from
   // localStorage (keyed by user id once we know it) and write back
   // whenever it changes.
-  const [greeterMessages, setGreeterMessages] = useState([]);
-  // Hydrate from localStorage once we know whose messages to load
+  //
+  // v55.78 — PER-PERSONA conversation threads.
+  // Before this change, all three personas shared a single message array,
+  // so when user switched from Nadia → Jenna, Jenna would see Nadia's
+  // entire conversation in her history (including operational queries
+  // unrelated to HR). Now each persona has her own thread. The active
+  // persona's thread is exposed via greeterMessages getter so AIGreeter
+  // sees only her own conversation. Updates from AIGreeter route to the
+  // active persona's slot.
+  // Storage shape: {nadia:[...], jenna:[...], sara:[...]}
+  // Migration: if old single-array localStorage entry exists, treat it
+  // as Nadia's thread (she was the only persona before).
+  const [greeterMessagesByAgent, setGreeterMessagesByAgent] = useState({ nadia: [], jenna: [], sara: [] });
+  // Computed accessor for the ACTIVE persona's thread. AIGreeter receives
+  // this. When persona switches, this re-evaluates and AIGreeter re-renders
+  // with that persona's history — Jenna sees only Jenna conversations.
+  const greeterMessages = (greeterMessagesByAgent && greeterMessagesByAgent[selectedAssistant]) || [];
+  // Setter that AIGreeter calls when it appends or updates messages. Routes
+  // the update into the active persona's slot, leaving other slots alone.
+  const setGreeterMessages = (next) => {
+    setGreeterMessagesByAgent(function (prev) {
+      var updated = Object.assign({}, prev || {});
+      // AIGreeter passes either a new array OR a function (functional update).
+      var resolved = typeof next === 'function' ? next(prev[selectedAssistant] || []) : next;
+      updated[selectedAssistant] = resolved;
+      return updated;
+    });
+  };
+  // Hydrate from localStorage once we know whose messages to load.
+  // Reads the new per-persona shape if present; falls back to the old
+  // single-array entry (treating it as Nadia's history) for migration.
   useEffect(() => {
     if (typeof window === 'undefined') return;
     const uid = userProfile?.id;
     if (!uid) return;
     try {
-      const raw = localStorage.getItem('nadia.messages.' + uid);
-      if (raw) {
-        const parsed = JSON.parse(raw);
-        if (Array.isArray(parsed) && parsed.length > 0) {
-          setGreeterMessages(parsed);
+      // New shape first
+      const newRaw = localStorage.getItem('nadia.messages.byAgent.' + uid);
+      if (newRaw) {
+        const parsed = JSON.parse(newRaw);
+        if (parsed && typeof parsed === 'object') {
+          setGreeterMessagesByAgent({
+            nadia: Array.isArray(parsed.nadia) ? parsed.nadia : [],
+            jenna: Array.isArray(parsed.jenna) ? parsed.jenna : [],
+            sara:  Array.isArray(parsed.sara)  ? parsed.sara  : [],
+          });
+          return;
+        }
+      }
+      // Migrate old single-array shape — assume it was Nadia
+      const legacyRaw = localStorage.getItem('nadia.messages.' + uid);
+      if (legacyRaw) {
+        const legacyParsed = JSON.parse(legacyRaw);
+        if (Array.isArray(legacyParsed) && legacyParsed.length > 0) {
+          setGreeterMessagesByAgent({ nadia: legacyParsed, jenna: [], sara: [] });
         }
       }
     } catch (e) { /* corrupted localStorage entry — ignore */ }
     // Only run once per userProfile id; not on every render.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [userProfile?.id]);
-  // Persist on every change (cap to last 80 messages to stay under
-  // localStorage's practical size limits)
+  // Persist on every change (cap each thread to last 80 messages to stay
+  // under localStorage's practical size limits — total cap ~240 messages).
   useEffect(() => {
     if (typeof window === 'undefined') return;
     const uid = userProfile?.id;
     if (!uid) return;
     try {
-      const trimmed = (greeterMessages || []).slice(-80);
-      localStorage.setItem('nadia.messages.' + uid, JSON.stringify(trimmed));
+      const trim = function (arr) { return Array.isArray(arr) ? arr.slice(-80) : []; };
+      const trimmed = {
+        nadia: trim(greeterMessagesByAgent && greeterMessagesByAgent.nadia),
+        jenna: trim(greeterMessagesByAgent && greeterMessagesByAgent.jenna),
+        sara:  trim(greeterMessagesByAgent && greeterMessagesByAgent.sara),
+      };
+      localStorage.setItem('nadia.messages.byAgent.' + uid, JSON.stringify(trimmed));
     } catch (e) { /* quota errors are non-fatal */ }
-  }, [greeterMessages, userProfile?.id]);
+  }, [greeterMessagesByAgent, userProfile?.id]);
   // S17 — Shared Nadia mute state. Read from localStorage on mount so the
   // user's mute preference persists across sessions. Both the dashboard
   // AIGreeter and the NadiaFloatingOverlay read this same value, so muting
   // on one instance silences the other too.
-  const [nadiaMuted, setNadiaMuted] = useState(() => {
-    if (typeof window === 'undefined') return false;
-    try { return localStorage.getItem('nadia.muted') === 'true'; } catch (e) { return false; }
-  });
+  // v55.80 BD-AUDIT FIX: nadia mute is per-user. Same fix as lastPersona —
+  // can't read user id at lazy-init time, so default to false and hydrate
+  // once auth resolves.
+  const [nadiaMuted, setNadiaMuted] = useState(false);
   useEffect(() => {
     if (typeof window === 'undefined') return;
-    try { localStorage.setItem('nadia.muted', nadiaMuted ? 'true' : 'false'); } catch (e) {}
+    var uid = userProfile && userProfile.id;
+    if (!uid) return;
+    try {
+      var saved = localStorage.getItem('nadia.muted.' + uid);
+      if (saved === 'true') setNadiaMuted(true);
+      else if (saved === 'false') setNadiaMuted(false);
+    } catch (e) {}
+  }, [userProfile?.id]);
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    var uid = userProfile && userProfile.id;
+    if (!uid) return;
+    try { localStorage.setItem('nadia.muted.' + uid, nadiaMuted ? 'true' : 'false'); } catch (e) {}
     // Also dispatch events so components that listen (like the overlay)
     // stay in sync if another part of the app toggles mute.
     try {
       window.dispatchEvent(new CustomEvent(nadiaMuted ? 'nadia-mute' : 'nadia-unmute'));
     } catch (e) {}
-  }, [nadiaMuted]);
+  }, [nadiaMuted, userProfile?.id]);
   const [greeterSettings, setGreeterSettings] = useState({ personality: 'friendly', language: 'en', enabled: true });
   // v55.42 — VOICE DISABLED.
   // After many sessions chasing Web Speech API quirks (wake-word reliability,
@@ -644,7 +736,7 @@ export default function App() {
     if (!userProfile?.id || greeterHasGreeted) return;
     // Local check first — fast path, no round trip
     try {
-      const todayKey = new Date().toISOString().substring(0, 10);
+      const todayKey = todayET();
       const stamped = localStorage.getItem('nadia.greeted.' + userProfile.id + '.' + todayKey);
       if (stamped) { setGreeterHasGreeted(true); return; }
     } catch (_) {}
@@ -669,7 +761,7 @@ export default function App() {
     // or the column doesn't exist, the next dashboard visit won't re-greet.
     try {
       if (userProfile?.id) {
-        const todayKey = new Date().toISOString().substring(0, 10);
+        const todayKey = todayET();
         localStorage.setItem('nadia.greeted.' + userProfile.id + '.' + todayKey, new Date().toISOString());
       }
     } catch (_) {}
@@ -694,7 +786,7 @@ export default function App() {
   // Emergency sound for new reminders
   useEffect(() => {
     if (!reminders.length || !userProfile) return;
-    const todayStr = new Date().toISOString().substring(0, 10);
+    const todayStr = todayET();
     const myActive = reminders.filter(r => {
       const isForMe = !r.target_users || r.target_users === 'all' || (r.target_users || '').includes(userProfile?.id);
       const isToday = r.reminder_date === todayStr || (!r.reminder_date && r.created_at && r.created_at.substring(0, 10) === todayStr);
@@ -889,7 +981,38 @@ export default function App() {
     // Session timeout: auto-logout after 2 hours of inactivity (except super_admin)
     let idleTimer;
     const IDLE_TIMEOUT = 2 * 60 * 60 * 1000; // 2 hours
+    // v55.80 (Phase B+ feedback from Max May 8 2026):
+    //   Track ACTIVE time, not just "tab was open." Real activity = user
+    //   input (mouse/key/touch/scroll). Idle tab open all night should NOT
+    //   count as 8h of work.
+    //
+    //   We bump `user_sessions.last_active` only when user actually
+    //   interacts. Throttled to 30s so a busy typist doesn't hammer the DB.
+    //   The presence calculator reads last_active (separate from last_seen)
+    //   to compute "how long they were really working."
+    let lastActivePingMs = 0;
+    const ACTIVE_PING_MIN_GAP_MS = 30 * 1000;
+    const pingActive = function () {
+      var now = Date.now();
+      if (now - lastActivePingMs < ACTIVE_PING_MIN_GAP_MS) return;
+      lastActivePingMs = now;
+      try {
+        var uid = profileIdRef.current || user?.id;
+        if (!uid) return;
+        var today = todayET();
+        // Best-effort — don't block UI on this. Throttle = 1 write per 30s.
+        supabase.from('user_sessions')
+          .update({ last_active: new Date().toISOString(), last_seen: new Date().toISOString() })
+          .eq('user_id', uid)
+          .eq('date', today)
+          .order('login_at', { ascending: false })
+          .limit(1)
+          .then(function () {});
+      } catch (e) { /* swallow — don't crash on activity ping */ }
+    };
     const resetIdle = () => {
+      // Bump active timestamp on every real user input — throttled inside.
+      pingActive();
       clearTimeout(idleTimer);
       idleTimer = setTimeout(async () => {
         try {
@@ -898,7 +1021,7 @@ export default function App() {
           const { data: profile } = await supabase.from('users').select('role').eq('email', s.user.email).single();
           if (profile?.role === 'super_admin') return; // super admins stay logged in
           // Record auto-logout in session
-          const today = new Intl.DateTimeFormat('en-CA', { timeZone: 'America/New_York' }).format(new Date()); // ET, not UTC — fixes 'you werent here yesterday' bug
+          const today = todayET();
           const uid = profileIdRef.current || s.user.id;
           await supabase.from('user_sessions')
             .update({ logout_at: new Date().toISOString(), logout_reason: 'auto_timeout' })
@@ -917,7 +1040,7 @@ export default function App() {
     const handleUnload = () => {
       const uid = profileIdRef.current || user?.id;
       if (uid) {
-        const today = new Intl.DateTimeFormat('en-CA', { timeZone: 'America/New_York' }).format(new Date()); // ET, not UTC — fixes 'you werent here yesterday' bug
+        const today = todayET(); // ET — fixes 'you werent here yesterday' bug
         // Best-effort logout event via beacon (survives navigation)
         try {
           const blob = new Blob([JSON.stringify({ user_id: uid, event_type: 'logout' })], { type: 'application/json' });
@@ -931,7 +1054,59 @@ export default function App() {
     };
     window.addEventListener('beforeunload', handleUnload);
 
-    return () => { subscription?.unsubscribe(); clearInterval(heartbeat); clearTimeout(idleTimer); ['mousedown','keydown','touchstart','scroll'].forEach(evt => window.removeEventListener(evt, resetIdle)); window.removeEventListener('beforeunload', handleUnload); window.removeEventListener('keydown', handleKey); document.removeEventListener('click', handleClickOutside); };
+    // v55.80 (Phase B / Section 13 — login reliability)
+    // ----------------------------------------------------------------
+    // The "still online" bug: if the user closes a tab and the
+    // beforeunload beacon doesn't fire (which happens — Safari drops
+    // them, mobile background-kill drops them), heartbeats keep going
+    // for the full 10-minute online window or until the browser stops
+    // running our timer. Fix: when the tab becomes hidden, START a
+    // 3-minute soft-logout timer. If they come back before it fires,
+    // cancel. If 3 min pass with the tab hidden, fire a logout event
+    // so admin sees them go offline. We do NOT clear the auth session
+    // — they're still signed in; they just stop pulsing as "online".
+    let hiddenTimer = null;
+    const HIDDEN_TIMEOUT_MS = 3 * 60 * 1000;
+    const handleVisibilityChange = () => {
+      try {
+        if (document.visibilityState === 'hidden') {
+          if (hiddenTimer) clearTimeout(hiddenTimer);
+          hiddenTimer = setTimeout(() => {
+            try {
+              const uid = profileIdRef.current || user?.id;
+              if (!uid) return;
+              // Fire a soft 'logout' event so user_login_summary.is_online
+              // flips false within 10 minutes regardless of beacon delivery.
+              // v55.80 BUG-8 FIX: try beacon first; only fall through to
+              // fetch if the beacon failed. Otherwise we double-fire.
+              let beaconSent = false;
+              try {
+                const blob = new Blob([JSON.stringify({ user_id: uid, event_type: 'logout', notes: 'tab_hidden_timeout' })], { type: 'application/json' });
+                beaconSent = navigator.sendBeacon('/api/login-event', blob);
+              } catch (e) { beaconSent = false; }
+              if (!beaconSent) {
+                try {
+                  fetch('/api/login-event', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ user_id: uid, event_type: 'logout', notes: 'tab_hidden_timeout' }),
+                    keepalive: true,
+                  }).catch(function () {});
+                } catch (e) {}
+              }
+            } catch (e) { /* never let this crash the tab */ }
+          }, HIDDEN_TIMEOUT_MS);
+        } else if (document.visibilityState === 'visible') {
+          // Tab is back — cancel the pending logout, and re-pulse a
+          // heartbeat right away so admin sees them come back online.
+          if (hiddenTimer) { clearTimeout(hiddenTimer); hiddenTimer = null; }
+          heartbeatTick();
+        }
+      } catch (e) { /* swallow */ }
+    };
+    document.addEventListener('visibilitychange', handleVisibilityChange);
+
+    return () => { subscription?.unsubscribe(); clearInterval(heartbeat); clearTimeout(idleTimer); if (hiddenTimer) clearTimeout(hiddenTimer); ['mousedown','keydown','touchstart','scroll'].forEach(evt => window.removeEventListener(evt, resetIdle)); window.removeEventListener('beforeunload', handleUnload); window.removeEventListener('keydown', handleKey); document.removeEventListener('click', handleClickOutside); document.removeEventListener('visibilitychange', handleVisibilityChange); };
   }, []);
 
   // ==========================================
@@ -1001,8 +1176,8 @@ export default function App() {
             });
             // Log first login of the day (legacy daily_log entry)
             try {
-              const todayStr = new Date().toISOString().substring(0, 10);
-              const loginTime = new Date().toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' });
+              const todayStr = todayET();
+              const loginTime = fmtET(new Date(), 'time', { tag: false });
               const { data: existing } = await supabase.from('daily_log')
                 .select('id').eq('user_id', profile.id).eq('log_date', todayStr)
                 .ilike('entry_text', '%logged in%').limit(1);
@@ -1101,9 +1276,15 @@ export default function App() {
         setAnnouncementAcks(acks || []);
       } catch(e) { setAnnouncements([]); }
       // Load recent ticket updates (comments from last 7 days)
+      // v55.75 (A3) — Bumped limit 30→100 because the next-step filter
+      // narrows to "tickets the user is involved in" and 30 comments
+      // shared across ~10 team members often left only 1-2 visible.
+      // Also added created_by to the embedded tickets() select — without
+      // it, the c.tickets.created_by === myId filter silently failed and
+      // tickets the user CREATED but didn't have assigned never appeared.
       try {
         const sevenDaysAgo = new Date(Date.now() - 7 * 86400000).toISOString();
-        const { data: comments } = await supabase.from('ticket_comments').select('*, tickets(id, ticket_number, title, status, priority, assigned_to)').gte('created_at', sevenDaysAgo).order('created_at', { ascending: false }).limit(30);
+        const { data: comments } = await supabase.from('ticket_comments').select('*, tickets(id, ticket_number, title, status, priority, assigned_to, created_by)').gte('created_at', sevenDaysAgo).order('created_at', { ascending: false }).limit(100);
         setRecentTicketUpdates(comments || []);
       } catch(e) { setRecentTicketUpdates([]); }
       // Load tickets for dashboard
@@ -1127,7 +1308,7 @@ export default function App() {
       } catch(e) { setActivityFeed([]); }
       // Load calendar events for dashboard
       try {
-        const todayStr = new Date().toISOString().substring(0, 10);
+        const todayStr = todayET();
         const { data: evts } = await supabase.from('calendar_events').select('*').gte('event_date', todayStr).order('event_date').order('event_time').limit(30);
         setDashEvents(evts || []);
       } catch(e) { setDashEvents([]); }
@@ -1200,7 +1381,7 @@ export default function App() {
     const ws = XLSX.utils.json_to_sheet(data);
     const wb = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(wb, ws, sheetName || 'Data');
-    XLSX.writeFile(wb, fileName + '_' + new Date().toISOString().substring(0, 10) + '.xlsx');
+    XLSX.writeFile(wb, fileName + '_' + todayET() + '.xlsx');
     if (toast) toast.success('Exported ' + data.length + ' rows to Excel');
   };
   const canEditTreasury = isSuperAdmin || modulePerms?.['Edit Treasury'] === true || modulePerms?.['Treasury'] === true;
@@ -2007,7 +2188,7 @@ export default function App() {
   // ========== RECONCILIATION REPORT GENERATOR ==========
   const generateReconReport = () => {
     const wb = XLSX.utils.book_new();
-    const now = new Date().toLocaleDateString();
+    const now = fmtET(new Date(), 'shortdate');
 
     // 1. Categorize all invoices
     const mismatch = [], unverified = [], overpaid = [], overdue = [];
@@ -2076,7 +2257,7 @@ export default function App() {
     addSheet('No Order #', noOrder);
     addSheet('No Category', noCat);
 
-    XLSX.writeFile(wb, 'KTC_Reconciliation_Report_' + new Date().toISOString().substring(0, 10) + '.xlsx');
+    XLSX.writeFile(wb, 'KTC_Reconciliation_Report_' + todayET() + '.xlsx');
   };
 
   const handleAddInvoice = async () => {
@@ -3405,7 +3586,7 @@ export default function App() {
           user_id: (userProfile && userProfile.id) || null,
           entry_text: auditNote + ' — Check #' + (check.check_number || '?') + ' for ' + Number(check.amount).toLocaleString() + ' EGP',
           log_category: 'check',
-          log_date: new Date().toISOString().substring(0, 10),
+          log_date: todayET(),
           auto_generated: true,
         });
       } catch (e) { console.warn('[uncollect] daily_log insert failed (non-fatal):', e.message); }
@@ -3678,7 +3859,7 @@ export default function App() {
               {/* Brand mark — bracket prefix is a terminal callout convention. */}
               <span className="text-emerald-400 font-mono text-xs font-bold tracking-tight" style={{ fontFamily: '"JetBrains Mono", monospace' }}>[KTC]</span>
               <h1 className="text-sm font-bold text-white tracking-tight whitespace-nowrap">NEXTTRADE HUB</h1>
-              <span className="text-[10px] text-zinc-500 font-mono hidden md:inline" style={{ fontFamily: '"JetBrains Mono", monospace' }}>v55.62</span>
+              <span className="text-[10px] text-zinc-500 font-mono hidden md:inline" style={{ fontFamily: '"JetBrains Mono", monospace' }}>v55.80</span>
               {/* Live clock — terminals always show one. Updates via the
                   existing tick state; if not present, falls back to no clock. */}
               <span className="hidden lg:inline text-[10px] text-zinc-500 font-mono ml-2 pl-2 border-l border-zinc-800" style={{ fontFamily: '"JetBrains Mono", monospace' }}>
@@ -3784,7 +3965,7 @@ export default function App() {
             {(() => {
               const overdueCount = invoices.filter(i => i.outstanding > 0 && i.invoice_date && (Date.now() - new Date(i.invoice_date).getTime()) > 30 * 86400000).length;
               const openTickets = dashTickets.filter(t => t.status !== 'Closed' && t.status !== 'Resolved').length;
-              const todayN = new Date().toISOString().substring(0, 10);
+              const todayN = todayET();
               const tomorrowN = new Date(Date.now() + 86400000).toISOString().substring(0, 10);
               const overdueChecks = pendingChecks.filter(c => (c.due_date || c.check_date || '') < todayN && (c.due_date || c.check_date));
               const dueTomorrowChecks = pendingChecks.filter(c => (c.due_date || c.check_date || '') === tomorrowN);
@@ -3871,7 +4052,7 @@ export default function App() {
           <div className="hidden md:block px-4 py-1.5 border-t border-zinc-900 overflow-hidden" style={{ background: '#0a0a0a' }}>
             <div className="flex items-center gap-6 text-[10px] font-mono whitespace-nowrap overflow-x-auto" style={{ fontFamily: '"JetBrains Mono", monospace' }}>
               {(() => {
-                const todayN = new Date().toISOString().substring(0, 10);
+                const todayN = todayET();
                 const monthStart = todayN.substring(0, 7) + '-01';
                 const monthIn = treasury.filter(t => (t.transaction_date || '') >= monthStart).reduce((a, t) => a + Number(t.cash_in || 0) + Number(t.bank_in || 0), 0);
                 const monthOut = treasury.filter(t => (t.transaction_date || '') >= monthStart).reduce((a, t) => a + Number(t.cash_out || 0) + Number(t.bank_out || 0), 0);
@@ -3912,7 +4093,7 @@ export default function App() {
                   ? 'Search invoices, customers, tickets, bank...'
                   : 'Search customers, tickets...'}
                 aria-label="Global search" className="flex-1 outline-none text-sm" />
-              <button onClick={() => setShowGlobalSearch(false)} className="text-xs text-slate-400 bg-slate-100 px-2 py-1 rounded">ESC</button>
+              <button onClick={() => setShowGlobalSearch(false)} className="text-xs text-slate-700 bg-slate-200 px-2 py-1 rounded font-bold">ESC</button>
             </div>
             {globalSearch.length >= 2 && (() => {
               const q = globalSearch.toLowerCase();
@@ -4195,7 +4376,7 @@ export default function App() {
                   + '<table><tr><td><strong>Total</strong></td><td class="r lg">EGP ' + Number(inv.amount || inv.total_amount || 0).toLocaleString() + '</td></tr>'
                   + '<tr><td>Collected</td><td class="r">EGP ' + Number(inv.total_collected || 0).toLocaleString() + '</td></tr>'
                   + '<tr><td><strong>Outstanding</strong></td><td class="r" style="color:#ef4444;font-weight:700">EGP ' + Number(inv.outstanding || 0).toLocaleString() + '</td></tr></table>'
-                  + '<p class="meta" style="margin-top:30px">Generated by KTC NextTrade Hub — ' + new Date().toLocaleDateString() + '</p></body></html>');
+                  + '<p class="meta" style="margin-top:30px">Generated by KTC NextTrade Hub — ' + fmtET(new Date(), 'shortdate') + '</p></body></html>');
                 w.document.close();
                 setTimeout(function() { w.print(); }, 500);
               };
@@ -6578,7 +6759,7 @@ export default function App() {
 
         {/* ===== FLOATING REMINDER BANNER (all tabs) ===== */}
         {tab !== 'dashboard' && (() => {
-          const todayStr = new Date().toISOString().substring(0, 10);
+          const todayStr = todayET();
           const myActive = reminders.filter(r => {
             const isForMe = !r.target_users || r.target_users === 'all' || (r.target_users || '').includes(userProfile?.id);
             const isToday = r.reminder_date === todayStr;
@@ -6640,7 +6821,7 @@ export default function App() {
                 tile to the relevant tab.
                 =========================================================== */}
             {(isSuperAdmin || modulePerms?.['Treasury'] === true) && (() => {
-              const todayN = new Date().toISOString().substring(0, 10);
+              const todayN = todayET();
               const monthStart = todayN.substring(0, 7) + '-01';
               const sevenDaysOut = new Date(Date.now() + 7 * 86400000).toISOString().substring(0, 10);
               const myId = userProfile?.id;
@@ -6856,7 +7037,7 @@ export default function App() {
                           </div>
                           {a.body && <div style={{ fontSize: '1rem', marginTop: '0.5rem', lineHeight: 1.6, color: '#1e293b', whiteSpace: 'pre-wrap' }}>{a.body}</div>}
                           <div style={{ fontSize: '0.75rem', marginTop: '0.5rem', color: '#94a3b8' }}>
-                            From: {poster ? poster.name : 'Admin'} • {new Date(a.created_at).toLocaleDateString()} {new Date(a.created_at).toLocaleTimeString([], {hour:'2-digit',minute:'2-digit'})}
+                            From: {poster ? poster.name : 'Admin'} • {fmtET(a.created_at, 'shortdate')} {fmtET(a.created_at, 'time', { tag: false })}
                             {isTargeted && <span style={{ color: '#7c3aed', fontWeight: 700, marginLeft: 8 }}>📩 Sent to you directly</span>}
                           </div>
                           <button onClick={async () => {
@@ -6878,7 +7059,7 @@ export default function App() {
             {/* ===== SMART WELCOME BRIEFING ===== */}
             {!welcomeDismissed && userProfile && (isSuperAdmin || modulePerms?.['Welcome Briefing']) && (() => {
               const myId = userProfile.id;
-              const todayStr = new Date().toISOString().substring(0, 10);
+              const todayStr = todayET();
               const hour = new Date().getHours();
               const greeting = hour < 12 ? 'Good morning' : hour < 17 ? 'Good afternoon' : 'Good evening';
               const firstName = (userProfile.name || '').split(' ')[0];
@@ -6994,7 +7175,7 @@ export default function App() {
                     <div>
                       <div style={{ fontSize: 20, fontWeight: 900, color: '#e2e8f0' }}>{greeting}, {firstName} 👋</div>
                       <div style={{ fontSize: 11, color: '#64748b', marginTop: 2 }}>
-                        {new Date().toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric', year: 'numeric' })}
+                        {fmtET(new Date(), 'longdate', { tag: false })}
                         {loginStreak >= 3 && <span style={{ marginLeft: 8, color: '#f59e0b', fontWeight: 700 }}>🔥 {loginStreak}-day streak</span>}
                       </div>
                     </div>
@@ -7031,40 +7212,12 @@ export default function App() {
               </button>
             )}
 
-            {/* ===== AI ASSISTANT (compact — click to expand) =====
-                H2 (Apr 20): wrapper has max-md:order-last so Nadia visually sinks
-                to the bottom on viewports <768px. Desktop (md+) keeps natural order.
-                Single instance — no double mount, sessionMessages/hasGreeted preserved.
-                S17.8 (Apr 23): Reverted to original props only — no context
-                props, no muted prop. This is Nadia's ORIGINAL dashboard behavior,
-                unchanged from before any of the recent tab/overlay work. */}
-            <div className="max-md:order-last" id="nadia-greeter-anchor">
-            {!greeterDismissed && greeterSettings.enabled ? (
-              <div className="mb-4">
-                <SafeSection label="Nadia">
-                  <AIGreeter
-                    user={user} userProfile={userProfile} users={teamUsers}
-                    tickets={dashTickets} invoices={invoices} treasury={treasury}
-                    checks={pendingChecks} loginHistory={lastLoginInfo} loginHistoryLoaded={loginHistoryLoaded}
-                    lang={lang} personality={greeterSettings.personality}
-                    greeterLang={greeterSettings.language}
-                    enabled={greeterSettings.enabled}
-                    hasGreeted={greeterHasGreeted} onGreeted={handleGreeted}
-                    sessionMessages={greeterMessages} onMessagesUpdate={setGreeterMessages}
-                    onToggle={(on) => { if (!on) setGreeterDismissed(true); }}
-                    toast={toast}
-                    selectedAssistant={selectedAssistant}
-                  />
-                </SafeSection>
-              </div>
-            ) : greeterSettings.enabled ? (
-              <button onClick={() => setGreeterDismissed(false)}
-                className="mb-4 w-full px-4 py-2.5 rounded-xl text-xs font-semibold text-indigo-300 border border-indigo-500/20 hover:bg-indigo-500/10 transition flex items-center gap-2"
-                style={{ background: 'rgba(99,102,241,0.05)' }}>
-                🤖 <span>Open AI Assistant</span> <span className="ml-auto text-[10px] text-indigo-400/60">Nadia</span>
-              </button>
-            ) : null}
-            </div>
+            {/* v55.75 — AIGreeter NO LONGER mounts here (was the standalone
+                "Nadia chat" surface separate from the avatars). Per Max's
+                Build A spec: the chat must live INSIDE the AssistantsBar
+                directly under the avatars. AIGreeter is now constructed
+                just before PersonalDashboard and passed in as a chatSurface
+                slot — search for "v55.75 chatSurface" in this file. */}
 
                 </>)}{/* end !hasUnacked gate */}
               </>);
@@ -7073,7 +7226,7 @@ export default function App() {
             {/* ===== TODAY'S EVENTS + SCORECARD ===== */}
             {(() => {
               const myId = userProfile?.id;
-              const todayStr = new Date().toISOString().substring(0, 10);
+              const todayStr = todayET();
               const myTicketsCount = dashTickets.filter(t => t.assigned_to === myId && t.status !== 'Closed').length;
               const assignedByMe = dashTickets.filter(t => t.created_by === myId && t.assigned_to !== myId && t.status !== 'Closed').length;
               const teamTicketsCount = dashTickets.filter(t => t.status !== 'Closed' && t.assigned_to !== myId && t.created_by !== myId).length;
@@ -7150,7 +7303,7 @@ export default function App() {
 
                   {/* ── CHECKS CASH FLOW — treasury access only ── */}
                   {hasTreasuryAccess && pendingChecks.length > 0 && (() => {
-                    const todayD = new Date().toISOString().substring(0, 10);
+                    const todayD = todayET();
                     const tmrwD = new Date(Date.now() + 86400000).toISOString().substring(0, 10);
                     const thisMonthD = todayD.substring(0, 7);
                     const pendingTotal = pendingChecks.reduce((a, c) => a + Number(c.amount || 0), 0);
@@ -7223,7 +7376,7 @@ export default function App() {
 
             {/* ===== TEAM REMINDERS ===== */}
             {(() => {
-              const todayStr = new Date().toISOString().substring(0, 10);
+              const todayStr = todayET();
               const myReminders = reminders.filter(r => {
                 const isForMe = !r.target_users || r.target_users === 'all' || (r.target_users || '').includes(userProfile?.id);
                 return isForMe;
@@ -7555,13 +7708,13 @@ export default function App() {
                           </div>
                           {a.body && <div style={{ fontSize: '0.95rem', marginTop: '0.5rem', lineHeight: 1.6, color: '#1e293b', whiteSpace: 'pre-wrap' }}>{a.body}</div>}
                           <div style={{ fontSize: '0.7rem', marginTop: '0.5rem', color: '#94a3b8' }}>
-                            {poster ? poster.name : 'Admin'} • {new Date(a.created_at).toLocaleDateString()} {new Date(a.created_at).toLocaleTimeString([], {hour:'2-digit',minute:'2-digit'})}
+                            {poster ? poster.name : 'Admin'} • {fmtET(a.created_at, 'shortdate')} {fmtET(a.created_at, 'time', { tag: false })}
                             {isTargeted && <span style={{ color: '#7c3aed', fontWeight: 700, marginLeft: 8 }}>📩 Sent to you directly</span>}
                           </div>
                           {/* Acknowledge button */}
                           <div style={{ marginTop: '0.75rem' }}>
                             {myAck ? (
-                              <span style={{ fontSize: '0.75rem', color: '#16a34a', fontWeight: 700, background: '#f0fdf4', padding: '4px 12px', borderRadius: 8, border: '1px solid #bbf7d0' }}>✅ Acknowledged {new Date(myAck.acked_at).toLocaleTimeString([], {hour:'2-digit',minute:'2-digit'})}</span>
+                              <span style={{ fontSize: '0.75rem', color: '#16a34a', fontWeight: 700, background: '#f0fdf4', padding: '4px 12px', borderRadius: 8, border: '1px solid #bbf7d0' }}>✅ Acknowledged {fmtET(myAck.acked_at, 'time', { tag: false })}</span>
                             ) : (
                               <button onClick={async () => {
                                 await dbInsert('announcement_acks', { announcement_id: a.id, user_id: myId, acked_at: new Date().toISOString() }, myId);
@@ -7577,7 +7730,7 @@ export default function App() {
                               {ackedUsers.length > 0 && (
                                 <div style={{ color: '#16a34a' }}>✅ {ackedUsers.map(u => {
                                   const ack = thisAcks.find(ak => ak.user_id === u.id);
-                                  return u.name + (ack ? ' (' + new Date(ack.acked_at).toLocaleString([], {month:'short',day:'numeric',hour:'2-digit',minute:'2-digit'}) + ')' : '');
+                                  return u.name + (ack ? ' (' + fmtET(ack.acked_at, 'datetime') + ')' : '');
                                 }).join(', ')}</div>
                               )}
                               {unackedUsers.length > 0 && (
@@ -7641,7 +7794,7 @@ export default function App() {
                                   <div style={{ fontSize: '0.85rem', fontWeight: 700 }}>{icon} {a.title}</div>
                                   {a.body && <div style={{ fontSize: '0.75rem', color: '#475569', marginTop: 4, whiteSpace: 'pre-wrap' }}>{a.body}</div>}
                                   <div style={{ fontSize: '0.6rem', color: '#94a3b8', marginTop: 4 }}>
-                                    {poster ? poster.name : 'Admin'} • {new Date(a.created_at).toLocaleDateString()}
+                                    {poster ? poster.name : 'Admin'} • {fmtET(a.created_at, 'shortdate')}
                                   </div>
                                   {isAdmin && (
                                     <div style={{ marginTop: 8, padding: '8px 10px', background: 'rgba(255,255,255,0.6)', borderRadius: 8, border: '1px solid rgba(0,0,0,0.05)' }}>
@@ -7657,7 +7810,7 @@ export default function App() {
                                         <div style={{ fontSize: '0.65rem', color: '#16a34a', marginBottom: 2 }}>
                                           <b>✅ Acknowledged by:</b> {ackedNames.map(u => {
                                             const ack = thisAcks.find(ak => ak.user_id === u.id);
-                                            return u.name + (ack ? ' (' + new Date(ack.acked_at).toLocaleString([], {month:'short',day:'numeric',hour:'2-digit',minute:'2-digit'}) + ')' : '');
+                                            return u.name + (ack ? ' (' + fmtET(ack.acked_at, 'datetime') + ')' : '');
                                           }).join(', ')}
                                         </div>
                                       )}
@@ -7695,7 +7848,7 @@ export default function App() {
             {/* ===== TICKETS DASHBOARD ===== */}
             {dashTickets.length > 0 && (() => {
               const myId = userProfile?.id;
-              const todayStr = new Date().toISOString().substring(0, 10);
+              const todayStr = todayET();
               const twoDaysAgo = new Date(Date.now() - 48 * 3600000).toISOString();
               const priColor = (p) => p === 'high' ? '#ef4444' : p === 'low' ? '#10b981' : '#f59e0b';
               const timeAgo = (d) => { const m = Math.floor((Date.now() - new Date(d).getTime()) / 60000); if (m < 60) return m + 'm'; const h = Math.floor(m/60); if (h < 24) return h + 'h'; return Math.floor(h/24) + 'd'; };
@@ -7982,15 +8135,20 @@ export default function App() {
                     color="#f87171" bgColor="rgba(239,68,68,0.1)" borderColor="rgba(239,68,68,0.3)" items={overdueTickets}
                     renderItem={(t) => <TicketCard key={t.id} t={t} accent="#f87171" />} />
 
-                  {/* ── 3. RECENTLY UPDATED ── */}
+                  {/* ── 3. RECENTLY UPDATED ──
+                      v55.75 (A3) — Per Max May 8 2026: "Show latest 25
+                      updated tickets initially". Both Recently Updated
+                      sections override the default 5-cap with defaultShow=25. */}
                   {myUpdates.length > 0 && (
                     <CollapsibleSection id="recentUpd" icon="💬" title="Recently Updated" count={myUpdates.length}
                       color="#a78bfa" bgColor="rgba(139,92,246,0.08)" items={myUpdates}
+                      defaultShow={25}
                       renderItem={(c) => <UpdateCard key={c.id} c={c} />} />
                   )}
                   {recentlyUpdated.length > 0 && myUpdates.length === 0 && (
                     <CollapsibleSection id="recentUpd2" icon="🔄" title="Recently Updated Tickets" count={recentlyUpdated.length}
                       color="#a78bfa" bgColor="rgba(139,92,246,0.08)" items={recentlyUpdated}
+                      defaultShow={25}
                       renderItem={(t) => <TicketCard key={t.id} t={t} accent="#a78bfa" />} />
                   )}
 
@@ -8655,8 +8813,54 @@ export default function App() {
             })()}
 
             {/* ===== PERSONAL DASHBOARD (tickets, reminders, calendar — after financial for admins, first for team) ===== */}
-            <PersonalDashboard user={user} userProfile={userProfile} isAdmin={isAdmin} isSuperAdmin={isSuperAdmin}
-              invoices={invoices} customers={customers} navigate={navigate} fE={fE} users={teamUsers} />
+            {/* v55.75 chatSurface — Build A item #1: the AIGreeter chat surface
+                is built here and passed INTO PersonalDashboard, which threads
+                it down to AssistantsBar to render directly under the avatars.
+                Single GUI surface. No redirects. */}
+            {(() => {
+              // v55.76 (A5) — Persona-aware fallback when chat is dismissed.
+              // The "wake the assistant" affordance now reflects whichever
+              // persona is currently active, not hard-coded "Nadia". This
+              // preserves the unified-module feel: the user sees who's in
+              // control even when chat is collapsed.
+              const activePersonaName =
+                selectedAssistant === 'jenna' ? 'Ms. Jenna' :
+                selectedAssistant === 'sara'  ? 'Sara' :
+                                                'Nadia';
+              const activePersonaColor =
+                selectedAssistant === 'jenna' ? 'text-rose-700 border-rose-300 hover:bg-rose-50' :
+                selectedAssistant === 'sara'  ? 'text-cyan-700 border-cyan-300 hover:bg-cyan-50' :
+                                                'text-indigo-700 border-indigo-300 hover:bg-indigo-50';
+              const nadiaChatSurface = (!greeterDismissed && greeterSettings.enabled) ? (
+                <div id="nadia-greeter-anchor">
+                  <SafeSection label="Nadia">
+                    <AIGreeter
+                      user={user} userProfile={userProfile} users={teamUsers}
+                      tickets={dashTickets} invoices={invoices} treasury={treasury}
+                      checks={pendingChecks} loginHistory={lastLoginInfo} loginHistoryLoaded={loginHistoryLoaded}
+                      lang={lang} personality={greeterSettings.personality}
+                      greeterLang={greeterSettings.language}
+                      enabled={greeterSettings.enabled}
+                      hasGreeted={greeterHasGreeted} onGreeted={handleGreeted}
+                      sessionMessages={greeterMessages} onMessagesUpdate={setGreeterMessages}
+                      onToggle={(on) => { if (!on) setGreeterDismissed(true); }}
+                      toast={toast}
+                      selectedAssistant={selectedAssistant}
+                    />
+                  </SafeSection>
+                </div>
+              ) : greeterSettings.enabled ? (
+                <button onClick={() => setGreeterDismissed(false)}
+                  className={'w-full px-4 py-3 rounded-xl text-sm font-semibold border-2 transition flex items-center justify-center gap-2 bg-white ' + activePersonaColor}>
+                  🤖 <span>Talk to {activePersonaName}</span>
+                </button>
+              ) : null;
+              return (
+                <PersonalDashboard user={user} userProfile={userProfile} isAdmin={isAdmin} isSuperAdmin={isSuperAdmin}
+                  invoices={invoices} customers={customers} navigate={navigate} fE={fE} users={teamUsers}
+                  chatSurface={nadiaChatSurface} />
+              );
+            })()}
 
             {/* ===== VOICEMAILS WIDGET (Phase B — Apr 26 2026) =====
                 Shows the logged-in user's unread voicemails with audio + Whisper transcript.
@@ -8722,7 +8926,7 @@ export default function App() {
                   ws['!cols'] = [{wch:14},{wch:30},{wch:12},{wch:14},{wch:14},{wch:14},{wch:14},{wch:14}];
                   const wb = XLSX.utils.book_new();
                   XLSX.utils.book_append_sheet(wb, ws, 'Sales');
-                  XLSX.writeFile(wb, `Sales-Export-${new Date().toISOString().substring(0,10)}.xlsx`);
+                  XLSX.writeFile(wb, `Sales-Export-${todayET()}.xlsx`);
                 }} className="px-3 py-1.5 bg-slate-100 text-slate-600 rounded-lg text-xs font-semibold hover:bg-slate-200">
                   📥 Export
                 </button>
@@ -9204,7 +9408,7 @@ export default function App() {
                   ws['!cols'] = [{wch:12},{wch:12},{wch:40},{wch:14},{wch:14},{wch:16}];
                   const wb = XLSX.utils.book_new();
                   XLSX.utils.book_append_sheet(wb, ws, 'Treasury');
-                  XLSX.writeFile(wb, `Treasury-Export-${new Date().toISOString().substring(0,10)}.xlsx`);
+                  XLSX.writeFile(wb, `Treasury-Export-${todayET()}.xlsx`);
                 }} className="px-3 py-1.5 bg-slate-100 text-slate-600 rounded-lg text-xs font-semibold hover:bg-slate-200">
                   📥 Export
                 </button>
@@ -9878,7 +10082,7 @@ export default function App() {
             CHECKS TAB
         ========================================== */}
         {tab === 'checks' && (() => {
-          const todayStr = new Date().toISOString().substring(0, 10);
+          const todayStr = todayET();
           const thisMonth = todayStr.substring(0, 7);
           const tomorrowStr = new Date(Date.now() + 86400000).toISOString().substring(0, 10);
           const dueThisMonth = pendingChecks.filter(c => (c.due_date || c.check_date || '').substring(0, 7) === thisMonth);
@@ -10061,7 +10265,7 @@ export default function App() {
                 } else if (checkSort === 'order') {
                   groupLabel = '📦 Order #' + gKey;
                 } else {
-                  groupLabel = gKey === 'Unknown' ? 'No Date' : new Date(gKey + '-01').toLocaleDateString('en-US', { year: 'numeric', month: 'long' });
+                  groupLabel = gKey === 'Unknown' ? 'No Date' : (function(){ var d = new Date(gKey + '-01'); var m = new Intl.DateTimeFormat('en-US', { month: 'long', year: 'numeric', timeZone: 'America/New_York' }).format(d); return m; })();
                   isOverdueGroup = checkView === 'pending' && gKey < todayStr.substring(0, 7);
                 }
                 return (
@@ -10228,7 +10432,7 @@ export default function App() {
                   ws['!cols'] = [{wch:12},{wch:50},{wch:14},{wch:20},{wch:20}];
                   const wb = XLSX.utils.book_new();
                   XLSX.utils.book_append_sheet(wb, ws, 'Warehouse');
-                  XLSX.writeFile(wb, `Warehouse-Export-${formData.whYear || 'All'}-${new Date().toISOString().substring(0,10)}.xlsx`);
+                  XLSX.writeFile(wb, `Warehouse-Export-${formData.whYear || 'All'}-${todayET()}.xlsx`);
                 }} className="px-3 py-1.5 bg-slate-100 text-slate-600 rounded-lg text-xs font-semibold hover:bg-slate-200">
                   📥 Export
                 </button>
@@ -11996,7 +12200,7 @@ export default function App() {
                                     const delta = Number(a.new_value || 0) - Number(a.old_value || 0);
                                     return (
                                       <tr key={a.id} className="border-b border-slate-50">
-                                        <td className="px-2 py-1">{a.adjusted_at ? new Date(a.adjusted_at).toLocaleString() : '—'}</td>
+                                        <td className="px-2 py-1">{a.adjusted_at ? fmtET(a.adjusted_at, 'datetime') : '—'}</td>
                                         <td className="px-2 py-1 font-semibold text-slate-700">{userName(a.adjusted_by)}</td>
                                         <td className="px-2 py-1">{a.field === 'original_quantity' ? 'Original Qty' : a.field === 'current_quantity' ? 'Current Qty' : a.field}</td>
                                         <td className="px-2 py-1 text-right text-slate-500">{a.old_value}</td>
@@ -12878,7 +13082,7 @@ export default function App() {
                       latest fix is actually deployed. If he doesn't see this
                       tag in the modal, his browser is running stale JS. */}
                   <div className="mt-1.5 inline-block px-2 py-0.5 rounded bg-amber-900/60 text-amber-100 text-[10px] font-mono font-bold tracking-wide">
-                    BUILD v55.62-ACTIVE-USER-NULL-FIX
+                    BUILD v55.80-PHASE-B+
                   </div>
                 </div>
                 <button onClick={() => closePendingTreasuryModal()}
@@ -13507,7 +13711,7 @@ export default function App() {
                     معاملة قد تكون مكررة
                   </div>
                   <div className="mt-1.5 inline-block px-2 py-0.5 rounded bg-amber-900/60 text-amber-100 text-[10px] font-mono font-bold tracking-wide">
-                    BUILD v55.62-ACTIVE-USER-NULL-FIX
+                    BUILD v55.80-PHASE-B+
                   </div>
                 </div>
                 <button

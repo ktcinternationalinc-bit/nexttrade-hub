@@ -194,7 +194,7 @@ export default function CustomsRateLibrary({ user, isAdmin }) {
               value={settings?.bank_commission_pct ?? ''}
               onChange={e => setSettings(Object.assign({}, settings, { bank_commission_pct: e.target.value }))}
               className="w-full px-3 py-2 rounded border border-slate-200 text-sm" />
-            <p className="text-[9px] text-slate-400 mt-0.5">% of the advance income tax</p>
+            <p className="text-[9px] text-slate-500 mt-0.5">% of the advance income tax</p>
           </div>
         </div>
         {canEdit && (
@@ -203,7 +203,7 @@ export default function CustomsRateLibrary({ user, isAdmin }) {
             {savingSettings ? '⏳ Saving…' : '💾 Save Government Rates'}
           </button>
         )}
-        {!canEdit && <p className="text-[10px] text-slate-400 mt-2 italic">View-only — only super admin can edit government rates.</p>}
+        {!canEdit && <p className="text-[10px] text-slate-500 mt-2 italic">View-only — only super admin can edit government rates.</p>}
       </div>
 
       {/* ===== Product Customs Rates ===== */}

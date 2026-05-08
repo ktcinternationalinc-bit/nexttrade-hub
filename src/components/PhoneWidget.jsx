@@ -1,6 +1,7 @@
 'use client';
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { supabase } from '../lib/supabase';
+import { fmtET } from '../lib/et-time';
 
 const DIAL_KEYS = [['1','2','3'],['4','5','6'],['7','8','9'],['*','0','#']];
 
@@ -593,7 +594,7 @@ export default function PhoneWidget({ user, userProfile, users, customers }) {
             <div className="flex justify-between items-center">
               <div>
                 <div className="font-bold text-sm">📞 KTC Phone</div>
-                <div className="text-[10px] text-slate-400">{myNumber || 'No number assigned'}</div>
+                <div className="text-[10px] text-slate-500">{myNumber || 'No number assigned'}</div>
               </div>
               <button onClick={() => setOpen(false)} className="text-slate-400 text-lg">✕</button>
             </div>
@@ -672,8 +673,8 @@ export default function PhoneWidget({ user, userProfile, users, customers }) {
                       <span className={l.direction === 'inbound' ? 'text-blue-500' : 'text-green-500'}>{l.direction === 'inbound' ? '📥' : '📤'}</span>
                       <div>
                         <div className="text-xs font-semibold">{contactName || fmtPhone(l.customer_number)}</div>
-                        {contactName && <div className="text-[10px] text-slate-400">{fmtPhone(l.customer_number)}</div>}
-                        <div className="text-[10px] text-slate-400">{new Date(l.started_at).toLocaleString()}{l.duration_seconds ? ` • ${fmtDuration(l.duration_seconds)}` : ''}</div>
+                        {contactName && <div className="text-[10px] text-slate-500">{fmtPhone(l.customer_number)}</div>}
+                        <div className="text-[10px] text-slate-500">{fmtET(l.started_at, 'datetime')}{l.duration_seconds ? ` • ${fmtDuration(l.duration_seconds)}` : ''}</div>
                       </div>
                     </div>
                     <button onClick={(e) => { e.stopPropagation(); setNumber(l.customer_number); makeCall(l.customer_number); }}

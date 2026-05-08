@@ -7,6 +7,7 @@
 // with detailed diagnostic instead of silent.
 // ============================================================
 import { useState, useEffect, useCallback } from 'react';
+import { fmtET } from '../lib/et-time';
 
 export default function EmailStatusPanel({ userId, userEmail, userName }) {
   var [status, setStatus] = useState(null);
@@ -100,14 +101,46 @@ export default function EmailStatusPanel({ userId, userEmail, userName }) {
   var stats = (status && status.stats_24h) || {};
   var failures = stats.recent_failures || [];
 
+  // v55.80 (Phase B / Section 13 — silent-failure escalation)
+  // ----------------------------------------------------------------
+  // The panel previously said "CONFIGURED" green pill even when zero
+  // emails were succeeding. The new rule: if Resend is configured but
+  // the 24h success count is 0 despite attempts, OR more than half of
+  // attempts failed, surface that loudly.
+  var attempted = Number(stats.last_24h_attempted || 0);
+  var succeeded = Number(stats.last_24h_succeeded || 0);
+  var rawFailed = Number(stats.last_24h_failed || 0);
+  // v55.80 BUG-12 FIX: server shape isn't strictly enforced —
+  // attempted/succeeded/failed are independently counted. If they don't add
+  // up, derive failed from (attempted - succeeded) and clamp to 0+.
+  var failed = (Math.abs((succeeded + rawFailed) - attempted) > 1)
+    ? Math.max(0, attempted - succeeded)
+    : rawFailed;
+  var silentFailure = isReady && attempted >= 3 && succeeded === 0;
+  var degraded = isReady && !silentFailure && attempted >= 5 && (failed / attempted) >= 0.5;
+  var escalated = silentFailure || degraded;
+
+  // The pill color shifts from green → red when silent-failure is true,
+  // so the viewer can't miss that "configured" doesn't mean "working".
+  var pillBg = !isReady ? 'bg-amber-500'
+    : silentFailure ? 'bg-rose-600'
+    : degraded ? 'bg-amber-500'
+    : 'bg-emerald-500';
+  var pillLabel = !isReady ? 'NOT CONFIGURED'
+    : silentFailure ? 'NOT DELIVERING'
+    : degraded ? 'DEGRADED'
+    : 'CONFIGURED';
+  var panelBg = (!isReady || escalated) ? 'bg-amber-50 border-amber-300' : 'bg-emerald-50 border-emerald-200';
+  if (silentFailure) panelBg = 'bg-rose-50 border-rose-300';
+
   return (
-    <div className={'rounded-xl p-4 border mb-3 ' + (isReady ? 'bg-emerald-50 border-emerald-200' : 'bg-amber-50 border-amber-300')}>
+    <div className={'rounded-xl p-4 border mb-3 ' + panelBg}>
       <div className="flex items-center justify-between flex-wrap gap-2 mb-2">
         <div className="flex items-center gap-2">
           <span className="text-lg">📧</span>
           <span className="text-sm font-bold text-slate-800">Email (Resend) Status</span>
-          <span className={'px-2 py-0.5 rounded text-[10px] font-bold ' + (isReady ? 'bg-emerald-500 text-white' : 'bg-amber-500 text-white')}>
-            {isReady ? 'CONFIGURED' : 'NOT CONFIGURED'}
+          <span className={'px-2 py-0.5 rounded text-[10px] font-bold text-white ' + pillBg}>
+            {pillLabel}
           </span>
         </div>
         <button
@@ -118,6 +151,27 @@ export default function EmailStatusPanel({ userId, userEmail, userName }) {
           ↻ Refresh
         </button>
       </div>
+
+      {/* v55.80 (Phase B / Section 13) — Silent-failure callout.
+          Used to be hidden behind a "configured" green pill, which hid
+          the worst kind of bug: looks fine, isn't delivering. */}
+      {silentFailure && (
+        <div className="bg-white border-2 border-rose-300 rounded-lg p-3 mb-2">
+          <div className="text-xs font-extrabold text-rose-800 mb-1">🚨 Emails are NOT delivering — {attempted} attempted, 0 sent in last 24h</div>
+          <div className="text-[11px] text-rose-700 leading-relaxed">
+            Resend is configured but every send in the last 24 hours has failed. Most common causes: the API key is wrong, the FROM address is unverified, or you've hit the Resend free-tier daily limit.
+            Click <b>Send test email</b> below — the response will tell you exactly which one.
+          </div>
+        </div>
+      )}
+      {degraded && !silentFailure && (
+        <div className="bg-white border border-amber-300 rounded-lg p-3 mb-2">
+          <div className="text-xs font-bold text-amber-800 mb-1">⚠️ Email delivery is degraded — {failed} of {attempted} failed in last 24h</div>
+          <div className="text-[11px] text-amber-700">
+            More than half of recent sends failed. Look at the recent failures below to spot a pattern (one bad recipient address vs. a wider outage).
+          </div>
+        </div>
+      )}
 
       {!isReady && (
         <div className="bg-white rounded-lg p-3 mt-2 border border-amber-200">
@@ -149,15 +203,15 @@ export default function EmailStatusPanel({ userId, userEmail, userName }) {
           <div className="bg-white rounded p-2 border border-emerald-100">
             <div className="text-[9px] text-slate-500 font-semibold uppercase">From address</div>
             <div className="text-xs font-mono text-slate-800 truncate" title={status.from_email}>{status.from_email}</div>
-            {status.from_email_is_default && <div className="text-[9px] text-amber-600 mt-0.5">using fallback</div>}
+            {status.from_email_is_default && <div className="text-[9px] text-amber-800 mt-0.5 font-semibold">using fallback</div>}
           </div>
           <div className="bg-white rounded p-2 border border-emerald-100">
             <div className="text-[9px] text-slate-500 font-semibold uppercase">24h sent</div>
-            <div className="text-xs font-bold text-emerald-700">{stats.last_24h_succeeded || 0}</div>
+            <div className={'text-xs font-bold ' + (silentFailure ? 'text-rose-600' : 'text-emerald-700')}>{succeeded}</div>
           </div>
           <div className="bg-white rounded p-2 border border-emerald-100">
             <div className="text-[9px] text-slate-500 font-semibold uppercase">24h failed</div>
-            <div className={'text-xs font-bold ' + ((stats.last_24h_failed || 0) > 0 ? 'text-red-600' : 'text-slate-500')}>{stats.last_24h_failed || 0}</div>
+            <div className={'text-xs font-bold ' + (failed > 0 ? 'text-red-600' : 'text-slate-500')}>{failed}</div>
           </div>
         </div>
       )}
@@ -331,7 +385,7 @@ export default function EmailStatusPanel({ userId, userEmail, userName }) {
                   <span className="font-semibold text-slate-700">{f.type || 'unknown'}</span>
                   <span className="text-slate-500 mx-1">·</span>
                   <span className="text-slate-700">{f.subject}</span>
-                  <span className="text-slate-400 ml-2">{f.when ? new Date(f.when).toLocaleString() : ''}</span>
+                  <span className="text-slate-400 ml-2">{f.when ? fmtET(f.when, 'datetime') : ''}</span>
                 </div>
               );
             })}

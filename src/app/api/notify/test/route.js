@@ -125,7 +125,7 @@ export async function POST(req) {
       }
 
       var FROM_EMAIL_ALL = process.env.NOTIFICATION_FROM_EMAIL || 'notifications@ktcus.com';
-      var nowStrAll = new Date().toLocaleString();
+      var nowStrAll = new Intl.DateTimeFormat("en-US", { timeZone: "America/New_York", month: "short", day: "numeric", year: "numeric", hour: "numeric", minute: "2-digit", hour12: true }).format(new Date()) + " ET";
       var results = [];
       var bulkStart = Date.now();
 
@@ -238,7 +238,7 @@ export async function POST(req) {
     }
 
     var FROM_EMAIL = process.env.NOTIFICATION_FROM_EMAIL || 'notifications@ktcus.com';
-    var nowStr = new Date().toLocaleString();
+    var nowStr = new Intl.DateTimeFormat("en-US", { timeZone: "America/New_York", month: "short", day: "numeric", year: "numeric", hour: "numeric", minute: "2-digit", hour12: true }).format(new Date()) + " ET";
 
     var html = ''
       + '<div style="font-family: -apple-system, sans-serif; max-width: 560px; margin: 0 auto; padding: 24px;">'

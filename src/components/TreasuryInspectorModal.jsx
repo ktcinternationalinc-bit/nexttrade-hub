@@ -1,6 +1,7 @@
 'use client';
 import React, { useMemo } from 'react';
 import { classifyTreasuryTransaction } from '../lib/treasury-classifier';
+import { fmtET } from '../lib/et-time';
 
 // ============================================================
 // TREASURY INSPECTOR MODAL
@@ -15,12 +16,11 @@ function fE(n) {
 
 function fmtDate(s) {
   if (!s) return '—';
-  try {
-    var d = new Date(s);
-    if (isNaN(d.getTime())) return s;
-    return d.toLocaleDateString('en-US', { year: 'numeric', month: 'short', day: 'numeric' }) +
-      (s.length > 10 ? ' ' + d.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' }) : '');
-  } catch (e) { return s; }
+  // s could be 'YYYY-MM-DD' (date-only) or a full ISO timestamp.
+  // For date-only strings, render as ET shortdate (no time component).
+  // For full timestamps, render as ET datetime.
+  if (typeof s === 'string' && s.length === 10) return fmtET(s, 'date');
+  return fmtET(s, 'datetime');
 }
 
 function colorClasses(color) {

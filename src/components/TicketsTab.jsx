@@ -4,6 +4,7 @@ import { filterActiveUsers } from '../lib/active-users';
 import { supabase, dbInsert, dbUpdate, dbDelete, logActivity } from '../lib/supabase';
 import { notifyTicketAssigned, notifyTicketStatus, notifyTicketComment, notifyTicketReassigned, notifyTicketPriority, notifyTicketDueDate, ticketRecipients } from '../lib/notify';
 import { sanitizeRichText, isHtmlComment, richTextToPlain } from '../lib/utils';
+import { fmtET, todayET } from '../lib/et-time';
 import RichCommentComposer from './RichCommentComposer';
 import PriorityBoard from './PriorityBoard';
 
@@ -98,14 +99,14 @@ export default function TicketsTab({ toast, customers, user, userProfile, users,
   // field for attaching a related URL (e.g., PR / doc / external ticket).
   const [closeModal, setCloseModal] = useState(null); // { ticket, comment: '', link: '' } or null
 
-  const todayStr = new Date().toISOString().substring(0, 10);
+  const todayStr = todayET();
   const getUserName = (id) => (users || []).find(u => u.id === id)?.name || '';
   // v55.52 — Active users only, for assignee dropdowns. We keep `users` as
   // the full list so historical assignments still resolve to a name even
   // for terminated/deactivated teammates. `activeUsers` is what shows up in
   // every "pick a person" UI so deactivated users disappear from selection.
   const activeUsers = filterActiveUsers(users); // v55.62 — handles active=NULL
-  const fmtDate = (d) => d ? new Date(d).toLocaleString() : '';
+  const fmtDate = (d) => d ? fmtET(d, 'datetime') : '';
 
   const startVoice = () => {
     if (!('webkitSpeechRecognition' in window) && !('SpeechRecognition' in window)) { alert('Voice not supported'); return; }
@@ -113,7 +114,7 @@ export default function TicketsTab({ toast, customers, user, userProfile, users,
     const recognition = new SR();
     recognition.lang = 'en-US'; recognition.continuous = false; recognition.interimResults = false;
     setListening(true);
-    recognition.onresult = (event) => { const text = event.results[0][0].transcript; setListening(false); let priority = 'medium'; if (/urgent|high|asap/i.test(text)) priority = 'high'; if (/\blow\b/i.test(text)) priority = 'low'; let assignTo = ''; (users || []).forEach(u => { if (text.toLowerCase().includes((u.name || '').toLowerCase())) assignTo = u.id; }); let dueDate = ''; if (/today/i.test(text)) dueDate = todayStr; if (/tomorrow/i.test(text)) { const d = new Date(); d.setDate(d.getDate() + 1); dueDate = d.toISOString().substring(0, 10); } setF({ title: text, priority, assignedTo: assignTo, dueDate }); setShowAdd(true); };
+    recognition.onresult = (event) => { const text = event.results[0][0].transcript; setListening(false); let priority = 'medium'; if (/urgent|high|asap/i.test(text)) priority = 'high'; if (/\blow\b/i.test(text)) priority = 'low'; let assignTo = ''; (users || []).forEach(u => { if (text.toLowerCase().includes((u.name || '').toLowerCase())) assignTo = u.id; }); let dueDate = ''; if (/today/i.test(text)) dueDate = todayStr; if (/tomorrow/i.test(text)) { const d = new Date(); d.setDate(d.getDate() + 1); dueDate = fmtET(d, 'iso'); } setF({ title: text, priority, assignedTo: assignTo, dueDate }); setShowAdd(true); };
     recognition.onerror = () => setListening(false);
     recognition.onend = () => setListening(false);
     recognition.start();
@@ -616,7 +617,7 @@ export default function TicketsTab({ toast, customers, user, userProfile, users,
               placeholder="Describe how this was resolved, what was done, what was learned..."
               className={'w-full rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 ' + (!closeModal.comment.trim() ? 'border-2 border-red-400 focus:ring-red-400 focus:border-red-400' : 'border border-slate-300 focus:ring-emerald-400 focus:border-emerald-400')}
             />
-            <p className="text-[10px] text-slate-400 mt-1">
+            <p className="text-[10px] text-slate-500 mt-1">
               This comment will be visible on the ticket history. Required for audit trail.
             </p>
           </div>
@@ -631,7 +632,7 @@ export default function TicketsTab({ toast, customers, user, userProfile, users,
               placeholder="https://... or mailto:..."
               className="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-emerald-400 focus:border-emerald-400"
             />
-            <p className="text-[10px] text-slate-400 mt-1">
+            <p className="text-[10px] text-slate-500 mt-1">
               Attach a related URL — a doc, PR, external ticket, or email thread.
             </p>
           </div>
@@ -786,7 +787,7 @@ export default function TicketsTab({ toast, customers, user, userProfile, users,
           <div className="bg-slate-50 rounded-lg p-3">
             <div className="text-[10px] text-slate-500 font-semibold">Opened By / أنشأها</div>
             <div className="text-sm font-bold text-blue-600">{createdByName}</div>
-            <div className="text-[10px] text-slate-400">{fmtDate(sel.created_at)}</div>
+            <div className="text-[10px] text-slate-500">{fmtDate(sel.created_at)}</div>
           </div>
           <div className="bg-purple-50 rounded-lg p-3">
             <div className="text-[10px] text-slate-500 font-semibold">Assigned To / معيّن إلى</div>
@@ -875,7 +876,7 @@ export default function TicketsTab({ toast, customers, user, userProfile, users,
                   }} className="px-3 py-1 bg-blue-500 text-white rounded text-[10px] font-semibold">Set</button>
                 </div>
               ) : (
-                <div className="text-[9px] text-slate-400 mt-1">Only super admins and managers can change due dates</div>
+                <div className="text-[9px] text-slate-500 mt-1">Only super admins and managers can change due dates</div>
               );
             })()}
           </div>
@@ -928,7 +929,7 @@ export default function TicketsTab({ toast, customers, user, userProfile, users,
 
         {/* LAST UPDATED INFO */}
         {sel.updated_at && (
-          <div className="flex items-center gap-2 mb-3 text-[10px] text-slate-400 bg-slate-50 rounded-lg px-3 py-2">
+          <div className="flex items-center gap-2 mb-3 text-[10px] text-slate-500 bg-slate-50 rounded-lg px-3 py-2">
             <span>🕐 Last updated: {fmtDate(sel.updated_at)}</span>
             {sel.updated_by && <span>by <span className="font-semibold text-purple-500">{getUserName(sel.updated_by) || 'Unknown'}</span></span>}
             {sel.closed_by && sel.status === 'Closed' && <span>• Closed by: <span className="font-semibold text-purple-500">{getUserName(sel.closed_by) || 'Unknown'}</span></span>}
@@ -968,7 +969,7 @@ export default function TicketsTab({ toast, customers, user, userProfile, users,
                   <span className="text-xs mt-0.5">📋</span>
                   <div className="flex-1">
                     <div className="text-xs whitespace-pre-wrap">{c.comment_text}</div>
-                    <div className="text-[10px] text-slate-400 mt-0.5">
+                    <div className="text-[10px] text-slate-500 mt-0.5">
                       <span className="font-semibold text-purple-500">{updaterName}</span>
                       <span className="ml-2">{fmtDate(c.created_at)}</span>
                     </div>
@@ -1019,7 +1020,7 @@ export default function TicketsTab({ toast, customers, user, userProfile, users,
                       📎 {c.attachment_name || 'Attachment'}
                     </a>
                   )}
-                  <div className="text-[10px] text-slate-400 mt-1">
+                  <div className="text-[10px] text-slate-500 mt-1">
                     <span className={'font-semibold ' + (isMe ? 'text-blue-500' : 'text-purple-500')}>{authorName}</span>
                     <span className="ml-2">{fmtDate(c.created_at)}</span>
                   </div>
@@ -1145,7 +1146,7 @@ export default function TicketsTab({ toast, customers, user, userProfile, users,
         <button onClick={() => { setOwnerF('all'); setAssignedF('all'); setPriorityF('all'); setStatusF('open'); }}
           className="px-2 py-1 rounded-lg text-[10px] font-semibold text-red-500 bg-red-50 border border-red-200">✕ Clear all filters</button>
       )}
-      <span className="text-[10px] text-slate-400 font-semibold">{filtered.length} result{filtered.length !== 1 ? 's' : ''}</span>
+      <span className="text-[10px] text-slate-500 font-semibold">{filtered.length} result{filtered.length !== 1 ? 's' : ''}</span>
     </div>
 
     {/* Sort */}
@@ -1174,7 +1175,7 @@ export default function TicketsTab({ toast, customers, user, userProfile, users,
             <div className="flex items-center gap-1.5 mb-0.5">
               <div className="w-2.5 h-2.5 rounded-full" style={{background: STATUS_COLORS[s]}} />
               <span className="text-xs font-bold">{s}</span>
-              <span className="text-[9px] text-slate-400 ml-auto">{tickets.filter(t => t.status === s).length}</span>
+              <span className="text-[9px] text-slate-500 ml-auto">{tickets.filter(t => t.status === s).length}</span>
             </div>
             <div className="text-[9px] text-slate-500 leading-tight">{STATUS_DESC[s]}</div>
           </div>
@@ -1271,7 +1272,7 @@ export default function TicketsTab({ toast, customers, user, userProfile, users,
     {/* Ticket Cards */}
     <div className="space-y-2">
       {filtered.length > 0 && (
-        <label className="flex items-center gap-2 px-4 py-1 text-[10px] text-slate-400 font-semibold cursor-pointer hover:text-slate-600">
+        <label className="flex items-center gap-2 px-4 py-1 text-[10px] text-slate-500 font-semibold cursor-pointer hover:text-slate-600">
           <input type="checkbox" checked={bulkSelected.size === filtered.length && filtered.length > 0}
             onChange={toggleAllBulk} className="w-3.5 h-3.5 rounded" />
           Select All ({filtered.length})
@@ -1363,8 +1364,8 @@ export default function TicketsTab({ toast, customers, user, userProfile, users,
                     </span>
                   </div>
                 </div>
-                <span className="text-[10px] text-slate-400 flex-shrink-0">
-                  {new Date(t.created_at).toLocaleDateString()}
+                <span className="text-[10px] text-slate-500 flex-shrink-0">
+                  {fmtET(t.created_at, 'shortdate')}
                 </span>
               </div>
 

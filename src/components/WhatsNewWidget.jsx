@@ -33,6 +33,92 @@ import { supabase } from '../lib/supabase';
 //     WhatsApp, the calendar, the Sales tab.
 export const BUILD_HISTORY = [
   {
+    version: 'v55.79',
+    date: '2026-05-08',
+    label: 'Voice Parity — Animated Avatars + Audio-Reactive Rings',
+    items: [
+      // PUBLIC
+      'JENNA AND SARA NOW LOOK ALIVE WHEN THEY TALK. Before this build, only Nadia had an animated face — Jenna and Sara just had static photos with a colored ring. Now all three personas have living avatars that pulse with their actual voice. When Jenna or Sara speaks, concentric colored rings ripple outward from her photo in real time, driven by the actual audio amplitude. When she\'s listening, a red breathing ring appears. When she\'s thinking, three small dots appear beneath her. Same visual aliveness Nadia has, just adapted to use the real photos instead of an illustrated face.',
+      'SUBTLE BREATH WHEN IDLE. Even when no one is speaking, all three avatars now have a barely-noticeable breath animation — they don\'t look frozen anymore. It\'s a small thing but makes the dashboard feel more alive.',
+      // SUPER_ADMIN ONLY
+      { superAdminOnly: true, text: 'NEW COMPONENT: src/components/PortraitAvatar.jsx (~285 lines). Audio-reactive overlay for any persona photo. Mirrors NadiaFace\'s hardened AudioContext + AnalyserNode pattern (createMediaElementSource → analyser.getByteTimeDomainData → RMS → amplitude 0..1). Concentric rings scale + opacity-modulate with amp. Photo subtly scales with amp. Listening state uses red breathing ring (avatar-listening-pulse CSS class — added to globals.css). Loading state uses pulse dots. Idle uses sine-wave breath animation.' },
+      { superAdminOnly: true, text: 'DEFENSIVE DOUBLE-HOOK GUARD (caught in QA): createMediaElementSource throws InvalidStateError if called twice on the same audio element. NadiaFace marks elements with __nadiaHooked. PortraitAvatar marks them with __portraitHooked. If either marker is set, falls back to procedural shimmer instead of crashing. Mobile autoplay-suspended AudioContext gets ctx.resume() before analyser wiring.' },
+      { superAdminOnly: true, text: 'AIGreeter conditional render: activeAgentKey === "nadia" → NadiaFace (existing illustrated SVG with lip-sync); else → PortraitAvatar with persona\'s photo + uiColor. Same speaking/listening/loading/audioElement props for both — drop-in compatible API.' },
+      { superAdminOnly: true, text: 'NEW CSS in globals.css: @keyframes avatarListeningBreath (1.4s ease-in-out infinite, scale 1.0↔1.08 + opacity 0.85↔1.0). The .avatar-listening-pulse class binds it. Also new: @keyframes avatar-loading-dot (in PortraitAvatar inline style block). 26 new tests in test-v55-79-portrait-avatar.js, all green.' },
+    ],
+  },
+  {
+    version: 'v55.78',
+    date: '2026-05-08',
+    label: 'Voice Parity — Wake Words + Per-Persona History + Persona Persistence',
+    items: [
+      // PUBLIC
+      'EACH ASSISTANT HAS HER OWN WAKE WORD. Before, only "Hey Nadia" worked. Now you can say "Hey Jenna" or "Hey Sara" and that persona becomes active automatically — even if you\'re currently talking to a different one. The wake-word also recognizes common mishearings the recognizer makes (Jenna ↔ Gina/Jenny/Jen, Sara ↔ Sarah, etc.) so you don\'t have to enunciate.',
+      'EACH ASSISTANT HAS HER OWN MEMORY THREAD. Before, all three assistants shared one conversation log — so when you talked to Nadia about overdue tickets, then clicked Ms. Jenna, Ms. Jenna would see that whole conversation in her context and might respond confused. Now each persona has her own conversation thread. Talk to Nadia about tickets; Ms. Jenna only sees HR conversations; Sara only sees coaching conversations. Threads are saved across sessions.',
+      'YOUR ACTIVE PERSONA STAYS WITH YOU. Before, every page reload reset to Nadia. If you mostly work with Sara for coaching, you had to re-click her every time. Now your last-active persona is remembered across reloads.',
+      'AMBIENT NOISE CALIBRATION FOR VOICE CONVERSATIONS. Voice conversation mode used to use a fixed silence threshold — in noisy rooms it would never detect "you stopped talking" and stay recording forever. Now it spends the first ~600ms calibrating to your room\'s ambient noise, then sets a smarter threshold. Works in quiet offices and noisy ones.',
+      // SUPER_ADMIN ONLY
+      { superAdminOnly: true, text: 'WAKE-WORD ROUTING: src/lib/voice/wake-word.js — WAKE_RE expanded to capture nadia/jenna/sara variants (incl. mishearings: gina, jeanna, jana, gianna, jenn, jenny, jen → jenna; sarah, sarra, sera, sarai → sara). VARIANT_TO_AGENT lookup table maps capture group → canonical agent ID. detectWakeWord() returns {matched, command, rest, agent}. Engine state tracks activeAgent across interim/final. New getActiveAgent() accessor. VoiceController emits agent in hey-bob-command event detail. AIGreeter handler reads detail.agent + dispatches ktc:assistant-changed if different from current.' },
+      { superAdminOnly: true, text: 'CRITICAL RACE FIX (caught in QA): When wake-word switches persona AND issues a command in the same utterance ("Hey Jenna, file vacation"), the dispatched ktc:assistant-changed event triggers a React re-render to update activeAgentKey + sysPrompt + voiceId. But doSendRef.current still references the OLD persona\'s closure until that re-render completes. Without the fix, "Hey Jenna, vacation" would route to Nadia\'s brain. Fix: personaWillSwitch flag + setTimeout(doSend, 80) to defer the API call past the re-render. Same-persona wake stays synchronous (no defer needed).' },
+      { superAdminOnly: true, text: 'PER-PERSONA HISTORY: page.jsx greeterMessagesByAgent state ({nadia:[], jenna:[], sara:[]}). Computed greeterMessages getter resolves the active slot. setGreeterMessages routes updates into [selectedAssistant] only. Functional updates supported. localStorage hydrates new shape (nadia.messages.byAgent.<uid>); legacy single-array (nadia.messages.<uid>) migrates to Nadia slot only. Each thread trimmed to last 80 entries on persist (~240 messages cap total). AIGreeter consumption unchanged — receives sessionMessages prop, transparent to it.' },
+      { superAdminOnly: true, text: 'PERSONA PERSISTENCE: page.jsx selectedAssistant lazy-init reads ktc.lastPersona from localStorage. AssistantsBar openPanel uses the same key for hydration. Persisted on every change via useEffect. Both states stay in sync via the existing ktc:assistant-changed event bus (no new sync mechanism needed).' },
+      { superAdminOnly: true, text: 'AMBIENT CALIBRATION: AIGreeter conversation-mode silence detector now collects RMS samples for the first CALIBRATION_MS (~600ms), takes the median (robust to coughs/clicks), multiplies by THRESHOLD_MULTIPLIER (1.8x), clamps to [FLOOR_THRESHOLD, CEILING_THRESHOLD], and assigns the result as SILENCE_THRESHOLD. Calibration phase early-returns from the monitor so silence trigger can\'t fire during it. lastVoice resets at calibration end so the user gets a clean head-start. Works in 0dB silent rooms and 30dB ambient-rumble rooms equally.' },
+      { superAdminOnly: true, text: 'TEST COVERAGE: 1,344 total assertions across 53 suites. New: test-v55-78-wake-agent-routing.js (28 tests), test-v55-78-per-persona-history.js (11), test-v55-78-deferred-gaps.js (51 — wake routing + history + portrait avatar + persistence + calibration + carry-forward). Same 6 pre-existing v55.32/33 legacy stamp failures (unrelated).' },
+    ],
+  },
+  {
+    version: 'v55.77',
+    date: '2026-05-08',
+    label: 'A5 Stabilization + Persona Engine Wiring',
+    items: [
+      // PUBLIC
+      'EACH ASSISTANT NOW SOUNDS LIKE HERSELF. Nadia, Ms. Jenna, and Sara each have their own distinct voice now (Nadia keeps her current voice; Jenna got a warm, empathetic voice; Sara got an energetic, encouraging voice). Before this build, all three spoke with the same voice — only the photos changed. Now the audio matches the personality.',
+      'EACH ASSISTANT BEHAVES IN CHARACTER. Before, when you clicked Ms. Jenna and asked an HR question, you were really just talking to Nadia in a different photo. Now Ms. Jenna actually responds as HR (warm, supportive, focused on requests and concerns). Sara responds as a coach (energetic, growth-oriented). Nadia stays your operational right hand. Each one even knows when to redirect you — "for HR, check with Ms. Jenna" — instead of trying to handle everything.',
+      'CLEAN HANDOFF WHEN YOU SWITCH. Before, switching personas while one was talking left the audio playing in the wrong voice + photo. Now switching cleanly stops the current audio, the recording, and conversation mode — the new persona starts fresh.',
+      'STATE STAYS WITH YOU. If you start filling out an HR concern with Ms. Jenna and switch to Sara to check your stats, then come back to Ms. Jenna — your draft is still there. The form no longer wipes when you switch.',
+      'SMOOTHER MR. KANDIL EXPERIENCE in the HR inbox: jargon like "anonymous to admins" cleaned up to "identity confidential". Status pills made readable. The cartoon HR mascot that used to overlap Ms. Jenna\'s real photo has been removed.',
+      // SUPER_ADMIN ONLY
+      { superAdminOnly: true, text: 'A5 STABILIZATION (6 fixes from QA review): #3 AIGreeter outer-border + bubbles now derive from activeAgent.colors.primary not PERSONALITIES tone preset (uiColor variable, replaced 7 raw persona.color usages). #4 MyHRDesk + MyPerformance always-mounted via display:none so form drafts and Sara metrics survive persona switches. #6 AdminHRInbox jargon swept (super_admin → Mr. Kandil; anonymous to admins → identity confidential). #7 Ten more amber-600/700 contrast spots bumped (HR status pills "Under review"/"Investigating", Shipping cost cells, EmailStatusPanel fallback, CustomsTab empty-state, SettingsTab Safari/Reset/Reverse buttons + warn status). #11 Cartoon "Maya" SVG mascot removed from MyHRDesk (real Jenna photo lives in unified module header now). #12 lastSpokenAgentRef tracks last dispatched speaking agent so persona-switch dispatches {oldAgent, false} cleanly without flashing the wrong tile.' },
+      { superAdminOnly: true, text: 'PERSONA ENGINE WIRING (5 fixes — the persona swap was largely cosmetic before): #A getElevenLabsVoiceId() resolves the active persona\'s voiceId at TTS call time. User-level voice_settings.voice_id still wins as override. Three distinct ElevenLabs voiceIds now actually used (Nadia EXAVITQu4vr4xnSDxMaL, Jenna pFZP5JQG7iQjIQuC4Bku, Sara XrExE9yKIg1WjnnlVkGX). #B sysPrompt now PREPENDS personaIntro built from activeAgent.personalityPrompt + role declaration + cross-persona handoff hints. Jenna\'s HR-empathetic prompt actually reaches the API. Sara\'s coaching prompt actually reaches the API. #F Persona-switch effect now COMPREHENSIVE: stops TTS audio + cancels speechSynthesis + stops MediaRecorder with discardRecordingRef flag (so captured audio doesn\'t go to wrong persona\'s API) + exits conversationModeRef + tears down endConversationMonitoring + fires nadia-tts-stop event + clears pausedRef + dispatches ktc:assistant-changed-cleanup. #G MyHRDesk got an active prop + hasBeenActive defer-load gate (no more HR table fetch on every dashboard load when user never opened Jenna). #L MyHRDesk listens for ktc:assistant-changed-cleanup and closes openModal on switch — but does NOT reset form state, so the draft is preserved for next time.' },
+      { superAdminOnly: true, text: 'TEST COVERAGE: 1,228 total assertions across 50 test suites (2 new suites added — test-v55-77-a5-stabilization.js with 48 assertions, test-v55-77-engine-wiring.js with 31 assertions). Same 6 pre-existing v55.32/33 legacy stamp failures. Touched files: AIGreeter.jsx (+~80 lines for prompt + voice + comprehensive halt), AssistantsBar.jsx (display:none state preservation), MyHRDesk.jsx (defer-load + cleanup listener + Maya removal), AdminHRInbox.jsx (jargon sweep), ShippingRatesTab/EmailStatusPanel/CustomsTab/SettingsTab (contrast).' },
+      { superAdminOnly: true, text: 'KNOWN GAPS (deferred to v55.78+): wake-word still hardcoded to "Hey Nadia" (saying "Hey Jenna" or "Hey Sara" does nothing); chat history shared across personas (Jenna sees Nadia conversation in context — mitigated but not eliminated by strong identity prompt); only Nadia has animated NadiaFace SVG (Jenna/Sara use static photo with speaking ring); no persona persistence across page reloads (always defaults back to Nadia); silence-detection threshold hardcoded (no ambient noise calibration). These are the parity items for the next phase.' },
+    ],
+  },
+  {
+    version: 'v55.76',
+    date: '2026-05-08',
+    label: 'Phase A5 — Unified AI Workforce Module',
+    items: [
+      // PUBLIC
+      'ONE UNIFIED AI MODULE. Nadia, Ms. Jenna, and Sara now live inside ONE shared module on the dashboard — three photos at the top, one shared interaction area below. Switching between them no longer feels like opening different sections; it feels like the same intelligent system changing personality. The module color shifts smoothly to match whoever is active (indigo for Nadia, rose for Ms. Jenna, cyan for Sara).',
+      'CHAT STAYS IN ONE PLACE. The conversation surface is now the persistent body of the module — whether you\'re talking to Nadia about your day, filing a concern with Ms. Jenna, or getting feedback from Sara, you stay in the same spot on the dashboard. No redirects, no jumps to other sections.',
+      'ASSISTANT-AWARE WAKE BUTTON. If you collapse the chat, the "Talk to..." button now shows the active assistant\'s name and her color — so it stays clear who you\'re about to wake up.',
+      // SUPER_ADMIN ONLY
+      { superAdminOnly: true, text: 'A5 STRUCTURAL: Three separate persona panel cards (each with their own border-2 rounded-2xl shell) consolidated into ONE id="ai-workforce-module" shell. Persona content (Nadia stats / Jenna MyHRDesk / Sara MyPerformance) renders as conditional content inside the same shell. Border + background gradient shifts via single ternary chain on openPanel — transition-all duration-500 for smooth color swap.' },
+      { superAdminOnly: true, text: 'A5 CHAT INTEGRATION: chatSurface slot now renders INSIDE the unified module (was previously a sibling outside). Inner chat region gets a subtle persona-matched border-color (indigo-100/rose-100/cyan-100) so the visual continuity is unbroken. AIGreeter still mounted exactly ONCE in page.jsx — passed in as a slot, not duplicated per persona. ONE BRAIN principle preserved.' },
+      { superAdminOnly: true, text: 'A5 PERSONA-AWARE WAKE: dismissed-state "Talk to..." button reads selectedAssistant from state, swaps name (Nadia / Ms. Jenna / Sara) and color (indigo/rose/cyan) accordingly. Old hard-coded "Open AI Assistant — Nadia" pill removed.' },
+      { superAdminOnly: true, text: 'A5 CARRY-FORWARD: A1 calm-idle + speaking-only pulse intact. Switch event bus (ktc:assistant-changed) intact. AIGreeter persona-prop wiring intact. Voice/listening/recording engine bytes still untouched. 1,149 tests pass; 27 new A5-specific assertions in test-v55-76-a5-unified-module.js.' },
+    ],
+  },
+  {
+    version: 'v55.75',
+    date: '2026-05-08',
+    label: 'Phase A — visible bug fixes (avatars, HR wording, ticket list, contrast)',
+    items: [
+      // PUBLIC bullets
+      'CALMER, CLEANER AVATARS. Only the active assistant glows now. No more all three avatars blinking together. Each one reacts independently when you hover. The active assistant only pulses when she\'s actually speaking — calm idle the rest of the time.',
+      'CLEARER HR LANGUAGE. Filing a concern with Ms. Jenna no longer shows technical jargon. Her introduction now reads: "I\'m sorry you\'re dealing with this. I\'ll take it directly to Mr. Kandil." After you submit, you see exactly what was sent and your reference number — for example: "Your reference number is HRC-2026-0001. Mr. Kandil has been notified."',
+      'RECENTLY UPDATED TICKETS — show 25, not 1. The dashboard\'s "Recently Updated" sections now default to showing the latest 25 entries (was capped at 5 before, which made it look like only one). "Show all" reveals the rest.',
+      'BETTER CONTRAST EVERYWHERE. Hundreds of small badges, hints, and labels were updated to be readable. No more washed-out yellow-on-yellow text. No more invisible pale-grey hints at 9–10px. Status badges (Postponed, Partial, Unclaimed, In Progress, etc.) now use higher-contrast colors with crisp borders so they\'re legible at a glance.',
+      // SUPER_ADMIN ONLY
+      { superAdminOnly: true, text: 'A1 ARCHITECTURE: avatar pulse moved off transform animation onto box-shadow only — eliminates conflict with the hover scale transform. New CSS class .ktc-assistant-speaking (driven by the speaking prop) replaces the always-on .ktc-assistant-active-pulse. Per-assistant glow color via --ktc-glow-color CSS variable so each persona pulses in her own color.' },
+      { superAdminOnly: true, text: 'A1 EVENT BUS: AssistantsBar now listens for ktc:assistant-speaking events; AIGreeter dispatches the event when its speaking state changes. Additive layer — voice/listening engine bytes unchanged.' },
+      { superAdminOnly: true, text: 'A2 WORDING: removed "(President)" suffix per Max\'s decision; removed user-visible "anonymous" word from confidentiality toggle (toggle still works under the hood, anonymous_to_admins flag preserved). Reference number surfacing already in place from v55.73.' },
+      { superAdminOnly: true, text: 'A3 PAGINATION: CollapsibleSection defaultShow={25} on both Recently Updated sections (was inheriting global default of 5). All other dashboard sections still default to 5 (Newly Assigned, Overdue, All Open).' },
+      { superAdminOnly: true, text: 'A4 CONTRAST SWEEP: 15 amber-text-on-amber-bg combos bumped from text-amber-600/700 → text-amber-900 with crisp borders (failed WCAG AA at 9–10px text). 164 small-text text-slate-400 → text-slate-500 bumps across 26 components for legibility at small sizes. Tests pinned in test-v55-75-phase-a-final.js (17 assertions, all green).' },
+    ],
+  },
+  {
     version: 'v55.74',
     date: '2026-05-08',
     label: 'AI assistant experience improvements',
@@ -1060,7 +1146,7 @@ export default function WhatsNewWidget({ isAdmin, isSuperAdmin } = {}) {
                   );
                 })}
                 {filteredHistory.length > DISPLAY_LIMIT && (
-                  <div className="text-center text-[10px] text-slate-400 pt-2">
+                  <div className="text-center text-[10px] text-slate-500 pt-2">
                     Older entries ({filteredHistory.length - DISPLAY_LIMIT}) are archived in the source file but not shown here.
                   </div>
                 )}
@@ -1069,7 +1155,7 @@ export default function WhatsNewWidget({ isAdmin, isSuperAdmin } = {}) {
 
             {/* Footer */}
             <div className="border-t border-slate-100 p-3 flex justify-between items-center">
-              <span className="text-[10px] text-slate-400">
+              <span className="text-[10px] text-slate-500">
                 {hasUnseen ? 'Closing this marks all ' + unseenCount + ' as seen.' : ''}
               </span>
               <button

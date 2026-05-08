@@ -118,14 +118,14 @@ test('S17.5.S1 nadiaMuted state declared at page level', function() {
     'nadiaMuted state must be declared at page root');
 });
 
-test('S17.5.S2 nadiaMuted restored from localStorage on mount', function() {
-  assert(/localStorage\.getItem\('nadia\.muted'\) === 'true'/.test(page),
-    'nadiaMuted initial value must read from localStorage "nadia.muted"');
+test('S17.5.S2 nadiaMuted restored from per-user localStorage on auth (BD-audit v55.80)', function() {
+  assert(/localStorage\.getItem\('nadia\.muted\.' \+ uid\)/.test(page),
+    'nadiaMuted must hydrate from per-user "nadia.muted.<uid>" key after auth resolves');
 });
 
-test('S17.5.S3 nadiaMuted persisted to localStorage when changed', function() {
-  assert(/localStorage\.setItem\('nadia\.muted', nadiaMuted \? 'true' : 'false'\)/.test(page),
-    'nadiaMuted changes must write back to localStorage');
+test('S17.5.S3 nadiaMuted persisted per-user to localStorage when changed (BD-audit v55.80)', function() {
+  assert(/localStorage\.setItem\('nadia\.muted\.' \+ uid, nadiaMuted \? 'true' : 'false'\)/.test(page),
+    'nadiaMuted changes must write back to per-user key');
 });
 
 test('S17.5.S4 nadiaMuted changes dispatch sync events', function() {

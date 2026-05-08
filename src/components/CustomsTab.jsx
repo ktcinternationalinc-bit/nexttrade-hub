@@ -19,6 +19,7 @@
 import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { supabase, dbInsert, dbUpdate, logActivity } from '../lib/supabase';
 import { fE } from '../lib/utils';
+import { fmtET, todayET } from '../lib/et-time';
 import * as XLSX from 'xlsx';
 
 const STATUS_COLORS_SHIP = {Pending:'#f59e0b','In Transit':'#3b82f6','At Port':'#8b5cf6',Clearing:'#ec4899',Cleared:'#10b981',Delivered:'#374151'};
@@ -179,7 +180,7 @@ export default function CustomsTab({ customers, user, fxRate }) {
       var hintRow   = TEMPLATE_COLUMNS.map(function (c) { return c.hint; });
       var sampleRow = [
         'PVC-INV-1676',                       // reference_number
-        new Date().toISOString().substring(0,10), // clearance_date
+        todayET(),                            // clearance_date
         'PVC',                                // product_name
         5,                                    // customs_duty_pct
         1.20,                                 // usd_price_per_kg
@@ -486,7 +487,7 @@ export default function CustomsTab({ customers, user, fxRate }) {
 
   var openNewClearance = function () {
     setForm({
-      clearance_date: new Date().toISOString().substring(0, 10),
+      clearance_date: todayET(),
       fx_rate: (fxRate && fxRate.rate) ? Number(fxRate.rate).toFixed(2) : '',
       status: 'draft',
     });
@@ -764,14 +765,14 @@ export default function CustomsTab({ customers, user, fxRate }) {
                       {productList.map(p => <option key={p.id} value={p.product_name}>{p.product_name} ({Number(p.customs_duty_pct).toFixed(1)}%)</option>)}
                     </select>
                     {productList.length === 0 && (
-                      <div className="text-[9px] text-amber-600 mt-1">No products yet. Add them in Settings → Customs Rates.</div>
+                      <div className="text-[9px] text-amber-800 mt-1 font-semibold">No products yet. Add them in Settings → Customs Rates.</div>
                     )}
                   </div>
                   <div>
                     <label className="text-[10px] font-semibold text-slate-700">Customs Duty %</label>
                     <input type="number" step="0.01" value={form.customs_duty_pct ?? ''} onChange={e => setForm(Object.assign({}, form, { customs_duty_pct: e.target.value }))}
                       className="w-full px-2 py-1.5 rounded border border-slate-200 text-sm bg-amber-50" />
-                    <div className="text-[9px] text-slate-400 mt-0.5">Auto-fills; editable for one-offs</div>
+                    <div className="text-[9px] text-slate-500 mt-0.5">Auto-fills; editable for one-offs</div>
                   </div>
                   <div>
                     <label className="text-[10px] font-semibold text-slate-700">USD/kg / السعر بالدولار *</label>
@@ -813,22 +814,22 @@ export default function CustomsTab({ customers, user, fxRate }) {
                   <div className="bg-white rounded p-2">
                     <div className="text-[9px] text-slate-500 uppercase">Customs Duty / رسوم</div>
                     <div className="font-extrabold text-blue-700">{fmtEgp(calcs.customsDutyEgp)}</div>
-                    <div className="text-[9px] text-slate-400">@{Number(form.customs_duty_pct || 0).toFixed(2)}%</div>
+                    <div className="text-[9px] text-slate-500">@{Number(form.customs_duty_pct || 0).toFixed(2)}%</div>
                   </div>
                   <div className="bg-white rounded p-2">
                     <div className="text-[9px] text-slate-500 uppercase">VAT / ض ق م</div>
                     <div className="font-extrabold text-purple-700">{fmtEgp(calcs.vatEgp)}</div>
-                    <div className="text-[9px] text-slate-400">@{calcs.vatPct.toFixed(2)}%</div>
+                    <div className="text-[9px] text-slate-500">@{calcs.vatPct.toFixed(2)}%</div>
                   </div>
                   <div className="bg-white rounded p-2">
                     <div className="text-[9px] text-slate-500 uppercase">Income Tax / ض ا ت</div>
                     <div className="font-extrabold text-indigo-700">{fmtEgp(calcs.aitEgp)}</div>
-                    <div className="text-[9px] text-slate-400">@{calcs.aitPct.toFixed(2)}%</div>
+                    <div className="text-[9px] text-slate-500">@{calcs.aitPct.toFixed(2)}%</div>
                   </div>
                   <div className="bg-white rounded p-2">
                     <div className="text-[9px] text-slate-500 uppercase">Bank Commission</div>
                     <div className="font-extrabold text-amber-700">{fmtEgp(calcs.bcEgp)}</div>
-                    <div className="text-[9px] text-slate-400">@{calcs.bcPct.toFixed(2)}% of income tax</div>
+                    <div className="text-[9px] text-slate-500">@{calcs.bcPct.toFixed(2)}% of income tax</div>
                   </div>
                 </div>
               </div>
@@ -869,7 +870,7 @@ export default function CustomsTab({ customers, user, fxRate }) {
               </div>
 
               <div className="bg-slate-900 text-white rounded-lg p-3 mb-3 text-center">
-                <div className="text-[10px] uppercase tracking-wide text-slate-400">Grand Total / الإجمالي</div>
+                <div className="text-[10px] uppercase tracking-wide text-slate-500">Grand Total / الإجمالي</div>
                 <div className="text-2xl font-black text-emerald-400">{fmtEgp(calcs.totalClearance)}</div>
               </div>
 
@@ -918,7 +919,7 @@ export default function CustomsTab({ customers, user, fxRate }) {
                 <div><span className="text-slate-500">Transport:</span> <b>{fmtEgp(selClr.transport_egp)}</b></div>
               </div>
               <div className="mt-3 p-3 bg-slate-900 text-white rounded text-center">
-                <div className="text-[10px] uppercase text-slate-400">Total Clearance Cost</div>
+                <div className="text-[10px] uppercase text-slate-500">Total Clearance Cost</div>
                 <div className="text-xl font-black text-emerald-400">{fmtEgp(selClr.total_clearance_egp)}</div>
               </div>
               {selClr.notes && <div className="mt-2 text-xs text-slate-600 bg-slate-50 p-2 rounded">📝 {selClr.notes}</div>}
@@ -960,7 +961,7 @@ export default function CustomsTab({ customers, user, fxRate }) {
                           {c.reference_number ? <span className="ml-2 text-[11px] font-mono bg-slate-100 px-1.5 py-0.5 rounded">#{c.reference_number}</span> : null}
                         </div>
                         <div className="text-[10px] text-slate-500 mt-0.5">
-                          {c.clearance_date} · {Number(c.quantity_kg).toLocaleString()} kg @ {fmtUsd(c.usd_price_per_kg)}/kg · FX {Number(c.fx_rate).toFixed(2)}
+                          {fmtET(c.clearance_date, 'shortdate')} · {Number(c.quantity_kg).toLocaleString()} kg @ {fmtUsd(c.usd_price_per_kg)}/kg · FX {Number(c.fx_rate).toFixed(2)}
                         </div>
                       </div>
                       <div className="text-right">
@@ -1012,7 +1013,7 @@ export default function CustomsTab({ customers, user, fxRate }) {
                     className="px-6 py-3 bg-emerald-600 text-white rounded-lg font-bold shadow hover:bg-emerald-700">
                     Choose Excel file…
                   </button>
-                  <p className="text-[10px] text-slate-400 mt-4">.xlsx files only. The first sheet is read; sheets named "Read me" or "Notes" are ignored.</p>
+                  <p className="text-[10px] text-slate-500 mt-4">.xlsx files only. The first sheet is read; sheets named "Read me" or "Notes" are ignored.</p>
                 </div>
               )}
 
@@ -1241,7 +1242,7 @@ export default function CustomsTab({ customers, user, fxRate }) {
                     </div>
                     <span className="px-2 py-0.5 rounded-full text-[9px] font-bold text-white" style={{ background: STATUS_COLORS_SHIP[s.status] }}>{s.status}</span>
                   </div>
-                  <div className="flex gap-2 mt-1 text-[10px] text-slate-400">
+                  <div className="flex gap-2 mt-1 text-[10px] text-slate-500">
                     {s.rate_usd && <span className="text-emerald-600">${s.rate_usd}</span>}
                     {s.eta && <span>ETA: {s.eta}</span>}
                     {s.order_number && <span>Order #{s.order_number}</span>}

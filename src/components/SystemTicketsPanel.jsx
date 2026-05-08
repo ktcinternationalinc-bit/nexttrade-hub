@@ -35,6 +35,7 @@
 // ============================================================
 import { useState, useEffect, useCallback } from 'react';
 import { supabase, dbInsert, dbUpdate, dbDelete } from '../lib/supabase';
+import { fmtET } from '../lib/et-time';
 
 export default function SystemTicketsPanel({ userId, isAdmin, getUserName, sanitize, toast }) {
   var [tickets, setTickets] = useState([]);
@@ -279,7 +280,7 @@ export default function SystemTicketsPanel({ userId, isAdmin, getUserName, sanit
 
   var CATS = { bug: '🐛', feature: '✨', improvement: '📈', question: '❓', urgent: '🚨' };
   var PRIS = { critical: '🚨', high: '🔴', medium: '🟡', low: '🟢' };
-  var STATS = { Open: 'bg-blue-100 text-blue-700', 'In Progress': 'bg-amber-100 text-amber-700', Resolved: 'bg-emerald-100 text-emerald-700', Fixed: 'bg-emerald-100 text-emerald-700', Reopened: 'bg-rose-100 text-rose-700', Closed: 'bg-slate-100 text-slate-500' };
+  var STATS = { Open: 'bg-blue-100 text-blue-700', 'In Progress': 'bg-amber-100 text-amber-900', Resolved: 'bg-emerald-100 text-emerald-700', Fixed: 'bg-emerald-100 text-emerald-700', Reopened: 'bg-rose-100 text-rose-700', Closed: 'bg-slate-100 text-slate-500' };
   var claudeCount = sorted.filter(function (t) { return t.claude_review_requested; }).length;
 
   return (
@@ -438,7 +439,7 @@ export default function SystemTicketsPanel({ userId, isAdmin, getUserName, sanit
                       {t.needs_retest && t.created_by === userId && <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-amber-100 text-amber-800 animate-pulse" title="Please retest this fix">🔁 Please retest</span>}
                       {t.retest_outcome === 'passed' && <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-emerald-100 text-emerald-700">✓ Retested OK</span>}
                       {t.retest_outcome === 'failed' && <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-rose-100 text-rose-700">✗ Retest failed</span>}
-                      {t.retest_outcome === 'partial' && <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-amber-100 text-amber-700">~ Partial</span>}
+                      {t.retest_outcome === 'partial' && <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-amber-100 text-amber-900 border border-amber-300">~ Partial</span>}
                     </div>
                     <div className="text-sm font-bold">{t.title}</div>
                     {t.description && <div className="text-xs text-slate-500 mt-1 whitespace-pre-wrap">{t.description}</div>}
@@ -454,8 +455,8 @@ export default function SystemTicketsPanel({ userId, isAdmin, getUserName, sanit
                         <div className="text-[11px] whitespace-pre-wrap">{t.retest_notes}</div>
                       </div>
                     )}
-                    <div className="text-[10px] text-slate-400 mt-1">
-                      {t.created_at ? new Date(t.created_at).toLocaleDateString() : ''} · {(getUserName && getUserName(t.created_by)) || 'Unknown'}
+                    <div className="text-[10px] text-slate-500 mt-1">
+                      {t.created_at ? fmtET(t.created_at, 'shortdate') : ''} · {(getUserName && getUserName(t.created_by)) || 'Unknown'}
                     </div>
                   </div>
                   <div className="flex flex-col gap-1 flex-shrink-0 ml-2">

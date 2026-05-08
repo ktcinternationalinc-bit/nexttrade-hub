@@ -99,8 +99,8 @@ check('D.2 build modal stamp v55.56+',
 console.log('\nE. Earlier session fixes still intact');
 check('E.1 v55.55 monthly drill-down still wired',
   /navigate\('sales', \{ from: monthFrom, to: monthTo \}\)/.test(read('src/components/PersonalDashboard.jsx')));
-check('E.2 v55.54 SafeSection wraps MyPerformance',
-  /<SafeSection label="My Performance">/.test(read('src/components/PersonalDashboard.jsx')));
+check('E.2 SafeSection wraps MyPerformance (in AssistantsBar after v55.71 move)',
+  /<SafeSection label="My Performance">/.test(read('src/components/AssistantsBar.jsx')));
 check('E.3 v55.51 customs SQL file present',
   fs.existsSync(path.join(REPO, 'supabase/customs-phase-1.sql')));
 

@@ -146,8 +146,9 @@ check('5.6 v55.73 — Close buttons REMOVED (one always active)',
 // ============================================================
 group('6. Nadia is the hard default (v55.73)');
 
-check('6.1 v55.73 — openPanel useState defaults to "nadia" (no null fallback)',
-  /\[openPanel, setOpenPanel\] = useState\('nadia'\)/.test(ab));
+check('6.1 v55.80 — openPanel defaults to "nadia"; per-user hydrate after auth resolves (BD-audit fix)',
+  /var \[openPanel, setOpenPanel\] = useState\('nadia'\)/.test(ab)
+  && /useEffect\(function \(\) \{[\s\S]{0,400}'ktc\.lastPersona\.' \+ myId/.test(ab));
 check('6.2 NADIA_AUTO_OPEN_KEY localStorage key still defined for badge purposes',
   /var NADIA_AUTO_OPEN_KEY = 'ktc_nadia_morning_brief_dismissed_at'/.test(ab));
 check('6.3 v55.73 — togglePanel dispatches ktc:assistant-changed event',
@@ -182,14 +183,15 @@ group('8. Wave animation per avatar');
 
 check('8.1 waveState tracks all three avatars (nadia, jenna, sara)',
   /useState\(\{ nadia: false, jenna: false, sara: false \}\)/.test(ab));
-check('8.2 Periodic loop schedules waves with offsets',
-  /schedule\('nadia', 0\)[\s\S]{0,100}schedule\('jenna', 5000\)[\s\S]{0,100}schedule\('sara', 10000\)/.test(ab));
-check('8.3 Loop interval is 16 seconds',
-  /setInterval\([\s\S]{0,400}\}, 16000\);/.test(ab));
+check('8.2 v55.75 — NO periodic loop (was the source of the "all three blink" bug)',
+  // Per Max May 8 2026 Build A item #2: removed entirely.
+  !/schedule\('nadia', 0\)/.test(ab));
+check('8.3 v55.75 — NO setInterval loop',
+  !/setInterval\([\s\S]{0,400}\}, 16000\)/.test(ab));
 check('8.4 Hover triggers per-avatar wave',
   /onMouseEnter=\{function \(\) \{ setWave\(who, true\); \}\}/.test(ab));
-check('8.5 Cleanup clears interval AND pending timeouts',
-  /clearInterval\(loop\); triggers\.forEach\(function \(t\) \{ clearTimeout\(t\); \}\)/.test(ab));
+check('8.5 v55.75 — No timer cleanup needed (no timer to clean up)',
+  !/clearInterval\(loop\)/.test(ab));
 
 // ============================================================
 // 9. PersonalDashboard wiring
@@ -224,16 +226,18 @@ check('10.3 Jenna summary fetches from hr_requests + hr_complaints',
   /supabase\.from\('hr_requests'\)[\s\S]{0,400}supabase\.from\('hr_complaints'\)/.test(ab));
 check('10.4 Jenna summary handles missing tables gracefully (tableMissing flag)',
   /tableMissing/.test(ab) && /HR setup needed/.test(ab));
-check('10.5 Sara summary tracks last-opened in localStorage',
-  /ktc_sara_last_opened/.test(ab));
-check('10.6 Sara opening marks her as seen-today',
-  /openPanel === 'sara'[\s\S]{0,300}localStorage\.setItem\('ktc_sara_last_opened'/.test(ab));
+check('10.5 Sara summary tracks last-opened in localStorage (per-user key)',
+  /ktc_sara_last_opened_/.test(ab));
+check('10.6 Sara opening marks her as seen-today (per-user key, BD-audit fix)',
+  /openPanel === 'sara'[\s\S]{0,400}localStorage\.setItem\('ktc_sara_last_opened_' \+ myId/.test(ab));
 check('10.7 Sara shows "new feedback waiting" if not opened today',
   /New coach feedback waiting/.test(ab));
 check('10.8 Notification badges render with count',
   /props\.notifCount > 0 && \(/.test(ab));
-check('10.9 Notification pulses for urgency (animate-pulse conditional)',
-  /props\.notifPulse \? ' animate-pulse' : ''/.test(ab));
+check('10.9 v55.75 — Notification pulse is speaking-conditional, not always-pulse',
+  // Per Max May 8 2026: removed synchronized blinking. Badge pulses only
+  // when active AND speaking — no constant pulse on inactive tiles.
+  /isSpeaking \? ' animate-pulse' : ''/.test(ab));
 
 // ============================================================
 // 11. Edge cases
@@ -246,10 +250,10 @@ check('11.2 Defensive: checks prop null → uses empty array',
   /var safeChecks = checks \|\| \[\]/.test(ab));
 check('11.3 Jenna useEffect uses stable [myId] dep',
   /\}, \[myId\]\)/.test(ab));
-check('11.4 Sara useEffect uses stable [todayStr] dep',
-  /\}, \[todayStr\]\)/.test(ab));
-check('11.5 Sara open useEffect uses stable [openPanel] dep',
-  /\}, \[openPanel\]\)/.test(ab));
+check('11.4 Sara useEffect uses [todayStr, myId] dep (BD-audit per-user scoping)',
+  /\}, \[todayStr, myId\]\)/.test(ab));
+check('11.5 Sara open useEffect uses [openPanel, myId] dep',
+  /\}, \[openPanel, myId\]\)/.test(ab));
 check('11.6 Cancellation guard in Jenna fetch',
   /var cancelled = false[\s\S]{0,2500}return function \(\) \{ cancelled = true; \}/.test(ab));
 check('11.7 localStorage access wrapped in try/catch (every usage)',

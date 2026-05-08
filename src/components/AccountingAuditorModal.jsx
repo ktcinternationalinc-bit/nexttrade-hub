@@ -1,6 +1,7 @@
 'use client';
 import React, { useState, useEffect, useMemo } from 'react';
 import { runAccountingAudit } from '../lib/accounting-auditor';
+import { fmtET } from '../lib/et-time';
 
 // ============================================================
 // AI ACCOUNTANT MODAL
@@ -143,7 +144,7 @@ export default function AccountingAuditorModal(props) {
             <div className="bg-slate-800 rounded-lg p-3">
               <div className="text-[11px] text-slate-300 font-bold">Pending Checks / شيكات معلقة</div>
               <div className="text-base font-extrabold text-blue-300">{fE(audit.metrics.pendingChecksTotal)}</div>
-              <div className="text-[10px] text-slate-400">{audit.metrics.pendingCheckCount} checks</div>
+              <div className="text-[10px] text-slate-500">{audit.metrics.pendingCheckCount} checks</div>
             </div>
             <div className="bg-slate-800 rounded-lg p-3">
               <div className="text-[11px] text-slate-300 font-bold">Unmatched Bank / بنك غير مطابق</div>
@@ -281,7 +282,7 @@ export default function AccountingAuditorModal(props) {
           )}
 
           <div className="text-xs text-slate-600 text-center font-semibold pt-2">
-            Generated {new Date(audit.generatedAt).toLocaleString()} · {audit.metrics.treasuryRowCount} treasury rows · {audit.metrics.invoiceRowCount} invoices
+            Generated {fmtET(audit.generatedAt, 'datetime')} · {audit.metrics.treasuryRowCount} treasury rows · {audit.metrics.invoiceRowCount} invoices
           </div>
         </div>
 

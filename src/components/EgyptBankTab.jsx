@@ -3,6 +3,7 @@ import { useState, useEffect, useCallback, useMemo } from 'react';
 import { supabase, dbInsert, dbUpdate, dbDelete, logActivity } from '../lib/supabase';
 import * as XLSX from 'xlsx';
 import { EXPENSE_CATS } from '../lib/utils';
+import { todayET } from '../lib/et-time';
 
 export default function EgyptBankTab({ toast, user, userProfile, isAdmin, invoices, onReload }) {
   const [accounts, setAccounts] = useState([]);
@@ -534,7 +535,7 @@ export default function EgyptBankTab({ toast, user, userProfile, isAdmin, invoic
           // Auto-collect the check — the bank confirmed it
           await dbUpdate('checks', matchingCheck.id, {
             status: 'collected',
-            collection_date: txn.date || new Date().toISOString().substring(0, 10),
+            collection_date: txn.date || todayET(),
           }, myId);
           // Update invoice collected (check wasn't counted before, bank confirms it now)
           const newCollected = Number(inv.total_collected || 0) + bankAmt;
@@ -676,7 +677,7 @@ export default function EgyptBankTab({ toast, user, userProfile, isAdmin, invoic
                   <div className="flex justify-between items-center">
                     <div>
                       <div className="font-bold text-sm">{a.bank_name}</div>
-                      <div className="text-[10px] text-slate-400">{a.account_number} {a.account_name ? `• ${a.account_name}` : ''} • {a.currency}</div>
+                      <div className="text-[10px] text-slate-500">{a.account_number} {a.account_name ? `• ${a.account_name}` : ''} • {a.currency}</div>
                       <div className="text-xs mt-1">{txnCount} transactions • Net: <span className={balance >= 0 ? 'text-green-600 font-bold' : 'text-red-600 font-bold'}>{fmtE(balance)}</span></div>
                     </div>
                     <div className="flex gap-1">
@@ -699,7 +700,7 @@ export default function EgyptBankTab({ toast, user, userProfile, isAdmin, invoic
             <div className="bg-white rounded-xl p-6 text-center border-2 border-dashed border-blue-300">
               <div className="text-4xl mb-2">📁</div>
               <h3 className="font-bold text-sm mb-1">Upload Bank Statement / رفع كشف حساب</h3>
-              <p className="text-[10px] text-slate-400 mb-3">Supports CIB bank statements, and any Excel/CSV with Date/Description/Amount columns.<br/>يدعم كشوف حسابات CIB وأي ملف Excel أو CSV بأعمدة التاريخ والوصف والمبلغ</p>
+              <p className="text-[10px] text-slate-500 mb-3">Supports CIB bank statements, and any Excel/CSV with Date/Description/Amount columns.<br/>يدعم كشوف حسابات CIB وأي ملف Excel أو CSV بأعمدة التاريخ والوصف والمبلغ</p>
               {accounts.length > 0 && (
                 <div className="mb-3">
                   <label className="text-[10px] text-slate-500 font-bold block mb-1">Select Account / اختر الحساب</label>
@@ -710,7 +711,7 @@ export default function EgyptBankTab({ toast, user, userProfile, isAdmin, invoic
                 </div>
               )}
               {accounts.length === 0 && (
-                <p className="text-[10px] text-amber-600 font-semibold mb-3">⚠️ No accounts — a default account will be auto-created on import</p>
+                <p className="text-[10px] text-amber-900 font-bold mb-3">⚠️ No accounts — a default account will be auto-created on import</p>
               )}
               <label className="px-6 py-3 bg-blue-500 text-white rounded-lg text-sm font-semibold cursor-pointer hover:bg-blue-600 inline-block">
                 Select File(s) / اختر ملفات
@@ -820,7 +821,7 @@ export default function EgyptBankTab({ toast, user, userProfile, isAdmin, invoic
                   {accounts.map(a => <option key={a.id} value={a.id}>{a.bank_name} - {a.account_number}</option>)}
                 </select>
               ) : (
-                <span className="text-[10px] text-amber-600 font-semibold">⚠️ No accounts yet — one will be created automatically</span>
+                <span className="text-[10px] text-amber-900 font-bold">⚠️ No accounts yet — one will be created automatically</span>
               )}
             </div>
             <div className="flex gap-2">
@@ -875,7 +876,7 @@ export default function EgyptBankTab({ toast, user, userProfile, isAdmin, invoic
               <div className="text-lg font-black text-blue-700">{matchedCount}</div>
             </div>
             <div className="bg-amber-50 rounded-xl p-3 border border-amber-200">
-              <div className="text-[10px] text-amber-600 font-bold">Unmatched / غير متطابق</div>
+              <div className="text-[10px] text-amber-900 font-extrabold">Unmatched / غير متطابق</div>
               <div className="text-lg font-black text-amber-700">{unmatchedCount}</div>
             </div>
           </div>
@@ -900,7 +901,7 @@ export default function EgyptBankTab({ toast, user, userProfile, isAdmin, invoic
             {transactions.filter(t => !t.category && !t.hidden).length > 0 && (
               <div className="flex items-center gap-1">
                 <button onClick={() => setShowSmartConfig(!showSmartConfig)}
-                  className="px-2 py-1.5 bg-amber-100 text-amber-700 rounded-lg text-[10px] font-bold border border-amber-200 hover:bg-amber-200">
+                  className="px-2 py-1.5 bg-amber-100 text-amber-900 rounded-lg text-[10px] font-bold border border-amber-300 hover:bg-amber-200">
                   🤖 Smart Categorize ▾
                 </button>
               </div>
@@ -912,7 +913,7 @@ export default function EgyptBankTab({ toast, user, userProfile, isAdmin, invoic
             <div className="bg-amber-50 rounded-xl p-3 mb-3 border border-amber-200">
               <div className="flex items-center justify-between mb-2">
                 <span className="text-xs font-bold text-amber-800">🤖 Smart Categorize Settings</span>
-                <button onClick={() => setShowSmartConfig(false)} className="text-[10px] text-slate-400">✕</button>
+                <button onClick={() => setShowSmartConfig(false)} className="text-[10px] text-slate-500">✕</button>
               </div>
               <div className="grid grid-cols-1 md:grid-cols-3 gap-3 mb-3">
                 <div>
@@ -924,16 +925,16 @@ export default function EgyptBankTab({ toast, user, userProfile, isAdmin, invoic
                     <option value="20">±20%</option>
                     <option value="50">±50%</option>
                   </select>
-                  <div className="text-[9px] text-slate-400 mt-0.5">0% = amount must match exactly</div>
+                  <div className="text-[9px] text-slate-500 mt-0.5">0% = amount must match exactly</div>
                 </div>
                 <div>
                   <label className="text-[10px] font-bold text-slate-600 block mb-1">Day of Month Range</label>
                   <div className="flex items-center gap-1">
                     <input type="number" min="1" max="31" value={dayFrom} onChange={e => setDayFrom(e.target.value)} placeholder="1" className="border rounded-lg px-2 py-1.5 text-xs w-16" />
-                    <span className="text-[10px] text-slate-400">to</span>
+                    <span className="text-[10px] text-slate-500">to</span>
                     <input type="number" min="1" max="31" value={dayTo} onChange={e => setDayTo(e.target.value)} placeholder="31" className="border rounded-lg px-2 py-1.5 text-xs w-16" />
                   </div>
-                  <div className="text-[9px] text-slate-400 mt-0.5">Only categorize transactions within these days</div>
+                  <div className="text-[9px] text-slate-500 mt-0.5">Only categorize transactions within these days</div>
                 </div>
                 <div>
                   <label className="text-[10px] font-bold text-slate-600 block mb-1">Scoring</label>
@@ -958,7 +959,7 @@ export default function EgyptBankTab({ toast, user, userProfile, isAdmin, invoic
                 }} className="px-4 py-2 bg-amber-500 text-white rounded-lg text-xs font-bold hover:bg-amber-600">
                   ▶ Run Smart Categorize
                 </button>
-                <span className="text-[10px] text-slate-400">
+                <span className="text-[10px] text-slate-500">
                   {transactions.filter(t => t.category).length} categorized → {transactions.filter(t => !t.category && !t.hidden).length} uncategorized
                 </span>
               </div>
@@ -978,12 +979,12 @@ export default function EgyptBankTab({ toast, user, userProfile, isAdmin, invoic
                 <option key={m} value={m}>{['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'][parseInt(m)-1]}</option>
               ))}
             </select>
-            <span className="text-[10px] text-slate-400">or</span>
+            <span className="text-[10px] text-slate-500">or</span>
             <input type="date" value={dateFrom} onChange={e => setDateFrom(e.target.value)} className="border rounded-lg px-2 py-1 text-xs" />
-            <span className="text-[10px] text-slate-400">→</span>
+            <span className="text-[10px] text-slate-500">→</span>
             <input type="date" value={dateTo} onChange={e => setDateTo(e.target.value)} className="border rounded-lg px-2 py-1 text-xs" />
             {(dateFrom || dateTo || filterMonth || filterYear) && <button onClick={() => { setDateFrom(''); setDateTo(''); setFilterMonth(''); setFilterYear(''); }} className="text-[10px] text-red-500 font-semibold">✕ Clear</button>}
-            <span className="text-[10px] text-slate-400 ml-auto">{filtered.length} transactions</span>
+            <span className="text-[10px] text-slate-500 ml-auto">{filtered.length} transactions</span>
             <button onClick={() => {
               const rows = filtered.map(t => ({
                 Date: t.date, Description: t.description,
@@ -996,7 +997,7 @@ export default function EgyptBankTab({ toast, user, userProfile, isAdmin, invoic
               ws['!cols'] = [{wch:12},{wch:50},{wch:14},{wch:14},{wch:16},{wch:16},{wch:8}];
               const wb = XLSX.utils.book_new();
               XLSX.utils.book_append_sheet(wb, ws, 'Egypt Bank');
-              XLSX.writeFile(wb, `Egypt-Bank-Export-${new Date().toISOString().substring(0,10)}.xlsx`);
+              XLSX.writeFile(wb, `Egypt-Bank-Export-${todayET()}.xlsx`);
             }} className="text-[10px] text-blue-500 font-semibold">📥 Export Excel</button>
           </div>
 
@@ -1033,7 +1034,7 @@ export default function EgyptBankTab({ toast, user, userProfile, isAdmin, invoic
                   await supabase.from('egypt_bank_transactions').update({ category: null, subcategory: null }).in('id', ids);
                   setTransactions(prev => prev.map(t => selectedTxns.has(t.id) ? {...t, category: '', subcategory: ''} : t));
                   setSelectedTxns(new Set());
-                }} className="px-3 py-1 bg-amber-100 text-amber-700 border border-amber-300 rounded-lg text-[10px] font-bold">✕ Clear Category</button>
+                }} className="px-3 py-1 bg-amber-100 text-amber-900 border border-amber-400 rounded-lg text-[10px] font-bold">✕ Clear Category</button>
               </div>
               {/* Super Admin: Delete + Hide */}
               {isSuperAdmin && (
@@ -1064,7 +1065,7 @@ export default function EgyptBankTab({ toast, user, userProfile, isAdmin, invoic
                 {showHidden ? '🔓 Showing Hidden' : '🔒 Show Hidden'}
               </button>
             )}
-            {isSuperAdmin && showHidden && <span className="text-[10px] text-slate-400">{transactions.filter(t => t.hidden).length} hidden</span>}
+            {isSuperAdmin && showHidden && <span className="text-[10px] text-slate-500">{transactions.filter(t => t.hidden).length} hidden</span>}
             {filtered.length > 0 && (
               <button onClick={() => {
                 if (selectedTxns.size === filtered.length) setSelectedTxns(new Set());
@@ -1099,7 +1100,7 @@ export default function EgyptBankTab({ toast, user, userProfile, isAdmin, invoic
                       <div className="flex-1 min-w-0">
                         {/* Full description — no truncate */}
                         <div className="font-semibold text-sm" style={{ wordBreak: 'break-word' }}>{t.description || '—'}</div>
-                        <div className="text-[10px] text-slate-400">
+                        <div className="text-[10px] text-slate-500">
                           {t.date} {accName ? `• ${accName}` : ''}{isHidden ? ' • 🔒 Hidden' : ''}
                         </div>
                         {/* Category / Subcategory */}
@@ -1142,7 +1143,7 @@ export default function EgyptBankTab({ toast, user, userProfile, isAdmin, invoic
                           <button onClick={async () => {
                             await dbUpdate('egypt_bank_transactions', t.id, { hidden: !isHidden }, myId);
                             setTransactions(prev => prev.map(x => x.id === t.id ? {...x, hidden: !isHidden} : x));
-                          }} className={'text-[10px] font-semibold mt-1 block ' + (isHidden ? 'text-green-500' : 'text-slate-400')}>
+                          }} className={'text-[10px] font-semibold mt-1 block ' + (isHidden ? 'text-green-500' : 'text-slate-500')}>
                             {isHidden ? '🔓 Unhide' : '🔒 Hide'}
                           </button>
                         )}
@@ -1198,7 +1199,7 @@ export default function EgyptBankTab({ toast, user, userProfile, isAdmin, invoic
                           <span className="font-semibold text-xs truncate">{inv.customer || inv.customer_name || inv.customer_name_en || 'N/A'}</span>
                           {isExactMatch && <span className="px-1 py-0.5 bg-emerald-200 text-emerald-800 rounded text-[8px] font-bold flex-shrink-0">EXACT MATCH</span>}
                         </div>
-                        <div className="text-[10px] text-slate-400 mt-0.5">
+                        <div className="text-[10px] text-slate-500 mt-0.5">
                           #{inv.invoice_number || inv.order_number || '—'} • {inv.invoice_date || inv.date || '—'}
                         </div>
                       </div>

@@ -131,7 +131,7 @@ export default function TranslationPanel({ user, users, isAdmin }) {
         <div className="flex justify-between items-center mb-3">
           <div>
             <h3 className="text-sm font-bold">Translation Progress / تقدم الترجمة</h3>
-            <p className="text-[10px] text-slate-400">
+            <p className="text-[10px] text-slate-500">
               {totalTranslated.toLocaleString()} / {totalRecords.toLocaleString()} records translated
               {stats?._cache && ` • ${stats._cache.total.toLocaleString()} cached translations`}
             </p>
@@ -171,7 +171,7 @@ export default function TranslationPanel({ user, users, isAdmin }) {
                     <span>{tc.icon}</span>
                     <div>
                       <div className="text-xs font-semibold">{tc.label}</div>
-                      <div className="text-[10px] text-slate-400">
+                      <div className="text-[10px] text-slate-500">
                         {s.translated.toLocaleString()} / {s.total.toLocaleString()}
                         {remaining > 0 && <span className="text-amber-500 ml-1">({remaining} remaining)</span>}
                         {s.error && <span className="text-red-500 ml-1">(column may not exist yet)</span>}
@@ -217,14 +217,14 @@ export default function TranslationPanel({ user, users, isAdmin }) {
       {isAdmin && users && users.length > 0 && (
         <div className="bg-white rounded-xl p-4 mb-4 border border-slate-200">
           <h3 className="text-sm font-bold mb-2">Language Access / صلاحيات اللغة</h3>
-          <p className="text-[10px] text-slate-400 mb-3">Control which users can see the English toggle. Super Admin always has access.</p>
+          <p className="text-[10px] text-slate-500 mb-3">Control which users can see the English toggle. Super Admin always has access.</p>
           <div className="space-y-2">
             {/* v55.52 — Active users only. Deactivated users don't need language config. */}
             {filterActiveUsers(users).map(u => (
               <div key={u.id} className="flex justify-between items-center py-2 border-b border-slate-50">
                 <div>
                   <div className="text-xs font-semibold">{u.name}</div>
-                  <div className="text-[10px] text-slate-400">{u.role}</div>
+                  <div className="text-[10px] text-slate-500">{u.role}</div>
                 </div>
                 <select
                   value={u.language_access || 'ar'}
@@ -246,7 +246,7 @@ export default function TranslationPanel({ user, users, isAdmin }) {
         <div className="bg-white rounded-xl p-4 border border-slate-200">
           <div className="flex justify-between items-center mb-2">
             <h3 className="text-sm font-bold">Translation Log</h3>
-            <button onClick={() => setLog([])} className="text-[10px] text-slate-400 hover:text-slate-600">Clear</button>
+            <button onClick={() => setLog([])} className="text-[10px] text-slate-500 hover:text-slate-600">Clear</button>
           </div>
           <div className="max-h-[200px] overflow-auto bg-slate-50 rounded-lg p-3">
             {log.map((entry, i) => (

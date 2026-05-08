@@ -1446,9 +1446,14 @@ function runSection19_MobileNadia() {
   assert(/greeterSettings\.enabled && !greeterDismissed && tab !== 'dashboard' && \(\s*<NadiaFloatingOverlay/.test(src),
     '19.5a overlay gated on tab !== \'dashboard\' so it does NOT double-mount on the dashboard');
 
-  // 19.6 — Dashboard AIGreeter wrapper still uses max-md:order-last for mobile
-  assert(/<div className="max-md:order-last">/.test(src),
-    '19.6a dashboard AIGreeter still wrapped with max-md:order-last (original mobile ordering)');
+  // 19.6 — v55.71+ moved AIGreeter into AssistantsBar's body. The dashboard
+  // tab renders <PersonalDashboard> which mounts <AssistantsBar> which
+  // mounts AIGreeter. So instead of asserting the old order-last wrapper,
+  // verify PersonalDashboard is the dashboard renderer and AssistantsBar
+  // lives inside it.
+  const pdSrc19 = require('fs').readFileSync(__dirname + '/../src/components/PersonalDashboard.jsx', 'utf8');
+  assert(/<AssistantsBar/.test(pdSrc19),
+    '19.6a PersonalDashboard mounts AssistantsBar (which mounts AIGreeter)');
 
   // 19.7 — parent flex-col does not break layout: no child uses `float-` classes
   // inside the dashboard block (float breaks flex)
@@ -3234,16 +3239,17 @@ function runSection28_TicketsTabAudit() {
   assert(/logActivity\(myId, 'Edited ' \+ field/.test(sb),
     '28.save.7a logActivity records the edit action');
 
-  // Local state updated (sel) — no full reload needed for immediate UX
-  assert(/setSel\(\{\.\.\.sel, \[field\]: newVal/.test(sb),
-    '28.save.8a setSel updates UI immediately with new value');
+  // Local state updated immediately (optimistic update — v55.69 refactor).
+  // The shape is `const updatedSel = { ...sel, [field]: newVal,...}; setSel(updatedSel)`
+  assert(/(setSel\(\{\.\.\.sel, \[field\]: newVal|updatedSel = \{ \.\.\.sel, \[field\]: newVal[\s\S]+?setSel\(updatedSel\))/.test(sb),
+    '28.save.8a setSel updates UI immediately with new value (optimistic)');
 
   // setEditingField(null) closes edit mode
   assert(/setEditingField\(null\)/.test(sb),
     '28.save.9a edit mode closes after save');
 
-  // Error path uses toast.error not alert when toast is present
-  assert(/toast \? toast\.error\(err\.message\) : alert\(err\.message\)/.test(sb),
+  // Error path uses toast.error (with alert fallback) — message text may vary
+  assert(/toast \? toast\.error\(['"`]?[^)]*['"`]?\) : alert\(/.test(sb),
     '28.save.10a error uses toast.error with alert fallback');
 
   // =========================================================
@@ -3485,12 +3491,12 @@ function runSection29_CalendarTabAudit() {
     '29.r3.3c first-time check-in header');
 
   // =========================================================
-  // Documented timezone gap (UTC fallback for daily_log date)
+  // v55.80 — gap CLOSED. CalendarTab now uses todayET() for the
+  // daily_log fallback so a 10pm-Cairo (=4pm-ET) action lands on
+  // today-ET, not tomorrow-UTC.
   // =========================================================
-  // This matches the gap noted in supabase.js logActivity — Cairo late-night
-  // actions land on tomorrow UTC. Lock as known limitation; R6+ will revisit.
-  assert(/notesEvent\.event_date \|\| new Date\(\)\.toISOString\(\)\.substring\(0, ?10\)/.test(cSrc),
-    '29.tz.1a KNOWN GAP: daily_log fallback uses UTC date (Cairo late-night → tomorrow)');
+  assert(/notesEvent\.event_date \|\| todayET\(\)/.test(cSrc),
+    '29.tz.1a v55.80: daily_log fallback now uses ET (was UTC — Cairo late-night bug)');
 }
 
 try { runSection29_CalendarTabAudit(); } catch(e) {
@@ -3744,9 +3750,11 @@ function runSection31_PageJsxAudit() {
   assert(greeterCount === 1,
     '31.h2.3a exactly one <AIGreeter> mount in page.jsx — dashboard home (count=' + greeterCount + ')');
 
-  // Dashboard AIGreeter wrapper still uses max-md:order-last for mobile order
-  assert(/<div className="max-md:order-last">/.test(pSrc),
-    '31.h2.4a dashboard AIGreeter still wrapped with max-md:order-last');
+  // v55.71+ moved AIGreeter into AssistantsBar's body. Dashboard tab uses
+  // PersonalDashboard which mounts AssistantsBar.
+  const pdSrc31 = require('fs').readFileSync(__dirname + '/../src/components/PersonalDashboard.jsx', 'utf8');
+  assert(/<AssistantsBar/.test(pdSrc31),
+    '31.h2.4a PersonalDashboard mounts AssistantsBar (which contains AIGreeter)');
 
   // Overlay gated to NOT render on dashboard (prevents double-mount)
   assert(/tab !== 'dashboard' && \(\s*<NadiaFloatingOverlay/.test(pSrc),
@@ -4570,10 +4578,13 @@ function runSection37_ETTime() {
   assert(utcHits === 0,
     '37.regress.3a page.jsx heartbeats no longer use UTC for user_sessions lookup',
     'utcHits=' + utcHits);
-  // New ET-based pattern should appear at least 4 times (one per heartbeat site)
-  var etHits = (pSrc.match(/timeZone: 'America\/New_York'/g) || []).length;
-  assert(etHits >= 4, '37.regress.3b page.jsx uses America/New_York TZ at heartbeat sites (4+ times)',
-    'etHits=' + etHits);
+  // v55.80: page.jsx now imports todayET() from src/lib/et-time.js instead
+  // of using inline `new Intl.DateTimeFormat(..., { timeZone: 'America/New_York' })`.
+  // The TZ string lives ONCE in the helper. Verify page.jsx uses todayET()
+  // at least 4 times (one per heartbeat/session-touch site).
+  var todayETHits = (pSrc.match(/todayET\(\)/g) || []).length;
+  assert(todayETHits >= 4, '37.regress.3b page.jsx uses todayET() helper (4+ times — covers heartbeat / session-touch sites)',
+    'todayETHits=' + todayETHits);
 }
 try { runSection37_ETTime(); } catch(e) {
   console.error('SECTION 37 ERROR:', e.message);
@@ -5710,8 +5721,8 @@ function runSection48_Session5Finish() {
   // Thread renders with author + timestamp
   assert(/authorName\(n\.author_id\)/.test(cal),
     '48.modal.2a each note shows author name');
-  assert(/new Date\(n\.created_at\)\.toLocaleString\(\)/.test(cal),
-    '48.modal.2b each note shows timestamp');
+  assert(/fmtET\(n\.created_at, 'datetime'\)/.test(cal),
+    '48.modal.2b each note shows timestamp (v55.80: ET-formatted)');
   // Kind selector on composer
   assert(/\[\s*\['note', '📝 Note'\],\s*\['action_item', '☐ Action'\],\s*\['decision', '💡 Decision'\],\s*\]/.test(cal),
     '48.modal.3a composer offers 3 note kinds');

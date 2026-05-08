@@ -17,6 +17,7 @@
 //   - Auto-refresh after each operation
 // ============================================================
 import { useState, useEffect, useCallback } from 'react';
+import { fmtET } from '../lib/et-time';
 
 function fmtBytes(n) {
   if (!n || n < 1024) return (n || 0) + ' B';
@@ -30,12 +31,7 @@ function fmtDuration(ms) {
 }
 function fmtDate(iso) {
   if (!iso) return '—';
-  try {
-    return new Date(iso).toLocaleString('en-US', {
-      month: 'short', day: 'numeric', year: 'numeric',
-      hour: 'numeric', minute: '2-digit', timeZone: 'America/New_York',
-    });
-  } catch (_) { return iso; }
+  return fmtET(iso, 'datetime');
 }
 function kindStyle(k) {
   if (k === 'manual')  return { bg: 'bg-blue-100',    text: 'text-blue-800',    label: '👆 Manual' };

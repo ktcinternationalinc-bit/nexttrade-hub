@@ -272,7 +272,11 @@ check('6.16 Has retention explanation in collapsible <details>',
 check('6.17 Formats sizes (B/KB/MB/GB)',
   /function fmtBytes\(n\)/.test(bp));
 check('6.18 Formats dates in Eastern Time',
-  /timeZone: 'America\/New_York'/.test(bp));
+  // v55.80: BackupsPanel now delegates to the shared fmtET helper which
+  // is ET-aware by construction. We assert it imports the helper AND the
+  // fmtDate function uses fmtET — both together prove ET formatting.
+  /from '\.\.\/lib\/et-time'/.test(bp)
+  && /function fmtDate\([\s\S]{0,200}fmtET\(/.test(bp));
 check('6.19 Header card shows summary stats (snapshots count, last backup, total size, total rows)',
   /Snapshots[\s\S]{0,400}Last Backup[\s\S]{0,400}Total Size[\s\S]{0,400}Total Rows/.test(bp));
 check('6.20 Last-result success banner with table count + duration',
