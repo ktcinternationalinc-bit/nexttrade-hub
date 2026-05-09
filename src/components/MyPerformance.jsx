@@ -173,10 +173,28 @@ export default function MyPerformance({ user, userProfile, active }) {
     return { current: m1, prior: m2, deltas: computeDeltas(m1, m2) };
   }, [data, myId, period]);
 
+  // v55.81 QA-9 (Max May 9 2026): single source of truth for "does this
+  // user have any activity in the selected period?". Used to decide
+  // whether to show Sara's empty-state card OR the activity grid + coach.
+  // Previously this 14-field sum was computed twice — once per branch.
+  const hasAnyActivity = useMemo(function () {
+    if (!current) return false;
+    var sum = (current.ticketsClosed || 0) + (current.ticketsCreated || 0) +
+              (current.ticketComments || 0) + (current.manualEntries || 0) +
+              (current.autoEntries || 0) + (current.ratesAdded || 0) +
+              (current.bookings || 0) + (current.quotesCreated || 0) +
+              (current.contactTouches || 0) + (current.pipelineMoves || 0) +
+              (current.assignedEvents || 0) + (current.attendedEvents || 0) +
+              (current.meetingsCreated || 0) + (current.meetingsCheckedIn || 0) +
+              (current.systemTicketsCreated || 0) + (current.systemTicketsRetested || 0);
+    return sum > 0;
+  }, [current]);
+
   const requestCoach = async () => {
     if (!current) return;
     setCoachLoading(true);
     setCoachError('');
+    setCoachMsg('');
     try {
       const res = await fetch('/api/hr-report/coach', {
         method: 'POST',
@@ -188,11 +206,23 @@ export default function MyPerformance({ user, userProfile, active }) {
           deltas: deltas,
         }),
       });
-      const j = await res.json();
-      if (!res.ok) throw new Error(j.error || 'Coach unavailable');
-      setCoachMsg(j.message || '');
+      // v55.81 — robust response handling. If the route returns HTML (e.g.
+      // Vercel error page) or empty body, .json() throws; catch and surface
+      // a usable message instead of a silent empty result.
+      var rawText = '';
+      try { rawText = await res.text(); } catch (_) { rawText = ''; }
+      var j = {};
+      try { j = rawText ? JSON.parse(rawText) : {}; } catch (_) { j = { error: 'Coach returned unexpected response' }; }
+      if (!res.ok) {
+        throw new Error((j && j.error) || ('Coach unavailable (HTTP ' + res.status + ')'));
+      }
+      var msg = (j && j.message) || '';
+      if (!msg) {
+        throw new Error('Coach returned no feedback this time. Try again or pick a different period.');
+      }
+      setCoachMsg(msg);
     } catch (e) {
-      setCoachError(e.message || 'Could not reach coach');
+      setCoachError((e && e.message) || 'Could not reach coach');
     } finally {
       setCoachLoading(false);
     }
@@ -330,7 +360,28 @@ export default function MyPerformance({ user, userProfile, active }) {
         </div>
       )}
 
-      {!loading && current && (
+      {/* v55.81 #5 (Max May 9 2026): When `current` exists but the user has
+          literally no activity in this period, the activity grid was a wall
+          of zero tiles ("0 closed · 0 opened · 0 comments · 0 touches…")
+          which felt like an empty white block.
+          v55.81 QA-3 (May 9): added meetingsCreated + meetingsCheckedIn to
+          the activity sum — without them, a user who only set up meetings
+          this period would falsely see the empty state.
+          v55.81 QA-9 (May 9): both branches now use hasAnyActivity (a
+          single useMemo) — no more duplicated 14-field sum. */}
+      {!loading && current && !hasAnyActivity && (function () {
+        var periodLabel = (PERIOD_LABELS.find(function(p){return p[0]===period;}) || [null, 'this period'])[1];
+        return (
+          <div className="bg-cyan-50 border border-cyan-200 rounded-lg p-4 text-sm text-cyan-900 mb-3">
+            <div className="font-bold mb-1">👋 No activity in {periodLabel}</div>
+            <div className="text-xs leading-relaxed">
+              I don't see any tickets, comments, daily log entries, customer touches, or meetings yet. Try a longer period above, or once you've logged some activity I'll show your wins and trends here.
+            </div>
+          </div>
+        );
+      })()}
+
+      {!loading && current && hasAnyActivity && (
         <>
           {/* Wins highlights */}
           <Wins metrics={current} deltas={deltas} />
@@ -343,7 +394,7 @@ export default function MyPerformance({ user, userProfile, active }) {
             <SelfStat label="Shipping Rates Added" value={current.ratesAdded} delta={deltas.ratesAdded} suffix="rates" tone="cyan" />
             <SelfStat label="Bookings Made" value={current.bookings} delta={deltas.bookings} suffix="bookings" tone="emerald" />
             <SelfStat label="Quotes Created" value={current.quotesCreated} delta={deltas.quotesCreated} suffix="quotes" tone="amber" />
-            <SelfStat label="Customer Touches" value={current.contactTouches + current.pipelineMoves} delta={null} suffix="touches" tone="rose" hint="Pipeline moves + contact updates" />
+            <SelfStat label="Customer Touches" value={(current.contactTouches || 0) + (current.pipelineMoves || 0)} delta={null} suffix="touches" tone="rose" hint="Pipeline moves + contact updates" />
             {/* v55.65 — split "Meetings" into the three signals Max asked for:
                 created (you organized), attended (you were invited & showed),
                 checked-in (you actually signed in to confirm presence) */}
@@ -501,6 +552,23 @@ function SelfStat({ label, value, delta, suffix, tone, hint }) {
 
 // --- Subcomponent: daily log fill bar ---
 function DailyLogBar({ metrics }) {
+  // v55.81 #5 (Max May 9 2026): If the period has zero working days
+  // (e.g., user just joined, or it's a leave-only period), the original
+  // bar showed "0 of 0 working days" with an empty grey progress strip
+  // — feels broken. Render a friendly explainer instead.
+  if (!metrics.workingDays || metrics.workingDays === 0) {
+    return (
+      <div className="bg-slate-50 rounded-lg p-3 mb-4 border border-slate-200">
+        <div className="flex justify-between items-center mb-1">
+          <div className="text-xs font-semibold text-slate-700">📝 Daily Log Consistency</div>
+          <div className="text-[10px] text-slate-500">no working days in this period</div>
+        </div>
+        <div className="text-[10px] text-slate-500 leading-snug">
+          Once you have working days in this period, this shows what % of them you wrote a manual log entry for. Streaks build credibility.
+        </div>
+      </div>
+    );
+  }
   const pct = metrics.manualFillRatePct || 0;
   const tone = pct >= 80 ? 'bg-emerald-500' : pct >= 50 ? 'bg-amber-500' : 'bg-slate-400';
   return (

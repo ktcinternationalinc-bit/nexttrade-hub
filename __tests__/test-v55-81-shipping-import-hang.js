@@ -1,0 +1,132 @@
+// __tests__/test-v55-81-shipping-import-hang.js
+// =============================================
+// v55.81 — REGRESSION TEST for two bugs Max reported May 9 2026:
+//
+//   BUG 1: Shipping import sits "Importing..." forever, never finishes.
+//   Root cause: per-row fallback called dbInsert which writes audit_log
+//   per row (210 rows × 2 round-trips = up to 2 minutes), no timeout, and
+//   the fallback hit the same column-error 210 times. Plus no progress
+//   feedback or cancel button.
+//
+//   Fix: bulk insert with column-strip retry; only true data errors fall
+//   through to per-row; 30s timeout on every Supabase call; live status
+//   text + cancel button so user is never stuck.
+//
+//   BUG 2: Trend chart should use EXPIRATION date as the time axis, not
+//   effective date. Max May 9 2026: "the date should be the historical
+//   of when it is from the date of the expiration ... that's what you're
+//   using the charts as well."
+//
+// Run: node __tests__/test-v55-81-shipping-import-hang.js
+
+var fs = require('fs');
+var path = require('path');
+
+var src = fs.readFileSync(path.join(__dirname, '..', 'src', 'components', 'ShippingRatesTab.jsx'), 'utf8');
+
+var passed = 0;
+var failed = 0;
+function ok(name, cond, detail) {
+  if (cond) passed++;
+  else { failed++; console.error('  ✗ ' + name + (detail ? ' — ' + detail : '')); }
+}
+
+console.log('\n=== Shipping import hang + expiry-axis regression test ===\n');
+
+// =======================================================================
+// BUG 1 — Import hang
+// =======================================================================
+
+// 1.1 — There's a timeout wrapper on Supabase calls so they can't hang
+ok('1.1 withTimeout helper wraps Supabase calls',
+   /var withTimeout = function \(promise, ms, label\)/.test(src));
+ok('1.2 Default timeout is 30 seconds for bulk operations',
+   /withTimeout\([\s\S]+?,\s*30000,/.test(src));
+ok('1.3 Per-row timeout is shorter (5s) so a bad row fails fast',
+   /withTimeout\([\s\S]+?,\s*5000,/.test(src));
+
+// 1.4 — Bulk insert FIRST, not per-row
+ok('1.4 Tries bulk insert first (not per-row)',
+   /Step 1 — try ALL rows in one go/.test(src) || /bulkRes = await withTimeout\(\s*supabase\.from\('shipping_rates'\)\.insert\(rowsToInsert\)/.test(src));
+
+// 1.5 — On column-missing error, strip the column and retry bulk ONCE
+ok('1.5 If bulk fails with missing column, strip it and retry bulk',
+   /missingCol/.test(src) && /retry = await withTimeout/.test(src));
+
+// 1.6 — Per-row fallback is for TRUE data errors, not schema errors
+ok('1.6 runPerRow helper extracted (only used for true data errors)',
+   /const runPerRow = async \(rows, withTimeout\) =>/.test(src));
+
+// 1.7 — Per-row no longer calls dbInsert (which writes audit_log per row)
+var executeImportMatch = src.match(/const executeImport = async \(\) => \{[\s\S]+?\n  \};/);
+ok('1.7 executeImport function found', !!executeImportMatch);
+if (executeImportMatch) {
+  ok('1.8 executeImport no longer calls dbInsert in the per-row path (which would write audit_log per row)',
+     !/await dbInsert\('shipping_rates'/.test(executeImportMatch[0]),
+     'per-row dbInsert was the cause of the hang');
+}
+var runPerRowMatch = src.match(/const runPerRow = async[\s\S]+?\n  \};/);
+if (runPerRowMatch) {
+  ok('1.9 runPerRow uses raw supabase insert (no audit_log per row)',
+     !/dbInsert\(/.test(runPerRowMatch[0]),
+     'must not call dbInsert per row');
+}
+
+// 1.10 — Single bulk audit-log entry at the end (not per-row)
+ok('1.10 Single bulk audit_log entry at the end of import',
+   /action: 'bulk_import'/.test(src));
+
+// 1.11 — Live status text shown during import
+ok('1.11 importStatus state declared',
+   /\[importStatus, setImportStatus\]/.test(src));
+ok('1.12 importStatus shown in importing UI',
+   /importStatus &&/.test(src) && /importStatus\}<\/p>/.test(src));
+
+// 1.13 — Cancel button so user is never stuck
+ok('1.13 Cancel button on importing UI',
+   /Cancel the import\?/.test(src));
+ok('1.14 30-sec timeout reassurance shown to user',
+   /30-second timeout/.test(src));
+
+// 1.15 — Cleans up empty-string dates before insert (prevents Postgres rejection)
+ok('1.15 Strips empty-string dates before insert (Postgres rejects "" on DATE)',
+   /effective_date' \|\| k === 'expiry_date' \|\| k === 'booking_date'\) && v === ''\) continue/.test(src));
+
+// 1.16 — Progress updates throttled in per-row path so UI doesn't redraw 210 times
+ok('1.16 Progress updates throttled in per-row path (every 10 rows)',
+   /i % 10 === 0/.test(src));
+
+// 1.17 — If EVERY row failed with the same error, surface the bulk error
+// instead of pretending it's row-specific
+ok('1.17 If all rows fail same way, surface the original bulk error (not "row failed")',
+   /failed === rowsToInsert\.length/.test(src));
+
+// 1.18 — Better final messages: distinguish "0 saved + N failed" from partial
+ok('1.18 Distinct alert when ok===0 (full failure)',
+   /ok === 0/.test(src) && /Import failed — nothing was saved/.test(src));
+
+// =======================================================================
+// BUG 2 — Trend chart anchored to expiration date
+// =======================================================================
+
+// 2.1 — dateAnchor function uses expiry_date first, falls back to effective_date
+ok('2.1 dateAnchor function defined',
+   /const dateAnchor = function \(r\)/.test(src));
+ok('2.2 dateAnchor uses expiry_date PRIMARY, effective_date fallback',
+   /return r\.expiry_date \|\| r\.effective_date/.test(src));
+
+// 2.3 — Trend filter uses dateAnchor
+ok('2.3 Trend filter uses dateAnchor (not bare effective_date)',
+   /var anchor = dateAnchor\(r\)/.test(src));
+
+// 2.4 — Grouping by month uses dateAnchor
+ok('2.4 Monthly grouping uses dateAnchor',
+   /const ym = dateAnchor\(r\)\.substring\(0, 7\)/.test(src));
+
+// 2.5 — Caption explains the expiry-anchored axis to the user
+ok('2.5 Chart caption mentions expiration anchoring',
+   /expiration date/i.test(src) && /historically valid|when it was last valid|valid until/i.test(src));
+
+console.log('\n=== Results ===');
+console.log('Passed: ' + passed + ' / ' + (passed + failed));
+process.exit(failed > 0 ? 1 : 0);

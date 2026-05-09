@@ -337,7 +337,31 @@ export default function ShippingRatesTab({ toast, user, userProfile, isAdmin, cu
   const [filterVendor, setFilterVendor] = useState('all');
   const [filterLine, setFilterLine] = useState('all');
   const [filterMode, setFilterMode] = useState('all');
-  const [filterExpiry, setFilterExpiry] = useState('all');
+  // v55.81 #17 (Max May 9 2026): default to 'active' so daily users see only
+  // live rates on first load. Historical/expired rates are still preserved
+  // and accessible — switch the toggle to "Historical" or "All" to surface
+  // them in their own clearly-labeled section. Previously 'all' was default
+  // and active + historical mixed together, which made it harder to scan.
+  // v55.81 QA-6 (Max May 9 2026): persist the user's choice in localStorage
+  // so flipping to "Both" or "Historical" sticks across reloads. Without
+  // persistence the toggle felt like it kept resetting, which annoyed users
+  // who lived in the "Both" view.
+  const [filterExpiry, setFilterExpiry] = useState(function () {
+    try {
+      if (typeof window !== 'undefined') {
+        var saved = window.localStorage.getItem('ktc_shipping_filter_expiry');
+        if (saved === 'active' || saved === 'expired' || saved === 'all') return saved;
+      }
+    } catch (_) {}
+    return 'active';
+  });
+  // Persist on every change. Wrapping the setter so any caller (the three
+  // toggle buttons below) automatically persists without each one having to
+  // remember to do it.
+  var setFilterExpiryPersist = function (v) {
+    setFilterExpiry(v);
+    try { if (typeof window !== 'undefined') window.localStorage.setItem('ktc_shipping_filter_expiry', v); } catch (_) {}
+  };
   const [selectedRoute, setSelectedRoute] = useState(null);
   const [editingRate, setEditingRate] = useState(null);
   const [editingQuote, setEditingQuote] = useState(null);
@@ -348,6 +372,9 @@ export default function ShippingRatesTab({ toast, user, userProfile, isAdmin, cu
   const [importData, setImportData] = useState([]);
   const [importStep, setImportStep] = useState('select');
   const [importProgress, setImportProgress] = useState(0);
+  // v55.81 — live status text shown alongside the progress bar so the
+  // user can see what's happening (was just %).
+  const [importStatus, setImportStatus] = useState('');
   const [importColMap, setImportColMap] = useState({});
   // v55.44 — keep the raw Excel rows + header list so the user can RE-MAP a
   // column from a dropdown if the auto-detect picked the wrong source. Without
@@ -420,8 +447,42 @@ export default function ShippingRatesTab({ toast, user, userProfile, isAdmin, cu
       if (r.shipping_line) groups[key].lines.add(r.shipping_line);
       if (r.transport_mode) groups[key].modes.add(r.transport_mode);
     });
-    return Object.entries(groups).map(([key, data]) => { const ar = data.rates.filter(r => !isExpired(r.expiry_date)); const ch = ar.length > 0 ? ar.reduce((a,b) => (a.rate_amount||Infinity) < (b.rate_amount||Infinity) ? a : b) : null; return { key, ...data, cheapest: ch, activeCount: ar.length, expiredCount: data.rates.length - ar.length, count: data.rates.length }; }).sort((a,b) => b.count - a.count);
+    // v55.81 #16 + #19 (Max May 9 2026): mark each group as `historicalGroup`
+    // when ALL its rates are expired, so the renderer can move it into a
+    // separate "Historical Rates" section instead of mixing it with active
+    // rates. Sort alphabetically by destination first (Max's spec), with
+    // groups that have any active rates appearing before groups that are
+    // fully historical when both show in the same render (i.e. the "All"
+    // toggle below). Previously sorted by `count desc` which moved high-
+    // volume historical routes to the top.
+    return Object.entries(groups).map(([key, data]) => {
+      const ar = data.rates.filter(r => !isExpired(r.expiry_date));
+      const ch = ar.length > 0 ? ar.reduce((a,b) => (a.rate_amount||Infinity) < (b.rate_amount||Infinity) ? a : b) : null;
+      return { key, ...data, cheapest: ch, activeCount: ar.length, expiredCount: data.rates.length - ar.length, count: data.rates.length, historicalGroup: ar.length === 0 };
+    }).sort(function (a, b) {
+      // Active groups first, then alphabetical by destination
+      if (a.historicalGroup !== b.historicalGroup) return a.historicalGroup ? 1 : -1;
+      var ad = (a.destination || a.rightLabel || '').toLowerCase();
+      var bd = (b.destination || b.rightLabel || '').toLowerCase();
+      if (ad !== bd) return ad < bd ? -1 : 1;
+      // Same destination — secondary sort by origin so cards group sensibly
+      var ao = (a.origin || a.leftLabel || '').toLowerCase();
+      var bo = (b.origin || b.leftLabel || '').toLowerCase();
+      return ao < bo ? -1 : (ao > bo ? 1 : 0);
+    });
   }, [filtered, groupByPort]);
+
+  // v55.81 #16 (Max May 9 2026): pre-split routeGroups for the renderer
+  // when filterExpiry === 'all'. The renderer reads activeRouteGroups and
+  // historicalRouteGroups directly, so it doesn't have to re-filter on
+  // every render pass. When filterExpiry is 'active' or 'expired' (only
+  // one side is showing), the inactive bucket is empty so nothing renders.
+  const activeRouteGroups = useMemo(function () {
+    return routeGroups.filter(function (rg) { return !rg.historicalGroup; });
+  }, [routeGroups]);
+  const historicalRouteGroups = useMemo(function () {
+    return routeGroups.filter(function (rg) { return rg.historicalGroup; });
+  }, [routeGroups]);
 
   // v55.63 — routeHistory now respects POL/POD too. When a user clicks into
   // a route card while filtered to POD = Alexandria, the detail view stays
@@ -820,39 +881,179 @@ export default function ShippingRatesTab({ toast, user, userProfile, isAdmin, cu
   const removeImportRow = (idx) => {
     setImportData(prev => prev.filter((_, i) => i !== idx));
   };
+  // v55.81 — REWRITTEN for reliability. Per Max May 9 2026: import was
+  // "sitting forever". Three causes addressed here:
+  //   1. The per-row fallback called dbInsert() which writes audit_log per
+  //      row. 210 rows = 420 round-trips serialized = up to 2 minutes.
+  //   2. If the bulk insert failed because of one bad column (e.g. column
+  //      doesn't exist on this DB), we'd fall through to the per-row path
+  //      and hit the SAME error 210 times.
+  //   3. No timeout on the Supabase calls — a hung connection meant the
+  //      UI froze indefinitely.
+  // The fix: try bulk, if it fails for a missing-column reason strip that
+  // column FROM ALL rows and retry ONCE bulk, then per-row only for true
+  // data errors. Skip audit_log per row — write a single bulk-import audit
+  // entry at the end. 30-sec timeout on every Supabase call.
   const executeImport = async () => {
     setImportStep('importing'); setImportProgress(0);
-    let ok = 0, failed = 0;
-    const errors = [];
-    // v55.33 — batched at 50 rows per insert (was per-row, slow on large imports).
-    // If a batch fails, fall back to per-row so we don't lose the whole 50.
-    const BATCH_SIZE = 50;
-    for (let i = 0; i < importData.length; i += BATCH_SIZE) {
-      const batch = importData.slice(i, i + BATCH_SIZE);
-      try {
-        const { error } = await supabase.from('shipping_rates').insert(batch);
-        if (error) throw error;
-        ok += batch.length;
-      } catch (e) {
-        // Per-row fallback: try each row individually so a single bad row
-        // doesn't kill the whole batch
-        for (const row of batch) {
-          try {
-            await dbInsert('shipping_rates', row, myId);
-            ok++;
-          } catch (err) {
-            failed++;
-            if (errors.length < 5) errors.push(err.message || String(err));
-          }
+    setImportStatus('Preparing ' + importData.length + ' rows…');
+
+    // Defensive: snapshot the data and clean it up first.
+    var rowsToInsert = importData.slice().map(function (r) {
+      var clean = {};
+      // Only keep keys with non-undefined values; null is fine for nullable
+      // columns. Strip empty-string for date columns since Postgres rejects
+      // '' on a DATE column.
+      for (var k in r) {
+        var v = r[k];
+        if (v === undefined) continue;
+        if ((k === 'effective_date' || k === 'expiry_date' || k === 'booking_date') && v === '') continue;
+        clean[k] = v;
+      }
+      return clean;
+    });
+
+    var ok = 0, failed = 0;
+    var errors = [];
+
+    // 30-second timeout wrapper for any Supabase call so a stalled network
+    // or long query doesn't freeze the importer.
+    var withTimeout = function (promise, ms, label) {
+      return new Promise(function (resolve) {
+        var done = false;
+        var timer = setTimeout(function () {
+          if (done) return;
+          done = true;
+          resolve({ data: null, error: { message: (label || 'Operation') + ' timed out after ' + ms + 'ms' } });
+        }, ms);
+        promise.then(function (res) {
+          if (done) return;
+          done = true;
+          clearTimeout(timer);
+          resolve(res);
+        }).catch(function (err) {
+          if (done) return;
+          done = true;
+          clearTimeout(timer);
+          resolve({ data: null, error: err });
+        });
+      });
+    };
+
+    // Step 1 — try ALL rows in one go. Postgres handles a few hundred fine.
+    setImportStatus('Inserting ' + rowsToInsert.length + ' rows…');
+    var bulkRes = await withTimeout(
+      supabase.from('shipping_rates').insert(rowsToInsert),
+      30000,
+      'Bulk insert'
+    );
+
+    if (!bulkRes.error) {
+      // Happy path
+      ok = rowsToInsert.length;
+      setImportProgress(95);
+    } else {
+      // Step 2 — if the error is a missing column, strip it from every
+      // row and retry once.
+      var msg = (bulkRes.error.message || String(bulkRes.error || '')).toLowerCase();
+      var missingCol = null;
+      var m = msg.match(/column ['"]?(\w+)['"]? of relation/);
+      if (!m) m = msg.match(/could not find the ['"]?(\w+)['"]? column/);
+      if (!m) m = msg.match(/['"](\w+)['"]? column .* schema cache/);
+      if (m) missingCol = m[1];
+
+      if (missingCol) {
+        setImportStatus('Database is missing the "' + missingCol + '" column — retrying without it…');
+        rowsToInsert = rowsToInsert.map(function (r) {
+          var copy = Object.assign({}, r);
+          delete copy[missingCol];
+          return copy;
+        });
+        var retry = await withTimeout(
+          supabase.from('shipping_rates').insert(rowsToInsert),
+          30000,
+          'Bulk insert retry'
+        );
+        if (!retry.error) {
+          ok = rowsToInsert.length;
+          setImportProgress(95);
+        } else {
+          // Still failing — fall through to per-row to find which rows are bad
+          setImportStatus('Some rows have problems — checking each row individually…');
+          var perRowResult = await runPerRow(rowsToInsert, withTimeout);
+          ok = perRowResult.ok; failed = perRowResult.failed; errors = perRowResult.errors;
+        }
+      } else {
+        // Unknown error type — try per-row to surface specific bad rows
+        setImportStatus('Some rows have problems — checking each row individually…');
+        var perRowResult2 = await runPerRow(rowsToInsert, withTimeout);
+        ok = perRowResult2.ok; failed = perRowResult2.failed; errors = perRowResult2.errors;
+
+        // If EVERY row failed with the same error, don't pretend it's
+        // a row issue — surface the original bulk error to the user.
+        if (failed === rowsToInsert.length) {
+          errors = [bulkRes.error.message || String(bulkRes.error)];
         }
       }
-      setImportProgress(Math.round(((i + batch.length) / importData.length) * 100));
     }
-    setImportProgress(100); setImportStep('done');
+
+    // Step 3 — single bulk audit-log entry (NOT per-row, which would be 210 writes)
+    if (ok > 0 && myId) {
+      try {
+        await withTimeout(
+          supabase.from('audit_log').insert({
+            table_name: 'shipping_rates',
+            record_id: null,
+            action: 'bulk_import',
+            changed_by: myId,
+            new_values: { count: ok, source: 'shipping-rate-import' }
+          }),
+          5000,
+          'Audit log'
+        );
+      } catch (_) {} // audit failure shouldn't block the import success message
+    }
+
+    setImportProgress(100);
+    setImportStep('done');
+    setImportStatus('');
+
     if (failed > 0) {
-      alert('Import complete: ' + ok + ' saved, ' + failed + ' failed.\n\nFirst errors:\n' + errors.join('\n'));
+      alert('Import complete:\n' +
+            ok + ' saved\n' +
+            failed + ' failed\n\n' +
+            (errors.length > 0 ? 'First errors:\n' + errors.slice(0, 5).join('\n') : ''));
+    } else if (ok === 0) {
+      alert('Import failed — nothing was saved.\n\n' +
+            (errors.length > 0 ? errors.join('\n') : 'Unknown error. Check browser console for details.'));
     }
-    await loadData();
+    try { await loadData(); } catch (_) {}
+  };
+
+  // Per-row fallback used by executeImport. Pulled out for readability.
+  // Tries each row individually with a 5-sec timeout so one bad row never
+  // freezes the importer.
+  const runPerRow = async (rows, withTimeout) => {
+    var ok = 0, failed = 0, errors = [];
+    for (var i = 0; i < rows.length; i++) {
+      var res = await withTimeout(
+        supabase.from('shipping_rates').insert(rows[i]),
+        5000,
+        'Row ' + (i + 1) + ' insert'
+      );
+      if (res.error) {
+        failed++;
+        if (errors.length < 5) errors.push((res.error.message || String(res.error)));
+      } else {
+        ok++;
+      }
+      // Update progress every 10 rows so the bar doesn't redraw 210 times
+      if (i % 10 === 0 || i === rows.length - 1) {
+        setImportProgress(Math.round(((i + 1) / rows.length) * 90));
+        setImportStatus('Checking row ' + (i + 1) + ' of ' + rows.length + '…');
+      }
+    }
+    return { ok: ok, failed: failed, errors: errors };
   };
   const handleAiQuery = async () => { if (!aiQuery.trim()) return; setAiLoading(true); setAiAnswer(''); try { const summary = routeGroups.slice(0,50).map(rg => { const c=rg.cheapest; return rg.key+': '+rg.count+' quotes ('+rg.activeCount+' active), best: '+(c?'$'+c.rate_amount+' '+c.vendor_name+'/'+(c.shipping_line||'N/A'):'none'); }).join('\n'); const res = await fetch('/api/ask',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({question:aiQuery,context:'Shipping rates assistant for KTC.\n\nROUTES:\n'+summary+'\n\nAnswer concisely.'})}); const data = await res.json(); setAiAnswer(data.answer||'No response'); } catch(err) { setAiAnswer('Error: '+err.message); } setAiLoading(false); };
   const resetQuoteForm = () => { setF({}); setEditingQuote(null); setPickedShipRate(null); setPickedTruckRate(null); setPickedBrokerRate(null); setManualShip(false); setManualTruck(false); setManualBroker(false); };
@@ -1594,9 +1795,18 @@ Date: ${today}`;
     const cutoffDays = trendRange === '6m' ? 180 : trendRange === '24m' ? 730 : trendRange === 'all' ? 99999 : 365;
     const cutoffStr = daysAgoET(cutoffDays);
 
+    // v55.81 (Max May 9 2026): Use expiry_date as the time-axis anchor.
+    // Max's logic: "The date should be the historical of when it is from
+    // the date of the expiration ... that's what you're using the charts
+    // as well." A rate that expired 2024-12-31 was historically valid
+    // through that date — that's where the data point goes on the chart.
+    // Fall back to effective_date for any row missing expiry_date.
+    const dateAnchor = function (r) { return r.expiry_date || r.effective_date || ''; };
+
     // Filter rates by date + optional route + currency
     const trendRates = rates.filter(r => {
-      if (!r.effective_date || r.effective_date < cutoffStr) return false;
+      var anchor = dateAnchor(r);
+      if (!anchor || anchor < cutoffStr) return false;
       if (trendCurrency !== 'all' && (r.currency || 'USD') !== trendCurrency) return false;
       if (trendOrigin !== 'all' && r.origin !== trendOrigin) return false;
       if (trendDest !== 'all' && r.destination !== trendDest) return false;
@@ -1609,7 +1819,7 @@ Date: ${today}`;
     const TARGETS = ["20' GP", "40' GP", "40' HC"];
     const byMonth = {};   // { 'YYYY-MM': { "20' GP": [rate, rate, ...], ... } }
     trendRates.forEach(r => {
-      const ym = (r.effective_date || '').substring(0, 7);
+      const ym = dateAnchor(r).substring(0, 7);
       if (!ym) return;
       let ct = r.container_type || '40ft';
       // Map legacy values to the TARGETS list
@@ -1648,7 +1858,7 @@ Date: ${today}`;
     return (<div>
       <button onClick={() => setView('routes')} className="px-3 py-1 rounded border border-slate-200 text-xs font-semibold mb-3">← Back</button>
       <h2 className="text-xl font-extrabold mb-1">📈 Rate Trends</h2>
-      <p className="text-xs text-slate-500 mb-4">How shipping rates have changed over time. Each line is a container size; each point is the average rate that month.</p>
+      <p className="text-xs text-slate-500 mb-4">How shipping rates have changed over time. Each line is a container size; each point is the average rate that month, anchored to the rate's <strong>expiration date</strong> (when it was last valid).</p>
 
       {/* v55.80 — Trends view also has Bubble (chart) vs Detail (table) toggle */}
       <div className="flex items-center gap-1 mb-3 bg-slate-100 rounded-lg p-1 w-fit">
@@ -1764,7 +1974,7 @@ Date: ${today}`;
       )}
 
       <p className="text-[10px] text-slate-500 mt-3 text-center">
-        Data points = average rate per month per container type • {trendCurrency === 'all' ? 'mixed currencies' : trendCurrency + ' only'}
+        Data points anchored to expiration date • average rate per month per container type • {trendCurrency === 'all' ? 'mixed currencies' : trendCurrency + ' only'}
       </p>
     </div>);
   }
@@ -2010,7 +2220,31 @@ Date: ${today}`;
       </div>
       <p className="text-[10px] text-slate-500 mt-2">💡 Tap any cell to edit. Red rows have rate = 0. Click ✕ to drop a row before importing.</p>
     </div>);})()}
-    {importStep==='importing'&&<div className="bg-white rounded-xl p-8 text-center"><div className="text-4xl mb-3">⏳</div><div className="w-full bg-slate-200 rounded-full h-3"><div className="bg-blue-500 h-3 rounded-full" style={{width:importProgress+'%'}}></div></div><p className="text-sm mt-2">{importProgress}%</p></div>}
+    {importStep==='importing'&&(
+      <div className="bg-white rounded-xl p-8 text-center">
+        <div className="text-4xl mb-3 animate-pulse">⏳</div>
+        <div className="w-full bg-slate-200 rounded-full h-3 mb-2">
+          <div className="bg-blue-500 h-3 rounded-full transition-all" style={{width: importProgress + '%'}}></div>
+        </div>
+        <p className="text-sm font-bold text-slate-700">{importProgress}%</p>
+        {importStatus && <p className="text-xs text-slate-500 mt-2">{importStatus}</p>}
+        {/* v55.81 — Cancel button so user is never stuck if something hangs.
+            Also a "30 sec timeout per call" reassurance so they know the
+            import won't run forever silently. */}
+        <p className="text-[10px] text-slate-500 mt-3 italic">Each step has a 30-second timeout — won't run forever.</p>
+        <button
+          onClick={() => {
+            if (confirm('Cancel the import? Rows already saved will stay in the database.')) {
+              setImportStep('preview');
+              setImportStatus('');
+              setImportProgress(0);
+            }
+          }}
+          className="mt-3 px-4 py-1.5 border border-slate-300 rounded-lg text-xs font-semibold text-slate-600 hover:bg-slate-50">
+          Cancel
+        </button>
+      </div>
+    )}
     {importStep==='done'&&<div className="bg-white rounded-xl p-8 text-center"><div className="text-4xl mb-3">✅</div><h3 className="text-lg font-bold text-emerald-700">Done!</h3><button onClick={()=>{setView('routes');setImportData([]);setImportStep('select');setImportRawRows([]);setImportHeaders([]);setImportContainerCols([]);}} className="mt-3 px-6 py-2 bg-blue-500 text-white rounded-lg font-semibold">Done</button></div>}
   </div>);
 
@@ -2054,7 +2288,34 @@ Date: ${today}`;
       <select value={filterPod} onChange={e=>setFilterPod(e.target.value)} className={'px-2 py-1 rounded border text-xs ' + (filterPod !== 'all' ? 'border-emerald-400 bg-emerald-50 text-emerald-700 font-semibold' : '')}><option value="all">All POD (discharge ports)</option>{pods.map(p=><option key={p} value={p}>{p}</option>)}</select>
       <select value={filterVendor} onChange={e=>setFilterVendor(e.target.value)} className="px-2 py-1 rounded border text-xs"><option value="all">All Vendors</option>{vendors.map(v=><option key={v} value={v}>{v}</option>)}</select>
       <select value={filterLine} onChange={e=>setFilterLine(e.target.value)} className="px-2 py-1 rounded border text-xs"><option value="all">All Lines</option>{lines.map(l=><option key={l} value={l}>{l}</option>)}</select>
-      <select value={filterExpiry} onChange={e=>setFilterExpiry(e.target.value)} className="px-2 py-1 rounded border text-xs"><option value="all">All Rates</option><option value="active">Active Only</option><option value="expired">Expired Only</option></select>
+      {/* v55.81 #17 (Max May 9 2026): three-button toggle replaces the
+          dropdown — clearer, faster to scan, and the "Show Historical"
+          option is no longer hidden behind a dropdown click. Default is
+          Active so daily users see only live rates on first load. The
+          "All" mode renders Active rates first, then a clearly-labeled
+          "Historical Rates" section below (see #16). v55.81 QA-6: the
+          three buttons now go through setFilterExpiryPersist so the
+          choice sticks across reloads. */}
+      <div className="flex items-center gap-1 bg-slate-100 rounded-lg p-1">
+        <button
+          onClick={function () { setFilterExpiryPersist('active'); }}
+          className={'px-3 py-1 rounded text-xs font-bold transition ' + (filterExpiry === 'active' ? 'bg-white text-emerald-700 shadow' : 'text-slate-500 hover:text-slate-700')}
+          title="Show only rates whose expiry date is in the future">
+          ✅ Active
+        </button>
+        <button
+          onClick={function () { setFilterExpiryPersist('expired'); }}
+          className={'px-3 py-1 rounded text-xs font-bold transition ' + (filterExpiry === 'expired' ? 'bg-white text-slate-700 shadow' : 'text-slate-500 hover:text-slate-700')}
+          title="Show only historical rates whose expiry date has passed">
+          📜 Historical
+        </button>
+        <button
+          onClick={function () { setFilterExpiryPersist('all'); }}
+          className={'px-3 py-1 rounded text-xs font-bold transition ' + (filterExpiry === 'all' ? 'bg-white text-blue-700 shadow' : 'text-slate-500 hover:text-slate-700')}
+          title="Show all rates — active first, then historical">
+          Both
+        </button>
+      </div>
       {(filterPol !== 'all' || filterPod !== 'all') && (
         <button
           onClick={() => { setFilterPol('all'); setFilterPod('all'); }}
@@ -2094,25 +2355,82 @@ Date: ${today}`;
       </button>
     </div>
 
-    {/* ROUTES VIEW (the card grid by route) — original layout */}
-    {routesViewMode === 'routes' && (
-      <>
-    {routeGroups.length===0?(<div className="bg-white rounded-xl p-8 text-center border"><div className="text-4xl mb-2">🚢</div><p className="text-sm text-slate-400">No rates yet</p></div>):(<div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">{routeGroups.map(rg=>{const c=rg.cheapest; return (<div key={rg.key} onClick={()=>{setSelectedRoute({origin:rg.origin,destination:rg.destination,pol:rg.pol||null,pod:rg.pod||null});setView('route_detail');}} className="bg-white rounded-xl p-4 cursor-pointer border border-slate-200 hover:shadow-lg hover:-translate-y-0.5 transition-all">
-      <div className="flex justify-between items-start mb-2"><div><div className="text-sm font-extrabold text-blue-700">{groupByPort && rg.pol ? rg.pol : rg.origin}{groupByPort && rg.pol && rg.origin && rg.pol !== rg.origin && <span className="text-[9px] text-slate-500 font-normal ml-1">({rg.origin})</span>}</div><div className="text-[10px] text-slate-500">↓</div><div className="text-sm font-extrabold text-emerald-700">{groupByPort && rg.pod ? rg.pod : rg.destination}{groupByPort && rg.pod && rg.destination && rg.pod !== rg.destination && <span className="text-[9px] text-slate-500 font-normal ml-1">({rg.destination})</span>}</div></div><div className="text-right">{c?(<><div className="text-[9px] text-slate-500">Best Active</div><div className="text-lg font-extrabold text-emerald-600">{fCur(c.rate_amount,c.currency)}</div><div className="text-[9px] text-blue-500">{c.vendor_name}{c.shipping_line?' / '+c.shipping_line:''}</div><ExpiryBadge date={c.expiry_date}/></>):(<div className="text-xs text-red-400 font-bold">All Expired</div>)}</div></div>
-      {/* v55.63 — show TT / FT / ETD on the cheapest active rate when a port
-          is picked, so you can compare at a glance without opening the card. */}
-      {groupByPort && c && (
-        <div className="flex gap-2 flex-wrap text-[10px] mb-2">
-          {c.transit_days != null && <span className="px-1.5 py-0.5 bg-sky-50 text-sky-700 rounded"><strong>TT:</strong> {c.transit_days}d</span>}
-          {c.free_days != null && <span className="px-1.5 py-0.5 bg-amber-50 text-amber-700 rounded"><strong>FT:</strong> {c.free_days}d</span>}
-          {c.effective_date && <span className="px-1.5 py-0.5 bg-violet-50 text-violet-700 rounded"><strong>ETD:</strong> {c.effective_date}</span>}
-        </div>
-      )}
-      <div className="flex gap-1 flex-wrap mb-2">{[...rg.lines].filter(Boolean).map(l=><span key={l} className="px-1.5 py-0.5 bg-purple-100 text-purple-700 rounded text-[9px]">{l}</span>)}{[...rg.modes].map(m=><span key={m} className="px-1.5 py-0.5 bg-blue-100 text-blue-700 rounded text-[9px]">{m}</span>)}</div>
-      <div className="flex justify-between text-[10px] text-slate-500 border-t border-slate-100 pt-2"><span>{rg.activeCount} active{rg.expiredCount>0&&<span className="text-red-400 ml-1">({rg.expiredCount} exp)</span>}</span><span>{[...rg.vendors].length} vendors</span>{(() => { const rb = routeBookings(rg.origin,rg.destination,rg.pol,rg.pod); return rb.length > 0 && <span className="text-emerald-600">✓ {rb.length}x</span>; })()}</div>
-    </div>);})}</div>)}
-      </>
-    )}
+    {/* ROUTES VIEW (the card grid by route) — original layout
+        v55.81 #16 + #18 (Max May 9 2026): when filter is "Both" (all),
+        Active rates render first, then a clearly-labeled "Historical
+        Rates" section below at reduced opacity. When filter is "Active"
+        only, historical bucket is empty so only the active grid shows.
+        When filter is "Historical" only, active bucket is empty so only
+        the historical grid shows. */}
+    {routesViewMode === 'routes' && (() => {
+      // Local helper that renders one route card. Extracted so we can
+      // render Active and Historical sections without duplicating the
+      // 14-line card markup. Behaves IDENTICALLY to the previous inline
+      // version — only the wrapper changed.
+      var renderRouteCard = function (rg) {
+        var c = rg.cheapest;
+        return (
+          <div key={rg.key} onClick={function(){setSelectedRoute({origin:rg.origin,destination:rg.destination,pol:rg.pol||null,pod:rg.pod||null});setView('route_detail');}} className="bg-white rounded-xl p-4 cursor-pointer border border-slate-200 hover:shadow-lg hover:-translate-y-0.5 transition-all">
+            <div className="flex justify-between items-start mb-2"><div><div className="text-sm font-extrabold text-blue-700">{groupByPort && rg.pol ? rg.pol : rg.origin}{groupByPort && rg.pol && rg.origin && rg.pol !== rg.origin && <span className="text-[9px] text-slate-500 font-normal ml-1">({rg.origin})</span>}</div><div className="text-[10px] text-slate-500">↓</div><div className="text-sm font-extrabold text-emerald-700">{groupByPort && rg.pod ? rg.pod : rg.destination}{groupByPort && rg.pod && rg.destination && rg.pod !== rg.destination && <span className="text-[9px] text-slate-500 font-normal ml-1">({rg.destination})</span>}</div></div><div className="text-right">{c?(<><div className="text-[9px] text-slate-500">Best Active</div><div className="text-lg font-extrabold text-emerald-600">{fCur(c.rate_amount,c.currency)}</div><div className="text-[9px] text-blue-500">{c.vendor_name}{c.shipping_line?' / '+c.shipping_line:''}</div><ExpiryBadge date={c.expiry_date}/></>):(<div className="text-xs text-red-400 font-bold">All Expired</div>)}</div></div>
+            {/* v55.63 — show TT / FT / ETD on the cheapest active rate when a port
+                is picked, so you can compare at a glance without opening the card. */}
+            {groupByPort && c && (
+              <div className="flex gap-2 flex-wrap text-[10px] mb-2">
+                {c.transit_days != null && <span className="px-1.5 py-0.5 bg-sky-50 text-sky-700 rounded"><strong>TT:</strong> {c.transit_days}d</span>}
+                {c.free_days != null && <span className="px-1.5 py-0.5 bg-amber-50 text-amber-700 rounded"><strong>FT:</strong> {c.free_days}d</span>}
+                {c.effective_date && <span className="px-1.5 py-0.5 bg-violet-50 text-violet-700 rounded"><strong>ETD:</strong> {c.effective_date}</span>}
+              </div>
+            )}
+            <div className="flex gap-1 flex-wrap mb-2">{[...rg.lines].filter(Boolean).map(function(l){return <span key={l} className="px-1.5 py-0.5 bg-purple-100 text-purple-700 rounded text-[9px]">{l}</span>;})}{[...rg.modes].map(function(m){return <span key={m} className="px-1.5 py-0.5 bg-blue-100 text-blue-700 rounded text-[9px]">{m}</span>;})}</div>
+            <div className="flex justify-between text-[10px] text-slate-500 border-t border-slate-100 pt-2"><span>{rg.activeCount} active{rg.expiredCount>0&&<span className="text-red-400 ml-1">({rg.expiredCount} exp)</span>}</span><span>{[...rg.vendors].length} vendors</span>{(function(){var rb=routeBookings(rg.origin,rg.destination,rg.pol,rg.pod);return rb.length>0&&<span className="text-emerald-600">✓ {rb.length}x</span>;})()}</div>
+          </div>
+        );
+      };
+
+      // Both buckets empty → unified empty state (preserves the original
+      // "No rates yet" UX for fresh installs).
+      if (activeRouteGroups.length === 0 && historicalRouteGroups.length === 0) {
+        return (<div className="bg-white rounded-xl p-8 text-center border"><div className="text-4xl mb-2">🚢</div><p className="text-sm text-slate-400">No rates match your filters</p></div>);
+      }
+
+      return (
+        <>
+          {activeRouteGroups.length > 0 && (
+            <div>
+              {/* v55.81 #16 + QA-4 (Max May 9 2026): show the header
+                  whenever the user is in "Both" mode, even if the
+                  historical bucket happens to be empty. Without this,
+                  Both mode looks identical to Active mode whenever
+                  there are no historical rates — confusing. */}
+              {filterExpiry === 'all' && (
+                <div className="flex items-center gap-2 mb-2">
+                  <span className="text-xs font-extrabold text-emerald-700 uppercase tracking-wide">✅ Active Rates</span>
+                  <span className="text-[10px] text-slate-500">({activeRouteGroups.length} {activeRouteGroups.length === 1 ? 'route' : 'routes'} · sorted by destination)</span>
+                </div>
+              )}
+              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
+                {activeRouteGroups.map(renderRouteCard)}
+              </div>
+            </div>
+          )}
+
+          {historicalRouteGroups.length > 0 && (
+            <div className={activeRouteGroups.length > 0 ? 'mt-6 pt-5 border-t-2 border-dashed border-slate-200' : ''}>
+              <div className="flex items-center gap-2 mb-2">
+                <span className="text-xs font-extrabold text-slate-600 uppercase tracking-wide">📜 Historical Rates</span>
+                <span className="text-[10px] text-slate-500">({historicalRouteGroups.length} {historicalRouteGroups.length === 1 ? 'route' : 'routes'} · all rates expired · kept for reference)</span>
+              </div>
+              {/* v55.81 #18: dimmed at 60% opacity to make the active/historical
+                  distinction immediate. Hover restores full opacity so you can
+                  still scan the details. */}
+              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3 opacity-60 hover:opacity-100 transition-opacity">
+                {historicalRouteGroups.map(renderRouteCard)}
+              </div>
+            </div>
+          )}
+        </>
+      );
+    })()}
 
     {/* v55.66 — LIST VIEW. Every individual rate as a row. Click a row to
         open the same route detail screen the card grid would. Sortable
@@ -2161,7 +2479,21 @@ Date: ${today}`;
               </thead>
               <tbody>
                 {(function () {
+                  // v55.81 #16 + #19 (Max May 9 2026): primary sort is
+                  // active-first (so historical rows always appear after
+                  // active rows), secondary is the user-selected column.
+                  // When both buckets exist, a divider row labels each
+                  // section. Historical rows are dimmed at 60% opacity
+                  // (already in the row className) for visual distinction.
+                  // v55.81 QA-12 (Max May 9 2026): divider colSpan is now
+                  // computed from LIST_COL_COUNT (defined at the top of
+                  // the list view) so adding/removing a column doesn't
+                  // visually break the dividers.
+                  var LIST_COL_COUNT = 13; // 12 data columns + 1 edit col — matches the <thead> map() above + trailing <th>
                   var sorted = filtered.slice().sort(function (a, b) {
+                    var ax = isExpired(a.expiry_date) ? 1 : 0;
+                    var bx = isExpired(b.expiry_date) ? 1 : 0;
+                    if (ax !== bx) return ax - bx; // active first, always
                     var av = a[listSortKey];
                     var bv = b[listSortKey];
                     if (av == null && bv == null) return 0;
@@ -2172,9 +2504,32 @@ Date: ${today}`;
                     else cmp = String(av).localeCompare(String(bv));
                     return listSortDir === 'asc' ? cmp : -cmp;
                   });
-                  return sorted.map(function (r) {
+                  // Insert a divider row when transitioning from active to
+                  // historical (only if BOTH buckets have rows AND the user
+                  // is showing both — i.e. filterExpiry === 'all').
+                  var rows = [];
+                  var activeCount = sorted.filter(function (r) { return !isExpired(r.expiry_date); }).length;
+                  var historicalCount = sorted.length - activeCount;
+                  var dividerInserted = false;
+                  var showDivider = filterExpiry === 'all' && activeCount > 0 && historicalCount > 0;
+                  if (showDivider && activeCount > 0) {
+                    rows.push(
+                      <tr key="hdr-active" className="bg-emerald-50/60 border-t-2 border-emerald-200">
+                        <td colSpan={LIST_COL_COUNT} className="px-3 py-2 text-[10px] font-extrabold text-emerald-700 uppercase tracking-wide">✅ Active Rates ({activeCount})</td>
+                      </tr>
+                    );
+                  }
+                  sorted.forEach(function (r) {
                     var exp = isExpired(r.expiry_date);
-                    return (
+                    if (showDivider && exp && !dividerInserted) {
+                      rows.push(
+                        <tr key="hdr-historical" className="bg-slate-100 border-t-2 border-slate-300">
+                          <td colSpan={LIST_COL_COUNT} className="px-3 py-2 text-[10px] font-extrabold text-slate-700 uppercase tracking-wide">📜 Historical Rates ({historicalCount}) · expired · kept for reference</td>
+                        </tr>
+                      );
+                      dividerInserted = true;
+                    }
+                    rows.push(
                       <tr
                         key={r.id}
                         onClick={function () { setSelectedRoute({origin: r.origin, destination: r.destination, pol: r.port_of_loading || null, pod: r.port_of_discharge || null}); setView('route_detail'); }}
@@ -2199,6 +2554,7 @@ Date: ${today}`;
                       </tr>
                     );
                   });
+                  return rows;
                 })()}
               </tbody>
             </table>

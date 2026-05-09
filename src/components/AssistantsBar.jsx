@@ -453,12 +453,24 @@ export default function AssistantsBar({
                   </div>
                 </div>
               </div>
-              <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
-                <StatCard label="Need Ack" value={myAck} color="amber" />
-                <StatCard label="Due Today" value={myDueToday} color="blue" />
-                <StatCard label="Overdue" value={myOverdue} color="rose" />
-                <StatCard label="Checks Due" value={checksDueToday} color="violet" />
-              </div>
+              {/* v55.81 #5 (Max May 9 2026): When ALL four stats are zero,
+                  showing four "0" cards under "all caught up today" feels
+                  empty and redundant. Replace with one friendly all-clear
+                  panel that doubles as an explainer of what these cards
+                  show when there IS something to act on. */}
+              {nadiaUrgentCount > 0 ? (
+                <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+                  <StatCard label="Need Ack" value={myAck} color="amber" />
+                  <StatCard label="Due Today" value={myDueToday} color="blue" />
+                  <StatCard label="Overdue" value={myOverdue} color="rose" />
+                  <StatCard label="Checks Due" value={checksDueToday} color="violet" />
+                </div>
+              ) : (
+                <div className="rounded-lg p-3 border border-emerald-200 bg-emerald-50/70 text-center">
+                  <div className="text-xs font-bold text-emerald-800 mb-0.5">✅ Nothing needs action right now</div>
+                  <div className="text-[10px] text-emerald-700 leading-snug">When you have tickets to acknowledge, items due today, overdue work, or checks due, they'll show up here as quick-action tiles.</div>
+                </div>
+              )}
             </>
           )}
 

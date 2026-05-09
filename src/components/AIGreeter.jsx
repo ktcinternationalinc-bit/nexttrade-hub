@@ -180,6 +180,31 @@ export default function AIGreeter({ user, userProfile, users, tickets, invoices,
         currentAskAbortRef.current = null;
       }
     } catch (_) {}
+    // (8) v55.81 — When the user actively switches personas (Sara ↔ Jenna ↔
+    // Nadia), the new persona should immediately introduce herself. Without
+    // this, switching feels silent/dead. We use the persona's `greeting`
+    // from agent-personalities.js as the intro text. Only fires on a real
+    // switch (fromAgent !== activeAgentKey, which we already gated on at
+    // the top of this effect). Fires even if muted — the text still appears
+    // in chat; doSpeak() short-circuits for muted/paused users.
+    try {
+      var newAgent = getAgent(activeAgentKey);
+      if (newAgent && newAgent.greeting && fromAgent && fromAgent !== activeAgentKey) {
+        var introText = newAgent.greeting;
+        // Append the intro to the existing message stream so the user can
+        // see all three personas' interactions in one transcript.
+        var introMsg = { role: 'assistant', text: introText, agent: activeAgentKey };
+        setMessages([].concat(messages, [introMsg]));
+        // Speak it (doSpeak respects muted/paused).
+        // Defer one tick so the React state has rerendered with the new
+        // persona's voiceId before TTS fetches audio. Without this defer,
+        // /api/tts may fetch using the OLD voiceId and the wrong voice
+        // plays for the wrong persona.
+        try {
+          setTimeout(function () { try { doSpeak(introText); } catch (_) {} }, 80);
+        } catch (_) {}
+      }
+    } catch (_) {}
   }, [activeAgentKey]);
   var [recording, setRecording] = useState(false); // MediaRecorder session (separate from live-mic `listening`)
   var [transcribing, setTranscribing] = useState(false); // uploading audio to /api/transcribe
@@ -1962,11 +1987,13 @@ export default function AIGreeter({ user, userProfile, users, tickets, invoices,
       // / cross-team-action blocks never get injected into Nadia's prompt.
       // S13 2026-04-22: isGreeting flag added so server only computes the
       // morning briefing on the auto-greeting (not every chat turn).
-      // S17.6: isGreeting is true ONLY for login greeting. Tab greetings
-      // skip the expensive briefing computation.
+      // v55.81 QA-16 (Max May 9 2026): include the active persona key
+      // in the payload so the server can persist this turn into the
+      // per-persona conversation_logs table — enables cross-device
+      // continuity (a user on phone sees their laptop history, etc.).
       var payload = useV2
-        ? { question: q, history: anyGreeting ? [] : hist.slice(-20), userId: (userProfile && userProfile.id) || null, isGreeting: isLoginGreet }
-        : { question: q, mode: 'greeter', systemOverride: sysPrompt + '\n' + ctx, history: anyGreeting ? [] : hist.slice(-20), userId: (userProfile && userProfile.id) || null, isGreeting: isLoginGreet };
+        ? { question: q, history: anyGreeting ? [] : hist.slice(-20), userId: (userProfile && userProfile.id) || null, isGreeting: isLoginGreet, agentKey: activeAgentKey }
+        : { question: q, mode: 'greeter', systemOverride: sysPrompt + '\n' + ctx, history: anyGreeting ? [] : hist.slice(-20), userId: (userProfile && userProfile.id) || null, isGreeting: isLoginGreet, agentKey: activeAgentKey };
 
       // v55.80 BD-AUDIT FIX (32.2): create an AbortController and store its
       // ref so the persona-switch cleanup can cancel mid-flight requests.
@@ -2550,7 +2577,7 @@ export default function AIGreeter({ user, userProfile, users, tickets, invoices,
               try { setTimeout(function() { window.__nadiaUserTyping = false; }, 200); } catch (_) {}
             }}
             onKeyDown={function(e) { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); handleSubmit(); } }}
-            placeholder={useLang === 'ar' ? 'اكتب أو تحدث...' : 'Type or speak to Nadia...'}
+            placeholder={useLang === 'ar' ? 'اكتب أو تحدث...' : ('Type or speak to ' + (activeAgent && activeAgent.name ? activeAgent.name : 'Nadia') + '...')}
             className="flex-1 bg-transparent text-white text-xs outline-none placeholder-white/25"
             style={{ direction: useLang === 'ar' ? 'rtl' : 'ltr' }}
             disabled={loading} />

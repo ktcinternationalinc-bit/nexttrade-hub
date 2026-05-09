@@ -246,21 +246,27 @@ test('Shipping: per-row "Δ vs prev" column in historical rates table', function
     'delta lookup keyed by row id');
 });
 
-test('Shipping: executeImport uses BATCH_SIZE 50', function() {
-  assert(/const BATCH_SIZE = 50/.test(shipTab),
-    'batch size constant');
-  assert(/importData\.slice\(i, i \+ BATCH_SIZE\)/.test(shipTab),
-    'slices into batches');
-  assert(/supabase\.from\('shipping_rates'\)\.insert\(batch\)/.test(shipTab),
-    'bulk inserts batch');
+test('Shipping: executeImport uses bulk insert (single bulk, not batched)', function() {
+  // v55.81 (Max May 9 2026): rewrote to do a single bulk insert with
+  // smart retry on column-missing errors. The old BATCH_SIZE=50 approach
+  // was replaced because the per-row fallback wrote audit_log per row
+  // and could hang for minutes.
+  assert(/supabase\.from\('shipping_rates'\)\.insert\(rowsToInsert\)/.test(shipTab),
+    'bulk inserts the whole rowsToInsert array in one call');
+  assert(/withTimeout/.test(shipTab),
+    'wrapped in a timeout to prevent hangs');
 });
 
-test('Shipping: executeImport has per-row fallback in catch block', function() {
-  // If a batch fails, fall back to per-row dbInsert so we don't lose all 50.
-  assert(/for \(const row of batch\)/.test(shipTab),
-    'per-row loop inside catch as fallback');
-  assert(/dbInsert\('shipping_rates', row, myId\)/.test(shipTab),
-    'fallback uses dbInsert (audited)');
+test('Shipping: executeImport has smart retry + per-row fallback', function() {
+  // v55.81: if bulk fails with a missing-column error, strip it and retry
+  // bulk ONCE. Only true data errors fall through to per-row.
+  assert(/missingCol/.test(shipTab),
+    'detects missing-column errors specifically');
+  assert(/const runPerRow = async/.test(shipTab),
+    'runPerRow helper extracted');
+  assert(!/await dbInsert\('shipping_rates'/.test(shipTab) ||
+         /Step 1 — try ALL rows in one go/.test(shipTab),
+    'no longer calls dbInsert per row (which wrote audit_log per row and caused the hang)');
 });
 
 // ============================================================

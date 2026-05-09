@@ -649,11 +649,34 @@ export default function App() {
       if (newRaw) {
         const parsed = JSON.parse(newRaw);
         if (parsed && typeof parsed === 'object') {
-          setGreeterMessagesByAgent({
+          const localState = {
             nadia: Array.isArray(parsed.nadia) ? parsed.nadia : [],
             jenna: Array.isArray(parsed.jenna) ? parsed.jenna : [],
             sara:  Array.isArray(parsed.sara)  ? parsed.sara  : [],
-          });
+          };
+          setGreeterMessagesByAgent(localState);
+
+          // v55.81 QA-16 (Max May 9 2026): also pull server-side
+          // conversation_logs and merge in. The server has the canonical
+          // history (cross-device). Local takes precedence ONLY if the
+          // server returned nothing (e.g. first deploy of this feature).
+          // Otherwise the longer of the two wins per persona — protects
+          // against losing a long thread when switching to a new device
+          // that has a stale-but-shorter local copy.
+          (async () => {
+            try {
+              const r = await fetch('/api/conversation-log?userId=' + encodeURIComponent(uid));
+              if (!r.ok) return;
+              const sd = await r.json();
+              if (!sd || !sd.byPersona) return;
+              const merged = { nadia: localState.nadia, jenna: localState.jenna, sara: localState.sara };
+              ['nadia', 'jenna', 'sara'].forEach(function (p) {
+                const sv = Array.isArray(sd.byPersona[p]) ? sd.byPersona[p] : [];
+                if (sv.length > merged[p].length) merged[p] = sv;
+              });
+              setGreeterMessagesByAgent(merged);
+            } catch (_) { /* offline / endpoint missing — keep local */ }
+          })();
           return;
         }
       }
@@ -664,6 +687,23 @@ export default function App() {
         if (Array.isArray(legacyParsed) && legacyParsed.length > 0) {
           setGreeterMessagesByAgent({ nadia: legacyParsed, jenna: [], sara: [] });
         }
+      } else {
+        // v55.81 QA-16: no local cache at all — fresh device. Hydrate
+        // entirely from the server.
+        (async () => {
+          try {
+            const r = await fetch('/api/conversation-log?userId=' + encodeURIComponent(uid));
+            if (!r.ok) return;
+            const sd = await r.json();
+            if (sd && sd.byPersona) {
+              setGreeterMessagesByAgent({
+                nadia: Array.isArray(sd.byPersona.nadia) ? sd.byPersona.nadia : [],
+                jenna: Array.isArray(sd.byPersona.jenna) ? sd.byPersona.jenna : [],
+                sara:  Array.isArray(sd.byPersona.sara)  ? sd.byPersona.sara  : [],
+              });
+            }
+          } catch (_) { /* offline / endpoint missing */ }
+        })();
       }
     } catch (e) { /* corrupted localStorage entry — ignore */ }
     // Only run once per userProfile id; not on every render.
@@ -3859,7 +3899,7 @@ export default function App() {
               {/* Brand mark — bracket prefix is a terminal callout convention. */}
               <span className="text-emerald-400 font-mono text-xs font-bold tracking-tight" style={{ fontFamily: '"JetBrains Mono", monospace' }}>[KTC]</span>
               <h1 className="text-sm font-bold text-white tracking-tight whitespace-nowrap">NEXTTRADE HUB</h1>
-              <span className="text-[10px] text-zinc-500 font-mono hidden md:inline" style={{ fontFamily: '"JetBrains Mono", monospace' }}>v55.80</span>
+              <span className="text-[10px] text-zinc-500 font-mono hidden md:inline" style={{ fontFamily: '"JetBrains Mono", monospace' }}>v55.81</span>
               {/* Live clock — terminals always show one. Updates via the
                   existing tick state; if not present, falls back to no clock. */}
               <span className="hidden lg:inline text-[10px] text-zinc-500 font-mono ml-2 pl-2 border-l border-zinc-800" style={{ fontFamily: '"JetBrains Mono", monospace' }}>
@@ -6785,6 +6825,15 @@ export default function App() {
         {tab === 'dashboard' && (
           <div className="flex flex-col">
 
+            {/* v55.81 — Per Max May 9 2026: AI Workforce (Nadia/Sara/Jenna)
+                must be the focal point of the dashboard. Use flex `order:`
+                to pin PersonalDashboard (the AI Workforce hero) ABOVE the
+                widget cluster (WhatsNew, NadiaNewBuildCard, PendingMessages,
+                Treasury terminal, etc.) regardless of render order. The
+                widgets render in JSX before PersonalDashboard for code-flow
+                reasons, but flex order makes them visually appear AFTER. */}
+            <div className="flex flex-col" style={{ order: 2 }}>
+
             {/* v55.45 — "What's New" pill. Click to see the changelog of
                 recent builds with an expandable section per release. */}
             <div className="mb-3 flex justify-end">
@@ -8812,6 +8861,12 @@ export default function App() {
               );
             })()}
 
+            </div>{/* end order:2 widget cluster */}
+
+            {/* v55.81 — PersonalDashboard wrapper with order: 1 so it pins to the TOP.
+                AI Workforce (Nadia/Sara/Jenna avatars) is the visual anchor. */}
+            <div className="flex flex-col" style={{ order: 1 }}>
+
             {/* ===== PERSONAL DASHBOARD (tickets, reminders, calendar — after financial for admins, first for team) ===== */}
             {/* v55.75 chatSurface — Build A item #1: the AIGreeter chat surface
                 is built here and passed INTO PersonalDashboard, which threads
@@ -8871,6 +8926,8 @@ export default function App() {
                 <VoicemailsWidget user={user} userProfile={userProfile} customers={customers} toast={toast} />
               </SafeSection>
             </div>
+
+            </div>{/* end order:1 PersonalDashboard wrapper */}
 
           </div>
         )}
@@ -13082,7 +13139,7 @@ export default function App() {
                       latest fix is actually deployed. If he doesn't see this
                       tag in the modal, his browser is running stale JS. */}
                   <div className="mt-1.5 inline-block px-2 py-0.5 rounded bg-amber-900/60 text-amber-100 text-[10px] font-mono font-bold tracking-wide">
-                    BUILD v55.80-PHASE-B+
+                    BUILD v55.82
                   </div>
                 </div>
                 <button onClick={() => closePendingTreasuryModal()}
@@ -13711,7 +13768,7 @@ export default function App() {
                     معاملة قد تكون مكررة
                   </div>
                   <div className="mt-1.5 inline-block px-2 py-0.5 rounded bg-amber-900/60 text-amber-100 text-[10px] font-mono font-bold tracking-wide">
-                    BUILD v55.80-PHASE-B+
+                    BUILD v55.82
                   </div>
                 </div>
                 <button

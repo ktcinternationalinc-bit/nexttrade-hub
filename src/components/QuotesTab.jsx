@@ -501,7 +501,10 @@ function QuoteList({ quotes, companies, onEdit, onPreview, onDelete }) {
     return true;
   });
 
-  const statusColor = { draft: 'bg-slate-100 text-slate-600', sent: 'bg-blue-100 text-blue-600', accepted: 'bg-green-100 text-green-700', rejected: 'bg-red-100 text-red-600', expired: 'bg-amber-100 text-amber-600' };
+  // v55.81 #6 (Max May 9 2026): bumped status badge contrast — amber-600 on
+  // amber-100 fails WCAG AA at small badge sizes; amber-900 + border clears it.
+  // Also nudged blue-600/red-600 to 700 to match the v55.75 Phase A4 baseline.
+  const statusColor = { draft: 'bg-slate-100 text-slate-600', sent: 'bg-blue-100 text-blue-700', accepted: 'bg-green-100 text-green-700', rejected: 'bg-red-100 text-red-700', expired: 'bg-amber-100 text-amber-900 border border-amber-200' };
 
   return (
     <div>

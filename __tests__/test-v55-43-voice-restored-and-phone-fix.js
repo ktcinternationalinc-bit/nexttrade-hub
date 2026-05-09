@@ -127,8 +127,8 @@ assert(/setTimeout\(function\(\) \{[\s\S]{0,200}stopRecording[\s\S]{0,100}\}, 30
 // VOICE RESTORED — surface text + Settings tab
 // ----------------------------------------------------------------------
 console.log('\nVoice restored — surface text + Settings tab');
-assert(/Type or speak to Nadia/.test(greeter),
-  'V.1 — placeholder mentions speaking again');
+assert(/Type or speak to/.test(greeter) && /activeAgent && activeAgent\.name/.test(greeter),
+  'V.1 — placeholder mentions speaking, dynamic per persona (v55.81: not hardcoded to Nadia)');
 assert(/\['voice', '🎙️ Voice'\]/.test(settings),
   'V.2 — Voice tab restored in Settings nav');
 assert(/<VoiceSettingsPanel/.test(settings),

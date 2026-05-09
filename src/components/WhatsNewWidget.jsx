@@ -33,6 +33,41 @@ import { supabase } from '../lib/supabase';
 //     WhatsApp, the calendar, the Sales tab.
 export const BUILD_HISTORY = [
   {
+    version: 'v55.82',
+    date: '2026-05-09',
+    label: 'QA-pass + Shipping Historical + Cross-device Memory + Crisis Detection',
+    items: [
+      // PUBLIC
+      'SHIPPING RATES NOW SHOWS HISTORICAL ROUTES IN A SEPARATE SECTION. Used to be: open the rates page, expired ones got mixed in with active ones. Now: active rates show first, then a clearly-labeled "Historical Rates" section below at reduced opacity. Hover over a faded one to brighten it back up. Three-button toggle at the top — Active / Historical / Both — and your choice now sticks across reloads.',
+      'SHIPPING RATES NOW SORT ALPHABETICALLY BY DESTINATION. Before, busy routes sat at the top because the sort was by count. Now it\'s alphabetical so finding a specific destination is faster.',
+      'NEW "RELOAD FOR LATEST" BUTTON IN THE WHAT\'S-NEW POPUP. If you\'ve had the dashboard tab open for a while and you\'re not sure if you\'re seeing the freshest version, click the button at the bottom of the popup. It actually busts the browser cache (not just a regular refresh) so you pick up newer builds. If you\'ve been typing in an HR form, it\'ll warn you before reloading so you don\'t lose your draft.',
+      'BUILD VERSION + FRESHNESS NOW VISIBLE. The dashboard pill ("v55.82 · 2 days ago") and the bottom of the popup both tell you which build you\'re on and how recent it is. So if a teammate says "the new feature isn\'t working for me," you can immediately tell whether you\'re on the same build.',
+      'CONVERSATIONS WITH NADIA / JENNA / SARA NOW SYNC ACROSS YOUR DEVICES. Used to be: chat with Nadia on your laptop, switch to your phone, history was empty. Now: the conversation tail (last 80 messages per persona) is saved and shows up wherever you log in.',
+      'HR CONCERNS THAT MENTION SELF-HARM OR DANGER NOW SURFACE PROFESSIONAL RESOURCES. If your text suggests you\'re in crisis, the system shows hotline numbers (988 in the US, Behman Hospital in Egypt) right after submission, and tags the concern as critical so Mr. Kandil sees it elevated. Submission still goes through normally — the resources are additional, not a gate.',
+      'SARA NOW SHOWS A FRIENDLY EMPTY-STATE WHEN YOU HAVE NO ACTIVITY. Used to be: open Sara\'s panel for a slow week, see a wall of zero tiles. Now: Sara says "No activity in this period" and points you at trying a longer time range.',
+      'PIPELINE CARD NOW EXPLAINS ITSELF WHEN EMPTY. If you have no clients assigned to you yet, the Pipeline card now shows a friendly message explaining what the section is, instead of seven empty zero-pills.',
+      'NEW EMPLOYEE RANKINGS ON ADMIN. Pick a metric, get a top-three list with medals. Login Consistency card shows "logged in N out of 6 expected work days" with a percentage.',
+      'TEAM / INDIVIDUAL VIEW IN ADMIN. Pick a person from the dropdown — admin scorecards filter to just that person. Eight-card grid of login stats. Shows date ranges in plain English ("Today — Saturday, May 9, 2026 (ET)").',
+      'CONTRAST FIXES. Several status badges that were yellow-on-yellow now read cleanly. Small text on light backgrounds got bumped to a darker shade.',
+      // SUPER_ADMIN ONLY
+      { superAdminOnly: true, text: 'QA-1 + QA-2 (Reload button): plain location.reload() does NOT bypass the browser cache. Updated to use location.href = pathname + "?_v=" + Date.now() for hard cache-bust. Added confirm dialog when textarea content > 10 chars detected (or [data-ktc-draft-active="true"] marker present). HR Desk textareas now carry the marker.' },
+      { superAdminOnly: true, text: 'QA-3 + QA-9 (Sara empty-state): refactored anyActivity from duplicated 14-field IIFE sums into a single useMemo (hasAnyActivity). Added missing meetingsCreated + meetingsCheckedIn signals — without them, a user who only set up meetings would falsely see the empty state.' },
+      { superAdminOnly: true, text: 'QA-4 + QA-5 (Shipping historical): "Active Rates" header now shows whenever filterExpiry === "all" (was hidden when historical bucket was empty, making "Both" mode look identical to "Active" mode). List view dividers now have border-t-2 for consistent banding.' },
+      { superAdminOnly: true, text: 'QA-6 (filterExpiry persist): wraps useState in a function that reads localStorage["ktc_shipping_filter_expiry"]; setFilterExpiryPersist writes on every change. Default still "active" for new users.' },
+      { superAdminOnly: true, text: 'QA-7 (pipeline guard relaxed): outer condition now `myCustomers.length>0 || isAdmin || (Array.isArray(customers) && customers.length>0)` so a regular team member with CRM access but zero assigned customers sees the empty-state.' },
+      { superAdminOnly: true, text: 'QA-12 (colSpan magic): replaced bare `colSpan={13}` with `colSpan={LIST_COL_COUNT}`. Defined as 13 inside the IIFE that builds the rows; column-count change requires updating one place.' },
+      { superAdminOnly: true, text: 'QA-13 (NaN guard): SelfStat for Customer Touches now uses `(current.contactTouches || 0) + (current.pipelineMoves || 0)` so undefined fields show 0, not NaN.' },
+      { superAdminOnly: true, text: 'QA-14 (auth boundary): /api/ask now imports requireUser from src/lib/phone-auth and validates body.userId === session.user.id. Returns 403 on mismatch. Soft-mode during rollout — if no session present, logs warning but doesn\'t hard-fail (some clients haven\'t refreshed yet). Closes the longstanding userId-spoofing audit gap from the v55.79 whitepaper.' },
+      { superAdminOnly: true, text: 'QA-15 (rate limit): /api/ask now calls checkRateLimit(userId, "ask") at request entry. 120 calls per user per hour. 121st returns 429 with retry-time message. Caps Anthropic cost-runaway from a buggy or malicious client.' },
+      { superAdminOnly: true, text: 'QA-16 (cross-device chat): NEW migration v55.81-qa16-conversation-logs.sql creates `conversation_logs (user_id, persona, messages, ...)` with composite PK. NEW endpoint /api/conversation-log GET validates session + returns byPersona buckets. /api/ask persistConversationTurn helper writes after every successful turn. AIGreeter sends agentKey in payload. page.jsx hydrates from server on cold load and merges with localStorage (longer wins per persona). Trim cap matches localStorage 80-message rolling window.' },
+      { superAdminOnly: true, text: 'QA-17 (crisis detection): NEW src/lib/crisis-detection.js — heuristic regex matcher for self-harm / threat / distress patterns (case-insensitive, word-bounded). NEW migration v55.81-qa17-crisis-flag.sql adds crisis_flag column to hr_complaints with CHECK constraint. MyHRDesk runs detector on submit, auto-bumps severity (self_harm → critical, threat/distress → high if not already critical), surfaces overlay with 988 + Behman Hospital + Befrienders Cairo + 988 + 122 emergency. Defensive insert: retries without crisis_flag column if migration not yet applied.' },
+      { superAdminOnly: true, text: 'QA-18 (prompt injection): NEW sanitizeFreeText helper in /api/ask. Strips role-prompt prefixes (SYSTEM:/USER:/ASSISTANT:/HUMAN:) → renames to FIELD-suffix, replaces 3+ dashes / equals with single chars, strips invisible unicode tag chars (U+E0000-U+E007F), redacts "ignore prior instructions" phrase variants. Applied to customer.name_en, customer.name, c.industry, c.group_name, t.title, v.company_name, v.contact_name. Defense-in-depth on top of the model\'s built-in injection resistance.' },
+      { superAdminOnly: true, text: 'QA-19 (model fallback): /api/ask now tries claude-sonnet-4-20250514 first, falls back to claude-haiku-4-5-20251001 on non-2xx or thrown error. Loop covers both the briefing path (gMessages) and the main /ask path (messages). Logs which model served when fallback used. Eliminates the single-Anthropic-point-of-failure flagged in whitepaper section 9.5.' },
+      { superAdminOnly: true, text: 'QA-pass test suite: NEW __tests__/test-v55-81-qa-fixes.js (62 assertions) covers all 18 actionable findings + functional probes for the crisis detector + SWC-constraint check (no template literals / let / const in new API code). Earlier v55.81 tests updated to reflect refactors (useMemo, persisting setter, cache-bust button). 240/240 v55.81 assertions green; zero v55.80 regressions across 20+ test files.' },
+      { superAdminOnly: true, text: 'Build stamp bumped from v55.81-CHECKPOINT-1 to v55.82.' },
+    ],
+  },
+  {
     version: 'v55.79',
     date: '2026-05-08',
     label: 'Voice Parity — Animated Avatars + Audio-Reactive Rings',
@@ -364,11 +399,11 @@ export const BUILD_HISTORY = [
     date: '2026-05-06',
     label: 'Phone — fix "an application error has occurred" on inbound calls',
     items: [
-      'Inbound calls were failing with the dreaded "an application error has occurred" message after the second greeting. Root cause: when Twilio\'s webhook signature check didn\'t match (a common issue when Vercel\'s internal URL differs from the public URL), our routes returned a 403 Forbidden — and Twilio plays the application-error message to the caller as a result.',
+      'Inbound calls were failing with the dreaded "an application error has occurred" message after the second greeting. The cause: when Twilio tried to verify the call coming into our portal, the security check didn\'t match (a common issue when Vercel\'s internal URL differs from the public URL), so our portal blocked the call — and Twilio plays the application-error message to the caller as a result.',
       'Fix: phone routes now log the signature failure prominently in the Vercel logs, but they DO NOT block the call. The caller hears proper greeting, recording disclaimer, dial routing, voicemail prompt — exactly as configured. Brand-safe behavior. The security exposure is small because the routes don\'t initiate any outbound calls or charge anything.',
-      'New diagnostic URL: https://nexttrade-hub.vercel.app/api/phone/health — paste it into your browser to see whether the phone routing stack is reachable and what env vars are set. Also returns valid TwiML if Twilio hits it, so you can point a test number at this URL temporarily to confirm Twilio→portal connectivity without involving the real call routing.',
-      'After deploying, retry your test call to 17328005428. You should hear the greeting + recording disclaimer + "the team is unavailable" or the voicemail prompt — not "an application error." If it still fails, open https://nexttrade-hub.vercel.app/api/phone/health in your browser and share the JSON output — it tells us exactly what env var is missing.',
-      'Same fix applied to the four phone webhooks (incoming, outbound, voicemail-record, call-status, recording-callback). Whichever one was actually erroring will now succeed.',
+      'New diagnostic page: https://nexttrade-hub.vercel.app/api/phone/health — paste it into your browser to check whether the phone system is reachable and what settings are configured. You can also point a test phone number at this URL temporarily to confirm Twilio can reach the portal without involving the real call routing.',
+      'After deploying, retry your test call to 17328005428. You should hear the greeting + recording disclaimer + "the team is unavailable" or the voicemail prompt — not "an application error." If it still fails, open https://nexttrade-hub.vercel.app/api/phone/health in your browser and share what it shows — that tells us exactly what setting is missing.',
+      'Same fix applied to all four phone handlers (incoming call, outbound call, voicemail recording, call status, recording confirmation). Whichever one was actually erroring will now succeed.',
     ],
   },
   {
@@ -400,9 +435,9 @@ export const BUILD_HISTORY = [
     items: [
       'Two planning documents now live in the project under docs/. Both are reference material for cutover days that have not happened yet — nothing changes in the live portal in this build.',
       'docs/CUTOVER-resend-from-address.md — the playbook for switching the email FROM address from "onboarding@resend.dev" to "notifications@ktcus.com" so notifications go out to the whole team. Includes the DNS records you need at Bluehost, the failure modes from the previous attempt, the test, and the rollback. This change is isolated — it does NOT touch the portal URL or anything else.',
-      'docs/CUTOVER-hub-ktcus-com.md — the playbook for moving the portal URL from "nexttrade-hub.vercel.app" to "hub.ktcus.com." This is a bigger change that affects Twilio phone webhooks, Gmail OAuth, Supabase login URLs, and a couple of email-template links. Step-by-step in order, every step has a 30-second rollback, nothing touches your data or anyone\'s account. Estimated 1-2 hours of hands-on work on cutover day, plus 1-2 weeks of planning beforehand and 1-2 weeks of soak afterwards.',
+      'docs/CUTOVER-hub-ktcus-com.md — the playbook for moving the portal URL from "nexttrade-hub.vercel.app" to "hub.ktcus.com." This is a bigger change that affects the Twilio phone settings, the Gmail sign-in setup, the Supabase login URLs, and a couple of email-template links. Step-by-step in order, every step has a 30-second rollback, nothing touches your data or anyone\'s account. Estimated 1-2 hours of hands-on work on cutover day, plus 1-2 weeks of planning beforehand and 1-2 weeks of soak afterwards.',
       'Both documents stress that the two cutovers are completely independent — the Resend email change does not require the portal URL change, and vice versa. They\'re documented separately so you can do one without the other.',
-      'Audit complete: every file in the codebase that references the portal URL is listed in the playbook. 15 references total. Most already honor an env var (NEXT_PUBLIC_APP_URL) so they auto-update; two email templates have hard-coded URLs that will get a small code patch in a future build.',
+      'Audit complete: every file in the project that references the portal URL is listed in the playbook. 15 references total. Most already pick up the URL from a single setting (NEXT_PUBLIC_APP_URL) so they auto-update; two email templates have the URL written directly in them and will get a small fix in a future build.',
     ],
   },
   {
@@ -560,7 +595,7 @@ export const BUILD_HISTORY = [
     label: 'WhatsApp inbox',
     items: [
       'WhatsApp — shared company-number inbox in the Communications tab. The team can claim conversations, see which are within the 24-hour reply window, and the inbox refreshes every 20 seconds.',
-      'WhatsApp — the API behind the inbox (six routes total) is wired up. Once you set up the five Meta environment variables in Vercel and configure the webhook in Meta\'s dashboard, customer messages start arriving in the inbox automatically.',
+      'WhatsApp — the wiring behind the inbox (six handlers total) is in place. Once you set up the five Meta credentials in Vercel and tell Meta\'s dashboard where to send incoming messages, customer messages start arriving in the inbox automatically.',
     ],
   },
   {
@@ -610,7 +645,7 @@ export const BUILD_HISTORY = [
     date: '2026-04-23',
     label: 'WhatsApp scaffolding (Meta Cloud API)',
     items: [
-      'WhatsApp — the foundation: database tables, helper code, webhook handler, send endpoint. About 40% of the full feature. UI is not in this build.',
+      'WhatsApp — the foundation is in: database tables, helper code, the way Meta sends messages to us, and the way we send messages back. About 40% of the full feature. The on-screen inbox is not in this build.',
       'Customers messaging your WhatsApp number land in the database within seconds, but you can\'t see them in the app yet — wait for v55.32.',
     ],
   },
@@ -982,6 +1017,39 @@ export default function WhatsNewWidget({ isAdmin, isSuperAdmin } = {}) {
     } catch (_) { return iso; }
   };
 
+  // v55.81 #23 (Max May 9 2026): relative-time helper so the user sees
+  // "shipped 2 days ago" next to the version date, not just the date.
+  // Builds older than ~30 days fall back to the date format.
+  // v55.81 QA-8: also log a console.warn when the date is in the future
+  // (build-date typo, timezone weirdness) so it's debuggable. Returns
+  // empty so the caller falls back to the absolute date format silently.
+  var relativeTime = function (iso) {
+    if (!iso) return '';
+    try {
+      var d = new Date(iso);
+      if (isNaN(d.getTime())) return '';
+      var now = new Date();
+      var diffMs = now.getTime() - d.getTime();
+      if (diffMs < 0) {
+        try { console.warn('[whatsnew] build date is in the future:', iso, '— check the BUILD_HISTORY entry.'); } catch (_) {}
+        return '';
+      }
+      var oneDay = 24 * 60 * 60 * 1000;
+      var days = Math.floor(diffMs / oneDay);
+      if (days === 0) {
+        var hours = Math.floor(diffMs / (60 * 60 * 1000));
+        if (hours < 1) return 'just now';
+        if (hours === 1) return '1 hour ago';
+        return hours + ' hours ago';
+      }
+      if (days === 1) return 'yesterday';
+      if (days < 7) return days + ' days ago';
+      if (days < 14) return '1 week ago';
+      if (days < 30) return Math.floor(days / 7) + ' weeks ago';
+      return ''; // older — caller will show absolute date instead
+    } catch (_) { return ''; }
+  };
+
   var togglePanel = function (v) {
     setExpanded(function (prev) {
       var next = Object.assign({}, prev);
@@ -1025,7 +1093,7 @@ export default function WhatsNewWidget({ isAdmin, isSuperAdmin } = {}) {
             ? ('+' + unseenCount + ' new since your last visit')
             : ('What\'s new in ' + latest.version)}
         </span>
-        <span className="opacity-70 text-[10px] font-normal">· {fmtDate(latest.date)}</span>
+        <span className="opacity-70 text-[10px] font-normal">· {fmtDate(latest.date)}{(function () { var rel = relativeTime(latest.date); return rel ? ' · ' + rel : ''; })()}</span>
         {hasUnseen && (
           <span className="ml-1 inline-flex items-center justify-center min-w-[20px] h-5 px-1.5 rounded-full bg-white text-rose-600 text-[10px] font-extrabold">
             {unseenCount}
@@ -1153,17 +1221,76 @@ export default function WhatsNewWidget({ isAdmin, isSuperAdmin } = {}) {
               </div>
             </div>
 
-            {/* Footer */}
-            <div className="border-t border-slate-100 p-3 flex justify-between items-center">
+            {/* Footer
+                v55.81 #23 (Max May 9 2026): added a "Reload page to get
+                the latest" button. Browsers cache the JS bundle, so a
+                user who left the tab open from yesterday may still be
+                running yesterday's build. The button forces a refresh
+                so they pick up any newer build that has shipped since
+                they opened the tab, without making them close the
+                browser. We also show the current build + how fresh it
+                is right next to the button so they can decide whether
+                to bother. */}
+            <div className="border-t border-slate-100 p-3 flex justify-between items-center gap-3 flex-wrap">
               <span className="text-[10px] text-slate-500">
-                {hasUnseen ? 'Closing this marks all ' + unseenCount + ' as seen.' : ''}
+                You're on <span className="font-mono font-bold text-slate-700">{latest.version}</span>{(function () { var rel = relativeTime(latest.date); return rel ? ' · shipped ' + rel : ' · ' + fmtDate(latest.date); })()}
+                {hasUnseen ? ' · closing this marks all ' + unseenCount + ' as seen.' : ''}
               </span>
-              <button
-                onClick={closeModal}
-                className="px-4 py-2 bg-slate-700 text-white rounded-lg text-sm font-bold hover:bg-slate-800"
-              >
-                {hasUnseen ? 'Got it — mark all seen' : 'Close'}
-              </button>
+              <div className="flex items-center gap-2">
+                <button
+                  onClick={function () {
+                    // v55.81 #23 + QA-1/QA-2 (Max May 9 2026): two fixes here.
+                    //   (a) plain location.reload() doesn't actually bypass
+                    //       the browser's HTTP cache — modern browsers may
+                    //       still serve the old JS bundle. Append a cache-
+                    //       bust query string so the reload pulls fresh.
+                    //   (b) v55.77 specifically protects HR draft text on
+                    //       persona switch. The reload kills that draft.
+                    //       Confirm with the user before reloading if a
+                    //       draft is detected (open modal, draft body in
+                    //       state). The check is best-effort — looks for
+                    //       any element with data-ktc-draft-active="true"
+                    //       or any visible textarea with content.
+                    var hasUnsavedDraft = false;
+                    try {
+                      var markedDraft = document.querySelector('[data-ktc-draft-active="true"]');
+                      if (markedDraft) hasUnsavedDraft = true;
+                      if (!hasUnsavedDraft) {
+                        var areas = document.querySelectorAll('textarea');
+                        for (var ti = 0; ti < areas.length; ti++) {
+                          var ta = areas[ti];
+                          if (ta && ta.value && ta.value.trim().length > 10 && ta.offsetParent !== null) {
+                            hasUnsavedDraft = true;
+                            break;
+                          }
+                        }
+                      }
+                    } catch (_) {}
+                    if (hasUnsavedDraft) {
+                      var ok = window.confirm('Reloading will discard anything you\u2019ve been typing in an open form. Continue?');
+                      if (!ok) return;
+                    }
+                    try {
+                      // Cache-bust: append a unique query string so the
+                      // browser must re-fetch instead of serving from cache.
+                      var u = new URL(window.location.href);
+                      u.searchParams.set('_v', Date.now().toString());
+                      window.location.href = u.toString();
+                    } catch (_) {
+                      try { window.location.reload(); } catch (__) {}
+                    }
+                  }}
+                  title="Reloads the dashboard so you pick up any newer build that has shipped since you opened this tab. Will warn you first if a form has unsaved text."
+                  className="px-3 py-2 bg-white border border-slate-300 text-slate-700 rounded-lg text-xs font-bold hover:bg-slate-50">
+                  ↻ Reload for latest
+                </button>
+                <button
+                  onClick={closeModal}
+                  className="px-4 py-2 bg-slate-700 text-white rounded-lg text-sm font-bold hover:bg-slate-800"
+                >
+                  {hasUnseen ? 'Got it — mark all seen' : 'Close'}
+                </button>
+              </div>
             </div>
           </div>
         </div>

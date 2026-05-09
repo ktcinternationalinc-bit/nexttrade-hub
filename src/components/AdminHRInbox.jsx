@@ -24,21 +24,24 @@ var CMP_STATUSES = ['submitted', 'investigating', 'resolved', 'dismissed', 'esca
 
 var STATUS_COLORS = {
   submitted:        { bg: 'bg-blue-100',     text: 'text-blue-700',    label: 'New' },
-  under_review:     { bg: 'bg-amber-100',    text: 'text-amber-700',   label: 'Reviewing' },
+  under_review:     { bg: 'bg-amber-100',    text: 'text-amber-900',   label: 'Reviewing' },
   approved:         { bg: 'bg-emerald-100',  text: 'text-emerald-700', label: 'Approved' },
   denied:           { bg: 'bg-rose-100',     text: 'text-rose-700',    label: 'Denied' },
   more_info_needed: { bg: 'bg-purple-100',   text: 'text-purple-700',  label: 'Info needed' },
   withdrawn:        { bg: 'bg-slate-100',    text: 'text-slate-600',   label: 'Withdrawn' },
   completed:        { bg: 'bg-emerald-100',  text: 'text-emerald-700', label: 'Done' },
-  investigating:    { bg: 'bg-amber-100',    text: 'text-amber-700',   label: 'Investigating' },
+  investigating:    { bg: 'bg-amber-100',    text: 'text-amber-900',   label: 'Investigating' },
   resolved:         { bg: 'bg-emerald-100',  text: 'text-emerald-700', label: 'Resolved' },
   dismissed:        { bg: 'bg-slate-100',    text: 'text-slate-600',   label: 'Dismissed' },
   escalated:        { bg: 'bg-rose-100',     text: 'text-rose-700',    label: 'Escalated' },
 };
 
+// v55.81 #6 (Max May 9 2026): bumped medium-severity from amber-700 → amber-900
+// to match the v55.75 Phase A4 contrast standard. amber-700 on amber-100 fails
+// WCAG AA at small badge sizes; amber-900 clears it cleanly.
 var SEVERITY_COLORS = {
   low:      'bg-slate-100 text-slate-600',
-  medium:   'bg-amber-100 text-amber-700',
+  medium:   'bg-amber-100 text-amber-900',
   high:     'bg-orange-100 text-orange-700',
   critical: 'bg-rose-100 text-rose-700 ring-2 ring-rose-300',
 };

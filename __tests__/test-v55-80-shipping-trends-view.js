@@ -83,8 +83,12 @@ ok('Container normalization — 40HC/40HQ → "40\' HC"',
 // Filter the rate set BEFORE charting (don't include outside-window)
 ok('Trend filters: cutoffStr from daysAgoET',
    /cutoffStr = daysAgoET\(cutoffDays\)/.test(src));
-ok('Trend filters by date >= cutoff',
-   /effective_date < cutoffStr/.test(src));
+// v55.81 — trend axis uses expiry_date (the historical "valid until"
+// anchor), with fallback to effective_date for rows missing expiry.
+ok('Trend uses expiry-anchored date function',
+   /dateAnchor = function \(r\)/.test(src) && /r\.expiry_date \|\| r\.effective_date/.test(src));
+ok('Trend filters by anchor date >= cutoff',
+   /anchor < cutoffStr/.test(src));
 
 console.log('\n=== Results ===');
 console.log('Passed: ' + passed + ' / ' + (passed + failed));

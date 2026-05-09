@@ -446,7 +446,7 @@ function PersonRow({ row, showSubScores, expanded, onToggle, onRequestReview, re
                 })}
               </div>
 
-              <div className="text-[9px] text-slate-400 mt-2 italic">
+              <div className="text-[9px] text-slate-500 mt-2 italic">
                 Score = Productivity×30% + Timeliness×20% + Engagement×15% + Quality×15% + Reliability×10% + Presence×10%
               </div>
             </div>

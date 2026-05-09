@@ -27,6 +27,11 @@
 import { useState, useEffect } from 'react';
 import { supabase, dbInsert } from '../lib/supabase';
 import { AGENT_PERSONALITIES } from '../lib/agent-personalities';
+// v55.81 QA-17 (Max May 9 2026): crisis-language detection in HR
+// submissions. Surfaces hotline resources to users whose text suggests
+// self-harm, threat, or severe distress, and tags the submission
+// urgent so admins see it elevated.
+import { detectCrisisLanguage, crisisResources } from '../lib/crisis-detection';
 
 // v55.69 — Each category now has a `routing` field that determines where
 // the request lands automatically:
@@ -115,6 +120,9 @@ export default function MyHRDesk({ user, userProfile, users, active }) {
   var [loading, setLoading] = useState(false);
   var [submitOk, setSubmitOk] = useState(null); // { kind, number }
   var [tableMissing, setTableMissing] = useState(false);
+  // v55.81 QA-17: shown when a submission's text trips the crisis detector.
+  // null = no flag. { flag: 'self_harm'|'threat'|'distress', resources: {...} }
+  var [crisisOverlay, setCrisisOverlay] = useState(null);
   // hover state for mascot animation
   // v55.77 — mascotWaving state removed (Fix #11). Was driving the cartoon
   // "Maya" SVG mascot which got replaced by the real Jenna photo above.
@@ -327,6 +335,22 @@ export default function MyHRDesk({ user, userProfile, users, active }) {
       alert('Please add a short title so ' + (superAdminName || 'Mr. Kandil') + ' knows what this is about.');
       return;
     }
+
+    // v55.81 QA-17 (Max May 9 2026): crisis-language detection. If the
+    // submitter's title or description suggests self-harm, a credible
+    // threat, or severe distress, surface professional resources right
+    // here BEFORE the submission completes — they need somewhere
+    // additional to turn beyond Jenna routing the form. We also auto-
+    // bump severity to 'critical' for self-harm or 'high' for the
+    // others so Mr. Kandil sees the row visually elevated.
+    var crisisFlag = detectCrisisLanguage((form.title || '') + ' ' + (form.description || ''));
+    var effectiveSeverity = form.severity;
+    if (crisisFlag === 'self_harm') effectiveSeverity = 'critical';
+    else if (crisisFlag === 'threat' || crisisFlag === 'distress') {
+      // Don't downgrade if user already picked critical
+      if (effectiveSeverity !== 'critical') effectiveSeverity = 'high';
+    }
+
     setLoading(true);
     try {
       var payload = {
@@ -334,11 +358,21 @@ export default function MyHRDesk({ user, userProfile, users, active }) {
         category: form.category,
         title: form.title.trim(),
         description: form.description.trim() || null,
-        severity: form.severity,
+        severity: effectiveSeverity,
         anonymous_to_admins: form.anonymous_to_admins,
         status: 'submitted',
+        // crisis_flag column is added by migration v55.81-qa17. If the
+        // column doesn't exist yet, the insert will fail; we catch that
+        // and retry without the column so the submission still goes
+        // through during the rollout window.
+        crisis_flag: crisisFlag,
       };
       var res = await supabase.from('hr_complaints').insert(payload).select().maybeSingle();
+      if (res.error && /crisis_flag/i.test(res.error.message || '')) {
+        // Column not migrated yet — retry without
+        delete payload.crisis_flag;
+        res = await supabase.from('hr_complaints').insert(payload).select().maybeSingle();
+      }
       if (res.error) throw new Error(res.error.message);
       var complaintNumber = (res.data && res.data.complaint_number) || 'submitted';
 
@@ -380,6 +414,16 @@ export default function MyHRDesk({ user, userProfile, users, active }) {
       }
 
       setSubmitOk({ kind: 'complaint', number: complaintNumber });
+      // v55.81 QA-17: if crisis language was detected, show the resource
+      // overlay. The submission already went through; this is the
+      // "and here's where you can also turn for help" moment, not a
+      // gate. The overlay component is rendered in the JSX below.
+      if (crisisFlag) {
+        var resources = crisisResources(crisisFlag);
+        if (resources) {
+          setCrisisOverlay({ flag: crisisFlag, resources: resources, complaintNumber: complaintNumber });
+        }
+      }
       await loadRecent();
     } catch (e) {
       alert('Could not submit your complaint: ' + (e.message || 'unknown'));
@@ -673,7 +717,7 @@ export default function MyHRDesk({ user, userProfile, users, active }) {
                   )}
                   <div>
                     <label className="text-xs font-bold text-slate-800 block mb-1">Details</label>
-                    <textarea value={form.description} onChange={function (e) { setForm(Object.assign({}, form, { description: e.target.value })); }} rows={5} placeholder="Anything that helps the reviewer decide quickly." className="w-full px-3 py-2 border border-slate-300 rounded text-sm" />
+                    <textarea data-ktc-draft-active={form.description && form.description.length > 0 ? 'true' : 'false'} value={form.description} onChange={function (e) { setForm(Object.assign({}, form, { description: e.target.value })); }} rows={5} placeholder="Anything that helps the reviewer decide quickly." className="w-full px-3 py-2 border border-slate-300 rounded text-sm" />
                   </div>
                   <div>
                     {/* v55.69 — visibility dropdown removed; routing is now
@@ -731,6 +775,23 @@ export default function MyHRDesk({ user, userProfile, users, active }) {
             </div>
             {submitOk ? (
               <div className="p-8 text-center">
+                {/* v55.81 QA-17 (Max May 9 2026): if the submission text
+                    triggered a crisis-language flag, show the resource
+                    overlay first. The submission already succeeded —
+                    this is "and here's where else to turn for help",
+                    not a gate. */}
+                {crisisOverlay ? (
+                  <div className="mb-5 text-left bg-rose-50 border-2 border-rose-300 rounded-xl p-4">
+                    <div className="text-3xl mb-2">🤝</div>
+                    <h4 className="font-extrabold text-rose-900 mb-2">{crisisOverlay.resources.title}</h4>
+                    <ul className="text-sm text-rose-900 list-disc pl-5 space-y-1 mb-3">
+                      {crisisOverlay.resources.lines.map(function (line, idx) {
+                        return <li key={idx}>{line}</li>;
+                      })}
+                    </ul>
+                    <div className="text-xs text-rose-800 italic mb-3">{crisisOverlay.resources.note}</div>
+                  </div>
+                ) : null}
                 <div className="text-5xl mb-3">✅</div>
                 <h3 className="font-extrabold text-emerald-700 mb-2">Thank you</h3>
                 {/* v55.75 (A2) — exact wording per Max's spec May 8 2026:
@@ -740,7 +801,7 @@ export default function MyHRDesk({ user, userProfile, users, active }) {
                 <p className="text-sm text-slate-700 mb-1">Your reference number is <strong className="font-mono">{submitOk.number}</strong>.</p>
                 <p className="text-sm text-slate-700 mb-4">{superAdminName} has been notified.</p>
                 <p className="text-xs text-slate-500 mb-4">Status updates will appear right here on your dashboard.</p>
-                <button onClick={closeModal} className="px-5 py-2 bg-rose-500 text-white rounded-lg font-bold hover:bg-rose-600">Done</button>
+                <button onClick={function () { setCrisisOverlay(null); closeModal(); }} className="px-5 py-2 bg-rose-500 text-white rounded-lg font-bold hover:bg-rose-600">Done</button>
               </div>
             ) : (
               <>
@@ -761,7 +822,7 @@ export default function MyHRDesk({ user, userProfile, users, active }) {
                   </div>
                   <div>
                     <label className="text-xs font-bold text-slate-800 block mb-1">What happened? (use as much detail as you're comfortable with)</label>
-                    <textarea value={form.description} onChange={function (e) { setForm(Object.assign({}, form, { description: e.target.value })); }} rows={6} placeholder={"Dates, times, who was involved, what was said, how it affected you. The more specific, the better " + superAdminName + " can help."} className="w-full px-3 py-2 border border-slate-300 rounded text-sm" />
+                    <textarea data-ktc-draft-active={form.description && form.description.length > 0 ? 'true' : 'false'} value={form.description} onChange={function (e) { setForm(Object.assign({}, form, { description: e.target.value })); }} rows={6} placeholder={"Dates, times, who was involved, what was said, how it affected you. The more specific, the better " + superAdminName + " can help."} className="w-full px-3 py-2 border border-slate-300 rounded text-sm" />
                   </div>
                   <div>
                     <label className="text-xs font-bold text-slate-800 block mb-1">How serious is this?</label>

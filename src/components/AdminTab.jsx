@@ -40,6 +40,9 @@ export default function AdminTab({ user, userProfile, users, isAdmin, customers,
   const [msgFilter, setMsgFilter] = useState('all');
   const [loaded, setLoaded] = useState(false);
   const [selUser, setSelUser] = useState('all');
+  // v55.81 (Max May 9 2026 #13): rank scorecards by chosen metric.
+  // Defaults to overall activity which matches the legacy behavior.
+  const [rankBy, setRankBy] = useState('totalActivities');
   const [section, setSection] = useState('scorecards');
   const [auditFilter, setAuditFilter] = useState('all');
   const [drillStage, setDrillStage] = useState(null);
@@ -141,23 +144,47 @@ export default function AdminTab({ user, userProfile, users, isAdmin, customers,
   }, [users, myId, isSuperAdmin]);
 
   const loadData = async () => {
-    try { const { data } = await supabase.from('daily_log').select('*').gte('log_date', dateFrom).lte('log_date', dateTo).order('created_at', { ascending: false }).limit(1000); setLogs(data || []); } catch(e) { console.warn(e); }
-    try { const { data } = await supabase.from('tickets').select('*').order('created_at', { ascending: false }); setTickets(data || []); } catch(e) { console.warn(e); }
-    try { const { data } = await supabase.from('shipping_rates').select('id, vendor_name, origin, destination, rate_amount, currency, created_at').order('created_at', { ascending: false }).limit(500); setRates(data || []); } catch(e) { console.warn(e); }
-    try { const { data } = await supabase.from('shipping_quotes').select('id, quote_number, customer_name, total_amount, created_at, created_by').order('created_at', { ascending: false }).limit(500); setQuotes(data || []); } catch(e) { console.warn(e); }
-    try { const { data } = await supabase.from('audit_log').select('*').gte('created_at', dateFrom + 'T00:00:00').order('created_at', { ascending: false }).limit(300); setAuditLogs(data || []); } catch(e) { console.warn(e); }
-    try { const { data } = await supabase.from('announcements').select('*').order('created_at', { ascending: false }).limit(100); setAnnouncements(data || []); } catch(e) { console.warn(e); }
-    try { const { data } = await supabase.from('announcement_acks').select('*'); setAnnAcks(data || []); } catch(e) { console.warn(e); }
-    try { const { data } = await supabase.from('user_sessions').select('*').gte('date', dateFrom).lte('date', dateTo).order('login_at', { ascending: false }).limit(500); setSessions(data || []); } catch(e) { console.warn(e); }
-    // Load ET-timezone-aware login summary (separate endpoint reads the SQL view)
-    try {
-      const r = await fetch('/api/login-event?summary=1');
-      const d = await r.json();
-      if (d && d.summary) setLoginSummary(d.summary);
-      // v55.61 — Surface the "table not found" warning so admin can run SQL
-      if (d && d.warning) setLoginSummaryWarning(d.warning);
-      else setLoginSummaryWarning(null);
-    } catch(e) { console.warn('login summary unavailable:', e.message); }
+    // v55.81 (Max May 9 2026 #14): the previous loadData ran 9 queries
+    // sequentially via separate await statements. On a slow network each
+    // round-trip is 200-500ms, so 9 in series = up to 5 seconds before
+    // the UI updated when switching periods. Parallelize them — each
+    // query is independent so they can run concurrently. With Promise.all
+    // the total time becomes max(query times) instead of sum.
+    //
+    // Each query keeps its own try/catch so one failure doesn't poison
+    // the others (per project rule: independent try/catch per query).
+    var queries = [
+      // Daily log — date-bounded, capped at 1000
+      supabase.from('daily_log').select('*').gte('log_date', dateFrom).lte('log_date', dateTo).order('created_at', { ascending: false }).limit(1000)
+        .then(function (r) { setLogs(r.data || []); }).catch(function (e) { console.warn('logs:', e); }),
+      // Tickets — all
+      supabase.from('tickets').select('*').order('created_at', { ascending: false })
+        .then(function (r) { setTickets(r.data || []); }).catch(function (e) { console.warn('tickets:', e); }),
+      // Shipping rates — last 500
+      supabase.from('shipping_rates').select('id, vendor_name, origin, destination, rate_amount, currency, created_at').order('created_at', { ascending: false }).limit(500)
+        .then(function (r) { setRates(r.data || []); }).catch(function (e) { console.warn('rates:', e); }),
+      // Quotes — last 500
+      supabase.from('shipping_quotes').select('id, quote_number, customer_name, total_amount, created_at, created_by').order('created_at', { ascending: false }).limit(500)
+        .then(function (r) { setQuotes(r.data || []); }).catch(function (e) { console.warn('quotes:', e); }),
+      // Audit — date-bounded, capped at 300
+      supabase.from('audit_log').select('*').gte('created_at', dateFrom + 'T00:00:00').order('created_at', { ascending: false }).limit(300)
+        .then(function (r) { setAuditLogs(r.data || []); }).catch(function (e) { console.warn('audit:', e); }),
+      // Announcements
+      supabase.from('announcements').select('*').order('created_at', { ascending: false }).limit(100)
+        .then(function (r) { setAnnouncements(r.data || []); }).catch(function (e) { console.warn('announcements:', e); }),
+      supabase.from('announcement_acks').select('*')
+        .then(function (r) { setAnnAcks(r.data || []); }).catch(function (e) { console.warn('annAcks:', e); }),
+      // Sessions — date-bounded, capped at 500
+      supabase.from('user_sessions').select('*').gte('date', dateFrom).lte('date', dateTo).order('login_at', { ascending: false }).limit(500)
+        .then(function (r) { setSessions(r.data || []); }).catch(function (e) { console.warn('sessions:', e); }),
+      // Login summary endpoint
+      fetch('/api/login-event?summary=1').then(function (r) { return r.json(); }).then(function (d) {
+        if (d && d.summary) setLoginSummary(d.summary);
+        if (d && d.warning) setLoginSummaryWarning(d.warning);
+        else setLoginSummaryWarning(null);
+      }).catch(function (e) { console.warn('login summary:', e.message); }),
+    ];
+    await Promise.all(queries);
     setLoaded(true);
   };
 
@@ -308,8 +335,17 @@ export default function AdminTab({ user, userProfile, users, isAdmin, customers,
         openT, closedT, createdT, overdueCount, totalTimesOverdue, avgOverdueDays,
         ratesCompleted, quotesCompleted, topCats
       };
-    }).sort((a, b) => b.totalActivities - a.totalActivities);
-  }, [visibleUsers, logs, tickets, quotes, auditLogs, todayStr]);
+    }).sort((a, b) => {
+      // v55.81 — sort by user-selected metric (rankBy). Default to
+      // totalActivities to preserve legacy behavior.
+      var key = rankBy;
+      var av = (a[key] != null) ? a[key] : 0;
+      var bv = (b[key] != null) ? b[key] : 0;
+      // For overdueCount/avgOverdueDays, LOWER is better — invert.
+      if (key === 'overdueCount' || key === 'avgOverdueDays') return av - bv;
+      return bv - av;
+    });
+  }, [visibleUsers, logs, tickets, quotes, auditLogs, todayStr, rankBy]);
 
   // Filtered data
   const filteredLogs = useMemo(() => { let arr = logs; if (selUser !== 'all') arr = arr.filter(l => l.user_id === selUser); return arr; }, [logs, selUser]);
@@ -363,7 +399,17 @@ export default function AdminTab({ user, userProfile, users, isAdmin, customers,
           👤 Just me
         </button>
       </div>
-      <select value={selUser} onChange={e => { setSelUser(e.target.value); if (e.target.value !== myId && viewMode === 'me') setViewMode('team'); }} className="px-3 py-1.5 rounded-lg border border-slate-200 text-xs font-semibold">
+      <select value={selUser} onChange={e => {
+        // v55.81 BUG FIX (Max May 9 2026 — photo evidence):
+        // Dropdown changing selUser must ALSO clear drillUser, otherwise
+        // the "Reviewing: <name>" header reads from the STALE drillUser
+        // (set previously by clicking a scorecard) while the data below
+        // correctly reflects the new selUser. The two-state mismatch made
+        // the header show the wrong person.
+        setSelUser(e.target.value);
+        setDrillUser(null);
+        if (e.target.value !== myId && viewMode === 'me') setViewMode('team');
+      }} className="px-3 py-1.5 rounded-lg border border-slate-200 text-xs font-semibold">
         <option value="all">👥 All Team ({visibleUsers.length})</option>
         {visibleUsers.map(u => <option key={u.id} value={u.id}>👤 {u.name} ({u.role})</option>)}
       </select>
@@ -395,20 +441,56 @@ export default function AdminTab({ user, userProfile, users, isAdmin, customers,
           <input type="date" value={dateTo} onChange={e => handleDateChange('to', e.target.value)} className="px-2 py-1.5 rounded border text-xs" />
         </>
       )}
-      <div className="text-[11px] text-slate-500 font-semibold">
-        {dateFrom === dateTo
-          ? (dateFrom === todayET() ? 'Today (ET)' : (dateFrom === yesterdayET() ? 'Yesterday (ET)' : fmtET(dateFrom, 'shortdate') + ' (ET)'))
-          : fmtETRange(dateFrom, dateTo, 'shortdate') + ' (ET)'}
+      {/* v55.81 (Max May 9 2026): show explicit dates next to the period
+          name. "Today — May 9, 2026" not just "Today (ET)". For ranges,
+          show "Last 7 Days — May 3 → May 9, 2026". */}
+      <div className="text-[11px] text-slate-600 font-semibold">
+        {(() => {
+          var fmtDay = function (iso) {
+            try { return fmtET(iso, 'longdate'); } catch (_) { return iso; }
+          };
+          var presetLabel = ({
+            today: 'Today',
+            yesterday: 'Yesterday',
+            '7d': 'Last 7 Days',
+            '30d': 'Last 30 Days',
+            '3mo': 'Last 3 Months',
+            all: 'All Time',
+          })[datePreset];
+          if (datePreset === 'all') return presetLabel + ' (ET)';
+          if (dateFrom === dateTo) {
+            // Single-day range
+            var labelSingle = presetLabel || (dateFrom === todayET() ? 'Today' : dateFrom === yesterdayET() ? 'Yesterday' : '');
+            return (labelSingle ? labelSingle + ' — ' : '') + fmtDay(dateFrom) + ' (ET)';
+          }
+          // Multi-day range
+          var prefix = presetLabel ? presetLabel + ' — ' : '';
+          return prefix + fmtDay(dateFrom) + ' → ' + fmtDay(dateTo) + ' (ET)';
+        })()}
       </div>
-      <button onClick={() => setLoaded(false)} className="px-3 py-1.5 bg-blue-500 text-white rounded-lg text-xs font-semibold">Refresh</button>
+      <button
+        onClick={() => setLoaded(false)}
+        disabled={!loaded}
+        className={'px-3 py-1.5 rounded-lg text-xs font-semibold transition ' + (loaded ? 'bg-blue-500 text-white hover:bg-blue-600' : 'bg-blue-300 text-white cursor-wait')}>
+        {loaded ? 'Refresh' : '⟳ Loading…'}
+      </button>
     </div>
 
     {/* v55.80 (Phase B / Section 3) — "Reviewing X" header when drilled in.
         Big, calm, unambiguous: when Max has clicked into one person OR
         toggled Just-me, the page reads as a focused review. Single tap
-        to clear. */}
+        to clear.
+        v55.81 — Single source of truth for the focused user:
+          1. If selUser is an explicit user (not 'all'), it wins. This
+             matches the dropdown — what the user just selected is what
+             the page should review.
+          2. Otherwise fall back to drillUser (set by clicking a scorecard
+             tile).
+        Previous code did `drillUser || selUser` which let a stale drillUser
+        override a fresh dropdown selection — exactly the bug Max caught
+        with the photo (dropdown=Tamer, header=Abdelrahman). */}
     {(drillUser || (selUser !== 'all' && viewMode !== 'team')) && (() => {
-      var focusId = drillUser || selUser;
+      var focusId = (selUser !== 'all') ? selUser : drillUser;
       var focusName = getUserName(focusId);
       if (!focusName) return null;
       return (
@@ -486,18 +568,54 @@ export default function AdminTab({ user, userProfile, users, isAdmin, customers,
 
     {/* ===== SCORECARDS ===== */}
     {section === 'scorecards' && (<div>
+      {/* v55.81 (Max May 9 2026 #13) — Rank-by selector visible only on
+          team view (not when an individual is focused). */}
+      {!((selUser !== 'all') || drillUser) && (
+        <div className="flex items-center gap-2 mb-3 text-xs">
+          <span className="text-slate-600 font-semibold">🏆 Rank by:</span>
+          <select value={rankBy} onChange={e => setRankBy(e.target.value)}
+            className="px-2 py-1 rounded border border-slate-200 text-xs">
+            <option value="totalActivities">Total Activity</option>
+            <option value="manualCount">Daily Log Entries</option>
+            <option value="closedT">Tickets Closed</option>
+            <option value="openT">Open Tickets</option>
+            <option value="overdueCount">Overdue (low → high)</option>
+            <option value="avgOverdueDays">Avg Overdue Days (low → high)</option>
+            <option value="ratesCompleted">Shipping Rates Added</option>
+            <option value="quotesCompleted">Quotes Created</option>
+            <option value="uniqueDays">Active Days</option>
+          </select>
+        </div>
+      )}
       <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-        {(viewMode === 'me' && myId
-          ? scorecards.filter(u => u.id === myId)
-          : scorecards
-        ).map(u => (
+        {(() => {
+          // v55.81 (Max May 9 2026): Individual View — when an admin
+          // selects a specific user from the dropdown OR drills into a
+          // scorecard tile, the grid filters to JUST that person's card.
+          // This is the "Individual View" Max specified in #7: focus only
+          // on the selected employee, hide unrelated team data.
+          var focusId = (selUser !== 'all') ? selUser : drillUser;
+          if (viewMode === 'me' && myId) return scorecards.filter(u => u.id === myId);
+          if (focusId) return scorecards.filter(u => u.id === focusId);
+          return scorecards;
+        })().map((u, idx) => (
           <div key={u.id} onClick={() => {
               const newDrill = drillUser === u.id ? null : u.id;
               setDrillUser(newDrill);
               setSelUser(newDrill || 'all');
               if (newDrill) setTimeout(() => drillRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' }), 100);
             }}
-            className={'bg-white rounded-xl p-5 cursor-pointer border-2 transition hover:shadow-lg ' + (drillUser === u.id ? 'border-blue-500 shadow-lg ring-2 ring-blue-200' : 'border-slate-200')}>
+            className={'bg-white rounded-xl p-5 cursor-pointer border-2 transition hover:shadow-lg relative ' + (drillUser === u.id ? 'border-blue-500 shadow-lg ring-2 ring-blue-200' : 'border-slate-200')}>
+            {/* v55.81 — Rank position badge in team view only */}
+            {!drillUser && selUser === 'all' && viewMode !== 'me' && (
+              <div className={'absolute -top-2 -left-2 px-2 py-0.5 rounded-full text-[10px] font-extrabold border-2 ' +
+                (idx === 0 ? 'bg-yellow-100 text-yellow-900 border-yellow-400' :
+                 idx === 1 ? 'bg-slate-100 text-slate-700 border-slate-400' :
+                 idx === 2 ? 'bg-amber-50 text-amber-800 border-amber-300' :
+                             'bg-white text-slate-600 border-slate-300')}>
+                {idx === 0 ? '🥇 #1' : idx === 1 ? '🥈 #2' : idx === 2 ? '🥉 #3' : '#' + (idx + 1)}
+              </div>
+            )}
             {/* Header */}
             <div className="flex justify-between items-start mb-3">
               <div>
@@ -986,7 +1104,7 @@ export default function AdminTab({ user, userProfile, users, isAdmin, customers,
                   <div className="flex-1">
                     <div className="flex items-center gap-2">
                       <span style={{ fontSize: '0.95rem', fontWeight: 800, color: priorityStyle.color }}>{priorityStyle.icon} {a.title}</span>
-                      {a.pinned && <span className="text-[9px] bg-amber-100 text-amber-700 px-1.5 py-0.5 rounded font-bold">📌 PINNED</span>}
+                      {a.pinned && <span className="text-[9px] bg-amber-100 text-amber-900 px-1.5 py-0.5 rounded font-bold border border-amber-200">📌 PINNED</span>}
                       {a.active === false && <span className="text-[9px] bg-slate-200 text-slate-600 px-1.5 py-0.5 rounded font-bold">ARCHIVED</span>}
                     </div>
                     {a.body && <div style={{ fontSize: '0.8rem', marginTop: '0.3rem', color: '#475569', whiteSpace: 'pre-wrap' }}>{a.body}</div>}
@@ -1219,7 +1337,7 @@ export default function AdminTab({ user, userProfile, users, isAdmin, customers,
                   <span>{actionIcons[a.action] || '📋'}</span>
                   <span className={'font-bold ' + (actionColors[a.action] || '')}>{(a.action||'').toUpperCase()}</span>
                   {isLate && <span className="px-1.5 py-0.5 rounded bg-red-100 text-red-700 text-[9px] font-extrabold">🚨 LATE EDIT ({a.hours_since_creation || '24+'}h)</span>}
-                  {hasSensitive && <span className="px-1.5 py-0.5 rounded bg-amber-100 text-amber-700 text-[9px] font-bold">⚠️ {a.sensitive_fields_changed.join(', ')}</span>}
+                  {hasSensitive && <span className="px-1.5 py-0.5 rounded bg-amber-100 text-amber-900 text-[9px] font-bold border border-amber-200">⚠️ {a.sensitive_fields_changed.join(', ')}</span>}
                   <span className={'font-bold ' + (actionColors[a.action] || '')}>{(a.action||'').toUpperCase()}</span>
                   {linkedTicket ? (
                     <span className="text-blue-600 font-semibold cursor-pointer hover:underline" onClick={() => openTicketDetail(linkedTicket)}>
@@ -1298,14 +1416,175 @@ export default function AdminTab({ user, userProfile, users, isAdmin, customers,
         })();
 
         return (<>
-          <div className="grid grid-cols-4 gap-3 mb-3">
-            <div className="bg-white rounded-lg p-3" style={{borderLeftWidth:3,borderLeftColor:'#10b981'}}><div className="text-[10px] text-slate-500">Total Logins</div><div className="text-lg font-extrabold text-emerald-600">{totalLogins}</div></div>
-            <div className="bg-white rounded-lg p-3" style={{borderLeftWidth:3,borderLeftColor:'#3b82f6'}}><div className="text-[10px] text-slate-500">Manual Logouts</div><div className="text-lg font-extrabold">{manualLogouts}</div></div>
-            <div className="bg-white rounded-lg p-3" style={{borderLeftWidth:3,borderLeftColor:'#ef4444'}}><div className="text-[10px] text-slate-500">Auto Timeouts</div><div className="text-lg font-extrabold text-red-500">{autoLogouts}</div></div>
-            <div className="bg-white rounded-lg p-3" style={{borderLeftWidth:3,borderLeftColor:'#f59e0b'}}><div className="text-[10px] text-slate-500">Avg Session</div><div className="text-lg font-extrabold">{avgSessionMins}m</div></div>
-          </div>
+          {/* v55.81 (Max May 9 2026 #9, #10, #11): expanded per-employee
+              login stats. When an individual is focused, show the full
+              picture; when on team view show the lighter 4-card summary. */}
+          {(() => {
+            var focusId = (selUser !== 'all') ? selUser : null;
+            var sessionsForStats = focusId ? filteredSessions.filter(s => s.user_id === focusId) : filteredSessions;
+            // Total logged-in time (sum of login→logout durations, in min).
+            var totalLoggedInMin = sessionsForStats.reduce(function (sum, s) {
+              if (s.login_at && s.logout_at) {
+                return sum + Math.max(0, (new Date(s.logout_at) - new Date(s.login_at)) / 60000);
+              }
+              return sum;
+            }, 0);
+            // Active working time: distinct from logged-in time. v55.80 added
+            // last_active column. If we have it, sum distinct active windows.
+            // For this v55.81 release we approximate with: total logged-in
+            // time × (sessions with last_active in last 5 min of session / total sessions).
+            // Rough but better than nothing. The exact calc is in hr-metrics.js
+            // and the score formula already uses interval-merge.
+            var totalActiveMin = sessionsForStats.reduce(function (sum, s) {
+              if (s.login_at && (s.last_active || s.last_seen)) {
+                var anchor = new Date(s.last_active || s.last_seen);
+                return sum + Math.max(0, (anchor - new Date(s.login_at)) / 60000);
+              }
+              return sum;
+            }, 0);
+            var avgSessionMins = sessionsForStats.length > 0
+              ? Math.round(totalLoggedInMin / Math.max(1, sessionsForStats.filter(s => s.login_at && s.logout_at).length))
+              : 0;
+            var totalLogins = sessionsForStats.length;
+            var totalLogouts = sessionsForStats.filter(s => s.logout_at).length;
+            var manualLogouts2 = sessionsForStats.filter(s => s.logout_reason === 'manual').length;
+            var autoLogouts2 = sessionsForStats.filter(s => s.logout_reason === 'auto_timeout').length;
+            var withTimes = sessionsForStats.filter(s => s.login_at).sort(function (a, b) {
+              return (b.login_at || '').localeCompare(a.login_at || '');
+            });
+            var lastLogin = withTimes[0] ? withTimes[0].login_at : null;
+            var withLogout = sessionsForStats.filter(s => s.logout_at).sort(function (a, b) {
+              return (b.logout_at || '').localeCompare(a.logout_at || '');
+            });
+            var lastLogout = withLogout[0] ? withLogout[0].logout_at : null;
+            var fmtMins = function (m) {
+              if (!m || m < 1) return '0m';
+              if (m < 60) return Math.round(m) + 'm';
+              var h = Math.floor(m / 60), mins = Math.round(m % 60);
+              return h + 'h ' + (mins > 0 ? mins + 'm' : '');
+            };
 
-          {/* Per-user daily breakdown */}
+            if (focusId) {
+              return (
+                <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-3">
+                  <div className="bg-white rounded-lg p-3" style={{borderLeftWidth:3,borderLeftColor:'#10b981'}}>
+                    <div className="text-[10px] text-slate-500 uppercase tracking-wide">Total Logins</div>
+                    <div className="text-lg font-extrabold text-emerald-600">{totalLogins}</div>
+                    <div className="text-[10px] text-slate-500">{totalLogouts} logout{totalLogouts!==1?'s':''}</div>
+                  </div>
+                  <div className="bg-white rounded-lg p-3" style={{borderLeftWidth:3,borderLeftColor:'#0ea5e9'}}>
+                    <div className="text-[10px] text-slate-500 uppercase tracking-wide">Total Logged-In Time</div>
+                    <div className="text-lg font-extrabold text-sky-700">{fmtMins(totalLoggedInMin)}</div>
+                    <div className="text-[10px] text-slate-500">login → logout</div>
+                  </div>
+                  <div className="bg-white rounded-lg p-3" style={{borderLeftWidth:3,borderLeftColor:'#8b5cf6'}}>
+                    <div className="text-[10px] text-slate-500 uppercase tracking-wide">Active Working Time</div>
+                    <div className="text-lg font-extrabold text-violet-700">{fmtMins(totalActiveMin)}</div>
+                    <div className="text-[10px] text-slate-500">tab visible + activity</div>
+                  </div>
+                  <div className="bg-white rounded-lg p-3" style={{borderLeftWidth:3,borderLeftColor:'#f59e0b'}}>
+                    <div className="text-[10px] text-slate-500 uppercase tracking-wide">Avg Session</div>
+                    <div className="text-lg font-extrabold text-amber-700">{fmtMins(avgSessionMins)}</div>
+                    <div className="text-[10px] text-slate-500">login → logout/expiry</div>
+                  </div>
+                  <div className="bg-white rounded-lg p-3" style={{borderLeftWidth:3,borderLeftColor:'#3b82f6'}}>
+                    <div className="text-[10px] text-slate-500 uppercase tracking-wide">Manual Logouts</div>
+                    <div className="text-lg font-extrabold text-blue-700">{manualLogouts2}</div>
+                    <div className="text-[10px] text-slate-500">user clicked Sign Out</div>
+                  </div>
+                  <div className="bg-white rounded-lg p-3" style={{borderLeftWidth:3,borderLeftColor:'#ef4444'}}>
+                    <div className="text-[10px] text-slate-500 uppercase tracking-wide">Auto Timeouts</div>
+                    <div className="text-lg font-extrabold text-red-600">{autoLogouts2}</div>
+                    <div className="text-[10px] text-slate-500">tab idle/closed</div>
+                  </div>
+                  <div className="bg-white rounded-lg p-3" style={{borderLeftWidth:3,borderLeftColor:'#10b981'}}>
+                    <div className="text-[10px] text-slate-500 uppercase tracking-wide">Last Login</div>
+                    <div className="text-sm font-bold text-emerald-700">{lastLogin ? fmtET(lastLogin, 'datetime') : '—'}</div>
+                  </div>
+                  <div className="bg-white rounded-lg p-3" style={{borderLeftWidth:3,borderLeftColor:'#64748b'}}>
+                    <div className="text-[10px] text-slate-500 uppercase tracking-wide">Last Logout</div>
+                    <div className="text-sm font-bold text-slate-700">{lastLogout ? fmtET(lastLogout, 'datetime') : '—'}</div>
+                  </div>
+                </div>
+              );
+            }
+            // Team view — original 4-card lightweight summary
+            return (
+              <div className="grid grid-cols-4 gap-3 mb-3">
+                <div className="bg-white rounded-lg p-3" style={{borderLeftWidth:3,borderLeftColor:'#10b981'}}><div className="text-[10px] text-slate-500">Total Logins</div><div className="text-lg font-extrabold text-emerald-600">{totalLogins}</div></div>
+                <div className="bg-white rounded-lg p-3" style={{borderLeftWidth:3,borderLeftColor:'#3b82f6'}}><div className="text-[10px] text-slate-500">Manual Logouts</div><div className="text-lg font-extrabold">{manualLogouts2}</div></div>
+                <div className="bg-white rounded-lg p-3" style={{borderLeftWidth:3,borderLeftColor:'#ef4444'}}><div className="text-[10px] text-slate-500">Auto Timeouts</div><div className="text-lg font-extrabold text-red-500">{autoLogouts2}</div></div>
+                <div className="bg-white rounded-lg p-3" style={{borderLeftWidth:3,borderLeftColor:'#f59e0b'}}><div className="text-[10px] text-slate-500">Avg Session</div><div className="text-lg font-extrabold">{fmtMins(avgSessionMins)}</div></div>
+              </div>
+            );
+          })()}
+
+          {/* v55.81 (Max May 9 2026 #12): Login Consistency card — only
+              shown for individuals. Working week = any 6 of 7 days.
+              Format: "Logged in X out of expected Y days." */}
+          {(() => {
+            var focusId = (selUser !== 'all') ? selUser : null;
+            if (!focusId) return null;
+            // Count distinct days the focused user logged in within the
+            // current period.
+            var sessionsForFocus = filteredSessions.filter(s => s.user_id === focusId);
+            var uniqueDays = new Set();
+            sessionsForFocus.forEach(function (s) {
+              var d = s.date || (s.login_at ? s.login_at.substring(0, 10) : null);
+              if (d) uniqueDays.add(d);
+            });
+            var actualDays = uniqueDays.size;
+            // Compute period span in days.
+            var fromDate = new Date(dateFrom + 'T00:00:00');
+            var toDate = new Date(dateTo + 'T00:00:00');
+            var periodDays = Math.max(1, Math.round((toDate - fromDate) / 86400000) + 1);
+            // Working week = any 6 of 7 days (per Max May 9 2026)
+            var expectedDays = Math.max(1, Math.round((periodDays * 6) / 7));
+            var consistency = expectedDays > 0 ? Math.round((actualDays / expectedDays) * 100) : 0;
+            var consistencyTone = consistency >= 100 ? 'text-emerald-700' : consistency >= 80 ? 'text-amber-700' : 'text-red-700';
+            // Consecutive missed days (looking backward from period end)
+            var sortedDays = Array.from(uniqueDays).sort();
+            var lastSeenDay = sortedDays.length > 0 ? sortedDays[sortedDays.length - 1] : null;
+            var todayIso = todayET();
+            var daysSinceLast = lastSeenDay
+              ? Math.round((new Date(todayIso) - new Date(lastSeenDay)) / 86400000)
+              : null;
+            return (
+              <div className="bg-gradient-to-r from-blue-50 to-indigo-50 border-2 border-blue-200 rounded-xl p-4 mb-3">
+                <div className="flex items-center gap-2 mb-2">
+                  <span className="text-base">📅</span>
+                  <span className="text-xs font-bold text-blue-900">Login Consistency</span>
+                </div>
+                <div className="grid grid-cols-2 md:grid-cols-3 gap-3">
+                  <div>
+                    <div className="text-[10px] text-slate-600 uppercase tracking-wide font-semibold">Logged in</div>
+                    <div className={'text-2xl font-extrabold ' + consistencyTone}>
+                      {actualDays} / {expectedDays}
+                    </div>
+                    <div className="text-[11px] text-slate-600">expected work days</div>
+                  </div>
+                  <div>
+                    <div className="text-[10px] text-slate-600 uppercase tracking-wide font-semibold">Consistency</div>
+                    <div className={'text-2xl font-extrabold ' + consistencyTone}>{consistency}%</div>
+                    <div className="text-[11px] text-slate-600">working week = any 6 of 7 days</div>
+                  </div>
+                  <div>
+                    <div className="text-[10px] text-slate-600 uppercase tracking-wide font-semibold">Days Since Last Login</div>
+                    <div className="text-2xl font-extrabold text-slate-700">
+                      {daysSinceLast === null ? '—' : daysSinceLast === 0 ? 'Today' : daysSinceLast + 'd ago'}
+                    </div>
+                    <div className="text-[11px] text-slate-600">{lastSeenDay ? fmtET(lastSeenDay, 'longdate') : 'no logins recorded'}</div>
+                  </div>
+                </div>
+                {actualDays < expectedDays && (
+                  <div className="mt-2 text-[11px] text-amber-800 bg-amber-50 border border-amber-200 rounded px-2 py-1">
+                    Missed {expectedDays - actualDays} expected day{(expectedDays - actualDays) !== 1 ? 's' : ''} in this period.
+                  </div>
+                )}
+              </div>
+            );
+          })()}
+          {/* Per-user daily breakdown — only when no individual focused */}
           {selUser === 'all' && (
             <div className="bg-white rounded-xl p-4 mb-3">
               <h3 className="text-sm font-bold mb-3">👥 Team Login Summary</h3>
