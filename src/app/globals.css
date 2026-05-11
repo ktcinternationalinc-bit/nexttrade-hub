@@ -368,20 +368,34 @@ h3 { letter-spacing: -0.02em; }
 }
 .animate-pulse { animation: gentlePulse 2s ease-in-out infinite; }
 
-/* v55.75 — Active assistant pulse — Build A item #2.
-   Previous version cycled brightness + saturation which made the entire
-   tile (including the inactive sibling area, due to backdrop-filter spill)
-   appear to "blink." Replaced with a soft outline pulse that only animates
-   the box-shadow, never the colors. Subtle, clean, premium-feeling. */
-/* v55.75 — A1 (Phase A) — CALM IDLE + speaking-only pulse.
-   Per Max May 8 2026: "Soft premium glow / Pulsing/wave effect while
-   speaking / Listening indicator while listening / Calm idle glow when
-   active." Previous v55.73 transform animation conflicted with the hover
-   scale + caused all three avatars to appear to blink in sync. Now:
-   - IDLE active = static glow only, no animation (calm)
-   - SPEAKING = box-shadow pulse (the only continuous animation)
-   - HOVER = independent per-tile reaction (already correct)
-   Animating box-shadow not transform = no conflict with hover scale. */
+/* v55.82-B — UNIFIED ACTIVE-ASSISTANT GLOW SYSTEM.
+   Replaces the previous "inline boxShadow + class animation tries to override
+   it" approach which was the root of two visible bugs:
+     PROBLEM 2 — active persona not pulsing. The inline boxShadow always wins
+                 over a CSS animation, so .ktc-assistant-speaking's keyframes
+                 had no effect. The glow looked static even when speaking.
+     PROBLEM 3 — random blinking on all three avatars. transition-all on the
+                 tile, combined with the inline boxShadow appearing/dis-
+                 appearing on isActive flips, caused the browser to fight
+                 between transition interpolation and CSS class animation.
+                 The result was visible flicker across all tiles every time
+                 React re-rendered the AssistantsBar (every speaking event,
+                 every Sara-seen-today refresh, etc.).
+
+   Now both states are pure CSS classes driven by a single CSS variable
+   --ktc-glow-color. The inline boxShadow is GONE. JS just sets the variable.
+     IDLE active = .ktc-assistant-active     → static soft glow + slow pulse
+     SPEAKING    = .ktc-assistant-speaking   → faster, deeper pulse (overrides)
+   Both animations only animate box-shadow. No transform, no opacity, no
+   anything else that could fight the tile's hover scale. */
+@keyframes ktcAssistantActiveBreath {
+  0%, 100% { box-shadow: 0 0 0 4px var(--ktc-glow-color), 0 6px 24px var(--ktc-glow-color); }
+  50%      { box-shadow: 0 0 0 6px var(--ktc-glow-color), 0 10px 32px var(--ktc-glow-color); }
+}
+.ktc-assistant-active {
+  animation: ktcAssistantActiveBreath 4.5s ease-in-out infinite;
+}
+
 @keyframes ktcAssistantSpeakingPulse {
   0%, 100% { box-shadow: 0 0 0 4px var(--ktc-glow-color), 0 8px 32px var(--ktc-glow-color); }
   50%      { box-shadow: 0 0 0 8px var(--ktc-glow-color), 0 16px 48px var(--ktc-glow-color); }

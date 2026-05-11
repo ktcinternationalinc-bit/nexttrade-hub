@@ -125,6 +125,34 @@ export default function NadiaFloatingOverlay(props) {
 
   if (!props.enabled) return null;
 
+  // v55.82-F — SUPPRESSED MODE.
+  //
+  // Max May 11 2026: Nadia floating overlay was popping up over the Treasury
+  // "Add New Transaction" form (and dup-confirm + pending-invoice modals).
+  // The overlay is z-index 9998 — far above Modal's z-50 — so the pill /
+  // expanded panel would float on top of form fields. The auto-expand on
+  // new assistant messages compounded this: switching INTO Treasury fired a
+  // tab-greeting → sessionMsgs grew → setExpanded(true) → panel covered
+  // half the screen mid data-entry.
+  //
+  // Fix: parent passes `suppressed={true}` whenever any blocking Treasury
+  // modal is open (or whenever the user has explicitly disabled Nadia in a
+  // tab via the per-tab "Wake Nadia" toggle). When suppressed:
+  //   • Overlay returns null entirely — no pill, no panel, no AIGreeter.
+  //   • Because AIGreeter is not mounted, no tab-greeting / TTS / Whisper
+  //     side-effects can fire. Cleanest possible solution.
+  //   • Any in-flight speech is canceled via the nadia-mute event below
+  //     so audio stops mid-word if Max is mid-sentence when the modal
+  //     opens.
+  //   • Auto-collapse persists so when the modal closes, the user comes
+  //     back to a clean collapsed pill — not a panel that was open before.
+  if (props.suppressed) {
+    // One-shot effect: cancel any active speech and force collapse so the
+    // next time suppression lifts, the user sees a calm collapsed pill.
+    // Wrapped in useEffect so it doesn't fire on every render.
+    return <NadiaSuppressedKiller setExpanded={setExpanded} />;
+  }
+
   // S17.6 — Track when user last opened the overlay. Any assistant message
   // added after this timestamp is "unread". Used to show a pulsing badge on
   // the collapsed pill so user knows Nadia said something while closed.
@@ -183,15 +211,17 @@ export default function NadiaFloatingOverlay(props) {
         <div
           style={{
             position: 'fixed',
-            // v55.58 — Moved to LEFT side of screen entirely so it never
-            // conflicts with the FAB (which owns the bottom-right corner
-            // including its expanding menu).
-            // v55.59 — Voice pill is now hidden when voice is system-
-            // disabled (which it is by default), so we can sit closer to
-            // the phone button. bottom: 76 = phone button (height 48 +
-            // bottom 4 = top edge 52) + 24px gap.
+            // v55.82-F (Max May 11 2026): MOVED FROM LEFT → RIGHT.
+            // Max's explicit ask: "Nadia must stay all the way to the
+            // right side of the screen and never cover the main Treasury
+            // transaction form." The pill and the expanded panel both
+            // anchor to the right now, leaving the entire left/center
+            // of the viewport free for forms. Phone button still owns
+            // the immediate bottom-right corner; we sit ABOVE it at
+            // bottom: 76. (Previous v55.58 logic moved this to LEFT for
+            // a different reason — that constraint no longer applies.)
             bottom: 76,
-            left: 16,
+            right: 16,
             zIndex: 9998,
             display: 'flex',
             alignItems: 'center',
@@ -236,11 +266,26 @@ export default function NadiaFloatingOverlay(props) {
 
   // EXPANDED state — the full AIGreeter inside a floating panel
   return (
-    // v55.58 — Anchored to LEFT side to match the collapsed bubble.
-    // v55.59 — Voice pill is now hidden, so panel can sit at bottom: 76
-    // (just above the phone button + a small gap). Width capped so it
-    // doesn't bleed into the right edge where the FAB lives.
-    <div style={{ position: 'fixed', bottom: 76, left: 16, zIndex: 9998, maxWidth: 380, width: 'calc(100vw - 96px)' }}>
+    // v55.82-F (Max May 11 2026): EXPANDED PANEL ALSO ANCHORED TO RIGHT.
+    // Max's ask: "Nadia must stay all the way to the right side of the
+    // screen and never cover the main Treasury transaction form." The
+    // collapsed pill moved to right; the panel now matches.
+    //
+    // Width is also tightened. Was width: 'calc(100vw - 96px)' which on
+    // a 360px phone was 264px — basically all the screen. Now max 360px
+    // AND capped at 90vw on phones with min(...) so on a small screen
+    // it's narrower, on a tablet it stays a comfortable 360. Either way,
+    // form fields next to the panel remain visible/touchable.
+    //
+    // bottom: 76 still keeps us above the phone FAB. right: 16 mirrors
+    // the collapsed pill exactly so opening/closing doesn't shift.
+    <div style={{
+      position: 'fixed',
+      bottom: 76,
+      right: 16,
+      zIndex: 9998,
+      width: 'min(360px, 90vw)',
+    }}>
       {/* Floating control bar ABOVE the chat (collapse + mute toggle) */}
       <div style={{
         display: 'flex', alignItems: 'center', justifyContent: 'space-between',
@@ -296,4 +341,28 @@ export default function NadiaFloatingOverlay(props) {
       </div>
     </div>
   );
+}
+
+// v55.82-F — Helper rendered in place of the overlay when suppressed=true.
+// Renders nothing visible. Does TWO things on mount:
+//   1. Cancels any active speech / TTS audio so a Modal opening mid-word
+//      doesn't leave Nadia talking over the form.
+//   2. Calls setExpanded(false) once so when suppression is later lifted,
+//      Nadia comes back as a calm collapsed pill, not whatever state she
+//      was in (mid-sentence, mid-panel-open, etc.).
+// Returning null after the effect means no DOM is rendered — guaranteed
+// no overlay in the way. AIGreeter is not mounted at all, so no greet
+// effects can fire, no tab-change side-effects, no audio.
+function NadiaSuppressedKiller(props) {
+  React.useEffect(function() {
+    if (typeof window === 'undefined') return;
+    try { if (window.speechSynthesis) window.speechSynthesis.cancel(); } catch (_) {}
+    try {
+      document.querySelectorAll('audio').forEach(function(a) {
+        try { a.pause(); a.currentTime = 0; } catch (er) {}
+      });
+    } catch (_) {}
+    try { props.setExpanded(false); } catch (_) {}
+  }, []);
+  return null;
 }

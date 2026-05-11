@@ -78,9 +78,25 @@ function simulateHandleAddTreasury(formData, invoices) {
     };
   }
 
+  // v55.82-B — Cash IN / Bank IN without order# is BLOCKED at validation
+  // unless an explicit non-order income category is set. Simulator was
+  // previously out of sync with real code, returning silent-save here.
+  // Now: matches real behavior — return rejected with the same banner-
+  // triggering reason real handleAddTreasury uses.
+  if (isOrderLinkable && !orderNumTrimmed && !isBankPlaceholder) {
+    var nonOrderIncomeCats = ['Refund', 'Advance', 'Owner Contribution', 'Owner Draw', 'Loan', 'Loan Received', 'Other Income', 'Inter-Bank Transfer', 'Bank Fee', 'استرداد', 'سلفة', 'إيداع المالك', 'قرض', 'دخل آخر'];
+    var catName = String(formData.category || '').trim();
+    var isNonOrderIncome = catName && nonOrderIncomeCats.some(function(n) {
+      return catName.toLowerCase() === n.toLowerCase();
+    });
+    if (!isNonOrderIncome) {
+      return { branch: 'rejected', reason: 'income_needs_order_number' };
+    }
+  }
+
   return {
     branch: 'silent-save',
-    reason: !isOrderLinkable ? 'not order-linkable (expense or non-order bank)' : 'order# is empty after trim',
+    reason: !isOrderLinkable ? 'not order-linkable (expense or non-order bank)' : 'non-order income (category set)',
   };
 }
 
@@ -126,24 +142,53 @@ ok('1c: Cash IN + matching-with-whitespace order# → auto-link (trim-tolerant)'
   })()
 );
 
-ok('1d: Cash IN + NO order# → silent save (no modal, by design)',
+// v55.82-B — Tests 1d/1e updated. Real code BLOCKS Cash IN with empty
+// order# unless an explicit non-order income category is selected. The
+// simulator used to claim silent-save here, which gave us false confidence
+// while users on production were getting blocked by the toast. Now both
+// the simulator and the assertions reflect actual behavior.
+
+ok('1d: Cash IN + NO order# + no category → rejected (income_needs_order_number) [v55.82-B]',
   (function() {
     var r = simulateHandleAddTreasury(
       { type: 'in', amount: 5000, orderNumber: '' },
       INVOICES_SAMPLE
     );
-    return r.branch === 'silent-save';
-  })()
+    return r.branch === 'rejected' && r.reason === 'income_needs_order_number';
+  })(),
+  'income with no order# and no override category must be blocked at validation'
 );
 
-ok('1e: Cash IN + whitespace-only order# → silent save (treated as empty)',
+ok('1e: Cash IN + whitespace-only order# + no category → rejected [v55.82-B]',
   (function() {
     var r = simulateHandleAddTreasury(
       { type: 'in', amount: 5000, orderNumber: '   ' },
       INVOICES_SAMPLE
     );
-    return r.branch === 'silent-save';
+    return r.branch === 'rejected' && r.reason === 'income_needs_order_number';
   })()
+);
+
+ok('1f: Cash IN + NO order# + non-order income category → silent save (allowed) [v55.82-B]',
+  (function() {
+    var r = simulateHandleAddTreasury(
+      { type: 'in', amount: 5000, orderNumber: '', category: 'Owner Contribution' },
+      INVOICES_SAMPLE
+    );
+    return r.branch === 'silent-save';
+  })(),
+  'category override (Refund / Owner Contribution / Loan / etc.) must let income save without an order#'
+);
+
+ok('1g: Cash IN + NO order# + Arabic non-order category → silent save (allowed) [v55.82-B]',
+  (function() {
+    var r = simulateHandleAddTreasury(
+      { type: 'in', amount: 5000, orderNumber: '', category: 'استرداد' },
+      INVOICES_SAMPLE
+    );
+    return r.branch === 'silent-save';
+  })(),
+  'Arabic category names must also bypass the gate'
 );
 
 // =============================================================

@@ -6,7 +6,7 @@ import { fE, fmt } from '../lib/utils';
 import { fmtET, todayET, daysAgoET } from '../lib/et-time';
 import EmailComposer from './EmailComposer';
 import * as XLSX from 'xlsx';
-import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip as RTooltip, Legend as RLegend, ResponsiveContainer } from 'recharts';
+import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip as RTooltip, Legend as RLegend, ResponsiveContainer, ComposedChart, Scatter } from 'recharts';
 import { parseNumberSmart as _parseNumberSmartShared, parseDate as _parseDateShared, normalizeContainer as _normalizeContainerShared } from '../lib/shipping-import-helpers';
 
 const CONTAINER_TYPES = ['20ft', '40ft', '40ft HC', '45ft', 'LCL', 'Bulk', 'Flatbed', 'Reefer', 'Open Top', 'Truck', 'Trailer'];
@@ -21,7 +21,7 @@ const daysUntil = (d) => { if (!d) return null; return Math.ceil((new Date(d) - 
 function ExpiryBadge({ date }) {
   if (!date) return <span className="text-[9px] text-slate-500">No expiry</span>;
   const d = daysUntil(date); const exp = d < 0; const soon = d >= 0 && d <= 7;
-  return <span className={'px-1.5 py-0.5 rounded text-[9px] font-bold ' + (exp ? 'bg-red-100 text-red-600' : soon ? 'bg-amber-100 text-amber-900' : 'bg-green-100 text-green-700')}>{exp ? 'Expired ' + Math.abs(d) + 'd ago' : d === 0 ? 'Expires today' : d + 'd left'}</span>;
+  return <span className={'px-1.5 py-0.5 rounded text-[9px] font-bold ' + (exp ? 'bg-red-100 text-red-900 border border-red-300' : soon ? 'bg-amber-100 text-amber-900' : 'bg-green-100 text-green-700')}>{exp ? 'Expired ' + Math.abs(d) + 'd ago' : d === 0 ? 'Expires today' : d + 'd left'}</span>;
 }
 
 // ========== RATE PICKER ==========
@@ -515,7 +515,25 @@ export default function ShippingRatesTab({ toast, user, userProfile, isAdmin, cu
   };
 
   const [bookingModal, setBookingModal] = useState(null);
+  // v55.82-D — Two-stage booking flow per Max May 10 2026:
+  //   1. REQUEST BOOKING — opens an email/WhatsApp template pre-filled with
+  //      route + rate + container info to send to the freight forwarder.
+  //      Marks the rate as `booking_requested` so the user knows they're
+  //      waiting on the forwarder's reply (and so it shows up on dashboards
+  //      as "in flight" rather than mistaken for booked).
+  //   2. CONFIRM BOOKING — once the forwarder replies with a booking#,
+  //      the user clicks "Confirm Booking" and enters the booking#,
+  //      customer name, customer release#, and expected ship date. This
+  //      is what flips `booked = true` and seeds the bookings table for
+  //      the trend-chart star.
+  // The old single-step bookingModal kept around for backward compat (used
+  // by the "Book" button on rates that already have everything in hand —
+  // e.g. importing a historical booking that already happened).
+  const [bookingRequestModal, setBookingRequestModal] = useState(null);  // rate being requested
+  const [bookingConfirmModal, setBookingConfirmModal] = useState(null);  // rate being confirmed
   const handleMarkBooked = async (rate) => { setBookingModal(rate); };
+  const handleRequestBooking = (rate) => { setBookingRequestModal(rate); };
+  const handleConfirmBooking = (rate) => { setBookingConfirmModal(rate); };
   const confirmBooking = async () => {
     if (!bookingModal || !f.bookRef) return;
     try {
@@ -525,6 +543,137 @@ export default function ShippingRatesTab({ toast, user, userProfile, isAdmin, cu
       notifyShippingBooked('all', f.bookRef, myId);
       setBookingModal(null); setF(prev => ({...prev, bookRef:'', bookCustomer:'', bookOrder:'', bookNotes:''})); await loadData();
     } catch (err) { toast ? toast.error(err.message) : alert(err.message); }
+  };
+
+  // v55.82-D — Generate freight-forwarder booking-request message body.
+  // Mirror of generateQuoteRequest's shape but oriented around "we want to
+  // book THIS rate" rather than "we want a quote." Includes the rate#,
+  // expiry, container, fees, and route so the forwarder has everything
+  // they need to issue a booking confirmation. Fields default to safe
+  // strings if missing (no "undefined" in user-facing text).
+  const generateBookingRequest = (rate, vendor, customerName, orderNumber, releaseNumber, expectedDate) => {
+    var today = fmtET(new Date(), 'longdate', { tag: false });
+    var subject = 'Booking Request — ' + (rate.origin || 'Origin') + ' to ' + (rate.destination || 'Destination') + ' — ' + (rate.container_type || '40ft') + ' — KTC International';
+    var body = ''
+      + 'Dear ' + (vendor && (vendor.contact_name || vendor.company_name) ? (vendor.contact_name || vendor.company_name) : (rate.vendor_name || 'Team')) + ',\n'
+      + '\n'
+      + 'We would like to confirm a booking against your rate below. Please issue a booking number at your earliest convenience.\n'
+      + '\n'
+      + 'BOOKING DETAILS\n'
+      + '--------------------------------\n'
+      + 'Origin: ' + (rate.origin || '—') + (rate.port_of_loading ? ' (POL: ' + rate.port_of_loading + ')' : '') + '\n'
+      + 'Destination: ' + (rate.destination || '—') + (rate.port_of_discharge ? ' (POD: ' + rate.port_of_discharge + ')' : '') + '\n'
+      + 'Container Type: ' + (rate.container_type || '40ft') + '\n'
+      + 'Carrier / Line: ' + (rate.shipping_line || '—') + '\n'
+      + 'Rate: ' + (rate.currency || 'USD') + ' ' + (rate.rate_amount || 0) + (rate.total_cost && rate.total_cost !== rate.rate_amount ? '  (Total all-in: ' + (rate.currency || 'USD') + ' ' + rate.total_cost + ')' : '') + '\n'
+      + 'Rate Validity: ' + (rate.expiry_date || 'open') + '\n'
+      + (rate.transit_days ? 'Transit Days: ' + rate.transit_days + '\n' : '')
+      + (rate.free_days ? 'Free Days: ' + rate.free_days + '\n' : '')
+      + '\n'
+      + 'CUSTOMER / SHIPPER INFORMATION\n'
+      + '--------------------------------\n'
+      + 'Customer: ' + (customerName || '[to be provided]') + '\n'
+      + (orderNumber ? 'Our Order #: ' + orderNumber + '\n' : '')
+      + (releaseNumber ? 'Release #: ' + releaseNumber + '\n' : '')
+      + (expectedDate ? 'Expected Cargo Ready Date: ' + expectedDate + '\n' : '')
+      + '\n'
+      + 'Please send the booking number, vessel/voyage details, and cut-off times once available.\n'
+      + '\n'
+      + 'Thank you for your continued partnership.\n'
+      + '\n'
+      + 'Best regards,\n'
+      + 'KTC International Trading\n'
+      + 'Kandil Trading Company\n'
+      + 'Date: ' + today;
+    return { subject: subject, body: body };
+  };
+
+  // v55.82-D — Stage 1: Stamp the rate as "booking requested" so we can
+  // distinguish it from rates that are still merely quoted, AND from
+  // rates that have a confirmed booking number. The rate row is NOT yet
+  // marked booked=true — that happens in finalizeBookingConfirm. This
+  // is just a "we sent the request, waiting on reply" marker.
+  const submitBookingRequest = async (rate) => {
+    try {
+      var updates = {
+        booking_requested: true,
+        booking_requested_at: new Date().toISOString(),
+        booking_requested_customer: f.bookReqCustomer || '',
+        booking_requested_order: f.bookReqOrder || '',
+        booking_requested_release: f.bookReqRelease || '',
+        booking_requested_expected_date: f.bookReqExpected || null,
+      };
+      try {
+        await dbUpdate('shipping_rates', rate.id, updates, myId);
+      } catch (e) {
+        // If the booking_requested* columns don't exist yet, log and
+        // continue — the email/whatsapp message still gets sent and the
+        // user has the audit-log entry. Migration ships separately.
+        console.warn('[booking-request] schema may be missing booking_requested columns:', e && e.message);
+      }
+      await logActivity(myId, 'Requested booking: ' + (rate.vendor_name || '?') + ' ' + rate.origin + '→' + rate.destination + (f.bookReqCustomer ? ' for ' + f.bookReqCustomer : ''), 'shipping');
+      setBookingRequestModal(null);
+      setF(function(prev) { return Object.assign({}, prev, { bookReqCustomer: '', bookReqOrder: '', bookReqRelease: '', bookReqExpected: '' }); });
+      await loadData();
+      if (toast && toast.success) toast.success('Booking request sent. Waiting on forwarder reply.');
+    } catch (err) {
+      console.error('[booking-request] failed', err);
+      try { (toast && toast.error) ? toast.error('Could not save booking request: ' + (err && err.message)) : alert(err && err.message); } catch (_) {}
+    }
+  };
+
+  // v55.82-D — Stage 2: forwarder replied with a booking number. Capture
+  // it + customer/release info, mark the rate booked=true, write a row
+  // into shipping_bookings (so it appears as a chart star + on the route
+  // bookings list).
+  const finalizeBookingConfirm = async (rate) => {
+    if (!rate || !f.bookConfirmNumber) {
+      if (toast && toast.warning) toast.warning('Booking number is required to confirm.');
+      return;
+    }
+    try {
+      // 1. Insert the bookings row (the trend chart picks this up via the
+      //    booked rates → stars layer).
+      await dbInsert('shipping_bookings', {
+        rate_id: rate.id,
+        shipment_reference: f.bookConfirmNumber,
+        customer_name: f.bookConfirmCustomer || '',
+        order_number: f.bookConfirmOrder || '',
+        booking_date: todayET(),
+        notes: ''
+          + (f.bookConfirmRelease ? 'Release #: ' + f.bookConfirmRelease + '. ' : '')
+          + (f.bookConfirmExpected ? 'Expected ship date: ' + f.bookConfirmExpected + '. ' : '')
+          + (f.bookConfirmNotes ? f.bookConfirmNotes : ''),
+        booked_by: myId,
+      }, myId);
+
+      // 2. Stamp the rate row.
+      var rateUpdates = {
+        booked: true,
+        shipment_reference: f.bookConfirmNumber,
+        booking_date: todayET(),
+        booking_notes: ''
+          + (f.bookConfirmCustomer ? 'Customer: ' + f.bookConfirmCustomer + '. ' : '')
+          + (f.bookConfirmOrder ? 'Order: ' + f.bookConfirmOrder + '. ' : '')
+          + (f.bookConfirmRelease ? 'Release #: ' + f.bookConfirmRelease + '. ' : '')
+          + (f.bookConfirmExpected ? 'Expected ship: ' + f.bookConfirmExpected + '. ' : ''),
+      };
+      // Try to also clear the booking_requested flag now that we have a
+      // confirmed booking. If the column doesn't exist, the dbUpdate retry
+      // path handles it gracefully.
+      try { rateUpdates.booking_requested = false; } catch (_) {}
+      await dbUpdate('shipping_rates', rate.id, rateUpdates, myId);
+
+      await logActivity(myId, 'Confirmed booking: ' + rate.vendor_name + ' ' + rate.origin + '→' + rate.destination + ' Booking#: ' + f.bookConfirmNumber + (f.bookConfirmCustomer ? ' for ' + f.bookConfirmCustomer : ''), 'shipping');
+      try { notifyShippingBooked('all', f.bookConfirmNumber, myId); } catch (_) {}
+      setBookingConfirmModal(null);
+      setF(function(prev) { return Object.assign({}, prev, { bookConfirmNumber: '', bookConfirmCustomer: '', bookConfirmOrder: '', bookConfirmRelease: '', bookConfirmExpected: '', bookConfirmNotes: '' }); });
+      await loadData();
+      if (toast && toast.success) toast.success('Booking confirmed ✓');
+    } catch (err) {
+      console.error('[booking-confirm] failed', err);
+      try { (toast && toast.error) ? toast.error('Could not confirm booking: ' + (err && err.message)) : alert(err && err.message); } catch (_) {}
+    }
   };
   const [rateHistoryMode, setRateHistoryMode] = useState('1y');
   const [rateHistoryDf, setRateHistoryDf] = useState(() => daysAgoET(365));
@@ -638,6 +787,10 @@ export default function ShippingRatesTab({ toast, user, userProfile, isAdmin, cu
       docFees: findColSmart(['doc fees', 'documentation', 'bl fee', 'bill of lading', 'doc'], { preferNumeric: true }),
       customsFees: findColSmart(['customs', 'duty', 'جمارك'], { preferNumeric: true }),
       otherFees: findColSmart(['other fees', 'other charges', 'surcharge', 'baf', 'caf', 'isps'], { preferNumeric: true }),
+      // v55.82-C — Pull "Other Fees Description" column. Previously dropped
+      // on the floor on every import, so the BAF/CAF/ISPS labels never made
+      // it into the rate record. Template column 20.
+      otherFeesDesc: findColSmart(['other fees description', 'other fees desc', 'other fees label', 'fee description', 'surcharge label', 'surcharge description'], { exclude: ['amount', 'value'] }),
       notes: findColSmart(['notes', 'remarks', 'comment', 'ملاحظات']),
       mode: findColSmart(['transport mode', 'shipping mode', 'mode of transport', 'ship type', 'mode']),
     };
@@ -712,6 +865,9 @@ export default function ShippingRatesTab({ toast, user, userProfile, isAdmin, cu
         documentation_fees: getNum(row, colMap.docFees),
         customs_fees: getNum(row, colMap.customsFees),
         other_fees: getNum(row, colMap.otherFees),
+        // v55.82-C — Capture Other Fees Description so the label that goes
+        // with the surcharge (BAF / CAF / ISPS / etc.) survives the import.
+        other_fees_desc: getVal(row, colMap.otherFeesDesc),
         // Use parsed historical date if present. ONLY fall back to today if
         // there's literally no date in the source. Historical dates pass
         // through and stay historical — even if already expired.
@@ -832,6 +988,9 @@ export default function ShippingRatesTab({ toast, user, userProfile, isAdmin, cu
         documentation_fees: getNum(row, newColMap.docFees),
         customs_fees: getNum(row, newColMap.customsFees),
         other_fees: getNum(row, newColMap.otherFees),
+        // v55.82-C — see processImportFile comment. Mirror here so user-
+        // remapped columns also pick up the surcharge label.
+        other_fees_desc: getVal(row, newColMap.otherFeesDesc),
         effective_date: parsedEffective || todayET(),
         expiry_date: parsedExpiry,
         port_of_loading: getVal(row, newColMap.pol),
@@ -1419,18 +1578,28 @@ Date: ${today}`;
         <div className="bg-white rounded-lg p-3" style={{borderLeftWidth:3,borderLeftColor:'#f59e0b'}}><div className="text-[10px] text-slate-500">Bookings</div><div className="text-lg font-extrabold">{routeBookings(selectedRoute.origin,selectedRoute.destination,selectedRoute.pol,selectedRoute.pod).length}</div></div>
       </div>
       {(() => {
-        // S17.11 — proper rate trend chart with time-period + shipping-line filters.
-        // Uses SAME rateHistoryMode state that drives the table below, so the chart
-        // and table always stay in sync (change the period, both update).
+        // v55.82-C — Rate trend chart, REWRITTEN per Max May 10 2026 spec:
+        //   • X-axis = EXPIRATION DATE (was effective_date). Expiry tells us
+        //     "this is the last day this price was good for" — that's how
+        //     freight forwarders quote, and the right shape for negotiating.
+        //   • Y per period = BEST PRICE (lowest = best for buyer) of any
+        //     forwarder. Was AVG before, which let one expensive outlier
+        //     drag the line up and disguise the real floor.
+        //   • Bookings show as STARS at the booked rate on the date booked.
+        //     Multiple bookings → multiple stars. Star tooltip shows
+        //     vendor + reference + rate.
+        //   • Empty fields safe: rows with no expiry_date or rate=0 are
+        //     excluded from the trend; bookings with no booking_date or
+        //     rate=0 are excluded from the stars layer. No NaN, no
+        //     undefined-key explosions, no chart crashes.
+        //
+        // Filtering still respects rateHistoryDf / rateHistoryDt / hideExpired
+        // controls so the chart and the table below stay in sync.
         var trendRates = routeHistory;
-        if (rateHistoryDf) trendRates = trendRates.filter(r => (r.effective_date || '') >= rateHistoryDf);
-        if (rateHistoryDt) trendRates = trendRates.filter(r => (r.effective_date || '') <= rateHistoryDt);
+        if (rateHistoryDf) trendRates = trendRates.filter(r => (r.expiry_date || r.effective_date || '') >= rateHistoryDf);
+        if (rateHistoryDt) trendRates = trendRates.filter(r => (r.expiry_date || r.effective_date || '') <= rateHistoryDt);
         if (hideExpired) trendRates = trendRates.filter(r => !isExpired(r.expiry_date));
 
-        // v55.33 — figure out the primary currency for the trend window so
-        // the Y-axis and tooltip can use the right symbol (was hardcoded '$'
-        // before, which read wrong on EUR / EGP / GBP routes). Currency
-        // symbol map mirrors fCur() at line 15.
         var SYM = { USD: '$', EUR: '€', EGP: 'E£', GBP: '£', CNY: '¥', TRY: '₺', SAR: 'SR', AED: 'AED ' };
         var trendCurrencyCounts = {};
         trendRates.forEach(function(r) {
@@ -1443,14 +1612,13 @@ Date: ${today}`;
           : 'USD';
         var chartSym = SYM[chartCurrency] || (chartCurrency + ' ');
         var chartMixed = trendCurrencies.length > 1;
-        // Restrict the chart points to the primary currency so we're not
-        // averaging across $ and € on the same bar.
         var trendRatesForChart = trendRates.filter(function(r) { return (r.currency || 'USD') === chartCurrency; });
 
-        // v55.33 — period-over-period: compute the same-length window
-        // immediately preceding the current one and compare averages.
-        var priorAvg = null;
-        var currentAvg = null;
+        // v55.82-C — period-over-period uses BEST price (Math.min) too,
+        // matching the new chart aggregation. Was avg before; switching
+        // to min keeps period-comparison consistent with what's plotted.
+        var priorBest = null;
+        var currentBest = null;
         if (rateHistoryDf && rateHistoryDt) {
           var df = new Date(rateHistoryDf);
           var dt = new Date(rateHistoryDt);
@@ -1461,66 +1629,146 @@ Date: ${today}`;
           var pStartIso = priorStart.toISOString().substring(0,10);
           var pEndIso = priorEnd.toISOString().substring(0,10);
           var priorRates = routeHistory.filter(function(r) {
+            var anchor = r.expiry_date || r.effective_date || '';
             return (r.currency || 'USD') === chartCurrency
-              && (r.effective_date || '') >= pStartIso
-              && (r.effective_date || '') <= pEndIso;
+              && anchor >= pStartIso
+              && anchor <= pEndIso
+              && Number(r.rate_amount || 0) > 0;
           });
           if (priorRates.length > 0) {
-            priorAvg = priorRates.reduce(function(a,r){ return a + Number(r.rate_amount||0); }, 0) / priorRates.length;
+            priorBest = Math.min.apply(null, priorRates.map(function(r){ return Number(r.rate_amount || 0); }));
           }
-          if (trendRatesForChart.length > 0) {
-            currentAvg = trendRatesForChart.reduce(function(a,r){ return a + Number(r.rate_amount||0); }, 0) / trendRatesForChart.length;
+          var currentValid = trendRatesForChart.filter(function(r){ return Number(r.rate_amount || 0) > 0; });
+          if (currentValid.length > 0) {
+            currentBest = Math.min.apply(null, currentValid.map(function(r){ return Number(r.rate_amount || 0); }));
           }
         }
 
-        // Available shipping lines in the full route history (not just filtered) so
-        // user can always see the dropdown options.
         var allLinesInRoute = Array.from(new Set(routeHistory.map(r => r.shipping_line || '(no line)'))).sort();
 
-        // Build: [{month, <line1>: avg, <line2>: avg, _avg: overall}]
+        // v55.82-C — Anchor each rate row to its EXPIRATION month for the X-axis.
+        // Rows missing expiry_date are excluded — without an end date, we
+        // can't tell what period the rate applied to, and putting it on
+        // today's bucket would be a lie. Same goes for rate=0 rows: noise.
         var monthsSet = new Set();
-        trendRatesForChart.forEach(r => { var m = (r.effective_date || '').substring(0,7); if (m) monthsSet.add(m); });
+        var validRatesForChart = trendRatesForChart.filter(function(r) {
+          var exp = r.expiry_date || '';
+          var amt = Number(r.rate_amount || 0);
+          return exp.length >= 7 && amt > 0;
+        });
+        validRatesForChart.forEach(function(r) {
+          var m = (r.expiry_date || '').substring(0,7);
+          if (m) monthsSet.add(m);
+        });
         var months = Array.from(monthsSet).sort();
 
-        // Distinct color palette for up to 8 lines.
         var LINE_COLORS = ['#0ea5e9','#8b5cf6','#f59e0b','#10b981','#ef4444','#ec4899','#14b8a6','#6366f1'];
 
         var linesToPlot = [];
         if (chartShippingLine === 'all') {
-          linesToPlot = allLinesInRoute.filter(L => trendRatesForChart.some(r => (r.shipping_line || '(no line)') === L));
+          linesToPlot = allLinesInRoute.filter(L => validRatesForChart.some(r => (r.shipping_line || '(no line)') === L));
         } else {
           linesToPlot = [chartShippingLine];
         }
 
+        // v55.82-C — BEST (lowest) rate per month per shipping line.
+        // Math.min.apply with an empty array returns Infinity, so we guard
+        // by checking ratesForLine.length > 0 first.
         var trendPoints = months.map(function(m) {
           var point = { month: m };
           linesToPlot.forEach(function(L) {
-            var ratesForLine = trendRatesForChart.filter(r => (r.effective_date||'').substring(0,7) === m && (r.shipping_line || '(no line)') === L);
-            if (ratesForLine.length) {
-              var sum = ratesForLine.reduce((a,b) => a + Number(b.rate_amount||0), 0);
-              point[L] = Math.round(sum / ratesForLine.length);
+            var ratesForLine = validRatesForChart.filter(function(r) {
+              return (r.expiry_date || '').substring(0,7) === m
+                && (r.shipping_line || '(no line)') === L;
+            });
+            if (ratesForLine.length > 0) {
+              var amounts = ratesForLine.map(function(b) { return Number(b.rate_amount || 0); });
+              point[L] = Math.min.apply(null, amounts);
             }
           });
-          // Overall avg across ALL lines in this month
-          var monthRates = trendRatesForChart.filter(r => (r.effective_date||'').substring(0,7) === m);
-          if (monthRates.length) {
-            point._avg = Math.round(monthRates.reduce((a,b) => a + Number(b.rate_amount||0), 0) / monthRates.length);
+          // Best across ALL lines in this month — the "market floor"
+          var monthRates = validRatesForChart.filter(function(r) {
+            return (r.expiry_date || '').substring(0,7) === m;
+          });
+          if (monthRates.length > 0) {
+            var allAmounts = monthRates.map(function(b) { return Number(b.rate_amount || 0); });
+            point._best = Math.min.apply(null, allAmounts);
           }
           return point;
         });
 
-        if (trendPoints.length === 0) {
+        // v55.82-C — Booking stars layer. Each booked rate becomes a dot
+        // on the chart at (booking_date_month, rate_amount). Plotting on
+        // booking_date instead of expiry_date because the user wants to
+        // see "what price did we book at, when". Multiple bookings on
+        // the same route → multiple stars. Defensively skip booked rows
+        // where booking_date or rate is missing — those would render as
+        // NaN scatter points and break the whole chart.
+        var bookingStars = trendRatesForChart
+          .filter(function(r) {
+            if (!r.booked) return false;
+            var bd = r.booking_date || r.effective_date || '';
+            var amt = Number(r.rate_amount || 0);
+            return bd.length >= 7 && amt > 0;
+          })
+          .map(function(r) {
+            return {
+              month: (r.booking_date || r.effective_date || '').substring(0,7),
+              booked_rate: Number(r.rate_amount || 0),
+              vendor: r.vendor_name || '',
+              line: r.shipping_line || '',
+              ref: r.shipment_reference || '',
+              container: r.container_type || '',
+              full_date: r.booking_date || r.effective_date || '',
+            };
+          });
+        // Make sure every booking-star month is also a valid X-axis category.
+        // ComposedChart can't draw a Scatter point on a month that isn't in
+        // the data series, so we add the booking month to the trendPoints
+        // (with no line values) if it's not already there.
+        bookingStars.forEach(function(b) {
+          if (!months.includes(b.month)) {
+            trendPoints.push({ month: b.month });
+            months.push(b.month);
+          }
+        });
+        trendPoints.sort(function(a, b) { return a.month < b.month ? -1 : a.month > b.month ? 1 : 0; });
+        months.sort();
+
+        if (trendPoints.length === 0 && bookingStars.length === 0) {
           return (<div className="bg-white rounded-xl p-4 mb-4 border border-slate-200">
             <div className="flex justify-between items-center mb-2">
-              <h3 className="text-sm font-bold">📈 Rate Trend Over Time</h3>
+              <h3 className="text-sm font-bold">📈 Best Rate Over Time (by expiry)</h3>
             </div>
-            <div className="text-xs text-slate-500 py-6 text-center">No rate data in the selected period. Try a longer time range or turn off "Hide expired".</div>
+            <div className="text-xs text-slate-500 py-6 text-center">No rate data with expiry dates in the selected period. Add expiry dates to your rates so they show up on the trend, or try a longer time range.</div>
           </div>);
         }
 
+        // Custom star shape for the booking dots. Recharts' Scatter takes
+        // a "shape" prop that can be a function returning SVG. Drawing a
+        // 5-point star — gold fill, black stroke for visibility on any
+        // backing line color.
+        var StarShape = function(props) {
+          var cx = props.cx;
+          var cy = props.cy;
+          if (cx == null || cy == null || isNaN(cx) || isNaN(cy)) return null;
+          var s = 9; // size
+          // 5-point star path
+          var pts = [];
+          for (var i = 0; i < 10; i++) {
+            var r = i % 2 === 0 ? s : s * 0.45;
+            var a = (Math.PI / 5) * i - Math.PI / 2;
+            pts.push((cx + r * Math.cos(a)).toFixed(2) + ',' + (cy + r * Math.sin(a)).toFixed(2));
+          }
+          return (<polygon points={pts.join(' ')} fill="#fbbf24" stroke="#92400e" strokeWidth="1.2" />);
+        };
+
         return (<div className="bg-white rounded-xl p-4 mb-4 border border-slate-200">
           <div className="flex justify-between items-center mb-3 flex-wrap gap-2">
-            <h3 className="text-sm font-bold">📈 Rate Trend Over Time ({chartCurrency})</h3>
+            <div>
+              <h3 className="text-sm font-bold">📈 Best Rate Over Time ({chartCurrency})</h3>
+              <div className="text-[10px] text-slate-500">X-axis: rate expiry month · Y-axis: lowest rate seen · ⭐ = booking</div>
+            </div>
             <div className="flex items-center gap-2">
               <span className="text-[10px] text-slate-500">Shipping line:</span>
               <select value={chartShippingLine} onChange={function(e){ setChartShippingLine(e.target.value); }} className="px-2 py-1 rounded border text-xs">
@@ -1534,18 +1782,26 @@ Date: ${today}`;
               ⚠️ This route has rates in multiple currencies ({trendCurrencies.join(', ')}). Chart shows {chartCurrency} only.
             </div>
           )}
-          {priorAvg !== null && currentAvg !== null && (
-            <div className={'rounded p-2 mb-2 text-[11px] ' + (currentAvg > priorAvg ? 'bg-red-50 border border-red-200 text-red-800' : 'bg-emerald-50 border border-emerald-200 text-emerald-800')}>
-              {currentAvg > priorAvg ? '↗' : '↘'} Period-over-period: avg {chartSym}{Math.round(currentAvg).toLocaleString()} vs prior {chartSym}{Math.round(priorAvg).toLocaleString()} ({(((currentAvg - priorAvg) / priorAvg) * 100).toFixed(1)}%)
+          {priorBest !== null && currentBest !== null && (
+            <div className={'rounded p-2 mb-2 text-[11px] ' + (currentBest > priorBest ? 'bg-red-50 border border-red-200 text-red-800' : 'bg-emerald-50 border border-emerald-200 text-emerald-800')}>
+              {currentBest > priorBest ? '↗' : '↘'} Period-over-period (best price): {chartSym}{Math.round(currentBest).toLocaleString()} vs prior best {chartSym}{Math.round(priorBest).toLocaleString()} ({(((currentBest - priorBest) / priorBest) * 100).toFixed(1)}%)
             </div>
           )}
-          <div style={{width: '100%', height: 280}}>
+          <div style={{width: '100%', height: 300}}>
             <ResponsiveContainer>
-              <LineChart data={trendPoints} margin={{top: 10, right: 20, left: 0, bottom: 10}}>
+              <ComposedChart data={trendPoints} margin={{top: 10, right: 20, left: 0, bottom: 10}}>
                 <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" />
                 <XAxis dataKey="month" tick={{fontSize: 10}} />
                 <YAxis tick={{fontSize: 10}} tickFormatter={function(v){ return chartSym + v; }} />
-                <RTooltip formatter={function(v){ return chartSym + Number(v).toLocaleString(); }} />
+                <RTooltip
+                  formatter={function(v, name, p){
+                    if (name === 'booked_rate') {
+                      var pl = p && p.payload ? p.payload : {};
+                      return [chartSym + Number(v).toLocaleString() + ' ⭐ ' + (pl.vendor || '?') + (pl.ref ? ' (' + pl.ref + ')' : ''), 'Booking ' + (pl.full_date || '')];
+                    }
+                    return [chartSym + Number(v).toLocaleString(), name];
+                  }}
+                />
                 <RLegend wrapperStyle={{fontSize: 11}} />
                 {chartShippingLine === 'all'
                   ? linesToPlot.map(function(L, i) {
@@ -1553,12 +1809,21 @@ Date: ${today}`;
                     })
                   : (<Line type="monotone" dataKey={chartShippingLine} stroke="#0ea5e9" strokeWidth={3} connectNulls={true} dot={{r: 4}} />)
                 }
-                {chartShippingLine === 'all' && <Line type="monotone" dataKey="_avg" name="Overall avg" stroke="#334155" strokeWidth={2} strokeDasharray="5 3" dot={false} />}
-              </LineChart>
+                {chartShippingLine === 'all' && <Line type="monotone" dataKey="_best" name="Market best" stroke="#334155" strokeWidth={2} strokeDasharray="5 3" dot={false} />}
+                {bookingStars.length > 0 && (
+                  <Scatter
+                    name="Bookings"
+                    data={bookingStars}
+                    dataKey="booked_rate"
+                    shape={StarShape}
+                  />
+                )}
+              </ComposedChart>
             </ResponsiveContainer>
           </div>
           <div className="text-[10px] text-slate-500 mt-1">
-            {trendRatesForChart.length} rates plotted across {months.length} month{months.length === 1 ? '' : 's'}
+            {validRatesForChart.length} rate{validRatesForChart.length === 1 ? '' : 's'} plotted across {months.length} expiry month{months.length === 1 ? '' : 's'}
+            {bookingStars.length > 0 && <span className="ml-2 text-amber-700 font-semibold">• {bookingStars.length} booking{bookingStars.length === 1 ? '' : 's'} ⭐</span>}
             {hideExpired && <span className="ml-2 text-amber-800 font-semibold">• Expired rates hidden</span>}
           </div>
         </div>);
@@ -1703,16 +1968,38 @@ Date: ${today}`;
                   : <ExpiryBadge date={r.expiry_date} />}
               </td>
               <td className="px-2 py-1.5">
+                {/* v55.82-D — three-state booking display:
+                    • Booked (green) — has a confirmed booking number
+                    • Requested (amber) — sent a request, waiting on forwarder
+                    • Idle — no action yet */}
                 {r.booked
                   ? <div className="flex flex-col">
                       <span className="px-1.5 py-0.5 bg-green-100 text-green-700 rounded text-[9px] font-bold w-fit">✓ BOOKED</span>
                       {r.shipment_reference && <span className="text-[9px] text-slate-500 mt-0.5">Ref: {r.shipment_reference}</span>}
                       {r.booking_date && <span className="text-[9px] text-slate-500">{r.booking_date}</span>}
                     </div>
-                  : <span className="text-[9px] text-slate-500">—</span>}
+                  : r.booking_requested
+                    ? <div className="flex flex-col">
+                        <span className="px-1.5 py-0.5 bg-amber-100 text-amber-800 rounded text-[9px] font-bold w-fit" title="Waiting on the forwarder's booking number">⏳ REQUESTED</span>
+                        {r.booking_requested_customer && <span className="text-[9px] text-slate-500 mt-0.5">For: {r.booking_requested_customer}</span>}
+                        {r.booking_requested_at && <span className="text-[9px] text-slate-500">{(r.booking_requested_at || '').substring(0,10)}</span>}
+                      </div>
+                    : <span className="text-[9px] text-slate-500">—</span>}
               </td>
-              <td className="px-2 py-1.5 flex gap-1">
-                {!exp && !r.booked && <button onClick={() => handleMarkBooked(r)} className="px-2 py-0.5 rounded border border-green-300 text-green-600 text-[10px]">Book</button>}
+              <td className="px-2 py-1.5 flex gap-1 flex-wrap">
+                {/* v55.82-D — booking flow buttons.
+                    • Stage 1 (no request yet, not booked, not expired) → "Request Booking"
+                      opens the email/WhatsApp modal pre-filled with rate info.
+                    • Stage 2 (request sent OR rate is active) → "Confirm Booking"
+                      opens the modal that captures booking# + release# + expected date.
+                    • Both visible at once on a fresh active rate, since the user might
+                      already have a booking number in hand and want to skip the request. */}
+                {!exp && !r.booked && !r.booking_requested && (
+                  <button onClick={() => handleRequestBooking(r)} className="px-2 py-0.5 rounded border border-blue-300 text-blue-600 text-[10px]" title="Send email or WhatsApp to the forwarder asking them to confirm a booking">📨 Request Booking</button>
+                )}
+                {!exp && !r.booked && (
+                  <button onClick={() => handleConfirmBooking(r)} className="px-2 py-0.5 rounded border border-emerald-300 text-emerald-600 text-[10px] font-semibold" title="You received the booking number — record it">✅ Confirm Booking</button>
+                )}
                 <button onClick={() => { setEditingRate(r); setF({ origin: r.origin, destination: r.destination, vendorName: r.vendor_name, shippingLine: r.shipping_line, transportMode: r.transport_mode, rateType: r.rate_type || '', containerType: r.container_type, rateAmount: r.rate_amount, currency: r.currency, transitDays: r.transit_days, freeDays: r.free_days, portFees: r.port_fees, thcFees: r.thc_fees, docFees: r.documentation_fees, customsFees: r.customs_fees, otherFees: r.other_fees, otherFeesDesc: r.other_fees_desc, effectiveDate: r.effective_date, expiryDate: r.expiry_date, pol: r.port_of_loading, pod: r.port_of_discharge, notes: r.notes, booked: r.booked, shipmentRef: r.shipment_reference, bookingDate: r.booking_date, bookingNotes: r.booking_notes }); setView('add_rate'); }} className="px-2 py-0.5 rounded border border-blue-300 text-blue-600 text-[10px]">Edit</button>
                 {isAdmin && <button onClick={() => handleDeleteRate(r)} className="px-2 py-0.5 rounded border border-red-300 text-red-500 text-[10px]" title="Danger: deletes historical pricing data">Del</button>}
               </td>
@@ -1751,6 +2038,142 @@ Date: ${today}`;
           </div>
         </div>
       )}
+
+      {/* v55.82-D — REQUEST BOOKING modal.
+          Two-step booking flow per Max May 10 2026:
+          step 1 = ask the forwarder to confirm a booking (this modal)
+          step 2 = once they reply with a booking number, click Confirm.
+          The buttons at the bottom open WhatsApp / email / copy with a
+          fully-formed message body that includes route, container, rate,
+          expiry, customer, release#, expected date — everything the
+          forwarder needs to issue a booking number. The user can edit
+          fields then send. */}
+      {bookingRequestModal && (() => {
+        var rate = bookingRequestModal;
+        var vendor = (vendorContacts || []).find(function(v) {
+          return (v.company_name || '').toLowerCase() === (rate.vendor_name || '').toLowerCase();
+        }) || null;
+        var generated = generateBookingRequest(rate, vendor, f.bookReqCustomer || '', f.bookReqOrder || '', f.bookReqRelease || '', f.bookReqExpected || '');
+        return (
+          <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4" onClick={() => setBookingRequestModal(null)}>
+            <div className="bg-white rounded-2xl p-6 max-w-2xl w-full max-h-[90vh] overflow-auto" onClick={e => e.stopPropagation()}>
+              <h3 className="text-sm font-bold mb-1">📨 Request Booking — {rate.vendor_name || 'Forwarder'}</h3>
+              <p className="text-[11px] text-slate-500 mb-3">{rate.origin} → {rate.destination} · {rate.container_type} · {fCur(rate.total_cost || rate.rate_amount, rate.currency)} · expires {rate.expiry_date || '—'}</p>
+
+              {/* Customer / release / expected date — these go into both the
+                  message body AND the rate's booking_requested_* columns so
+                  the rest of the system knows we're waiting on this one. */}
+              <div className="grid grid-cols-2 gap-3 mb-3">
+                <div><label className="text-[10px] font-semibold">Customer Name</label>
+                  <input value={f.bookReqCustomer || ''} onChange={e => setF({...f, bookReqCustomer: e.target.value})} className="w-full px-3 py-2 rounded border text-sm" placeholder="Who's this for?" /></div>
+                <div><label className="text-[10px] font-semibold">Our Order #</label>
+                  <input value={f.bookReqOrder || ''} onChange={e => setF({...f, bookReqOrder: e.target.value})} className="w-full px-3 py-2 rounded border text-sm" placeholder="PO# / Order#" /></div>
+                <div><label className="text-[10px] font-semibold">Customer Release #</label>
+                  <input value={f.bookReqRelease || ''} onChange={e => setF({...f, bookReqRelease: e.target.value})} className="w-full px-3 py-2 rounded border text-sm" placeholder="If known" /></div>
+                <div><label className="text-[10px] font-semibold">Expected Cargo Ready Date</label>
+                  <input type="date" value={f.bookReqExpected || ''} onChange={e => setF({...f, bookReqExpected: e.target.value})} className="w-full px-3 py-2 rounded border text-sm" /></div>
+              </div>
+
+              {/* Show the auto-generated message and let the user edit it
+                  before sending. Mirrors the quote-request UX. */}
+              <div className="mb-3">
+                <label className="text-[10px] font-semibold">Message preview (edit before sending)</label>
+                <textarea value={f.bookReqBody == null ? generated.body : f.bookReqBody} onChange={e => setF({...f, bookReqBody: e.target.value})} rows={12} className="w-full px-3 py-2 rounded border text-xs font-mono" />
+                <div className="text-[9px] text-slate-500 mt-1">Subject: {generated.subject}</div>
+              </div>
+
+              <div className="flex flex-wrap gap-2 mt-4">
+                {/* Channel buttons — same pattern as RequestQuoteModal */}
+                {vendor && vendor.email && (
+                  <button onClick={async () => {
+                    var body = (f.bookReqBody == null ? generated.body : f.bookReqBody);
+                    openEmail(vendor.email, generated.subject, body);
+                    await submitBookingRequest(rate);
+                  }} className="px-3 py-2 bg-blue-500 text-white rounded-lg text-xs font-semibold">📧 Email {vendor.email}</button>
+                )}
+                {vendor && vendor.whatsapp && (
+                  <button onClick={async () => {
+                    var body = (f.bookReqBody == null ? generated.body : f.bookReqBody);
+                    openWhatsApp(vendor.whatsapp, body);
+                    await submitBookingRequest(rate);
+                  }} className="px-3 py-2 bg-emerald-500 text-white rounded-lg text-xs font-semibold">💬 WhatsApp {vendor.whatsapp}</button>
+                )}
+                {!vendor && (
+                  <div className="text-[10px] text-amber-700 bg-amber-50 border border-amber-200 rounded p-2 mb-1 w-full">
+                    ⚠️ No vendor contact saved for "{rate.vendor_name}". Add this forwarder under Vendor Contacts to enable one-click email / WhatsApp. You can still copy the message below.
+                  </div>
+                )}
+                <button onClick={async () => {
+                  var body = (f.bookReqBody == null ? generated.body : f.bookReqBody);
+                  try { await navigator.clipboard.writeText(generated.subject + '\n\n' + body); if (toast && toast.success) toast.success('Message copied'); } catch (_) { try { alert('Copied'); } catch (__) {} }
+                  await submitBookingRequest(rate);
+                }} className="px-3 py-2 bg-slate-100 text-slate-700 rounded-lg text-xs font-semibold">📋 Copy &amp; mark as requested</button>
+                <button onClick={() => { setBookingRequestModal(null); setF(function(prev) { return Object.assign({}, prev, { bookReqBody: undefined }); }); }} className="px-3 py-2 border border-slate-200 rounded-lg text-xs">Cancel</button>
+              </div>
+            </div>
+          </div>
+        );
+      })()}
+
+      {/* v55.82-D — CONFIRM BOOKING modal.
+          Stage 2 of the two-step flow. The forwarder has replied with a
+          booking number, the user enters it here along with the customer
+          info / release# / expected ship date. On submit:
+            • inserts a row into shipping_bookings (so the trend chart
+              picks it up as a star at the booked rate / booked date)
+            • flips the rate's booked = true
+            • clears the booking_requested flag if it was set
+          Booking number is REQUIRED — disabled save button until typed. */}
+      {bookingConfirmModal && (() => {
+        var rate = bookingConfirmModal;
+        // If we previously sent a request, prefill the customer fields with
+        // what we typed back then. Saves re-typing.
+        var preCust  = f.bookConfirmCustomer != null ? f.bookConfirmCustomer : (rate.booking_requested_customer || '');
+        var preOrder = f.bookConfirmOrder    != null ? f.bookConfirmOrder    : (rate.booking_requested_order || '');
+        var preRel   = f.bookConfirmRelease  != null ? f.bookConfirmRelease  : (rate.booking_requested_release || '');
+        var preExp   = f.bookConfirmExpected != null ? f.bookConfirmExpected : (rate.booking_requested_expected_date || '');
+        return (
+          <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4" onClick={() => setBookingConfirmModal(null)}>
+            <div className="bg-white rounded-2xl p-6 max-w-lg w-full" onClick={e => e.stopPropagation()}>
+              <h3 className="text-sm font-bold mb-1">✅ Confirm Booking — {rate.vendor_name || 'Forwarder'}</h3>
+              <p className="text-[11px] text-slate-500 mb-3">{rate.origin} → {rate.destination} · {rate.container_type} · {fCur(rate.total_cost || rate.rate_amount, rate.currency)}</p>
+
+              {rate.booking_requested && (
+                <div className="bg-amber-50 border border-amber-200 rounded-lg p-2 mb-3 text-[11px] text-amber-800">
+                  ⏳ Booking was requested on {(rate.booking_requested_at || '').substring(0,10)} — fields below are pre-filled from that request.
+                </div>
+              )}
+
+              <div className="space-y-3">
+                <div className="bg-blue-50 rounded-lg p-3 border border-blue-200">
+                  <label className="text-[10px] font-bold text-blue-800">Booking Number / BL # *</label>
+                  <input value={f.bookConfirmNumber || ''} onChange={e => setF({...f, bookConfirmNumber: e.target.value})} className="w-full px-3 py-2 rounded border text-sm font-mono" placeholder="MSCU-1234567 / BKG#xxxxxx" autoFocus />
+                  <p className="text-[10px] text-blue-700 mt-1">The reference number the forwarder gave you when they confirmed. Required.</p>
+                </div>
+
+                <div className="grid grid-cols-2 gap-3">
+                  <div><label className="text-[10px] font-semibold">Customer Name</label>
+                    <input value={preCust} onChange={e => setF({...f, bookConfirmCustomer: e.target.value})} className="w-full px-3 py-2 rounded border text-sm" placeholder="Who is this booking for?" /></div>
+                  <div><label className="text-[10px] font-semibold">Our Order #</label>
+                    <input value={preOrder} onChange={e => setF({...f, bookConfirmOrder: e.target.value})} className="w-full px-3 py-2 rounded border text-sm" placeholder="PO# / Order#" /></div>
+                  <div><label className="text-[10px] font-semibold">Customer Release #</label>
+                    <input value={preRel} onChange={e => setF({...f, bookConfirmRelease: e.target.value})} className="w-full px-3 py-2 rounded border text-sm" placeholder="From customer" /></div>
+                  <div><label className="text-[10px] font-semibold">Expected Ship Date</label>
+                    <input type="date" value={preExp || ''} onChange={e => setF({...f, bookConfirmExpected: e.target.value})} className="w-full px-3 py-2 rounded border text-sm" /></div>
+                </div>
+
+                <div><label className="text-[10px] font-semibold">Notes</label>
+                  <input value={f.bookConfirmNotes || ''} onChange={e => setF({...f, bookConfirmNotes: e.target.value})} className="w-full px-3 py-2 rounded border text-sm" placeholder="Vessel, voyage, cut-off times, etc." /></div>
+              </div>
+
+              <div className="flex gap-2 mt-4">
+                <button onClick={() => finalizeBookingConfirm(rate)} disabled={!f.bookConfirmNumber} className="px-4 py-2 bg-emerald-500 text-white rounded-lg text-sm font-semibold disabled:opacity-50">✅ Confirm Booking</button>
+                <button onClick={() => setBookingConfirmModal(null)} className="px-4 py-2 border border-slate-200 rounded-lg text-sm">Cancel</button>
+              </div>
+            </div>
+          </div>
+        );
+      })()}
 
       {/* Bookings List */}
       {bookings.filter(b => routeHistory.some(r => r.id === b.rate_id)).length > 0 && (
@@ -2101,6 +2524,9 @@ Date: ${today}`;
         ['docFees', 'Documentation Fees'],
         ['customsFees', 'Customs Fees'],
         ['otherFees', 'Other Fees'],
+        // v55.82-C — surface "Other Fees Description" in the mapping UI so
+        // users can correct it if auto-detection picked the wrong column.
+        ['otherFeesDesc', 'Other Fees Description'],
         ['notes', 'Notes'],
       ];
       return (<div>

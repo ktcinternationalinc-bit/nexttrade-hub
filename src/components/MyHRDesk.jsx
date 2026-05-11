@@ -471,24 +471,35 @@ export default function MyHRDesk({ user, userProfile, users, active }) {
           </div>
         </div>
 
-        {/* Two big quick-action buttons */}
+        {/* Two big quick-action buttons
+            v55.82-B (QA-22) — BULLETPROOF CONTRAST FIX.
+            Before: the "File a Request" card used text-amber-700 / amber-900
+            on a from-amber-50 to-orange-50 gradient. On certain screens the
+            subtitle was effectively yellow text on yellow background and
+            unreadable from any angle. Max reported this 10+ times.
+            Now: white card surface with a thick amber accent border for the
+            request action and a thick rose accent border for the concern
+            action. Title text is solid slate-900 (near-black) for guaranteed
+            readability. Subtitle is slate-700 with bold weight. The colored
+            border + emoji still telegraph the action's meaning at a glance.
+            Tested against light + dark wallpapers + both iOS and desktop. */}
         <div className="grid grid-cols-1 md:grid-cols-2 gap-3 mb-4">
           <button
             onClick={openRequest}
-            className="flex items-center gap-3 p-3 rounded-lg bg-gradient-to-br from-amber-50 to-orange-50 border-2 border-amber-200 hover:border-amber-400 hover:shadow-md transition text-left">
+            className="flex items-center gap-3 p-3 rounded-lg bg-white border-2 border-amber-500 hover:border-amber-600 hover:shadow-md transition text-left">
             <div className="text-3xl flex-shrink-0">📝</div>
             <div className="min-w-0">
-              <div className="text-sm font-extrabold text-amber-900">File a Request</div>
-              <div className="text-[11px] text-amber-700">Vacation · Equipment · Raise · Training · Schedule · Recognition</div>
+              <div className="text-sm font-extrabold text-slate-900">File a Request</div>
+              <div className="text-[12px] font-semibold text-slate-700">Vacation · Equipment · Raise · Training · Schedule · Recognition</div>
             </div>
           </button>
           <button
             onClick={openComplaint}
-            className="flex items-center gap-3 p-3 rounded-lg bg-gradient-to-br from-rose-50 to-pink-50 border-2 border-rose-200 hover:border-rose-400 hover:shadow-md transition text-left">
+            className="flex items-center gap-3 p-3 rounded-lg bg-white border-2 border-rose-500 hover:border-rose-600 hover:shadow-md transition text-left">
             <div className="text-3xl flex-shrink-0">🛡️</div>
             <div className="min-w-0">
-              <div className="text-sm font-extrabold text-rose-900">File a Concern</div>
-              <div className="text-xs text-rose-800">Confidential. Goes straight to {superAdminName}. Stays private from other team leads.</div>
+              <div className="text-sm font-extrabold text-slate-900">File a Concern</div>
+              <div className="text-xs font-semibold text-slate-700">Confidential. Goes straight to {superAdminName}. Stays private from other team leads.</div>
             </div>
           </button>
         </div>

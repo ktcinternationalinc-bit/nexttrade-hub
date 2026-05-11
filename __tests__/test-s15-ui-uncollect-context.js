@@ -30,11 +30,15 @@ test('S15.D2 S17.5: dashboard AIGreeter restored + overlay on other tabs', funct
   // S16 had moved Nadia to overlay-only (broke dashboard home). S17.5
   // restored her to the dashboard. Now BOTH exist: dashboard AIGreeter is
   // the primary home, overlay is for non-dashboard tabs.
+  // v55.82-F: the overlay mount block now wraps in an IIFE to compute
+  // suppressNadia (Treasury modal-open + Wake Nadia gating). The gate
+  // is still `tab !== 'dashboard'`; allow either direct mount OR IIFE
+  // wrapping with the same gate.
   assert(/<AIGreeter\s/.test(page),
     'dashboard AIGreeter must be present (primary home)');
   assert(/<NadiaFloatingOverlay\s/.test(page),
     'overlay must also be present (for non-dashboard tabs)');
-  assert(/tab !== 'dashboard' && \(\s*<NadiaFloatingOverlay/.test(page),
+  assert(/tab !== 'dashboard' && (\(\s*<NadiaFloatingOverlay|\(\(\) => \{)/.test(page),
     'overlay must be gated on tab !== dashboard to avoid double-mount');
 });
 
@@ -51,8 +55,10 @@ test('S15.T2 TicketsTab: ticket# becomes small monospace tag (not cramped beside
 });
 
 test('S15.T3 TicketsTab: colored left border drives urgency', function() {
-  assert(/borderLeft: '4px solid ' \+ leftBorderColor/.test(ticketsTab),
-    'card must have 4px colored left border');
+  // v55.82-D — closed tickets pick slate-grey #94a3b8, open tickets pick
+  // priority's leftBorderColor. Accept either pattern.
+  assert(/borderLeft: '4px solid ' \+ (leftBorderColor|\(t\.status === 'Closed' \? '#94a3b8' : leftBorderColor\))/.test(ticketsTab),
+    'card must have 4px colored left border (priority color when open, slate when closed)');
   // S16 palette: due-today moved from amber (#f59e0b) to orange (#f97316)
   // to disambiguate from medium-priority yellow.
   assert(/leftBorderColor = isOverdue \? '#ef4444' : \(isDueToday \? '#f97316' : priColor\)/.test(ticketsTab),

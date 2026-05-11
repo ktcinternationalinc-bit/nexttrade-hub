@@ -21,7 +21,4 @@ CREATE INDEX IF NOT EXISTS idx_hr_complaints_crisis_flag
   ON hr_complaints(crisis_flag)
   WHERE crisis_flag IS NOT NULL;
 
-COMMENT ON COLUMN hr_complaints.crisis_flag IS
-  'v55.81 QA-17: heuristic crisis-language flag set at submission time. ' ||
-  'NULL for the vast majority. self_harm > threat > distress in severity. ' ||
-  'Surfaces resources to the user and elevates urgency for admins.';
+COMMENT ON COLUMN hr_complaints.crisis_flag IS 'v55.81 QA-17: heuristic crisis-language flag set at submission time. NULL for the vast majority. self_harm > threat > distress in severity. Surfaces resources to the user and elevates urgency for admins.';

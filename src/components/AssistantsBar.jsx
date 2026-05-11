@@ -259,22 +259,43 @@ export default function AssistantsBar({
     // dispatches 'ktc:assistant-speaking' events with { agent, speaking }
     // and we toggle the pulse class only on the active+speaking tile.
     var isSpeaking = isActive && (speakingState[who] === true);
+    // v55.82-B (QA-23) — Active glow class wiring.
+    // BEFORE: inline `boxShadow: isActive ? props.activeGlow : undefined`
+    // ALWAYS won over the .ktc-assistant-speaking keyframe animation, so
+    // the active tile NEVER pulsed (Problem 2). It also caused all three
+    // tiles to flicker on every parent re-render because React removed
+    // and re-added the inline style every time, and `transition-all`
+    // animated the change → visible blink (Problem 3).
+    // NOW: no inline boxShadow at all. Two CSS classes drive every state:
+    //   .ktc-assistant-active           → idle active, slow soft breath
+    //   .ktc-assistant-speaking         → talking, faster deep pulse
+    // Both share the same --ktc-glow-color variable (per-persona color)
+    // and only animate box-shadow. Transition list is narrowed to props
+    // that CAN'T conflict (transform, opacity).
+    var activeClass = isActive
+      ? (isSpeaking ? 'ktc-assistant-speaking' : 'ktc-assistant-active')
+      : '';
     return (
       <button
         onClick={function () { togglePanel(who); }}
         aria-pressed={isActive}
         aria-label={isActive ? props.name + ' is the active assistant' : 'Switch to ' + props.name}
-        className={'group relative flex flex-col items-center text-center rounded-3xl p-4 sm:p-6 transition-all duration-300 ' +
+        className={'group relative flex flex-col items-center text-center rounded-3xl p-4 sm:p-6 ' +
+          // Narrowed transition — no longer 'transition-all'. Only the props
+          // we WANT animated when isActive flips. box-shadow is intentionally
+          // NOT in this list because the ktc-assistant-active class drives
+          // it via keyframes, and the transition would fight the keyframes.
+          'transition-[transform,opacity] duration-300 ' +
           (isActive
-            ? 'shadow-2xl scale-[1.04] ring-4 ring-offset-2 ring-offset-white ' + props.ringColor + (isSpeaking ? ' ktc-assistant-speaking' : '')
+            ? 'shadow-2xl scale-[1.04] ring-4 ring-offset-2 ring-offset-white ' + props.ringColor + ' ' + activeClass
             : 'hover:shadow-2xl hover:-translate-y-1 ring-2 ring-transparent shadow-lg opacity-90')}
         style={Object.assign(
           {
             background: props.bg,
-            boxShadow: isActive ? props.activeGlow : undefined,
           },
-          // CSS var consumed by .ktc-assistant-speaking keyframe so each
-          // assistant pulses in its own color, not a shared default.
+          // CSS var consumed by .ktc-assistant-active / .ktc-assistant-speaking
+          // keyframes so each persona pulses in its own color. Set ONLY when
+          // active so inactive tiles don't carry an unused custom property.
           isActive ? { '--ktc-glow-color': props.glowColorVar } : {}
         )}>
         {/* v55.75 (A1) — Badge no longer animates by default. Only the

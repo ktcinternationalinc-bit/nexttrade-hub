@@ -616,7 +616,7 @@ export default function PhoneWidget({ user, userProfile, users, customers }) {
           </div>
 
           {error && (
-            <div className="bg-red-50 text-red-600 text-[10px] p-2">{error} <button onClick={() => setError('')} className="underline ml-1">dismiss</button></div>
+            <div className="bg-red-50 text-red-900 text-[10px] p-2 border border-red-200 font-semibold">{error} <button onClick={() => setError('')} className="underline ml-1">dismiss</button></div>
           )}
 
           {/* Tabs */}

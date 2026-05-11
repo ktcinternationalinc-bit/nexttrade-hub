@@ -660,7 +660,7 @@ export default function CRMTab({ toast, customers, invoices, user, userProfile, 
         <div className="grid grid-cols-4 gap-2 mb-3">
           <div className="bg-blue-50 rounded-lg p-2 text-center"><div className="text-[9px] text-slate-500">Sales</div><div className="text-sm font-bold text-blue-600">{fE(totalSales)}</div></div>
           <div className="bg-emerald-50 rounded-lg p-2 text-center"><div className="text-[9px] text-slate-500">Collected</div><div className="text-sm font-bold text-emerald-600">{fE(totalCollected)}</div></div>
-          <div className="bg-red-50 rounded-lg p-2 text-center"><div className="text-[9px] text-slate-500">Owed</div><div className="text-sm font-bold text-red-500">{fE(totalOwed)}</div></div>
+          <div className="bg-red-50 rounded-lg p-2 text-center border border-red-200"><div className="text-[9px] text-slate-600">Owed</div><div className="text-sm font-bold text-red-500">{fE(totalOwed)}</div></div>
           <div className="bg-amber-50 rounded-lg p-2 text-center"><div className="text-[9px] text-slate-500">Orders</div><div className="text-sm font-bold">{invs.length}</div></div>
         </div>
       ) : (

@@ -10,10 +10,18 @@ import PriorityBoard from './PriorityBoard';
 
 const STATUSES = ['New','Acknowledged','In Progress','Blocked','On Hold','Review','Closed','Reopened'];
 // S16 — Distinct priority colors that don't collide with due-today orange.
-// High   → crimson   #dc2626  (critical importance)
-// Medium → yellow    #eab308  (warning)
-// Low    → emerald   #10b981  (normal/no concern)
-const PRIORITIES = [{v:'high',l:'High / عالي',c:'#dc2626'},{v:'medium',l:'Medium / متوسط',c:'#eab308'},{v:'low',l:'Low / منخفض',c:'#10b981'}];
+// v55.82-D — Added CRITICAL tier above High per Max May 10 2026:
+// "Critical means it's gotta be done within the next couple of hours."
+//   Critical → near-black red #7f1d1d  (drop-everything)
+//   High     → crimson        #dc2626  (very important)
+//   Medium   → yellow         #eab308  (warning)
+//   Low      → emerald        #10b981  (normal/no concern)
+const PRIORITIES = [
+  {v:'critical',l:'Critical / حرج',c:'#7f1d1d', icon:'🚨', sla:'within hours'},
+  {v:'high',    l:'High / عالي',   c:'#dc2626', icon:'🔴', sla:'today'},
+  {v:'medium',  l:'Medium / متوسط',c:'#eab308', icon:'🟡', sla:'this week'},
+  {v:'low',     l:'Low / منخفض',  c:'#10b981', icon:'🟢', sla:'when possible'},
+];
 // S17 — STATUS_COLORS used for summary cards and top-level indicators.
 // Closed switched from green (#10b981) to dark slate (#1e293b) so it reads
 // as archive-like, distinct from Acknowledged (purple) and Resolved (green).
@@ -114,7 +122,7 @@ export default function TicketsTab({ toast, customers, user, userProfile, users,
     const recognition = new SR();
     recognition.lang = 'en-US'; recognition.continuous = false; recognition.interimResults = false;
     setListening(true);
-    recognition.onresult = (event) => { const text = event.results[0][0].transcript; setListening(false); let priority = 'medium'; if (/urgent|high|asap/i.test(text)) priority = 'high'; if (/\blow\b/i.test(text)) priority = 'low'; let assignTo = ''; (users || []).forEach(u => { if (text.toLowerCase().includes((u.name || '').toLowerCase())) assignTo = u.id; }); let dueDate = ''; if (/today/i.test(text)) dueDate = todayStr; if (/tomorrow/i.test(text)) { const d = new Date(); d.setDate(d.getDate() + 1); dueDate = fmtET(d, 'iso'); } setF({ title: text, priority, assignedTo: assignTo, dueDate }); setShowAdd(true); };
+    recognition.onresult = (event) => { const text = event.results[0][0].transcript; setListening(false); let priority = 'medium'; if (/critical|emergency|drop everything|right now/i.test(text)) priority = 'critical'; else if (/urgent|high|asap/i.test(text)) priority = 'high'; if (/\blow\b/i.test(text)) priority = 'low'; let assignTo = ''; (users || []).forEach(u => { if (text.toLowerCase().includes((u.name || '').toLowerCase())) assignTo = u.id; }); let dueDate = ''; if (/today/i.test(text)) dueDate = todayStr; if (/tomorrow/i.test(text)) { const d = new Date(); d.setDate(d.getDate() + 1); dueDate = fmtET(d, 'iso'); } setF({ title: text, priority, assignedTo: assignTo, dueDate }); setShowAdd(true); };
     recognition.onerror = () => setListening(false);
     recognition.onend = () => setListening(false);
     recognition.start();
@@ -155,7 +163,7 @@ export default function TicketsTab({ toast, customers, user, userProfile, users,
     if (assignedF !== 'all') arr = arr.filter(t => assignedF === 'unassigned' ? !t.assigned_to : t.assigned_to === assignedF);
     if (priorityF !== 'all') arr = arr.filter(t => t.priority === priorityF);
     // Sort
-    const priOrder = { high: 0, medium: 1, low: 2 };
+    const priOrder = { critical: 0, high: 1, medium: 2, low: 3 };
     if (sortBy === 'priority') arr = [...arr].sort((a, b) => (priOrder[a.priority] ?? 1) - (priOrder[b.priority] ?? 1));
     else if (sortBy === 'owner') arr = [...arr].sort((a, b) => (getUserName(a.assigned_to) || 'zzz').localeCompare(getUserName(b.assigned_to) || 'zzz'));
     else if (sortBy === 'due') arr = [...arr].sort((a, b) => (a.due_date || '9999').localeCompare(b.due_date || '9999'));
@@ -1138,6 +1146,7 @@ export default function TicketsTab({ toast, customers, user, userProfile, users,
       </select>
       <select value={priorityF} onChange={e => { setPriorityF(e.target.value); }} className="px-2 py-1 rounded-lg border text-xs font-semibold">
         <option value="all">⚡ Priority: All</option>
+        <option value="critical">🚨 Critical</option>
         <option value="high">🔴 High</option>
         <option value="medium">🟡 Medium</option>
         <option value="low">🟢 Low</option>
@@ -1158,11 +1167,18 @@ export default function TicketsTab({ toast, customers, user, userProfile, users,
       ))}
     </div>
 
-    {/* Stats — click to filter */}
-    <div className="grid grid-cols-4 gap-3 mb-3">
+    {/* Stats — click to filter
+        v55.82-D — Added Critical card. Five columns now (was four).
+        Critical card sits leftmost, dark-red accent (#7f1d1d), so it grabs
+        the eye whenever a critical ticket is open. */}
+    <div className="grid grid-cols-5 gap-3 mb-3">
+      <div onClick={() => { setPriorityF('critical'); setStatusF('open'); }} className="bg-white rounded-lg p-3 cursor-pointer hover:shadow transition" style={{borderLeftWidth:3,borderLeftColor:'#7f1d1d'}}>
+        <div className="text-[10px] text-slate-500">🚨 Critical</div>
+        <div className="text-lg font-extrabold text-red-900">{tickets.filter(t=>t.priority==='critical'&&t.status!=='Closed').length}</div>
+      </div>
       <div onClick={() => setStatusF('open')} className="bg-white rounded-lg p-3 cursor-pointer hover:shadow transition" style={{borderLeftWidth:3,borderLeftColor:'#3b82f6'}}><div className="text-[10px] text-slate-500">Open</div><div className="text-lg font-extrabold">{tickets.filter(t=>t.status!=='Closed').length}</div></div>
       <div onClick={() => setStatusF('overdue')} className="bg-white rounded-lg p-3 cursor-pointer hover:shadow transition" style={{borderLeftWidth:3,borderLeftColor:'#ef4444'}}><div className="text-[10px] text-slate-500">Overdue</div><div className="text-lg font-extrabold text-red-500">{tickets.filter(t=>t.due_date&&t.due_date<todayStr&&t.status!=='Closed').length}</div></div>
-      <div onClick={() => { setPriorityF('high'); }} className="bg-white rounded-lg p-3 cursor-pointer hover:shadow transition" style={{borderLeftWidth:3,borderLeftColor:'#f59e0b'}}><div className="text-[10px] text-slate-500">High Priority</div><div className="text-lg font-extrabold text-amber-500">{tickets.filter(t=>t.priority==='high'&&t.status!=='Closed').length}</div></div>
+      <div onClick={() => { setPriorityF('high'); }} className="bg-white rounded-lg p-3 cursor-pointer hover:shadow transition" style={{borderLeftWidth:3,borderLeftColor:'#dc2626'}}><div className="text-[10px] text-slate-500">High Priority</div><div className="text-lg font-extrabold text-red-600">{tickets.filter(t=>t.priority==='high'&&t.status!=='Closed').length}</div></div>
       <div onClick={() => setStatusF('Closed')} className="bg-white rounded-lg p-3 cursor-pointer hover:shadow transition" style={{borderLeftWidth:3,borderLeftColor:'#1e293b'}}><div className="text-[10px] text-slate-500">Closed</div><div className="text-lg font-extrabold text-slate-800">{tickets.filter(t=>t.status==='Closed').length}</div></div>
     </div>
 
@@ -1322,8 +1338,23 @@ export default function TicketsTab({ toast, customers, user, userProfile, users,
 
         return (
           <div key={t.id}
-            className={'bg-white rounded-xl hover:shadow-md transition cursor-pointer overflow-hidden ' + (isBulked ? 'ring-2 ring-blue-400' : '')}
-            style={{ borderLeft: '4px solid ' + leftBorderColor, border: isBulked ? undefined : '1px solid #e2e8f0', borderLeftWidth: 4, borderLeftColor: leftBorderColor }}>
+            className={'rounded-xl hover:shadow-md transition cursor-pointer overflow-hidden '
+              + (isBulked ? 'ring-2 ring-blue-400 ' : '')
+              // v55.82-D — Closed tickets get the "archived" treatment so the
+              // user's eye glides past them. opacity-70 + slate-50 surface +
+              // grayscale class on text inside (handled below). Hover bumps
+              // back to full opacity so it's still clickable + readable when
+              // you actually need to look at one.
+              + (t.status === 'Closed' ? 'bg-slate-50 opacity-70 hover:opacity-100 ' : 'bg-white ')
+            }
+            style={{
+              // Closed tickets override the priority-color left border with
+              // a calm slate so they don't visually compete with open ones.
+              borderLeft: '4px solid ' + (t.status === 'Closed' ? '#94a3b8' : leftBorderColor),
+              border: isBulked ? undefined : '1px solid #e2e8f0',
+              borderLeftWidth: 4,
+              borderLeftColor: t.status === 'Closed' ? '#94a3b8' : leftBorderColor,
+            }}>
             <div className="px-4 py-3">
               {/* Top row: bulk select + title (the star) + status pill */}
               <div className="flex items-start gap-3 mb-2">
@@ -1388,7 +1419,7 @@ export default function TicketsTab({ toast, customers, user, userProfile, users,
                     → {getUserName(uid) || '?'}
                   </span>
                 )) : (
-                  <span className="inline-flex items-center gap-1 text-[10px] px-2 py-0.5 rounded font-semibold bg-red-50 text-red-600">
+                  <span className="inline-flex items-center gap-1 text-[10px] px-2 py-0.5 rounded font-semibold bg-red-50 text-red-800 border border-red-200">
                     <span className="w-1.5 h-1.5 rounded-full bg-red-500" />Unassigned
                   </span>
                 )}

@@ -43,7 +43,8 @@ check('A1.4 Per-assistant glow color via CSS variable',
 check('A1.5 AssistantsBar dropped ktc-assistant-active-pulse class from active tile',
   !/ktc-assistant-active-pulse/.test(ab));
 check('A1.6 Active tile gets ktc-assistant-speaking only when isSpeaking',
-  /isSpeaking \? ' ktc-assistant-speaking' : ''/.test(ab));
+  /isSpeaking \? ' ktc-assistant-speaking' : ''/.test(ab)
+  || /isSpeaking \? 'ktc-assistant-speaking' : (?:isActive \? )?'ktc-assistant-active'?/.test(ab));
 check('A1.7 speakingState introduced',
   /var \[speakingState, setSpeakingState\] = useState/.test(ab));
 check('A1.8 AssistantsBar listens for ktc:assistant-speaking event',

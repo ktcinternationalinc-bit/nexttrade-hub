@@ -682,7 +682,7 @@ export default function EgyptBankTab({ toast, user, userProfile, isAdmin, invoic
                     </div>
                     <div className="flex gap-1">
                       <button onClick={() => { setAccForm(a); setShowAddAccount(true); }} className="px-2 py-1 bg-blue-50 text-blue-600 rounded text-[10px] font-semibold">Edit</button>
-                      <button onClick={() => deleteAccount(a.id)} className="px-2 py-1 bg-red-50 text-red-600 rounded text-[10px] font-semibold">Delete</button>
+                      <button onClick={() => deleteAccount(a.id)} className="px-2 py-1 bg-red-50 text-red-800 rounded text-[10px] font-semibold border border-red-200">Delete</button>
                     </div>
                   </div>
                 </div>

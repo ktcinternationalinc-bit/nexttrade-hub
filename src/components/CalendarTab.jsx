@@ -1805,7 +1805,7 @@ export default function CalendarTab({ customers, user, userProfile, users, ticke
                           <button onClick={() => { setEditingNoteId(n.id); setEditingNoteDraft(n.note_text); }}
                             className="text-[10px] px-1.5 py-0.5 rounded hover:bg-white/60">✏️</button>
                           <button onClick={() => deleteNote(n.id)}
-                            className="text-[10px] px-1.5 py-0.5 rounded hover:bg-red-100 text-red-500">🗑</button>
+                            className="text-[10px] px-1.5 py-0.5 rounded hover:bg-red-100 text-red-700">🗑</button>
                         </div>
                       )}
                     </div>

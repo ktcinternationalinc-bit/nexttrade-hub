@@ -202,7 +202,7 @@ function CompanyManager({ companies, onSave, onDelete, editCompany, setEditCompa
             </div>
             <div className="flex gap-1">
               <button onClick={() => setEditCompany(c)} className="px-2 py-1 bg-blue-50 text-blue-600 rounded text-[10px] font-semibold">Edit</button>
-              <button onClick={() => onDelete(c.id)} className="px-2 py-1 bg-red-50 text-red-600 rounded text-[10px] font-semibold">Delete</button>
+              <button onClick={() => onDelete(c.id)} className="px-2 py-1 bg-red-50 text-red-800 rounded text-[10px] font-semibold border border-red-200">Delete</button>
             </div>
           </div>
         ))}
@@ -540,7 +540,7 @@ function QuoteList({ quotes, companies, onEdit, onPreview, onDelete }) {
                     <div className="flex items-center gap-2">
                       <span className="font-bold text-sm">{qt.quote_number}</span>
                       <span className={`px-1.5 py-0.5 rounded text-[9px] font-bold ${statusColor[qt.status] || statusColor.draft}`}>{qt.status}</span>
-                      {isExp && qt.status !== 'expired' && <span className="px-1.5 py-0.5 rounded text-[9px] font-bold bg-red-100 text-red-600">EXPIRED</span>}
+                      {isExp && qt.status !== 'expired' && <span className="px-1.5 py-0.5 rounded text-[9px] font-bold bg-red-100 text-red-900 border border-red-300">EXPIRED</span>}
                     </div>
                     <div className="text-[10px] text-slate-500 mt-0.5">
                       {qt.client_name || 'No client'} {co ? `• ${co.name}` : ''} • {qt.date}
@@ -551,7 +551,7 @@ function QuoteList({ quotes, companies, onEdit, onPreview, onDelete }) {
                   <div className="flex gap-1 ml-2">
                     <button onClick={() => onPreview(qt)} className="px-2 py-1 bg-purple-50 text-purple-600 rounded text-[10px] font-semibold">📄 PDF</button>
                     <button onClick={() => onEdit(qt)} className="px-2 py-1 bg-blue-50 text-blue-600 rounded text-[10px] font-semibold">Edit</button>
-                    <button onClick={() => onDelete(qt.id)} className="px-2 py-1 bg-red-50 text-red-600 rounded text-[10px] font-semibold">✕</button>
+                    <button onClick={() => onDelete(qt.id)} className="px-2 py-1 bg-red-50 text-red-800 rounded text-[10px] font-semibold border border-red-200">✕</button>
                   </div>
                 </div>
               </div>

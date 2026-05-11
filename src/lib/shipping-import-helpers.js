@@ -23,7 +23,17 @@
 export function parseNumberSmart(raw) {
   if (raw == null || raw === '') return NaN;
   if (typeof raw === 'number') return raw;
-  const s = String(raw).trim();
+  let s = String(raw).trim();
+  if (!s) return NaN;
+  // v55.82-E — Arabic-Indic (٠-٩) and Persian (۰-۹) digit normalization.
+  // Without this, an Egyptian user typing 5000 on an Arabic keyboard gets
+  // ٥٠٠٠, which Number() returns NaN for, and the saved row ends up with
+  // amount=NaN/0. Bug discovered May 10 2026 in the Treasury add flow.
+  // Also strip any embedded whitespace (NBSP, regular space) so "5 000"
+  // parses cleanly. Done before the comma/dot reasoning below.
+  s = s.replace(/[\u0660-\u0669]/g, function(d) { return String(d.charCodeAt(0) - 0x0660); }) // Arabic-Indic
+       .replace(/[\u06F0-\u06F9]/g, function(d) { return String(d.charCodeAt(0) - 0x06F0); }) // Persian/Urdu
+       .replace(/[\s\u00A0]/g, ''); // strip ASCII space + non-breaking space
   if (!s) return NaN;
   let clean = s.replace(/[^0-9.,\-]/g, '');
   if (!clean) return NaN;

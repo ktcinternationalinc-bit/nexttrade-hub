@@ -131,7 +131,8 @@ check('7.3 No duplicate AIGreeter import inside AssistantsBar (would mean engine
 group('8. A1 glow carry-forward intact');
 
 check('8.1 ktc-assistant-speaking class still wired',
-  /isSpeaking \? ' ktc-assistant-speaking' : ''/.test(ab));
+  /isSpeaking \? ' ktc-assistant-speaking' : ''/.test(ab)
+  || /isSpeaking \? 'ktc-assistant-speaking' : (?:isActive \? )?'ktc-assistant-active'?/.test(ab));
 check('8.2 Per-tile speaking state still active',
   /var \[speakingState, setSpeakingState\]/.test(ab));
 check('8.3 hover state per-tile, no shared timer',

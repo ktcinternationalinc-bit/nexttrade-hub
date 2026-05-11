@@ -235,8 +235,12 @@ test('Shipping: "Best rate in period" filters to primary currency', function() {
 test('Shipping: period-over-period change banner present', function() {
   assert(/Period-over-period/.test(shipTab),
     'period-over-period comparison banner present');
-  assert(/priorAvg/.test(shipTab) && /currentAvg/.test(shipTab),
-    'computes prior + current period averages');
+  // v55.82-C — switched aggregation from avg to best (Math.min) per Max May 10 2026
+  // spec ("best price of any freight forwarder as the key for any period").
+  // Either pattern is fine — test allows old or new naming.
+  assert((/priorAvg/.test(shipTab) && /currentAvg/.test(shipTab))
+      || (/priorBest/.test(shipTab) && /currentBest/.test(shipTab)),
+    'computes prior + current period summary (avg or best)');
 });
 
 test('Shipping: per-row "Δ vs prev" column in historical rates table', function() {

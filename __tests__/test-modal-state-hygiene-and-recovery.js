@@ -277,7 +277,7 @@ ok('4h: Cancel button uses closePendingTreasuryModal',
 
 ok('4i: finalizePendingTreasury also routes through closePendingTreasuryModal',
   (function() {
-    var fpt = pageSrc.match(/const finalizePendingTreasury = async \(invoiceToLink\)[\s\S]{0,4000}?^\s{2}\};/m);
+    var fpt = pageSrc.match(/const finalizePendingTreasury = async \(invoiceToLink\)[\s\S]{0,6000}?^\s{2}\};/m);
     return fpt && fpt[0].indexOf('closePendingTreasuryModal()') >= 0;
   })()
 );
@@ -315,7 +315,7 @@ ok('4o: Optimistic insert into LOCAL invoices state after success',
 
 ok('4p: finalizePendingTreasury ALSO does optimistic insert on the typo-suggestion path',
   (function() {
-    var fpt = pageSrc.match(/const finalizePendingTreasury = async \(invoiceToLink\)[\s\S]{0,4000}?^\s{2}\};/m);
+    var fpt = pageSrc.match(/const finalizePendingTreasury = async \(invoiceToLink\)[\s\S]{0,6000}?^\s{2}\};/m);
     if (!fpt) return false;
     return fpt[0].indexOf('setInvoices(function(prev)') >= 0;
   })()

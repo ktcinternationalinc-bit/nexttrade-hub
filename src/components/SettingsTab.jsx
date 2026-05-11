@@ -1355,7 +1355,7 @@ export default function SettingsTab({ toast, user, users, onReload, isAdmin, use
                     return (
                       <td key={u.id} className="px-2 py-1 text-center">
                         <button onClick={() => togglePermission(u.id, mod)}
-                          className={'px-2 py-0.5 rounded text-[9px] font-bold ' + (hasAccess ? 'bg-emerald-100 text-emerald-700' : 'bg-red-100 text-red-600')}>
+                          className={'px-2 py-0.5 rounded text-[9px] font-bold ' + (hasAccess ? 'bg-emerald-100 text-emerald-700' : 'bg-red-100 text-red-900 border border-red-300')}>
                           {hasAccess ? 'ON' : 'OFF'}
                         </button>
                       </td>
@@ -1373,7 +1373,7 @@ export default function SettingsTab({ toast, user, users, onReload, isAdmin, use
                     return (
                       <td key={u.id} className="px-2 py-1 text-center">
                         <button onClick={() => togglePermission(u.id, mod)}
-                          className={'px-2 py-0.5 rounded text-[9px] font-bold ' + (hasAccess ? 'bg-emerald-100 text-emerald-700' : 'bg-red-100 text-red-600')}>
+                          className={'px-2 py-0.5 rounded text-[9px] font-bold ' + (hasAccess ? 'bg-emerald-100 text-emerald-700' : 'bg-red-100 text-red-900 border border-red-300')}>
                           {hasAccess ? 'ON' : 'OFF'}
                         </button>
                       </td>
@@ -1408,7 +1408,7 @@ export default function SettingsTab({ toast, user, users, onReload, isAdmin, use
                     return (
                       <td key={u.id} className="px-2 py-1 text-center">
                         <button onClick={() => toggleNotif(u.id, nt.v)}
-                          className={'px-2 py-0.5 rounded text-[9px] font-bold ' + (enabled ? 'bg-emerald-100 text-emerald-700' : 'bg-red-100 text-red-600')}>
+                          className={'px-2 py-0.5 rounded text-[9px] font-bold ' + (enabled ? 'bg-emerald-100 text-emerald-700' : 'bg-red-100 text-red-900 border border-red-300')}>
                           {enabled ? 'ON' : 'OFF'}
                         </button>
                       </td>
@@ -1747,7 +1747,7 @@ export default function SettingsTab({ toast, user, users, onReload, isAdmin, use
                         {c.name_en && c.name_ar && c.name_en !== c.name_ar && (
                           <span className="text-xs text-slate-500" style={{direction:'rtl'}}>/ {c.name_ar}</span>
                         )}
-                        <span className={'text-[9px] px-1.5 py-0.5 rounded-full ' + (c.type === 'income' ? 'bg-emerald-100 text-emerald-600' : 'bg-red-100 text-red-500')}>
+                        <span className={'text-[9px] px-1.5 py-0.5 rounded-full ' + (c.type === 'income' ? 'bg-emerald-100 text-emerald-600' : 'bg-red-100 text-red-900 border border-red-300')}>
                           {c.type || 'expense'}
                         </span>
                       </div>

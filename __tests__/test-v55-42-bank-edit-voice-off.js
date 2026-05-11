@@ -141,12 +141,15 @@ assert(/id="tx-bank-out"/.test(page),
 console.log('\nhandleSaveTreasuryEdit — recalc fires for bank field changes too');
 
 var saveFnIdx = page.indexOf('const handleSaveTreasuryEdit');
-var saveFnBody = page.slice(saveFnIdx, saveFnIdx + 2000);
+var saveFnBody = page.slice(saveFnIdx, saveFnIdx + 8000);
 assert(/v55\.42/.test(saveFnBody),
   'S.1 — handleSaveTreasuryEdit has the v55.42 update');
 assert(/moneyFields = \['cash_in', 'cash_out', 'bank_in', 'bank_out', 'expected_amount'\]/.test(saveFnBody),
   'S.2 — recalc fires on changes to ANY money-bearing field including bank/expected');
-assert(/recalcInvoiceCollected\(original\.linked_invoice_id\)/.test(saveFnBody),
+// v55.82-B — variable names changed from `original.linked_invoice_id` to
+// `oldLinkedInvoiceId` / `newLinkedInvoiceId` (same semantics, supports
+// the new auto-relink-on-order#-change feature). Either pattern is fine.
+assert(/recalcInvoiceCollected\((original\.linked_invoice_id|oldLinkedInvoiceId|newLinkedInvoiceId)\)/.test(saveFnBody),
   'S.3 — recalcs the linked invoice when amounts change');
 
 // ----------------------------------------------------------------------

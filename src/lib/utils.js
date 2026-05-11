@@ -4,6 +4,68 @@ export const fmt = (n) => {
   return new Intl.NumberFormat('en-US', { maximumFractionDigits: 0 }).format(n);
 };
 
+// v55.82-E — Robust amount parser for user-typed money fields.
+//
+// ROOT CAUSE FIXED HERE: Number(formData.amount) returned NaN for several
+// real inputs Max types regularly:
+//   • "5,000" — comma thousands separator → NaN
+//   • "5 000" — space thousands separator → NaN
+//   • "٥٠٠٠"  — Arabic-Indic digits → NaN  (frequent on iOS Arabic keyboard)
+//   • "5000,50" — EU/Arabic decimal comma → NaN
+// Postgres then either rejected the insert (silent fail because the toast
+// got swallowed) or coerced NaN to 0 — either way the saved cash_in was
+// not the amount the user typed.
+//
+// parseAmount() handles all of these. Returns 0 (not NaN) on unparseable
+// input so callers can use the result directly in arithmetic without
+// blowing up on isNaN. Use isValidAmount() if you need to validate
+// presence vs zero.
+//
+// Implementation note: kept self-contained in utils.js (does NOT depend
+// on shipping-import-helpers.js) because page.jsx already imports utils
+// and the import chain matters for SWC compilation in API routes.
+export const parseAmount = (raw) => {
+  if (raw == null || raw === '') return 0;
+  if (typeof raw === 'number') return isNaN(raw) ? 0 : raw;
+  let s = String(raw).trim();
+  if (!s) return 0;
+  // Arabic-Indic (٠-٩) → ASCII
+  s = s.replace(/[\u0660-\u0669]/g, (d) => String(d.charCodeAt(0) - 0x0660));
+  // Persian/Urdu (۰-۹) → ASCII
+  s = s.replace(/[\u06F0-\u06F9]/g, (d) => String(d.charCodeAt(0) - 0x06F0));
+  // Strip every kind of whitespace, including NBSP that some keyboards inject
+  s = s.replace(/[\s\u00A0]/g, '');
+  if (!s) return 0;
+  let clean = s.replace(/[^0-9.,\-]/g, '');
+  if (!clean) return 0;
+  const lastComma = clean.lastIndexOf(',');
+  const lastDot = clean.lastIndexOf('.');
+  if (lastComma > -1 && lastDot > -1 && lastComma > lastDot) {
+    // EU style: 1.234,56 — dot=thousands, comma=decimal
+    clean = clean.replace(/\./g, '').replace(',', '.');
+  } else if (lastComma > -1 && lastDot === -1) {
+    // Comma-only: ambiguous between thousands and decimal.
+    // Heuristic: 2+ commas OR exactly 3 digits after the last comma → thousands.
+    const commaCount = (clean.match(/,/g) || []).length;
+    const afterComma = clean.length - lastComma - 1;
+    if (commaCount > 1 || afterComma >= 3) clean = clean.replace(/,/g, '');
+    else clean = clean.replace(',', '.');
+  } else {
+    // Dot-only or pure digits: comma stripping is safe.
+    clean = clean.replace(/,/g, '');
+  }
+  const n = Number(clean);
+  return isNaN(n) ? 0 : n;
+};
+
+// Companion check: did the user actually type a non-zero amount?
+// Use this for validation ("Amount required") so 0 is treated as missing.
+// parseAmount("") returns 0 too — this disambiguates.
+export const isValidAmount = (raw) => {
+  const n = parseAmount(raw);
+  return n > 0;
+};
+
 // Format as EGP currency
 export const fE = (n) => {
   if (n == null || isNaN(n)) return '—';

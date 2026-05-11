@@ -2,7 +2,7 @@
 import React, { useState, useEffect, useMemo, useCallback, useRef, useContext, createContext } from 'react';
 import { supabase, dbInsert, dbUpdate, dbDelete } from '../lib/supabase';
 import { filterActiveUsers } from '../lib/active-users';
-import { fmt, fE, COLORS, EXPENSE_CATS, getReconStatus, STATUS_STYLES, today, inRange, monthOf, getWarehouseCat, sanitize, stripBankMatchMetadata, resolveCatName, buildCatOptions, isKnownCat, aggregatePaymentSources, PAYMENT_SOURCE_META } from '../lib/utils';
+import { fmt, fE, COLORS, EXPENSE_CATS, getReconStatus, STATUS_STYLES, today, inRange, monthOf, getWarehouseCat, sanitize, stripBankMatchMetadata, resolveCatName, buildCatOptions, isKnownCat, aggregatePaymentSources, PAYMENT_SOURCE_META, parseAmount, isValidAmount } from '../lib/utils';
 import { evaluateCheckReconcile as libEvaluateCheckReconcile } from '../lib/check-reconcile';
 import { fmtET, todayET, etDateStr } from '../lib/et-time';
 import * as XLSX from 'xlsx';
@@ -420,6 +420,26 @@ export default function App() {
   const [showAddPayment, setShowAddPayment] = useState(false);
   const [showAddInvoice, setShowAddInvoice] = useState(false);
   const [showAddTreasury, setShowAddTreasury] = useState(false);
+  // v55.82-F — Per-tab opt-in: Nadia is suppressed by default in Treasury
+  // (per Max May 11 2026 spec), and only appears when the user explicitly
+  // clicks "Wake Nadia" on the Treasury tab. Resets on tab change so each
+  // visit to Treasury starts in suppressed mode again.
+  const [nadiaWokenInTab, setNadiaWokenInTab] = useState({});
+  // v55.82-F — Reset effect. Without this, clicking "Wake Nadia" on
+  // Treasury, then navigating to Sales (or any other tab), then coming
+  // BACK to Treasury, would find Nadia still woken — violating the
+  // "default suppressed" spec. Now we drop the treasury flag whenever
+  // the user leaves the Treasury tab. Re-entering Treasury is a fresh
+  // suppressed-by-default visit.
+  useEffect(function() {
+    if (tab !== 'treasury' && nadiaWokenInTab.treasury) {
+      setNadiaWokenInTab(function(prev) {
+        var next = Object.assign({}, prev);
+        delete next.treasury;
+        return next;
+      });
+    }
+  }, [tab]);
   const [editingTxn, setEditingTxn] = useState(null);
   const [splittingTxn, setSplittingTxn] = useState(null);
   const [splits, setSplits] = useState([{ order: '', amount: 0 }, { order: '', amount: 0 }]);
@@ -455,6 +475,11 @@ export default function App() {
   // banner INSIDE the modal listing every missing/invalid field, plus per-
   // field highlighting. Cleared whenever the form is reset or submitted OK.
   const [treasuryFormErrors, setTreasuryFormErrors] = useState([]);
+  // v55.82-E — In-flight visual state for the Submit button. Disables the
+  // button + shows "Saving…" while handleAddTreasury is running so users
+  // can't double-tap and don't think the system froze when there's actually
+  // a slow network round-trip in progress.
+  const [treasurySaving, setTreasurySaving] = useState(false);
   // shape: { record, amount, txDate, matches: [...existing rows], invoiceToLink }
   // Loading flag for the inline "Create Invoice + Save Treasury" button so
   // the user gets immediate feedback (button disables + shows spinner) and
@@ -484,6 +509,12 @@ export default function App() {
       delete next.__creatingInvoice;
       delete next.__newInvCustomer;
       delete next.__newInvCustomerId;
+      // v55.82-B — also strip the auto-link flag and search seed so a
+      // subsequent open of the modal starts clean. Without these, the
+      // green "Auto-linked" chip could re-appear with stale customer
+      // info on a fresh transaction attempt.
+      delete next.__newInvCustomerAutoLinked;
+      delete next.__newInvSearch;
       delete next.__newInvTotal;
       delete next.__newInvDate;
       return next;
@@ -1517,6 +1548,13 @@ export default function App() {
   // LOOKS right, but safe totals inflate by the duplicate amount. This ref
   // lets us reject the second call within the same logical submission.
   const addPaymentRunning = useRef(false);
+  // v55.82-E — Same re-entry guard as addPaymentRunning, but for the
+  // Treasury "+ New Transaction" Submit button. Without this, a fast
+  // double-tap inserted two cash_in rows for the same payment. Caught
+  // during the v55.82-E root-cause review of Max's "amounts not
+  // recording properly" report. The freeze users perceived was made
+  // worse by the second click hitting an unguarded handler.
+  const addTreasuryRunning = useRef(false);
   useEffect(() => {
     if (autoMatchRunning.current) return;
     if (!treasury.length || !egyptBankTxns.length) return;
@@ -2327,7 +2365,10 @@ export default function App() {
     // we detect common database errors and translate to plain language.
     if (!formData.orderNumber || !String(formData.orderNumber).trim()) { toast.warning('Order number is required / رقم الأمر مطلوب'); return; }
     if (!resolvedCustomerName) { toast.warning('Customer name is required / اسم العميل مطلوب'); return; }
-    if (!formData.amount || Number(formData.amount) <= 0) { toast.warning('Amount must be greater than zero / المبلغ يجب أن يكون أكبر من صفر'); return; }
+    // v55.82-E — same parseAmount/isValidAmount upgrade as handleAddTreasury.
+    // Comma-thousands and Arabic-Indic digits previously slipped through
+    // Number(...) <= 0 and saved an invoice with NaN total_amount.
+    if (!isValidAmount(formData.amount)) { toast.warning('Amount must be greater than zero / المبلغ يجب أن يكون أكبر من صفر'); return; }
     try {
       const orderNum = sanitize(formData.orderNumber);
       const { data: inserted, error: insErr } = await supabase.from('invoices').insert({
@@ -2335,7 +2376,7 @@ export default function App() {
         customer_name: sanitize(resolvedCustomerName),
         customer_id: resolvedCustomerId || null,
         invoice_date: formData.date || today(),
-        total_amount: Number(formData.amount),
+        total_amount: parseAmount(formData.amount),
         total_collected: 0,
         sales_rep: formData.salesRep || '',
         notes: sanitize(formData.notes || ''),
@@ -2467,6 +2508,36 @@ export default function App() {
   const handleAddTreasury = async (opts) => {
     opts = opts || {};
     if (!canEditTreasury) { toast.error('You do not have permission to add treasury entries.'); return; }
+    // v55.82-E — RE-ENTRY GUARD. Without this, a fast double-tap on the
+    // Save button fired two parallel saves: both passed validation,
+    // both reached dbInsert, both wrote rows. The second one then
+    // tripped the unique-index dedup check (if enabled) and opened
+    // the duplicate-confirmation modal — which the user couldn't tell
+    // apart from the legitimate dup flow. Either way, books were off
+    // by a duplicate. This ref-based guard rejects any concurrent
+    // entry while a save is in flight. Released in finally so it
+    // resets even on a thrown error.
+    if (addTreasuryRunning.current) {
+      console.log('[treasury-add] re-entry blocked — save already in flight');
+      return;
+    }
+    addTreasuryRunning.current = true;
+    setTreasurySaving(true);
+    try {
+      return await _handleAddTreasuryImpl(opts);
+    } finally {
+      addTreasuryRunning.current = false;
+      setTreasurySaving(false);
+    }
+  };
+
+  // v55.82-E — Body of handleAddTreasury extracted into a private impl so
+  // the entry-point can wrap the whole thing in the re-entry guard above
+  // without repeating the unwrap/wrap code at every early-return path.
+  // All `return` statements below close out the SAVE flow normally; the
+  // guard release happens in the wrapper's finally block.
+  const _handleAddTreasuryImpl = async (opts) => {
+    opts = opts || {};
     // v55.47 — Collect ALL validation errors first instead of bailing on
     // the first one with a toast. The user sees every problem at once in
     // a persistent banner inside the modal, plus per-field highlighting.
@@ -2475,7 +2546,13 @@ export default function App() {
     // field was blank and the toast popped and died in 2s).
     const errs = [];
     const txDate = formData.date || today();
-    if (!formData.amount || Number(formData.amount) <= 0) {
+    // v55.82-E — Use isValidAmount() instead of Number(...). Number("5,000")
+    // returns NaN, so the OLD check `Number(...) <= 0` was FALSE for NaN
+    // (NaN <= 0 is false), letting the form pass validation but then
+    // writing NaN/0 to cash_in. Now: parseAmount handles commas, spaces,
+    // and Arabic-Indic digits; isValidAmount returns true only when the
+    // typed value is a real positive number.
+    if (!isValidAmount(formData.amount)) {
       errs.push({ field: 'amount', label: 'Amount / المبلغ', msg: 'Required — type the amount of money for this transaction.' });
     }
     const isBankPlaceholder = formData.type === 'bank_in' || formData.type === 'bank_out';
@@ -2502,6 +2579,34 @@ export default function App() {
         errs.push({ field: 'desc', label: 'Description / الوصف', msg: 'Required for bank entries.' });
       }
     }
+
+    // v55.82-B — Income (cash_in) without Order# moved into the persistent
+    // banner. The same rule existed at line 2700+ as a one-shot toast, but
+    // toasts at the corner are easy to miss on mobile and disappear after
+    // a few seconds. Now: same gate, same exception list (Refund, Owner
+    // Contribution, etc.), but the message stays pinned at the top of the
+    // form until fixed. Bank IN already had its own banner-level check
+    // above. Only applies when no override category is selected.
+    var preTxType = formData.type || 'in';
+    var preIsIncome = preTxType === 'in' || preTxType === 'bank_in';
+    if (preIsIncome && !isBankPlaceholder) {
+      var preOrderTrim = String(formData.orderNumber || '').trim();
+      if (!preOrderTrim) {
+        var preCatName = String(formData.category || '').trim();
+        var preNonOrderIncomeCats = ['Refund', 'Advance', 'Owner Contribution', 'Owner Draw', 'Loan', 'Loan Received', 'Other Income', 'Inter-Bank Transfer', 'Bank Fee', 'استرداد', 'سلفة', 'إيداع المالك', 'قرض', 'دخل آخر'];
+        var preIsNonOrderIncome = preCatName && preNonOrderIncomeCats.some(function(n) {
+          return preCatName.toLowerCase() === n.toLowerCase();
+        });
+        if (!preIsNonOrderIncome) {
+          errs.push({
+            field: 'orderNumber',
+            label: 'Order # / رقم الأمر',
+            msg: 'Required for Cash IN — needed to link the payment to a customer invoice. If this is not a customer payment (refund, advance, owner deposit, loan), pick a non-order Category instead. / مطلوب لربط الدفعة بفاتورة عميل. لو ليست دفعة عميل، اختر تصنيف غير العميل.'
+          });
+        }
+      }
+    }
+
     if (errs.length > 0) {
       // Persistent in-form banner + corner toast (belt + suspenders so the
       // user sees the failure at least one of the two ways).
@@ -2533,7 +2638,14 @@ export default function App() {
       const txType = formData.type || 'in';
       const isIncome = txType === 'in' || txType === 'bank_in';
       const currency = formData.currency || 'EGP';
-      const amt = Number(formData.amount);
+      // v55.82-E — parseAmount instead of Number(). See utils.js comment.
+      // BEFORE this fix, typing "5,000" (with thousands separator) or
+      // "٥٠٠٠" (Arabic-Indic digits, common on iOS Arabic keyboard)
+      // produced amt=NaN, which then got written into cash_in as
+      // either NaN (rejected by Postgres) or 0 (silently coerced).
+      // Either way, Max's typed amount was lost. parseAmount handles
+      // both cases plus comma decimals and embedded whitespace.
+      const amt = parseAmount(formData.amount);
 
       // v55.41 — DUPLICATE PREFLIGHT.
       // Open a confirmation modal if an existing treasury row matches
@@ -2648,11 +2760,37 @@ export default function App() {
           record.linked_invoice_id = matchingInvoice.id;
           // Insert. Only recalc for real cash_in; placeholders wait for the match.
           const inserted = await dbInsert('treasury', record, user?.id);
+          // v55.82-E ROOT-CAUSE #1 FIX. Previously a recalcInvoiceCollected()
+          // throw was poisoning the entire save. The treasury row WAS inserted
+          // successfully (Max's "system not recording amounts properly" report
+          // — actually it WAS recording, but the UI lied and said it failed).
+          // The recalc throws bubbled up to the outer catch at line 2762 which
+          // treated it as a duplicate-or-error and left the modal open with
+          // unreset state. User retried, got real duplicates. Refreshed the
+          // page, found the row already there.
+          //
+          // Fix: recalc gets its own try/catch. If it fails we log + warn the
+          // user that the invoice's collected total may need a manual refresh,
+          // BUT we still complete the success flow — modal closes, form clears,
+          // toast confirms. The insert is the source of truth; recalc is a
+          // derived view.
           if (!isBankPlaceholder) {
-            await recalcInvoiceCollected(matchingInvoice.id);
+            try {
+              await recalcInvoiceCollected(matchingInvoice.id);
+            } catch (recalcErr) {
+              console.warn('[treasury-add] insert succeeded but recalcInvoiceCollected threw:', recalcErr && recalcErr.message);
+              try { toast.warning('Saved ✓ — but the invoice total may need a manual refresh (Fix Links button).'); } catch (_) {}
+            }
           }
           setTreasury(prev => [inserted, ...prev]);
           setShowAddTreasury(false);
+          // v55.82-E — ALSO clear modal-companion state so a future open
+          // is clean. Belt-and-suspenders with the open-button reset.
+          setPendingTreasuryRecord(null);
+          setDuplicateConfirm(null);
+          setTreasuryFormErrors([]);
+          setIsCreatingInvoice(false);
+          setCreateInvoiceError(null);
           toast.success(
             (isBankPlaceholder ? 'Bank entry saved (awaiting statement) + linked to ' : 'Transaction saved + linked to ')
             + (matchingInvoice.customer_name || ('#' + matchingInvoice.order_number)) + ' ✓'
@@ -2722,6 +2860,13 @@ export default function App() {
       const inserted = await dbInsert('treasury', record, user?.id);
       setTreasury(prev => [inserted, ...prev]);
       setShowAddTreasury(false);
+      // v55.82-E — clear modal-companion state on every successful save
+      // so the next open is guaranteed clean.
+      setPendingTreasuryRecord(null);
+      setDuplicateConfirm(null);
+      setTreasuryFormErrors([]);
+      setIsCreatingInvoice(false);
+      setCreateInvoiceError(null);
       toast.success(isBankPlaceholder ? 'Bank entry saved — awaiting bank statement ✓' : 'Transaction saved ✓');
       setFormData({});
       setTimeout(() => loadAllData(), 500);
@@ -2742,16 +2887,20 @@ export default function App() {
         || /unique constraint/i.test(msg);
       if (isUniqueViolation && !opts.bypassDupCheck) {
         console.warn('[treasury-add] DB unique-constraint violation — opening duplicate confirmation modal');
+        // v55.82-E — parseAmount here too. The dup-recovery path was
+        // calling Number(formData.amount) which would mis-match ON RETRY
+        // for the same comma-typed input that broke the original save.
+        var dupAmt = parseAmount(formData.amount);
         var probableMatches = findPotentialDuplicates(
           formData.date || today(),
-          Number(formData.amount),
+          dupAmt,
           formData.desc,
           formData.type === 'in' || formData.type === 'bank_in' || !formData.type,
           formData.type === 'bank_in' || formData.type === 'bank_out'
         );
         setDuplicateConfirm({
           txDate: formData.date || today(),
-          amount: Number(formData.amount),
+          amount: dupAmt,
           description: formData.desc,
           isIncome: formData.type === 'in' || formData.type === 'bank_in' || !formData.type,
           matches: probableMatches,
@@ -2759,9 +2908,22 @@ export default function App() {
         });
         return;
       }
-      toast.error(err.message);
+      // v55.82-E — Non-unique-violation errors used to fire only toast.error
+      // and fall off the end of the function with the modal still open and
+      // formData intact. Toast at the corner on mobile gets missed easily,
+      // and the user couldn't tell whether the save actually happened. Now
+      // we ALSO push the error into treasuryFormErrors so the persistent red
+      // banner stays visible until the user explicitly retries or closes.
+      console.error('[treasury-add] save failed:', err);
+      try { toast.error('Save failed: ' + (err && err.message)); } catch (_) {}
+      setTreasuryFormErrors([{
+        field: 'amount',
+        label: 'Save failed',
+        msg: 'Database error: ' + (err && err.message ? err.message : String(err)) + ' — try again, or close this dialog and check the transaction list to see if the row was already saved before retrying.'
+      }]);
     }
   };
+  // End of _handleAddTreasuryImpl
 
   // Finalize the pending treasury record after the user either:
   // (a) accepts a typo suggestion → use that invoice's id
@@ -2807,8 +2969,42 @@ export default function App() {
       setTimeout(() => loadAllData(), 500);
     } catch (err) {
       console.error('[finalizePendingTreasury] error', err);
-      safeT.error(err && err.message ? err.message : String(err));
-      setCreateInvoiceError('Saving the transaction failed: ' + (err && err.message ? err.message : String(err)));
+      var rawMsg = (err && err.message) ? String(err.message) : String(err);
+      var pgcode = (err && err.code) ? String(err.code) : '';
+      var isUniqueViolation = pgcode === '23505'
+        || /duplicate key value/i.test(rawMsg)
+        || /unique constraint/i.test(rawMsg);
+
+      if (isUniqueViolation) {
+        // v55.82-B — Graceful recovery for the orphan-invoice failure mode.
+        // Before this fix, if the user got past the "Order # not found"
+        // dialog and clicked "Create Invoice + Save Treasury", the invoice
+        // was created first and THEN the treasury insert ran. If a unique
+        // constraint on (date, amount, order#) tripped on the treasury
+        // insert, the user saw a raw SQL error in the red banner with no
+        // path forward — and the invoice was already in Sales as an orphan
+        // with $0 collected.
+        //
+        // Now: detect 23505 specifically, tell the user plainly what
+        // happened (invoice DID get created, but a matching cash entry
+        // already exists), and point to the recovery action (open the
+        // existing treasury row in Treasury and link it to the new invoice
+        // via the link button). The pending modal stays open so the user
+        // can copy the order# if they want.
+        var invoiceTag = invoiceToLink && invoiceToLink.id
+          ? ('Invoice #' + (invoiceToLink.order_number || invoiceToLink.id) + ' was saved to Sales.')
+          : 'The invoice may have already been created.';
+        var friendly = 'A matching cash/bank entry already exists for this date and amount. ' + invoiceTag
+          + ' To finish: close this dialog, find the existing treasury row, and click its link button to attach it to the invoice. '
+          + ' / يوجد قيد خزنة مطابق بنفس التاريخ والمبلغ. الفاتورة محفوظة في المبيعات. لإكمال الربط، أغلق هذه النافذة وافتح القيد الموجود في الخزنة واضغط زر الربط.';
+        setCreateInvoiceError(friendly);
+        safeT.warning('Invoice saved — but a matching treasury entry already exists. See banner for next step.');
+        return;
+      }
+
+      // Non-duplicate error path: surface message as before.
+      safeT.error(rawMsg);
+      setCreateInvoiceError('Saving the transaction failed: ' + rawMsg);
     }
   };
 
@@ -2855,8 +3051,11 @@ export default function App() {
         };
         if (isPlaceholder) {
           // Pending placeholder — amount lives in expected_amount
-          var inAmt  = Number(fd.bankIn  || 0);
-          var outAmt = Number(fd.bankOut || 0);
+          // v55.82-E — parseAmount instead of Number() so comma/Arabic/
+          // whitespace inputs don't get coerced to NaN. Same root-cause fix
+          // as handleAddTreasury — was hitting the same bug on edit.
+          var inAmt  = parseAmount(fd.bankIn  || 0);
+          var outAmt = parseAmount(fd.bankOut || 0);
           if (inAmt > 0) {
             updates.expected_amount = inAmt;
             updates.expected_direction = 'in';
@@ -2868,16 +3067,19 @@ export default function App() {
           }
         } else {
           // Confirmed bank row — amount lives in bank_in/bank_out
-          updates.bank_in  = fd.bankIn  != null ? Number(fd.bankIn)  : Number(txn.bank_in  || 0);
-          updates.bank_out = fd.bankOut != null ? Number(fd.bankOut) : Number(txn.bank_out || 0);
+          // v55.82-E — parseAmount on user-typed values; Number() retained
+          // for the txn.* fallbacks since those came straight from the DB.
+          updates.bank_in  = fd.bankIn  != null ? parseAmount(fd.bankIn)  : Number(txn.bank_in  || 0);
+          updates.bank_out = fd.bankOut != null ? parseAmount(fd.bankOut) : Number(txn.bank_out || 0);
         }
       } else {
         // Cash row — original behavior preserved
         updates = {
           transaction_date: fd.date || txn.transaction_date,
           description: fd.desc || txn.description,
-          cash_in:  fd.cashIn  != null ? Number(fd.cashIn)  : txn.cash_in,
-          cash_out: fd.cashOut != null ? Number(fd.cashOut) : txn.cash_out,
+          // v55.82-E — same parseAmount upgrade for cash edits.
+          cash_in:  fd.cashIn  != null ? parseAmount(fd.cashIn)  : txn.cash_in,
+          cash_out: fd.cashOut != null ? parseAmount(fd.cashOut) : txn.cash_out,
           order_number: fd.orderNumber != null ? fd.orderNumber : txn.order_number,
           category: fd.category != null ? fd.category : txn.category,
           subcategory: fd.subcategory != null ? fd.subcategory : txn.subcategory,
@@ -2994,7 +3196,12 @@ export default function App() {
       await dbUpdate('treasury', txnId, { linked_invoice_id: null }, userProfile?.id || user?.id);
       // Recalculate invoice collected (will now exclude this entry)
       await recalcInvoiceCollected(invoiceId);
-    } catch (err) { alert('Unlink error: ' + err.message); }
+    } catch (err) {
+      // v55.82-B — toast over native alert. See handleSaveTreasuryEdit comment.
+      console.error('[treasury-unlink] failed', err);
+      var msg = (err && err.message) ? err.message : String(err);
+      try { (toast && toast.error) ? toast.error('Unlink error: ' + msg) : alert('Unlink error: ' + msg); } catch (_) {}
+    }
   };
 
   // ── Delete Treasury Transaction ──
@@ -3010,7 +3217,12 @@ export default function App() {
       if (invoiceToRecalc) {
         try { await recalcInvoiceCollected(invoiceToRecalc); } catch(e) {}
       }
-    } catch (err) { alert('Delete error / خطأ حذف: ' + err.message); }
+    } catch (err) {
+      // v55.82-B — toast over native alert. See handleSaveTreasuryEdit comment.
+      console.error('[treasury-delete] failed', err);
+      var msg = (err && err.message) ? err.message : String(err);
+      try { (toast && toast.error) ? toast.error('Delete error: ' + msg) : alert('Delete error: ' + msg); } catch (_) {}
+    }
   };
 
   // ── Save Treasury Edit from Modal ──
@@ -3021,26 +3233,113 @@ export default function App() {
       // (or cash_in/cash_out) on a linked row left the invoice's
       // total_collected stale until a manual "Fix Links" pass.
       var original = (treasury || []).find(function(t) { return t.id === txnId; });
+
+      // v55.82-B — AUTO-LINK ON ORDER# CHANGE.
+      // Before this fix, editing a row to ADD an order# (e.g., user forgot
+      // to fill it on first save) wrote the new value but never set
+      // linked_invoice_id. The row stayed unlinked even though a matching
+      // invoice existed. Treasury Inspector showed it as orphaned and the
+      // invoice's outstanding never moved. Reports lost the trail.
+      //
+      // Now: when order_number is in the update payload AND it differs
+      // from the original, we look up the matching invoice and set
+      // linked_invoice_id accordingly. Both old and new invoice are then
+      // recalced so totals stay truthful. Same pattern as the Add path.
+      var oldOrderTrim = String((original && original.order_number) || '').trim();
+      var newOrderTrim = Object.prototype.hasOwnProperty.call(updates, 'order_number')
+        ? String(updates.order_number || '').trim()
+        : oldOrderTrim;
+      var orderChanged = newOrderTrim !== oldOrderTrim;
+      var oldLinkedInvoiceId = (original && original.linked_invoice_id) || null;
+      var newLinkedInvoiceId = oldLinkedInvoiceId;
+      var matchingInvoice = null;
+
+      if (orderChanged) {
+        if (!newOrderTrim) {
+          // Order# cleared → unlink. recalcInvoiceCollected on the old
+          // invoice runs below so its outstanding bumps back up.
+          updates.linked_invoice_id = null;
+          newLinkedInvoiceId = null;
+        } else {
+          matchingInvoice = (invoices || []).find(function(i) {
+            return String(i.order_number || '').trim() === newOrderTrim;
+          });
+          if (matchingInvoice) {
+            updates.linked_invoice_id = matchingInvoice.id;
+            newLinkedInvoiceId = matchingInvoice.id;
+          } else {
+            // Order# changed to a value that doesn't match any invoice —
+            // unlink. We surface a non-blocking warning at the end so the
+            // user knows the row is now orphaned. Save still proceeds —
+            // user might be typing the order# before the invoice exists.
+            updates.linked_invoice_id = null;
+            newLinkedInvoiceId = null;
+          }
+        }
+      }
+
       await dbUpdate('treasury', txnId, updates, userProfile?.id || user?.id);
       setTreasury(prev => prev.map(t => t.id === txnId ? { ...t, ...updates } : t));
 
-      // Recalc the linked invoice if any money-bearing field changed.
+      // Recalc the OLD linked invoice if we just unlinked or relinked away.
+      if (oldLinkedInvoiceId && oldLinkedInvoiceId !== newLinkedInvoiceId) {
+        try { await recalcInvoiceCollected(oldLinkedInvoiceId); }
+        catch (e) { console.warn('[treasury-edit] old invoice recalc failed:', e && e.message); }
+      }
+
+      // Recalc the NEW (or still-linked) invoice if either:
+      //   (a) we just newly linked it (relinking case), OR
+      //   (b) any money-bearing field changed on a row that was already linked.
       // We compare the OLD row's totals to what's in `updates` for fields
       // that are present (Object.prototype.hasOwnProperty so a missing
       // field counts as "unchanged" — never overwrite with 0 by accident).
-      if (original && original.linked_invoice_id) {
+      if (newLinkedInvoiceId) {
         var moneyFields = ['cash_in', 'cash_out', 'bank_in', 'bank_out', 'expected_amount'];
-        var changed = moneyFields.some(function(f) {
+        var amountChanged = original && moneyFields.some(function(f) {
           if (!Object.prototype.hasOwnProperty.call(updates, f)) return false;
           return Number(updates[f] || 0) !== Number(original[f] || 0);
         });
-        if (changed) {
-          try { await recalcInvoiceCollected(original.linked_invoice_id); }
-          catch (e) { console.warn('[treasury-edit] invoice recalc failed:', e && e.message); }
+        var newlyLinked = oldLinkedInvoiceId !== newLinkedInvoiceId;
+        if (amountChanged || newlyLinked) {
+          try { await recalcInvoiceCollected(newLinkedInvoiceId); }
+          catch (e) { console.warn('[treasury-edit] new invoice recalc failed:', e && e.message); }
         }
       }
+
       setEditTreasuryModal(null);
-    } catch (err) { alert('Save error / خطأ حفظ: ' + err.message); }
+
+      // v55.82-B — User-visible feedback. Was previously silent on success.
+      try {
+        if (orderChanged && matchingInvoice) {
+          if (toast && toast.success) {
+            toast.success('Saved + linked to ' + (matchingInvoice.customer_name || ('#' + matchingInvoice.order_number)) + ' ✓');
+          }
+        } else if (orderChanged && newOrderTrim && !matchingInvoice) {
+          if (toast && toast.warning) {
+            toast.warning('Saved — but order #' + newOrderTrim + ' does not match any invoice. Row is unlinked. / لا توجد فاتورة بهذا الرقم. الصف غير مرتبط.');
+          }
+        } else if (orderChanged && !newOrderTrim && oldLinkedInvoiceId) {
+          if (toast && toast.info) {
+            toast.info('Saved — order# cleared, row unlinked. / تم الحفظ، الصف غير مرتبط.');
+          }
+        } else {
+          if (toast && toast.success) toast.success('Saved ✓');
+        }
+      } catch (_) { /* never let a toast bug break the save */ }
+    } catch (err) {
+      // v55.82-B — Replace native alert() with toast.error(). Native alerts
+      // are jarring system-level dialogs on mobile, easily mistaken for
+      // browser errors rather than app feedback. Toast pattern matches the
+      // rest of the Treasury handlers.
+      console.error('[treasury-edit] save failed', err);
+      var msg = (err && err.message) ? err.message : String(err);
+      try {
+        if (toast && toast.error) toast.error('Save error: ' + msg);
+        else alert('Save error: ' + msg);
+      } catch (_) {
+        try { alert('Save error: ' + msg); } catch (__) {}
+      }
+    }
   };
 
   const handleSplitTreasury = async () => {
@@ -3842,7 +4141,27 @@ export default function App() {
         greetings and briefing cards). Shared muted state means toggling
         on one instance also silences the other.
         User can mute/unmute via button in the pill. Starts collapsed. */}
-    {greeterSettings.enabled && !greeterDismissed && tab !== 'dashboard' && (
+    {greeterSettings.enabled && !greeterDismissed && tab !== 'dashboard' && (() => {
+      // v55.82-F — Compute Nadia suppression for the current view.
+      // Three independent reasons to suppress:
+      //   1. ANY blocking Treasury modal is open (Add Treasury, pending-
+      //      invoice "Order # not found", duplicate-confirmation). Without
+      //      this, Nadia's floating panel (z-index 9998) covers form
+      //      fields on the modal (z-index 50). Auto-expand on new
+      //      assistant messages used to fire mid data-entry too.
+      //   2. The user is on the Treasury tab and has NOT explicitly
+      //      clicked "Wake Nadia" yet. Per Max's spec ("Nadia disabled
+      //      by default inside the Treasury module"), Nadia stays gone
+      //      until invited. nadiaWokenInTab resets per-session so each
+      //      page reload starts clean.
+      //   3. The Edit Treasury modal is open. Same reason as #1 — would
+      //      cover the form.
+      // suppressed=true → NadiaFloatingOverlay returns null + cancels any
+      // active speech.
+      var anyTreasuryModalOpen = !!(showAddTreasury || pendingTreasuryRecord || duplicateConfirm || editTreasuryModal);
+      var inTreasuryAndNotWoken = tab === 'treasury' && !nadiaWokenInTab.treasury;
+      var suppressNadia = anyTreasuryModalOpen || inTreasuryAndNotWoken;
+      return (
       <NadiaFloatingOverlay
         user={user} userProfile={userProfile} users={teamUsers}
         tickets={dashTickets} invoices={invoices} treasury={treasury}
@@ -3860,8 +4179,10 @@ export default function App() {
         contextOpenTicketId={openTicketId}
         externalMuted={nadiaMuted}
         onMutedChange={setNadiaMuted}
+        suppressed={suppressNadia}
       />
-    )}
+      );
+    })()}
     <div className="min-h-screen" style={{background:'#000000', color: '#e4e4e7', fontFamily: '"Inter Tight", "Inter", system-ui, sans-serif'}}>
       {/* Terminal grid background — subtle dot pattern, never moves, low opacity.
           Adds depth without distraction. CSS-only, no JS cost. */}
@@ -4491,7 +4812,13 @@ export default function App() {
                       <button onClick={async () => {
                         try {
                           const newOrder = document.getElementById('inv-edit-order')?.value?.trim();
-                          const newAmount = Number(document.getElementById('inv-edit-amount')?.value) || selectedInvoice.total_amount;
+                          // v55.82-E — parseAmount: invoice edit was hitting
+                          // the same comma/Arabic-Indic NaN bug as add. The
+                          // `|| selectedInvoice.total_amount` fallback meant
+                          // typing "5,000" silently kept the OLD amount —
+                          // looked like the edit didn't save.
+                          const newAmountParsed = parseAmount(document.getElementById('inv-edit-amount')?.value);
+                          const newAmount = newAmountParsed > 0 ? newAmountParsed : selectedInvoice.total_amount;
                           const newDate = formData.invEditDate || selectedInvoice.invoice_date;
                           const newRep = document.getElementById('inv-edit-rep')?.value?.trim();
                           const newNotes = document.getElementById('inv-edit-notes')?.value?.trim();
@@ -5386,6 +5713,51 @@ export default function App() {
                       <label className="text-[10px] font-bold text-slate-500">Order # / رقم الأمر</label>
                       <input value={txn.order_number || ''} onChange={e => setEditTreasuryModal({...txn, order_number: e.target.value})}
                         className="w-full px-3 py-2 rounded-lg border text-sm" />
+                      {/* v55.82-B — Live link-status indicator. Before this fix,
+                          the user could type any order# they wanted with no
+                          feedback on whether it matched a real invoice. They'd
+                          save, the row would silently stay unlinked, and the
+                          invoice's collected total never moved. Now the user
+                          sees right under the field whether the typed number
+                          will link to an invoice on save, who that customer
+                          is, and the invoice total. If no match, an amber
+                          "no match" hint appears so they can fix the typo or
+                          create the invoice in Sales first. */}
+                      {(() => {
+                        var typed = String(txn.order_number || '').trim();
+                        if (!typed) {
+                          return (
+                            <div className="text-[10px] text-slate-500 mt-1 italic">
+                              No order # — row will be saved unlinked. / بدون رقم أمر، الصف غير مرتبط.
+                            </div>
+                          );
+                        }
+                        var match = (invoices || []).find(function(i) {
+                          return String(i.order_number || '').trim() === typed;
+                        });
+                        if (match) {
+                          return (
+                            <div className="mt-1 flex items-center gap-2 px-2 py-1.5 rounded-md bg-emerald-50 border border-emerald-300">
+                              <span className="text-emerald-700 text-sm">✓</span>
+                              <div className="flex-1 min-w-0">
+                                <div className="text-[10px] font-extrabold text-emerald-800 uppercase tracking-wide">Will link on save</div>
+                                <div className="text-xs font-bold text-emerald-900 truncate" style={{ direction: 'rtl' }}>
+                                  {match.customer_name || ('#' + match.order_number)} — {fE(match.total_amount)}
+                                </div>
+                              </div>
+                            </div>
+                          );
+                        }
+                        return (
+                          <div className="mt-1 flex items-center gap-2 px-2 py-1.5 rounded-md bg-amber-50 border border-amber-300">
+                            <span className="text-amber-700 text-sm">⚠</span>
+                            <div className="flex-1 min-w-0">
+                              <div className="text-[10px] font-extrabold text-amber-800 uppercase tracking-wide">No matching invoice</div>
+                              <div className="text-[11px] text-amber-900">Save will succeed, but row will stay unlinked. Create the invoice in Sales first, or fix the typo. / لا توجد فاتورة بهذا الرقم.</div>
+                            </div>
+                          </div>
+                        );
+                      })()}
                     </div>
                     <div>
                       <label className="text-[10px] font-bold text-slate-500">Description / الوصف</label>
@@ -6328,7 +6700,12 @@ export default function App() {
                 // a specific error per missing field instead of the generic
                 // "fill all" message.
                 const items = formData.invoiceItems || [];
-                const totalAmt = items.reduce((a, i) => a + (i.inv_total || 0), 0) || Number(formData.amount) || 0;
+                // v55.82-E — parseAmount for the fallback typed amount.
+                // The items.reduce path is already numeric (built from
+                // line items), but the fallback `formData.amount` is a
+                // user-typed string and was hitting the comma/Arabic NaN
+                // bug.
+                const totalAmt = items.reduce((a, i) => a + (i.inv_total || 0), 0) || parseAmount(formData.amount) || 0;
 
                 // Promote custSearch → customerName if needed
                 let resolvedCustomerName = formData.customerName;
@@ -6453,7 +6830,17 @@ export default function App() {
             with all values intact.
         ========================================== */}
         {showAddTreasury && !pendingTreasuryRecord && !duplicateConfirm && (
-          <Modal onClose={() => { setShowAddTreasury(false); setFormData({}); setTreasuryFormErrors([]); }} title="New Transaction / معاملة جديدة">
+          <Modal onClose={() => {
+            // v55.82-E — Full reset on every close path. See companion notes
+            // on the Cancel button + the "+ New Transaction" button.
+            setShowAddTreasury(false);
+            setFormData({});
+            setTreasuryFormErrors([]);
+            setPendingTreasuryRecord(null);
+            setDuplicateConfirm(null);
+            setIsCreatingInvoice(false);
+            setCreateInvoiceError(null);
+          }} title="New Transaction / معاملة جديدة">
             {/* v55.47 — Persistent in-form validation error banner. When the
                 user taps Save and validation fails, this red box appears at
                 the top of the form listing every missing field. The user
@@ -6790,8 +7177,23 @@ export default function App() {
             </div>
             <div className="flex gap-2 mt-4">
               <button onClick={handleAddTreasury}
-                className="px-4 py-2 bg-blue-500 text-white rounded-lg font-semibold">Save / حفظ ✓</button>
-              <button onClick={() => { setShowAddTreasury(false); setFormData({}); }}
+                disabled={treasurySaving}
+                className={'px-4 py-2 bg-blue-500 text-white rounded-lg font-semibold ' + (treasurySaving ? 'opacity-60 cursor-wait' : 'hover:bg-blue-600')}>
+                {treasurySaving ? 'Saving… / جاري الحفظ' : 'Save / حفظ ✓'}
+              </button>
+              <button onClick={() => {
+                  // v55.82-E — Cancel must clean ALL modal-companion state too,
+                  // not just showAddTreasury + formData. Otherwise leftover
+                  // pendingTreasuryRecord / duplicateConfirm / treasuryFormErrors
+                  // can keep the next "+ New Transaction" open from rendering.
+                  setShowAddTreasury(false);
+                  setFormData({});
+                  setTreasuryFormErrors([]);
+                  setPendingTreasuryRecord(null);
+                  setDuplicateConfirm(null);
+                  setIsCreatingInvoice(false);
+                  setCreateInvoiceError(null);
+                }}
                 className="px-4 py-2 border border-slate-200 rounded-lg font-semibold">Cancel / إلغاء</button>
             </div>
           </Modal>
@@ -7136,6 +7538,11 @@ export default function App() {
               // Ticket analysis (only if permitted)
               const myTickets = hasTickets ? dashTickets.filter(t => t.assigned_to === myId && t.status !== 'Closed') : [];
               const overdueTickets = myTickets.filter(t => t.due_date && t.due_date < todayStr);
+              // v55.82-D — Critical = "must be done within hours" (Max May 10 2026).
+              // Surfaced as its own briefing line ahead of high-priority since the
+              // SLA is hours not days. Tracks separately so we can call it out
+              // even when there are no overdue items yet.
+              const criticalPriority = myTickets.filter(t => t.priority === 'critical');
               const highPriority = myTickets.filter(t => t.priority === 'high');
               const newTickets = myTickets.filter(t => t.status === 'New');
 
@@ -7173,10 +7580,16 @@ export default function App() {
               }
 
               // Overdue tickets (only if permitted)
+              // v55.82-D — Critical priority surfaces FIRST (above overdue) since
+              // the SLA is "within hours" — even if not yet overdue, it needs
+              // immediate attention.
+              if (hasTickets && criticalPriority.length > 0) {
+                messages.push({ icon: '🚨', text: criticalPriority.length + ' CRITICAL ticket' + (criticalPriority.length > 1 ? 's' : '') + ' — must be handled within hours. Drop everything and resolve now.', type: 'error', items: criticalPriority.map(t => t.ticket_number + ' — ' + t.title) });
+              }
               if (hasTickets && overdueTickets.length > 0) {
                 messages.push({ icon: '🚨', text: overdueTickets.length + ' ticket' + (overdueTickets.length > 1 ? 's are' : ' is') + ' OVERDUE. These need to be resolved immediately — clients are waiting.', type: 'error', items: overdueTickets.map(t => t.ticket_number + ' — ' + t.title) });
               }
-              if (hasTickets && highPriority.length > 0 && overdueTickets.length === 0) {
+              if (hasTickets && highPriority.length > 0 && overdueTickets.length === 0 && criticalPriority.length === 0) {
                 messages.push({ icon: '🔴', text: highPriority.length + ' high-priority ticket' + (highPriority.length > 1 ? 's' : '') + ' in your queue. Handle these before anything else.', type: 'warning' });
               }
               if (hasTickets && newTickets.length > 0) {
@@ -7899,7 +8312,8 @@ export default function App() {
               const myId = userProfile?.id;
               const todayStr = todayET();
               const twoDaysAgo = new Date(Date.now() - 48 * 3600000).toISOString();
-              const priColor = (p) => p === 'high' ? '#ef4444' : p === 'low' ? '#10b981' : '#f59e0b';
+              // v55.82-D — added critical (deep red, almost black) above high
+              const priColor = (p) => p === 'critical' ? '#7f1d1d' : p === 'high' ? '#ef4444' : p === 'low' ? '#10b981' : '#f59e0b';
               const timeAgo = (d) => { const m = Math.floor((Date.now() - new Date(d).getTime()) / 60000); if (m < 60) return m + 'm'; const h = Math.floor(m/60); if (h < 24) return h + 'h'; return Math.floor(h/24) + 'd'; };
 
               const myTickets = dashTickets.filter(t => (t.assigned_to === myId || t.created_by === myId) && t.status !== 'Closed');
@@ -7943,12 +8357,14 @@ export default function App() {
               // Priority → row-level urgency color
               // S16: DISTINCT colors for each urgency type. Previously both
               // "due today" and "medium priority" shared amber, confusing.
+              //   Critical   → #7f1d1d deep red (must be done within hours — v55.82-D)
               //   Overdue    → #ef4444 red      (danger)
               //   Due today  → #f97316 orange   (attention now)
-              //   Urgent/High→ #dc2626 crimson  (critical importance)
+              //   Urgent/High→ #dc2626 crimson  (very important)
               //   Medium     → #eab308 yellow   (warning)
               //   Low        → #64748b grey     (normal)
               const priBorderColor = (p) => {
+                if (p === 'critical') return '#7f1d1d';                 // deep red — drop everything
                 if (p === 'urgent' || p === 'high') return '#dc2626';  // crimson
                 if (p === 'medium') return '#eab308';                  // yellow
                 if (p === 'low') return '#64748b';                     // grey
@@ -9450,7 +9866,32 @@ export default function App() {
                   title="Find and link treasury rows whose order# matches an existing invoice but aren't linked. Fixes the invoice collected totals. / ابحث عن قيود الخزنة التي يطابق رقم أمرها فاتورة موجودة لكنها غير مربوطة، واربطها.">
                   🔗 Fix Links
                 </button>
-                <button onClick={() => { setShowAddTreasury(true); setFormData({ date: today(), type: 'in' }); }}
+                <button onClick={() => {
+                    // v55.82-E — RESET-OPEN HARDENING. Previously this button
+                    // only flipped showAddTreasury=true and seeded formData.
+                    // It did NOT clear pendingTreasuryRecord, duplicateConfirm,
+                    // treasuryFormErrors, isCreatingInvoice, or createInvoiceError.
+                    //
+                    // Failure mode (Max May 11 2026): if a prior submission
+                    // errored out in a path that didn't clean up (e.g. the
+                    // recalcInvoiceCollected throw → catch-block-without-modal-
+                    // reset described in v55.82-E ROOT-CAUSE #1), pressing
+                    // this button "did nothing" — gate at line 6665 checks
+                    // !pendingTreasuryRecord && !duplicateConfirm, so the
+                    // form Modal never re-rendered. User had to refresh the
+                    // whole page to recover.
+                    //
+                    // Now: every click hard-resets every Treasury modal flag
+                    // before opening. Idempotent — clean state if no stale
+                    // state existed; recovery if there was.
+                    setPendingTreasuryRecord(null);
+                    setDuplicateConfirm(null);
+                    setTreasuryFormErrors([]);
+                    setIsCreatingInvoice(false);
+                    setCreateInvoiceError(null);
+                    setShowAddTreasury(true);
+                    setFormData({ date: today(), type: 'in' });
+                  }}
                   className="px-3 py-1.5 bg-blue-500 text-white rounded-lg text-xs font-semibold hover:bg-blue-600">
                   + New Transaction
                 </button>
@@ -9469,6 +9910,31 @@ export default function App() {
                 }} className="px-3 py-1.5 bg-slate-100 text-slate-600 rounded-lg text-xs font-semibold hover:bg-slate-200">
                   📥 Export
                 </button>
+                {/* v55.82-F — Wake Nadia button. Only shown when Nadia is
+                    SUPPRESSED in Treasury (default state). Per Max's spec:
+                    "in Treasury, Nadia should only appear if the user clicks
+                    a clear button such as Wake Nadia or Open Nadia Assistant."
+                    Click flips nadiaWokenInTab.treasury → suppressNadia goes
+                    false → overlay re-renders. Resets on tab change so the
+                    next visit defaults back to suppressed. The mute button
+                    inside Nadia's panel still works to silence audio without
+                    hiding her. */}
+                {greeterSettings.enabled && !greeterDismissed && !nadiaWokenInTab.treasury && (
+                  <button
+                    onClick={() => setNadiaWokenInTab(function(prev) { return Object.assign({}, prev, { treasury: true }); })}
+                    title="Bring Nadia back into Treasury — she'll stay until you switch tabs"
+                    className="px-3 py-1.5 bg-indigo-500 text-white rounded-lg text-xs font-semibold hover:bg-indigo-600">
+                    🤖 Wake Nadia
+                  </button>
+                )}
+                {greeterSettings.enabled && !greeterDismissed && nadiaWokenInTab.treasury && (
+                  <button
+                    onClick={() => setNadiaWokenInTab(function(prev) { var n = Object.assign({}, prev); delete n.treasury; return n; })}
+                    title="Hide Nadia again — she won't pop up while you work"
+                    className="px-3 py-1.5 bg-slate-200 text-slate-700 rounded-lg text-xs font-semibold hover:bg-slate-300">
+                    😴 Sleep Nadia
+                  </button>
+                )}
               </div>
             </div>
             <div className="mb-3">
@@ -10226,7 +10692,7 @@ export default function App() {
                 </div>
                 <div className="flex gap-2">
                   <button onClick={async () => {
-                    if (!formData.chkCustomer || !formData.chkAmount) { alert('Customer and amount required'); return; }
+                    if (!formData.chkCustomer || !isValidAmount(formData.chkAmount)) { alert('Customer and amount required'); return; }
                     try {
                       const orderNum = formData.chkOrder || '';
                       const matchInv = orderNum ? invoices.find(i => i.order_number === orderNum) : null;
@@ -10234,7 +10700,7 @@ export default function App() {
                         customer_name: formData.chkCustomer,
                         order_number: orderNum,
                         invoice_id: matchInv?.id || null,
-                        amount: Number(formData.chkAmount),
+                        amount: parseAmount(formData.chkAmount),
                         check_date: formData.chkDueDate || today(),
                         due_date: formData.chkDueDate || today(),
                         check_number: formData.chkNumber || '',
@@ -10575,7 +11041,7 @@ export default function App() {
                     await dbInsert('warehouse_expenses', {
                       expense_date: formData.whExpDate || today(),
                       description: formData.whExpDesc,
-                      amount: Number(formData.whExpAmount),
+                      amount: parseAmount(formData.whExpAmount),
                       category: cat,
                       subcategory: formData.whExpSub || '',
                       america_ref: formData.whType === 'shipment' ? (formData.whExpRef || '') : 'GENERAL',
@@ -13139,7 +13605,7 @@ export default function App() {
                       latest fix is actually deployed. If he doesn't see this
                       tag in the modal, his browser is running stale JS. */}
                   <div className="mt-1.5 inline-block px-2 py-0.5 rounded bg-amber-900/60 text-amber-100 text-[10px] font-mono font-bold tracking-wide">
-                    BUILD v55.82
+                    BUILD v55.82-F
                   </div>
                 </div>
                 <button onClick={() => closePendingTreasuryModal()}
@@ -13550,7 +14016,13 @@ export default function App() {
                         setIsCreatingInvoice(true);
                         try {
                           const name = String(formData.__newInvCustomer || '').trim();
-                          const totalAmt = Number(formData.__newInvTotal ?? pendingTreasuryRecord.amount);
+                          // v55.82-E — parseAmount for the inline-create
+                          // total too. pendingTreasuryRecord.amount is
+                          // already a Number (set from parseAmount in
+                          // handleAddTreasury), but __newInvTotal could
+                          // be a fresh user-typed string with comma or
+                          // Arabic-Indic digits.
+                          const totalAmt = parseAmount(formData.__newInvTotal ?? pendingTreasuryRecord.amount);
                           if (!(totalAmt > 0)) {
                             setCreateInvoiceError('Invoice total must be greater than zero. / الإجمالي يجب أن يكون أكبر من صفر.');
                             safeT.warning('Invoice total must be > 0 / الإجمالي يجب أن يكون أكبر من صفر');
@@ -13768,7 +14240,7 @@ export default function App() {
                     معاملة قد تكون مكررة
                   </div>
                   <div className="mt-1.5 inline-block px-2 py-0.5 rounded bg-amber-900/60 text-amber-100 text-[10px] font-mono font-bold tracking-wide">
-                    BUILD v55.82
+                    BUILD v55.82-F
                   </div>
                 </div>
                 <button

@@ -169,7 +169,8 @@ check('#11.6 "complaint" → "concern" in user-facing pending counter',
 group('Carry-forward — A1, A2, A3, A4, A5 still intact');
 
 check('Carry A1 — speaking-only pulse class still wired',
-  /isSpeaking \? ' ktc-assistant-speaking' : ''/.test(ab));
+  /isSpeaking \? ' ktc-assistant-speaking' : ''/.test(ab)
+  || /isSpeaking \? 'ktc-assistant-speaking' : (?:isActive \? )?'ktc-assistant-active'?/.test(ab));
 check('Carry A2 — Mr. Kandil-only wording in HR concern modal',
   /I'm sorry you're dealing with this/.test(hr));
 check('Carry A3 — Recently Updated sections defaultShow=25',

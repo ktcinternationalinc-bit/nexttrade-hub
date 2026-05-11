@@ -1251,7 +1251,7 @@ export default function AdminTab({ user, userProfile, users, isAdmin, customers,
                     <td className="px-2 py-2 text-blue-500 font-mono text-[10px]">{t.ticket_number || '—'}</td>
                     <td className="px-2 py-2 font-semibold max-w-[200px] truncate">{t.title}</td>
                     <td className="px-2 py-2 text-center"><span className="px-2 py-0.5 rounded-full text-[9px] font-bold text-white" style={{background:STATUS_COLORS[t.status]||'#6b7280'}}>{t.status}</span></td>
-                    <td className="px-2 py-2 text-center"><span className={'font-bold ' + (t.priority==='high'?'text-red-500':t.priority==='low'?'text-green-500':'text-amber-500')}>{t.priority}</span></td>
+                    <td className="px-2 py-2 text-center"><span className={'font-bold ' + (t.priority==='critical'?'text-red-900':t.priority==='high'?'text-red-500':t.priority==='low'?'text-green-500':'text-amber-500')}>{t.priority==='critical'?'🚨 critical':t.priority}</span></td>
                     <td className="px-2 py-2"><span className={t.assigned_to ? 'text-purple-600 font-semibold' : 'text-red-400'}>{t.assigned_to ? getUserName(t.assigned_to) : 'UNASSIGNED'}</span></td>
                     <td className="px-2 py-2 text-[10px]">{getUserName(t.created_by) || '—'}</td>
                     <td className={'px-2 py-2 text-center ' + (isOverdue ? 'text-red-600 font-bold' : '')}>{t.due_date || '—'}</td>
@@ -1271,15 +1271,24 @@ export default function AdminTab({ user, userProfile, users, isAdmin, customers,
           <h3 className="text-sm font-bold">{selUserName} — Audit Log ({filteredAudit.length})</h3>
           <div className="flex gap-1">
             <button onClick={() => setAuditFilter('all')} className={'px-2 py-1 rounded text-[10px] font-semibold ' + (auditFilter === 'all' ? 'bg-slate-800 text-white' : 'bg-slate-100')}>All</button>
-            <button onClick={() => setAuditFilter('late')} className={'px-2 py-1 rounded text-[10px] font-semibold ' + (auditFilter === 'late' ? 'bg-red-600 text-white' : 'bg-red-50 text-red-600')}>🚨 Late Edits</button>
-            <button onClick={() => setAuditFilter('sensitive')} className={'px-2 py-1 rounded text-[10px] font-semibold ' + (auditFilter === 'sensitive' ? 'bg-amber-600 text-white' : 'bg-amber-50 text-amber-600')}>⚠️ Sensitive</button>
+            {/* v55.82 QA-21 (Max May 9 2026): inactive filter buttons used
+                red-600 / amber-600 on light bg — failed AA. Bumped both
+                to -900 + added border for definition. */}
+            <button onClick={() => setAuditFilter('late')} className={'px-2 py-1 rounded text-[10px] font-semibold ' + (auditFilter === 'late' ? 'bg-red-600 text-white' : 'bg-red-50 text-red-900 border border-red-200')}>🚨 Late Edits</button>
+            <button onClick={() => setAuditFilter('sensitive')} className={'px-2 py-1 rounded text-[10px] font-semibold ' + (auditFilter === 'sensitive' ? 'bg-amber-600 text-white' : 'bg-amber-50 text-amber-900 border border-amber-200')}>⚠️ Sensitive</button>
             <button onClick={() => setAuditFilter('delete')} className={'px-2 py-1 rounded text-[10px] font-semibold ' + (auditFilter === 'delete' ? 'bg-red-600 text-white' : 'bg-slate-100')}>🗑️ Deletes</button>
           </div>
         </div>
         {(() => { var lateEdits = filteredAudit.filter(a => a.is_late_edit && a.action === 'update'); return lateEdits.length > 0 ? (
-          <div className="bg-red-50 border-2 border-red-200 rounded-xl p-3 mb-3">
-            <div className="text-sm font-extrabold text-red-700">🚨 {lateEdits.length} Late Edit{lateEdits.length > 1 ? 's' : ''} Detected</div>
-            <div className="text-[10px] text-red-600">Changes made 24+ hours after original entry</div>
+          <div className="bg-red-50 border-2 border-red-300 rounded-xl p-3 mb-3">
+            {/* v55.82 QA-21 (Max May 9 2026): bumped red-700 → red-900 on the
+                header and red-600 → red-800 on the subtitle. The previous
+                shades were borderline-readable on bg-red-50 alone and
+                effectively unreadable when shown on top of the dark dashboard
+                background (Max's photo evidence). Also bumped the border
+                shade so the banner outline is visible. */}
+            <div className="text-sm font-extrabold text-red-900">🚨 {lateEdits.length} Late Edit{lateEdits.length > 1 ? 's' : ''} Detected</div>
+            <div className="text-[11px] text-red-800 font-semibold mt-0.5">Changes made 24+ hours after original entry</div>
           </div>
         ) : null; })()}
         {(() => {
@@ -1336,9 +1345,17 @@ export default function AdminTab({ user, userProfile, users, isAdmin, customers,
                 <div className="flex items-center gap-2 text-xs flex-wrap">
                   <span>{actionIcons[a.action] || '📋'}</span>
                   <span className={'font-bold ' + (actionColors[a.action] || '')}>{(a.action||'').toUpperCase()}</span>
-                  {isLate && <span className="px-1.5 py-0.5 rounded bg-red-100 text-red-700 text-[9px] font-extrabold">🚨 LATE EDIT ({a.hours_since_creation || '24+'}h)</span>}
+                  {/* v55.82 QA-21 (Max May 9 2026): LATE EDIT pill — bumped
+                      red-700 → red-900 + added border for AA contrast on the
+                      light-red row background (which itself is on a darker
+                      page background). Previous shade was unreadable in
+                      Max's photo. */}
+                  {isLate && <span className="px-1.5 py-0.5 rounded bg-red-100 text-red-900 text-[9px] font-extrabold border border-red-300">🚨 LATE EDIT ({a.hours_since_creation || '24+'}h)</span>}
                   {hasSensitive && <span className="px-1.5 py-0.5 rounded bg-amber-100 text-amber-900 text-[9px] font-bold border border-amber-200">⚠️ {a.sensitive_fields_changed.join(', ')}</span>}
-                  <span className={'font-bold ' + (actionColors[a.action] || '')}>{(a.action||'').toUpperCase()}</span>
+                  {/* v55.82 QA-21: removed the duplicate action label that
+                      rendered immediately below the LATE EDIT pill — pre-
+                      existing bug, two identical UPDATE/CREATE/DELETE pills
+                      side by side. Kept only the first one (line above). */}
                   {linkedTicket ? (
                     <span className="text-blue-600 font-semibold cursor-pointer hover:underline" onClick={() => openTicketDetail(linkedTicket)}>
                       🎫 {friendlyTarget}
@@ -1698,7 +1715,7 @@ export default function AdminTab({ user, userProfile, users, isAdmin, customers,
                               {isTimeout ? '⏱️' : '🔴'} {logoutTime}
                             </span>
                             {duration !== null && <span className="text-slate-500 text-[10px]">({duration}m)</span>}
-                            {isTimeout && <span className="px-1.5 py-0.5 bg-red-50 text-red-600 rounded text-[9px] font-bold">AUTO TIMEOUT</span>}
+                            {isTimeout && <span className="px-1.5 py-0.5 bg-red-50 text-red-900 rounded text-[9px] font-bold border border-red-300">AUTO TIMEOUT</span>}
                             {s.logout_reason === 'manual' && <span className="px-1.5 py-0.5 bg-blue-50 text-blue-600 rounded text-[9px] font-bold">CLOCKED OUT</span>}
                             {!s.logout_at && <span className="px-1.5 py-0.5 bg-emerald-50 text-emerald-600 rounded text-[9px] font-bold animate-pulse">ACTIVE</span>}
                           </div>
@@ -1747,7 +1764,7 @@ export default function AdminTab({ user, userProfile, users, isAdmin, customers,
             {/* Status / Priority / Dates */}
             <div className="grid grid-cols-2 gap-3 mb-4">
               <div><div className="text-[9px] text-slate-500 uppercase font-semibold">Status</div><span className="px-2 py-0.5 rounded-full text-[10px] font-bold text-white" style={{background:STATUS_COLORS[viewTicket.status]||'#6b7280'}}>{viewTicket.status}</span></div>
-              <div><div className="text-[9px] text-slate-500 uppercase font-semibold">Priority</div><span className={'text-sm font-bold ' + (viewTicket.priority==='high'?'text-red-500':viewTicket.priority==='low'?'text-green-500':'text-amber-500')}>{viewTicket.priority || '—'}</span></div>
+              <div><div className="text-[9px] text-slate-500 uppercase font-semibold">Priority</div><span className={'text-sm font-bold ' + (viewTicket.priority==='critical'?'text-red-900':viewTicket.priority==='high'?'text-red-500':viewTicket.priority==='low'?'text-green-500':'text-amber-500')}>{viewTicket.priority==='critical'?'🚨 CRITICAL':(viewTicket.priority || '—')}</span></div>
               <div><div className="text-[9px] text-slate-500 uppercase font-semibold">Assigned To</div><div className="text-xs font-semibold text-purple-600">{getUserName(viewTicket.assigned_to) || 'Unassigned'}</div></div>
               <div><div className="text-[9px] text-slate-500 uppercase font-semibold">Created By</div><div className="text-xs font-semibold">{getUserName(viewTicket.created_by) || '—'}</div></div>
               <div><div className="text-[9px] text-slate-500 uppercase font-semibold">Due Date</div><div className={'text-xs font-semibold ' + (viewTicket.due_date && viewTicket.due_date < todayStr ? 'text-red-600' : '')}>{viewTicket.due_date ? fmtET(viewTicket.due_date, 'shortdate') : '—'}</div></div>

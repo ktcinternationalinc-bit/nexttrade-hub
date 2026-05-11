@@ -49,7 +49,13 @@ group('1. Avatars are now prevailing (bigger)');
 check('1.1 Avatar maxWidth bumped to 320px (was 200)',
   /maxWidth: 320, aspectRatio: '1 \/ 1'/.test(ab));
 check('1.2 Tile padding bumped to p-4 sm:p-6 (was p-3 sm:p-4)',
-  /rounded-3xl p-4 sm:p-6 transition-all/.test(ab));
+  // v55.82-B: the transition declaration was moved to its own line on the
+  // className concatenation when we narrowed `transition-all` to
+  // `transition-[transform,opacity]` (Problem 3 fix). Check the two facts
+  // independently: the padding is present, AND the tile uses one of the
+  // accepted transition tokens somewhere within the className block.
+  /rounded-3xl p-4 sm:p-6/.test(ab)
+  && /(transition-all duration-300|transition-\[transform,opacity\] duration-300)/.test(ab));
 check('1.3 Name text scaled up to text-3xl sm:text-4xl (was text-2xl sm:text-3xl)',
   /<h3 className="text-3xl sm:text-4xl font-extrabold text-white">/.test(ab));
 check('1.4 Role badge text scaled up to text-xs (was text-[10px])',
