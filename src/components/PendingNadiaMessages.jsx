@@ -119,9 +119,9 @@ export default function PendingNadiaMessages({ userId, getUserName }) {
           <span className="text-sm font-bold text-amber-900">
             {totalPending} pending message{totalPending === 1 ? '' : 's'} from your team
           </span>
-          <span className="text-[10px] text-amber-700">— Nadia keeps mentioning these until you acknowledge</span>
+          <span className="text-[10px] text-amber-900">— Nadia keeps mentioning these until you acknowledge</span>
         </div>
-        <span className="text-amber-700">{collapsed ? '▸' : '▾'}</span>
+        <span className="text-amber-900">{collapsed ? '▸' : '▾'}</span>
       </button>
 
       {!collapsed && (
@@ -142,7 +142,7 @@ export default function PendingNadiaMessages({ userId, getUserName }) {
                 <div className="flex-1 min-w-0">
                   <div className="text-xs text-slate-500 mb-0.5">
                     From <b className="text-slate-700">{fmtSender(m.created_by)}</b>
-                    <span className="ml-2 text-amber-700">{age} day{age === 1 ? '' : 's'} old</span>
+                    <span className="ml-2 text-amber-900">{age} day{age === 1 ? '' : 's'} old</span>
                     {age >= 5 && <span className="ml-2 text-red-600 font-bold">drops in {7 - age}d</span>}
                   </div>
                   <div className="text-sm text-slate-800 whitespace-pre-wrap break-words">{m.content}</div>
@@ -172,7 +172,7 @@ export default function PendingNadiaMessages({ userId, getUserName }) {
                   <div className="text-xs text-slate-500 mb-0.5">
                     Reminder from <b className="text-slate-700">{fmtSender(r.created_by)}</b>
                     <span className={'ml-2 px-1.5 py-0.5 rounded text-[10px] font-bold ' + priColor}>{pri.toUpperCase()}</span>
-                    {dateRef && <span className="ml-2 text-amber-700">due {dateRef}</span>}
+                    {dateRef && <span className="ml-2 text-amber-900">due {dateRef}</span>}
                     {age >= 5 && <span className="ml-2 text-red-600 font-bold">drops in {7 - age}d</span>}
                   </div>
                   <div className="text-sm text-slate-800 font-semibold">{r.title || ''}</div>

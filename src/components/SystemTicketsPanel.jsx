@@ -305,7 +305,7 @@ export default function SystemTicketsPanel({ userId, isAdmin, getUserName, sanit
           {loadError.kind === 'missing-table' ? (
             <>
               <div className="font-bold text-amber-900 mb-1">⚠️ Database setup required</div>
-              <div className="text-xs text-amber-800 mb-3">
+              <div className="text-xs text-amber-900 mb-3">
                 The system_tickets table is missing or has missing columns. To fix, open Supabase → SQL Editor → New query, paste the SQL from <code className="bg-amber-100 px-1 rounded">supabase/system-tickets-setup.sql</code> in the v55.59 zip, click Run. Then refresh this page.
               </div>
               <div className="text-[10px] font-mono bg-amber-100 text-amber-900 p-2 rounded border border-amber-200 break-all">
@@ -338,7 +338,7 @@ export default function SystemTicketsPanel({ userId, isAdmin, getUserName, sanit
               {createError.kind === 'missing-table' ? (
                 <>
                   <div className="font-bold text-amber-900 text-xs mb-1">⚠️ Database setup required</div>
-                  <div className="text-[11px] text-amber-800">
+                  <div className="text-[11px] text-amber-900">
                     Run <code className="bg-amber-100 px-1 rounded">supabase/system-tickets-setup.sql</code> in Supabase, then try again.
                   </div>
                 </>
@@ -436,7 +436,7 @@ export default function SystemTicketsPanel({ userId, isAdmin, getUserName, sanit
                       {t.claude_review_requested && <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-indigo-100 text-indigo-700">🤖 Claude review requested</span>}
                       {t.claude_last_fixed_at && <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-emerald-50 text-emerald-700" title={'Fixed by Claude: ' + t.claude_last_fixed_at}>✨ Claude-fixed</span>}
                       {t.claude_fixed_in_build_version && <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-violet-100 text-violet-800" title="Build version where the fix shipped">📦 {t.claude_fixed_in_build_version}</span>}
-                      {t.needs_retest && t.created_by === userId && <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-amber-100 text-amber-800 animate-pulse" title="Please retest this fix">🔁 Please retest</span>}
+                      {t.needs_retest && t.created_by === userId && <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-amber-100 text-amber-900 animate-pulse" title="Please retest this fix">🔁 Please retest</span>}
                       {t.retest_outcome === 'passed' && <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-emerald-100 text-emerald-700">✓ Retested OK</span>}
                       {t.retest_outcome === 'failed' && <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-rose-100 text-rose-700">✗ Retest failed</span>}
                       {t.retest_outcome === 'partial' && <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-amber-100 text-amber-900 border border-amber-300">~ Partial</span>}
@@ -552,7 +552,7 @@ export default function SystemTicketsPanel({ userId, isAdmin, getUserName, sanit
                 className="w-full px-3 py-2 border border-slate-300 rounded text-sm font-mono"
               />
             </div>
-            <div className="bg-amber-50 border border-amber-200 rounded p-2 text-[10px] text-amber-800 mb-3">
+            <div className="bg-amber-50 border border-amber-200 rounded p-2 text-[10px] text-amber-900 mb-3">
               ⓘ The creator ({(getUserName && getUserName(fixModal.ticket.created_by)) || 'unknown'}) will see a "Please retest" card on their dashboard, and the fix will appear in the build's What's New highlights.
             </div>
             <div className="flex justify-end gap-2">
@@ -580,7 +580,7 @@ export default function SystemTicketsPanel({ userId, isAdmin, getUserName, sanit
               <div className="flex gap-2 flex-wrap">
                 {[
                   { v: 'passed', l: '✓ Works perfectly', cls: { active: 'border-emerald-500 bg-emerald-50 text-emerald-700' } },
-                  { v: 'partial', l: '~ Partly works',   cls: { active: 'border-amber-500 bg-amber-50 text-amber-700' } },
+                  { v: 'partial', l: '~ Partly works',   cls: { active: 'border-amber-500 bg-amber-50 text-amber-900' } },
                   { v: 'failed', l: '✗ Still broken',    cls: { active: 'border-rose-500 bg-rose-50 text-rose-700' } },
                 ].map(function (o) {
                   return (
@@ -604,7 +604,7 @@ export default function SystemTicketsPanel({ userId, isAdmin, getUserName, sanit
                 className="w-full px-3 py-2 border border-slate-300 rounded text-sm"
               />
             </div>
-            <div className={'rounded p-2 text-[10px] mb-3 ' + (retestModal.outcome === 'failed' ? 'bg-rose-50 text-rose-800' : retestModal.outcome === 'passed' ? 'bg-emerald-50 text-emerald-800' : 'bg-amber-50 text-amber-800')}>
+            <div className={'rounded p-2 text-[10px] mb-3 ' + (retestModal.outcome === 'failed' ? 'bg-rose-50 text-rose-800' : retestModal.outcome === 'passed' ? 'bg-emerald-50 text-emerald-800' : 'bg-amber-50 text-amber-900')}>
               {retestModal.outcome === 'failed' && 'ⓘ Submitting will reopen the ticket and put it back in Claude\'s queue.'}
               {retestModal.outcome === 'passed' && 'ⓘ Submitting will close the ticket. Thank you for closing the loop!'}
               {retestModal.outcome === 'partial' && 'ⓘ Submitting will record the partial result without closing the ticket.'}

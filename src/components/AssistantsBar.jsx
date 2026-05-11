@@ -392,7 +392,9 @@ export default function AssistantsBar({
           bg="linear-gradient(135deg, #6366f1 0%, #8b5cf6 50%, #ec4899 100%)"
           ringColor="ring-indigo-400" badgeColor="bg-rose-500"
           activeGlow="0 0 0 4px rgba(99,102,241,0.3), 0 8px 32px rgba(99,102,241,0.5)"
-          glowColorVar="rgba(99,102,241,0.5)"
+          // v55.82-I — glow alpha bumped 0.5 → 0.85 for visible halo.
+          // 0.5 disappeared into the card's own gradient (Max May 11 photo).
+          glowColorVar="rgba(99,102,241,0.85)"
           dotColor="#6366f1"
           avatar={NadiaAvatar}
         />
@@ -405,7 +407,7 @@ export default function AssistantsBar({
           ringColor="ring-rose-400"
           badgeColor={jennaSummary.newResponses > 0 ? 'bg-emerald-500' : 'bg-amber-500'}
           activeGlow="0 0 0 4px rgba(244,63,94,0.3), 0 8px 32px rgba(244,63,94,0.5)"
-          glowColorVar="rgba(244,63,94,0.5)"
+          glowColorVar="rgba(244,63,94,0.85)"
           dotColor="#f43f5e"
           avatar={JennaAvatar}
         />
@@ -416,7 +418,7 @@ export default function AssistantsBar({
           bg="linear-gradient(135deg, #06b6d4 0%, #0ea5e9 50%, #6366f1 100%)"
           ringColor="ring-cyan-400" badgeColor="bg-cyan-300"
           activeGlow="0 0 0 4px rgba(6,182,212,0.3), 0 8px 32px rgba(6,182,212,0.5)"
-          glowColorVar="rgba(6,182,212,0.5)"
+          glowColorVar="rgba(6,182,212,0.85)"
           dotColor="#06b6d4"
           avatar={SaraAvatar}
         />
@@ -617,7 +619,7 @@ function FloatingMini(props) {
 
 function StatCard(props) {
   var colorClasses = {
-    amber: 'bg-amber-100 text-amber-800 border-amber-200',
+    amber: 'bg-amber-100 text-amber-900 border-amber-200',
     blue: 'bg-blue-100 text-blue-800 border-blue-200',
     rose: 'bg-rose-100 text-rose-800 border-rose-200',
     violet: 'bg-violet-100 text-violet-800 border-violet-200',

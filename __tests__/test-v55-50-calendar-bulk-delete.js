@@ -108,7 +108,7 @@ console.log('\nG. Build stamps current');
 
 var pSrc = fs.readFileSync(path.join(REPO, 'src/app/page.jsx'), 'utf8');
 check('G.1 header pill bumped to v55.50 or later',
-  />v55\.(5[0-9]|[6-9]\d)</.test(pSrc));
+  />v55\.(5[0-9]|[6-9]\d)(?:-[A-Z])?</.test(pSrc));
 // v55.51+ replaced the v55.50 build label; the bulk-fix is still in place
 // if the bulk DB calls (verified in C and E) are present.
 var anyBuildLabel = pSrc.match(/BUILD v55\.\d+-/g);

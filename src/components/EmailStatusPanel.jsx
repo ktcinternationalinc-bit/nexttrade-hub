@@ -166,8 +166,8 @@ export default function EmailStatusPanel({ userId, userEmail, userName }) {
       )}
       {degraded && !silentFailure && (
         <div className="bg-white border border-amber-300 rounded-lg p-3 mb-2">
-          <div className="text-xs font-bold text-amber-800 mb-1">⚠️ Email delivery is degraded — {failed} of {attempted} failed in last 24h</div>
-          <div className="text-[11px] text-amber-700">
+          <div className="text-xs font-bold text-amber-900 mb-1">⚠️ Email delivery is degraded — {failed} of {attempted} failed in last 24h</div>
+          <div className="text-[11px] text-amber-900">
             More than half of recent sends failed. Look at the recent failures below to spot a pattern (one bad recipient address vs. a wider outage).
           </div>
         </div>
@@ -175,7 +175,7 @@ export default function EmailStatusPanel({ userId, userEmail, userName }) {
 
       {!isReady && (
         <div className="bg-white rounded-lg p-3 mt-2 border border-amber-200">
-          <div className="text-xs font-bold text-amber-800 mb-1">⚠️ Email notifications are NOT being sent.</div>
+          <div className="text-xs font-bold text-amber-900 mb-1">⚠️ Email notifications are NOT being sent.</div>
           <div className="text-xs text-slate-700 mb-2">
             The dashboard bell still works without Resend, but emails won't go out until you configure it.
           </div>
@@ -203,7 +203,7 @@ export default function EmailStatusPanel({ userId, userEmail, userName }) {
           <div className="bg-white rounded p-2 border border-emerald-100">
             <div className="text-[9px] text-slate-500 font-semibold uppercase">From address</div>
             <div className="text-xs font-mono text-slate-800 truncate" title={status.from_email}>{status.from_email}</div>
-            {status.from_email_is_default && <div className="text-[9px] text-amber-800 mt-0.5 font-semibold">using fallback</div>}
+            {status.from_email_is_default && <div className="text-[9px] text-amber-900 mt-0.5 font-semibold">using fallback</div>}
           </div>
           <div className="bg-white rounded p-2 border border-emerald-100">
             <div className="text-[9px] text-slate-500 font-semibold uppercase">24h sent</div>
@@ -223,7 +223,7 @@ export default function EmailStatusPanel({ userId, userEmail, userName }) {
       {isReady && status && status.from_email && /onboarding@resend\.dev/i.test(status.from_email) && (
         <div className="mt-3 bg-amber-50 border border-amber-300 rounded-lg p-3">
           <div className="text-xs font-bold text-amber-900 mb-2">⚠️ Team emails won't deliver until your domain is verified</div>
-          <div className="text-[11px] text-amber-800 mb-2">
+          <div className="text-[11px] text-amber-900 mb-2">
             You're currently using Resend's testing address (<code className="bg-amber-100 px-1 rounded">onboarding@resend.dev</code>),
             which only delivers to the account owner ({userEmail || 'you'}). To send to teammates, verify <b>ktcus.com</b> and switch the FROM address.
           </div>
@@ -240,7 +240,7 @@ export default function EmailStatusPanel({ userId, userEmail, userName }) {
               <li>Redeploy</li>
               <li>Come back here and click <b>📬 Test all teammates</b> — should now deliver to everyone</li>
             </ol>
-            <div className="mt-2 text-amber-700">
+            <div className="mt-2 text-amber-900">
               <b>Stuck on step 4?</b> Take a screenshot of the Resend domain page (the one showing your DNS records as ✓ Verified or ✗ Not Verified) and ask Claude — I'll tell you exactly which record is wrong.
             </div>
           </details>
@@ -274,7 +274,7 @@ export default function EmailStatusPanel({ userId, userEmail, userName }) {
             </button>
           ) : (
             <div className="ml-auto flex items-center gap-1 bg-amber-50 border border-amber-300 rounded-lg px-2 py-1">
-              <span className="text-[10px] text-amber-800 font-semibold">Send a real email to every active teammate?</span>
+              <span className="text-[10px] text-amber-900 font-semibold">Send a real email to every active teammate?</span>
               <button onClick={sendTestToAll} disabled={bulkTesting} className="px-2 py-0.5 text-[10px] font-bold bg-emerald-500 text-white rounded hover:bg-emerald-600">
                 {bulkTesting ? '⏳' : 'Yes'}
               </button>
@@ -329,7 +329,7 @@ export default function EmailStatusPanel({ userId, userEmail, userName }) {
             {bulkResult.ok ? (
               <span className="text-emerald-700">✅ Test email sent to all {bulkResult.succeeded} teammates</span>
             ) : bulkResult.succeeded > 0 ? (
-              <span className="text-amber-800">⚠️ {bulkResult.succeeded} of {bulkResult.total} teammates received the test — {bulkResult.failed} failed</span>
+              <span className="text-amber-900">⚠️ {bulkResult.succeeded} of {bulkResult.total} teammates received the test — {bulkResult.failed} failed</span>
             ) : (
               <span className="text-red-700">❌ All {bulkResult.total || 0} sends failed</span>
             )}

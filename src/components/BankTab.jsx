@@ -212,7 +212,7 @@ export default function BankTab({ user, supabase }) {
           </div>
           <div className="bg-amber-50 rounded-xl p-3 border border-amber-200">
             <div className="text-[10px] text-amber-600 font-bold">Unmatched / غير متطابق</div>
-            <div className="text-lg font-black text-amber-700">{unmatchedCount}</div>
+            <div className="text-lg font-black text-amber-900">{unmatchedCount}</div>
           </div>
         </div>
       )}

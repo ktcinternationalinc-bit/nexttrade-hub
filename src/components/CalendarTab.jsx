@@ -1563,7 +1563,7 @@ export default function CalendarTab({ customers, user, userProfile, users, ticke
                       {ev.all_day ? <span className="font-semibold text-blue-600">🌅 All day</span> : (ev.event_time || 'All day')} | {ev.event_type}
                       {calView === 'team' && assignedName && <span className="ml-1 text-purple-600">→ {assignedName}</span>}
                       {ev.recurring && ev.recurring !== 'none' && <span className="ml-1">🔄 {recurrenceLabel(ev.recurring, ev.recurrence_interval)}</span>}
-                      {ev.original_event_date && ev.original_event_date !== ev.event_date && <span className="ml-1 text-amber-800 font-bold" title={'Moved from ' + ev.original_event_date}>↪</span>}
+                      {ev.original_event_date && ev.original_event_date !== ev.event_date && <span className="ml-1 text-amber-900 font-bold" title={'Moved from ' + ev.original_event_date}>↪</span>}
                     </div>
                     {/* v55 Stage 1 — Location + join link line. Location is plain
                         text, join link is a real <a> with stopPropagation so a
@@ -1695,7 +1695,7 @@ export default function CalendarTab({ customers, user, userProfile, users, ticke
                   <button onClick={() => openEditEvent(ev)} title="Edit" className="px-2 py-0.5 bg-slate-200 hover:bg-slate-300 rounded text-[10px]">✏️</button>
                 </div>}
                 {ev.event_status === 'postponed' && <div className="flex items-center gap-1">
-                  <span className="text-[9px] text-amber-800 font-extrabold">Postponed</span>
+                  <span className="text-[9px] text-amber-900 font-extrabold">Postponed</span>
                   {/* v54.4 — Always give access to the edit modal (where
                       cancel/delete/decline live), regardless of completed
                       or postponed state. Without this, there was no way
@@ -1780,7 +1780,7 @@ export default function CalendarTab({ customers, user, userProfile, users, ticke
               {notesThread.map(n => {
                 const isMe = n.author_id === myId;
                 const kindStyle = n.note_kind === 'decision'
-                  ? { bg: 'bg-amber-50', border: 'border-amber-200', label: '💡 DECISION', lbl: 'text-amber-700' }
+                  ? { bg: 'bg-amber-50', border: 'border-amber-200', label: '💡 DECISION', lbl: 'text-amber-900' }
                   : n.note_kind === 'action_item'
                   ? { bg: n.is_completed ? 'bg-emerald-50' : 'bg-blue-50', border: n.is_completed ? 'border-emerald-200' : 'border-blue-200', label: n.is_completed ? '✓ DONE' : '☐ ACTION', lbl: n.is_completed ? 'text-emerald-700' : 'text-blue-700' }
                   : { bg: 'bg-white', border: 'border-slate-200', label: null, lbl: '' };

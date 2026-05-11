@@ -877,7 +877,7 @@ export default function EgyptBankTab({ toast, user, userProfile, isAdmin, invoic
             </div>
             <div className="bg-amber-50 rounded-xl p-3 border border-amber-200">
               <div className="text-[10px] text-amber-900 font-extrabold">Unmatched / غير متطابق</div>
-              <div className="text-lg font-black text-amber-700">{unmatchedCount}</div>
+              <div className="text-lg font-black text-amber-900">{unmatchedCount}</div>
             </div>
           </div>
 
@@ -912,7 +912,7 @@ export default function EgyptBankTab({ toast, user, userProfile, isAdmin, invoic
           {showSmartConfig && (
             <div className="bg-amber-50 rounded-xl p-3 mb-3 border border-amber-200">
               <div className="flex items-center justify-between mb-2">
-                <span className="text-xs font-bold text-amber-800">🤖 Smart Categorize Settings</span>
+                <span className="text-xs font-bold text-amber-900">🤖 Smart Categorize Settings</span>
                 <button onClick={() => setShowSmartConfig(false)} className="text-[10px] text-slate-500">✕</button>
               </div>
               <div className="grid grid-cols-1 md:grid-cols-3 gap-3 mb-3">

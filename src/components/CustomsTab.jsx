@@ -628,9 +628,9 @@ export default function CustomsTab({ customers, user, fxRate }) {
         <div>
           {!tablesReady && tableError && (
             <div className="bg-amber-50 rounded-xl p-4 border border-amber-300 mb-3">
-              <div className="text-sm font-bold text-amber-800 mb-1">⚠️ Customs tables not set up yet</div>
-              <div className="text-xs text-amber-700 mb-2">{tableError}</div>
-              <div className="text-xs text-amber-700"><b>To fix:</b> open Supabase → SQL Editor → paste the contents of <code className="bg-white px-1 rounded">supabase/customs-phase-1.sql</code> from the latest build → Run.</div>
+              <div className="text-sm font-bold text-amber-900 mb-1">⚠️ Customs tables not set up yet</div>
+              <div className="text-xs text-amber-900 mb-2">{tableError}</div>
+              <div className="text-xs text-amber-900"><b>To fix:</b> open Supabase → SQL Editor → paste the contents of <code className="bg-white px-1 rounded">supabase/customs-phase-1.sql</code> from the latest build → Run.</div>
             </div>
           )}
 
@@ -765,7 +765,7 @@ export default function CustomsTab({ customers, user, fxRate }) {
                       {productList.map(p => <option key={p.id} value={p.product_name}>{p.product_name} ({Number(p.customs_duty_pct).toFixed(1)}%)</option>)}
                     </select>
                     {productList.length === 0 && (
-                      <div className="text-[9px] text-amber-800 mt-1 font-semibold">No products yet. Add them in Settings → Customs Rates.</div>
+                      <div className="text-[9px] text-amber-900 mt-1 font-semibold">No products yet. Add them in Settings → Customs Rates.</div>
                     )}
                   </div>
                   <div>
@@ -828,7 +828,7 @@ export default function CustomsTab({ customers, user, fxRate }) {
                   </div>
                   <div className="bg-white rounded p-2">
                     <div className="text-[9px] text-slate-500 uppercase">Bank Commission</div>
-                    <div className="font-extrabold text-amber-700">{fmtEgp(calcs.bcEgp)}</div>
+                    <div className="font-extrabold text-amber-900">{fmtEgp(calcs.bcEgp)}</div>
                     <div className="text-[9px] text-slate-500">@{calcs.bcPct.toFixed(2)}% of income tax</div>
                   </div>
                 </div>
@@ -1214,7 +1214,7 @@ export default function CustomsTab({ customers, user, fxRate }) {
                 <span className="px-2 py-0.5 bg-blue-50 text-blue-700 rounded text-[10px]">{selShipment.container_count}x {selShipment.container_type}</span>
                 {selShipment.broker_name && <span className="px-2 py-0.5 bg-purple-50 text-purple-700 rounded text-[10px]">Broker: {selShipment.broker_name}</span>}
                 {selShipment.rate_usd && <span className="px-2 py-0.5 bg-emerald-50 text-emerald-700 rounded text-[10px]">${selShipment.rate_usd}</span>}
-                {selShipment.eta && <span className="px-2 py-0.5 bg-amber-50 text-amber-700 rounded text-[10px]">ETA: {selShipment.eta}</span>}
+                {selShipment.eta && <span className="px-2 py-0.5 bg-amber-50 text-amber-900 rounded text-[10px]">ETA: {selShipment.eta}</span>}
               </div>
               {selShipment.notes && <p className="text-xs text-slate-600 mb-3">{selShipment.notes}</p>}
               <div className="flex gap-1 flex-wrap">

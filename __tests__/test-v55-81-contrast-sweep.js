@@ -100,6 +100,11 @@ var firstOffender = '';
 
 componentFiles.forEach(function (f) {
   var src = fs.readFileSync(path.join(COMPONENTS, f), 'utf8');
+  // v55.82-H — WhatsNewWidget's BUILD_HISTORY contains descriptive prose
+  // that mentions historical className patterns (e.g. "removed bg-amber-100
+  // + text-amber-700 combo"). These are documentation, not live JSX, so
+  // skip them when sweeping for contrast bugs.
+  if (f === 'WhatsNewWidget.jsx') return;
   src.split('\n').forEach(function (line, i) {
     if (/text-\[(8|9|10)px\][^"]*text-slate-400/.test(line) ||
         /text-slate-400[^"]*text-\[(8|9|10)px\]/.test(line)) {

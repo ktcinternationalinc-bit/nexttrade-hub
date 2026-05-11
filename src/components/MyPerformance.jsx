@@ -11,7 +11,7 @@
 // The same data is also visible to super_admin / privileged users via HRReport.jsx
 // but THIS component never displays a numeric score or rank.
 
-import { useState, useEffect, useMemo } from 'react';
+import { useState, useEffect, useMemo, useRef } from 'react';
 import { supabase } from '../lib/supabase';
 import {
   resolvePeriod,
@@ -228,6 +228,25 @@ export default function MyPerformance({ user, userProfile, active }) {
     }
   };
 
+  // v55.82-I — AUTO-FETCH coach feedback on first show. Max May 11 2026
+  // photo showed an empty Personal Coach panel that "gives zero feedback"
+  // — turns out users didn't realize they had to click a button. Now we
+  // fire requestCoach automatically the first time the panel is visible
+  // AND we have data, AND user has activity, AND we haven't already
+  // fetched/errored. Period change also re-triggers. autoFetchedKey
+  // tracks (period + myId) so we don't re-fetch on every render.
+  const autoFetchedRef = useRef('');
+  useEffect(function () {
+    if (!expanded) return;
+    if (!current) return;
+    if (!hasAnyActivity) return;
+    if (coachMsg || coachError || coachLoading) return;
+    var key = (myId || 'anon') + ':' + period;
+    if (autoFetchedRef.current === key) return;
+    autoFetchedRef.current = key;
+    requestCoach();
+  }, [expanded, current, hasAnyActivity, myId, period]);
+
   if (!expanded) {
     return (
       <div className="bg-gradient-to-r from-violet-50 to-blue-50 rounded-xl p-4 border border-violet-200">
@@ -341,7 +360,7 @@ export default function MyPerformance({ user, userProfile, active }) {
           loaded but couldn't compute). Catches any silent failure inside
           calcMetricsForUser. */}
       {!loading && !loadError && !current && data && (
-        <div className="bg-amber-50 border border-amber-200 rounded-lg p-4 text-sm text-amber-800">
+        <div className="bg-amber-50 border border-amber-200 rounded-lg p-4 text-sm text-amber-900">
           <div className="font-bold mb-1">No activity to show yet</div>
           <div className="text-xs">Once you've created a ticket, written a comment, or logged daily activity, your metrics will appear here.</div>
         </div>
@@ -420,14 +439,21 @@ export default function MyPerformance({ user, userProfile, active }) {
           {/* Tickets-on-time mini-callout (positive only) */}
           {current.ticketsClosed > 0 && (
             <div className={'rounded-lg p-3 mb-4 text-xs ' +
+              // v55.82-I — Max May 11 2026: middle band was amber-50 bg +
+              // amber-900 text which read as a dim yellow wash on a light
+              // screen — basically invisible. Photo evidence showed the
+              // "You closed 5 tickets" line unreadable. Replaced with a
+              // white surface + slate-900 text + amber-500 LEFT border so
+              // the warning hue stays without burying the words.
               (current.onTimePct >= 80 ? 'bg-emerald-50 border border-emerald-200 text-emerald-800' :
-               current.onTimePct >= 50 ? 'bg-amber-50 border border-amber-200 text-amber-800' :
-               'bg-blue-50 border border-blue-200 text-blue-800')}>
+               current.onTimePct >= 50 ? 'bg-white border-2 border-amber-500 text-slate-900' :
+               'bg-blue-50 border border-blue-200 text-blue-800')}
+              style={current.onTimePct >= 50 && current.onTimePct < 80 ? { borderLeftWidth: '6px' } : undefined}>
               {current.onTimePct >= 80 && (
                 <span><strong>🎯 Strong on-time rate.</strong> {current.ticketsClosedOnTime} of your {current.ticketsClosed} closed tickets came in on or before deadline.</span>
               )}
               {current.onTimePct >= 50 && current.onTimePct < 80 && (
-                <span><strong>👍 You closed {current.ticketsClosed} tickets.</strong> {current.ticketsClosedOnTime} on time, {current.ticketsClosedLate} after deadline. Worth a look at your scheduling.</span>
+                <span className="font-semibold"><strong className="text-amber-700">👍 You closed {current.ticketsClosed} tickets.</strong> {current.ticketsClosedOnTime} on time, {current.ticketsClosedLate} after deadline. Worth a look at your scheduling.</span>
               )}
               {current.onTimePct < 50 && (
                 <span><strong>You closed {current.ticketsClosed} tickets this period.</strong> Some came in late — check in on overdue items earlier and you'll see this rebound fast.</span>
@@ -436,6 +462,15 @@ export default function MyPerformance({ user, userProfile, active }) {
           )}
 
           {/* AI Coach */}
+          {/* v55.82-I — Max May 11 2026: photo showed Personal Coach card
+              completely empty (just header + nothing). Users didn't know
+              they had to click a button. Two fixes:
+                1. Auto-fetch on first show when we have data — coach
+                   appears WITHOUT any clicks.
+                2. Empty state was tiny italic grey on a light gradient —
+                   bumped to a clear "Fetching feedback…" / dashed border
+                   placeholder card so user sees activity instead of a
+                   blank panel. */}
           <div className="bg-gradient-to-r from-violet-50 to-pink-50 rounded-lg p-4 border border-violet-200">
             <div className="flex items-center justify-between gap-3 mb-2">
               <div className="flex items-center gap-2">
@@ -454,11 +489,18 @@ export default function MyPerformance({ user, userProfile, active }) {
               <div className="text-xs text-rose-700 bg-rose-50 rounded p-2 mt-2">{coachError}</div>
             )}
             {coachMsg && (
-              <div className="text-sm text-slate-700 leading-relaxed whitespace-pre-wrap mt-2">{coachMsg}</div>
+              <div className="text-sm text-slate-800 leading-relaxed whitespace-pre-wrap mt-2">{coachMsg}</div>
             )}
-            {!coachMsg && !coachError && (
-              <div className="text-xs text-slate-600 italic mt-2">
-                Tap the button to get a personalized note from your coach. It'll highlight your wins and suggest one or two things you could focus on next.
+            {coachLoading && !coachMsg && (
+              <div className="mt-3 p-4 rounded-lg bg-white border-2 border-dashed border-violet-300 text-center">
+                <div className="text-sm font-semibold text-violet-800 mb-1">Coach is writing your feedback…</div>
+                <div className="text-xs text-slate-600">A personalized note about your wins this period.</div>
+              </div>
+            )}
+            {!coachMsg && !coachError && !coachLoading && (
+              <div className="mt-3 p-4 rounded-lg bg-white border-2 border-dashed border-violet-300">
+                <div className="text-sm font-semibold text-slate-800 mb-1">No feedback yet</div>
+                <div className="text-xs text-slate-700">Tap <strong>Get Coach Feedback</strong> above for a personalized note about your wins this period and one or two things to focus on next.</div>
               </div>
             )}
           </div>
@@ -502,49 +544,58 @@ function Wins({ metrics, deltas }) {
 
 // --- Subcomponent: a single metric tile ---
 function SelfStat({ label, value, delta, suffix, tone, hint }) {
-  const toneClass = {
-    green: 'bg-emerald-50 border-emerald-200',
-    blue: 'bg-blue-50 border-blue-200',
-    purple: 'bg-purple-50 border-purple-200',
-    cyan: 'bg-cyan-50 border-cyan-200',
-    emerald: 'bg-emerald-50 border-emerald-200',
-    amber: 'bg-amber-50 border-amber-200',
-    rose: 'bg-rose-50 border-rose-200',
-    indigo: 'bg-indigo-50 border-indigo-200',
-    teal: 'bg-teal-50 border-teal-200',
-  }[tone] || 'bg-slate-50 border-slate-200';
-  const valueClass = {
-    green: 'text-emerald-700',
-    blue: 'text-blue-700',
-    purple: 'text-purple-700',
-    cyan: 'text-cyan-700',
-    emerald: 'text-emerald-700',
-    amber: 'text-amber-700',
-    rose: 'text-rose-700',
-    indigo: 'text-indigo-700',
-    teal: 'text-teal-700',
-  }[tone] || 'text-slate-700';
+  // v55.82-I (Max May 11 2026): the dashboard runs on a dark canvas.
+  // The previous SelfStat used pastel light backgrounds (bg-rose-50,
+  // bg-teal-50, etc.) which rendered as glaring pink/teal islands on
+  // the dark theme AND made the slate-500/600 supporting text muted
+  // to the point of invisibility. Rose/teal cards in particular had
+  // unreadable numbers (Max's May 11 photo).
+  //
+  // New design: every tone uses the SAME dark-glass card surface used
+  // by the rest of the dashboard, with the tone driving ONLY the
+  // accent color of the big number + a thin left border. Labels and
+  // hints render in light slate text that's readable against dark
+  // backgrounds. Result: visual rhythm matches the rest of the
+  // dashboard, and every number is high-contrast.
+  const accentColor = {
+    green: '#34d399',     // emerald-400
+    blue: '#38bdf8',      // sky-400
+    purple: '#a78bfa',    // violet-400
+    cyan: '#22d3ee',      // cyan-400
+    emerald: '#34d399',
+    amber: '#fbbf24',     // amber-400
+    rose: '#fb7185',      // rose-400
+    indigo: '#818cf8',    // indigo-400
+    teal: '#2dd4bf',      // teal-400
+  }[tone] || '#cbd5e1';   // slate-300 fallback
 
   let deltaTxt = '';
   let deltaCls = '';
   if (delta && typeof delta.diff === 'number') {
-    if (delta.diff > 0) { deltaTxt = '↑ ' + delta.diff; deltaCls = 'text-emerald-600'; }
-    else if (delta.diff < 0) { deltaTxt = '↓ ' + Math.abs(delta.diff); deltaCls = 'text-slate-500'; }
-    else { deltaTxt = '— same'; deltaCls = 'text-slate-400'; }
+    if (delta.diff > 0) { deltaTxt = '↑ ' + delta.diff; deltaCls = 'text-emerald-400'; }
+    else if (delta.diff < 0) { deltaTxt = '↓ ' + Math.abs(delta.diff); deltaCls = 'text-slate-400'; }
+    else { deltaTxt = '— same'; deltaCls = 'text-slate-500'; }
   }
 
   return (
-    <div className={'rounded-lg p-3 border ' + toneClass}>
-      <div className="text-[10px] font-semibold text-slate-600 uppercase tracking-wide mb-1">{label}</div>
+    <div
+      className="rounded-lg p-3"
+      style={{
+        background: 'rgba(255,255,255,0.04)',
+        border: '1px solid rgba(255,255,255,0.08)',
+        borderLeft: '3px solid ' + accentColor,
+      }}
+    >
+      <div className="text-[10px] font-semibold uppercase tracking-wide mb-1" style={{ color: 'rgba(203,213,225,0.85)' }}>{label}</div>
       <div className="flex items-baseline gap-1">
-        <div className={'text-2xl font-extrabold ' + valueClass}>{value}</div>
-        <div className="text-[10px] text-slate-500">{suffix}</div>
+        <div className="text-2xl font-extrabold" style={{ color: accentColor }}>{value}</div>
+        <div className="text-[10px]" style={{ color: 'rgba(148,163,184,0.9)' }}>{suffix}</div>
       </div>
       {deltaTxt && (
         <div className={'text-[10px] font-semibold mt-0.5 ' + deltaCls}>{deltaTxt} vs last period</div>
       )}
       {hint && (
-        <div className="text-[10px] text-slate-500 italic mt-1">{hint}</div>
+        <div className="text-[10px] italic mt-1" style={{ color: 'rgba(148,163,184,0.8)' }}>{hint}</div>
       )}
     </div>
   );

@@ -536,7 +536,7 @@ export default function AdminTab({ user, userProfile, users, isAdmin, customers,
     </div>
 
     {!isSuperAdmin && visibleUsers.length <= 1 && (
-      <div className="bg-amber-50 rounded-lg px-3 py-2 mb-3 border border-amber-200 text-xs text-amber-700">
+      <div className="bg-amber-50 rounded-lg px-3 py-2 mb-3 border border-amber-200 text-xs text-amber-900">
         You can see your direct reports only. Ask a Super Admin to assign team members to you via the <strong>reports_to</strong> field.
       </div>
     )}
@@ -546,7 +546,7 @@ export default function AdminTab({ user, userProfile, users, isAdmin, customers,
       <HRReport user={user} userProfile={userProfile} users={users} customers={customers} />
     )}
     {section === 'hr_report' && !canSeeHR && (
-      <div className="bg-amber-50 rounded-lg px-3 py-2 mb-3 border border-amber-200 text-xs text-amber-700">
+      <div className="bg-amber-50 rounded-lg px-3 py-2 mb-3 border border-amber-200 text-xs text-amber-900">
         You don't have permission to view the HR Report. Ask a super admin to enable the "HR Report" permission for you in Settings.
       </div>
     )}
@@ -561,7 +561,7 @@ export default function AdminTab({ user, userProfile, users, isAdmin, customers,
       <BackupsPanel user={user} userProfile={userProfile} />
     )}
     {section === 'backups' && !isSuperAdmin && (
-      <div className="bg-amber-50 rounded-lg px-3 py-2 mb-3 border border-amber-200 text-xs text-amber-700">
+      <div className="bg-amber-50 rounded-lg px-3 py-2 mb-3 border border-amber-200 text-xs text-amber-900">
         Backups are only available to super_admin. They contain sensitive financial and personnel data.
       </div>
     )}
@@ -611,7 +611,7 @@ export default function AdminTab({ user, userProfile, users, isAdmin, customers,
               <div className={'absolute -top-2 -left-2 px-2 py-0.5 rounded-full text-[10px] font-extrabold border-2 ' +
                 (idx === 0 ? 'bg-yellow-100 text-yellow-900 border-yellow-400' :
                  idx === 1 ? 'bg-slate-100 text-slate-700 border-slate-400' :
-                 idx === 2 ? 'bg-amber-50 text-amber-800 border-amber-300' :
+                 idx === 2 ? 'bg-amber-50 text-amber-900 border-amber-300' :
                              'bg-white text-slate-600 border-slate-300')}>
                 {idx === 0 ? '🥇 #1' : idx === 1 ? '🥈 #2' : idx === 2 ? '🥉 #3' : '#' + (idx + 1)}
               </div>
@@ -1501,7 +1501,7 @@ export default function AdminTab({ user, userProfile, users, isAdmin, customers,
                   </div>
                   <div className="bg-white rounded-lg p-3" style={{borderLeftWidth:3,borderLeftColor:'#f59e0b'}}>
                     <div className="text-[10px] text-slate-500 uppercase tracking-wide">Avg Session</div>
-                    <div className="text-lg font-extrabold text-amber-700">{fmtMins(avgSessionMins)}</div>
+                    <div className="text-lg font-extrabold text-amber-900">{fmtMins(avgSessionMins)}</div>
                     <div className="text-[10px] text-slate-500">login → logout/expiry</div>
                   </div>
                   <div className="bg-white rounded-lg p-3" style={{borderLeftWidth:3,borderLeftColor:'#3b82f6'}}>
@@ -1558,7 +1558,7 @@ export default function AdminTab({ user, userProfile, users, isAdmin, customers,
             // Working week = any 6 of 7 days (per Max May 9 2026)
             var expectedDays = Math.max(1, Math.round((periodDays * 6) / 7));
             var consistency = expectedDays > 0 ? Math.round((actualDays / expectedDays) * 100) : 0;
-            var consistencyTone = consistency >= 100 ? 'text-emerald-700' : consistency >= 80 ? 'text-amber-700' : 'text-red-700';
+            var consistencyTone = consistency >= 100 ? 'text-emerald-700' : consistency >= 80 ? 'text-amber-900' : 'text-red-700';
             // Consecutive missed days (looking backward from period end)
             var sortedDays = Array.from(uniqueDays).sort();
             var lastSeenDay = sortedDays.length > 0 ? sortedDays[sortedDays.length - 1] : null;
@@ -1594,7 +1594,7 @@ export default function AdminTab({ user, userProfile, users, isAdmin, customers,
                   </div>
                 </div>
                 {actualDays < expectedDays && (
-                  <div className="mt-2 text-[11px] text-amber-800 bg-amber-50 border border-amber-200 rounded px-2 py-1">
+                  <div className="mt-2 text-[11px] text-amber-900 bg-amber-50 border border-amber-200 rounded px-2 py-1">
                     Missed {expectedDays - actualDays} expected day{(expectedDays - actualDays) !== 1 ? 's' : ''} in this period.
                   </div>
                 )}
@@ -1614,7 +1614,7 @@ export default function AdminTab({ user, userProfile, users, isAdmin, customers,
               {loginSummaryWarning && (
                 <div className="bg-amber-50 border-2 border-amber-300 rounded-lg p-3 mb-3">
                   <div className="font-bold text-amber-900 text-xs mb-1">⚠️ Online status not working — database setup needed</div>
-                  <div className="text-[11px] text-amber-800 mb-2">
+                  <div className="text-[11px] text-amber-900 mb-2">
                     Everyone shows as "Offline" because the login-events table doesn't exist in Supabase yet. To fix:
                     open Supabase → SQL Editor → New query, paste the SQL from <code className="bg-amber-100 px-1 rounded">supabase/login-events.sql</code> in the project repo, click Run. Then refresh this page. Logins from this point forward will track correctly.
                   </div>

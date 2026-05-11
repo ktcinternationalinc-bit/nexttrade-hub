@@ -36,7 +36,7 @@ function fmtDate(iso) {
 function kindStyle(k) {
   if (k === 'manual')  return { bg: 'bg-blue-100',    text: 'text-blue-800',    label: '👆 Manual' };
   if (k === 'daily')   return { bg: 'bg-emerald-100', text: 'text-emerald-800', label: '☀️ Daily' };
-  if (k === 'weekly')  return { bg: 'bg-amber-100',   text: 'text-amber-800',   label: '📅 Weekly' };
+  if (k === 'weekly')  return { bg: 'bg-amber-100',   text: 'text-amber-900',   label: '📅 Weekly' };
   if (k === 'monthly') return { bg: 'bg-violet-100',  text: 'text-violet-800',  label: '🗓 Monthly' };
   return { bg: 'bg-slate-100', text: 'text-slate-700', label: k || 'unknown' };
 }
@@ -186,7 +186,7 @@ export default function BackupsPanel({ user, userProfile }) {
           <div className="mt-3 px-3 py-2 rounded-lg bg-emerald-50 border border-emerald-200 text-xs text-emerald-900">
             ✅ Backup complete — {lastResult.tables_count} tables, {(lastResult.total_rows || 0).toLocaleString()} rows, {fmtBytes(lastResult.size_bytes)}, took {fmtDuration(lastResult.duration_ms)}.
             {lastResult.tables_with_errors && lastResult.tables_with_errors.length > 0 && (
-              <div className="mt-1 text-amber-800 font-semibold">
+              <div className="mt-1 text-amber-900 font-semibold">
                 ⚠️ {lastResult.tables_with_errors.length} table(s) had errors (check the notes column on this backup).
               </div>
             )}

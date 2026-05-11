@@ -219,6 +219,34 @@ ok('5d: editTreasuryModal is in suppression check',
 );
 
 // =====================================================================
+// SPEC #6 — Build stamp consistency (NEW guard, added after Max
+//   reported the header badge still read v55.81 after deploying F)
+// =====================================================================
+
+// 6a — Global header badge must match the current build letter
+ok('6a: Global header badge reads v55.82-F (not a stale earlier version)',
+  /<span className="text-\[10px\] text-zinc-500 font-mono hidden md:inline"[^>]*>v55.82-[A-Z]<\/span>/.test(pageSrc),
+  'the visible app-header version badge must move with each build letter — Max May 11 2026 caught v55.81 left over on F'
+);
+
+// 6b — REGRESSION GUARD: no stale "v55.81" remains in displayed UI strings
+//      Allowed in source: comments referencing historical versions.
+//      Forbidden in source: `>v55.81<` (JSX text node displaying the string).
+ok('6b: REGRESSION GUARD — no JSX text node displays "v55.81"',
+  !/>v55\.81</.test(pageSrc),
+  'no leftover hardcoded v55.81 in visible UI'
+);
+
+// 6c — Treasury modal headers stamped v55.82-F
+ok('6c: Treasury modal headers display BUILD v55.82-F',
+  (function() {
+    var matches = pageSrc.match(/BUILD v55.82-[A-Z]/g);
+    return matches && matches.length >= 2;
+  })(),
+  'Add Transaction + Edit Transaction modal headers both stamped'
+);
+
+// =====================================================================
 // Final
 // =====================================================================
 

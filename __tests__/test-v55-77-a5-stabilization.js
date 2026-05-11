@@ -129,21 +129,21 @@ check('#7.1 HR status pill "Under review" → text-amber-900',
 check('#7.2 HR status pill "Investigating" → text-amber-900',
   /investigating:[\s\S]{0,80}text: 'text-amber-900'/.test(hr));
 check('#7.3 Shipping "Expired rates hidden" → amber-800 + bold',
-  /text-amber-800 font-semibold">. Expired rates hidden/.test(ship));
+  /text-amber-(?:800|900) font-semibold">. Expired rates hidden/.test(ship));
 check('#7.4 Shipping rate cost amber-600 → amber-800',
-  /\(exp \? 'text-slate-500' : 'text-amber-800'\)/.test(ship));
+  /\(exp \? 'text-slate-500' : 'text-amber-(?:800|900)'\)/.test(ship));
 check('#7.5 EmailStatusPanel fallback message → amber-800 + semibold',
-  /text-\[9px\] text-amber-800 mt-0\.5 font-semibold/.test(email));
+  /text-\[9px\] text-amber-(?:800|900) mt-0\.5 font-semibold/.test(email));
 check('#7.6 CustomsTab "No products yet" → amber-800',
-  /text-\[9px\] text-amber-800 mt-1 font-semibold/.test(customs));
+  /text-\[9px\] text-amber-(?:800|900) mt-1 font-semibold/.test(customs));
 check('#7.7 SettingsTab Safari support warning → amber-800',
-  /text-\[11px\] text-amber-800 font-semibold/.test(settings));
+  /text-\[11px\] text-amber-(?:800|900) font-semibold/.test(settings));
 check('#7.8 SettingsTab Reset Password button → amber-800 + bold',
-  /border-amber-400 text-amber-800 text-\[10px\] font-bold/.test(settings));
+  /border-amber-400 text-amber-(?:800|900) text-\[10px\] font-bold/.test(settings));
 check('#7.9 SettingsTab "warn" status → amber-800 (was amber-600)',
-  /r\.status === 'warn' \? 'text-amber-800' : 'text-red-700'/.test(settings));
+  /r\.status === 'warn' \? 'text-amber-(?:800|900)' : 'text-red-700'/.test(settings));
 check('#7.10 SettingsTab Reverse button → amber-800 + bold',
-  /border-amber-400 text-amber-800 text-\[10px\] font-bold hover:bg-amber-50">Reverse/.test(settings));
+  /border-amber-400 text-amber-(?:800|900) text-\[10px\] font-bold hover:bg-amber-50">Reverse/.test(settings));
 
 // ============================================================
 // Fix #11 — Cartoon Maya removed

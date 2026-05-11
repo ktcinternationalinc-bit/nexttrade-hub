@@ -463,7 +463,7 @@ export default function MyHRDesk({ user, userProfile, users, active }) {
               </div>
               {/* Status counters */}
               <div className="flex gap-3 mt-1.5 flex-wrap text-[10px]">
-                {pendingReq > 0 && <span className="text-amber-800 font-bold">⏳ {pendingReq} request{pendingReq === 1 ? '' : 's'} pending</span>}
+                {pendingReq > 0 && <span className="text-amber-900 font-bold">⏳ {pendingReq} request{pendingReq === 1 ? '' : 's'} pending</span>}
                 {pendingCmp > 0 && <span className="text-rose-800 font-bold">⏳ {pendingCmp} concern{pendingCmp === 1 ? '' : 's'} pending</span>}
                 {pendingReq === 0 && pendingCmp === 0 && myRecent.length === 0 && <span className="text-slate-500">No items filed yet</span>}
               </div>
@@ -473,7 +473,7 @@ export default function MyHRDesk({ user, userProfile, users, active }) {
 
         {/* Two big quick-action buttons
             v55.82-B (QA-22) — BULLETPROOF CONTRAST FIX.
-            Before: the "File a Request" card used text-amber-700 / amber-900
+            Before: the "File a Request" card used text-amber-900 / amber-900
             on a from-amber-50 to-orange-50 gradient. On certain screens the
             subtitle was effectively yellow text on yellow background and
             unreadable from any angle. Max reported this 10+ times.
@@ -506,7 +506,7 @@ export default function MyHRDesk({ user, userProfile, users, active }) {
 
         {/* Missing-table guidance */}
         {tableMissing && (
-          <div className="bg-amber-50 border border-amber-200 rounded-lg p-3 text-xs text-amber-800">
+          <div className="bg-amber-50 border border-amber-200 rounded-lg p-3 text-xs text-amber-900">
             <strong>Setup needed:</strong> the HR Desk database tables haven't been created yet. Run <code className="bg-white px-1 rounded">sql/s41_hr_desk_requests_complaints.sql</code> in Supabase SQL Editor (one-time).
           </div>
         )}

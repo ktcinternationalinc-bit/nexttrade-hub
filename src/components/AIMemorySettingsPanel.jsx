@@ -88,7 +88,7 @@ export default function AIMemorySettingsPanel({ userProfile, toast }) {
   return (
     <div className="bg-white rounded-xl p-5 mb-4 border border-indigo-200" style={{boxShadow:'0 2px 8px rgba(79,70,229,0.1)'}}>
       {warning && (
-        <div className="mb-3 p-2 bg-amber-50 border border-amber-300 rounded text-[11px] text-amber-800">
+        <div className="mb-3 p-2 bg-amber-50 border border-amber-300 rounded text-[11px] text-amber-900">
           ⚠️ {warning}
         </div>
       )}
@@ -198,7 +198,7 @@ export default function AIMemorySettingsPanel({ userProfile, toast }) {
                       <span className={'px-1.5 py-0.5 rounded text-[10px] font-bold ' +
                         (it.type === 'urgent' ? 'bg-red-100 text-red-800'
                           : it.type === 'meeting' ? 'bg-indigo-100 text-indigo-800'
-                          : it.type === 'reminder' ? 'bg-amber-100 text-amber-800'
+                          : it.type === 'reminder' ? 'bg-amber-100 text-amber-900'
                           : it.type === 'follow_up' ? 'bg-emerald-100 text-emerald-800'
                           : 'bg-slate-100 text-slate-700')}>
                         {it.type}

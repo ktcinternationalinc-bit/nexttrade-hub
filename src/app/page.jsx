@@ -73,7 +73,7 @@ const ToastProvider = ({ children }) => {
             success: 'bg-emerald-50 border-emerald-200 text-emerald-800',
             error: 'bg-red-50 border-red-200 text-red-800',
             info: 'bg-blue-50 border-blue-200 text-blue-800',
-            warning: 'bg-amber-50 border-amber-200 text-amber-800',
+            warning: 'bg-amber-50 border-amber-200 text-amber-900',
           }[t.type] || 'bg-white border-slate-200 text-slate-800')}>
             <span>{t.type === 'success' ? '✅' : t.type === 'error' ? '❌' : t.type === 'warning' ? '⚠️' : 'ℹ️'}</span>
             <span className="flex-1">{t.message}</span>
@@ -264,7 +264,7 @@ function PaymentForm({ invoice, categories, catOptions, existingSubcats, onSave,
         </div>
         {pf.payMethod === 'check' && (
           <div className="mt-2 bg-amber-50 rounded-lg p-3 border border-amber-200">
-            <div className="text-[10px] text-amber-700 font-bold mb-2">📝 Post-dated check — NOT added to treasury until collected</div>
+            <div className="text-[10px] text-amber-900 font-bold mb-2">📝 Post-dated check — NOT added to treasury until collected</div>
             <div className="grid grid-cols-2 gap-2">
               <div>
                 <label className="text-[9px] font-bold text-slate-500">Due Date / تاريخ الاستحقاق</label>
@@ -4220,7 +4220,7 @@ export default function App() {
               {/* Brand mark — bracket prefix is a terminal callout convention. */}
               <span className="text-emerald-400 font-mono text-xs font-bold tracking-tight" style={{ fontFamily: '"JetBrains Mono", monospace' }}>[KTC]</span>
               <h1 className="text-sm font-bold text-white tracking-tight whitespace-nowrap">NEXTTRADE HUB</h1>
-              <span className="text-[10px] text-zinc-500 font-mono hidden md:inline" style={{ fontFamily: '"JetBrains Mono", monospace' }}>v55.81</span>
+              <span className="text-[10px] text-zinc-500 font-mono hidden md:inline" style={{ fontFamily: '"JetBrains Mono", monospace' }}>v55.82-I</span>
               {/* Live clock — terminals always show one. Updates via the
                   existing tick state; if not present, falls back to no clock. */}
               <span className="hidden lg:inline text-[10px] text-zinc-500 font-mono ml-2 pl-2 border-l border-zinc-800" style={{ fontFamily: '"JetBrains Mono", monospace' }}>
@@ -4781,7 +4781,7 @@ export default function App() {
                   {/* Edit fields */}
                   {formData.editingInvoice && (
                     <div className="bg-amber-50 border border-amber-200 rounded-lg p-4 mb-3">
-                      <h4 className="text-xs font-bold text-amber-800 mb-3">Edit Invoice Details / تعديل الفاتورة</h4>
+                      <h4 className="text-xs font-bold text-amber-900 mb-3">Edit Invoice Details / تعديل الفاتورة</h4>
                       <div className="grid grid-cols-2 gap-3 mb-3">
                         <div>
                           <label className="text-[10px] font-bold text-slate-500">Order # / رقم الأمر</label>
@@ -4981,7 +4981,7 @@ export default function App() {
               if (orderChecks.length === 0) return null;
               return (
                 <div className="bg-amber-50 rounded-lg p-4 mb-4 border border-amber-200">
-                  <h4 className="text-sm font-bold text-amber-800 mb-2">📝 Post-dated Checks / شيكات آجلة ({orderChecks.length})</h4>
+                  <h4 className="text-sm font-bold text-amber-900 mb-2">📝 Post-dated Checks / شيكات آجلة ({orderChecks.length})</h4>
                   {pendingOC.length > 0 && (
                     <div className="mb-2">
                       <div className="text-[10px] font-bold text-amber-600 mb-1">Pending / معلقة ({pendingOC.length}) — {fE(pendingOC.reduce((a,c) => a + Number(c.amount||0), 0))}</div>
@@ -5693,12 +5693,12 @@ export default function App() {
                         identical to cash rows in the edit modal. */}
                     {isBankRow && (
                       <div className={'rounded-lg p-3 border-2 ' + (isMatched ? 'bg-indigo-50 border-indigo-300' : 'bg-amber-50 border-amber-300')}>
-                        <div className={'text-xs font-extrabold uppercase ' + (isMatched ? 'text-indigo-800' : 'text-amber-800')}>
+                        <div className={'text-xs font-extrabold uppercase ' + (isMatched ? 'text-indigo-800' : 'text-amber-900')}>
                           {isMatched
                             ? '🏦 Bank Transaction (matched bank statement)'
                             : '🏦 Bank Transaction (placeholder — awaiting statement)'}
                         </div>
-                        <div className={'text-[11px] mt-0.5 ' + (isMatched ? 'text-indigo-700' : 'text-amber-700')}>
+                        <div className={'text-[11px] mt-0.5 ' + (isMatched ? 'text-indigo-700' : 'text-amber-900')}>
                           The money for this entry is tracked in <code>bank_in</code> / <code>bank_out</code>, not cash.
                           {isMatched ? ' Editing the amount here will update the bank-side total and recalc any linked invoice.' : ''}
                         </div>
@@ -5750,9 +5750,9 @@ export default function App() {
                         }
                         return (
                           <div className="mt-1 flex items-center gap-2 px-2 py-1.5 rounded-md bg-amber-50 border border-amber-300">
-                            <span className="text-amber-700 text-sm">⚠</span>
+                            <span className="text-amber-900 text-sm">⚠</span>
                             <div className="flex-1 min-w-0">
-                              <div className="text-[10px] font-extrabold text-amber-800 uppercase tracking-wide">No matching invoice</div>
+                              <div className="text-[10px] font-extrabold text-amber-900 uppercase tracking-wide">No matching invoice</div>
                               <div className="text-[11px] text-amber-900">Save will succeed, but row will stay unlinked. Create the invoice in Sales first, or fix the typo. / لا توجد فاتورة بهذا الرقم.</div>
                             </div>
                           </div>
@@ -6187,7 +6187,7 @@ export default function App() {
                                 ) : (
                                   <div onClick={() => { setEditSubTxnId(txn.id); setEditCatValue(txn.category || ''); setEditSubValue(txn.subcategory || ''); }}
                                     className="cursor-pointer hover:bg-slate-100 rounded px-1 py-0.5">
-                                    <div className="text-[9px] font-semibold text-amber-700">{txn.category ? txCat(txn.category) : <span className="text-slate-300 italic">+ category</span>}</div>
+                                    <div className="text-[9px] font-semibold text-amber-900">{txn.category ? txCat(txn.category) : <span className="text-slate-300 italic">+ category</span>}</div>
                                     <div className="text-[9px] text-orange-500">{txn.subcategory || <span className="text-slate-300 italic">+ subcategory</span>}</div>
                                   </div>
                                 )}
@@ -6296,7 +6296,7 @@ export default function App() {
               <div className="mb-4 space-y-2">
                 {evalResult.warnings.map((w, idx) => (
                   <div key={idx} className={'rounded-lg p-3 border-2 ' + (w.level === 'error' ? 'bg-red-50 border-red-400' : 'bg-amber-50 border-amber-400')}>
-                    <div className={'text-xs font-extrabold uppercase mb-1 ' + (w.level === 'error' ? 'text-red-800' : 'text-amber-800')}>
+                    <div className={'text-xs font-extrabold uppercase mb-1 ' + (w.level === 'error' ? 'text-red-800' : 'text-amber-900')}>
                       {w.level === 'error' ? '⛔ Cannot proceed' : '⚠️ Warning'}
                     </div>
                     <div className={'text-sm font-medium ' + (w.level === 'error' ? 'text-red-900' : 'text-amber-900')}>{w.en}</div>
@@ -6338,7 +6338,7 @@ export default function App() {
                     <div className="flex-1 text-xs">
                       <div className="font-semibold text-amber-900">None of the above — create a new treasury entry for this check</div>
                       <div className="font-semibold text-amber-900" style={{direction:'rtl'}}>لا شيء مما سبق — أنشئ قيد خزنة جديد لهذا الشيك</div>
-                      <div className="text-amber-700 text-[10px] mt-0.5">Use only if the existing matches above are coincidences (different payments that happen to share the same amount).</div>
+                      <div className="text-amber-900 text-[10px] mt-0.5">Use only if the existing matches above are coincidences (different payments that happen to share the same amount).</div>
                     </div>
                   </label>
                 </div>
@@ -6348,11 +6348,11 @@ export default function App() {
             {/* ===== MODE C: No match — user must choose how check was collected ===== */}
             {evalResult.mode === 'no_match' && (
               <div className="bg-amber-50 border-2 border-amber-400 rounded-lg p-3 mb-4">
-                <div className="text-xs font-extrabold text-amber-800 uppercase mb-2">📥 How was this check collected? / كيف تم تحصيل هذا الشيك؟</div>
+                <div className="text-xs font-extrabold text-amber-900 uppercase mb-2">📥 How was this check collected? / كيف تم تحصيل هذا الشيك؟</div>
                 <div className="text-sm text-amber-900">No existing treasury entry on invoice #{evalResult.invoice.order_number || ''} matches the check amount of {fE(evalResult.checkAmount)} exactly.</div>
                 <div className="text-sm text-amber-900 mt-1" style={{direction:'rtl'}}>لا يوجد قيد خزنة على الفاتورة بنفس مبلغ الشيك بالضبط.</div>
-                <div className="text-xs text-amber-700 italic mt-2">Pick the option that matches what physically happened. The system will create a new treasury entry tagged as 'check' so it doesn't get confused with cash payments.</div>
-                <div className="text-xs text-amber-700 italic" style={{direction:'rtl'}}>اختر الذي يطابق ما حدث فعلًا.</div>
+                <div className="text-xs text-amber-900 italic mt-2">Pick the option that matches what physically happened. The system will create a new treasury entry tagged as 'check' so it doesn't get confused with cash payments.</div>
+                <div className="text-xs text-amber-900 italic" style={{direction:'rtl'}}>اختر الذي يطابق ما حدث فعلًا.</div>
                 <div className="space-y-2 mt-3">
                   <label className="flex items-start gap-2 p-2 rounded cursor-pointer border-2 border-amber-200 bg-white hover:bg-amber-50">
                     <input type="radio" name="reconcile-choice" className="mt-1" checked={reconcileCheckChoice && reconcileCheckChoice.kind === 'new' && !reconcileCheckReturned} onChange={() => { setReconcileCheckChoice({ kind: 'new' }); setReconcileCheckReturned(false); }} />
@@ -9013,7 +9013,7 @@ export default function App() {
                         </div>
                         <div className="bg-amber-50 rounded-lg p-2 border border-amber-200 text-center">
                           <div className="text-[9px] text-amber-600 font-bold">Unmatched</div>
-                          <div className="text-xs font-black text-amber-700">{unmatched}</div>
+                          <div className="text-xs font-black text-amber-900">{unmatched}</div>
                         </div>
                         <div className="bg-slate-50 rounded-lg p-2 border border-slate-200 text-center">
                           <div className="text-[9px] text-slate-600 font-bold">No Category</div>
@@ -9051,7 +9051,7 @@ export default function App() {
               return (
                 <div className="mt-6">
                   <div className="bg-amber-100 rounded-lg px-3 py-2 mb-3 flex justify-between items-center cursor-pointer" onClick={() => setHideSections({...hideSections, usd: !hideSections.usd})}>
-                    <span className="text-sm font-bold text-amber-800">💵 USD DOLLAR LEDGER / دفتر الدولار</span>
+                    <span className="text-sm font-bold text-amber-900">💵 USD DOLLAR LEDGER / دفتر الدولار</span>
                     <span className="text-xs text-amber-600">{hideSections.usd ? '👁️ Show' : '🙈 Hide'}</span>
                   </div>
                   {!hideSections.usd && (<>
@@ -10389,7 +10389,7 @@ export default function App() {
                                     });
                                     setShowAddInvoice(true);
                                   }}
-                                  className="text-amber-700 hover:text-amber-900 font-extrabold underline-offset-2 hover:underline"
+                                  className="text-amber-900 hover:text-amber-900 font-extrabold underline-offset-2 hover:underline"
                                   title="No invoice exists for this order. Click to create one — the amount will auto-link.">
                                   {txn.order_number} ⚠️
                                 </button>
@@ -10432,7 +10432,7 @@ export default function App() {
                           </div>
                           {/* Category — own line, below description, smaller muted */}
                           {(txn.category || txn.subcategory) && (
-                            <div className="text-[10px] text-amber-700 mt-0.5">
+                            <div className="text-[10px] text-amber-900 mt-0.5">
                               <span className="font-semibold">{txCat(txn.category) || 'Uncategorized'}</span>
                               {txn.subcategory && <span className="text-amber-600"> › {txn.subcategory}</span>}
                             </div>
@@ -10451,9 +10451,9 @@ export default function App() {
                             <div className="text-[10px] text-indigo-700 italic mt-0.5">Does not affect safe balance / لا يؤثر على رصيد الخزنة</div>
                           )}
                           {isOrphanWaiting && (
-                            <div className="text-[11px] text-amber-800 italic mt-1 font-semibold leading-snug">
+                            <div className="text-[11px] text-amber-900 italic mt-1 font-semibold leading-snug">
                               <div>⏳ Not yet credited — invoice #{txn.order_number} does not exist. Click the order# to create it.</div>
-                              <div style={{direction:'rtl'}} className="text-amber-700 mt-0.5">⏳ لم تُضف بعد إلى المحصّل — الفاتورة رقم {txn.order_number} غير موجودة. اضغط رقم الأمر لإنشائها.</div>
+                              <div style={{direction:'rtl'}} className="text-amber-900 mt-0.5">⏳ لم تُضف بعد إلى المحصّل — الفاتورة رقم {txn.order_number} غير موجودة. اضغط رقم الأمر لإنشائها.</div>
                             </div>
                           )}
                         </td>
@@ -10822,7 +10822,7 @@ export default function App() {
                                 ) : isOD ? (
                                   <span className="px-2 py-0.5 bg-red-100 text-red-700 rounded-full text-[8px] font-bold">OVERDUE</span>
                                 ) : isDueSoon ? (
-                                  <span className="px-2 py-0.5 bg-amber-100 text-amber-700 rounded-full text-[8px] font-bold">TOMORROW</span>
+                                  <span className="px-2 py-0.5 bg-amber-100 text-amber-900 rounded-full text-[8px] font-bold">TOMORROW</span>
                                 ) : isDueThisMonth ? (
                                   <span className="px-2 py-0.5 bg-blue-100 text-blue-700 rounded-full text-[8px] font-bold">THIS MONTH</span>
                                 ) : (
@@ -10867,7 +10867,7 @@ export default function App() {
                                     {/* S15 — Uncollect button: reverses the collect flow cleanly */}
                                     {(userProfile?.role === 'super_admin' || userProfile?.role === 'admin') && (
                                       <button onClick={() => handleUncollectCheck(c)}
-                                        className="px-1.5 py-0.5 rounded border border-amber-300 text-amber-700 text-[9px] hover:bg-amber-50 font-semibold"
+                                        className="px-1.5 py-0.5 rounded border border-amber-300 text-amber-900 text-[9px] hover:bg-amber-50 font-semibold"
                                         title="Uncollect — reverse this collection">
                                         ↩︎ Uncollect
                                       </button>
@@ -11671,10 +11671,10 @@ export default function App() {
                           {/* Category pills */}
                           <div className="flex gap-1 mb-2 flex-wrap">
                             {p.product_type && <span className="px-2 py-0.5 bg-indigo-50 text-indigo-700 rounded-md text-[9px] font-bold">{p.product_type}</span>}
-                            {p.subcategory && <span className="px-2 py-0.5 bg-amber-50 text-amber-700 rounded-md text-[9px] font-medium">{p.subcategory}</span>}
+                            {p.subcategory && <span className="px-2 py-0.5 bg-amber-50 text-amber-900 rounded-md text-[9px] font-medium">{p.subcategory}</span>}
                             <span className={'px-2 py-0.5 rounded-md text-[9px] font-bold ' +
                               (p.stock_status === 'in_stock' ? 'bg-green-50 text-green-700' :
-                               p.stock_status === 'low' ? 'bg-amber-50 text-amber-700' :
+                               p.stock_status === 'low' ? 'bg-amber-50 text-amber-900' :
                                p.stock_status === 'reserved' ? 'bg-blue-50 text-blue-700' : 'bg-red-50 text-red-700')}>
                               {p.stock_status === 'in_stock' ? 'In Stock' : p.stock_status === 'low' ? 'Low' : p.stock_status === 'reserved' ? 'Reserved' : p.stock_status === 'out_of_stock' ? 'Out' : 'Available'}
                             </span>
@@ -11732,7 +11732,7 @@ export default function App() {
                             <div className="text-[10px] text-slate-500">{lang === 'en' && p.description_en ? p.description_en : p.description}</div>
                           </td>
                           <td className="px-2 py-1.5">{p.product_type && <span className="px-1.5 py-0.5 bg-indigo-100 text-indigo-700 rounded text-[9px]">{p.product_type}</span>}</td>
-                          <td className="px-2 py-1.5">{p.subcategory && <span className="px-1.5 py-0.5 bg-amber-100 text-amber-700 rounded text-[9px]">{p.subcategory}</span>}</td>
+                          <td className="px-2 py-1.5">{p.subcategory && <span className="px-1.5 py-0.5 bg-amber-100 text-amber-900 rounded text-[9px]">{p.subcategory}</span>}</td>
                           <td className="px-2 py-1.5 text-xs text-right">{Number(p.original_quantity || p.roll_count || 0).toLocaleString()}</td>
                           <td className="px-2 py-1.5 text-xs text-right font-bold text-emerald-600">{Number(p.current_quantity || p.roll_count || 0).toLocaleString()}</td>
                           <td className="px-2 py-1.5 text-xs text-right">
@@ -11745,7 +11745,7 @@ export default function App() {
                           </td>
                           <td className="px-2 py-1.5 text-xs text-right">
                             {adjCount > 0 ? (
-                              <span className="inline-flex items-center gap-1 text-amber-700 font-semibold">
+                              <span className="inline-flex items-center gap-1 text-amber-900 font-semibold">
                                 <span>🧾</span>
                                 <span>{adjCount}</span>
                               </span>
@@ -11755,7 +11755,7 @@ export default function App() {
                           <td className="px-2 py-1.5">
                             <span className={'px-1.5 py-0.5 rounded-full text-[9px] font-semibold ' +
                               (p.stock_status === 'in_stock' ? 'bg-green-100 text-green-700' :
-                               p.stock_status === 'low' ? 'bg-amber-100 text-amber-700' :
+                               p.stock_status === 'low' ? 'bg-amber-100 text-amber-900' :
                                p.stock_status === 'reserved' ? 'bg-blue-100 text-blue-700' : 'bg-red-100 text-red-700')}>
                               {p.stock_status === 'in_stock' ? 'In Stock' : p.stock_status === 'low' ? 'Low' : p.stock_status === 'reserved' ? 'Reserved' : 'Out'}
                             </span>
@@ -11800,7 +11800,7 @@ export default function App() {
                         <DatePickerSelect value={formData.prodDate || today()} onChange={v => setFormData({...formData, prodDate: v})} /></div>
                       {formData.prodId && inventory.find(p => p.product_id === formData.prodId) && (
                         <div className="col-span-2 bg-amber-50 rounded-lg p-2 border border-amber-200">
-                          <div className="text-[10px] font-bold text-amber-700">⚠️ Product ID "{formData.prodId}" already exists — this will be added as a new inbound and quantities/costs will be aggregated.</div>
+                          <div className="text-[10px] font-bold text-amber-900">⚠️ Product ID "{formData.prodId}" already exists — this will be added as a new inbound and quantities/costs will be aggregated.</div>
                         </div>
                       )}
                       <div><label className="text-[10px] font-bold text-slate-500">Description (Arabic)</label>
@@ -11900,7 +11900,7 @@ export default function App() {
                             (formData.prodCurrQty !== undefined && Number(formData.prodCurrQty) !== exCurr)
                           ) && (
                             <div className="col-span-2">
-                              <label className="text-[10px] font-bold text-amber-700">🧾 Reason for adjustment (journal entry)</label>
+                              <label className="text-[10px] font-bold text-amber-900">🧾 Reason for adjustment (journal entry)</label>
                               <input
                                 value={formData.prodAdjReason || ''}
                                 onChange={e => setFormData({...formData, prodAdjReason: e.target.value})}
@@ -12215,7 +12215,7 @@ export default function App() {
                       {/* Category pills */}
                       <div className="flex gap-2 flex-wrap">
                         {p.product_type && <span className="px-2 py-1 bg-indigo-100 text-indigo-700 rounded-lg text-xs font-bold">{p.product_type}</span>}
-                        {p.subcategory && <span className="px-2 py-1 bg-amber-100 text-amber-700 rounded-lg text-xs font-bold">{p.subcategory}</span>}
+                        {p.subcategory && <span className="px-2 py-1 bg-amber-100 text-amber-900 rounded-lg text-xs font-bold">{p.subcategory}</span>}
                       </div>
                       <div>
                         <div className="text-lg font-bold">{p.reference_number || p.product_id}</div>
@@ -12242,7 +12242,7 @@ export default function App() {
                       </div>
                       {/* Update current quantity */}
                       <div className="flex gap-2 items-center bg-amber-50 rounded-lg p-3">
-                        <span className="text-xs font-bold text-amber-700">Update Qty:</span>
+                        <span className="text-xs font-bold text-amber-900">Update Qty:</span>
                         <input type="number" id="update-qty" defaultValue={currQty} className="flex-1 px-2 py-1.5 rounded border text-sm" />
                         <button onClick={async () => {
                           const val = Number(document.getElementById('update-qty')?.value);
@@ -13605,7 +13605,7 @@ export default function App() {
                       latest fix is actually deployed. If he doesn't see this
                       tag in the modal, his browser is running stale JS. */}
                   <div className="mt-1.5 inline-block px-2 py-0.5 rounded bg-amber-900/60 text-amber-100 text-[10px] font-mono font-bold tracking-wide">
-                    BUILD v55.82-F
+                    BUILD v55.82-I
                   </div>
                 </div>
                 <button onClick={() => closePendingTreasuryModal()}
@@ -13817,7 +13817,7 @@ export default function App() {
                           return (
                             <div className="mt-2 p-3 rounded-lg bg-amber-50 border-2 border-amber-300 space-y-2">
                               <div className="flex items-start gap-2">
-                                <span className="text-amber-700 text-base flex-shrink-0">⚠</span>
+                                <span className="text-amber-900 text-base flex-shrink-0">⚠</span>
                                 <div className="flex-1 text-[12px] text-amber-900">
                                   <div className="font-bold">"{typedRaw}" is not in your customers list</div>
                                   <div>Create them as a new customer, or pick someone different from the list below.</div>
@@ -14240,7 +14240,7 @@ export default function App() {
                     معاملة قد تكون مكررة
                   </div>
                   <div className="mt-1.5 inline-block px-2 py-0.5 rounded bg-amber-900/60 text-amber-100 text-[10px] font-mono font-bold tracking-wide">
-                    BUILD v55.82-F
+                    BUILD v55.82-I
                   </div>
                 </div>
                 <button
@@ -14257,13 +14257,13 @@ export default function App() {
                 {duplicateConfirm.fromDbError
                   ? 'The database flagged this entry as a potential duplicate. We found '
                   : 'We found '}
-                <span className="font-extrabold text-amber-700">
+                <span className="font-extrabold text-amber-900">
                   {duplicateConfirm.matches.length} existing transaction{duplicateConfirm.matches.length === 1 ? '' : 's'}
                 </span>
                 {' '}with the same date, amount, and description:
               </div>
               <div className="text-sm text-slate-700 mb-3" style={{ direction: 'rtl' }}>
-                وجدنا <span className="font-extrabold text-amber-700">{duplicateConfirm.matches.length} معاملة موجودة</span> بنفس التاريخ والمبلغ والوصف.
+                وجدنا <span className="font-extrabold text-amber-900">{duplicateConfirm.matches.length} معاملة موجودة</span> بنفس التاريخ والمبلغ والوصف.
               </div>
 
               {/* List of existing matches */}
@@ -14279,7 +14279,7 @@ export default function App() {
                   return (
                     <div key={t.id} className="bg-amber-50 border-2 border-amber-300 rounded-lg p-3">
                       <div className="flex justify-between items-start gap-2 mb-1">
-                        <span className="text-[10px] font-mono font-bold text-amber-800 uppercase">
+                        <span className="text-[10px] font-mono font-bold text-amber-900 uppercase">
                           {direction === 'IN' ? '💵 Cash In' : '💸 Cash Out'}
                           {t.is_bank_placeholder ? ' (Bank — pending statement)' : ''}
                         </span>

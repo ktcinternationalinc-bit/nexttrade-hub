@@ -181,7 +181,7 @@ export default function PersonalDashboard({ user, userProfile, isAdmin, isSuperA
             <span className="text-2xl">🔁</span>
             <div>
               <div className="text-sm font-extrabold text-amber-900">{bugsToRetest.length} bug{bugsToRetest.length === 1 ? '' : 's'} you filed {bugsToRetest.length === 1 ? 'is' : 'are'} ready to retest</div>
-              <div className="text-[11px] text-amber-700">Claude shipped a fix. Verify it works and close the loop — it counts toward your reliability score.</div>
+              <div className="text-[11px] text-amber-900">Claude shipped a fix. Verify it works and close the loop — it counts toward your reliability score.</div>
             </div>
           </div>
           <button
@@ -205,7 +205,7 @@ export default function PersonalDashboard({ user, userProfile, isAdmin, isSuperA
             </div>
           ))}
           {bugsToRetest.length > 5 && (
-            <div className="text-[10px] text-amber-700 text-center pt-1">…and {bugsToRetest.length - 5} more — see System Tickets</div>
+            <div className="text-[10px] text-amber-900 text-center pt-1">…and {bugsToRetest.length - 5} more — see System Tickets</div>
           )}
         </div>
       </div>
@@ -268,10 +268,10 @@ export default function PersonalDashboard({ user, userProfile, isAdmin, isSuperA
                   className={'flex justify-between items-center py-1.5 px-2 rounded border ' +
                     (overdue ? 'border-red-300 bg-red-50 ' : 'border-amber-300 bg-amber-50 ') + blinkClass}>
                   <div className="flex-1 min-w-0">
-                    <div className={'text-xs font-bold ' + (overdue ? 'text-red-700' : 'text-amber-800')}>
+                    <div className={'text-xs font-bold ' + (overdue ? 'text-red-700' : 'text-amber-900')}>
                       {item.kind === 'ticket' ? '🎫 ' : ''}{item.text}
                     </div>
-                    <div className={'text-[10px] font-bold ' + (overdue ? 'text-red-600' : 'text-amber-700')}>
+                    <div className={'text-[10px] font-bold ' + (overdue ? 'text-red-600' : 'text-amber-900')}>
                       {overdue ? 'Overdue ' : 'Due today'}{item.due_date ? ' • ' + item.due_date : ''}
                       {item.priority === 'critical' && <span className="ml-1 text-red-900 font-bold">🚨 CRITICAL</span>}
                       {item.priority === 'high' && <span className="ml-1 text-red-500">🔴 HIGH</span>}
@@ -322,7 +322,7 @@ export default function PersonalDashboard({ user, userProfile, isAdmin, isSuperA
       ) : (
         <div className="flex gap-1.5 flex-wrap mb-2">{PIPELINE_STAGES.map(s=>{const c=pipelineStats[s.v]||0; return (<div key={s.v} className="rounded-lg px-3 py-2 text-center min-w-[70px]" style={{background:c>0?s.c+'15':'#f8fafc',borderLeft:'3px solid '+(c>0?s.c:'#e2e8f0')}}><div className="text-lg font-extrabold" style={{color:c>0?s.c:'#cbd5e1'}}>{c}</div><div className="text-[9px] font-semibold text-slate-600">{s.icon} {s.l}</div></div>);})}</div>
       )}
-      {notContacted30.length>0&&<div className="bg-amber-50 rounded-lg p-2 mt-2 border border-amber-200"><div className="text-[10px] font-bold text-amber-700">⚠️ {notContacted30.length} clients not contacted in 30+ days</div></div>}
+      {notContacted30.length>0&&<div className="bg-amber-50 rounded-lg p-2 mt-2 border border-amber-200"><div className="text-[10px] font-bold text-amber-900">⚠️ {notContacted30.length} clients not contacted in 30+ days</div></div>}
     </div>)}
 
     {overdueFollowUps.length>0&&(<div className="bg-red-50 rounded-xl p-4 mb-3 border border-red-200"><h3 className="text-sm font-bold text-red-700 mb-2">⚠️ Overdue Follow-ups ({overdueFollowUps.length})</h3>{overdueFollowUps.map(fu=>(<div key={fu.id} className="flex justify-between items-center py-1.5 border-b border-red-100"><div><div className="text-xs font-semibold">{fu.task}</div><div className="text-xs text-slate-700">{fu.customers?.name||''} • Due: {fu.due_date}</div></div><span className="text-[10px] font-bold text-red-600">{Math.floor((Date.now()-new Date(fu.due_date).getTime())/86400000)}d late</span></div>))}</div>)}

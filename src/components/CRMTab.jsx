@@ -616,7 +616,7 @@ export default function CRMTab({ toast, customers, invoices, user, userProfile, 
                 setSel({...sel, important: newVal});
                 onReload();
               } catch(err) { toast ? toast.error(err.message) : toast ? toast.error(err.message) : alert(err.message); }
-            }} className={'mt-2 px-3 py-1.5 rounded-lg text-xs font-bold border-2 transition ' + (sel.important ? 'border-amber-400 bg-amber-50 text-amber-700' : 'border-slate-200 text-slate-400')}>
+            }} className={'mt-2 px-3 py-1.5 rounded-lg text-xs font-bold border-2 transition ' + (sel.important ? 'border-amber-400 bg-amber-50 text-amber-900' : 'border-slate-200 text-slate-400')}>
               {sel.important ? '⭐ Important Client / عميل مهم' : '☆ Mark as Important / تعيين كمهم'}
             </button>
             {sel.phone && <div className="text-xs text-slate-500 mt-2">Phone: {canSeeContact(sel) ? sel.phone : maskPhone(sel.phone)}</div>}
@@ -712,7 +712,7 @@ export default function CRMTab({ toast, customers, invoices, user, userProfile, 
       )}
       {pendingFU.length > 0 && (
         <div className="bg-amber-50 rounded-xl p-4 mb-3 border border-amber-200">
-          <h4 className="text-sm font-bold text-amber-800 mb-2">Follow-ups ({pendingFU.length})</h4>
+          <h4 className="text-sm font-bold text-amber-900 mb-2">Follow-ups ({pendingFU.length})</h4>
           {pendingFU.map(fu => {
             const isOverdue = fu.due_date && fu.due_date < todayET();
             const assignedName = users?.find(u => u.id === fu.assigned_to)?.name;

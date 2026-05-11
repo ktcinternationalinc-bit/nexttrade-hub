@@ -313,7 +313,7 @@ function PersonRow({ row, showSubScores, expanded, onToggle, onRequestReview, re
   const toneClasses = (t) => {
     if (t === 'good') return { bg: 'bg-emerald-50', text: 'text-emerald-700', ring: 'ring-emerald-200' };
     if (t === 'ok') return { bg: 'bg-blue-50', text: 'text-blue-700', ring: 'ring-blue-200' };
-    if (t === 'low') return { bg: 'bg-amber-50', text: 'text-amber-700', ring: 'ring-amber-200' };
+    if (t === 'low') return { bg: 'bg-amber-50', text: 'text-amber-900', ring: 'ring-amber-200' };
     if (t === 'poor') return { bg: 'bg-rose-50', text: 'text-rose-700', ring: 'ring-rose-200' };
     return { bg: 'bg-slate-50', text: 'text-slate-700', ring: 'ring-slate-200' };
   };
@@ -540,7 +540,7 @@ function Pill({ label, value, delta, tone }) {
     if (delta > 0) { deltaTxt = ' ↑' + delta; deltaCls = 'text-emerald-600 font-semibold'; }
     else if (delta < 0) { deltaTxt = ' ↓' + Math.abs(delta); deltaCls = 'text-slate-500'; }
   }
-  const toneCls = tone === 'rose' ? 'bg-rose-50 text-rose-700' : tone === 'amber' ? 'bg-amber-50 text-amber-700' : 'bg-slate-50 text-slate-700';
+  const toneCls = tone === 'rose' ? 'bg-rose-50 text-rose-700' : tone === 'amber' ? 'bg-amber-50 text-amber-900' : 'bg-slate-50 text-slate-700';
   return (
     <span className={'inline-flex items-center gap-1 rounded px-2 py-0.5 text-[10px] ' + toneCls}>
       <span className="font-bold">{value}</span>

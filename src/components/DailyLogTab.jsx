@@ -384,7 +384,7 @@ export default function DailyLogTab({ user, userProfile, users, isAdmin }) {
                           </span>
                           {l.auto_generated && <span className="text-[9px] text-slate-500">auto</span>}
                           {viewMode === 'team' && userName && <span className="text-[10px] font-semibold text-blue-500">{userName}</span>}
-                          {isEdited && <span className="text-[9px] font-extrabold text-amber-800">⚠️ edited{l.edited_at ? ' ' + fmtET(l.edited_at, 'shortdate') : ''}</span>}
+                          {isEdited && <span className="text-[9px] font-extrabold text-amber-900">⚠️ edited{l.edited_at ? ' ' + fmtET(l.edited_at, 'shortdate') : ''}</span>}
                           {!l.auto_generated && !isEditMode && l.user_id === myId && (
                             <button onClick={() => { setEditingId(l.id); setEditText(l.entry_text); }}
                               className="text-[9px] text-slate-500 hover:text-blue-500 cursor-pointer">edit</button>

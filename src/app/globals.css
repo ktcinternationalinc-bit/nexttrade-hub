@@ -107,7 +107,12 @@ body {
 .bg-blue-100 { background: rgba(56,189,248,0.2) !important; color: #7dd3fc !important; }
 .bg-emerald-100, .bg-green-100 { background: rgba(52,211,153,0.2) !important; color: #6ee7b7 !important; }
 .bg-red-100 { background: rgba(248,113,113,0.2) !important; color: #fca5a5 !important; }
-.bg-amber-100 { background: rgba(251,191,36,0.2) !important; color: #fde68a !important; }
+/* v55.82-I (Max May 11 2026): bg-amber-100 was forcing text color to
+   light yellow (#fde68a), which produced yellow-on-yellow with no
+   contrast on the resulting amber pill. Now we keep the background
+   tint but DROP the text-color override — JSX className for text
+   (e.g. text-amber-900) wins. */
+.bg-amber-100 { background: rgba(251,191,36,0.2) !important; }
 .bg-purple-100 { background: rgba(167,139,250,0.2) !important; color: #c4b5fd !important; }
 .bg-slate-100:not(.min-h-screen) { background: rgba(255,255,255,0.08) !important; color: var(--text-secondary) !important; }
 .bg-indigo-100 { background: rgba(167,139,250,0.2) !important; color: #c4b5fd !important; }
@@ -123,7 +128,9 @@ body {
 .text-blue-600, .text-blue-700, .text-blue-500 { color: #38bdf8 !important; }
 .text-emerald-600, .text-emerald-700, .text-emerald-500, .text-green-700, .text-green-600 { color: #34d399 !important; }
 .text-red-500, .text-red-600, .text-red-700 { color: #f87171 !important; }
-.text-amber-600, .text-amber-700 { color: #fbbf24 !important; }
+/* v55.82-I — amber text on amber background is yellow-on-yellow. Don't
+   force a pale color here; let the JSX className choose (text-amber-900
+   on light bg, text-amber-300 on dark bg, etc.). */
 .text-purple-600, .text-purple-700 { color: #a78bfa !important; }
 .text-indigo-600, .text-indigo-700 { color: #818cf8 !important; }
 
@@ -333,7 +340,8 @@ h3 { letter-spacing: -0.02em; }
 .text-blue-800 { color: #7dd3fc !important; }
 .text-emerald-800, .text-green-800 { color: #6ee7b7 !important; }
 .text-red-800 { color: #fca5a5 !important; }
-.text-amber-800, .text-amber-700 { color: #fde68a !important; }
+/* v55.82-I — removed `.text-amber-800, .text-amber-700` override here too.
+   See companion note above. JSX className decides. */
 .text-indigo-800 { color: #c4b5fd !important; }
 
 /* ===== CALENDAR ===== */
@@ -388,20 +396,64 @@ h3 { letter-spacing: -0.02em; }
      SPEAKING    = .ktc-assistant-speaking   → faster, deeper pulse (overrides)
    Both animations only animate box-shadow. No transform, no opacity, no
    anything else that could fight the tile's hover scale. */
+/* v55.82-I — GLOW VISIBILITY OVERHAUL (Max May 11 2026 photo evidence).
+   Per Max: "if someone is active, they should be glowing. It should be a
+   very visible glow. It's not happening now." Photo showed the cyan Sara
+   tile completely flat against the cyan gradient background — the previous
+   ring + box-shadow used 0.5 alpha colors that disappeared into the card's
+   own background gradient.
+
+   Two fixes:
+     1. Add a high-contrast WHITE inner ring (4px) before the colored halo
+        so the boundary between card and glow is always visible, regardless
+        of background color.
+     2. Wider, more saturated colored halos. 0.5 alpha bumped via richer
+        shadow stacking (multiple shadows = additive glow that pops).
+     3. Slow breathing range goes from 4px → 8px (was 4-6px) so the size
+        change is actually noticeable.
+
+   IDLE active = .ktc-assistant-active     → static soft glow + slow pulse
+   SPEAKING    = .ktc-assistant-speaking   → faster, deeper pulse (overrides)
+   Both animations only animate box-shadow. No transform, no opacity, no
+   anything else that could fight the tile's hover scale. */
 @keyframes ktcAssistantActiveBreath {
-  0%, 100% { box-shadow: 0 0 0 4px var(--ktc-glow-color), 0 6px 24px var(--ktc-glow-color); }
-  50%      { box-shadow: 0 0 0 6px var(--ktc-glow-color), 0 10px 32px var(--ktc-glow-color); }
+  0%, 100% {
+    box-shadow:
+      0 0 0 4px rgba(255,255,255,0.95),
+      0 0 0 10px var(--ktc-glow-color),
+      0 8px 36px var(--ktc-glow-color),
+      0 0 60px var(--ktc-glow-color);
+  }
+  50% {
+    box-shadow:
+      0 0 0 4px rgba(255,255,255,0.95),
+      0 0 0 14px var(--ktc-glow-color),
+      0 12px 48px var(--ktc-glow-color),
+      0 0 80px var(--ktc-glow-color);
+  }
 }
 .ktc-assistant-active {
-  animation: ktcAssistantActiveBreath 4.5s ease-in-out infinite;
+  animation: ktcAssistantActiveBreath 3s ease-in-out infinite;
 }
 
 @keyframes ktcAssistantSpeakingPulse {
-  0%, 100% { box-shadow: 0 0 0 4px var(--ktc-glow-color), 0 8px 32px var(--ktc-glow-color); }
-  50%      { box-shadow: 0 0 0 8px var(--ktc-glow-color), 0 16px 48px var(--ktc-glow-color); }
+  0%, 100% {
+    box-shadow:
+      0 0 0 4px rgba(255,255,255,0.95),
+      0 0 0 12px var(--ktc-glow-color),
+      0 12px 40px var(--ktc-glow-color),
+      0 0 80px var(--ktc-glow-color);
+  }
+  50% {
+    box-shadow:
+      0 0 0 4px rgba(255,255,255,0.95),
+      0 0 0 18px var(--ktc-glow-color),
+      0 20px 64px var(--ktc-glow-color),
+      0 0 100px var(--ktc-glow-color);
+  }
 }
 .ktc-assistant-speaking {
-  animation: ktcAssistantSpeakingPulse 1.4s ease-in-out infinite;
+  animation: ktcAssistantSpeakingPulse 1.2s ease-in-out infinite;
 }
 /* Removed .ktc-assistant-active-pulse — idle active no longer pulses. */
 

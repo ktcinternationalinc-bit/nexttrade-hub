@@ -794,7 +794,7 @@ export default function PriorityBoard({
           {additional.length > 0 && (
             <div
               className={'text-[9px] ml-auto ' + (isStarred ? '' : 'text-slate-500')}
-              style={isStarred ? { color: '#78350f' /* dark amber, beats globals.css text-amber-800 → light-yellow override */ } : undefined}
+              style={isStarred ? { color: '#78350f' /* dark amber, beats globals.css text-amber-900 → light-yellow override */ } : undefined}
               title="Also assigned to others"
             >
               +{additional.length} other{additional.length === 1 ? '' : 's'}

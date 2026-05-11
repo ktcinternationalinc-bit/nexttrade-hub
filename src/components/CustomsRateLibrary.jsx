@@ -156,8 +156,8 @@ export default function CustomsRateLibrary({ user, isAdmin }) {
   if (error) {
     return (
       <div className="bg-amber-50 rounded-xl p-4 border border-amber-300">
-        <div className="text-sm font-bold text-amber-800 mb-1">⚠️ Customs Rate Library unavailable</div>
-        <div className="text-xs text-amber-700">{error}</div>
+        <div className="text-sm font-bold text-amber-900 mb-1">⚠️ Customs Rate Library unavailable</div>
+        <div className="text-xs text-amber-900">{error}</div>
         <button onClick={load} className="mt-2 px-3 py-1 text-xs font-semibold bg-amber-500 text-white rounded">↻ Try again</button>
       </div>
     );

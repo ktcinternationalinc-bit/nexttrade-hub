@@ -176,7 +176,7 @@ export default function AdminHRInbox({ user, userProfile, isSuperAdmin, users })
       </div>
 
       {tableMissing && (
-        <div className="bg-amber-50 border border-amber-200 rounded-lg p-3 text-xs text-amber-800 mb-3">
+        <div className="bg-amber-50 border border-amber-200 rounded-lg p-3 text-xs text-amber-900 mb-3">
           <strong>Setup needed:</strong> The HR Desk tables haven't been created yet. Run <code className="bg-white px-1 rounded">sql/s41_hr_desk_requests_complaints.sql</code> in Supabase SQL Editor.
         </div>
       )}
@@ -185,7 +185,7 @@ export default function AdminHRInbox({ user, userProfile, isSuperAdmin, users })
       <div className="flex border-b border-slate-200 mb-3">
         <button
           onClick={function () { setTab('requests'); }}
-          className={'px-4 py-2 text-xs font-bold border-b-2 transition ' + (tab === 'requests' ? 'border-amber-500 text-amber-700 bg-amber-50' : 'border-transparent text-slate-500 hover:text-slate-700')}>
+          className={'px-4 py-2 text-xs font-bold border-b-2 transition ' + (tab === 'requests' ? 'border-amber-500 text-amber-900 bg-amber-50' : 'border-transparent text-slate-500 hover:text-slate-700')}>
           📝 Requests ({visibleRequests.length}{pendingReqCount > 0 ? ' · ' + pendingReqCount + ' pending' : ''})
         </button>
         <button

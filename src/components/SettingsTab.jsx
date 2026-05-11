@@ -216,7 +216,7 @@ function VoiceSettingsPanel({ userProfile, toast }) {
       <div className="p-4 rounded-lg border border-slate-200 mb-3">
         <div className="text-xs font-bold mb-2">Browser support</div>
         {support.kind === 'ok' && <div className="text-[11px] text-emerald-600">✅ This browser supports continuous voice — "Hey Nadia" will listen automatically.</div>}
-        {support.kind === 'safari' && <div className="text-[11px] text-amber-800 font-semibold">⚠️ Safari supports voice but re-starts after each utterance. Works — just slightly less seamless than Chrome.</div>}
+        {support.kind === 'safari' && <div className="text-[11px] text-amber-900 font-semibold">⚠️ Safari supports voice but re-starts after each utterance. Works — just slightly less seamless than Chrome.</div>}
         {support.kind === 'firefox' && <div className="text-[11px] text-rose-600">❌ Firefox does NOT support speech recognition. Use Chrome/Safari/Edge for voice. Push-to-talk via Space bar still works.</div>}
         {support.kind === 'unsupported' && <div className="text-[11px] text-rose-600">❌ No speech recognition in this browser. Update browser or switch to Chrome.</div>}
         {support.kind === 'checking' && <div className="text-[11px] text-slate-400">Checking...</div>}
@@ -282,7 +282,7 @@ function AdminToolsPanel({ toast }) {
           <div className="text-2xl font-extrabold text-emerald-600">{stats?.memory_count ?? '—'}</div>
         </div>
         <div className="rounded-lg p-3 bg-amber-50">
-          <div className="text-[10px] text-amber-700 uppercase tracking-wide">Uncategorized Invoices</div>
+          <div className="text-[10px] text-amber-900 uppercase tracking-wide">Uncategorized Invoices</div>
           <div className="text-2xl font-extrabold text-amber-600">{stats?.uncategorized_invoice_count ?? '—'}</div>
         </div>
       </div>
@@ -591,7 +591,7 @@ function PhoneSettingsPanel({ users, userProfile, toast, isAdmin, isSuperAdmin }
                 diagResult.overall === 'ok'
                   ? 'bg-green-100 text-green-800 border border-green-300'
                   : diagResult.overall === 'warn'
-                    ? 'bg-amber-100 text-amber-800 border border-amber-300'
+                    ? 'bg-amber-100 text-amber-900 border border-amber-300'
                     : 'bg-red-100 text-red-800 border border-red-300'
               )}>
                 {diagResult.overall === 'ok'
@@ -612,7 +612,7 @@ function PhoneSettingsPanel({ users, userProfile, toast, isAdmin, isSuperAdmin }
                     : 'bg-red-50 border-red-200';
                   var icon = r.status === 'ok' ? '✓' : r.status === 'warn' ? '⚠' : '✗';
                   var iconColor = r.status === 'ok' ? 'text-green-600'
-                    : r.status === 'warn' ? 'text-amber-800' : 'text-red-700';
+                    : r.status === 'warn' ? 'text-amber-900' : 'text-red-700';
                   return (
                     <div key={idx} className={'rounded border p-2.5 ' + bg}>
                       <div className="flex items-start gap-2">
@@ -1214,7 +1214,7 @@ export default function SettingsTab({ toast, user, users, onReload, isAdmin, use
                           var pw = prompt('New password for ' + u.name + ' (min 6 chars):');
                           if (pw && pw.length >= 6) handleUpdateUser(u.id, { new_password: pw });
                           else if (pw) alert('Password must be at least 6 characters');
-                        }} className="px-2 py-1 rounded border border-amber-400 text-amber-800 text-[10px] font-bold">🔑 Reset Password</button>
+                        }} className="px-2 py-1 rounded border border-amber-400 text-amber-900 text-[10px] font-bold">🔑 Reset Password</button>
                         {u.active !== false && <button onClick={() => handleDeactivateUser(u.id, u.name)}
                           className="px-2 py-1 rounded border border-red-300 text-red-500 text-[10px] font-semibold">Deactivate</button>}
                         {u.active === false && <button onClick={() => handleUpdateUser(u.id, { active: true })}
@@ -1364,10 +1364,10 @@ export default function SettingsTab({ toast, user, users, onReload, isAdmin, use
                 </tr>
               ))}
               {/* Action Permissions */}
-              <tr><td colSpan={nonSuperUsers.length + 1} className="px-2 py-2 bg-amber-50 text-[10px] font-bold text-amber-700 border-b border-amber-200 mt-2">🔐 ACTION PERMISSIONS — what the user can do (Tab ON + Edit OFF = Read Only 👁️)</td></tr>
+              <tr><td colSpan={nonSuperUsers.length + 1} className="px-2 py-2 bg-amber-50 text-[10px] font-bold text-amber-900 border-b border-amber-200 mt-2">🔐 ACTION PERMISSIONS — what the user can do (Tab ON + Edit OFF = Read Only 👁️)</td></tr>
               {['Edit Treasury', 'Edit Invoices', 'Delete Invoices', 'Edit Inventory', 'Adjust Inventory Quantities', 'Edit Warehouse', 'Edit CRM', 'View Costs', 'View Financial Reports', 'CRM View All', 'CRM View Contacts', 'Delete Tickets', 'Assign Tickets', 'Merge Customers', 'Manage Categories', 'Export Data', 'Post Reminders', 'HR Report'].map(mod => (
                 <tr key={mod} className="border-b border-slate-50">
-                  <td className="px-2 py-1.5 text-[10px] font-semibold text-amber-700">{mod}</td>
+                  <td className="px-2 py-1.5 text-[10px] font-semibold text-amber-900">{mod}</td>
                   {nonSuperUsers.map(u => {
                     const hasAccess = permissions[u.id]?.[mod] ?? false;
                     return (
@@ -1710,7 +1710,7 @@ export default function SettingsTab({ toast, user, users, onReload, isAdmin, use
               const dbList = Array.isArray(categoriesList) ? categoriesList : [];
               if (dbList.length === 0) {
                 return (
-                  <div className="bg-amber-50 border border-amber-200 rounded p-3 text-[11px] text-amber-700">
+                  <div className="bg-amber-50 border border-amber-200 rounded p-3 text-[11px] text-amber-900">
                     No categories in the database yet. Run <code className="bg-white px-1 rounded">supabase/categories.sql</code> in Supabase to seed the bilingual categories table, then reload this page.
                     <div className="mt-2 text-slate-500 text-[10px]">Legacy EXPENSE_CATS fallback is still active in dropdowns until the migration is run.</div>
                   </div>
@@ -1836,7 +1836,7 @@ export default function SettingsTab({ toast, user, users, onReload, isAdmin, use
                                     alert('Reversed ' + (matching || []).length + ' transactions');
                                     onReload();
                                   } catch(err) { toast ? toast.error(err.message) : toast ? toast.error(err.message) : alert(err.message); }
-                                }} className="px-2 py-0.5 rounded border border-amber-400 text-amber-800 text-[10px] font-bold hover:bg-amber-50">Reverse</button>
+                                }} className="px-2 py-0.5 rounded border border-amber-400 text-amber-900 text-[10px] font-bold hover:bg-amber-50">Reverse</button>
                                 <button onClick={async () => {
                                   if (!confirm('Delete this rule?\nحذف هذه القاعدة؟')) return;
                                   try {

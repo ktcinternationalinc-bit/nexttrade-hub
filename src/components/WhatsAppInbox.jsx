@@ -197,7 +197,7 @@ export default function WhatsAppInbox({ user, userProfile, customers }) {
       {diag && !diag.env_configured && (
         <div className="bg-amber-50 border-b border-amber-300 p-3 text-xs">
           <div className="font-bold text-amber-900 mb-1">⚠️ WhatsApp not fully configured</div>
-          <div className="text-amber-800">
+          <div className="text-amber-900">
             Some required environment variables are missing. Conversations will load but you can't send or receive yet.
             Missing: {Object.entries(diag.env || {}).filter(([_, v]) => !v).map(([k]) => k).join(', ') || 'none'}.
           </div>

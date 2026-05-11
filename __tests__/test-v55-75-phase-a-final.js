@@ -35,11 +35,11 @@ var pending = read('src/components/PendingNadiaMessages.jsx');
 check('A4.1.1 Calendar Postponed badge → amber-900 + border for legibility',
   /bg-amber-100 text-amber-900 rounded text-\[10px\] font-bold border border-amber-300/.test(calTab));
 check('A4.1.2 Calendar Postponed mini → amber-800 (was amber-600)',
-  /text-\[9px\] text-amber-800 font-extrabold/.test(calTab));
+  /text-\[9px\] text-amber-(?:800|900) font-extrabold/.test(calTab));
 check('A4.1.3 DailyLog historical entry warning → amber-900 (was amber-600)',
   /text-\[10px\] text-amber-900 font-bold px-1/.test(dailyLog));
 check('A4.1.4 DailyLog edited badge → amber-800 (was amber-600)',
-  /text-\[9px\] font-extrabold text-amber-800/.test(dailyLog));
+  /text-\[9px\] font-extrabold text-amber-(?:800|900)/.test(dailyLog));
 check('A4.1.5 CRM industry tag (small list) → amber-900 + border (was amber-700 on amber-50)',
   /bg-amber-100 text-amber-900 rounded-md text-\[9px\] font-bold border border-amber-200/.test(crm));
 check('A4.1.6 CRM industry tag (detail) → amber-900 + border',
@@ -63,7 +63,7 @@ check('A4.1.13 WhatsApp Unclaimed badge → amber-900 + border (was amber-700)',
 check('A4.1.14 Pending priority chip amber → amber-900',
   /'text-amber-900 bg-amber-100'/.test(pending));
 check('A4.1.15 Calendar moved-from arrow → amber-800 + bold (was amber-600)',
-  /text-amber-800 font-bold" title=\{'Moved from /.test(calTab));
+  /text-amber-(?:800|900) font-bold" title=\{'Moved from /.test(calTab));
 
 group('A4.2 — Small text bumped from text-slate-400 to text-slate-500');
 

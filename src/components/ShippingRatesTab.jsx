@@ -375,6 +375,21 @@ export default function ShippingRatesTab({ toast, user, userProfile, isAdmin, cu
   // v55.81 — live status text shown alongside the progress bar so the
   // user can see what's happening (was just %).
   const [importStatus, setImportStatus] = useState('');
+  // v55.82-G — Replace/Update import mode (Max May 11 2026).
+  //   'add'     — current default. Insert every row, no matching, no dedup.
+  //               Best for a fresh batch of brand-new rates.
+  //   'update'  — for each imported row, find a matching existing rate
+  //               (same vendor + origin + destination + container + effective
+  //               date). If found: patch only the fields that the import row
+  //               has values for, leaving the rest untouched. If not found:
+  //               insert as new. Best for filling in missing pieces or fixing
+  //               typos in old rows without losing data.
+  //   'replace' — for each imported row, find the same matching key. If
+  //               found: delete the old row and insert the new one (so all
+  //               fields take on the new values, including blanks). If not
+  //               found: insert as new. Best for full corrections where the
+  //               new file is the source of truth.
+  const [importMode, setImportMode] = useState('add');
   const [importColMap, setImportColMap] = useState({});
   // v55.44 — keep the raw Excel rows + header list so the user can RE-MAP a
   // column from a dropdown if the auto-detect picked the wrong source. Without
@@ -1074,6 +1089,9 @@ export default function ShippingRatesTab({ toast, user, userProfile, isAdmin, cu
 
     var ok = 0, failed = 0;
     var errors = [];
+    var updated = 0;
+    var inserted = 0;
+    var replaced = 0;
 
     // 30-second timeout wrapper for any Supabase call so a stalled network
     // or long query doesn't freeze the importer.
@@ -1099,59 +1117,212 @@ export default function ShippingRatesTab({ toast, user, userProfile, isAdmin, cu
       });
     };
 
-    // Step 1 — try ALL rows in one go. Postgres handles a few hundred fine.
-    setImportStatus('Inserting ' + rowsToInsert.length + ' rows…');
-    var bulkRes = await withTimeout(
-      supabase.from('shipping_rates').insert(rowsToInsert),
-      30000,
-      'Bulk insert'
-    );
+    // v55.82-G — Match key builder for Update / Replace modes.
+    // Picks the natural composite key: vendor + route + container + effective date.
+    // All lowercased/trimmed so trivial whitespace and casing differences match.
+    var keyFor = function (r) {
+      return [
+        String(r.vendor_name || '').trim().toLowerCase(),
+        String(r.origin || '').trim().toLowerCase(),
+        String(r.destination || '').trim().toLowerCase(),
+        String(r.container_type || '').trim().toLowerCase(),
+        String(r.effective_date || '').trim(),
+      ].join('|');
+    };
 
-    if (!bulkRes.error) {
-      // Happy path
-      ok = rowsToInsert.length;
-      setImportProgress(95);
-    } else {
-      // Step 2 — if the error is a missing column, strip it from every
-      // row and retry once.
-      var msg = (bulkRes.error.message || String(bulkRes.error || '')).toLowerCase();
-      var missingCol = null;
-      var m = msg.match(/column ['"]?(\w+)['"]? of relation/);
-      if (!m) m = msg.match(/could not find the ['"]?(\w+)['"]? column/);
-      if (!m) m = msg.match(/['"](\w+)['"]? column .* schema cache/);
-      if (m) missingCol = m[1];
+    // v55.82-G — UPDATE / REPLACE PATHS
+    // Both modes start by fetching every existing row whose vendor+origin
+    // appears in this import batch — so we have a working set to match
+    // against. We do this ONCE for the whole import instead of N queries.
+    if (importMode === 'update' || importMode === 'replace') {
+      setImportStatus('Looking up existing rates for ' + importMode + '…');
+      // Collect the distinct vendor names + origins so we can scope the
+      // existing-rows fetch. .in() supports up to 1000 items; for typical
+      // imports this is well within range.
+      var distinctVendors = Array.from(new Set(rowsToInsert
+        .map(function(r) { return String(r.vendor_name || '').trim(); })
+        .filter(function(v) { return v.length > 0; })));
+      var distinctOrigins = Array.from(new Set(rowsToInsert
+        .map(function(r) { return String(r.origin || '').trim(); })
+        .filter(function(v) { return v.length > 0; })));
 
-      if (missingCol) {
-        setImportStatus('Database is missing the "' + missingCol + '" column — retrying without it…');
-        rowsToInsert = rowsToInsert.map(function (r) {
-          var copy = Object.assign({}, r);
-          delete copy[missingCol];
-          return copy;
-        });
-        var retry = await withTimeout(
-          supabase.from('shipping_rates').insert(rowsToInsert),
-          30000,
-          'Bulk insert retry'
-        );
-        if (!retry.error) {
-          ok = rowsToInsert.length;
-          setImportProgress(95);
-        } else {
-          // Still failing — fall through to per-row to find which rows are bad
-          setImportStatus('Some rows have problems — checking each row individually…');
-          var perRowResult = await runPerRow(rowsToInsert, withTimeout);
-          ok = perRowResult.ok; failed = perRowResult.failed; errors = perRowResult.errors;
+      var existingRes = await withTimeout(
+        supabase.from('shipping_rates').select('*')
+          .in('vendor_name', distinctVendors.length > 0 ? distinctVendors : ['__none__'])
+          .in('origin', distinctOrigins.length > 0 ? distinctOrigins : ['__none__']),
+        30000,
+        'Fetch existing rates'
+      );
+      var existingRows = (existingRes && existingRes.data) || [];
+      // Index existing rows by the same composite key so we can do O(1)
+      // lookups when iterating the import.
+      var existingByKey = {};
+      existingRows.forEach(function(row) { existingByKey[keyFor(row)] = row; });
+
+      // Partition the import: rows that match → patch or delete, the rest → insert.
+      var matchedPairs = []; // { newRow, existingRow }
+      var unmatched = [];
+      rowsToInsert.forEach(function(newRow) {
+        var match = existingByKey[keyFor(newRow)];
+        if (match) matchedPairs.push({ newRow: newRow, existingRow: match });
+        else unmatched.push(newRow);
+      });
+
+      setImportStatus(matchedPairs.length + ' match' + (matchedPairs.length === 1 ? '' : 'es') + ' found · ' + unmatched.length + ' to insert as new…');
+
+      if (importMode === 'update') {
+        // Patch each matched row with only the non-blank fields from the new row.
+        // This is the "fill in missing pieces" mode — we never erase existing values.
+        for (var i = 0; i < matchedPairs.length; i++) {
+          var pair = matchedPairs[i];
+          var patch = {};
+          for (var fld in pair.newRow) {
+            var nv = pair.newRow[fld];
+            // Skip blank-equivalents so we don't blank-out an existing value.
+            // Empty string, null, undefined all count as "no value provided".
+            if (nv === '' || nv === null || nv === undefined) continue;
+            // Also skip zero for the numeric fee fields if the existing row
+            // already has a non-zero — a missing column in the spreadsheet
+            // imports as 0, and we shouldn't overwrite real fees with 0.
+            var feeFields = { port_fees: 1, thc_fees: 1, documentation_fees: 1, customs_fees: 1, other_fees: 1 };
+            if (feeFields[fld] && Number(nv) === 0 && Number(pair.existingRow[fld] || 0) !== 0) continue;
+            patch[fld] = nv;
+          }
+          if (Object.keys(patch).length === 0) continue; // nothing to do
+          var updRes = await withTimeout(
+            supabase.from('shipping_rates').update(patch).eq('id', pair.existingRow.id),
+            10000,
+            'Update row ' + pair.existingRow.id
+          );
+          if (updRes && !updRes.error) {
+            updated++; ok++;
+          } else {
+            failed++;
+            errors.push('Update failed for ' + (pair.existingRow.vendor_name || '?') + ' ' + (pair.existingRow.origin || '?') + '→' + (pair.existingRow.destination || '?') + ': ' + ((updRes && updRes.error && updRes.error.message) || 'unknown'));
+          }
+          setImportProgress(Math.floor(5 + (i / rowsToInsert.length) * 85));
         }
       } else {
-        // Unknown error type — try per-row to surface specific bad rows
-        setImportStatus('Some rows have problems — checking each row individually…');
-        var perRowResult2 = await runPerRow(rowsToInsert, withTimeout);
-        ok = perRowResult2.ok; failed = perRowResult2.failed; errors = perRowResult2.errors;
+        // REPLACE — delete matched rows in bulk, then insert all matched + unmatched as new.
+        if (matchedPairs.length > 0) {
+          var matchedIds = matchedPairs.map(function(p) { return p.existingRow.id; });
+          var delRes = await withTimeout(
+            supabase.from('shipping_rates').delete().in('id', matchedIds),
+            30000,
+            'Delete matched rows'
+          );
+          if (delRes && delRes.error) {
+            failed = rowsToInsert.length;
+            errors.push('Replace failed at delete step: ' + (delRes.error.message || 'unknown'));
+            setImportStep('done');
+            alert('Import failed during Replace — nothing was saved.\n\n' + errors.join('\n'));
+            try { await loadData(); } catch (_) {}
+            return;
+          }
+          replaced = matchedPairs.length;
+        }
+      }
 
-        // If EVERY row failed with the same error, don't pretend it's
-        // a row issue — surface the original bulk error to the user.
-        if (failed === rowsToInsert.length) {
-          errors = [bulkRes.error.message || String(bulkRes.error)];
+      // Insert the unmatched rows (Update mode) OR matched+unmatched (Replace mode)
+      var rowsForInsert = importMode === 'update'
+        ? unmatched
+        : matchedPairs.map(function(p) { return p.newRow; }).concat(unmatched);
+
+      if (rowsForInsert.length > 0) {
+        setImportStatus('Inserting ' + rowsForInsert.length + ' new row' + (rowsForInsert.length === 1 ? '' : 's') + '…');
+        var insRes = await withTimeout(
+          supabase.from('shipping_rates').insert(rowsForInsert),
+          30000,
+          'Insert new rows'
+        );
+        if (!insRes || insRes.error) {
+          // Try the same missing-column retry that the Add path uses
+          var insMsg = ((insRes && insRes.error && insRes.error.message) || '').toLowerCase();
+          var insM = insMsg.match(/column ['"]?(\w+)['"]? of relation/);
+          if (!insM) insM = insMsg.match(/could not find the ['"]?(\w+)['"]? column/);
+          if (insM) {
+            var stripCol = insM[1];
+            var retryRows = rowsForInsert.map(function (r) { var c = Object.assign({}, r); delete c[stripCol]; return c; });
+            var insRetry = await withTimeout(
+              supabase.from('shipping_rates').insert(retryRows),
+              30000,
+              'Insert new rows retry'
+            );
+            if (insRetry && !insRetry.error) {
+              inserted = rowsForInsert.length; ok += inserted;
+            } else {
+              failed += rowsForInsert.length;
+              errors.push('Insert step failed: ' + ((insRetry && insRetry.error && insRetry.error.message) || 'unknown'));
+            }
+          } else {
+            failed += rowsForInsert.length;
+            errors.push('Insert step failed: ' + ((insRes && insRes.error && insRes.error.message) || 'unknown'));
+          }
+        } else {
+          inserted = rowsForInsert.length; ok += inserted;
+        }
+      }
+      setImportProgress(95);
+    } else {
+      // ADD MODE (default) — original behavior preserved exactly.
+      // Step 1 — try ALL rows in one go. Postgres handles a few hundred fine.
+      setImportStatus('Inserting ' + rowsToInsert.length + ' rows…');
+      var bulkRes = await withTimeout(
+        supabase.from('shipping_rates').insert(rowsToInsert),
+        30000,
+        'Bulk insert'
+      );
+
+      if (!bulkRes.error) {
+        // Happy path
+        ok = rowsToInsert.length;
+        inserted = ok;
+        setImportProgress(95);
+      } else {
+        // Step 2 — if the error is a missing column, strip it from every
+        // row and retry once.
+        var msg = (bulkRes.error.message || String(bulkRes.error || '')).toLowerCase();
+        var missingCol = null;
+        var m = msg.match(/column ['"]?(\w+)['"]? of relation/);
+        if (!m) m = msg.match(/could not find the ['"]?(\w+)['"]? column/);
+        if (!m) m = msg.match(/['"](\w+)['"]? column .* schema cache/);
+        if (m) missingCol = m[1];
+
+        if (missingCol) {
+          setImportStatus('Database is missing the "' + missingCol + '" column — retrying without it…');
+          rowsToInsert = rowsToInsert.map(function (r) {
+            var copy = Object.assign({}, r);
+            delete copy[missingCol];
+            return copy;
+          });
+          var retry = await withTimeout(
+            supabase.from('shipping_rates').insert(rowsToInsert),
+            30000,
+            'Bulk insert retry'
+          );
+          if (!retry.error) {
+            ok = rowsToInsert.length;
+            inserted = ok;
+            setImportProgress(95);
+          } else {
+            // Still failing — fall through to per-row to find which rows are bad
+            setImportStatus('Some rows have problems — checking each row individually…');
+            var perRowResult = await runPerRow(rowsToInsert, withTimeout);
+            ok = perRowResult.ok; failed = perRowResult.failed; errors = perRowResult.errors;
+            inserted = ok;
+          }
+        } else {
+          // Unknown error type — try per-row to surface specific bad rows
+          setImportStatus('Some rows have problems — checking each row individually…');
+          var perRowResult2 = await runPerRow(rowsToInsert, withTimeout);
+          ok = perRowResult2.ok; failed = perRowResult2.failed; errors = perRowResult2.errors;
+          inserted = ok;
+
+          // If EVERY row failed with the same error, don't pretend it's
+          // a row issue — surface the original bulk error to the user.
+          if (failed === rowsToInsert.length) {
+            errors = [bulkRes.error.message || String(bulkRes.error)];
+          }
         }
       }
     }
@@ -1165,7 +1336,7 @@ export default function ShippingRatesTab({ toast, user, userProfile, isAdmin, cu
             record_id: null,
             action: 'bulk_import',
             changed_by: myId,
-            new_values: { count: ok, source: 'shipping-rate-import' }
+            new_values: { count: ok, source: 'shipping-rate-import', mode: importMode, inserted: inserted, updated: updated, replaced: replaced }
           }),
           5000,
           'Audit log'
@@ -1177,14 +1348,26 @@ export default function ShippingRatesTab({ toast, user, userProfile, isAdmin, cu
     setImportStep('done');
     setImportStatus('');
 
+    // v55.82-G — Summary alert reflects the mode used so user can verify
+    // the import did what they expected.
+    var modeLabel = importMode === 'update' ? 'Update' : (importMode === 'replace' ? 'Replace' : 'Add');
+    var modeSummary = '';
+    if (importMode === 'update') {
+      modeSummary = '\n' + updated + ' existing rate' + (updated === 1 ? '' : 's') + ' updated\n' + inserted + ' new rate' + (inserted === 1 ? '' : 's') + ' added';
+    } else if (importMode === 'replace') {
+      modeSummary = '\n' + replaced + ' existing rate' + (replaced === 1 ? '' : 's') + ' replaced\n' + inserted + ' total row' + (inserted === 1 ? '' : 's') + ' written';
+    }
+
     if (failed > 0) {
-      alert('Import complete:\n' +
+      alert(modeLabel + ' import complete:\n' +
             ok + ' saved\n' +
-            failed + ' failed\n\n' +
+            failed + ' failed\n' + modeSummary + '\n\n' +
             (errors.length > 0 ? 'First errors:\n' + errors.slice(0, 5).join('\n') : ''));
     } else if (ok === 0) {
-      alert('Import failed — nothing was saved.\n\n' +
+      alert(modeLabel + ' import failed — nothing was saved.\n\n' +
             (errors.length > 0 ? errors.join('\n') : 'Unknown error. Check browser console for details.'));
+    } else if (importMode !== 'add') {
+      alert(modeLabel + ' import complete:\n' + ok + ' saved' + modeSummary);
     }
     try { await loadData(); } catch (_) {}
   };
@@ -1393,7 +1576,7 @@ Date: ${today}`;
           <div><label className="text-[10px] font-semibold">{f.rateType === 'Trucking' ? 'Trucking Company' : f.rateType === 'Customs/Brokerage' ? 'Broker/Agent' : 'Shipping Line'}</label><input list="l-l" value={f.shippingLine||''} onChange={e=>setF({...f,shippingLine:e.target.value})} className="w-full px-3 py-2 rounded-lg border text-sm" /><datalist id="l-l">{lines.map(l=><option key={l} value={l}/>)}</datalist></div>
           <div><label className="text-[10px] font-semibold">Container</label><select value={f.containerType||'40ft'} onChange={e=>setF({...f,containerType:e.target.value})} className="w-full px-3 py-2 rounded-lg border text-sm">{CONTAINER_TYPES.map(c=><option key={c}>{c}</option>)}</select></div>
         </div></div>
-      <div className="bg-amber-50 rounded-lg p-3 mb-4 border border-amber-200"><h3 className="text-xs font-bold text-amber-800 mb-2">💰 Rates & Fees</h3>
+      <div className="bg-amber-50 rounded-lg p-3 mb-4 border border-amber-200"><h3 className="text-xs font-bold text-amber-900 mb-2">💰 Rates & Fees</h3>
         <div className="grid grid-cols-4 gap-3">
           <div><label className="text-[10px] font-semibold">Base Rate</label><input type="number" value={f.rateAmount||''} onChange={e=>setF({...f,rateAmount:e.target.value})} className="w-full px-3 py-2 rounded-lg border text-sm" /></div>
           <div><label className="text-[10px] font-semibold">Currency</label><select value={f.currency||'USD'} onChange={e=>setF({...f,currency:e.target.value})} className="w-full px-3 py-2 rounded-lg border text-sm">{CURRENCIES.map(c=><option key={c}>{c}</option>)}</select></div>
@@ -1406,7 +1589,7 @@ Date: ${today}`;
           <div><label className="text-[10px] font-semibold">Other Fees</label><input type="number" value={f.otherFees||''} onChange={e=>setF({...f,otherFees:e.target.value})} className="w-full px-3 py-2 rounded-lg border text-sm" /></div>
           <div className="col-span-3"><label className="text-[10px] font-semibold">Other Desc</label><input value={f.otherFeesDesc||''} onChange={e=>setF({...f,otherFeesDesc:e.target.value})} className="w-full px-3 py-2 rounded-lg border text-sm" /></div>
         </div>
-        <div className="mt-2 text-right"><span className="text-xs text-slate-500">Total: </span><span className="text-lg font-extrabold text-amber-700">{fCur(Number(f.rateAmount||0)+Number(f.portFees||0)+Number(f.thcFees||0)+Number(f.docFees||0)+Number(f.customsFees||0)+Number(f.otherFees||0), f.currency||'USD')}</span></div></div>
+        <div className="mt-2 text-right"><span className="text-xs text-slate-500">Total: </span><span className="text-lg font-extrabold text-amber-900">{fCur(Number(f.rateAmount||0)+Number(f.portFees||0)+Number(f.thcFees||0)+Number(f.docFees||0)+Number(f.customsFees||0)+Number(f.otherFees||0), f.currency||'USD')}</span></div></div>
       <div className="grid grid-cols-4 gap-3 mb-4">
         <div><label className="text-[10px] font-semibold">Effective Date</label><input type="date" value={f.effectiveDate||todayET()} onChange={e=>setF({...f,effectiveDate:e.target.value})} className="w-full px-3 py-2 rounded-lg border text-sm" /></div>
         <div><label className="text-[10px] font-semibold text-red-600">Expiry Date</label><input type="date" value={f.expiryDate||''} onChange={e=>setF({...f,expiryDate:e.target.value})} className="w-full px-3 py-2 rounded-lg border text-sm border-red-200" /></div>
@@ -1428,7 +1611,7 @@ Date: ${today}`;
     <div className="grid grid-cols-4 gap-3 mb-4">
       <div className="bg-white rounded-lg p-3" style={{borderLeftWidth:3,borderLeftColor:'#0ea5e9'}}><div className="text-[10px] text-slate-500">Total</div><div className="text-lg font-extrabold">{quotes.length}</div></div>
       <div className="bg-white rounded-lg p-3" style={{borderLeftWidth:3,borderLeftColor:'#10b981'}}><div className="text-[10px] text-slate-500">Accepted</div><div className="text-lg font-extrabold text-emerald-600">{quotes.filter(q=>q.status==='accepted'||q.status==='booked').length}</div></div>
-      <div className="bg-white rounded-lg p-3" style={{borderLeftWidth:3,borderLeftColor:'#f59e0b'}}><div className="text-[10px] text-slate-500">Pending</div><div className="text-lg font-extrabold text-amber-700">{quotes.filter(q=>q.status==='draft'||q.status==='sent').length}</div></div>
+      <div className="bg-white rounded-lg p-3" style={{borderLeftWidth:3,borderLeftColor:'#f59e0b'}}><div className="text-[10px] text-slate-500">Pending</div><div className="text-lg font-extrabold text-amber-900">{quotes.filter(q=>q.status==='draft'||q.status==='sent').length}</div></div>
       <div className="bg-white rounded-lg p-3" style={{borderLeftWidth:3,borderLeftColor:'#10b981'}}><div className="text-[10px] text-slate-500">Total Profit</div><div className="text-lg font-extrabold text-emerald-600">{fCur(quotes.reduce((a,q)=>a+Number(q.profit||0),0),'USD')}</div></div>
     </div>
     <div className="overflow-auto rounded-lg border bg-white max-h-[500px]"><table className="w-full border-collapse text-xs"><thead className="sticky top-0"><tr className="bg-slate-50">
@@ -1566,7 +1749,7 @@ Date: ${today}`;
       )}
       <p className="text-xs text-slate-500 mb-3">{routeHistory.length} rates • {active.length} active • {bk.length} booked</p>
       {routeMixedCurrency && (
-        <div className="bg-amber-50 border border-amber-300 rounded-lg p-2 mb-3 text-[11px] text-amber-800">
+        <div className="bg-amber-50 border border-amber-300 rounded-lg p-2 mb-3 text-[11px] text-amber-900">
           ⚠️ Mixed currencies on this route ({routeCurrencies.join(', ')}). Summary cards below show only {primaryCurrency} rates ({primaryHistory.length} of {routeHistory.length}).
         </div>
       )}
@@ -1778,7 +1961,7 @@ Date: ${today}`;
             </div>
           </div>
           {chartMixed && (
-            <div className="bg-amber-50 border border-amber-300 rounded p-2 mb-2 text-[11px] text-amber-800">
+            <div className="bg-amber-50 border border-amber-300 rounded p-2 mb-2 text-[11px] text-amber-900">
               ⚠️ This route has rates in multiple currencies ({trendCurrencies.join(', ')}). Chart shows {chartCurrency} only.
             </div>
           )}
@@ -1823,8 +2006,8 @@ Date: ${today}`;
           </div>
           <div className="text-[10px] text-slate-500 mt-1">
             {validRatesForChart.length} rate{validRatesForChart.length === 1 ? '' : 's'} plotted across {months.length} expiry month{months.length === 1 ? '' : 's'}
-            {bookingStars.length > 0 && <span className="ml-2 text-amber-700 font-semibold">• {bookingStars.length} booking{bookingStars.length === 1 ? '' : 's'} ⭐</span>}
-            {hideExpired && <span className="ml-2 text-amber-800 font-semibold">• Expired rates hidden</span>}
+            {bookingStars.length > 0 && <span className="ml-2 text-amber-900 font-semibold">• {bookingStars.length} booking{bookingStars.length === 1 ? '' : 's'} ⭐</span>}
+            {hideExpired && <span className="ml-2 text-amber-900 font-semibold">• Expired rates hidden</span>}
           </div>
         </div>);
       })()}
@@ -1951,7 +2134,7 @@ Date: ${today}`;
               <td className="px-2 py-1.5 text-[10px]">{r.port_of_discharge || <span className="text-slate-300">—</span>}</td>
               <td className="px-2 py-1.5 text-center text-[10px] text-violet-600">{r.effective_date || <span className="text-slate-300">—</span>}</td>
               <td className="px-2 py-1.5 text-center text-[10px]">{r.transit_days != null ? <span className="font-semibold text-sky-700">{r.transit_days}d</span> : <span className="text-slate-300">—</span>}</td>
-              <td className="px-2 py-1.5 text-center text-[10px]">{r.free_days != null ? <span className="font-semibold text-amber-700">{r.free_days}d</span> : <span className="text-slate-300">—</span>}</td>
+              <td className="px-2 py-1.5 text-center text-[10px]">{r.free_days != null ? <span className="font-semibold text-amber-900">{r.free_days}d</span> : <span className="text-slate-300">—</span>}</td>
               <td className={'px-2 py-1.5 text-right font-bold ' + (exp ? 'text-slate-500' : 'text-blue-600')}>{fCur(r.rate_amount, r.currency)}</td>
               <td className="px-2 py-1.5 text-right text-[10px]" title={dlt ? ('Previous: ' + fCur(dlt.prevRate, r.currency) + ' on ' + dlt.prevDate) : 'No prior rate for this vendor + line + container + currency'}>
                 {dlt
@@ -1961,7 +2144,7 @@ Date: ${today}`;
                     </span>)
                   : <span className="text-slate-400">—</span>}
               </td>
-              <td className={'px-2 py-1.5 text-right font-bold ' + (exp ? 'text-slate-500' : 'text-amber-800')}>{fCur(r.total_cost, r.currency)}</td>
+              <td className={'px-2 py-1.5 text-right font-bold ' + (exp ? 'text-slate-500' : 'text-amber-900')}>{fCur(r.total_cost, r.currency)}</td>
               <td className="px-2 py-1.5">
                 {exp
                   ? <span className="px-1.5 py-0.5 bg-red-100 text-red-700 rounded text-[9px] font-bold" title={'Expired ' + (r.expiry_date || '')}>EXPIRED</span>
@@ -1980,7 +2163,7 @@ Date: ${today}`;
                     </div>
                   : r.booking_requested
                     ? <div className="flex flex-col">
-                        <span className="px-1.5 py-0.5 bg-amber-100 text-amber-800 rounded text-[9px] font-bold w-fit" title="Waiting on the forwarder's booking number">⏳ REQUESTED</span>
+                        <span className="px-1.5 py-0.5 bg-amber-100 text-amber-900 rounded text-[9px] font-bold w-fit" title="Waiting on the forwarder's booking number">⏳ REQUESTED</span>
                         {r.booking_requested_customer && <span className="text-[9px] text-slate-500 mt-0.5">For: {r.booking_requested_customer}</span>}
                         {r.booking_requested_at && <span className="text-[9px] text-slate-500">{(r.booking_requested_at || '').substring(0,10)}</span>}
                       </div>
@@ -2099,7 +2282,7 @@ Date: ${today}`;
                   }} className="px-3 py-2 bg-emerald-500 text-white rounded-lg text-xs font-semibold">💬 WhatsApp {vendor.whatsapp}</button>
                 )}
                 {!vendor && (
-                  <div className="text-[10px] text-amber-700 bg-amber-50 border border-amber-200 rounded p-2 mb-1 w-full">
+                  <div className="text-[10px] text-amber-900 bg-amber-50 border border-amber-200 rounded p-2 mb-1 w-full">
                     ⚠️ No vendor contact saved for "{rate.vendor_name}". Add this forwarder under Vendor Contacts to enable one-click email / WhatsApp. You can still copy the message below.
                   </div>
                 )}
@@ -2139,7 +2322,7 @@ Date: ${today}`;
               <p className="text-[11px] text-slate-500 mb-3">{rate.origin} → {rate.destination} · {rate.container_type} · {fCur(rate.total_cost || rate.rate_amount, rate.currency)}</p>
 
               {rate.booking_requested && (
-                <div className="bg-amber-50 border border-amber-200 rounded-lg p-2 mb-3 text-[11px] text-amber-800">
+                <div className="bg-amber-50 border border-amber-200 rounded-lg p-2 mb-3 text-[11px] text-amber-900">
                   ⏳ Booking was requested on {(rate.booking_requested_at || '').substring(0,10)} — fields below are pre-filled from that request.
                 </div>
               )}
@@ -2535,17 +2718,53 @@ Date: ${today}`;
         <div className="flex justify-between items-center mb-2 flex-wrap gap-2">
           <div>
             <span className="text-sm font-bold text-slate-800">Found {importData.length} rate{importData.length!==1?'s':''} ready to import</span>
-            {zeroRateCount > 0 && <div className="text-[11px] text-amber-700 font-semibold mt-0.5">⚠️ {zeroRateCount} row{zeroRateCount!==1?'s':''} have rate = 0 — fix or remove them below before importing</div>}
-            {noDateCount > 0 && <div className="text-[11px] text-amber-700 font-semibold mt-0.5">⚠️ {noDateCount} row{noDateCount!==1?'s':''} couldn't parse the effective date — they'll save with today's date as a fallback. Check the source data.</div>}
+            {zeroRateCount > 0 && <div className="text-[11px] text-amber-900 font-semibold mt-0.5">⚠️ {zeroRateCount} row{zeroRateCount!==1?'s':''} have rate = 0 — fix or remove them below before importing</div>}
+            {noDateCount > 0 && <div className="text-[11px] text-amber-900 font-semibold mt-0.5">⚠️ {noDateCount} row{noDateCount!==1?'s':''} couldn't parse the effective date — they'll save with today's date as a fallback. Check the source data.</div>}
             {noExpiryCount > 0 && <div className="text-[10px] text-slate-500 mt-0.5">{noExpiryCount} row{noExpiryCount!==1?'s':''} missing expiry date — they'll never auto-expire</div>}
             {/* v55.80 — Surface historical / already-expired counts so user knows what they're importing */}
             {historicalCount > 0 && <div className="text-[10px] text-blue-600 mt-0.5">📅 {historicalCount} row{historicalCount!==1?'s':''} have historical effective dates — they'll be saved as-is for trend analysis</div>}
             {expiredCount > 0 && <div className="text-[10px] text-rose-600 mt-0.5">⏰ {expiredCount} row{expiredCount!==1?'s':''} are already expired — kept in the record but won't show as active rates</div>}
           </div>
-          <div className="flex gap-2">
+          <div className="flex gap-2 items-center flex-wrap">
+            {/* v55.82-G — Import mode selector. Three radio buttons, persistent
+                until the import completes. Drives the matching/dedup logic in
+                executeImport. See state declaration above for what each mode
+                does. */}
+            <div className="flex items-center gap-2 bg-slate-50 border border-slate-200 rounded-lg px-2 py-1.5">
+              <span className="text-[10px] font-bold text-slate-700">Mode:</span>
+              <label className="flex items-center gap-1 text-[11px] cursor-pointer">
+                <input type="radio" name="importMode" value="add" checked={importMode === 'add'} onChange={() => setImportMode('add')} />
+                <span className="font-semibold">Add</span>
+              </label>
+              <label className="flex items-center gap-1 text-[11px] cursor-pointer">
+                <input type="radio" name="importMode" value="update" checked={importMode === 'update'} onChange={() => setImportMode('update')} />
+                <span className="font-semibold">Update</span>
+              </label>
+              <label className="flex items-center gap-1 text-[11px] cursor-pointer">
+                <input type="radio" name="importMode" value="replace" checked={importMode === 'replace'} onChange={() => setImportMode('replace')} />
+                <span className="font-semibold">Replace</span>
+              </label>
+            </div>
             <button onClick={()=>{setImportStep('select');setImportData([]);}} className="px-3 py-1.5 border rounded-lg text-xs">Cancel</button>
             <button onClick={executeImport} className="px-4 py-1.5 bg-emerald-500 text-white rounded-lg text-xs font-semibold">✅ Import All ({importData.length})</button>
           </div>
+        </div>
+        {/* v55.82-G — Plain-language explainer for whichever mode is selected.
+            Helps the user understand the impact before they hit Import. */}
+        <div className="mt-2 px-3 py-2 rounded-lg text-[11px] border" style={{
+          background: importMode === 'replace' ? '#fef2f2' : (importMode === 'update' ? '#eff6ff' : '#f0fdf4'),
+          borderColor: importMode === 'replace' ? '#fecaca' : (importMode === 'update' ? '#bfdbfe' : '#bbf7d0'),
+          color: importMode === 'replace' ? '#7f1d1d' : (importMode === 'update' ? '#1e3a8a' : '#14532d'),
+        }}>
+          {importMode === 'add' && (
+            <span><strong>Add mode:</strong> every row in the file is inserted as a brand-new rate. Existing rates are untouched. Best for a fresh batch.</span>
+          )}
+          {importMode === 'update' && (
+            <span><strong>Update mode:</strong> for each row, look for an existing rate with the same vendor + origin + destination + container + effective date. If found, fill in any fields that were previously missing and update fields the file has new values for. If not found, insert as new. Best for filling gaps or fixing typos without losing existing data.</span>
+          )}
+          {importMode === 'replace' && (
+            <span><strong>Replace mode:</strong> for each row, look for an existing rate with the same vendor + origin + destination + container + effective date. If found, the old row is deleted and the new one takes its place (including any blank fields). If not found, insert as new. Best for a full correction where the file is the source of truth.</span>
+          )}
         </div>
       </div>
 
@@ -2803,7 +3022,7 @@ Date: ${today}`;
             {groupByPort && c && (
               <div className="flex gap-2 flex-wrap text-[10px] mb-2">
                 {c.transit_days != null && <span className="px-1.5 py-0.5 bg-sky-50 text-sky-700 rounded"><strong>TT:</strong> {c.transit_days}d</span>}
-                {c.free_days != null && <span className="px-1.5 py-0.5 bg-amber-50 text-amber-700 rounded"><strong>FT:</strong> {c.free_days}d</span>}
+                {c.free_days != null && <span className="px-1.5 py-0.5 bg-amber-50 text-amber-900 rounded"><strong>FT:</strong> {c.free_days}d</span>}
                 {c.effective_date && <span className="px-1.5 py-0.5 bg-violet-50 text-violet-700 rounded"><strong>ETD:</strong> {c.effective_date}</span>}
               </div>
             )}
@@ -2969,7 +3188,7 @@ Date: ${today}`;
                         <td className="px-2 py-1.5">{r.shipping_line || <span className="text-slate-300">—</span>}</td>
                         <td className="px-2 py-1.5 text-center"><span className="px-1.5 py-0.5 bg-blue-100 text-blue-700 rounded text-[9px]">{r.container_type || '—'}</span></td>
                         <td className="px-2 py-1.5 text-right text-[10px]">{r.transit_days != null ? <span className="font-semibold text-sky-700">{r.transit_days}d</span> : <span className="text-slate-300">—</span>}</td>
-                        <td className="px-2 py-1.5 text-right text-[10px]">{r.free_days != null ? <span className="font-semibold text-amber-700">{r.free_days}d</span> : <span className="text-slate-300">—</span>}</td>
+                        <td className="px-2 py-1.5 text-right text-[10px]">{r.free_days != null ? <span className="font-semibold text-amber-900">{r.free_days}d</span> : <span className="text-slate-300">—</span>}</td>
                         <td className={'px-2 py-1.5 text-right font-extrabold ' + (exp ? 'text-slate-500' : 'text-emerald-600')}>{fCur(r.rate_amount, r.currency)}</td>
                         <td className="px-2 py-1.5 text-[10px]"><ExpiryBadge date={r.expiry_date} /></td>
                         <td className="px-2 py-1.5 text-right">

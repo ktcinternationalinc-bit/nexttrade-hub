@@ -102,8 +102,11 @@ ok('1.17 If all rows fail same way, surface the original bulk error (not "row fa
    /failed === rowsToInsert\.length/.test(src));
 
 // 1.18 — Better final messages: distinguish "0 saved + N failed" from partial
+// v55.82-G — the literal "Import failed" is now prefixed with the mode label
+// ("Add import failed", "Update import failed", "Replace import failed"), so
+// accept any "* failed — nothing was saved" pattern.
 ok('1.18 Distinct alert when ok===0 (full failure)',
-   /ok === 0/.test(src) && /Import failed — nothing was saved/.test(src));
+   /ok === 0/.test(src) && /failed — nothing was saved/.test(src));
 
 // =======================================================================
 // BUG 2 — Trend chart anchored to expiration date
