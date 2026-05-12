@@ -83,6 +83,19 @@ export async function POST(req) {
       (Number(metrics.attendedEvents) || 0) +
       (Number(metrics.meetingsCreated) || 0);
     var isLowActivity = activitySum === 0;
+    // v55.82-T — Distinguish "metrics object is empty/missing" from
+    // "real low-activity period". If the frontend sent metrics:{} (or
+    // a stub with no keys at all), that's a client-side timing bug —
+    // not the user's fault. We refuse to write a "you had no activity"
+    // message in that case; instead we ask the client to retry.
+    var metricsKeyCount = Object.keys(metrics || {}).length;
+    var metricsLooksEmpty = metricsKeyCount < 5;
+    if (isLowActivity && metricsLooksEmpty) {
+      try { console.warn('[hr-coach] metrics payload looks empty (', metricsKeyCount, 'keys) — refusing to generate "no activity" message. Likely a client-side timing bug.'); } catch (_) {}
+      return Response.json({
+        error: 'Activity data is still loading — please tap Refresh in a moment.'
+      }, { status: 503 });
+    }
 
     // Build a plain-English summary of what happened. We hand this to Claude
     // along with strict instructions on tone.

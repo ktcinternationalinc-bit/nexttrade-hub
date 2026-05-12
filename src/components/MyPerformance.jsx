@@ -252,16 +252,44 @@ export default function MyPerformance({ user, userProfile, active }) {
   // and we have any user identity. Even a zero-activity period gets a
   // coach message (the API has a no-activity branch that produces
   // encouragement).
+  // v55.82-T (Max May 12 2026 — "Sarah saying no data when data exists"):
+  // Two NEW guards on top of the v55.82-L logic:
+  //   (a) DO NOT auto-fetch until the metrics calculation actually
+  //       finished (loading === false). Previously the effect fired on
+  //       first render while current was still null, sending metrics:{}
+  //       to the API. The AI then correctly responded "no recorded
+  //       activity" — based on the empty payload it received.
+  //   (b) The de-dup key now includes a small fingerprint of the metrics
+  //       payload (totalActions). So when current goes from {} (initial)
+  //       → {ticketsClosed: 5, totalActions: 396, …} (after data loads),
+  //       the key changes and the auto-fetch fires again with the REAL
+  //       data, overwriting the stale "no activity" message.
   const autoFetchedRef = useRef('');
   useEffect(function () {
     if (!expanded) return;
     if (!myId) return;
-    if (coachMsg || coachError || coachLoading) return;
-    var key = (myId || 'anon') + ':' + period;
+    // v55.82-T (a) — wait for metrics to finish loading. Sending empty
+    // {} to the coach API was the root cause of the "no recorded
+    // activity" message Max saw despite real metrics on screen.
+    if (loading) return;
+    if (coachLoading) return;
+    // v55.82-T (b) — fingerprint includes a few key numbers from current
+    // so we re-fetch when stale-empty data is replaced by real data.
+    // totalActions is the umbrella metric — when it goes from undefined
+    // to a real number, that's the signal to redo the request.
+    var fp = current
+      ? ((current.totalActions || 0) + ':' + (current.ticketsClosed || 0) + ':' + (current.manualEntries || 0))
+      : 'empty';
+    var key = (myId || 'anon') + ':' + period + ':' + fp;
     if (autoFetchedRef.current === key) return;
     autoFetchedRef.current = key;
+    // Clear any prior stale message before refetching with the new key.
+    // Without this, the second fetch would no-op because the early-return
+    // checks coachMsg / coachError.
+    if (coachMsg) setCoachMsg('');
+    if (coachError) setCoachError('');
     requestCoach();
-  }, [expanded, myId, period, current]);
+  }, [expanded, myId, period, current, loading]);
 
   if (!expanded) {
     return (
