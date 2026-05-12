@@ -1340,12 +1340,14 @@ export default function TicketsTab({ toast, customers, user, userProfile, users,
           <div key={t.id}
             className={'rounded-xl hover:shadow-md transition cursor-pointer overflow-hidden '
               + (isBulked ? 'ring-2 ring-blue-400 ' : '')
-              // v55.82-D / Q — Closed tickets get a clearer grey treatment.
-              // Previously bg-slate-50 (near-white) + opacity-70 — on dark
-              // theme it looked identical to open tickets. v55.82-Q bumps
-              // to bg-slate-200 + text-slate-600 + adds a subtle border so
-              // closed status is unmistakable at a glance.
-              + (t.status === 'Closed' ? 'bg-slate-200 text-slate-600 ' : 'bg-white ')
+              // v55.82-D / Q / S — Closed tickets get a clearer grey treatment.
+              // v55.82-Q bumped the outer bg from slate-50 to slate-200 so it
+              // reads against the dark theme. v55.82-S goes further: every
+              // child element (title, status pill, badges, assignee chips,
+              // description) is also muted when the ticket is closed, so the
+              // ENTIRE card communicates "this is closed/inactive", not just
+              // the outer shell. Per Max May 12 2026 spec.
+              + (t.status === 'Closed' ? 'bg-slate-200 ' : 'bg-white ')
             }
             style={{
               // Closed tickets override the priority-color left border with
@@ -1354,6 +1356,11 @@ export default function TicketsTab({ toast, customers, user, userProfile, users,
               border: isBulked ? undefined : (t.status === 'Closed' ? '1px solid #94a3b8' : '1px solid #e2e8f0'),
               borderLeftWidth: 4,
               borderLeftColor: t.status === 'Closed' ? '#64748b' : leftBorderColor,
+              // v55.82-S — slight desaturation on closed cards. Children
+              // keep their own colors, but the overall card reads as
+              // muted. Filter undone on hover so accessing the card is
+              // still clear.
+              filter: t.status === 'Closed' ? 'grayscale(0.55) opacity(0.92)' : undefined,
             }}>
             <div className="px-4 py-3">
               {/* Top row: bulk select + title (the star) + status pill */}
@@ -1361,75 +1368,91 @@ export default function TicketsTab({ toast, customers, user, userProfile, users,
                 <input type="checkbox" checked={isBulked} onChange={(e) => { e.stopPropagation(); toggleBulk(t.id); }}
                   onClick={e => e.stopPropagation()} className="w-4 h-4 rounded mt-0.5 flex-shrink-0" />
                 <div className="flex-1 min-w-0" onClick={()=>{setSel(t);loadComments(t.id);}}>
-                  <div className="font-bold text-[15px] text-slate-900 leading-tight mb-1"
+                  <div className={'font-bold text-[15px] leading-tight mb-1 ' + (t.status === 'Closed' ? 'text-slate-600 line-through decoration-slate-400' : 'text-slate-900')}
                     style={{ wordBreak: 'break-word' }}>
                     {t.title}
                   </div>
                   {/* Info row — ticket#, status pill, and urgency badges */}
                   <div className="flex items-center gap-2 flex-wrap">
                     {t.ticket_number && (
-                      <span className="text-[10px] font-mono font-bold text-slate-500 tracking-wider">
+                      <span className={'text-[10px] font-mono font-bold tracking-wider ' + (t.status === 'Closed' ? 'text-slate-500' : 'text-slate-500')}>
                         {t.ticket_number}
                       </span>
                     )}
                     <span className="inline-flex items-center px-2 py-0.5 rounded-md text-[10px] font-bold"
-                      style={{ background: sp.bg, color: sp.fg, border: '1px solid ' + sp.border }}>
+                      style={t.status === 'Closed'
+                        ? { background: '#cbd5e1', color: '#475569', border: '1px solid #94a3b8' }
+                        : { background: sp.bg, color: sp.fg, border: '1px solid ' + sp.border }}>
                       {t.status}
                     </span>
-                    {daysOverdue > 0 && (
+                    {/* v55.82-S — overdue/due-today badges suppressed on closed
+                        tickets. They're no longer urgent (it's done). */}
+                    {t.status !== 'Closed' && daysOverdue > 0 && (
                       <span className="inline-flex items-center px-2 py-0.5 rounded-md text-[10px] font-extrabold tracking-wider"
                         style={{ background: '#fee2e2', color: '#b91c1c', border: '1px solid #fca5a5' }}>
                         {daysOverdue === 1 ? '1 DAY OVERDUE' : daysOverdue + ' DAYS OVERDUE'}
                       </span>
                     )}
-                    {isDueToday && (
+                    {t.status !== 'Closed' && isDueToday && (
                       <span className="inline-flex items-center px-2 py-0.5 rounded-md text-[10px] font-extrabold tracking-wider"
                         style={{ background: '#ffedd5', color: '#c2410c', border: '1px solid #fdba74' }}>
                         DUE TODAY
                       </span>
                     )}
-                    {/* Priority dot with label */}
-                    <span className="inline-flex items-center gap-1 text-[10px] font-semibold text-slate-600 capitalize">
-                      <span className="w-2 h-2 rounded-full" style={{ background: priColor }} />
+                    {/* Priority dot with label — also greyed when closed */}
+                    <span className={'inline-flex items-center gap-1 text-[10px] font-semibold capitalize ' + (t.status === 'Closed' ? 'text-slate-500' : 'text-slate-600')}>
+                      <span className="w-2 h-2 rounded-full" style={{ background: t.status === 'Closed' ? '#94a3b8' : priColor }} />
                       {t.priority || 'medium'}
                     </span>
                   </div>
                 </div>
-                <span className="text-[10px] text-slate-500 flex-shrink-0">
+                <span className={'text-[10px] flex-shrink-0 ' + (t.status === 'Closed' ? 'text-slate-500' : 'text-slate-500')}>
                   {fmtET(t.created_at, 'shortdate')}
                 </span>
               </div>
 
               {/* Description (if present) */}
               {t.description && (
-                <div className="text-[12px] text-slate-600 mb-2 line-clamp-2 pl-7" onClick={()=>{setSel(t);loadComments(t.id);}}>
+                <div className={'text-[12px] mb-2 line-clamp-2 pl-7 ' + (t.status === 'Closed' ? 'text-slate-500' : 'text-slate-600')} onClick={()=>{setSel(t);loadComments(t.id);}}>
                   {t.description}
                 </div>
               )}
 
               {/* Meta row: created by / assignees / due date / order */}
               <div className="flex items-center gap-2 flex-wrap pl-7" onClick={()=>{setSel(t);loadComments(t.id);}}>
-                <span className="inline-flex items-center gap-1 text-[10px] bg-slate-50 text-slate-600 px-2 py-0.5 rounded">
-                  <span className="w-1.5 h-1.5 rounded-full bg-blue-400" />by {createdName || '?'}
+                <span className={'inline-flex items-center gap-1 text-[10px] px-2 py-0.5 rounded ' + (t.status === 'Closed' ? 'bg-slate-100 text-slate-500' : 'bg-slate-50 text-slate-600')}>
+                  <span className={'w-1.5 h-1.5 rounded-full ' + (t.status === 'Closed' ? 'bg-slate-400' : 'bg-blue-400')} />by {createdName || '?'}
                 </span>
-                {tAssignees.length > 0 ? tAssignees.map(uid => (
-                  <span key={uid} className="inline-flex items-center gap-1 text-[10px] px-2 py-0.5 rounded font-semibold"
-                    style={{ background: (userColorMap[uid] || '#8b5cf6') + '18', color: userColorMap[uid] || '#8b5cf6' }}>
-                    <span className="w-1.5 h-1.5 rounded-full" style={{ background: userColorMap[uid] || '#8b5cf6' }} />
-                    → {getUserName(uid) || '?'}
-                  </span>
-                )) : (
-                  <span className="inline-flex items-center gap-1 text-[10px] px-2 py-0.5 rounded font-semibold bg-red-50 text-red-800 border border-red-200">
-                    <span className="w-1.5 h-1.5 rounded-full bg-red-500" />Unassigned
+                {tAssignees.length > 0 ? tAssignees.map(uid => {
+                  // v55.82-S — assignee chips lose their vivid user color when
+                  // the ticket is closed. They render as plain slate chips so
+                  // the colored ones still grab attention for open tickets.
+                  var chipStyle = t.status === 'Closed'
+                    ? { background: '#e2e8f0', color: '#64748b' }
+                    : { background: (userColorMap[uid] || '#8b5cf6') + '18', color: userColorMap[uid] || '#8b5cf6' };
+                  var dotColor = t.status === 'Closed' ? '#94a3b8' : (userColorMap[uid] || '#8b5cf6');
+                  return (
+                    <span key={uid} className="inline-flex items-center gap-1 text-[10px] px-2 py-0.5 rounded font-semibold"
+                      style={chipStyle}>
+                      <span className="w-1.5 h-1.5 rounded-full" style={{ background: dotColor }} />
+                      → {getUserName(uid) || '?'}
+                    </span>
+                  );
+                }) : (
+                  <span className={t.status === 'Closed'
+                    ? 'inline-flex items-center gap-1 text-[10px] px-2 py-0.5 rounded font-semibold bg-slate-100 text-slate-500 border border-slate-300'
+                    : 'inline-flex items-center gap-1 text-[10px] px-2 py-0.5 rounded font-semibold bg-red-50 text-red-800 border border-red-200'
+                  }>
+                    <span className={'w-1.5 h-1.5 rounded-full ' + (t.status === 'Closed' ? 'bg-slate-400' : 'bg-red-500')} />Unassigned
                   </span>
                 )}
                 {t.due_date && !isOverdue && !isDueToday && (
-                  <span className="inline-flex items-center gap-1 text-[10px] px-2 py-0.5 rounded bg-slate-50 text-slate-600">
+                  <span className={'inline-flex items-center gap-1 text-[10px] px-2 py-0.5 rounded ' + (t.status === 'Closed' ? 'bg-slate-100 text-slate-500' : 'bg-slate-50 text-slate-600')}>
                     📅 Due {t.due_date}
                   </span>
                 )}
                 {t.order_number && (
-                  <span className="text-[10px] bg-slate-50 text-slate-500 px-2 py-0.5 rounded">
+                  <span className={'text-[10px] px-2 py-0.5 rounded ' + (t.status === 'Closed' ? 'bg-slate-100 text-slate-500' : 'bg-slate-50 text-slate-500')}>
                     #{t.order_number}
                   </span>
                 )}

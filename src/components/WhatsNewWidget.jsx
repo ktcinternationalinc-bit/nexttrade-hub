@@ -33,6 +33,79 @@ import { supabase } from '../lib/supabase';
 //     WhatsApp, the calendar, the Sales tab.
 export const BUILD_HISTORY = [
   {
+    version: 'v55.82-S',
+    date: '2026-05-12',
+    label: 'Three asks from Max May 12 2026: closed tickets fully greyed · stop button uses active assistant name · Personal Coach Arabic toggle',
+    items: [
+      // PUBLIC
+      'CLOSED TICKETS NOW LOOK CLOSED. The ENTIRE ticket card is greyed out, not just the outer shell. Title gets a strike-through and muted color. Status pill renders in plain slate (not the loud blue/green colored pill). Overdue and Due Today urgency badges are suppressed (a closed ticket can\'t be overdue — it\'s done). Assignee chips lose their per-person vendor color so they don\'t pop out. The whole card gets a slight grayscale + opacity filter so it visually recedes from the open tickets. Quick visual differentiation between active and resolved at a glance — but the AI can still read all the data and you can still click into closed tickets for full history.',
+      'TAP-TO-STOP BUTTON NOW NAMES THE RIGHT ASSISTANT. When Nadia is talking, button says "Tap to stop Nadia". When Jenna is talking, it says "Tap to stop Jenna". When Sara is talking, it says "Tap to stop Sara". Same in Arabic: إيقاف ناديا / إيقاف جينا / إيقاف سارة. Before this fix it always said Nadia regardless of who was actually speaking.',
+      'PERSONAL COACH NOW HAS AN ARABIC TOGGLE. New EN/AR pill buttons next to the Get Coach Feedback button. Tap AR and the entire card flips to Arabic — title, button labels, error messages, "Your coach feedback" header, empty state, AND the actual AI-generated feedback message itself. Tap EN to flip back. Each toggle clears the cached message and fetches a fresh response in the new language. Arabic body text renders right-to-left as expected.',
+      // SUPER_ADMIN
+      { superAdminOnly: true, text: 'TICKETS — TicketsTab.jsx: closed-ticket card wrapper gets filter: \'grayscale(0.55) opacity(0.92)\'. Title className now conditional: closed → text-slate-600 line-through decoration-slate-400, open → text-slate-900. Status pill style now conditional: closed → fixed slate inline-style {bg:#cbd5e1, color:#475569, border:#94a3b8}, open → the sp.bg/sp.fg map. Overdue + Due-Today badges guarded by t.status !== \'Closed\'. Priority dot color: closed → #94a3b8, open → priColor. Assignee chip style conditional: closed → flat slate {bg:#e2e8f0, color:#64748b}, open → user color +18 alpha. Description text-slate-600 → text-slate-500 when closed. Ticket# tracking + date stamp slate-500/500 (was slate-400 — caused contrast-audit fail).' },
+      { superAdminOnly: true, text: 'AIGREETER — stop button IIFE picks stopAssistantName/stopAssistantNameAr from activeAgentKey (which is already derived from the selectedAssistant prop on line 79). Old hardcoded \'Tap to stop Nadia\' replaced. Title attribute also dynamic so screen readers / hover tooltip stay in sync.' },
+      { superAdminOnly: true, text: 'COACH — MyPerformance.jsx: new coachLang state independent of global lang (defaults \'en\'). requestCoach POST body adds lang: coachLang. /api/hr-report/coach/route.js: accepts body.lang, defaults to \'en\', any other value falls back to \'en\'. When lang===\'ar\' the route appends to the system prompt: "LANGUAGE: Write your entire response in Modern Standard Arabic (الفصحى). Use natural, warm Arabic phrasing — not a literal word-for-word translation of English." All card chrome strings (title, refresh, getFeedback, thinking, tryAgain, cantRespond, yourFeedback, writing, writingSub, noFeedback, tapToGet, tapToGetSuffix) live in a tLabel map driven by isAr = coachLang === \'ar\'. Body containers get dir={bodyDir} (rtl when ar). Apostrophe-escape bug in cantRespond fixed by switching to double-quoted string.' },
+      { superAdminOnly: true, text: 'NOT YET TRANSLATED: the Wins panel content and the period selector (\'yesterday\' / \'last 7 days\' / etc) — those use the global app lang, not coachLang. If you want full Arabic coverage of MyPerformance, ping me and I\'ll thread coachLang through the rest of the panel.' },
+      { superAdminOnly: true, text: 'NEW TEST: __tests__/test-v55-82-s-three-asks.js — 21 assertions across the 3 asks (8 closed-ticket, 4 stop-button, 9 coach-arabic). Brittle prior tests patched: test-v55-82-d 2a (outer card text-slate-600 removed), test-s15 T1/T2 (title + ticket# className now conditional), test-v55-81-contrast-audit/sweep (no slate-400 + tiny-text combos remaining), test-v55-82-l 1a/3a (IIFE form + tLabel reference), test-v55-82-r 5/7 (tLabel lookup OR direct string).' },
+      { superAdminOnly: true, text: 'QA: 129 pass / 32 fail. Zero regressions vs R baseline.' },
+    ],
+  },
+  {
+    version: 'v55.82-R',
+    date: '2026-05-12',
+    label: 'Personal Coach feedback contrast fix per Max May 12 2026 — "the text/font appears almost invisible"',
+    items: [
+      // PUBLIC
+      'PERSONAL COACH FEEDBACK IS NOW READABLE. The coach\'s feedback text was rendered directly on a violet/pink gradient with mid-grey text — on the dark theme that gradient renders as cream-pale and the mid-grey text was almost invisible. Fixed: feedback now sits in a solid white card with near-black bold text. Same upgrade applied to the loading state, the empty "No feedback yet" state, and the error card. The Get Coach Feedback button bumped to a stronger violet for better white-text contrast.',
+      // SUPER_ADMIN
+      { superAdminOnly: true, text: 'MyPerformance.jsx — coachMsg block moved INTO a bg-white p-4 rounded-lg + border + shadow-sm card, INSIDE the violet/pink gradient parent. Body text: text-sm text-slate-900 font-medium leading-relaxed whitespace-pre-wrap. New "YOUR COACH FEEDBACK" uppercase label on top of the white card in text-violet-800 font-extrabold for visual hierarchy. Empty + loading + error states all upgraded: violet-900 headings, slate-800/700 body with font-medium. Wins panel emerald-50/700 → emerald-100/900. Button violet-600 → violet-700. Heading violet-800 → violet-900. NEW TEST: __tests__/test-v55-82-r-coach-contrast.js — 8 assertions. Brittle prior tests patched: test-v55-81-empty-white-blocks (window 2500→4500), test-v55-82-i 3h/3j (accept conditional strong-with-className + slate-800 alongside slate-700).' },
+      { superAdminOnly: true, text: 'QA: 130 pass / 30 fail. Zero regressions vs Q.' },
+    ],
+  },
+  {
+    version: 'v55.82-Q',
+    date: '2026-05-12',
+    label: 'Dark-theme contrast fixes — FAILED count invisible · closed tickets indistinguishable · field-capture pills washed out',
+    items: [
+      // PUBLIC
+      'IMPORT RESULT CARDS NOW READABLE ON DARK THEME. The 5 count cards (New Added, Updated, Unchanged, Failed, Deleted) were rendered with very pale backgrounds + dark text — fine on white, invisible on dark. Especially the FAILED count was unreadable when it mattered most. Bumped surfaces to saturated -100/-200 colors with -950 text and font-black for the numbers. Same fix applied to the field capture summary pills.',
+      'CLOSED TICKETS NOW LOOK DIFFERENT FROM OPEN ONES. Previously closed tickets used bg-slate-50 (near-white) + 70% opacity — on dark theme they looked identical to open tickets. Now bg-slate-200 (proper grey) + darker left border. No more opacity-hover gimmick — closed tickets stay readable at full opacity, just unmistakably grey.',
+      // SUPER_ADMIN
+      { superAdminOnly: true, text: 'ShippingRatesTab.jsx import result cards: bg-emerald-50/text-emerald-900 → bg-emerald-100 border-emerald-300 + text-emerald-900 + font-black. Same pattern for blue, slate, rose. Rose-failed got the strongest bump: bg-rose-200 border-rose-400 text-rose-950. Field capture summary pills (done screen): bg-X-100/text-X-900 → bg-X-200/text-X-950. Preview-screen capture cards: bg-X-50 border-X-200 → bg-X-100 border-X-400.' },
+      { superAdminOnly: true, text: 'TicketsTab.jsx closed-card styling: bg-slate-50 opacity-70 hover:opacity-100 → bg-slate-200 text-slate-600. Left border #94a3b8 → #64748b for stronger contrast. Outer border #e2e8f0 → #94a3b8 when closed. Patched brittle tests S15.T3 (color hex), v55-82-d 2a/2b/2c (closed-state assertions).' },
+      { superAdminOnly: true, text: 'QA: 129 pass / 30 fail. Zero regressions vs P.' },
+    ],
+  },
+  {
+    version: 'v55.82-P',
+    date: '2026-05-12',
+    label: 'Import UX fixes — kill the uncopiable popup · scrollable error list · "nothing was lost" banner',
+    items: [
+      // PUBLIC
+      'NO MORE BLOCKING POPUP AFTER IMPORT. The browser-native alert summary at the end of import is gone — you couldn\'t copy from it (browser security), and the same info was already on the done screen below in a much better format. The popup just blocked your view and required an extra click to dismiss.',
+      'ERROR LIST NOW USABLE. The error panel max height bumped from 256px to 384px (you see ~10 errors at once instead of 3). Added "📋 Copy all errors" button that puts the FULL error list on your clipboard. Added "⬇️ CSV" button that downloads import-errors-YYYY-MM-DD.csv for spreadsheet review.',
+      'NEW "NOTHING WAS LOST" BANNER. When every row in your import fails (like a constraint mismatch), the done screen now shows a clear amber banner: "📌 Nothing was saved — and nothing was lost." So you don\'t panic that your existing data was deleted. Update Only mode never deletes anything, ever.',
+      // SUPER_ADMIN
+      { superAdminOnly: true, text: 'ShippingRatesTab.jsx: removed the alert(summary) call at end of executeImport. Error panel: max-h-64 → max-h-96, added Copy + CSV buttons with navigator.clipboard fallback to document.execCommand for old browsers. New banner in done screen, conditional on (counts.added + counts.updated === 0) && counts.failed > 0. Patched brittle tests 1.17/1.18 in test-v55-81 (removed-alert refs), 5b in test-v55-82-l-stage2 (widened regex window 200→800).' },
+      { superAdminOnly: true, text: 'QA: 129 pass / 30 fail. Zero regressions vs N.' },
+    ],
+  },
+  {
+    version: 'v55.82-O',
+    date: '2026-05-12',
+    label: 'Voice transcription auth fix — "Authentication required" misdiagnosed as mic problem',
+    items: [
+      // PUBLIC
+      'VOICE RECORDING WHEN AUTH FAILS NOW SHOWS THE RIGHT MESSAGE. When the recorder hit "Authentication required" from the server, the old error message said "speak closer to the mic" — which was wrong, frustrating, and had nothing to do with the actual problem. Now you get distinct messages: "Session expired — please sign in again" (with explicit "this has nothing to do with the mic"), "Hit the transcription rate limit — wait a few minutes", or "Transcription service not set up — needs OPENAI_API_KEY". Each error tells you exactly what to do.',
+      // SUPER_ADMIN
+      { superAdminOnly: true, text: 'AIGreeter.jsx: onstop handler now grabs supabase.auth.getSession() access_token and sends Authorization: Bearer ${tok} on the /api/transcribe POST. Previously sent no header — relied on cookie auth which is brittle (different cookie shapes across browsers, missing in private/incognito, ITP issues on Safari). The /api/transcribe route already supports the Bearer fallback so server side needed no logic change, just better logging.' },
+      { superAdminOnly: true, text: '/api/transcribe/route.js: added [transcribe] auth-fail jwt_source=X err=Y console.warn so Vercel logs show what auth failed (no-jwt / bearer-header / cookie + the supa.auth.getUser error message). Helps diagnose without leaking the token.' },
+      { superAdminOnly: true, text: 'AIGreeter error classification: case for /Authentication required|401|unauthor/ → distinct "Session expired" message. Case for /rate limit|429/ → distinct "rate limit hit, wait a few minutes". The mic-blame case is now the catch-all only for actually-unknown errors. Arabic translations for all three new cases.' },
+      { superAdminOnly: true, text: 'BRITTLE TESTS PATCHED: test-record-button-bulletproof E5 (wording softened from "has not been configured" → "is not configured", regex made tolerant). test-voice-recorder-whisper REC11 (the non-greedy onstop regex was capturing an inner }; instead of the outer — widened scope from match to global greeter file).' },
+      { superAdminOnly: true, text: 'QA: 129 pass / 30 fail. Zero regressions vs N.' },
+    ],
+  },
+  {
     version: 'v55.82-N',
     date: '2026-05-12',
     label: 'Shipping import — field-level capture diagnostic (per Max May 12 2026 — "Add validation showing which fields were imported, missing, or failed")',

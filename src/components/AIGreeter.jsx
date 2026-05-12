@@ -2408,20 +2408,33 @@ export default function AIGreeter({ user, userProfile, users, tickets, invoices,
 
       {/* Input */}
       <div className="px-3 pb-3">
-        {/* Floating STOP SPEAKING bar — big and obvious while Nadia is talking.
-            Tapping it (or the mic) interrupts her immediately.
+        {/* Floating STOP SPEAKING bar — big and obvious while the active
+            assistant is talking. Tapping it (or the mic) interrupts her
+            immediately.
             S22.13 — tapping this ALSO enters "paused" mode: she stays silent
-            until the user engages her (type, tap mic, say "Hey Nadia"). */}
-        {speaking && (
-          <button
-            onClick={stopSpeech}
-            className="w-full mb-2 px-3 py-2 rounded-xl bg-red-500 hover:bg-red-600 text-white text-xs font-bold flex items-center justify-center gap-2 shadow-lg animate-pulse"
-            title="Stop Nadia from speaking (she stays quiet until you engage her)"
-          >
-            <span>⏹</span>
-            <span>{useLang === 'ar' ? 'إيقاف المساعد' : 'Tap to stop Nadia'}</span>
-          </button>
-        )}
+            until the user engages her (type, tap mic, say "Hey Nadia").
+            v55.82-S — label now uses the ACTIVE assistant's name (Nadia /
+            Jenna / Sara) instead of always saying "Nadia". When Jenna or
+            Sara is the active speaker, "Tap to stop Jenna" / "Tap to stop
+            Sara" reads correctly. */}
+        {speaking && (function () {
+          var stopAssistantName = activeAgentKey === 'jenna' ? 'Jenna'
+            : activeAgentKey === 'sara' ? 'Sara'
+            : 'Nadia';
+          var stopAssistantNameAr = activeAgentKey === 'jenna' ? 'جينا'
+            : activeAgentKey === 'sara' ? 'سارة'
+            : 'ناديا';
+          return (
+            <button
+              onClick={stopSpeech}
+              className="w-full mb-2 px-3 py-2 rounded-xl bg-red-500 hover:bg-red-600 text-white text-xs font-bold flex items-center justify-center gap-2 shadow-lg animate-pulse"
+              title={'Stop ' + stopAssistantName + ' from speaking (she stays quiet until you engage her)'}
+            >
+              <span>⏹</span>
+              <span>{useLang === 'ar' ? ('إيقاف ' + stopAssistantNameAr) : ('Tap to stop ' + stopAssistantName)}</span>
+            </button>
+          );
+        })()}
         {/* v54.2 — Autoplay-unlock banner. Browsers block audio on fresh
             page load until the user taps something. If Nadia tried to
             speak and got blocked, we show this big blue "tap to hear"

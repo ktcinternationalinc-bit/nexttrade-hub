@@ -44,6 +44,10 @@ export async function POST(req) {
     var periodCode = body.period || '30d';
     var metrics = body.metrics || {};
     var deltas = body.deltas || {};
+    // v55.82-S — Arabic toggle. Frontend sends lang='ar' to get the coach
+    // response written in Modern Standard Arabic. Default 'en'. Any other
+    // value falls back to English.
+    var lang = body.lang === 'ar' ? 'ar' : 'en';
 
     var apiKey = process.env.ANTHROPIC_API_KEY;
     if (!apiKey) {
@@ -151,6 +155,13 @@ export async function POST(req) {
     }
 
     var userMsg = 'Here is the activity data:\n\n' + summary + '\n\nPlease write the coach message now.';
+
+    // v55.82-S — If user requested Arabic, append explicit instruction to
+    // both prompts. Done as an append so the English logic above is
+    // preserved verbatim (no risk of breaking the existing prompt).
+    if (lang === 'ar') {
+      system = system + '\n\nLANGUAGE: Write your entire response in Modern Standard Arabic (الفصحى). Use natural, warm Arabic phrasing — not a literal word-for-word translation of English. The name "' + name + '" can be transliterated to Arabic letters or kept in Latin script, whichever sounds more natural in context. Same rules apply: plain prose, no markdown, under 180 words.';
+    }
 
     var response;
     try {

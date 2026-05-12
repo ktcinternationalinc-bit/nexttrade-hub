@@ -46,6 +46,10 @@ export default function MyPerformance({ user, userProfile, active }) {
   const [coachMsg, setCoachMsg] = useState('');
   const [coachLoading, setCoachLoading] = useState(false);
   const [coachError, setCoachError] = useState('');
+  // v55.82-S — Per-user language toggle for the Personal Coach feedback.
+  // Independent of the global app language so a user can flip the coach
+  // output to Arabic without changing the rest of the UI. Default 'en'.
+  const [coachLang, setCoachLang] = useState('en');
   // v55.64 — default to EXPANDED. Previously this defaulted to false so
   // the card on the dashboard looked like a tiny placeholder pill, and
   // people forgot the AI coach + scorecard even existed. Open by default
@@ -208,6 +212,8 @@ export default function MyPerformance({ user, userProfile, active }) {
           period: period,
           metrics: current || {},
           deltas: deltas || {},
+          // v55.82-S — language toggle independent of global app lang
+          lang: coachLang,
         }),
       });
       // v55.81 — robust response handling. If the route returns HTML (e.g.
@@ -479,65 +485,114 @@ export default function MyPerformance({ user, userProfile, active }) {
           Previously, when hasAnyActivity was false, this card was skipped
           entirely and Max saw a blank spot. Now the card always shows; the
           coach copy adapts to what data is available. */}
-      {!loading && (
+      {!loading && (function () {
+        // v55.82-S — All card labels translated based on coachLang. The
+        // body text (coachMsg) comes from the API already-translated.
+        var isAr = coachLang === 'ar';
+        var tLabel = {
+          title:           isAr ? 'المدرّب الشخصي' : 'Personal Coach',
+          thinking:        isAr ? 'المدرّب يفكّر…' : 'Coach is thinking…',
+          refresh:         isAr ? '↻ تحديث' : '↻ Refresh',
+          getFeedback:     isAr ? 'احصل على تقييم المدرّب' : 'Get Coach Feedback',
+          tryAgain:        isAr ? 'حاول مرة أخرى' : 'Try again',
+          cantRespond:     isAr ? '⚠️ المدرّب لا يستطيع الرد الآن' : "⚠️ Coach can't respond right now",
+          yourFeedback:    isAr ? 'تقييم المدرّب الخاص بك' : 'Your coach feedback',
+          writing:         isAr ? 'المدرّب يكتب تقييمك…' : 'Coach is writing your feedback…',
+          writingSub:      isAr ? 'ملاحظة مخصّصة عن إنجازاتك في هذه الفترة.' : 'A personalized note about your wins this period.',
+          noFeedback:      isAr ? 'لا يوجد تقييم بعد' : 'No feedback yet',
+          tapToGet:        isAr
+            ? 'اضغط على '
+            : 'Tap ',
+          tapToGetSuffix:  isAr
+            ? ' للحصول على ملاحظة مخصّصة عن إنجازاتك في هذه الفترة وشيء أو اثنين للتركيز عليه بعد ذلك.'
+            : ' above for a personalized note about your wins this period and one or two things to focus on next.',
+          langToggleToAr:  'العربية',
+          langToggleToEn:  'English',
+        };
+        // Direction control: when the response is Arabic, the body should
+        // render RTL so it reads correctly. Card chrome stays LTR so
+        // numbers/badges keep their layout.
+        var bodyDir = isAr ? 'rtl' : 'ltr';
+        return (
         <div className="bg-gradient-to-r from-violet-50 to-pink-50 rounded-lg p-4 border border-violet-200">
-          <div className="flex items-center justify-between gap-3 mb-2">
+          <div className="flex items-center justify-between gap-3 mb-2 flex-wrap">
             <div className="flex items-center gap-2">
               <div className="text-2xl">🌱</div>
-              <div className="font-bold text-violet-900">Personal Coach</div>
+              <div className="font-bold text-violet-900">{tLabel.title}</div>
             </div>
-            <button
-              onClick={requestCoach}
-              disabled={coachLoading}
-              className="text-xs px-3 py-1.5 rounded-lg bg-violet-700 text-white font-semibold hover:bg-violet-800 disabled:opacity-50 disabled:cursor-not-allowed"
-            >
-              {coachLoading ? 'Coach is thinking…' : (coachMsg ? '↻ Refresh' : 'Get Coach Feedback')}
-            </button>
+            <div className="flex items-center gap-2">
+              {/* v55.82-S — Language toggle. Two pill buttons (EN / AR).
+                  Switching language clears any cached feedback so the
+                  user sees a fresh request in the new language. */}
+              <div className="inline-flex rounded-lg overflow-hidden border border-violet-300 text-[10px] font-bold">
+                <button
+                  onClick={function () {
+                    if (coachLang === 'en') return;
+                    setCoachLang('en');
+                    setCoachMsg('');
+                    setCoachError('');
+                  }}
+                  className={'px-2 py-1 ' + (coachLang === 'en' ? 'bg-violet-700 text-white' : 'bg-white text-violet-800 hover:bg-violet-50')}
+                  title="Show coach feedback in English"
+                  aria-label="Switch coach feedback to English"
+                >EN</button>
+                <button
+                  onClick={function () {
+                    if (coachLang === 'ar') return;
+                    setCoachLang('ar');
+                    setCoachMsg('');
+                    setCoachError('');
+                  }}
+                  className={'px-2 py-1 ' + (coachLang === 'ar' ? 'bg-violet-700 text-white' : 'bg-white text-violet-800 hover:bg-violet-50')}
+                  title="إظهار تقييم المدرّب بالعربية"
+                  aria-label="Switch coach feedback to Arabic"
+                >AR</button>
+              </div>
+              <button
+                onClick={requestCoach}
+                disabled={coachLoading}
+                className="text-xs px-3 py-1.5 rounded-lg bg-violet-700 text-white font-semibold hover:bg-violet-800 disabled:opacity-50 disabled:cursor-not-allowed"
+              >
+                {coachLoading ? tLabel.thinking : (coachMsg ? tLabel.refresh : tLabel.getFeedback)}
+              </button>
+            </div>
           </div>
-          {/* v55.82-L — error display upgraded from tiny pink text-rose-700 chip
-              to a full warning card so users can\'t miss when the coach is
-              actually broken (e.g. ANTHROPIC_API_KEY not set on Vercel).
-              v55.82-R — bumped contrast: rose-900 → rose-950 on rose-100 bg,
-              border-rose-300 → border-rose-400. */}
           {coachError && (
-            <div className="mt-2 p-3 rounded-lg bg-rose-100 border-2 border-rose-400 text-sm text-rose-950">
-              <div className="font-extrabold mb-1">⚠️ Coach can\'t respond right now</div>
+            <div className="mt-2 p-3 rounded-lg bg-rose-100 border-2 border-rose-400 text-sm text-rose-950" dir={bodyDir}>
+              <div className="font-extrabold mb-1">{tLabel.cantRespond}</div>
               <div className="text-xs text-rose-900 font-medium">{coachError}</div>
               <button
                 onClick={requestCoach}
                 disabled={coachLoading}
                 className="mt-2 text-xs px-2 py-1 rounded bg-rose-200 hover:bg-rose-300 text-rose-950 font-bold disabled:opacity-50"
               >
-                Try again
+                {tLabel.tryAgain}
               </button>
             </div>
           )}
-          {/* v55.82-R — Coach feedback text MOVED INTO A SOLID WHITE CARD
-              with text-slate-900 + font-medium. The previous pattern was
-              text-slate-800 on a violet/pink gradient — slate-800 on those
-              washed-out gradient stops was a faint mid-grey that the user
-              reported as "almost invisible". Solid white surface + near-
-              black bold text reads cleanly on any theme. */}
           {coachMsg && (
-            <div className="mt-2 p-4 rounded-lg bg-white border border-violet-200 shadow-sm">
-              <div className="text-[10px] uppercase tracking-wide font-extrabold text-violet-800 mb-2">Your coach feedback</div>
+            <div className="mt-2 p-4 rounded-lg bg-white border border-violet-200 shadow-sm" dir={bodyDir}>
+              <div className="text-[10px] uppercase tracking-wide font-extrabold text-violet-800 mb-2">{tLabel.yourFeedback}</div>
               <div className="text-sm text-slate-900 font-medium leading-relaxed whitespace-pre-wrap">{coachMsg}</div>
             </div>
           )}
           {coachLoading && !coachMsg && (
-            <div className="mt-3 p-4 rounded-lg bg-white border-2 border-dashed border-violet-400 text-center">
-              <div className="text-sm font-extrabold text-violet-900 mb-1">Coach is writing your feedback…</div>
-              <div className="text-xs text-slate-700 font-medium">A personalized note about your wins this period.</div>
+            <div className="mt-3 p-4 rounded-lg bg-white border-2 border-dashed border-violet-400 text-center" dir={bodyDir}>
+              <div className="text-sm font-extrabold text-violet-900 mb-1">{tLabel.writing}</div>
+              <div className="text-xs text-slate-700 font-medium">{tLabel.writingSub}</div>
             </div>
           )}
           {!coachMsg && !coachError && !coachLoading && (
-            <div className="mt-3 p-4 rounded-lg bg-white border-2 border-dashed border-violet-400">
-              <div className="text-sm font-extrabold text-slate-900 mb-1">No feedback yet</div>
-              <div className="text-xs text-slate-800 font-medium">Tap <strong className="text-violet-800">Get Coach Feedback</strong> above for a personalized note about your wins this period and one or two things to focus on next.</div>
+            <div className="mt-3 p-4 rounded-lg bg-white border-2 border-dashed border-violet-400" dir={bodyDir}>
+              <div className="text-sm font-extrabold text-slate-900 mb-1">{tLabel.noFeedback}</div>
+              <div className="text-xs text-slate-800 font-medium">
+                {tLabel.tapToGet}<strong className="text-violet-800">{tLabel.getFeedback}</strong>{tLabel.tapToGetSuffix}
+              </div>
             </div>
           )}
         </div>
-      )}
+        );
+      })()}
     </div>
   );
 }

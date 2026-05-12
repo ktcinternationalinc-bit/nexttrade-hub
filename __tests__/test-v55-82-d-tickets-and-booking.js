@@ -149,12 +149,13 @@ ok('1l: PersonalDashboard urgent items shows 🚨 CRITICAL',
 // FIX #2 — Closed tickets greyed out
 // =====================================================================
 
-// 2a — v55.82-Q: Closed tickets get bg-slate-200 (darker than the
-// previous bg-slate-50) so they're visible on dark theme. Per Max
-// May 12 2026 — the pale slate-50 was invisible against the dark
-// page background.
-ok('2a: v55.82-Q — TicketsTab row applies bg-slate-200 + text-slate-600 when status===Closed',
-  /t\.status === 'Closed' \? 'bg-slate-200 text-slate-600 '/.test(ticketsTab),
+// 2a — v55.82-S: Closed tickets get bg-slate-200 on outer card. The
+// inner text muting is now per-child (title gets slate-600, badges
+// get their own muted colors) rather than blanket text-slate-600 on
+// the parent. This avoids React inheritance issues with the inline-
+// styled colored pills.
+ok('2a: v55.82-S — TicketsTab row applies bg-slate-200 when status===Closed',
+  /t\.status === 'Closed' \? 'bg-slate-200 '/.test(ticketsTab),
   'closed tickets must be visibly grey (no longer near-white)'
 );
 

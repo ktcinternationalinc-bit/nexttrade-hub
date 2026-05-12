@@ -55,8 +55,11 @@ ok('4: Coach error card uses rose-950 on rose-100 (not rose-900 on rose-50)',
   /bg-rose-100 border-2 border-rose-400 text-sm text-rose-950/.test(myPerf)
 );
 
-// 5) Empty-state "Get Coach Feedback" prompt uses readable contrast
+// 5) Empty-state "Get Coach Feedback" prompt uses readable contrast.
+// v55.82-S — "No feedback yet" now lives in tLabel.noFeedback. The
+// rendering still uses text-slate-800 font-medium for the body.
 ok('5: "No feedback yet" prompt uses font-medium + slate-800',
+  /tLabel\.noFeedback[\s\S]{0,400}text-slate-800 font-medium/.test(myPerf) ||
   /No feedback yet[\s\S]{0,300}text-slate-800 font-medium/.test(myPerf)
 );
 
@@ -65,9 +68,12 @@ ok('6: Coach button uses violet-700 bg (not violet-600) for better white-text co
   /bg-violet-700 text-white font-semibold hover:bg-violet-800/.test(myPerf)
 );
 
-// 7) Personal Coach heading uses violet-900 (not violet-800)
+// 7) Personal Coach heading uses violet-900 (not violet-800).
+// v55.82-S — heading text moved into tLabel.title; the wrapping div
+// still has text-violet-900.
 ok('7: Personal Coach heading uses text-violet-900',
-  /font-bold text-violet-900">Personal Coach<\/div>/.test(myPerf)
+  /font-bold text-violet-900">Personal Coach<\/div>/.test(myPerf) ||
+  /font-bold text-violet-900">\{tLabel\.title\}<\/div>/.test(myPerf)
 );
 
 // 8) Wins panel bumped from emerald-50 to emerald-100

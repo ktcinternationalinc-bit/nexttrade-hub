@@ -62,7 +62,10 @@ var coachRoute = fs.readFileSync(path.join(__dirname, '..', 'src', 'app', 'api',
 
 // 1a — Coach card is gated only on !loading, not nested in hasAnyActivity
 ok('1a: Personal Coach card rendered when !loading (NOT inside hasAnyActivity)',
-  /\{!loading && \(\s*<div className="bg-gradient-to-r from-violet-50 to-pink-50/.test(myPerf),
+  // v55.82-S wrapped the card body in an IIFE for the language-translation
+  // map. Accept either direct JSX or IIFE form.
+  /\{!loading && \(\s*<div className="bg-gradient-to-r from-violet-50 to-pink-50/.test(myPerf) ||
+  /\{!loading && \(function \(\) \{[\s\S]{0,2000}<div className="bg-gradient-to-r from-violet-50 to-pink-50/.test(myPerf),
   'card must render even for users with zero activity in the period'
 );
 
@@ -156,7 +159,10 @@ ok('2f: REGRESSION GUARD — requestCoach no longer bails on !current',
 
 // 3a — Full warning card with bold heading replaces tiny pink chip
 ok('3a: Error UI is a full warning card, not just a tiny chip',
-  /Coach can\\'t respond right now/.test(myPerf)
+  // v55.82-S — copy moved into tLabel.cantRespond. Either the English
+  // string itself or the lookup must be present.
+  /Coach can't respond right now/.test(myPerf) ||
+  /tLabel\.cantRespond/.test(myPerf)
 );
 
 // 3b — Retry button inside error card

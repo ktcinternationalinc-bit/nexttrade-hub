@@ -45,12 +45,18 @@ test('S15.D2 S17.5: dashboard AIGreeter restored + overlay on other tabs', funct
 // ===== PART 2: TICKETS TAB UI — MATCHES DASHBOARD =====
 
 test('S15.T1 TicketsTab: title is larger and bolder (15px, font-bold)', function() {
-  assert(/font-bold text-\[15px\] text-slate-900 leading-tight/.test(ticketsTab),
+  // v55.82-S — title class is now conditional (line-through + muted slate
+  // when closed, slate-900 when open). Accept either form.
+  assert(/font-bold text-\[15px\] (?:text-slate-900 )?leading-tight/.test(ticketsTab) ||
+         /font-bold text-\[15px\] leading-tight mb-1 ' \+ \(t\.status === 'Closed'/.test(ticketsTab),
     'title must be 15px bold — matches dashboard visual language');
 });
 
 test('S15.T2 TicketsTab: ticket# becomes small monospace tag (not cramped beside title)', function() {
-  assert(/text-\[10px\] font-mono font-bold text-slate-500 tracking-wider/.test(ticketsTab),
+  // v55.82-S — ticket# class is also now conditional (slate-500 when open,
+  // slate-500/400 when closed). Accept either form.
+  assert(/text-\[10px\] font-mono font-bold (?:text-slate-500 )?tracking-wider/.test(ticketsTab) ||
+         /text-\[10px\] font-mono font-bold tracking-wider ' \+ \(t\.status === 'Closed'/.test(ticketsTab),
     'ticket number is now a small grey monospace tag in the info row, not a blue chip next to title');
 });
 
