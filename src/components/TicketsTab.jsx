@@ -1340,20 +1340,20 @@ export default function TicketsTab({ toast, customers, user, userProfile, users,
           <div key={t.id}
             className={'rounded-xl hover:shadow-md transition cursor-pointer overflow-hidden '
               + (isBulked ? 'ring-2 ring-blue-400 ' : '')
-              // v55.82-D — Closed tickets get the "archived" treatment so the
-              // user's eye glides past them. opacity-70 + slate-50 surface +
-              // grayscale class on text inside (handled below). Hover bumps
-              // back to full opacity so it's still clickable + readable when
-              // you actually need to look at one.
-              + (t.status === 'Closed' ? 'bg-slate-50 opacity-70 hover:opacity-100 ' : 'bg-white ')
+              // v55.82-D / Q — Closed tickets get a clearer grey treatment.
+              // Previously bg-slate-50 (near-white) + opacity-70 — on dark
+              // theme it looked identical to open tickets. v55.82-Q bumps
+              // to bg-slate-200 + text-slate-600 + adds a subtle border so
+              // closed status is unmistakable at a glance.
+              + (t.status === 'Closed' ? 'bg-slate-200 text-slate-600 ' : 'bg-white ')
             }
             style={{
               // Closed tickets override the priority-color left border with
               // a calm slate so they don't visually compete with open ones.
-              borderLeft: '4px solid ' + (t.status === 'Closed' ? '#94a3b8' : leftBorderColor),
-              border: isBulked ? undefined : '1px solid #e2e8f0',
+              borderLeft: '4px solid ' + (t.status === 'Closed' ? '#64748b' : leftBorderColor),
+              border: isBulked ? undefined : (t.status === 'Closed' ? '1px solid #94a3b8' : '1px solid #e2e8f0'),
               borderLeftWidth: 4,
-              borderLeftColor: t.status === 'Closed' ? '#94a3b8' : leftBorderColor,
+              borderLeftColor: t.status === 'Closed' ? '#64748b' : leftBorderColor,
             }}>
             <div className="px-4 py-3">
               {/* Top row: bulk select + title (the star) + status pill */}

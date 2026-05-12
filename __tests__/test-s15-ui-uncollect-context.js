@@ -55,9 +55,10 @@ test('S15.T2 TicketsTab: ticket# becomes small monospace tag (not cramped beside
 });
 
 test('S15.T3 TicketsTab: colored left border drives urgency', function() {
-  // v55.82-D — closed tickets pick slate-grey #94a3b8, open tickets pick
-  // priority's leftBorderColor. Accept either pattern.
-  assert(/borderLeft: '4px solid ' \+ (leftBorderColor|\(t\.status === 'Closed' \? '#94a3b8' : leftBorderColor\))/.test(ticketsTab),
+  // v55.82-Q — closed-ticket slate color bumped from #94a3b8 to #64748b
+  // for better contrast on dark theme. Accept either historical or
+  // current value.
+  assert(/borderLeft: '4px solid ' \+ \(t\.status === 'Closed' \? '#(94a3b8|64748b)' : leftBorderColor\)/.test(ticketsTab),
     'card must have 4px colored left border (priority color when open, slate when closed)');
   // S16 palette: due-today moved from amber (#f59e0b) to orange (#f97316)
   // to disambiguate from medium-priority yellow.

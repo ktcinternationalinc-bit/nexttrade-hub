@@ -1686,23 +1686,14 @@ export default function ShippingRatesTab({ toast, user, userProfile, isAdmin, cu
     setImportErrors(errors);
     setImportCounts(counts);
 
-    // Plain-language summary
-    var summary = (importMode === 'full_sync' ? 'Full Sync' : 'Update Only') + ' import complete:\n' +
-      counts.added + ' new rate' + (counts.added === 1 ? '' : 's') + ' added\n' +
-      counts.updated + ' existing rate' + (counts.updated === 1 ? '' : 's') + ' updated\n' +
-      counts.unchanged + ' rate' + (counts.unchanged === 1 ? '' : 's') + ' unchanged (left alone)\n' +
-      counts.failed + ' row' + (counts.failed === 1 ? '' : 's') + ' failed';
-    if (importMode === 'full_sync' && counts.deleted > 0) {
-      summary += '\n' + counts.deleted + ' rate' + (counts.deleted === 1 ? '' : 's') + ' deleted (no longer in file)';
-    }
-    if (errors.length > 0) {
-      summary += '\n\nFirst errors:';
-      errors.slice(0, 5).forEach(function (e) {
-        summary += '\n  Row ' + e.row + ' (' + e.field + '): ' + e.reason;
-      });
-      if (errors.length > 5) summary += '\n  … and ' + (errors.length - 5) + ' more (see full error list below)';
-    }
-    alert(summary);
+    // v55.82-P — REMOVED the modal alert() summary. The done screen below
+    // already shows everything (count cards + scrollable error list +
+    // field capture summary), and the alert pop-up had three problems:
+    //   1. Browser-native alerts can't be copied from on most browsers
+    //   2. Truncated to first 5 errors — full list was below anyway
+    //   3. Blocked the UI thread + required an extra click to dismiss
+    // The user sees the same data on the inline done screen, fully
+    // scrollable, with copy buttons.
     try { await loadData(); } catch (_) {}
   };
 
@@ -3317,24 +3308,24 @@ Date: ${today}`;
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-1.5">
             {importCaptureReport.map(function(r) {
               var bg, label;
-              if (r.status === 'ok') { bg = 'bg-emerald-50 border-emerald-200'; label = 'OK'; }
-              else if (r.status === 'partial') { bg = 'bg-amber-50 border-amber-200'; label = 'PARTIAL'; }
-              else if (r.status === 'empty') { bg = 'bg-slate-50 border-slate-200'; label = 'EMPTY'; }
-              else { bg = 'bg-rose-50 border-rose-200'; label = 'MISSING'; }
+              if (r.status === 'ok') { bg = 'bg-emerald-100 border-emerald-400'; label = 'OK'; }
+              else if (r.status === 'partial') { bg = 'bg-amber-100 border-amber-400'; label = 'PARTIAL'; }
+              else if (r.status === 'empty') { bg = 'bg-slate-100 border-slate-400'; label = 'EMPTY'; }
+              else { bg = 'bg-rose-100 border-rose-400'; label = 'MISSING'; }
               var rateStr = r.total > 0 ? (r.captured + '/' + r.total) : '0/0';
               return (
                 <div key={r.field} className={'rounded p-2 border ' + bg + ' flex items-center justify-between'}>
                   <div className="text-[11px]">
-                    <div className="font-bold text-slate-900">{r.label}</div>
-                    <div className="text-[10px] text-slate-600">
+                    <div className="font-bold text-slate-950">{r.label}</div>
+                    <div className="text-[10px] text-slate-700">
                       {r.detected
                         ? <span>from <code className="bg-white px-1 rounded">{r.sourceCol || '(container split)'}</code></span>
-                        : <span className="text-rose-700 font-semibold">no source column found</span>}
+                        : <span className="text-rose-800 font-bold">no source column found</span>}
                     </div>
                   </div>
                   <div className="text-right">
-                    <div className="text-[9px] font-bold text-slate-700">{label}</div>
-                    <div className="text-[10px] font-mono text-slate-800">{rateStr}</div>
+                    <div className="text-[9px] font-extrabold text-slate-900">{label}</div>
+                    <div className="text-[10px] font-mono font-bold text-slate-900">{rateStr}</div>
                   </div>
                 </div>
               );
@@ -3488,28 +3479,46 @@ Date: ${today}`;
           <div className="text-[11px] text-slate-600">{importMode === 'full_sync' ? 'Full Sync' : 'Update Only'} mode</div>
         </div>
       </div>
-      {/* v55.82-L Stage 2 — Detailed result summary per spec section 6. */}
+      {/* v55.82-P — Clear "your data is safe" banner when every row failed.
+          Without this the user sees a wall of errors and panics that data
+          was lost — but Update Only mode never deletes anything, and a
+          failed insert doesn't write either. So "210/210 failed" actually
+          means "nothing changed in the database — existing rates are intact". */}
+      {importCounts.failed > 0 && (importCounts.added + importCounts.updated) === 0 && (
+        <div className="bg-amber-50 border-2 border-amber-300 rounded-lg p-3 mb-4">
+          <div className="text-sm font-bold text-amber-900 mb-1">📌 Nothing was saved — and nothing was lost</div>
+          <div className="text-[11px] text-amber-900 leading-snug">
+            Every row in your file hit an error and was skipped. No rates were added, updated, or deleted — your existing shipping rates database is untouched.
+            {' '}Fix the issues listed below (most likely a column-mapping problem or a database constraint mismatch), then re-import the same file. Update Only mode is safe to retry as many times as you need.
+          </div>
+        </div>
+      )}
+      {/* v55.82-L Stage 2 — Detailed result summary per spec section 6.
+          v55.82-Q — bumped from -50 surfaces to -100 + saturated text so
+          the numbers actually read on dark themes. Previously the FAILED
+          number was rose-900 on rose-50 which was invisible against the
+          surrounding cream/dark theme. */}
       <div className="grid grid-cols-2 md:grid-cols-5 gap-2 mb-4">
-        <div className="bg-emerald-50 border border-emerald-200 rounded-lg p-3">
-          <div className="text-[10px] font-bold text-emerald-900 uppercase">New Added</div>
-          <div className="text-2xl font-extrabold text-emerald-900">{importCounts.added}</div>
+        <div className="bg-emerald-100 border border-emerald-300 rounded-lg p-3">
+          <div className="text-[10px] font-extrabold text-emerald-900 uppercase tracking-wide">New Added</div>
+          <div className="text-3xl font-black text-emerald-900">{importCounts.added}</div>
         </div>
-        <div className="bg-blue-50 border border-blue-200 rounded-lg p-3">
-          <div className="text-[10px] font-bold text-blue-900 uppercase">Updated</div>
-          <div className="text-2xl font-extrabold text-blue-900">{importCounts.updated}</div>
+        <div className="bg-blue-100 border border-blue-300 rounded-lg p-3">
+          <div className="text-[10px] font-extrabold text-blue-900 uppercase tracking-wide">Updated</div>
+          <div className="text-3xl font-black text-blue-900">{importCounts.updated}</div>
         </div>
-        <div className="bg-slate-50 border border-slate-200 rounded-lg p-3">
-          <div className="text-[10px] font-bold text-slate-900 uppercase">Unchanged</div>
-          <div className="text-2xl font-extrabold text-slate-900">{importCounts.unchanged}</div>
+        <div className="bg-slate-100 border border-slate-300 rounded-lg p-3">
+          <div className="text-[10px] font-extrabold text-slate-900 uppercase tracking-wide">Unchanged</div>
+          <div className="text-3xl font-black text-slate-900">{importCounts.unchanged}</div>
         </div>
-        <div className={(importCounts.failed > 0 ? 'bg-rose-50 border-rose-300' : 'bg-slate-50 border-slate-200') + ' border rounded-lg p-3'}>
-          <div className={'text-[10px] font-bold uppercase ' + (importCounts.failed > 0 ? 'text-rose-900' : 'text-slate-700')}>Failed</div>
-          <div className={'text-2xl font-extrabold ' + (importCounts.failed > 0 ? 'text-rose-900' : 'text-slate-500')}>{importCounts.failed}</div>
+        <div className={(importCounts.failed > 0 ? 'bg-rose-200 border-rose-400' : 'bg-slate-100 border-slate-300') + ' border rounded-lg p-3'}>
+          <div className={'text-[10px] font-extrabold uppercase tracking-wide ' + (importCounts.failed > 0 ? 'text-rose-950' : 'text-slate-700')}>Failed</div>
+          <div className={'text-3xl font-black ' + (importCounts.failed > 0 ? 'text-rose-950' : 'text-slate-500')}>{importCounts.failed}</div>
         </div>
         {importMode === 'full_sync' && (
-          <div className={(importCounts.deleted > 0 ? 'bg-rose-50 border-rose-300' : 'bg-slate-50 border-slate-200') + ' border rounded-lg p-3'}>
-            <div className={'text-[10px] font-bold uppercase ' + (importCounts.deleted > 0 ? 'text-rose-900' : 'text-slate-700')}>Deleted</div>
-            <div className={'text-2xl font-extrabold ' + (importCounts.deleted > 0 ? 'text-rose-900' : 'text-slate-500')}>{importCounts.deleted}</div>
+          <div className={(importCounts.deleted > 0 ? 'bg-rose-200 border-rose-400' : 'bg-slate-100 border-slate-300') + ' border rounded-lg p-3'}>
+            <div className={'text-[10px] font-extrabold uppercase tracking-wide ' + (importCounts.deleted > 0 ? 'text-rose-950' : 'text-slate-700')}>Deleted</div>
+            <div className={'text-3xl font-black ' + (importCounts.deleted > 0 ? 'text-rose-950' : 'text-slate-500')}>{importCounts.deleted}</div>
           </div>
         )}
       </div>
@@ -3522,14 +3531,14 @@ Date: ${today}`;
           <div className="grid grid-cols-2 sm:grid-cols-3 gap-1 text-[11px]">
             {importCaptureReport.map(function(r) {
               var pillBg, pillText;
-              if (r.status === 'ok') { pillBg = 'bg-emerald-100'; pillText = 'text-emerald-900'; }
-              else if (r.status === 'partial') { pillBg = 'bg-amber-100'; pillText = 'text-amber-900'; }
-              else if (r.status === 'empty') { pillBg = 'bg-slate-100'; pillText = 'text-slate-700'; }
-              else { pillBg = 'bg-rose-100'; pillText = 'text-rose-900'; }
+              if (r.status === 'ok') { pillBg = 'bg-emerald-200'; pillText = 'text-emerald-950'; }
+              else if (r.status === 'partial') { pillBg = 'bg-amber-200'; pillText = 'text-amber-950'; }
+              else if (r.status === 'empty') { pillBg = 'bg-slate-200'; pillText = 'text-slate-800'; }
+              else { pillBg = 'bg-rose-200'; pillText = 'text-rose-950'; }
               return (
                 <div key={r.field} className="flex items-center justify-between gap-1">
-                  <span className="text-slate-700 truncate" title={r.label}>{r.label}</span>
-                  <span className={'px-1.5 py-0.5 rounded font-mono text-[9px] ' + pillBg + ' ' + pillText}>
+                  <span className="text-slate-800 font-medium truncate" title={r.label}>{r.label}</span>
+                  <span className={'px-1.5 py-0.5 rounded font-mono font-bold text-[9px] ' + pillBg + ' ' + pillText}>
                     {r.captured + '/' + r.total}
                   </span>
                 </div>
@@ -3538,13 +3547,57 @@ Date: ${today}`;
           </div>
         </div>
       )}
-      {/* v55.82-L Stage 2 — Expandable error report per spec section 5. */}
+      {/* v55.82-L Stage 2 — Expandable error report per spec section 5.
+          v55.82-P — taller (max-h-96), with Copy All + Download CSV
+          buttons so user can paste the full error list into a message
+          or share it with support. */}
       {importErrors.length > 0 && (
         <div className="bg-rose-50 border border-rose-200 rounded-lg p-3 mb-3">
-          <div className="text-xs font-bold text-rose-900 mb-2">⚠️ {importErrors.length} issue{importErrors.length === 1 ? '' : 's'} during import (these rows were skipped — your other rows are saved):</div>
-          <div className="max-h-64 overflow-y-auto space-y-1">
+          <div className="flex items-center justify-between mb-2 flex-wrap gap-2">
+            <div className="text-xs font-bold text-rose-900">⚠️ {importErrors.length} issue{importErrors.length === 1 ? '' : 's'} during import (these rows were skipped — your other rows are saved):</div>
+            <div className="flex gap-1">
+              <button
+                onClick={function () {
+                  var txt = importErrors.map(function (e) {
+                    return 'Row ' + e.row + ' (' + e.field + '): ' + e.reason;
+                  }).join('\n');
+                  try {
+                    if (navigator.clipboard && navigator.clipboard.writeText) {
+                      navigator.clipboard.writeText(txt);
+                    } else {
+                      var ta = document.createElement('textarea');
+                      ta.value = txt; document.body.appendChild(ta); ta.select();
+                      document.execCommand('copy'); document.body.removeChild(ta);
+                    }
+                  } catch (_) {}
+                }}
+                className="px-2 py-1 rounded border border-rose-300 text-rose-800 hover:bg-rose-100 text-[10px] font-semibold"
+              >
+                📋 Copy all errors
+              </button>
+              <button
+                onClick={function () {
+                  var headers = ['Row', 'Field', 'Reason'];
+                  var esc = function (v) { var s = String(v == null ? '' : v); return /[",\n]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s; };
+                  var lines = [headers.join(',')];
+                  importErrors.forEach(function (e) { lines.push([esc(e.row), esc(e.field), esc(e.reason)].join(',')); });
+                  var blob = new Blob([lines.join('\n')], { type: 'text/csv;charset=utf-8;' });
+                  var url = URL.createObjectURL(blob);
+                  var a = document.createElement('a');
+                  a.href = url;
+                  a.download = 'import-errors-' + (new Date()).toISOString().slice(0, 10) + '.csv';
+                  document.body.appendChild(a); a.click(); document.body.removeChild(a);
+                  setTimeout(function () { URL.revokeObjectURL(url); }, 1000);
+                }}
+                className="px-2 py-1 rounded border border-rose-300 text-rose-800 hover:bg-rose-100 text-[10px] font-semibold"
+              >
+                ⬇️ CSV
+              </button>
+            </div>
+          </div>
+          <div className="max-h-96 overflow-y-auto space-y-1 border border-rose-100 rounded bg-white">
             {importErrors.map((e, i) => (
-              <div key={i} className="text-[11px] bg-white border border-rose-100 rounded p-2">
+              <div key={i} className="text-[11px] border-b border-rose-50 last:border-b-0 p-2">
                 <div className="font-semibold text-rose-900">
                   {e.row > 0 ? 'Row ' + e.row : 'Import step'}{e.field ? ' — ' + e.field : ''}
                 </div>

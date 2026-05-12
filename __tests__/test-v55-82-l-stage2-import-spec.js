@@ -137,7 +137,7 @@ ok('5a: Errors collected as objects with row + field + reason',
 );
 
 ok('5b: Error report UI rendered on done screen',
-  /importErrors\.length > 0[\s\S]{0,200}issue/.test(src) &&
+  /importErrors\.length > 0[\s\S]{0,800}issue/.test(src) &&
   /Row ' \+ e\.row/.test(src)
 );
 

@@ -75,9 +75,10 @@ ok('Daily Log Bar still inside the activity-grid branch',
 ok('Personal Coach card always renders while !loading (v55.82-K)',
   /\{!loading && \(\s*<div className="bg-gradient-to-r from-violet-50 to-pink-50/.test(mperf));
 // Structure closes cleanly — the coach card is the LAST major block
-// before the closing </div> + );.
+// before the closing </div> + );. v55.82-R widened the body (wrapped
+// feedback in a white card for contrast) so the window grew.
 ok('Component closes cleanly (coach card → closing div → return)',
-  /Personal Coach[\s\S]{0,2500}<\/div>\s*\)\}\s*<\/div>\s*\);\s*\}/.test(mperf));
+  /Personal Coach[\s\S]{0,4500}<\/div>\s*\)\}\s*<\/div>\s*\);\s*\}/.test(mperf));
 
 console.log('\nMyHRDesk — empty state was already there (no regression)');
 var mhr = fs.readFileSync(path.join(ROOT, 'src/components/MyHRDesk.jsx'), 'utf8');

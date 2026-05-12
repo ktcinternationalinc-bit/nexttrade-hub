@@ -98,18 +98,18 @@ ok('1.15 v55.82-L2: dates handled by cleanForDB / validateDate helpers',
 ok('1.16 Progress updates throttled in per-row path (every 10 rows)',
    /i % 10 === 0/.test(src));
 
-// 1.17 — v55.82-L2 reports errors per-row in the errors array (not as a
-// bulk "all rows failed" message). Each row has its own reason.
-ok('1.17 v55.82-L2: each failing row gets its own error entry in errors array',
-   /errors\.push\(\{\s*row:/.test(src) && /errors\.slice\(0, 5\)/.test(src));
+// 1.17 — v55.82-L2/P: each failing row gets its own error entry. v55.82-P
+// removed the alert() pop-up — the errors live in importErrors state and
+// are rendered inline on the done screen.
+ok('1.17 v55.82-L2/P: each failing row gets its own error entry in errors array',
+   /errors\.push\(\{\s*row:/.test(src) && /setImportErrors\(errors\)/.test(src));
 
-// 1.18 — v55.82-L2 changed summary structure entirely. New format shows
-// "Update Only / Full Sync import complete:" with N added / N updated /
-// N unchanged / N failed broken out.
-ok('1.18 v55.82-L2: summary distinguishes added/updated/unchanged/failed',
-   /N added/.test(src) || /import complete:/.test(src) ||
-   /'Update Only' \) \+ ' import complete/.test(src) ||
-   /'Full Sync' : 'Update Only'\) \+ ' import complete/.test(src));
+// 1.18 — v55.82-L2/P: summary structure shown via importCounts state +
+// inline 5-card grid on the done screen. The earlier alert() summary
+// was removed in v55.82-P (browsers can't copy from alerts).
+ok('1.18 v55.82-L2/P: summary shown via importCounts on done screen (5 count cards)',
+   /setImportCounts\(counts\)/.test(src) &&
+   /New Added/.test(src) && />Updated</.test(src) && />Unchanged</.test(src));
 
 // =======================================================================
 // BUG 2 — Trend chart anchored to expiration date

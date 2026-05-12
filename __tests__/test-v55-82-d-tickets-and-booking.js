@@ -149,20 +149,27 @@ ok('1l: PersonalDashboard urgent items shows 🚨 CRITICAL',
 // FIX #2 — Closed tickets greyed out
 // =====================================================================
 
-// 2a — Closed tickets get opacity-70 + slate background
-ok('2a: TicketsTab row applies opacity-70 + bg-slate-50 when status===Closed',
-  /t\.status === 'Closed' \? 'bg-slate-50 opacity-70 hover:opacity-100/.test(ticketsTab),
-  'closed tickets must be visually de-emphasized'
+// 2a — v55.82-Q: Closed tickets get bg-slate-200 (darker than the
+// previous bg-slate-50) so they're visible on dark theme. Per Max
+// May 12 2026 — the pale slate-50 was invisible against the dark
+// page background.
+ok('2a: v55.82-Q — TicketsTab row applies bg-slate-200 + text-slate-600 when status===Closed',
+  /t\.status === 'Closed' \? 'bg-slate-200 text-slate-600 '/.test(ticketsTab),
+  'closed tickets must be visibly grey (no longer near-white)'
 );
 
-// 2b — Closed tickets get slate left border (#94a3b8) instead of priority color
-ok('2b: TicketsTab row uses slate-400 left border for closed (overrides priority color)',
-  /t\.status === 'Closed' \? '#94a3b8' : leftBorderColor/.test(ticketsTab)
+// 2b — v55.82-Q: closed-ticket left border bumped to darker slate (#64748b)
+// for the same contrast reason. Previously #94a3b8.
+ok('2b: v55.82-Q — TicketsTab row uses darker slate left border for closed',
+  /t\.status === 'Closed' \? '#64748b' : leftBorderColor/.test(ticketsTab)
 );
 
-// 2c — Closed tickets bump back to full opacity on hover
-ok('2c: closed-ticket greying has hover:opacity-100 escape hatch',
-  /opacity-70 hover:opacity-100/.test(ticketsTab)
+// 2c — v55.82-Q: opacity-70/hover gimmick removed in favor of static
+// darker bg. Closed tickets are always at full readable opacity now.
+ok('2c: v55.82-Q — closed-ticket greying no longer uses opacity tricks',
+  /t\.status === 'Closed' \? 'bg-slate-200/.test(ticketsTab) &&
+  !/'Closed' \? 'bg-slate-50 opacity-70/.test(ticketsTab),
+  'opacity-70 hover-opacity-100 gimmick replaced with stable bg-slate-200'
 );
 
 // 2d — PersonalDashboard My Tickets list also greys closed

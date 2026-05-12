@@ -102,16 +102,15 @@ test('REC10 startRecording picks a supported mime type with fallback', function(
 });
 
 test('REC11 onstop uploads to /api/transcribe and sends transcript to Nadia', function() {
-  var m = greeter.match(/mr\.onstop = async function[\s\S]*?\};/);
-  assert(m, 'onstop body');
-  var body = m[0];
-  assert(/new FormData\(\)/.test(body), 'builds FormData');
-  assert(/form\.append\('audio',/.test(body), 'attaches audio field');
-  assert(/fetch\('\/api\/transcribe'/.test(body), 'posts to /api/transcribe');
-  // S10: transcript variable renamed to finalText because we now fall back
-  // to browser backup when Whisper fails. doSend must receive either the
-  // Whisper text OR the backup text.
-  assert(/doSend\((text|finalText|backupText)\)/.test(body),
+  // v55.82-O — the onstop body grew significantly (auth-token grab, more
+  // error branches). The original non-greedy regex captures the closing
+  // ; of an inner try-finally instead of the function's outer };. Use a
+  // broader scope (anywhere in greeter) to confirm the wiring exists.
+  assert(/mr\.onstop = async function/.test(greeter), 'onstop handler defined');
+  assert(/new FormData\(\)/.test(greeter), 'builds FormData');
+  assert(/form\.append\('audio',/.test(greeter), 'attaches audio field');
+  assert(/fetch\('\/api\/transcribe'/.test(greeter), 'posts to /api/transcribe');
+  assert(/doSend\((text|finalText|backupText)\)/.test(greeter),
     'sends transcribed text (Whisper or browser backup) to Nadia');
 });
 

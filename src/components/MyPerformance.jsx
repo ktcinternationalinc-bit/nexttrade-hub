@@ -484,45 +484,56 @@ export default function MyPerformance({ user, userProfile, active }) {
           <div className="flex items-center justify-between gap-3 mb-2">
             <div className="flex items-center gap-2">
               <div className="text-2xl">🌱</div>
-              <div className="font-bold text-violet-800">Personal Coach</div>
+              <div className="font-bold text-violet-900">Personal Coach</div>
             </div>
             <button
               onClick={requestCoach}
               disabled={coachLoading}
-              className="text-xs px-3 py-1.5 rounded-lg bg-violet-600 text-white font-semibold hover:bg-violet-700 disabled:opacity-50 disabled:cursor-not-allowed"
+              className="text-xs px-3 py-1.5 rounded-lg bg-violet-700 text-white font-semibold hover:bg-violet-800 disabled:opacity-50 disabled:cursor-not-allowed"
             >
               {coachLoading ? 'Coach is thinking…' : (coachMsg ? '↻ Refresh' : 'Get Coach Feedback')}
             </button>
           </div>
           {/* v55.82-L — error display upgraded from tiny pink text-rose-700 chip
               to a full warning card so users can\'t miss when the coach is
-              actually broken (e.g. ANTHROPIC_API_KEY not set on Vercel). */}
+              actually broken (e.g. ANTHROPIC_API_KEY not set on Vercel).
+              v55.82-R — bumped contrast: rose-900 → rose-950 on rose-100 bg,
+              border-rose-300 → border-rose-400. */}
           {coachError && (
-            <div className="mt-2 p-3 rounded-lg bg-rose-50 border-2 border-rose-300 text-sm text-rose-900">
-              <div className="font-bold mb-1">⚠️ Coach can\'t respond right now</div>
-              <div className="text-xs text-rose-800">{coachError}</div>
+            <div className="mt-2 p-3 rounded-lg bg-rose-100 border-2 border-rose-400 text-sm text-rose-950">
+              <div className="font-extrabold mb-1">⚠️ Coach can\'t respond right now</div>
+              <div className="text-xs text-rose-900 font-medium">{coachError}</div>
               <button
                 onClick={requestCoach}
                 disabled={coachLoading}
-                className="mt-2 text-xs px-2 py-1 rounded bg-rose-100 hover:bg-rose-200 text-rose-900 font-semibold disabled:opacity-50"
+                className="mt-2 text-xs px-2 py-1 rounded bg-rose-200 hover:bg-rose-300 text-rose-950 font-bold disabled:opacity-50"
               >
                 Try again
               </button>
             </div>
           )}
+          {/* v55.82-R — Coach feedback text MOVED INTO A SOLID WHITE CARD
+              with text-slate-900 + font-medium. The previous pattern was
+              text-slate-800 on a violet/pink gradient — slate-800 on those
+              washed-out gradient stops was a faint mid-grey that the user
+              reported as "almost invisible". Solid white surface + near-
+              black bold text reads cleanly on any theme. */}
           {coachMsg && (
-            <div className="text-sm text-slate-800 leading-relaxed whitespace-pre-wrap mt-2">{coachMsg}</div>
+            <div className="mt-2 p-4 rounded-lg bg-white border border-violet-200 shadow-sm">
+              <div className="text-[10px] uppercase tracking-wide font-extrabold text-violet-800 mb-2">Your coach feedback</div>
+              <div className="text-sm text-slate-900 font-medium leading-relaxed whitespace-pre-wrap">{coachMsg}</div>
+            </div>
           )}
           {coachLoading && !coachMsg && (
-            <div className="mt-3 p-4 rounded-lg bg-white border-2 border-dashed border-violet-300 text-center">
-              <div className="text-sm font-semibold text-violet-800 mb-1">Coach is writing your feedback…</div>
-              <div className="text-xs text-slate-600">A personalized note about your wins this period.</div>
+            <div className="mt-3 p-4 rounded-lg bg-white border-2 border-dashed border-violet-400 text-center">
+              <div className="text-sm font-extrabold text-violet-900 mb-1">Coach is writing your feedback…</div>
+              <div className="text-xs text-slate-700 font-medium">A personalized note about your wins this period.</div>
             </div>
           )}
           {!coachMsg && !coachError && !coachLoading && (
-            <div className="mt-3 p-4 rounded-lg bg-white border-2 border-dashed border-violet-300">
-              <div className="text-sm font-semibold text-slate-800 mb-1">No feedback yet</div>
-              <div className="text-xs text-slate-700">Tap <strong>Get Coach Feedback</strong> above for a personalized note about your wins this period and one or two things to focus on next.</div>
+            <div className="mt-3 p-4 rounded-lg bg-white border-2 border-dashed border-violet-400">
+              <div className="text-sm font-extrabold text-slate-900 mb-1">No feedback yet</div>
+              <div className="text-xs text-slate-800 font-medium">Tap <strong className="text-violet-800">Get Coach Feedback</strong> above for a personalized note about your wins this period and one or two things to focus on next.</div>
             </div>
           )}
         </div>
@@ -554,9 +565,9 @@ function Wins({ metrics, deltas }) {
   }
   if (wins.length === 0) return null;
   return (
-    <div className="bg-emerald-50 rounded-lg p-3 mb-4 border border-emerald-200">
-      <div className="text-xs font-bold text-emerald-800 mb-1">✨ Wins this period</div>
-      <ul className="text-xs text-emerald-700 space-y-0.5">
+    <div className="bg-emerald-100 rounded-lg p-3 mb-4 border border-emerald-300">
+      <div className="text-xs font-extrabold text-emerald-900 mb-1">✨ Wins this period</div>
+      <ul className="text-xs text-emerald-900 font-medium space-y-0.5">
         {wins.slice(0, 4).map((w, i) => <li key={i}>• {w}</li>)}
       </ul>
     </div>

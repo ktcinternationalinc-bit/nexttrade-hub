@@ -47,6 +47,7 @@ export async function POST(request) {
   // ---- Auth: require a Supabase session ----
   var authHeader = request.headers.get('authorization') || '';
   var jwt = authHeader.indexOf('Bearer ') === 0 ? authHeader.substring(7) : null;
+  var jwtSource = jwt ? 'bearer-header' : null;
   if (!jwt) {
     var cookieHeader = request.headers.get('cookie') || '';
     var match = cookieHeader.match(/sb-[a-z0-9-]+-auth-token=([^;]+)/i);
@@ -54,10 +55,12 @@ export async function POST(request) {
       try {
         var cookieJson = JSON.parse(decodeURIComponent(match[1]));
         jwt = cookieJson && cookieJson.access_token;
+        jwtSource = jwt ? 'cookie' : null;
       } catch (_) {}
     }
   }
   var userId = null;
+  var authErr = null;
   if (jwt) {
     try {
       var supa = createClient(
@@ -67,9 +70,16 @@ export async function POST(request) {
       );
       var ures = await supa.auth.getUser(jwt);
       userId = ures && ures.data && ures.data.user && ures.data.user.id;
-    } catch (_) {}
+      authErr = ures && ures.error ? ures.error.message : null;
+    } catch (e) {
+      authErr = (e && e.message) ? e.message : 'getUser threw';
+    }
   }
   if (!userId) {
+    // v55.82-O — log enough to debug the auth failure without leaking the
+    // token itself. Surfaces "no Authorization header sent" vs "token
+    // expired" vs "token invalid" to Vercel logs.
+    try { console.warn('[transcribe] auth-fail jwt_source=' + (jwtSource || 'none') + ' err=' + (authErr || 'no-jwt')); } catch (e) {}
     return Response.json({ error: 'Authentication required' }, { status: 401 });
   }
 

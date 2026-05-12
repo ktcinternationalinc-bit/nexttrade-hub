@@ -1569,13 +1569,26 @@ export default function AIGreeter({ user, userProfile, users, tickets, invoices,
         var ext = type.indexOf('mp4') >= 0 ? 'mp4' : type.indexOf('ogg') >= 0 ? 'ogg' : 'webm';
         form.append('audio', blob, 'recording.' + ext);
         form.append('language', useLang === 'ar' ? 'ar' : 'en');
-        try { console.log('[record] posting to /api/transcribe'); } catch (e) {}
-        var r = await fetch('/api/transcribe', { method: 'POST', body: form });
+        // v55.82-O — Send Supabase session bearer token explicitly. The
+        // /api/transcribe route requires auth and was previously relying
+        // on the auth cookie, which is brittle (different cookie shapes
+        // across browsers, missing in private/incognito, missing on
+        // Safari ITP). Always send the access token from getSession() so
+        // the route can verify the user reliably.
+        var transcribeAuthHeaders = {};
+        try {
+          var sessRes = await supabase.auth.getSession();
+          var sessTok = sessRes && sessRes.data && sessRes.data.session
+            ? sessRes.data.session.access_token : '';
+          if (sessTok) transcribeAuthHeaders['Authorization'] = 'Bearer ' + sessTok;
+        } catch (e) {}
+        try { console.log('[record] posting to /api/transcribe (auth header set:', !!transcribeAuthHeaders['Authorization'], ')'); } catch (e) {}
+        var r = await fetch('/api/transcribe', { method: 'POST', body: form, headers: transcribeAuthHeaders });
         var data = null;
         try { data = await r.json(); } catch (parseErr) { data = { error: 'Server returned invalid JSON (status ' + r.status + ')' }; }
         if (!r.ok || (data && data.error)) {
           whisperError = (data && data.error) || ('HTTP ' + r.status);
-          try { console.warn('[record] Whisper failed:', whisperError); } catch (e) {}
+          try { console.warn('[record] Whisper failed:', whisperError, '(status:', r.status + ')'); } catch (e) {}
         } else {
           whisperText = String((data && data.text) || '').trim();
           try { console.log('[record] Whisper returned', whisperText.length, 'chars'); } catch (e) {}
@@ -1604,15 +1617,29 @@ export default function AIGreeter({ user, userProfile, users, tickets, invoices,
       // the most likely cause so Max knows what to do.
       var title, detail;
       if (whisperError && /OPENAI_API_KEY|not configured/i.test(String(whisperError))) {
-        title = useLang === 'ar' ? 'خدمة التفريغ النصي غير مفعّلة وفشل النسخ الاحتياطي أيضًا' : 'Transcription service not set up and browser backup came back empty';
+        title = useLang === 'ar' ? 'خدمة التفريغ النصي غير مفعّلة وفشل النسخ الاحتياطي أيضًا' : 'Transcription service not set up';
         detail = useLang === 'ar'
-          ? 'اضغط وتحدث مباشرة بجوار الميكروفون، ثم اضغط إيقاف. إذا استمرت المشكلة، راجع إعدادات الميكروفون.'
-          : 'The premium transcription (Whisper) has not been configured in Vercel (needs OPENAI_API_KEY), AND the browser backup did not pick up any speech. Speak clearly and close to the mic, then tap stop. If it keeps happening, check your microphone.';
+          ? 'يجب إضافة مفتاح OpenAI إلى إعدادات Vercel. تواصل مع المسؤول.'
+          : 'The premium transcription (Whisper) is not configured in Vercel — needs OPENAI_API_KEY environment variable from platform.openai.com/api-keys. Until that\'s added, voice recording can\'t work. Type your message instead, or ask the admin to add the key.';
+      } else if (whisperError && /Authentication required|401|unauthor/i.test(String(whisperError))) {
+        // v55.82-O — distinct auth-fail message. The "speak closer to the
+        // mic" instruction is wrong here and was previously confusing
+        // because auth errors look identical to the user.
+        title = useLang === 'ar' ? 'جلسة العمل انتهت' : 'Session expired — please sign in again';
+        detail = useLang === 'ar'
+          ? 'انتهت جلسة تسجيل الدخول. حاول تحديث الصفحة (Cmd+Shift+R) ثم تسجيل الدخول من جديد. لا علاقة لهذا بالميكروفون.'
+          : 'Your login session expired before the transcription request reached the server. This has nothing to do with the mic. Hard-refresh the page (Cmd+Shift+R), sign in again, and try recording. If it keeps happening on every recording, the auth cookie or token isn\'t being sent — tell me and I\'ll investigate.';
+      } else if (whisperError && /rate limit|429/i.test(String(whisperError))) {
+        // v55.82-O — also call out the rate-limit case (30 transcripts/hour/user)
+        title = useLang === 'ar' ? 'تم تجاوز الحد المسموح به' : 'Hit the transcription rate limit';
+        detail = useLang === 'ar'
+          ? 'الحد الأقصى هو 30 تفريغًا في الساعة. حاول مرة أخرى بعد بضع دقائق.'
+          : 'The transcription endpoint is capped at 30 recordings per hour per user. Wait a few minutes and try again — no mic problem here.';
       } else if (whisperError) {
-        title = useLang === 'ar' ? 'لم يتمكن من التعرف على أي كلام' : 'Could not transcribe anything';
+        title = useLang === 'ar' ? 'فشل التفريغ النصي' : 'Transcription failed';
         detail = useLang === 'ar'
-          ? ('سبب الفشل: ' + whisperError + '. حاول التحدث بوضوح أقرب إلى الميكروفون.')
-          : ('Whisper error: ' + whisperError + '. The browser backup also came back empty — please speak closer to the mic and try again.');
+          ? ('سبب الفشل: ' + whisperError)
+          : ('Whisper returned an error: ' + whisperError + '. The browser-backup transcription also came back empty. Try again, and if the same error keeps appearing, the server-side transcription service may be down — type your message instead in the meantime.');
       } else {
         title = useLang === 'ar' ? 'لم يتم التعرف على أي كلام' : 'No speech was detected';
         detail = useLang === 'ar'

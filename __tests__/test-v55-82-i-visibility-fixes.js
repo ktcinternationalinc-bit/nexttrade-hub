@@ -159,7 +159,9 @@ ok('3g: Loading state shows visible "Coach is writing your feedback…" card',
 );
 
 ok('3h: Empty state replaced italic-grey with a dashed border card',
-  /No feedback yet[\s\S]{0,400}Tap <strong>Get Coach Feedback<\/strong> above/.test(perfSrc),
+  // v55.82-R — wrapped "Get Coach Feedback" in <strong className="text-violet-800">
+  // for emphasis. Old test required bare <strong>. Accept either.
+  /No feedback yet[\s\S]{0,400}Tap <strong[^>]*>Get Coach Feedback<\/strong> above/.test(perfSrc),
   'empty state must be visibly readable on light background'
 );
 
@@ -169,7 +171,9 @@ ok('3i: REGRESSION GUARD — old italic placeholder text is gone',
 );
 
 ok('3j: Empty state uses solid text colors (slate-700+, slate-800+)',
-  /No feedback yet[\s\S]{0,300}text-slate-700/.test(perfSrc),
+  // v55.82-R bumped from slate-700 → slate-800 for stronger contrast.
+  // Accept either as "solid enough" per the spec intent.
+  /No feedback yet[\s\S]{0,300}text-slate-(700|800|900)/.test(perfSrc),
   'no faint italic text — must be readable'
 );
 
