@@ -213,7 +213,7 @@ test('Cal Bug 14: side-attendee posting note does NOT mark event completed', fun
 test('Build stamp bumped to v55.33 or later', function() {
   // Test was added at v55.33 to catch a missed stamp bump. Now we just
   // verify the stamp exists and is at least v55.33.
-  var match = page.match(/>v55\.(\d+)(?:-[A-Z])?</);
+  var match = page.match(/>v55\.(\d+)(?:-[A-Z][0-9]*)?</);
   assert(match && Number(match[1]) >= 33,
     'page.jsx build stamp shows v55.33+ (currently: ' + (match ? 'v55.' + match[1] : 'NOT FOUND') + ')');
 });

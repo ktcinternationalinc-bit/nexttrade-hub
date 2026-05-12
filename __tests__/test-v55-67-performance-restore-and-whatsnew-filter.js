@@ -81,7 +81,8 @@ group('2. WhatsNewWidget accepts admin props + filters items');
 
 var wnw = read('src/components/WhatsNewWidget.jsx');
 check('2.1 WhatsNewWidget signature accepts isAdmin + isSuperAdmin',
-  /function WhatsNewWidget\(\{ isAdmin, isSuperAdmin \} = \{\}\)/.test(wnw));
+  // v55.82-J: signature gained `prominent` prop. Accept either.
+  /function WhatsNewWidget\(\{ isAdmin, isSuperAdmin(, prominent)? \} = \{\}\)/.test(wnw));
 check('2.2 canSeeAdminInternals derived from props',
   /var canSeeAdminInternals = !!\(isAdmin \|\| isSuperAdmin\)/.test(wnw));
 check('2.3 filterEntry function defined to drop admin-only content',
@@ -103,7 +104,8 @@ check('2.9 item renderer accepts both string and {text} shape',
 // page.jsx passes the props
 var pg = read('src/app/page.jsx');
 check('2.10 page.jsx passes isAdmin + isSuperAdmin to WhatsNewWidget',
-  /<WhatsNewWidget isAdmin=\{isAdmin\} isSuperAdmin=\{isSuperAdmin\} \/>/.test(pg));
+  // v55.82-J: dashboard mount now also passes prominent={true}.
+  /<WhatsNewWidget isAdmin=\{isAdmin\} isSuperAdmin=\{isSuperAdmin\}( prominent=\{true\})? \/>/.test(pg));
 
 // ============================================================
 // 3. Specific items marked adminOnly in BUILD_HISTORY
@@ -247,7 +249,8 @@ check('6.1 BUILD_HISTORY count visible to admin > visible to non-admin',
 check('6.2 Older-entries archived count uses filteredHistory length',
   /filteredHistory\.length > DISPLAY_LIMIT/.test(wnw));
 check('6.3 Default props ({} =) so widget still works if mounted without props',
-  /\{ isAdmin, isSuperAdmin \} = \{\}/.test(wnw));
+  // v55.82-J: signature gained `prominent`. Accept either form.
+  /\{ isAdmin, isSuperAdmin(, prominent)? \} = \{\}/.test(wnw));
 check('6.4 HR Report admin tab still gated (canSeeHR check unchanged)',
   // AdminTab carries this — let's verify quickly
   /canSeeHR = isSuperAdmin/.test(read('src/components/AdminTab.jsx')));

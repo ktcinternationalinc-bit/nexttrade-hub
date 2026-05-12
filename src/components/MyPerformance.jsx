@@ -191,7 +191,11 @@ export default function MyPerformance({ user, userProfile, active }) {
   }, [current]);
 
   const requestCoach = async () => {
-    if (!current) return;
+    // v55.82-L — DON'T bail if `current` is null. Previously this silently
+    // returned, so a user with slow metrics fetch would click the button
+    // and see nothing happen. Now we send whatever we have (possibly empty
+    // metrics) and let the API produce a graceful "I don't have your data
+    // yet" coach message. Better than a silent dead click.
     setCoachLoading(true);
     setCoachError('');
     setCoachMsg('');
@@ -202,8 +206,8 @@ export default function MyPerformance({ user, userProfile, active }) {
         body: JSON.stringify({
           name: myName,
           period: period,
-          metrics: current,
-          deltas: deltas,
+          metrics: current || {},
+          deltas: deltas || {},
         }),
       });
       // v55.81 — robust response handling. If the route returns HTML (e.g.
@@ -228,24 +232,30 @@ export default function MyPerformance({ user, userProfile, active }) {
     }
   };
 
-  // v55.82-I — AUTO-FETCH coach feedback on first show. Max May 11 2026
-  // photo showed an empty Personal Coach panel that "gives zero feedback"
-  // — turns out users didn't realize they had to click a button. Now we
-  // fire requestCoach automatically the first time the panel is visible
-  // AND we have data, AND user has activity, AND we haven't already
-  // fetched/errored. Period change also re-triggers. autoFetchedKey
-  // tracks (period + myId) so we don't re-fetch on every render.
+  // v55.82-L — AUTO-FETCH coach feedback on first show. Max May 11 2026
+  // (10th time he's reported this!) — photo evidence kept showing blank
+  // Personal Coach panel. Root causes were:
+  //   (a) the entire coach card was nested INSIDE the `hasAnyActivity`
+  //       branch — so users with zero activity never even saw the card,
+  //   (b) the auto-fetch effect had `if (!hasAnyActivity) return;` which
+  //       silently bailed for low-activity users,
+  //   (c) the button was disabled when `!current` so users with slow
+  //       network couldn't even try.
+  // v55.82-L removes all three of those gates. The coach card always
+  // mounts and the auto-fetch always runs as long as the panel is open
+  // and we have any user identity. Even a zero-activity period gets a
+  // coach message (the API has a no-activity branch that produces
+  // encouragement).
   const autoFetchedRef = useRef('');
   useEffect(function () {
     if (!expanded) return;
-    if (!current) return;
-    if (!hasAnyActivity) return;
+    if (!myId) return;
     if (coachMsg || coachError || coachLoading) return;
     var key = (myId || 'anon') + ':' + period;
     if (autoFetchedRef.current === key) return;
     autoFetchedRef.current = key;
     requestCoach();
-  }, [expanded, current, hasAnyActivity, myId, period]);
+  }, [expanded, myId, period, current]);
 
   if (!expanded) {
     return (
@@ -460,51 +470,62 @@ export default function MyPerformance({ user, userProfile, active }) {
               )}
             </div>
           )}
+        </>
+      )}
 
-          {/* AI Coach */}
-          {/* v55.82-I — Max May 11 2026: photo showed Personal Coach card
-              completely empty (just header + nothing). Users didn't know
-              they had to click a button. Two fixes:
-                1. Auto-fetch on first show when we have data — coach
-                   appears WITHOUT any clicks.
-                2. Empty state was tiny italic grey on a light gradient —
-                   bumped to a clear "Fetching feedback…" / dashed border
-                   placeholder card so user sees activity instead of a
-                   blank panel. */}
-          <div className="bg-gradient-to-r from-violet-50 to-pink-50 rounded-lg p-4 border border-violet-200">
-            <div className="flex items-center justify-between gap-3 mb-2">
-              <div className="flex items-center gap-2">
-                <div className="text-2xl">🌱</div>
-                <div className="font-bold text-violet-800">Personal Coach</div>
-              </div>
+      {/* AI Coach card — v55.82-L (Max May 11 2026 — 10th report of blank
+          coach panel). MOVED OUT of the `hasAnyActivity &&` branch so it
+          ALWAYS renders, even for users with zero activity in this period.
+          Previously, when hasAnyActivity was false, this card was skipped
+          entirely and Max saw a blank spot. Now the card always shows; the
+          coach copy adapts to what data is available. */}
+      {!loading && (
+        <div className="bg-gradient-to-r from-violet-50 to-pink-50 rounded-lg p-4 border border-violet-200">
+          <div className="flex items-center justify-between gap-3 mb-2">
+            <div className="flex items-center gap-2">
+              <div className="text-2xl">🌱</div>
+              <div className="font-bold text-violet-800">Personal Coach</div>
+            </div>
+            <button
+              onClick={requestCoach}
+              disabled={coachLoading}
+              className="text-xs px-3 py-1.5 rounded-lg bg-violet-600 text-white font-semibold hover:bg-violet-700 disabled:opacity-50 disabled:cursor-not-allowed"
+            >
+              {coachLoading ? 'Coach is thinking…' : (coachMsg ? '↻ Refresh' : 'Get Coach Feedback')}
+            </button>
+          </div>
+          {/* v55.82-L — error display upgraded from tiny pink text-rose-700 chip
+              to a full warning card so users can\'t miss when the coach is
+              actually broken (e.g. ANTHROPIC_API_KEY not set on Vercel). */}
+          {coachError && (
+            <div className="mt-2 p-3 rounded-lg bg-rose-50 border-2 border-rose-300 text-sm text-rose-900">
+              <div className="font-bold mb-1">⚠️ Coach can\'t respond right now</div>
+              <div className="text-xs text-rose-800">{coachError}</div>
               <button
                 onClick={requestCoach}
-                disabled={coachLoading || !current}
-                className="text-xs px-3 py-1.5 rounded-lg bg-violet-600 text-white font-semibold hover:bg-violet-700 disabled:opacity-50 disabled:cursor-not-allowed"
+                disabled={coachLoading}
+                className="mt-2 text-xs px-2 py-1 rounded bg-rose-100 hover:bg-rose-200 text-rose-900 font-semibold disabled:opacity-50"
               >
-                {coachLoading ? 'Coach is thinking…' : (coachMsg ? '↻ Refresh' : 'Get Coach Feedback')}
+                Try again
               </button>
             </div>
-            {coachError && (
-              <div className="text-xs text-rose-700 bg-rose-50 rounded p-2 mt-2">{coachError}</div>
-            )}
-            {coachMsg && (
-              <div className="text-sm text-slate-800 leading-relaxed whitespace-pre-wrap mt-2">{coachMsg}</div>
-            )}
-            {coachLoading && !coachMsg && (
-              <div className="mt-3 p-4 rounded-lg bg-white border-2 border-dashed border-violet-300 text-center">
-                <div className="text-sm font-semibold text-violet-800 mb-1">Coach is writing your feedback…</div>
-                <div className="text-xs text-slate-600">A personalized note about your wins this period.</div>
-              </div>
-            )}
-            {!coachMsg && !coachError && !coachLoading && (
-              <div className="mt-3 p-4 rounded-lg bg-white border-2 border-dashed border-violet-300">
-                <div className="text-sm font-semibold text-slate-800 mb-1">No feedback yet</div>
-                <div className="text-xs text-slate-700">Tap <strong>Get Coach Feedback</strong> above for a personalized note about your wins this period and one or two things to focus on next.</div>
-              </div>
-            )}
-          </div>
-        </>
+          )}
+          {coachMsg && (
+            <div className="text-sm text-slate-800 leading-relaxed whitespace-pre-wrap mt-2">{coachMsg}</div>
+          )}
+          {coachLoading && !coachMsg && (
+            <div className="mt-3 p-4 rounded-lg bg-white border-2 border-dashed border-violet-300 text-center">
+              <div className="text-sm font-semibold text-violet-800 mb-1">Coach is writing your feedback…</div>
+              <div className="text-xs text-slate-600">A personalized note about your wins this period.</div>
+            </div>
+          )}
+          {!coachMsg && !coachError && !coachLoading && (
+            <div className="mt-3 p-4 rounded-lg bg-white border-2 border-dashed border-violet-300">
+              <div className="text-sm font-semibold text-slate-800 mb-1">No feedback yet</div>
+              <div className="text-xs text-slate-700">Tap <strong>Get Coach Feedback</strong> above for a personalized note about your wins this period and one or two things to focus on next.</div>
+            </div>
+          )}
+        </div>
       )}
     </div>
   );

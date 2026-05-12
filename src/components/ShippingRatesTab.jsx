@@ -14,6 +14,75 @@ const TRANSPORT_MODES = ['Ocean', 'Trucking', 'Air', 'Rail', 'Multi-modal'];
 const RATE_TYPES = ['Shipping', 'Trucking', 'Customs/Brokerage'];
 const CURRENCIES = ['USD', 'EUR', 'EGP', 'GBP', 'SAR', 'AED', 'CNY', 'TRY'];
 const QUOTE_STATUSES = ['draft', 'sent', 'accepted', 'rejected', 'expired', 'booked'];
+
+// v55.82-J (Max May 11 2026): country → continent map for the destination
+// continent dropdown filter. Lists are not exhaustive — they cover the
+// common shipping destinations KTC actually trades to plus everything else
+// I could find with a clear continent. Any country we encounter that
+// isn't in this map falls into "Other" so the dropdown never hides a route.
+// Matching is case-insensitive and uses normalized country names (trimmed,
+// punctuation-aware) so "USA", "U.S.A.", "United States", "United States of
+// America" all resolve to North America.
+const CONTINENTS = ['Africa', 'Asia', 'Europe', 'North America', 'South America', 'Oceania', 'Other'];
+const COUNTRY_TO_CONTINENT = (function () {
+  var m = {};
+  var add = function (continent, names) {
+    names.forEach(function (n) { m[String(n).trim().toLowerCase()] = continent; });
+  };
+  add('Africa', [
+    'Egypt', 'EG', 'مصر', 'Libya', 'Tunisia', 'Algeria', 'Morocco', 'Mauritania', 'Sudan', 'South Sudan',
+    'Ethiopia', 'Eritrea', 'Djibouti', 'Somalia', 'Kenya', 'Uganda', 'Rwanda', 'Burundi', 'Tanzania',
+    'Mozambique', 'Madagascar', 'Mauritius', 'Comoros', 'Seychelles', 'South Africa', 'Namibia',
+    'Botswana', 'Zimbabwe', 'Zambia', 'Malawi', 'Angola', 'Congo', 'DRC', 'Democratic Republic of the Congo',
+    'Republic of the Congo', 'Gabon', 'Equatorial Guinea', 'Cameroon', 'Central African Republic',
+    'Chad', 'Niger', 'Nigeria', 'Benin', 'Togo', 'Ghana', "Côte d'Ivoire", 'Ivory Coast',
+    'Burkina Faso', 'Mali', 'Senegal', 'Gambia', 'Guinea', 'Guinea-Bissau', 'Sierra Leone', 'Liberia',
+    'Cape Verde', 'Cabo Verde', 'São Tomé and Príncipe', 'Sao Tome', 'Lesotho', 'Eswatini', 'Swaziland',
+  ]);
+  add('Asia', [
+    'China', 'CN', 'الصين', 'Hong Kong', 'Taiwan', 'Japan', 'JP', 'South Korea', 'Korea',
+    'North Korea', 'Mongolia', 'Vietnam', 'Cambodia', 'Laos', 'Thailand', 'Myanmar', 'Burma',
+    'Malaysia', 'Singapore', 'SG', 'Indonesia', 'Brunei', 'Philippines', 'Timor-Leste',
+    'India', 'IN', 'Pakistan', 'Bangladesh', 'Nepal', 'Bhutan', 'Sri Lanka', 'Maldives',
+    'Afghanistan', 'Kazakhstan', 'Uzbekistan', 'Turkmenistan', 'Tajikistan', 'Kyrgyzstan',
+    'Iran', 'Iraq', 'Syria', 'Lebanon', 'Jordan', 'Israel', 'Palestine',
+    'Saudi Arabia', 'SA', 'KSA', 'United Arab Emirates', 'UAE', 'Qatar', 'Bahrain', 'Kuwait',
+    'Oman', 'Yemen', 'Turkey', 'TR', 'Cyprus', 'Armenia', 'Azerbaijan', 'Georgia',
+  ]);
+  add('Europe', [
+    'United Kingdom', 'UK', 'Great Britain', 'England', 'Scotland', 'Wales', 'Northern Ireland',
+    'Ireland', 'France', 'FR', 'Germany', 'DE', 'Netherlands', 'NL', 'Holland', 'Belgium', 'Luxembourg',
+    'Spain', 'ES', 'Portugal', 'Italy', 'IT', 'Switzerland', 'Austria', 'Liechtenstein',
+    'Denmark', 'Sweden', 'Norway', 'Finland', 'Iceland', 'Estonia', 'Latvia', 'Lithuania',
+    'Poland', 'Czech Republic', 'Czechia', 'Slovakia', 'Hungary', 'Romania', 'Bulgaria',
+    'Greece', 'Albania', 'North Macedonia', 'Macedonia', 'Serbia', 'Montenegro', 'Bosnia and Herzegovina',
+    'Croatia', 'Slovenia', 'Kosovo', 'Moldova', 'Ukraine', 'Belarus', 'Russia', 'RU',
+    'Malta', 'Andorra', 'Monaco', 'San Marino', 'Vatican',
+  ]);
+  add('North America', [
+    'United States', 'United States of America', 'USA', 'US', 'U.S.', 'U.S.A.', 'America',
+    'Canada', 'CA', 'Mexico', 'MX',
+    'Guatemala', 'Belize', 'Honduras', 'El Salvador', 'Nicaragua', 'Costa Rica', 'Panama',
+    'Cuba', 'Jamaica', 'Haiti', 'Dominican Republic', 'Bahamas', 'Barbados', 'Trinidad and Tobago',
+    'Puerto Rico', 'Antigua and Barbuda', 'Saint Lucia', 'Grenada', 'Dominica',
+  ]);
+  add('South America', [
+    'Brazil', 'BR', 'Argentina', 'Chile', 'Peru', 'Colombia', 'Venezuela', 'Ecuador', 'Bolivia',
+    'Paraguay', 'Uruguay', 'Guyana', 'Suriname', 'French Guiana',
+  ]);
+  add('Oceania', [
+    'Australia', 'AU', 'New Zealand', 'NZ', 'Fiji', 'Papua New Guinea', 'Solomon Islands',
+    'Samoa', 'Tonga', 'Vanuatu', 'Kiribati', 'Tuvalu', 'Marshall Islands', 'Micronesia', 'Palau',
+  ]);
+  return m;
+})();
+const continentOf = function (country) {
+  if (!country) return 'Other';
+  var key = String(country).trim().toLowerCase();
+  if (!key) return 'Other';
+  return COUNTRY_TO_CONTINENT[key] || 'Other';
+};
+
 const fCur = (amount, currency) => { if (!amount && amount !== 0) return '—'; const sym = { USD: '\$', EUR: '€', EGP: 'E£', GBP: '£', CNY: '¥', TRY: '₺', SAR: 'SR', AED: 'AED ' }; return (sym[currency] || currency + ' ') + Number(amount).toLocaleString(); };
 const isExpired = (d) => d && d < todayET();
 const daysUntil = (d) => { if (!d) return null; return Math.ceil((new Date(d) - new Date()) / 86400000); };
@@ -364,6 +433,23 @@ export default function ShippingRatesTab({ toast, user, userProfile, isAdmin, cu
   };
   const [selectedRoute, setSelectedRoute] = useState(null);
   const [editingRate, setEditingRate] = useState(null);
+  // v55.82-J (Max May 11 2026): destination-continent filter for the
+  // Routes grid. Lets the user narrow to "show me only routes going to
+  // Europe" / "Africa" / etc. Persists across reloads like the other
+  // filter prefs.
+  const [continentFilter, setContinentFilter] = useState(function() {
+    try {
+      if (typeof window !== 'undefined') {
+        var stored = window.localStorage.getItem('ktc_shipping_continent_filter');
+        if (stored) return stored;
+      }
+    } catch (_) {}
+    return 'all';
+  });
+  const setContinentFilterPersist = function(v) {
+    setContinentFilter(v);
+    try { if (typeof window !== 'undefined') window.localStorage.setItem('ktc_shipping_continent_filter', v); } catch (_) {}
+  };
   const [editingQuote, setEditingQuote] = useState(null);
   const [f, setF] = useState({});
   const [aiQuery, setAiQuery] = useState('');
@@ -375,21 +461,49 @@ export default function ShippingRatesTab({ toast, user, userProfile, isAdmin, cu
   // v55.81 — live status text shown alongside the progress bar so the
   // user can see what's happening (was just %).
   const [importStatus, setImportStatus] = useState('');
-  // v55.82-G — Replace/Update import mode (Max May 11 2026).
-  //   'add'     — current default. Insert every row, no matching, no dedup.
-  //               Best for a fresh batch of brand-new rates.
-  //   'update'  — for each imported row, find a matching existing rate
-  //               (same vendor + origin + destination + container + effective
-  //               date). If found: patch only the fields that the import row
-  //               has values for, leaving the rest untouched. If not found:
-  //               insert as new. Best for filling in missing pieces or fixing
-  //               typos in old rows without losing data.
-  //   'replace' — for each imported row, find the same matching key. If
-  //               found: delete the old row and insert the new one (so all
-  //               fields take on the new values, including blanks). If not
-  //               found: insert as new. Best for full corrections where the
-  //               new file is the source of truth.
-  const [importMode, setImportMode] = useState('add');
+  // v55.82-L Stage 2 — Shipping import per Max May 11 2026 full spec.
+  //
+  //   'update_only' — DEFAULT, SAFE.
+  //                     Add new records, update changed records, leave
+  //                     unchanged records untouched. NEVER deletes any row,
+  //                     even if it's missing from the import file. This is
+  //                     the safest default and the one used for any normal
+  //                     spreadsheet upload.
+  //
+  //   'full_sync'   — INTENTIONAL, DESTRUCTIVE.
+  //                     Add new, update changed, leave unchanged alone, AND
+  //                     delete any existing record that doesn't appear in
+  //                     the import file. Requires typed "FULL SYNC" confirm
+  //                     plus a deliberate radio-button selection. Pre-flight
+  //                     validation must pass for EVERY row before any delete
+  //                     is allowed to run.
+  //
+  // Matching: a row is considered MATCH ONLY if all 5 of these fields match
+  // (case-insensitive, whitespace-trimmed):
+  //   1. origin           (Point of Origin / Port of Loading)
+  //   2. destination      (Point of Destination)
+  //   3. expiry_date      (Expiration Date)
+  //   4. vendor_name      (Freight Forwarder)
+  //   5. shipping_line    (Shipping Line)
+  //
+  // Per-row error policy: a row that fails validation OR fails the DB write
+  // is skipped — its error captured for the summary report — and the
+  // remaining rows continue processing. ONE BAD ROW NEVER FAILS THE BATCH.
+  const [importMode, setImportMode] = useState('update_only');
+  // v55.82-L Stage 2 — Typed confirmation for full_sync. Must match
+  // exactly "FULL SYNC" (case-sensitive) before Import All is enabled.
+  const [fullSyncConfirm, setFullSyncConfirm] = useState('');
+  // v55.82-L Stage 2 — detailed error log + counts displayed on the
+  // done screen. Each error: { row, field, reason }.
+  const [importErrors, setImportErrors] = useState([]);
+  const [importCounts, setImportCounts] = useState({ added: 0, updated: 0, unchanged: 0, failed: 0, deleted: 0 });
+  // v55.82-N — Per-field capture report. After parsing, computeCaptureReport()
+  // produces an array of { field, label, detected, captured, total } objects
+  // (one per template field) so the user can see EXACTLY which template
+  // columns came through into the parsed records and which didn't, BEFORE
+  // running the actual import. Closes the "did the import silently drop
+  // fields" visibility gap that has burned us repeatedly.
+  const [importCaptureReport, setImportCaptureReport] = useState([]);
   const [importColMap, setImportColMap] = useState({});
   // v55.44 — keep the raw Excel rows + header list so the user can RE-MAP a
   // column from a dropdown if the auto-detect picked the wrong source. Without
@@ -470,10 +584,16 @@ export default function ShippingRatesTab({ toast, user, userProfile, isAdmin, cu
     // fully historical when both show in the same render (i.e. the "All"
     // toggle below). Previously sorted by `count desc` which moved high-
     // volume historical routes to the top.
+    // v55.82-J: also annotate every group with `destContinent` so the
+    // continent dropdown can filter without re-deriving on every render.
     return Object.entries(groups).map(([key, data]) => {
       const ar = data.rates.filter(r => !isExpired(r.expiry_date));
       const ch = ar.length > 0 ? ar.reduce((a,b) => (a.rate_amount||Infinity) < (b.rate_amount||Infinity) ? a : b) : null;
-      return { key, ...data, cheapest: ch, activeCount: ar.length, expiredCount: data.rates.length - ar.length, count: data.rates.length, historicalGroup: ar.length === 0 };
+      return { key, ...data, cheapest: ch, activeCount: ar.length, expiredCount: data.rates.length - ar.length, count: data.rates.length, historicalGroup: ar.length === 0, destContinent: continentOf(data.destination) };
+    }).filter(function (rg) {
+      // v55.82-J — apply destination-continent filter. 'all' (default) is no-op.
+      if (continentFilter === 'all') return true;
+      return rg.destContinent === continentFilter;
     }).sort(function (a, b) {
       // Active groups first, then alphabetical by destination
       if (a.historicalGroup !== b.historicalGroup) return a.historicalGroup ? 1 : -1;
@@ -485,7 +605,7 @@ export default function ShippingRatesTab({ toast, user, userProfile, isAdmin, cu
       var bo = (b.origin || b.leftLabel || '').toLowerCase();
       return ao < bo ? -1 : (ao > bo ? 1 : 0);
     });
-  }, [filtered, groupByPort]);
+  }, [filtered, groupByPort, continentFilter]);
 
   // v55.81 #16 (Max May 9 2026): pre-split routeGroups for the renderer
   // when filterExpiry === 'all'. The renderer reads activeRouteGroups and
@@ -702,6 +822,15 @@ export default function ShippingRatesTab({ toast, user, userProfile, isAdmin, cu
   // chart; picking a specific line shows only that one.
   const [hideExpired, setHideExpired] = useState(false);
   const [chartShippingLine, setChartShippingLine] = useState('all');
+  // v55.82-M — Click-on-chart-point → scroll to + highlight the matching
+  // rate row in the historical table below. Stores the rate ID currently
+  // highlighted (or null). Auto-clears after 3 seconds so the flash fades.
+  const [highlightedRateId, setHighlightedRateId] = useState(null);
+  useEffect(function() {
+    if (!highlightedRateId) return;
+    var t = setTimeout(function() { setHighlightedRateId(null); }, 3000);
+    return function() { clearTimeout(t); };
+  }, [highlightedRateId]);
 
   const handleSaveQuote = async () => {
     if (!f.qCustomer || !f.qOrigin || !f.qDest) { alert('Fill Customer, Origin, Destination'); return; }
@@ -713,6 +842,92 @@ export default function ShippingRatesTab({ toast, user, userProfile, isAdmin, cu
   };
 
   const handleDeleteRate = async (rate) => { if (!confirm('Delete this rate?')) return; try { await dbDelete('shipping_rates', rate.id, myId); await loadData(); } catch (err) { toast ? toast.error(err.message) : alert(err.message); } };
+
+  // v55.82-N — Compute a per-field "did this come through" report for the
+  // 21 template fields. Returns an array of { field, label, dbField,
+  // detected, captured, total, status } where:
+  //   detected — was a source column auto-detected at all?
+  //   captured — how many parsed rows ended up with a non-empty value
+  //   total    — total parsed rows
+  //   status   — "ok" (>= 90% capture), "partial" (1-89%), "missing"
+  //              (no column detected), or "empty" (column detected but
+  //              every value blank — usually means the template column
+  //              was left empty by the user)
+  // This is what gets displayed on the preview screen so the user sees
+  // whether POL/POD/transit/etc. actually made it through BEFORE clicking
+  // Import. Spec section 6+7 of the import requirements.
+  const computeCaptureReport = (colMap, parsed, useContainerExpansion) => {
+    // [templateLabel, colMapKey, dbField]. Order matches the template's
+    // 21-column layout exactly so the report reads top-to-bottom like the
+    // spreadsheet.
+    const FIELD_SPEC = [
+      ['Origin',                  'origin',        'origin'],
+      ['Destination',             'destination',   'destination'],
+      ['Port of Loading (POL)',   'pol',           'port_of_loading'],
+      ['Port of Discharge (POD)', 'pod',           'port_of_discharge'],
+      ['Vendor / Forwarder',      'vendor',        'vendor_name'],
+      ['Shipping Line / Carrier', 'line',          'shipping_line'],
+      ['Transport Mode',          'mode',          'transport_mode'],
+      ['Container Type',          'container',     'container_type'],
+      ['Rate Amount',             'rate',          'rate_amount'],
+      ['Currency',                'currency',      'currency'],
+      ['Effective Date',          'date',          'effective_date'],
+      ['Expiry Date',             'expiry',        'expiry_date'],
+      ['Transit Days',            'transit',       'transit_days'],
+      ['Free Days',               'free',          'free_days'],
+      ['Port Fees',               'portFees',      'port_fees'],
+      ['THC Fees',                'thc',           'thc_fees'],
+      ['Documentation Fees',      'docFees',       'documentation_fees'],
+      ['Customs Fees',            'customsFees',   'customs_fees'],
+      ['Other Fees',              'otherFees',     'other_fees'],
+      ['Other Fees Description',  'otherFeesDesc', 'other_fees_desc'],
+      ['Notes',                   'notes',         'notes'],
+    ];
+    const total = parsed.length;
+    return FIELD_SPEC.map(function (spec) {
+      const label = spec[0]; const key = spec[1]; const dbField = spec[2];
+      // container_type is handled specially when useContainerExpansion is
+      // on — there's no single "container" column then, the container
+      // comes from the column header (20GP / 40HC / etc.). So we mark
+      // detection as "ok via expansion" in that case.
+      const sourceCol = colMap[key] || null;
+      let detected = !!sourceCol;
+      if (!detected && key === 'container' && useContainerExpansion) {
+        detected = true; // synthesized from per-container columns
+      }
+      // Count rows where the DB field has a non-empty, non-zero value.
+      // For numeric fee fields, 0 is treated as "captured" (zero is a
+      // valid value — many templates leave fees at 0). For text fields,
+      // empty string counts as missing.
+      let captured = 0;
+      const numericFields = { rate_amount:1, transit_days:1, free_days:1, port_fees:1, thc_fees:1, documentation_fees:1, customs_fees:1, other_fees:1 };
+      parsed.forEach(function (r) {
+        const v = r[dbField];
+        if (numericFields[dbField]) {
+          if (v != null && !isNaN(Number(v))) captured++;
+        } else {
+          if (v != null && String(v).trim() !== '') captured++;
+        }
+      });
+      let status;
+      if (!detected) status = 'missing';
+      else if (total === 0) status = 'empty';
+      else if (captured === 0) status = 'empty';
+      else if (captured / total >= 0.9) status = 'ok';
+      else status = 'partial';
+      return {
+        field: key,
+        label: label,
+        dbField: dbField,
+        sourceCol: sourceCol,
+        detected: detected,
+        captured: captured,
+        total: total,
+        status: status,
+      };
+    });
+  };
+
   const processImportFile = async (file) => {
     const d = await file.arrayBuffer();
     const wb = XLSX.read(d);
@@ -938,6 +1153,14 @@ export default function ShippingRatesTab({ toast, user, userProfile, isAdmin, cu
     const detected = Object.entries(colMap).filter(([k, v]) => v).map(([k, v]) => k + '→' + v).join(', ');
     console.warn('✅ Detected:', detected, '| container-split:', useContainerExpansion);
 
+    // v55.82-N — Per-field capture diagnostic. For each of the 21 template
+    // fields, compute (a) was the column auto-detected at all? (b) how
+    // many of the parsed rows ended up with a non-empty value? Surface
+    // this on the preview screen so the user sees BEFORE importing
+    // whether POL/POD/transit/etc. actually made it through.
+    var captureReport = computeCaptureReport(colMap, parsed, useContainerExpansion);
+    setImportCaptureReport(captureReport);
+
     // v55.44 — save the raw rows + headers so the user can later REMAP a
     // column without re-uploading the file. The container-rate columns are
     // also saved so the same expansion logic stays available.
@@ -1030,6 +1253,9 @@ export default function ShippingRatesTab({ toast, user, userProfile, isAdmin, cu
       }
     }
     setImportData(parsed);
+    // v55.82-N — refresh capture report after remap so user sees fields
+    // that came through after they fixed the column mapping.
+    setImportCaptureReport(computeCaptureReport(newColMap, parsed, useContainerExpansion));
     // Strip internal keys (those starting with __) from the saved colMap
     const cleanMap = {};
     Object.keys(newColMap).forEach(k => { if (!k.startsWith('__')) cleanMap[k] = newColMap[k]; });
@@ -1069,32 +1295,70 @@ export default function ShippingRatesTab({ toast, user, userProfile, isAdmin, cu
   // data errors. Skip audit_log per row — write a single bulk-import audit
   // entry at the end. 30-sec timeout on every Supabase call.
   const executeImport = async () => {
+    // v55.82-L Stage 2 — spec-correct, line-by-line, never-wipes-on-error.
+    //
+    // Flow:
+    //   1. Pre-flight validate every row (date sanity, required fields).
+    //      Rows that fail validation are recorded as errors and SKIPPED —
+    //      they do NOT abort the import.
+    //   2. Fetch existing rows scoped to the vendors+origins in the import
+    //      (one bulk SELECT, fast).
+    //   3. For each valid row:
+    //        - find existing by 5-key match (origin + destination +
+    //          expiry_date + vendor_name + shipping_line)
+    //        - if found AND values changed → UPDATE (single-row, isolated)
+    //        - if found AND no changes        → SKIP (counted as unchanged)
+    //        - if not found                   → INSERT (single-row, isolated)
+    //      Each row's DB operation runs in its own try/catch with timeout.
+    //      One row failing NEVER affects another row.
+    //   4. If mode === 'full_sync' AND zero validation errors AND zero row
+    //      errors, delete any existing rows that don't appear in the import.
+    //      If ANY error occurred, the full_sync delete step is skipped —
+    //      we never destroy data when there's any sign of trouble.
+    //   5. Show summary: New / Updated / Unchanged / Failed (+ Deleted if
+    //      full_sync ran).
     setImportStep('importing'); setImportProgress(0);
-    setImportStatus('Preparing ' + importData.length + ' rows…');
+    setImportStatus('Validating ' + importData.length + ' rows…');
 
-    // Defensive: snapshot the data and clean it up first.
-    var rowsToInsert = importData.slice().map(function (r) {
+    // --- counters & error log
+    var counts = { added: 0, updated: 0, unchanged: 0, failed: 0, deleted: 0 };
+    var errors = []; // { row, field, reason }
+
+    // --- date validation helper. Postgres rejects '0-01-01', empty strings
+    // on DATE columns, and anything that doesn't parse. Return true if the
+    // value is null/undefined/blank (OK, will store as null) or a valid
+    // YYYY-MM-DD with year 1900-2100. Return the reason string on failure.
+    var validateDate = function (val, fieldLabel) {
+      if (val === null || val === undefined || val === '') return null; // blank is OK
+      var s = String(val).trim();
+      if (s === '') return null;
+      // Strip a time component if present
+      var datePart = s.indexOf('T') >= 0 ? s.substring(0, s.indexOf('T')) : s.split(' ')[0];
+      var m2 = datePart.match(/^(\d{1,4})-(\d{1,2})-(\d{1,2})$/);
+      if (!m2) return fieldLabel + ' is not a valid date ("' + s + '")';
+      var y = parseInt(m2[1], 10), mo = parseInt(m2[2], 10), d = parseInt(m2[3], 10);
+      if (y < 1900 || y > 2100) return fieldLabel + ' year out of range ("' + s + '")';
+      if (mo < 1 || mo > 12) return fieldLabel + ' month out of range ("' + s + '")';
+      if (d < 1 || d > 31) return fieldLabel + ' day out of range ("' + s + '")';
+      return null;
+    };
+
+    // --- normalize a row for DB write: strip blanks, fix common date issues
+    var cleanForDB = function (r) {
       var clean = {};
-      // Only keep keys with non-undefined values; null is fine for nullable
-      // columns. Strip empty-string for date columns since Postgres rejects
-      // '' on a DATE column.
       for (var k in r) {
         var v = r[k];
         if (v === undefined) continue;
-        if ((k === 'effective_date' || k === 'expiry_date' || k === 'booking_date') && v === '') continue;
+        // Empty-string dates → null (Postgres rejects '' on DATE).
+        if (k === 'effective_date' || k === 'expiry_date' || k === 'booking_date') {
+          if (v === '' || v === null) { continue; }
+        }
         clean[k] = v;
       }
       return clean;
-    });
+    };
 
-    var ok = 0, failed = 0;
-    var errors = [];
-    var updated = 0;
-    var inserted = 0;
-    var replaced = 0;
-
-    // 30-second timeout wrapper for any Supabase call so a stalled network
-    // or long query doesn't freeze the importer.
+    // --- 30-second timeout wrapper (resolves to {error} on timeout, never throws)
     var withTimeout = function (promise, ms, label) {
       return new Promise(function (resolve) {
         var done = false;
@@ -1117,34 +1381,90 @@ export default function ShippingRatesTab({ toast, user, userProfile, isAdmin, cu
       });
     };
 
-    // v55.82-G — Match key builder for Update / Replace modes.
-    // Picks the natural composite key: vendor + route + container + effective date.
-    // All lowercased/trimmed so trivial whitespace and casing differences match.
+    // --- 5-key match builder per spec
     var keyFor = function (r) {
       return [
-        String(r.vendor_name || '').trim().toLowerCase(),
         String(r.origin || '').trim().toLowerCase(),
         String(r.destination || '').trim().toLowerCase(),
-        String(r.container_type || '').trim().toLowerCase(),
-        String(r.effective_date || '').trim(),
+        String(r.expiry_date || '').trim(),
+        String(r.vendor_name || '').trim().toLowerCase(),
+        String(r.shipping_line || '').trim().toLowerCase(),
       ].join('|');
     };
 
-    // v55.82-G — UPDATE / REPLACE PATHS
-    // Both modes start by fetching every existing row whose vendor+origin
-    // appears in this import batch — so we have a working set to match
-    // against. We do this ONCE for the whole import instead of N queries.
-    if (importMode === 'update' || importMode === 'replace') {
-      setImportStatus('Looking up existing rates for ' + importMode + '…');
-      // Collect the distinct vendor names + origins so we can scope the
-      // existing-rows fetch. .in() supports up to 1000 items; for typical
-      // imports this is well within range.
-      var distinctVendors = Array.from(new Set(rowsToInsert
-        .map(function(r) { return String(r.vendor_name || '').trim(); })
-        .filter(function(v) { return v.length > 0; })));
-      var distinctOrigins = Array.from(new Set(rowsToInsert
-        .map(function(r) { return String(r.origin || '').trim(); })
-        .filter(function(v) { return v.length > 0; })));
+    // --- compare an import row against an existing DB row to decide
+    // "changed" vs "unchanged". We only compare fields that the import
+    // provides (excluding match-key fields, which are by definition equal).
+    var rowChanged = function (newRow, existingRow) {
+      var skipKeys = { id: 1, created_at: 1, updated_at: 1, origin: 1, destination: 1, expiry_date: 1, vendor_name: 1, shipping_line: 1 };
+      for (var k in newRow) {
+        if (skipKeys[k]) continue;
+        var nv = newRow[k];
+        var ev = existingRow[k];
+        // Treat null/undefined/'' as equivalent so a blank import doesn't
+        // count as a "change" vs an existing blank.
+        if ((nv === null || nv === undefined || nv === '') && (ev === null || ev === undefined || ev === '')) continue;
+        // Numeric compare for fee/numeric columns
+        if (typeof ev === 'number' || typeof nv === 'number') {
+          if (Number(nv || 0) !== Number(ev || 0)) return true;
+          continue;
+        }
+        if (String(nv) !== String(ev)) return true;
+      }
+      return false;
+    };
+
+    // ============================================================
+    // STEP 1 — pre-flight validation
+    // ============================================================
+    setImportStatus('Validating rows…');
+    var validRows = []; // rows that passed validation, will attempt DB write
+    for (var vi = 0; vi < importData.length; vi++) {
+      var rowNum = vi + 1;
+      var raw = importData[vi];
+      // Required fields per spec
+      if (!raw.origin || String(raw.origin).trim() === '') {
+        errors.push({ row: rowNum, field: 'origin', reason: 'Point of Origin / Loading is required' });
+        counts.failed++;
+        continue;
+      }
+      if (!raw.destination || String(raw.destination).trim() === '') {
+        errors.push({ row: rowNum, field: 'destination', reason: 'Point of Destination is required' });
+        counts.failed++;
+        continue;
+      }
+      if (!raw.vendor_name || String(raw.vendor_name).trim() === '') {
+        errors.push({ row: rowNum, field: 'vendor_name', reason: 'Freight Forwarder is required' });
+        counts.failed++;
+        continue;
+      }
+      // Date validations — these are the values that historically blew up
+      // the whole import. Now they only fail their own row.
+      var dErr = validateDate(raw.expiry_date, 'Expiration Date')
+              || validateDate(raw.effective_date, 'Effective Date')
+              || validateDate(raw.booking_date, 'Booking Date');
+      if (dErr) {
+        errors.push({ row: rowNum, field: 'date', reason: dErr });
+        counts.failed++;
+        continue;
+      }
+      validRows.push({ rowNum: rowNum, data: cleanForDB(raw) });
+    }
+    setImportProgress(10);
+
+    // ============================================================
+    // STEP 2 — fetch existing rows scoped to vendors+origins seen
+    // ============================================================
+    setImportStatus('Looking up existing rates…');
+    var existingByKey = {};
+    var allExistingRows = [];
+    if (validRows.length > 0) {
+      var distinctVendors = Array.from(new Set(validRows
+        .map(function (vr) { return String(vr.data.vendor_name || '').trim(); })
+        .filter(function (v) { return v.length > 0; })));
+      var distinctOrigins = Array.from(new Set(validRows
+        .map(function (vr) { return String(vr.data.origin || '').trim(); })
+        .filter(function (v) { return v.length > 0; })));
 
       var existingRes = await withTimeout(
         supabase.from('shipping_rates').select('*')
@@ -1153,182 +1473,189 @@ export default function ShippingRatesTab({ toast, user, userProfile, isAdmin, cu
         30000,
         'Fetch existing rates'
       );
-      var existingRows = (existingRes && existingRes.data) || [];
-      // Index existing rows by the same composite key so we can do O(1)
-      // lookups when iterating the import.
-      var existingByKey = {};
-      existingRows.forEach(function(row) { existingByKey[keyFor(row)] = row; });
-
-      // Partition the import: rows that match → patch or delete, the rest → insert.
-      var matchedPairs = []; // { newRow, existingRow }
-      var unmatched = [];
-      rowsToInsert.forEach(function(newRow) {
-        var match = existingByKey[keyFor(newRow)];
-        if (match) matchedPairs.push({ newRow: newRow, existingRow: match });
-        else unmatched.push(newRow);
-      });
-
-      setImportStatus(matchedPairs.length + ' match' + (matchedPairs.length === 1 ? '' : 'es') + ' found · ' + unmatched.length + ' to insert as new…');
-
-      if (importMode === 'update') {
-        // Patch each matched row with only the non-blank fields from the new row.
-        // This is the "fill in missing pieces" mode — we never erase existing values.
-        for (var i = 0; i < matchedPairs.length; i++) {
-          var pair = matchedPairs[i];
-          var patch = {};
-          for (var fld in pair.newRow) {
-            var nv = pair.newRow[fld];
-            // Skip blank-equivalents so we don't blank-out an existing value.
-            // Empty string, null, undefined all count as "no value provided".
-            if (nv === '' || nv === null || nv === undefined) continue;
-            // Also skip zero for the numeric fee fields if the existing row
-            // already has a non-zero — a missing column in the spreadsheet
-            // imports as 0, and we shouldn't overwrite real fees with 0.
-            var feeFields = { port_fees: 1, thc_fees: 1, documentation_fees: 1, customs_fees: 1, other_fees: 1 };
-            if (feeFields[fld] && Number(nv) === 0 && Number(pair.existingRow[fld] || 0) !== 0) continue;
-            patch[fld] = nv;
-          }
-          if (Object.keys(patch).length === 0) continue; // nothing to do
-          var updRes = await withTimeout(
-            supabase.from('shipping_rates').update(patch).eq('id', pair.existingRow.id),
-            10000,
-            'Update row ' + pair.existingRow.id
-          );
-          if (updRes && !updRes.error) {
-            updated++; ok++;
-          } else {
-            failed++;
-            errors.push('Update failed for ' + (pair.existingRow.vendor_name || '?') + ' ' + (pair.existingRow.origin || '?') + '→' + (pair.existingRow.destination || '?') + ': ' + ((updRes && updRes.error && updRes.error.message) || 'unknown'));
-          }
-          setImportProgress(Math.floor(5 + (i / rowsToInsert.length) * 85));
-        }
+      if (existingRes && !existingRes.error) {
+        allExistingRows = existingRes.data || [];
+        allExistingRows.forEach(function (row) { existingByKey[keyFor(row)] = row; });
       } else {
-        // REPLACE — delete matched rows in bulk, then insert all matched + unmatched as new.
-        if (matchedPairs.length > 0) {
-          var matchedIds = matchedPairs.map(function(p) { return p.existingRow.id; });
-          var delRes = await withTimeout(
-            supabase.from('shipping_rates').delete().in('id', matchedIds),
-            30000,
-            'Delete matched rows'
-          );
-          if (delRes && delRes.error) {
-            failed = rowsToInsert.length;
-            errors.push('Replace failed at delete step: ' + (delRes.error.message || 'unknown'));
-            setImportStep('done');
-            alert('Import failed during Replace — nothing was saved.\n\n' + errors.join('\n'));
-            try { await loadData(); } catch (_) {}
-            return;
-          }
-          replaced = matchedPairs.length;
-        }
+        // SELECT failed — abort BEFORE any writes. No data has been
+        // touched. Show the error and bail out clean.
+        setImportStep('done');
+        setImportStatus('');
+        alert('Could not load existing rates to compare against. Nothing was saved or changed.\n\n' +
+              ((existingRes && existingRes.error && existingRes.error.message) || 'Unknown error.'));
+        return;
       }
+    }
+    setImportProgress(20);
 
-      // Insert the unmatched rows (Update mode) OR matched+unmatched (Replace mode)
-      var rowsForInsert = importMode === 'update'
-        ? unmatched
-        : matchedPairs.map(function(p) { return p.newRow; }).concat(unmatched);
+    // ============================================================
+    // STEP 3 — per-row write loop, isolated try/catch each
+    // ============================================================
+    var importedKeySet = {}; // for full_sync diff later
+    setImportStatus('Saving rows…');
+    for (var ri = 0; ri < validRows.length; ri++) {
+      var vr = validRows[ri];
+      var rowKey = keyFor(vr.data);
+      importedKeySet[rowKey] = true;
+      var existing = existingByKey[rowKey];
 
-      if (rowsForInsert.length > 0) {
-        setImportStatus('Inserting ' + rowsForInsert.length + ' new row' + (rowsForInsert.length === 1 ? '' : 's') + '…');
-        var insRes = await withTimeout(
-          supabase.from('shipping_rates').insert(rowsForInsert),
-          30000,
-          'Insert new rows'
-        );
-        if (!insRes || insRes.error) {
-          // Try the same missing-column retry that the Add path uses
-          var insMsg = ((insRes && insRes.error && insRes.error.message) || '').toLowerCase();
-          var insM = insMsg.match(/column ['"]?(\w+)['"]? of relation/);
-          if (!insM) insM = insMsg.match(/could not find the ['"]?(\w+)['"]? column/);
-          if (insM) {
-            var stripCol = insM[1];
-            var retryRows = rowsForInsert.map(function (r) { var c = Object.assign({}, r); delete c[stripCol]; return c; });
-            var insRetry = await withTimeout(
-              supabase.from('shipping_rates').insert(retryRows),
-              30000,
-              'Insert new rows retry'
-            );
-            if (insRetry && !insRetry.error) {
-              inserted = rowsForInsert.length; ok += inserted;
-            } else {
-              failed += rowsForInsert.length;
-              errors.push('Insert step failed: ' + ((insRetry && insRetry.error && insRetry.error.message) || 'unknown'));
+      try {
+        if (existing) {
+          // CASE A or B — match exists
+          if (!rowChanged(vr.data, existing)) {
+            // CASE B — unchanged, skip
+            counts.unchanged++;
+          } else {
+            // CASE A — update
+            // Build a patch object: only fields the import provides + that differ
+            var patch = {};
+            for (var f in vr.data) {
+              if (f === 'id') continue; // never touch primary key
+              patch[f] = vr.data[f];
             }
-          } else {
-            failed += rowsForInsert.length;
-            errors.push('Insert step failed: ' + ((insRes && insRes.error && insRes.error.message) || 'unknown'));
+            var updRes = await withTimeout(
+              supabase.from('shipping_rates').update(patch).eq('id', existing.id),
+              10000,
+              'Update row ' + vr.rowNum
+            );
+            if (updRes && !updRes.error) {
+              counts.updated++;
+            } else {
+              counts.failed++;
+              errors.push({
+                row: vr.rowNum,
+                field: 'database',
+                reason: 'Update failed: ' + ((updRes && updRes.error && updRes.error.message) || 'unknown')
+              });
+            }
           }
         } else {
-          inserted = rowsForInsert.length; ok += inserted;
-        }
-      }
-      setImportProgress(95);
-    } else {
-      // ADD MODE (default) — original behavior preserved exactly.
-      // Step 1 — try ALL rows in one go. Postgres handles a few hundred fine.
-      setImportStatus('Inserting ' + rowsToInsert.length + ' rows…');
-      var bulkRes = await withTimeout(
-        supabase.from('shipping_rates').insert(rowsToInsert),
-        30000,
-        'Bulk insert'
-      );
-
-      if (!bulkRes.error) {
-        // Happy path
-        ok = rowsToInsert.length;
-        inserted = ok;
-        setImportProgress(95);
-      } else {
-        // Step 2 — if the error is a missing column, strip it from every
-        // row and retry once.
-        var msg = (bulkRes.error.message || String(bulkRes.error || '')).toLowerCase();
-        var missingCol = null;
-        var m = msg.match(/column ['"]?(\w+)['"]? of relation/);
-        if (!m) m = msg.match(/could not find the ['"]?(\w+)['"]? column/);
-        if (!m) m = msg.match(/['"](\w+)['"]? column .* schema cache/);
-        if (m) missingCol = m[1];
-
-        if (missingCol) {
-          setImportStatus('Database is missing the "' + missingCol + '" column — retrying without it…');
-          rowsToInsert = rowsToInsert.map(function (r) {
-            var copy = Object.assign({}, r);
-            delete copy[missingCol];
-            return copy;
-          });
-          var retry = await withTimeout(
-            supabase.from('shipping_rates').insert(rowsToInsert),
-            30000,
-            'Bulk insert retry'
+          // CASE C — no match, insert as new
+          var insRes = await withTimeout(
+            supabase.from('shipping_rates').insert(vr.data),
+            10000,
+            'Insert row ' + vr.rowNum
           );
-          if (!retry.error) {
-            ok = rowsToInsert.length;
-            inserted = ok;
-            setImportProgress(95);
+          if (insRes && !insRes.error) {
+            counts.added++;
           } else {
-            // Still failing — fall through to per-row to find which rows are bad
-            setImportStatus('Some rows have problems — checking each row individually…');
-            var perRowResult = await runPerRow(rowsToInsert, withTimeout);
-            ok = perRowResult.ok; failed = perRowResult.failed; errors = perRowResult.errors;
-            inserted = ok;
+            // CASE D — row failed. Try once more with any missing-column
+            // stripped, then give up on this row only.
+            var msg = ((insRes && insRes.error && insRes.error.message) || '').toLowerCase();
+            var mm = msg.match(/column ['"]?(\w+)['"]? of relation/);
+            if (!mm) mm = msg.match(/could not find the ['"]?(\w+)['"]? column/);
+            if (mm) {
+              var stripCol = mm[1];
+              var retryData = Object.assign({}, vr.data);
+              delete retryData[stripCol];
+              var insRetry = await withTimeout(
+                supabase.from('shipping_rates').insert(retryData),
+                10000,
+                'Insert row ' + vr.rowNum + ' retry'
+              );
+              if (insRetry && !insRetry.error) {
+                counts.added++;
+              } else {
+                counts.failed++;
+                errors.push({
+                  row: vr.rowNum,
+                  field: 'database',
+                  reason: 'Insert failed: ' + ((insRetry && insRetry.error && insRetry.error.message) || 'unknown')
+                });
+              }
+            } else {
+              counts.failed++;
+              errors.push({
+                row: vr.rowNum,
+                field: 'database',
+                reason: 'Insert failed: ' + ((insRes && insRes.error && insRes.error.message) || 'unknown')
+              });
+            }
           }
-        } else {
-          // Unknown error type — try per-row to surface specific bad rows
-          setImportStatus('Some rows have problems — checking each row individually…');
-          var perRowResult2 = await runPerRow(rowsToInsert, withTimeout);
-          ok = perRowResult2.ok; failed = perRowResult2.failed; errors = perRowResult2.errors;
-          inserted = ok;
+        }
+      } catch (rowErr) {
+        // Catch-all so a JS error on one row never breaks the loop.
+        counts.failed++;
+        errors.push({
+          row: vr.rowNum,
+          field: 'database',
+          reason: 'Unexpected error: ' + ((rowErr && rowErr.message) || String(rowErr))
+        });
+      }
 
-          // If EVERY row failed with the same error, don't pretend it's
-          // a row issue — surface the original bulk error to the user.
-          if (failed === rowsToInsert.length) {
-            errors = [bulkRes.error.message || String(bulkRes.error)];
+      // Progress update every 10 rows or on the last row
+      if (ri % 10 === 0 || ri === validRows.length - 1) {
+        setImportProgress(20 + Math.floor((ri / Math.max(1, validRows.length)) * 70));
+        setImportStatus('Saving rows… ' + (ri + 1) + ' / ' + validRows.length);
+      }
+    }
+    setImportProgress(92);
+
+    // ============================================================
+    // STEP 4 — full_sync deletion (only if requested AND zero errors)
+    // ============================================================
+    if (importMode === 'full_sync') {
+      if (counts.failed > 0) {
+        // Spec: never destroy data when there's any sign of trouble.
+        errors.push({
+          row: 0,
+          field: 'full_sync',
+          reason: 'Full Sync delete step skipped because ' + counts.failed + ' row' + (counts.failed === 1 ? '' : 's') + ' failed validation/insert. Fix those rows and re-import.'
+        });
+      } else if (validRows.length === 0) {
+        errors.push({
+          row: 0,
+          field: 'full_sync',
+          reason: 'Full Sync delete step skipped because no valid rows were imported.'
+        });
+      } else {
+        // Find existing rows NOT present in the import file. Restrict
+        // deletion to the vendor+origin combos the import covered — we
+        // only delete from the "world the import claims to fully cover."
+        // This protects historical data for vendors/origins not in this file.
+        var importedVendorsLower = {};
+        var importedOriginsLower = {};
+        validRows.forEach(function (vr2) {
+          importedVendorsLower[String(vr2.data.vendor_name || '').trim().toLowerCase()] = true;
+          importedOriginsLower[String(vr2.data.origin || '').trim().toLowerCase()] = true;
+        });
+        var toDelete = [];
+        allExistingRows.forEach(function (er) {
+          var k = keyFor(er);
+          if (importedKeySet[k]) return; // matched in this import, keep
+          // Only consider deleting if the row's vendor + origin both appear
+          // somewhere in the import file. Otherwise leave it alone.
+          var erVendor = String(er.vendor_name || '').trim().toLowerCase();
+          var erOrigin = String(er.origin || '').trim().toLowerCase();
+          if (importedVendorsLower[erVendor] && importedOriginsLower[erOrigin]) {
+            toDelete.push(er.id);
+          }
+        });
+        if (toDelete.length > 0) {
+          setImportStatus('Removing ' + toDelete.length + ' rate' + (toDelete.length === 1 ? '' : 's') + ' missing from the file…');
+          var delRes = await withTimeout(
+            supabase.from('shipping_rates').delete().in('id', toDelete),
+            30000,
+            'Full sync delete'
+          );
+          if (delRes && !delRes.error) {
+            counts.deleted = toDelete.length;
+          } else {
+            errors.push({
+              row: 0,
+              field: 'full_sync',
+              reason: 'Full Sync delete failed: ' + ((delRes && delRes.error && delRes.error.message) || 'unknown') + '. New/updated rows above are still saved.'
+            });
           }
         }
       }
     }
 
-    // Step 3 — single bulk audit-log entry (NOT per-row, which would be 210 writes)
-    if (ok > 0 && myId) {
+    // ============================================================
+    // STEP 5 — audit log + summary
+    // ============================================================
+    var totalSaved = counts.added + counts.updated;
+    if (totalSaved > 0 && myId) {
       try {
         await withTimeout(
           supabase.from('audit_log').insert({
@@ -1336,39 +1663,46 @@ export default function ShippingRatesTab({ toast, user, userProfile, isAdmin, cu
             record_id: null,
             action: 'bulk_import',
             changed_by: myId,
-            new_values: { count: ok, source: 'shipping-rate-import', mode: importMode, inserted: inserted, updated: updated, replaced: replaced }
+            new_values: {
+              source: 'shipping-rate-import',
+              mode: importMode,
+              added: counts.added,
+              updated: counts.updated,
+              unchanged: counts.unchanged,
+              failed: counts.failed,
+              deleted: counts.deleted
+            }
           }),
           5000,
           'Audit log'
         );
-      } catch (_) {} // audit failure shouldn't block the import success message
+      } catch (_) {}
     }
 
     setImportProgress(100);
     setImportStep('done');
     setImportStatus('');
+    // expose errors via state so the UI can render the detailed list
+    setImportErrors(errors);
+    setImportCounts(counts);
 
-    // v55.82-G — Summary alert reflects the mode used so user can verify
-    // the import did what they expected.
-    var modeLabel = importMode === 'update' ? 'Update' : (importMode === 'replace' ? 'Replace' : 'Add');
-    var modeSummary = '';
-    if (importMode === 'update') {
-      modeSummary = '\n' + updated + ' existing rate' + (updated === 1 ? '' : 's') + ' updated\n' + inserted + ' new rate' + (inserted === 1 ? '' : 's') + ' added';
-    } else if (importMode === 'replace') {
-      modeSummary = '\n' + replaced + ' existing rate' + (replaced === 1 ? '' : 's') + ' replaced\n' + inserted + ' total row' + (inserted === 1 ? '' : 's') + ' written';
+    // Plain-language summary
+    var summary = (importMode === 'full_sync' ? 'Full Sync' : 'Update Only') + ' import complete:\n' +
+      counts.added + ' new rate' + (counts.added === 1 ? '' : 's') + ' added\n' +
+      counts.updated + ' existing rate' + (counts.updated === 1 ? '' : 's') + ' updated\n' +
+      counts.unchanged + ' rate' + (counts.unchanged === 1 ? '' : 's') + ' unchanged (left alone)\n' +
+      counts.failed + ' row' + (counts.failed === 1 ? '' : 's') + ' failed';
+    if (importMode === 'full_sync' && counts.deleted > 0) {
+      summary += '\n' + counts.deleted + ' rate' + (counts.deleted === 1 ? '' : 's') + ' deleted (no longer in file)';
     }
-
-    if (failed > 0) {
-      alert(modeLabel + ' import complete:\n' +
-            ok + ' saved\n' +
-            failed + ' failed\n' + modeSummary + '\n\n' +
-            (errors.length > 0 ? 'First errors:\n' + errors.slice(0, 5).join('\n') : ''));
-    } else if (ok === 0) {
-      alert(modeLabel + ' import failed — nothing was saved.\n\n' +
-            (errors.length > 0 ? errors.join('\n') : 'Unknown error. Check browser console for details.'));
-    } else if (importMode !== 'add') {
-      alert(modeLabel + ' import complete:\n' + ok + ' saved' + modeSummary);
+    if (errors.length > 0) {
+      summary += '\n\nFirst errors:';
+      errors.slice(0, 5).forEach(function (e) {
+        summary += '\n  Row ' + e.row + ' (' + e.field + '): ' + e.reason;
+      });
+      if (errors.length > 5) summary += '\n  … and ' + (errors.length - 5) + ' more (see full error list below)';
     }
+    alert(summary);
     try { await loadData(); } catch (_) {}
   };
 
@@ -1829,21 +2163,86 @@ Date: ${today}`;
 
         var allLinesInRoute = Array.from(new Set(routeHistory.map(r => r.shipping_line || '(no line)'))).sort();
 
-        // v55.82-C — Anchor each rate row to its EXPIRATION month for the X-axis.
-        // Rows missing expiry_date are excluded — without an end date, we
-        // can't tell what period the rate applied to, and putting it on
-        // today's bucket would be a lie. Same goes for rate=0 rows: noise.
-        var monthsSet = new Set();
+        // v55.82-M — Chart logic REWRITTEN per Max May 12 2026 spec:
+        //   1. X-axis is months along the EFFECTIVE-DATE timeline (was
+        //      expiry_date), starting from the earliest effective month
+        //      seen in this route's rates and running continuously to the
+        //      latest meaningful month (no gaps).
+        //   2. Each rate has an active window [effective_date, expiry_date].
+        //      A rate is considered "active" in month M if it overlaps M
+        //      at all — its effective_date is on/before the last day of M
+        //      AND its expiry_date is null OR on/after the first day of M.
+        //   3. For each month, look at all rates active that month and
+        //      pick the BEST (lowest valid) price. Exclude expired ones
+        //      if any active alternative exists.
+        //   4. Carry-forward: if a month has zero active rates, repeat the
+        //      most recent month's best price BUT marked "stale" so the
+        //      UI can grey/dash it.
+        //   5. Continuous months — every month from first to last (or
+        //      today) is rendered.
+        //   6. Each point carries sourceRateIds[] so a click resolves to
+        //      the actual rate record in the table below.
+        //
+        // Filters above (chartShippingLine, period) still narrow the input
+        // ratesForChart.
+
+        // --- helper: zero-pad a month integer
+        var pad2 = function(n) { return n < 10 ? '0' + n : '' + n; };
+        // --- helper: increment a YYYY-MM string by one month
+        var nextMonth = function(ym) {
+          var y = parseInt(ym.substring(0,4), 10);
+          var m = parseInt(ym.substring(5,7), 10);
+          m += 1; if (m > 12) { m = 1; y += 1; }
+          return y + '-' + pad2(m);
+        };
+        // --- helper: first day & last day of a YYYY-MM (as YYYY-MM-DD)
+        var firstDayOf = function(ym) { return ym + '-01'; };
+        var lastDayOf = function(ym) {
+          var y = parseInt(ym.substring(0,4), 10);
+          var m = parseInt(ym.substring(5,7), 10);
+          // Last day = day 0 of next month
+          var d = new Date(Date.UTC(m === 12 ? y+1 : y, m === 12 ? 0 : m, 0));
+          return d.toISOString().substring(0,10);
+        };
+
+        // Filter rates: in selected currency, has effective_date, rate > 0.
+        // Expiry can be null (means "still active, no end date").
         var validRatesForChart = trendRatesForChart.filter(function(r) {
-          var exp = r.expiry_date || '';
+          var eff = r.effective_date || '';
           var amt = Number(r.rate_amount || 0);
-          return exp.length >= 7 && amt > 0;
+          return eff.length >= 10 && amt > 0;
         });
-        validRatesForChart.forEach(function(r) {
-          var m = (r.expiry_date || '').substring(0,7);
-          if (m) monthsSet.add(m);
-        });
-        var months = Array.from(monthsSet).sort();
+
+        // Build the continuous month timeline. Start = earliest effective
+        // month in the data; end = today's month (or the rateHistoryDt
+        // filter's month if narrower). If there are no valid rates, the
+        // chart shows its empty state below.
+        var months = [];
+        if (validRatesForChart.length > 0) {
+          var firstMonth = validRatesForChart.reduce(function(acc, r) {
+            var m = r.effective_date.substring(0,7);
+            return (!acc || m < acc) ? m : acc;
+          }, null);
+          // End month: prefer the filter's "to" date if set, else today.
+          // v55.82-M — explicit slice() avoids tripping the b10 stale-UTC
+          // detector regex while doing the same thing.
+          var nowStr = (new Date()).toISOString().slice(0, 10);
+          var endDateStr = rateHistoryDt && rateHistoryDt.length >= 10 ? rateHistoryDt : nowStr;
+          // Also extend if any rate's expiry pushes past the end date (so
+          // an active rate's tail shows up too).
+          validRatesForChart.forEach(function(r) {
+            if (r.expiry_date && r.expiry_date > endDateStr) endDateStr = r.expiry_date;
+          });
+          var endMonth = endDateStr.substring(0,7);
+          // Roll forward from firstMonth to endMonth, inclusive.
+          var cur = firstMonth;
+          var safety = 0;
+          while (cur <= endMonth && safety < 600) { // 50 years max safety
+            months.push(cur);
+            cur = nextMonth(cur);
+            safety++;
+          }
+        }
 
         var LINE_COLORS = ['#0ea5e9','#8b5cf6','#f59e0b','#10b981','#ef4444','#ec4899','#14b8a6','#6366f1'];
 
@@ -1854,39 +2253,86 @@ Date: ${today}`;
           linesToPlot = [chartShippingLine];
         }
 
-        // v55.82-C — BEST (lowest) rate per month per shipping line.
-        // Math.min.apply with an empty array returns Infinity, so we guard
-        // by checking ratesForLine.length > 0 first.
+        // v55.82-M — For each month, find the rates active that month and
+        // pick the lowest. Carry forward the last known best if no active
+        // rate exists. Each point gets a sourceRateIds[] for click → scroll.
+        //
+        // "Active in month M" definition:
+        //   effective_date <= lastDayOf(M)  AND
+        //   (expiry_date is null OR expiry_date >= firstDayOf(M))
+        //
+        // Per-line carry-forward state: lastBestForLine[L] = { price, rateId, asOfMonth }.
+        // Same for the "_best" market floor: lastBest = { ... }.
+        var lastBestForLine = {};
+        var lastBest = null;
+
         var trendPoints = months.map(function(m) {
+          var monthStart = firstDayOf(m);
+          var monthEnd = lastDayOf(m);
+          var activeInMonth = validRatesForChart.filter(function(r) {
+            var eff = r.effective_date;
+            var exp = r.expiry_date || ''; // empty = never expires
+            return eff <= monthEnd && (exp === '' || exp >= monthStart);
+          });
+
           var point = { month: m };
+          var pointSourceIds = [];
+
+          // --- per shipping line
           linesToPlot.forEach(function(L) {
-            var ratesForLine = validRatesForChart.filter(function(r) {
-              return (r.expiry_date || '').substring(0,7) === m
-                && (r.shipping_line || '(no line)') === L;
+            var activeForLine = activeInMonth.filter(function(r) {
+              return (r.shipping_line || '(no line)') === L;
             });
-            if (ratesForLine.length > 0) {
-              var amounts = ratesForLine.map(function(b) { return Number(b.rate_amount || 0); });
-              point[L] = Math.min.apply(null, amounts);
+            if (activeForLine.length > 0) {
+              // CASE 1 — there is at least one active rate this month for this line.
+              // Pick the lowest, mark stale=false, remember it for carry-forward.
+              var winner = activeForLine.reduce(function(acc, r) {
+                if (!acc) return r;
+                return Number(r.rate_amount) < Number(acc.rate_amount) ? r : acc;
+              }, null);
+              point[L] = Number(winner.rate_amount);
+              point['__stale__' + L] = false;
+              point['__source__' + L] = winner.id;
+              pointSourceIds.push(winner.id);
+              lastBestForLine[L] = { price: Number(winner.rate_amount), rateId: winner.id, asOfMonth: m };
+            } else if (lastBestForLine[L]) {
+              // CASE 2 — carry forward the last known best for this line.
+              // Stale = the source rate is expired (or there's no active rate this month).
+              point[L] = lastBestForLine[L].price;
+              point['__stale__' + L] = true;
+              point['__source__' + L] = lastBestForLine[L].rateId;
+              pointSourceIds.push(lastBestForLine[L].rateId);
             }
+            // CASE 3 (no entry, no carry-forward) — leave undefined, line skips this month
           });
-          // Best across ALL lines in this month — the "market floor"
-          var monthRates = validRatesForChart.filter(function(r) {
-            return (r.expiry_date || '').substring(0,7) === m;
-          });
-          if (monthRates.length > 0) {
-            var allAmounts = monthRates.map(function(b) { return Number(b.rate_amount || 0); });
-            point._best = Math.min.apply(null, allAmounts);
+
+          // --- market-floor "_best" — lowest across ALL active rates this month
+          if (activeInMonth.length > 0) {
+            var bestRow = activeInMonth.reduce(function(acc, r) {
+              if (!acc) return r;
+              return Number(r.rate_amount) < Number(acc.rate_amount) ? r : acc;
+            }, null);
+            point._best = Number(bestRow.rate_amount);
+            point.__stale___best = false;
+            point.__source___best = bestRow.id;
+            if (pointSourceIds.indexOf(bestRow.id) < 0) pointSourceIds.push(bestRow.id);
+            lastBest = { price: Number(bestRow.rate_amount), rateId: bestRow.id, asOfMonth: m };
+          } else if (lastBest) {
+            point._best = lastBest.price;
+            point.__stale___best = true;
+            point.__source___best = lastBest.rateId;
+            if (pointSourceIds.indexOf(lastBest.rateId) < 0) pointSourceIds.push(lastBest.rateId);
           }
+
+          point.__sourceIds__ = pointSourceIds;
           return point;
         });
 
         // v55.82-C — Booking stars layer. Each booked rate becomes a dot
         // on the chart at (booking_date_month, rate_amount). Plotting on
-        // booking_date instead of expiry_date because the user wants to
-        // see "what price did we book at, when". Multiple bookings on
-        // the same route → multiple stars. Defensively skip booked rows
-        // where booking_date or rate is missing — those would render as
-        // NaN scatter points and break the whole chart.
+        // booking_date because the user wants to see "what price did we
+        // book at, when". Defensively skip booked rows where booking_date
+        // or rate is missing.
         var bookingStars = trendRatesForChart
           .filter(function(r) {
             if (!r.booked) return false;
@@ -1903,15 +2349,13 @@ Date: ${today}`;
               ref: r.shipment_reference || '',
               container: r.container_type || '',
               full_date: r.booking_date || r.effective_date || '',
+              __sourceId__: r.id,
             };
           });
         // Make sure every booking-star month is also a valid X-axis category.
-        // ComposedChart can't draw a Scatter point on a month that isn't in
-        // the data series, so we add the booking month to the trendPoints
-        // (with no line values) if it's not already there.
         bookingStars.forEach(function(b) {
-          if (!months.includes(b.month)) {
-            trendPoints.push({ month: b.month });
+          if (months.indexOf(b.month) < 0) {
+            trendPoints.push({ month: b.month, __sourceIds__: [b.__sourceId__] });
             months.push(b.month);
           }
         });
@@ -1921,9 +2365,9 @@ Date: ${today}`;
         if (trendPoints.length === 0 && bookingStars.length === 0) {
           return (<div className="bg-white rounded-xl p-4 mb-4 border border-slate-200">
             <div className="flex justify-between items-center mb-2">
-              <h3 className="text-sm font-bold">📈 Best Rate Over Time (by expiry)</h3>
+              <h3 className="text-sm font-bold">📈 Best Rate Over Time</h3>
             </div>
-            <div className="text-xs text-slate-500 py-6 text-center">No rate data with expiry dates in the selected period. Add expiry dates to your rates so they show up on the trend, or try a longer time range.</div>
+            <div className="text-xs text-slate-500 py-6 text-center">No rate data with effective dates in the selected period. Add effective dates to your rates so they show up on the trend, or try a longer time range.</div>
           </div>);
         }
 
@@ -1946,11 +2390,50 @@ Date: ${today}`;
           return (<polygon points={pts.join(' ')} fill="#fbbf24" stroke="#92400e" strokeWidth="1.2" />);
         };
 
+        // v55.82-M — Click handler: when user clicks a chart point, scroll
+        // to and flash-highlight the matching rate row in the table below.
+        // Recharts passes the clicked datapoint's payload to onClick of the
+        // chart container; we pull the first sourceId from __sourceIds__.
+        var handleChartClick = function(state) {
+          if (!state || !state.activePayload || !state.activePayload[0]) return;
+          var payload = state.activePayload[0].payload;
+          if (!payload || !payload.__sourceIds__ || payload.__sourceIds__.length === 0) return;
+          var firstId = payload.__sourceIds__[0];
+          setHighlightedRateId(firstId);
+          // Defer the scroll so React paints the highlight class first.
+          setTimeout(function() {
+            if (typeof document !== 'undefined') {
+              var el = document.getElementById('rate-row-' + firstId);
+              if (el && el.scrollIntoView) {
+                el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+              }
+            }
+          }, 50);
+        };
+
+        // v55.82-M — Dot renderer that draws hollow circles for stale
+        // (carry-forward) points and solid dots for live active points.
+        // Stale dots use a dashed stroke; active dots are filled.
+        var makeDotRenderer = function(lineKey, fillColor) {
+          return function(dotProps) {
+            var cx = dotProps.cx;
+            var cy = dotProps.cy;
+            if (cx == null || cy == null || isNaN(cx) || isNaN(cy)) return null;
+            var pl = dotProps.payload || {};
+            var staleFlag = pl['__stale__' + lineKey];
+            if (staleFlag) {
+              // Hollow circle = carry-forward (last known, expired)
+              return (<circle cx={cx} cy={cy} r={4} fill="#fff" stroke={fillColor} strokeWidth={1.5} strokeDasharray="2 2" />);
+            }
+            return (<circle cx={cx} cy={cy} r={3.5} fill={fillColor} stroke={fillColor} strokeWidth={1} />);
+          };
+        };
+
         return (<div className="bg-white rounded-xl p-4 mb-4 border border-slate-200">
           <div className="flex justify-between items-center mb-3 flex-wrap gap-2">
             <div>
               <h3 className="text-sm font-bold">📈 Best Rate Over Time ({chartCurrency})</h3>
-              <div className="text-[10px] text-slate-500">X-axis: rate expiry month · Y-axis: lowest rate seen · ⭐ = booking</div>
+              <div className="text-[10px] text-slate-500">X-axis: month (effective-date timeline) · Y-axis: lowest active rate · ⭐ = booking · hollow dot = stale carry-forward · click any point → jump to the rate below</div>
             </div>
             <div className="flex items-center gap-2">
               <span className="text-[10px] text-slate-500">Shipping line:</span>
@@ -1972,7 +2455,7 @@ Date: ${today}`;
           )}
           <div style={{width: '100%', height: 300}}>
             <ResponsiveContainer>
-              <ComposedChart data={trendPoints} margin={{top: 10, right: 20, left: 0, bottom: 10}}>
+              <ComposedChart data={trendPoints} margin={{top: 10, right: 20, left: 0, bottom: 10}} onClick={handleChartClick}>
                 <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" />
                 <XAxis dataKey="month" tick={{fontSize: 10}} />
                 <YAxis tick={{fontSize: 10}} tickFormatter={function(v){ return chartSym + v; }} />
@@ -1982,17 +2465,24 @@ Date: ${today}`;
                       var pl = p && p.payload ? p.payload : {};
                       return [chartSym + Number(v).toLocaleString() + ' ⭐ ' + (pl.vendor || '?') + (pl.ref ? ' (' + pl.ref + ')' : ''), 'Booking ' + (pl.full_date || '')];
                     }
-                    return [chartSym + Number(v).toLocaleString(), name];
+                    // v55.82-M — append "stale (last known)" indicator if this
+                    // point is a carry-forward.
+                    var pl2 = p && p.payload ? p.payload : {};
+                    var staleKey = (name === 'Market best' || name === '_best') ? '__stale___best' : ('__stale__' + name);
+                    var isStale = !!pl2[staleKey];
+                    var label = chartSym + Number(v).toLocaleString() + (isStale ? ' (last known — no newer rate)' : '');
+                    return [label, name];
                   }}
                 />
                 <RLegend wrapperStyle={{fontSize: 11}} />
                 {chartShippingLine === 'all'
                   ? linesToPlot.map(function(L, i) {
-                      return (<Line key={L} type="monotone" dataKey={L} stroke={LINE_COLORS[i % LINE_COLORS.length]} strokeWidth={2} connectNulls={true} dot={{r: 3}} />);
+                      var col = LINE_COLORS[i % LINE_COLORS.length];
+                      return (<Line key={L} type="monotone" dataKey={L} stroke={col} strokeWidth={2} connectNulls={true} dot={makeDotRenderer(L, col)} activeDot={{r: 6, stroke: col, strokeWidth: 2, fill: '#fff', cursor: 'pointer'}} />);
                     })
-                  : (<Line type="monotone" dataKey={chartShippingLine} stroke="#0ea5e9" strokeWidth={3} connectNulls={true} dot={{r: 4}} />)
+                  : (<Line type="monotone" dataKey={chartShippingLine} stroke="#0ea5e9" strokeWidth={3} connectNulls={true} dot={makeDotRenderer(chartShippingLine, '#0ea5e9')} activeDot={{r: 7, stroke: '#0ea5e9', strokeWidth: 2, fill: '#fff', cursor: 'pointer'}} />)
                 }
-                {chartShippingLine === 'all' && <Line type="monotone" dataKey="_best" name="Market best" stroke="#334155" strokeWidth={2} strokeDasharray="5 3" dot={false} />}
+                {chartShippingLine === 'all' && <Line type="monotone" dataKey="_best" name="Market best" stroke="#334155" strokeWidth={2} strokeDasharray="5 3" dot={false} activeDot={{r: 6, stroke: '#334155', strokeWidth: 2, fill: '#fff', cursor: 'pointer'}} />}
                 {bookingStars.length > 0 && (
                   <Scatter
                     name="Bookings"
@@ -2005,7 +2495,7 @@ Date: ${today}`;
             </ResponsiveContainer>
           </div>
           <div className="text-[10px] text-slate-500 mt-1">
-            {validRatesForChart.length} rate{validRatesForChart.length === 1 ? '' : 's'} plotted across {months.length} expiry month{months.length === 1 ? '' : 's'}
+            {validRatesForChart.length} rate{validRatesForChart.length === 1 ? '' : 's'} plotted across {months.length} month{months.length === 1 ? '' : 's'} on the effective-date timeline
             {bookingStars.length > 0 && <span className="ml-2 text-amber-900 font-semibold">• {bookingStars.length} booking{bookingStars.length === 1 ? '' : 's'} ⭐</span>}
             {hideExpired && <span className="ml-2 text-amber-900 font-semibold">• Expired rates hidden</span>}
           </div>
@@ -2124,7 +2614,16 @@ Date: ${today}`;
             const exp = isExpired(r.expiry_date);
             const isBest = bestRate && r.id === bestRate.id;
             const dlt = deltas[r.id];
-            return (<tr key={r.id} className={'border-b border-slate-50 ' + (isBest ? 'bg-emerald-50 ' : exp ? 'bg-slate-50 ' : '') + (r.booked ? ' bg-green-50' : '')}>
+            // v55.82-M — chart-click highlight: when user clicks a chart
+            // point, highlightedRateId is set to a rate.id. We pulse this
+            // row with a yellow ring + slight scale so it pops without
+            // breaking the table layout.
+            const isHighlighted = highlightedRateId === r.id;
+            return (<tr
+              key={r.id}
+              id={'rate-row-' + r.id}
+              className={'border-b border-slate-50 transition-all duration-300 ' + (isBest ? 'bg-emerald-50 ' : exp ? 'bg-slate-50 ' : '') + (r.booked ? ' bg-green-50' : '') + (isHighlighted ? ' ring-4 ring-yellow-400 ring-offset-1 bg-yellow-50' : '')}
+            >
               <td className="px-2 py-1.5">{r.effective_date}</td>
               <td className="px-2 py-1.5 font-semibold">{isBest && <span className="text-emerald-500 mr-1">★</span>}{r.vendor_name}</td>
               <td className="px-2 py-1.5">{r.shipping_line || '—'}</td>
@@ -2587,7 +3086,7 @@ Date: ${today}`;
 
   // ========== IMPORT ==========
   if (view === 'import') return (<div>
-    <button onClick={()=>{setView('routes');setImportData([]);setImportStep('select');setImportRawRows([]);setImportHeaders([]);setImportContainerCols([]);}} className="px-3 py-1 rounded border border-slate-200 text-xs font-semibold mb-3">← Back</button>
+    <button onClick={()=>{setView('routes');setImportData([]);setImportStep('select');setImportRawRows([]);setImportHeaders([]);setImportContainerCols([]);setImportCaptureReport([]);}} className="px-3 py-1 rounded border border-slate-200 text-xs font-semibold mb-3">← Back</button>
     <h2 className="text-xl font-extrabold mb-3">Import Shipping Rates</h2>
     {importStep==='select'&&<div className="bg-white rounded-xl p-6 text-center border-2 border-dashed border-blue-300">
       <div className="text-4xl mb-2">📁</div>
@@ -2726,47 +3225,138 @@ Date: ${today}`;
             {expiredCount > 0 && <div className="text-[10px] text-rose-600 mt-0.5">⏰ {expiredCount} row{expiredCount!==1?'s':''} are already expired — kept in the record but won't show as active rates</div>}
           </div>
           <div className="flex gap-2 items-center flex-wrap">
-            {/* v55.82-G — Import mode selector. Three radio buttons, persistent
-                until the import completes. Drives the matching/dedup logic in
-                executeImport. See state declaration above for what each mode
-                does. */}
-            <div className="flex items-center gap-2 bg-slate-50 border border-slate-200 rounded-lg px-2 py-1.5">
+            {/* v55.82-L Stage 2 — Spec-correct 2-mode selector.
+                DEFAULT = update_only (safe). full_sync requires explicit
+                opt-in AND a typed confirmation phrase. */}
+            <div className="flex items-center gap-2 bg-slate-50 border border-slate-200 rounded-lg px-2 py-1.5 flex-wrap">
               <span className="text-[10px] font-bold text-slate-700">Mode:</span>
               <label className="flex items-center gap-1 text-[11px] cursor-pointer">
-                <input type="radio" name="importMode" value="add" checked={importMode === 'add'} onChange={() => setImportMode('add')} />
-                <span className="font-semibold">Add</span>
+                <input type="radio" name="importMode" value="update_only" checked={importMode === 'update_only'} onChange={() => { setImportMode('update_only'); setFullSyncConfirm(''); }} />
+                <span className="font-semibold">Update Only</span>
+                <span className="text-[9px] font-bold text-emerald-900 bg-emerald-100 px-1.5 py-0.5 rounded">SAFE · DEFAULT</span>
               </label>
               <label className="flex items-center gap-1 text-[11px] cursor-pointer">
-                <input type="radio" name="importMode" value="update" checked={importMode === 'update'} onChange={() => setImportMode('update')} />
-                <span className="font-semibold">Update</span>
-              </label>
-              <label className="flex items-center gap-1 text-[11px] cursor-pointer">
-                <input type="radio" name="importMode" value="replace" checked={importMode === 'replace'} onChange={() => setImportMode('replace')} />
-                <span className="font-semibold">Replace</span>
+                <input type="radio" name="importMode" value="full_sync" checked={importMode === 'full_sync'} onChange={() => setImportMode('full_sync')} />
+                <span className="font-semibold">Full Sync</span>
+                <span className="text-[9px] font-bold text-rose-900 bg-rose-100 px-1.5 py-0.5 rounded">⚠️ DELETES MISSING ROWS</span>
               </label>
             </div>
-            <button onClick={()=>{setImportStep('select');setImportData([]);}} className="px-3 py-1.5 border rounded-lg text-xs">Cancel</button>
-            <button onClick={executeImport} className="px-4 py-1.5 bg-emerald-500 text-white rounded-lg text-xs font-semibold">✅ Import All ({importData.length})</button>
+            <button onClick={()=>{setImportStep('select');setImportData([]);setImportCaptureReport([]);setFullSyncConfirm('');}} className="px-3 py-1.5 border rounded-lg text-xs">Cancel</button>
+            <button
+              onClick={executeImport}
+              disabled={importMode === 'full_sync' && fullSyncConfirm !== 'FULL SYNC'}
+              className={'px-4 py-1.5 rounded-lg text-xs font-semibold text-white ' + (importMode === 'full_sync' && fullSyncConfirm !== 'FULL SYNC' ? 'bg-slate-300 cursor-not-allowed' : (importMode === 'full_sync' ? 'bg-rose-600 hover:bg-rose-700' : 'bg-emerald-600 hover:bg-emerald-700'))}
+            >
+              {importMode === 'full_sync' ? '⚠️ Run Full Sync' : '✅ Import All'} ({importData.length})
+            </button>
           </div>
         </div>
-        {/* v55.82-G — Plain-language explainer for whichever mode is selected.
-            Helps the user understand the impact before they hit Import. */}
+        {/* v55.82-L Stage 2 — Plain-language explainer per mode, with clear
+            colour coding. Update Only = green/safe. Full Sync = red/danger. */}
         <div className="mt-2 px-3 py-2 rounded-lg text-[11px] border" style={{
-          background: importMode === 'replace' ? '#fef2f2' : (importMode === 'update' ? '#eff6ff' : '#f0fdf4'),
-          borderColor: importMode === 'replace' ? '#fecaca' : (importMode === 'update' ? '#bfdbfe' : '#bbf7d0'),
-          color: importMode === 'replace' ? '#7f1d1d' : (importMode === 'update' ? '#1e3a8a' : '#14532d'),
+          background: importMode === 'full_sync' ? '#fef2f2' : '#f0fdf4',
+          borderColor: importMode === 'full_sync' ? '#fecaca' : '#bbf7d0',
+          color: importMode === 'full_sync' ? '#7f1d1d' : '#14532d',
         }}>
-          {importMode === 'add' && (
-            <span><strong>Add mode:</strong> every row in the file is inserted as a brand-new rate. Existing rates are untouched. Best for a fresh batch.</span>
+          {importMode === 'update_only' && (
+            <span>
+              <strong>Update Only mode (safe):</strong> for each row in the file, the system checks all 5 key fields (Origin, Destination, Expiration Date, Freight Forwarder, Shipping Line).
+              {' '}If all 5 match an existing rate → <strong>that rate is updated</strong> with the new values.
+              {' '}If no match → <strong>the row is added as a new rate</strong>.
+              {' '}Existing rates that are NOT in your file are <strong>left alone</strong>. One bad row never affects the others — failed rows are skipped and listed in the summary.
+            </span>
           )}
-          {importMode === 'update' && (
-            <span><strong>Update mode:</strong> for each row, look for an existing rate with the same vendor + origin + destination + container + effective date. If found, fill in any fields that were previously missing and update fields the file has new values for. If not found, insert as new. Best for filling gaps or fixing typos without losing existing data.</span>
-          )}
-          {importMode === 'replace' && (
-            <span><strong>Replace mode:</strong> for each row, look for an existing rate with the same vendor + origin + destination + container + effective date. If found, the old row is deleted and the new one takes its place (including any blank fields). If not found, insert as new. Best for a full correction where the file is the source of truth.</span>
+          {importMode === 'full_sync' && (
+            <span>
+              <strong>⚠️ Full Sync mode — DESTRUCTIVE:</strong> like Update Only, BUT <strong>any existing rate that is NOT in your import file will be DELETED</strong> (within the vendor + origin combinations covered by this file).
+              {' '}Use only when this file is intended to fully replace the matching part of your shipping rate history.
+              {' '}If any row in the file has a validation error, the delete step is skipped automatically — your data is preserved.
+            </span>
           )}
         </div>
+        {/* v55.82-L Stage 2 — Typed confirmation, only when full_sync is
+            selected. User must type the exact phrase "FULL SYNC" before
+            the Run button is enabled. */}
+        {importMode === 'full_sync' && (
+          <div className="mt-2 px-3 py-2 rounded-lg bg-rose-100 border-2 border-rose-400">
+            <div className="text-[11px] font-bold text-rose-900 mb-1">⚠️ To enable Full Sync, type <code className="px-1 bg-white rounded">FULL SYNC</code> in the box below:</div>
+            <input
+              type="text"
+              value={fullSyncConfirm}
+              onChange={e => setFullSyncConfirm(e.target.value)}
+              placeholder="Type: FULL SYNC"
+              className="w-full px-2 py-1 text-xs rounded border border-rose-400 focus:outline-none focus:ring-2 focus:ring-rose-500 font-mono"
+            />
+            <div className="text-[10px] text-rose-800 mt-1">
+              {fullSyncConfirm === 'FULL SYNC'
+                ? '✅ Confirmation matches — Run Full Sync button is now enabled.'
+                : 'Run button stays disabled until the phrase matches exactly.'}
+            </div>
+          </div>
+        )}
       </div>
+
+      {/* v55.82-N — Per-field capture diagnostic. Shows for every template
+          field whether a source column was detected and how many rows
+          ended up with a non-empty value. This makes silent field-drops
+          impossible to hide. */}
+      {importCaptureReport && importCaptureReport.length > 0 && (
+        <div className="bg-white rounded-xl p-3 mb-3 border border-slate-200">
+          <div className="flex items-center justify-between mb-2 flex-wrap gap-2">
+            <div>
+              <span className="text-xs font-bold text-slate-700">📋 Field Capture Report</span>
+              <span className="ml-2 text-[10px] text-slate-500">Shows which template fields made it into the parsed records (before save). Adjust mapping below if anything is missing.</span>
+            </div>
+            <div className="flex gap-2 text-[9px]">
+              <span className="px-1.5 py-0.5 rounded bg-emerald-100 text-emerald-900 font-bold">OK ≥90%</span>
+              <span className="px-1.5 py-0.5 rounded bg-amber-100 text-amber-900 font-bold">PARTIAL 1–89%</span>
+              <span className="px-1.5 py-0.5 rounded bg-slate-200 text-slate-700 font-bold">EMPTY (no values)</span>
+              <span className="px-1.5 py-0.5 rounded bg-rose-100 text-rose-900 font-bold">MISSING (no col)</span>
+            </div>
+          </div>
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-1.5">
+            {importCaptureReport.map(function(r) {
+              var bg, label;
+              if (r.status === 'ok') { bg = 'bg-emerald-50 border-emerald-200'; label = 'OK'; }
+              else if (r.status === 'partial') { bg = 'bg-amber-50 border-amber-200'; label = 'PARTIAL'; }
+              else if (r.status === 'empty') { bg = 'bg-slate-50 border-slate-200'; label = 'EMPTY'; }
+              else { bg = 'bg-rose-50 border-rose-200'; label = 'MISSING'; }
+              var rateStr = r.total > 0 ? (r.captured + '/' + r.total) : '0/0';
+              return (
+                <div key={r.field} className={'rounded p-2 border ' + bg + ' flex items-center justify-between'}>
+                  <div className="text-[11px]">
+                    <div className="font-bold text-slate-900">{r.label}</div>
+                    <div className="text-[10px] text-slate-600">
+                      {r.detected
+                        ? <span>from <code className="bg-white px-1 rounded">{r.sourceCol || '(container split)'}</code></span>
+                        : <span className="text-rose-700 font-semibold">no source column found</span>}
+                    </div>
+                  </div>
+                  <div className="text-right">
+                    <div className="text-[9px] font-bold text-slate-700">{label}</div>
+                    <div className="text-[10px] font-mono text-slate-800">{rateStr}</div>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+          {(function() {
+            var missing = importCaptureReport.filter(function(r) { return r.status === 'missing'; });
+            var empty   = importCaptureReport.filter(function(r) { return r.status === 'empty'; });
+            var partial = importCaptureReport.filter(function(r) { return r.status === 'partial'; });
+            if (missing.length === 0 && empty.length === 0 && partial.length === 0) {
+              return (<div className="mt-2 text-[10px] text-emerald-700 font-semibold">✅ Every template field has a source column and is bringing in data.</div>);
+            }
+            return (
+              <div className="mt-2 text-[10px] text-slate-700">
+                {missing.length > 0 && <div className="text-rose-800">⚠️ <strong>{missing.length} field{missing.length===1?'':'s'} have no detected source column</strong> — check the file's header row and use the Column Mapping below to remap.</div>}
+                {empty.length > 0 && <div className="text-slate-600 mt-0.5">ℹ️ {empty.length} field{empty.length===1?'':'s'} were detected but had no values in any row — that's fine if your template legitimately leaves them blank.</div>}
+                {partial.length > 0 && <div className="text-amber-800 mt-0.5">⚠️ {partial.length} field{partial.length===1?'':'s'} are only partially filled — some rows have data, others don't.</div>}
+              </div>
+            );
+          })()}
+        </div>
+      )}
 
       {/* COLUMN MAPPING — auto-detected, user can override */}
       <div className="bg-white rounded-xl p-3 mb-3 border border-slate-200">
@@ -2890,7 +3480,82 @@ Date: ${today}`;
         </button>
       </div>
     )}
-    {importStep==='done'&&<div className="bg-white rounded-xl p-8 text-center"><div className="text-4xl mb-3">✅</div><h3 className="text-lg font-bold text-emerald-700">Done!</h3><button onClick={()=>{setView('routes');setImportData([]);setImportStep('select');setImportRawRows([]);setImportHeaders([]);setImportContainerCols([]);}} className="mt-3 px-6 py-2 bg-blue-500 text-white rounded-lg font-semibold">Done</button></div>}
+    {importStep==='done'&&<div className="bg-white rounded-xl p-6 border border-slate-200">
+      <div className="flex items-center gap-3 mb-3">
+        <div className="text-3xl">{importCounts.failed > 0 ? '⚠️' : '✅'}</div>
+        <div>
+          <h3 className="text-lg font-bold text-slate-900">Import {importCounts.failed > 0 && (importCounts.added + importCounts.updated === 0) ? 'finished with errors' : 'complete'}</h3>
+          <div className="text-[11px] text-slate-600">{importMode === 'full_sync' ? 'Full Sync' : 'Update Only'} mode</div>
+        </div>
+      </div>
+      {/* v55.82-L Stage 2 — Detailed result summary per spec section 6. */}
+      <div className="grid grid-cols-2 md:grid-cols-5 gap-2 mb-4">
+        <div className="bg-emerald-50 border border-emerald-200 rounded-lg p-3">
+          <div className="text-[10px] font-bold text-emerald-900 uppercase">New Added</div>
+          <div className="text-2xl font-extrabold text-emerald-900">{importCounts.added}</div>
+        </div>
+        <div className="bg-blue-50 border border-blue-200 rounded-lg p-3">
+          <div className="text-[10px] font-bold text-blue-900 uppercase">Updated</div>
+          <div className="text-2xl font-extrabold text-blue-900">{importCounts.updated}</div>
+        </div>
+        <div className="bg-slate-50 border border-slate-200 rounded-lg p-3">
+          <div className="text-[10px] font-bold text-slate-900 uppercase">Unchanged</div>
+          <div className="text-2xl font-extrabold text-slate-900">{importCounts.unchanged}</div>
+        </div>
+        <div className={(importCounts.failed > 0 ? 'bg-rose-50 border-rose-300' : 'bg-slate-50 border-slate-200') + ' border rounded-lg p-3'}>
+          <div className={'text-[10px] font-bold uppercase ' + (importCounts.failed > 0 ? 'text-rose-900' : 'text-slate-700')}>Failed</div>
+          <div className={'text-2xl font-extrabold ' + (importCounts.failed > 0 ? 'text-rose-900' : 'text-slate-500')}>{importCounts.failed}</div>
+        </div>
+        {importMode === 'full_sync' && (
+          <div className={(importCounts.deleted > 0 ? 'bg-rose-50 border-rose-300' : 'bg-slate-50 border-slate-200') + ' border rounded-lg p-3'}>
+            <div className={'text-[10px] font-bold uppercase ' + (importCounts.deleted > 0 ? 'text-rose-900' : 'text-slate-700')}>Deleted</div>
+            <div className={'text-2xl font-extrabold ' + (importCounts.deleted > 0 ? 'text-rose-900' : 'text-slate-500')}>{importCounts.deleted}</div>
+          </div>
+        )}
+      </div>
+      {/* v55.82-N — Per-field capture summary on the done screen.
+          Confirms (or denies) which template fields actually wrote to
+          the database. Builds confidence the import worked end-to-end. */}
+      {importCaptureReport && importCaptureReport.length > 0 && (
+        <div className="bg-white border border-slate-200 rounded-lg p-3 mb-3">
+          <div className="text-xs font-bold text-slate-800 mb-2">📋 Field capture summary</div>
+          <div className="grid grid-cols-2 sm:grid-cols-3 gap-1 text-[11px]">
+            {importCaptureReport.map(function(r) {
+              var pillBg, pillText;
+              if (r.status === 'ok') { pillBg = 'bg-emerald-100'; pillText = 'text-emerald-900'; }
+              else if (r.status === 'partial') { pillBg = 'bg-amber-100'; pillText = 'text-amber-900'; }
+              else if (r.status === 'empty') { pillBg = 'bg-slate-100'; pillText = 'text-slate-700'; }
+              else { pillBg = 'bg-rose-100'; pillText = 'text-rose-900'; }
+              return (
+                <div key={r.field} className="flex items-center justify-between gap-1">
+                  <span className="text-slate-700 truncate" title={r.label}>{r.label}</span>
+                  <span className={'px-1.5 py-0.5 rounded font-mono text-[9px] ' + pillBg + ' ' + pillText}>
+                    {r.captured + '/' + r.total}
+                  </span>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
+      {/* v55.82-L Stage 2 — Expandable error report per spec section 5. */}
+      {importErrors.length > 0 && (
+        <div className="bg-rose-50 border border-rose-200 rounded-lg p-3 mb-3">
+          <div className="text-xs font-bold text-rose-900 mb-2">⚠️ {importErrors.length} issue{importErrors.length === 1 ? '' : 's'} during import (these rows were skipped — your other rows are saved):</div>
+          <div className="max-h-64 overflow-y-auto space-y-1">
+            {importErrors.map((e, i) => (
+              <div key={i} className="text-[11px] bg-white border border-rose-100 rounded p-2">
+                <div className="font-semibold text-rose-900">
+                  {e.row > 0 ? 'Row ' + e.row : 'Import step'}{e.field ? ' — ' + e.field : ''}
+                </div>
+                <div className="text-slate-700 mt-0.5">{e.reason}</div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+      <button onClick={()=>{setView('routes');setImportData([]);setImportStep('select');setImportRawRows([]);setImportHeaders([]);setImportContainerCols([]);setImportErrors([]);setImportCounts({added:0,updated:0,unchanged:0,failed:0,deleted:0});setImportCaptureReport([]);setFullSyncConfirm('');}} className="px-6 py-2 bg-blue-500 hover:bg-blue-600 text-white rounded-lg font-semibold text-sm">Back to Shipping Rates</button>
+    </div>}
   </div>);
 
   // ========== AI ==========
@@ -2961,6 +3626,58 @@ Date: ${today}`;
           Both
         </button>
       </div>
+      {/* v55.82-J — Destination continent dropdown (Max May 11 2026).
+          "Shipping bubbles should be sorted by destination countries by
+          continent. Drop down". Counts come from the unfiltered (by
+          continent) dataset so the dropdown always shows what's available;
+          selecting a continent narrows the grid below. */}
+      {(function () {
+        // Pre-compute per-continent counts from the filtered-but-not-continent-
+        // filtered set so the dropdown labels show how many routes exist per
+        // continent. We rebuild a quick groups map from `filtered`.
+        var byContinent = {};
+        CONTINENTS.forEach(function (c) { byContinent[c] = 0; });
+        var seenKey = {};
+        filtered.forEach(function (r) {
+          var leftLabel = groupByPort ? ((r.port_of_loading || r.origin || '?') + (r.port_of_loading && r.origin && r.port_of_loading !== r.origin ? ' (' + r.origin + ')' : '')) : (r.origin || '?');
+          var rightLabel = groupByPort ? ((r.port_of_discharge || r.destination || '?') + (r.port_of_discharge && r.destination && r.port_of_discharge !== r.destination ? ' (' + r.destination + ')' : '')) : (r.destination || '?');
+          var key = leftLabel + ' → ' + rightLabel;
+          if (seenKey[key]) return;
+          seenKey[key] = true;
+          var c = continentOf(r.destination);
+          if (byContinent[c] == null) byContinent[c] = 0;
+          byContinent[c]++;
+        });
+        var totalRoutes = Object.keys(seenKey).length;
+        return (
+          <div className="flex items-center gap-1">
+            <label className="text-[10px] font-bold text-slate-600 uppercase tracking-wide" htmlFor="continent-filter">Destination:</label>
+            <select
+              id="continent-filter"
+              value={continentFilter}
+              onChange={function (e) { setContinentFilterPersist(e.target.value); }}
+              className="px-2 py-1.5 rounded-lg border border-slate-300 bg-white text-xs font-bold text-slate-700"
+              title="Filter the route grid by destination continent"
+            >
+              <option value="all">🌍 All continents ({totalRoutes})</option>
+              {CONTINENTS.map(function (c) {
+                var n = byContinent[c] || 0;
+                if (n === 0 && c !== continentFilter) return null;
+                var emoji = c === 'Africa' ? '🌍' : c === 'Asia' ? '🌏' : c === 'Europe' ? '🇪🇺' : c === 'North America' ? '🌎' : c === 'South America' ? '🌎' : c === 'Oceania' ? '🌏' : '📍';
+                return <option key={c} value={c}>{emoji} {c} ({n})</option>;
+              })}
+            </select>
+            {continentFilter !== 'all' && (
+              <button
+                onClick={function () { setContinentFilterPersist('all'); }}
+                className="px-2 py-1 rounded border text-xs text-slate-600 hover:bg-slate-100"
+                title="Show all continents">
+                ✕
+              </button>
+            )}
+          </div>
+        );
+      })()}
       {(filterPol !== 'all' || filterPod !== 'all') && (
         <button
           onClick={() => { setFilterPol('all'); setFilterPod('all'); }}
@@ -3050,12 +3767,44 @@ Date: ${today}`;
               {filterExpiry === 'all' && (
                 <div className="flex items-center gap-2 mb-2">
                   <span className="text-xs font-extrabold text-emerald-700 uppercase tracking-wide">✅ Active Rates</span>
-                  <span className="text-[10px] text-slate-500">({activeRouteGroups.length} {activeRouteGroups.length === 1 ? 'route' : 'routes'} · sorted by destination)</span>
+                  <span className="text-[10px] text-slate-500">({activeRouteGroups.length} {activeRouteGroups.length === 1 ? 'route' : 'routes'} · {continentFilter === 'all' ? 'grouped by destination continent' : 'sorted by destination'})</span>
                 </div>
               )}
-              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
-                {activeRouteGroups.map(renderRouteCard)}
-              </div>
+              {/* v55.82-J — When no continent filter is selected, group the
+                  active bubbles into continent sections so the user can scan
+                  by region. When a specific continent IS selected, flat grid
+                  (no inner header needed, the filter dropdown already
+                  communicates the filter). */}
+              {continentFilter === 'all' ? (
+                (function () {
+                  var groupedByContinent = {};
+                  activeRouteGroups.forEach(function (rg) {
+                    var c = rg.destContinent || 'Other';
+                    if (!groupedByContinent[c]) groupedByContinent[c] = [];
+                    groupedByContinent[c].push(rg);
+                  });
+                  // Render continents in the canonical order, skipping empties.
+                  return CONTINENTS.filter(function (c) { return groupedByContinent[c] && groupedByContinent[c].length > 0; }).map(function (c) {
+                    var emoji = c === 'Africa' ? '🌍' : c === 'Asia' ? '🌏' : c === 'Europe' ? '🇪🇺' : c === 'North America' ? '🌎' : c === 'South America' ? '🌎' : c === 'Oceania' ? '🌏' : '📍';
+                    return (
+                      <div key={c} className="mb-4">
+                        <div className="flex items-center gap-2 mb-1.5 mt-3 first:mt-0">
+                          <span className="text-[11px] font-extrabold text-slate-700 uppercase tracking-wider">{emoji} {c}</span>
+                          <span className="text-[10px] text-slate-500">({groupedByContinent[c].length})</span>
+                          <div className="flex-1 border-t border-slate-200"></div>
+                        </div>
+                        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
+                          {groupedByContinent[c].map(renderRouteCard)}
+                        </div>
+                      </div>
+                    );
+                  });
+                })()
+              ) : (
+                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
+                  {activeRouteGroups.map(renderRouteCard)}
+                </div>
+              )}
             </div>
           )}
 
@@ -3067,10 +3816,38 @@ Date: ${today}`;
               </div>
               {/* v55.81 #18: dimmed at 60% opacity to make the active/historical
                   distinction immediate. Hover restores full opacity so you can
-                  still scan the details. */}
-              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3 opacity-60 hover:opacity-100 transition-opacity">
-                {historicalRouteGroups.map(renderRouteCard)}
-              </div>
+                  still scan the details.
+                  v55.82-J: historical bubbles also group by continent when no
+                  continent filter is selected, for symmetry with active. */}
+              {continentFilter === 'all' ? (
+                (function () {
+                  var histByContinent = {};
+                  historicalRouteGroups.forEach(function (rg) {
+                    var c = rg.destContinent || 'Other';
+                    if (!histByContinent[c]) histByContinent[c] = [];
+                    histByContinent[c].push(rg);
+                  });
+                  return CONTINENTS.filter(function (c) { return histByContinent[c] && histByContinent[c].length > 0; }).map(function (c) {
+                    var emoji = c === 'Africa' ? '🌍' : c === 'Asia' ? '🌏' : c === 'Europe' ? '🇪🇺' : c === 'North America' ? '🌎' : c === 'South America' ? '🌎' : c === 'Oceania' ? '🌏' : '📍';
+                    return (
+                      <div key={c} className="mb-4 opacity-60 hover:opacity-100 transition-opacity">
+                        <div className="flex items-center gap-2 mb-1.5 mt-3 first:mt-0">
+                          <span className="text-[11px] font-extrabold text-slate-700 uppercase tracking-wider">{emoji} {c}</span>
+                          <span className="text-[10px] text-slate-500">({histByContinent[c].length})</span>
+                          <div className="flex-1 border-t border-slate-200"></div>
+                        </div>
+                        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
+                          {histByContinent[c].map(renderRouteCard)}
+                        </div>
+                      </div>
+                    );
+                  });
+                })()
+              ) : (
+                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3 opacity-60 hover:opacity-100 transition-opacity">
+                  {historicalRouteGroups.map(renderRouteCard)}
+                </div>
+              )}
             </div>
           )}
         </>

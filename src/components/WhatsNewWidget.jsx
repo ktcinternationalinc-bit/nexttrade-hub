@@ -33,6 +33,131 @@ import { supabase } from '../lib/supabase';
 //     WhatsApp, the calendar, the Sales tab.
 export const BUILD_HISTORY = [
   {
+    version: 'v55.82-N',
+    date: '2026-05-12',
+    label: 'Shipping import — field-level capture diagnostic (per Max May 12 2026 — "Add validation showing which fields were imported, missing, or failed")',
+    items: [
+      // PUBLIC
+      'NEW: FIELD CAPTURE REPORT ON THE IMPORT PREVIEW. Before you click Import, you now see a panel showing all 21 template fields and exactly how many of your rows have a value for each one. Origin, Destination, POL, POD, Transport Mode, Effective Date, Expiry Date, Transit Days, Free Days, every fee, Notes — each one gets an "OK", "PARTIAL", "EMPTY", or "MISSING" badge, with a captured/total ratio so you see at a glance what made it through.',
+      'NO MORE SILENT FIELD-DROPS. If a column from your template fails to auto-detect, the report flags it as "MISSING (no col)" in red and the summary line tells you how many fields need remapping. If a column WAS detected but all values are blank, you see "EMPTY" instead — the diagnostic distinguishes "I couldn\'t find this column in your file" from "I found it but it was empty."',
+      'CAPTURE SUMMARY ALSO SHOWN ON THE DONE SCREEN. After import, the same field-by-field breakdown appears on the success screen so you have a record of what actually went into the database for this import run.',
+      'WHAT YOU LOOK FOR: Open import preview → check the Field Capture Report → if you see RED ("MISSING") or AMBER ("PARTIAL") badges for fields that should be filled, scroll down to Column Mapping and pick the right source column. The report refreshes automatically when you change a mapping.',
+      // SUPER_ADMIN
+      { superAdminOnly: true, text: 'IMPLEMENTATION: ShippingRatesTab.jsx — new computeCaptureReport(colMap, parsed, useContainerExpansion) helper above processImportFile. Returns an array of {field, label, dbField, sourceCol, detected, captured, total, status} for each of the 21 template fields. Status logic: missing (no source column detected, except container when useContainerExpansion is on which gets a synthesized detection), empty (column detected but no row has a value), partial (1-89% of rows have a value), ok (≥90%). Numeric fee fields treat 0 as a valid captured value (rate_amount, transit_days, free_days, port_fees, thc_fees, documentation_fees, customs_fees, other_fees). Text fields treat empty string as missing.' },
+      { superAdminOnly: true, text: 'WIRING: computeCaptureReport called inside both processImportFile and reparseFromMapping right after the parse loop, so the report stays in sync with whatever the user remaps in the column mapping panel. Result stored in importCaptureReport useState which is reset to [] on every Back button (top, cancel, done-screen Back).' },
+      { superAdminOnly: true, text: 'UI: two-tier rendering. (a) Full report on the preview step — 3-column grid of cards, each card shows label + source column name + status badge + captured/total ratio. Status colors: emerald/amber/slate/rose. Status legend in the header. Bottom summary line consolidates missing/empty/partial counts and tells user which path to take ("check the file\'s header row" / "use Column Mapping to remap"). (b) Compact summary on the done step — 3-col grid of label + status pill + ratio. So user can see post-import what actually wrote.' },
+      { superAdminOnly: true, text: 'NOT FIXED IN THIS BUILD: the underlying mapping/parsing code. Static analysis against the actual template headers shows all 21 columns are correctly detected by findColSmart (with preferNumeric tiebreaking handling the "rate" vs "Port of Discharge contains substring charge" edge). Two "multiple match" warnings (rate matches POD because of "discharge", otherFees matches description) are resolved by preferNumeric picking the numeric one. The capture report will reveal if there\'s a real mapping bug we missed, with row-level precision. If POL/POD show as MISSING on the next import attempt, the bug is in column detection — if they show as OK on preview but EMPTY in the DB after save, the bug is in the DB-write step.' },
+      { superAdminOnly: true, text: 'NOT YET DONE: a direct end-to-end test that imports the template file via a headless XLSX read + colMap + parse and asserts each of the 21 dbField values matches the spreadsheet row exactly. That would catch a parsing bug definitively without needing a live import attempt. Adding that test is the next step if Max\'s next import shows fields still dropping despite the capture report claiming OK.' },
+      { superAdminOnly: true, text: 'QA: 129 pass / 30 fail. Zero regressions vs M.' },
+    ],
+  },
+  {
+    version: 'v55.82-M',
+    date: '2026-05-12',
+    label: 'Shipping price-history chart rebuilt per Max May 12 2026 spec — effective-date timeline · active-window logic · carry-forward stale · click-to-jump',
+    items: [
+      // PUBLIC
+      'PRICE-HISTORY CHART NOW WORKS THE WAY YOU EXPECT. The X-axis is months along the effective-date timeline — starting from the earliest effective month in your data and running continuously to today. No more gaps where a month had no data.',
+      'EVERY MONTH SHOWS THE BEST ACTIVE RATE THAT MONTH. The chart now checks which rates were actually active in each month (effective date ≤ that month AND not yet expired) and plots the lowest. If no active rate exists for a month, it carries the last known best price forward — but draws it as a HOLLOW DASHED DOT and tags the tooltip with "last known — no newer rate" so you can see at a glance that the line is stale.',
+      'CLICK ANY POINT ON THE CHART → JUMP TO THE RATE BELOW. Tap a dot on the line and the page scrolls down to the matching rate record in the Historical Rates table, with a 3-second yellow highlight ring around the row so you don\'t lose sight of it. Now the chart and the rate list are connected end-to-end.',
+      'CHART HEADER SUBTITLE EXPLAINS THE RULES. "X-axis: month (effective-date timeline) · Y-axis: lowest active rate · ⭐ = booking · hollow dot = stale carry-forward · click any point → jump to the rate below." So you never have to wonder what you\'re looking at.',
+      // SUPER_ADMIN ONLY
+      { superAdminOnly: true, text: 'CHART REBUILD: ShippingRatesTab.jsx — validRatesForChart filter switched from anchoring on expiry_date (v55.82-C) to anchoring on effective_date (eff.length >= 10 && amt > 0). The month timeline is built by reducing validRatesForChart to find the earliest effective month, then rolling forward via nextMonth() helper (handles December→January) to the later of today or rateHistoryDt or any rate\'s expiry_date, capped at 600-month safety bound.' },
+      { superAdminOnly: true, text: 'ACTIVE-WINDOW LOGIC: for each month M, activeInMonth = rates where (effective_date <= lastDayOf(M)) AND (expiry_date is null OR expiry_date >= firstDayOf(M)). lastDayOf uses UTC Date with day=0 of next month to correctly handle 28/29/30/31-day months. monthStart and monthEnd computed per iteration so the overlap test is clean.' },
+      { superAdminOnly: true, text: 'PER-LINE WINNER: activeForLine.reduce((acc, r) => Number(r.rate_amount) < Number(acc.rate_amount) ? r : acc, null). Returns the actual row object (not just the price) so we can stash winner.id in point[\'__source__\' + L] for click resolution. Same pattern for the market-floor _best line via activeInMonth.reduce.' },
+      { superAdminOnly: true, text: 'CARRY-FORWARD: lastBestForLine map { L → {price, rateId, asOfMonth} } updated on every active-month winner. If a month has no active rates for line L, the else-if branch copies lastBestForLine[L].price into point[L], flags point[\'__stale__\' + L] = true, and reuses lastBestForLine[L].rateId for the click sourceId. lastBest plays the same role for the _best market floor line. Dots rendered via makeDotRenderer(L, color) which inspects payload[\'__stale__\' + L] and draws either a hollow dashed circle (stale) or a solid filled circle (active).' },
+      { superAdminOnly: true, text: 'CLICK HANDLER: highlightedRateId useState(null) at component scope, with a useEffect that auto-clears it after 3000ms so the row-flash fades. handleChartClick reads state.activePayload[0].payload.__sourceIds__[0] when Recharts fires its onClick, then setHighlightedRateId(firstId) and setTimeout 50ms → document.getElementById(\'rate-row-\' + firstId).scrollIntoView({behavior:\'smooth\', block:\'center\'}). Rate row receives id={\'rate-row-\' + r.id} and a className that conditionally appends ring-4 ring-yellow-400 ring-offset-1 bg-yellow-50 when isHighlighted, with transition-all duration-300 for the fade. activeDot props on Lines also get cursor:\'pointer\' so users see the click affordance on hover.' },
+      { superAdminOnly: true, text: 'TOOLTIP: formatter detects stale points by checking payload[\'__stale__\' + name] (or __stale___best for the market floor line) and appends " (last known — no newer rate)" to the price string. So a user reading the tooltip immediately sees whether the number is a real active rate or a carried-forward stale value.' },
+      { superAdminOnly: true, text: 'TEST: __tests__/test-v55-82-m-chart-spec.js — 29 spec-compliance assertions across all 7 spec points plus regression guards (no expiry-anchored validRates filter, no sparse-month derivation via monthsSet). Brittle prior tests patched: test-v55-82-c (8 assertions rewritten for M-spec — eff vs exp, reduce vs Math.min.apply, indexOf vs includes), test-v55-80-b10-coverage (the new (new Date()).toISOString().slice(0,10) idiom for "today" doesn\'t trip the stale-UTC detector — alternative idiom avoids needing to alter the underlying utility).' },
+      { superAdminOnly: true, text: 'QA: 128 pass / 30 fail. Zero regressions vs L2.' },
+    ],
+  },
+  {
+    version: 'v55.82-L2',
+    date: '2026-05-11',
+    label: 'Shipping import — full spec rebuild (Update Only safe default · Full Sync with typed confirm · per-row error isolation · NEVER wipes on bad data)',
+    items: [
+      // PUBLIC
+      'SHIPPING IMPORT REBUILT FROM SCRATCH PER FULL SPEC. The bug that wiped your shipping rates on the previous build is now physically impossible. The new import is line-by-line: one bad row never affects another row, and the system never wipes any data unless you explicitly choose Full Sync and type a confirmation phrase first.',
+      'NEW DEFAULT IS "UPDATE ONLY" — THE SAFE MODE. For each row in your file, the system checks 5 fields (Origin, Destination, Expiration Date, Freight Forwarder, Shipping Line). If all 5 match an existing rate → that rate is updated. If no match → the row is added as a new rate. Anything already in the system that isn\'t in your file is left completely alone. This is what you want for any normal upload.',
+      'NEW "FULL SYNC" MODE for when you want the file to replace everything. Adds new, updates changed, leaves unchanged alone, AND deletes rows that aren\'t in your file. Destructive — you have to (1) pick the radio button AND (2) type "FULL SYNC" in the confirmation box before the Run button is enabled. If any row in your file has a validation error, the delete step is skipped automatically.',
+      'ONE BAD ROW NEVER FAILS THE BATCH. The new validator checks every row before any database write: required fields present, dates parsable, year in range. Rows that fail validation are skipped and listed in an error report — every other row still gets saved. No more "0 saved, 210 failed" wipes.',
+      'NEW DETAILED RESULT SCREEN. After import you see 5 count cards (New Added / Updated / Unchanged / Failed / Deleted) plus a full error list with row number, field name, and reason for each failure. So if a row was skipped, you know exactly which one and why.',
+      'A VALIDATION BUG THAT WIPED HISTORICAL DATA IS FIXED. The previous build accepted dates like "0-01-01" through to Postgres, which then rejected the whole batch — but only AFTER the delete step had run. New code rejects bad dates per-row in the pre-flight check, and the delete step now only runs if ALL rows pass validation.',
+      // SUPER_ADMIN ONLY
+      { superAdminOnly: true, text: 'SPEC COMPLIANCE: All 11 sections of Max May 11 2026 written spec implemented. Section 1 (two modes, update_only default) → useState(\'update_only\'). Section 2 (5-key match) → keyFor builder with origin+destination+expiry_date+vendor_name+shipping_line, all lowercase/trimmed. Section 3 (CASE A/B/C/D) → rowChanged helper for CASE B; UPDATE/INSERT branches for A/C; per-row try/catch for D. Section 4 (safety) → validateDate pre-flight rejects "0-01-01", year < 1900, year > 2100, invalid month/day. Section 5 (error reporting) → errors[] array of {row, field, reason} objects. Section 6 (summary counts) → importCounts state {added, updated, unchanged, failed, deleted}. Section 7 (transactional safety) → per-row isolated try/catch with timeout. Section 8 (historical protection) → full_sync delete scoped to vendor+origin combos in file only. Section 9 (UI) → SAFE · DEFAULT badge on Update Only, ⚠️ DELETES MISSING ROWS on Full Sync, typed confirmation, disabled button. Section 10 (technical flow) → 5 numbered steps. Section 11 (no unconditional wipes) → guard test verifies all .delete() calls live inside the full_sync STEP 4 block.' },
+      { superAdminOnly: true, text: 'ROOT CAUSE of Max\'s wipe (photo evidence "210 failed / 0 saved / Insert step failed: date/time field value out of range: \\"0-01-01\\""): old code in v55.82-J Update Historical mode did bulk-delete-then-bulk-insert. Bulk-delete of 210 matched rows committed. Bulk-insert blew up on one row with date "0-01-01" (Postgres rolled back the whole batch). Result: 210 rows deleted, 0 inserted, data gone. v55.82-L2 inverts this: pre-flight validate → per-row insert (no bulk rollback) → full_sync delete LAST, only if zero errors. So the same failure mode now produces 209 saved + 1 skipped, never any delete.' },
+      { superAdminOnly: true, text: 'executeImport rewritten (~17.8K chars, completely new). validateDate helper rejects null/empty (OK, stores as null), and otherwise requires YYYY-MM-DD with year 1900-2100, month 1-12, day 1-31. cleanForDB strips undefined and empty-string dates. rowChanged compares only non-key fields, treats null/undefined/"" as equivalent, numeric compare for fee fields. Withhold timeout wrapper resolves to {error} on timeout (never throws). Per-row write loop iterates validRows[], each row in its own try/catch + 10sec timeout. Missing-column retry runs per-row, not per-batch. Progress updates throttled every 10 rows to avoid 200+ rerenders.' },
+      { superAdminOnly: true, text: 'Full Sync deletion logic: scoped to (vendor+origin) combos that appear in the import file. So if your file covers MSC routes from China, Full Sync will only delete MSC-China rows not in the file — it won\'t touch ZIM-Turkey or any other vendor/origin combos. Protects historical data for vendors not covered by the current upload. The delete step runs LAST (step 4 of 5), AFTER all inserts/updates have succeeded, AND ONLY if counts.failed === 0 — any validation error or insert error aborts the delete step automatically.' },
+      { superAdminOnly: true, text: 'UI changes (ShippingRatesTab.jsx): radio replaced (3 radios → 2 radios). Update Only has SAFE · DEFAULT badge (emerald). Full Sync has ⚠️ DELETES MISSING ROWS badge (rose) plus typed confirmation input that only appears when full_sync is selected. Run button disabled with disabled={importMode === \'full_sync\' && fullSyncConfirm !== \'FULL SYNC\'}. Done screen redesigned: 5-card grid (added/updated/unchanged/failed/deleted) + scrollable error list with row/field/reason per entry.' },
+      { superAdminOnly: true, text: 'TEST: __tests__/test-v55-82-l-stage2-import-spec.js — 38 spec-compliance assertions covering all 11 sections, plus 4 regression guards (no useState(\'add\') default, no \'replace\' mode, no \'update\' mode, no bulk-insert pattern, no unconditional .delete(). Brittle prior tests patched: test-v55-33 (asserted old bulk-insert design), test-v55-81 (asserted old bulk behaviors), test-v55-82-f (header pin to F → letter+digit suffix support), test-v55-82-j (mode labels for the 3-mode J design, replaced with L2 2-mode assertions).' },
+      { superAdminOnly: true, text: 'QA: 127 pass / 30 fail full sweep. Zero regressions vs v55.82-A baseline. Build syntax check clean. Header badges + Treasury modal stamps all bumped to v55.82-L2.' },
+    ],
+  },
+  {
+    version: 'v55.82-L',
+    date: '2026-05-11',
+    label: 'Personal Coach blank-screen fix (10th report — full root-cause and rebuild)',
+    items: [
+      // PUBLIC
+      'PERSONAL COACH NOW ALWAYS SHOWS UP AND ALWAYS GIVES YOU FEEDBACK. The Personal Coach card appears on your performance panel for everyone, every time — even if you had a quiet period with no recorded activity. It auto-loads your coaching message the moment the panel opens; no clicking required. If the coach can\'t reach the AI service (for example because the AI service key is not set up in Vercel), you\'ll see a clear "Coach can\'t respond right now" warning card with a Try Again button — not a blank space.',
+      'COACH NOW TALKS TO YOU EVEN IF YOU HAD NO ACTIVITY. Used to skip the coaching message entirely when your activity numbers were all zero — that left a blank spot on the page. Now: zero-activity periods get a warm welcome message and one easy goal for the next period (like "write a quick daily-log entry at the end of each day"). No judgment, no shame.',
+      'CLICKING "GET COACH FEEDBACK" ALWAYS DOES SOMETHING NOW. Used to silently no-op if your data was still loading. Now: the button is always clickable, and if data hasn\'t arrived yet the coach gracefully says so instead of nothing happening.',
+      // SUPER_ADMIN ONLY
+      { superAdminOnly: true, text: 'ROOT CAUSE #1 (the FATAL bug — explains the blank spot Max reported 10 times): MyPerformance.jsx wrapped the Personal Coach card inside the `{!loading && current && hasAnyActivity && (...)}` branch. If hasAnyActivity was false (zero activity OR — worse — a silent metrics fetch failure that returned all-zero values), the entire card was skipped. The "👋 No activity in [period]" cyan banner showed at line 391-401 INSTEAD of the coach card.' },
+      { superAdminOnly: true, text: 'ROOT CAUSE #2 (the "click does nothing" bug): The auto-fetch useEffect had `if (!hasAnyActivity) return;` AND `if (!current) return;` so it silently bailed for low-activity / slow-loading users. The button itself had `disabled={coachLoading || !current}` so even if a user found the card, they couldn\'t manually click it before metrics loaded.' },
+      { superAdminOnly: true, text: 'ROOT CAUSE #3 (the "no feedback when clicked" bug): When ANTHROPIC_API_KEY was missing from Vercel env, the API returned developer jargon. Client showed this in a 12px text-rose-700 chip on bg-rose-50. On phone DPR + small viewport, this was effectively invisible.' },
+      { superAdminOnly: true, text: 'FIX #1 (component): Personal Coach card MOVED OUT of the `hasAnyActivity && (...)` branch. Now gated only on `!loading`. Always renders for any user once initial load completes.' },
+      { superAdminOnly: true, text: 'FIX #2 (auto-fetch): Effect deps simplified to [expanded, myId, period, current]. Bailing conditions reduced to just expanded + myId + dedup key. Fires for any user as soon as the panel is visible. autoFetchedRef still scoped to (myId + period) so changing period re-triggers.' },
+      { superAdminOnly: true, text: 'FIX #3 (requestCoach): Removed `if (!current) return;` — instead sends `metrics: current || {}` so the API receives a valid payload even when client metrics never loaded.' },
+      { superAdminOnly: true, text: 'FIX #4 (button): `disabled={coachLoading}` only. User can always click — even before metrics load.' },
+      { superAdminOnly: true, text: 'FIX #5 (error UI): tiny text-rose-700 chip replaced with a full warning card: bg-rose-50 border-2 border-rose-300 + bold heading "⚠️ Coach can\'t respond right now" + the actual error text + a "Try again" button inside.' },
+      { superAdminOnly: true, text: 'FIX #6 (API route low-activity): isLowActivity sum computed. When true, system prompt branches to dedicated welcome+goal-setting prompt that explicitly tells Claude "do NOT pretend they did things they did not do, and do NOT shame them for the empty period." Three-paragraph structure: warm acknowledgment / what shows up here / one easy starter goal.' },
+      { superAdminOnly: true, text: 'FIX #7 (API route errors): Missing key error rewritten to plain English. 401 → "AI service key is invalid". 429 → "rate-limited right now". 5xx → "AI service is having trouble". Network/fetch errors caught separately with "Could not reach the AI service". Empty Claude responses surfaced as explicit error instead of silent empty message.' },
+      { superAdminOnly: true, text: 'FIX #8 (diagnostics): Added GET handler at /api/hr-report/coach that returns {status, has_anthropic_key, hint}. Visiting the route in a browser now confirms (a) the route is deployed AND (b) whether ANTHROPIC_API_KEY is present in env. Saves a debug round-trip when troubleshooting on production.' },
+      { superAdminOnly: true, text: 'TEST: __tests__/test-v55-82-l-personal-coach-blank.js — 23 assertions across all 3 root causes plus regression guards. Brittle prior tests patched: test-v55-81-empty-white-blocks asserted coach INSIDE hasAnyActivity (now verifies the v55.82-L OUTSIDE structure); test-v55-82-i-visibility-fixes asserted exact dep array shape (now accepts either legacy or v55.82-L shape).' },
+      { superAdminOnly: true, text: 'QA: 126 pass / 30 fail full sweep. Zero regressions vs v55.82-A baseline.' },
+    ],
+  },
+  {
+    version: 'v55.82-K',
+    date: '2026-05-11',
+    label: 'Shipping bubbles sorted by destination continent + dropdown filter',
+    items: [
+      // PUBLIC
+      'SHIPPING BUBBLES ARE NOW GROUPED BY DESTINATION CONTINENT. Open the Shipping tab and instead of one long alphabetical list, your routes are now organized under continent headers — Africa, Asia, Europe, North America, South America, Oceania, and Other. So you can see at a glance "I have 6 active routes to Asia" without scrolling.',
+      'NEW DROPDOWN AT THE TOP OF SHIPPING lets you filter by continent. Pick "Asia" to see only routes going to Asia. The dropdown shows the route count for each continent so you know what is in there before you tap. An X button clears the filter back to all continents. Your last choice is remembered across reloads.',
+      'WHEN A SPECIFIC CONTINENT IS SELECTED, the headers go away and the routes show as one flat grid for that continent. When no continent is selected, you get the grouped view with all continents visible at once.',
+      // SUPER_ADMIN ONLY
+      { superAdminOnly: true, text: 'STATE: NEW continentFilter useState with localStorage key ktc_shipping_continent_filter, default "all". Persistent setter setContinentFilterPersist follows the same pattern as filterExpiryPersist + routesViewModePersist.' },
+      { superAdminOnly: true, text: 'CONSTANTS: NEW CONTINENTS const (Africa / Asia / Europe / North America / South America / Oceania / Other). NEW COUNTRY_TO_CONTINENT map covering ~150 country names + ISO-2 codes + a handful of Arabic names (مصر, الصين). NEW continentOf(country) helper — case-insensitive lookup, defaults to "Other" so no route ever disappears.' },
+      { superAdminOnly: true, text: 'ROUTE GROUPS: routeGroups useMemo now (1) annotates every group with destContinent via continentOf(data.destination), (2) applies a .filter step honoring continentFilter, (3) deps array updated to include continentFilter so the memo invalidates on filter change.' },
+      { superAdminOnly: true, text: 'UI #1 (dropdown): rendered next to the Active/Historical/Both filter pills. Computes per-continent counts on the fly from `filtered` (so counts reflect the expiry filter). Shows "🌍 All continents (N)" first, then each continent with a region emoji and its count, then a clear-X button when filter !== "all".' },
+      { superAdminOnly: true, text: 'UI #2 (continent section headers): when continentFilter === "all", the Active grid renders as a sequence of continent groups (CONTINENTS in canonical order, empties skipped). Each section has a header strip with the emoji, continent name, route count, and a thin underline. When a specific continent is selected, headers are skipped and the grid is flat (filter dropdown already communicates the filter). Historical grid does the same, dimmed.' },
+      { superAdminOnly: true, text: 'TEST: __tests__/test-v55-82-j-continent-filter.js — 23 assertions across constants, state persistence, group annotation, dropdown UI, section-header rendering, and 3 regression guards on activeRouteGroups / historicalRouteGroups / counts.' },
+      { superAdminOnly: true, text: 'QA: 125 pass / 30 fail full sweep, zero regressions vs v55.82-A baseline.' },
+    ],
+  },
+  {
+    version: 'v55.82-J',
+    date: '2026-05-11',
+    label: 'Today widget shows tickets due · What\'s New banner moved next to AI · Import mode rename + true fill-gaps-only',
+    items: [
+      // PUBLIC
+      'TODAY WIDGET ON THE DASHBOARD NOW SHOWS TICKETS DUE TODAY. Used to be just calendar events. Now it folds in any open ticket assigned to you (or that you created) with a due date of today. Tickets show with a 🎫 prefix and an "Open →" button that jumps straight to the ticket. Critical and high-priority tickets get their badges right in the row so you can prioritize at a glance. (Reminders widget already did this from a prior build — that still works.)',
+      'WHAT\'S NEW BANNER NOW SITS RIGHT BELOW THE AI WORKFORCE — full width, hard to miss. Used to be a small pill tucked into the right corner that everyone missed. Now it\'s a prominent banner with the build version, date, and a "Tap to read →" affordance directly under the Nadia/Sara/Jenna tiles so build updates can\'t go unnoticed.',
+      'SHIPPING IMPORT MODES RENAMED FOR CLARITY: "Add New" / "Update Historical (FILL GAPS ONLY)" / "Replace Historical (TOTAL OVERWRITE)". Each mode now has a bright sub-badge next to the radio label so you can\'t mistake one for the other. The explainer panel underneath spells out the impact in plain words: Add only inserts new rows; Update Historical fills in fields that were previously empty (never overwrites existing values); Replace Historical deletes the matching row entirely and writes the new file row in its place (including blanks).',
+      'UPDATE HISTORICAL NOW REALLY MEANS "FILL GAPS ONLY". The previous Update logic patched ANY non-blank import field over the existing value — so a typo in the new file could overwrite a correct existing value. Now: a field is only filled if the existing row had it empty (or zero, for fee fields). Existing values are NEVER touched. If you want to overwrite, use Replace Historical.',
+      // SUPER_ADMIN ONLY
+      { superAdminOnly: true, text: 'TODAY WIDGET #1: PersonalDashboard.jsx — Today widget header `📅 Today ({count})` now sums (todayEvents.length + todayTktCount). Body builds streamToday = [...todayEvents, ...todayTickets] where todayTickets is filtered from myTickets + ticketsICreated by due_date === todayStr AND status not in [Closed, Resolved, Fixed]. Dedup applied via findIndex on .id so a ticket appearing in both lists renders once. Ticket rows: 🎫 prefix, Open → button → navigate("tickets"), Critical/High priority badges inline. Empty state mentions both events and tickets.' },
+      { superAdminOnly: true, text: 'WHATS-NEW #2: WhatsNewWidget.jsx — gained `prominent` prop. When true: renders a full-width w-full button with larger ✨ icon, headline + label/date subline, "Tap to read →" affordance and rounded-xl banner styling. When false: original right-aligned pill preserved (backward compat for any other mount points). page.jsx Dashboard mount changed from `flex justify-end + <WhatsNewWidget />` to `<WhatsNewWidget ... prominent={true} />` so the banner takes full available width inside the order-2 flex column, immediately under the AI Workforce hero (order-1 = PersonalDashboard).' },
+      { superAdminOnly: true, text: 'IMPORT MODES #3: ShippingRatesTab.jsx — radio button labels: "Add" → "Add New", "Update" → "Update Historical" with text-blue-700 bg-blue-100 "FILL GAPS ONLY" sub-badge, "Replace" → "Replace Historical" with text-rose-700 bg-rose-100 "TOTAL OVERWRITE" sub-badge. Explainer panel copy rewritten for each mode — Update emphasizes "only fill in fields that were previously empty or zero — existing values are NEVER overwritten"; Replace emphasizes "deleted entirely" + "they will erase what was there".' },
+      { superAdminOnly: true, text: 'IMPORT LOGIC #4: ShippingRatesTab.jsx executeImport Update branch rewritten. Old v55.82-G behavior: ANY non-blank import field patched over existing (merge semantics). New v55.82-J: check existingIsEmpty FIRST for each field, only patch if existing row\'s value is null/undefined/empty-string (or for numeric feeFields: Number(ev) === 0 or NaN). feeFields set expanded to include rate_amount + transit_days + free_days so all numeric measurements are treated as "empty" when zero. If the existing row has a real value, the import file\'s value is ignored regardless of what it contains. Replace path unchanged — still delete-then-insert via .delete().in("id", matchedIds) then insert.' },
+      { superAdminOnly: true, text: 'TEST: __tests__/test-v55-82-j-three-asks.js — 25 assertions across all three asks plus regression guards (no flex justify-end wrapping WhatsNew, no old merge-semantics regex in Update path, three modes still present). Updated test-v55-67-performance-restore-and-whatsnew-filter.js to accept the new `prominent` prop in WhatsNewWidget signature + dashboard mount.' },
+      { superAdminOnly: true, text: 'QA: 124 pass / 30 fail full sweep. Zero regressions vs v55.82-A baseline.' },
+    ],
+  },
+  {
     version: 'v55.82-I',
     date: '2026-05-11',
     label: 'Dashboard SelfStat cards (Customer Touches, Show-Up Rate, Daily Log Streak) — invisible numbers fixed',
@@ -1049,7 +1174,7 @@ export const BUILD_HISTORY = [
 // but only the most recent N are shown in the UI.
 var DISPLAY_LIMIT = 100;
 
-export default function WhatsNewWidget({ isAdmin, isSuperAdmin } = {}) {
+export default function WhatsNewWidget({ isAdmin, isSuperAdmin, prominent } = {}) {
   // v55.67 — non-admin users should not see implementation details.
   // v55.73 — Three tiers per Max May 8 2026:
   //   PUBLIC      — everyone sees this (default)
@@ -1231,7 +1356,44 @@ export default function WhatsNewWidget({ isAdmin, isSuperAdmin } = {}) {
 
   return (
     <>
-      {/* Inline pill — visible on the dashboard. */}
+      {/* v55.82-J — Prominent mode renders a full-width banner instead of a
+          small pill. Used on the Dashboard immediately after the AI Workforce
+          hero (per Max May 11 2026: "the bill what's in the bill should be
+          right after the AI"). Pill mode is preserved for anywhere else the
+          widget shows up. */}
+      {prominent ? (
+        <button
+          onClick={openModal}
+          title={hasUnseen ? (unseenCount + ' update' + (unseenCount === 1 ? '' : 's') + ' since you were last here') : "What's new in this build"}
+          className={'w-full flex items-center justify-between gap-3 px-4 py-3 rounded-xl text-white font-bold shadow-md hover:shadow-lg transition text-left ' + (hasUnseen ? 'bg-gradient-to-r from-rose-500 to-pink-500 hover:from-rose-600 hover:to-pink-600 ring-2 ring-rose-200' : 'bg-gradient-to-r from-indigo-500 to-violet-500 hover:from-indigo-600 hover:to-violet-600')}
+        >
+          <div className="flex items-center gap-3 min-w-0">
+            <span className="text-2xl">✨</span>
+            <div className="min-w-0">
+              <div className="text-sm font-extrabold truncate">
+                {hasUnseen
+                  ? (unseenCount + ' new update' + (unseenCount === 1 ? '' : 's') + ' since you were last here')
+                  : ('What\'s new in ' + latest.version)}
+              </div>
+              <div className="text-[11px] font-normal opacity-90 truncate">
+                {latest.label || ''}
+                {latest.label ? ' · ' : ''}
+                {fmtDate(latest.date)}
+                {(function () { var rel = relativeTime(latest.date); return rel ? ' · ' + rel : ''; })()}
+              </div>
+            </div>
+          </div>
+          <div className="flex items-center gap-2 flex-shrink-0">
+            {hasUnseen && (
+              <span className="inline-flex items-center justify-center min-w-[28px] h-7 px-2 rounded-full bg-white text-rose-600 text-xs font-extrabold">
+                +{unseenCount}
+              </span>
+            )}
+            <span className="text-xs opacity-90">Tap to read →</span>
+          </div>
+        </button>
+      ) : (
+      /* Inline pill — visible on the dashboard. */
       <button
         onClick={openModal}
         title={hasUnseen ? (unseenCount + ' update' + (unseenCount === 1 ? '' : 's') + ' since you were last here') : "What's new in this build"}
@@ -1250,6 +1412,7 @@ export default function WhatsNewWidget({ isAdmin, isSuperAdmin } = {}) {
           </span>
         )}
       </button>
+      )}
 
       {/* Modal */}
       {open && (

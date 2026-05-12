@@ -4220,7 +4220,7 @@ export default function App() {
               {/* Brand mark — bracket prefix is a terminal callout convention. */}
               <span className="text-emerald-400 font-mono text-xs font-bold tracking-tight" style={{ fontFamily: '"JetBrains Mono", monospace' }}>[KTC]</span>
               <h1 className="text-sm font-bold text-white tracking-tight whitespace-nowrap">NEXTTRADE HUB</h1>
-              <span className="text-[10px] text-zinc-500 font-mono hidden md:inline" style={{ fontFamily: '"JetBrains Mono", monospace' }}>v55.82-I</span>
+              <span className="text-[10px] text-zinc-500 font-mono hidden md:inline" style={{ fontFamily: '"JetBrains Mono", monospace' }}>v55.82-N</span>
               {/* Live clock — terminals always show one. Updates via the
                   existing tick state; if not present, falls back to no clock. */}
               <span className="hidden lg:inline text-[10px] text-zinc-500 font-mono ml-2 pl-2 border-l border-zinc-800" style={{ fontFamily: '"JetBrains Mono", monospace' }}>
@@ -7236,10 +7236,14 @@ export default function App() {
                 reasons, but flex order makes them visually appear AFTER. */}
             <div className="flex flex-col" style={{ order: 2 }}>
 
-            {/* v55.45 — "What's New" pill. Click to see the changelog of
-                recent builds with an expandable section per release. */}
-            <div className="mb-3 flex justify-end">
-              <WhatsNewWidget isAdmin={isAdmin} isSuperAdmin={isSuperAdmin} />
+            {/* v55.82-J — "What's New" widget now positioned as a prominent
+                banner immediately after the AI Workforce hero, per Max May 11
+                2026 ("the bill what's in the bill should be right after the
+                AI"). Was previously a small right-aligned pill that was easy
+                to miss; now a full-width banner that's the first thing
+                you see after Nadia/Sara/Jenna. */}
+            <div className="mb-3">
+              <WhatsNewWidget isAdmin={isAdmin} isSuperAdmin={isSuperAdmin} prominent={true} />
             </div>
 
             {/* v55.60 — Nadia highlights when a new build has deployed.
@@ -13605,7 +13609,7 @@ export default function App() {
                       latest fix is actually deployed. If he doesn't see this
                       tag in the modal, his browser is running stale JS. */}
                   <div className="mt-1.5 inline-block px-2 py-0.5 rounded bg-amber-900/60 text-amber-100 text-[10px] font-mono font-bold tracking-wide">
-                    BUILD v55.82-I
+                    BUILD v55.82-N
                   </div>
                 </div>
                 <button onClick={() => closePendingTreasuryModal()}
@@ -14240,7 +14244,7 @@ export default function App() {
                     معاملة قد تكون مكررة
                   </div>
                   <div className="mt-1.5 inline-block px-2 py-0.5 rounded bg-amber-900/60 text-amber-100 text-[10px] font-mono font-bold tracking-wide">
-                    BUILD v55.82-I
+                    BUILD v55.82-N
                   </div>
                 </div>
                 <button

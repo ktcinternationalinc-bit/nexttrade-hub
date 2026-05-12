@@ -45,23 +45,25 @@ ok('1.2 Default timeout is 30 seconds for bulk operations',
 ok('1.3 Per-row timeout is shorter (5s) so a bad row fails fast',
    /withTimeout\([\s\S]+?,\s*5000,/.test(src));
 
-// 1.4 — Bulk insert FIRST, not per-row
-ok('1.4 Tries bulk insert first (not per-row)',
-   /Step 1 — try ALL rows in one go/.test(src) || /bulkRes = await withTimeout\(\s*supabase\.from\('shipping_rates'\)\.insert\(rowsToInsert\)/.test(src));
+// 1.4 — v55.82-L2 changed strategy: PER-ROW is now the design, NOT bulk.
+// Bulk-insert was the cause of the data wipe Max reported. The whole batch
+// rolled back when one row had a bad date. Per-row inserts isolate failures.
+ok('1.4 v55.82-L2: per-row write loop is now the design (replaces bulk-insert)',
+   /for \(var ri = 0; ri < validRows\.length; ri\+\+\)/.test(src));
 
-// 1.5 — On column-missing error, strip the column and retry bulk ONCE
-ok('1.5 If bulk fails with missing column, strip it and retry bulk',
-   /missingCol/.test(src) && /retry = await withTimeout/.test(src));
+// 1.5 — Per-row insert still has a single missing-column retry per row.
+ok('1.5 Per-row insert has a missing-column retry path',
+   /missing-column stripped/.test(src) || /stripCol = mm\[1\]/.test(src));
 
-// 1.6 — Per-row fallback is for TRUE data errors, not schema errors
-ok('1.6 runPerRow helper extracted (only used for true data errors)',
+// 1.6 — runPerRow legacy helper is left in place for backward-compat tests
+ok('1.6 runPerRow helper still exists for legacy callers',
    /const runPerRow = async \(rows, withTimeout\) =>/.test(src));
 
-// 1.7 — Per-row no longer calls dbInsert (which writes audit_log per row)
+// 1.7 — executeImport function found
 var executeImportMatch = src.match(/const executeImport = async \(\) => \{[\s\S]+?\n  \};/);
 ok('1.7 executeImport function found', !!executeImportMatch);
 if (executeImportMatch) {
-  ok('1.8 executeImport no longer calls dbInsert in the per-row path (which would write audit_log per row)',
+  ok('1.8 executeImport no longer calls dbInsert in the per-row path',
      !/await dbInsert\('shipping_rates'/.test(executeImportMatch[0]),
      'per-row dbInsert was the cause of the hang');
 }
@@ -88,25 +90,26 @@ ok('1.13 Cancel button on importing UI',
 ok('1.14 30-sec timeout reassurance shown to user',
    /30-second timeout/.test(src));
 
-// 1.15 — Cleans up empty-string dates before insert (prevents Postgres rejection)
-ok('1.15 Strips empty-string dates before insert (Postgres rejects "" on DATE)',
-   /effective_date' \|\| k === 'expiry_date' \|\| k === 'booking_date'\) && v === ''\) continue/.test(src));
+// 1.15 — v55.82-L2 handles empty dates via cleanForDB helper instead of inline
+ok('1.15 v55.82-L2: dates handled by cleanForDB / validateDate helpers',
+   /cleanForDB = function/.test(src) && /validateDate = function/.test(src));
 
 // 1.16 — Progress updates throttled in per-row path so UI doesn't redraw 210 times
 ok('1.16 Progress updates throttled in per-row path (every 10 rows)',
    /i % 10 === 0/.test(src));
 
-// 1.17 — If EVERY row failed with the same error, surface the bulk error
-// instead of pretending it's row-specific
-ok('1.17 If all rows fail same way, surface the original bulk error (not "row failed")',
-   /failed === rowsToInsert\.length/.test(src));
+// 1.17 — v55.82-L2 reports errors per-row in the errors array (not as a
+// bulk "all rows failed" message). Each row has its own reason.
+ok('1.17 v55.82-L2: each failing row gets its own error entry in errors array',
+   /errors\.push\(\{\s*row:/.test(src) && /errors\.slice\(0, 5\)/.test(src));
 
-// 1.18 — Better final messages: distinguish "0 saved + N failed" from partial
-// v55.82-G — the literal "Import failed" is now prefixed with the mode label
-// ("Add import failed", "Update import failed", "Replace import failed"), so
-// accept any "* failed — nothing was saved" pattern.
-ok('1.18 Distinct alert when ok===0 (full failure)',
-   /ok === 0/.test(src) && /failed — nothing was saved/.test(src));
+// 1.18 — v55.82-L2 changed summary structure entirely. New format shows
+// "Update Only / Full Sync import complete:" with N added / N updated /
+// N unchanged / N failed broken out.
+ok('1.18 v55.82-L2: summary distinguishes added/updated/unchanged/failed',
+   /N added/.test(src) || /import complete:/.test(src) ||
+   /'Update Only' \) \+ ' import complete/.test(src) ||
+   /'Full Sync' : 'Update Only'\) \+ ' import complete/.test(src));
 
 // =======================================================================
 // BUG 2 — Trend chart anchored to expiration date

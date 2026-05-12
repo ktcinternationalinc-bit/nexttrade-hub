@@ -390,7 +390,7 @@ assert(/audit_trail|late.*edit|logActivity/i.test(read('src/lib/supabase.js')),
 // ----------------------------------------------------------------------
 console.log('\nG. Version stamps — bumped to v55.44');
 function vNum(s) { var m = s.match(/v55\.(\d+)/); return m ? parseInt(m[1], 10) : 0; }
-var headerMatch = page.match(/>v55\.\d+(?:-[A-Z])?</);
+var headerMatch = page.match(/>v55\.\d+(?:-[A-Z][0-9]*)?</);
 var modalMatch = page.match(/BUILD v55\.\d+-/);
 assert(headerMatch && vNum(headerMatch[0]) >= 44, 'G.1 — header pill v55.44 or later');
 assert(modalMatch && vNum(modalMatch[0]) >= 44, 'G.2 — build modal v55.44+');

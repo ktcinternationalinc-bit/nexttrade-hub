@@ -224,8 +224,50 @@ export default function PersonalDashboard({ user, userProfile, isAdmin, isSuperA
 
     {ticketsICreated.length>0&&(<div className="bg-white rounded-xl p-4 mb-3"><h3 className="text-sm font-bold mb-2">📤 Tickets I Assigned ({ticketsICreated.length})</h3><div className="space-y-1.5 max-h-[200px] overflow-auto">{ticketsICreated.map(t=>{const ov=t.due_date&&t.due_date<todayStr; return (<div key={t.id} onClick={()=>navigate('tickets')} className={'flex justify-between items-center py-2 px-2 rounded cursor-pointer hover:bg-blue-50 border '+(ov?'border-red-200 bg-red-50':'border-slate-100')}><div className="flex-1"><div className="text-xs font-bold">{t.title}</div><div className="text-xs text-slate-700"><span className="text-purple-600 font-semibold">👤 {getUserName(t.assigned_to)||'Unassigned'}</span>{t.due_date&&<span className={ov?' text-red-600 font-bold':''}> • Due: {t.due_date}</span>}<span className="text-slate-400"> • {t.updated_at?fmtET(t.updated_at, 'shortdate'):'—'}</span></div></div><span className="px-2 py-0.5 rounded-full text-[9px] font-bold text-white ml-2" style={{background:STATUS_COLORS[t.status]||'#6b7280'}}>{t.status}</span></div>);})}</div></div>)}
 
-    <div className="bg-white rounded-xl p-4 mb-3"><h3 className="text-sm font-bold mb-2">📅 Today ({todayEvents.length})</h3>
-      {todayEvents.length>0?todayEvents.map(ev=>(<div key={ev.id} className="flex justify-between items-center py-2 border-b border-slate-50"><div><div className="text-xs font-semibold">{ev.title}</div><div className="text-xs text-slate-600">{ev.event_time?ev.event_time.substring(0,5):'All day'} • {ev.event_type||'Event'}</div></div><span className={'text-[10px] font-bold '+(ev.completed?'text-emerald-500':'text-amber-500')}>{ev.completed?'✅':'⏳'}</span></div>)):<div className="text-xs text-slate-400 py-2">No events today</div>}
+    <div className="bg-white rounded-xl p-4 mb-3"><h3 className="text-sm font-bold mb-2">📅 Today ({(() => {
+      // v55.82-J — Today widget now counts events + today-due tickets.
+      // Max May 11 2026: "the today reminders. And calendar should include
+      // also your the tickets that are due".
+      var todayTktCount = [...(Array.isArray(myTickets)?myTickets:[]), ...(Array.isArray(ticketsICreated)?ticketsICreated:[])]
+        .filter(function(t) { return t.due_date === todayStr && ['Closed','Resolved','Fixed'].indexOf(t.status) === -1; })
+        .length;
+      return todayEvents.length + todayTktCount;
+    })()})</h3>
+      {(() => {
+        // v55.82-J — Build a unified "today" stream: real calendar events
+        // PLUS tickets whose due_date === today (not closed). Same widget,
+        // tickets get a 🎫 prefix and dashed-feel pseudo-event styling.
+        var todayTickets = [...(Array.isArray(myTickets)?myTickets:[]), ...(Array.isArray(ticketsICreated)?ticketsICreated:[])]
+          .filter(function(t) { return t.due_date === todayStr && ['Closed','Resolved','Fixed'].indexOf(t.status) === -1; })
+          // Dedup: a ticket I both created AND am assigned to should appear once.
+          .filter(function(t, idx, arr) { return arr.findIndex(function(x){ return x.id === t.id; }) === idx; })
+          .map(function(t) { return { _ticket: true, id: 'tkt-' + t.id, _ticket_id: t.id, title: (t.ticket_number ? '[' + t.ticket_number + '] ' : '') + (t.title || 'Ticket'), event_type: 'Ticket due', priority: t.priority, status: t.status }; });
+        var streamToday = [...todayEvents, ...todayTickets];
+        if (streamToday.length === 0) return <div className="text-xs text-slate-400 py-2">No events or tickets today</div>;
+        return streamToday.map(function(ev) {
+          if (ev._ticket) {
+            return (<div key={ev.id} onClick={function(){ navigate('tickets'); }} className="flex justify-between items-center py-2 border-b border-slate-50 cursor-pointer hover:bg-slate-50 rounded">
+              <div className="flex-1 min-w-0">
+                <div className="text-xs font-semibold truncate">🎫 {ev.title}</div>
+                <div className="text-xs text-slate-600">
+                  {ev.event_type}
+                  {ev.priority === 'critical' && <span className="ml-1 text-red-900 font-bold">🚨 CRITICAL</span>}
+                  {ev.priority === 'high' && <span className="ml-1 text-red-600 font-bold">🔴 HIGH</span>}
+                  {ev.status && <span className="ml-1 text-slate-500">• {ev.status}</span>}
+                </div>
+              </div>
+              <span className="text-[10px] font-bold text-blue-600">Open →</span>
+            </div>);
+          }
+          return (<div key={ev.id} className="flex justify-between items-center py-2 border-b border-slate-50">
+            <div className="flex-1 min-w-0">
+              <div className="text-xs font-semibold truncate">{ev.title}</div>
+              <div className="text-xs text-slate-600">{ev.event_time?ev.event_time.substring(0,5):'All day'} • {ev.event_type||'Event'}</div>
+            </div>
+            <span className={'text-[10px] font-bold '+(ev.completed?'text-emerald-500':'text-amber-500')}>{ev.completed?'✅':'⏳'}</span>
+          </div>);
+        });
+      })()}
       {upcomingEvents.length>0&&(<div className="mt-2 pt-2 border-t border-slate-100"><div className="text-xs font-bold text-slate-700 mb-1">Upcoming</div>{upcomingEvents.map(ev=>(<div key={ev.id} className="flex justify-between py-1 text-xs text-slate-700"><span>{ev.title}</span><span>{ev.event_date} {ev.event_time?ev.event_time.substring(0,5):''}</span></div>))}</div>)}</div>
 
     {/* Reminders — split into Urgent (today or overdue) vs Normal (future).

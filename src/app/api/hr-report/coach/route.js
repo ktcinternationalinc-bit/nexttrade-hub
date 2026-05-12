@@ -3,6 +3,17 @@
 // Generates a positive, encouraging coach message for a single user about
 // their own performance over a chosen period.
 //
+// v55.82-L — Max May 11 2026: 10th report of "blank coach panel". Hardening
+// pass on this route:
+//   • Zero-activity payloads now produce a real coaching message rather
+//     than going through the same template that needs activity stats.
+//   • Missing ANTHROPIC_API_KEY returns a friendly user-facing error
+//     instead of a raw "API key not configured" string.
+//   • Anthropic-side failures are surfaced with the actual reason instead
+//     of an opaque HTTP code.
+//   • GET handler added for diagnostics — pings the route to verify
+//     deployment without sending a body.
+//
 // Tone rules: positive, growth-oriented, never judgmental, focused on
 // wins and 1-2 actionable suggestions. Never compares to other team
 // members. Never gives a numeric score back.
@@ -12,6 +23,19 @@
 // fragile on this route family.
 
 import { sanitizeErr } from '../../../../lib/sanitize-error';
+
+// v55.82-L — Lightweight GET for diagnostics. Visiting /api/hr-report/coach
+// in a browser used to 405. Now returns a JSON status so the user can verify
+// the route is deployed AND the API key is wired in.
+export async function GET() {
+  return Response.json({
+    status: 'ok',
+    route: '/api/hr-report/coach',
+    method_expected: 'POST',
+    has_anthropic_key: !!process.env.ANTHROPIC_API_KEY,
+    hint: 'POST with JSON body { name, period, metrics, deltas } to get coach feedback.',
+  });
+}
 
 export async function POST(req) {
   try {
@@ -23,7 +47,10 @@ export async function POST(req) {
 
     var apiKey = process.env.ANTHROPIC_API_KEY;
     if (!apiKey) {
-      return Response.json({ error: 'ANTHROPIC_API_KEY not set in Vercel environment variables.' }, { status: 500 });
+      // v55.82-L — user-friendly error instead of dev jargon.
+      return Response.json({
+        error: 'The AI coach is not connected yet. Ask your admin to set ANTHROPIC_API_KEY in the Vercel environment variables. Once set, the coach will start working.'
+      }, { status: 500 });
     }
 
     var periodLabel = ({
@@ -34,6 +61,24 @@ export async function POST(req) {
       '1y': 'the last year',
       custom: 'this period'
     })[periodCode] || 'this period';
+
+    // v55.82-L — Check whether we have any meaningful activity. If not, branch
+    // to a special "low-activity" prompt that produces real coaching content
+    // (encouragement + setting goals for the next period) instead of being
+    // a thin template that needs activity numbers to riff on.
+    var activitySum =
+      (Number(metrics.ticketsClosed) || 0) +
+      (Number(metrics.ticketsCreated) || 0) +
+      (Number(metrics.ticketComments) || 0) +
+      (Number(metrics.ratesAdded) || 0) +
+      (Number(metrics.bookings) || 0) +
+      (Number(metrics.quotesCreated) || 0) +
+      (Number(metrics.contactTouches) || 0) +
+      (Number(metrics.pipelineMoves) || 0) +
+      (Number(metrics.manualEntries) || 0) +
+      (Number(metrics.attendedEvents) || 0) +
+      (Number(metrics.meetingsCreated) || 0);
+    var isLowActivity = activitySum === 0;
 
     // Build a plain-English summary of what happened. We hand this to Claude
     // along with strict instructions on tone.
@@ -71,42 +116,83 @@ export async function POST(req) {
 
     var summary = lines.join('\n');
 
-    var system =
-      'You are a supportive, positive personal performance coach for ' + name + ', a team member at KTC International (an import/distribution company).\n\n' +
-      'Your tone is encouraging, warm, and growth-oriented. You are NEVER judgmental. You DO NOT give numeric scores or rankings. You DO NOT compare them to other team members. You focus on celebrating wins and offering one or two specific, doable suggestions for the next period.\n\n' +
-      'Structure your response as 3 short paragraphs in plain English (no headers, no bullet points, no markdown):\n' +
-      '  Paragraph 1: Open with a warm, genuine acknowledgement of something they did well in this period (cite a specific number from the data).\n' +
-      '  Paragraph 2: Highlight a strength or improvement you see in the data (especially if a metric went UP from the prior period).\n' +
-      '  Paragraph 3: Offer ONE concrete, gentle suggestion for the next period — something realistic and actionable. Keep it constructive, not corrective. End with a sentence of encouragement.\n\n' +
-      'Hard rules:\n' +
-      '  - Never use phrases like "needs improvement", "you should", "you must", "lacking", or anything that sounds like a critique.\n' +
-      '  - Never use stars, ratings, scores, or rankings.\n' +
-      '  - Address the person by their first name once at the start.\n' +
-      '  - Keep total length under 180 words.\n' +
-      '  - If a number is zero, do not call it out as a failure — frame any suggestion around the next period as opportunity, not deficiency.\n' +
-      '  - If they had a tough period (low activity), still find something genuine and specific to acknowledge.';
+    // v55.82-L — Branch the system prompt on isLowActivity. Activity prompt
+    // is the original. Low-activity prompt asks Claude to write a warm
+    // welcome + goal-setting message instead of pretending there are wins.
+    var system;
+    if (isLowActivity) {
+      system =
+        'You are a supportive, positive personal performance coach for ' + name + ', a team member at KTC International (an import/distribution company).\n\n' +
+        'IMPORTANT: ' + name + ' has no recorded activity in ' + periodLabel + ' yet. Do NOT pretend they did things they did not do, and do NOT shame them for the empty period. Instead, write a warm, encouraging welcome that:\n' +
+        '  Paragraph 1: Greet them warmly by name and acknowledge that the system shows no recorded activity for ' + periodLabel + ' yet. Frame this neutrally — maybe they had a quiet stretch, maybe they were focused elsewhere, maybe their work is in areas the system does not track yet. No judgment.\n' +
+        '  Paragraph 2: Quick reminder of the kinds of things that show up here when they happen: closing tickets, adding shipping rates, booking shipments, creating quotes, customer touches, writing daily-log entries. Make it sound supportive ("Once you start logging…") not corrective.\n' +
+        '  Paragraph 3: One concrete, easy starter goal for the next period — for example "writing a quick daily-log entry at the end of each day" or "closing one ticket this week." End with a sentence of genuine encouragement.\n\n' +
+        'Hard rules:\n' +
+        '  - Never use phrases like "needs improvement", "you should", "you must", "lacking", "behind", or anything corrective.\n' +
+        '  - Never use stars, ratings, scores, or rankings.\n' +
+        '  - Address them by their first name once at the start.\n' +
+        '  - Plain English. No bullet points, no markdown, no headers.\n' +
+        '  - Keep total length under 180 words.';
+    } else {
+      system =
+        'You are a supportive, positive personal performance coach for ' + name + ', a team member at KTC International (an import/distribution company).\n\n' +
+        'Your tone is encouraging, warm, and growth-oriented. You are NEVER judgmental. You DO NOT give numeric scores or rankings. You DO NOT compare them to other team members. You focus on celebrating wins and offering one or two specific, doable suggestions for the next period.\n\n' +
+        'Structure your response as 3 short paragraphs in plain English (no headers, no bullet points, no markdown):\n' +
+        '  Paragraph 1: Open with a warm, genuine acknowledgement of something they did well in this period (cite a specific number from the data).\n' +
+        '  Paragraph 2: Highlight a strength or improvement you see in the data (especially if a metric went UP from the prior period).\n' +
+        '  Paragraph 3: Offer ONE concrete, gentle suggestion for the next period — something realistic and actionable. Keep it constructive, not corrective. End with a sentence of encouragement.\n\n' +
+        'Hard rules:\n' +
+        '  - Never use phrases like "needs improvement", "you should", "you must", "lacking", or anything that sounds like a critique.\n' +
+        '  - Never use stars, ratings, scores, or rankings.\n' +
+        '  - Address the person by their first name once at the start.\n' +
+        '  - Keep total length under 180 words.\n' +
+        '  - If a number is zero, do not call it out as a failure — frame any suggestion around the next period as opportunity, not deficiency.\n' +
+        '  - If they had a tough period (low activity), still find something genuine and specific to acknowledge.';
+    }
 
     var userMsg = 'Here is the activity data:\n\n' + summary + '\n\nPlease write the coach message now.';
 
-    var response = await fetch('https://api.anthropic.com/v1/messages', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', 'x-api-key': apiKey, 'anthropic-version': '2023-06-01' },
-      body: JSON.stringify({
-        model: 'claude-sonnet-4-20250514',
-        max_tokens: 600,
-        system: system,
-        messages: [{ role: 'user', content: userMsg }],
-      }),
-    });
-
-    if (!response.ok) {
-      var errText = await response.text();
-      console.warn('[hr-coach] Anthropic non-OK:', response.status, errText.substring(0, 200));
-      return Response.json({ error: 'Coach API error (' + response.status + ')' }, { status: response.status });
+    var response;
+    try {
+      response = await fetch('https://api.anthropic.com/v1/messages', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'x-api-key': apiKey, 'anthropic-version': '2023-06-01' },
+        body: JSON.stringify({
+          model: 'claude-sonnet-4-20250514',
+          max_tokens: 600,
+          system: system,
+          messages: [{ role: 'user', content: userMsg }],
+        }),
+      });
+    } catch (fetchErr) {
+      console.error('[hr-coach] network error to Anthropic:', fetchErr);
+      return Response.json({ error: 'Could not reach the AI service. Check your internet connection and try again.' }, { status: 502 });
     }
 
-    var data = await response.json();
-    var text = (data.content && data.content[0] && data.content[0].text) || '';
+    if (!response.ok) {
+      var errText = '';
+      try { errText = await response.text(); } catch (_) { errText = ''; }
+      console.warn('[hr-coach] Anthropic non-OK:', response.status, errText.substring(0, 400));
+      // v55.82-L — try to extract a useful reason from the Anthropic error body
+      var friendly = 'The AI service returned an error (HTTP ' + response.status + ').';
+      if (response.status === 401) friendly = 'The AI service key is invalid. Ask your admin to double-check ANTHROPIC_API_KEY in Vercel.';
+      else if (response.status === 429) friendly = 'The AI service is rate-limited right now. Try again in a minute.';
+      else if (response.status >= 500) friendly = 'The AI service is having trouble right now. Try again in a minute.';
+      return Response.json({ error: friendly }, { status: response.status });
+    }
+
+    var data;
+    try { data = await response.json(); } catch (parseErr) {
+      console.error('[hr-coach] bad JSON from Anthropic:', parseErr);
+      return Response.json({ error: 'The AI service sent back an unreadable response. Try again.' }, { status: 502 });
+    }
+    var text = (data && data.content && data.content[0] && data.content[0].text) || '';
+    if (!text.trim()) {
+      // v55.82-L — never return empty string. If Claude somehow returned
+      // blank, surface that explicitly so the client doesn't show "blank
+      // panel" again.
+      return Response.json({ error: 'The coach returned an empty response. Try again.' }, { status: 502 });
+    }
     return Response.json({ message: text.trim() });
   } catch (err) {
     console.error('[hr-coach] error:', err);

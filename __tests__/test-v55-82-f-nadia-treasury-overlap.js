@@ -1,5 +1,5 @@
 // ============================================================
-// v55.82-F — Nadia must not interfere with Treasury workflow
+// v55.82-L2 — Nadia must not interfere with Treasury workflow
 //
 // Max May 11 2026 spec (5 items):
 //   1. Nadia must stay all the way to the right side of the screen
@@ -71,7 +71,7 @@ ok('1d: Expanded panel width capped at min(360px, 90vw)',
 ok('1e: REGRESSION GUARD — panel no longer USES calc(100vw - 96px) as a style value',
   (function() {
     // Strip line comments and block comments before regex-checking, so the
-    // historical reference in the v55.82-F migration comment doesn't trigger
+    // historical reference in the v55.82-L2 migration comment doesn't trigger
     // a false positive. We just want to know it isn't the actual style.
     var stripped = overlaySrc
       .replace(/\/\/[^\n]*/g, '')           // strip // line comments
@@ -224,8 +224,8 @@ ok('5d: editTreasuryModal is in suppression check',
 // =====================================================================
 
 // 6a — Global header badge must match the current build letter
-ok('6a: Global header badge reads v55.82-F (not a stale earlier version)',
-  /<span className="text-\[10px\] text-zinc-500 font-mono hidden md:inline"[^>]*>v55.82-[A-Z]<\/span>/.test(pageSrc),
+ok('6a: Global header badge reads v55.82-L2 (not a stale earlier version)',
+  /<span className="text-\[10px\] text-zinc-500 font-mono hidden md:inline"[^>]*>v55\.82-[A-Z][0-9]*<\/span>/.test(pageSrc),
   'the visible app-header version badge must move with each build letter — Max May 11 2026 caught v55.81 left over on F'
 );
 
@@ -237,10 +237,10 @@ ok('6b: REGRESSION GUARD — no JSX text node displays "v55.81"',
   'no leftover hardcoded v55.81 in visible UI'
 );
 
-// 6c — Treasury modal headers stamped v55.82-F
-ok('6c: Treasury modal headers display BUILD v55.82-F',
+// 6c — Treasury modal headers stamped v55.82-L2
+ok('6c: Treasury modal headers display BUILD v55.82-L2',
   (function() {
-    var matches = pageSrc.match(/BUILD v55.82-[A-Z]/g);
+    var matches = pageSrc.match(/BUILD v55\.82-[A-Z][0-9]*/g);
     return matches && matches.length >= 2;
   })(),
   'Add Transaction + Edit Transaction modal headers both stamped'
@@ -255,4 +255,4 @@ if (failures.length > 0) {
   failures.forEach(function(f) { console.log('  - ' + f); });
   process.exit(1);
 }
-console.log('\n✅ All v55.82-F Nadia/Treasury overlap fixes verified');
+console.log('\n✅ All v55.82-L2 Nadia/Treasury overlap fixes verified');

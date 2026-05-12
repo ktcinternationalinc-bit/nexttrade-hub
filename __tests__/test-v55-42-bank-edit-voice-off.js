@@ -234,7 +234,7 @@ assert(/recalcInvoiceCollected/.test(page),
 // ----------------------------------------------------------------------
 console.log('\nVersion stamps — bumped to v55.42');
 function vNum(s) { var m = s.match(/v55\.(\d+)/); return m ? parseInt(m[1], 10) : 0; }
-var headerMatch = page.match(/>v55\.\d+(?:-[A-Z])?</);
+var headerMatch = page.match(/>v55\.\d+(?:-[A-Z][0-9]*)?</);
 var modalMatch = page.match(/BUILD v55\.\d+-/);
 assert(headerMatch && vNum(headerMatch[0]) >= 42,
   'X.1 — header pill shows v55.42 or later');

@@ -250,27 +250,30 @@ test('Shipping: per-row "Δ vs prev" column in historical rates table', function
     'delta lookup keyed by row id');
 });
 
-test('Shipping: executeImport uses bulk insert (single bulk, not batched)', function() {
-  // v55.81 (Max May 9 2026): rewrote to do a single bulk insert with
-  // smart retry on column-missing errors. The old BATCH_SIZE=50 approach
-  // was replaced because the per-row fallback wrote audit_log per row
-  // and could hang for minutes.
-  assert(/supabase\.from\('shipping_rates'\)\.insert\(rowsToInsert\)/.test(shipTab),
-    'bulk inserts the whole rowsToInsert array in one call');
+test('Shipping: executeImport uses per-row write loop (v55.82-L2 spec)', function() {
+  // v55.82-L2 (Max May 11 2026): replaced bulk-insert with per-row writes.
+  // Bulk-insert was the cause of Max's data wipe — when one row had a bad
+  // date, Postgres rolled back the whole batch. Now each row runs in its
+  // own try/catch with timeout, so one bad row never affects another.
+  assert(/for \(var ri = 0; ri < validRows\.length; ri\+\+\)/.test(shipTab),
+    'per-row write loop is now the design');
   assert(/withTimeout/.test(shipTab),
-    'wrapped in a timeout to prevent hangs');
+    'each row wrapped in a timeout to prevent hangs');
 });
 
-test('Shipping: executeImport has smart retry + per-row fallback', function() {
-  // v55.81: if bulk fails with a missing-column error, strip it and retry
-  // bulk ONCE. Only true data errors fall through to per-row.
-  assert(/missingCol/.test(shipTab),
-    'detects missing-column errors specifically');
+test('Shipping: executeImport has per-row error isolation (v55.82-L2)', function() {
+  // v55.82-L2: each row's DB op is isolated with its own try/catch + the
+  // missing-column retry runs per-row, not per-batch. The old runPerRow
+  // helper is still defined for legacy callers but no longer the path.
   assert(/const runPerRow = async/.test(shipTab),
-    'runPerRow helper extracted');
-  assert(!/await dbInsert\('shipping_rates'/.test(shipTab) ||
-         /Step 1 — try ALL rows in one go/.test(shipTab),
-    'no longer calls dbInsert per row (which wrote audit_log per row and caused the hang)');
+    'runPerRow helper still defined');
+  assert(/catch \(rowErr\)/.test(shipTab),
+    'per-row try/catch for failure isolation');
+  // Check that executeImport itself does NOT call dbInsert (the single-rate
+  // form on line 642 does, but that's the form save, not the import).
+  var execMatch = shipTab.match(/const executeImport = async \(\) => \{[\s\S]+?\n  \};/);
+  assert(execMatch && !/dbInsert\('shipping_rates'/.test(execMatch[0]),
+    'executeImport function body never calls dbInsert per row (audit_log writes were the hang cause)');
 });
 
 // ============================================================
@@ -278,7 +281,7 @@ test('Shipping: executeImport has smart retry + per-row fallback', function() {
 // ============================================================
 
 test('Build stamp: header shows v55.33 or later', function() {
-  var match = page.match(/>v55\.(\d+)(?:-[A-Z])?</);
+  var match = page.match(/>v55\.(\d+)(?:-[A-Z][0-9]*)?</);
   assert(match && Number(match[1]) >= 33,
     'page.jsx header build stamp shows v55.33+ (currently: ' + (match ? 'v55.' + match[1] : 'NOT FOUND') + ')');
 });

@@ -67,10 +67,17 @@ ok('Wins highlights still inside the activity-grid branch',
   /hasAnyActivity && \([\s\S]{0,600}<Wins/.test(mperf));
 ok('Daily Log Bar still inside the activity-grid branch',
   /hasAnyActivity && \([\s\S]*?<DailyLogBar/.test(mperf));
-ok('Personal Coach still inside the activity-grid branch',
-  /hasAnyActivity && \([\s\S]*?Personal Coach/.test(mperf));
-ok('Activity grid block closes cleanly (no stray IIFE remnants)',
-  /<\/>\s*\)\}\s*<\/div>\s*\);\s*\}/.test(mperf));
+// v55.82-K — Personal Coach card MOVED OUT of hasAnyActivity branch
+// (Max May 11 2026, 10th report of blank coach panel). Card now always
+// renders while !loading so users with zero activity still get coach
+// feedback. Verify the card is gated on !loading, not nested in the
+// hasAnyActivity branch.
+ok('Personal Coach card always renders while !loading (v55.82-K)',
+  /\{!loading && \(\s*<div className="bg-gradient-to-r from-violet-50 to-pink-50/.test(mperf));
+// Structure closes cleanly — the coach card is the LAST major block
+// before the closing </div> + );.
+ok('Component closes cleanly (coach card → closing div → return)',
+  /Personal Coach[\s\S]{0,2500}<\/div>\s*\)\}\s*<\/div>\s*\);\s*\}/.test(mperf));
 
 console.log('\nMyHRDesk — empty state was already there (no regression)');
 var mhr = fs.readFileSync(path.join(ROOT, 'src/components/MyHRDesk.jsx'), 'utf8');

@@ -143,8 +143,14 @@ ok('3e: Auto-fetch re-keys on period change',
   'changing period invalidates the cached fetch key, so coach refreshes'
 );
 
-ok('3f: Auto-fetch deps include period + current + hasAnyActivity',
-  /\}, \[expanded, current, hasAnyActivity, myId, period\]\);/.test(perfSrc)
+// v55.82-K — Auto-fetch deps simplified per Max May 11 2026 (10th report
+// of blank coach panel). Old deps included `current` and `hasAnyActivity`
+// which silently bailed for low-activity users. New deps only need
+// expanded + myId + period; current is kept for refresh-on-data-arrival
+// but not gated.
+ok('3f: Auto-fetch deps no longer include hasAnyActivity gate (v55.82-K)',
+  /\}, \[expanded, (current, hasAnyActivity, myId, period|myId, period, current)\]\);/.test(perfSrc),
+  'either old shape (legacy) or new v55.82-K shape acceptable'
 );
 
 ok('3g: Loading state shows visible "Coach is writing your feedback…" card',

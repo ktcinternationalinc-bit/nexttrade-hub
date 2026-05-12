@@ -120,39 +120,41 @@ ok('chart-anchor: chart block exists with new title',
   chartIdx > 0,
   '"Best Rate Over Time" replaces the old "Rate Trend Over Time" title'
 );
-// Take a generous window — the chart block has the title but the upstream
-// filtering happens BEFORE the title (in the same IIFE). Window backwards
-// far enough to include trendRates filtering + period-over-period block.
-var chartSlice = chartIdx > 0 ? tabSrc.slice(Math.max(0, chartIdx - 9000), chartIdx + 8000) : '';
+// v55.82-M added ~3K of new code (active-window logic, carry-forward,
+// click handler, dot renderer) between the upstream trendRates filter
+// and the chart title, so we widen the upstream window from 9000 → 13000.
+var chartSlice = chartIdx > 0 ? tabSrc.slice(Math.max(0, chartIdx - 13000), chartIdx + 10000) : '';
 
-// 2a — Filter anchors by expiry_date (with effective_date fallback)
-ok('2a: trendRates filtering uses expiry_date (with effective_date fallback)',
+// 2a — v55.82-M: X-axis driven by EFFECTIVE date timeline (Max May 12 2026
+//      respec). The old C-build expiry anchor is superseded.
+ok('2a: v55.82-M — trendRates filter still uses expiry/effective fallback for the period filter (input narrowing)',
   /\(r\.expiry_date \|\| r\.effective_date \|\| ''\) >= rateHistoryDf/.test(chartSlice)
   && /\(r\.expiry_date \|\| r\.effective_date \|\| ''\) <= rateHistoryDt/.test(chartSlice),
-  'X-axis anchor changed from effective_date to expiry_date'
+  'period filter still uses either-or anchor — narrows input rows'
 );
 
-// 2b — monthsSet is built from expiry_date, NOT effective_date
-ok('2b: months bucket built from expiry_date',
-  /m = \(r\.expiry_date \|\| ''\)\.substring\(0,7\)/.test(chartSlice),
-  'chart x-axis = expiry month per Max\'s spec'
+// 2b — v55.82-M: months timeline now built from earliest effective_date
+ok('2b: v55.82-M — months timeline starts at earliest effective_date',
+  /r\.effective_date\.substring\(0,7\)/.test(chartSlice) &&
+  /firstMonth = validRatesForChart\.reduce/.test(chartSlice),
+  'chart X-axis = effective-date timeline per Max May 12 spec'
 );
 
-// 2c — REGRESSION GUARD: chart should no longer use effective_date for monthsSet
-ok('2c: REGRESSION GUARD — chart\'s monthsSet does NOT use effective_date',
-  !/monthsSet[\s\S]{0,200}r\.effective_date \|\| ''\)\.substring\(0,7\)/.test(chartSlice),
-  'falling back to effective_date for X-axis would defeat Max\'s spec'
+// 2c — REGRESSION GUARD: chart should no longer build monthsSet from expiry_date
+ok('2c: REGRESSION GUARD — chart no longer buckets months from expiry_date',
+  !/monthsSet[\s\S]{0,400}r\.expiry_date \|\| ''\)\.substring\(0,7\)/.test(chartSlice),
+  'expiry-bucket approach removed in v55.82-M'
 );
 
-// 3a — per-line aggregation uses Math.min (best = lowest), not avg
-ok('3a: per-shipping-line aggregation uses Math.min (best = lowest price)',
-  /point\[L\] = Math\.min\.apply\(null, amounts\)/.test(chartSlice),
-  'aggregate switched from average to best (Math.min)'
+// 3a — v55.82-M: per-line aggregation uses reduce() picking lowest (best = lowest), not Math.min.apply
+ok('3a: v55.82-M — per-shipping-line winner picked via reduce() lowest',
+  /winner = activeForLine\.reduce[\s\S]{0,300}Number\(r\.rate_amount\) < Number\(acc\.rate_amount\) \? r : acc/.test(chartSlice),
+  'aggregate is "best = lowest" but uses reduce so we can carry the winning row id'
 );
 
-// 3b — overall (market-best) line also Math.min, renamed to _best
-ok('3b: market-floor line uses Math.min and dataKey "_best"',
-  /point\._best = Math\.min\.apply\(null, allAmounts\)/.test(chartSlice)
+// 3b — overall (market-best) line uses same reduce + dataKey "_best"
+ok('3b: market-floor line uses reduce-min and dataKey "_best"',
+  /bestRow = activeInMonth\.reduce/.test(chartSlice)
   && /dataKey="_best"/.test(chartSlice)
 );
 
@@ -164,9 +166,13 @@ ok('3c: REGRESSION GUARD — chart no longer averages rates per period',
 );
 
 // 3d — period-over-period banner also uses BEST not AVG
-ok('3d: period-over-period uses currentBest / priorBest',
-  /currentBest = Math\.min\.apply/.test(chartSlice)
-  && /priorBest = Math\.min\.apply/.test(chartSlice)
+//      v55.82-M: period-over-period code uses Math.min.apply for the
+//      pure trendRates input (still the same upstream block). Accept
+//      either old Math.min.apply or new reduce-based pickers as long
+//      as the "best price" framing is intact.
+ok('3d: period-over-period uses best (lowest) price logic',
+  (/currentBest = Math\.min\.apply/.test(chartSlice) || /currentBest = .+reduce/.test(chartSlice))
+  && (/priorBest = Math\.min\.apply/.test(chartSlice) || /priorBest = .+reduce/.test(chartSlice))
   && /Period-over-period \(best price\)/.test(chartSlice)
 );
 
@@ -192,15 +198,17 @@ ok('4d: 5-point StarShape function defined and passed to Scatter',
   && /shape=\{StarShape\}/.test(chartSlice)
 );
 
-// 4e — booking-month is added to trendPoints if it isn\'t already a category
-//      (Recharts won\'t plot a Scatter point on an unknown X category)
+// 4e — booking-month is added to trendPoints if it isn't already a category
+//      v55.82-M: same forEach, just uses .indexOf instead of .includes for
+//      old-runtime safety. Accept either.
 ok('4e: booking months are added to trendPoints if missing (so Scatter renders)',
-  /bookingStars\.forEach\(function\(b\) \{[\s\S]{0,300}if \(!months\.includes\(b\.month\)\)/.test(chartSlice)
+  /bookingStars\.forEach\(function\(b\) \{[\s\S]{0,400}if \(months\.indexOf\(b\.month\) < 0\)/.test(chartSlice)
+  || /bookingStars\.forEach\(function\(b\) \{[\s\S]{0,300}if \(!months\.includes\(b\.month\)\)/.test(chartSlice)
 );
 
-// 5a — rate=0 rows filtered out of validRatesForChart (no NaN in Math.min)
-ok('5a: validRatesForChart filters out rate <= 0 AND missing expiry',
-  /validRatesForChart = trendRatesForChart\.filter\(function\(r\) \{[\s\S]{0,300}exp\.length >= 7 && amt > 0/.test(chartSlice),
+// 5a — v55.82-M: validRatesForChart filters effective_date + rate > 0 now
+ok('5a: v55.82-M — validRatesForChart filters out rate <= 0 AND missing effective_date',
+  /validRatesForChart = trendRatesForChart\.filter\(function\(r\) \{[\s\S]{0,300}eff\.length >= 10 && amt > 0/.test(chartSlice),
   'empty/zero rate fields safe — no NaN on chart'
 );
 
@@ -214,19 +222,21 @@ ok('5c: StarShape returns null on NaN cx/cy',
   /if \(cx == null \|\| cy == null \|\| isNaN\(cx\) \|\| isNaN\(cy\)\) return null/.test(chartSlice)
 );
 
-// 5d — Math.min.apply guarded by length > 0 check (avoids Infinity)
-ok('5d: Math.min calls guarded by ratesForLine.length > 0',
-  /if \(ratesForLine\.length > 0\) \{[\s\S]{0,300}Math\.min\.apply/.test(chartSlice)
+// 5d — v55.82-M: reduce-based winner picks naturally guard against empty
+//      input (the if (activeForLine.length > 0) check stays in place).
+ok('5d: v55.82-M — winner-pick guarded by activeForLine.length > 0',
+  /if \(activeForLine\.length > 0\) \{[\s\S]{0,400}winner = activeForLine\.reduce/.test(chartSlice)
 );
 
-// 5e — empty-state message updated to mention expiry-date requirement
-ok('5e: empty-state message updated to point at missing expiry dates',
-  /No rate data with expiry dates in the selected period/.test(chartSlice)
+// 5e — empty-state message describes the new effective-date requirement
+ok('5e: v55.82-M — empty-state message points at missing effective dates',
+  /No rate data with effective dates in the selected period/.test(chartSlice)
 );
 
-// 5f — header sub-line explains "X-axis: rate expiry month · ⭐ = booking"
-ok('5f: chart header explains the rules in plain language',
-  /X-axis: rate expiry month/.test(chartSlice) && /⭐ = booking/.test(chartSlice)
+// 5f — header sub-line explains the new effective-date axis + click affordance
+ok('5f: v55.82-M — chart header explains effective-date timeline + click rule',
+  /effective-date timeline/.test(chartSlice) && /⭐ = booking/.test(chartSlice)
+  && /click any point/.test(chartSlice)
 );
 
 // 5g — footer counter shows booking count
