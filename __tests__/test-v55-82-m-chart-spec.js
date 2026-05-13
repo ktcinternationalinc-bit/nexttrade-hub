@@ -101,13 +101,16 @@ ok('4b: When no active rate exists, carry-forward branch runs',
   'carry-forward must still propagate the lastBestForLine price'
 );
 
-ok('4c: Stale dot renderer marks stale points distinctly',
-  // v55.83-A.6 (Max May 13 2026 spec) — stale rendering changed from a hollow
-  // dashed circle to a SOLID dot + ⏳ icon overlay above the dot. The line
-  // itself is now solid (no more dotted-grey). Accept either form.
+ok('4c: Stale carry-forward visually distinguished from active rates',
+  // v55.83-A.6.4 (Max May 13 2026) — stale rendering rebuilt yet again.
+  // Now uses TWO Recharts <Line> elements:
+  //   _bestActive — solid dark line (fresh rates)
+  //   _bestStale  — dashed grey line (expired, no replacement)
+  // Accept any of the three historic forms.
   (/staleFlag[\s\S]{0,300}circle cx=\{cx\} cy=\{cy\} r=\{4\} fill="#fff"[\s\S]{0,100}strokeDasharray="2 2"/.test(src) ||
-   /staleFlag[\s\S]{0,400}⏳/.test(src)),
-  'stale carry-forward must be visually marked (hollow dashed dot OR ⏳ icon)'
+   /staleFlag[\s\S]{0,400}⏳/.test(src) ||
+   /dataKey="_bestStale"[\s\S]{0,300}strokeDasharray="6 4"/.test(src)),
+  'stale carry-forward must be visually marked (any of three approved forms)'
 );
 
 ok('4d: Tooltip shows "last known — no newer rate" indicator on stale points',

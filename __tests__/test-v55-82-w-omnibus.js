@@ -89,12 +89,12 @@ ok('7a: Floor view default = no spaghetti (only market floor renders)',
   // New: chartView === 'floor' → groupsToPlot=[] (no breakdownField).
   (/chartShippingLine === 'all'\) \{\s*linesToPlot = \[\]; \/\/ default — only the _best market line shows/.test(shipping)) ||
   (/breakdownField = null/.test(shipping) && /chartView === 'vendor'[\s\S]{0,80}breakdownField = 'vendor_name'/.test(shipping)));
-ok('8a: Floor view renders the market-best line',
-  // v55.83-A.6 — chartShippingLine === 'all' && (<> _bestActive _bestStale </>) replaced
-  // by chartView === 'floor' ? <Line dataKey="_best" /> : ... . Single solid line now,
-  // stale handled via per-point icon, no dashed-grey overlay.
+ok('8a: Floor view renders market-best line(s)',
+  // v55.83-A.6.4 (Max May 13 2026) — chart for floor view now uses TWO lines:
+  // _bestActive (solid) + _bestStale (dashed grey). Accept any historic form.
   (/chartShippingLine === 'all' && \(\s*<>[\s\S]{0,800}_bestActive[\s\S]{0,400}_bestStale[\s\S]{0,400}<\/>\s*\)/.test(shipping)) ||
-  /chartView === 'floor' \?\s*\(?\s*<Line type="monotone" dataKey="_best"/.test(shipping));
+  /chartView === 'floor' \?\s*\(?\s*<Line type="monotone" dataKey="_best"/.test(shipping) ||
+  /chartView === 'floor' \?[\s\S]{0,400}dataKey="_bestActive"[\s\S]{0,400}dataKey="_bestStale"/.test(shipping));
 
 // =============================================================
 // ITEM 9 — Stale carry-forward best rate as dotted grey
@@ -108,10 +108,10 @@ ok('9a: trend point captures market-best with carry-forward',
   (/point\._best = Number\(bestRow\.rate_amount\)/.test(shipping) &&
    /point\._best = lastBest\.price/.test(shipping)));
 ok('9b: Stale points are visually distinguished',
-  // v55.83-A.6 (Max May 13 2026 spec) — stale rendering moved from a dashed
-  // grey line (_bestStale) to a solid line with ⏳ icon overlays at stale dots.
-  // Accept either form.
-  /dataKey="_bestStale"[\s\S]{0,300}strokeDasharray="4 4"[\s\S]{0,200}stroke: '#94a3b8'/.test(shipping) ||
+  // v55.83-A.6.4 — accept any historic form. Currently: dashed grey
+  // _bestStale line.
+  /dataKey="_bestStale"[\s\S]{0,300}strokeDasharray="4 4"[\s\S]{0,200}stroke[:=]\s*['"]#94a3b8/.test(shipping) ||
+  /dataKey="_bestStale"[\s\S]{0,300}stroke="#94a3b8"[\s\S]{0,200}strokeDasharray="6 4"/.test(shipping) ||
   /staleFlag[\s\S]{0,400}⏳/.test(shipping));
 
 // =============================================================

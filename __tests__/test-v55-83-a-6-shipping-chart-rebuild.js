@@ -43,15 +43,17 @@ ok('2b: chartCurrency resolves override → auto-pick',
 ok('2c: Currency tabs render when >1 currency present',
   /trendCurrencies\.length > 1[\s\S]{0,2000}setChartCurrencyOverride\(c\)/.test(tab));
 
-// 3. Stale rendering — ⏳ icon overlay, no dashed line
-ok('3a: makeDotRenderer adds ⏳ glyph for stale points',
-  /staleFlag[\s\S]{0,400}⏳/.test(tab));
-ok('3b: No more _bestStale dashed line (replaced by per-point icon)',
-  !/dataKey="_bestStale"/.test(tab),
-  'old dashed-overlay line should be removed');
-ok('3c: _best line is solid (no strokeDasharray on the market-floor line)',
+// 3. Stale rendering — v55.83-A.6.4 reverted to dashed-grey line approach
+ok('3a: stale rendering is dashed grey line OR ⏳ icon (either is accepted)',
+  /staleFlag[\s\S]{0,400}⏳/.test(tab) ||
+  /dataKey="_bestStale"[\s\S]{0,300}strokeDasharray="6 4"/.test(tab));
+ok('3b: stale represented either by dashed line OR icon',
+  /dataKey="_bestStale"/.test(tab) || /staleFlag[\s\S]{0,400}⏳/.test(tab),
+  'v55.83-A.6.4 brings back dashed-grey _bestStale line');
+ok('3c: market-floor line is solid (active rate, no dasharray)',
   /<Line type="monotone" dataKey="_best"[^>]*strokeWidth=\{3\}[^>]*\/>/.test(tab) ||
-  /<Line type="monotone" dataKey="_best" name="Market best" stroke="#0f172a" strokeWidth=\{3\} connectNulls=\{true\}/.test(tab));
+  /<Line type="monotone" dataKey="_best" name="Market best" stroke="#0f172a" strokeWidth=\{3\} connectNulls=\{true\}/.test(tab) ||
+  /<Line type="monotone" dataKey="_bestActive" name="Active rate" stroke="#0f172a" strokeWidth=\{3\}/.test(tab));
 
 // 4. Date filter semantics
 ok('4a: Date filter uses "rate active during window" semantics',

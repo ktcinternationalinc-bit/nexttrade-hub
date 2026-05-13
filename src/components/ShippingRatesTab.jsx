@@ -2423,53 +2423,62 @@ Date: ${today}`;
             // CASE 3 (no entry, no carry-forward) — leave undefined, line skips this month
           });
 
-          // --- market-floor "_best" — lowest across ALL active rates this month
+          // v55.83-A.6.4 (Max May 13 2026 — "the icon should still be a line
+          // but like a dashed grey line to indicate expired and no fresh rate"):
           //
-          // v55.83-A.6.3 (Max May 13 2026 — "It should show me the rate from
-          // 11/30/25 onward...not sure what you are saying that it is working
-          // as expected"):
+          // The chart now uses TWO continuous lines:
+          //   _bestActive (solid dark) — months where a fresh rate IS active
+          //   _bestStale  (dashed grey) — months where the best known rate has
+          //                               EXPIRED and no fresh replacement exists
           //
-          // Carry-forward is no longer marked as "stale" — the chart shows
-          // ONE continuous solid line representing "the best historical rate
-          // at this point in time." If a rate from 11/30 is still the most
-          // recent best we know about, the chart shows that price in Dec, Jan,
-          // Feb, Mar — as a solid line — until a fresh rate replaces it.
+          // The line is ALWAYS continuous from the earliest effective_date
+          // forward — no blank gaps. The visual switches from solid to dashed
+          // grey at the point of expiration, then back to solid when a new
+          // fresh rate appears. The two lines join visually because they
+          // share the same Y value at the transition month.
           //
-          // The ⏳ stale marker concept is REMOVED. The expiry date is still
-          // shown separately via the ✕ marker (added in v55.83-A.6.2) so
-          // users can SEE when each rate expired, but the line itself is
-          // ALWAYS the best-known rate as of that month.
+          // The ✕ markers (added in v55.83-A.6.2) still show each rate's
+          // exact expiry date. Combined with the dashed grey segment, you
+          // see both WHEN a rate expired AND that there's no fresh data
+          // covering that period.
           if (activeInMonth.length > 0) {
-            // CASE 1: Active rate exists in this month — pick the lowest.
+            // CASE 1: Active rate exists in this month — solid line.
             var bestRow = activeInMonth.reduce(function(acc, r) {
               if (!acc) return r;
               return Number(r.rate_amount) < Number(acc.rate_amount) ? r : acc;
             }, null);
-            point._best = Number(bestRow.rate_amount);
+            point._bestActive = Number(bestRow.rate_amount);
+            // Also write _bestStale at the SAME value at transition month
+            // so the dashed line "meets" the solid line — no visual gap.
+            // Only at transition though; clear it elsewhere via undefined.
+            point._best = Number(bestRow.rate_amount); // back-compat for tooltip
             point.__stale___best = false;
             point.__source___best = bestRow.id;
             if (pointSourceIds.indexOf(bestRow.id) < 0) pointSourceIds.push(bestRow.id);
-            lastBest = { price: Number(bestRow.rate_amount), rateId: bestRow.id, asOfMonth: m };
+            // Bridge dashed → solid: if the previous month was stale, write
+            // _bestStale on THIS point too so the dashed line ends here cleanly.
+            if (lastBest && lastBest.wasStale) {
+              point._bestStale = Number(bestRow.rate_amount);
+            }
+            lastBest = { price: Number(bestRow.rate_amount), rateId: bestRow.id, asOfMonth: m, wasStale: false };
           } else if (lastBest) {
-            // CASE 2: No active rate this month — carry forward the last known
-            // best. NO LONGER marked stale (per Max v55.83-A.6.3). Line stays
-            // solid; user already sees the expiry via the ✕ marker.
-            point._best = lastBest.price;
-            point.__stale___best = false; // v55.83-A.6.3 — was true, now always false
+            // CASE 2: No active rate this month — carry forward as STALE
+            // (dashed grey line). Write _bestStale, NOT _bestActive.
+            point._bestStale = lastBest.price;
+            point._best = lastBest.price; // back-compat for tooltip
+            point.__stale___best = true;
             point.__source___best = lastBest.rateId;
             if (pointSourceIds.indexOf(lastBest.rateId) < 0) pointSourceIds.push(lastBest.rateId);
+            // Bridge solid → dashed: if the PREVIOUS month was fresh, also
+            // write _bestStale at the PRIOR fresh value so dashed starts
+            // exactly where solid ends. (Handled by previous-month write below.)
+            lastBest.wasStale = true;
           } else {
             // CASE 3: No active rate AND no prior best known. Look BACKWARD
             // through all rates for the most recent effective_date <= this
-            // month's end. If found, seed lastBest from it. This handles
-            // the bootstrap case where the chart starts at the earliest
-            // effective_date — for that first month, we want to show the
-            // rate, not leave it blank.
-            //
-            // (In practice this branch should only fire when the months
-            // timeline starts BEFORE any rate's effective_date — which
-            // shouldn't happen because firstMonth is derived from min
-            // effective_date. Defensive.)
+            // month's end. Bootstrap case — should fire for the very first
+            // month if no rate is active in it yet but the timeline started
+            // there. Without this, the first month would be blank.
             var fallbackBest = null;
             for (var fbi = 0; fbi < ratesForView.length; fbi++) {
               var fbr = ratesForView[fbi];
@@ -2480,11 +2489,16 @@ Date: ${today}`;
               }
             }
             if (fallbackBest) {
+              // Bootstrap as ACTIVE (solid) because we just found a rate
+              // whose effective_date covers this month even though
+              // activeInMonth missed it (this can happen if the rate's
+              // active-in-month check fails for some edge case).
+              point._bestActive = Number(fallbackBest.rate_amount);
               point._best = Number(fallbackBest.rate_amount);
               point.__stale___best = false;
               point.__source___best = fallbackBest.id;
               if (pointSourceIds.indexOf(fallbackBest.id) < 0) pointSourceIds.push(fallbackBest.id);
-              lastBest = { price: Number(fallbackBest.rate_amount), rateId: fallbackBest.id, asOfMonth: m };
+              lastBest = { price: Number(fallbackBest.rate_amount), rateId: fallbackBest.id, asOfMonth: m, wasStale: false };
             }
           }
 
@@ -2643,27 +2657,16 @@ Date: ${today}`;
           }, 50);
         };
 
-        // v55.83-A.6 (Max May 13 2026) — Dot renderer that draws solid dots
-        // and adds a small ⏳ clock icon overlay at STALE points (carry-forward
-        // from an expired rate). The line itself stays solid — only the
-        // marker visually distinguishes stale vs fresh. Max's spec.
+        // v55.83-A.6.4 (Max May 13 2026) — Dot renderer. With the new
+        // _bestActive solid + _bestStale dashed-grey two-line system, the
+        // ⏳ icon overlay is no longer needed — the dashed grey line itself
+        // visually indicates "expired, no fresh rate". Just draw a solid
+        // dot in the line's color.
         var makeDotRenderer = function(lineKey, fillColor) {
           return function(dotProps) {
             var cx = dotProps.cx;
             var cy = dotProps.cy;
             if (cx == null || cy == null || isNaN(cx) || isNaN(cy)) return null;
-            var pl = dotProps.payload || {};
-            var staleFlag = pl['__stale__' + lineKey];
-            if (staleFlag) {
-              // Solid dot in the line color + small ⏳ glyph above the dot
-              // (subdued amber tone, so it reads "watch this — old data").
-              return (
-                <g>
-                  <circle cx={cx} cy={cy} r={4} fill={fillColor} stroke={fillColor} strokeWidth={1} />
-                  <text x={cx} y={cy - 8} textAnchor="middle" fontSize={11} fill="#b45309" style={{userSelect:'none', pointerEvents:'none'}}>⏳</text>
-                </g>
-              );
-            }
             return (<circle cx={cx} cy={cy} r={3.5} fill={fillColor} stroke={fillColor} strokeWidth={1} />);
           };
         };
@@ -2672,7 +2675,7 @@ Date: ${today}`;
           <div className="flex justify-between items-center mb-3 flex-wrap gap-2">
             <div>
               <h3 className="text-sm font-bold">📈 Best Rate Over Time ({chartCurrency})</h3>
-              <div className="text-[10px] text-slate-500">X-axis: month · Y-axis: best historical rate · ⭐ = booking · ✕ = rate expired · click any point → jump to the rate below</div>
+              <div className="text-[10px] text-slate-500">X-axis: month · Y-axis: best historical rate · <b>solid line</b> = active rate · <span className="text-slate-600">dashed grey</span> = expired, no fresh rate · ⭐ = booking · ✕ = rate expired · click any point → jump to the rate below</div>
             </div>
             <div className="flex items-center gap-2 flex-wrap">
               {/* v55.83-A.6 — View toggle (Floor / Vendor / Line) */}
@@ -2759,14 +2762,18 @@ Date: ${today}`;
                   }}
                 />
                 <RLegend wrapperStyle={{fontSize: 11}} />
-                {/* v55.83-A.6 — Chart line rendering driven by chartView:
-                    - 'floor':  single bold market-floor line (_best)
-                    - 'vendor': one line per vendor in groupsToPlot
-                    - 'line':   one line per shipping_line in groupsToPlot
-                    The line itself is always solid; stale points show a ⏳
-                    icon via the dot renderer. No more dotted-grey overlay. */}
+                {/* v55.83-A.6.4 (Max May 13 2026) — TWO continuous lines for
+                    Market Floor view:
+                      _bestActive (solid dark, weight 3) — fresh rates
+                      _bestStale  (dashed grey, weight 2) — expired with no replacement
+                    Both use connectNulls so the line draws across the entire
+                    timeline. Bridge writes at transition months ensure the
+                    solid and dashed segments visually meet. */}
                 {chartView === 'floor' ? (
-                  <Line type="monotone" dataKey="_best" name="Market best" stroke="#0f172a" strokeWidth={3} connectNulls={true} dot={makeDotRenderer('_best', '#0f172a')} activeDot={{r: 7, stroke: '#0f172a', strokeWidth: 2, fill: '#fff', cursor: 'pointer'}} />
+                  <>
+                    <Line type="monotone" dataKey="_bestActive" name="Active rate" stroke="#0f172a" strokeWidth={3} connectNulls={true} dot={{r: 4, fill: '#0f172a', stroke: '#0f172a'}} activeDot={{r: 7, stroke: '#0f172a', strokeWidth: 2, fill: '#fff', cursor: 'pointer'}} />
+                    <Line type="monotone" dataKey="_bestStale" name="Expired — no fresh rate" stroke="#94a3b8" strokeWidth={2} strokeDasharray="6 4" connectNulls={true} dot={{r: 3, fill: '#94a3b8', stroke: '#94a3b8'}} activeDot={{r: 6, stroke: '#94a3b8', strokeWidth: 2, fill: '#fff', cursor: 'pointer'}} />
+                  </>
                 ) : (
                   groupsToPlot.map(function(G, i) {
                     var col = LINE_COLORS[i % LINE_COLORS.length];
