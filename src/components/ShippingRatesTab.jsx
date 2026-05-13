@@ -2419,8 +2419,33 @@ Date: ${today}`;
               point['__stale__' + G] = false;
               point['__source__' + G] = lastBestForLine[G].rateId;
               pointSourceIds.push(lastBestForLine[G].rateId);
+            } else {
+              // CASE 3 (v55.83-A.6.5) — no active rate AND no prior best known.
+              // Bootstrap: look backward through ratesForView for the most
+              // recent rate belonging to THIS group with effective_date <=
+              // this month's end. If found, seed lastBestForLine[G] from it.
+              // Without this, the first month of a group's line would be
+              // blank — line discontinuity.
+              var fallbackForGroup = null;
+              for (var fbgi = 0; fbgi < ratesForView.length; fbgi++) {
+                var fbgr = ratesForView[fbgi];
+                if (!fbgr.effective_date || fbgr.effective_date > monthEnd) continue;
+                if (Number(fbgr.rate_amount || 0) <= 0) continue;
+                if (!breakdownField) continue;
+                var fbgrG = (fbgr[breakdownField] || '(none)').trim() || '(none)';
+                if (fbgrG !== G) continue;
+                if (!fallbackForGroup || Number(fbgr.rate_amount) < Number(fallbackForGroup.rate_amount)) {
+                  fallbackForGroup = fbgr;
+                }
+              }
+              if (fallbackForGroup) {
+                point[G] = Number(fallbackForGroup.rate_amount);
+                point['__stale__' + G] = false;
+                point['__source__' + G] = fallbackForGroup.id;
+                pointSourceIds.push(fallbackForGroup.id);
+                lastBestForLine[G] = { price: Number(fallbackForGroup.rate_amount), rateId: fallbackForGroup.id, asOfMonth: m };
+              }
             }
-            // CASE 3 (no entry, no carry-forward) — leave undefined, line skips this month
           });
 
           // v55.83-A.6.4 (Max May 13 2026 — "the icon should still be a line
@@ -2506,32 +2531,67 @@ Date: ${today}`;
           return point;
         });
 
-        // v55.83-A.6.2 (Max May 13 2026 — "expiration dates need to be on this
-        // graph...that's part of the historical perspective").
+        // v55.83-A.6.5 (Max May 13 2026 — "from left to right it should be
+        // the older date to the newer dates first of all"):
         //
-        // Each rate with a valid expiry_date becomes an EXPIRY MARKER on the
-        // chart: a vertical X-marker at (expiry_month, rate_amount). It tells
-        // the user "this rate stopped being good at this point". Combined
-        // with the solid line of best-active, you get the full historical
-        // picture: when did rates exist, when did they expire, where were
-        // the gaps.
-        var expiryMarkers = ratesForView
+        // PROBLEM: passing expiryMarkers as a separate <Scatter data={...}>
+        // caused Recharts to APPEND those months to the X-axis AFTER the
+        // sorted trendPoints months — resulting in "2026-05, 2026-05, ...,
+        // 2025-12, 2025-12" (mixed order). The X-axis categories are derived
+        // from the UNION of every <Line> and <Scatter> data array in
+        // ComposedChart, in the order encountered.
+        //
+        // FIX: deduplicate expiry markers BY MONTH (so 3 rates expiring in
+        // the same month show as ONE ✕), and write them directly into the
+        // matching trendPoint as an `__expiredCount__` field + an
+        // `__expiredAtY__` field carrying the average expired price. Then
+        // <Scatter> reads from trendPoints (same data array) — X-axis stays
+        // sorted.
+        var rawExpiryRows = ratesForView
           .filter(function (r) {
             var exp = r.expiry_date || '';
             var amt = Number(r.rate_amount || 0);
             return exp.length >= 7 && amt > 0;
-          })
-          .map(function (r) {
-            return {
-              month: (r.expiry_date || '').substring(0, 7),
-              expired_rate: Number(r.rate_amount || 0),
-              vendor: r.vendor_name || '',
-              line: r.shipping_line || '',
-              full_expiry: r.expiry_date || '',
-              effective: r.effective_date || '',
-              __sourceId__: r.id,
-            };
           });
+
+        // Group by month for dedup
+        var expiryByMonth = {};
+        rawExpiryRows.forEach(function (r) {
+          var m = (r.expiry_date || '').substring(0, 7);
+          if (!expiryByMonth[m]) expiryByMonth[m] = { rates: [], total: 0, count: 0 };
+          expiryByMonth[m].rates.push(r);
+          expiryByMonth[m].total += Number(r.rate_amount || 0);
+          expiryByMonth[m].count++;
+        });
+
+        // Write dedup-by-month info into the matching trendPoint
+        Object.keys(expiryByMonth).forEach(function (m) {
+          var bucket = expiryByMonth[m];
+          var avgPrice = bucket.total / bucket.count;
+          // Find or create the trendPoint for this month
+          var pt = trendPoints.find(function (p) { return p.month === m; });
+          if (!pt) {
+            // Expiry month not in trendPoints (extends past last data month
+            // or before first). Add a sparse point so the ✕ renders, with
+            // no line value.
+            pt = { month: m };
+            trendPoints.push(pt);
+            if (months.indexOf(m) < 0) months.push(m);
+          }
+          pt.__expiredCount__ = bucket.count;
+          pt.__expiredAtY__ = avgPrice;
+          pt.__expiredVendors__ = bucket.rates.map(function (r) {
+            return (r.vendor_name || '?') + (r.shipping_line ? '/' + r.shipping_line : '');
+          }).join(', ');
+        });
+
+        // Re-sort after potential additions
+        trendPoints.sort(function(a, b) { return a.month < b.month ? -1 : a.month > b.month ? 1 : 0; });
+        months.sort();
+
+        // For backwards compatibility with the rest of the chart code,
+        // expose a count of how many distinct expiry months exist.
+        var expiryMarkersCount = Object.keys(expiryByMonth).length;
 
         // v55.83-A.6.2 — data-quality counters surfaced in the chart caption
         // so the user can SEE why fewer rates show than total. Counts include
@@ -2618,20 +2678,24 @@ Date: ${today}`;
           return (<polygon points={pts.join(' ')} fill="#fbbf24" stroke="#92400e" strokeWidth="1.2" />);
         };
 
-        // v55.83-A.6.2 (Max May 13 2026) — Expiration marker shape.
-        // Rendered for every rate's expiry_date as a small red ✕ at the
-        // (expiry_month, rate_amount) coordinate. Visually says "this rate
-        // stopped here". Combined with the line + stars, gives the full
-        // historical timeline.
+        // v55.83-A.6.5 (Max May 13 2026) — Expiration marker shape with
+        // dedup count badge. When multiple rates expire in the same month,
+        // show ✕ with a small "×N" label so the chart isn't cluttered with
+        // 14 separate ✕'s when 5 rates expired in the same month.
         var ExpiryMarkerShape = function(props) {
           var cx = props.cx;
           var cy = props.cy;
           if (cx == null || cy == null || isNaN(cx) || isNaN(cy)) return null;
+          var pl = props.payload || {};
+          var count = Number(pl.__expiredCount__ || 1);
           var s = 5;
           return (
             <g style={{ pointerEvents: 'auto', cursor: 'pointer' }}>
               <line x1={cx - s} y1={cy - s} x2={cx + s} y2={cy + s} stroke="#dc2626" strokeWidth="2" />
               <line x1={cx - s} y1={cy + s} x2={cx + s} y2={cy - s} stroke="#dc2626" strokeWidth="2" />
+              {count > 1 && (
+                <text x={cx + 8} y={cy - 4} fontSize={9} fill="#dc2626" fontWeight="bold" style={{userSelect:'none', pointerEvents:'none'}}>×{count}</text>
+              )}
             </g>
           );
         };
@@ -2747,10 +2811,12 @@ Date: ${today}`;
                       var pl = p && p.payload ? p.payload : {};
                       return [chartSym + Number(v).toLocaleString() + ' ⭐ ' + (pl.vendor || '?') + (pl.ref ? ' (' + pl.ref + ')' : ''), 'Booking ' + (pl.full_date || '')];
                     }
-                    if (name === 'expired_rate' || name === 'Expirations') {
-                      // v55.83-A.6.2 — expiry marker tooltip
+                    if (name === '__expiredAtY__' || name === 'Expirations') {
+                      // v55.83-A.6.5 — expiry marker tooltip, deduplicated by month
                       var pl3 = p && p.payload ? p.payload : {};
-                      return [chartSym + Number(v).toLocaleString() + ' ✕ ' + (pl3.vendor || '?') + (pl3.line ? ' / ' + pl3.line : ''), 'Expired ' + (pl3.full_expiry || '')];
+                      var cnt = Number(pl3.__expiredCount__ || 1);
+                      var label = chartSym + Number(v).toLocaleString() + ' ✕ ' + (cnt > 1 ? cnt + ' rates expired' : '1 rate expired');
+                      return [label, pl3.__expiredVendors__ || 'Expired'];
                     }
                     // v55.82-M — append "stale (last known)" indicator if this
                     // point is a carry-forward.
@@ -2788,17 +2854,16 @@ Date: ${today}`;
                     shape={StarShape}
                   />
                 )}
-                {/* v55.83-A.6.2 (Max May 13 2026 — "expiration dates need to be
-                    on this graph"): expiry-marker scatter. Each rate with an
-                    expiry_date shows as a small ✕ at (expiry_month, rate_amount).
-                    Combined with the solid best-active line + booking stars,
-                    you get a full historical picture: when rates existed,
-                    where they expired, when bookings were made. */}
-                {expiryMarkers.length > 0 && (
+                {/* v55.83-A.6.5 — Expiry markers scatter now reads from
+                    trendPoints (same data array as the lines) so the X-axis
+                    stays sorted chronologically. Each trendPoint may carry
+                    an __expiredAtY__ field (avg of all rates expiring that
+                    month) that drives the ✕ Y position. dataKey is the
+                    deduplicated value. */}
+                {expiryMarkersCount > 0 && (
                   <Scatter
                     name="Expirations"
-                    data={expiryMarkers}
-                    dataKey="expired_rate"
+                    dataKey="__expiredAtY__"
                     shape={ExpiryMarkerShape}
                   />
                 )}

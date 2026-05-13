@@ -37,18 +37,29 @@ ok('1f: strict-equality version of routeHistory removed',
   'old strict-equality pattern must not still exist');
 
 // 2. Expiry markers
-ok('2a: expiryMarkers data array built from ratesForView',
+ok('2a: expiry rows derived from ratesForView',
+  // v55.83-A.6.5 — expiryMarkers variable renamed to rawExpiryRows because
+  // the data structure changed: now grouped by month, written directly into
+  // trendPoints, not a separate scatter data array.
+  /var rawExpiryRows = ratesForView[\s\S]{0,300}r\.expiry_date \|\| ''[\s\S]{0,200}return exp\.length >= 7/.test(tab) ||
   /var expiryMarkers = ratesForView[\s\S]{0,300}r\.expiry_date \|\| ''[\s\S]{0,200}return exp\.length >= 7/.test(tab));
-ok('2b: expiryMarkers carry month + expired_rate + vendor',
-  /month: \(r\.expiry_date \|\| ''\)\.substring\(0, 7\)[\s\S]{0,200}expired_rate: Number\(r\.rate_amount[\s\S]{0,100}vendor: r\.vendor_name/.test(tab));
+ok('2b: expiry rows carry month and price for trendPoint enrichment',
+  // v55.83-A.6.5 — expiry data now grouped by month then written into
+  // trendPoint as __expiredAtY__ + __expiredCount__ + __expiredVendors__
+  // instead of a per-row object.
+  /\(r\.expiry_date \|\| ''\)\.substring\(0, 7\)/.test(tab) &&
+  /__expiredAtY__|expired_rate/.test(tab));
 ok('2c: ExpiryMarkerShape function defined',
   /var ExpiryMarkerShape = function\(props\)/.test(tab));
 ok('2d: ExpiryMarkerShape draws a red ✕ (two crossing lines)',
   /ExpiryMarkerShape[\s\S]{0,800}stroke="#dc2626"[\s\S]{0,200}stroke="#dc2626"/.test(tab));
 ok('2e: <Scatter name="Expirations" /> renders on chart',
-  /<Scatter[\s\S]{0,200}name="Expirations"[\s\S]{0,200}data=\{expiryMarkers\}[\s\S]{0,200}shape=\{ExpiryMarkerShape\}/.test(tab));
-ok('2f: Tooltip handles expired_rate label',
-  /name === 'expired_rate' \|\| name === 'Expirations'/.test(tab));
+  // v55.83-A.6.5 — Scatter no longer takes a separate data prop; reads from
+  // ComposedChart's data (trendPoints) via dataKey="__expiredAtY__".
+  /<Scatter[\s\S]{0,300}name="Expirations"[\s\S]{0,300}shape=\{ExpiryMarkerShape\}/.test(tab));
+ok('2f: Tooltip handles expiry marker label',
+  // v55.83-A.6.5 — dataKey changed from 'expired_rate' to '__expiredAtY__'
+  /name === '(expired_rate|__expiredAtY__)' \|\| name === 'Expirations'/.test(tab));
 ok('2g: Chart subtitle mentions ✕ expiry marker',
   /✕ = rate expired/.test(tab));
 
