@@ -831,12 +831,12 @@ export default function TicketsTab({ toast, customers, user, userProfile, users,
                   modal so the viewer always knows the visibility tier of
                   the ticket they're looking at. */}
               {sel.is_private && (
-                <span className="inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded bg-sky-100 border border-sky-400 text-sky-900 text-[10px] font-extrabold align-middle" title="Private — only you can see this">
+                <span className="inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded bg-sky-700 border border-sky-800 text-white text-[11px] font-extrabold align-middle shadow-sm" title="Private — only you can see this">
                   🔒 PRIVATE
                 </span>
               )}
               {sel.is_confidential && (
-                <span className="inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded bg-orange-100 border border-orange-400 text-orange-900 text-[10px] font-extrabold align-middle" title="Confidential — only the creator, assignees, and super admin can see this">
+                <span className="inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded bg-orange-700 border border-orange-800 text-white text-[11px] font-extrabold align-middle shadow-sm" title="Confidential — only the creator, assignees, and super admin can see this">
                   🟧 CONFIDENTIAL
                 </span>
               )}
@@ -1575,12 +1575,12 @@ export default function TicketsTab({ toast, customers, user, userProfile, users,
                         visible to creator, assignees, and super admin. Mutually
                         exclusive, but defensive: if both, render both. */}
                     {t.is_private && (
-                      <span className="inline-flex items-center gap-0.5 mr-1 px-1.5 py-0.5 rounded bg-sky-100 border border-sky-400 text-sky-900 text-[10px] font-extrabold align-middle" title="Private ticket — only you can see this">
+                      <span className="inline-flex items-center gap-0.5 mr-1 px-1.5 py-0.5 rounded bg-sky-700 border border-sky-800 text-white text-[11px] font-extrabold align-middle shadow-sm" title="Private ticket — only you can see this">
                         🔒 PRIVATE
                       </span>
                     )}
                     {t.is_confidential && (
-                      <span className="inline-flex items-center gap-0.5 mr-1 px-1.5 py-0.5 rounded bg-orange-100 border border-orange-400 text-orange-900 text-[10px] font-extrabold align-middle" title="Confidential — only the creator, assignees, and super admin can see this">
+                      <span className="inline-flex items-center gap-0.5 mr-1 px-1.5 py-0.5 rounded bg-orange-700 border border-orange-800 text-white text-[11px] font-extrabold align-middle shadow-sm" title="Confidential — only the creator, assignees, and super admin can see this">
                         🟧 CONFIDENTIAL
                       </span>
                     )}

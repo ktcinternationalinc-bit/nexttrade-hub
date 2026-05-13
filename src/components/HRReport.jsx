@@ -75,14 +75,20 @@ export default function HRReport({ user, userProfile, users, customers }) {
       // people's HR scores. Confidential tickets DO count — they're
       // legitimate team workload signal — but the report only computes
       // aggregates, not displays titles, so no content leak.
+      // v55.83-A.3 (Max May 13 2026) — fixed const-reassignment build error.
+      // Previously this block reassigned `ticketComments` (a const from the
+      // Promise.all destructure), which Vercel's SWC rejects. Now uses a
+      // separate `visibleHRComments` variable in the same shape as
+      // `visibleHRTickets`.
       var visibleHRTickets = tickets;
+      var visibleHRComments = ticketComments;
       if (!isSuperAdmin) {
         var privateIds = {};
         (tickets || []).forEach(function (t) { if (t.is_private) privateIds[t.id] = 1; });
         visibleHRTickets = tickets.filter(function (t) { return !t.is_private; });
-        ticketComments = (ticketComments || []).filter(function (c) { return !privateIds[c.ticket_id]; });
+        visibleHRComments = (ticketComments || []).filter(function (c) { return !privateIds[c.ticket_id]; });
       }
-      setData({ tickets: visibleHRTickets, ticketComments, dailyLog, auditLog, customerQuotes, calendarEvents, customers: customers || [], userSessions });
+      setData({ tickets: visibleHRTickets, ticketComments: visibleHRComments, dailyLog, auditLog, customerQuotes, calendarEvents, customers: customers || [], userSessions });
       setLoading(false);
     };
     load();
