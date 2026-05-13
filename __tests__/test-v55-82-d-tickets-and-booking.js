@@ -155,7 +155,7 @@ ok('1l: PersonalDashboard urgent items shows 🚨 CRITICAL',
 // the parent. This avoids React inheritance issues with the inline-
 // styled colored pills.
 ok('2a: v55.82-S — TicketsTab row applies bg-slate-200 when status===Closed',
-  /t\.status === 'Closed' \? 'bg-slate-200 '/.test(ticketsTab),
+  /t\.status === 'Closed'[\s\S]{0,80}'bg-slate-200 '/.test(ticketsTab),
   'closed tickets must be visibly grey (no longer near-white)'
 );
 
@@ -168,7 +168,7 @@ ok('2b: v55.82-Q — TicketsTab row uses darker slate left border for closed',
 // 2c — v55.82-Q: opacity-70/hover gimmick removed in favor of static
 // darker bg. Closed tickets are always at full readable opacity now.
 ok('2c: v55.82-Q — closed-ticket greying no longer uses opacity tricks',
-  /t\.status === 'Closed' \? 'bg-slate-200/.test(ticketsTab) &&
+  /t\.status === 'Closed'[\s\S]{0,80}'bg-slate-200/.test(ticketsTab) &&
   !/'Closed' \? 'bg-slate-50 opacity-70/.test(ticketsTab),
   'opacity-70 hover-opacity-100 gimmick replaced with stable bg-slate-200'
 );

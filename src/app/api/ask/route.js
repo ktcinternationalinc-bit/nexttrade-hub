@@ -753,6 +753,21 @@ export async function POST(request) {
         }
         while (gMessages.length > 0 && gMessages[0].role !== 'user') gMessages.shift();
         gMessages = gMessages.filter(function(m) { return m.content && String(m.content).trim(); });
+        // v55.82-Y (Max May 12 2026) — collapse consecutive same-role
+        // messages. Anthropic rejects requests where two messages in a
+        // row have the same role (e.g. user/user or assistant/assistant)
+        // with HTTP 400. The history coming from the client occasionally
+        // contains these, especially after retries.
+        var gNormalized = [];
+        for (var gnIdx = 0; gnIdx < gMessages.length; gnIdx++) {
+          var gnPrev = gNormalized[gNormalized.length - 1];
+          if (gnPrev && gnPrev.role === gMessages[gnIdx].role) {
+            gNormalized[gNormalized.length - 1] = gMessages[gnIdx];
+          } else {
+            gNormalized.push(gMessages[gnIdx]);
+          }
+        }
+        gMessages = gNormalized;
         // v53.2 (Apr 24 2026) — CRITICAL FIX: the greeter-mode path (which is
         // what AIGreeter.jsx actually uses when the user chats) was pushing
         // `question` on top of the history even when history already contained
@@ -802,6 +817,7 @@ export async function POST(request) {
           : ['claude-sonnet-4-6', 'claude-haiku-4-5']);
         var gResponse = null;
         var gLastErr = null;
+        var gAllErrors = []; // v55.82-Y — capture every attempt
         for (var gmIdx = 0; gmIdx < GMODEL_CHAIN.length; gmIdx++) {
           var gTryModel = GMODEL_CHAIN[gmIdx];
           try {
@@ -811,17 +827,23 @@ export async function POST(request) {
               body: JSON.stringify({ model: gTryModel, max_tokens: 900, system: fullSystem, messages: gMessages }),
             });
             if (gr.ok) { gResponse = gr; break; }
-            gLastErr = 'HTTP ' + gr.status + ' on ' + gTryModel;
-            console.warn('[ask/greeter] model ' + gTryModel + ' failed (' + gr.status + '); trying next');
+            // v55.82-Y — capture FULL body to surface the real error reason
+            var gErrBody = '';
+            try { gErrBody = await gr.text(); } catch (_) {}
+            gLastErr = 'HTTP ' + gr.status + ' on ' + gTryModel + ': ' + gErrBody.substring(0, 500);
+            gAllErrors.push(gLastErr);
+            try { console.warn('[ask/greeter] model ' + gTryModel + ' failed (' + gr.status + '):', gErrBody.substring(0, 1000)); } catch (_) {}
           } catch (gErr) {
             gLastErr = 'Threw on ' + gTryModel + ': ' + (gErr && gErr.message);
-            console.warn('[ask/greeter] model ' + gTryModel + ' threw; trying next');
+            gAllErrors.push(gLastErr);
+            try { console.warn('[ask/greeter] model ' + gTryModel + ' threw:', gErr && gErr.message); } catch (_) {}
           }
         }
 
         if (!gResponse) {
-          console.warn('[ask/greeter] all models failed:', gLastErr);
-          return Response.json({ answer: 'AI error: ' + (gLastErr || 'all models unavailable') });
+          var gCombined = gAllErrors.length > 0 ? gAllErrors.join(' | ') : (gLastErr || 'all models unavailable');
+          console.warn('[ask/greeter] all models failed:', gCombined);
+          return Response.json({ answer: 'AI error: ' + gCombined });
         }
 
         var gData = await gResponse.json();
@@ -1745,6 +1767,41 @@ export async function POST(request) {
       messages.push({ role: 'user', content: question });
     }
 
+    // v55.82-Y (Max May 12 2026 — "AI error: HTTP 400 on claude-haiku-4-5"
+    // STILL FAILING after v55.82-X model-ID refresh): the model IDs are
+    // correct, so the 400 must be coming from the request SHAPE. Anthropic
+    // rejects requests with:
+    //   (a) empty/whitespace-only message content
+    //   (b) two consecutive messages with the same role
+    //   (c) a messages array starting with role=assistant
+    //   (d) a final message that isn't role=user
+    // Normalize before sending — drop empties, collapse consecutive
+    // same-role pairs by keeping the latest, and ensure the array starts
+    // with role=user and ends with role=user.
+    var normalized = [];
+    for (var nmIdx = 0; nmIdx < messages.length; nmIdx++) {
+      var nmMsg = messages[nmIdx];
+      var nmContent = String((nmMsg && nmMsg.content) || '').trim();
+      if (!nmContent) continue;
+      var prev = normalized[normalized.length - 1];
+      if (prev && prev.role === nmMsg.role) {
+        // Same-role pair — keep the latest (more recent context).
+        normalized[normalized.length - 1] = { role: nmMsg.role, content: nmContent };
+      } else {
+        normalized.push({ role: nmMsg.role, content: nmContent });
+      }
+    }
+    // Drop leading assistant turns — the array must start with user.
+    while (normalized.length > 0 && normalized[0].role !== 'user') {
+      normalized.shift();
+    }
+    // If the array somehow ended up empty or ending with assistant, push
+    // the question to make it valid.
+    if (normalized.length === 0 || normalized[normalized.length - 1].role !== 'user') {
+      normalized.push({ role: 'user', content: String(question || '').trim() || '(no message)' });
+    }
+    messages = normalized;
+
     // v55.81 QA-19 (Max May 9 2026): fallback model chain. The whitepaper
     // flagged that we have a single point of failure on Anthropic's Sonnet 4.
     // If the primary call fails (outage, rate limit, transient 5xx), fall
@@ -1760,6 +1817,7 @@ export async function POST(request) {
       : ['claude-sonnet-4-6', 'claude-haiku-4-5']);
     var response = null;
     var lastErr = null;
+    var allAttemptErrors = []; // v55.82-Y — capture every attempt's error so users see why
     var modelUsed = null;
     for (var mIdx = 0; mIdx < MODEL_CHAIN.length; mIdx++) {
       var tryModel = MODEL_CHAIN[mIdx];
@@ -1770,16 +1828,26 @@ export async function POST(request) {
           body: JSON.stringify({ model: tryModel, max_tokens: 2000, system: context, messages: messages }),
         });
         if (r.ok) { response = r; modelUsed = tryModel; break; }
-        // Capture the error text so we can surface it if every model fails
-        lastErr = 'HTTP ' + r.status + ' on ' + tryModel + ': ' + (await r.text()).substring(0, 200);
-        console.warn('[ask] model ' + tryModel + ' failed (' + r.status + '); trying next');
+        // v55.82-Y — capture the FULL body (was: substring(0, 200)). When
+        // Anthropic returns a 400 because of a request-shape issue, the
+        // body has the actual reason — truncating to 200 chars often hid it.
+        var errBody = '';
+        try { errBody = await r.text(); } catch (_) {}
+        lastErr = 'HTTP ' + r.status + ' on ' + tryModel + ': ' + errBody.substring(0, 500);
+        allAttemptErrors.push(lastErr);
+        try { console.warn('[ask] model ' + tryModel + ' failed (' + r.status + '):', errBody.substring(0, 1000)); } catch (_) {}
       } catch (e) {
         lastErr = 'Threw on ' + tryModel + ': ' + (e && e.message);
-        console.warn('[ask] model ' + tryModel + ' threw; trying next');
+        allAttemptErrors.push(lastErr);
+        try { console.warn('[ask] model ' + tryModel + ' threw:', e && e.message); } catch (_) {}
       }
     }
     if (!response) {
-      return Response.json({ answer: 'AI Error: ' + (lastErr || 'all models unavailable') });
+      // v55.82-Y — surface ALL attempt errors, not just the last. If
+      // Sonnet failed for one reason and Haiku failed for a different
+      // reason, the user (and Vercel logs) sees both.
+      var combined = allAttemptErrors.length > 0 ? allAttemptErrors.join(' | ') : (lastErr || 'all models unavailable');
+      return Response.json({ answer: 'AI Error: ' + combined });
     }
     if (modelUsed && modelUsed !== MODEL_CHAIN[0]) {
       console.warn('[ask] served from fallback model: ' + modelUsed);

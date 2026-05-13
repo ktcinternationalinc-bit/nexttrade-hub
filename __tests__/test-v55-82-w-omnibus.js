@@ -117,7 +117,13 @@ ok('11b: didLogIn helper checks both user_sessions AND loginSummary',
 // CARRY-FORWARDS from prior turns we want to keep verified
 // =============================================================
 ok('priv: TicketsTab still has private-ticket filter',
-  /arr = arr\.filter\(t => !t\.is_private \|\| t\.private_to === myId\)/.test(tickets));
+  // v55.82-Z centralized the privacy gate into canSeeTicket. Either the
+  // old inline filter or the new helper-based one is acceptable as long
+  // as private-ticket filtering exists somewhere.
+  /arr = arr\.filter\(t => !t\.is_private \|\| t\.private_to === myId\)/.test(tickets) ||
+  (/const canSeeTicket = \(t\) => \{/.test(tickets) &&
+   /if \(t\.is_private\) return t\.private_to === myId/.test(tickets) &&
+   /arr = arr\.filter\(canSeeTicket\)/.test(tickets)));
 ok('coach-lang: coachLang still defaults from userProfile.preferred_language',
   /var pref = userProfile && userProfile\.preferred_language[\s\S]{0,200}return 'ar'/.test(myPerf));
 

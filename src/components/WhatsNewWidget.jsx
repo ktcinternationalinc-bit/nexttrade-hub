@@ -33,6 +33,44 @@ import { supabase } from '../lib/supabase';
 //     WhatsApp, the calendar, the Sales tab.
 export const BUILD_HISTORY = [
   {
+    version: 'v55.82-Z',
+    date: '2026-05-12',
+    label: 'Confidential tickets · Private tickets re-colored to light blue',
+    items: [
+      // PUBLIC — layman per Permanent Rule #1
+      '**New: Confidential tickets (orange).** Anyone on the team can now mark a ticket CONFIDENTIAL when they create it. A confidential ticket is only visible to the creator, the people it\'s assigned to, and super admin. Everyone else — including regular admins — won\'t see it in lists, searches, or counts. Use this for sensitive matters where a small team needs to collaborate but the rest of the company shouldn\'t see it (HR issues, vendor disputes, internal investigations). Confidential tickets show with an orange tint and a 🟧 CONFIDENTIAL chip so they\'re easy to recognize.',
+      '**Private tickets now use light blue.** The super-admin-only "Make this ticket PRIVATE" checkbox now shows in light-blue (was amber/yellow) and so does the card itself. This is purely a visual change so you can tell PRIVATE (light blue) and CONFIDENTIAL (orange) apart at a glance.',
+      '**Counts and stats respect privacy.** The five summary cards at the top (Critical / Open / Overdue / High / Closed) and the status legend counts now exclude tickets the current user can\'t see. No more "Open: 47" when only 39 are actually visible to them.',
+      '**Setup needed before this works:** run the SQL at `sql/v55-82-z-confidential-tickets.sql` to add the `is_confidential` column. The build will still load without it — if you check the Confidential box without running the migration, the system silently saves the ticket as a regular one. The light-blue private color works regardless of SQL state.',
+      // SUPER_ADMIN — technical detail per Permanent Rule #1
+      { superAdminOnly: true, text: 'SQL — sql/v55-82-z-confidential-tickets.sql adds `is_confidential BOOLEAN NOT NULL DEFAULT FALSE` to tickets, plus a partial index on (is_confidential) WHERE is_confidential=TRUE. Idempotent — also reasserts v55.82-V is_private + private_to columns so a single run brings the schema fully current.' },
+      { superAdminOnly: true, text: 'canSeeTicket helper — new single source of truth in TicketsTab.jsx. Logic: super_admin → true; is_private → private_to===myId; is_confidential → created_by===myId OR parseAssignees(t).includes(myId); else → true. Used by the main filtered useMemo, the status-count widget (legend), and all five top stat cards.' },
+      { superAdminOnly: true, text: 'Form — Private box now uses sky palette (border-sky-400, bg-sky-50, text-sky-900) and is still super_admin-gated. New Confidential box below it uses orange palette (border-orange-400, bg-orange-50, text-orange-900) and is available to ALL users. onChange handlers enforce mutual exclusivity at the UI layer.' },
+      { superAdminOnly: true, text: 'Insert path — handleAddTicket now computes both makePrivate and makeConfidential. is_private/private_to only added to ticketRow when makePrivate is true; is_confidential only added when makeConfidential is true. Backward-compat: works without v55.82-V or v55.82-Z SQL having been run (columns simply won\'t be set). logActivity tag now reflects [PRIVATE] vs [CONFIDENTIAL] vs assignment. Confidential tickets DO notify assignees (unlike private, where the assignee IS the creator).' },
+      { superAdminOnly: true, text: 'Card visuals — outer bg uses nested ternary: closed → bg-slate-200 (wins); private → bg-sky-50; confidential → bg-orange-50; else → bg-white. Border colors follow same pattern: closed #94a3b8, private #7dd3fc (sky-300), confidential #fdba74 (orange-300), else #e2e8f0. Chips: 🔒 PRIVATE on sky-100; 🟧 CONFIDENTIAL on orange-100.' },
+      { superAdminOnly: true, text: 'NEW TEST: __tests__/test-v55-82-z-confidential.js — 27 assertions covering SQL existence, canSeeTicket logic, filter/count usage, form colors+mutual exclusivity, conditional column writes, card/chip styling. Brittle prior tests patched: test-v55-82-d 2a+2c, test-v55-82-s 1a, test-v55-82-w priv — all loosened to accept v55.82-Z nested ternary forms.' },
+      { superAdminOnly: true, text: 'QA: 134 pass / 32 fail. Zero regressions vs Y.' },
+    ],
+  },
+  {
+    version: 'v55.82-Y',
+    date: '2026-05-12',
+    label: 'Hotfix — Nadia HTTP 400 root cause · ticket submit silently failing',
+    items: [
+      // PUBLIC — layman per Permanent Rule #1
+      '**Fixed: tickets can be created again.** The Submit button on the new-ticket form was silently doing nothing because the database was rejecting hidden fields (`is_private` and `private_to`) that aren\'t in your table yet — those columns only exist if you\'ve run the v55.82-V SQL. The system now only sends those fields when you actually check the "Make this ticket private" box. Tickets will save normally even if you never run that SQL.',
+      '**Fixed: AI assistants still hitting HTTP 400 after the X build.** The model names were correct in X, but the request body sometimes had problems Anthropic rejects — empty messages, or two messages from the same speaker in a row (happens occasionally after retries). The system now cleans up the message list before sending. If anything DOES still fail, you\'ll see the actual reason from Anthropic instead of just "HTTP 400" — every error now shows the full server response so we can diagnose immediately.',
+      '**Improved: database changes are more forgiving.** When the app tries to save a record with a column your database doesn\'t have yet, the save used to fail on the SECOND such column. Now it iteratively removes any number of unknown columns and saves what it can — so partial migrations no longer block saves. Console logs tell admins which migrations are still pending.',
+      // SUPER_ADMIN — technical detail
+      { superAdminOnly: true, text: 'TICKETS — TicketsTab.jsx handleAddTicket now conditionally includes is_private + private_to ONLY when makePrivate is true. The default ticketRow literal no longer references those columns, so an INSERT works regardless of whether sql/v55-82-v-private-tickets.sql has been applied. Private-ticket filter (`!t.is_private || t.private_to === myId`) is safe with undefined t.is_private — undefined is falsy, all rows pass.' },
+      { superAdminOnly: true, text: 'AI REQUEST NORMALIZATION — /api/ask main path now: (a) trims and drops empty content, (b) collapses consecutive same-role messages (keeps the latest), (c) drops leading non-user messages, (d) guarantees the array ends with role=user. Anthropic returns 400 on any of these violations. Same normalization applied to greeter path (gMessages).' },
+      { superAdminOnly: true, text: 'AI ERROR REPORTING — both MODEL_CHAIN and GMODEL_CHAIN now capture FULL response body (substring(0, 500), up from 200) and track per-attempt errors in allAttemptErrors / gAllErrors arrays. Final error message is the joined list of every attempt\'s failure so users see "Sonnet 400: ... | Haiku 400: ..." instead of just the last one. Vercel logs get up to 1000 chars of each error body.' },
+      { superAdminOnly: true, text: 'DB RESILIENCE — src/lib/supabase.js dbInsert + dbUpdate now loop column-stripping (max 8 iterations) instead of single retry. Records with multiple not-yet-migrated columns no longer fail on the second one. Each stripped column logs `[dbInsert] ... Run the SQL migration that adds this column.` Stripped columns also propagate to audit_log new_values so the trail matches what was actually saved.' },
+      { superAdminOnly: true, text: 'NEW TEST: __tests__/test-v55-82-y-hotfix.js — 9 assertions. Brittle prior test patched: test-v55-30-missing-column-resilience accepts both single-if and while-loop forms.' },
+      { superAdminOnly: true, text: 'QA: 133 pass / 32 fail. Zero regressions vs X.' },
+    ],
+  },
+  {
     version: 'v55.82-X',
     date: '2026-05-12',
     label: 'Hotfix — AI assistants getting "HTTP 400" errors',

@@ -45,6 +45,22 @@ export default function TicketsTab({ toast, customers, user, userProfile, users,
   };
   const isAssignedToMe = (t) => parseAssignees(t).includes(myId);
   const allAssigneeNames = (t) => parseAssignees(t).map(id => getUserName(id)).filter(Boolean);
+  // v55.82-Z (Max May 12 2026) — single source of truth for ticket visibility.
+  // Used by the main filter AND every count widget so private/confidential
+  // tickets never appear in counts the user shouldn't see.
+  //   • Super admin: sees everything.
+  //   • Private (is_private): only the creator (private_to === myId).
+  //   • Confidential (is_confidential): creator OR any assignee.
+  //   • Regular: visible to everyone.
+  const canSeeTicket = (t) => {
+    if (!t) return false;
+    if (isSuperAdmin) return true;
+    if (t.is_private) return t.private_to === myId;
+    if (t.is_confidential) {
+      return t.created_by === myId || parseAssignees(t).includes(myId);
+    }
+    return true;
+  };
   const [uploading, setUploading] = useState(false);
 
   const canDeleteTicket = (ticket) => {
@@ -149,11 +165,11 @@ export default function TicketsTab({ toast, customers, user, userProfile, users,
 
   const filtered = useMemo(() => {
     let arr = tickets;
-    // v55.82-V — PRIVATE TICKETS visibility. Private tickets are visible
-    // only to the user listed in private_to. Even admins cannot see other
-    // users' private tickets. Applied BEFORE any other filter so private
-    // tickets never leak through search, status filters, or sort.
-    arr = arr.filter(t => !t.is_private || t.private_to === myId);
+    // v55.82-V — PRIVATE tickets (super-admin only, light-blue highlight).
+    // v55.82-Z — CONFIDENTIAL tickets (orange) — visible to creator,
+    //   assigned_to, additional_assignees, and super_admin.
+    // Centralized in canSeeTicket() so every count widget uses the same rule.
+    arr = arr.filter(canSeeTicket);
     // v55.82-W (Max May 12 2026): when the user is actively searching, the
     // status filter is intentionally bypassed so search results include
     // CLOSED tickets too. Without this, "Open" status (the default) was
@@ -207,6 +223,10 @@ export default function TicketsTab({ toast, customers, user, userProfile, users,
       // field set, we silently refuse to honor it server-side at the
       // RLS/filter layer too.
       var makePrivate = !!(f.isPrivate && isSuperAdmin);
+      // v55.82-Z — Confidential is mutually exclusive with private. If
+      // both are checked (shouldn't happen via UI but defensive), private
+      // wins because it's the stricter restriction.
+      var makeConfidential = !makePrivate && !!f.isConfidential;
       var ticketRow = {
         ticket_number: ticketNum,
         title: f.title,
@@ -220,12 +240,22 @@ export default function TicketsTab({ toast, customers, user, userProfile, users,
         assigned_to: makePrivate ? (myId || null) : (f.assignedTo || null),
         additional_assignees: makePrivate ? null : (extraAssignees.length ? JSON.stringify(extraAssignees) : null),
         created_by: myId || null,
-        is_private: makePrivate,
-        private_to: makePrivate ? (myId || null) : null,
       };
+      // v55.82-Y/Z — only include privacy columns when actually setting
+      // them. If the SQL migration hasn't been run yet, the columns don't
+      // exist; omitting them entirely keeps INSERT working regardless.
+      if (makePrivate) {
+        ticketRow.is_private = true;
+        ticketRow.private_to = myId || null;
+      }
+      if (makeConfidential) {
+        ticketRow.is_confidential = true;
+      }
       await dbInsert('tickets', ticketRow, myId || null);
-      await logActivity(myId, 'Created ' + ticketNum + ': ' + f.title + (makePrivate ? ' [PRIVATE]' : (assignedName ? ' → ' + assignedName : '')), 'ticket');
+      var logTag = makePrivate ? ' [PRIVATE]' : (makeConfidential ? ' [CONFIDENTIAL]' : (assignedName ? ' → ' + assignedName : ''));
+      await logActivity(myId, 'Created ' + ticketNum + ': ' + f.title + logTag, 'ticket');
       // Don't notify anyone on private tickets — the assignee IS the creator.
+      // Confidential tickets DO notify the assignees (they need to know).
       if (!makePrivate) {
         const allToNotify = [f.assignedTo, ...extraAssignees].filter(id => id && id !== myId);
         if (allToNotify.length) notifyTicketAssigned(allToNotify, ticketNum + ' ' + f.title, myId);
@@ -1209,16 +1239,18 @@ export default function TicketsTab({ toast, customers, user, userProfile, users,
     {/* Stats — click to filter
         v55.82-D — Added Critical card. Five columns now (was four).
         Critical card sits leftmost, dark-red accent (#7f1d1d), so it grabs
-        the eye whenever a critical ticket is open. */}
+        the eye whenever a critical ticket is open.
+        v55.82-Z — counts honor canSeeTicket so private/confidential
+        tickets don't bleed into counts for users who can't see them. */}
     <div className="grid grid-cols-5 gap-3 mb-3">
       <div onClick={() => { setPriorityF('critical'); setStatusF('open'); }} className="bg-white rounded-lg p-3 cursor-pointer hover:shadow transition" style={{borderLeftWidth:3,borderLeftColor:'#7f1d1d'}}>
         <div className="text-[10px] text-slate-500">🚨 Critical</div>
-        <div className="text-lg font-extrabold text-red-900">{tickets.filter(t=>t.priority==='critical'&&t.status!=='Closed').length}</div>
+        <div className="text-lg font-extrabold text-red-900">{tickets.filter(t=>canSeeTicket(t)&&t.priority==='critical'&&t.status!=='Closed').length}</div>
       </div>
-      <div onClick={() => setStatusF('open')} className="bg-white rounded-lg p-3 cursor-pointer hover:shadow transition" style={{borderLeftWidth:3,borderLeftColor:'#3b82f6'}}><div className="text-[10px] text-slate-500">Open</div><div className="text-lg font-extrabold">{tickets.filter(t=>t.status!=='Closed').length}</div></div>
-      <div onClick={() => setStatusF('overdue')} className="bg-white rounded-lg p-3 cursor-pointer hover:shadow transition" style={{borderLeftWidth:3,borderLeftColor:'#ef4444'}}><div className="text-[10px] text-slate-500">Overdue</div><div className="text-lg font-extrabold text-red-500">{tickets.filter(t=>t.due_date&&t.due_date<todayStr&&t.status!=='Closed').length}</div></div>
-      <div onClick={() => { setPriorityF('high'); }} className="bg-white rounded-lg p-3 cursor-pointer hover:shadow transition" style={{borderLeftWidth:3,borderLeftColor:'#dc2626'}}><div className="text-[10px] text-slate-500">High Priority</div><div className="text-lg font-extrabold text-red-600">{tickets.filter(t=>t.priority==='high'&&t.status!=='Closed').length}</div></div>
-      <div onClick={() => setStatusF('Closed')} className="bg-white rounded-lg p-3 cursor-pointer hover:shadow transition" style={{borderLeftWidth:3,borderLeftColor:'#1e293b'}}><div className="text-[10px] text-slate-500">Closed</div><div className="text-lg font-extrabold text-slate-800">{tickets.filter(t=>t.status==='Closed').length}</div></div>
+      <div onClick={() => setStatusF('open')} className="bg-white rounded-lg p-3 cursor-pointer hover:shadow transition" style={{borderLeftWidth:3,borderLeftColor:'#3b82f6'}}><div className="text-[10px] text-slate-500">Open</div><div className="text-lg font-extrabold">{tickets.filter(t=>canSeeTicket(t)&&t.status!=='Closed').length}</div></div>
+      <div onClick={() => setStatusF('overdue')} className="bg-white rounded-lg p-3 cursor-pointer hover:shadow transition" style={{borderLeftWidth:3,borderLeftColor:'#ef4444'}}><div className="text-[10px] text-slate-500">Overdue</div><div className="text-lg font-extrabold text-red-500">{tickets.filter(t=>canSeeTicket(t)&&t.due_date&&t.due_date<todayStr&&t.status!=='Closed').length}</div></div>
+      <div onClick={() => { setPriorityF('high'); }} className="bg-white rounded-lg p-3 cursor-pointer hover:shadow transition" style={{borderLeftWidth:3,borderLeftColor:'#dc2626'}}><div className="text-[10px] text-slate-500">High Priority</div><div className="text-lg font-extrabold text-red-600">{tickets.filter(t=>canSeeTicket(t)&&t.priority==='high'&&t.status!=='Closed').length}</div></div>
+      <div onClick={() => setStatusF('Closed')} className="bg-white rounded-lg p-3 cursor-pointer hover:shadow transition" style={{borderLeftWidth:3,borderLeftColor:'#1e293b'}}><div className="text-[10px] text-slate-500">Closed</div><div className="text-lg font-extrabold text-slate-800">{tickets.filter(t=>canSeeTicket(t)&&t.status==='Closed').length}</div></div>
     </div>
 
     {/* Status Legend — collapsible */}
@@ -1230,7 +1262,7 @@ export default function TicketsTab({ toast, customers, user, userProfile, users,
             <div className="flex items-center gap-1.5 mb-0.5">
               <div className="w-2.5 h-2.5 rounded-full" style={{background: STATUS_COLORS[s]}} />
               <span className="text-xs font-bold">{s}</span>
-              <span className="text-[9px] text-slate-500 ml-auto">{tickets.filter(t => t.status === s && (!t.is_private || t.private_to === myId)).length}</span>
+              <span className="text-[9px] text-slate-500 ml-auto">{tickets.filter(t => t.status === s && canSeeTicket(t)).length}</span>
             </div>
             <div className="text-[9px] text-slate-500 leading-tight">{STATUS_DESC[s]}</div>
           </div>
@@ -1278,26 +1310,66 @@ export default function TicketsTab({ toast, customers, user, userProfile, users,
             visible only to the creator + the creator's AI session. Other
             users (including admins) cannot see it. Useful for personal
             notes, sensitive items, or super-admin-only workstreams. */}
+        {/* v55.82-V — PRIVATE TICKETS for super_admin (light-blue per Max May 12 2026).
+            Only super_admin sees this toggle. When checked: the ticket is
+            visible only to the creator + super_admin (i.e. yourself).
+            Cannot be assigned to anyone else. */}
         {isSuperAdmin && (
-          <div className="col-span-2 mt-2 p-3 rounded-lg border-2 border-dashed border-amber-400 bg-amber-50">
+          <div className="col-span-2 mt-2 p-3 rounded-lg border-2 border-dashed border-sky-400 bg-sky-50">
             <label className="flex items-start gap-2 cursor-pointer">
               <input
                 type="checkbox"
                 checked={!!f.isPrivate}
-                onChange={e => setF({ ...f, isPrivate: e.target.checked, assignedTo: e.target.checked ? '' : f.assignedTo, extraAssignees: e.target.checked ? [] : f.extraAssignees })}
+                onChange={e => setF({
+                  ...f,
+                  isPrivate: e.target.checked,
+                  // Mutually exclusive with confidential
+                  isConfidential: e.target.checked ? false : f.isConfidential,
+                  assignedTo: e.target.checked ? '' : f.assignedTo,
+                  extraAssignees: e.target.checked ? [] : f.extraAssignees,
+                })}
                 className="w-4 h-4 mt-0.5"
               />
               <span>
-                <span className="text-xs font-bold text-amber-900 flex items-center gap-1">
-                  🔒 Make this ticket private
+                <span className="text-xs font-bold text-sky-900 flex items-center gap-1">
+                  🔒 Make this ticket PRIVATE (super-admin only)
                 </span>
-                <span className="text-[11px] text-amber-900 font-medium block mt-0.5">
-                  Only you and your AI assistants will be able to see this ticket. Other team members — including admins — won't find it in any list. When private, the ticket cannot be assigned to anyone else.
+                <span className="text-[11px] text-sky-900 font-medium block mt-0.5">
+                  Only you (super admin) and your AI assistants can see it. Other team members — including admins — won't find it in any list. Cannot be assigned to anyone else.
                 </span>
               </span>
             </label>
           </div>
         )}
+        {/* v55.82-Z — CONFIDENTIAL TICKETS (orange per Max May 12 2026).
+            Available to ALL users. When checked: visible only to the
+            creator, the assigned_to user, anyone in additional_assignees,
+            and super_admin. Use for sensitive items that still need a team
+            (e.g. HR matters, vendor disputes, internal investigations). */}
+        <div className="col-span-2 mt-2 p-3 rounded-lg border-2 border-dashed border-orange-400 bg-orange-50">
+          <label className="flex items-start gap-2 cursor-pointer">
+            <input
+              type="checkbox"
+              checked={!!f.isConfidential}
+              onChange={e => setF({
+                ...f,
+                isConfidential: e.target.checked,
+                // Mutually exclusive with private (if user is super_admin)
+                isPrivate: e.target.checked ? false : f.isPrivate,
+              })}
+              className="w-4 h-4 mt-0.5"
+              disabled={!!f.isPrivate}
+            />
+            <span>
+              <span className="text-xs font-bold text-orange-900 flex items-center gap-1">
+                🟧 Mark CONFIDENTIAL
+              </span>
+              <span className="text-[11px] text-orange-900 font-medium block mt-0.5">
+                Only the creator, the assignees, and super admin can see this ticket. Useful for sensitive matters (HR issues, vendor disputes, internal investigations) where a small team needs to collaborate but the rest of the company shouldn't see it.
+              </span>
+            </span>
+          </label>
+        </div>
       </div>
       <div className="flex gap-2 mt-3">
         <button onClick={handleAddTicket}
@@ -1411,13 +1483,26 @@ export default function TicketsTab({ toast, customers, user, userProfile, users,
               // description) is also muted when the ticket is closed, so the
               // ENTIRE card communicates "this is closed/inactive", not just
               // the outer shell. Per Max May 12 2026 spec.
-              + (t.status === 'Closed' ? 'bg-slate-200 ' : 'bg-white ')
+              // v55.82-Z — privacy tints: sky-50 for private (super-admin
+              // only), orange-50 for confidential. Closed always wins because
+              // it's the strongest "don't act on this" signal.
+              + (t.status === 'Closed'
+                  ? 'bg-slate-200 '
+                  : (t.is_private ? 'bg-sky-50 ' : (t.is_confidential ? 'bg-orange-50 ' : 'bg-white ')))
             }
             style={{
               // Closed tickets override the priority-color left border with
               // a calm slate so they don't visually compete with open ones.
               borderLeft: '4px solid ' + (t.status === 'Closed' ? '#64748b' : leftBorderColor),
-              border: isBulked ? undefined : (t.status === 'Closed' ? '1px solid #94a3b8' : '1px solid #e2e8f0'),
+              border: isBulked
+                ? undefined
+                : (t.status === 'Closed'
+                    ? '1px solid #94a3b8'
+                    : (t.is_private
+                        ? '1px solid #7dd3fc'    // sky-300
+                        : (t.is_confidential
+                            ? '1px solid #fdba74' // orange-300
+                            : '1px solid #e2e8f0'))),
               borderLeftWidth: 4,
               borderLeftColor: t.status === 'Closed' ? '#64748b' : leftBorderColor,
               // v55.82-S — slight desaturation on closed cards. Children
@@ -1434,12 +1519,18 @@ export default function TicketsTab({ toast, customers, user, userProfile, users,
                 <div className="flex-1 min-w-0" onClick={()=>{setSel(t);loadComments(t.id);}}>
                   <div className={'font-bold text-[15px] leading-tight mb-1 ' + (t.status === 'Closed' ? 'text-slate-600 line-through decoration-slate-400' : 'text-slate-900')}
                     style={{ wordBreak: 'break-word' }}>
-                    {/* v55.82-V — lock icon flags private tickets at a glance.
-                        Only visible to the owner since others can't see the
-                        row at all. */}
+                    {/* v55.82-V/Z — Privacy chips. PRIVATE (sky) = super-admin
+                        only, visible only to creator. CONFIDENTIAL (orange) =
+                        visible to creator, assignees, and super admin. Mutually
+                        exclusive, but defensive: if both, render both. */}
                     {t.is_private && (
-                      <span className="inline-flex items-center gap-0.5 mr-1 px-1.5 py-0.5 rounded bg-amber-100 border border-amber-400 text-amber-900 text-[10px] font-extrabold align-middle" title="Private ticket — only you can see this">
+                      <span className="inline-flex items-center gap-0.5 mr-1 px-1.5 py-0.5 rounded bg-sky-100 border border-sky-400 text-sky-900 text-[10px] font-extrabold align-middle" title="Private ticket — only you can see this">
                         🔒 PRIVATE
+                      </span>
+                    )}
+                    {t.is_confidential && (
+                      <span className="inline-flex items-center gap-0.5 mr-1 px-1.5 py-0.5 rounded bg-orange-100 border border-orange-400 text-orange-900 text-[10px] font-extrabold align-middle" title="Confidential — only the creator, assignees, and super admin can see this">
+                        🟧 CONFIDENTIAL
                       </span>
                     )}
                     {t.title}

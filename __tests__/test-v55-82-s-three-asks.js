@@ -27,7 +27,10 @@ var coachApi = fs.readFileSync(path.join(__dirname, '..', 'src', 'app', 'api', '
 // =============================================================
 
 ok('1a: Closed ticket outer bg is bg-slate-200 (visible against dark theme)',
-  /t\.status === 'Closed' \? 'bg-slate-200 ' : 'bg-white '/.test(ticketsTab));
+  // v55.82-Z added nested ternary for private (sky)/confidential (orange)
+  // tints. Closed always wins. Accept either old simple form or new nested.
+  /t\.status === 'Closed' \? 'bg-slate-200 ' : 'bg-white '/.test(ticketsTab) ||
+  /t\.status === 'Closed'[\s\S]{0,80}'bg-slate-200 '[\s\S]{0,500}'bg-white '/.test(ticketsTab));
 
 ok('1b: Closed ticket card has grayscale filter applied (whole-card muting)',
   /filter: t\.status === 'Closed' \? 'grayscale\(0\.55\) opacity\(0\.92\)'/.test(ticketsTab),

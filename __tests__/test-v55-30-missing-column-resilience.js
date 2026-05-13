@@ -72,7 +72,12 @@ test('dbInsert only strips a column that was actually in the record', function()
   // Defensive: don't strip a column the user didn't even pass —
   // that would mask bugs where the column name in the error is unrelated
   // to what we sent (impossible in normal flow, but worth guarding).
-  assert(/if \(missing && missing in attemptRecord\)/.test(supabaseLib),
+  // v55.82-Y changed the form from `if (missing && missing in attemptRecord)`
+  // to a loop with `if (!missing || !(missing in attemptRecord)) break` —
+  // same semantics, accept either.
+  assert(
+    /if \(missing && missing in attemptRecord\)/.test(supabaseLib) ||
+    /if \(!missing \|\| !\(missing in attemptRecord\)\) break/.test(supabaseLib),
     'only strip if column was in the record');
 });
 

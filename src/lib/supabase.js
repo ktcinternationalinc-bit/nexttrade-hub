@@ -67,19 +67,25 @@ export async function dbInsert(table, record, userId) {
   data = first.data;
   error = first.error;
 
-  // If the error is a missing column, strip it and retry ONCE
-  if (error) {
+  // v55.82-Y (Max May 12 2026 — "creating tickets is not working"): if a
+  // record has MULTIPLE not-yet-migrated columns (e.g. both is_private
+  // and private_to on tickets), the old single-retry logic stripped one,
+  // retried, then bombed on the next missing column. Loop up to 8 times,
+  // stripping one column per iteration, so any number of pending columns
+  // are gracefully removed before giving up.
+  var safety = 0;
+  while (error && safety < 8) {
     var missing = extractMissingColumn(error);
-    if (missing && missing in attemptRecord) {
-      console.warn('[dbInsert] ' + table + ' missing column "' + missing + '" — stripping and retrying. Run the SQL migration that adds this column.');
-      var retryRecord = Object.assign({}, attemptRecord);
-      delete retryRecord[missing];
-      strippedColumns.push(missing);
-      var retry = await supabase.from(table).insert(retryRecord).select().single();
-      data = retry.data;
-      error = retry.error;
-      attemptRecord = retryRecord;
-    }
+    if (!missing || !(missing in attemptRecord)) break;
+    console.warn('[dbInsert] ' + table + ' missing column "' + missing + '" — stripping and retrying. Run the SQL migration that adds this column.');
+    var retryRecord = Object.assign({}, attemptRecord);
+    delete retryRecord[missing];
+    strippedColumns.push(missing);
+    var retry = await supabase.from(table).insert(retryRecord).select().single();
+    data = retry.data;
+    error = retry.error;
+    attemptRecord = retryRecord;
+    safety++;
   }
 
   if (error) throw error;
@@ -112,8 +118,11 @@ export async function dbUpdate(table, id, changes, userId) {
   var error = first.error;
 
   if (error) {
-    var missing = extractMissingColumn(error);
-    if (missing && missing in attemptChanges) {
+    // v55.82-Y — iterate stripping missing columns. Same fix as dbInsert.
+    var safetyU = 0;
+    while (error && safetyU < 8) {
+      var missing = extractMissingColumn(error);
+      if (!missing || !(missing in attemptChanges)) break;
       console.warn('[dbUpdate] ' + table + ' missing column "' + missing + '" — stripping and retrying. Run the SQL migration that adds this column.');
       var retryChanges = Object.assign({}, attemptChanges);
       delete retryChanges[missing];
@@ -126,6 +135,7 @@ export async function dbUpdate(table, id, changes, userId) {
       data = retry.data;
       error = retry.error;
       attemptChanges = retryChanges;
+      safetyU++;
     }
   }
 
