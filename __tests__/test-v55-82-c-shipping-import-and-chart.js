@@ -123,13 +123,18 @@ ok('chart-anchor: chart block exists with new title',
 // v55.82-M added ~3K of new code (active-window logic, carry-forward,
 // click handler, dot renderer) between the upstream trendRates filter
 // and the chart title, so we widen the upstream window from 9000 → 13000.
-var chartSlice = chartIdx > 0 ? tabSrc.slice(Math.max(0, chartIdx - 20000), chartIdx + 10000) : '';
+// v55.83-A.6 — chart section grew with view controls + currency tabs + scatter
+// wrap; widen the slice window to cover all the new code.
+var chartSlice = chartIdx > 0 ? tabSrc.slice(Math.max(0, chartIdx - 20000), chartIdx + 18000) : '';
 
 // 2a — v55.82-M: X-axis driven by EFFECTIVE date timeline (Max May 12 2026
 //      respec). The old C-build expiry anchor is superseded.
-ok('2a: v55.82-M — trendRates filter still uses expiry/effective fallback for the period filter (input narrowing)',
-  /\(r\.expiry_date \|\| r\.effective_date \|\| ''\) >= rateHistoryDf/.test(chartSlice)
-  && /\(r\.expiry_date \|\| r\.effective_date \|\| ''\) <= rateHistoryDt/.test(chartSlice),
+ok('2a: trendRates period filter narrows input rows (input narrowing)',
+  // v55.83-A.6 — period filter switched from "(expiry || effective) in window" to
+  // "rate active during window" semantics. Either form is acceptable; both narrow input.
+  (/\(r\.expiry_date \|\| r\.effective_date \|\| ''\) >= rateHistoryDf/.test(chartSlice)
+   && /\(r\.expiry_date \|\| r\.effective_date \|\| ''\) <= rateHistoryDt/.test(chartSlice)) ||
+  /Rate has to have started by the end of the window[\s\S]{0,400}Rate has to still be active by the start of the window/.test(chartSlice),
   'period filter still uses either-or anchor — narrows input rows'
 );
 
@@ -147,8 +152,11 @@ ok('2c: REGRESSION GUARD — chart no longer buckets months from expiry_date',
 );
 
 // 3a — v55.82-M: per-line aggregation uses reduce() picking lowest (best = lowest), not Math.min.apply
-ok('3a: v55.82-M — per-shipping-line winner picked via reduce() lowest',
-  /winner = activeForLine\.reduce[\s\S]{0,300}Number\(r\.rate_amount\) < Number\(acc\.rate_amount\) \? r : acc/.test(chartSlice),
+ok('3a: per-group winner picked via reduce() lowest',
+  // v55.83-A.6 — variable renamed activeForLine → activeForGroup (groups can be
+  // either shipping_line or vendor_name now, based on chartView). Same logic.
+  (/winner = activeForLine\.reduce[\s\S]{0,300}Number\(r\.rate_amount\) < Number\(acc\.rate_amount\) \? r : acc/.test(chartSlice) ||
+   /winner = activeForGroup\.reduce[\s\S]{0,300}Number\(r\.rate_amount\) < Number\(acc\.rate_amount\) \? r : acc/.test(chartSlice)),
   'aggregate is "best = lowest" but uses reduce so we can carry the winning row id'
 );
 
@@ -181,7 +189,8 @@ ok('3d: period-over-period uses best (lowest) price logic',
 
 // 4a — booking stars layer present with Scatter
 ok('4a: chart renders <Scatter name="Bookings" /> for booking stars',
-  /<Scatter[\s\S]{0,200}name="Bookings"[\s\S]{0,200}data=\{bookingStars\}/.test(chartSlice)
+  // v55.83-A.6 — Scatter wraps to multiple lines now; loosen the search distance.
+  /<Scatter[\s\S]{0,500}name="Bookings"[\s\S]{0,500}data=\{bookingStars\}/.test(chartSlice)
 );
 
 // 4b — bookingStars built from booked rows with proper (booking_date, rate) coords
@@ -227,8 +236,10 @@ ok('5c: StarShape returns null on NaN cx/cy',
 
 // 5d — v55.82-M: reduce-based winner picks naturally guard against empty
 //      input (the if (activeForLine.length > 0) check stays in place).
-ok('5d: v55.82-M — winner-pick guarded by activeForLine.length > 0',
-  /if \(activeForLine\.length > 0\) \{[\s\S]{0,400}winner = activeForLine\.reduce/.test(chartSlice)
+ok('5d: winner-pick guarded by activeForGroup.length > 0',
+  // v55.83-A.6 — activeForLine renamed to activeForGroup
+  /if \(activeForLine\.length > 0\) \{[\s\S]{0,400}winner = activeForLine\.reduce/.test(chartSlice) ||
+  /if \(activeForGroup\.length > 0\) \{[\s\S]{0,400}winner = activeForGroup\.reduce/.test(chartSlice)
 );
 
 // 5e — empty-state message describes the new effective-date requirement
@@ -237,14 +248,17 @@ ok('5e: v55.82-M — empty-state message points at missing effective dates',
 );
 
 // 5f — header sub-line explains the new effective-date axis + click affordance
-ok('5f: v55.82-M — chart header explains effective-date timeline + click rule',
-  /effective-date timeline/.test(chartSlice) && /⭐ = booking/.test(chartSlice)
-  && /click any point/.test(chartSlice)
+ok('5f: chart header explains booking marker + click rule',
+  // v55.83-A.6 — caption rewritten. Removed "effective-date timeline" phrase
+  // (timeline is now view-aware and shown in the footer caption). Booking
+  // marker + click rule still documented.
+  /⭐ = booking/.test(chartSlice) && /click any point/.test(chartSlice)
 );
 
 // 5g — footer counter shows booking count
 ok('5g: chart footer shows booking-star count when > 0',
-  /\{bookingStars\.length\} booking/.test(chartSlice)
+  // v55.83-A.6 — caption still references bookingStars.length
+  /bookingStars\.length\}? booking/.test(chartSlice)
 );
 
 // =====================================================================

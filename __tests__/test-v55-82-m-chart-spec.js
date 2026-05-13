@@ -69,7 +69,9 @@ ok('2c: Null/empty expiry_date treated as "no end date" (always active)',
 // ============================================================
 
 ok('3a: Per-month winner selected as lowest rate via reduce()',
-  /winner = activeForLine\.reduce[\s\S]{0,300}Number\(r\.rate_amount\) < Number\(acc\.rate_amount\) \? r : acc/.test(src),
+  // v55.83-A.6 — activeForLine → activeForGroup rename
+  (/winner = activeForLine\.reduce[\s\S]{0,300}Number\(r\.rate_amount\) < Number\(acc\.rate_amount\) \? r : acc/.test(src) ||
+   /winner = activeForGroup\.reduce[\s\S]{0,300}Number\(r\.rate_amount\) < Number\(acc\.rate_amount\) \? r : acc/.test(src)),
   'spec point 3 — lowest valid active price wins'
 );
 
@@ -81,19 +83,27 @@ ok('3b: Market-floor "_best" line picks lowest across ALL active rates',
 // SPEC #4 — Carry-forward with stale marker
 // ============================================================
 
-ok('4a: lastBestForLine map tracks the most recent best per line',
+ok('4a: lastBestForLine map tracks the most recent best per line/group',
+  // v55.83-A.6 — variable iteration var renamed L → G (group, not just shipping_line)
   /var lastBestForLine = \{\}/.test(src) &&
-  /lastBestForLine\[L\] = \{ price: Number\(winner\.rate_amount\), rateId: winner\.id, asOfMonth: m \}/.test(src)
+  (/lastBestForLine\[L\] = \{ price: Number\(winner\.rate_amount\), rateId: winner\.id, asOfMonth: m \}/.test(src) ||
+   /lastBestForLine\[G\] = \{ price: Number\(winner\.rate_amount\), rateId: winner\.id, asOfMonth: m \}/.test(src))
 );
 
 ok('4b: When no active rate exists, carry-forward branch runs and sets stale flag',
-  /else if \(lastBestForLine\[L\]\) \{[\s\S]{0,500}point\['__stale__' \+ L\] = true/.test(src),
+  // v55.83-A.6 — same L → G iteration rename
+  (/else if \(lastBestForLine\[L\]\) \{[\s\S]{0,500}point\['__stale__' \+ L\] = true/.test(src) ||
+   /else if \(lastBestForLine\[G\]\) \{[\s\S]{0,500}point\['__stale__' \+ G\] = true/.test(src)),
   'spec point 4 — carry-forward marks the point stale'
 );
 
-ok('4c: Stale dot renderer draws a hollow circle (not solid)',
-  /staleFlag[\s\S]{0,300}circle cx=\{cx\} cy=\{cy\} r=\{4\} fill="#fff"[\s\S]{0,100}strokeDasharray="2 2"/.test(src),
-  'spec point 4 — stale carry-forward shown as a hollow dashed dot'
+ok('4c: Stale dot renderer marks stale points distinctly',
+  // v55.83-A.6 (Max May 13 2026 spec) — stale rendering changed from a hollow
+  // dashed circle to a SOLID dot + ⏳ icon overlay above the dot. The line
+  // itself is now solid (no more dotted-grey). Accept either form.
+  (/staleFlag[\s\S]{0,300}circle cx=\{cx\} cy=\{cy\} r=\{4\} fill="#fff"[\s\S]{0,100}strokeDasharray="2 2"/.test(src) ||
+   /staleFlag[\s\S]{0,400}⏳/.test(src)),
+  'stale carry-forward must be visually marked (hollow dashed dot OR ⏳ icon)'
 );
 
 ok('4d: Tooltip shows "last known — no newer rate" indicator on stale points',
@@ -173,13 +183,17 @@ ok('6i: Highlighted row transitions smoothly (not instant flash)',
 // SPEC #7 — Goal: trace each point back to its source record
 // ============================================================
 
-ok('7a: Each line plotted carries per-line __source__ ids',
-  /point\['__source__' \+ L\] = winner\.id/.test(src) &&
+ok('7a: Each line plotted carries per-group __source__ ids',
+  // v55.83-A.6 — L → G iteration rename
+  (/point\['__source__' \+ L\] = winner\.id/.test(src) ||
+   /point\['__source__' \+ G\] = winner\.id/.test(src)) &&
   /point\.__source___best = bestRow\.id/.test(src)
 );
 
 ok('7b: Carry-forward stale points still expose their (last known) source id',
-  /point\['__source__' \+ L\] = lastBestForLine\[L\]\.rateId/.test(src)
+  // v55.83-A.6 — L → G iteration rename
+  /point\['__source__' \+ L\] = lastBestForLine\[L\]\.rateId/.test(src) ||
+  /point\['__source__' \+ G\] = lastBestForLine\[G\]\.rateId/.test(src)
 );
 
 ok('7c: Header subtitle explains the click → jump affordance',
@@ -188,9 +202,12 @@ ok('7c: Header subtitle explains the click → jump affordance',
   'spec point 7 — user should understand the chart→table link'
 );
 
-ok('7d: Chart subtitle mentions effective-date timeline (not expiry)',
-  /effective-date timeline/.test(src),
-  'spec point 1+7 — UI clearly labels what X-axis represents'
+ok('7d: Chart subtitle explains X-axis is by month (not expiry-anchored)',
+  // v55.83-A.6 — caption restructured to mention "X-axis: month" instead of
+  // "effective-date timeline". Both convey the same intent (month-based axis).
+  /effective-date timeline/.test(src) ||
+  /X-axis: month/.test(src),
+  'UI clearly labels what X-axis represents'
 );
 
 // ============================================================

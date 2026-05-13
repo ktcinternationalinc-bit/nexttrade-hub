@@ -76,23 +76,34 @@ test('S17.11.10 Rate trend chart renders with trendPoints data', function() {
     'trendPoints must be defined and fed to the trend chart');
 });
 
-test('S17.11.11 Chart supports "all lines" view overlaying each shipping line', function() {
-  assert(/chartShippingLine === 'all'\s*\?\s*linesToPlot\.map/.test(tab),
-    'when chartShippingLine=all, should render one Line per shipping line');
+test('S17.11.11 Chart supports per-group view rendering one Line per group', function() {
+  // v55.83-A.6 — chart restructured to use chartView ('floor' / 'vendor' /
+  // 'line'). When chartView is 'vendor' or 'line', the chart maps groupsToPlot
+  // → one <Line> per group. Replaces the old chartShippingLine === 'all' branch.
+  assert(/chartShippingLine === 'all'\s*\?\s*linesToPlot\.map/.test(tab) ||
+    /groupsToPlot\.map\(function\(G, i\)/.test(tab),
+    'when grouped by vendor or shipping line, should render one Line per group');
 });
 
-test('S17.11.12 Chart supports specific shipping-line view', function() {
-  assert(/\(<Line type="monotone" dataKey=\{chartShippingLine\}/.test(tab),
-    'when a specific line is selected, only that Line renders');
+test('S17.11.12 Chart supports scope filtering by specific shipping line', function() {
+  // v55.83-A.6 — chartShippingLine is now a SCOPE filter (not a render mode).
+  // When non-'all', ratesForView is narrowed to that shipping line, and the
+  // chart still renders according to chartView. Verify the scope filter exists.
+  assert(/\(<Line type="monotone" dataKey=\{chartShippingLine\}/.test(tab) ||
+    /chartShippingLine !== 'all'/.test(tab) ||
+    /ratesForView = ratesForView\.filter[\s\S]{0,200}shipping_line[\s\S]{0,80}chartShippingLine/.test(tab),
+    'specific-line selection must narrow the chart data');
 });
 
-test('S17.11.13 Stale/average dashed reference line shown', function() {
-  // v55.83-A.5 — chart restructured. Previous `_avg` dashed line was replaced
-  // in v55.82-W by `_bestStale` dashed line (carry-forward gaps). Either
-  // qualifies as a dashed reference line in the chart.
+test('S17.11.13 Stale rendering is per-point (icon overlay, not dashed line)', function() {
+  // v55.83-A.6 — Max's spec: stale rendering moved from a dashed reference
+  // line to a small ⏳ icon at each stale dot, on a SOLID continuous line.
+  // Old dashed-line approach is gone. Verify EITHER the legacy dashed _avg /
+  // _bestStale, OR the new staleFlag → ⏳ icon dot renderer.
   assert(/dataKey="_avg"[\s\S]{0,200}strokeDasharray/.test(tab) ||
-    /dataKey="_bestStale"[\s\S]{0,400}strokeDasharray/.test(tab),
-    'chart must have at least one dashed reference line');
+    /dataKey="_bestStale"[\s\S]{0,400}strokeDasharray/.test(tab) ||
+    /staleFlag[\s\S]{0,400}⏳/.test(tab),
+    'chart must indicate stale either by dashed line (legacy) or per-point ⏳ icon (v55.83-A.6)');
 });
 
 test('S17.11.14 Empty-state message when no data in period', function() {

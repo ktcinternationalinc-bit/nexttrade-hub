@@ -83,19 +83,37 @@ ok('6d: ticket card renders attachments as chips/links',
 // =============================================================
 // ITEM 7+8 — Shipping graph: best-rate single line as default
 // =============================================================
-ok('7a: chartShippingLine === all → linesToPlot is empty (no spaghetti)',
-  /chartShippingLine === 'all'\) \{\s*linesToPlot = \[\]; \/\/ default — only the _best market line shows/.test(shipping));
-ok('8a: when "all" selected, only the _best* lines render',
-  /chartShippingLine === 'all' && \(\s*<>[\s\S]{0,800}_bestActive[\s\S]{0,400}_bestStale[\s\S]{0,400}<\/>\s*\)/.test(shipping));
+ok('7a: Floor view default = no spaghetti (only market floor renders)',
+  // v55.83-A.6 — anti-spaghetti behavior moved from chartShippingLine === 'all'
+  // branch to chartView === 'floor' (the default). Old: chartShippingLine === 'all' → linesToPlot=[].
+  // New: chartView === 'floor' → groupsToPlot=[] (no breakdownField).
+  (/chartShippingLine === 'all'\) \{\s*linesToPlot = \[\]; \/\/ default — only the _best market line shows/.test(shipping)) ||
+  (/breakdownField = null/.test(shipping) && /chartView === 'vendor'[\s\S]{0,80}breakdownField = 'vendor_name'/.test(shipping)));
+ok('8a: Floor view renders the market-best line',
+  // v55.83-A.6 — chartShippingLine === 'all' && (<> _bestActive _bestStale </>) replaced
+  // by chartView === 'floor' ? <Line dataKey="_best" /> : ... . Single solid line now,
+  // stale handled via per-point icon, no dashed-grey overlay.
+  (/chartShippingLine === 'all' && \(\s*<>[\s\S]{0,800}_bestActive[\s\S]{0,400}_bestStale[\s\S]{0,400}<\/>\s*\)/.test(shipping)) ||
+  /chartView === 'floor' \?\s*\(?\s*<Line type="monotone" dataKey="_best"/.test(shipping));
 
 // =============================================================
 // ITEM 9 — Stale carry-forward best rate as dotted grey
 // =============================================================
-ok('9a: trend point splits _bestActive (fresh) and _bestStale (carry-forward)',
-  /point\._bestActive = Number\(bestRow\.rate_amount\)/.test(shipping) &&
-  /point\._bestStale = lastBest\.price/.test(shipping));
-ok('9b: _bestStale renders as dashed grey line with hollow dots',
-  /dataKey="_bestStale"[\s\S]{0,300}strokeDasharray="4 4"[\s\S]{0,200}stroke: '#94a3b8'/.test(shipping));
+ok('9a: trend point captures market-best with stale-flag tracking',
+  // v55.83-A.6 — _bestActive/_bestStale split collapsed back into a single
+  // _best field + __stale___best flag. Same semantic: fresh vs carry-forward;
+  // visual rendering now uses a solid line + icon overlay instead of two lines.
+  (/point\._bestActive = Number\(bestRow\.rate_amount\)/.test(shipping) &&
+   /point\._bestStale = lastBest\.price/.test(shipping)) ||
+  (/point\._best = Number\(bestRow\.rate_amount\)/.test(shipping) &&
+   /point\.__stale___best = true/.test(shipping) &&
+   /point\._best = lastBest\.price/.test(shipping)));
+ok('9b: Stale points are visually distinguished',
+  // v55.83-A.6 (Max May 13 2026 spec) — stale rendering moved from a dashed
+  // grey line (_bestStale) to a solid line with ⏳ icon overlays at stale dots.
+  // Accept either form.
+  /dataKey="_bestStale"[\s\S]{0,300}strokeDasharray="4 4"[\s\S]{0,200}stroke: '#94a3b8'/.test(shipping) ||
+  /staleFlag[\s\S]{0,400}⏳/.test(shipping));
 
 // =============================================================
 // ITEM 10 — Smart name matching (case/punctuation insensitive)

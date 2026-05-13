@@ -822,6 +822,18 @@ export default function ShippingRatesTab({ toast, user, userProfile, isAdmin, cu
   // chart; picking a specific line shows only that one.
   const [hideExpired, setHideExpired] = useState(false);
   const [chartShippingLine, setChartShippingLine] = useState('all');
+  // v55.83-A.6 (Max May 13 2026) — three toggleable chart views.
+  //   'floor'  — single line, lowest price across ALL vendors/lines each month
+  //              (true market floor — the cheapest available)
+  //   'vendor' — one line per vendor (vendor_name field on each rate)
+  //   'line'   — one line per shipping_line (Maersk / MSC / etc, the prior default)
+  // 'floor' is the new default because Max said the chart should answer
+  // "what was the best price at any point in time" first, with vendor /
+  // shipping-line breakdowns as deliberate drill-downs.
+  const [chartView, setChartView] = useState('floor');
+  // v55.83-A.6 — user-selectable currency for the chart, overrides the
+  // auto-pick. Default '' = let the chart pick most-common currency.
+  const [chartCurrencyOverride, setChartCurrencyOverride] = useState('');
   // v55.82-M — Click-on-chart-point → scroll to + highlight the matching
   // rate row in the historical table below. Stores the rate ID currently
   // highlighted (or null). Auto-clears after 3 seconds so the flash fades.
@@ -2119,9 +2131,34 @@ Date: ${today}`;
         //
         // Filtering still respects rateHistoryDf / rateHistoryDt / hideExpired
         // controls so the chart and the table below stay in sync.
+        // v55.83-A.6 (Max May 13 2026) — DATE FILTER LOGIC FIX.
+        //
+        // OLD logic kept a rate if (expiry || effective) was inside the window.
+        // That dropped rates whose effective_date AND expiry_date were both
+        // BEFORE the window's "from" date — even if they were carried forward
+        // and still in use during the window. Result: the chart looked empty
+        // or started its timeline LATE.
+        //
+        // NEW logic: keep a rate if its active window [effective, expiry]
+        // overlaps the user's filter window [from, to] at all.
+        //   rate active in window iff:
+        //     effective_date <= filter_to (or no filter_to)
+        //     AND (expiry_date >= filter_from OR expiry_date is null)
         var trendRates = routeHistory;
-        if (rateHistoryDf) trendRates = trendRates.filter(r => (r.expiry_date || r.effective_date || '') >= rateHistoryDf);
-        if (rateHistoryDt) trendRates = trendRates.filter(r => (r.expiry_date || r.effective_date || '') <= rateHistoryDt);
+        if (rateHistoryDf || rateHistoryDt) {
+          var fwFrom = rateHistoryDf || '';
+          var fwTo = rateHistoryDt || '';
+          trendRates = trendRates.filter(function (r) {
+            var eff = r.effective_date || '';
+            var exp = r.expiry_date || '';
+            // Rate has to have started by the end of the window
+            if (fwTo && eff && eff > fwTo) return false;
+            // Rate has to still be active by the start of the window
+            // (no expiry = still active forever)
+            if (fwFrom && exp && exp < fwFrom) return false;
+            return true;
+          });
+        }
         if (hideExpired) trendRates = trendRates.filter(r => !isExpired(r.expiry_date));
 
         var SYM = { USD: '$', EUR: '€', EGP: 'E£', GBP: '£', CNY: '¥', TRY: '₺', SAR: 'SR', AED: 'AED ' };
@@ -2131,9 +2168,14 @@ Date: ${today}`;
           trendCurrencyCounts[c] = (trendCurrencyCounts[c] || 0) + 1;
         });
         var trendCurrencies = Object.keys(trendCurrencyCounts);
-        var chartCurrency = trendCurrencies.length > 0
+        // v55.83-A.6 — user override beats auto-pick. If the user clicked
+        // a currency tab, honor it; otherwise pick the most-common currency.
+        var autoCurrency = trendCurrencies.length > 0
           ? trendCurrencies.reduce(function(a, b) { return trendCurrencyCounts[a] > trendCurrencyCounts[b] ? a : b; })
           : 'USD';
+        var chartCurrency = (chartCurrencyOverride && trendCurrencies.indexOf(chartCurrencyOverride) >= 0)
+          ? chartCurrencyOverride
+          : autoCurrency;
         var chartSym = SYM[chartCurrency] || (chartCurrency + ' ');
         var chartMixed = trendCurrencies.length > 1;
         var trendRatesForChart = trendRates.filter(function(r) { return (r.currency || 'USD') === chartCurrency; });
@@ -2251,22 +2293,60 @@ Date: ${today}`;
           }
         }
 
-        var LINE_COLORS = ['#0ea5e9','#8b5cf6','#f59e0b','#10b981','#ef4444','#ec4899','#14b8a6','#6366f1'];
+        var LINE_COLORS = ['#0ea5e9','#8b5cf6','#f59e0b','#10b981','#ef4444','#ec4899','#14b8a6','#6366f1', '#06b6d4', '#a855f7', '#84cc16', '#f97316'];
 
-        // v55.82-W (Max May 12 2026 — "I WANT TO SEE ONE MAIN LINE ITEM
-        // NOT FOR SEVERAL SHIPPING LINES THAT SHOW THE BEST OVER TIME.
-        // NOT FOR EACH ONE. THAT WOULD BE IF I SELECT FROM THE DROP DOWN
-        // FOR THAT SPECIFIC LINE OTHERWISE THE LINE GRAPH DEFAULT TO
-        // BEST RATES"): when the user has 'all' selected, we DON'T plot
-        // per-line spaghetti. We only plot the single _best market-floor
-        // line. Per-line trends only appear when the user picks a
-        // specific line from the dropdown.
-        var linesToPlot = [];
-        if (chartShippingLine === 'all') {
-          linesToPlot = []; // default — only the _best market line shows
-        } else {
-          linesToPlot = [chartShippingLine];
+        // v55.83-A.6 (Max May 13 2026) — THREE CHART VIEWS.
+        //
+        // chartView = 'floor'  → one line, market floor (lowest across all rates each month)
+        // chartView = 'vendor' → one line per vendor_name (vendor comparison)
+        // chartView = 'line'   → one line per shipping_line (Maersk / MSC / etc, legacy view)
+        //
+        // The chartShippingLine dropdown still works as a SCOPE filter:
+        //   - 'all' = all data feeds the selected view
+        //   - specific line = only rates from that shipping line feed the view
+        //
+        // breakdownField determines which field we group by. For 'floor' it's
+        // null (no breakdown, just market-wide). For 'vendor' it's vendor_name,
+        // for 'line' it's shipping_line.
+        var breakdownField = null;
+        if (chartView === 'vendor') breakdownField = 'vendor_name';
+        else if (chartView === 'line') breakdownField = 'shipping_line';
+
+        // Build the list of groups to plot. For 'floor', this stays empty —
+        // we ONLY plot the market floor (_bestActive / _bestStale series).
+        // For 'vendor' / 'line', we collect every distinct value of the
+        // breakdown field that has at least one rate in our filtered set.
+        var groupsToPlot = [];
+        var ratesForView = validRatesForChart;
+        if (chartShippingLine !== 'all') {
+          ratesForView = ratesForView.filter(function (r) {
+            return (r.shipping_line || '(no line)') === chartShippingLine;
+          });
         }
+        if (breakdownField) {
+          var groupSet = {};
+          ratesForView.forEach(function (r) {
+            var v = (r[breakdownField] || '(none)').trim() || '(none)';
+            groupSet[v] = true;
+          });
+          groupsToPlot = Object.keys(groupSet).sort();
+          // Cap at 10 visible lines to avoid spaghetti — drop the least-data ones.
+          if (groupsToPlot.length > 10) {
+            var groupCounts = {};
+            ratesForView.forEach(function (r) {
+              var v = (r[breakdownField] || '(none)').trim() || '(none)';
+              groupCounts[v] = (groupCounts[v] || 0) + 1;
+            });
+            groupsToPlot.sort(function (a, b) { return groupCounts[b] - groupCounts[a]; });
+            groupsToPlot = groupsToPlot.slice(0, 10);
+            groupsToPlot.sort();
+          }
+        }
+
+        // Backward-compat: keep linesToPlot/breakdownActiveForLine names so
+        // the rest of the chart code (legacy per-shipping-line path) still
+        // works when chartView === 'line'.
+        var linesToPlot = groupsToPlot;
 
         // v55.82-M — For each month, find the rates active that month and
         // pick the lowest. Carry forward the last known best if no active
@@ -2284,7 +2364,10 @@ Date: ${today}`;
         var trendPoints = months.map(function(m) {
           var monthStart = firstDayOf(m);
           var monthEnd = lastDayOf(m);
-          var activeInMonth = validRatesForChart.filter(function(r) {
+          // v55.83-A.6 — use ratesForView (scope-filtered) instead of all
+          // validRatesForChart. If user picked a specific shipping line in
+          // the dropdown, only that line's rates feed the chart.
+          var activeInMonth = ratesForView.filter(function(r) {
             var eff = r.effective_date;
             var exp = r.expiry_date || ''; // empty = never expires
             return eff <= monthEnd && (exp === '' || exp >= monthStart);
@@ -2293,54 +2376,53 @@ Date: ${today}`;
           var point = { month: m };
           var pointSourceIds = [];
 
-          // --- per shipping line
-          linesToPlot.forEach(function(L) {
-            var activeForLine = activeInMonth.filter(function(r) {
-              return (r.shipping_line || '(no line)') === L;
+          // v55.83-A.6 — per-group (vendor or shipping_line, based on chartView)
+          linesToPlot.forEach(function(G) {
+            var activeForGroup = activeInMonth.filter(function(r) {
+              if (!breakdownField) return false;
+              var v = (r[breakdownField] || '(none)').trim() || '(none)';
+              return v === G;
             });
-            if (activeForLine.length > 0) {
-              // CASE 1 — there is at least one active rate this month for this line.
+            if (activeForGroup.length > 0) {
+              // CASE 1 — there is at least one active rate this month for this group.
               // Pick the lowest, mark stale=false, remember it for carry-forward.
-              var winner = activeForLine.reduce(function(acc, r) {
+              var winner = activeForGroup.reduce(function(acc, r) {
                 if (!acc) return r;
                 return Number(r.rate_amount) < Number(acc.rate_amount) ? r : acc;
               }, null);
-              point[L] = Number(winner.rate_amount);
-              point['__stale__' + L] = false;
-              point['__source__' + L] = winner.id;
+              point[G] = Number(winner.rate_amount);
+              point['__stale__' + G] = false;
+              point['__source__' + G] = winner.id;
               pointSourceIds.push(winner.id);
-              lastBestForLine[L] = { price: Number(winner.rate_amount), rateId: winner.id, asOfMonth: m };
-            } else if (lastBestForLine[L]) {
-              // CASE 2 — carry forward the last known best for this line.
-              // Stale = the source rate is expired (or there's no active rate this month).
-              point[L] = lastBestForLine[L].price;
-              point['__stale__' + L] = true;
-              point['__source__' + L] = lastBestForLine[L].rateId;
-              pointSourceIds.push(lastBestForLine[L].rateId);
+              lastBestForLine[G] = { price: Number(winner.rate_amount), rateId: winner.id, asOfMonth: m };
+            } else if (lastBestForLine[G]) {
+              // CASE 2 — carry forward the last known best for this group.
+              point[G] = lastBestForLine[G].price;
+              point['__stale__' + G] = true;
+              point['__source__' + G] = lastBestForLine[G].rateId;
+              pointSourceIds.push(lastBestForLine[G].rateId);
             }
             // CASE 3 (no entry, no carry-forward) — leave undefined, line skips this month
           });
 
           // --- market-floor "_best" — lowest across ALL active rates this month
-          // v55.82-W (Max May 12 2026 — "IF EXPIRED AND NOTHING NEW..THEN
-          // SHOULD BE DOTTED GRAY LINE"): we split _best into TWO series:
-          //   _bestActive — fresh / current rate, solid dark line
-          //   _bestStale  — carry-forward from an expired rate, dotted grey
-          // Each point populates exactly ONE of them based on whether the
-          // best rate this month was actually active or carried forward.
+          //
+          // v55.83-A.6 (Max May 13 2026 — "Show stale as the same solid line
+          // but with a stale icon at each stale point"): we no longer split
+          // the line into _bestActive + _bestStale dashed. ONE continuous
+          // solid line carries the price; the per-point `__stale___best`
+          // flag drives a small ⏳ icon at stale dots.
           if (activeInMonth.length > 0) {
             var bestRow = activeInMonth.reduce(function(acc, r) {
               if (!acc) return r;
               return Number(r.rate_amount) < Number(acc.rate_amount) ? r : acc;
             }, null);
-            point._bestActive = Number(bestRow.rate_amount);
-            point._best = Number(bestRow.rate_amount); // kept for tooltip/back-compat
+            point._best = Number(bestRow.rate_amount);
             point.__stale___best = false;
             point.__source___best = bestRow.id;
             if (pointSourceIds.indexOf(bestRow.id) < 0) pointSourceIds.push(bestRow.id);
             lastBest = { price: Number(bestRow.rate_amount), rateId: bestRow.id, asOfMonth: m };
           } else if (lastBest) {
-            point._bestStale = lastBest.price;
             point._best = lastBest.price;
             point.__stale___best = true;
             point.__source___best = lastBest.rateId;
@@ -2434,9 +2516,10 @@ Date: ${today}`;
           }, 50);
         };
 
-        // v55.82-M — Dot renderer that draws hollow circles for stale
-        // (carry-forward) points and solid dots for live active points.
-        // Stale dots use a dashed stroke; active dots are filled.
+        // v55.83-A.6 (Max May 13 2026) — Dot renderer that draws solid dots
+        // and adds a small ⏳ clock icon overlay at STALE points (carry-forward
+        // from an expired rate). The line itself stays solid — only the
+        // marker visually distinguishes stale vs fresh. Max's spec.
         var makeDotRenderer = function(lineKey, fillColor) {
           return function(dotProps) {
             var cx = dotProps.cx;
@@ -2445,8 +2528,14 @@ Date: ${today}`;
             var pl = dotProps.payload || {};
             var staleFlag = pl['__stale__' + lineKey];
             if (staleFlag) {
-              // Hollow circle = carry-forward (last known, expired)
-              return (<circle cx={cx} cy={cy} r={4} fill="#fff" stroke={fillColor} strokeWidth={1.5} strokeDasharray="2 2" />);
+              // Solid dot in the line color + small ⏳ glyph above the dot
+              // (subdued amber tone, so it reads "watch this — old data").
+              return (
+                <g>
+                  <circle cx={cx} cy={cy} r={4} fill={fillColor} stroke={fillColor} strokeWidth={1} />
+                  <text x={cx} y={cy - 8} textAnchor="middle" fontSize={11} fill="#b45309" style={{userSelect:'none', pointerEvents:'none'}}>⏳</text>
+                </g>
+              );
             }
             return (<circle cx={cx} cy={cy} r={3.5} fill={fillColor} stroke={fillColor} strokeWidth={1} />);
           };
@@ -2456,19 +2545,59 @@ Date: ${today}`;
           <div className="flex justify-between items-center mb-3 flex-wrap gap-2">
             <div>
               <h3 className="text-sm font-bold">📈 Best Rate Over Time ({chartCurrency})</h3>
-              <div className="text-[10px] text-slate-500">X-axis: month (effective-date timeline) · Y-axis: lowest active rate · ⭐ = booking · hollow dot = stale carry-forward · click any point → jump to the rate below</div>
+              <div className="text-[10px] text-slate-500">X-axis: month · Y-axis: lowest active rate · ⭐ = booking · ⏳ = stale (no newer rate) · click any point → jump to the rate below</div>
             </div>
-            <div className="flex items-center gap-2">
-              <span className="text-[10px] text-slate-500">Shipping line:</span>
+            <div className="flex items-center gap-2 flex-wrap">
+              {/* v55.83-A.6 — View toggle (Floor / Vendor / Line) */}
+              <div className="inline-flex rounded-lg overflow-hidden border border-slate-300 text-[11px] font-bold">
+                <button
+                  onClick={function(){ setChartView('floor'); }}
+                  className={'px-2.5 py-1 ' + (chartView === 'floor' ? 'bg-slate-900 text-white' : 'bg-white text-slate-700 hover:bg-slate-50')}
+                  title="One line — lowest price each month across all vendors/lines">
+                  🏆 Market Floor
+                </button>
+                <button
+                  onClick={function(){ setChartView('vendor'); }}
+                  className={'px-2.5 py-1 ' + (chartView === 'vendor' ? 'bg-slate-900 text-white' : 'bg-white text-slate-700 hover:bg-slate-50')}
+                  title="One line per vendor, each showing their best monthly rate">
+                  🏢 By Vendor
+                </button>
+                <button
+                  onClick={function(){ setChartView('line'); }}
+                  className={'px-2.5 py-1 ' + (chartView === 'line' ? 'bg-slate-900 text-white' : 'bg-white text-slate-700 hover:bg-slate-50')}
+                  title="One line per shipping line (Maersk / MSC / etc)">
+                  🚢 By Line
+                </button>
+              </div>
+              {/* Shipping-line SCOPE filter (independent of view) */}
+              <span className="text-[10px] text-slate-500">Scope:</span>
               <select value={chartShippingLine} onChange={function(e){ setChartShippingLine(e.target.value); }} className="px-2 py-1 rounded border text-xs">
-                <option value="all">All lines (compare)</option>
+                <option value="all">All lines</option>
                 {allLinesInRoute.map(function(L){ return (<option key={L} value={L}>{L}</option>); })}
               </select>
             </div>
           </div>
+          {/* v55.83-A.6 — Currency tabs (only show when there's more than one) */}
+          {trendCurrencies.length > 1 && (
+            <div className="flex items-center gap-2 mb-2">
+              <span className="text-[10px] text-slate-500">Currency:</span>
+              <div className="inline-flex rounded-lg overflow-hidden border border-slate-300 text-[10px] font-bold">
+                {trendCurrencies.map(function(c) {
+                  return (
+                    <button key={c}
+                      onClick={function(){ setChartCurrencyOverride(c); }}
+                      className={'px-2 py-0.5 ' + (chartCurrency === c ? 'bg-violet-700 text-white' : 'bg-white text-slate-700 hover:bg-violet-50')}
+                      title={'Show ' + c + ' rates only (' + trendCurrencyCounts[c] + ' rate' + (trendCurrencyCounts[c] === 1 ? '' : 's') + ')'}>
+                      {(SYM[c] || c).trim()} {c}
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+          )}
           {chartMixed && (
             <div className="bg-amber-50 border border-amber-300 rounded p-2 mb-2 text-[11px] text-amber-900">
-              ⚠️ This route has rates in multiple currencies ({trendCurrencies.join(', ')}). Chart shows {chartCurrency} only.
+              ⚠️ This route has rates in {trendCurrencies.length} currencies ({trendCurrencies.join(', ')}). Currently showing {chartCurrency}. Use the currency tabs above to switch.
             </div>
           )}
           {priorBest !== null && currentBest !== null && (
@@ -2498,23 +2627,19 @@ Date: ${today}`;
                   }}
                 />
                 <RLegend wrapperStyle={{fontSize: 11}} />
-                {chartShippingLine === 'all'
-                  ? linesToPlot.map(function(L, i) {
-                      var col = LINE_COLORS[i % LINE_COLORS.length];
-                      return (<Line key={L} type="monotone" dataKey={L} stroke={col} strokeWidth={2} connectNulls={true} dot={makeDotRenderer(L, col)} activeDot={{r: 6, stroke: col, strokeWidth: 2, fill: '#fff', cursor: 'pointer'}} />);
-                    })
-                  : (<Line type="monotone" dataKey={chartShippingLine} stroke="#0ea5e9" strokeWidth={3} connectNulls={true} dot={makeDotRenderer(chartShippingLine, '#0ea5e9')} activeDot={{r: 7, stroke: '#0ea5e9', strokeWidth: 2, fill: '#fff', cursor: 'pointer'}} />)
-                }
-                {chartShippingLine === 'all' && (
-                  <>
-                    {/* v55.82-W — Two complementary Lines so the chart can
-                        show a clear visual transition from fresh best rates
-                        (solid dark) to stale carry-forward best (dotted grey).
-                        connectNulls=true on both keeps the visual continuity
-                        even though each point populates only ONE of them. */}
-                    <Line type="monotone" dataKey="_bestActive" name="Best rate" stroke="#0f172a" strokeWidth={3} connectNulls={true} dot={{r: 4, fill: '#0f172a', stroke: '#0f172a'}} activeDot={{r: 7, stroke: '#0f172a', strokeWidth: 2, fill: '#fff', cursor: 'pointer'}} />
-                    <Line type="monotone" dataKey="_bestStale" name="Best rate (stale — last known)" stroke="#94a3b8" strokeWidth={2} strokeDasharray="4 4" connectNulls={true} dot={{r: 3, fill: '#fff', stroke: '#94a3b8', strokeWidth: 2}} activeDot={{r: 6, stroke: '#94a3b8', strokeWidth: 2, fill: '#fff', cursor: 'pointer'}} />
-                  </>
+                {/* v55.83-A.6 — Chart line rendering driven by chartView:
+                    - 'floor':  single bold market-floor line (_best)
+                    - 'vendor': one line per vendor in groupsToPlot
+                    - 'line':   one line per shipping_line in groupsToPlot
+                    The line itself is always solid; stale points show a ⏳
+                    icon via the dot renderer. No more dotted-grey overlay. */}
+                {chartView === 'floor' ? (
+                  <Line type="monotone" dataKey="_best" name="Market best" stroke="#0f172a" strokeWidth={3} connectNulls={true} dot={makeDotRenderer('_best', '#0f172a')} activeDot={{r: 7, stroke: '#0f172a', strokeWidth: 2, fill: '#fff', cursor: 'pointer'}} />
+                ) : (
+                  groupsToPlot.map(function(G, i) {
+                    var col = LINE_COLORS[i % LINE_COLORS.length];
+                    return (<Line key={G} type="monotone" dataKey={G} name={G} stroke={col} strokeWidth={2} connectNulls={true} dot={makeDotRenderer(G, col)} activeDot={{r: 6, stroke: col, strokeWidth: 2, fill: '#fff', cursor: 'pointer'}} />);
+                  })
                 )}
                 {bookingStars.length > 0 && (
                   <Scatter
@@ -2528,7 +2653,12 @@ Date: ${today}`;
             </ResponsiveContainer>
           </div>
           <div className="text-[10px] text-slate-500 mt-1">
-            {validRatesForChart.length} rate{validRatesForChart.length === 1 ? '' : 's'} plotted across {months.length} month{months.length === 1 ? '' : 's'} on the effective-date timeline
+            {/* v55.83-A.6 — informative caption: view mode + data scope */}
+            {chartView === 'floor' && <span>Showing <b>market floor</b> — the lowest active rate each month. </span>}
+            {chartView === 'vendor' && <span>Showing <b>{groupsToPlot.length} vendor{groupsToPlot.length === 1 ? '' : 's'}</b> — each line is one vendor's best monthly rate. </span>}
+            {chartView === 'line' && <span>Showing <b>{groupsToPlot.length} shipping line{groupsToPlot.length === 1 ? '' : 's'}</b> — each line is one shipping company's best monthly rate. </span>}
+            {validRatesForChart.length} rate{validRatesForChart.length === 1 ? '' : 's'} across {months.length} month{months.length === 1 ? '' : 's'}
+            {months.length > 0 && <span> ({months[0]} → {months[months.length - 1]})</span>}
             {bookingStars.length > 0 && <span className="ml-2 text-amber-900 font-semibold">• {bookingStars.length} booking{bookingStars.length === 1 ? '' : 's'} ⭐</span>}
             {hideExpired && <span className="ml-2 text-amber-900 font-semibold">• Expired rates hidden</span>}
           </div>
