@@ -247,6 +247,47 @@ function calcMetricsForUser(userId, period, data) {
     ? Math.round((commentsByThisUserInPeriod.length / assignedTickets.length) * 10) / 10
     : 0;
 
+  // v55.82-W (Max May 12 2026 — "If something is on your priority board
+  // and there has been no movement or comments on it. this should effect
+  // negatively on you"): count OPEN priority-starred tickets assigned to
+  // this user where neither the ticket nor its comments have moved in 24h.
+  // Stagnant = no status change, no comment, no due-date change since
+  // either starred_at (when they pinned it) or updated_at — whichever is
+  // newer. A stagnant priority is a negative signal: it was important
+  // enough to star, but nothing has happened with it.
+  var STAGNANT_HOURS = 24;
+  var stagnantPriorityTickets = assignedTickets.filter(function (t) {
+    if (!t.starred_today) return false;
+    if (t.status === 'Closed') return false;
+    // Reference point: when did movement last happen on this ticket?
+    var starredAt = t.starred_at || t.updated_at || t.created_at;
+    if (!starredAt) return false;
+    // Look for comments by this user on this ticket since starredAt.
+    var hasRecentComment = (ticketComments || []).some(function (c) {
+      if (c.ticket_id !== t.id) return false;
+      if (!c.created_at) return false;
+      return c.created_at > starredAt;
+    });
+    if (hasRecentComment) return false;
+    // Look for an audit_log entry on this ticket since starredAt.
+    var hasRecentMovement = (auditLog || []).some(function (a) {
+      if (a.table_name !== 'tickets') return false;
+      if (a.record_id !== t.id) return false;
+      if (!a.created_at) return false;
+      // Skip the very entry that recorded the star itself.
+      if (a.action === 'star' || a.action === 'unstar') return false;
+      return a.created_at > starredAt;
+    });
+    if (hasRecentMovement) return false;
+    // Finally, has the ticket itself been updated since starredAt?
+    // (updated_at is usually bumped on any field change.)
+    if (t.updated_at && t.updated_at > starredAt) return false;
+    // Now: is starredAt itself older than STAGNANT_HOURS? If they JUST
+    // starred it 10 minutes ago, no penalty yet.
+    var hoursSinceStar = (Date.now() - new Date(starredAt).getTime()) / 36e5;
+    return hoursSinceStar >= STAGNANT_HOURS;
+  });
+
   // ---- SHIPPING RATES ----
   // Use audit_log: 'shipping_rates' + 'create' by this user in period
   var ratesAddedInPeriod = auditLog.filter(function (a) {
@@ -598,6 +639,11 @@ function calcMetricsForUser(userId, period, data) {
     ticketComments: commentsByThisUserInPeriod.length,
     commentsPerTicket: commentsPerAssignedTicket,
     lateEdits: lateEdits.length,
+    // v55.82-W — Priority-board stagnation count. Tickets starred for
+    // today's focus that have had zero movement (no comment, no status
+    // change, no due-date change) in 24+ hours. Counted as a negative
+    // signal in the activity score below.
+    stagnantPriorityCount: stagnantPriorityTickets.length,
     // Shipping
     ratesAdded: ratesAddedInPeriod.length,
     bookings: bookingsInPeriod.length,
@@ -848,6 +894,14 @@ function calcScore(myMetrics, allTeamMetrics) {
   if ((myMetrics.systemTicketsCreated || 0) > 0) variety++;
   var varietySig = Math.round((variety / 7) * 100);
   var engagement = Math.round((fillSig + meetingSig + checkInSig + varietySig) / 4);
+
+  // v55.82-W (Max May 12 2026 — "If something is on your priority board
+  // and there has been no movement or comments on it. this should effect
+  // negatively on you"): subtract 5 points per stagnant priority,
+  // capped at 25 points off engagement. Stagnant = starred for today's
+  // focus, no comment/status change/audit movement in 24+ hours.
+  var stagnantPenalty = Math.min(25, (myMetrics.stagnantPriorityCount || 0) * 5);
+  engagement = Math.max(0, engagement - stagnantPenalty);
 
   // ---- RELIABILITY (10%) — meeting show-up + retest follow-through ----
   var reliability_show = (myMetrics.meetingShowUpPct == null) ? null : myMetrics.meetingShowUpPct;

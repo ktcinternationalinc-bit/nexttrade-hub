@@ -790,9 +790,16 @@ export async function POST(request) {
 
         // v55.81 QA-19 (Max May 9 2026): fallback model chain for the
         // briefing path. Same pattern as the main /api/ask call below —
-        // if Sonnet 4 fails, fall back to Haiku 4.5 so the morning brief
-        // still fires instead of going dark.
-        var GMODEL_CHAIN = ['claude-sonnet-4-20250514', 'claude-haiku-4-5-20251001'];
+        // if Sonnet fails, fall back to Haiku so the morning brief still
+        // fires instead of going dark.
+        // v55.82-X (Max May 12 2026): bumped to current dateless-pinned
+        // model IDs per docs.claude.com. The old dated IDs returned 400
+        // after Anthropic's model cleanup. Chain now: Sonnet 4.6 first,
+        // Haiku 4.5 fallback. Env-var override lets ops swap models in
+        // Vercel without a code change.
+        var GMODEL_CHAIN = (process.env.AI_MODEL_CHAIN
+          ? process.env.AI_MODEL_CHAIN.split(',').map(function (s) { return s.trim(); }).filter(Boolean)
+          : ['claude-sonnet-4-6', 'claude-haiku-4-5']);
         var gResponse = null;
         var gLastErr = null;
         for (var gmIdx = 0; gmIdx < GMODEL_CHAIN.length; gmIdx++) {
@@ -1745,7 +1752,12 @@ export async function POST(request) {
     // hard failure. Haiku is cheaper and faster but less capable; for the
     // briefing path that's acceptable. The chain order matters: try the
     // best model first, fall back on non-2xx responses or thrown errors.
-    var MODEL_CHAIN = ['claude-sonnet-4-20250514', 'claude-haiku-4-5-20251001'];
+    // v55.82-X (Max May 12 2026): use current dateless-pinned model IDs
+    // per docs.claude.com. Env-var override lets ops swap models in
+    // Vercel without a code change.
+    var MODEL_CHAIN = (process.env.AI_MODEL_CHAIN
+      ? process.env.AI_MODEL_CHAIN.split(',').map(function (s) { return s.trim(); }).filter(Boolean)
+      : ['claude-sonnet-4-6', 'claude-haiku-4-5']);
     var response = null;
     var lastErr = null;
     var modelUsed = null;
@@ -1823,7 +1835,7 @@ export async function POST(request) {
           var summaryRes = await fetch('https://api.anthropic.com/v1/messages', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json', 'x-api-key': apiKey, 'anthropic-version': '2023-06-01' },
-            body: JSON.stringify({ model: 'claude-sonnet-4-20250514', max_tokens: 1500, system: context, messages: summaryMessages }),
+            body: JSON.stringify({ model: 'claude-sonnet-4-6', max_tokens: 1500, system: context, messages: summaryMessages }),
           });
           if (summaryRes.ok) {
             var summaryData = await summaryRes.json();

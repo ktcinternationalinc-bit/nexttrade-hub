@@ -1680,10 +1680,17 @@ export default function AIGreeter({ user, userProfile, users, tickets, invoices,
           try { console.log('[record] backup SR error (non-fatal):', e && e.error); } catch (er) {}
         };
         br.onend = function() {
-          // Auto-restart while still recording — same trick as the live mic.
-          if (recording && recordBackupRecogRef.current === br) {
-            try { br.start(); } catch (restartErr) { /* ignore */ }
-          }
+          // v55.82-W (Max May 12 2026): only auto-restart if (a) the ref
+          // still points to THIS instance (stopBackupRecog nulls the ref),
+          // AND (b) the MediaRecorder is still actively recording. The
+          // previous check used the closure-captured `recording` variable
+          // which could be stale. mediaRecorderRef.current.state is the
+          // canonical source of truth — it goes to 'inactive' the moment
+          // mr.stop() is called.
+          if (recordBackupRecogRef.current !== br) return;
+          var mr2 = mediaRecorderRef.current;
+          if (!mr2 || mr2.state !== 'recording') return;
+          try { br.start(); } catch (restartErr) { /* ignore */ }
         };
         recordBackupRecogRef.current = br;
         try { br.start(); console.log('[record] backup SR started'); } catch (e) { try { console.log('[record] backup SR start failed (non-fatal):', e && e.message); } catch (er) {} }
@@ -1715,6 +1722,15 @@ export default function AIGreeter({ user, userProfile, users, tickets, invoices,
 
   var stopRecording = function() {
     if (!recording) return;
+    // v55.82-W (Max May 12 2026 — "tap to stop keeps turning record on by
+    // itself"): tear down the backup WebSpeech recognizer FIRST, before
+    // stopping the MediaRecorder. The backup recognizer's onend handler
+    // auto-restarts itself while recording is true. By nulling the ref
+    // and clearing its handlers right here, we prevent any onend that
+    // fires between mr.stop() and the actual onstop callback from
+    // re-triggering itself. Previously this teardown only happened
+    // inside onstop, which left a race window.
+    try { stopBackupRecog(); } catch (e) {}
     try {
       if (mediaRecorderRef.current && mediaRecorderRef.current.state !== 'inactive') {
         mediaRecorderRef.current.stop();

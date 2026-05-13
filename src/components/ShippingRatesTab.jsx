@@ -1382,13 +1382,29 @@ export default function ShippingRatesTab({ toast, user, userProfile, isAdmin, cu
     };
 
     // --- 5-key match builder per spec
+    // v55.82-W (Max May 12 2026 — "make sure you use smart AI so if
+    // something is capitalized or small cased they are the same and if
+    // they are almost the same spelling then they are the same"):
+    // normName collapses common variations so "CMA CGM" / "CMA-CGM" /
+    // "cma cgm" all produce the same match key. Strips non-alphanumeric
+    // characters and collapses whitespace. This is the SAFE half of
+    // fuzzy matching — exact-after-normalization, not approximate.
+    // Approximate (edit-distance) matching is too risky for silent
+    // merges; see comments below for the flag-for-review path.
+    var normName = function (s) {
+      return String(s || '')
+        .toLowerCase()
+        .replace(/[^a-z0-9]+/g, ' ')   // strip punctuation/symbols, keep word boundaries
+        .replace(/\s+/g, ' ')           // collapse whitespace
+        .trim();
+    };
     var keyFor = function (r) {
       return [
-        String(r.origin || '').trim().toLowerCase(),
-        String(r.destination || '').trim().toLowerCase(),
+        normName(r.origin),
+        normName(r.destination),
         String(r.expiry_date || '').trim(),
-        String(r.vendor_name || '').trim().toLowerCase(),
-        String(r.shipping_line || '').trim().toLowerCase(),
+        normName(r.vendor_name),
+        normName(r.shipping_line),
       ].join('|');
     };
 
@@ -2237,9 +2253,17 @@ Date: ${today}`;
 
         var LINE_COLORS = ['#0ea5e9','#8b5cf6','#f59e0b','#10b981','#ef4444','#ec4899','#14b8a6','#6366f1'];
 
+        // v55.82-W (Max May 12 2026 — "I WANT TO SEE ONE MAIN LINE ITEM
+        // NOT FOR SEVERAL SHIPPING LINES THAT SHOW THE BEST OVER TIME.
+        // NOT FOR EACH ONE. THAT WOULD BE IF I SELECT FROM THE DROP DOWN
+        // FOR THAT SPECIFIC LINE OTHERWISE THE LINE GRAPH DEFAULT TO
+        // BEST RATES"): when the user has 'all' selected, we DON'T plot
+        // per-line spaghetti. We only plot the single _best market-floor
+        // line. Per-line trends only appear when the user picks a
+        // specific line from the dropdown.
         var linesToPlot = [];
         if (chartShippingLine === 'all') {
-          linesToPlot = allLinesInRoute.filter(L => validRatesForChart.some(r => (r.shipping_line || '(no line)') === L));
+          linesToPlot = []; // default — only the _best market line shows
         } else {
           linesToPlot = [chartShippingLine];
         }
@@ -2298,17 +2322,25 @@ Date: ${today}`;
           });
 
           // --- market-floor "_best" — lowest across ALL active rates this month
+          // v55.82-W (Max May 12 2026 — "IF EXPIRED AND NOTHING NEW..THEN
+          // SHOULD BE DOTTED GRAY LINE"): we split _best into TWO series:
+          //   _bestActive — fresh / current rate, solid dark line
+          //   _bestStale  — carry-forward from an expired rate, dotted grey
+          // Each point populates exactly ONE of them based on whether the
+          // best rate this month was actually active or carried forward.
           if (activeInMonth.length > 0) {
             var bestRow = activeInMonth.reduce(function(acc, r) {
               if (!acc) return r;
               return Number(r.rate_amount) < Number(acc.rate_amount) ? r : acc;
             }, null);
-            point._best = Number(bestRow.rate_amount);
+            point._bestActive = Number(bestRow.rate_amount);
+            point._best = Number(bestRow.rate_amount); // kept for tooltip/back-compat
             point.__stale___best = false;
             point.__source___best = bestRow.id;
             if (pointSourceIds.indexOf(bestRow.id) < 0) pointSourceIds.push(bestRow.id);
             lastBest = { price: Number(bestRow.rate_amount), rateId: bestRow.id, asOfMonth: m };
           } else if (lastBest) {
+            point._bestStale = lastBest.price;
             point._best = lastBest.price;
             point.__stale___best = true;
             point.__source___best = lastBest.rateId;
@@ -2473,7 +2505,17 @@ Date: ${today}`;
                     })
                   : (<Line type="monotone" dataKey={chartShippingLine} stroke="#0ea5e9" strokeWidth={3} connectNulls={true} dot={makeDotRenderer(chartShippingLine, '#0ea5e9')} activeDot={{r: 7, stroke: '#0ea5e9', strokeWidth: 2, fill: '#fff', cursor: 'pointer'}} />)
                 }
-                {chartShippingLine === 'all' && <Line type="monotone" dataKey="_best" name="Market best" stroke="#334155" strokeWidth={2} strokeDasharray="5 3" dot={false} activeDot={{r: 6, stroke: '#334155', strokeWidth: 2, fill: '#fff', cursor: 'pointer'}} />}
+                {chartShippingLine === 'all' && (
+                  <>
+                    {/* v55.82-W — Two complementary Lines so the chart can
+                        show a clear visual transition from fresh best rates
+                        (solid dark) to stale carry-forward best (dotted grey).
+                        connectNulls=true on both keeps the visual continuity
+                        even though each point populates only ONE of them. */}
+                    <Line type="monotone" dataKey="_bestActive" name="Best rate" stroke="#0f172a" strokeWidth={3} connectNulls={true} dot={{r: 4, fill: '#0f172a', stroke: '#0f172a'}} activeDot={{r: 7, stroke: '#0f172a', strokeWidth: 2, fill: '#fff', cursor: 'pointer'}} />
+                    <Line type="monotone" dataKey="_bestStale" name="Best rate (stale — last known)" stroke="#94a3b8" strokeWidth={2} strokeDasharray="4 4" connectNulls={true} dot={{r: 3, fill: '#fff', stroke: '#94a3b8', strokeWidth: 2}} activeDot={{r: 6, stroke: '#94a3b8', strokeWidth: 2, fill: '#fff', cursor: 'pointer'}} />
+                  </>
+                )}
                 {bookingStars.length > 0 && (
                   <Scatter
                     name="Bookings"

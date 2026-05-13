@@ -321,10 +321,14 @@ ok('QA-18 marker present',
 // QA-19: Fallback model chain
 // =============================================================
 console.log('\nQA-19: fallback model chain');
+// v55.82-X — model IDs refreshed to current dateless-pinned values;
+// chain now also accepts an env-var override. Either form acceptable.
 ok('MODEL_CHAIN defined for main /ask path',
-  /var MODEL_CHAIN = \['claude-sonnet-4-20250514', 'claude-haiku-4-5-20251001'\]/.test(ask));
+  /var MODEL_CHAIN = \['claude-sonnet-4-20250514', 'claude-haiku-4-5-20251001'\]/.test(ask) ||
+  /MODEL_CHAIN = [\s\S]{0,200}\['claude-sonnet-4-6', 'claude-haiku-4-5'\]/.test(ask));
 ok('GMODEL_CHAIN defined for greeter path',
-  /var GMODEL_CHAIN = \['claude-sonnet-4-20250514', 'claude-haiku-4-5-20251001'\]/.test(ask));
+  /var GMODEL_CHAIN = \['claude-sonnet-4-20250514', 'claude-haiku-4-5-20251001'\]/.test(ask) ||
+  /GMODEL_CHAIN = [\s\S]{0,200}\['claude-sonnet-4-6', 'claude-haiku-4-5'\]/.test(ask));
 ok('Loop iterates models on failure',
   /for \(var mIdx = 0; mIdx < MODEL_CHAIN\.length; mIdx\+\+\)/.test(ask));
 ok('Logs which model served the response when fallback used',

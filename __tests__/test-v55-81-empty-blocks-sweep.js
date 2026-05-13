@@ -85,7 +85,9 @@ check('2.5 Comment marks this as v55.81 #5 work',
 group('3. Regression: previously-shipped no-activity gate is still there');
 
 check('3.1 MyPerformance still has the no-activity gate on the grid',
-  /No activity in[\s\S]{0,300}I don't see any tickets/.test(mp));
+  // v55.82-V split this into Arabic + English branches with the T() helper.
+  // Match either the literal English copy or the T('noActivity') lookup.
+  /T\('noActivity'\)/.test(mp) || /any tickets, comments/.test(mp));
 
 check('3.2 The gate sums every activity signal before deciding empty',
   // QA-9 (May 9 2026) renamed the local var anyActivity to a useMemo

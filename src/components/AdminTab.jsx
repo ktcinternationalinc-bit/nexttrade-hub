@@ -719,15 +719,29 @@ export default function AdminTab({ user, userProfile, users, isAdmin, customers,
         ))}
       </div>
 
-      {/* Login Alerts — who didn't log in yesterday */}
+      {/* Login Alerts — who didn't log in yesterday.
+          v55.82-W (Max May 12 2026): Yasmeen was flagged as "did not login
+          yesterday" even though she clearly did. The old check only looked
+          at the user_sessions table — but login_events is the more
+          reliable source (sendBeacon-based, doesn't depend on a clean
+          logout). Fix: a user is "missing" only if BOTH sources show no
+          login yesterday. */}
       {(() => {
         const yesterday = yesterdayET();
         const dayName = fmtET(yesterday, 'weekday', { tag: false });
         // Skip Saturday/Sunday in the alert (most teammates don't work weekends).
         const dayOfWeek = new Date(yesterday + 'T12:00:00Z').getUTCDay();
         if (dayOfWeek === 5 || dayOfWeek === 6) return null;
-        const loggedInYesterday = new Set(sessions.filter(s => s.date === yesterday).map(s => s.user_id));
-        const missing = filterActiveUsers(users).filter(u => !loggedInYesterday.has(u.id) && u.role !== 'super_admin');
+        const loggedInYesterdaySessions = new Set(sessions.filter(s => s.date === yesterday).map(s => s.user_id));
+        // v55.82-W — also build the set from the more reliable login_events
+        // summary endpoint. loginSummary rows have logins_yesterday_et.
+        const loggedInYesterdayEvents = new Set(
+          (loginSummary || [])
+            .filter(ls => Number(ls.logins_yesterday_et || 0) > 0)
+            .map(ls => ls.id)
+        );
+        const didLogIn = (uid) => loggedInYesterdaySessions.has(uid) || loggedInYesterdayEvents.has(uid);
+        const missing = filterActiveUsers(users).filter(u => !didLogIn(u.id) && u.role !== 'super_admin');
         if (!missing.length) return null;
         return (
           <div className="bg-red-50 border border-red-200 rounded-xl p-4 mt-4">

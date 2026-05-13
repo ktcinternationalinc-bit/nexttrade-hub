@@ -123,7 +123,7 @@ ok('chart-anchor: chart block exists with new title',
 // v55.82-M added ~3K of new code (active-window logic, carry-forward,
 // click handler, dot renderer) between the upstream trendRates filter
 // and the chart title, so we widen the upstream window from 9000 → 13000.
-var chartSlice = chartIdx > 0 ? tabSrc.slice(Math.max(0, chartIdx - 13000), chartIdx + 10000) : '';
+var chartSlice = chartIdx > 0 ? tabSrc.slice(Math.max(0, chartIdx - 20000), chartIdx + 10000) : '';
 
 // 2a — v55.82-M: X-axis driven by EFFECTIVE date timeline (Max May 12 2026
 //      respec). The old C-build expiry anchor is superseded.
@@ -152,10 +152,13 @@ ok('3a: v55.82-M — per-shipping-line winner picked via reduce() lowest',
   'aggregate is "best = lowest" but uses reduce so we can carry the winning row id'
 );
 
-// 3b — overall (market-best) line uses same reduce + dataKey "_best"
-ok('3b: market-floor line uses reduce-min and dataKey "_best"',
+// 3b — overall (market-best) line uses same reduce. v55.82-W split
+//      _best into _bestActive (solid, fresh) + _bestStale (dashed,
+//      carry-forward) so the user can visually distinguish them.
+//      Accept either dataKey form.
+ok('3b: market-floor line uses reduce-min and dataKey "_best" / "_bestActive"',
   /bestRow = activeInMonth\.reduce/.test(chartSlice)
-  && /dataKey="_best"/.test(chartSlice)
+  && (/dataKey="_best"/.test(chartSlice) || /dataKey="_bestActive"/.test(chartSlice))
 );
 
 // 3c — REGRESSION GUARD: no avg/sum across multiple rates remains

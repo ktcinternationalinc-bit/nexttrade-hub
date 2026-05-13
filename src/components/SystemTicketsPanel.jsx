@@ -44,6 +44,13 @@ export default function SystemTicketsPanel({ userId, isAdmin, getUserName, sanit
   var [submitting, setSubmitting] = useState(false);
   var [confirmDel, setConfirmDel] = useState(null);
   var [busyId, setBusyId] = useState(null);
+  // v55.82-W (Max May 12 2026) — system ticket attachments. Files are
+  // uploaded to Supabase Storage bucket 'ticket-attachments' and the
+  // resulting public URLs are stored on system_tickets.attachments as
+  // jsonb [{name, url, size, type}, ...]. Same shape used by regular
+  // tickets so the AdminTab viewer code already renders them.
+  var [pendingFiles, setPendingFiles] = useState([]); // File[] before upload
+  var [uploadingFiles, setUploadingFiles] = useState(false);
   // v55.59 — persistent error banner. Toast disappears in 2s, leaving
   // an empty panel and no clue what failed. Now we surface the error
   // visibly so the user knows whether it's a missing-table issue (run
@@ -84,6 +91,43 @@ export default function SystemTicketsPanel({ userId, isAdmin, getUserName, sanit
 
   var resetForm = function () {
     setForm({ title: '', description: '', priority: 'medium', category: 'bug' });
+    setPendingFiles([]);
+  };
+
+  // v55.82-W — Upload pending files to Supabase Storage and return the
+  // array of {name, url, size, type} records ready for the attachments
+  // jsonb column. Failures on individual files are surfaced but don't
+  // abort the whole insert — at worst the ticket is created without
+  // those files attached. Bucket name 'ticket-attachments' must exist
+  // in Supabase Storage with public read enabled.
+  var uploadPendingFiles = async function () {
+    if (!pendingFiles || pendingFiles.length === 0) return [];
+    setUploadingFiles(true);
+    var results = [];
+    for (var i = 0; i < pendingFiles.length; i++) {
+      var f = pendingFiles[i];
+      try {
+        var safe = f.name.replace(/[^a-zA-Z0-9._-]/g, '_');
+        var path = 'system/' + Date.now() + '_' + i + '_' + safe;
+        var up = await supabase.storage.from('ticket-attachments').upload(path, f, {
+          contentType: f.type || 'application/octet-stream',
+          upsert: false,
+        });
+        if (up.error) throw up.error;
+        var pub = supabase.storage.from('ticket-attachments').getPublicUrl(path);
+        results.push({
+          name: f.name,
+          url: pub.data.publicUrl,
+          size: f.size,
+          type: f.type || '',
+        });
+      } catch (err) {
+        try { console.warn('[sys-tickets] file upload failed for ' + f.name + ':', err && err.message); } catch (_) {}
+        if (toast) toast.warning('Could not upload "' + f.name + '" — ticket will be created without it');
+      }
+    }
+    setUploadingFiles(false);
+    return results;
   };
 
   var create = async function () {
@@ -99,6 +143,11 @@ export default function SystemTicketsPanel({ userId, isAdmin, getUserName, sanit
     setSubmitting(true);
     setCreateError(null);
     try {
+      // v55.82-W — Upload pending files first so the URLs land in the
+      // attachments column on the same INSERT. If uploads fail, the
+      // ticket still gets created (without those files) so the user
+      // doesn't lose the report.
+      var uploadedAttachments = await uploadPendingFiles();
       // Number the new ticket sequentially based on the current count.
       // Using count as the suffix is what the previous implementation did;
       // kept identical for continuity (SYS-0001, SYS-0002...).
@@ -113,6 +162,7 @@ export default function SystemTicketsPanel({ userId, isAdmin, getUserName, sanit
         status: 'Open',
         created_by: userId || null,
         assigned_to: null,
+        attachments: uploadedAttachments.length > 0 ? uploadedAttachments : null,
       }, userId);
       if (toast) toast.success('System ticket created ✓');
       resetForm();
@@ -386,13 +436,57 @@ export default function SystemTicketsPanel({ userId, isAdmin, getUserName, sanit
             className="dark-input mb-3"
             disabled={submitting}
           />
+          {/* v55.82-W — Attachments per Max May 12 2026. Screenshots,
+              screen recordings, logs, anything that helps the build team
+              reproduce the issue. Files are uploaded on submit. */}
+          <div className="mb-3 p-3 rounded-lg border border-slate-300 bg-slate-50">
+            <label className="text-xs font-bold text-slate-700 mb-2 block">
+              📎 Attachments (optional)
+            </label>
+            <input
+              type="file"
+              multiple
+              onChange={function (e) {
+                var files = Array.from(e.target.files || []);
+                setPendingFiles(pendingFiles.concat(files));
+                // Reset input so picking the same file again still fires onChange
+                e.target.value = '';
+              }}
+              disabled={submitting || uploadingFiles}
+              className="text-xs"
+            />
+            {pendingFiles.length > 0 && (
+              <div className="mt-2 space-y-1">
+                {pendingFiles.map(function (f, i) {
+                  return (
+                    <div key={i} className="flex items-center justify-between text-[11px] bg-white px-2 py-1 rounded border border-slate-200">
+                      <span className="truncate flex-1 text-slate-700">
+                        {f.name} <span className="text-slate-400">({Math.round(f.size / 1024)} KB)</span>
+                      </span>
+                      <button
+                        onClick={function () {
+                          setPendingFiles(pendingFiles.filter(function (_, j) { return j !== i; }));
+                        }}
+                        disabled={submitting || uploadingFiles}
+                        className="ml-2 text-rose-600 hover:text-rose-800 font-bold text-sm"
+                        title="Remove this file"
+                      >×</button>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+            <div className="text-[10px] text-slate-500 mt-1">
+              Attach screenshots, screen recordings, or any file that helps explain the issue. Files are uploaded when you submit.
+            </div>
+          </div>
           <div className="flex gap-2">
             <button
               onClick={create}
-              disabled={submitting || !form.title.trim()}
-              className={'px-5 py-2.5 rounded-lg text-sm font-bold text-white transition ' + (submitting || !form.title.trim() ? 'bg-slate-400 cursor-not-allowed opacity-60' : 'bg-red-500 hover:bg-red-600')}
+              disabled={submitting || uploadingFiles || !form.title.trim()}
+              className={'px-5 py-2.5 rounded-lg text-sm font-bold text-white transition ' + ((submitting || uploadingFiles || !form.title.trim()) ? 'bg-slate-400 cursor-not-allowed opacity-60' : 'bg-red-500 hover:bg-red-600')}
             >
-              {submitting ? '⏳ Submitting…' : 'Submit / إرسال'}
+              {uploadingFiles ? '📎 Uploading…' : (submitting ? '⏳ Submitting…' : 'Submit / إرسال')}
             </button>
             <button
               onClick={function () { setShowForm(false); resetForm(); }}
@@ -443,6 +537,27 @@ export default function SystemTicketsPanel({ userId, isAdmin, getUserName, sanit
                     </div>
                     <div className="text-sm font-bold">{t.title}</div>
                     {t.description && <div className="text-xs text-slate-500 mt-1 whitespace-pre-wrap">{t.description}</div>}
+                    {/* v55.82-W — Show attachments as compact list of clickable
+                        chips. Click opens in a new tab. Images get a thumbnail. */}
+                    {t.attachments && Array.isArray(t.attachments) && t.attachments.length > 0 && (
+                      <div className="mt-2 flex flex-wrap gap-1.5">
+                        {t.attachments.map(function (att, i) {
+                          var isImg = (att.type || '').indexOf('image/') === 0;
+                          return (
+                            <a
+                              key={i}
+                              href={att.url}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              className="inline-flex items-center gap-1 px-2 py-1 rounded bg-blue-50 border border-blue-200 text-[10px] text-blue-800 hover:bg-blue-100 hover:underline"
+                              title={'Open ' + att.name + ' (' + Math.round((att.size || 0) / 1024) + ' KB)'}
+                            >
+                              {isImg ? '🖼️' : '📎'} {att.name}
+                            </a>
+                          );
+                        })}
+                      </div>
+                    )}
                     {t.claude_fix_notes && (
                       <div className="mt-2 p-2 rounded bg-indigo-50 border-l-2 border-indigo-400">
                         <div className="text-[9px] font-bold text-indigo-600 mb-0.5">🤖 CLAUDE NOTES{t.claude_fixed_in_build_version ? ' · shipped in ' + t.claude_fixed_in_build_version : ''}</div>

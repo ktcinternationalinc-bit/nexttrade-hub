@@ -28,6 +28,96 @@ const PERIOD_LABELS = [
   ['1y', 'Last Year'],
 ];
 
+// v55.82-V — Arabic translations for period labels (Max May 12 2026 —
+// "AI's should work based on the setting for each team user whether
+// English or Arabic or both"). Used when the user's preferred_language
+// is 'ar'.
+const PERIOD_LABELS_AR = [
+  ['yesterday', 'الأمس'],
+  ['7d', 'آخر 7 أيام'],
+  ['30d', 'آخر 30 يوماً'],
+  ['3mo', 'آخر 3 أشهر'],
+  ['1y', 'آخر سنة'],
+];
+
+// v55.82-V — Static label translations for MyPerformance / Sara's panel.
+// Anything that previously rendered as a hardcoded English string and
+// is now wrapped in T(key) reads from this map.
+const PAGE_LABELS = {
+  en: {
+    myPerformance: 'My Performance',
+    seeAccomplishments: 'See what you\'ve accomplished and get coach feedback',
+    activityTagline: 'Your activity, your trends, your growth — with an AI pep talk on demand',
+    collapse: 'Collapse',
+    expand: 'Expand',
+    sortBy: 'Sort by:',
+    period: 'Period',
+    noActivity: '👋 No activity in',
+    ticketsYouClosed: 'Tickets You Closed',
+    ticketsYouOpened: 'Tickets You Opened',
+    commentsYouWrote: 'Comments You Wrote',
+    shippingRatesAdded: 'Shipping Rates Added',
+    bookingsMade: 'Bookings Made',
+    quotesCreated: 'Quotes Created',
+    customerTouches: 'Customer Touches',
+    meetingsYouSetUp: 'Meetings You Set Up',
+    meetingsAttended: 'Meetings Attended',
+    meetingsYouSignedInto: 'Meetings You Signed Into',
+    showUpRate: 'Show-up Rate',
+    bugReportsFiled: 'Bug Reports Filed',
+    dailyLogStreak: 'Daily Log Streak',
+    dailyLogConsistency: '📝 Daily Log Consistency',
+    winsThisPeriod: '✨ Wins this period',
+    vsLastPeriod: 'vs last period',
+    same: '— same',
+    workDays: 'work days',
+    daysWroteEntry: 'Days you wrote a manual entry',
+    pipelineMovesContactUpdates: 'Pipeline moves + contact updates',
+    meetingsYouOrganized: 'Meetings you organized in this period',
+    meetingsOnInviteList: 'Meetings where you were on the invite list',
+    iWasThereSignal: 'Meetings you actively checked into — the strongest "I was there" signal',
+    showUpRateHint: 'Of the meetings you organized that have already happened, how many you actually showed up to',
+    bugReportsHint: 'System tickets you\'ve opened — your QA contribution to the team',
+    howOftenCheckIn: 'How often you check in on your tickets',
+  },
+  ar: {
+    myPerformance: 'أدائي',
+    seeAccomplishments: 'شاهد ما أنجزته واحصل على تقييم المدرّب',
+    activityTagline: 'نشاطك، اتجاهاتك، نموّك — مع تشجيع من الذكاء الاصطناعي عند الطلب',
+    collapse: 'إخفاء',
+    expand: 'إظهار',
+    sortBy: 'الترتيب حسب:',
+    period: 'الفترة',
+    noActivity: '👋 لا يوجد نشاط في',
+    ticketsYouClosed: 'التذاكر التي أغلقتها',
+    ticketsYouOpened: 'التذاكر التي فتحتها',
+    commentsYouWrote: 'التعليقات التي كتبتها',
+    shippingRatesAdded: 'أسعار الشحن المضافة',
+    bookingsMade: 'الحجوزات المنجزة',
+    quotesCreated: 'عروض الأسعار',
+    customerTouches: 'التواصل مع العملاء',
+    meetingsYouSetUp: 'الاجتماعات التي نظّمتها',
+    meetingsAttended: 'الاجتماعات التي حضرتها',
+    meetingsYouSignedInto: 'الاجتماعات التي سجّلت دخولك فيها',
+    showUpRate: 'نسبة الحضور',
+    bugReportsFiled: 'تقارير الأخطاء',
+    dailyLogStreak: 'سجل العمل اليومي',
+    dailyLogConsistency: '📝 انتظام السجل اليومي',
+    winsThisPeriod: '✨ إنجازات هذه الفترة',
+    vsLastPeriod: 'مقارنة بالفترة السابقة',
+    same: '— ثابت',
+    workDays: 'أيام عمل',
+    daysWroteEntry: 'الأيام التي كتبت فيها إدخالاً يدوياً',
+    pipelineMovesContactUpdates: 'تحرّكات خط البيع + تحديثات الاتصال',
+    meetingsYouOrganized: 'الاجتماعات التي نظّمتها في هذه الفترة',
+    meetingsOnInviteList: 'الاجتماعات التي كنت مدعوّاً لحضورها',
+    iWasThereSignal: 'الاجتماعات التي سجّلت دخولك فيها فعلياً — أقوى دليل على الحضور',
+    showUpRateHint: 'من الاجتماعات التي نظّمتها وحدثت بالفعل، كم منها حضرت',
+    bugReportsHint: 'تذاكر النظام التي فتحتها — إسهامك في ضمان الجودة',
+    howOftenCheckIn: 'كم مرّة تتابع فيها تذاكرك',
+  },
+};
+
 export default function MyPerformance({ user, userProfile, active }) {
   // v55.77 — `active` prop signals whether Sara's panel is the currently
   // open persona. Defaults to true for backward compat (older mounts).
@@ -48,8 +138,29 @@ export default function MyPerformance({ user, userProfile, active }) {
   const [coachError, setCoachError] = useState('');
   // v55.82-S — Per-user language toggle for the Personal Coach feedback.
   // Independent of the global app language so a user can flip the coach
-  // output to Arabic without changing the rest of the UI. Default 'en'.
-  const [coachLang, setCoachLang] = useState('en');
+  // output to Arabic without changing the rest of the UI.
+  // v55.82-V (Max May 12 2026 — "AI's should work based on the setting
+  // for each team user whether English or Arabic or both"): the initial
+  // value now respects the user's preferred_language. 'ar' starts in
+  // Arabic; 'en' starts in English; 'both' starts in English with the
+  // AR toggle one click away. Users can still flip at any time.
+  const initialCoachLang = (function () {
+    var pref = userProfile && userProfile.preferred_language;
+    if (pref === 'ar') return 'ar';
+    return 'en';
+  })();
+  const [coachLang, setCoachLang] = useState(initialCoachLang);
+  // v55.82-V — Page-wide language for static labels (period selector,
+  // headers, Wins panel, dailyLog narrative, empty state). Derived from
+  // userProfile.preferred_language. 'ar' → Arabic page chrome.
+  // 'en' / 'both' → English page chrome. Independent of coachLang —
+  // a user with preferred_language='ar' still gets the EN/AR coach
+  // toggle so they can ask the coach to speak English if they want.
+  const pageLang = (userProfile && userProfile.preferred_language === 'ar') ? 'ar' : 'en';
+  const T = function (key) {
+    return (PAGE_LABELS[pageLang] && PAGE_LABELS[pageLang][key]) || PAGE_LABELS.en[key] || key;
+  };
+  const periodOptions = pageLang === 'ar' ? PERIOD_LABELS_AR : PERIOD_LABELS;
   // v55.64 — default to EXPANDED. Previously this defaulted to false so
   // the card on the dashboard looked like a tiny placeholder pill, and
   // people forgot the AI coach + scorecard even existed. Open by default
@@ -359,9 +470,10 @@ export default function MyPerformance({ user, userProfile, active }) {
         </button>
       </div>
 
-      {/* Period selector */}
-      <div className="flex flex-wrap gap-1 mb-4 rounded-lg border border-slate-200 p-1 bg-slate-50">
-        {PERIOD_LABELS.map(([v, l]) => (
+      {/* Period selector — v55.82-V uses periodOptions (AR or EN) based
+          on userProfile.preferred_language. */}
+      <div className="flex flex-wrap gap-1 mb-4 rounded-lg border border-slate-200 p-1 bg-slate-50" dir={pageLang === 'ar' ? 'rtl' : 'ltr'}>
+        {periodOptions.map(([v, l]) => (
           <button
             key={v}
             onClick={() => setPeriod(v)}
@@ -433,12 +545,14 @@ export default function MyPerformance({ user, userProfile, active }) {
           v55.81 QA-9 (May 9): both branches now use hasAnyActivity (a
           single useMemo) — no more duplicated 14-field sum. */}
       {!loading && current && !hasAnyActivity && (function () {
-        var periodLabel = (PERIOD_LABELS.find(function(p){return p[0]===period;}) || [null, 'this period'])[1];
+        var periodLabel = (periodOptions.find(function(p){return p[0]===period;}) || [null, 'this period'])[1];
         return (
-          <div className="bg-cyan-50 border border-cyan-200 rounded-lg p-4 text-sm text-cyan-900 mb-3">
-            <div className="font-bold mb-1">👋 No activity in {periodLabel}</div>
+          <div className="bg-cyan-50 border border-cyan-200 rounded-lg p-4 text-sm text-cyan-900 mb-3" dir={pageLang === 'ar' ? 'rtl' : 'ltr'}>
+            <div className="font-bold mb-1">{T('noActivity')} {periodLabel}</div>
             <div className="text-xs leading-relaxed">
-              I don't see any tickets, comments, daily log entries, customer touches, or meetings yet. Try a longer period above, or once you've logged some activity I'll show your wins and trends here.
+              {pageLang === 'ar'
+                ? 'لا أرى أي تذاكر أو تعليقات أو إدخالات سجل يومي أو تواصلات مع العملاء أو اجتماعات حتى الآن. جرّب فترة أطول أعلاه، أو بمجرد أن تسجّل بعض النشاط سأعرض إنجازاتك واتجاهاتك هنا.'
+                : 'I don\'t see any tickets, comments, daily log entries, customer touches, or meetings yet. Try a longer period above, or once you\'ve logged some activity I\'ll show your wins and trends here.'}
             </div>
           </div>
         );
@@ -447,32 +561,33 @@ export default function MyPerformance({ user, userProfile, active }) {
       {!loading && current && hasAnyActivity && (
         <>
           {/* Wins highlights */}
-          <Wins metrics={current} deltas={deltas} />
+          <Wins metrics={current} deltas={deltas} pageLang={pageLang} />
 
-          {/* Activity grid */}
-          <div className="grid grid-cols-2 md:grid-cols-3 gap-3 mb-5">
-            <SelfStat label="Tickets You Closed" value={current.ticketsClosed} delta={deltas.ticketsClosed} suffix="closed" tone="green" />
-            <SelfStat label="Tickets You Opened" value={current.ticketsCreated} delta={deltas.ticketsCreated} suffix="opened" tone="blue" />
-            <SelfStat label="Comments You Wrote" value={current.ticketComments} delta={deltas.ticketComments} suffix="comments" tone="purple" hint="How often you check in on your tickets" />
-            <SelfStat label="Shipping Rates Added" value={current.ratesAdded} delta={deltas.ratesAdded} suffix="rates" tone="cyan" />
-            <SelfStat label="Bookings Made" value={current.bookings} delta={deltas.bookings} suffix="bookings" tone="emerald" />
-            <SelfStat label="Quotes Created" value={current.quotesCreated} delta={deltas.quotesCreated} suffix="quotes" tone="amber" />
-            <SelfStat label="Customer Touches" value={(current.contactTouches || 0) + (current.pipelineMoves || 0)} delta={null} suffix="touches" tone="rose" hint="Pipeline moves + contact updates" />
+          {/* Activity grid — v55.82-V labels read from T(key) so the
+              page chrome flips to Arabic when preferred_language='ar'. */}
+          <div className="grid grid-cols-2 md:grid-cols-3 gap-3 mb-5" dir={pageLang === 'ar' ? 'rtl' : 'ltr'}>
+            <SelfStat label={T('ticketsYouClosed')} value={current.ticketsClosed} delta={deltas.ticketsClosed} suffix={pageLang === 'ar' ? 'مُغلقة' : 'closed'} tone="green" />
+            <SelfStat label={T('ticketsYouOpened')} value={current.ticketsCreated} delta={deltas.ticketsCreated} suffix={pageLang === 'ar' ? 'مفتوحة' : 'opened'} tone="blue" />
+            <SelfStat label={T('commentsYouWrote')} value={current.ticketComments} delta={deltas.ticketComments} suffix={pageLang === 'ar' ? 'تعليق' : 'comments'} tone="purple" hint={T('howOftenCheckIn')} />
+            <SelfStat label={T('shippingRatesAdded')} value={current.ratesAdded} delta={deltas.ratesAdded} suffix={pageLang === 'ar' ? 'سعر' : 'rates'} tone="cyan" />
+            <SelfStat label={T('bookingsMade')} value={current.bookings} delta={deltas.bookings} suffix={pageLang === 'ar' ? 'حجز' : 'bookings'} tone="emerald" />
+            <SelfStat label={T('quotesCreated')} value={current.quotesCreated} delta={deltas.quotesCreated} suffix={pageLang === 'ar' ? 'عرض' : 'quotes'} tone="amber" />
+            <SelfStat label={T('customerTouches')} value={(current.contactTouches || 0) + (current.pipelineMoves || 0)} delta={null} suffix={pageLang === 'ar' ? 'تواصل' : 'touches'} tone="rose" hint={T('pipelineMovesContactUpdates')} />
             {/* v55.65 — split "Meetings" into the three signals Max asked for:
                 created (you organized), attended (you were invited & showed),
                 checked-in (you actually signed in to confirm presence) */}
-            <SelfStat label="Meetings You Set Up" value={current.meetingsCreated || 0} delta={deltas.meetingsCreated} suffix="meetings" tone="indigo" hint="Meetings you organized in this period" />
-            <SelfStat label="Meetings Attended" value={current.attendedEvents} delta={deltas.attendedEvents} suffix="meetings" tone="indigo" hint="Meetings where you were on the invite list" />
-            <SelfStat label="Meetings You Signed Into" value={current.meetingsCheckedIn || 0} delta={deltas.meetingsCheckedIn} suffix="check-ins" tone="emerald" hint="Meetings you actively checked into — the strongest 'I was there' signal" />
+            <SelfStat label={T('meetingsYouSetUp')} value={current.meetingsCreated || 0} delta={deltas.meetingsCreated} suffix={pageLang === 'ar' ? 'اجتماعات' : 'meetings'} tone="indigo" hint={T('meetingsYouOrganized')} />
+            <SelfStat label={T('meetingsAttended')} value={current.attendedEvents} delta={deltas.attendedEvents} suffix={pageLang === 'ar' ? 'اجتماعات' : 'meetings'} tone="indigo" hint={T('meetingsOnInviteList')} />
+            <SelfStat label={T('meetingsYouSignedInto')} value={current.meetingsCheckedIn || 0} delta={deltas.meetingsCheckedIn} suffix={pageLang === 'ar' ? 'تسجيلات دخول' : 'check-ins'} tone="emerald" hint={T('iWasThereSignal')} />
             {current.meetingShowUpPct != null && (
-              <SelfStat label="Show-Up Rate" value={current.meetingShowUpPct + '%'} delta={null} suffix={'of ' + (current.meetingsHeldFromMine || 0) + ' you set up'} tone={current.meetingShowUpPct >= 80 ? 'emerald' : current.meetingShowUpPct >= 50 ? 'amber' : 'rose'} hint="Of the meetings you organized that have already happened, how many you actually showed up to" />
+              <SelfStat label={T('showUpRate')} value={current.meetingShowUpPct + '%'} delta={null} suffix={pageLang === 'ar' ? ('من ' + (current.meetingsHeldFromMine || 0) + ' نظّمتها') : ('of ' + (current.meetingsHeldFromMine || 0) + ' you set up')} tone={current.meetingShowUpPct >= 80 ? 'emerald' : current.meetingShowUpPct >= 50 ? 'amber' : 'rose'} hint={T('showUpRateHint')} />
             )}
             {/* v55.65 — bug-reporting + retest follow-through */}
             {(current.systemTicketsCreated || 0) > 0 && (
-              <SelfStat label="Bug Reports Filed" value={current.systemTicketsCreated} delta={deltas.systemTicketsCreated} suffix={current.systemTicketsFixed > 0 ? '· ' + current.systemTicketsFixed + ' already fixed' : 'reports'} tone="purple" hint="System tickets you've opened — your QA contribution to the team" />
+              <SelfStat label={T('bugReportsFiled')} value={current.systemTicketsCreated} delta={deltas.systemTicketsCreated} suffix={current.systemTicketsFixed > 0 ? '· ' + current.systemTicketsFixed + (pageLang === 'ar' ? ' تمّ إصلاحها' : ' already fixed') : (pageLang === 'ar' ? 'تقارير' : 'reports')} tone="purple" hint={T('bugReportsHint')} />
             )}
             {(current.systemTicketsRetested || 0) > 0 && (
-              <SelfStat label="Bugs You Retested" value={current.systemTicketsRetested} delta={deltas.systemTicketsRetested} suffix="closed loop" tone="teal" hint="Bugs you reported, then verified the fix on. Closing the loop matters." />
+              <SelfStat label={pageLang === 'ar' ? 'أخطاء أعدت اختبارها' : 'Bugs You Retested'} value={current.systemTicketsRetested} delta={deltas.systemTicketsRetested} suffix={pageLang === 'ar' ? 'حلقة مُكتملة' : 'closed loop'} tone="teal" hint={pageLang === 'ar' ? 'أخطاء بلّغت عنها ثم تحقّقت من إصلاحها. إكمال الحلقة مهم.' : 'Bugs you reported, then verified the fix on. Closing the loop matters.'} />
             )}
             <SelfStat label="Daily Log Streak" value={current.manualDays} delta={deltas.manualEntries} suffix={'/' + current.workingDays + ' work days'} tone="teal" hint="Days you wrote a manual entry" />
           </div>
@@ -626,30 +741,45 @@ export default function MyPerformance({ user, userProfile, active }) {
 }
 
 // --- Subcomponent: positive wins highlights ---
-function Wins({ metrics, deltas }) {
+function Wins({ metrics, deltas, pageLang }) {
+  // v55.82-V — Wins messages bilingual. pageLang='ar' triggers Arabic
+  // phrasing; default English. Same trigger conditions for each win.
+  var isAr = pageLang === 'ar';
   const wins = [];
   if (metrics.ticketsClosed > 0 && (deltas?.ticketsClosed?.diff || 0) > 0) {
-    wins.push('Closed ' + deltas.ticketsClosed.diff + ' more tickets than last period');
+    wins.push(isAr
+      ? ('أغلقت ' + deltas.ticketsClosed.diff + ' تذكرة أكثر من الفترة السابقة')
+      : ('Closed ' + deltas.ticketsClosed.diff + ' more tickets than last period'));
   }
   if (metrics.bookings > 0 && (deltas?.bookings?.diff || 0) > 0) {
-    wins.push('Locked in ' + metrics.bookings + ' booking' + (metrics.bookings === 1 ? '' : 's'));
+    wins.push(isAr
+      ? ('أكملت ' + metrics.bookings + ' حجز' + (metrics.bookings === 1 ? '' : 'ات'))
+      : ('Locked in ' + metrics.bookings + ' booking' + (metrics.bookings === 1 ? '' : 's')));
   }
   if (metrics.onTimePct != null && metrics.onTimePct >= 80) {
-    wins.push(metrics.onTimePct + '% of your closes were on time');
+    wins.push(isAr
+      ? (metrics.onTimePct + '% من إغلاقاتك تمّت في الوقت المحدّد')
+      : (metrics.onTimePct + '% of your closes were on time'));
   }
   if (metrics.manualFillRatePct >= 80) {
-    wins.push('Daily log filled ' + metrics.manualFillRatePct + '% of working days');
+    wins.push(isAr
+      ? ('السجل اليومي مُعبَّأ في ' + metrics.manualFillRatePct + '% من أيام العمل')
+      : ('Daily log filled ' + metrics.manualFillRatePct + '% of working days'));
   }
   if (metrics.ratesAdded > 0 && (deltas?.ratesAdded?.diff || 0) >= 0) {
-    wins.push('Added ' + metrics.ratesAdded + ' shipping rate' + (metrics.ratesAdded === 1 ? '' : 's'));
+    wins.push(isAr
+      ? ('أضفت ' + metrics.ratesAdded + ' سعر شحن')
+      : ('Added ' + metrics.ratesAdded + ' shipping rate' + (metrics.ratesAdded === 1 ? '' : 's')));
   }
   if ((deltas?.totalActions?.diff || 0) > 0) {
-    wins.push('Up ' + deltas.totalActions.diff + ' total actions vs last period');
+    wins.push(isAr
+      ? ('زيادة ' + deltas.totalActions.diff + ' إجراء مقارنة بالفترة السابقة')
+      : ('Up ' + deltas.totalActions.diff + ' total actions vs last period'));
   }
   if (wins.length === 0) return null;
   return (
-    <div className="bg-emerald-100 rounded-lg p-3 mb-4 border border-emerald-300">
-      <div className="text-xs font-extrabold text-emerald-900 mb-1">✨ Wins this period</div>
+    <div className="bg-emerald-100 rounded-lg p-3 mb-4 border border-emerald-300" dir={isAr ? 'rtl' : 'ltr'}>
+      <div className="text-xs font-extrabold text-emerald-900 mb-1">{isAr ? '✨ إنجازات هذه الفترة' : '✨ Wins this period'}</div>
       <ul className="text-xs text-emerald-900 font-medium space-y-0.5">
         {wins.slice(0, 4).map((w, i) => <li key={i}>• {w}</li>)}
       </ul>

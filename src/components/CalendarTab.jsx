@@ -1755,6 +1755,31 @@ export default function CalendarTab({ customers, user, userProfile, users, ticke
                     <span className="font-semibold">📋 Agenda: </span>{notesEvent.description}
                   </div>
                 )}
+                {/* v55.82-W (Max May 12 2026 — "we should see who logged
+                    into the meeting and any notes in the meeting"):
+                    Attendance summary derived from (a) the event's own
+                    check-in stamp and (b) the unique author_ids on the
+                    notes thread. Anyone who posted a note necessarily
+                    attended — that's the reliable per-person signal. */}
+                {(function () {
+                  var attendeeIds = {};
+                  if (notesEvent.checked_in_by) attendeeIds[notesEvent.checked_in_by] = true;
+                  (notesThread || []).forEach(function (n) {
+                    if (n.author_id) attendeeIds[n.author_id] = true;
+                  });
+                  var names = Object.keys(attendeeIds).map(function (uid) {
+                    return getUserName ? (getUserName(uid) || 'someone') : 'someone';
+                  });
+                  if (names.length === 0) return null;
+                  return (
+                    <div className="mt-2 px-2 py-1.5 rounded bg-emerald-50 border border-emerald-200 text-[11px] text-emerald-900 leading-snug">
+                      <span className="font-semibold">✓ Attended: </span>{names.join(', ')}
+                      {notesEvent.checked_in_at && (
+                        <span className="text-emerald-700"> · first check-in {fmtET ? fmtET(notesEvent.checked_in_at, 'datetime') : notesEvent.checked_in_at}</span>
+                      )}
+                    </div>
+                  );
+                })()}
               </div>
               <div className="flex gap-1 ml-2">
                 {notesThread.length > 0 && (

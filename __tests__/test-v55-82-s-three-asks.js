@@ -78,7 +78,9 @@ ok('2d: REGRESSION GUARD — hardcoded "Tap to stop Nadia" no longer in source',
 // =============================================================
 
 ok('3a: coachLang state declared (independent of global lang)',
-  /const \[coachLang, setCoachLang\] = useState\('en'\)/.test(myPerf));
+  // v55.82-V derived the initial value from userProfile.preferred_language.
+  // Either literal 'en' or the helper variable name is acceptable.
+  /const \[coachLang, setCoachLang\] = useState\((?:'en'|initialCoachLang)\)/.test(myPerf));
 
 ok('3b: requestCoach sends lang in POST body',
   /JSON\.stringify\(\{[\s\S]{0,400}lang: coachLang/.test(myPerf));

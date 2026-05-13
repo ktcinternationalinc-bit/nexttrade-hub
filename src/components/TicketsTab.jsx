@@ -149,12 +149,26 @@ export default function TicketsTab({ toast, customers, user, userProfile, users,
 
   const filtered = useMemo(() => {
     let arr = tickets;
-    if (statusF === 'open') arr = arr.filter(t => t.status !== 'Closed');
-    else if (statusF === 'mine') arr = arr.filter(t => isAssignedToMe(t) && t.status !== 'Closed');
-    else if (statusF === 'team') arr = arr.filter(t => t.status !== 'Closed' && (t.assigned_to || t.additional_assignees) && !isAssignedToMe(t));
-    else if (statusF === 'created') arr = arr.filter(t => t.created_by === myId && t.status !== 'Closed');
-    else if (statusF === 'overdue') arr = arr.filter(t => t.due_date && t.due_date < todayStr && t.status !== 'Closed');
-    else if (statusF !== 'all') arr = arr.filter(t => t.status === statusF);
+    // v55.82-V — PRIVATE TICKETS visibility. Private tickets are visible
+    // only to the user listed in private_to. Even admins cannot see other
+    // users' private tickets. Applied BEFORE any other filter so private
+    // tickets never leak through search, status filters, or sort.
+    arr = arr.filter(t => !t.is_private || t.private_to === myId);
+    // v55.82-W (Max May 12 2026): when the user is actively searching, the
+    // status filter is intentionally bypassed so search results include
+    // CLOSED tickets too. Without this, "Open" status (the default) was
+    // hiding closed tickets from search — exactly the bug Max reported.
+    // Owner/assignee/priority filters still apply because those are
+    // explicit user choices, not a default-hidden bucket.
+    var searchActive = q && q.length > 0;
+    if (!searchActive) {
+      if (statusF === 'open') arr = arr.filter(t => t.status !== 'Closed');
+      else if (statusF === 'mine') arr = arr.filter(t => isAssignedToMe(t) && t.status !== 'Closed');
+      else if (statusF === 'team') arr = arr.filter(t => t.status !== 'Closed' && (t.assigned_to || t.additional_assignees) && !isAssignedToMe(t));
+      else if (statusF === 'created') arr = arr.filter(t => t.created_by === myId && t.status !== 'Closed');
+      else if (statusF === 'overdue') arr = arr.filter(t => t.due_date && t.due_date < todayStr && t.status !== 'Closed');
+      else if (statusF !== 'all') arr = arr.filter(t => t.status === statusF);
+    }
     if (q) arr = arr.filter(t => {
       const ql = q.toLowerCase();
       return (t.title||'').toLowerCase().includes(ql) || (t.description||'').toLowerCase().includes(ql) || (t.order_number||'').toLowerCase().includes(ql) || (t.ticket_number||'').toLowerCase().includes(ql) || (t.client_name||'').toLowerCase().includes(ql) || (getUserName(t.assigned_to)||'').toLowerCase().includes(ql) || (getUserName(t.created_by)||'').toLowerCase().includes(ql);
@@ -187,10 +201,35 @@ export default function TicketsTab({ toast, customers, user, userProfile, users,
       const assignedName = getUserName(f.assignedTo);
       const creatorName = getUserName(myId);
       const extraAssignees = (f.extraAssignees || []).filter(id => id !== f.assignedTo);
-      await dbInsert('tickets', { ticket_number: ticketNum, title: f.title, description: f.description || '', priority: f.priority || 'medium', order_number: f.orderNumber || '', due_date: f.dueDate || null, customer_id: f.customerId || null, client_name: f.clientName || '', status: 'New', assigned_to: f.assignedTo || null, additional_assignees: extraAssignees.length ? JSON.stringify(extraAssignees) : null, created_by: myId || null }, myId || null);
-      await logActivity(myId, 'Created ' + ticketNum + ': ' + f.title + (assignedName ? ' → ' + assignedName : ''), 'ticket');
-      const allToNotify = [f.assignedTo, ...extraAssignees].filter(id => id && id !== myId);
-      if (allToNotify.length) notifyTicketAssigned(allToNotify, ticketNum + ' ' + f.title, myId);
+      // v55.82-V — private ticket creation. Only super_admin can mark a
+      // ticket private. private_to = creator's user id, so the same row
+      // belongs to whoever made it. If anyone else somehow gets the form
+      // field set, we silently refuse to honor it server-side at the
+      // RLS/filter layer too.
+      var makePrivate = !!(f.isPrivate && isSuperAdmin);
+      var ticketRow = {
+        ticket_number: ticketNum,
+        title: f.title,
+        description: f.description || '',
+        priority: f.priority || 'medium',
+        order_number: f.orderNumber || '',
+        due_date: f.dueDate || null,
+        customer_id: f.customerId || null,
+        client_name: f.clientName || '',
+        status: 'New',
+        assigned_to: makePrivate ? (myId || null) : (f.assignedTo || null),
+        additional_assignees: makePrivate ? null : (extraAssignees.length ? JSON.stringify(extraAssignees) : null),
+        created_by: myId || null,
+        is_private: makePrivate,
+        private_to: makePrivate ? (myId || null) : null,
+      };
+      await dbInsert('tickets', ticketRow, myId || null);
+      await logActivity(myId, 'Created ' + ticketNum + ': ' + f.title + (makePrivate ? ' [PRIVATE]' : (assignedName ? ' → ' + assignedName : '')), 'ticket');
+      // Don't notify anyone on private tickets — the assignee IS the creator.
+      if (!makePrivate) {
+        const allToNotify = [f.assignedTo, ...extraAssignees].filter(id => id && id !== myId);
+        if (allToNotify.length) notifyTicketAssigned(allToNotify, ticketNum + ' ' + f.title, myId);
+      }
       setShowAdd(false); setF({}); loadTickets();
     } catch (err) {
       toast ? toast.error(err.message) : alert(err.message);
@@ -1191,7 +1230,7 @@ export default function TicketsTab({ toast, customers, user, userProfile, users,
             <div className="flex items-center gap-1.5 mb-0.5">
               <div className="w-2.5 h-2.5 rounded-full" style={{background: STATUS_COLORS[s]}} />
               <span className="text-xs font-bold">{s}</span>
-              <span className="text-[9px] text-slate-500 ml-auto">{tickets.filter(t => t.status === s).length}</span>
+              <span className="text-[9px] text-slate-500 ml-auto">{tickets.filter(t => t.status === s && (!t.is_private || t.private_to === myId)).length}</span>
             </div>
             <div className="text-[9px] text-slate-500 leading-tight">{STATUS_DESC[s]}</div>
           </div>
@@ -1234,6 +1273,31 @@ export default function TicketsTab({ toast, customers, user, userProfile, users,
         <div className="col-span-2"><label className="text-[10px] font-semibold">Client</label>
           <input list="tkt-cl" value={f.clientName||''} onChange={e=>{ const m=customers.find(c=>c.name===e.target.value); setF({...f,clientName:e.target.value,customerId:m?m.id:''}); }} className="w-full px-3 py-2 rounded border text-sm" />
           <datalist id="tkt-cl">{customers.map(c=><option key={c.id} value={c.name}/>)}</datalist></div>
+        {/* v55.82-V — PRIVATE TICKETS for super_admin (Max May 12 2026).
+            Only super_admin sees this toggle. When checked: the ticket is
+            visible only to the creator + the creator's AI session. Other
+            users (including admins) cannot see it. Useful for personal
+            notes, sensitive items, or super-admin-only workstreams. */}
+        {isSuperAdmin && (
+          <div className="col-span-2 mt-2 p-3 rounded-lg border-2 border-dashed border-amber-400 bg-amber-50">
+            <label className="flex items-start gap-2 cursor-pointer">
+              <input
+                type="checkbox"
+                checked={!!f.isPrivate}
+                onChange={e => setF({ ...f, isPrivate: e.target.checked, assignedTo: e.target.checked ? '' : f.assignedTo, extraAssignees: e.target.checked ? [] : f.extraAssignees })}
+                className="w-4 h-4 mt-0.5"
+              />
+              <span>
+                <span className="text-xs font-bold text-amber-900 flex items-center gap-1">
+                  🔒 Make this ticket private
+                </span>
+                <span className="text-[11px] text-amber-900 font-medium block mt-0.5">
+                  Only you and your AI assistants will be able to see this ticket. Other team members — including admins — won't find it in any list. When private, the ticket cannot be assigned to anyone else.
+                </span>
+              </span>
+            </label>
+          </div>
+        )}
       </div>
       <div className="flex gap-2 mt-3">
         <button onClick={handleAddTicket}
@@ -1370,6 +1434,14 @@ export default function TicketsTab({ toast, customers, user, userProfile, users,
                 <div className="flex-1 min-w-0" onClick={()=>{setSel(t);loadComments(t.id);}}>
                   <div className={'font-bold text-[15px] leading-tight mb-1 ' + (t.status === 'Closed' ? 'text-slate-600 line-through decoration-slate-400' : 'text-slate-900')}
                     style={{ wordBreak: 'break-word' }}>
+                    {/* v55.82-V — lock icon flags private tickets at a glance.
+                        Only visible to the owner since others can't see the
+                        row at all. */}
+                    {t.is_private && (
+                      <span className="inline-flex items-center gap-0.5 mr-1 px-1.5 py-0.5 rounded bg-amber-100 border border-amber-400 text-amber-900 text-[10px] font-extrabold align-middle" title="Private ticket — only you can see this">
+                        🔒 PRIVATE
+                      </span>
+                    )}
                     {t.title}
                   </div>
                   {/* Info row — ticket#, status pill, and urgency badges */}

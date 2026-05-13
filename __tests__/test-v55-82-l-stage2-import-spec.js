@@ -68,7 +68,12 @@ ok('2b: REGRESSION GUARD — match key no longer uses container_type or effectiv
 );
 
 ok('2c: keyFor lowercases + trims (case + whitespace tolerance)',
-  /keyFor = function[\s\S]{0,800}toLowerCase\(\)/.test(src)
+  // v55.82-W replaced inline .trim().toLowerCase() with normName() which
+  // does that PLUS strips non-alphanumeric for fuzzy matching (so
+  // "CMA CGM" == "CMA-CGM"). Either pattern is acceptable.
+  /keyFor = function[\s\S]{0,800}toLowerCase\(\)/.test(src) ||
+  (/keyFor = function[\s\S]{0,400}normName\(/.test(src) &&
+   /var normName = function[\s\S]{0,300}toLowerCase\(\)/.test(src))
 );
 
 // ============================================================

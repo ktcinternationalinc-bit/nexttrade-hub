@@ -33,6 +33,66 @@ import { supabase } from '../lib/supabase';
 //     WhatsApp, the calendar, the Sales tab.
 export const BUILD_HISTORY = [
   {
+    version: 'v55.82-X',
+    date: '2026-05-12',
+    label: 'Hotfix — AI assistants getting "HTTP 400" errors',
+    items: [
+      // PUBLIC — layman per Permanent Rule #1
+      '**Fixed: AI assistants returning "HTTP 400" errors.** Nadia, Sara, Jenna, the Personal Coach, the translator, and the auto-summarizer were all failing because the AI model names they were trying to use got deprecated by Anthropic in their May 2026 cleanup. Every model reference has been updated to the current names — the assistants should respond normally again.',
+      '**New: ops can swap models without a code change.** If you ever need to roll back to a different model or test a new one, just set `AI_MODEL_CHAIN` in Vercel environment variables (comma-separated, e.g. `claude-sonnet-4-6,claude-haiku-4-5`). The system reads this on each request, so changes take effect immediately on next request — no redeploy.',
+      // SUPER_ADMIN — technical detail
+      { superAdminOnly: true, text: 'Ten model-ID references updated across src/app/api/{ask,ask-v2,hr-report/coach,hr-report/review,translate,accountant}/route.js and src/lib/ai-memory.js. Old dated IDs `claude-sonnet-4-20250514` and `claude-haiku-4-5-20251001` → current dateless-pinned IDs `claude-sonnet-4-6` and `claude-haiku-4-5` per docs.claude.com. Also normalized one stray `claude-sonnet-4-5` reference in accountant route.' },
+      { superAdminOnly: true, text: 'Both MODEL_CHAIN and GMODEL_CHAIN in /api/ask now read from process.env.AI_MODEL_CHAIN first (comma-separated), falling back to the defaults if unset. This is the same pattern used by other env-var-overridable knobs in the codebase. Fallback order is intentional: Sonnet first (quality), Haiku second (speed/cost) — Anthropic\'s docs recommend Opus 4.7 for the hardest tasks but it\'s 5-10x cost so we don\'t put it in the default chain.' },
+      { superAdminOnly: true, text: 'NEW TEST: __tests__/test-v55-82-x-model-refresh.js — 7 assertions. Zero refs to old IDs anywhere, current IDs present, env-var override hook exists. Brittle prior test patched: test-v55-81-qa-fixes QA-19 MODEL_CHAIN + GMODEL_CHAIN assertions now accept either historical or current chain.' },
+      { superAdminOnly: true, text: 'QA: 132 pass / 32 fail. Zero regressions vs W.' },
+    ],
+  },
+  {
+    version: 'v55.82-W',
+    date: '2026-05-12',
+    label: 'Eleven fixes — closed-ticket search, recorder, shipping graph, login alerts, attachments, and more',
+    items: [
+      // PUBLIC — layman business language only per Permanent Rule #1
+      '**Search now finds closed tickets too.** Typing a search query in the Tickets tab used to be blocked by the "Open" status filter — so closed tickets never appeared in results. Now whenever you\'re searching, the status filter is bypassed and you see every matching ticket, open or closed.',
+      '**Voice recording no longer turns itself back on after you stop.** When you tapped the Record button and then tapped Stop, the mic was secretly restarting itself. Fixed — Stop now means stop, on all assistants (Nadia, Sara, Jenna, dashboard voice).',
+      '**Calendar meetings now show who attended.** Open any meeting\'s notes panel and you\'ll see a new green "Attended" line listing everyone who checked in or contributed notes, plus when the first check-in happened.',
+      '**HR review now penalizes priority items that aren\'t moving.** If a ticket is starred on your priority board but you\'ve gone 24+ hours without commenting, updating its status, or touching it, your engagement score drops by 5 points per stagnant item (capped at 25). Stars are commitments — sitting on them counts against you.',
+      '**Setup needed for "Change priority to Critical" bug.** Run the SQL diagnostic at `sql/v55-82-w-priority-check.sql` and paste me the output. Most likely your database has a CHECK constraint that doesn\'t include `critical` — same pattern as the container-type issue last week. The diagnostic tells me the fix to give you.',
+      '**System tickets can now have file attachments.** New 📎 Attachments section in the system-ticket form. Drop screenshots, screen recordings, logs, anything that helps. Files are uploaded when you submit, and appear as clickable chips on the ticket card. **Setup needed:** create a Supabase Storage bucket named `ticket-attachments` with public read enabled.',
+      '**Shipping graph: expired rates show in the historical trend.** Previously the graph plotted one line per shipping line, which got cluttered and hid expired rates behind newer ones. Now the default is one clear line showing the best rate over time, period — no spaghetti.',
+      '**Shipping graph: best-rate line as default, dropdown for per-line view.** The "All lines (compare)" default now shows a single best-rate line. To see a specific shipping line\'s trend, pick it from the dropdown. Cleaner, more decision-useful.',
+      '**Shipping graph: stale rates show as dotted grey.** When the best rate has expired and no newer rate has replaced it, the graph continues the line as a dashed grey segment with hollow dots — labeled "Best rate (stale — last known)". You can see "this is the last known best, but it\'s no longer valid" at a glance.',
+      '**Shipping import: smarter name matching.** "CMA CGM" and "CMA-CGM" now match. "Maersk" and "MAERSK" already matched (case-insensitive). The new matching also strips dashes, dots, slashes, and collapses extra spaces — so cosmetic differences in vendor or line names don\'t create duplicate records.',
+      '**"Did Not Login Yesterday" no longer flags people who actually logged in.** The widget used to only check the older `user_sessions` table. Now it cross-references the newer `login_events` summary, which is the more reliable source. If either confirms the login, you\'re not flagged.',
+      // SUPER_ADMIN — technical detail per Permanent Rule #1
+      { superAdminOnly: true, text: 'TICKETS — TicketsTab.jsx: search bypass for status filter via `if (!searchActive) { ... status filters ... }`. Private-ticket gate already in place from v55.82-V applies before search.' },
+      { superAdminOnly: true, text: 'RECORDER — AIGreeter.jsx stopRecording() now calls stopBackupRecog() FIRST to null out recordBackupRecogRef.current and clear handlers, so any in-flight br.onend gets the new guards: (a) ref-equality check (br === recordBackupRecogRef.current), and (b) canonical MediaRecorder.state check instead of closure-captured `recording` variable. Previously a race window between mr.stop() and onstop firing allowed the backup SR to call br.start() one more time.' },
+      { superAdminOnly: true, text: 'CALENDAR — CalendarTab.jsx meeting-notes modal: new attendance summary block derives attendeeIds from event.checked_in_by ∪ notesThread[].author_id. Renders unique names + first-check-in timestamp.' },
+      { superAdminOnly: true, text: 'HR-METRICS — src/lib/hr-metrics.js: new `stagnantPriorityTickets` filter — assigned + starred_today + status !== Closed + no comment/audit/updated_at since starred_at + 24h+ elapsed. Exposed as `stagnantPriorityCount`. Score impact: `engagement = Math.max(0, engagement - Math.min(25, stagnantPriorityCount * 5))`.' },
+      { superAdminOnly: true, text: 'SYSTEM TICKETS — SystemTicketsPanel.jsx: new pendingFiles state + uploadPendingFiles helper (path: system/<ts>_<i>_<safe-name>, bucket: ticket-attachments, contentType from File.type with octet-stream fallback). Attachments stored as jsonb [{name, url, size, type}, ...]. List view renders 📎/🖼️ chips with href.' },
+      { superAdminOnly: true, text: 'SHIPPING CHART — ShippingRatesTab.jsx: chartShippingLine === \'all\' now sets linesToPlot = [] (was: every line in route). Per-month point splits into _bestActive (fresh, solid stroke #0f172a w=3) vs _bestStale (carry-forward, dashed #94a3b8 w=2 strokeDasharray 4 4 hollow dots). Two Line components render the split.' },
+      { superAdminOnly: true, text: 'IMPORT MATCHING — ShippingRatesTab.jsx: new normName() = `s.toLowerCase().replace(/[^a-z0-9]+/g, \' \').replace(/\\s+/g, \' \').trim()`. keyFor() now calls normName() for origin, destination, vendor_name, shipping_line. Safe exact-after-normalization match — no edit-distance fuzziness, no silent merges.' },
+      { superAdminOnly: true, text: 'LOGIN ALERT — AdminTab.jsx: "Did Not Login Yesterday" widget builds two sets — loggedInYesterdaySessions (user_sessions.date === yesterday) and loggedInYesterdayEvents (loginSummary[].logins_yesterday_et > 0). User is "missing" only if BOTH show no login. didLogIn(uid) = sessions OR events.' },
+      { superAdminOnly: true, text: 'NEW TEST: __tests__/test-v55-82-w-omnibus.js — 25 assertions across the 11 items. Brittle prior tests patched: test-v55-81-empty-blocks-sweep 3.1, test-v55-82-c 2a+3b, test-v55-82-i 4a/4b/4c, test-v55-82-l 2c, test-v55-82-s 3a.' },
+      { superAdminOnly: true, text: 'QA: 131 pass / 32 fail. Zero regressions vs U baseline.' },
+      { superAdminOnly: true, text: 'SQL needed: (1) sql/v55-82-w-priority-check.sql — diagnostic for the Critical-priority bug; paste output back for the fix-constraint SQL. (2) v55.82-V SQL sql/v55-82-v-private-tickets.sql adds is_private + private_to columns to tickets. (3) Supabase Storage: create bucket "ticket-attachments" with public read enabled.' },
+    ],
+  },
+  {
+    version: 'v55.82-V',
+    date: '2026-05-12',
+    label: 'Private tickets for super_admin · AI language follows each user\'s setting',
+    items: [
+      // PUBLIC
+      '**Super admin can now create private tickets.** New 🔒 "Make this ticket private" checkbox on the new-ticket form (super_admin only). When checked: only you and your AI assistants will see the ticket. Other team members — including admins — won\'t find it in any list, search result, or count widget. Private tickets get a 🔒 PRIVATE chip on the card so you can tell them apart at a glance.',
+      '**AI now respects each user\'s preferred language.** The Personal Coach (Sara), the Wins panel, the period selector (Yesterday / Last 7 Days / etc), the stat tile labels (Tickets You Closed, Meetings Attended, etc), and the no-activity empty state all now flip to Arabic automatically for users whose preferred_language is set to "ar" in Settings. Users with "en" or "both" see English by default, with the EN/AR toggle still available on the coach card.',
+      // SUPER_ADMIN
+      { superAdminOnly: true, text: 'TICKETS — Tickets table gets is_private (boolean default false) + private_to (uuid, indexed). SQL at sql/v55-82-v-private-tickets.sql. TicketsTab filter applies `!t.is_private || t.private_to === myId` BEFORE all other filters so private tickets never leak through search, status filters, sort, or count widgets. New-ticket form: super-admin-only checkbox; when checked, assigned_to is forced to creator and additional_assignees is null (a private ticket assigned to someone else makes no sense).' },
+      { superAdminOnly: true, text: 'MYPERFORMANCE — coachLang initializer reads userProfile.preferred_language (ar → ar, anything else → en). New `pageLang` derived the same way drives page chrome translation. PAGE_LABELS map with en/ar keys; T(key) lookup helper; periodOptions = PERIOD_LABELS_AR when ar. Stat tile labels, suffixes, hints, empty-state body, Wins component all bilingual. RTL via dir={bodyDir} on body containers.' },
+      { superAdminOnly: true, text: 'QA: zero regressions; all v55.82-V assertions roll up into the v55.82-W omnibus test suite.' },
+    ],
+  },
+  {
     version: 'v55.82-U',
     date: '2026-05-12',
     label: 'Build notes rewritten in plain business language — permanent rules locked in',
