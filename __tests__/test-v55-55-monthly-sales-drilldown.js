@@ -64,7 +64,7 @@ check('C.3 Reports last-day calc',
 // ---------- D: Build stamp ----------
 console.log('\nD. Build stamp current');
 check('D.1 header pill v55.55+',
-  />v55\.(5[5-9]|[6-9]\d)(?:-[A-Z][0-9]*(?:\.\d+)?)?</.test(pageSrc));
+  />v55\.(5[5-9]|[6-9]\d)(?:-[A-Z][0-9]*(?:\.\d+)*)?</.test(pageSrc));
 var anyBuildLabel = pageSrc.match(/BUILD v55\.\d+-/g);
 check('D.2 build modal stamp v55.55+',
   anyBuildLabel && anyBuildLabel.some(function(s) {

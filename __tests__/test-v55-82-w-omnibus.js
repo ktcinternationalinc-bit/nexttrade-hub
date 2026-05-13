@@ -99,14 +99,13 @@ ok('8a: Floor view renders the market-best line',
 // =============================================================
 // ITEM 9 — Stale carry-forward best rate as dotted grey
 // =============================================================
-ok('9a: trend point captures market-best with stale-flag tracking',
-  // v55.83-A.6 — _bestActive/_bestStale split collapsed back into a single
-  // _best field + __stale___best flag. Same semantic: fresh vs carry-forward;
-  // visual rendering now uses a solid line + icon overlay instead of two lines.
+ok('9a: trend point captures market-best with carry-forward',
+  // v55.83-A.6.3 (Max May 13 2026) — carry-forward no longer marks stale.
+  // The semantic is "one continuous historical line" not "fresh vs stale".
+  // Verify both branches still set point._best.
   (/point\._bestActive = Number\(bestRow\.rate_amount\)/.test(shipping) &&
    /point\._bestStale = lastBest\.price/.test(shipping)) ||
   (/point\._best = Number\(bestRow\.rate_amount\)/.test(shipping) &&
-   /point\.__stale___best = true/.test(shipping) &&
    /point\._best = lastBest\.price/.test(shipping)));
 ok('9b: Stale points are visually distinguished',
   // v55.83-A.6 (Max May 13 2026 spec) — stale rendering moved from a dashed

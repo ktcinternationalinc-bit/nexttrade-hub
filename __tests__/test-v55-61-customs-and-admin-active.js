@@ -63,7 +63,7 @@ check('D.2 resolveIds also reads full users list',
 console.log('\nE. Build stamp current');
 var pageSrc = read('src/app/page.jsx');
 check('E.1 header pill v55.61+',
-  />v55\.(61|6[2-9]|[7-9]\d)(?:-[A-Z][0-9]*(?:\.\d+)?)?</.test(pageSrc));
+  />v55\.(61|6[2-9]|[7-9]\d)(?:-[A-Z][0-9]*(?:\.\d+)*)?</.test(pageSrc));
 var labels = pageSrc.match(/BUILD v55\.\d+-/g);
 check('E.2 build modal stamp v55.61+',
   labels && labels.some(function(s) {

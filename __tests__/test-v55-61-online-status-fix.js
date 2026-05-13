@@ -64,7 +64,7 @@ check('C.5 banner displays the actual server warning text',
 // ---------- D: Build stamp ----------
 console.log('\nD. Build stamp current');
 check('D.1 header pill v55.61+',
-  />v55\.(61|6[2-9]|[7-9]\d)(?:-[A-Z][0-9]*(?:\.\d+)?)?</.test(pageSrc));
+  />v55\.(61|6[2-9]|[7-9]\d)(?:-[A-Z][0-9]*(?:\.\d+)*)?</.test(pageSrc));
 var labels = pageSrc.match(/BUILD v55\.\d+-/g);
 check('D.2 build modal stamp v55.61+',
   labels && labels.some(function(s) {

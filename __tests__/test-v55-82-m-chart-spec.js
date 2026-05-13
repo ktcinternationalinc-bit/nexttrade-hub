@@ -90,11 +90,15 @@ ok('4a: lastBestForLine map tracks the most recent best per line/group',
    /lastBestForLine\[G\] = \{ price: Number\(winner\.rate_amount\), rateId: winner\.id, asOfMonth: m \}/.test(src))
 );
 
-ok('4b: When no active rate exists, carry-forward branch runs and sets stale flag',
-  // v55.83-A.6 — same L → G iteration rename
-  (/else if \(lastBestForLine\[L\]\) \{[\s\S]{0,500}point\['__stale__' \+ L\] = true/.test(src) ||
-   /else if \(lastBestForLine\[G\]\) \{[\s\S]{0,500}point\['__stale__' \+ G\] = true/.test(src)),
-  'spec point 4 — carry-forward marks the point stale'
+ok('4b: When no active rate exists, carry-forward branch runs',
+  // v55.83-A.6.3 (Max May 13 2026) — carry-forward NO LONGER marks the point
+  // as stale. Per Max's request, the chart shows ONE continuous solid line
+  // ("the best historical rate at this point in time"). Expiration is shown
+  // via separate ✕ markers, not via a stale ⏳ flag on the line itself.
+  // Verify that carry-forward branch exists; either marking is acceptable.
+  /else if \(lastBestForLine\[L\]\) \{[\s\S]{0,500}point\[G\] = lastBestForLine\[G\]\.price/.test(src) ||
+  /else if \(lastBestForLine\[G\]\) \{[\s\S]{0,500}point\[G\] = lastBestForLine\[G\]\.price/.test(src),
+  'carry-forward must still propagate the lastBestForLine price'
 );
 
 ok('4c: Stale dot renderer marks stale points distinctly',

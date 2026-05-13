@@ -118,7 +118,7 @@ ok('9b: coach returns friendly billing message',
 
 ok('10: version stamp bumped to v55.83-A or later',
   // v55.83-A.4 — accept any v55.83-A.N patch number
-  />v55\.83-A(?:\.\d+)?</.test(page) && /BUILD v55\.83-A(?:\.\d+)?/.test(page));
+  />v55\.83-A(?:\.\d+)*</.test(page) && /BUILD v55\.83-A(?:\.\d+)*/.test(page));
 
 if (failures.length > 0) {
   console.log('\n❌ ' + failures.length + ' test' + (failures.length === 1 ? '' : 's') + ' failed:');

@@ -97,7 +97,7 @@ check('D.5 shows the order # in the duplicate message (not just "duplicate detec
 console.log('\nE. Build stamps current');
 
 check('E.1 header pill bumped to v55.49 or later',
-  />v55\.(49|5\d|6\d|7\d|8\d|9\d)(?:-[A-Z][0-9]*(?:\.\d+)?)?</.test(pSrc));
+  />v55\.(49|5\d|6\d|7\d|8\d|9\d)(?:-[A-Z][0-9]*(?:\.\d+)*)?</.test(pSrc));
 // v55.50+ replaced the v55.49 build label with newer ones; the fix is
 // still in place if the form Modal is gated correctly (verified in A)
 // and the modals don't use backdrop-blur (verified in B). The build

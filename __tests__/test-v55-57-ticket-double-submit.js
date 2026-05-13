@@ -72,7 +72,7 @@ check('E.2 Close button shows ⏳ Closing… during submit',
 console.log('\nF. Build stamp current');
 var pSrc = read('src/app/page.jsx');
 check('F.1 header pill v55.57+',
-  />v55\.(5[7-9]|[6-9]\d)(?:-[A-Z][0-9]*(?:\.\d+)?)?</.test(pSrc));
+  />v55\.(5[7-9]|[6-9]\d)(?:-[A-Z][0-9]*(?:\.\d+)*)?</.test(pSrc));
 var labels = pSrc.match(/BUILD v55\.\d+-/g);
 check('F.2 build modal stamp v55.57+',
   labels && labels.some(function(s) {

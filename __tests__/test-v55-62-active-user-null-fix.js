@@ -136,7 +136,7 @@ check('G.3 NO leftover render-time loader call (the v55.51 bug pattern)',
 console.log('\nH. Build stamp + earlier session fixes intact');
 var pageSrc = read('src/app/page.jsx');
 check('H.1 header pill v55.62+',
-  />v55\.(62|6[3-9]|[7-9]\d)(?:-[A-Z][0-9]*(?:\.\d+)?)?</.test(pageSrc));
+  />v55\.(62|6[3-9]|[7-9]\d)(?:-[A-Z][0-9]*(?:\.\d+)*)?</.test(pageSrc));
 var labels = pageSrc.match(/BUILD v55\.\d+-/g);
 check('H.2 build modal stamp v55.62+',
   labels && labels.some(function(s) {

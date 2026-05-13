@@ -90,7 +90,7 @@ check('E.6 hint about asking Claude with screenshot',
 // ---------- F: Build stamp ----------
 console.log('\nF. Build stamp current');
 check('F.1 header pill v55.60+',
-  />v55\.(60|6[1-9]|[7-9]\d)(?:-[A-Z][0-9]*(?:\.\d+)?)?</.test(pageSrc));
+  />v55\.(60|6[1-9]|[7-9]\d)(?:-[A-Z][0-9]*(?:\.\d+)*)?</.test(pageSrc));
 var labels = pageSrc.match(/BUILD v55\.\d+-/g);
 check('F.2 build modal stamp v55.60+',
   labels && labels.some(function(s) {

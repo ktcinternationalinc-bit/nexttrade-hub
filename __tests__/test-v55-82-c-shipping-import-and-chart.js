@@ -125,7 +125,7 @@ ok('chart-anchor: chart block exists with new title',
 // and the chart title, so we widen the upstream window from 9000 → 13000.
 // v55.83-A.6 — chart section grew with view controls + currency tabs + scatter
 // wrap; widen the slice window to cover all the new code.
-var chartSlice = chartIdx > 0 ? tabSrc.slice(Math.max(0, chartIdx - 20000), chartIdx + 18000) : '';
+var chartSlice = chartIdx > 0 ? tabSrc.slice(Math.max(0, chartIdx - 25000), chartIdx + 22000) : '';
 
 // 2a — v55.82-M: X-axis driven by EFFECTIVE date timeline (Max May 12 2026
 //      respec). The old C-build expiry anchor is superseded.

@@ -139,7 +139,7 @@ check('G.1 language access list filters to active users',
 console.log('\nH. Build stamp current');
 var pSrc = read('src/app/page.jsx');
 check('H.1 header pill at v55.52 or later',
-  />v55\.(5[2-9]|[6-9]\d)(?:-[A-Z][0-9]*(?:\.\d+)?)?</.test(pSrc));
+  />v55\.(5[2-9]|[6-9]\d)(?:-[A-Z][0-9]*(?:\.\d+)*)?</.test(pSrc));
 var anyBuildLabel = pSrc.match(/BUILD v55\.\d+-/g);
 check('H.2 build modal stamp version is at least v55.52',
   anyBuildLabel && anyBuildLabel.some(function(s) {

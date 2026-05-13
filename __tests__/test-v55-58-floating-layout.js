@@ -93,7 +93,7 @@ check('E.1 FAB at bottom-20 right-4',
 // ---------- F: Build stamp current ----------
 console.log('\nF. Build stamp current');
 check('F.1 header pill v55.58+',
-  />v55\.(5[8-9]|[6-9]\d)(?:-[A-Z][0-9]*(?:\.\d+)?)?</.test(pageSrc));
+  />v55\.(5[8-9]|[6-9]\d)(?:-[A-Z][0-9]*(?:\.\d+)*)?</.test(pageSrc));
 var labels = pageSrc.match(/BUILD v55\.\d+-/g);
 check('F.2 build modal stamp v55.58+',
   labels && labels.some(function(s) {

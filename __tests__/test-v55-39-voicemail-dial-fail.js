@@ -132,7 +132,7 @@ assert(/timeout="25"/.test(inc),
 console.log('\nVersion stamps — bumped to v55.39 or later');
 var page = read('src/app/page.jsx');
 function vNum(s) { var m = s.match(/v55\.(\d+)/); return m ? parseInt(m[1], 10) : 0; }
-var headerMatch = page.match(/>v55\.\d+(?:-[A-Z][0-9]*(?:\.\d+)?)?</);
+var headerMatch = page.match(/>v55\.\d+(?:-[A-Z][0-9]*(?:\.\d+)*)?</);
 var modalMatch = page.match(/BUILD v55\.\d+-/);
 assert(headerMatch && vNum(headerMatch[0]) >= 39,
   'V.20 — header pill shows v55.39 or later');

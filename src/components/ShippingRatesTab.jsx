@@ -622,13 +622,30 @@ export default function ShippingRatesTab({ toast, user, userProfile, isAdmin, cu
   // v55.63 — routeHistory now respects POL/POD too. When a user clicks into
   // a route card while filtered to POD = Alexandria, the detail view stays
   // scoped to Alexandria; it doesn't widen back to all Egypt ports.
-  const routeHistory = useMemo(() => { if (!selectedRoute) return []; return rates.filter(r => {
-    if (selectedRoute.origin && r.origin !== selectedRoute.origin) return false;
-    if (selectedRoute.destination && r.destination !== selectedRoute.destination) return false;
-    if (selectedRoute.pol && r.port_of_loading !== selectedRoute.pol) return false;
-    if (selectedRoute.pod && r.port_of_discharge !== selectedRoute.pod) return false;
-    return true;
-  }).sort((a,b) => (b.effective_date||'').localeCompare(a.effective_date||'')); }, [selectedRoute, rates]);
+  const routeHistory = useMemo(() => { if (!selectedRoute) return []; 
+    // v55.83-A.6.2 (Max May 13 2026) — case/whitespace-insensitive route match.
+    // The old strict equality `r.origin !== selectedRoute.origin` was silently
+    // dropping rates whose origin/destination was entered with different
+    // casing or trailing whitespace ("USA" vs "Usa" vs " USA "). On Max's
+    // USA→ALGERIA route the route card aggregated 14 rates but the chart
+    // saw fewer because some had slightly different origin/destination
+    // strings. Normalize both sides before comparing.
+    var norm = function(s) { return (s || '').trim().toLowerCase(); };
+    var routeOrigin = norm(selectedRoute.origin);
+    var routeDest = norm(selectedRoute.destination);
+    var routePol = norm(selectedRoute.pol);
+    var routePod = norm(selectedRoute.pod);
+    return rates.filter(r => {
+      if (routeOrigin && norm(r.origin) !== routeOrigin) return false;
+      if (routeDest && norm(r.destination) !== routeDest) return false;
+      // POL/POD are nullable on rate rows. If the route card has a POL/POD
+      // value, only filter when the rate ALSO has one (don't punish rates
+      // missing POL/POD just because the route card has them aggregated).
+      if (routePol && r.port_of_loading && norm(r.port_of_loading) !== routePol) return false;
+      if (routePod && r.port_of_discharge && norm(r.port_of_discharge) !== routePod) return false;
+      return true;
+    }).sort((a,b) => (b.effective_date||'').localeCompare(a.effective_date||''));
+  }, [selectedRoute, rates]);
   const routeQuotes = useMemo(() => { if (!selectedRoute) return []; return quotes.filter(q => q.origin === selectedRoute.origin && q.destination === selectedRoute.destination).sort((a,b) => (b.quote_date||'').localeCompare(a.quote_date||'')); }, [selectedRoute, quotes]);
   const rateBookings = (rateId) => bookings.filter(b => b.rate_id === rateId);
   const routeBookings = (origin, dest, pol, pod) => {
@@ -2397,8 +2414,9 @@ Date: ${today}`;
               lastBestForLine[G] = { price: Number(winner.rate_amount), rateId: winner.id, asOfMonth: m };
             } else if (lastBestForLine[G]) {
               // CASE 2 — carry forward the last known best for this group.
+              // v55.83-A.6.3 — no longer marked stale; line stays solid.
               point[G] = lastBestForLine[G].price;
-              point['__stale__' + G] = true;
+              point['__stale__' + G] = false;
               point['__source__' + G] = lastBestForLine[G].rateId;
               pointSourceIds.push(lastBestForLine[G].rateId);
             }
@@ -2407,12 +2425,22 @@ Date: ${today}`;
 
           // --- market-floor "_best" — lowest across ALL active rates this month
           //
-          // v55.83-A.6 (Max May 13 2026 — "Show stale as the same solid line
-          // but with a stale icon at each stale point"): we no longer split
-          // the line into _bestActive + _bestStale dashed. ONE continuous
-          // solid line carries the price; the per-point `__stale___best`
-          // flag drives a small ⏳ icon at stale dots.
+          // v55.83-A.6.3 (Max May 13 2026 — "It should show me the rate from
+          // 11/30/25 onward...not sure what you are saying that it is working
+          // as expected"):
+          //
+          // Carry-forward is no longer marked as "stale" — the chart shows
+          // ONE continuous solid line representing "the best historical rate
+          // at this point in time." If a rate from 11/30 is still the most
+          // recent best we know about, the chart shows that price in Dec, Jan,
+          // Feb, Mar — as a solid line — until a fresh rate replaces it.
+          //
+          // The ⏳ stale marker concept is REMOVED. The expiry date is still
+          // shown separately via the ✕ marker (added in v55.83-A.6.2) so
+          // users can SEE when each rate expired, but the line itself is
+          // ALWAYS the best-known rate as of that month.
           if (activeInMonth.length > 0) {
+            // CASE 1: Active rate exists in this month — pick the lowest.
             var bestRow = activeInMonth.reduce(function(acc, r) {
               if (!acc) return r;
               return Number(r.rate_amount) < Number(acc.rate_amount) ? r : acc;
@@ -2423,15 +2451,96 @@ Date: ${today}`;
             if (pointSourceIds.indexOf(bestRow.id) < 0) pointSourceIds.push(bestRow.id);
             lastBest = { price: Number(bestRow.rate_amount), rateId: bestRow.id, asOfMonth: m };
           } else if (lastBest) {
+            // CASE 2: No active rate this month — carry forward the last known
+            // best. NO LONGER marked stale (per Max v55.83-A.6.3). Line stays
+            // solid; user already sees the expiry via the ✕ marker.
             point._best = lastBest.price;
-            point.__stale___best = true;
+            point.__stale___best = false; // v55.83-A.6.3 — was true, now always false
             point.__source___best = lastBest.rateId;
             if (pointSourceIds.indexOf(lastBest.rateId) < 0) pointSourceIds.push(lastBest.rateId);
+          } else {
+            // CASE 3: No active rate AND no prior best known. Look BACKWARD
+            // through all rates for the most recent effective_date <= this
+            // month's end. If found, seed lastBest from it. This handles
+            // the bootstrap case where the chart starts at the earliest
+            // effective_date — for that first month, we want to show the
+            // rate, not leave it blank.
+            //
+            // (In practice this branch should only fire when the months
+            // timeline starts BEFORE any rate's effective_date — which
+            // shouldn't happen because firstMonth is derived from min
+            // effective_date. Defensive.)
+            var fallbackBest = null;
+            for (var fbi = 0; fbi < ratesForView.length; fbi++) {
+              var fbr = ratesForView[fbi];
+              if (!fbr.effective_date || fbr.effective_date > monthEnd) continue;
+              if (Number(fbr.rate_amount || 0) <= 0) continue;
+              if (!fallbackBest || Number(fbr.rate_amount) < Number(fallbackBest.rate_amount)) {
+                fallbackBest = fbr;
+              }
+            }
+            if (fallbackBest) {
+              point._best = Number(fallbackBest.rate_amount);
+              point.__stale___best = false;
+              point.__source___best = fallbackBest.id;
+              if (pointSourceIds.indexOf(fallbackBest.id) < 0) pointSourceIds.push(fallbackBest.id);
+              lastBest = { price: Number(fallbackBest.rate_amount), rateId: fallbackBest.id, asOfMonth: m };
+            }
           }
 
           point.__sourceIds__ = pointSourceIds;
           return point;
         });
+
+        // v55.83-A.6.2 (Max May 13 2026 — "expiration dates need to be on this
+        // graph...that's part of the historical perspective").
+        //
+        // Each rate with a valid expiry_date becomes an EXPIRY MARKER on the
+        // chart: a vertical X-marker at (expiry_month, rate_amount). It tells
+        // the user "this rate stopped being good at this point". Combined
+        // with the solid line of best-active, you get the full historical
+        // picture: when did rates exist, when did they expire, where were
+        // the gaps.
+        var expiryMarkers = ratesForView
+          .filter(function (r) {
+            var exp = r.expiry_date || '';
+            var amt = Number(r.rate_amount || 0);
+            return exp.length >= 7 && amt > 0;
+          })
+          .map(function (r) {
+            return {
+              month: (r.expiry_date || '').substring(0, 7),
+              expired_rate: Number(r.rate_amount || 0),
+              vendor: r.vendor_name || '',
+              line: r.shipping_line || '',
+              full_expiry: r.expiry_date || '',
+              effective: r.effective_date || '',
+              __sourceId__: r.id,
+            };
+          });
+
+        // v55.83-A.6.2 — data-quality counters surfaced in the chart caption
+        // so the user can SEE why fewer rates show than total. Counts include
+        // rates dropped from this chart's view due to specific exclusions.
+        var dataQuality = {
+          totalInRoute: routeHistory.length,
+          inSelectedCurrency: trendRatesForChart.length,
+          afterPeriodFilter: trendRates.length,
+          validForChart: validRatesForChart.length,
+          missingEffective: routeHistory.filter(function (r) {
+            var eff = r.effective_date || '';
+            return eff.length < 10;
+          }).length,
+          missingAmount: routeHistory.filter(function (r) {
+            return !(Number(r.rate_amount || 0) > 0);
+          }).length,
+          missingCurrency: routeHistory.filter(function (r) {
+            return !r.currency || r.currency.trim() === '';
+          }).length,
+          expiryBeforeEffective: routeHistory.filter(function (r) {
+            return r.expiry_date && r.effective_date && r.expiry_date < r.effective_date;
+          }).length,
+        };
 
         // v55.82-C — Booking stars layer. Each booked rate becomes a dot
         // on the chart at (booking_date_month, rate_amount). Plotting on
@@ -2495,6 +2604,24 @@ Date: ${today}`;
           return (<polygon points={pts.join(' ')} fill="#fbbf24" stroke="#92400e" strokeWidth="1.2" />);
         };
 
+        // v55.83-A.6.2 (Max May 13 2026) — Expiration marker shape.
+        // Rendered for every rate's expiry_date as a small red ✕ at the
+        // (expiry_month, rate_amount) coordinate. Visually says "this rate
+        // stopped here". Combined with the line + stars, gives the full
+        // historical timeline.
+        var ExpiryMarkerShape = function(props) {
+          var cx = props.cx;
+          var cy = props.cy;
+          if (cx == null || cy == null || isNaN(cx) || isNaN(cy)) return null;
+          var s = 5;
+          return (
+            <g style={{ pointerEvents: 'auto', cursor: 'pointer' }}>
+              <line x1={cx - s} y1={cy - s} x2={cx + s} y2={cy + s} stroke="#dc2626" strokeWidth="2" />
+              <line x1={cx - s} y1={cy + s} x2={cx + s} y2={cy - s} stroke="#dc2626" strokeWidth="2" />
+            </g>
+          );
+        };
+
         // v55.82-M — Click handler: when user clicks a chart point, scroll
         // to and flash-highlight the matching rate row in the table below.
         // Recharts passes the clicked datapoint's payload to onClick of the
@@ -2545,7 +2672,7 @@ Date: ${today}`;
           <div className="flex justify-between items-center mb-3 flex-wrap gap-2">
             <div>
               <h3 className="text-sm font-bold">📈 Best Rate Over Time ({chartCurrency})</h3>
-              <div className="text-[10px] text-slate-500">X-axis: month · Y-axis: lowest active rate · ⭐ = booking · ⏳ = stale (no newer rate) · click any point → jump to the rate below</div>
+              <div className="text-[10px] text-slate-500">X-axis: month · Y-axis: best historical rate · ⭐ = booking · ✕ = rate expired · click any point → jump to the rate below</div>
             </div>
             <div className="flex items-center gap-2 flex-wrap">
               {/* v55.83-A.6 — View toggle (Floor / Vendor / Line) */}
@@ -2617,6 +2744,11 @@ Date: ${today}`;
                       var pl = p && p.payload ? p.payload : {};
                       return [chartSym + Number(v).toLocaleString() + ' ⭐ ' + (pl.vendor || '?') + (pl.ref ? ' (' + pl.ref + ')' : ''), 'Booking ' + (pl.full_date || '')];
                     }
+                    if (name === 'expired_rate' || name === 'Expirations') {
+                      // v55.83-A.6.2 — expiry marker tooltip
+                      var pl3 = p && p.payload ? p.payload : {};
+                      return [chartSym + Number(v).toLocaleString() + ' ✕ ' + (pl3.vendor || '?') + (pl3.line ? ' / ' + pl3.line : ''), 'Expired ' + (pl3.full_expiry || '')];
+                    }
                     // v55.82-M — append "stale (last known)" indicator if this
                     // point is a carry-forward.
                     var pl2 = p && p.payload ? p.payload : {};
@@ -2649,9 +2781,53 @@ Date: ${today}`;
                     shape={StarShape}
                   />
                 )}
+                {/* v55.83-A.6.2 (Max May 13 2026 — "expiration dates need to be
+                    on this graph"): expiry-marker scatter. Each rate with an
+                    expiry_date shows as a small ✕ at (expiry_month, rate_amount).
+                    Combined with the solid best-active line + booking stars,
+                    you get a full historical picture: when rates existed,
+                    where they expired, when bookings were made. */}
+                {expiryMarkers.length > 0 && (
+                  <Scatter
+                    name="Expirations"
+                    data={expiryMarkers}
+                    dataKey="expired_rate"
+                    shape={ExpiryMarkerShape}
+                  />
+                )}
               </ComposedChart>
             </ResponsiveContainer>
           </div>
+          {/* v55.83-A.6.2 — Inline data-quality warning. Surface the gap between
+              "rates in this route" and "rates the chart can plot" so the user
+              knows WHY a number is smaller. Max screenshot: 14 rates / 10 active
+              in the header, but only some show on the chart. This row tells
+              you exactly which exclusions ate the difference. */}
+          {(dataQuality.totalInRoute > dataQuality.validForChart) && (
+            <div className="bg-amber-50 border border-amber-300 rounded p-2 mb-2 mt-2 text-[11px] text-amber-900">
+              <div className="font-bold mb-1">📊 Chart shows {dataQuality.validForChart} of {dataQuality.totalInRoute} rates on this route:</div>
+              <ul className="ml-4 space-y-0.5">
+                {dataQuality.totalInRoute - dataQuality.inSelectedCurrency > 0 && (
+                  <li>• {dataQuality.totalInRoute - dataQuality.inSelectedCurrency} in other currencies — switch currency tabs above to see them</li>
+                )}
+                {dataQuality.inSelectedCurrency - dataQuality.afterPeriodFilter > 0 && (
+                  <li>• {dataQuality.inSelectedCurrency - dataQuality.afterPeriodFilter} outside the period filter — change the Period buttons below to widen</li>
+                )}
+                {dataQuality.missingEffective > 0 && (
+                  <li>• {dataQuality.missingEffective} have no <b>effective_date</b> — chart can't place them on a timeline. Edit those rates to add a date.</li>
+                )}
+                {dataQuality.missingAmount > 0 && (
+                  <li>• {dataQuality.missingAmount} have a <b>rate amount of 0</b> — chart can't plot them. Edit the rate amount.</li>
+                )}
+                {dataQuality.expiryBeforeEffective > 0 && (
+                  <li>• {dataQuality.expiryBeforeEffective} have <b>expiry before effective</b> (impossible window) — fix the dates on those rates.</li>
+                )}
+                {dataQuality.missingCurrency > 0 && (
+                  <li>• {dataQuality.missingCurrency} have no <b>currency</b> set — bucketed as USD by default. Edit to confirm currency.</li>
+                )}
+              </ul>
+            </div>
+          )}
           <div className="text-[10px] text-slate-500 mt-1">
             {/* v55.83-A.6 — informative caption: view mode + data scope */}
             {chartView === 'floor' && <span>Showing <b>market floor</b> — the lowest active rate each month. </span>}
@@ -2662,6 +2838,56 @@ Date: ${today}`;
             {bookingStars.length > 0 && <span className="ml-2 text-amber-900 font-semibold">• {bookingStars.length} booking{bookingStars.length === 1 ? '' : 's'} ⭐</span>}
             {hideExpired && <span className="ml-2 text-amber-900 font-semibold">• Expired rates hidden</span>}
           </div>
+          {/* v55.83-A.6.1 (Max May 13 2026) — DIAGNOSTIC ROW for chart debugging.
+              Shows per-month status: how many rates were active, what _best was,
+              whether it came from a fresh or stale source. Super-admin only,
+              tucked behind a toggle so it doesn't clutter the chart for end-users.
+              Click "Show data table" to expand. */}
+          {chartView === 'floor' && trendPoints.length > 0 && (
+            <details className="mt-2">
+              <summary className="text-[10px] text-slate-600 cursor-pointer hover:text-slate-800">🔍 Show per-month diagnostic table (debug)</summary>
+              <div className="mt-1 max-h-60 overflow-auto border border-slate-200 rounded">
+                <table className="w-full text-[10px]">
+                  <thead className="bg-slate-50 sticky top-0">
+                    <tr>
+                      <th className="px-2 py-1 text-left">Month</th>
+                      <th className="px-2 py-1 text-right">Active rates</th>
+                      <th className="px-2 py-1 text-right">_best</th>
+                      <th className="px-2 py-1 text-left">Status</th>
+                      <th className="px-2 py-1 text-left">Source rate ID</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {trendPoints.map(function(pt) {
+                      var monthStart = firstDayOf(pt.month);
+                      var monthEnd = lastDayOf(pt.month);
+                      var actCount = ratesForView.filter(function(r) {
+                        var eff = r.effective_date || '';
+                        var exp = r.expiry_date || '';
+                        return eff <= monthEnd && (exp === '' || exp >= monthStart);
+                      }).length;
+                      var status = '∅ no data';
+                      if (pt._best !== undefined) {
+                        status = pt.__stale___best ? '⏳ stale (carry-forward)' : '✓ fresh';
+                      }
+                      return (
+                        <tr key={pt.month} className="border-t border-slate-100">
+                          <td className="px-2 py-1 font-mono">{pt.month}</td>
+                          <td className="px-2 py-1 text-right">{actCount}</td>
+                          <td className="px-2 py-1 text-right font-mono">{pt._best !== undefined ? chartSym + Math.round(pt._best).toLocaleString() : '—'}</td>
+                          <td className="px-2 py-1">{status}</td>
+                          <td className="px-2 py-1 font-mono text-[9px]">{(pt.__source___best || '').substring(0, 8)}</td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+                <div className="px-2 py-1 text-[10px] text-slate-500 bg-slate-50 border-t border-slate-200">
+                  Total rates in ratesForView: {ratesForView.length} · chart currency: {chartCurrency} · scope: {chartShippingLine}
+                </div>
+              </div>
+            </details>
+          )}
         </div>);
       })()}
       {Object.keys(byVL).length>0&&(<div className="bg-white rounded-xl p-4 mb-4 border border-slate-200"><h3 className="text-sm font-bold mb-2">🏆 Vendor Comparison</h3><div className="overflow-auto"><table className="w-full border-collapse text-xs"><thead><tr className="bg-slate-50"><th className="px-3 py-2 text-left text-[10px]">Vendor / Line</th><th className="px-3 py-2 text-right text-[10px]">Best Rate</th><th className="px-3 py-2 text-right text-[10px]">Transit</th><th className="px-3 py-2 text-right text-[10px]">Free Days</th><th className="px-3 py-2 text-[10px]">Expiry</th></tr></thead><tbody>{Object.entries(byVL).sort((a,b)=>(a[1][0]?.rate_amount||Infinity)-(b[1][0]?.rate_amount||Infinity)).map(([key,vr],i)=>{const best=vr.reduce((a,b)=>(a.rate_amount||Infinity)<(b.rate_amount||Infinity)?a:b); return (<tr key={key} className={'border-b border-slate-50 '+(i===0?'bg-emerald-50':'')}><td className="px-3 py-2 font-semibold">{i===0&&<span className="text-emerald-500 mr-1">★</span>}{key}</td><td className="px-3 py-2 text-right font-bold text-blue-600">{fCur(best.rate_amount,best.currency)}</td><td className="px-3 py-2 text-right">{best.transit_days?best.transit_days+'d':'—'}</td><td className="px-3 py-2 text-right">{best.free_days||'—'}</td><td className="px-3 py-2"><ExpiryBadge date={best.expiry_date}/></td></tr>);})}</tbody></table></div></div>)}

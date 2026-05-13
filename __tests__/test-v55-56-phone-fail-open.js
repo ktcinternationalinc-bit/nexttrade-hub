@@ -87,7 +87,7 @@ if (fs.existsSync(healthPath)) {
 console.log('\nD. Build stamp current');
 var pageSrc = read('src/app/page.jsx');
 check('D.1 header pill v55.56+',
-  />v55\.(5[6-9]|[6-9]\d)(?:-[A-Z][0-9]*(?:\.\d+)?)?</.test(pageSrc));
+  />v55\.(5[6-9]|[6-9]\d)(?:-[A-Z][0-9]*(?:\.\d+)*)?</.test(pageSrc));
 var anyBuildLabel = pageSrc.match(/BUILD v55\.\d+-/g);
 check('D.2 build modal stamp v55.56+',
   anyBuildLabel && anyBuildLabel.some(function(s) {
