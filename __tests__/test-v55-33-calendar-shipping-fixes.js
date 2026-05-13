@@ -281,7 +281,7 @@ test('Shipping: executeImport has per-row error isolation (v55.82-L2)', function
 // ============================================================
 
 test('Build stamp: header shows v55.33 or later', function() {
-  var match = page.match(/>v55\.(\d+)(?:-[A-Z][0-9]*)?</);
+  var match = page.match(/>v55\.(\d+)(?:-[A-Z][0-9]*(?:\.\d+)?)?</);
   assert(match && Number(match[1]) >= 33,
     'page.jsx header build stamp shows v55.33+ (currently: ' + (match ? 'v55.' + match[1] : 'NOT FOUND') + ')');
 });

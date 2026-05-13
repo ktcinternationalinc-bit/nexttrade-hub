@@ -199,6 +199,11 @@ export async function POST(req) {
       console.warn('[hr-coach] Anthropic non-OK:', response.status, errText.substring(0, 400));
       // v55.82-L — try to extract a useful reason from the Anthropic error body
       var friendly = 'The AI service returned an error (HTTP ' + response.status + ').';
+      // v55.83-A — billing error detection (Max May 13 2026)
+      if (/credit balance is too low/i.test(errText) || /credit_balance/i.test(errText)) {
+        friendly = 'AI coaching is paused — the Anthropic account needs credit. Please ask your super admin to top up at console.anthropic.com/settings/billing.';
+        return Response.json({ error: friendly, error_type: 'billing', admin_action_required: true }, { status: response.status });
+      }
       if (response.status === 401) friendly = 'The AI service key is invalid. Ask your admin to double-check ANTHROPIC_API_KEY in Vercel.';
       else if (response.status === 429) friendly = 'The AI service is rate-limited right now. Try again in a minute.';
       else if (response.status >= 500) friendly = 'The AI service is having trouble right now. Try again in a minute.';

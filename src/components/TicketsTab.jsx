@@ -262,7 +262,23 @@ export default function TicketsTab({ toast, customers, user, userProfile, users,
       }
       setShowAdd(false); setF({}); loadTickets();
     } catch (err) {
-      toast ? toast.error(err.message) : alert(err.message);
+      // v55.83-A.2 — surface the EXACT database error. Previously errors
+      // like "violates check constraint tickets_priority_check" were getting
+      // shown as a generic toast that didn't tell the user (or anyone
+      // debugging) WHY the insert failed. Log the full error to the
+      // console and show a more informative toast.
+      try { console.error('[handleAddTicket] FAILED:', err); } catch (_) {}
+      var errMsg = err && err.message ? err.message : String(err);
+      var hint = '';
+      if (/violates check constraint/i.test(errMsg) && /priority/i.test(errMsg)) {
+        hint = ' — Database priority constraint is rejecting this value. Run sql/v55-83-a-2-tickets-hotfix.sql in Supabase.';
+      } else if (/column .* does not exist/i.test(errMsg)) {
+        hint = ' — A required database column is missing. Run sql/v55-83-a-2-tickets-hotfix.sql in Supabase.';
+      } else if (/permission denied|policy/i.test(errMsg)) {
+        hint = ' — Database permission denied. Check RLS policies in Supabase.';
+      }
+      var fullMsg = 'Ticket save failed: ' + errMsg + hint;
+      if (toast) toast.error(fullMsg); else alert(fullMsg);
     } finally {
       setCreatingTicket(false);
     }
@@ -377,6 +393,11 @@ export default function TicketsTab({ toast, customers, user, userProfile, users,
   };
 
   const reassignTicket = async (ticket, newUserId) => {
+    // v55.82-Z QA — defense-in-depth: even though the UI normally only
+    // surfaces this action from cards that already passed canSeeTicket,
+    // re-verify here so stale state or programmatic invocation can't
+    // mutate a ticket the user shouldn't be able to see.
+    if (!canSeeTicket(ticket)) return;
     try {
       await dbUpdate('tickets', ticket.id, { assigned_to: newUserId, updated_by: myId }, myId);
       const newName = getUserName(newUserId);
@@ -544,6 +565,10 @@ export default function TicketsTab({ toast, customers, user, userProfile, users,
   };
 
   const deleteTicket = async (ticket) => {
+    // v55.82-Z QA — defense-in-depth: re-verify visibility before
+    // allowing delete. UI gates this already, but stale state could
+    // theoretically expose a private/confidential ticket to a non-viewer.
+    if (!canSeeTicket(ticket)) return;
     if (!canDeleteTicket(ticket)) return;
     setConfirmDel(ticket);
   };
@@ -801,7 +826,20 @@ export default function TicketsTab({ toast, customers, user, userProfile, users,
               </button>
             </div>
           ) : (
-            <h3 className="text-lg font-extrabold flex-1 flex items-center gap-2">
+            <h3 className="text-lg font-extrabold flex-1 flex items-center gap-2 flex-wrap">
+              {/* v55.82-Z QA — privacy chips also surface in the detail
+                  modal so the viewer always knows the visibility tier of
+                  the ticket they're looking at. */}
+              {sel.is_private && (
+                <span className="inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded bg-sky-100 border border-sky-400 text-sky-900 text-[10px] font-extrabold align-middle" title="Private — only you can see this">
+                  🔒 PRIVATE
+                </span>
+              )}
+              {sel.is_confidential && (
+                <span className="inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded bg-orange-100 border border-orange-400 text-orange-900 text-[10px] font-extrabold align-middle" title="Confidential — only the creator, assignees, and super admin can see this">
+                  🟧 CONFIDENTIAL
+                </span>
+              )}
               {sel.ticket_number && <span className="text-blue-400 mr-2">{sel.ticket_number}</span>}
               <span>{sel.title}</span>
               {canEditTicketContent(sel) && (
@@ -992,7 +1030,20 @@ export default function TicketsTab({ toast, customers, user, userProfile, users,
                   // Refresh comments list so the audit entry appears immediately.
                   try { loadComments(sel.id); } catch(_) {}
                   if (onReload) onReload();
-                } catch (err) { if (toast) toast.error(err.message); else alert(err.message); }
+                } catch (err) {
+                  // v55.83-A.2 — show the EXACT error reason. Generic
+                  // "could not save priority" was hiding the actual DB cause.
+                  try { console.error('[priority change] FAILED:', err); } catch (_) {}
+                  var pErrMsg = err && err.message ? err.message : String(err);
+                  var pHint = '';
+                  if (/violates check constraint/i.test(pErrMsg) && /priority/i.test(pErrMsg)) {
+                    pHint = ' — Database priority constraint rejecting this value. Run sql/v55-83-a-2-tickets-hotfix.sql in Supabase to allow critical/urgent/high/medium/normal/low.';
+                  } else if (/column .* does not exist/i.test(pErrMsg)) {
+                    pHint = ' — Missing database column. Run sql/v55-83-a-2-tickets-hotfix.sql in Supabase.';
+                  }
+                  if (toast) toast.error('Priority save failed: ' + pErrMsg + pHint);
+                  else alert('Priority save failed: ' + pErrMsg + pHint);
+                }
               }} className="text-sm font-bold bg-transparent border-0 cursor-pointer outline-none w-full" style={{ color: priInfo.c }}>
                 {PRIORITIES.map(p => <option key={p.v} value={p.v}>{p.v.toUpperCase()}</option>)}
               </select>

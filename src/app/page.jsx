@@ -11,6 +11,12 @@ import TicketsTab from '../components/TicketsTab';
 import SystemTicketsPanel from '../components/SystemTicketsPanel';
 import WhatsNewWidget from '../components/WhatsNewWidget';
 import PendingNadiaMessages from '../components/PendingNadiaMessages';
+// v55.83-A — new Inventory module replaces the inline inventory section
+import InventoryTab from '../components/InventoryTab';
+// v55.83-A.1 — bank-confirmation status badge for invoices
+import InvoicePaymentBadge from '../components/InvoicePaymentBadge';
+// v55.83-A.1 — dashboard widget surfacing invoices awaiting bank match
+import PendingBankConfirmationsWidget from '../components/PendingBankConfirmationsWidget';
 import NadiaNewBuildCard from '../components/NadiaNewBuildCard';
 import CalendarTab from '../components/CalendarTab';
 import DailyLogTab from '../components/DailyLogTab';
@@ -1353,15 +1359,62 @@ export default function App() {
       // Also added created_by to the embedded tickets() select — without
       // it, the c.tickets.created_by === myId filter silently failed and
       // tickets the user CREATED but didn't have assigned never appeared.
+      // v55.82-Z QA — also pull privacy columns on the joined ticket so
+      // we can filter out comments tied to tickets the current user
+      // shouldn't see (private super-admin tickets, confidential tickets
+      // they aren't part of). Super admin sees everything.
       try {
         const sevenDaysAgo = new Date(Date.now() - 7 * 86400000).toISOString();
-        const { data: comments } = await supabase.from('ticket_comments').select('*, tickets(id, ticket_number, title, status, priority, assigned_to, created_by)').gte('created_at', sevenDaysAgo).order('created_at', { ascending: false }).limit(100);
-        setRecentTicketUpdates(comments || []);
+        const { data: comments } = await supabase.from('ticket_comments')
+          .select('*, tickets(id, ticket_number, title, status, priority, assigned_to, created_by, additional_assignees, is_private, private_to, is_confidential)')
+          .gte('created_at', sevenDaysAgo)
+          .order('created_at', { ascending: false })
+          .limit(100);
+        var meId = profile && profile.id;
+        var meIsSA = profile && profile.role === 'super_admin';
+        var filteredComments = (comments || []).filter(function (c) {
+          var t = c.tickets;
+          if (!t) return true; // orphan comment — keep
+          if (meIsSA) return true;
+          if (t.is_private) return t.private_to === meId;
+          if (t.is_confidential) {
+            if (t.created_by === meId) return true;
+            if (t.assigned_to === meId) return true;
+            try {
+              var extras = typeof t.additional_assignees === 'string'
+                ? JSON.parse(t.additional_assignees)
+                : t.additional_assignees;
+              if (Array.isArray(extras) && extras.indexOf(meId) >= 0) return true;
+            } catch (_) {}
+            return false;
+          }
+          return true;
+        });
+        setRecentTicketUpdates(filteredComments);
       } catch(e) { setRecentTicketUpdates([]); }
       // Load tickets for dashboard
+      // v55.82-Z QA — also filter at the dashTickets pull.
       try {
         const { data: tix } = await supabase.from('tickets').select('*').order('created_at', { ascending: false }).limit(200);
-        setDashTickets(tix || []);
+        var dashMeId = profile && profile.id;
+        var dashMeIsSA = profile && profile.role === 'super_admin';
+        var filteredTix = (tix || []).filter(function (t) {
+          if (dashMeIsSA) return true;
+          if (t.is_private) return t.private_to === dashMeId;
+          if (t.is_confidential) {
+            if (t.created_by === dashMeId) return true;
+            if (t.assigned_to === dashMeId) return true;
+            try {
+              var extras = typeof t.additional_assignees === 'string'
+                ? JSON.parse(t.additional_assignees)
+                : t.additional_assignees;
+              if (Array.isArray(extras) && extras.indexOf(dashMeId) >= 0) return true;
+            } catch (_) {}
+            return false;
+          }
+          return true;
+        });
+        setDashTickets(filteredTix);
       } catch(e) { setDashTickets([]); }
       // Load Egypt bank transactions
       try {
@@ -1609,14 +1662,18 @@ export default function App() {
 
           // POST-MATCH: amount lives in bank_in/bank_out (NOT cash_in/cash_out).
           // Treasury safe net is cash-only; bank hits only affect invoice collected.
+          // v55.83-A.1 — also clear needs_bank_match flag. The row is now
+          // confirmed by a real statement entry and contributes to
+          // total_confirmed (not total_pending_bank) on the invoice.
           const updates = {
             is_bank_placeholder: false,
+            needs_bank_match: false,
             matched_bank_txn_id: bank.id,
             cash_in: 0,
             cash_out: 0,
             bank_in:  isIn ?  expAmt : 0,
             bank_out: !isIn ? expAmt : 0,
-            description: (placeholder.description || '').replace(' [awaiting bank confirmation]', '') + ' ✅ matched bank ' + bank.date,
+            description: (placeholder.description || '').replace(' [awaiting bank confirmation]', '').replace(' [🏦 Bank Transfer · awaiting match]', ' [🏦 Bank Transfer]') + ' ✅ matched bank ' + bank.date,
           };
 
           if (placeholder.order_number && !placeholder.linked_invoice_id) {
@@ -2138,37 +2195,83 @@ export default function App() {
   // Called after ANY payment/link/unlink/match action
   // Queries DB directly — always accurate, prevents double counting
   // ==========================================
+  // v55.83-A.1 (Max May 13 2026) — split collected into confirmed + pending.
+  //
+  // CONFIRMED = money that's either:
+  //   • Cash/safe channel (cash_in > 0) — physically counted, no bank needed
+  //   • Bank channel matched against a real statement entry (matched_bank_txn_id IS NOT NULL)
+  //     OR rows that came from the bank-statement auto-matcher itself
+  //
+  // PENDING BANK = recorded as bank-channel but not yet matched to a statement:
+  //   • is_bank_placeholder = TRUE (Path B awaiting matcher)
+  //   • OR needs_bank_match = TRUE (Path A bank_transfer awaiting matcher under v55.83-A.1)
+  //
+  // total_collected (legacy) = total_confirmed + total_pending_bank.
+  // We keep it for backward compat with reports/exports built before the split.
   const recalcInvoiceCollected = async (invoiceId) => {
     if (!invoiceId) return;
-    // Get invoice from DB
     const { data: inv } = await supabase.from('invoices').select('id, total_amount, order_number').eq('id', invoiceId).maybeSingle();
     if (!inv) return;
-    // Source of truth: treasury rows with linked_invoice_id pointing to this invoice.
-    // "Collected" sums BOTH safe cash_in AND bank_in (both are real money received
-    // for this invoice — just via different channels). We do NOT filter on cash_in>0
-    // in the query anymore because a row might have bank_in>0 and cash_in=0.
     const { data: linked } = await supabase.from('treasury')
-      .select('id, cash_in, bank_in, is_bank_placeholder, description, dedup_sibling_id')
+      .select('id, cash_in, bank_in, is_bank_placeholder, needs_bank_match, matched_bank_txn_id, description, dedup_sibling_id')
       .eq('linked_invoice_id', invoiceId);
-    // Sum only real entries (not placeholders, not bank-confirmation dedup markers).
-    // BUG 5 fix: prefer dedup_sibling_id (the stable DB column set at auto-match
-    // time) as the authoritative dedup signal, with the old description substring
-    // check kept as a legacy fallback. Previously the marker check relied purely
-    // on the description containing "[bank confirmation" — if a user edited the
-    // description and removed that marker, the row became "real" and got counted,
-    // reintroducing the double-counting the marker was meant to prevent.
-    let total = 0;
+
+    let confirmed = 0;
+    let pending = 0;
     for (const t of (linked || [])) {
-      if (t.is_bank_placeholder) continue;
-      if (t.dedup_sibling_id) continue;                                // authoritative
-      if (t.description && t.description.includes('[bank confirmation')) continue; // legacy fallback
-      total += Number(t.cash_in || 0) + Number(t.bank_in || 0);
+      // Always skip dedup markers (the legacy "[bank confirmation" rows and
+      // the new dedup_sibling_id rows) — these mirror another row that's
+      // already counted. Double-count guard.
+      if (t.dedup_sibling_id) continue;
+      if (t.description && t.description.includes('[bank confirmation')) continue;
+
+      const cashAmt = Number(t.cash_in || 0);
+      const bankAmt = Number(t.bank_in || 0);
+
+      // PLACEHOLDER rows (Path B before match) — pending. expected_amount
+      // semantics: the row's bank_in is 0 until the matcher writes it, but
+      // the placeholder shouldn't be hidden from the user — they recorded
+      // it intentionally. We count its expected amount as pending.
+      if (t.is_bank_placeholder) {
+        // For placeholders, bank_in is 0 until matched. The expected_amount
+        // column holds the user-entered amount. Fall back to bank_in just
+        // in case (defensive).
+        pending += Number(t.bank_in || t.expected_amount || 0);
+        continue;
+      }
+
+      // BANK ROWS AWAITING MATCH (Path A trust-immediate under old behavior,
+      // or any unmatched bank_in/bank_out row under v55.83-A.1).
+      if (t.needs_bank_match && !t.matched_bank_txn_id) {
+        pending += bankAmt;
+        continue;
+      }
+
+      // Everything else is confirmed: cash, safe channels (cash_in > 0), or
+      // bank rows that have been matched against a real statement entry.
+      confirmed += cashAmt + bankAmt;
     }
-    // Cap at invoice total
-    const capped = Math.min(total, Number(inv.total_amount || 0));
+
+    // Cap at invoice total — the system never claims a customer paid more
+    // than they were billed.
+    const totalAmt = Number(inv.total_amount || 0);
+    const totalAll = confirmed + pending;
+    // If sum exceeds total, scale both proportionally so the cap is respected
+    // but the confirmed/pending split is preserved.
+    let cappedConfirmed = confirmed;
+    let cappedPending = pending;
+    if (totalAll > totalAmt && totalAll > 0) {
+      const scale = totalAmt / totalAll;
+      cappedConfirmed = confirmed * scale;
+      cappedPending = pending * scale;
+    }
+    const capped = cappedConfirmed + cappedPending;
+
     await dbUpdate('invoices', invoiceId, {
       total_collected: capped,
-      outstanding: Math.max(0, Number(inv.total_amount || 0) - capped),
+      total_confirmed: cappedConfirmed,
+      total_pending_bank: cappedPending,
+      outstanding: Math.max(0, totalAmt - capped),
     }, userProfile?.id || user?.id);
     return capped;
   };
@@ -2234,16 +2337,26 @@ export default function App() {
         await recalcInvoiceCollected(selectedInvoice.id);
       } else if (isBankChannel) {
         // BANK TRANSFER → treasury bank_in + invoice link. Does NOT hit safe.
+        // v55.83-A.1 (Max May 13 2026) — bank-channel payments now ALWAYS
+        // require statement confirmation, even via this "trusted" Add Payment
+        // path. The row is created with needs_bank_match=TRUE so it counts
+        // toward total_pending_bank on the invoice (not total_confirmed)
+        // until the bank-statement auto-matcher links it to a real bank
+        // statement entry. This unifies behavior with the placeholder flow
+        // (Path B). Previously this path trusted the user immediately, which
+        // caused invoices to show fully-paid even when the money hadn't
+        // actually landed yet.
         await dbInsert('treasury', {
           transaction_date: pd.date,
           order_number: selectedInvoice.order_number,
-          description: sanitize((pd.desc || selectedInvoice.customer_name + ' payment') + ' [🏦 Bank Transfer]'),
+          description: sanitize((pd.desc || selectedInvoice.customer_name + ' payment') + ' [🏦 Bank Transfer · awaiting match]'),
           cash_in: 0, cash_out: 0,
           bank_in: Number(pd.amount),
           bank_out: 0,
           category: pd.category || 'مبيعات',
           subcategory: pd.subcategory || '',
           linked_invoice_id: selectedInvoice.id,
+          needs_bank_match: true,  // v55.83-A.1 — flag for matcher
         }, user?.id);
         await recalcInvoiceCollected(selectedInvoice.id);
       } else {
@@ -4220,7 +4333,7 @@ export default function App() {
               {/* Brand mark — bracket prefix is a terminal callout convention. */}
               <span className="text-emerald-400 font-mono text-xs font-bold tracking-tight" style={{ fontFamily: '"JetBrains Mono", monospace' }}>[KTC]</span>
               <h1 className="text-sm font-bold text-white tracking-tight whitespace-nowrap">NEXTTRADE HUB</h1>
-              <span className="text-[10px] text-zinc-500 font-mono hidden md:inline" style={{ fontFamily: '"JetBrains Mono", monospace' }}>v55.82-Z</span>
+              <span className="text-[10px] text-zinc-500 font-mono hidden md:inline" style={{ fontFamily: '"JetBrains Mono", monospace' }}>v55.83-A.2</span>
               {/* Live clock — terminals always show one. Updates via the
                   existing tick state; if not present, falls back to no clock. */}
               <span className="hidden lg:inline text-[10px] text-zinc-500 font-mono ml-2 pl-2 border-l border-zinc-800" style={{ fontFamily: '"JetBrains Mono", monospace' }}>
@@ -4879,8 +4992,27 @@ export default function App() {
                 <div className="text-xl font-extrabold text-blue-500">{fE(selectedInvoice.total_amount)}</div>
               </div>
               <div className="bg-emerald-50 rounded-lg p-3">
-                <div className="text-[10px] text-emerald-700">Collected / المحصّل</div>
+                <div className="flex items-center justify-between mb-1">
+                  <div className="text-[10px] text-emerald-700">Collected / المحصّل</div>
+                  <InvoicePaymentBadge invoice={selectedInvoice} fE={fE} compact />
+                </div>
                 <div className="text-xl font-extrabold text-emerald-500">{fE(selectedInvoice.total_collected)}</div>
+                {/* v55.83-A.1 — confirmed/pending split. When the SQL migration
+                    is in place AND there's a pending amount, show the
+                    breakdown so the user can see exactly what's confirmed
+                    vs what's awaiting bank-statement match. */}
+                {Number(selectedInvoice.total_pending_bank || 0) > 0 && (
+                  <div className="mt-1.5 space-y-0.5 text-[10px] leading-tight">
+                    <div className="flex justify-between">
+                      <span className="text-emerald-700">✓ Confirmed</span>
+                      <span className="font-bold text-emerald-700">{fE(Number(selectedInvoice.total_confirmed || 0))}</span>
+                    </div>
+                    <div className="flex justify-between">
+                      <span className="text-amber-700">⏳ Pending bank match</span>
+                      <span className="font-bold text-amber-700">{fE(Number(selectedInvoice.total_pending_bank || 0))}</span>
+                    </div>
+                  </div>
+                )}
                 {Number(selectedInvoice.total_collected) > Number(selectedInvoice.total_amount) && (
                   <div className="text-[9px] text-red-500 font-bold mt-1">⚠️ OVERPAID — may be doubled</div>
                 )}
@@ -7245,6 +7377,18 @@ export default function App() {
             <div className="mb-3">
               <WhatsNewWidget isAdmin={isAdmin} isSuperAdmin={isSuperAdmin} prominent={true} />
             </div>
+
+            {/* v55.83-A.1 — Pending Bank Confirmations widget. Surfaces
+                invoices where payments are recorded as bank-channel but
+                haven't been matched against bank statements yet. Hidden
+                from users without financial-reports permission. */}
+            <PendingBankConfirmationsWidget
+              invoices={invoices}
+              isSuperAdmin={isSuperAdmin}
+              modulePerms={modulePerms}
+              onSelectInvoice={(inv) => { setTab('sales'); setSelectedInvoice(inv); }}
+              fE={fE}
+            />
 
             {/* v55.60 — Nadia highlights when a new build has deployed.
                 Shows the latest build version, label, and top 3 highlights
@@ -11384,1900 +11528,29 @@ export default function App() {
         })()}
 
         {/* ==========================================
-            INVENTORY TAB
+        {/* ==========================================
+            INVENTORY TAB (v55.83-A — new module)
+            Replaced the inline ~1900-line inventory section with the
+            new module. Stage 1 ships Master SKUs + Warehouses; future
+            stages fill in Shipments, Movements, Adjustments, Reports.
         ========================================== */}
         {tab === 'inventory' && (
-          <div>
-            <div className="flex justify-between flex-wrap gap-2 mb-3">
-              <h2 className="text-xl font-extrabold">Inventory / المخزون</h2>
-              <div className="flex gap-2 items-center flex-wrap">
-                <input value={query} onChange={e => setQuery(e.target.value)}
-                  placeholder="Search / بحث" className="px-3 py-1.5 rounded-lg border border-slate-200 text-xs w-32" />
-                <select value={formData.invTypeFilter || 'all'} onChange={e => setFormData({...formData, invTypeFilter: e.target.value, invSubFilter: 'all'})}
-                  className="px-2 py-1.5 rounded border text-xs">
-                  <option value="all">All Categories</option>
-                  {[...new Set(inventory.map(p => p.product_type).filter(Boolean))].sort().map(t =>
-                    <option key={t} value={t}>{t}</option>)}
-                </select>
-                <select value={formData.invSubFilter || 'all'} onChange={e => setFormData({...formData, invSubFilter: e.target.value})}
-                  className="px-2 py-1.5 rounded border text-xs">
-                  <option value="all">All Subcategories</option>
-                  {[...new Set(inventory
-                    .filter(p => !formData.invTypeFilter || formData.invTypeFilter === 'all' || p.product_type === formData.invTypeFilter)
-                    .map(p => p.subcategory).filter(Boolean))].sort().map(s =>
-                    <option key={s} value={s}>{s}</option>)}
-                </select>
-                <select value={formData.invColorFilter || 'all'} onChange={e => setFormData({...formData, invColorFilter: e.target.value})}
-                  className="px-2 py-1.5 rounded border text-xs"
-                  title="Filter by color">
-                  <option value="all">All Colors</option>
-                  {[...new Set(inventory.map(p => p.color_en || p.color).filter(Boolean))].sort().map(c =>
-                    <option key={c} value={c}>{c}</option>)}
-                </select>
-                <button onClick={() => setFormData({...formData, showInvBreakdown: !formData.showInvBreakdown})}
-                  className={'px-3 py-1.5 rounded-lg text-xs font-bold ' + (formData.showInvBreakdown ? 'bg-indigo-600 text-white' : 'bg-slate-100 text-slate-700 hover:bg-slate-200')}
-                  title="Toggle breakdown by product type, subcategory, color">
-                  📊 Breakdown
-                </button>
-                <select value={formData.invView || 'cards'} onChange={e => setFormData({...formData, invView: e.target.value})}
-                  className="px-2 py-1.5 rounded border text-xs">
-                  <option value="cards">📷 Cards</option>
-                  <option value="table">📋 Table</option>
-                </select>
-                <button onClick={() => setFormData({...formData, showAddProduct: true})}
-                  className="px-3 py-1.5 bg-gradient-to-r from-blue-500 to-indigo-600 text-white rounded-lg text-xs font-bold shadow-sm">
-                  + Add Product
-                </button>
-                <button onClick={() => setFormData({...formData, showInvImport: true})}
-                  className="px-3 py-1.5 bg-emerald-500 hover:bg-emerald-600 text-white rounded-lg text-xs font-bold shadow-sm"
-                  title="Bulk import inventory items from Excel">
-                  📥 Import
-                </button>
-                {/* S22.12 (Apr 23 2026) — Direct Download Template button on
-                    the Inventory tab itself. Previously the template was
-                    only accessible from inside the Import modal. Per Max:
-                    the template should be a link downloadable from the
-                    portal. This generates the same XLSX as the import
-                    modal's button so the columns are always in sync with
-                    what the importer expects. */}
-                <button onClick={() => {
-                  try {
-                    var cols = [
-                      'Product ID','Reference #','Product Type','Subcategory',
-                      'Description (Arabic)','Description (English)',
-                      'Color (Arabic)','Color (English)',
-                      'Inbound Quantity','Original Quantity','Current Quantity','Expected Quantity',
-                      'Unit of Measure','Linear Density (g/m)',
-                      'Gross Weight (kg)','Net Weight (kg)','Unit Price','Roll Count',
-                      'Shipment Reference','Inbound Date',
-                      'Purchase Cost','Purchase Currency','Customs Cost','Customs Currency',
-                      'Shipping Cost','Shipping Currency','Other Cost','Other Currency',
-                      'FX Rate','Notes',
-                    ];
-                    var examples = [
-                      ['SKU-001','REF-2026-001','Textiles','Cotton','قماش قطن أحمر','Red Cotton Fabric','أحمر','Red',200,200,200,0,'yd',420,150,140,25,10,'SH-2026-01','2026-04-20',1200,'USD',5000,'EGP',800,'USD',0,'EGP',50,'First batch — opening balance'],
-                      ['SKU-001','REF-2026-015','Textiles','Cotton','قماش قطن أحمر','Red Cotton Fabric','أحمر','Red',80,'','',0,'yd',420,150,140,25,4,'SH-2026-02','2026-05-10',500,'USD',2000,'EGP',300,'USD',0,'EGP',50,'Restock — inbound only'],
-                      ['SKU-002','REF-2026-002','Leather','Genuine','جلد طبيعي بني','Brown Leather','بني','Brown',50,50,50,60,'kg','',30,28,80,5,'SH-2026-01','2026-04-20',2500,'USD',3000,'EGP',400,'USD',0,'EGP',50,'Expected 60, got 50'],
-                    ];
-                    var aoa = [cols].concat(examples);
-                    var ws = XLSX.utils.aoa_to_sheet(aoa);
-                    ws['!cols'] = cols.map(function(c) { return { wch: Math.max(14, c.length + 2) }; });
-                    var instr = [
-                      ['KTC Inventory Import Template'],
-                      [''],
-                      ['HOW TO USE'],
-                      ['1. Keep the header row. Fill in one row per product / inbound below.'],
-                      ['2. Save as .xlsx and upload through Inventory → Import.'],
-                      [''],
-                      ['THE THREE QUANTITY COLUMNS'],
-                      ['- Inbound Quantity — ALWAYS the primary input. How much arrived this time.'],
-                      ['- Original Quantity — only used the first time a Product ID is created.'],
-                      ['- Current Quantity — only used the first time a Product ID is created.'],
-                      [''],
-                      ['UNIT OF MEASURE (S22.11)'],
-                      ['- Pick kg, ton, m (meter), yd (yard), roll, piece, pair, or box.'],
-                      ['- For m/yd products, also set Linear Density (g/m) to enable'],
-                      ['  apples-to-apples per-kg P&L math. Example: if 1 meter of your'],
-                      ['  fabric weighs 420 grams, enter 420.'],
-                      [''],
-                      ['EXPECTED QUANTITY'],
-                      ['- Optional. Fill in to compare expected-vs-actual in the report.'],
-                      ['- Does NOT affect your live inventory — stored in a separate table.'],
-                    ];
-                    var iws = XLSX.utils.aoa_to_sheet(instr);
-                    iws['!cols'] = [{ wch: 80 }];
-                    var wb = XLSX.utils.book_new();
-                    XLSX.utils.book_append_sheet(wb, ws, 'Inventory');
-                    XLSX.utils.book_append_sheet(wb, iws, 'Instructions');
-                    XLSX.writeFile(wb, 'KTC_Inventory_Import_Template.xlsx');
-                  } catch (err) {
-                    alert('Could not generate template: ' + (err.message || 'unknown'));
-                  }
-                }}
-                  className="px-3 py-1.5 bg-white border border-emerald-300 text-emerald-700 hover:bg-emerald-50 rounded-lg text-xs font-bold shadow-sm"
-                  title="Download the Excel template for bulk import (with instructions + examples)">
-                  ⬇ Template
-                </button>
-                <button onClick={() => setFormData({...formData, showInvHistorical: true})}
-                  className="px-3 py-1.5 bg-slate-200 hover:bg-slate-300 text-slate-700 rounded-lg text-xs font-bold"
-                  title="See quantity received as of a specific date">
-                  📅 Historical
-                </button>
-                <button onClick={() => setFormData({...formData, showInvByShipment: true})}
-                  className="px-3 py-1.5 bg-indigo-500 hover:bg-indigo-600 text-white rounded-lg text-xs font-bold shadow-sm"
-                  title="See original quantity received per shipment, per product">
-                  📦 By Shipment
-                </button>
-                <button onClick={() => setFormData({...formData, showInvExpected: true})}
-                  className="px-3 py-1.5 bg-purple-500 hover:bg-purple-600 text-white rounded-lg text-xs font-bold shadow-sm"
-                  title="Compare expected vs actual per shipment">
-                  📊 Expected vs Actual
-                </button>
-              </div>
-            </div>
-
-            {/* Summary */}
-            {(() => {
-              const filtered = inventory.filter(p => {
-                if (formData.invTypeFilter && formData.invTypeFilter !== 'all' && p.product_type !== formData.invTypeFilter) return false;
-                if (formData.invSubFilter && formData.invSubFilter !== 'all' && p.subcategory !== formData.invSubFilter) return false;
-                if (formData.invColorFilter && formData.invColorFilter !== 'all' && (p.color_en || p.color) !== formData.invColorFilter) return false;
-                if (query) return (p.product_id||'').includes(query)||(p.reference_number||'').includes(query)||(p.description||'').includes(query)||(p.description_en||'').toLowerCase().includes(query.toLowerCase())||(p.color||'').includes(query)||(p.product_type||'').toLowerCase().includes(query.toLowerCase())||(p.subcategory||'').toLowerCase().includes(query.toLowerCase());
-                return true;
-              });
-              const totalOriginal = filtered.reduce((a, p) => a + Number(p.original_quantity || p.roll_count || 0), 0);
-              const totalCurrent = filtered.reduce((a, p) => a + Number(p.current_quantity || p.roll_count || 0), 0);
-              const totalWeight = filtered.reduce((a, p) => a + Number(p.net_weight || 0), 0);
-              const totalValue = filtered.reduce((a, p) => a + (Number(p.current_quantity || p.roll_count || 0) * Number(p.unit_price || 0)), 0);
-
-              return (<>
-              <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-4">
-                <div className="bg-white rounded-xl p-3 border border-slate-100">
-                  <div className="text-[9px] text-slate-400 uppercase tracking-wide">Products</div>
-                  <div className="text-xl font-extrabold">{filtered.length}</div>
-                </div>
-                <div className="bg-white rounded-xl p-3 border border-slate-100">
-                  <div className="text-[9px] text-slate-400 uppercase tracking-wide">Original Qty</div>
-                  <div className="text-xl font-extrabold text-blue-600">{totalOriginal.toLocaleString()}</div>
-                </div>
-                <div className="bg-white rounded-xl p-3 border border-slate-100">
-                  <div className="text-[9px] text-slate-400 uppercase tracking-wide">Current Qty</div>
-                  <div className="text-xl font-extrabold text-emerald-600">{totalCurrent.toLocaleString()}</div>
-                </div>
-                <div className="bg-white rounded-xl p-3 border border-slate-100">
-                  <div className="text-[9px] text-slate-400 uppercase tracking-wide">Est. Value</div>
-                  <div className="text-xl font-extrabold text-purple-600">{fE(totalValue)}</div>
-                </div>
-              </div>
-
-              {/* S22.9 — Cleaner breakdown: single unified table instead of
-                  three side-by-side "bubble bucket" cards. Max: "I don't
-                  really like the bubble buckets. Make it better."
-                  Now it's ONE sortable table with a tab selector for the
-                  grouping dimension (Type / Subcategory / Color). Fewer
-                  visual containers, more data density, easier to scan. */}
-              {formData.showInvBreakdown && (() => {
-                const activeDim = formData.invBreakdownDim || 'type';
-                const keyFnByDim = {
-                  type: p => p.product_type,
-                  sub: p => p.subcategory,
-                  color: p => p.color_en || p.color,
-                };
-                const labelByDim = { type: 'Product Type', sub: 'Subcategory', color: 'Color' };
-                const keyFn = keyFnByDim[activeDim];
-                const map = {};
-                filtered.forEach(p => {
-                  const k = keyFn(p) || '(none)';
-                  if (!map[k]) map[k] = { key: k, count: 0, orig: 0, curr: 0, value: 0 };
-                  map[k].count += 1;
-                  map[k].orig += Number(p.original_quantity || p.roll_count || 0);
-                  map[k].curr += Number(p.current_quantity || p.roll_count || 0);
-                  map[k].value += Number(p.current_quantity || p.roll_count || 0) * Number(p.unit_price || 0);
-                });
-                const rows = Object.values(map).sort((a, b) => b.curr - a.curr);
-                const totals = rows.reduce((a, r) => ({
-                  count: a.count + r.count, orig: a.orig + r.orig, curr: a.curr + r.curr, value: a.value + r.value,
-                }), { count: 0, orig: 0, curr: 0, value: 0 });
-                return (
-                  <div className="mb-4 bg-white rounded-xl border border-slate-200 overflow-hidden">
-                    <div className="px-4 py-3 border-b border-slate-100 flex items-center justify-between flex-wrap gap-2">
-                      <div className="flex items-center gap-3">
-                        <h3 className="text-sm font-bold text-slate-800">Inventory Breakdown</h3>
-                        <span className="text-[10px] text-slate-500">{rows.length} group{rows.length === 1 ? '' : 's'} · {totals.count} products</span>
-                      </div>
-                      {/* Dimension selector — pill row BUT tight, not bubbly */}
-                      <div className="flex rounded-md overflow-hidden border border-slate-200 text-[11px]">
-                        {['type', 'sub', 'color'].map(d => (
-                          <button key={d}
-                            onClick={() => setFormData({...formData, invBreakdownDim: d})}
-                            className={'px-3 py-1 font-semibold transition ' + (activeDim === d ? 'bg-slate-800 text-white' : 'bg-white text-slate-600 hover:bg-slate-50')}>
-                            {labelByDim[d]}
-                          </button>
-                        ))}
-                      </div>
-                    </div>
-                    <div className="overflow-auto max-h-[360px]">
-                      <table className="w-full text-xs border-collapse">
-                        <thead className="sticky top-0 bg-slate-50 z-[1]">
-                          <tr className="text-slate-500 text-[10px] uppercase tracking-wide">
-                            <th className="px-3 py-2 text-left font-semibold">{labelByDim[activeDim]}</th>
-                            <th className="px-3 py-2 text-right font-semibold">Products</th>
-                            <th className="px-3 py-2 text-right font-semibold">Original</th>
-                            <th className="px-3 py-2 text-right font-semibold">Current</th>
-                            <th className="px-3 py-2 text-right font-semibold">Est. Value</th>
-                            <th className="px-3 py-2 text-right font-semibold w-[90px]">% Left</th>
-                          </tr>
-                        </thead>
-                        <tbody>
-                          {rows.map(r => {
-                            const pctLeft = r.orig > 0 ? Math.round((r.curr / r.orig) * 100) : 0;
-                            return (
-                              <tr key={r.key} className="border-b border-slate-100 hover:bg-slate-50">
-                                <td className="px-3 py-1.5 font-semibold text-slate-800 truncate max-w-[200px]" title={r.key}>{r.key}</td>
-                                <td className="px-3 py-1.5 text-right text-slate-500">{r.count}</td>
-                                <td className="px-3 py-1.5 text-right text-slate-600">{r.orig.toLocaleString()}</td>
-                                <td className="px-3 py-1.5 text-right font-bold text-emerald-600">{r.curr.toLocaleString()}</td>
-                                <td className="px-3 py-1.5 text-right text-slate-700">{fE(r.value)}</td>
-                                <td className="px-3 py-1.5 text-right">
-                                  <div className="inline-flex items-center gap-1.5">
-                                    <div className="w-12 h-1 bg-slate-200 rounded overflow-hidden">
-                                      <div className="h-full rounded" style={{ width: pctLeft + '%', background: pctLeft >= 50 ? '#10b981' : pctLeft >= 20 ? '#f59e0b' : '#ef4444' }} />
-                                    </div>
-                                    <span className="text-[10px] text-slate-500 tabular-nums w-7 text-right">{pctLeft}%</span>
-                                  </div>
-                                </td>
-                              </tr>
-                            );
-                          })}
-                          {rows.length === 0 && (
-                            <tr><td colSpan="6" className="text-center text-slate-400 py-6 text-xs">No products in current filter.</td></tr>
-                          )}
-                        </tbody>
-                        {rows.length > 0 && (
-                          <tfoot>
-                            <tr className="bg-slate-50 border-t-2 border-slate-200 font-bold text-xs">
-                              <td className="px-3 py-2 text-slate-700">Total</td>
-                              <td className="px-3 py-2 text-right">{totals.count}</td>
-                              <td className="px-3 py-2 text-right">{totals.orig.toLocaleString()}</td>
-                              <td className="px-3 py-2 text-right text-emerald-700">{totals.curr.toLocaleString()}</td>
-                              <td className="px-3 py-2 text-right">{fE(totals.value)}</td>
-                              <td className="px-3 py-2 text-right text-slate-400">—</td>
-                            </tr>
-                          </tfoot>
-                        )}
-                      </table>
-                    </div>
-                  </div>
-                );
-              })()}
-
-              {/* Cards View */}
-              {(formData.invView || 'cards') === 'cards' && (
-                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
-                  {filtered.map(p => {
-                    const origQty = Number(p.original_quantity || p.roll_count || 0);
-                    const currQty = Number(p.current_quantity || p.roll_count || 0);
-                    const usedPct = origQty > 0 ? Math.round(((origQty - currQty) / origQty) * 100) : 0;
-                    return (
-                      <div key={p.id} onClick={() => setFormData({...formData, selectedProduct: p})}
-                        className="bg-white rounded-2xl overflow-hidden border border-slate-100 hover:border-slate-300 hover:shadow-lg transition cursor-pointer group">
-                        {/* Photo */}
-                        {p.photo_url ? (
-                          <div className="h-40 bg-slate-100 overflow-hidden">
-                            <img src={p.photo_url} alt={p.description_en || p.description} className="w-full h-full object-cover group-hover:scale-105 transition-transform" />
-                          </div>
-                        ) : (
-                          <div className="h-24 bg-gradient-to-br from-slate-100 to-slate-50 flex items-center justify-center">
-                            <span className="text-3xl opacity-30">📦</span>
-                          </div>
-                        )}
-                        <div className="p-3">
-                          {/* Category pills */}
-                          <div className="flex gap-1 mb-2 flex-wrap">
-                            {p.product_type && <span className="px-2 py-0.5 bg-indigo-50 text-indigo-700 rounded-md text-[9px] font-bold">{p.product_type}</span>}
-                            {p.subcategory && <span className="px-2 py-0.5 bg-amber-50 text-amber-900 rounded-md text-[9px] font-medium">{p.subcategory}</span>}
-                            <span className={'px-2 py-0.5 rounded-md text-[9px] font-bold ' +
-                              (p.stock_status === 'in_stock' ? 'bg-green-50 text-green-700' :
-                               p.stock_status === 'low' ? 'bg-amber-50 text-amber-900' :
-                               p.stock_status === 'reserved' ? 'bg-blue-50 text-blue-700' : 'bg-red-50 text-red-700')}>
-                              {p.stock_status === 'in_stock' ? 'In Stock' : p.stock_status === 'low' ? 'Low' : p.stock_status === 'reserved' ? 'Reserved' : p.stock_status === 'out_of_stock' ? 'Out' : 'Available'}
-                            </span>
-                          </div>
-                          {/* Name */}
-                          <div className="text-sm font-bold truncate">{p.reference_number || p.product_id}</div>
-                          <div className="text-[11px] text-slate-500 truncate" style={{direction:'rtl'}}>{lang === 'en' && p.description_en ? p.description_en : p.description}</div>
-                          {p.color && <div className="text-[10px] text-slate-400 mt-0.5">🎨 {lang === 'en' && p.color_en ? p.color_en : p.color}</div>}
-                          {/* Quantity bar */}
-                          <div className="mt-2">
-                            <div className="flex justify-between text-[9px] mb-0.5">
-                              <span className="text-slate-400">Qty: {currQty.toLocaleString()} / {origQty.toLocaleString()}</span>
-                              <span className="font-bold text-emerald-600">{fE(p.unit_price)}</span>
-                            </div>
-                            <div className="h-1.5 bg-slate-100 rounded-full overflow-hidden">
-                              <div className="h-full rounded-full" style={{width: Math.max(5, 100 - usedPct) + '%', background: usedPct > 80 ? '#ef4444' : usedPct > 50 ? '#f59e0b' : '#10b981'}} />
-                            </div>
-                          </div>
-                        </div>
-                      </div>
-                    );
-                  })}
-                </div>
-              )}
-
-              {/* Table View */}
-              {formData.invView === 'table' && (
-                <div className="overflow-auto rounded-xl border border-slate-200 max-h-[450px]">
-                  <table className="w-full border-collapse">
-                    <thead className="sticky top-0"><tr className="bg-slate-50">
-                      <th className="px-2 py-2 text-[10px] text-left">Photo</th>
-                      <th className="px-2 py-2 text-[10px] text-left">Product</th>
-                      <th className="px-2 py-2 text-[10px]">Category</th>
-                      <th className="px-2 py-2 text-[10px]">Subcategory</th>
-                      <th className="px-2 py-2 text-[10px] text-right">Original</th>
-                      <th className="px-2 py-2 text-[10px] text-right">Current</th>
-                      <th className="px-2 py-2 text-[10px] text-right" title="Number of inbound batches">Batches</th>
-                      <th className="px-2 py-2 text-[10px] text-right" title="Number of journal adjustments">Adj.</th>
-                      <th className="px-2 py-2 text-[10px] text-right">Price</th>
-                      <th className="px-2 py-2 text-[10px]">Status</th>
-                    </tr></thead>
-                    <tbody>
-                      {filtered.map(p => {
-                        const batchCount = (invInbounds || []).filter(ib => ib.product_id === p.product_id).length;
-                        const adjCount = (invAdjustments || []).filter(a => a.product_id === p.product_id).length;
-                        return (
-                        <tr key={p.id} className="border-b border-slate-50 hover:bg-indigo-50/50 cursor-pointer group"
-                          onClick={() => setFormData({...formData, selectedProduct: p})}
-                          title="Click for full history (batches + adjustments)">
-                          <td className="px-2 py-1.5">
-                            {p.photo_url ? <img src={p.photo_url} className="w-10 h-10 rounded object-cover" /> : <span className="text-slate-300 text-lg">📦</span>}
-                          </td>
-                          <td className="px-2 py-1.5">
-                            <div className="text-xs font-bold text-blue-600 group-hover:underline">{p.reference_number || p.product_id}</div>
-                            <div className="text-[10px] text-slate-500">{lang === 'en' && p.description_en ? p.description_en : p.description}</div>
-                          </td>
-                          <td className="px-2 py-1.5">{p.product_type && <span className="px-1.5 py-0.5 bg-indigo-100 text-indigo-700 rounded text-[9px]">{p.product_type}</span>}</td>
-                          <td className="px-2 py-1.5">{p.subcategory && <span className="px-1.5 py-0.5 bg-amber-100 text-amber-900 rounded text-[9px]">{p.subcategory}</span>}</td>
-                          <td className="px-2 py-1.5 text-xs text-right">{Number(p.original_quantity || p.roll_count || 0).toLocaleString()}</td>
-                          <td className="px-2 py-1.5 text-xs text-right font-bold text-emerald-600">{Number(p.current_quantity || p.roll_count || 0).toLocaleString()}</td>
-                          <td className="px-2 py-1.5 text-xs text-right">
-                            {batchCount > 0 ? (
-                              <span className="inline-flex items-center gap-1 text-slate-700 font-semibold">
-                                <span>{batchCount}</span>
-                                <span className="text-[9px] text-indigo-500">▸</span>
-                              </span>
-                            ) : <span className="text-slate-300">—</span>}
-                          </td>
-                          <td className="px-2 py-1.5 text-xs text-right">
-                            {adjCount > 0 ? (
-                              <span className="inline-flex items-center gap-1 text-amber-900 font-semibold">
-                                <span>🧾</span>
-                                <span>{adjCount}</span>
-                              </span>
-                            ) : <span className="text-slate-300">—</span>}
-                          </td>
-                          <td className="px-2 py-1.5 text-xs text-right font-semibold text-emerald-600">{fE(p.unit_price)}</td>
-                          <td className="px-2 py-1.5">
-                            <span className={'px-1.5 py-0.5 rounded-full text-[9px] font-semibold ' +
-                              (p.stock_status === 'in_stock' ? 'bg-green-100 text-green-700' :
-                               p.stock_status === 'low' ? 'bg-amber-100 text-amber-900' :
-                               p.stock_status === 'reserved' ? 'bg-blue-100 text-blue-700' : 'bg-red-100 text-red-700')}>
-                              {p.stock_status === 'in_stock' ? 'In Stock' : p.stock_status === 'low' ? 'Low' : p.stock_status === 'reserved' ? 'Reserved' : 'Out'}
-                            </span>
-                          </td>
-                        </tr>
-                        );
-                      })}
-                    </tbody>
-                  </table>
-                </div>
-              )}
-              </>);
-            })()}
-
-            {/* Add Product Form */}
-            {formData.showAddProduct && (
-              <div className="fixed inset-0 bg-black/60 z-50 flex items-start justify-center overflow-auto p-4" onClick={e => { if (e.target === e.currentTarget) setFormData({}); }}>
-                <div className="bg-white rounded-2xl shadow-2xl w-full max-w-[600px] my-8 overflow-hidden">
-                  <div className="bg-gradient-to-r from-indigo-600 to-purple-600 px-5 py-4">
-                    <h3 className="text-white font-bold text-base">📦 New Product / منتج جديد</h3>
-                  </div>
-                  <div className="p-5 space-y-3 max-h-[70vh] overflow-auto">
-                    <div className="grid grid-cols-2 gap-3">
-                      <div><label className="text-[10px] font-bold text-slate-500">Product ID</label>
-                        <input value={formData.prodId || ''} onChange={e => setFormData({...formData, prodId: e.target.value})} className="w-full px-3 py-2 rounded-lg border text-sm" /></div>
-                      <div><label className="text-[10px] font-bold text-slate-500">Shipment Reference #</label>
-                        <input value={formData.prodShipment || ''} onChange={e => setFormData({...formData, prodShipment: e.target.value})} className="w-full px-3 py-2 rounded-lg border text-sm" /></div>
-                      <div><label className="text-[10px] font-bold text-slate-500">Category / النوع</label>
-                        <select value={formData.prodType || ''} onChange={e => { if (e.target.value === '_new') { const n = prompt('New category:'); if (n) setFormData({...formData, prodType: n}); } else setFormData({...formData, prodType: e.target.value}); }}
-                          className="w-full px-3 py-2 rounded-lg border text-sm">
-                          <option value="">Select...</option>
-                          {['Pool','Leather','Roofing','Fabrics','PVC','Chemicals','Headliner','Boat Flooring','Upholstery',
-                            ...new Set(inventory.map(p => p.product_type).filter(Boolean))].filter((v,i,a) => v && a.indexOf(v)===i).sort().map(t =>
-                            <option key={t} value={t}>{t}</option>)}
-                          <option value="_new">+ New Category</option>
-                        </select></div>
-                      <div><label className="text-[10px] font-bold text-slate-500">Subcategory / تصنيف فرعي</label>
-                        <input list="inv-subcats-add" value={formData.prodSubcat || ''} onChange={e => setFormData({...formData, prodSubcat: e.target.value})}
-                          placeholder="e.g. Mosaic Liner, Looks..." className="w-full px-3 py-2 rounded-lg border text-sm" />
-                        <datalist id="inv-subcats-add">{[...new Set(inventory.map(p => p.subcategory).filter(Boolean))].sort().map(s => <option key={s} value={s} />)}</datalist></div>
-                      <div><label className="text-[10px] font-bold text-slate-500">Inbound Date</label>
-                        <DatePickerSelect value={formData.prodDate || today()} onChange={v => setFormData({...formData, prodDate: v})} /></div>
-                      {formData.prodId && inventory.find(p => p.product_id === formData.prodId) && (
-                        <div className="col-span-2 bg-amber-50 rounded-lg p-2 border border-amber-200">
-                          <div className="text-[10px] font-bold text-amber-900">⚠️ Product ID "{formData.prodId}" already exists — this will be added as a new inbound and quantities/costs will be aggregated.</div>
-                        </div>
-                      )}
-                      <div><label className="text-[10px] font-bold text-slate-500">Description (Arabic)</label>
-                        <input value={formData.prodDesc || ''} onChange={e => setFormData({...formData, prodDesc: e.target.value})} className="w-full px-3 py-2 rounded-lg border text-sm" style={{direction:'rtl'}} /></div>
-                      <div><label className="text-[10px] font-bold text-slate-500">Description (English)</label>
-                        <input value={formData.prodDescEn || ''} onChange={e => setFormData({...formData, prodDescEn: e.target.value})} className="w-full px-3 py-2 rounded-lg border text-sm" /></div>
-                      <div><label className="text-[10px] font-bold text-slate-500">Color (Arabic)</label>
-                        <input value={formData.prodColor || ''} onChange={e => setFormData({...formData, prodColor: e.target.value})} className="w-full px-3 py-2 rounded-lg border text-sm" style={{direction:'rtl'}} /></div>
-                      <div><label className="text-[10px] font-bold text-slate-500">Color (English)</label>
-                        <input value={formData.prodColorEn || ''} onChange={e => setFormData({...formData, prodColorEn: e.target.value})} className="w-full px-3 py-2 rounded-lg border text-sm" /></div>
-                      {(() => {
-                        // S20 (Apr 23 2026) — three-field inventory flow:
-                        //   - Inbound Qty: always editable. It's how much
-                        //     arrived THIS TIME.
-                        //   - Original Qty + Current Qty: editable ONLY the
-                        //     first time a product_id is created, OR by a
-                        //     super-admin / user with "Adjust Inventory
-                        //     Quantities" permission (which triggers an
-                        //     adjustment journal entry).
-                        // S22.10 (Apr 23 2026) — split permissions per Max:
-                        //   "Edit Inventory" = day-to-day (add products,
-                        //     record inbounds, edit descriptions, photos)
-                        //   "Adjust Inventory Quantities" = the rarer,
-                        //     audit-worthy action of overriding Original or
-                        //     Current on an existing product.
-                        // Normal rule: add an inbound → current auto-updates.
-                        const existingForCurr = formData.prodId
-                          ? inventory.find(p => p.product_id === formData.prodId)
-                          : null;
-                        const canOverrideQty = userProfile?.role === 'super_admin' || modulePerms?.['Adjust Inventory Quantities'] === true;
-                        const isFirstTime = !existingForCurr;
-                        const qtyLocked = !isFirstTime && !canOverrideQty;
-                        const exOrig = existingForCurr ? Number(existingForCurr.original_quantity) || 0 : 0;
-                        const exCurr = existingForCurr ? Number(existingForCurr.current_quantity) || 0 : 0;
-                        return (<>
-                          <div className="col-span-2">
-                            <label className="text-[10px] font-bold text-slate-500">
-                              Inbound Quantity {isFirstTime ? '(this first batch)' : '(add to existing)'}
-                            </label>
-                            <input
-                              type="number"
-                              value={formData.prodInboundQty || ''}
-                              onChange={e => setFormData({...formData, prodInboundQty: e.target.value})}
-                              placeholder={isFirstTime ? 'How much in this first batch?' : 'How much came in this shipment?'}
-                              className="w-full px-3 py-2 rounded-lg border text-sm" />
-                            {!isFirstTime && (
-                              <div className="text-[10px] text-slate-500 mt-1">
-                                Adding <strong>{Number(formData.prodInboundQty) || 0}</strong> to current stock of <strong>{exCurr}</strong> → new total <strong>{exCurr + (Number(formData.prodInboundQty) || 0)}</strong>.
-                              </div>
-                            )}
-                          </div>
-                          <div>
-                            <label className="text-[10px] font-bold text-slate-500">
-                              Original Quantity {qtyLocked && <span className="text-red-600">🔒</span>}
-                            </label>
-                            <input
-                              type="number"
-                              value={isFirstTime ? (formData.prodOrigQty || '') : (formData.prodOrigQty !== undefined ? formData.prodOrigQty : exOrig)}
-                              disabled={qtyLocked}
-                              onChange={e => setFormData({...formData, prodOrigQty: e.target.value})}
-                              placeholder={isFirstTime ? 'Opening original' : '—'}
-                              className={'w-full px-3 py-2 rounded-lg border text-sm ' + (qtyLocked ? 'bg-slate-100 text-slate-500 cursor-not-allowed' : '')} />
-                            {qtyLocked && (
-                              <div className="text-[10px] text-slate-400 mt-1">Locked — needs the "Adjust Inventory Quantities" permission.</div>
-                            )}
-                            {!isFirstTime && canOverrideQty && (
-                              <div className="text-[10px] text-amber-600 mt-1">
-                                ⚠️ Any change here writes a journal entry under this product.
-                              </div>
-                            )}
-                          </div>
-                          <div>
-                            <label className="text-[10px] font-bold text-slate-500">
-                              Current Quantity {qtyLocked && <span className="text-red-600">🔒</span>}
-                            </label>
-                            <input
-                              type="number"
-                              value={isFirstTime ? (formData.prodCurrQty || '') : (formData.prodCurrQty !== undefined ? formData.prodCurrQty : exCurr)}
-                              disabled={qtyLocked}
-                              onChange={e => setFormData({...formData, prodCurrQty: e.target.value})}
-                              placeholder={isFirstTime ? 'Same as Original if blank' : '—'}
-                              className={'w-full px-3 py-2 rounded-lg border text-sm ' + (qtyLocked ? 'bg-slate-100 text-slate-500 cursor-not-allowed' : '')} />
-                            {qtyLocked && (
-                              <div className="text-[10px] text-slate-400 mt-1">Locked — auto-updates when an inbound is added.</div>
-                            )}
-                            {!isFirstTime && canOverrideQty && (formData.prodCurrQty !== undefined && Number(formData.prodCurrQty) !== exCurr) && (
-                              <div className="text-[10px] text-amber-600 mt-1">
-                                ⚠️ Overrides running total. Needs a reason (below).
-                              </div>
-                            )}
-                          </div>
-                          {/* Override reason for manual adjustment — required when
-                              super-admin OR permissioned user changes Original or
-                              Current away from the computed values. */}
-                          {!isFirstTime && canOverrideQty && (
-                            (formData.prodOrigQty !== undefined && Number(formData.prodOrigQty) !== exOrig) ||
-                            (formData.prodCurrQty !== undefined && Number(formData.prodCurrQty) !== exCurr)
-                          ) && (
-                            <div className="col-span-2">
-                              <label className="text-[10px] font-bold text-amber-900">🧾 Reason for adjustment (journal entry)</label>
-                              <input
-                                value={formData.prodAdjReason || ''}
-                                onChange={e => setFormData({...formData, prodAdjReason: e.target.value})}
-                                placeholder="e.g. Physical count correction, damaged goods write-off, historical correction"
-                                className="w-full px-3 py-2 rounded-lg border border-amber-300 bg-amber-50 text-sm" />
-                            </div>
-                          )}
-                        </>);
-                      })()}
-                      {/* S22.11 — Unit of Measure + Linear Density.
-                          Lets products be billed/tracked in kg, ton, yard,
-                          meter, roll, or piece. Linear density (grams per
-                          meter) lets us convert yards/meters ↔ weight so
-                          per-kg math still works on length-priced items. */}
-                      <div><label className="text-[10px] font-bold text-slate-500">Unit of Measure</label>
-                        <select value={formData.prodUom || ''} onChange={e => setFormData({...formData, prodUom: e.target.value})}
-                          className="w-full px-3 py-2 rounded-lg border text-sm">
-                          <option value="">Select unit...</option>
-                          <option value="kg">kg (kilogram)</option>
-                          <option value="ton">ton (metric ton)</option>
-                          <option value="m">m (meter)</option>
-                          <option value="yd">yd (yard)</option>
-                          <option value="roll">roll</option>
-                          <option value="piece">piece</option>
-                          <option value="pair">pair</option>
-                          <option value="box">box</option>
-                        </select></div>
-                      <div><label className="text-[10px] font-bold text-slate-500">Linear Density (g/m)
-                        <span className="text-slate-400 font-normal"> — for m/yd products</span></label>
-                        <input type="number" step="0.01" value={formData.prodLinearDensity || ''}
-                          onChange={e => setFormData({...formData, prodLinearDensity: e.target.value})}
-                          placeholder="e.g. 450 if 1 meter weighs 450g"
-                          className="w-full px-3 py-2 rounded-lg border text-sm" />
-                      </div>
-                      <div><label className="text-[10px] font-bold text-slate-500">Gross Weight (kg)</label>
-                        <input type="number" value={formData.prodGross || ''} onChange={e => setFormData({...formData, prodGross: e.target.value})} className="w-full px-3 py-2 rounded-lg border text-sm" /></div>
-                      <div><label className="text-[10px] font-bold text-slate-500">Net Weight (kg)</label>
-                        <input type="number" value={formData.prodNet || ''} onChange={e => setFormData({...formData, prodNet: e.target.value})} className="w-full px-3 py-2 rounded-lg border text-sm" /></div>
-                      <div><label className="text-[10px] font-bold text-slate-500">Unit Price</label>
-                        <input type="number" value={formData.prodPrice || ''} onChange={e => setFormData({...formData, prodPrice: e.target.value})} className="w-full px-3 py-2 rounded-lg border text-sm" /></div>
-                      <div><label className="text-[10px] font-bold text-slate-500">Roll Count</label>
-                        <input type="number" value={formData.prodRolls || ''} onChange={e => setFormData({...formData, prodRolls: e.target.value})} className="w-full px-3 py-2 rounded-lg border text-sm" /></div>
-                      <div className="col-span-2">
-                        <label className="text-[10px] font-bold text-slate-500">Product Photo / صورة المنتج</label>
-                        <input type="file" accept="image/*" id="prod-photo" className="w-full px-3 py-2 rounded-lg border text-sm" />
-                        <div className="text-[9px] text-slate-400 mt-1">JPEG or PNG. Stored in Supabase Storage.</div>
-                      </div>
-                      {(userProfile?.role === 'super_admin' || modulePerms?.['View Costs'] === true) && (<>
-                        <div className="col-span-2 mt-2 pt-2 border-t border-red-200">
-                          <div className="text-[10px] font-bold text-red-700">🔒 Cost Fields (Internal)</div>
-                        </div>
-                        <div><label className="text-[9px] font-bold text-slate-500">Purchase Cost</label>
-                          <div className="flex gap-1">
-                            <input type="number" value={formData.prodPurchaseCost || ''} onChange={e => setFormData({...formData, prodPurchaseCost: e.target.value})} placeholder="0.00" className="flex-1 px-2 py-1.5 rounded border text-sm" />
-                            <select value={formData.prodPurchaseCurr || 'USD'} onChange={e => setFormData({...formData, prodPurchaseCurr: e.target.value})} className="px-1 py-1 rounded border text-xs w-16"><option value="USD">USD</option><option value="EGP">EGP</option></select>
-                          </div></div>
-                        <div><label className="text-[9px] font-bold text-slate-500">Customs / Duties</label>
-                          <div className="flex gap-1">
-                            <input type="number" value={formData.prodCustomsCost || ''} onChange={e => setFormData({...formData, prodCustomsCost: e.target.value})} placeholder="0.00" className="flex-1 px-2 py-1.5 rounded border text-sm" />
-                            <select value={formData.prodCustomsCurr || 'EGP'} onChange={e => setFormData({...formData, prodCustomsCurr: e.target.value})} className="px-1 py-1 rounded border text-xs w-16"><option value="USD">USD</option><option value="EGP">EGP</option></select>
-                          </div></div>
-                        <div><label className="text-[9px] font-bold text-slate-500">Shipping & Freight</label>
-                          <div className="flex gap-1">
-                            <input type="number" value={formData.prodShippingCost || ''} onChange={e => setFormData({...formData, prodShippingCost: e.target.value})} placeholder="0.00" className="flex-1 px-2 py-1.5 rounded border text-sm" />
-                            <select value={formData.prodShippingCurr || 'USD'} onChange={e => setFormData({...formData, prodShippingCurr: e.target.value})} className="px-1 py-1 rounded border text-xs w-16"><option value="USD">USD</option><option value="EGP">EGP</option></select>
-                          </div></div>
-                        <div><label className="text-[9px] font-bold text-slate-500">Other Charges</label>
-                          <div className="flex gap-1">
-                            <input type="number" value={formData.prodOtherCost || ''} onChange={e => setFormData({...formData, prodOtherCost: e.target.value})} placeholder="0.00" className="flex-1 px-2 py-1.5 rounded border text-sm" />
-                            <select value={formData.prodOtherCurr || 'EGP'} onChange={e => setFormData({...formData, prodOtherCurr: e.target.value})} className="px-1 py-1 rounded border text-xs w-16"><option value="USD">USD</option><option value="EGP">EGP</option></select>
-                          </div></div>
-                        <div><label className="text-[9px] font-bold text-slate-500">FX Rate (USD→EGP)</label>
-                          <input type="number" value={formData.prodFxRate || 50} onChange={e => setFormData({...formData, prodFxRate: e.target.value})} step="0.01" className="w-full px-2 py-1.5 rounded border text-sm" /></div>
-                      </>)}
-                    </div>
-                    <div className="flex gap-2 pt-2">
-                      <button onClick={async () => {
-                        try {
-                          const isSuperAdmin = userProfile?.role === 'super_admin';
-                          const existingProduct = formData.prodId ? inventory.find(p => p.product_id === formData.prodId) : null;
-                          const isFirstTime = !existingProduct;
-
-                          // Inbound quantity is always editable. Original/Current input
-                          // is editable only on first creation OR for super_admin.
-                          const inboundQty = Number(formData.prodInboundQty) || 0;
-
-                          // Compute what Original and Current should become. Regular
-                          // users: locked to "existing + inbound" (existing flow).
-                          // Super-admin: can enter explicit overrides, which get
-                          // written to inventory_adjustments as a journal entry.
-                          let finalOrigQty, finalCurrQty;
-                          let adjustmentsToLog = []; // {field, old, new, reason}
-
-                          if (isFirstTime) {
-                            // First time: user can enter Original/Current directly.
-                            // If blank, default to inbound. Same as before.
-                            finalOrigQty = Number(formData.prodOrigQty) || inboundQty;
-                            finalCurrQty = Number(formData.prodCurrQty) || finalOrigQty;
-                            if (inboundQty === 0 && finalOrigQty === 0) {
-                              alert('Please enter at least a quantity.');
-                              return;
-                            }
-                          } else {
-                            // Existing product. Default path: add inbound to both.
-                            const exOrig = Number(existingProduct.original_quantity) || 0;
-                            const exCurr = Number(existingProduct.current_quantity) || 0;
-                            finalOrigQty = exOrig + inboundQty;
-                            finalCurrQty = exCurr + inboundQty;
-
-                            // S22.10 — super-admin OR anyone with "Adjust
-                            // Inventory Quantities" perm may override
-                            // Original/Current. This is separate from the
-                            // broader "Edit Inventory" day-to-day permission.
-                            const canOverrideQty = isSuperAdmin || modulePerms?.['Adjust Inventory Quantities'] === true;
-                            if (canOverrideQty) {
-                              const typedOrig = formData.prodOrigQty;
-                              const typedCurr = formData.prodCurrQty;
-                              const origChanged = typedOrig !== undefined && Number(typedOrig) !== exOrig;
-                              const currChanged = typedCurr !== undefined && Number(typedCurr) !== exCurr;
-                              if (origChanged || currChanged) {
-                                if (!formData.prodAdjReason || !formData.prodAdjReason.trim()) {
-                                  alert('Please provide a reason for the adjustment — it will be logged on the product.');
-                                  return;
-                                }
-                                if (origChanged) {
-                                  adjustmentsToLog.push({ field: 'original_quantity', old: exOrig, new: Number(typedOrig), reason: formData.prodAdjReason });
-                                  finalOrigQty = Number(typedOrig) + inboundQty; // inbound still added on top
-                                }
-                                if (currChanged) {
-                                  adjustmentsToLog.push({ field: 'current_quantity', old: exCurr, new: Number(typedCurr), reason: formData.prodAdjReason });
-                                  finalCurrQty = Number(typedCurr) + inboundQty;
-                                }
-                              }
-                            }
-
-                            if (inboundQty === 0 && adjustmentsToLog.length === 0) {
-                              alert('Nothing to save. Enter an Inbound Quantity, or (if you have the "Adjust Inventory Quantities" permission) change Original/Current with a reason.');
-                              return;
-                            }
-                          }
-
-                          const costData = {
-                            purchase_cost: Number(formData.prodPurchaseCost) || 0, purchase_currency: formData.prodPurchaseCurr || 'USD',
-                            customs_cost: Number(formData.prodCustomsCost) || 0, customs_currency: formData.prodCustomsCurr || 'EGP',
-                            shipping_cost: Number(formData.prodShippingCost) || 0, shipping_currency: formData.prodShippingCurr || 'USD',
-                            other_cost: Number(formData.prodOtherCost) || 0, other_currency: formData.prodOtherCurr || 'EGP',
-                            fx_rate: Number(formData.prodFxRate) || 50,
-                          };
-
-                          // Upload photo if selected
-                          let photoUrl = '';
-                          const fileInput = document.getElementById('prod-photo');
-                          if (fileInput && fileInput.files && fileInput.files[0]) {
-                            const file = fileInput.files[0];
-                            const ext = file.name.split('.').pop();
-                            const fileName = 'product-' + Date.now() + '.' + ext;
-                            const { data: uploadData, error: uploadErr } = await supabase.storage.from('product-photos').upload(fileName, file);
-                            if (!uploadErr && uploadData) {
-                              const { data: urlData } = supabase.storage.from('product-photos').getPublicUrl(fileName);
-                              photoUrl = urlData?.publicUrl || '';
-                            }
-                          }
-
-                          // Record the inbound (only if there IS an inbound this time)
-                          if (inboundQty > 0) {
-                            await dbInsert('inventory_inbounds', {
-                              product_id: formData.prodId || '',
-                              reference_number: formData.prodShipment || '',
-                              shipment_reference: formData.prodShipment || '',
-                              inbound_date: formData.prodDate || today(),
-                              quantity: inboundQty,
-                              unit_price: Number(formData.prodPrice) || 0,
-                              ...costData,
-                              notes: formData.prodDescEn || formData.prodDesc || '',
-                            }, userProfile?.id);
-                          }
-
-                          if (existingProduct) {
-                            // AGGREGATE: weighted-average costs exactly like before
-                            const toEgp = (amt, curr, fx) => curr === 'USD' ? amt * fx : amt;
-                            const oldFx = Number(existingProduct.fx_rate) || 50;
-                            const newFx = costData.fx_rate;
-                            const oldTotal = toEgp(Number(existingProduct.purchase_cost)||0, existingProduct.purchase_currency, oldFx);
-                            const newTotal = toEgp(costData.purchase_cost, costData.purchase_currency, newFx);
-                            const avgPurchase = (Number(existingProduct.original_quantity) || 0) + inboundQty > 0 ? (oldTotal + newTotal) / 2 : 0;
-                            const oldCustoms = toEgp(Number(existingProduct.customs_cost)||0, existingProduct.customs_currency, oldFx);
-                            const newCustoms = toEgp(costData.customs_cost, costData.customs_currency, newFx);
-                            const avgCustoms = (Number(existingProduct.original_quantity) || 0) + inboundQty > 0 ? (oldCustoms + newCustoms) / 2 : 0;
-
-                            await dbUpdate('inventory', existingProduct.id, {
-                              original_quantity: finalOrigQty,
-                              current_quantity: finalCurrQty,
-                              purchase_cost: Math.round(avgPurchase * 100) / 100,
-                              purchase_currency: 'EGP',
-                              customs_cost: Math.round(avgCustoms * 100) / 100,
-                              customs_currency: 'EGP',
-                              shipping_cost: (Number(existingProduct.shipping_cost)||0) + costData.shipping_cost,
-                              other_cost: (Number(existingProduct.other_cost)||0) + costData.other_cost,
-                              fx_rate: newFx,
-                              shipment_reference: (existingProduct.shipment_reference || '') + (formData.prodShipment ? ', ' + formData.prodShipment : ''),
-                              ...(photoUrl ? { photo_url: photoUrl } : {}),
-                            }, userProfile?.id);
-
-                            // Log any super-admin adjustments to the journal
-                            for (const adj of adjustmentsToLog) {
-                              try {
-                                await dbInsert('inventory_adjustments', {
-                                  product_id: formData.prodId,
-                                  field: adj.field,
-                                  old_value: adj.old,
-                                  new_value: adj.new,
-                                  reason: adj.reason,
-                                  source: 'manual',
-                                  adjusted_by: userProfile?.id || null,
-                                }, userProfile?.id);
-                              } catch (adjErr) {
-                                console.warn('[adjustment-log] failed — run S20 SQL if missing', adjErr?.message);
-                              }
-                            }
-
-                            alert('✅ Added ' + inboundQty + ' to existing product ' + formData.prodId + ' (now ' + finalCurrQty + ' total)' + (adjustmentsToLog.length ? ' — ' + adjustmentsToLog.length + ' adjustment(s) logged.' : ''));
-                          } else {
-                            // NEW product
-                            const record = {
-                              product_id: formData.prodId || '', reference_number: formData.prodShipment || '',
-                              shipment_reference: formData.prodShipment || '', product_type: formData.prodType || '',
-                              subcategory: formData.prodSubcat || '',
-                              description: formData.prodDesc || '', description_en: formData.prodDescEn || '',
-                              color: formData.prodColor || '', color_en: formData.prodColorEn || '',
-                              roll_count: Number(formData.prodRolls) || 0, gross_weight: Number(formData.prodGross) || 0,
-                              net_weight: Number(formData.prodNet) || 0, unit_price: Number(formData.prodPrice) || 0,
-                              // S22.11 — UoM + linear density (for P&L normalization)
-                              uom: formData.prodUom || null,
-                              linear_density_g_per_m: Number(formData.prodLinearDensity) || null,
-                              original_quantity: finalOrigQty, current_quantity: finalCurrQty,
-                              ...costData,
-                              ...(photoUrl ? { photo_url: photoUrl } : {}),
-                            };
-                            // S22.11 — Defensive: if the DB doesn't yet have
-                            // the new columns, retry without them so the save
-                            // still works on older schemas. User just won't see
-                            // per-m/per-yd math until they run the S22 SQL.
-                            try {
-                              await dbInsert('inventory', record, user?.id);
-                            } catch (colErr) {
-                              if (String(colErr.message || '').match(/column.*uom|column.*linear_density/i)) {
-                                console.warn('[inventory] new columns missing — run s22_inventory_uom.sql. Saving without.');
-                                delete record.uom;
-                                delete record.linear_density_g_per_m;
-                                await dbInsert('inventory', record, user?.id);
-                              } else {
-                                throw colErr;
-                              }
-                            }
-                          }
-                          setFormData({});
-                          await loadAllData();
-                        } catch (err) { toast.error(err.message); }
-                      }} className="flex-1 py-3 rounded-xl text-sm font-bold text-white"
-                        style={{background:'linear-gradient(135deg, #10b981, #059669)'}}>
-                        Save / حفظ
-                      </button>
-                      <button onClick={() => setFormData({})} className="px-5 py-3 rounded-xl text-sm border border-slate-200">Cancel</button>
-                    </div>
-                  </div>
-                </div>
-              </div>
-            )}
-
-            {/* Product Detail Modal */}
-            {formData.selectedProduct && (() => {
-              const p = formData.selectedProduct;
-              const origQty = Number(p.original_quantity || p.roll_count || 0);
-              const currQty = Number(p.current_quantity || p.roll_count || 0);
-              const usedPct = origQty > 0 ? Math.round(((origQty - currQty) / origQty) * 100) : 0;
-              return (
-                <div className="fixed inset-0 bg-black/60 z-50 flex items-start justify-center overflow-auto p-4" onClick={e => { if (e.target === e.currentTarget) setFormData({...formData, selectedProduct: null}); }}>
-                  <div className="bg-white rounded-2xl shadow-2xl w-full max-w-[600px] my-8 overflow-hidden">
-                    {/* Photo header */}
-                    {p.photo_url ? (
-                      <div className="h-48 overflow-hidden relative">
-                        <img src={p.photo_url} alt="" className="w-full h-full object-cover" />
-                        <button onClick={() => setFormData({...formData, selectedProduct: null})}
-                          className="absolute top-3 right-3 w-8 h-8 bg-black/50 rounded-full text-white flex items-center justify-center">✕</button>
-                      </div>
-                    ) : (
-                      <div className="bg-gradient-to-r from-indigo-600 to-purple-600 px-5 py-4 flex justify-between items-center">
-                        <h3 className="text-white font-bold">{p.reference_number || p.product_id}</h3>
-                        <button onClick={() => setFormData({...formData, selectedProduct: null})} className="text-white/70 text-xl">✕</button>
-                      </div>
-                    )}
-                    <div className="p-5 space-y-3">
-                      {/* Upload photo for existing product */}
-                      {!p.photo_url && (
-                        <div className="flex gap-2 items-center">
-                          <input type="file" accept="image/*" id="prod-photo-edit" className="text-xs flex-1" />
-                          <button onClick={async () => {
-                            const fi = document.getElementById('prod-photo-edit');
-                            if (!fi?.files?.[0]) return;
-                            const file = fi.files[0];
-                            const fileName = 'product-' + Date.now() + '.' + file.name.split('.').pop();
-                            const { data: ud, error: ue } = await supabase.storage.from('product-photos').upload(fileName, file);
-                            if (!ue && ud) {
-                              const { data: url } = supabase.storage.from('product-photos').getPublicUrl(fileName);
-                              await dbUpdate('inventory', p.id, { photo_url: url?.publicUrl || '' }, user?.id);
-                              setFormData({...formData, selectedProduct: {...p, photo_url: url?.publicUrl}});
-                              await loadAllData();
-                            } else { alert('Upload error: ' + (ue?.message || 'unknown')); }
-                          }} className="px-3 py-1.5 bg-blue-500 text-white rounded text-xs font-bold">📷 Upload</button>
-                        </div>
-                      )}
-                      {/* Category pills */}
-                      <div className="flex gap-2 flex-wrap">
-                        {p.product_type && <span className="px-2 py-1 bg-indigo-100 text-indigo-700 rounded-lg text-xs font-bold">{p.product_type}</span>}
-                        {p.subcategory && <span className="px-2 py-1 bg-amber-100 text-amber-900 rounded-lg text-xs font-bold">{p.subcategory}</span>}
-                      </div>
-                      <div>
-                        <div className="text-lg font-bold">{p.reference_number || p.product_id}</div>
-                        <div className="text-sm text-slate-600" style={{direction:'rtl'}}>{p.description}</div>
-                        {p.description_en && <div className="text-sm text-blue-600">{p.description_en}</div>}
-                        {p.color && <div className="text-xs text-slate-400 mt-1">🎨 {p.color}{p.color_en ? ' / ' + p.color_en : ''}</div>}
-                      </div>
-                      {/* Quantity tracking */}
-                      <div className="bg-slate-50 rounded-xl p-4">
-                        <div className="flex justify-between mb-2">
-                          <div><div className="text-[9px] text-slate-400">Original</div><div className="text-lg font-bold text-blue-600">{origQty.toLocaleString()}</div></div>
-                          <div className="text-center"><div className="text-[9px] text-slate-400">Used</div><div className="text-lg font-bold text-red-500">{(origQty - currQty).toLocaleString()}</div></div>
-                          <div className="text-right"><div className="text-[9px] text-slate-400">Remaining</div><div className="text-lg font-bold text-emerald-600">{currQty.toLocaleString()}</div></div>
-                        </div>
-                        <div className="h-3 bg-slate-200 rounded-full overflow-hidden">
-                          <div className="h-full rounded-full transition-all" style={{width: Math.max(3, 100 - usedPct) + '%', background: usedPct > 80 ? '#ef4444' : usedPct > 50 ? '#f59e0b' : '#10b981'}} />
-                        </div>
-                        <div className="text-[10px] text-slate-400 text-center mt-1">{usedPct}% used</div>
-                      </div>
-                      <div className="grid grid-cols-3 gap-2">
-                        <div className="bg-blue-50 rounded-lg p-2 text-center"><div className="text-[9px] text-slate-500">Rolls</div><div className="text-sm font-bold">{p.roll_count}</div></div>
-                        <div className="bg-emerald-50 rounded-lg p-2 text-center"><div className="text-[9px] text-slate-500">Net Weight</div><div className="text-sm font-bold">{fmt(p.net_weight)} kg</div></div>
-                        <div className="bg-purple-50 rounded-lg p-2 text-center"><div className="text-[9px] text-slate-500">Unit Price</div><div className="text-sm font-bold text-emerald-600">{fE(p.unit_price)}</div></div>
-                      </div>
-                      {/* Update current quantity */}
-                      <div className="flex gap-2 items-center bg-amber-50 rounded-lg p-3">
-                        <span className="text-xs font-bold text-amber-900">Update Qty:</span>
-                        <input type="number" id="update-qty" defaultValue={currQty} className="flex-1 px-2 py-1.5 rounded border text-sm" />
-                        <button onClick={async () => {
-                          const val = Number(document.getElementById('update-qty')?.value);
-                          if (isNaN(val)) return;
-                          await dbUpdate('inventory', p.id, { current_quantity: val }, user?.id);
-                          setFormData({...formData, selectedProduct: {...p, current_quantity: val}});
-                          await loadAllData();
-                        }} className="px-3 py-1.5 bg-amber-500 text-white rounded text-xs font-bold">Save</button>
-                      </div>
-                      {/* ===== COST & PROFIT (Super Admin / View Costs permission) ===== */}
-                      {(userProfile?.role === 'super_admin' || modulePerms?.['View Costs'] === true) && (
-                        <div className="bg-red-50/50 rounded-xl p-4 border border-red-200/50">
-                          <h4 className="text-xs font-bold text-red-800 mb-2">🔒 Cost & Profit (Internal)</h4>
-                          <div className="grid grid-cols-2 gap-2 mb-3">
-                            <div>
-                              <label className="text-[9px] font-bold text-slate-500">Purchase Cost</label>
-                              <div className="flex gap-1">
-                                <input type="number" id="cost-purchase" defaultValue={p.purchase_cost || ''} placeholder="0.00" className="flex-1 px-2 py-1.5 rounded border text-sm" />
-                                <select id="cost-purchase-curr" defaultValue={p.purchase_currency || 'USD'} className="px-2 py-1.5 rounded border text-xs w-16">
-                                  <option value="USD">USD</option><option value="EGP">EGP</option></select>
-                              </div>
-                            </div>
-                            <div>
-                              <label className="text-[9px] font-bold text-slate-500">Customs / Duties</label>
-                              <div className="flex gap-1">
-                                <input type="number" id="cost-customs" defaultValue={p.customs_cost || ''} placeholder="0.00" className="flex-1 px-2 py-1.5 rounded border text-sm" />
-                                <select id="cost-customs-curr" defaultValue={p.customs_currency || 'EGP'} className="px-2 py-1.5 rounded border text-xs w-16">
-                                  <option value="USD">USD</option><option value="EGP">EGP</option></select>
-                              </div>
-                            </div>
-                            <div>
-                              <label className="text-[9px] font-bold text-slate-500">Shipping & Freight</label>
-                              <div className="flex gap-1">
-                                <input type="number" id="cost-shipping" defaultValue={p.shipping_cost || ''} placeholder="0.00" className="flex-1 px-2 py-1.5 rounded border text-sm" />
-                                <select id="cost-shipping-curr" defaultValue={p.shipping_currency || 'USD'} className="px-2 py-1.5 rounded border text-xs w-16">
-                                  <option value="USD">USD</option><option value="EGP">EGP</option></select>
-                              </div>
-                            </div>
-                            <div>
-                              <label className="text-[9px] font-bold text-slate-500">Other Charges</label>
-                              <div className="flex gap-1">
-                                <input type="number" id="cost-other" defaultValue={p.other_cost || ''} placeholder="0.00" className="flex-1 px-2 py-1.5 rounded border text-sm" />
-                                <select id="cost-other-curr" defaultValue={p.other_currency || 'EGP'} className="px-2 py-1.5 rounded border text-xs w-16">
-                                  <option value="USD">USD</option><option value="EGP">EGP</option></select>
-                              </div>
-                            </div>
-                            <div>
-                              <label className="text-[9px] font-bold text-slate-500">FX Rate (USD→EGP)</label>
-                              <input type="number" id="cost-fx" defaultValue={p.fx_rate || 50} step="0.01" className="w-full px-2 py-1.5 rounded border text-sm" />
-                            </div>
-                            <div>
-                              <label className="text-[9px] font-bold text-slate-500">Sale Price (per unit)</label>
-                              <div className="flex gap-1">
-                                <input type="number" id="cost-sale" defaultValue={p.unit_price || ''} className="flex-1 px-2 py-1.5 rounded border text-sm bg-emerald-50" disabled />
-                                <span className="px-2 py-1.5 text-xs text-slate-500">EGP</span>
-                              </div>
-                            </div>
-                          </div>
-                          <button onClick={async () => {
-                            const costs = {
-                              purchase_cost: Number(document.getElementById('cost-purchase')?.value) || 0,
-                              purchase_currency: document.getElementById('cost-purchase-curr')?.value || 'USD',
-                              customs_cost: Number(document.getElementById('cost-customs')?.value) || 0,
-                              customs_currency: document.getElementById('cost-customs-curr')?.value || 'EGP',
-                              shipping_cost: Number(document.getElementById('cost-shipping')?.value) || 0,
-                              shipping_currency: document.getElementById('cost-shipping-curr')?.value || 'USD',
-                              other_cost: Number(document.getElementById('cost-other')?.value) || 0,
-                              other_currency: document.getElementById('cost-other-curr')?.value || 'EGP',
-                              fx_rate: Number(document.getElementById('cost-fx')?.value) || 50,
-                            };
-                            try {
-                              await dbUpdate('inventory', p.id, costs, user?.id);
-                              setFormData({...formData, selectedProduct: {...p, ...costs}});
-                              await loadAllData();
-                            } catch (err) { toast.error(err.message); }
-                          }} className="px-4 py-2 bg-red-600 text-white rounded-lg text-xs font-bold w-full mb-3">Save Costs</button>
-
-                          {/* Profit Calculation */}
-                          {(() => {
-                            const fx = Number(p.fx_rate) || 50;
-                            const toEGP = (amt, curr) => curr === 'USD' ? amt * fx : amt;
-                            const toUSD = (amt, curr) => curr === 'EGP' ? amt / fx : amt;
-                            const purchaseEGP = toEGP(Number(p.purchase_cost || 0), p.purchase_currency || 'USD');
-                            const customsEGP = toEGP(Number(p.customs_cost || 0), p.customs_currency || 'EGP');
-                            const shippingEGP = toEGP(Number(p.shipping_cost || 0), p.shipping_currency || 'USD');
-                            const otherEGP = toEGP(Number(p.other_cost || 0), p.other_currency || 'EGP');
-                            const totalCostEGP = purchaseEGP + customsEGP + shippingEGP + otherEGP;
-                            const totalCostUSD = totalCostEGP / fx;
-                            const salesEGP = Number(p.unit_price || 0) * origQty;
-                            const linkedInvs = invoiceItems.filter(it => (it.description||'').includes(p.description)||(it.description||'').includes(p.reference_number));
-                            const actualSalesEGP = linkedInvs.reduce((a, it) => a + Number(it.line_total || 0), 0);
-                            const profitEGP = (actualSalesEGP || salesEGP) - totalCostEGP;
-                            const profitUSD = profitEGP / fx;
-                            const margin = (actualSalesEGP || salesEGP) > 0 ? (profitEGP / (actualSalesEGP || salesEGP) * 100).toFixed(1) : 0;
-                            return (
-                              <div className="bg-white rounded-lg p-3 border">
-                                <div className="grid grid-cols-2 gap-2 mb-2">
-                                  <div className="text-center"><div className="text-[9px] text-slate-400">Total Cost</div>
-                                    <div className="text-sm font-bold text-red-600">{fE(totalCostEGP)}</div>
-                                    <div className="text-[9px] text-slate-400">${totalCostUSD.toLocaleString(undefined,{maximumFractionDigits:2})} USD</div></div>
-                                  <div className="text-center"><div className="text-[9px] text-slate-400">Revenue</div>
-                                    <div className="text-sm font-bold text-blue-600">{fE(actualSalesEGP || salesEGP)}</div>
-                                    <div className="text-[9px] text-slate-400">{actualSalesEGP > 0 ? 'From invoices' : 'Estimated'}</div></div>
-                                </div>
-                                <div className={'rounded-lg p-3 text-center ' + (profitEGP >= 0 ? 'bg-emerald-50' : 'bg-red-50')}>
-                                  <div className="text-[9px] text-slate-400">Profit / الربح</div>
-                                  <div className={'text-lg font-extrabold ' + (profitEGP >= 0 ? 'text-emerald-600' : 'text-red-600')}>{fE(profitEGP)}</div>
-                                  <div className="text-xs text-slate-500">${profitUSD.toLocaleString(undefined,{maximumFractionDigits:2})} USD · {margin}% margin</div>
-                                </div>
-
-                                {/* S22.11 (Apr 23 2026) — Apples-to-apples normalization.
-                                    Max: "P&L should show per kg and per ton, and we should
-                                    know how to make it apples-to-apples — could be billed
-                                    by kg, ton, yard, or meter. Also a conversion for
-                                    yards/meters understanding the cost in weight."
-                                    We express the totals in as many units as we can derive:
-                                      - /kg and /ton use net_weight
-                                      - /m uses net_weight + linear_density_g_per_m
-                                      - /yd uses the /m value × 0.9144
-                                    Missing inputs → that row is hidden (not zero-divided).
-                                    Uses origQty as the denominator for per-unit and the
-                                    total net weight (origQty × net_weight_per_unit) for
-                                    /kg /ton. */}
-                                {(() => {
-                                  const netWeightPerUnit = Number(p.net_weight || 0);
-                                  const totalKg = netWeightPerUnit * origQty;
-                                  const totalTon = totalKg / 1000;
-                                  const linearDensityGperM = Number(p.linear_density_g_per_m || 0);
-                                  // Meters per unit = weight per unit (kg) / (g/m) × 1000
-                                  const metersPerUnit = linearDensityGperM > 0 && netWeightPerUnit > 0
-                                    ? (netWeightPerUnit * 1000) / linearDensityGperM
-                                    : 0;
-                                  const totalMeters = metersPerUnit * origQty;
-                                  const totalYards = totalMeters / 0.9144;
-                                  const revenueEGP = actualSalesEGP || salesEGP;
-                                  const rows = [];
-                                  // Per unit (always available as long as qty > 0)
-                                  if (origQty > 0) {
-                                    rows.push({
-                                      label: 'Per unit',
-                                      sub: p.uom ? ('(' + p.uom + ')') : '',
-                                      cost: totalCostEGP / origQty,
-                                      rev: revenueEGP / origQty,
-                                      profit: profitEGP / origQty,
-                                    });
-                                  }
-                                  if (totalKg > 0) {
-                                    rows.push({
-                                      label: 'Per kg',
-                                      sub: totalKg.toLocaleString(undefined,{maximumFractionDigits:1}) + ' kg',
-                                      cost: totalCostEGP / totalKg,
-                                      rev: revenueEGP / totalKg,
-                                      profit: profitEGP / totalKg,
-                                    });
-                                  }
-                                  if (totalTon > 0.01) {
-                                    rows.push({
-                                      label: 'Per ton',
-                                      sub: totalTon.toLocaleString(undefined,{maximumFractionDigits:3}) + ' ton',
-                                      cost: totalCostEGP / totalTon,
-                                      rev: revenueEGP / totalTon,
-                                      profit: profitEGP / totalTon,
-                                    });
-                                  }
-                                  if (totalMeters > 0) {
-                                    rows.push({
-                                      label: 'Per meter',
-                                      sub: totalMeters.toLocaleString(undefined,{maximumFractionDigits:1}) + ' m',
-                                      cost: totalCostEGP / totalMeters,
-                                      rev: revenueEGP / totalMeters,
-                                      profit: profitEGP / totalMeters,
-                                    });
-                                  }
-                                  if (totalYards > 0) {
-                                    rows.push({
-                                      label: 'Per yard',
-                                      sub: totalYards.toLocaleString(undefined,{maximumFractionDigits:1}) + ' yd',
-                                      cost: totalCostEGP / totalYards,
-                                      rev: revenueEGP / totalYards,
-                                      profit: profitEGP / totalYards,
-                                    });
-                                  }
-                                  if (rows.length === 0) return null;
-                                  return (
-                                    <div className="mt-2 pt-2 border-t border-slate-200">
-                                      <div className="text-[9px] font-bold text-slate-500 mb-1">📏 Apples-to-Apples (per unit of measure)</div>
-                                      {netWeightPerUnit === 0 && (
-                                        <div className="text-[9px] text-amber-600 mb-1">⚠ Set Net Weight on this product to unlock /kg and /ton views.</div>
-                                      )}
-                                      {linearDensityGperM === 0 && netWeightPerUnit > 0 && (
-                                        <div className="text-[9px] text-slate-400 mb-1">ℹ To see /meter and /yard, set "Linear Density (g/m)" on the product — converts length ↔ weight.</div>
-                                      )}
-                                      <table className="w-full text-[10px] border-collapse">
-                                        <thead>
-                                          <tr className="text-slate-400 text-[9px] uppercase">
-                                            <th className="text-left py-1">Basis</th>
-                                            <th className="text-right py-1">Cost</th>
-                                            <th className="text-right py-1">Revenue</th>
-                                            <th className="text-right py-1">Profit</th>
-                                          </tr>
-                                        </thead>
-                                        <tbody>
-                                          {rows.map(r => (
-                                            <tr key={r.label} className="border-t border-slate-100">
-                                              <td className="py-1">
-                                                <div className="font-semibold">{r.label}</div>
-                                                {r.sub && <div className="text-[9px] text-slate-400">{r.sub}</div>}
-                                              </td>
-                                              <td className="text-right text-red-600 font-semibold py-1">{fE(r.cost)}</td>
-                                              <td className="text-right text-blue-600 font-semibold py-1">{fE(r.rev)}</td>
-                                              <td className={'text-right font-bold py-1 ' + (r.profit >= 0 ? 'text-emerald-600' : 'text-red-600')}>{fE(r.profit)}</td>
-                                            </tr>
-                                          ))}
-                                        </tbody>
-                                      </table>
-                                    </div>
-                                  );
-                                })()}
-
-                                {/* Customs Cost/kg per Inbound Reference */}
-                                {(() => {
-                                  const shipRefs = [...new Set([p.shipment_reference, ...invInbounds.filter(ib => ib.product_id === p.product_id).map(ib => ib.shipment_reference)].filter(Boolean).flatMap(s => s.split(',').map(x => x.trim())).filter(Boolean))];
-                                  if (shipRefs.length === 0) return null;
-                                  return (
-                                    <div className="mt-2 pt-2 border-t border-slate-200">
-                                      <div className="text-[9px] font-bold text-slate-500 mb-1">Customs Cost/kg per Inbound Reference</div>
-                                      {shipRefs.map(ref => {
-                                        // All products with this shipment reference
-                                        const prodsInShipment = inventory.filter(pr => (pr.shipment_reference || '').includes(ref));
-                                        const inboundsInShipment = invInbounds.filter(ib => (ib.shipment_reference || '').includes(ref));
-                                        // Total customs from inventory records
-                                        const totalCustomsInv = prodsInShipment.reduce((a, pr) => {
-                                          const f = Number(pr.fx_rate) || 50;
-                                          return a + ((pr.customs_currency || 'EGP') === 'USD' ? Number(pr.customs_cost || 0) * f : Number(pr.customs_cost || 0));
-                                        }, 0);
-                                        // Total customs from inbounds
-                                        const totalCustomsIb = inboundsInShipment.reduce((a, ib) => {
-                                          const f = Number(ib.fx_rate) || 50;
-                                          return a + ((ib.customs_currency || 'EGP') === 'USD' ? Number(ib.customs_cost || 0) * f : Number(ib.customs_cost || 0));
-                                        }, 0);
-                                        const totalCustoms = Math.max(totalCustomsInv, totalCustomsIb);
-                                        // Total weight from products
-                                        const totalKg = prodsInShipment.reduce((a, pr) => a + Number(pr.net_weight || pr.gross_weight || 0), 0);
-                                        const costPerKg = totalKg > 0 ? totalCustoms / totalKg : 0;
-                                        // This product's weight
-                                        const thisKg = Number(p.net_weight || p.gross_weight || 0);
-                                        const thisCustomsShare = thisKg > 0 ? costPerKg * thisKg : 0;
-                                        return (
-                                          <div key={ref} className="flex justify-between text-[10px] py-1 border-b border-slate-50">
-                                            <span className="font-semibold text-blue-600">{ref}</span>
-                                            <div className="flex gap-3 text-right">
-                                              <span className="text-slate-500">{totalKg.toLocaleString()} kg</span>
-                                              <span className="text-amber-600">Customs: {fE(totalCustoms)}</span>
-                                              <span className="font-bold text-purple-600">{fE(costPerKg)}/kg</span>
-                                              {thisKg > 0 && <span className="text-red-500">This: {fE(thisCustomsShare)}</span>}
-                                            </div>
-                                          </div>
-                                        );
-                                      })}
-                                    </div>
-                                  );
-                                })()}
-                                <div className="grid grid-cols-4 gap-1 mt-2 text-center">
-                                  <div><div className="text-[8px] text-slate-400">Purchase</div><div className="text-[10px] font-bold">{fE(purchaseEGP)}</div></div>
-                                  <div><div className="text-[8px] text-slate-400">Customs</div><div className="text-[10px] font-bold">{fE(customsEGP)}</div></div>
-                                  <div><div className="text-[8px] text-slate-400">Shipping</div><div className="text-[10px] font-bold">{fE(shippingEGP)}</div></div>
-                                  <div><div className="text-[8px] text-slate-400">Other</div><div className="text-[10px] font-bold">{fE(otherEGP)}</div></div>
-                                </div>
-                              </div>
-                            );
-                          })()}
-                        </div>
-                      )}
-                      {/* Linked Invoices */}
-                      <h4 className="text-xs font-bold">Linked Invoices</h4>
-                      <div className="overflow-auto max-h-[200px] rounded border border-slate-200">
-                        {invoiceItems.filter(it => (it.description||'').includes(p.description)||(it.description||'').includes(p.reference_number)).length > 0 ? (
-                          <table className="w-full border-collapse">
-                            <thead><tr className="bg-slate-50">
-                              <th className="px-2 py-1 text-[10px] text-left">Invoice</th>
-                              <th className="px-2 py-1 text-[10px] text-right">Qty</th>
-                              <th className="px-2 py-1 text-[10px] text-right">Price</th>
-                              <th className="px-2 py-1 text-[10px] text-right">Total</th>
-                            </tr></thead>
-                            <tbody>
-                              {invoiceItems.filter(it => (it.description||'').includes(p.description)||(it.description||'').includes(p.reference_number)).map(it => {
-                                const inv = invoices.find(i => i.id === it.invoice_id);
-                                return (
-                                  <tr key={it.id} className="border-b border-slate-50 cursor-pointer hover:bg-blue-50"
-                                    onClick={() => { if (inv) { setFormData({...formData, selectedProduct: null}); setSelectedInvoice(inv); } }}>
-                                    <td className="px-2 py-1 text-xs font-semibold">{inv ? '#'+inv.order_number : '—'}</td>
-                                    <td className="px-2 py-1 text-xs text-right">{fmt(it.quantity)}</td>
-                                    <td className="px-2 py-1 text-xs text-right">{fmt(it.unit_price)}</td>
-                                    <td className="px-2 py-1 text-xs text-right font-semibold">{fE(it.line_total)}</td>
-                                  </tr>
-                                );
-                              })}
-                            </tbody>
-                          </table>
-                        ) : (<div className="px-3 py-4 text-xs text-slate-400 text-center">No linked invoices</div>)}
-                      </div>
-                      
-                      {/* S20.2 — Per-Shipment Original Quantity breakdown.
-                          Max's ask: remember what ORIGINALLY arrived in each shipment
-                          for this product. The product-level "overall value" still
-                          lives in inventory.original_quantity; this panel uses the
-                          immutable inventory_inbounds rows as the source of truth
-                          for per-shipment originals. "Estimated remaining" is a
-                          FIFO allocation against the product's current_quantity —
-                          it's an estimate because we don't track which shipment a
-                          unit was sold from. */}
-                      {(() => {
-                        const inbs = invInbounds
-                          .filter(ib => ib.product_id === p.product_id)
-                          .sort((a, b) => (a.inbound_date || '').localeCompare(b.inbound_date || ''));
-                        if (inbs.length === 0) return null;
-                        // Group by shipment_reference. Multiple inbounds for the same
-                        // shipment reference collapse into one row (summed original qty).
-                        const groups = {};
-                        inbs.forEach(ib => {
-                          const key = ib.shipment_reference || '(no shipment ref)';
-                          if (!groups[key]) groups[key] = {
-                            shipment: key,
-                            originalQty: 0,
-                            firstDate: ib.inbound_date,
-                            lastDate: ib.inbound_date,
-                            rows: [],
-                          };
-                          groups[key].originalQty += Number(ib.quantity || 0);
-                          if ((ib.inbound_date || '') < (groups[key].firstDate || '9999')) groups[key].firstDate = ib.inbound_date;
-                          if ((ib.inbound_date || '') > (groups[key].lastDate || '')) groups[key].lastDate = ib.inbound_date;
-                          groups[key].rows.push(ib);
-                        });
-                        const ordered = Object.values(groups).sort((a, b) => (a.firstDate || '').localeCompare(b.firstDate || ''));
-                        // FIFO remaining: current_quantity is the product-wide running
-                        // total. Allocate it from newest shipment backward — newest
-                        // shipments are "still in stock" first, older shipments are
-                        // "sold down" first. This matches how traders typically think
-                        // about it but is a heuristic.
-                        let remainingBudget = Number(p.current_quantity || 0);
-                        // Allocate newest-first → iterate reverse
-                        for (let i = ordered.length - 1; i >= 0; i--) {
-                          const g = ordered[i];
-                          if (remainingBudget <= 0) { g.estimatedRemaining = 0; continue; }
-                          if (remainingBudget >= g.originalQty) {
-                            g.estimatedRemaining = g.originalQty;
-                            remainingBudget -= g.originalQty;
-                          } else {
-                            g.estimatedRemaining = remainingBudget;
-                            remainingBudget = 0;
-                          }
-                        }
-                        return (
-                          <div className="mt-3 pt-3 border-t border-slate-200">
-                            <h4 className="text-xs font-bold mb-1">📦 Per-Shipment Original Quantity ({ordered.length})</h4>
-                            <div className="text-[10px] text-slate-500 mb-2">
-                              Each shipment's original quantity is locked to what arrived — it never changes. "Est. remaining" is a newest-first estimate of how much of each shipment is still in stock (based on the product's current quantity).
-                            </div>
-                            <div className="overflow-auto max-h-[220px] rounded border border-slate-200">
-                              <table className="w-full border-collapse text-[10px]">
-                                <thead className="sticky top-0"><tr className="bg-indigo-50">
-                                  <th className="px-2 py-1 text-left">Shipment</th>
-                                  <th className="px-2 py-1 text-left">Arrived</th>
-                                  <th className="px-2 py-1 text-right">Original Qty</th>
-                                  <th className="px-2 py-1 text-right">Est. Remaining</th>
-                                  <th className="px-2 py-1 text-right">Est. Sold</th>
-                                  <th className="px-2 py-1 text-right">% left</th>
-                                </tr></thead>
-                                <tbody>
-                                  {ordered.map(g => {
-                                    const sold = Math.max(0, g.originalQty - (g.estimatedRemaining || 0));
-                                    const pct = g.originalQty > 0 ? Math.round((g.estimatedRemaining || 0) / g.originalQty * 100) : 0;
-                                    return (
-                                      <tr key={g.shipment} className="border-b border-slate-50">
-                                        <td className="px-2 py-1 text-blue-600 font-semibold">{g.shipment}</td>
-                                        <td className="px-2 py-1 text-slate-600">
-                                          {g.firstDate}
-                                          {g.firstDate !== g.lastDate && <span className="text-slate-400"> → {g.lastDate}</span>}
-                                        </td>
-                                        <td className="px-2 py-1 text-right font-bold text-indigo-700">{g.originalQty.toLocaleString()}</td>
-                                        <td className="px-2 py-1 text-right text-emerald-600 font-semibold">{(g.estimatedRemaining || 0).toLocaleString()}</td>
-                                        <td className="px-2 py-1 text-right text-slate-500">{sold.toLocaleString()}</td>
-                                        <td className={'px-2 py-1 text-right font-bold ' + (pct >= 75 ? 'text-emerald-600' : pct >= 25 ? 'text-amber-600' : 'text-red-600')}>{pct}%</td>
-                                      </tr>
-                                    );
-                                  })}
-                                  <tr className="bg-slate-50 border-t-2 border-slate-200 font-bold">
-                                    <td className="px-2 py-1.5" colSpan="2">Total across shipments</td>
-                                    <td className="px-2 py-1.5 text-right text-indigo-700">{ordered.reduce((a, g) => a + g.originalQty, 0).toLocaleString()}</td>
-                                    <td className="px-2 py-1.5 text-right text-emerald-600">{ordered.reduce((a, g) => a + (g.estimatedRemaining || 0), 0).toLocaleString()}</td>
-                                    <td className="px-2 py-1.5 text-right text-slate-500">{ordered.reduce((a, g) => a + Math.max(0, g.originalQty - (g.estimatedRemaining || 0)), 0).toLocaleString()}</td>
-                                    <td className="px-2 py-1.5 text-right text-slate-400">—</td>
-                                  </tr>
-                                </tbody>
-                              </table>
-                            </div>
-                          </div>
-                        );
-                      })()}
-
-                      {/* Inbound History */}
-                      {(() => {
-                        const inbounds = invInbounds.filter(ib => ib.product_id === p.product_id);
-                        if (inbounds.length === 0) return null;
-                        return (
-                          <div className="mt-3 pt-3 border-t border-slate-200">
-                            <h4 className="text-xs font-bold mb-2">📥 Inbound History ({inbounds.length})</h4>
-                            <div className="overflow-auto max-h-[200px] rounded border border-slate-200">
-                              <table className="w-full border-collapse text-[10px]">
-                                <thead className="sticky top-0"><tr className="bg-slate-50">
-                                  <th className="px-2 py-1 text-left">Date</th>
-                                  <th className="px-2 py-1 text-left">Shipment</th>
-                                  <th className="px-2 py-1 text-right">Qty</th>
-                                  <th className="px-2 py-1 text-right">Purchase</th>
-                                  <th className="px-2 py-1 text-right">Customs</th>
-                                  <th className="px-2 py-1 text-right">Customs/kg</th>
-                                  <th className="px-2 py-1 text-right">Total Cost</th>
-                                </tr></thead>
-                                <tbody>
-                                  {inbounds.sort((a,b) => (b.inbound_date||'').localeCompare(a.inbound_date||'')).map(ib => {
-                                    const fx = Number(ib.fx_rate) || 50;
-                                    const toEgp = (amt, curr) => curr === 'USD' ? amt * fx : amt;
-                                    const total = toEgp(Number(ib.purchase_cost)||0, ib.purchase_currency) + toEgp(Number(ib.customs_cost)||0, ib.customs_currency) + toEgp(Number(ib.shipping_cost)||0, ib.shipping_currency) + toEgp(Number(ib.other_cost)||0, ib.other_currency);
-                                    return (
-                                      <tr key={ib.id} className="border-b border-slate-50">
-                                        <td className="px-2 py-1">{ib.inbound_date}</td>
-                                        <td className="px-2 py-1 text-blue-600 font-semibold">{ib.shipment_reference || '—'}</td>
-                                        <td className="px-2 py-1 text-right font-bold">{fmt(ib.quantity)}</td>
-                                        <td className="px-2 py-1 text-right">{fE(toEgp(Number(ib.purchase_cost)||0, ib.purchase_currency))}</td>
-                                        <td className="px-2 py-1 text-right">{fE(toEgp(Number(ib.customs_cost)||0, ib.customs_currency))}</td>
-                                        <td className="px-2 py-1 text-right text-purple-600 font-semibold">{(() => {
-                                          const shipRef = ib.shipment_reference;
-                                          if (!shipRef) return '—';
-                                          const prodsInShip = inventory.filter(pr => (pr.shipment_reference || '').includes(shipRef));
-                                          const totalKg = prodsInShip.reduce((a, pr) => a + Number(pr.net_weight || pr.gross_weight || 0), 0);
-                                          const ibsInShip = invInbounds.filter(i2 => (i2.shipment_reference || '').includes(shipRef));
-                                          const totalCustoms = ibsInShip.reduce((a, i2) => { const f2 = Number(i2.fx_rate)||50; return a + ((i2.customs_currency||'EGP')==='USD'?Number(i2.customs_cost||0)*f2:Number(i2.customs_cost||0)); }, 0);
-                                          return totalKg > 0 ? fE(totalCustoms / totalKg) + '/kg' : '—';
-                                        })()}</td>
-                                        <td className="px-2 py-1 text-right font-bold text-red-600">{fE(total)}</td>
-                                      </tr>
-                                    );
-                                  })}
-                                </tbody>
-                              </table>
-                            </div>
-                          </div>
-                        );
-                      })()}
-
-                      {/* S20 — Adjustment journal for this product. Each row is a
-                          super-admin override to original_quantity or current_quantity.
-                          Immutable audit trail; never affects live values directly. */}
-                      {(() => {
-                        const adjForProd = (invAdjustments || []).filter(a => a.product_id === p.product_id);
-                        if (adjForProd.length === 0) return null;
-                        const userName = (uid) => (teamUsers || []).find(u => u.id === uid)?.name || 'Unknown';
-                        return (
-                          <div className="mt-3 pt-3 border-t border-slate-200">
-                            <h4 className="text-xs font-bold mb-2 flex items-center gap-2">
-                              🧾 Adjustment Journal ({adjForProd.length})
-                              <span className="text-[9px] font-normal text-slate-400">super-admin manual changes</span>
-                            </h4>
-                            <div className="overflow-auto max-h-[200px] rounded border border-slate-200">
-                              <table className="w-full border-collapse text-[10px]">
-                                <thead className="sticky top-0"><tr className="bg-amber-50">
-                                  <th className="px-2 py-1 text-left">When</th>
-                                  <th className="px-2 py-1 text-left">Who</th>
-                                  <th className="px-2 py-1 text-left">Field</th>
-                                  <th className="px-2 py-1 text-right">From</th>
-                                  <th className="px-2 py-1 text-right">To</th>
-                                  <th className="px-2 py-1 text-right">Δ</th>
-                                  <th className="px-2 py-1 text-left">Source</th>
-                                  <th className="px-2 py-1 text-left">Reason</th>
-                                </tr></thead>
-                                <tbody>
-                                  {adjForProd.map(a => {
-                                    const delta = Number(a.new_value || 0) - Number(a.old_value || 0);
-                                    return (
-                                      <tr key={a.id} className="border-b border-slate-50">
-                                        <td className="px-2 py-1">{a.adjusted_at ? fmtET(a.adjusted_at, 'datetime') : '—'}</td>
-                                        <td className="px-2 py-1 font-semibold text-slate-700">{userName(a.adjusted_by)}</td>
-                                        <td className="px-2 py-1">{a.field === 'original_quantity' ? 'Original Qty' : a.field === 'current_quantity' ? 'Current Qty' : a.field}</td>
-                                        <td className="px-2 py-1 text-right text-slate-500">{a.old_value}</td>
-                                        <td className="px-2 py-1 text-right font-bold">{a.new_value}</td>
-                                        <td className={'px-2 py-1 text-right font-bold ' + (delta > 0 ? 'text-emerald-600' : delta < 0 ? 'text-red-600' : 'text-slate-400')}>{delta > 0 ? '+' : ''}{delta}</td>
-                                        <td className="px-2 py-1">
-                                          <span className={'px-1.5 py-0.5 rounded text-[9px] ' + (a.source === 'import' ? 'bg-blue-100 text-blue-700' : 'bg-slate-100 text-slate-600')}>
-                                            {a.source || 'manual'}
-                                          </span>
-                                        </td>
-                                        <td className="px-2 py-1 text-slate-600 max-w-[220px] truncate" title={a.reason}>{a.reason || '—'}</td>
-                                      </tr>
-                                    );
-                                  })}
-                                </tbody>
-                              </table>
-                            </div>
-                          </div>
-                        );
-                      })()}
-                      
-                      {/* P&L Summary */}
-                      {(userProfile?.role === 'super_admin' || modulePerms?.['View Costs'] === true) && (() => {
-                        const fx = Number(p.fx_rate) || 50;
-                        const toEgp = (amt, curr) => curr === 'USD' ? amt * fx : amt;
-                        const totalCost = toEgp(Number(p.purchase_cost)||0, p.purchase_currency) + toEgp(Number(p.customs_cost)||0, p.customs_currency) + toEgp(Number(p.shipping_cost)||0, p.shipping_currency) + toEgp(Number(p.other_cost)||0, p.other_currency);
-                        const linkedItems = invoiceItems.filter(it => it.product_id === p.id);
-                        const totalRevenue = linkedItems.reduce((a, it) => a + Number(it.line_total || 0), 0);
-                        const profit = totalRevenue - totalCost;
-                        const margin = totalRevenue > 0 ? Math.round((profit / totalRevenue) * 100) : 0;
-                        const inbounds = invInbounds.filter(ib => ib.product_id === p.product_id);
-                        const shipments = [...new Set([p.shipment_reference, ...inbounds.map(ib => ib.shipment_reference)].filter(Boolean).flatMap(s => s.split(',').map(x => x.trim())).filter(Boolean))];
-                        
-                        return (
-                          <div className="mt-3 pt-3 border-t border-red-200">
-                            <h4 className="text-xs font-bold text-red-700 mb-2">📊 P&L Summary</h4>
-                            <div className="grid grid-cols-4 gap-2 mb-2">
-                              <div className="bg-red-50 rounded p-2 text-center">
-                                <div className="text-[8px] text-red-500">Total Cost</div>
-                                <div className="text-xs font-extrabold text-red-600">{fE(totalCost)}</div>
-                              </div>
-                              <div className="bg-blue-50 rounded p-2 text-center">
-                                <div className="text-[8px] text-blue-500">Revenue</div>
-                                <div className="text-xs font-extrabold text-blue-600">{fE(totalRevenue)}</div>
-                              </div>
-                              <div className={'rounded p-2 text-center ' + (profit >= 0 ? 'bg-emerald-50' : 'bg-red-50')}>
-                                <div className="text-[8px] text-slate-500">Profit</div>
-                                <div className={'text-xs font-extrabold ' + (profit >= 0 ? 'text-emerald-600' : 'text-red-600')}>{fE(profit)}</div>
-                              </div>
-                              <div className={'rounded p-2 text-center ' + (margin >= 0 ? 'bg-emerald-50' : 'bg-red-50')}>
-                                <div className="text-[8px] text-slate-500">Margin</div>
-                                <div className={'text-xs font-extrabold ' + (margin >= 0 ? 'text-emerald-600' : 'text-red-600')}>{margin}%</div>
-                              </div>
-                            </div>
-                            {shipments.length > 0 && (
-                              <div>
-                                <h5 className="text-[10px] font-bold text-slate-500 mb-1">Per Shipment</h5>
-                                {shipments.map(ship => {
-                                  const ibsForShip = inbounds.filter(ib => (ib.shipment_reference || '').includes(ship));
-                                  const shipCost = ibsForShip.reduce((a, ib) => {
-                                    const f = Number(ib.fx_rate) || 50;
-                                    const te = (amt, c) => c === 'USD' ? amt * f : amt;
-                                    return a + te(Number(ib.purchase_cost)||0, ib.purchase_currency) + te(Number(ib.customs_cost)||0, ib.customs_currency) + te(Number(ib.shipping_cost)||0, ib.shipping_currency) + te(Number(ib.other_cost)||0, ib.other_currency);
-                                  }, 0);
-                                  const shipRevItems = linkedItems.filter(it => {
-                                    const inv = invoices.find(i => i.id === it.invoice_id);
-                                    return inv && (inv.order_number || '').includes(ship);
-                                  });
-                                  const shipRev = shipRevItems.reduce((a, it) => a + Number(it.line_total || 0), 0);
-                                  const shipProfit = shipRev - shipCost;
-                                  return (
-                                    <div key={ship} className="flex justify-between text-[10px] py-0.5 border-b border-slate-50">
-                                      <span className="font-semibold text-blue-600">{ship}</span>
-                                      <div className="flex gap-3">
-                                        <span className="text-red-500">Cost: {fE(shipCost)}</span>
-                                        <span className="text-blue-500">Rev: {fE(shipRev)}</span>
-                                        <span className={shipProfit >= 0 ? 'text-emerald-600 font-bold' : 'text-red-600 font-bold'}>{fE(shipProfit)}</span>
-                                      </div>
-                                    </div>
-                                  );
-                                })}
-                              </div>
-                            )}
-                          </div>
-                        );
-                      })()}
-                    </div>
-                  </div>
-                </div>
-              );
-            })()}
-
-            {/* ===== S19 — Inventory Import modal ===== */}
-            {formData.showInvImport && (
-              <InventoryImport
-                inventory={inventory}
-                isSuperAdmin={userProfile?.role === 'super_admin'}
-                userId={userProfile?.id}
-                onClose={() => setFormData({...formData, showInvImport: false})}
-                onComplete={() => { loadAllData(); }}
-              />
-            )}
-
-            {/* ===== S19 — Historical received-by-date report =====
-                Plain-English: shows how much of each product had been received
-                up to a chosen date, by summing inventory_inbounds. This is NOT
-                a full stock-on-hand snapshot (we don't track outbounds yet) —
-                it's "stock received as of date X" which is still useful for
-                reconciliation and planning. */}
-            {formData.showInvHistorical && (() => {
-              const asOfDate = formData.invHistDate || today();
-              // Per product: sum inbound qty where inbound_date <= asOfDate
-              const byProduct = {};
-              (invInbounds || []).forEach(ib => {
-                if (!ib.inbound_date || ib.inbound_date > asOfDate) return;
-                const pid = ib.product_id || '—';
-                if (!byProduct[pid]) byProduct[pid] = { qty: 0, lastDate: '' };
-                byProduct[pid].qty += Number(ib.quantity || 0);
-                if (ib.inbound_date > byProduct[pid].lastDate) byProduct[pid].lastDate = ib.inbound_date;
-              });
-              const rows = Object.entries(byProduct).map(([pid, v]) => {
-                const p = inventory.find(x => x.product_id === pid);
-                return {
-                  product_id: pid,
-                  description: p?.description_en || p?.description || '',
-                  qty_received: v.qty,
-                  current_qty: p ? Number(p.current_quantity || 0) : 0,
-                  last_inbound: v.lastDate,
-                };
-              }).sort((a, b) => b.qty_received - a.qty_received);
-              const totalRx = rows.reduce((a, r) => a + r.qty_received, 0);
-              return (
-                <div className="fixed inset-0 bg-black/50 z-[60] flex items-center justify-center p-4" onClick={() => setFormData({...formData, showInvHistorical: false})}>
-                  <div className="bg-white rounded-2xl w-full max-w-3xl max-h-[85vh] overflow-hidden shadow-2xl flex flex-col" onClick={e => e.stopPropagation()}>
-                    <div className="px-5 py-3 border-b border-slate-100 flex justify-between items-center">
-                      <h3 className="text-base font-extrabold">📅 Inventory Received as of…</h3>
-                      <button onClick={() => setFormData({...formData, showInvHistorical: false})} className="text-slate-400 hover:text-slate-600 text-xl">×</button>
-                    </div>
-                    <div className="p-5 overflow-auto">
-                      <div className="flex items-center gap-3 mb-4 flex-wrap">
-                        <label className="text-xs font-semibold">As of date:</label>
-                        <input type="date" value={asOfDate}
-                          max={today()}
-                          onChange={e => setFormData({...formData, invHistDate: e.target.value})}
-                          className="px-2 py-1 rounded border text-xs" />
-                        {[['7d', 7], ['30d', 30], ['90d', 90], ['1y', 365]].map(([label, days]) => (
-                          <button key={label}
-                            onClick={() => {
-                              const d = new Date(Date.now() - days * 86400000).toISOString().substring(0, 10);
-                              setFormData({...formData, invHistDate: d});
-                            }}
-                            className="px-2 py-1 rounded border text-xs hover:bg-slate-50">{label} ago</button>
-                        ))}
-                        <button
-                          onClick={() => {
-                            if (rows.length === 0) return;
-                            const headers = ['Product ID', 'Description', 'Received Qty', 'Current Qty', 'Last Inbound'];
-                            const csv = [headers.join(',')].concat(
-                              rows.map(r => [r.product_id, r.description, r.qty_received, r.current_qty, r.last_inbound].map(v => '"' + String(v || '').replace(/"/g, '""') + '"').join(','))
-                            ).join('\n');
-                            const blob = new Blob([csv], { type: 'text/csv;charset=utf-8' });
-                            const url = URL.createObjectURL(blob);
-                            const a = document.createElement('a');
-                            a.href = url;
-                            a.download = 'inventory_as_of_' + asOfDate + '.csv';
-                            a.click();
-                            URL.revokeObjectURL(url);
-                          }}
-                          disabled={rows.length === 0}
-                          className="px-3 py-1 bg-emerald-500 text-white rounded text-xs font-semibold disabled:opacity-40">📥 Export CSV</button>
-                      </div>
-                      <div className="text-xs text-slate-500 mb-2">
-                        Based on <strong>{rows.length}</strong> product{rows.length === 1 ? '' : 's'} · total <strong>{totalRx.toLocaleString()}</strong> units received on or before {asOfDate}.
-                      </div>
-                      <div className="text-[10px] text-amber-600 mb-3 italic">
-                        Note: this counts received inbounds only. If you need point-in-time stock-on-hand (after sales), ask to add inventory_outbounds + daily snapshots.
-                      </div>
-                      <div className="overflow-auto border rounded max-h-[420px]">
-                        <table className="w-full text-xs border-collapse">
-                          <thead className="sticky top-0 bg-slate-100"><tr>
-                            <th className="px-2 py-2 text-left">Product ID</th>
-                            <th className="px-2 py-2 text-left">Description</th>
-                            <th className="px-2 py-2 text-right">Received Qty</th>
-                            <th className="px-2 py-2 text-right">Current Qty</th>
-                            <th className="px-2 py-2 text-left">Last Inbound</th>
-                          </tr></thead>
-                          <tbody>
-                            {rows.map(r => (
-                              <tr key={r.product_id} className="border-b border-slate-50">
-                                <td className="px-2 py-1.5 font-bold">{r.product_id}</td>
-                                <td className="px-2 py-1.5 text-slate-600 truncate max-w-[260px]">{r.description}</td>
-                                <td className="px-2 py-1.5 text-right font-semibold text-blue-600">{r.qty_received.toLocaleString()}</td>
-                                <td className="px-2 py-1.5 text-right">{r.current_qty.toLocaleString()}</td>
-                                <td className="px-2 py-1.5 text-slate-500">{r.last_inbound}</td>
-                              </tr>
-                            ))}
-                            {rows.length === 0 && (
-                              <tr><td colSpan="5" className="text-center text-slate-400 py-4 text-xs">No inbounds on or before this date.</td></tr>
-                            )}
-                          </tbody>
-                        </table>
-                      </div>
-                    </div>
-                  </div>
-                </div>
-              );
-            })()}
-
-            {/* ===== S19 — Expected vs Actual by shipment report =====
-                Reads inventory_expected (optional table — gracefully handles missing).
-                For each shipment_reference it matches to actual inbounds in that
-                shipment and shows the delta. */}
-            {formData.showInvExpected && (() => {
-              // Load expected rows lazily via state held in formData.invExpected
-              const expected = formData.invExpected || null;
-              if (expected === null) {
-                // Kick off load once
-                supabase.from('inventory_expected').select('*').order('expected_date', { ascending: false })
-                  .then(r => {
-                    setFormData(prev => ({...prev, invExpected: r.data || []}));
-                  })
-                  .catch(() => setFormData(prev => ({...prev, invExpected: []})));
-              }
-              // Build shipment summary: for each shipment_reference, list expected
-              // per product and the actual received
-              const byShipment = {};
-              (expected || []).forEach(e => {
-                const key = (e.shipment_reference || '—') + '|' + e.product_id;
-                if (!byShipment[e.shipment_reference]) byShipment[e.shipment_reference] = {};
-                if (!byShipment[e.shipment_reference][e.product_id]) {
-                  byShipment[e.shipment_reference][e.product_id] = { expected: 0, actual: 0 };
-                }
-                byShipment[e.shipment_reference][e.product_id].expected += Number(e.expected_quantity || 0);
-              });
-              (invInbounds || []).forEach(ib => {
-                if (!ib.shipment_reference) return;
-                if (!byShipment[ib.shipment_reference]) return; // no expected for this shipment
-                if (!byShipment[ib.shipment_reference][ib.product_id]) {
-                  byShipment[ib.shipment_reference][ib.product_id] = { expected: 0, actual: 0 };
-                }
-                byShipment[ib.shipment_reference][ib.product_id].actual += Number(ib.quantity || 0);
-              });
-              const shipments = Object.entries(byShipment).map(([shipRef, prods]) => {
-                const products = Object.entries(prods).map(([pid, v]) => ({
-                  product_id: pid,
-                  expected: v.expected,
-                  actual: v.actual,
-                  delta: v.actual - v.expected,
-                }));
-                const totalExp = products.reduce((a, x) => a + x.expected, 0);
-                const totalAct = products.reduce((a, x) => a + x.actual, 0);
-                return { shipRef, products, totalExp, totalAct, totalDelta: totalAct - totalExp };
-              }).sort((a, b) => a.shipRef.localeCompare(b.shipRef));
-
-              return (
-                <div className="fixed inset-0 bg-black/50 z-[60] flex items-center justify-center p-4" onClick={() => setFormData({...formData, showInvExpected: false, invExpected: undefined})}>
-                  <div className="bg-white rounded-2xl w-full max-w-4xl max-h-[85vh] overflow-hidden shadow-2xl flex flex-col" onClick={e => e.stopPropagation()}>
-                    <div className="px-5 py-3 border-b border-slate-100 flex justify-between items-center">
-                      <h3 className="text-base font-extrabold">📊 Expected vs Actual by Shipment</h3>
-                      <button onClick={() => setFormData({...formData, showInvExpected: false, invExpected: undefined})} className="text-slate-400 hover:text-slate-600 text-xl">×</button>
-                    </div>
-                    <div className="p-5 overflow-auto">
-                      {/* S22.11 (Apr 23 2026) — Manual entry for expected qty.
-                          Previously the only way to populate this was the
-                          Excel import. Max wants to enter it by hand too. */}
-                      <div className="mb-4 bg-slate-50 border border-slate-200 rounded-lg p-3">
-                        <div className="flex items-center justify-between mb-2">
-                          <div className="text-xs font-bold text-slate-700">➕ Add Expected Quantity Manually</div>
-                          {!formData.showExpForm && (
-                            <button onClick={() => setFormData({...formData, showExpForm: true})}
-                              className="px-2.5 py-1 bg-indigo-600 text-white rounded text-[11px] font-bold hover:bg-indigo-700">
-                              + New Entry
-                            </button>
-                          )}
-                        </div>
-                        {formData.showExpForm && (
-                          <div className="grid grid-cols-2 md:grid-cols-5 gap-2">
-                            <div>
-                              <label className="text-[9px] font-bold text-slate-500">Product ID</label>
-                              <input list="inv-exp-products" value={formData.expProdId || ''}
-                                onChange={e => setFormData({...formData, expProdId: e.target.value})}
-                                placeholder="e.g. LEA-001" className="w-full px-2 py-1 rounded border text-xs" />
-                              <datalist id="inv-exp-products">
-                                {[...new Set((inventory || []).map(p => p.product_id).filter(Boolean))].sort().map(id =>
-                                  <option key={id} value={id} />)}
-                              </datalist>
-                            </div>
-                            <div>
-                              <label className="text-[9px] font-bold text-slate-500">Shipment Ref</label>
-                              <input value={formData.expShipRef || ''}
-                                onChange={e => setFormData({...formData, expShipRef: e.target.value})}
-                                placeholder="e.g. SH-2026-04" className="w-full px-2 py-1 rounded border text-xs" />
-                            </div>
-                            <div>
-                              <label className="text-[9px] font-bold text-slate-500">Expected Qty</label>
-                              <input type="number" value={formData.expQty || ''}
-                                onChange={e => setFormData({...formData, expQty: e.target.value})}
-                                className="w-full px-2 py-1 rounded border text-xs" />
-                            </div>
-                            <div>
-                              <label className="text-[9px] font-bold text-slate-500">Expected Date</label>
-                              <input type="date" value={formData.expDate || ''}
-                                onChange={e => setFormData({...formData, expDate: e.target.value})}
-                                className="w-full px-2 py-1 rounded border text-xs" />
-                            </div>
-                            <div>
-                              <label className="text-[9px] font-bold text-slate-500">Notes</label>
-                              <input value={formData.expNotes || ''}
-                                onChange={e => setFormData({...formData, expNotes: e.target.value})}
-                                className="w-full px-2 py-1 rounded border text-xs" />
-                            </div>
-                            <div className="col-span-2 md:col-span-5 flex justify-end gap-2 mt-1">
-                              <button onClick={() => setFormData({...formData, showExpForm: false, expProdId: '', expShipRef: '', expQty: '', expDate: '', expNotes: ''})}
-                                className="px-3 py-1 rounded border text-[11px]">Cancel</button>
-                              <button onClick={async () => {
-                                if (!formData.expProdId || !formData.expShipRef || !formData.expQty) {
-                                  alert('Please fill in Product ID, Shipment Ref, and Expected Qty.');
-                                  return;
-                                }
-                                try {
-                                  const { error } = await supabase.from('inventory_expected').insert({
-                                    product_id: formData.expProdId.trim(),
-                                    shipment_reference: formData.expShipRef.trim(),
-                                    expected_quantity: Number(formData.expQty) || 0,
-                                    expected_date: formData.expDate || null,
-                                    notes: formData.expNotes || null,
-                                    created_by: userProfile?.id || null,
-                                  });
-                                  if (error) throw error;
-                                  toast.success('Expected quantity saved');
-                                  // Reset + reload the panel by flipping the invExpected cache
-                                  setFormData({
-                                    ...formData,
-                                    showExpForm: false,
-                                    expProdId: '', expShipRef: '', expQty: '', expDate: '', expNotes: '',
-                                    invExpected: undefined, // forces re-fetch
-                                  });
-                                } catch (err) {
-                                  alert('Could not save: ' + (err.message || 'unknown error') +
-                                    '\n\nMake sure you ran s19_inventory_expected.sql in Supabase.');
-                                }
-                              }} className="px-3 py-1 rounded bg-indigo-600 text-white text-[11px] font-bold hover:bg-indigo-700">
-                                Save
-                              </button>
-                            </div>
-                          </div>
-                        )}
-                      </div>
-
-                      {expected === null && (
-                        <div className="text-center py-6 text-sm text-slate-500">Loading…</div>
-                      )}
-                      {expected !== null && shipments.length === 0 && (
-                        <div className="p-4 bg-amber-50 border border-amber-200 rounded text-xs text-amber-900">
-                          <div className="font-bold mb-1">No expected quantities recorded yet.</div>
-                          <div>Use the Excel import and fill in the <strong>Expected Quantity</strong> + <strong>Shipment Reference</strong> columns to populate this report. Expected quantities never change the actual inventory — they're stored separately.</div>
-                          <div className="mt-2 text-slate-600">
-                            If you've never set this up in the database, run the <code className="bg-white px-1 rounded">inventory_expected</code> SQL in the handover doc first.
-                          </div>
-                        </div>
-                      )}
-                      {expected !== null && shipments.length > 0 && (
-                        <>
-                          <div className="grid grid-cols-3 gap-3 mb-4">
-                            <div className="bg-purple-50 border border-purple-200 rounded-lg p-3">
-                              <div className="text-[10px] text-purple-700 font-bold">Shipments tracked</div>
-                              <div className="text-xl font-extrabold text-purple-700">{shipments.length}</div>
-                            </div>
-                            <div className="bg-blue-50 border border-blue-200 rounded-lg p-3">
-                              <div className="text-[10px] text-blue-700 font-bold">Total expected</div>
-                              <div className="text-xl font-extrabold text-blue-700">{shipments.reduce((a, s) => a + s.totalExp, 0).toLocaleString()}</div>
-                            </div>
-                            <div className="bg-emerald-50 border border-emerald-200 rounded-lg p-3">
-                              <div className="text-[10px] text-emerald-700 font-bold">Total received</div>
-                              <div className="text-xl font-extrabold text-emerald-700">{shipments.reduce((a, s) => a + s.totalAct, 0).toLocaleString()}</div>
-                            </div>
-                          </div>
-                          {shipments.map(s => (
-                            <div key={s.shipRef} className="mb-4 border border-slate-200 rounded-lg overflow-hidden">
-                              <div className="bg-slate-50 px-3 py-2 flex justify-between items-center">
-                                <div>
-                                  <div className="text-sm font-bold">📦 {s.shipRef}</div>
-                                  <div className="text-[10px] text-slate-500">
-                                    Expected <strong>{s.totalExp.toLocaleString()}</strong> · Received <strong>{s.totalAct.toLocaleString()}</strong>
-                                    <span className={'ml-2 font-bold ' + (s.totalDelta === 0 ? 'text-emerald-600' : s.totalDelta < 0 ? 'text-red-600' : 'text-amber-600')}>
-                                      {s.totalDelta === 0 ? '✓ Match' : (s.totalDelta > 0 ? '+' : '') + s.totalDelta.toLocaleString()}
-                                    </span>
-                                  </div>
-                                </div>
-                              </div>
-                              <table className="w-full text-xs border-collapse">
-                                <thead><tr className="bg-white border-b"><th className="px-2 py-1.5 text-left">Product ID</th><th className="px-2 py-1.5 text-right">Expected</th><th className="px-2 py-1.5 text-right">Received</th><th className="px-2 py-1.5 text-right">Delta</th></tr></thead>
-                                <tbody>
-                                  {s.products.sort((a, b) => a.product_id.localeCompare(b.product_id)).map(p => (
-                                    <tr key={p.product_id} className={'border-b border-slate-50 ' + (p.delta === 0 ? '' : p.delta < 0 ? 'bg-red-50' : 'bg-amber-50')}>
-                                      <td className="px-2 py-1.5 font-semibold">{p.product_id}</td>
-                                      <td className="px-2 py-1.5 text-right">{p.expected.toLocaleString()}</td>
-                                      <td className="px-2 py-1.5 text-right">{p.actual.toLocaleString()}</td>
-                                      <td className={'px-2 py-1.5 text-right font-bold ' + (p.delta === 0 ? 'text-emerald-600' : p.delta < 0 ? 'text-red-600' : 'text-amber-600')}>
-                                        {p.delta === 0 ? '✓' : (p.delta > 0 ? '+' : '') + p.delta.toLocaleString()}
-                                      </td>
-                                    </tr>
-                                  ))}
-                                </tbody>
-                              </table>
-                            </div>
-                          ))}
-                        </>
-                      )}
-                    </div>
-                  </div>
-                </div>
-              );
-            })()}
-
-            {/* ===== S20.2 — By-Shipment report =====
-                Pick a shipment reference. See every product that arrived in it,
-                with each product's original quantity AT THAT SHIPMENT (immutable,
-                from inventory_inbounds). This is the "per-shipment original"
-                view Max asked for, independent of the product-level running
-                totals. */}
-            {formData.showInvByShipment && (() => {
-              // All shipment references present in inbounds
-              const refSet = new Set();
-              (invInbounds || []).forEach(ib => { if (ib.shipment_reference) refSet.add(ib.shipment_reference); });
-              const refs = [...refSet].sort();
-              const chosen = formData.invByShipRef || refs[0] || '';
-              const ibsInShip = (invInbounds || []).filter(ib => ib.shipment_reference === chosen);
-              // Per-product rollup for this shipment
-              const perProd = {};
-              ibsInShip.forEach(ib => {
-                const pid = ib.product_id;
-                if (!perProd[pid]) {
-                  const p = inventory.find(x => x.product_id === pid);
-                  perProd[pid] = {
-                    product_id: pid,
-                    description: p?.description_en || p?.description || '',
-                    color: p?.color_en || p?.color || '',
-                    product_type: p?.product_type || '',
-                    originalInShipment: 0,
-                    firstDate: ib.inbound_date,
-                    lastDate: ib.inbound_date,
-                    productCurrent: p ? Number(p.current_quantity || 0) : 0,
-                    productOriginal: p ? Number(p.original_quantity || 0) : 0,
-                  };
-                }
-                perProd[pid].originalInShipment += Number(ib.quantity || 0);
-                if ((ib.inbound_date || '') < (perProd[pid].firstDate || '9999')) perProd[pid].firstDate = ib.inbound_date;
-                if ((ib.inbound_date || '') > (perProd[pid].lastDate || '')) perProd[pid].lastDate = ib.inbound_date;
-              });
-              const prodRows = Object.values(perProd).sort((a, b) => b.originalInShipment - a.originalInShipment);
-              const totalOrigInShip = prodRows.reduce((a, r) => a + r.originalInShipment, 0);
-              return (
-                <div className="fixed inset-0 bg-black/50 z-[60] flex items-center justify-center p-4" onClick={() => setFormData({...formData, showInvByShipment: false})}>
-                  <div className="bg-white rounded-2xl w-full max-w-4xl max-h-[85vh] overflow-hidden shadow-2xl flex flex-col" onClick={e => e.stopPropagation()}>
-                    <div className="px-5 py-3 border-b border-slate-100 flex justify-between items-center">
-                      <h3 className="text-base font-extrabold">📦 By Shipment — Original Quantities</h3>
-                      <button onClick={() => setFormData({...formData, showInvByShipment: false})} className="text-slate-400 hover:text-slate-600 text-xl">×</button>
-                    </div>
-                    <div className="p-5 overflow-auto">
-                      {refs.length === 0 ? (
-                        <div className="text-center py-6 text-sm text-slate-500">No shipments on file yet. Add inventory with a Shipment Reference to see it here.</div>
-                      ) : (<>
-                        <div className="flex items-center gap-3 mb-3 flex-wrap">
-                          <label className="text-xs font-semibold">Shipment:</label>
-                          <select value={chosen}
-                            onChange={e => setFormData({...formData, invByShipRef: e.target.value})}
-                            className="px-2 py-1 rounded border text-xs">
-                            {refs.map(r => <option key={r} value={r}>{r}</option>)}
-                          </select>
-                          <span className="text-[10px] text-slate-500">{refs.length} shipment{refs.length === 1 ? '' : 's'} tracked</span>
-                          <button
-                            onClick={() => {
-                              if (prodRows.length === 0) return;
-                              const headers = ['Shipment', 'Product ID', 'Description', 'Color', 'Type', 'Original in Shipment', 'Arrived', 'Product Current (whole)', 'Product Original (whole)'];
-                              const csv = [headers.join(',')].concat(
-                                prodRows.map(r => [chosen, r.product_id, r.description, r.color, r.product_type, r.originalInShipment, r.firstDate === r.lastDate ? r.firstDate : r.firstDate + ' → ' + r.lastDate, r.productCurrent, r.productOriginal]
-                                  .map(v => '"' + String(v || '').replace(/"/g, '""') + '"').join(','))
-                              ).join('\n');
-                              const blob = new Blob([csv], { type: 'text/csv;charset=utf-8' });
-                              const url = URL.createObjectURL(blob);
-                              const a = document.createElement('a');
-                              a.href = url;
-                              a.download = 'shipment_' + chosen + '.csv';
-                              a.click();
-                              URL.revokeObjectURL(url);
-                            }}
-                            className="ml-auto px-3 py-1 bg-emerald-500 text-white rounded text-xs font-semibold">📥 CSV</button>
-                        </div>
-                        <div className="grid grid-cols-3 gap-3 mb-3">
-                          <div className="bg-indigo-50 border border-indigo-200 rounded-lg p-3">
-                            <div className="text-[10px] text-indigo-700 font-bold">Products in shipment</div>
-                            <div className="text-xl font-extrabold text-indigo-700">{prodRows.length}</div>
-                          </div>
-                          <div className="bg-blue-50 border border-blue-200 rounded-lg p-3">
-                            <div className="text-[10px] text-blue-700 font-bold">Original qty (this shipment)</div>
-                            <div className="text-xl font-extrabold text-blue-700">{totalOrigInShip.toLocaleString()}</div>
-                          </div>
-                          <div className="bg-slate-50 border border-slate-200 rounded-lg p-3">
-                            <div className="text-[10px] text-slate-500 font-bold">Product-level current total</div>
-                            <div className="text-xl font-extrabold text-slate-700">{prodRows.reduce((a, r) => a + r.productCurrent, 0).toLocaleString()}</div>
-                            <div className="text-[9px] text-slate-400">(across these products, all shipments)</div>
-                          </div>
-                        </div>
-                        <div className="overflow-auto border rounded max-h-[360px]">
-                          <table className="w-full text-xs border-collapse">
-                            <thead className="sticky top-0 bg-slate-100"><tr>
-                              <th className="px-2 py-2 text-left">Product ID</th>
-                              <th className="px-2 py-2 text-left">Description</th>
-                              <th className="px-2 py-2 text-left">Color</th>
-                              <th className="px-2 py-2 text-left">Type</th>
-                              <th className="px-2 py-2 text-right">Original in Shipment</th>
-                              <th className="px-2 py-2 text-left">Arrived</th>
-                              <th className="px-2 py-2 text-right">Product Current</th>
-                            </tr></thead>
-                            <tbody>
-                              {prodRows.map(r => (
-                                <tr key={r.product_id} className="border-b border-slate-50">
-                                  <td className="px-2 py-1.5 font-bold">{r.product_id}</td>
-                                  <td className="px-2 py-1.5 text-slate-600 truncate max-w-[220px]" title={r.description}>{r.description}</td>
-                                  <td className="px-2 py-1.5 text-slate-600">{r.color}</td>
-                                  <td className="px-2 py-1.5 text-slate-600">{r.product_type}</td>
-                                  <td className="px-2 py-1.5 text-right font-bold text-indigo-700">{r.originalInShipment.toLocaleString()}</td>
-                                  <td className="px-2 py-1.5 text-slate-500">{r.firstDate === r.lastDate ? r.firstDate : r.firstDate + ' → ' + r.lastDate}</td>
-                                  <td className="px-2 py-1.5 text-right text-emerald-600">{r.productCurrent.toLocaleString()}</td>
-                                </tr>
-                              ))}
-                              {prodRows.length === 0 && (
-                                <tr><td colSpan="7" className="text-center text-slate-400 py-4">No products in this shipment.</td></tr>
-                              )}
-                            </tbody>
-                          </table>
-                        </div>
-                        <div className="text-[10px] text-slate-400 mt-2 italic">
-                          "Original in Shipment" never changes after import — it's the immutable record of what arrived in this shipment. "Product Current" is the running total for the whole product across all shipments.
-                        </div>
-                      </>)}
-                    </div>
-                  </div>
-                </div>
-              );
-            })()}
-          </div>
+          <SafeSection label="Inventory">
+            <InventoryTab userProfile={userProfile} modulePerms={modulePerms} toast={toast} />
+          </SafeSection>
         )}
+
+        {/* ==========================================
+            CRM TAB
+            v55.83-A — Restored to byte-exact match with v55.82-Z baseline.
+        ========================================== */}
         {tab === 'crm' && (
           <SafeSection label="CRM"><CRMTab toast={toast} customers={customers} invoices={invoices} user={user} userProfile={userProfile} users={teamUsers} onReload={loadAllData} isAdmin={isAdmin} onSelectInvoice={setSelectedInvoice} lang={lang} modulePerms={modulePerms} /></SafeSection>
         )}
 
         {/* ==========================================
             TICKETS TAB
+            v55.83-A — Restored to byte-exact match with v55.82-Z baseline.
         ========================================== */}
         {tab === 'tickets' && (
           <SafeSection label="Tickets"><TicketsTab toast={toast} customers={customers} user={user} userProfile={userProfile} users={teamUsers} onReload={loadAllData} lang={lang} isAdmin={isAdmin} modulePerms={modulePerms} openTicketId={openTicketId} onOpenTicketHandled={() => setOpenTicketId(null)} /></SafeSection>
@@ -13285,6 +11558,7 @@ export default function App() {
 
         {/* ==========================================
             CALENDAR TAB
+            v55.83-A — Restored to byte-exact match with v55.82-Z baseline.
         ========================================== */}
         {tab === 'calendar' && (
           <SafeSection label="Calendar"><CalendarTab customers={customers} user={user} userProfile={userProfile} users={teamUsers} tickets={dashTickets} onOpenTicket={(tid) => { setOpenTicketId(tid); setTab('tickets'); }} onReload={loadAllData} /></SafeSection>
@@ -13609,7 +11883,7 @@ export default function App() {
                       latest fix is actually deployed. If he doesn't see this
                       tag in the modal, his browser is running stale JS. */}
                   <div className="mt-1.5 inline-block px-2 py-0.5 rounded bg-amber-900/60 text-amber-100 text-[10px] font-mono font-bold tracking-wide">
-                    BUILD v55.82-Z
+                    BUILD v55.83-A.2
                   </div>
                 </div>
                 <button onClick={() => closePendingTreasuryModal()}
@@ -14244,7 +12518,7 @@ export default function App() {
                     معاملة قد تكون مكررة
                   </div>
                   <div className="mt-1.5 inline-block px-2 py-0.5 rounded bg-amber-900/60 text-amber-100 text-[10px] font-mono font-bold tracking-wide">
-                    BUILD v55.82-Z
+                    BUILD v55.83-A.2
                   </div>
                 </div>
                 <button

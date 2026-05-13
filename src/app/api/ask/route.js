@@ -719,18 +719,43 @@ export async function POST(request) {
       if (isFirstGreeting && userId) {
         try {
           var briefingDataRes = await Promise.all([
-            supabase.from('tickets').select('id, ticket_number, title, status, priority, due_date, assigned_to, created_at, updated_at').neq('status', 'Closed').limit(500),
+            supabase.from('tickets').select('id, ticket_number, title, status, priority, due_date, assigned_to, created_by, additional_assignees, is_private, private_to, is_confidential').neq('status', 'Closed').limit(500),
             supabase.from('invoices').select('id, customer_name, customer_name_en, customer_id, invoice_date, total_collected, outstanding, order_number, invoice_number').limit(2000),
             supabase.from('checks').select('id, check_number, amount, status, due_date').eq('status', 'pending').limit(200),
             supabase.from('calendar_events').select('id, title, event_date, event_time, assigned_to, description').eq('event_date', new Date().toISOString().substring(0, 10)).limit(50),
             supabase.from('follow_ups').select('id, task, due_date, completed, customer_id, assigned_to').eq('completed', false).limit(200),
             supabase.from('customers').select('id, name, name_en').limit(500),
           ]);
+          // v55.82-Z QA — privacy filter on briefing tickets. Super admin
+          // sees everything (their AI can act across the org). Everyone
+          // else: drop private tickets they don't own, and drop
+          // confidential tickets where they aren't creator/assignee.
+          var rawTickets = (briefingDataRes[0] && briefingDataRes[0].data) || [];
+          var visibleTickets = rawTickets;
+          if (!gIsSuperAdmin) {
+            visibleTickets = rawTickets.filter(function (t) {
+              if (t.is_private) return t.private_to === userId;
+              if (t.is_confidential) {
+                if (t.created_by === userId) return true;
+                if (t.assigned_to === userId) return true;
+                if (t.additional_assignees) {
+                  try {
+                    var extras = typeof t.additional_assignees === 'string'
+                      ? JSON.parse(t.additional_assignees)
+                      : t.additional_assignees;
+                    if (Array.isArray(extras) && extras.indexOf(userId) >= 0) return true;
+                  } catch (_) {}
+                }
+                return false;
+              }
+              return true;
+            });
+          }
           briefing = briefingEngine.buildBriefing({
             userId: userId,
             todayStr: new Date().toISOString().substring(0, 10),
             nowMs: Date.now(),
-            tickets: (briefingDataRes[0] && briefingDataRes[0].data) || [],
+            tickets: visibleTickets,
             invoices: (briefingDataRes[1] && briefingDataRes[1].data) || [],
             checks: (briefingDataRes[2] && briefingDataRes[2].data) || [],
             calendar_events: (briefingDataRes[3] && briefingDataRes[3].data) || [],
@@ -843,6 +868,17 @@ export async function POST(request) {
         if (!gResponse) {
           var gCombined = gAllErrors.length > 0 ? gAllErrors.join(' | ') : (gLastErr || 'all models unavailable');
           console.warn('[ask/greeter] all models failed:', gCombined);
+          // v55.83-A — special-case the billing error (see main chain for context)
+          var gIsBillingError = /credit balance is too low/i.test(gCombined)
+                             || /credit_balance/i.test(gCombined);
+          if (gIsBillingError) {
+            try { console.warn('[ask/greeter] BILLING ERROR — Anthropic account out of credit'); } catch (_) {}
+            return Response.json({
+              answer: 'I can\'t respond right now — the AI service needs credit on its account. Please ask your super admin to top up the Anthropic account, and I\'ll be back as soon as that\'s done.',
+              error_type: 'billing',
+              admin_action_required: true
+            });
+          }
           return Response.json({ answer: 'AI error: ' + gCombined });
         }
 
@@ -1847,6 +1883,21 @@ export async function POST(request) {
       // Sonnet failed for one reason and Haiku failed for a different
       // reason, the user (and Vercel logs) sees both.
       var combined = allAttemptErrors.length > 0 ? allAttemptErrors.join(' | ') : (lastErr || 'all models unavailable');
+      // v55.83-A (Max May 13 2026) — special-case the billing error. When the
+      // Anthropic account has run out of credit, all models will fail with
+      // the same message: "Your credit balance is too low to access the
+      // Anthropic API." That's not a code bug — it's a wallet problem. Give
+      // the user a clear, actionable message instead of a raw JSON dump.
+      var isBillingError = /credit balance is too low/i.test(combined)
+                        || /credit_balance/i.test(combined);
+      if (isBillingError) {
+        try { console.warn('[ask] BILLING ERROR — Anthropic account out of credit. Visit console.anthropic.com/settings/billing'); } catch (_) {}
+        return Response.json({
+          answer: 'AI features are temporarily paused — the Anthropic account needs credit. Please contact your super admin to add funds at console.anthropic.com/settings/billing. No code changes are needed — once credits are added, AI features will work immediately.',
+          error_type: 'billing',
+          admin_action_required: true
+        });
+      }
       return Response.json({ answer: 'AI Error: ' + combined });
     }
     if (modelUsed && modelUsed !== MODEL_CHAIN[0]) {

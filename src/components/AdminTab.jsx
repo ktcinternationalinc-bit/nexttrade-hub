@@ -286,11 +286,14 @@ export default function AdminTab({ user, userProfile, users, isAdmin, customers,
       const manualCount = uLogs.filter(l => !l.auto_generated).length;
       const uniqueDays = [...new Set(uLogs.map(l => l.log_date))].length;
 
-      // Tickets
-      const myTickets = tickets.filter(t => t.assigned_to === u.id);
+      // Tickets — v55.82-Z QA uses visibleTickets so private/confidential
+      // that this user cannot see don't bleed into their scorecard view.
+      // Super admin sees full counts; regular admins see only what they
+      // have visibility to.
+      const myTickets = visibleTickets.filter(t => t.assigned_to === u.id);
       const openT = myTickets.filter(t => t.status !== 'Closed').length;
       const closedT = myTickets.filter(t => t.status === 'Closed').length;
-      const createdT = tickets.filter(t => t.created_by === u.id).length;
+      const createdT = visibleTickets.filter(t => t.created_by === u.id).length;
 
       // Overdue analysis
       const overdueNow = myTickets.filter(t => t.due_date && t.due_date < todayStr && t.status !== 'Closed');
@@ -345,11 +348,36 @@ export default function AdminTab({ user, userProfile, users, isAdmin, customers,
       if (key === 'overdueCount' || key === 'avgOverdueDays') return av - bv;
       return bv - av;
     });
-  }, [visibleUsers, logs, tickets, quotes, auditLogs, todayStr, rankBy]);
+  }, [visibleUsers, logs, tickets, visibleTickets, quotes, auditLogs, todayStr, rankBy]);
+
+  // v55.82-Z QA — privacy filter for AdminTab. Super admin sees every
+  // ticket; non-super_admin admins see regular tickets, plus confidential
+  // tickets they created or are assigned to. Private super-admin tickets
+  // never appear in AdminTab unless the viewer is the super admin.
+  const visibleTickets = useMemo(() => {
+    if (isSuperAdmin) return tickets;
+    return tickets.filter(function (t) {
+      if (t.is_private) return false; // super-admin-only
+      if (t.is_confidential) {
+        if (t.created_by === myId) return true;
+        if (t.assigned_to === myId) return true;
+        if (t.additional_assignees) {
+          try {
+            var extras = typeof t.additional_assignees === 'string'
+              ? JSON.parse(t.additional_assignees)
+              : t.additional_assignees;
+            if (Array.isArray(extras) && extras.indexOf(myId) >= 0) return true;
+          } catch (_) {}
+        }
+        return false;
+      }
+      return true;
+    });
+  }, [tickets, isSuperAdmin, myId]);
 
   // Filtered data
   const filteredLogs = useMemo(() => { let arr = logs; if (selUser !== 'all') arr = arr.filter(l => l.user_id === selUser); return arr; }, [logs, selUser]);
-  const filteredTickets = useMemo(() => { let arr = tickets; if (selUser !== 'all') arr = arr.filter(t => t.assigned_to === selUser || t.created_by === selUser); return arr; }, [tickets, selUser]);
+  const filteredTickets = useMemo(() => { let arr = visibleTickets; if (selUser !== 'all') arr = arr.filter(t => t.assigned_to === selUser || t.created_by === selUser); return arr; }, [visibleTickets, selUser]);
   const filteredAudit = useMemo(() => { let arr = auditLogs; if (selUser !== 'all') arr = arr.filter(a => a.changed_by === selUser); return arr; }, [auditLogs, selUser]);
   const filteredSessions = useMemo(() => { let arr = sessions; if (selUser !== 'all') arr = arr.filter(s => s.user_id === selUser); return arr; }, [sessions, selUser]);
   const selUserName = selUser !== 'all' ? getUserName(selUser) : 'All Team';

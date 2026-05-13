@@ -69,12 +69,25 @@ export default function HRReport({ user, userProfile, users, customers }) {
         safe(async () => (await supabase.from('user_sessions').select('user_id, date, login_at, logout_at, last_seen, logout_reason').gte('date', window.from).limit(20000)).data || []),
       ]);
       if (cancelled) return;
-      setData({ tickets, ticketComments, dailyLog, auditLog, customerQuotes, calendarEvents, customers: customers || [], userSessions });
+      // v55.82-Z QA — strip super_admin's private tickets out of the
+      // HR data set unless the viewer is the super admin. Private tickets
+      // are super admin's personal items and shouldn't drive other
+      // people's HR scores. Confidential tickets DO count — they're
+      // legitimate team workload signal — but the report only computes
+      // aggregates, not displays titles, so no content leak.
+      var visibleHRTickets = tickets;
+      if (!isSuperAdmin) {
+        var privateIds = {};
+        (tickets || []).forEach(function (t) { if (t.is_private) privateIds[t.id] = 1; });
+        visibleHRTickets = tickets.filter(function (t) { return !t.is_private; });
+        ticketComments = (ticketComments || []).filter(function (c) { return !privateIds[c.ticket_id]; });
+      }
+      setData({ tickets: visibleHRTickets, ticketComments, dailyLog, auditLog, customerQuotes, calendarEvents, customers: customers || [], userSessions });
       setLoading(false);
     };
     load();
     return () => { cancelled = true; };
-  }, [customers]);
+  }, [customers, isSuperAdmin]);
 
   // Compute metrics + scores for everyone visible
   const teamReport = useMemo(() => {

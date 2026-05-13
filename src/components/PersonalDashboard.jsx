@@ -92,9 +92,39 @@ export default function PersonalDashboard({ user, userProfile, isAdmin, isSuperA
   // and MyPerformance every time `loaded` flipped — which is what made them
   // appear, then disappear, then reappear. Now there's ONE return tree, the
   // dashboard cards just show their own inline loading spinners.
-  const myTickets = (tickets || []).filter(t => t.assigned_to === myId && t.status !== 'Closed');
-  const ticketsICreated = (tickets || []).filter(t => t.created_by === myId && t.assigned_to !== myId && t.status !== 'Closed');
-  const teamTickets = (tickets || []).filter(t => t.status !== 'Closed' && t.assigned_to !== myId && t.created_by !== myId);
+  // v55.82-Z QA — helpers for visibility-aware filtering.
+  //   isMineByAssign: I'm assigned_to OR I'm in additional_assignees.
+  //     This corrects an earlier under-count where a ticket I was added
+  //     to via "additional assignees" didn't appear on my dashboard.
+  //   canSee: visibility gate matching TicketsTab. Private (super-admin
+  //     only) and confidential (creator/assignees) tickets don't appear
+  //     in any list for non-viewers.
+  const parseExtras = (t) => {
+    if (!t || !t.additional_assignees) return [];
+    try {
+      var v = typeof t.additional_assignees === 'string'
+        ? JSON.parse(t.additional_assignees)
+        : t.additional_assignees;
+      return Array.isArray(v) ? v : [];
+    } catch (_) { return []; }
+  };
+  const isMineByAssign = (t) => t.assigned_to === myId || parseExtras(t).indexOf(myId) >= 0;
+  const canSee = (t) => {
+    if (isSuperAdmin) return true;
+    if (t.is_private) return t.private_to === myId;
+    if (t.is_confidential) {
+      return t.created_by === myId || isMineByAssign(t);
+    }
+    return true;
+  };
+  // myTickets — anything assigned to me (direct or additional) and not closed.
+  const myTickets = (tickets || []).filter(t => isMineByAssign(t) && t.status !== 'Closed' && canSee(t));
+  // ticketsICreated — I made it but didn't assign it to myself.
+  const ticketsICreated = (tickets || []).filter(t => t.created_by === myId && !isMineByAssign(t) && t.status !== 'Closed' && canSee(t));
+  // teamTickets — open tickets not mine and not authored by me. Filter out
+  // private and confidential I can't see, so other people's private items
+  // never leak into my "team activity" view.
+  const teamTickets = (tickets || []).filter(t => t.status !== 'Closed' && !isMineByAssign(t) && t.created_by !== myId && canSee(t));
   const needsAck = myTickets.filter(t => t.status === 'New');
   const myEvents = (events || []).filter(e => e.assigned_to === myId || e.created_by === myId);
   const todayEvents = myEvents.filter(e => e.event_date === todayStr);

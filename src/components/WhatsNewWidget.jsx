@@ -33,6 +33,29 @@ import { supabase } from '../lib/supabase';
 //     WhatsApp, the calendar, the Sales tab.
 export const BUILD_HISTORY = [
   {
+    version: 'v55.83-A',
+    date: '2026-05-13',
+    label: 'New Inventory Module — Stage 1 of 6 (Foundation)',
+    items: [
+      // PUBLIC — layman per Permanent Rule #1
+      '**New Inventory module — foundation shipped.** This is the first of six stages building an ERP-grade inventory, shipment, costing, and profitability system. Stage 1 ships the foundation: you can now define your master SKU database and your physical warehouse locations. The next stages add shipments, costing, sales linkage, adjustments, imports, and AI insights — all building on this foundation without restructuring it.',
+      '**Replaced the old Inventory tab.** The previous inline inventory section (test data only — wiped per agreed plan) has been replaced with the new structured module. The old test rows have been archived (saved to a backup table just in case) and the new module starts from a clean slate.',
+      '**Master SKU database.** Define every product you stock once: SKU number, English/Arabic descriptions, product type, color, primary unit (kilos, yards, meters, rolls, pieces, liters, boxes), and conversion factors. There\'s a "Generate SKU" helper button that suggests SKU-00001 style numbers if you don\'t have your own scheme.',
+      '**Four starter warehouses seeded** — Cairo, Sokhna, USA, Other. Edit names, codes, addresses, and default currencies in the Warehouses tab. Add more whenever you need.',
+      '**Cost and P&L permissions.** Three new permission tiers can be granted per user: see SKUs (basic), see costs (landed/avg cost), see P&L (gross profit, FX impact, total profit). Super admin sees everything by default; everyone else sees only what they\'re granted. Hides at the UI level AND refuses at the server level.',
+      '**Setup needed: run the database update.** A one-time database setup file is included in this build. It creates the new inventory tables, archives the old test inventory, and seeds the 4 warehouses + 6 starter exchange rates. Safe to re-run if needed. Until this is run once, the Inventory tab will be empty.',
+      '**FX rates are placeholders.** USD/EGP=50.00, EUR/EGP=54.00 — please update these in Settings → FX Rates (Stage C wires up the UI for this; for now you can edit directly in Supabase).',
+      // SUPER_ADMIN — technical detail
+      { superAdminOnly: true, text: 'SCHEMA — sql/v55-83-a-inventory-schema.sql creates 11 tables: inv_warehouses, inv_skus, inv_fx_rates, inv_shipments, inv_shipment_skus, inv_movements, inv_adjustments, inv_transfers, inv_invoice_lines, inv_audit_journal, inv_import_jobs. All idempotent (IF NOT EXISTS). Archive snapshot via CREATE TABLE AS SELECT * FROM inventory, then DELETE FROM inventory. Soft-delete via deleted_at on identity tables (warehouses/skus/shipments); append-only ledger on movements/audit/imports.' },
+      { superAdminOnly: true, text: 'ARCHITECTURE — Weighted Average COGS per SKU + rolling weighted-avg base FX rate per SKU (Option B from design). inv_skus has avg_landed_cost + avg_base_fx_to_egp + avg_base_fx_to_usd, all maintained as denormalized caches of the latest inv_movements row. inv_invoice_lines snapshots gross_profit_egp/usd, fx_impact_egp/usd, total_profit_egp/usd at write time — never recalculated. Per-shipment P&L uses dual approach: Expected (target_revenue vs landed_cost) + Attributed (proportional share — computed in Stage D).' },
+      { superAdminOnly: true, text: 'PERMISSIONS — src/lib/inventory-permissions.js with six exports: canViewInventory, canEditInventory, canSeeInventoryCosts, canSeeInventoryPnL, canEditOriginalQty, canApproveAdjustments + stripSensitiveFields/Rows helpers for server response stripping. Three permission keys: inv.view, inv.see_costs, inv.see_pnl. Super_admin role bypasses all gates.' },
+      { superAdminOnly: true, text: 'COMPONENTS — MasterSKUList.jsx (CRUD with permission-aware columns), WarehouseSettings.jsx (CRUD with admin gate), InventoryTab.jsx (orchestrator with 7 subtabs — 2 active in Stage A, 5 coming-soon for B/E/F). Removed ~1900 lines of inline inventory code from page.jsx. RESTORED Calendar + CRM tab renders that were accidentally clipped during the line-range replacement.' },
+      { superAdminOnly: true, text: 'TESTS — __tests__/test-v55-83-a-inventory-foundation.js with 41 assertions covering schema (11 tables + idempotency + seeds + indexes), permissions (3-tier visibility + strip helpers), components (Master SKU + Warehouse CRUD), and page.jsx integration. DEFERRED 3 legacy inventory test suites (S19, S20-three-field, S20-calendar-and-shipment) — their features are scheduled for Stages B/E. Patched: v55-82-f 6a/6c (accept v55.83+ family), v55-82-z 11b (loosened regex), v55-81 contrast sweep (cleaned text-slate-400 in new components).' },
+      { superAdminOnly: true, text: 'STAGE PLAN — A: foundation (this build, shipped). B: shipment header + SKU breakdown + reconciliation + master inventory view. C: landed cost engine + customs/freight distribution + rolling avg cost. D: structured invoice lines + sale FX + COGS deduction + per-SKU + per-shipment P&L. E: imports (template + row-level errors) + adjustments module + physical count. F: AI anomaly detection + smart matching + 10 reporting dashboards + profitability insights.' },
+      { superAdminOnly: true, text: 'QA: 136 pass / 32 fail. Zero regressions vs Z baseline. 8 initial regressions all resolved: (a) Calendar+CRM render blocks accidentally clipped — restored. (b) 3 legacy inventory test suites — deferred to Stage B/E. (c) Contrast offenders in new components — text-slate-400 → text-slate-500. (d) Version-stamp regex updated for v55.83 family. (e) Comment-feed filter regex loosened.' },
+    ],
+  },
+  {
     version: 'v55.82-Z',
     date: '2026-05-12',
     label: 'Confidential tickets · Private tickets re-colored to light blue',
