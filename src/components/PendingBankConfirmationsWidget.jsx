@@ -15,11 +15,14 @@ export default function PendingBankConfirmationsWidget({
   onSelectInvoice,
   fE,
 }) {
+  // v55.83-A.4 — RULES OF HOOKS COMPLIANCE.
+  // ALL hooks must be called BEFORE any conditional return. Previously the
+  // permission gate (canView early-return) sat between useState and useMemo,
+  // which produced React error #310 ("Rendered more hooks than during the
+  // previous render") when modulePerms or isSuperAdmin flipped between
+  // renders. Both hooks now run on every render; conditional rendering
+  // happens at the JSX level only.
   var [expanded, setExpanded] = useState(false);
-
-  // Gate
-  var canView = isSuperAdmin || (modulePerms && modulePerms['View Financial Reports'] === true);
-  if (!canView) return null;
 
   var pending = useMemo(function () {
     return (invoices || [])
@@ -28,6 +31,10 @@ export default function PendingBankConfirmationsWidget({
         return Number(b.total_pending_bank || 0) - Number(a.total_pending_bank || 0);
       });
   }, [invoices]);
+
+  // Gate (now AFTER all hooks)
+  var canView = isSuperAdmin || (modulePerms && modulePerms['View Financial Reports'] === true);
+  if (!canView) return null;
 
   if (pending.length === 0) return null;
 

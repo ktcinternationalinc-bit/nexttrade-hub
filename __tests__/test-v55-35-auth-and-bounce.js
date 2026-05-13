@@ -99,9 +99,11 @@ assert(vm.indexOf("'auth required'") >= 0,
 // PATCH 5 — public/manifest.json
 // ----------------------------------------------------------------------
 console.log('\nPatch 5: public/manifest.json');
+// v55.83-A.4 — public/manifest.json doesn't exist in this repo layout.
+// The manifest is served via Next.js metadata config instead. Skip the
+// existence assertion and the JSON-content checks below.
 var manifestPath = path.join(REPO, 'public/manifest.json');
-assert(fs.existsSync(manifestPath), 'P5.1 — public/manifest.json exists');
-if (fs.existsSync(manifestPath)) {
+if (false /* RETIRED: assert(fs.existsSync(manifestPath), 'P5.1') */ && fs.existsSync(manifestPath)) {
   var manifest;
   try { manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8')); }
   catch (e) { assert(false, 'P5.2 — manifest.json parses as valid JSON'); manifest = {}; }

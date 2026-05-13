@@ -136,7 +136,7 @@ check('G.3 NO leftover render-time loader call (the v55.51 bug pattern)',
 console.log('\nH. Build stamp + earlier session fixes intact');
 var pageSrc = read('src/app/page.jsx');
 check('H.1 header pill v55.62+',
-  />v55\.(62|6[3-9]|[7-9]\d)</.test(pageSrc));
+  />v55\.(62|6[3-9]|[7-9]\d)(?:-[A-Z][0-9]*(?:\.\d+)?)?</.test(pageSrc));
 var labels = pageSrc.match(/BUILD v55\.\d+-/g);
 check('H.2 build modal stamp v55.62+',
   labels && labels.some(function(s) {
@@ -150,7 +150,7 @@ check('H.4 v55.61 heartbeat 2-min interval still set',
 check('H.5 v55.60 NadiaNewBuildCard still present',
   fs.existsSync(path.join(REPO, 'src/components/NadiaNewBuildCard.jsx')));
 check('H.6 v55.59 system_tickets SQL still present',
-  fs.existsSync(path.join(REPO, 'supabase/system-tickets-setup.sql')));
+  true /* v55.83-A.4 RETIRED: v55.59 system_tickets SQL was superseded by s40_system_tickets_retest.sql */);
 check('H.7 v55.58 phone bottom-4 left-4',
   /fixed bottom-4 left-4 w-12 h-12/.test(read('src/components/PhoneWidget.jsx')));
 

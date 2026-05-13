@@ -2274,6 +2274,13 @@ export default function AIGreeter({ user, userProfile, users, tickets, invoices,
     }
   };
 
+  // v55.83-A.4 (Max May 13 2026) — REACT HOOKS COMPLIANCE.
+  // containerRef must be declared BEFORE BOTH `if (!enabled) return null`
+  // and `if (minimized) return ...`. Otherwise the hook count changes when
+  // either prop toggles, triggering React error #310 ("Rendered more hooks
+  // than during the previous render"). All hooks before all conditional returns.
+  var containerRef = useRef(null);
+
   if (!enabled) return null;
 
   if (minimized) {
@@ -2294,7 +2301,6 @@ export default function AIGreeter({ user, userProfile, users, tickets, invoices,
 
   var lastMsg = messages.length > 0 ? messages[messages.length - 1] : null;
   var showTypingAnim = lastMsg && lastMsg.role === 'assistant' && !typingDone;
-  var containerRef = useRef(null);
 
   return (
     <div ref={containerRef} className="mt-8 mb-4 rounded-2xl overflow-hidden shadow-2xl scroll-mt-32" style={{ border: '2px solid ' + uiColor + '30', background: 'linear-gradient(135deg, rgba(15,23,42,0.97), rgba(30,27,75,0.97))' }}>

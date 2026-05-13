@@ -103,9 +103,11 @@ ok('7a: deleteTicket gates by canSeeTicket as defense-in-depth',
 // =============================================================
 console.log('\nGAP 12: Detail modal privacy chips');
 ok('12a: detail modal renders 🔒 PRIVATE chip when sel.is_private',
-  /sel\.is_private && \(\s*<span[^>]*bg-sky-100[^>]*>\s*🔒 PRIVATE/.test(tickets));
+  // v55.83-A.4 — chip colors changed from bg-sky-100 (pale) to bg-sky-700 (high-contrast)
+  /sel\.is_private && \(\s*<span[^>]*bg-sky-700[^>]*>\s*🔒 PRIVATE/.test(tickets));
 ok('12b: detail modal renders 🟧 CONFIDENTIAL chip when sel.is_confidential',
-  /sel\.is_confidential && \(\s*<span[^>]*bg-orange-100[^>]*>\s*🟧 CONFIDENTIAL/.test(tickets));
+  // v55.83-A.4 — chip colors changed from bg-orange-100 (pale) to bg-orange-700 (high-contrast)
+  /sel\.is_confidential && \(\s*<span[^>]*bg-orange-700[^>]*>\s*🟧 CONFIDENTIAL/.test(tickets));
 
 // =============================================================
 // CARRY-FORWARD verifications from prior turns

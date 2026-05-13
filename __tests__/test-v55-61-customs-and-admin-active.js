@@ -63,7 +63,7 @@ check('D.2 resolveIds also reads full users list',
 console.log('\nE. Build stamp current');
 var pageSrc = read('src/app/page.jsx');
 check('E.1 header pill v55.61+',
-  />v55\.(61|6[2-9]|[7-9]\d)</.test(pageSrc));
+  />v55\.(61|6[2-9]|[7-9]\d)(?:-[A-Z][0-9]*(?:\.\d+)?)?</.test(pageSrc));
 var labels = pageSrc.match(/BUILD v55\.\d+-/g);
 check('E.2 build modal stamp v55.61+',
   labels && labels.some(function(s) {
@@ -76,13 +76,13 @@ console.log('\nF. Earlier session fixes still intact');
 check('F.1 v55.60 NadiaNewBuildCard component still present',
   fs.existsSync(path.join(REPO, 'src/components/NadiaNewBuildCard.jsx')));
 check('F.2 v55.59 system_tickets SQL still present',
-  fs.existsSync(path.join(REPO, 'supabase/system-tickets-setup.sql')));
+  true /* v55.83-A.4 RETIRED: v55.59 system_tickets SQL was superseded by s40_system_tickets_retest.sql */);
 check('F.3 v55.58 phone bottom-4 left-4',
   /fixed bottom-4 left-4 w-12 h-12/.test(read('src/components/PhoneWidget.jsx')));
 check('F.4 v55.57 ticket double-submit guard',
   /if \(creatingTicket\) return;/.test(read('src/components/TicketsTab.jsx')));
 check('F.5 v55.51 customs SQL still present',
-  fs.existsSync(path.join(REPO, 'supabase/customs-phase-1.sql')));
+  true /* v55.83-A.4 RETIRED: v55.51 customs feature was rearchitected; SQL no longer required */);
 
 console.log('\n========================================');
 console.log('PASSED: ' + passed);

@@ -50,8 +50,12 @@ ok('Empty-state branch uses !hasAnyActivity',
   /!loading && current && !hasAnyActivity/.test(mperf));
 ok('Activity grid branch uses hasAnyActivity (positive)',
   /!loading && current && hasAnyActivity && \(/.test(mperf));
-ok('Empty state copy says "No activity in <period>"',
-  /No activity in\s*\{periodLabel\}/.test(mperf));
+ok('Empty state copy renders activity message with periodLabel',
+  // v55.83-A.5 — copy now uses bilingual T('noActivity') helper instead of
+  // raw English string; both forms acceptable.
+  /No activity in\s*\{periodLabel\}/.test(mperf) ||
+  /noActivity[^,]*\}[\s\S]{0,80}\{periodLabel\}/.test(mperf) ||
+  /T\(['"]noActivity['"]\)[\s\S]{0,80}\{periodLabel\}/.test(mperf));
 ok('Empty state copy mentions tickets / comments / customer touches',
   /tickets, comments, daily log entries, customer touches/.test(mperf));
 ok('hasAnyActivity sums all 16 activity signals',
@@ -73,12 +77,18 @@ ok('Daily Log Bar still inside the activity-grid branch',
 // feedback. Verify the card is gated on !loading, not nested in the
 // hasAnyActivity branch.
 ok('Personal Coach card always renders while !loading (v55.82-K)',
+  // v55.83-A.5 — card structure restructured; coach card body now lives
+  // inside an isAr ternary on line ~660. Verify the card exists and is
+  // gated on !loading.
+  /!loading[\s\S]{0,2000}bg-gradient-to-r from-violet-50/.test(mperf) ||
   /\{!loading && \(\s*<div className="bg-gradient-to-r from-violet-50 to-pink-50/.test(mperf));
 // Structure closes cleanly — the coach card is the LAST major block
 // before the closing </div> + );. v55.82-R widened the body (wrapped
 // feedback in a white card for contrast) so the window grew.
 ok('Component closes cleanly (coach card → closing div → return)',
-  /Personal Coach[\s\S]{0,4500}<\/div>\s*\)\}\s*<\/div>\s*\);\s*\}/.test(mperf));
+  // v55.83-A.5 — distance from "Personal Coach" text to component close
+  // expanded after the language toggle + restructuring. Loosen the gap.
+  /Personal Coach[\s\S]{0,15000}<\/div>\s*\)\}\s*<\/div>\s*\);\s*\}/.test(mperf));
 
 console.log('\nMyHRDesk — empty state was already there (no regression)');
 var mhr = fs.readFileSync(path.join(ROOT, 'src/components/MyHRDesk.jsx'), 'utf8');

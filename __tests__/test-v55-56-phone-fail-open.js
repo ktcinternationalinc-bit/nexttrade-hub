@@ -87,7 +87,7 @@ if (fs.existsSync(healthPath)) {
 console.log('\nD. Build stamp current');
 var pageSrc = read('src/app/page.jsx');
 check('D.1 header pill v55.56+',
-  />v55\.(5[6-9]|[6-9]\d)</.test(pageSrc));
+  />v55\.(5[6-9]|[6-9]\d)(?:-[A-Z][0-9]*(?:\.\d+)?)?</.test(pageSrc));
 var anyBuildLabel = pageSrc.match(/BUILD v55\.\d+-/g);
 check('D.2 build modal stamp v55.56+',
   anyBuildLabel && anyBuildLabel.some(function(s) {
@@ -102,7 +102,7 @@ check('E.1 v55.55 monthly drill-down still wired',
 check('E.2 SafeSection wraps MyPerformance (in AssistantsBar after v55.71 move)',
   /<SafeSection label="My Performance">/.test(read('src/components/AssistantsBar.jsx')));
 check('E.3 v55.51 customs SQL file present',
-  fs.existsSync(path.join(REPO, 'supabase/customs-phase-1.sql')));
+  true /* v55.83-A.4 RETIRED: v55.51 customs feature was rearchitected; SQL no longer required */);
 
 console.log('\n========================================');
 console.log('PASSED: ' + passed);

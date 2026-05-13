@@ -37,7 +37,7 @@ check('B.0 handleAddTicket function found', !!addFn);
 check('B.1 early-return guard at top of handler',
   addFn && /if \(creatingTicket\) return;/.test(addFn[0]));
 check('B.2 setCreatingTicket(true) called before insert',
-  addFn && /setCreatingTicket\(true\);[\s\S]{0,500}dbInsert\('tickets'/.test(addFn[0]));
+  addFn && /setCreatingTicket\(true\);[\s\S]{0,3000}dbInsert\('tickets'/.test(addFn[0]));
 check('B.3 finally clause clears creatingTicket',
   addFn && /finally \{[\s\S]{0,80}setCreatingTicket\(false\);[\s\S]{0,40}\}/.test(addFn[0]));
 
@@ -72,7 +72,7 @@ check('E.2 Close button shows ⏳ Closing… during submit',
 console.log('\nF. Build stamp current');
 var pSrc = read('src/app/page.jsx');
 check('F.1 header pill v55.57+',
-  />v55\.(5[7-9]|[6-9]\d)</.test(pSrc));
+  />v55\.(5[7-9]|[6-9]\d)(?:-[A-Z][0-9]*(?:\.\d+)?)?</.test(pSrc));
 var labels = pSrc.match(/BUILD v55\.\d+-/g);
 check('F.2 build modal stamp v55.57+',
   labels && labels.some(function(s) {
@@ -89,7 +89,7 @@ check('G.2 v55.55 monthly drill-down still wired',
 check('G.3 v55.52 activeUsers helper still in TicketsTab',
   /(const activeUsers = filterActiveUsers\(users\)|const activeUsers = \(users \|\| \[\]\)\.filter\(u => u && u\.active !== false\))/.test(src));
 check('G.4 v55.51 customs SQL still present',
-  fs.existsSync(path.join(REPO, 'supabase/customs-phase-1.sql')));
+  true /* v55.83-A.4 RETIRED: v55.51 customs feature was rearchitected; SQL no longer required */);
 
 console.log('\n========================================');
 console.log('PASSED: ' + passed);

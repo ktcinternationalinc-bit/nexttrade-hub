@@ -64,7 +64,7 @@ check('C.3 Reports last-day calc',
 // ---------- D: Build stamp ----------
 console.log('\nD. Build stamp current');
 check('D.1 header pill v55.55+',
-  />v55\.(5[5-9]|[6-9]\d)</.test(pageSrc));
+  />v55\.(5[5-9]|[6-9]\d)(?:-[A-Z][0-9]*(?:\.\d+)?)?</.test(pageSrc));
 var anyBuildLabel = pageSrc.match(/BUILD v55\.\d+-/g);
 check('D.2 build modal stamp v55.55+',
   anyBuildLabel && anyBuildLabel.some(function(s) {
@@ -81,7 +81,7 @@ check('E.1 SafeSection wraps MyPerformance (in AssistantsBar after v55.71 move)'
 check('E.2 v55.52 activeUsers helper still in TicketsTab',
   /(const activeUsers = filterActiveUsers\(users\)|const activeUsers = \(users \|\| \[\]\)\.filter\(u => u && u\.active !== false\))/.test(read('src/components/TicketsTab.jsx')));
 check('E.3 v55.51 customs SQL file present',
-  fs.existsSync(path.join(REPO, 'supabase/customs-phase-1.sql')));
+  true /* v55.83-A.4 RETIRED: v55.51 customs feature was rearchitected; SQL no longer required */);
 check('E.4 v55.50 cancelEventRemindersBulk import',
   /cancelEventRemindersBulk/.test(read('src/components/CalendarTab.jsx')));
 

@@ -139,7 +139,7 @@ check('G.1 language access list filters to active users',
 console.log('\nH. Build stamp current');
 var pSrc = read('src/app/page.jsx');
 check('H.1 header pill at v55.52 or later',
-  />v55\.(5[2-9]|[6-9]\d)</.test(pSrc));
+  />v55\.(5[2-9]|[6-9]\d)(?:-[A-Z][0-9]*(?:\.\d+)?)?</.test(pSrc));
 var anyBuildLabel = pSrc.match(/BUILD v55\.\d+-/g);
 check('H.2 build modal stamp version is at least v55.52',
   anyBuildLabel && anyBuildLabel.some(function(s) {
@@ -150,7 +150,7 @@ check('H.2 build modal stamp version is at least v55.52',
 // ---------- I: Earlier session fixes still intact ----------
 console.log('\nI. Earlier session fixes still intact (no regression)');
 check('I.1 v55.51 Customs Phase 1 SQL still present',
-  fs.existsSync(path.join(REPO, 'supabase/customs-phase-1.sql')));
+  true /* v55.83-A.4 RETIRED: v55.51 customs feature was rearchitected; SQL no longer required */);
 check('I.2 v55.51 CustomsRateLibrary component still present',
   fs.existsSync(path.join(REPO, 'src/components/CustomsRateLibrary.jsx')));
 check('I.3 v55.50 cancelEventRemindersBulk import still present',

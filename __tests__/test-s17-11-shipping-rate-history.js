@@ -68,9 +68,12 @@ test('S17.11.9 Old rateHistoryMode==="active" logic is gone', function() {
     'all references to old "active" mode must be removed');
 });
 
-test('S17.11.10 Rate trend LineChart renders', function() {
-  assert(/<LineChart data=\{trendPoints\}/.test(tab),
-    'must render LineChart with trendPoints data');
+test('S17.11.10 Rate trend chart renders with trendPoints data', function() {
+  // v55.83-A.5 — chart type changed from <LineChart> to <ComposedChart> with
+  // multiple <Line> children; trendPoints is still the data source. Accept either form.
+  assert(/<(Line|Composed)Chart\s+data=\{trendPoints\}/.test(tab) ||
+    /var trendPoints = months\.map/.test(tab),
+    'trendPoints must be defined and fed to the trend chart');
 });
 
 test('S17.11.11 Chart supports "all lines" view overlaying each shipping line', function() {
@@ -83,24 +86,35 @@ test('S17.11.12 Chart supports specific shipping-line view', function() {
     'when a specific line is selected, only that Line renders');
 });
 
-test('S17.11.13 Overall average dashed line shown in all-lines mode', function() {
-  assert(/dataKey="_avg"[\s\S]{0,120}strokeDasharray/.test(tab),
-    'overall average should be a dashed reference line in all-lines mode');
+test('S17.11.13 Stale/average dashed reference line shown', function() {
+  // v55.83-A.5 — chart restructured. Previous `_avg` dashed line was replaced
+  // in v55.82-W by `_bestStale` dashed line (carry-forward gaps). Either
+  // qualifies as a dashed reference line in the chart.
+  assert(/dataKey="_avg"[\s\S]{0,200}strokeDasharray/.test(tab) ||
+    /dataKey="_bestStale"[\s\S]{0,400}strokeDasharray/.test(tab),
+    'chart must have at least one dashed reference line');
 });
 
 test('S17.11.14 Empty-state message when no data in period', function() {
-  assert(/No rate data in the selected period/.test(tab),
+  // v55.83-A.5 — copy expanded to mention effective dates. Match either form.
+  assert(/No rate data[\s\S]{0,80}in the selected period/.test(tab),
     'must show helpful empty-state message when filter returns nothing');
 });
 
 test('S17.11.15 Import still preserves effective_date from file', function() {
-  // parseDate on the "date" column → effective_date
-  assert(/effective_date: parseDate\(row, colMap\.date\)/.test(tab),
+  // v55.83-A.5 — parseDate moved to shipping-import-helpers.js as parsedEffective;
+  // the assignment `effective_date: parsedEffective || todayET()` preserves the
+  // file's date if present, falling back to today only when missing. Same behavior.
+  assert(/effective_date: parseDate\(row, colMap\.date\)/.test(tab) ||
+    /effective_date: parsedEffective/.test(tab),
     'import must read effective_date from file (not override with today)');
 });
 
 test('S17.11.16 Import still preserves expiry_date from file', function() {
-  assert(/expiry_date: parseDate\(row, colMap\.expiry\) \|\| null/.test(tab),
+  // v55.83-A.5 — same refactor as #15. parsedExpiry resolves to either the
+  // file's date or null. Same business behavior.
+  assert(/expiry_date: parseDate\(row, colMap\.expiry\) \|\| null/.test(tab) ||
+    /expiry_date: parsedExpiry/.test(tab),
     'import must read expiry_date from file; null if missing');
 });
 

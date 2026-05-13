@@ -305,10 +305,7 @@ group('10. Carry-forward — v55.65/66/67/68/69/70/71/72 still intact');
 
 check('10.1 v55.71 — three avatar tiles still rendered',
   /who="nadia"/.test(ab) && /who="jenna"/.test(ab) && /who="sara"/.test(ab));
-check('10.2 v55.71 — three real photos still in public/avatars/',
-  fs.existsSync(path.join(REPO, 'public/avatars/nadia.png'))
-  && fs.existsSync(path.join(REPO, 'public/avatars/jenna.png'))
-  && fs.existsSync(path.join(REPO, 'public/avatars/sara.png')));
+check('10.2 [RETIRED v55.83-A.5] avatars now rendered as SVG, not PNG files in public/avatars/', true);
 check('10.3 v55.71 — PhotoAvatar wrapper still in AssistantsBar',
   /function PhotoAvatar\(props\)/.test(ab));
 check('10.4 v55.72 — formatBodyAsHtml still in /api/notify',

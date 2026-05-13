@@ -333,16 +333,23 @@ ok('4p: saveEditEvent detects hasAllDayChange',
   /hasAllDayChange/.test(cal)
 );
 
-ok('4q: saveEditEvent persists update.location',
-  /update\.location\s*=\s*newLoc \|\| null/.test(cal)
+ok('4q: saveEditEvent persists location field',
+  // v55.83-A.5 — variable renamed update → fieldUpdate (for clarity that
+  // there's also a parallel singleUpdate). Same business behavior.
+  /update\.location\s*=\s*newLoc \|\| null/.test(cal) ||
+  /fieldUpdate\.location\s*=\s*newLoc \|\| null/.test(cal)
 );
 
-ok('4r: saveEditEvent persists update.join_link',
-  /update\.join_link\s*=\s*newLink \|\| null/.test(cal)
+ok('4r: saveEditEvent persists join_link field',
+  // v55.83-A.5 — see 4q note re: fieldUpdate rename
+  /update\.join_link\s*=\s*newLink \|\| null/.test(cal) ||
+  /fieldUpdate\.join_link\s*=\s*newLink \|\| null/.test(cal)
 );
 
 ok('4s: saveEditEvent forces event_time=null when toggling all_day ON',
-  /if \(newAllDay\) update\.event_time = null/.test(cal)
+  // v55.83-A.5 — see 4q note re: fieldUpdate rename
+  /if \(newAllDay\) update\.event_time = null/.test(cal) ||
+  /if \(newAllDay\) fieldUpdate\.event_time = null/.test(cal)
 );
 
 // 4t-w. Display: all-day badge, location pin, join link

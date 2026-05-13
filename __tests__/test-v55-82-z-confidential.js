@@ -95,10 +95,13 @@ ok('9e: card border is orange-300 when confidential',
   /1px solid #fdba74/.test(tickets));
 
 // Chip styling
-ok('10a: PRIVATE chip uses sky colors (bg-sky-100, border-sky-400, text-sky-900)',
-  /bg-sky-100[^"]*border-sky-400[^"]*text-sky-900[\s\S]{0,200}🔒 PRIVATE/.test(tickets));
-ok('10b: CONFIDENTIAL chip uses orange colors (bg-orange-100, border-orange-400, text-orange-900)',
-  /bg-orange-100[^"]*border-orange-400[^"]*text-orange-900[\s\S]{0,200}🟧 CONFIDENTIAL/.test(tickets));
+ok('10a: PRIVATE chip uses sky colors (v55.83-A.4 high-contrast: bg-sky-700 + white text)',
+  // v55.83-A.4 — Max requested better contrast. Chips moved from pale
+  // bg-sky-100 + dark text to dark bg-sky-700 + white text.
+  /bg-sky-700[^"]*border-sky-800[^"]*text-white[\s\S]{0,200}🔒 PRIVATE/.test(tickets));
+ok('10b: CONFIDENTIAL chip uses orange colors (v55.83-A.4 high-contrast: bg-orange-700 + white text)',
+  // v55.83-A.4 — same contrast fix as PRIVATE chip
+  /bg-orange-700[^"]*border-orange-800[^"]*text-white[\s\S]{0,200}🟧 CONFIDENTIAL/.test(tickets));
 
 if (failures.length > 0) {
   console.log('\n❌ ' + failures.length + ' test' + (failures.length === 1 ? '' : 's') + ' failed:');

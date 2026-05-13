@@ -130,11 +130,17 @@ ok('3b: autoFetchedRef declared with empty-string initial value',
 );
 
 ok('3c: Auto-fetch useEffect calls requestCoach when conditions met',
-  /useEffect\(function \(\) \{[\s\S]{0,800}autoFetchedRef\.current = key;[\s\S]{0,80}requestCoach\(\)/.test(perfSrc)
+  // v55.83-A.5 — comments and defensive clears added between the key assignment
+  // and the requestCoach() call. Distance expanded from 80 to 600 chars.
+  /useEffect\(function \(\) \{[\s\S]{0,2500}autoFetchedRef\.current = key;[\s\S]{0,600}requestCoach\(\)/.test(perfSrc)
 );
 
-ok('3d: Auto-fetch skips when already fetching/erroring/has-message',
-  /if \(coachMsg \|\| coachError \|\| coachLoading\) return/.test(perfSrc),
+ok('3d: Auto-fetch skips when already fetching (idempotent — no loop)',
+  // v55.83-A.5 — combined OR guard was split into independent if-returns
+  // for clarity. Either shape is acceptable; both prevent re-entry.
+  /if \(coachMsg \|\| coachError \|\| coachLoading\) return/.test(perfSrc) ||
+  (/if \(coachLoading\) return/.test(perfSrc) &&
+   /autoFetchedRef\.current === key\) return/.test(perfSrc)),
   'auto-fetch must be idempotent — no loop'
 );
 
@@ -149,19 +155,27 @@ ok('3e: Auto-fetch re-keys on period change',
 // expanded + myId + period; current is kept for refresh-on-data-arrival
 // but not gated.
 ok('3f: Auto-fetch deps no longer include hasAnyActivity gate (v55.82-K)',
-  /\}, \[expanded, (current, hasAnyActivity, myId, period|myId, period, current)\]\);/.test(perfSrc),
-  'either old shape (legacy) or new v55.82-K shape acceptable'
+  // v55.83-A.5 — current deps array is [expanded, myId, period, current, loading].
+  // The critical invariant: hasAnyActivity must NOT be in the deps (would gate the auto-fetch).
+  (/\}, \[expanded, (current, hasAnyActivity, myId, period|myId, period, current)\]\);/.test(perfSrc) ||
+   /\}, \[expanded, myId, period, current, loading\]\);/.test(perfSrc)) &&
+  !/\}, \[[^\]]*hasAnyActivity[^\]]*\]\);/.test(perfSrc),
+  'either old shape (legacy) or new v55.82-K shape acceptable; hasAnyActivity must NOT be in deps'
 );
 
-ok('3g: Loading state shows visible "Coach is writing your feedback…" card',
-  /coachLoading && !coachMsg && \([\s\S]{0,500}Coach is writing your feedback/.test(perfSrc),
+ok('3g: Loading state shows a visible coach-writing card',
+  // v55.83-A.5 — copy now bilingual via tLabel.writing. The card uses
+  // {tLabel.writing} as visible message inside a bordered card.
+  /coachLoading && !coachMsg && \([\s\S]{0,500}(Coach is writing your feedback|tLabel\.writing|tLabel\.thinking)/.test(perfSrc),
   'loading state must be a real visible card, not just a button label change'
 );
 
 ok('3h: Empty state replaced italic-grey with a dashed border card',
-  // v55.82-R — wrapped "Get Coach Feedback" in <strong className="text-violet-800">
-  // for emphasis. Old test required bare <strong>. Accept either.
-  /No feedback yet[\s\S]{0,400}Tap <strong[^>]*>Get Coach Feedback<\/strong> above/.test(perfSrc),
+  // v55.83-A.5 — copy bilingual via tLabel.noFeedback / tLabel.tapToGet /
+  // tLabel.getFeedback. The empty state still wraps in a dashed border
+  // card with a <strong> emphasis. Accept either bilingual or legacy form.
+  /No feedback yet[\s\S]{0,400}Tap <strong[^>]*>Get Coach Feedback<\/strong> above/.test(perfSrc) ||
+  /tLabel\.noFeedback[\s\S]{0,400}<strong className="text-violet-800">\{tLabel\.getFeedback\}/.test(perfSrc),
   'empty state must be visibly readable on light background'
 );
 
@@ -171,9 +185,9 @@ ok('3i: REGRESSION GUARD — old italic placeholder text is gone',
 );
 
 ok('3j: Empty state uses solid text colors (slate-700+, slate-800+)',
-  // v55.82-R bumped from slate-700 → slate-800 for stronger contrast.
-  // Accept either as "solid enough" per the spec intent.
-  /No feedback yet[\s\S]{0,300}text-slate-(700|800|900)/.test(perfSrc),
+  // v55.83-A.5 — accept tLabel.noFeedback form as well as legacy literal.
+  /No feedback yet[\s\S]{0,300}text-slate-(700|800|900)/.test(perfSrc) ||
+  /tLabel\.noFeedback[\s\S]{0,300}text-slate-(700|800|900)/.test(perfSrc),
   'no faint italic text — must be readable'
 );
 

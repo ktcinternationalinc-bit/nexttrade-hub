@@ -167,13 +167,23 @@ ok('4a: Modal-open suppression overrides woken flag',
 //      of NadiaFloatingOverlay's render block is BEFORE the
 //      auto-expand-on-message useEffect. So a tab-greeting that arrives
 //      while suppressed cannot trigger setExpanded(true).
-ok('4b: Auto-expand effect cannot fire while suppressed',
+ok('4b: Auto-expand effect cannot fire side-effects while suppressed',
+  // v55.83-A.4 — Original assertion required the suppressed return to be
+  // BEFORE the auto-expand useEffect. That violated React rules of hooks
+  // and caused error #310 in production. New architecture: the useEffect
+  // is declared BEFORE the suppressed return (so hooks count is stable),
+  // but its callback short-circuits on props.suppressed via early return
+  // inside the effect body. Same business outcome (no auto-expand while
+  // suppressed) with hooks-rule compliance.
   (function() {
-    var suppressedAt = overlaySrc.indexOf('return <NadiaSuppressedKiller');
+    // Look for the suppressed short-circuit INSIDE the auto-expand effect
     var autoExpandAt = overlaySrc.indexOf('AUTO-EXPAND on new assistant message');
-    return suppressedAt > 0 && autoExpandAt > 0 && suppressedAt < autoExpandAt;
+    if (autoExpandAt < 0) return false;
+    // Find the effect body that follows, check it short-circuits on suppressed
+    var sliceAfter = overlaySrc.substring(autoExpandAt, autoExpandAt + 1500);
+    return /useEffect\(function\(\)[\s\S]*?if \(props\.suppressed\) return/.test(sliceAfter);
   })(),
-  'suppression must short-circuit BEFORE the auto-expand useEffect runs'
+  'auto-expand effect must short-circuit on props.suppressed inside its body (hooks-rule compliant)'
 );
 
 // 4c — When suppressed, AIGreeter is not mounted at all
@@ -226,7 +236,7 @@ ok('5d: editTreasuryModal is in suppression check',
 // 6a — Global header badge must match the current build letter
 // v55.83-A — accept v55.83+ family (was v55.82-* only)
 ok('6a: Global header badge reads current build letter (not stale)',
-  /<span className="text-\[10px\] text-zinc-500 font-mono hidden md:inline"[^>]*>v55\.\d+-[A-Z][0-9]*<\/span>/.test(pageSrc),
+  /<span className="text-\[10px\] text-zinc-500 font-mono hidden md:inline"[^>]*>v55\.\d+-[A-Z][0-9]*(?:\.\d+)?<\/span>/.test(pageSrc),
   'the visible app-header version badge must move with each build letter — Max May 11 2026 caught v55.81 left over on F'
 );
 

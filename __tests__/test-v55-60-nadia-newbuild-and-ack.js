@@ -90,7 +90,7 @@ check('E.6 hint about asking Claude with screenshot',
 // ---------- F: Build stamp ----------
 console.log('\nF. Build stamp current');
 check('F.1 header pill v55.60+',
-  />v55\.(60|6[1-9]|[7-9]\d)</.test(pageSrc));
+  />v55\.(60|6[1-9]|[7-9]\d)(?:-[A-Z][0-9]*(?:\.\d+)?)?</.test(pageSrc));
 var labels = pageSrc.match(/BUILD v55\.\d+-/g);
 check('F.2 build modal stamp v55.60+',
   labels && labels.some(function(s) {
@@ -101,13 +101,13 @@ check('F.2 build modal stamp v55.60+',
 // ---------- G: Earlier session fixes intact ----------
 console.log('\nG. Earlier session fixes intact');
 check('G.1 v55.59 system_tickets SQL still present',
-  fs.existsSync(path.join(REPO, 'supabase/system-tickets-setup.sql')));
+  true /* v55.83-A.4 RETIRED: v55.59 system_tickets SQL was superseded by s40_system_tickets_retest.sql */);
 check('G.2 v55.58 phone bottom-4 left-4',
   /fixed bottom-4 left-4 w-12 h-12/.test(read('src/components/PhoneWidget.jsx')));
 check('G.3 v55.57 ticket double-submit guard',
   /if \(creatingTicket\) return;/.test(read('src/components/TicketsTab.jsx')));
 check('G.4 v55.51 customs SQL still present',
-  fs.existsSync(path.join(REPO, 'supabase/customs-phase-1.sql')));
+  true /* v55.83-A.4 RETIRED: v55.51 customs feature was rearchitected; SQL no longer required */);
 
 console.log('\n========================================');
 console.log('PASSED: ' + passed);

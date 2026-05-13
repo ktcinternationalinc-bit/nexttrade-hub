@@ -127,7 +127,11 @@ check('3.11 Expired rates dimmed (opacity-60) but still visible in list',
 check('3.12 Detail Line View respects ALL existing filters (filtered, not raw)',
   /📋 Detail Line View \(\{filtered\.length\}\)/.test(srt));
 check('3.13 Routes (card) view STILL preserved as default',
-  /routesViewMode === 'routes' && \([\s\S]{0,4000}routeGroups\.map/.test(srt));
+  // v55.83-A.5 — routes-view body restructured: previous inline routeGroups.map
+  // was extracted to a renderRouteCard() helper that's called from both Active
+  // and Historical sections. Either form is acceptable.
+  /routesViewMode === 'routes' && \([\s\S]{0,4000}routeGroups\.map/.test(srt) ||
+  /routesViewMode === 'routes' && \([\s\S]{0,4000}renderRouteCard/.test(srt));
 
 // ============================================================
 // 4. Carry-forward — earlier v55.65 work intact
