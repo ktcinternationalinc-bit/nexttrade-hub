@@ -1,14 +1,16 @@
 // v55.83-A — Inventory Tab (Stage 1)
+// v55.83-A.6.21 — Stage B activated: Shipments + Inventory View + Movements
 //
-// Replaces the legacy inline inventory section in page.jsx. Stage 1 ships:
-//   • Master SKU list (CRUD)
-//   • Warehouse management (CRUD)
-//   • Coming-soon placeholders for Shipments, Inventory View, Movements, Reports
-//
-// Future stages will fill in those placeholders without restructuring this tab.
+// Stage 1 (A): Master SKUs + Warehouses
+// Stage 2 (B): Shipments form/list/receive, Inventory pivot, Movements ledger,
+//              Reconciliation per shipment line item
+// Stage 3-6: Landed cost, P&L, adjustments, reports — future builds
 import { useState } from 'react';
 import MasterSKUList from './MasterSKUList';
 import WarehouseSettings from './WarehouseSettings';
+import ShipmentsManager from './ShipmentsManager';
+import InventoryView from './InventoryView';
+import MovementsLedger from './MovementsLedger';
 import {
   canViewInventory,
   canSeeInventoryCosts,
@@ -26,8 +28,10 @@ var SUBTABS = [
 ];
 
 export default function InventoryTab({ userProfile, modulePerms, toast }) {
-  // Default to Master SKUs since Inventory View needs Stage B before it has data
-  var [subtab, setSubtab] = useState('skus');
+  // v55.83-A.6.21 — Stage B ships, so default landing is the Inventory pivot view
+  // (it's the most useful "where is my stock right now?" surface). User can still
+  // jump to skus/warehouses/shipments via the subtab nav.
+  var [subtab, setSubtab] = useState('inventory');
 
   if (!canViewInventory(userProfile, modulePerms)) {
     return (
@@ -57,7 +61,7 @@ export default function InventoryTab({ userProfile, modulePerms, toast }) {
           </div>
           <div className="flex items-center gap-1 text-[10px]">
             <span className="px-2 py-0.5 rounded bg-blue-200 text-blue-900 font-bold">
-              v55.83-A · Stage 1 of 6
+              v55.83-A.6.21 · Stage 2 of 6
             </span>
             {seePnL && (
               <span className="px-2 py-0.5 rounded bg-emerald-200 text-emerald-900 font-bold">
@@ -76,7 +80,8 @@ export default function InventoryTab({ userProfile, modulePerms, toast }) {
       {/* Subtab nav */}
       <div className="flex gap-1 flex-wrap bg-slate-50 rounded-lg p-1 border border-slate-200">
         {SUBTABS.map(function (st) {
-          var available = st.stage === 'A';
+          // v55.83-A.6.21 — Stage B (Inventory View, Shipments, Movements) is now active.
+          var available = st.stage === 'A' || st.stage === 'B';
           var isActive = subtab === st.id;
           return (
             <button key={st.id}
@@ -103,14 +108,25 @@ export default function InventoryTab({ userProfile, modulePerms, toast }) {
       {subtab === 'warehouses' && (
         <WarehouseSettings userProfile={userProfile} modulePerms={modulePerms} toast={toast} />
       )}
+      {/* v55.83-A.6.21 — Stage B components */}
+      {subtab === 'inventory' && (
+        <InventoryView userProfile={userProfile} modulePerms={modulePerms} toast={toast} />
+      )}
+      {subtab === 'shipments' && (
+        <ShipmentsManager userProfile={userProfile} modulePerms={modulePerms} toast={toast} />
+      )}
+      {subtab === 'movements' && (
+        <MovementsLedger userProfile={userProfile} modulePerms={modulePerms} toast={toast} />
+      )}
 
-      {/* Coming-soon placeholders for Stage B+ */}
-      {['inventory','shipments','movements','adjustments','reports'].indexOf(subtab) >= 0 && (
+      {/* Coming-soon placeholders for Stage E+ only (adjustments, reports) */}
+      {['adjustments', 'reports'].indexOf(subtab) >= 0 && (
         <div className="bg-blue-50 border border-blue-200 rounded-xl p-6 text-center">
           <div className="text-3xl mb-2">🚧</div>
-          <div className="text-sm font-bold text-blue-900 mb-1">Coming in a future build</div>
+          <div className="text-sm font-bold text-blue-900 mb-1">Coming in Stage {SUBTABS.find(function (s) { return s.id === subtab; }).stage}</div>
           <div className="text-xs text-blue-800 max-w-md mx-auto">
-            This section is part of Stage {SUBTABS.find(function (s) { return s.id === subtab; }).stage} of the new inventory module. For now, use the <strong>Master SKUs</strong> and <strong>Warehouses</strong> tabs above to set up your product database and physical locations.
+            {subtab === 'adjustments' && 'Damage, returns, transfers, and physical count corrections will live here (Stage E).'}
+            {subtab === 'reports' && 'Profitability, aging, and slow-moving inventory reports come in Stage F.'}
           </div>
         </div>
       )}
@@ -118,23 +134,27 @@ export default function InventoryTab({ userProfile, modulePerms, toast }) {
       {/* Stage 1 guidance */}
       <details className="bg-slate-50 border border-slate-200 rounded-lg p-3 text-xs">
         <summary className="font-bold text-slate-700 cursor-pointer">
-          ℹ️ What's in this build (v55.83-A · Stage 1 of 6)
+          ℹ️ What's in this build (v55.83-A.6.21 · Stage 2 of 6)
         </summary>
         <div className="mt-2 space-y-2 text-slate-600 leading-relaxed">
           <p>
-            <strong>Stage 1 is the foundation.</strong> You can set up your product database (SKUs) and physical locations (Warehouses). Stock quantities, shipments, and P&L all come in later stages.
+            <strong>Stage 2 (B) adds operational inventory.</strong> You can now create shipments, track them from draft → in transit → arrived → received, add SKU line items with multi-unit quantities, reconcile expected vs actual on receipt, see current stock pivoted by SKU × Warehouse, and audit every movement.
           </p>
           <p className="font-semibold text-slate-700">Roadmap:</p>
           <ul className="space-y-1 pl-4">
             {SUBTABS.map(function (st) {
+              var done = st.stage === 'A' || st.stage === 'B';
               return (
-                <li key={st.id} className={st.stage === 'A' ? 'text-emerald-700' : ''}>
+                <li key={st.id} className={done ? 'text-emerald-700' : ''}>
                   <strong>Stage {st.stage}:</strong> {st.desc}
-                  {st.stage === 'A' && <span className="ml-1">✓ shipped</span>}
+                  {done && <span className="ml-1">✓ shipped</span>}
                 </li>
               );
             })}
           </ul>
+          <p className="text-[10px] text-slate-500 mt-2">
+            <strong>Setup:</strong> If you haven't run the inventory schema yet, run <code>sql/v55-83-a-inventory-schema.sql</code> in Supabase. For reconciliation columns, also run the v55.83-A.6.21 SQL inline in chat.
+          </p>
         </div>
       </details>
     </div>

@@ -1416,9 +1416,18 @@ export default function App() {
         setRecentTicketUpdates(filteredComments);
       } catch(e) { setRecentTicketUpdates([]); }
       // Load tickets for dashboard
-      // v55.82-Z QA — also filter at the dashTickets pull.
+      // v55.83-A.6.22 (Max May 14 2026) — REMOVED limit(200). Overdue tickets
+      // are by definition OLD tickets, so limiting to the 200 newest ORDER BY
+      // created_at DESC pushed every overdue ticket out of the window when the
+      // team has 200+ active tickets. Now loads ALL non-closed tickets so the
+      // dashboard priority cards can find them. Closed tickets are excluded
+      // server-side — they're not needed for dashboard cards and would only
+      // bloat the payload. For a typical KTC volume (a few hundred open
+      // tickets) this is a small fetch.
       try {
-        const { data: tix } = await supabase.from('tickets').select('*').order('created_at', { ascending: false }).limit(200);
+        const { data: tix } = await supabase.from('tickets').select('*')
+          .neq('status', 'Closed')
+          .order('created_at', { ascending: false });
         var dashMeId = profile && profile.id;
         var dashMeIsSA = profile && profile.role === 'super_admin';
         var filteredTix = (tix || []).filter(function (t) {
@@ -4633,7 +4642,7 @@ export default function App() {
               {/* Brand mark — bracket prefix is a terminal callout convention. */}
               <span className="text-emerald-400 font-mono text-xs font-bold tracking-tight" style={{ fontFamily: '"JetBrains Mono", monospace' }}>[KTC]</span>
               <h1 className="text-sm font-bold text-white tracking-tight whitespace-nowrap">NEXTTRADE HUB</h1>
-              <span className="text-[10px] text-zinc-500 font-mono hidden md:inline" style={{ fontFamily: '"JetBrains Mono", monospace' }}>v55.83-A.6.20</span>
+              <span className="text-[10px] text-zinc-500 font-mono hidden md:inline" style={{ fontFamily: '"JetBrains Mono", monospace' }}>v55.83-A.6.22</span>
               {/* Live clock — terminals always show one. Updates via the
                   existing tick state; if not present, falls back to no clock. */}
               <span className="hidden lg:inline text-[10px] text-zinc-500 font-mono ml-2 pl-2 border-l border-zinc-800" style={{ fontFamily: '"JetBrains Mono", monospace' }}>
@@ -8519,9 +8528,12 @@ export default function App() {
                     const openTickets = dashTickets.filter(t => t.status !== 'Closed' && t.status !== 'Resolved').length;
                     const overdueTickets = dashTickets.filter(t => t.status !== 'Closed' && t.status !== 'Resolved' && t.due_date && t.due_date < todayStr).length;
                     const teamTickets = dashTickets.filter(t => t.status !== 'Closed' && t.assigned_to !== myId && t.created_by !== myId).length;
+                    // v55.83-A.6.22 (Max May 14 2026) — REMOVED "Overdue Tickets" stat card.
+                    // The new DashboardPrioritySections cluster above already shows overdue
+                    // count + the actual overdue ticket list. Keeping a duplicate stat tile
+                    // would re-create the visual clutter Max asked to clean up.
                     const cards = [
                       { label: 'Open Tickets', value: openTickets, color: '#60a5fa', icon: '🎫', click: () => setTab('tickets') },
-                      { label: 'Overdue Tickets', value: overdueTickets, color: '#ef4444', icon: '⚠️', click: () => setTab('tickets') },
                       { label: 'Team Tickets', value: teamTickets, color: '#38bdf8', icon: '👥', click: () => setTab('tickets') },
                       { label: "Today's Events", value: todayEvents.length, color: '#34d399', icon: '📅', click: () => setTab('calendar') },
                       { label: 'Follow-ups', value: myFollowUps.length, color: '#fbbf24', icon: '🔔', click: () => setTab('crm') },
@@ -9078,330 +9090,16 @@ export default function App() {
             })()}
 
 
-            {/* Section: Tickets */}
-            <div style={{ display: 'flex', alignItems: 'center', gap: 10, margin: '20px 0 12px' }}>
-              <div style={{ width: 3, height: 20, borderRadius: 2, background: '#8b5cf6' }} />
-              <span style={{ fontSize: 12, fontWeight: 800, color: '#94a3b8', letterSpacing: '0.06em' }}>🎫 TICKETS</span>
-              <div style={{ flex: 1, height: 1, background: 'rgba(148,163,184,0.1)' }} />
-            </div>
+            {/* v55.83-A.6.22 (Max May 14 2026) — REMOVED the old "Section: Tickets"
+                cluster (Newly Assigned + Overdue + Recently Updated + All My Open).
+                These were duplicates of the new DashboardPrioritySections rendered
+                way above (order:2 cluster, right after the AI Workforce hero). Max
+                explicitly asked: "Remove or hide the previous sections such as
+                Previous Tickets Assigned, My Tickets, Urgent Tickets, Overdue
+                Tickets. Those old sections are no longer needed because the new
+                dashboard cards are supposed to replace them." The new priority
+                cards are the sole ticket surface on the dashboard now. */}
 
-            {/* ===== TICKETS DASHBOARD ===== */}
-            {dashTickets.length > 0 && (() => {
-              const myId = userProfile?.id;
-              const todayStr = todayET();
-              const twoDaysAgo = new Date(Date.now() - 48 * 3600000).toISOString();
-              // v55.82-D — added critical (deep red, almost black) above high
-              const priColor = (p) => p === 'critical' ? '#7f1d1d' : p === 'high' ? '#ef4444' : p === 'low' ? '#10b981' : '#f59e0b';
-              const timeAgo = (d) => { const m = Math.floor((Date.now() - new Date(d).getTime()) / 60000); if (m < 60) return m + 'm'; const h = Math.floor(m/60); if (h < 24) return h + 'h'; return Math.floor(h/24) + 'd'; };
-
-              const myTickets = dashTickets.filter(t => (t.assigned_to === myId || t.created_by === myId) && t.status !== 'Closed');
-              const newlyAssigned = myTickets.filter(t => t.assigned_to === myId && t.created_at >= twoDaysAgo);
-              const myUpdates = recentTicketUpdates.filter(c => c.tickets && (c.tickets.assigned_to === myId || c.tickets.created_by === myId));
-              const overdueTickets = myTickets.filter(t => t.due_date && t.due_date < todayStr);
-
-              // S14 — Dashboard ticket UI redesign for better readability.
-              //
-              // What changed (in plain English):
-              //   1. Each section gets a distinct "chapter feel" — the header
-              //      band has a colored left accent bar + tighter typography.
-              //   2. Ticket cards now have a clear left border in the priority
-              //      color (red/amber/yellow/grey) — your eye jumps to the hot
-              //      ones first.
-              //   3. The ticket title is BIG and bold; the ticket number
-              //      becomes a subtle tag. Before they fought for attention.
-              //   4. Status + due date + assignee now sit in a clean info row
-              //      using small "pills" instead of random inline text.
-              //   5. Overdue days show as "3 days overdue" not a cryptic ⚠ icon.
-              //   6. Space between cards: gap 6px instead of a flat 1px line,
-              //      with the colored left border acting as the divider.
-              //   7. Last-update comment: cleaner, indented, with the commenter
-              //      shown as a small avatar circle instead of purple text.
-              const sectionStyle = { background: 'rgba(17,24,39,0.7)', borderRadius: 14, border: '1px solid rgba(255,255,255,0.08)', marginBottom: 12, overflow: 'hidden' };
-              const sectionHeaderStyle = (color, bgColor) => ({
-                display: 'flex', alignItems: 'center', justifyContent: 'space-between',
-                padding: '12px 16px',
-                borderBottom: '1px solid rgba(255,255,255,0.06)',
-                background: bgColor,
-                borderLeft: '3px solid ' + color,
-              });
-              const sectionLabel = (icon, text, count, color) => (
-                <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-                  <span style={{ fontSize: 15, lineHeight: 1 }}>{icon}</span>
-                  <span style={{ fontSize: 12, fontWeight: 800, color: color, letterSpacing: '0.04em', textTransform: 'uppercase' }}>{text}</span>
-                  <span style={{ fontSize: 10, fontWeight: 800, color: '#fff', background: color, borderRadius: 10, padding: '2px 9px', minWidth: 20, textAlign: 'center', lineHeight: 1.4 }}>{count}</span>
-                </div>
-              );
-
-              // Priority → row-level urgency color
-              // S16: DISTINCT colors for each urgency type. Previously both
-              // "due today" and "medium priority" shared amber, confusing.
-              //   Critical   → #7f1d1d deep red (must be done within hours — v55.82-D)
-              //   Overdue    → #ef4444 red      (danger)
-              //   Due today  → #f97316 orange   (attention now)
-              //   Urgent/High→ #dc2626 crimson  (very important)
-              //   Medium     → #eab308 yellow   (warning)
-              //   Low        → #64748b grey     (normal)
-              const priBorderColor = (p) => {
-                if (p === 'critical') return '#7f1d1d';                 // deep red — drop everything
-                if (p === 'urgent' || p === 'high') return '#dc2626';  // crimson
-                if (p === 'medium') return '#eab308';                  // yellow
-                if (p === 'low') return '#64748b';                     // grey
-                return '#475569';                                      // default
-              };
-
-              // Status pill style — replaces the old inline badge
-              const statusPillStyle = (status) => {
-                const map = {
-                  'New':         { bg: 'rgba(59,130,246,0.12)',  fg: '#60a5fa', border: 'rgba(59,130,246,0.3)' },
-                  'In Progress': { bg: 'rgba(234,179,8,0.12)',   fg: '#fbbf24', border: 'rgba(234,179,8,0.3)' },
-                  'Resolved':    { bg: 'rgba(16,185,129,0.12)',  fg: '#34d399', border: 'rgba(16,185,129,0.3)' },
-                  'Closed':      { bg: 'rgba(100,116,139,0.12)', fg: '#94a3b8', border: 'rgba(100,116,139,0.3)' },
-                };
-                const s = map[status] || { bg: 'rgba(139,92,246,0.12)', fg: '#a78bfa', border: 'rgba(139,92,246,0.3)' };
-                return {
-                  display: 'inline-flex', alignItems: 'center', gap: 4,
-                  padding: '2px 8px', borderRadius: 4,
-                  fontWeight: 700, fontSize: 10,
-                  background: s.bg, color: s.fg,
-                  border: '1px solid ' + s.border,
-                  letterSpacing: '0.02em',
-                };
-              };
-
-              // Infer initials for avatar circles
-              const initialsOf = (name) => {
-                if (!name) return '?';
-                const parts = String(name).trim().split(/\s+/);
-                return (parts[0][0] + (parts[1] ? parts[1][0] : '')).toUpperCase();
-              };
-
-              const TicketCard = ({ t, accent }) => {
-                const lastUpdate = recentTicketUpdates.find(c => c.tickets?.id === t.id);
-                const updaterName = lastUpdate ? ((teamUsers || []).find(u => u.id === lastUpdate.created_by)?.name || 'System') : null;
-                const daysOverdue = t.due_date && t.due_date < todayStr
-                  ? Math.floor((new Date(todayStr).getTime() - new Date(t.due_date).getTime()) / 86400000)
-                  : 0;
-                const dueToday = t.due_date === todayStr;
-                // Overdue = red, Due Today = orange (distinct from amber medium), else priority color
-                const leftBorderColor = daysOverdue > 0 ? '#ef4444' : (dueToday ? '#f97316' : priBorderColor(t.priority));
-
-                return (
-                <div style={{
-                  cursor: 'pointer',
-                  transition: 'background 0.15s',
-                  borderLeft: '4px solid ' + leftBorderColor,
-                  background: 'rgba(255,255,255,0.015)',
-                  borderBottom: '1px solid rgba(255,255,255,0.06)',
-                }}
-                  className="hover:bg-white/[0.05]" onClick={() => { setOpenTicketId(t.id); setTab('tickets'); }}>
-                  <div style={{ padding: '12px 14px 12px 12px' }}>
-                    {/* Title row — title is the star, ticket # is a subtle tag */}
-                    <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 12 }}>
-                      <div style={{ flex: 1, minWidth: 0 }}>
-                        <div style={{
-                          fontSize: 15, fontWeight: 800, color: '#f1f5f9',
-                          lineHeight: 1.35, marginBottom: 8,
-                          overflow: 'hidden', textOverflow: 'ellipsis',
-                          display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical',
-                        }}>
-                          {t.title}
-                        </div>
-                        {/* Info row — status pill, ticket#, assignee, due */}
-                        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, alignItems: 'center' }}>
-                          <span style={statusPillStyle(t.status)}>{t.status}</span>
-                          <span style={{ fontSize: 10, fontWeight: 700, color: '#64748b', fontFamily: 'monospace', letterSpacing: '0.03em' }}>
-                            {t.ticket_number}
-                          </span>
-                          {t.assigned_to && (
-                            <span style={{ fontSize: 11, color: '#94a3b8', display: 'inline-flex', alignItems: 'center', gap: 4 }}>
-                              <span style={{ fontSize: 9, color: '#64748b' }}>→</span>
-                              {getUserName(t.assigned_to)}
-                            </span>
-                          )}
-                          {daysOverdue > 0 && (
-                            <span style={{
-                              fontSize: 10, fontWeight: 800,
-                              color: '#fca5a5', background: 'rgba(239,68,68,0.12)',
-                              border: '1px solid rgba(239,68,68,0.3)',
-                              padding: '2px 8px', borderRadius: 4,
-                              letterSpacing: '0.02em',
-                            }}>
-                              {daysOverdue === 1 ? '1 DAY OVERDUE' : daysOverdue + ' DAYS OVERDUE'}
-                            </span>
-                          )}
-                          {dueToday && (
-                            <span style={{
-                              fontSize: 10, fontWeight: 800,
-                              color: '#fdba74', background: 'rgba(249,115,22,0.15)',
-                              border: '1px solid rgba(249,115,22,0.4)',
-                              padding: '2px 8px', borderRadius: 4,
-                            }}>
-                              DUE TODAY
-                            </span>
-                          )}
-                          {t.due_date && t.due_date > todayStr && (
-                            <span style={{ fontSize: 11, color: '#64748b' }}>
-                              Due {t.due_date}
-                            </span>
-                          )}
-                        </div>
-                      </div>
-                      <span style={{ fontSize: 10, color: '#475569', flexShrink: 0, whiteSpace: 'nowrap' }}>
-                        {timeAgo(t.created_at)}
-                      </span>
-                    </div>
-
-                    {/* Last update block — cleaner presentation with avatar */}
-                    {lastUpdate && (
-                      <div style={{
-                        marginTop: 10,
-                        padding: '8px 10px',
-                        background: 'rgba(139,92,246,0.05)',
-                        borderRadius: 6,
-                        borderLeft: '2px solid rgba(167,139,250,0.5)',
-                        display: 'flex', gap: 8, alignItems: 'flex-start',
-                      }}>
-                        <div style={{
-                          width: 22, height: 22, borderRadius: '50%',
-                          background: 'rgba(167,139,250,0.2)', color: '#c4b5fd',
-                          display: 'flex', alignItems: 'center', justifyContent: 'center',
-                          fontSize: 9, fontWeight: 800, flexShrink: 0,
-                        }}>
-                          {initialsOf(updaterName)}
-                        </div>
-                        <div style={{ flex: 1, minWidth: 0 }}>
-                          <div style={{ fontSize: 11, color: '#cbd5e1', marginBottom: 2 }}>
-                            <span style={{ fontWeight: 700, color: '#a78bfa' }}>{updaterName}</span>
-                            <span style={{ color: '#64748b', marginLeft: 6 }}>{timeAgo(lastUpdate.created_at)}</span>
-                          </div>
-                          <div style={{ fontSize: 12, color: '#e2e8f0', lineHeight: 1.4 }}>
-                            {(lastUpdate.comment_text || '').substring(0, 120)}{(lastUpdate.comment_text || '').length > 120 ? '…' : ''}
-                          </div>
-                        </div>
-                      </div>
-                    )}
-                    {!lastUpdate && t.updated_by && t.updated_at && t.updated_at !== t.created_at && (
-                      <div style={{ fontSize: 11, color: '#64748b', marginTop: 8, display: 'flex', alignItems: 'center', gap: 6 }}>
-                        <span>Last touched by</span>
-                        <span style={{ fontWeight: 600, color: '#94a3b8' }}>{getUserName(t.updated_by) || 'Unknown'}</span>
-                        <span>·</span>
-                        <span>{timeAgo(t.updated_at)}</span>
-                      </div>
-                    )}
-                  </div>
-                </div>
-                );
-              };
-
-              const UpdateCard = ({ c }) => {
-                const ticket = c.tickets;
-                if (!ticket) return null;
-                const commenter = (teamUsers || []).find(u => u.id === c.created_by);
-                return (
-                  <div style={{
-                    cursor: 'pointer',
-                    transition: 'background 0.15s',
-                    borderLeft: '3px solid #a78bfa',
-                    background: 'rgba(255,255,255,0.01)',
-                    borderBottom: '1px solid rgba(255,255,255,0.04)',
-                  }}
-                    className="hover:bg-white/[0.04]" onClick={() => { setOpenTicketId(ticket.id); setTab('tickets'); }}>
-                    <div style={{ padding: '12px 14px 12px 12px', display: 'flex', gap: 10, alignItems: 'flex-start' }}>
-                      <div style={{
-                        width: 28, height: 28, borderRadius: '50%',
-                        background: 'rgba(139,92,246,0.15)',
-                        display: 'flex', alignItems: 'center', justifyContent: 'center',
-                        fontSize: 12, flexShrink: 0,
-                      }}>
-                        {c.is_system ? '🤖' : initialsOf(commenter?.name)}
-                      </div>
-                      <div style={{ flex: 1, minWidth: 0 }}>
-                        <div style={{
-                          fontSize: 13, fontWeight: 700, color: '#f1f5f9',
-                          marginBottom: 4, lineHeight: 1.3,
-                          overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
-                        }}>
-                          {ticket.title}
-                        </div>
-                        <div style={{ display: 'flex', gap: 8, alignItems: 'center', fontSize: 11, color: '#64748b', marginBottom: 6 }}>
-                          <span style={{ fontWeight: 700, color: '#a78bfa' }}>{commenter?.name || 'System'}</span>
-                          <span>·</span>
-                          <span>{timeAgo(c.created_at)}</span>
-                          <span>·</span>
-                          <span style={{ fontFamily: 'monospace', letterSpacing: '0.03em' }}>{ticket.ticket_number}</span>
-                        </div>
-                        <div style={{ fontSize: 12, color: '#cbd5e1', lineHeight: 1.5 }}>
-                          {(c.comment_text || '').substring(0, 150)}{(c.comment_text || '').length > 150 ? '…' : ''}
-                        </div>
-                      </div>
-                    </div>
-                  </div>
-                );
-              };
-
-              const recentlyUpdated = myTickets.filter(t => t.updated_at && t.updated_at >= twoDaysAgo).sort((a,b) => (b.updated_at||'').localeCompare(a.updated_at||''));
-
-              const toggleSection = (key) => setHideSections(prev => ({...prev, [key]: !prev[key]}));
-              const isExpanded = (key) => hideSections[key] === true;
-
-              const CollapsibleSection = ({ id, icon, title, count, color, bgColor, borderColor, items, renderItem, defaultShow }) => {
-                const show = defaultShow || 5;
-                const expanded = isExpanded('dash_' + id);
-                const visible = expanded ? items : items.slice(0, show);
-                if (items.length === 0) return null;
-                return (
-                  <div style={{ ...sectionStyle, ...(borderColor ? { border: '1px solid ' + borderColor } : {}) }}>
-                    <div style={sectionHeaderStyle(color, bgColor)} className="cursor-pointer" onClick={() => toggleSection('dash_' + id)}>
-                      {sectionLabel(icon, title, count, color)}
-                      <span style={{ fontSize: 10, color: '#64748b' }}>{expanded ? '▲ Collapse' : '▼ Show All'}</span>
-                    </div>
-                    {visible.map(renderItem)}
-                    {!expanded && items.length > show && (
-                      <div style={{ padding: '8px 14px', fontSize: 11, color: color, fontWeight: 700, textAlign: 'center', cursor: 'pointer', background: 'rgba(255,255,255,0.02)' }}
-                        onClick={() => toggleSection('dash_' + id)}>
-                        Show all {items.length} (+{items.length - show} more) ▼
-                      </div>
-                    )}
-                  </div>
-                );
-              };
-
-              return (
-                <div style={{ marginBottom: 16 }}>
-                  {/* ── 1. NEWLY ASSIGNED ── */}
-                  <CollapsibleSection id="newAssign" icon="✨" title="Newly Assigned to You" count={newlyAssigned.length}
-                    color="#60a5fa" bgColor="rgba(59,130,246,0.08)" items={newlyAssigned}
-                    renderItem={(t) => <TicketCard key={t.id} t={t} accent="#60a5fa" />} />
-
-                  {/* ── 2. OVERDUE TICKETS ── */}
-                  <CollapsibleSection id="overdue" icon="🚨" title="Overdue Tickets" count={overdueTickets.length}
-                    color="#f87171" bgColor="rgba(239,68,68,0.1)" borderColor="rgba(239,68,68,0.3)" items={overdueTickets}
-                    renderItem={(t) => <TicketCard key={t.id} t={t} accent="#f87171" />} />
-
-                  {/* ── 3. RECENTLY UPDATED ──
-                      v55.75 (A3) — Per Max May 8 2026: "Show latest 25
-                      updated tickets initially". Both Recently Updated
-                      sections override the default 5-cap with defaultShow=25. */}
-                  {myUpdates.length > 0 && (
-                    <CollapsibleSection id="recentUpd" icon="💬" title="Recently Updated" count={myUpdates.length}
-                      color="#a78bfa" bgColor="rgba(139,92,246,0.08)" items={myUpdates}
-                      defaultShow={25}
-                      renderItem={(c) => <UpdateCard key={c.id} c={c} />} />
-                  )}
-                  {recentlyUpdated.length > 0 && myUpdates.length === 0 && (
-                    <CollapsibleSection id="recentUpd2" icon="🔄" title="Recently Updated Tickets" count={recentlyUpdated.length}
-                      color="#a78bfa" bgColor="rgba(139,92,246,0.08)" items={recentlyUpdated}
-                      defaultShow={25}
-                      renderItem={(t) => <TicketCard key={t.id} t={t} accent="#a78bfa" />} />
-                  )}
-
-                  {/* ── 4. ALL MY OPEN TICKETS ── */}
-                  <CollapsibleSection id="allOpen" icon="📋" title="All My Open Tickets" count={myTickets.length}
-                    color="#94a3b8" bgColor="rgba(255,255,255,0.03)" items={myTickets}
-                    renderItem={(t) => <TicketCard key={t.id} t={t} accent="#94a3b8" />} />
-                </div>
-              );
-            })()}
 
 
             {/* Section: Activity */}
@@ -12539,7 +12237,7 @@ export default function App() {
                       latest fix is actually deployed. If he doesn't see this
                       tag in the modal, his browser is running stale JS. */}
                   <div className="mt-1.5 inline-block px-2 py-0.5 rounded bg-amber-900/60 text-amber-100 text-[10px] font-mono font-bold tracking-wide">
-                    BUILD v55.83-A.6.20
+                    BUILD v55.83-A.6.22
                   </div>
                 </div>
                 <button onClick={() => closePendingTreasuryModal()}
@@ -13174,7 +12872,7 @@ export default function App() {
                     معاملة قد تكون مكررة
                   </div>
                   <div className="mt-1.5 inline-block px-2 py-0.5 rounded bg-amber-900/60 text-amber-100 text-[10px] font-mono font-bold tracking-wide">
-                    BUILD v55.83-A.6.20
+                    BUILD v55.83-A.6.22
                   </div>
                 </div>
                 <button

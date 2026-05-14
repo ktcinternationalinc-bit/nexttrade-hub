@@ -175,8 +175,8 @@ ok('tab: lists all 7 subtabs (skus, warehouses, inventory, shipments, movements,
   /id: 'reports'/.test(tab));
 ok('tab: only Stage A subtabs are clickable; later stages disabled',
   /available = st\.stage === 'A'/.test(tab));
-ok('tab: shows v55.83-A · Stage 1 of 6 marker',
-  /v55\.83-A · Stage 1 of 6/.test(tab));
+ok('tab: shows current stage badge (Stage 1 → 2 after Stage B ships in v55.83-A.6.21)',
+  /Stage [12] of 6/.test(tab));
 
 // ============================================================
 // PAGE.JSX INTEGRATION — old inline section replaced
