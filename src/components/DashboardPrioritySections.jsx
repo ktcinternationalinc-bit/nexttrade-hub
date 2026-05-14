@@ -1,25 +1,19 @@
-// v55.83-A.6.18 (Max May 14 2026) — Three high-priority dashboard cards.
+// v55.83-A.6.23 (Max May 14 2026) — Three priority cards, each split into
+// TWO sub-sections per the user's spec: "My Direct" (assigned to me) and
+// "I Delegated" (I created and assigned to someone else).
 //
-// Per Max May 14 2026: the dashboard should organize the employee's day with
-// three immediately-actionable sections AFTER the AI hero, BEFORE the rest of
-// the widgets. Each card stands out visually (color-coded, strong type,
-// generous spacing) but doesn't clutter the page.
+// THIS WORKS FOR EVERY LOGGED-IN USER — the filters use `myId` which is passed
+// from page.jsx as the current user's ID. Yasmeen, Mohamed, Omar, etc. all see
+// their own version of these cards based on whoever is logged in.
 //
-// Sections:
-//   1. 🚨 Your Overdue Tickets — newest-overdue first, top 10. Each row shows
-//      title, status, assigned person, days overdue, last update preview.
-//      Click row → opens ticket in dashboard-mounted modal (no tab switch).
+// Filter parity with the working PersonalDashboard surface:
+//   • My Direct  = isMineByAssign(t) (assigned_to OR in additional_assignees)
+//   • I Delegated = created_by === me AND NOT isMineByAssign(t)
+//   • Visibility gate: dashTickets is already pre-filtered for visibility in
+//     page.jsx (private/confidential checks), so we trust it here.
 //
-//   2. 💬 Recent Updates to Your Assigned Tickets — tickets assigned to me
-//      that got a comment/status change in the last 3 days. Shows latest
-//      comment preview directly so user doesn't need to open each ticket.
-//
-//   3. ✨ Newly Assigned Tickets — status === 'New' AND assigned to me.
-//      Big Acknowledge button right on the card (one click → status changes
-//      to 'Acknowledged' + system comment logged).
-//
-// All ticket clicks go through onOpenTicket(t) which the parent wires to a
-// dashboard-mounted modal overlay. Acknowledge is wired through onAcknowledge.
+// Previous builds only computed My Direct and called it a day, which is why
+// every card was empty for super_admin (who delegates almost everything).
 
 import { useMemo } from 'react';
 
@@ -59,6 +53,15 @@ function getUserName(users, id) {
   return u.full_name || u.email || '';
 }
 
+function parseExtras(t) {
+  if (!t || !t.additional_assignees) return [];
+  try {
+    var v = typeof t.additional_assignees === 'string'
+      ? JSON.parse(t.additional_assignees) : t.additional_assignees;
+    return Array.isArray(v) ? v : [];
+  } catch (_) { return []; }
+}
+
 export default function DashboardPrioritySections({
   dashTickets,
   recentTicketUpdates,
@@ -69,87 +72,110 @@ export default function DashboardPrioritySections({
   onAcknowledge,
   busyAckId,
 }) {
-  // ─── Compute the three lists ───────────────────────────────────────────
+  // ─── Bucket tickets ────────────────────────────────────────────────────
 
-  var myTickets = useMemo(function () {
+  function isMineByAssign(t) {
+    return t.assigned_to === myId || parseExtras(t).indexOf(myId) >= 0;
+  }
+
+  var myDirectTickets = useMemo(function () {
     return (dashTickets || []).filter(function (t) {
-      // Assigned to me as primary OR as additional_assignees, and not closed
       if (t.status === 'Closed') return false;
-      if (t.assigned_to === myId) return true;
-      try {
-        var extras = typeof t.additional_assignees === 'string'
-          ? JSON.parse(t.additional_assignees)
-          : t.additional_assignees;
-        if (Array.isArray(extras) && extras.indexOf(myId) >= 0) return true;
-      } catch (_) {}
-      return false;
+      return isMineByAssign(t);
     });
   }, [dashTickets, myId]);
 
-  // 1. Overdue — top 10, newest-overdue (most recent due_date in the past) first
-  var overdue = useMemo(function () {
-    var list = myTickets.filter(function (t) {
+  var iDelegatedTickets = useMemo(function () {
+    return (dashTickets || []).filter(function (t) {
+      if (t.status === 'Closed') return false;
+      if (t.created_by !== myId) return false;
+      if (isMineByAssign(t)) return false;
+      return true;
+    });
+  }, [dashTickets, myId]);
+
+  // ─── Overdue (per bucket) ──────────────────────────────────────────────
+
+  var overdueMyDirect = useMemo(function () {
+    var list = myDirectTickets.filter(function (t) {
       return t.due_date && t.due_date < todayStr;
     });
-    list.sort(function (a, b) {
-      // Newest overdue first = largest due_date (closest to today)
-      return (b.due_date || '').localeCompare(a.due_date || '');
-    });
+    list.sort(function (a, b) { return (b.due_date || '').localeCompare(a.due_date || ''); });
     return list.slice(0, 10);
-  }, [myTickets, todayStr]);
+  }, [myDirectTickets, todayStr]);
 
-  // 3-day cutoff for "recent updates"
+  var overdueDelegated = useMemo(function () {
+    var list = iDelegatedTickets.filter(function (t) {
+      return t.due_date && t.due_date < todayStr;
+    });
+    list.sort(function (a, b) { return (b.due_date || '').localeCompare(a.due_date || ''); });
+    return list.slice(0, 10);
+  }, [iDelegatedTickets, todayStr]);
+
+  // ─── Recent Updates (last 3 days, latest comment per ticket) ───────────
+
   var threeDaysAgoIso = useMemo(function () {
     return new Date(Date.now() - 3 * 86400000).toISOString();
   }, []);
 
-  // 2. Recent Updates — tickets assigned to me with a comment in last 3 days
-  //    Group comments by ticket id, take the latest one per ticket.
-  var recentUpdates = useMemo(function () {
-    var myTixIds = {};
-    myTickets.forEach(function (t) { myTixIds[t.id] = true; });
+  function pickLatestPerTicket(ticketBucket) {
+    var bucketIds = {};
+    ticketBucket.forEach(function (t) { bucketIds[t.id] = true; });
     var latestByTicket = {};
     (recentTicketUpdates || []).forEach(function (c) {
       var tid = c.tickets && c.tickets.id;
-      if (!tid || !myTixIds[tid]) return;
+      if (!tid || !bucketIds[tid]) return;
       if (!c.created_at || c.created_at < threeDaysAgoIso) return;
       var prev = latestByTicket[tid];
       if (!prev || (c.created_at || '') > (prev.created_at || '')) {
         latestByTicket[tid] = c;
       }
     });
-    var result = Object.values(latestByTicket);
-    // Sort: newest comment first
-    result.sort(function (a, b) {
-      return (b.created_at || '').localeCompare(a.created_at || '');
-    });
-    // Attach the ticket to make rendering easier
-    return result.slice(0, 5).map(function (c) {
-      var ticket = myTickets.find(function (t) { return t.id === (c.tickets && c.tickets.id); });
+    var arr = Object.values(latestByTicket);
+    arr.sort(function (a, b) { return (b.created_at || '').localeCompare(a.created_at || ''); });
+    return arr.slice(0, 5).map(function (c) {
+      var ticket = ticketBucket.find(function (t) { return t.id === (c.tickets && c.tickets.id); });
       return { comment: c, ticket: ticket };
     }).filter(function (x) { return !!x.ticket; });
-  }, [myTickets, recentTicketUpdates, threeDaysAgoIso]);
+  }
 
-  // 3. Newly assigned — status === 'New' AND assigned to me
-  var newlyAssigned = useMemo(function () {
-    var list = myTickets.filter(function (t) { return t.status === 'New'; });
-    list.sort(function (a, b) {
-      return (b.created_at || '').localeCompare(a.created_at || '');
-    });
+  var updatesMyDirect = useMemo(function () {
+    return pickLatestPerTicket(myDirectTickets);
+  }, [myDirectTickets, recentTicketUpdates, threeDaysAgoIso]);
+
+  var updatesDelegated = useMemo(function () {
+    return pickLatestPerTicket(iDelegatedTickets);
+  }, [iDelegatedTickets, recentTicketUpdates, threeDaysAgoIso]);
+
+  // ─── Newly Assigned (status === 'New', per bucket) ─────────────────────
+
+  var newMyDirect = useMemo(function () {
+    var list = myDirectTickets.filter(function (t) { return t.status === 'New'; });
+    list.sort(function (a, b) { return (b.created_at || '').localeCompare(a.created_at || ''); });
     return list;
-  }, [myTickets]);
+  }, [myDirectTickets]);
 
-  // v55.83-A.6.20 (Max May 14 2026) — Always render all three cards.
-  // Previously when all lists were empty, we collapsed to a single quiet
-  // "all clear" tile that looked identical to a blank dashboard. Per Max:
-  // "The dashboard cannot look exactly the same as before." So we keep the
-  // three big colored cards visible at all times with per-card empty states.
-  var allEmpty = overdue.length === 0 && recentUpdates.length === 0 && newlyAssigned.length === 0;
+  var newDelegated = useMemo(function () {
+    var list = iDelegatedTickets.filter(function (t) { return t.status === 'New'; });
+    list.sort(function (a, b) { return (b.created_at || '').localeCompare(a.created_at || ''); });
+    return list;
+  }, [iDelegatedTickets]);
+
+  // ─── Totals for the header badges ──────────────────────────────────────
+
+  var overdueTotal = overdueMyDirect.length + overdueDelegated.length;
+  var updatesTotal = updatesMyDirect.length + updatesDelegated.length;
+  var newTotal = newMyDirect.length + newDelegated.length;
+  var allEmpty = overdueTotal === 0 && updatesTotal === 0 && newTotal === 0;
+
+  // ────────────────────────────────────────────────────────────────────────
+  // RENDER
+  // ────────────────────────────────────────────────────────────────────────
 
   return (
     <div className="space-y-3 mb-4">
       {/* ============================================================
-          PRIORITY HEADER — always visible, color-coded counts
+          PRIORITY HEADER — counts color-coded per card
           ============================================================ */}
       <div className="bg-gradient-to-r from-slate-900 via-slate-800 to-slate-900 rounded-xl p-3 shadow-md text-white">
         <div className="flex items-center justify-between flex-wrap gap-2">
@@ -157,17 +183,17 @@ export default function DashboardPrioritySections({
             <h2 className="text-base font-extrabold tracking-tight flex items-center gap-2">
               📌 Your Daily Priorities <span className="text-[10px] font-normal opacity-70">/ أولوياتك اليومية</span>
             </h2>
-            <div className="text-[10px] opacity-70">What needs your attention right now</div>
+            <div className="text-[10px] opacity-70">Direct work + what you've delegated</div>
           </div>
           <div className="flex items-center gap-2 text-[11px]">
-            <span className={'px-2 py-1 rounded-md font-bold ' + (overdue.length > 0 ? 'bg-red-500/90' : 'bg-slate-700')}>
-              🚨 {overdue.length} overdue
+            <span className={'px-2 py-1 rounded-md font-bold ' + (overdueTotal > 0 ? 'bg-red-500/90' : 'bg-slate-700')}>
+              🚨 {overdueTotal} overdue
             </span>
-            <span className={'px-2 py-1 rounded-md font-bold ' + (recentUpdates.length > 0 ? 'bg-blue-500/90' : 'bg-slate-700')}>
-              💬 {recentUpdates.length} updates
+            <span className={'px-2 py-1 rounded-md font-bold ' + (updatesTotal > 0 ? 'bg-blue-500/90' : 'bg-slate-700')}>
+              💬 {updatesTotal} updates
             </span>
-            <span className={'px-2 py-1 rounded-md font-bold ' + (newlyAssigned.length > 0 ? 'bg-purple-500/90' : 'bg-slate-700')}>
-              ✨ {newlyAssigned.length} new
+            <span className={'px-2 py-1 rounded-md font-bold ' + (newTotal > 0 ? 'bg-purple-500/90' : 'bg-slate-700')}>
+              ✨ {newTotal} new
             </span>
           </div>
         </div>
@@ -180,7 +206,7 @@ export default function DashboardPrioritySections({
       </div>
 
       {/* ============================================================
-          1. OVERDUE TICKETS — RED, BIG, ATTENTION-GRABBING
+          1. OVERDUE — RED
           ============================================================ */}
       <div className="bg-gradient-to-br from-red-50 to-rose-50 border-2 border-red-300 rounded-xl shadow-sm overflow-hidden">
         <div className="bg-red-600 text-white px-4 py-2.5 flex items-center justify-between">
@@ -192,187 +218,284 @@ export default function DashboardPrioritySections({
             </div>
           </div>
           <div className="bg-white text-red-700 px-2.5 py-0.5 rounded-full text-xs font-extrabold">
-            {overdue.length} {overdue.length === 1 ? 'ticket' : 'tickets'}
+            {overdueTotal} {overdueTotal === 1 ? 'ticket' : 'tickets'}
           </div>
         </div>
 
-        <div className="p-2 space-y-2">
-          {overdue.length === 0 ? (
-            <div className="py-5 text-center">
-              <div className="text-2xl mb-1 opacity-50">✅</div>
-              <div className="text-sm font-bold text-red-900">No overdue tickets / لا توجد تذاكر متأخرة</div>
-              <div className="text-[11px] text-red-700/70 mt-0.5">You're on top of your due dates.</div>
-            </div>
-          ) : overdue.map(function (t) {
-            var dueDate = new Date(t.due_date + 'T00:00:00');
-              var daysOver = daysBetween(dueDate, new Date());
-              var lastUpdate = (recentTicketUpdates || []).find(function (c) {
-                return c.tickets && c.tickets.id === t.id;
-              });
-              var assignedName = getUserName(users, t.assigned_to) || 'Unassigned';
-
-              return (
-                <div key={t.id}
-                  onClick={function () { onOpenTicket && onOpenTicket(t); }}
-                  className="bg-white rounded-lg p-3 border border-red-200 hover:border-red-400 hover:shadow-md cursor-pointer transition">
-                  <div className="flex items-start justify-between gap-3 flex-wrap">
-                    <div className="flex-1 min-w-0">
-                      <div className="flex items-center gap-2 mb-1 flex-wrap">
-                        <span className="text-[10px] font-mono text-slate-500">{t.ticket_number}</span>
-                        <span className="px-2 py-0.5 rounded-full text-[9px] font-bold text-white" style={{ backgroundColor: STATUS_COLORS[t.status] || '#6b7280' }}>{t.status}</span>
-                        {t.priority === 'critical' && <span className="px-1.5 py-0.5 rounded text-[9px] font-extrabold bg-red-900 text-white">🚨 CRITICAL</span>}
-                        {t.priority === 'high' && <span className="px-1.5 py-0.5 rounded text-[9px] font-extrabold bg-red-600 text-white">🔴 HIGH</span>}
-                      </div>
-                      <div className="text-sm font-bold text-slate-900 leading-snug">{t.title}</div>
-                      <div className="flex items-center gap-3 mt-1.5 text-[11px] flex-wrap">
-                        <span className="text-slate-700 font-medium">👤 {assignedName}</span>
-                        <span className="text-slate-500">📅 due {t.due_date}</span>
-                        {lastUpdate && lastUpdate.created_at && (
-                          <span className="text-slate-500">💬 {fmtRelative(lastUpdate.created_at)}</span>
-                        )}
-                      </div>
-                    </div>
-                    <div className="flex items-center gap-2 flex-shrink-0">
-                      <div className="bg-red-100 border border-red-300 rounded-lg px-2.5 py-1.5 text-center">
-                        <div className="text-lg font-black text-red-700 leading-none">{daysOver}</div>
-                        <div className="text-[9px] font-bold text-red-600 uppercase tracking-wider">day{daysOver === 1 ? '' : 's'} late</div>
-                      </div>
-                      <button onClick={function (ev) { ev.stopPropagation(); onOpenTicket && onOpenTicket(t); }}
-                        className="px-2.5 py-1.5 rounded-lg bg-red-600 hover:bg-red-700 text-white text-xs font-bold whitespace-nowrap">
-                        Open →
-                      </button>
-                    </div>
-                  </div>
-                </div>
-              );
-            })}
-          </div>
+        <div className="p-2 space-y-3">
+          <SubSection
+            title="📥 My Direct"
+            subtitle="مُسنَدة إليّ"
+            count={overdueMyDirect.length}
+            emptyMsg="No overdue tickets directly assigned to you"
+            tone="red"
+            items={overdueMyDirect}
+            renderRow={function (t) {
+              return <OverdueRow key={t.id} t={t} users={users} recentTicketUpdates={recentTicketUpdates} onOpenTicket={onOpenTicket} />;
+            }}
+          />
+          <SubSection
+            title="📤 I Delegated"
+            subtitle="فوّضتها لآخرين"
+            count={overdueDelegated.length}
+            emptyMsg="None of the tickets you delegated are overdue"
+            tone="red"
+            items={overdueDelegated}
+            renderRow={function (t) {
+              return <OverdueRow key={t.id} t={t} users={users} recentTicketUpdates={recentTicketUpdates} onOpenTicket={onOpenTicket} />;
+            }}
+          />
         </div>
+      </div>
 
       {/* ============================================================
-          2. RECENT UPDATES TO YOUR ASSIGNED TICKETS — BLUE
+          2. RECENT UPDATES — BLUE
           ============================================================ */}
       <div className="bg-gradient-to-br from-blue-50 to-cyan-50 border-2 border-blue-300 rounded-xl shadow-sm overflow-hidden">
         <div className="bg-blue-600 text-white px-4 py-2.5 flex items-center justify-between">
           <div className="flex items-center gap-2">
             <span className="text-xl">💬</span>
             <div>
-              <h3 className="text-base font-extrabold tracking-tight">Recent Updates to Your Tickets</h3>
-              <div className="text-[10px] font-bold opacity-90">آخر تحديثات تذاكرك (٣ أيام)</div>
+              <h3 className="text-base font-extrabold tracking-tight">Recent Updates (Last 3 Days)</h3>
+              <div className="text-[10px] font-bold opacity-90">آخر التحديثات (٣ أيام)</div>
             </div>
           </div>
           <div className="bg-white text-blue-700 px-2.5 py-0.5 rounded-full text-xs font-extrabold">
-            {recentUpdates.length} update{recentUpdates.length === 1 ? '' : 's'}
+            {updatesTotal} update{updatesTotal === 1 ? '' : 's'}
           </div>
         </div>
 
-        <div className="p-2 space-y-2">
-          {recentUpdates.length === 0 ? (
-            <div className="py-5 text-center">
-              <div className="text-2xl mb-1 opacity-50">📭</div>
-              <div className="text-sm font-bold text-blue-900">No recent updates / لا توجد تحديثات حديثة</div>
-              <div className="text-[11px] text-blue-700/70 mt-0.5">No comments or status changes on your tickets in the last 3 days.</div>
-            </div>
-          ) : recentUpdates.map(function (item) {
-              var t = item.ticket;
-              var c = item.comment;
-              var commentBy = getUserName(users, c.created_by) || 'System';
-              var commentPreview = (c.comment_text || '').replace(/<[^>]+>/g, '').substring(0, 140);
-              var assignedName = getUserName(users, t.assigned_to) || 'Unassigned';
-
-              return (
-                <div key={t.id}
-                  onClick={function () { onOpenTicket && onOpenTicket(t); }}
-                  className="bg-white rounded-lg p-3 border border-blue-200 hover:border-blue-400 hover:shadow-md cursor-pointer transition">
-                  <div className="flex items-start justify-between gap-3 flex-wrap">
-                    <div className="flex-1 min-w-0">
-                      <div className="flex items-center gap-2 mb-1 flex-wrap">
-                        <span className="text-[10px] font-mono text-slate-500">{t.ticket_number}</span>
-                        <span className="px-2 py-0.5 rounded-full text-[9px] font-bold text-white" style={{ backgroundColor: STATUS_COLORS[t.status] || '#6b7280' }}>{t.status}</span>
-                      </div>
-                      <div className="text-sm font-bold text-slate-900 leading-snug">{t.title}</div>
-                      <div className="mt-1.5 p-2 bg-slate-50 border-l-2 border-blue-400 rounded text-[11px] text-slate-800">
-                        {c.is_system && <span className="font-mono text-slate-500 mr-1">[system]</span>}
-                        {commentPreview}{(c.comment_text || '').length > 140 ? '…' : ''}
-                      </div>
-                      <div className="flex items-center gap-3 mt-1.5 text-[11px] flex-wrap">
-                        <span className="text-slate-700 font-medium">✍️ {commentBy}</span>
-                        <span className="text-slate-500">{fmtRelative(c.created_at)}</span>
-                        <span className="text-slate-500">👤 {assignedName}</span>
-                      </div>
-                    </div>
-                    <button onClick={function (ev) { ev.stopPropagation(); onOpenTicket && onOpenTicket(t); }}
-                      className="px-2.5 py-1.5 rounded-lg bg-blue-600 hover:bg-blue-700 text-white text-xs font-bold whitespace-nowrap flex-shrink-0">
-                      Open →
-                    </button>
-                  </div>
-                </div>
-              );
-            })}
+        <div className="p-2 space-y-3">
+          <SubSection
+            title="📥 My Direct"
+            subtitle="مُسنَدة إليّ"
+            count={updatesMyDirect.length}
+            emptyMsg="No recent updates on tickets assigned to you"
+            tone="blue"
+            items={updatesMyDirect}
+            renderRow={function (item) {
+              return <UpdateRow key={item.ticket.id + ':' + item.comment.id} item={item} users={users} onOpenTicket={onOpenTicket} />;
+            }}
+          />
+          <SubSection
+            title="📤 I Delegated"
+            subtitle="فوّضتها لآخرين"
+            count={updatesDelegated.length}
+            emptyMsg="No recent updates on tickets you delegated"
+            tone="blue"
+            items={updatesDelegated}
+            renderRow={function (item) {
+              return <UpdateRow key={item.ticket.id + ':' + item.comment.id} item={item} users={users} onOpenTicket={onOpenTicket} />;
+            }}
+          />
         </div>
       </div>
 
       {/* ============================================================
-          3. NEWLY ASSIGNED — PURPLE, ACKNOWLEDGE BUTTON
+          3. NEWLY ASSIGNED — PURPLE
           ============================================================ */}
       <div className="bg-gradient-to-br from-purple-50 to-indigo-50 border-2 border-purple-300 rounded-xl shadow-sm overflow-hidden">
         <div className="bg-purple-600 text-white px-4 py-2.5 flex items-center justify-between">
           <div className="flex items-center gap-2">
             <span className="text-xl">✨</span>
             <div>
-              <h3 className="text-base font-extrabold tracking-tight">Newly Assigned — Acknowledge</h3>
-              <div className="text-[10px] font-bold opacity-90">تذاكر جديدة — أكّد الاستلام</div>
+              <h3 className="text-base font-extrabold tracking-tight">Newly Assigned</h3>
+              <div className="text-[10px] font-bold opacity-90">تذاكر جديدة</div>
             </div>
           </div>
           <div className="bg-white text-purple-700 px-2.5 py-0.5 rounded-full text-xs font-extrabold">
-            {newlyAssigned.length} new
+            {newTotal} new
           </div>
         </div>
 
-        <div className="p-2 space-y-2">
-          {newlyAssigned.length === 0 ? (
-            <div className="py-5 text-center">
-              <div className="text-2xl mb-1 opacity-50">📭</div>
-              <div className="text-sm font-bold text-purple-900">No new tickets to acknowledge / لا توجد تذاكر جديدة</div>
-              <div className="text-[11px] text-purple-700/70 mt-0.5">All your assignments have been acknowledged.</div>
-            </div>
-          ) : newlyAssigned.map(function (t) {
-              var assignedByName = getUserName(users, t.created_by) || 'Unknown';
+        <div className="p-2 space-y-3">
+          <SubSection
+            title="📥 My Direct — Acknowledge"
+            subtitle="مُسنَدة إليّ — أكّد الاستلام"
+            count={newMyDirect.length}
+            emptyMsg="No new tickets waiting for your acknowledgment"
+            tone="purple"
+            items={newMyDirect}
+            renderRow={function (t) {
               var isAcking = busyAckId === t.id;
+              return <NewRow key={t.id} t={t} users={users} onOpenTicket={onOpenTicket}
+                showAck={true} isAcking={isAcking} onAcknowledge={onAcknowledge} />;
+            }}
+          />
+          <SubSection
+            title="📤 I Delegated — Awaiting Acknowledgment"
+            subtitle="فوّضتها — بانتظار الاستلام"
+            count={newDelegated.length}
+            emptyMsg="Everyone has acknowledged tickets you delegated"
+            tone="purple"
+            items={newDelegated}
+            renderRow={function (t) {
+              return <NewRow key={t.id} t={t} users={users} onOpenTicket={onOpenTicket} showAck={false} />;
+            }}
+          />
+        </div>
+      </div>
+    </div>
+  );
+}
 
-              return (
-                <div key={t.id}
-                  className="bg-white rounded-lg p-3 border border-purple-200 hover:border-purple-400 hover:shadow-md transition">
-                  <div className="flex items-start justify-between gap-3 flex-wrap">
-                    <div className="flex-1 min-w-0 cursor-pointer" onClick={function () { onOpenTicket && onOpenTicket(t); }}>
-                      <div className="flex items-center gap-2 mb-1 flex-wrap">
-                        <span className="text-[10px] font-mono text-slate-500">{t.ticket_number}</span>
-                        <span className="px-2 py-0.5 rounded-full text-[9px] font-bold text-white" style={{ backgroundColor: STATUS_COLORS[t.status] || '#6b7280' }}>{t.status}</span>
-                        {t.priority === 'critical' && <span className="px-1.5 py-0.5 rounded text-[9px] font-extrabold bg-red-900 text-white">🚨 CRITICAL</span>}
-                        {t.priority === 'high' && <span className="px-1.5 py-0.5 rounded text-[9px] font-extrabold bg-red-600 text-white">🔴 HIGH</span>}
-                      </div>
-                      <div className="text-sm font-bold text-slate-900 leading-snug">{t.title}</div>
-                      <div className="flex items-center gap-3 mt-1.5 text-[11px] flex-wrap">
-                        <span className="text-slate-700 font-medium">👤 from {assignedByName}</span>
-                        <span className="text-slate-500">📅 assigned {fmtRelative(t.created_at)}</span>
-                        {t.due_date && <span className="text-slate-500">⏰ due {t.due_date}</span>}
-                      </div>
-                    </div>
-                    <div className="flex flex-col gap-1.5 flex-shrink-0">
-                      <button onClick={function () { onAcknowledge && onAcknowledge(t); }}
-                        disabled={isAcking}
-                        className="px-3 py-2 rounded-lg bg-purple-600 hover:bg-purple-700 disabled:opacity-50 text-white text-xs font-extrabold whitespace-nowrap">
-                        {isAcking ? '⏳ ...' : '✓ Acknowledge'}
-                      </button>
-                      <button onClick={function () { onOpenTicket && onOpenTicket(t); }}
-                        className="px-2.5 py-1.5 rounded-lg bg-white border border-purple-300 hover:bg-purple-50 text-purple-700 text-[11px] font-bold whitespace-nowrap">
-                        Open
-                      </button>
-                    </div>
-                  </div>
-                </div>
-              );
-            })}
+// ────────────────────────────────────────────────────────────────────────
+// SUB-SECTION WRAPPER
+// ────────────────────────────────────────────────────────────────────────
+
+function SubSection({ title, subtitle, count, emptyMsg, tone, items, renderRow }) {
+  var headerBg = {
+    red: 'bg-red-100/70 border-red-200 text-red-900',
+    blue: 'bg-blue-100/70 border-blue-200 text-blue-900',
+    purple: 'bg-purple-100/70 border-purple-200 text-purple-900',
+  }[tone] || 'bg-slate-100 border-slate-200 text-slate-900';
+
+  var emptyTextClass = {
+    red: 'text-red-700/60',
+    blue: 'text-blue-700/60',
+    purple: 'text-purple-700/60',
+  }[tone] || 'text-slate-600';
+
+  return (
+    <div>
+      <div className={'flex items-center justify-between px-2.5 py-1.5 rounded-md border ' + headerBg}>
+        <div className="flex items-center gap-2">
+          <span className="text-xs font-extrabold">{title}</span>
+          <span className="text-[9px] opacity-70">{subtitle}</span>
+        </div>
+        <span className="text-[10px] font-bold opacity-80">
+          {count} {count === 1 ? 'item' : 'items'}
+        </span>
+      </div>
+      {count === 0 ? (
+        <div className={'text-[11px] italic px-2.5 py-2 ' + emptyTextClass}>{emptyMsg}</div>
+      ) : (
+        <div className="space-y-1.5 mt-1.5">{items.map(renderRow)}</div>
+      )}
+    </div>
+  );
+}
+
+// ────────────────────────────────────────────────────────────────────────
+// ROW COMPONENTS
+// ────────────────────────────────────────────────────────────────────────
+
+function OverdueRow({ t, users, recentTicketUpdates, onOpenTicket }) {
+  var dueDate = new Date(t.due_date + 'T00:00:00');
+  var daysOver = daysBetween(dueDate, new Date());
+  var lastUpdate = (recentTicketUpdates || []).find(function (c) {
+    return c.tickets && c.tickets.id === t.id;
+  });
+  var assignedName = getUserName(users, t.assigned_to) || 'Unassigned';
+
+  return (
+    <div onClick={function () { onOpenTicket && onOpenTicket(t); }}
+      className="bg-white rounded-lg p-3 border border-red-200 hover:border-red-400 hover:shadow-md cursor-pointer transition">
+      <div className="flex items-start justify-between gap-3 flex-wrap">
+        <div className="flex-1 min-w-0">
+          <div className="flex items-center gap-2 mb-1 flex-wrap">
+            <span className="text-[10px] font-mono text-slate-500">{t.ticket_number}</span>
+            <span className="px-2 py-0.5 rounded-full text-[9px] font-bold text-white" style={{ backgroundColor: STATUS_COLORS[t.status] || '#6b7280' }}>{t.status}</span>
+            {t.priority === 'critical' && <span className="px-1.5 py-0.5 rounded text-[9px] font-extrabold bg-red-900 text-white">🚨 CRITICAL</span>}
+            {t.priority === 'high' && <span className="px-1.5 py-0.5 rounded text-[9px] font-extrabold bg-red-600 text-white">🔴 HIGH</span>}
+          </div>
+          <div className="text-sm font-bold text-slate-900 leading-snug">{t.title}</div>
+          <div className="flex items-center gap-3 mt-1.5 text-[11px] flex-wrap">
+            <span className="text-slate-700 font-medium">👤 {assignedName}</span>
+            <span className="text-slate-500">📅 due {t.due_date}</span>
+            {lastUpdate && lastUpdate.created_at && (
+              <span className="text-slate-500">💬 {fmtRelative(lastUpdate.created_at)}</span>
+            )}
+          </div>
+        </div>
+        <div className="flex items-center gap-2 flex-shrink-0">
+          <div className="bg-red-100 border border-red-300 rounded-lg px-2.5 py-1.5 text-center">
+            <div className="text-lg font-black text-red-700 leading-none">{daysOver}</div>
+            <div className="text-[9px] font-bold text-red-600 uppercase tracking-wider">day{daysOver === 1 ? '' : 's'} late</div>
+          </div>
+          <button onClick={function (ev) { ev.stopPropagation(); onOpenTicket && onOpenTicket(t); }}
+            className="px-2.5 py-1.5 rounded-lg bg-red-600 hover:bg-red-700 text-white text-xs font-bold whitespace-nowrap">
+            Open →
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function UpdateRow({ item, users, onOpenTicket }) {
+  var t = item.ticket;
+  var c = item.comment;
+  var commentBy = getUserName(users, c.created_by) || 'System';
+  var commentPreview = (c.comment_text || '').replace(/<[^>]+>/g, '').substring(0, 140);
+  var assignedName = getUserName(users, t.assigned_to) || 'Unassigned';
+
+  return (
+    <div onClick={function () { onOpenTicket && onOpenTicket(t); }}
+      className="bg-white rounded-lg p-3 border border-blue-200 hover:border-blue-400 hover:shadow-md cursor-pointer transition">
+      <div className="flex items-start justify-between gap-3 flex-wrap">
+        <div className="flex-1 min-w-0">
+          <div className="flex items-center gap-2 mb-1 flex-wrap">
+            <span className="text-[10px] font-mono text-slate-500">{t.ticket_number}</span>
+            <span className="px-2 py-0.5 rounded-full text-[9px] font-bold text-white" style={{ backgroundColor: STATUS_COLORS[t.status] || '#6b7280' }}>{t.status}</span>
+            <span className="text-[10px] text-slate-500">👤 {assignedName}</span>
+          </div>
+          <div className="text-sm font-bold text-slate-900 leading-snug">{t.title}</div>
+          <div className="mt-1.5 bg-slate-50 border-l-2 border-blue-400 px-2 py-1 rounded text-[11px] text-slate-700 italic">
+            "{commentPreview}{(c.comment_text || '').length > 140 ? '…' : ''}"
+          </div>
+          <div className="flex items-center gap-3 mt-1.5 text-[10px] text-slate-500">
+            <span>by {commentBy}</span>
+            <span>· {fmtRelative(c.created_at)}</span>
+          </div>
+        </div>
+        <button onClick={function (ev) { ev.stopPropagation(); onOpenTicket && onOpenTicket(t); }}
+          className="px-2.5 py-1.5 rounded-lg bg-blue-600 hover:bg-blue-700 text-white text-xs font-bold whitespace-nowrap self-start">
+          Open →
+        </button>
+      </div>
+    </div>
+  );
+}
+
+function NewRow({ t, users, onOpenTicket, showAck, isAcking, onAcknowledge }) {
+  var assignedByName = getUserName(users, t.created_by) || 'Unknown';
+  var assignedToName = getUserName(users, t.assigned_to) || 'Unassigned';
+
+  return (
+    <div onClick={function () { onOpenTicket && onOpenTicket(t); }}
+      className="bg-white rounded-lg p-3 border border-purple-200 hover:border-purple-400 hover:shadow-md cursor-pointer transition">
+      <div className="flex items-start justify-between gap-3 flex-wrap">
+        <div className="flex-1 min-w-0">
+          <div className="flex items-center gap-2 mb-1 flex-wrap">
+            <span className="text-[10px] font-mono text-slate-500">{t.ticket_number}</span>
+            <span className="px-2 py-0.5 rounded-full text-[9px] font-bold text-white bg-blue-500">New</span>
+            {t.priority === 'critical' && <span className="px-1.5 py-0.5 rounded text-[9px] font-extrabold bg-red-900 text-white">🚨 CRITICAL</span>}
+            {t.priority === 'high' && <span className="px-1.5 py-0.5 rounded text-[9px] font-extrabold bg-red-600 text-white">🔴 HIGH</span>}
+          </div>
+          <div className="text-sm font-bold text-slate-900 leading-snug">{t.title}</div>
+          <div className="flex items-center gap-3 mt-1.5 text-[11px] flex-wrap">
+            {showAck ? (
+              <span className="text-slate-600">📥 from <span className="font-bold">{assignedByName}</span></span>
+            ) : (
+              <span className="text-slate-600">📤 to <span className="font-bold">{assignedToName}</span></span>
+            )}
+            {t.created_at && <span className="text-slate-500">· assigned {fmtRelative(t.created_at)}</span>}
+            {t.due_date && <span className="text-slate-500">· due {t.due_date}</span>}
+          </div>
+        </div>
+        <div className="flex items-center gap-2 flex-shrink-0">
+          {showAck && (
+            <button onClick={function (ev) { ev.stopPropagation(); onAcknowledge && onAcknowledge(t); }}
+              disabled={isAcking}
+              className="px-3 py-2 rounded-lg bg-purple-600 hover:bg-purple-700 disabled:opacity-50 text-white text-xs font-extrabold whitespace-nowrap">
+              {isAcking ? '⏳ ...' : '✓ Acknowledge'}
+            </button>
+          )}
+          <button onClick={function (ev) { ev.stopPropagation(); onOpenTicket && onOpenTicket(t); }}
+            className="px-2.5 py-1.5 rounded-lg bg-white border border-purple-300 hover:bg-purple-50 text-purple-700 text-[11px] font-bold whitespace-nowrap">
+            Open
+          </button>
         </div>
       </div>
     </div>

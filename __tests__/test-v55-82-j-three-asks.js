@@ -75,8 +75,13 @@ ok('1g: Empty state mentions BOTH events and tickets',
 );
 
 // Reminders widget already folds tickets in (v55.81 carryover) — REGRESSION GUARD
-ok('1h: Reminders widget STILL folds today-due tickets (no regression vs prior build)',
-  /todayDueTickets = \[\.\.\.myTickets, \.\.\.ticketsICreated\][\s\S]{0,400}t\.due_date === todayStr/.test(personalDash)
+// v55.83-A.6.23 update — Max explicitly asked to STOP folding today-due tickets
+// into the Reminders widget, since they now belong exclusively to the new
+// DashboardPrioritySections cluster (the "📤 I Delegated" sub-section in each
+// of the three cards covers them). Confirm the comment is there explaining why.
+ok('1h: Reminders widget no longer folds today-due tickets (moved to priority cards in v55.83-A.6.23)',
+  !/todayDueTickets = \[\.\.\.myTickets, \.\.\.ticketsICreated\][\s\S]{0,400}t\.due_date === todayStr/.test(personalDash)
+  && /v55\.83-A\.6\.23[\s\S]{0,400}REMOVED today-due ticket injection/.test(personalDash)
 );
 
 // =====================================================================

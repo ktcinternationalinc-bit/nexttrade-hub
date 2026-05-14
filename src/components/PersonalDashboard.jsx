@@ -241,12 +241,12 @@ export default function PersonalDashboard({ user, userProfile, isAdmin, isSuperA
       </div>
     )}
 
-    {/* v55.83-A.6.22 (Max May 14 2026) — REMOVED "My Tickets" stat card from
-        this grid. It was a duplicate of the new DashboardPrioritySections
-        cluster rendered higher on the page. "Assigned by Me" stays because the
-        new priority cards don't cover tickets you created for others. */}
+    {/* v55.83-A.6.22 — REMOVED "My Tickets" stat card (duplicate of new priority cards).
+        v55.83-A.6.23 — REMOVED "Assigned by Me" stat card. Now redundant because the
+        new DashboardPrioritySections cluster shows delegated tickets as the "📤 I Delegated"
+        sub-section inside each of its three cards. The dashboard should not show ticket
+        counts that aren't covered by the new structure. */}
     <div className="grid grid-cols-2 md:grid-cols-5 gap-2 mb-4">
-      <div className="bg-white rounded-lg p-3 cursor-pointer hover:shadow" onClick={()=>navigate('tickets')} style={{borderLeftWidth:3,borderLeftColor:'#8b5cf6'}}><div className="text-xs text-slate-700">Assigned by Me</div><div className="text-lg font-extrabold">{ticketsICreated.length}</div></div>
       {(isAdmin || teamTickets.length > 0) && <div className="bg-white rounded-lg p-3 cursor-pointer hover:shadow" onClick={()=>navigate('tickets')} style={{borderLeftWidth:3,borderLeftColor:'#f59e0b'}}><div className="text-xs text-slate-700">Team Tickets</div><div className="text-lg font-extrabold">{teamTickets.length}</div></div>}
       <div className="bg-white rounded-lg p-3 cursor-pointer hover:shadow" onClick={()=>navigate('calendar')} style={{borderLeftWidth:3,borderLeftColor:'#0ea5e9'}}><div className="text-xs text-slate-700">Today's Events</div><div className="text-lg font-extrabold">{todayEvents.length}</div><div className="text-xs text-slate-600">{upcomingEvents.length} upcoming</div></div>
       <div className="bg-white rounded-lg p-3 cursor-pointer hover:shadow" onClick={()=>navigate('crm')} style={{borderLeftWidth:3,borderLeftColor:overdueFollowUps.length>0?'#ef4444':'#f59e0b'}}><div className="text-xs text-slate-700">Follow-ups</div><div className="text-lg font-extrabold">{myFollowUps.length}</div>{overdueFollowUps.length>0&&<div className="text-[10px] text-red-600 font-bold">⚠️ {overdueFollowUps.length} overdue</div>}</div>
@@ -258,7 +258,11 @@ export default function PersonalDashboard({ user, userProfile, isAdmin, isSuperA
         DashboardPrioritySections cluster above. Tickets I assigned to others
         stays — that's a different surface (delegation tracking). */}
 
-    {ticketsICreated.length>0&&(<div className="bg-white rounded-xl p-4 mb-3"><h3 className="text-sm font-bold mb-2">📤 Tickets I Assigned ({ticketsICreated.length})</h3><div className="space-y-1.5 max-h-[200px] overflow-auto">{ticketsICreated.map(t=>{const ov=t.due_date&&t.due_date<todayStr; return (<div key={t.id} onClick={()=>navigate('tickets')} className={'flex justify-between items-center py-2 px-2 rounded cursor-pointer hover:bg-blue-50 border '+(ov?'border-red-200 bg-red-50':'border-slate-100')}><div className="flex-1"><div className="text-xs font-bold">{t.title}</div><div className="text-xs text-slate-700"><span className="text-purple-600 font-semibold">👤 {getUserName(t.assigned_to)||'Unassigned'}</span>{t.due_date&&<span className={ov?' text-red-600 font-bold':''}> • Due: {t.due_date}</span>}<span className="text-slate-600"> • {t.updated_at?fmtET(t.updated_at, 'shortdate'):'—'}</span></div></div><span className="px-2 py-0.5 rounded-full text-[9px] font-bold text-white ml-2" style={{background:STATUS_COLORS[t.status]||'#6b7280'}}>{t.status}</span></div>);})}</div></div>)}
+    {/* v55.83-A.6.23 (Max May 14 2026) — REMOVED "📤 Tickets I Assigned ({n})"
+        section. This data is now surfaced as the "📤 I Delegated" sub-sections
+        inside each of the three new DashboardPrioritySections cards above
+        (Overdue / Recent Updates / Newly Assigned). Keeping this duplicate
+        surface would show the same data twice. */}
 
     <div className="bg-white rounded-xl p-4 mb-3"><h3 className="text-sm font-bold mb-2">📅 Today ({(() => {
       // v55.82-J — Today widget now counts events + today-due tickets.
@@ -321,13 +325,13 @@ export default function PersonalDashboard({ user, userProfile, isAdmin, isSuperA
         // Bucket reminders
         const urgentReminders = reminders.filter(r => r.due_date && r.due_date <= todayStr);
         const normalReminders = reminders.filter(r => !r.due_date || r.due_date > todayStr);
-        // Today-due tickets appear here too — they're action items for today.
-        // Overdue tickets are already surfaced in the top "🚨 OVERDUE" banner so
-        // we skip them here to avoid duplication.
-        const todayDueTickets = [...myTickets, ...ticketsICreated]
-          .filter(t => t.due_date === todayStr)
-          .map(t => ({ kind: 'ticket', id: t.id, text: t.title, due_date: t.due_date, status: t.status, priority: t.priority }));
-        const urgentAll = [...urgentReminders.map(r => ({ kind: 'reminder', ...r })), ...todayDueTickets];
+        // v55.83-A.6.23 (Max May 14 2026) — REMOVED today-due ticket injection.
+        // Previously this widget mixed reminders + tickets due today into the
+        // "🔴 Urgent" list, which duplicated the new DashboardPrioritySections
+        // cards above and made the dashboard show conflicting ticket data.
+        // Tickets now live solely in the priority cards at the top of the
+        // dashboard. Reminders stays a pure reminders widget.
+        const urgentAll = urgentReminders.map(r => ({ kind: 'reminder', ...r }));
 
         if (urgentAll.length === 0 && normalReminders.length === 0) {
           return <div className="text-xs text-slate-600">No reminders</div>;

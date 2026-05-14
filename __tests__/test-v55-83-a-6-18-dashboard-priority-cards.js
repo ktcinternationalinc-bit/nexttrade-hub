@@ -46,8 +46,8 @@ ok('2g: overdue card uses red color scheme',
   /from-red-50 to-rose-50[\s\S]{0,100}border-red-300/.test(prio));
 
 // 1.2 Recent Updates card
-ok('3a: recent updates card title',
-  /Recent Updates to Your Tickets/.test(prio));
+ok('3a: recent updates card title (v55.83-A.6.23: now includes "Last 3 Days" suffix)',
+  /Recent Updates \(Last 3 Days\)/.test(prio));
 ok('3b: 3-day cutoff for recent updates',
   /3 \* 86400000/.test(prio));
 ok('3c: shows comment preview (last comment per ticket)',
@@ -58,8 +58,8 @@ ok('3e: blue color scheme',
   /from-blue-50 to-cyan-50/.test(prio));
 
 // 1.3 Newly Assigned card
-ok('4a: newly assigned card title',
-  /Newly Assigned — Acknowledge/.test(prio));
+ok('4a: newly assigned card title (v55.83-A.6.23: Acknowledge label moved into "My Direct" sub-section)',
+  /Newly Assigned/.test(prio) && /My Direct — Acknowledge/.test(prio));
 ok('4b: filters by status === New',
   /t\.status === 'New'/.test(prio));
 ok('4c: Acknowledge button calls onAcknowledge',

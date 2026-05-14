@@ -29,19 +29,24 @@ ok('1b: NO conditional wrapping recent updates card',
 ok('1c: NO conditional wrapping newly assigned card',
   !/\{newlyAssigned\.length > 0 && \(\s*<div/.test(prio));
 
-// === 2. Each card has its own empty state ===
-ok('2a: overdue card empty state',
-  /overdue\.length === 0 \?[\s\S]{0,200}No overdue tickets/.test(prio));
-ok('2b: recent updates empty state',
-  /recentUpdates\.length === 0 \?[\s\S]{0,200}No recent updates/.test(prio));
-ok('2c: newly assigned empty state',
-  /newlyAssigned\.length === 0 \?[\s\S]{0,200}No new tickets to acknowledge/.test(prio));
+// === 2. Each card has its own empty state (v55.83-A.6.23: empties now sit
+//     inside the per-card SubSection wrappers — one per My Direct, one per
+//     I Delegated. The text is more specific too.) ===
+ok('2a: overdue card has empty state messaging',
+  /No overdue tickets directly assigned to you/.test(prio)
+  && /None of the tickets you delegated are overdue/.test(prio));
+ok('2b: recent updates card has empty state messaging',
+  /No recent updates on tickets assigned to you/.test(prio)
+  && /No recent updates on tickets you delegated/.test(prio));
+ok('2c: newly assigned card has empty state messaging',
+  /No new tickets waiting for your acknowledgment/.test(prio)
+  && /Everyone has acknowledged tickets you delegated/.test(prio));
 
 // === 3. Daily Priorities banner always visible ===
 ok('3a: Daily Priorities header banner exists',
   /Your Daily Priorities/.test(prio));
-ok('3b: banner shows count badges color-coded by category',
-  /\{overdue\.length\} overdue[\s\S]{0,200}\{recentUpdates\.length\} updates[\s\S]{0,200}\{newlyAssigned\.length\} new/.test(prio));
+ok('3b: banner shows count badges color-coded by category (v55.83-A.6.23: vars renamed to ...Total since they now sum both sub-sections)',
+  /\{overdueTotal\} overdue[\s\S]{0,200}\{updatesTotal\} updates[\s\S]{0,200}\{newTotal\} new/.test(prio));
 ok('3c: banner shows "all clear" pill when everything is empty',
   /allEmpty[\s\S]{0,500}You're all clear/.test(prio));
 
