@@ -32,6 +32,14 @@ export default function EgyptBankTab({ toast, user, userProfile, isAdmin, invoic
   const [importData, setImportData] = useState([]);
   const [importAccount, setImportAccount] = useState('');
   const [importStats, setImportStats] = useState(null);
+  // v55.83-A.6.15 (Max May 14 2026) — Bulk delete modal state
+  const [bulkDeleteOpen, setBulkDeleteOpen] = useState(false);
+  const [bulkDeleteAccountId, setBulkDeleteAccountId] = useState('');
+  const [bulkDeleteFrom, setBulkDeleteFrom] = useState('');
+  const [bulkDeleteTo, setBulkDeleteTo] = useState('');
+  const [bulkDeleteReason, setBulkDeleteReason] = useState('');
+  const [bulkDeleteImpact, setBulkDeleteImpact] = useState(null); // {count, sum, invoices, treasury_rows}
+  const [bulkDeleteWorking, setBulkDeleteWorking] = useState(false);
 
   const myId = userProfile?.id || user?.id;
   const isSuperAdmin = userProfile?.role === 'super_admin';
@@ -415,6 +423,9 @@ export default function EgyptBankTab({ toast, user, userProfile, isAdmin, invoic
   };
 
   // v55.83-A.6.14 — actually write the approved rows after review
+  // v55.83-A.6.15 — also tag each row with an import_batch_id so we can
+  // roll back this specific import later if needed. Best-effort; if the
+  // bank_import_batches table doesn't exist yet, imports still succeed.
   const executeImport = async (classified, accId) => {
     setImportStep('importing');
     var imported = 0, skipped = 0, exactSkipped = 0, possibleSkipped = 0, overridden = 0;
@@ -429,7 +440,6 @@ export default function EgyptBankTab({ toast, user, userProfile, isAdmin, invoic
         if (c.status === 'exact') exactSkipped += 1;
         else if (c.status === 'possible') possibleSkipped += 1;
       }
-      // Build audit entry for non-clean rows
       if (c.status !== 'clean') {
         auditEntries.push({
           row_date: c.row.date,
@@ -443,6 +453,24 @@ export default function EgyptBankTab({ toast, user, userProfile, isAdmin, invoic
         });
       }
     });
+
+    // v55.83-A.6.15 — Create batch record first; best-effort (don't fail import if table missing)
+    var batchId = null;
+    try {
+      var totalAmt = toInsert.reduce(function (a, r) { return a + Number(r.amount || 0); }, 0);
+      var batchResp = await supabase.from('bank_import_batches').insert({
+        imported_by: myId,
+        account_id: accId,
+        row_count: toInsert.length,
+        total_amount: totalAmt,
+        status: 'active',
+      }).select().maybeSingle();
+      if (batchResp.data && batchResp.data.id) {
+        batchId = batchResp.data.id;
+        // Tag every row with this batch_id
+        toInsert = toInsert.map(function (r) { return Object.assign({}, r, { import_batch_id: batchId }); });
+      }
+    } catch (_) { /* table may not exist yet; proceed without batch */ }
 
     // Batch insert in chunks of 100
     for (var i = 0; i < toInsert.length; i += 100) {
@@ -458,7 +486,7 @@ export default function EgyptBankTab({ toast, user, userProfile, isAdmin, invoic
     if (auditEntries.length > 0) {
       try {
         await supabase.from('bank_import_audit').insert(auditEntries.map(function (a) {
-          return { /* schema-friendly minimal columns */
+          return {
             user_id: myId,
             action: 'bank_import_duplicate_decision',
             details: JSON.stringify(a),
@@ -466,14 +494,13 @@ export default function EgyptBankTab({ toast, user, userProfile, isAdmin, invoic
           };
         }));
       } catch (e) { /* audit_log fallback below */ }
-      // Also try writing to audit_log if the dedicated table doesn't exist
       try {
         for (var ai = 0; ai < auditEntries.length; ai++) {
           await supabase.from('audit_log').insert({
             user_id: myId,
             entity_type: 'egypt_bank_transactions',
             action: 'import_dedup_' + auditEntries[ai].decision,
-            details: auditEntries[ai],
+            details: Object.assign({ import_batch_id: batchId }, auditEntries[ai]),
             created_at: auditEntries[ai].decided_at,
           });
         }
@@ -496,6 +523,99 @@ export default function EgyptBankTab({ toast, user, userProfile, isAdmin, invoic
       next[idx] = Object.assign({}, next[idx], { decision: decision });
       return next;
     });
+  };
+
+  // v55.83-A.6.15 (Max May 14 2026) — Bulk delete: preview impact, then execute.
+  // Two-step (preview → confirm) so user sees count/sum/affected invoices first.
+  const computeBulkDeleteImpact = async () => {
+    if (!bulkDeleteAccountId || !bulkDeleteFrom || !bulkDeleteTo) {
+      alert('Pick an account and date range first / اختر حسابًا ونطاق تاريخ');
+      return;
+    }
+    setBulkDeleteWorking(true);
+    try {
+      var bankResp = await supabase.from('egypt_bank_transactions')
+        .select('id, date, amount, description')
+        .eq('account_id', bulkDeleteAccountId)
+        .gte('date', bulkDeleteFrom)
+        .lte('date', bulkDeleteTo);
+      var bankRows = bankResp.data || [];
+      var bankIds = bankRows.map(function (r) { return r.id; });
+      var totalSum = bankRows.reduce(function (a, r) { return a + Number(r.amount || 0); }, 0);
+      var affectedInvoiceIds = [];
+      var matchedTreasury = [];
+      if (bankIds.length > 0) {
+        var tResp = await supabase.from('treasury')
+          .select('id, linked_invoice_id, matched_bank_txn_id')
+          .in('matched_bank_txn_id', bankIds);
+        matchedTreasury = tResp.data || [];
+        affectedInvoiceIds = Array.from(new Set(matchedTreasury.map(function (t) { return t.linked_invoice_id; }).filter(Boolean)));
+      }
+      setBulkDeleteImpact({
+        count: bankRows.length,
+        sum: totalSum,
+        treasury_rows: matchedTreasury.length,
+        invoices: affectedInvoiceIds.length,
+        invoice_ids: affectedInvoiceIds,
+      });
+    } catch (e) {
+      alert('Preview failed: ' + (e.message || e));
+      setBulkDeleteImpact(null);
+    }
+    setBulkDeleteWorking(false);
+  };
+
+  const executeBulkDelete = async () => {
+    if (!bulkDeleteImpact) { alert('Run preview first'); return; }
+    if (!bulkDeleteReason || bulkDeleteReason.length < 5) {
+      alert('Provide a reason (at least 5 characters) / أدخل سببًا للحذف');
+      return;
+    }
+    if (!confirm('You are about to DELETE ' + bulkDeleteImpact.count + ' bank transactions totaling EGP ' + bulkDeleteImpact.sum.toLocaleString() + '. This affects ' + bulkDeleteImpact.invoices + ' invoices. Continue? / تأكيد الحذف؟')) return;
+    setBulkDeleteWorking(true);
+    try {
+      var bankResp = await supabase.from('egypt_bank_transactions')
+        .select('id')
+        .eq('account_id', bulkDeleteAccountId)
+        .gte('date', bulkDeleteFrom)
+        .lte('date', bulkDeleteTo);
+      var bankIds = (bankResp.data || []).map(function (r) { return r.id; });
+      if (bankIds.length === 0) { alert('Nothing to delete'); setBulkDeleteWorking(false); return; }
+      var tBefore = (await supabase.from('treasury').select('linked_invoice_id').in('matched_bank_txn_id', bankIds)).data || [];
+      var invoiceIds = Array.from(new Set(tBefore.map(function (t) { return t.linked_invoice_id; }).filter(Boolean)));
+      // Unmatch treasury rows pointing at these
+      await supabase.from('treasury').update({ matched_bank_txn_id: null }).in('matched_bank_txn_id', bankIds);
+      // Audit BEFORE delete
+      try {
+        await supabase.from('audit_log').insert({
+          user_id: myId,
+          entity_type: 'egypt_bank_transactions',
+          action: 'bulk_delete',
+          details: {
+            account_id: bulkDeleteAccountId,
+            from: bulkDeleteFrom,
+            to: bulkDeleteTo,
+            count: bulkDeleteImpact.count,
+            sum: bulkDeleteImpact.sum,
+            invoices_affected: bulkDeleteImpact.invoices,
+            reason: bulkDeleteReason,
+            bank_row_ids: bankIds,
+            source: 'v55.83-A.6.15 EgyptBankTab bulk delete',
+          },
+          created_at: new Date().toISOString(),
+        });
+      } catch (_) {}
+      await supabase.from('egypt_bank_transactions').delete().in('id', bankIds);
+      toast && toast.success && toast.success(bankIds.length + ' rows deleted, ' + invoiceIds.length + ' invoices need recalc on reload / تم الحذف');
+      setBulkDeleteOpen(false);
+      setBulkDeleteImpact(null);
+      setBulkDeleteReason('');
+      if (onReload) await onReload();
+      await load();
+    } catch (e) {
+      alert('Delete failed: ' + (e.message || e));
+    }
+    setBulkDeleteWorking(false);
   };
 
   // ───── Smart Auto-categorize (amount-first + keywords + timing patterns + direction) ─────
@@ -803,6 +923,9 @@ export default function EgyptBankTab({ toast, user, userProfile, isAdmin, invoic
           <button onClick={() => setView('accounts')} className={'px-3 py-1.5 rounded-lg text-xs font-semibold ' + (view === 'accounts' ? 'bg-blue-500 text-white' : 'bg-slate-100 text-slate-600')}>🏛️ Accounts</button>
           <button onClick={() => { setView('import'); setImportStep('select'); }} className={'px-3 py-1.5 rounded-lg text-xs font-semibold ' + (view === 'import' ? 'bg-blue-500 text-white' : 'bg-slate-100 text-slate-600')}>📥 Import</button>
           <button onClick={() => setView('transactions')} className={'px-3 py-1.5 rounded-lg text-xs font-semibold ' + (view === 'transactions' ? 'bg-blue-500 text-white' : 'bg-slate-100 text-slate-600')}>📋 Transactions</button>
+          {isSuperAdmin && (
+            <button onClick={() => setView('history')} className={'px-3 py-1.5 rounded-lg text-xs font-semibold ' + (view === 'history' ? 'bg-blue-500 text-white' : 'bg-slate-100 text-slate-600')}>📜 Import History / السجل</button>
+          )}
         </div>
       </div>
 
@@ -1159,6 +1282,13 @@ export default function EgyptBankTab({ toast, user, userProfile, isAdmin, invoic
                   }
                 }} />
               </label>
+              {/* v55.83-A.6.15 — Bulk delete (super-admin only) */}
+              {isSuperAdmin && (
+                <button onClick={function () { setBulkDeleteOpen(true); setBulkDeleteImpact(null); }}
+                  className="px-3 py-2 bg-red-600 hover:bg-red-700 text-white rounded-lg text-xs font-bold">
+                  🗑 Bulk Delete / حذف بالجملة
+                </button>
+              )}
               <button onClick={() => {
                 const ws = XLSX.utils.aoa_to_sheet([
                   ['Date', 'Description', 'Credit (In)', 'Debit (Out)', 'Balance', 'Reference', 'Notes'],
@@ -1534,6 +1664,258 @@ export default function EgyptBankTab({ toast, user, userProfile, isAdmin, invoic
         </div>
         );
       })()}
+
+      {/* v55.83-A.6.15 — Import History (super-admin only) */}
+      {view === 'history' && isSuperAdmin && (
+        <ImportHistoryView supabase={supabase} accounts={accounts} myId={myId} toast={toast} onReload={onReload} reload={load} />
+      )}
+
+      {/* v55.83-A.6.15 — Bulk Delete Modal */}
+      {bulkDeleteOpen && isSuperAdmin && (
+        <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50 p-4" onClick={function () { if (!bulkDeleteWorking) setBulkDeleteOpen(false); }}>
+          <div className="bg-white rounded-2xl w-full max-w-2xl max-h-[90vh] overflow-auto shadow-2xl" onClick={function (e) { e.stopPropagation(); }}>
+            <div className="p-4 border-b border-slate-200">
+              <h3 className="text-lg font-bold text-red-700">🗑 Bulk Delete Bank Transactions</h3>
+              <p className="text-[11px] text-slate-500 mt-1">حذف معاملات بنكية بالجملة — اختر الحساب والتاريخ، ثم عاين قبل الحذف</p>
+            </div>
+
+            <div className="p-4 space-y-3">
+              <div>
+                <label className="block text-[11px] font-bold text-slate-700 mb-1">Bank Account / الحساب البنكي</label>
+                <select value={bulkDeleteAccountId} onChange={function (e) { setBulkDeleteAccountId(e.target.value); setBulkDeleteImpact(null); }}
+                  className="w-full border border-slate-300 rounded px-2 py-1.5 text-xs">
+                  <option value="">— Select account / اختر حسابًا —</option>
+                  {accounts.map(function (a) { return <option key={a.id} value={a.id}>{a.bank_name} — {a.account_number}</option>; })}
+                </select>
+              </div>
+
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-[11px] font-bold text-slate-700 mb-1">From date / من تاريخ</label>
+                  <input type="date" value={bulkDeleteFrom} onChange={function (e) { setBulkDeleteFrom(e.target.value); setBulkDeleteImpact(null); }}
+                    className="w-full border border-slate-300 rounded px-2 py-1.5 text-xs" />
+                </div>
+                <div>
+                  <label className="block text-[11px] font-bold text-slate-700 mb-1">To date / إلى تاريخ</label>
+                  <input type="date" value={bulkDeleteTo} onChange={function (e) { setBulkDeleteTo(e.target.value); setBulkDeleteImpact(null); }}
+                    className="w-full border border-slate-300 rounded px-2 py-1.5 text-xs" />
+                </div>
+              </div>
+
+              <div>
+                <label className="block text-[11px] font-bold text-slate-700 mb-1">Reason / سبب الحذف <span className="text-red-600">*</span></label>
+                <textarea value={bulkDeleteReason} onChange={function (e) { setBulkDeleteReason(e.target.value); }}
+                  placeholder="e.g. Imported same statement to wrong account on May 13"
+                  className="w-full border border-slate-300 rounded px-2 py-1.5 text-xs" rows={2} />
+              </div>
+
+              <div className="flex gap-2">
+                <button onClick={computeBulkDeleteImpact} disabled={bulkDeleteWorking || !bulkDeleteAccountId || !bulkDeleteFrom || !bulkDeleteTo}
+                  className="px-3 py-1.5 rounded bg-blue-600 hover:bg-blue-700 disabled:opacity-50 text-white text-xs font-bold">
+                  🔍 Preview Impact / عاين التأثير
+                </button>
+              </div>
+
+              {bulkDeleteImpact && (
+                <div className="bg-amber-50 border-2 border-amber-300 rounded p-3">
+                  <div className="font-bold text-amber-900 text-sm mb-2">Impact preview / معاينة التأثير:</div>
+                  <div className="grid grid-cols-2 gap-2 text-xs">
+                    <div><span className="text-slate-600">Rows to delete:</span> <span className="font-bold text-red-700">{bulkDeleteImpact.count}</span></div>
+                    <div><span className="text-slate-600">Total amount:</span> <span className="font-bold text-red-700">EGP {bulkDeleteImpact.sum.toLocaleString()}</span></div>
+                    <div><span className="text-slate-600">Treasury rows affected:</span> <span className="font-bold text-amber-700">{bulkDeleteImpact.treasury_rows}</span></div>
+                    <div><span className="text-slate-600">Invoices affected:</span> <span className="font-bold text-amber-700">{bulkDeleteImpact.invoices}</span></div>
+                  </div>
+                  <div className="text-[10px] text-amber-800 mt-2">Treasury rows will be unmatched (kept), but invoice totals will recalc after reload. Audit log entry is created with your reason. الخزنة ستفصل، الإجمالي يُعاد حسابه.</div>
+                </div>
+              )}
+
+              <div className="flex justify-end gap-2 pt-2 border-t border-slate-100">
+                <button onClick={function () { setBulkDeleteOpen(false); setBulkDeleteImpact(null); setBulkDeleteReason(''); }} disabled={bulkDeleteWorking}
+                  className="px-3 py-1.5 rounded border border-slate-300 hover:bg-slate-50 disabled:opacity-50 text-slate-700 text-xs font-bold">
+                  Cancel / إلغاء
+                </button>
+                <button onClick={executeBulkDelete} disabled={bulkDeleteWorking || !bulkDeleteImpact || !bulkDeleteReason || bulkDeleteReason.length < 5}
+                  className="px-3 py-1.5 rounded bg-red-600 hover:bg-red-700 disabled:opacity-50 text-white text-xs font-bold">
+                  {bulkDeleteWorking ? 'Working...' : '🗑 Confirm Delete / تأكيد الحذف'}
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// =====================================================================
+// IMPORT HISTORY VIEW (v55.83-A.6.15)
+// Shows last 10 bank import batches with one-click rollback.
+// =====================================================================
+function ImportHistoryView({ supabase, accounts, myId, toast, onReload, reload }) {
+  var [batches, setBatches] = useState([]);
+  var [loading, setLoading] = useState(true);
+  var [working, setWorking] = useState(false);
+  var [error, setError] = useState(null);
+
+  function loadBatches() {
+    setLoading(true);
+    setError(null);
+    supabase.from('bank_import_batches')
+      .select('id, imported_by, imported_at, account_id, row_count, total_amount, status, rolled_back_at, rolled_back_by, notes')
+      .order('imported_at', { ascending: false })
+      .limit(20)
+      .then(function (resp) {
+        if (resp.error) {
+          // Table may not exist yet — show friendly message
+          setError(resp.error.message || 'Could not load import history');
+          setBatches([]);
+        } else {
+          setBatches(resp.data || []);
+        }
+        setLoading(false);
+      })
+      .catch(function (e) {
+        setError(e.message || String(e));
+        setLoading(false);
+      });
+  }
+
+  useEffect(function () { loadBatches(); }, []);
+
+  function accountLabel(accId) {
+    var a = (accounts || []).find(function (x) { return x.id === accId; });
+    return a ? (a.bank_name + ' — ' + a.account_number) : (accId ? accId.substring(0, 8) : '—');
+  }
+
+  async function rollbackBatch(batch) {
+    if (batch.status === 'rolled_back') { alert('This batch is already rolled back'); return; }
+    if (!confirm('Roll back this import? ALL ' + batch.row_count + ' bank rows from this batch will be deleted (totaling EGP ' + Number(batch.total_amount || 0).toLocaleString() + '). Affected invoices recalc on reload. Continue? / تراجع عن الاستيراد؟')) return;
+    setWorking(true);
+    try {
+      // 1. Find the bank rows tagged with this batch_id
+      var rowsResp = await supabase.from('egypt_bank_transactions').select('id').eq('import_batch_id', batch.id);
+      var bankIds = (rowsResp.data || []).map(function (r) { return r.id; });
+      if (bankIds.length === 0) {
+        alert('No rows found tagged with this batch. The import may pre-date batch tracking, or the rows were already deleted.');
+        setWorking(false);
+        return;
+      }
+      // 2. Find affected invoices BEFORE unmatch
+      var tBefore = (await supabase.from('treasury').select('linked_invoice_id').in('matched_bank_txn_id', bankIds)).data || [];
+      var invoiceIds = Array.from(new Set(tBefore.map(function (t) { return t.linked_invoice_id; }).filter(Boolean)));
+      // 3. Unmatch treasury rows
+      await supabase.from('treasury').update({ matched_bank_txn_id: null }).in('matched_bank_txn_id', bankIds);
+      // 4. Audit
+      try {
+        await supabase.from('audit_log').insert({
+          user_id: myId,
+          entity_type: 'egypt_bank_transactions',
+          action: 'batch_rollback',
+          details: {
+            batch_id: batch.id,
+            rolled_row_count: bankIds.length,
+            sum: batch.total_amount,
+            invoices_affected: invoiceIds.length,
+            invoice_ids: invoiceIds,
+            source: 'v55.83-A.6.15 ImportHistoryView rollback',
+          },
+          created_at: new Date().toISOString(),
+        });
+      } catch (_) {}
+      // 5. Delete the bank rows
+      await supabase.from('egypt_bank_transactions').delete().in('id', bankIds);
+      // 6. Mark the batch as rolled back
+      await supabase.from('bank_import_batches').update({
+        status: 'rolled_back',
+        rolled_back_at: new Date().toISOString(),
+        rolled_back_by: myId,
+      }).eq('id', batch.id);
+      toast && toast.success && toast.success('Batch rolled back — ' + bankIds.length + ' rows removed, ' + invoiceIds.length + ' invoices need recalc / تم التراجع');
+      loadBatches();
+      if (onReload) await onReload();
+      if (reload) await reload();
+    } catch (e) {
+      alert('Rollback failed: ' + (e.message || e));
+    }
+    setWorking(false);
+  }
+
+  return (
+    <div>
+      <div className="bg-white rounded-xl p-4 mb-3">
+        <div className="flex justify-between items-center mb-2 flex-wrap gap-2">
+          <h3 className="text-sm font-bold">📜 Import History <span className="text-slate-400 font-normal">/ سجل الاستيراد</span></h3>
+          <button onClick={loadBatches} disabled={loading}
+            className="px-2 py-1 rounded border border-slate-300 hover:bg-slate-50 text-[10px] font-bold">
+            {loading ? '⏳' : '🔄'} Refresh / تحديث
+          </button>
+        </div>
+        <p className="text-[10px] text-slate-500 mb-3">
+          Most recent 20 bank import batches. Click "Roll back" to undo an entire import. Only super-admin. /
+          آخر 20 استيراد بنكي. يمكنك التراجع عن استيراد كامل. للمسؤول فقط.
+        </p>
+
+        {error && (
+          <div className="bg-amber-50 border border-amber-300 rounded p-3 mb-3">
+            <div className="text-xs font-bold text-amber-900 mb-1">⚠️ Batch tracking not set up yet</div>
+            <div className="text-[10px] text-amber-800 mb-2">
+              The <code className="bg-amber-100 px-1 rounded">bank_import_batches</code> table doesn't exist. Run the v55.83-A.6.15 SQL migration in Supabase to enable batch tracking and rollback.
+              لم يتم إعداد تتبع الدفعات بعد. شغّل SQL الإعداد في Supabase.
+            </div>
+            <div className="text-[9px] font-mono text-amber-900">Error: {error}</div>
+          </div>
+        )}
+
+        {!error && batches.length === 0 && !loading && (
+          <div className="text-center py-6 text-sm text-slate-500">No import batches yet / لا يوجد سجل استيراد بعد</div>
+        )}
+
+        {batches.length > 0 && (
+          <div className="overflow-auto max-h-[500px] border border-slate-200 rounded">
+            <table className="w-full text-xs">
+              <thead className="sticky top-0 bg-slate-50">
+                <tr>
+                  <th className="px-2 py-2 text-left text-[10px]">When / متى</th>
+                  <th className="px-2 py-2 text-left text-[10px]">Account / حساب</th>
+                  <th className="px-2 py-2 text-right text-[10px]">Rows / صفوف</th>
+                  <th className="px-2 py-2 text-right text-[10px]">Total / إجمالي</th>
+                  <th className="px-2 py-2 text-left text-[10px]">Status / الحالة</th>
+                  <th className="px-2 py-2 text-center text-[10px]">Action / إجراء</th>
+                </tr>
+              </thead>
+              <tbody>
+                {batches.map(function (b) {
+                  return (
+                    <tr key={b.id} className={'border-b border-slate-50 ' + (b.status === 'rolled_back' ? 'bg-slate-50 opacity-60' : '')}>
+                      <td className="px-2 py-2 text-[10px] whitespace-nowrap">{(b.imported_at || '').substring(0, 16).replace('T', ' ')}</td>
+                      <td className="px-2 py-2 text-[10px]">{accountLabel(b.account_id)}</td>
+                      <td className="px-2 py-2 text-right font-bold">{b.row_count}</td>
+                      <td className="px-2 py-2 text-right font-mono">EGP {Number(b.total_amount || 0).toLocaleString()}</td>
+                      <td className="px-2 py-2 text-[10px]">
+                        {b.status === 'rolled_back' ? (
+                          <span className="px-1 py-0.5 rounded bg-red-100 text-red-800 text-[9px] font-bold">↩️ Rolled back {(b.rolled_back_at || '').substring(0, 10)}</span>
+                        ) : (
+                          <span className="px-1 py-0.5 rounded bg-emerald-100 text-emerald-800 text-[9px] font-bold">✓ Active</span>
+                        )}
+                      </td>
+                      <td className="px-2 py-2 text-center">
+                        {b.status === 'rolled_back' ? (
+                          <span className="text-[10px] text-slate-500">—</span>
+                        ) : (
+                          <button onClick={function () { rollbackBatch(b); }} disabled={working}
+                            className="px-2 py-1 rounded bg-red-600 hover:bg-red-700 disabled:opacity-50 text-white text-[10px] font-bold">
+                            🗑 Roll back
+                          </button>
+                        )}
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </div>
     </div>
   );
 }
