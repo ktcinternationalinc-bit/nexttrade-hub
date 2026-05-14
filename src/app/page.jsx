@@ -1380,12 +1380,19 @@ export default function App() {
       // shouldn't see (private super-admin tickets, confidential tickets
       // they aren't part of). Super admin sees everything.
       try {
+        // v55.83-A.6.20 (Max May 14 2026) — bumped limit from 100 to 300
+        // because the dashboard "Recent Updates to Your Assigned Tickets"
+        // card was coming up empty for super admin even when their tickets
+        // had recent comments. With 10 team members + 50+ open tickets, 100
+        // comments in 7 days hits the ceiling fast and the user's specific
+        // ticket comments get pushed out by load order. 300 is generous
+        // enough to capture every relevant comment without straining the API.
         const sevenDaysAgo = new Date(Date.now() - 7 * 86400000).toISOString();
         const { data: comments } = await supabase.from('ticket_comments')
           .select('*, tickets(id, ticket_number, title, status, priority, assigned_to, created_by, additional_assignees, is_private, private_to, is_confidential)')
           .gte('created_at', sevenDaysAgo)
           .order('created_at', { ascending: false })
-          .limit(100);
+          .limit(300);
         var meId = profile && profile.id;
         var meIsSA = profile && profile.role === 'super_admin';
         var filteredComments = (comments || []).filter(function (c) {
@@ -4626,7 +4633,7 @@ export default function App() {
               {/* Brand mark — bracket prefix is a terminal callout convention. */}
               <span className="text-emerald-400 font-mono text-xs font-bold tracking-tight" style={{ fontFamily: '"JetBrains Mono", monospace' }}>[KTC]</span>
               <h1 className="text-sm font-bold text-white tracking-tight whitespace-nowrap">NEXTTRADE HUB</h1>
-              <span className="text-[10px] text-zinc-500 font-mono hidden md:inline" style={{ fontFamily: '"JetBrains Mono", monospace' }}>v55.83-A.6.18</span>
+              <span className="text-[10px] text-zinc-500 font-mono hidden md:inline" style={{ fontFamily: '"JetBrains Mono", monospace' }}>v55.83-A.6.20</span>
               {/* Live clock — terminals always show one. Updates via the
                   existing tick state; if not present, falls back to no clock. */}
               <span className="hidden lg:inline text-[10px] text-zinc-500 font-mono ml-2 pl-2 border-l border-zinc-800" style={{ fontFamily: '"JetBrains Mono", monospace' }}>
@@ -5124,6 +5131,19 @@ export default function App() {
                   </button>
                 </div>
               )}
+              {/* v55.83-A.6.19 (Max May 14 2026) — Invoice date row, always visible.
+                  Was hidden behind Edit mode before. Per Max: "Every invoice must
+                  display the date of sale clearly on the invoice itself." */}
+              <div className="mt-2 flex items-center gap-3 flex-wrap" style={{ direction: 'ltr' }}>
+                <div className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-blue-50 border border-blue-200">
+                  <span className="text-[10px] font-bold uppercase tracking-wider text-blue-700">📅 Invoice Date / تاريخ الفاتورة</span>
+                  <span className="text-sm font-extrabold text-blue-900">{selectedInvoice.invoice_date || '—'}</span>
+                </div>
+                {selectedInvoice.created_at && selectedInvoice.created_at.substring(0, 10) !== selectedInvoice.invoice_date && (
+                  <span className="text-[10px] text-slate-500">Created: {selectedInvoice.created_at.substring(0, 10)}</span>
+                )}
+                <span className="text-[10px] text-slate-500">Order # {selectedInvoice.order_number}</span>
+              </div>
             </div>
             {/* Edit Fields + Delete + PDF Export */}
             {(() => {
@@ -5547,6 +5567,41 @@ export default function App() {
             {/* Invoice Line Items — always visible */}
             {(() => {
               const items = invoiceItems.filter(it => it.invoice_id === selectedInvoice.id || (it.order_number && it.order_number === String(selectedInvoice.order_number)));
+              // v55.83-A.6.19 (Max May 14 2026) — Delete a single line item.
+              // Persists immediately (no "save invoice" needed since each line is
+              // its own row in invoice_items table). Re-runs the local state
+              // refresh so totals update without a full reload.
+              const deleteLineItem = async (lineItem) => {
+                if (!lineItem || !lineItem.id) return;
+                if (!confirm('Delete this line item from the invoice? / حذف هذا البند من الفاتورة؟\n\n' + (lineItem.description || '').substring(0, 80))) return;
+                try {
+                  await supabase.from('invoice_items').delete().eq('id', lineItem.id);
+                  // Update local state immediately so the row disappears and totals recompute
+                  setInvoiceItems(prev => prev.filter(it => it.id !== lineItem.id));
+                  // Audit log
+                  try {
+                    await supabase.from('audit_log').insert({
+                      user_id: userProfile?.id || user?.id,
+                      entity_type: 'invoice_items',
+                      action: 'delete_line_item',
+                      details: {
+                        invoice_id: selectedInvoice.id,
+                        order_number: selectedInvoice.order_number,
+                        line_item_id: lineItem.id,
+                        description: (lineItem.description || '').substring(0, 200),
+                        quantity: lineItem.quantity,
+                        unit_price: lineItem.unit_price,
+                        line_total: lineItem.line_total,
+                        source: 'v55.83-A.6.19 invoice modal delete line item',
+                      },
+                      created_at: new Date().toISOString(),
+                    });
+                  } catch (_) { /* non-fatal */ }
+                  toast && toast.success && toast.success('Line item deleted / تم حذف البند');
+                } catch (err) {
+                  toast && toast.error && toast.error('Delete failed: ' + (err.message || err));
+                }
+              };
               return (
                 <div className="bg-blue-50 rounded-lg p-4 mb-4 border border-blue-200">
                   <h4 className="text-sm font-bold text-blue-800 mb-2">📦 Order Breakdown / تفاصيل الأمر {items.length > 0 ? '(' + items.length + ' items)' : ''}</h4>
@@ -5559,14 +5614,27 @@ export default function App() {
                             <th className="px-2 py-1.5 text-[10px] text-right">Qty / الكمية</th>
                             <th className="px-2 py-1.5 text-[10px] text-right">Unit Price / السعر</th>
                             <th className="px-2 py-1.5 text-[10px] text-right">Total / الإجمالي</th>
+                            <th className="px-2 py-1.5 text-[10px] text-center w-10">—</th>
                           </tr></thead>
                           <tbody>
                             {items.map(it => (
-                              <tr key={it.id} className="border-b border-blue-100">
+                              <tr key={it.id} className="border-b border-blue-100 group">
                                 <td className="px-2 py-1.5 text-xs" style={{ direction: lang === 'ar' ? 'rtl' : 'ltr' }}>{tx(it.description, it.description_en)}</td>
                                 <td className="px-2 py-1.5 text-xs text-right">{fmt(it.quantity)}</td>
                                 <td className="px-2 py-1.5 text-xs text-right">{fE(it.unit_price)}</td>
                                 <td className="px-2 py-1.5 text-xs text-right font-semibold">{fE(it.line_total)}</td>
+                                <td className="px-2 py-1.5 text-center">
+                                  {/* v55.83-A.6.19 — Always visible per-row delete button.
+                                      Per Max May 14 2026: "Each invoice line item must have
+                                      a clear delete/remove button." */}
+                                  <button
+                                    type="button"
+                                    onClick={() => deleteLineItem(it)}
+                                    title="Delete this line / حذف هذا البند"
+                                    className="px-1.5 py-0.5 rounded text-red-600 hover:bg-red-100 hover:text-red-800 text-sm font-bold border border-red-200 hover:border-red-400 transition">
+                                    🗑
+                                  </button>
+                                </td>
                               </tr>
                             ))}
                           </tbody>
@@ -5583,7 +5651,7 @@ export default function App() {
                     </div>
                   ) : (
                     <div>
-                      <div className="text-xs text-slate-400 mb-2 text-center">No item breakdown available / لا يوجد تفاصيل بنود</div>
+                      <div className="text-xs text-slate-500 mb-2 text-center">No item breakdown available / لا يوجد تفاصيل بنود</div>
                       {!formData.addingItems && (
                         <div className="text-center">
                           <button onClick={() => setFormData({...formData, addingItems: true, newItems: [], prodSearch: ''})}
@@ -12471,7 +12539,7 @@ export default function App() {
                       latest fix is actually deployed. If he doesn't see this
                       tag in the modal, his browser is running stale JS. */}
                   <div className="mt-1.5 inline-block px-2 py-0.5 rounded bg-amber-900/60 text-amber-100 text-[10px] font-mono font-bold tracking-wide">
-                    BUILD v55.83-A.6.18
+                    BUILD v55.83-A.6.20
                   </div>
                 </div>
                 <button onClick={() => closePendingTreasuryModal()}
@@ -13106,7 +13174,7 @@ export default function App() {
                     معاملة قد تكون مكررة
                   </div>
                   <div className="mt-1.5 inline-block px-2 py-0.5 rounded bg-amber-900/60 text-amber-100 text-[10px] font-mono font-bold tracking-wide">
-                    BUILD v55.83-A.6.18
+                    BUILD v55.83-A.6.20
                   </div>
                 </div>
                 <button

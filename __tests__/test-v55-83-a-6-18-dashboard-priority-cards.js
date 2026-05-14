@@ -71,9 +71,9 @@ ok('4e: Open button calls onOpenTicket',
 ok('4f: purple color scheme',
   /from-purple-50 to-indigo-50/.test(prio));
 
-// 1.4 Empty state
-ok('5a: empty state when nothing to show',
-  /You're all clear[\s\S]{0,200}No overdue tickets, no new assignments/.test(prio));
+// 1.4 Empty state (v55.83-A.6.20 — banner "all clear" pill replaces the single tile)
+ok('5a: empty state when nothing to show (A.6.20 banner pill design)',
+  /You're all clear[\s\S]{0,300}no overdue, no new assignments/.test(prio));
 
 // === 2. DashboardTicketModalOverlay component ===
 ok('6a: overlay default exported',

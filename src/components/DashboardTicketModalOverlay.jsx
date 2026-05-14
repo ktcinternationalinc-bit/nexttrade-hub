@@ -65,6 +65,7 @@ export default function DashboardTicketModalOverlay({
             openTicketId={ticketId}
             onOpenTicketHandled={function () { /* one-shot, no-op */ }}
             onTicketModalClosed={onClose}
+            detailOnly={true}
           />
         </div>
       </div>

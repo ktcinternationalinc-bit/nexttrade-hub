@@ -30,7 +30,7 @@ const STATUS_DESC = {New:'Just created — nobody has looked at it yet',Acknowle
   'On Hold':'Paused intentionally — not urgent right now',Review:'Work done — needs someone to check/approve',Closed:'Complete — no more action needed',Reopened:'Was closed but needs more work'};
 const USER_COLORS = ['#8b5cf6','#0ea5e9','#f59e0b','#10b981','#ec4899','#ef4444','#6366f1','#14b8a6','#f97316','#06b6d4','#a855f7','#84cc16'];
 
-export default function TicketsTab({ toast, customers, user, userProfile, users, onReload, lang, isAdmin, modulePerms, openTicketId, onOpenTicketHandled, onTicketModalClosed }) {
+export default function TicketsTab({ toast, customers, user, userProfile, users, onReload, lang, isAdmin, modulePerms, openTicketId, onOpenTicketHandled, onTicketModalClosed, detailOnly }) {
   const myId = userProfile?.id || user?.id;
   const canManage = isAdmin || userProfile?.role === 'super_admin' || userProfile?.role === 'admin';
   const isSuperAdmin = userProfile?.role === 'super_admin';
@@ -770,6 +770,23 @@ export default function TicketsTab({ toast, customers, user, userProfile, users,
       </div>
     )}
   </>);
+
+  // v55.83-A.6.20 (Max May 14 2026) — When mounted inside the dashboard
+  // modal overlay (detailOnly=true), do NOT render the full tickets list
+  // page. Show a loading state until `sel` is set by the openTicketId effect.
+  // Without this guard, the modal briefly showed the entire tickets toolbar +
+  // list view before snapping into detail — looked like nothing happened.
+  if (detailOnly && !sel) {
+    return (
+      <div className="py-12 text-center">
+        <div className="text-3xl mb-2">⏳</div>
+        <div className="text-sm font-bold text-slate-700">Loading ticket… / جاري التحميل</div>
+        <div className="text-[10px] text-slate-500 mt-1">
+          {openTicketId ? 'Opening ticket ' + String(openTicketId).substring(0, 8) + '…' : 'Waiting for ticket…'}
+        </div>
+      </div>
+    );
+  }
 
   // ===== TICKET DETAIL VIEW =====
   if (sel) {
