@@ -24,6 +24,11 @@ import AdminTab from '../components/AdminTab';
 import SettingsTab from '../components/SettingsTab';
 import CustomsTab from '../components/CustomsTab';
 import PersonalDashboard from '../components/PersonalDashboard';
+// v55.83-A.6.18 (Max May 14 2026) — Three high-priority dashboard cards
+// (Overdue / Recent Updates / Newly Assigned) and an in-place ticket modal
+// that renders on the dashboard without a tab switch.
+import DashboardPrioritySections from '../components/DashboardPrioritySections';
+import DashboardTicketModalOverlay from '../components/DashboardTicketModalOverlay';
 import VoicemailsWidget from '../components/VoicemailsWidget';
 import AIAssistant from '../components/AIAssistant';
 import AIGreeter, { PERSONALITIES } from '../components/AIGreeter';
@@ -357,10 +362,6 @@ export default function App() {
   // ticket modal, and remember which tab to return to when modal closes.
   // Clears after the return tab switch fires.
   const [returnToTabAfterTicket, setReturnToTabAfterTicket] = useState(null);
-  // v55.83-A.6.16 (Max May 14 2026) — same pattern for invoices opened from
-  // the Reports → Cleanup tool. When user clicks an invoice number in the
-  // cleanup review, we switch to Sales + open it; closing returns here.
-  const [returnToTabAfterInvoice, setReturnToTabAfterInvoice] = useState(null);
   const [mode, setMode] = useState('ytd');
   const [df, setDf] = useState(() => { const d = new Date(); d.setMonth(d.getMonth() - 1); return d.toISOString().substring(0, 10); });
   const [dt, setDt] = useState(today());
@@ -397,18 +398,6 @@ export default function App() {
 
   // Modals
   const [selectedInvoice, setSelectedInvoice] = useState(null);
-  // v55.83-A.6.16 — when selectedInvoice transitions back to null AND we
-  // remembered a returnToTabAfterInvoice (set when user clicked invoice
-  // from Reports → Cleanup), switch back to that tab.
-  const prevSelectedInvoiceRef = useRef(null);
-  useEffect(() => {
-    if (prevSelectedInvoiceRef.current && !selectedInvoice && returnToTabAfterInvoice) {
-      const t = returnToTabAfterInvoice;
-      setReturnToTabAfterInvoice(null);
-      setTab(t);
-    }
-    prevSelectedInvoiceRef.current = selectedInvoice;
-  }, [selectedInvoice, returnToTabAfterInvoice]);
   const [drillType, setDrillType] = useState(null);
   const [selectedCustomer, setSelectedCustomer] = useState(null);
   const [selectedDebtor, setSelectedDebtor] = useState(null);
@@ -876,6 +865,11 @@ export default function App() {
   }, [userProfile?.id]);
   const [lastLoaded, setLastLoaded] = useState(null);
   const [openTicketId, setOpenTicketId] = useState(null);
+  // v55.83-A.6.18 (Max May 14 2026) — dashboard-side ticket modal. When user
+  // clicks a ticket from the three priority cards, we open it IN PLACE on the
+  // dashboard via this overlay instead of switching to the Tickets tab.
+  const [dashboardTicketModal, setDashboardTicketModal] = useState(null);
+  const [busyAckId, setBusyAckId] = useState(null);
   const [egyptBankTxns, setEgyptBankTxns] = useState([]);
   const [egyptBankAccounts, setEgyptBankAccounts] = useState([]);
   const [showReminderForm, setShowReminderForm] = useState(false);
@@ -2221,6 +2215,38 @@ export default function App() {
         window.scrollTo({ top: saved.scrollY, behavior: 'instant' });
       }
     }, 50);
+  };
+
+  // v55.83-A.6.18 (Max May 14 2026) — Acknowledge a ticket from the dashboard
+  // priority card. Changes status from 'New' → 'Acknowledged' AND logs a system
+  // comment so the audit trail captures the action. Matches the behavior of the
+  // Acknowledge button inside TicketsTab.
+  const ackDashboardTicket = async (ticket) => {
+    if (!ticket || !ticket.id) return;
+    setBusyAckId(ticket.id);
+    try {
+      const myUid = userProfile?.id || user?.id;
+      const myName = (userProfile && (userProfile.full_name || userProfile.email)) || 'User';
+      // 1. Status update
+      await dbUpdate('tickets', ticket.id, { status: 'Acknowledged' }, myUid);
+      // 2. System comment for audit trail (mirrors TicketsTab.updateStatus)
+      try {
+        await dbInsert('ticket_comments', {
+          ticket_id: ticket.id,
+          comment_text: '📋 Status changed to Acknowledged by ' + myName,
+          is_system: true,
+          created_by: myUid,
+        }, myUid);
+      } catch (_) { /* non-fatal */ }
+      toast && toast.success && toast.success('Acknowledged / تم التأكيد');
+      // 3. Reload tickets so the card disappears
+      try { await loadAllData(); } catch (_) {}
+    } catch (err) {
+      var msg = (err && err.message) ? err.message : String(err);
+      toast && toast.error && toast.error('Acknowledge failed: ' + msg);
+    } finally {
+      setBusyAckId(null);
+    }
   };
 
   const handleSignOut = async () => {
@@ -4600,7 +4626,7 @@ export default function App() {
               {/* Brand mark — bracket prefix is a terminal callout convention. */}
               <span className="text-emerald-400 font-mono text-xs font-bold tracking-tight" style={{ fontFamily: '"JetBrains Mono", monospace' }}>[KTC]</span>
               <h1 className="text-sm font-bold text-white tracking-tight whitespace-nowrap">NEXTTRADE HUB</h1>
-              <span className="text-[10px] text-zinc-500 font-mono hidden md:inline" style={{ fontFamily: '"JetBrains Mono", monospace' }}>v55.83-A.6.16</span>
+              <span className="text-[10px] text-zinc-500 font-mono hidden md:inline" style={{ fontFamily: '"JetBrains Mono", monospace' }}>v55.83-A.6.18</span>
               {/* Live clock — terminals always show one. Updates via the
                   existing tick state; if not present, falls back to no clock. */}
               <span className="hidden lg:inline text-[10px] text-zinc-500 font-mono ml-2 pl-2 border-l border-zinc-800" style={{ fontFamily: '"JetBrains Mono", monospace' }}>
@@ -7804,6 +7830,24 @@ export default function App() {
         {tab === 'dashboard' && (
           <div className="flex flex-col">
 
+            {/* v55.83-A.6.18 (Max May 14 2026) — In-place ticket editor.
+                Renders OVER the dashboard so the user never loses their
+                place. Mounted only while dashboardTicketModal is set, so
+                the underlying TicketsTab in its own tab is never duplicated. */}
+            <DashboardTicketModalOverlay
+              ticketId={dashboardTicketModal}
+              onClose={() => setDashboardTicketModal(null)}
+              toast={toast}
+              customers={customers}
+              user={user}
+              userProfile={userProfile}
+              users={teamUsers}
+              onReload={loadAllData}
+              lang={lang}
+              isAdmin={isAdmin}
+              modulePerms={modulePerms}
+            />
+
             {/* v55.81 — Per Max May 9 2026: AI Workforce (Nadia/Sara/Jenna)
                 must be the focal point of the dashboard. Use flex `order:`
                 to pin PersonalDashboard (the AI Workforce hero) ABOVE the
@@ -7812,6 +7856,22 @@ export default function App() {
                 widgets render in JSX before PersonalDashboard for code-flow
                 reasons, but flex order makes them visually appear AFTER. */}
             <div className="flex flex-col" style={{ order: 2 }}>
+
+            {/* v55.83-A.6.18 (Max May 14 2026) — Three high-priority cards:
+                Overdue Tickets / Recent Updates / Newly Assigned. Inserted
+                FIRST in the order:2 cluster so they show immediately after
+                the AI Workforce hero. Each ticket click opens a dashboard-
+                mounted modal so the user stays on the dashboard. */}
+            <DashboardPrioritySections
+              dashTickets={dashTickets}
+              recentTicketUpdates={recentTicketUpdates}
+              myId={userProfile?.id || user?.id}
+              users={teamUsers}
+              todayStr={todayET()}
+              onOpenTicket={(t) => { setDashboardTicketModal(t.id); }}
+              onAcknowledge={ackDashboardTicket}
+              busyAckId={busyAckId}
+            />
 
             {/* v55.82-J — "What's New" widget now positioned as a prominent
                 banner immediately after the AI Workforce hero, per Max May 11
@@ -12099,11 +12159,11 @@ export default function App() {
         {tab === 'reports' && (
           <SafeSection label="Reports">
             <ReportsTab treasury={treasury} invoices={invoices} warehouseExpenses={warehouse} egyptBankTxns={egyptBankTxns} canViewFinancials={isSuperAdmin || modulePerms?.['View Financial Reports'] === true} supabase={supabase} isSuperAdmin={isSuperAdmin} userProfile={userProfile} checks={checks} customers={customers} onReload={loadAllData} toast={toast} recalcInvoiceCollected={recalcInvoiceCollected} onOpenInvoice={(inv) => {
-              // v55.83-A.6.16 — opens an invoice in Sales tab with return-to-Reports
+              // v55.83-A.6.17 — opens the invoice modal (rendered globally
+              // outside tab gates, so we DO NOT switch tabs — Reports stays
+              // mounted in the background. Closing the modal returns naturally.
               if (!inv) return;
-              setReturnToTabAfterInvoice('reports');
               setSelectedInvoice(inv);
-              setTab('sales');
             }} />
             {/* v55.83-A.6.9 — Write-offs audit report. Reuses same
                 permission gate as financial reports. */}
@@ -12411,7 +12471,7 @@ export default function App() {
                       latest fix is actually deployed. If he doesn't see this
                       tag in the modal, his browser is running stale JS. */}
                   <div className="mt-1.5 inline-block px-2 py-0.5 rounded bg-amber-900/60 text-amber-100 text-[10px] font-mono font-bold tracking-wide">
-                    BUILD v55.83-A.6.16
+                    BUILD v55.83-A.6.18
                   </div>
                 </div>
                 <button onClick={() => closePendingTreasuryModal()}
@@ -13046,7 +13106,7 @@ export default function App() {
                     معاملة قد تكون مكررة
                   </div>
                   <div className="mt-1.5 inline-block px-2 py-0.5 rounded bg-amber-900/60 text-amber-100 text-[10px] font-mono font-bold tracking-wide">
-                    BUILD v55.83-A.6.16
+                    BUILD v55.83-A.6.18
                   </div>
                 </div>
                 <button

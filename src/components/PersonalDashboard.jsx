@@ -198,7 +198,7 @@ export default function PersonalDashboard({ user, userProfile, isAdmin, isSuperA
         data populates. Doesn't block or remount anything; the cards
         below just stay empty/skeleton until their data arrives. */}
     {!loaded && (
-      <div className="text-center text-slate-400 py-2 text-xs">Loading the rest of your dashboard…</div>
+      <div className="text-center text-slate-600 py-2 text-xs">Loading the rest of your dashboard…</div>
     )}
 
     {/* v55.65 — Bugs you reported that Claude fixed in the latest build.
@@ -250,9 +250,9 @@ export default function PersonalDashboard({ user, userProfile, isAdmin, isSuperA
       {monthlyTotal>0&&<div className="bg-white rounded-lg p-3 cursor-pointer hover:shadow" onClick={()=>navigate('sales')} style={{borderLeftWidth:3,borderLeftColor:'#10b981'}}><div className="text-xs text-slate-700">Sales ({thisMonth})</div><div className="text-lg font-extrabold text-emerald-600">{fE(monthlyTotal)}</div></div>}
     </div>
 
-    {myTickets.length>0&&(<div className="bg-white rounded-xl p-4 mb-3"><h3 className="text-sm font-bold mb-2">🎫 My Tickets ({myTickets.length})</h3><div className="space-y-1.5 max-h-[220px] overflow-auto">{myTickets.map(t=>{const ov=t.due_date&&t.due_date<todayStr; return (<div key={t.id} onClick={()=>navigate('tickets')} className={'flex justify-between items-center py-2 px-2 rounded cursor-pointer hover:bg-blue-50 border '+(t.status==='Closed'?'border-slate-200 bg-slate-50 opacity-70':ov?'border-red-200 bg-red-50':t.status==='New'?'border-purple-200 bg-purple-50':'border-slate-100')}><div className="flex-1"><div className="text-xs font-bold">{t.title}</div><div className="text-xs text-slate-700">{t.due_date&&<span className={ov?'text-red-600 font-bold':''}>Due: {t.due_date} </span>}{t.priority==='critical'&&<span className="text-red-900 font-bold">🚨 </span>}{t.priority==='high'&&<span className="text-red-500 font-bold">🔴 </span>}{getUserName(t.created_by)&&<span className="text-slate-400">From: {getUserName(t.created_by)}</span>}</div></div><span className="px-2 py-0.5 rounded-full text-[9px] font-bold text-white ml-2" style={{background:STATUS_COLORS[t.status]||'#6b7280'}}>{t.status}</span></div>);})}</div></div>)}
+    {myTickets.length>0&&(<div className="bg-white rounded-xl p-4 mb-3"><h3 className="text-sm font-bold mb-2">🎫 My Tickets ({myTickets.length})</h3><div className="space-y-1.5 max-h-[220px] overflow-auto">{myTickets.map(t=>{const ov=t.due_date&&t.due_date<todayStr; return (<div key={t.id} onClick={()=>navigate('tickets')} className={'flex justify-between items-center py-2 px-2 rounded cursor-pointer hover:bg-blue-50 border '+(t.status==='Closed'?'border-slate-200 bg-slate-50 opacity-70':ov?'border-red-200 bg-red-50':t.status==='New'?'border-purple-200 bg-purple-50':'border-slate-100')}><div className="flex-1"><div className="text-xs font-bold">{t.title}</div><div className="text-xs text-slate-700">{t.due_date&&<span className={ov?'text-red-600 font-bold':''}>Due: {t.due_date} </span>}{t.priority==='critical'&&<span className="text-red-900 font-bold">🚨 </span>}{t.priority==='high'&&<span className="text-red-500 font-bold">🔴 </span>}{getUserName(t.created_by)&&<span className="text-slate-600">From: {getUserName(t.created_by)}</span>}</div></div><span className="px-2 py-0.5 rounded-full text-[9px] font-bold text-white ml-2" style={{background:STATUS_COLORS[t.status]||'#6b7280'}}>{t.status}</span></div>);})}</div></div>)}
 
-    {ticketsICreated.length>0&&(<div className="bg-white rounded-xl p-4 mb-3"><h3 className="text-sm font-bold mb-2">📤 Tickets I Assigned ({ticketsICreated.length})</h3><div className="space-y-1.5 max-h-[200px] overflow-auto">{ticketsICreated.map(t=>{const ov=t.due_date&&t.due_date<todayStr; return (<div key={t.id} onClick={()=>navigate('tickets')} className={'flex justify-between items-center py-2 px-2 rounded cursor-pointer hover:bg-blue-50 border '+(ov?'border-red-200 bg-red-50':'border-slate-100')}><div className="flex-1"><div className="text-xs font-bold">{t.title}</div><div className="text-xs text-slate-700"><span className="text-purple-600 font-semibold">👤 {getUserName(t.assigned_to)||'Unassigned'}</span>{t.due_date&&<span className={ov?' text-red-600 font-bold':''}> • Due: {t.due_date}</span>}<span className="text-slate-400"> • {t.updated_at?fmtET(t.updated_at, 'shortdate'):'—'}</span></div></div><span className="px-2 py-0.5 rounded-full text-[9px] font-bold text-white ml-2" style={{background:STATUS_COLORS[t.status]||'#6b7280'}}>{t.status}</span></div>);})}</div></div>)}
+    {ticketsICreated.length>0&&(<div className="bg-white rounded-xl p-4 mb-3"><h3 className="text-sm font-bold mb-2">📤 Tickets I Assigned ({ticketsICreated.length})</h3><div className="space-y-1.5 max-h-[200px] overflow-auto">{ticketsICreated.map(t=>{const ov=t.due_date&&t.due_date<todayStr; return (<div key={t.id} onClick={()=>navigate('tickets')} className={'flex justify-between items-center py-2 px-2 rounded cursor-pointer hover:bg-blue-50 border '+(ov?'border-red-200 bg-red-50':'border-slate-100')}><div className="flex-1"><div className="text-xs font-bold">{t.title}</div><div className="text-xs text-slate-700"><span className="text-purple-600 font-semibold">👤 {getUserName(t.assigned_to)||'Unassigned'}</span>{t.due_date&&<span className={ov?' text-red-600 font-bold':''}> • Due: {t.due_date}</span>}<span className="text-slate-600"> • {t.updated_at?fmtET(t.updated_at, 'shortdate'):'—'}</span></div></div><span className="px-2 py-0.5 rounded-full text-[9px] font-bold text-white ml-2" style={{background:STATUS_COLORS[t.status]||'#6b7280'}}>{t.status}</span></div>);})}</div></div>)}
 
     <div className="bg-white rounded-xl p-4 mb-3"><h3 className="text-sm font-bold mb-2">📅 Today ({(() => {
       // v55.82-J — Today widget now counts events + today-due tickets.
@@ -273,7 +273,7 @@ export default function PersonalDashboard({ user, userProfile, isAdmin, isSuperA
           .filter(function(t, idx, arr) { return arr.findIndex(function(x){ return x.id === t.id; }) === idx; })
           .map(function(t) { return { _ticket: true, id: 'tkt-' + t.id, _ticket_id: t.id, title: (t.ticket_number ? '[' + t.ticket_number + '] ' : '') + (t.title || 'Ticket'), event_type: 'Ticket due', priority: t.priority, status: t.status }; });
         var streamToday = [...todayEvents, ...todayTickets];
-        if (streamToday.length === 0) return <div className="text-xs text-slate-400 py-2">No events or tickets today</div>;
+        if (streamToday.length === 0) return <div className="text-xs text-slate-600 py-2">No events or tickets today</div>;
         return streamToday.map(function(ev) {
           if (ev._ticket) {
             return (<div key={ev.id} onClick={function(){ navigate('tickets'); }} className="flex justify-between items-center py-2 border-b border-slate-50 cursor-pointer hover:bg-slate-50 rounded">
@@ -324,7 +324,7 @@ export default function PersonalDashboard({ user, userProfile, isAdmin, isSuperA
         const urgentAll = [...urgentReminders.map(r => ({ kind: 'reminder', ...r })), ...todayDueTickets];
 
         if (urgentAll.length === 0 && normalReminders.length === 0) {
-          return <div className="text-xs text-slate-400">No reminders</div>;
+          return <div className="text-xs text-slate-600">No reminders</div>;
         }
 
         return (<>

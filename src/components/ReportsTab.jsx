@@ -499,6 +499,7 @@ export default function ReportsTab({ treasury, invoices, warehouseExpenses, egyp
           onReload={onReload}
           toast={toast}
           recalcInvoiceCollected={recalcInvoiceCollected}
+          onOpenInvoice={onOpenInvoice}
         />
       )}
     </div>
