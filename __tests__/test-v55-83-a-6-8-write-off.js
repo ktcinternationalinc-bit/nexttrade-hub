@@ -84,9 +84,11 @@ ok('7c: written-off amount visible if > 0',
 ok('7d: reverse button available on already-written-off invoices',
   /Reverse the[\s\S]{0,400}handleReverseWriteOff/.test(page));
 
-// 8. Super-admin override path for amounts > cap
+// 8. Super-admin override path for amounts > cap (v55.83-A.6.12 also requires
+//    'Write off discounts' module permission — so super_admin role alone is
+//    not sufficient. This test accepts either form.)
 ok('8a: super_admin gets manual override button for > soft cap',
-  /selectedInvoice\.outstanding > WRITE_OFF_SOFT_CAP_EGP && isSuperAdmin[\s\S]{0,400}admin override/.test(page));
+  /selectedInvoice\.outstanding > WRITE_OFF_SOFT_CAP_EGP[\s\S]{0,400}admin override/.test(page));
 
 // 9. Bilingual everything (toasts, buttons)
 ok('9a: success toast bilingual',

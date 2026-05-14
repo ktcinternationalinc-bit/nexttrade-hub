@@ -1635,7 +1635,14 @@ export default function App() {
         const bankIsIn = bankAmt > 0;
         if (expDir === 'in' && !bankIsIn) return false;
         if (expDir === 'out' && bankIsIn) return false;
-        if (ph.bank_account_id && b.account_id && ph.bank_account_id !== b.account_id) return false;
+        // v55.83-A.6.12 (Max May 13 2026) — bank_account_id mismatch was
+        // BLOCKING matches even when amount/date/order# were perfect. This
+        // was the root cause of invoice 2303's 570K placeholder not matching
+        // the 570K bank entry on 2026-03-29. The customer deposited to a
+        // different company account than was expected when the placeholder
+        // was created. We no longer EXCLUDE on account mismatch — instead,
+        // we apply a score penalty (see scoring below). Match still has
+        // 1% amount tolerance + 14-day date window, so false matches stay rare.
         if (Math.abs(Math.abs(bankAmt) - expAmt) > tolAmt) return false;
         const bDate = new Date(b.date);
         if (Math.abs(bDate - anchorDate) > matchWindow) return false;
@@ -1649,6 +1656,14 @@ export default function App() {
         if (ph.order_number && (b.description || '').includes(ph.order_number)) score += 1000;
         score -= Math.abs(Math.abs(Number(b.amount)) - expAmt);
         score -= Math.abs(new Date(b.date) - anchorDate) / 86400000;
+        // v55.83-A.6.12 — penalize account_id mismatch instead of excluding.
+        // If accounts match → no penalty. If different → 500-point penalty
+        // (less than the order# bonus of 1000, so a perfect order# match on
+        // wrong account still beats no order# on right account). Prevents
+        // false matches while allowing the right one to surface.
+        if (ph.bank_account_id && b.account_id && ph.bank_account_id !== b.account_id) {
+          score -= 500;
+        }
         return { b, score };
       }).sort((a, b) => b.score - a.score);
 
@@ -1735,20 +1750,30 @@ export default function App() {
           }).eq('id', bank.id);
 
           // Recalc the linked invoice from DB truth (cash_in + bank_in on linked rows).
-          // v55.83-A.6.7 (CRIT-6): retry once on failure so a network blip
-          // between match and recalc doesn't leave the invoice with stale
-          // totals. If both attempts fail, log loudly — next loadAllData
-          // will re-trigger via state change.
-          if (updates.linked_invoice_id) {
+          //
+          // v55.83-A.6.11 (Max May 13 2026) — BUG FIX: previously this only
+          // fired when `updates.linked_invoice_id` was freshly set on this
+          // run. If the placeholder ALREADY had linked_invoice_id (e.g.
+          // because the v55.83-A.6.7 backfill SQL filled it on existing
+          // rows), the conditional was falsy and recalc was SKIPPED. Result:
+          // invoice 2303 stayed at "Confirmed 0, Pending 1.32M" even after
+          // 3 of its placeholders were matched to real bank statements.
+          //
+          // FIX: resolve target invoice from EITHER newly-set or existing
+          // linked_invoice_id and always run recalc.
+          //
+          // v55.83-A.6.7 (CRIT-6): retry once on failure.
+          var recalcTargetId = updates.linked_invoice_id || placeholder.linked_invoice_id;
+          if (recalcTargetId) {
             var recalcOk = false;
-            try { await recalcInvoiceCollected(updates.linked_invoice_id); recalcOk = true; } catch(e) { console.warn('[auto-match] recalc attempt 1 failed:', e && e.message); }
+            try { await recalcInvoiceCollected(recalcTargetId); recalcOk = true; } catch(e) { console.warn('[auto-match] recalc attempt 1 failed:', e && e.message); }
             if (!recalcOk) {
               try {
                 await new Promise(function (r) { setTimeout(r, 750); });
-                await recalcInvoiceCollected(updates.linked_invoice_id);
+                await recalcInvoiceCollected(recalcTargetId);
                 recalcOk = true;
               } catch (e2) {
-                console.error('[auto-match] recalc retry failed for invoice ' + updates.linked_invoice_id + ':', e2 && e2.message);
+                console.error('[auto-match] recalc retry failed for invoice ' + recalcTargetId + ':', e2 && e2.message);
               }
             }
           }
@@ -4554,7 +4579,7 @@ export default function App() {
               {/* Brand mark — bracket prefix is a terminal callout convention. */}
               <span className="text-emerald-400 font-mono text-xs font-bold tracking-tight" style={{ fontFamily: '"JetBrains Mono", monospace' }}>[KTC]</span>
               <h1 className="text-sm font-bold text-white tracking-tight whitespace-nowrap">NEXTTRADE HUB</h1>
-              <span className="text-[10px] text-zinc-500 font-mono hidden md:inline" style={{ fontFamily: '"JetBrains Mono", monospace' }}>v55.83-A.6.10</span>
+              <span className="text-[10px] text-zinc-500 font-mono hidden md:inline" style={{ fontFamily: '"JetBrains Mono", monospace' }}>v55.83-A.6.12</span>
               {/* Live clock — terminals always show one. Updates via the
                   existing tick state; if not present, falls back to no clock. */}
               <span className="hidden lg:inline text-[10px] text-zinc-500 font-mono ml-2 pl-2 border-l border-zinc-800" style={{ fontFamily: '"JetBrains Mono", monospace' }}>
@@ -5278,16 +5303,28 @@ export default function App() {
                     )}
                   </div>
                 )}
+                {/* v55.83-A.6.12 (Max May 13 2026) — TIGHTENED write-off
+                    auto-suggest conditions:
+                      1. Outstanding > 0 (something left to pay)
+                      2. Outstanding ≤ 1000 (small remainder)
+                      3. AT LEAST 90% of the invoice has been collected
+                         (otherwise it's not a "short-payment" — it's just
+                         a small invoice that hasn't been paid yet)
+                      4. No pending bank confirmation (don't write off money
+                         that's just waiting on bank statement match)
+                      5. User has invoice edit permission
+                    Combination of all five gates the button correctly. */}
                 {selectedInvoice.outstanding > 0
                   && selectedInvoice.outstanding <= WRITE_OFF_SOFT_CAP_EGP
+                  && Number(selectedInvoice.total_collected || 0) >= Number(selectedInvoice.total_amount || 0) * 0.90
                   && Number(selectedInvoice.total_pending_bank || 0) === 0
                   && canEditInvoices && (
                   <div className="mt-2 p-2 rounded bg-white border border-amber-300">
                     <div className="text-[10px] text-amber-900 font-semibold mb-1">
-                      💡 Small outstanding — write off as short-payment?
+                      💡 Customer short-paid by {fE(Number(selectedInvoice.outstanding))} — write off?
                     </div>
                     <div className="text-[9px] text-slate-600 mb-1.5" style={{direction:'rtl'}}>
-                      مبلغ صغير متبقي — هل تريد خصمه كعدم سداد؟
+                      نقص دفع العميل {fE(Number(selectedInvoice.outstanding))} — هل تريد خصمه؟
                     </div>
                     <button
                       onClick={async () => {
@@ -5303,8 +5340,14 @@ export default function App() {
                     </button>
                   </div>
                 )}
-                {/* Super-admin can write off larger amounts manually */}
-                {selectedInvoice.outstanding > WRITE_OFF_SOFT_CAP_EGP && isSuperAdmin && (
+                {/* v55.83-A.6.12 — Super-admin override path for write-offs > 1000.
+                    Permission-gated to super_admin AND requires explicit module
+                    permission "Write off discounts" (new). This prevents accidental
+                    large write-offs even by accounts with super_admin role.
+                    Every override is flagged in the audit log. */}
+                {selectedInvoice.outstanding > WRITE_OFF_SOFT_CAP_EGP
+                  && isSuperAdmin
+                  && (modulePerms?.['Write off discounts'] === true) && (
                   <button
                     onClick={async () => {
                       var amtStr = prompt('Write off amount (above ' + fE(WRITE_OFF_SOFT_CAP_EGP) + ' soft cap — super_admin override):\nمبلغ الخصم (تجاوز الحد الأقصى):', selectedInvoice.outstanding);
@@ -5730,7 +5773,14 @@ export default function App() {
                           <div className="text-xs font-semibold" style={{ direction: lang === 'ar' ? 'rtl' : 'ltr' }}>{tx(txn.description, txn.description_en)}</div>
                           <div className="text-[10px] text-slate-500">{txn.transaction_date}</div>
                         </div>
-                        <div className="text-sm font-bold text-emerald-600 mr-2">{fE(txn.cash_in)}</div>
+                        <div className="text-sm font-bold text-emerald-600 mr-2">
+                          {/* v55.83-A.6.11 — show bank_in OR cash_in, not
+                              just cash_in. Matched bank rows have
+                              bank_in=<amount> and cash_in=0; displaying
+                              only cash_in made them look like EGP 0
+                              empty rows on invoice 2303. */}
+                          {fE(Number(txn.cash_in || 0) + Number(txn.bank_in || 0))}
+                        </div>
                         <button onClick={() => setInspectedTreasury(txn)}
                           className="px-2 py-0.5 rounded border border-indigo-300 text-indigo-600 text-[10px] mr-1 hover:bg-indigo-50" title="Inspect / فحص">
                           ⓘ Inspect
@@ -12269,7 +12319,7 @@ export default function App() {
                       latest fix is actually deployed. If he doesn't see this
                       tag in the modal, his browser is running stale JS. */}
                   <div className="mt-1.5 inline-block px-2 py-0.5 rounded bg-amber-900/60 text-amber-100 text-[10px] font-mono font-bold tracking-wide">
-                    BUILD v55.83-A.6.10
+                    BUILD v55.83-A.6.12
                   </div>
                 </div>
                 <button onClick={() => closePendingTreasuryModal()}
@@ -12904,7 +12954,7 @@ export default function App() {
                     معاملة قد تكون مكررة
                   </div>
                   <div className="mt-1.5 inline-block px-2 py-0.5 rounded bg-amber-900/60 text-amber-100 text-[10px] font-mono font-bold tracking-wide">
-                    BUILD v55.83-A.6.10
+                    BUILD v55.83-A.6.12
                   </div>
                 </div>
                 <button
