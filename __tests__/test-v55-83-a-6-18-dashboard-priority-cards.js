@@ -26,8 +26,8 @@ function ok(label, cond, hint) {
 // === 1. DashboardPrioritySections component ===
 ok('1a: component default exported',
   /export default function DashboardPrioritySections/.test(prio));
-ok('1b: accepts the required props',
-  /\{[\s\S]{0,200}dashTickets,\s*recentTicketUpdates,\s*myId,\s*users,\s*todayStr,\s*onOpenTicket,\s*onAcknowledge,\s*busyAckId/.test(prio));
+ok('1b: accepts the required props (v55.83-A.6.25: dashTickets/recentTicketUpdates renamed in destructure to mark them ignored)',
+  /\{[\s\S]{0,400}myId,\s*users,\s*todayStr,\s*onOpenTicket,\s*onAcknowledge,\s*busyAckId/.test(prio));
 
 // 1.1 Overdue card
 ok('2a: overdue card has Your Overdue Tickets title',

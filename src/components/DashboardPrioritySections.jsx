@@ -15,7 +15,25 @@
 // Previous builds only computed My Direct and called it a day, which is why
 // every card was empty for super_admin (who delegates almost everything).
 
-import { useMemo } from 'react';
+// v55.83-A.6.25 (Max May 14 2026) — IMPORTANT ARCHITECTURE CHANGE:
+//
+// This component now fetches its OWN tickets and comments directly from
+// supabase, exactly the same way the working PersonalDashboard surface does.
+// Previously it depended on `dashTickets` + `recentTicketUpdates` passed in
+// as props from page.jsx — but that data path was unreliable, leading to
+// empty cards even when PersonalDashboard (independent loader) was showing
+// the same tickets fine.
+//
+// By owning the loader, this component now:
+//   1. Cannot be starved by a parent state issue.
+//   2. Uses identical SQL to PersonalDashboard, guaranteeing data parity.
+//   3. Works for ANY logged-in user (Yasmeen, Mohamed, Omar, etc.).
+//
+// The component still ACCEPTS dashTickets/recentTicketUpdates as props for
+// back-compat, but they are now ignored — the self-loaded data wins.
+
+import { useState, useEffect, useMemo } from 'react';
+import { supabase } from '../lib/supabase';
 
 var STATUS_COLORS = {
   New: '#3b82f6',
@@ -63,8 +81,8 @@ function parseExtras(t) {
 }
 
 export default function DashboardPrioritySections({
-  dashTickets,
-  recentTicketUpdates,
+  dashTickets: _ignoredDashTickets,        // intentionally ignored — see header note
+  recentTicketUpdates: _ignoredRecentTicketUpdates,  // intentionally ignored
   myId,
   users,
   todayStr,
@@ -72,27 +90,81 @@ export default function DashboardPrioritySections({
   onAcknowledge,
   busyAckId,
 }) {
-  // ─── Bucket tickets ────────────────────────────────────────────────────
+  // ─── SELF-LOAD: same as PersonalDashboard for tickets, same as page.jsx
+  //               for ticket_comments. No prop dependencies. ────────────────
+  var [tickets, setTickets] = useState([]);
+  var [comments, setComments] = useState([]);
+  var [loaded, setLoaded] = useState(false);
+  var [loadError, setLoadError] = useState(null);
+
+  useEffect(function () {
+    if (!myId) return;
+    var cancelled = false;
+    async function load() {
+      try {
+        // Tickets — identical SQL to PersonalDashboard.jsx so data parity
+        // is guaranteed. No status filter — we filter Closed client-side
+        // so the count badges stay accurate even when other parts of the
+        // app insert tickets in non-standard states.
+        var tRes = await supabase.from('tickets')
+          .select('*')
+          .order('created_at', { ascending: false });
+        if (cancelled) return;
+        if (tRes.error) {
+          console.warn('[priority-cards] tickets load failed:', tRes.error.message);
+          setLoadError(tRes.error.message);
+        } else {
+          setTickets(tRes.data || []);
+        }
+
+        // Comments — identical SQL to page.jsx's recentTicketUpdates loader.
+        // The 3-day filter applies later (client-side); we pull 7 days so
+        // the UI stays consistent if Max ever extends the window.
+        var sevenDaysAgo = new Date(Date.now() - 7 * 86400000).toISOString();
+        var cRes = await supabase.from('ticket_comments')
+          .select('*, tickets(id, ticket_number, title, status, priority, assigned_to, created_by, additional_assignees, is_private, private_to, is_confidential)')
+          .gte('created_at', sevenDaysAgo)
+          .order('created_at', { ascending: false })
+          .limit(300);
+        if (cancelled) return;
+        if (cRes.error) {
+          console.warn('[priority-cards] comments load failed:', cRes.error.message);
+        } else {
+          setComments(cRes.data || []);
+        }
+        setLoaded(true);
+      } catch (e) {
+        if (!cancelled) {
+          setLoadError(e && e.message ? e.message : String(e));
+          setLoaded(true);
+        }
+      }
+    }
+    load();
+    return function () { cancelled = true; };
+  }, [myId]);
+
+  // ─── Bucket tickets — exactly mirrors PersonalDashboard.isMineByAssign ──
 
   function isMineByAssign(t) {
     return t.assigned_to === myId || parseExtras(t).indexOf(myId) >= 0;
   }
 
   var myDirectTickets = useMemo(function () {
-    return (dashTickets || []).filter(function (t) {
+    return (tickets || []).filter(function (t) {
       if (t.status === 'Closed') return false;
       return isMineByAssign(t);
     });
-  }, [dashTickets, myId]);
+  }, [tickets, myId]);
 
   var iDelegatedTickets = useMemo(function () {
-    return (dashTickets || []).filter(function (t) {
+    return (tickets || []).filter(function (t) {
       if (t.status === 'Closed') return false;
       if (t.created_by !== myId) return false;
       if (isMineByAssign(t)) return false;
       return true;
     });
-  }, [dashTickets, myId]);
+  }, [tickets, myId]);
 
   // ─── Overdue (per bucket) ──────────────────────────────────────────────
 
@@ -122,7 +194,7 @@ export default function DashboardPrioritySections({
     var bucketIds = {};
     ticketBucket.forEach(function (t) { bucketIds[t.id] = true; });
     var latestByTicket = {};
-    (recentTicketUpdates || []).forEach(function (c) {
+    (comments || []).forEach(function (c) {
       var tid = c.tickets && c.tickets.id;
       if (!tid || !bucketIds[tid]) return;
       if (!c.created_at || c.created_at < threeDaysAgoIso) return;
@@ -141,11 +213,11 @@ export default function DashboardPrioritySections({
 
   var updatesMyDirect = useMemo(function () {
     return pickLatestPerTicket(myDirectTickets);
-  }, [myDirectTickets, recentTicketUpdates, threeDaysAgoIso]);
+  }, [myDirectTickets, comments, threeDaysAgoIso]);
 
   var updatesDelegated = useMemo(function () {
     return pickLatestPerTicket(iDelegatedTickets);
-  }, [iDelegatedTickets, recentTicketUpdates, threeDaysAgoIso]);
+  }, [iDelegatedTickets, comments, threeDaysAgoIso]);
 
   // ─── Newly Assigned (status === 'New', per bucket) ─────────────────────
 
@@ -171,6 +243,33 @@ export default function DashboardPrioritySections({
   // ────────────────────────────────────────────────────────────────────────
   // RENDER
   // ────────────────────────────────────────────────────────────────────────
+
+  // v55.83-A.6.25 — surface the load state. If self-load hasn't finished,
+  // show a spinner. If it errored, show the error inline so we can debug
+  // instead of silently showing empty cards.
+  if (!myId) {
+    return (
+      <div className="mb-4 bg-amber-50 border border-amber-300 rounded-xl p-3 text-xs">
+        ⚠️ Priority cards waiting for user profile to load…
+      </div>
+    );
+  }
+  if (loadError) {
+    return (
+      <div className="mb-4 bg-red-50 border border-red-300 rounded-xl p-3 text-xs">
+        <div className="font-bold text-red-900 mb-1">⚠️ Priority cards couldn't load tickets</div>
+        <code className="block bg-red-100 p-2 rounded text-[10px] font-mono text-red-900">{loadError}</code>
+      </div>
+    );
+  }
+  if (!loaded) {
+    return (
+      <div className="mb-4 bg-slate-50 border border-slate-200 rounded-xl p-4 text-center">
+        <div className="text-2xl mb-1">⏳</div>
+        <div className="text-xs font-bold text-slate-600">Loading your priorities…</div>
+      </div>
+    );
+  }
 
   return (
     <div className="space-y-3 mb-4">
@@ -231,7 +330,7 @@ export default function DashboardPrioritySections({
             tone="red"
             items={overdueMyDirect}
             renderRow={function (t) {
-              return <OverdueRow key={t.id} t={t} users={users} recentTicketUpdates={recentTicketUpdates} onOpenTicket={onOpenTicket} />;
+              return <OverdueRow key={t.id} t={t} users={users} recentTicketUpdates={comments} onOpenTicket={onOpenTicket} />;
             }}
           />
           <SubSection
@@ -242,7 +341,7 @@ export default function DashboardPrioritySections({
             tone="red"
             items={overdueDelegated}
             renderRow={function (t) {
-              return <OverdueRow key={t.id} t={t} users={users} recentTicketUpdates={recentTicketUpdates} onOpenTicket={onOpenTicket} />;
+              return <OverdueRow key={t.id} t={t} users={users} recentTicketUpdates={comments} onOpenTicket={onOpenTicket} />;
             }}
           />
         </div>
