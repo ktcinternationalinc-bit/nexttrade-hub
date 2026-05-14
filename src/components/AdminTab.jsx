@@ -278,6 +278,38 @@ export default function AdminTab({ user, userProfile, users, isAdmin, customers,
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [viewMode, myId]);
 
+  // v55.83-A.6.10 (Max May 13 2026 — TDZ hotfix). The `visibleTickets`
+  // useMemo was previously declared AFTER `scorecards` but referenced from
+  // inside `scorecards`. In dev mode this worked because React's
+  // re-evaluation cycle masked the issue, but production-minified builds
+  // raised "Cannot access 'eO' before initialization" when Admin tab
+  // tried to read the dependency array. Moved BEFORE scorecards.
+  //
+  // v55.82-Z QA — privacy filter for AdminTab. Super admin sees every
+  // ticket; non-super_admin admins see regular tickets, plus confidential
+  // tickets they created or are assigned to. Private super-admin tickets
+  // never appear in AdminTab unless the viewer is the super admin.
+  const visibleTickets = useMemo(() => {
+    if (isSuperAdmin) return tickets;
+    return tickets.filter(function (t) {
+      if (t.is_private) return false; // super-admin-only
+      if (t.is_confidential) {
+        if (t.created_by === myId) return true;
+        if (t.assigned_to === myId) return true;
+        if (t.additional_assignees) {
+          try {
+            var extras = typeof t.additional_assignees === 'string'
+              ? JSON.parse(t.additional_assignees)
+              : t.additional_assignees;
+            if (Array.isArray(extras) && extras.indexOf(myId) >= 0) return true;
+          } catch (_) {}
+        }
+        return false;
+      }
+      return true;
+    });
+  }, [tickets, isSuperAdmin, myId]);
+
   // Enhanced scorecards
   const scorecards = useMemo(() => {
     return visibleUsers.map(u => {
@@ -350,30 +382,7 @@ export default function AdminTab({ user, userProfile, users, isAdmin, customers,
     });
   }, [visibleUsers, logs, tickets, visibleTickets, quotes, auditLogs, todayStr, rankBy]);
 
-  // v55.82-Z QA — privacy filter for AdminTab. Super admin sees every
-  // ticket; non-super_admin admins see regular tickets, plus confidential
-  // tickets they created or are assigned to. Private super-admin tickets
-  // never appear in AdminTab unless the viewer is the super admin.
-  const visibleTickets = useMemo(() => {
-    if (isSuperAdmin) return tickets;
-    return tickets.filter(function (t) {
-      if (t.is_private) return false; // super-admin-only
-      if (t.is_confidential) {
-        if (t.created_by === myId) return true;
-        if (t.assigned_to === myId) return true;
-        if (t.additional_assignees) {
-          try {
-            var extras = typeof t.additional_assignees === 'string'
-              ? JSON.parse(t.additional_assignees)
-              : t.additional_assignees;
-            if (Array.isArray(extras) && extras.indexOf(myId) >= 0) return true;
-          } catch (_) {}
-        }
-        return false;
-      }
-      return true;
-    });
-  }, [tickets, isSuperAdmin, myId]);
+  // (visibleTickets declared above, before scorecards — v55.83-A.6.10)
 
   // Filtered data
   const filteredLogs = useMemo(() => { let arr = logs; if (selUser !== 'all') arr = arr.filter(l => l.user_id === selUser); return arr; }, [logs, selUser]);

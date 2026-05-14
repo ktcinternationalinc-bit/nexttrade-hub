@@ -221,6 +221,14 @@ export const getWarehouseCat = (desc) => {
 // Reconciliation status with 2% tolerance
 export const getReconStatus = (invoice, treasuryTotal) => {
   const tolerance = invoice.total_amount * 0.02;
+  // v55.83-A.6.8 (Max May 13 2026) — write-off awareness. If a customer
+  // short-paid by 50 EGP and we wrote it off, the "effective expected"
+  // is invoice.total_amount - total_written_off. So comparisons of
+  // treasuryTotal against expected amount must subtract written-off.
+  // Without this, every written-off invoice would show MISMATCH because
+  // treasury < total_amount.
+  const writtenOff = Number(invoice.total_written_off || 0);
+  const effectiveExpected = Math.max(0, Number(invoice.total_amount || 0) - writtenOff);
   // If invoice notes say UNVERIFIED, always show unverified
   if ((invoice.notes || '').includes('UNVERIFIED')) return 'unverified';
   // If says paid but no treasury entries, it's unverified
@@ -228,8 +236,10 @@ export const getReconStatus = (invoice, treasuryTotal) => {
   // If treasury exists but doesn't match collected amount (>2% gap)
   if (treasuryTotal > 0 && invoice.total_collected > 0 && Math.abs(treasuryTotal - invoice.total_collected) > invoice.total_collected * 0.02) return 'mismatch';
   if (invoice.outstanding > tolerance) return 'open';
-  if (treasuryTotal > invoice.total_amount * 1.02) return 'overpaid';
-  if (treasuryTotal >= invoice.total_amount * 0.98 || invoice.total_collected >= invoice.total_amount * 0.98) return 'reconciled';
+  // Compare against effective expected (post-write-off) so an invoice
+  // closed via small write-off shows RECONCILED, not OVERPAID.
+  if (treasuryTotal > effectiveExpected * 1.02) return 'overpaid';
+  if (treasuryTotal >= effectiveExpected * 0.98 || invoice.total_collected >= effectiveExpected * 0.98) return 'reconciled';
   return 'unverified';
 };
 
@@ -404,7 +414,15 @@ export const aggregatePaymentSources = (txns) => {
   for (let i = 0; i < txns.length; i++) {
     const t = txns[i];
     if (!t || typeof t !== 'object') continue;
-    const amt = n(t.cash_in) + n(t.bank_in);
+    let amt = n(t.cash_in) + n(t.bank_in);
+    // v55.83-A.6.6 — virtual check rows shimmed from collected post-dated
+    // checks have payment_source='check' and amount set, but no cash_in/
+    // bank_in (the check is a separate object, not a treasury row). Recognize
+    // those so the breakdown can include them. Real treasury rows from a
+    // collected check unstamp path keep their cash_in semantics.
+    if (amt <= 0 && String(t.payment_source || '').trim().toLowerCase() === 'check') {
+      amt = n(t.amount) || n(t.check_amount);
+    }
     if (amt <= 0) continue;
 
     let src = String(t.payment_source || '').trim().toLowerCase();

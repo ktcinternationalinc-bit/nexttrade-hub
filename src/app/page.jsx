@@ -39,6 +39,7 @@ import QuotesTab from '../components/QuotesTab';
 import EgyptBankTab from '../components/EgyptBankTab';
 import PhoneWidget from '../components/PhoneWidget';
 import ReportsTab from '../components/ReportsTab';
+import WriteOffsReport from '../components/WriteOffsReport';
 import TreasuryInspectorModal from '../components/TreasuryInspectorModal';
 import AccountingAuditorModal from '../components/AccountingAuditorModal';
 import InventoryImport from '../components/InventoryImport';
@@ -1621,9 +1622,13 @@ export default function App() {
     placeholders.forEach(ph => {
       const expAmt = Number(ph.expected_amount || 0);
       const expDir = ph.expected_direction;
-      const phDate = new Date(ph.transaction_date);
+      // v55.83-A.6.9 (Max May 13 2026) — anchor on expected_date if set,
+      // else fall back to transaction_date. Old 2-day window was too
+      // narrow for employee-held money waiting on a deposit run.
+      // 14 days covers most "money sitting with Haitham" cases.
+      const anchorDate = new Date(ph.expected_date || ph.transaction_date);
       const tolAmt = Math.max(expAmt * 0.01, 1);
-      const twoDays = 2 * 86400000;
+      const matchWindow = 14 * 86400000;
 
       const candidates = unmatchedBank.filter(b => {
         const bankAmt = Number(b.amount);
@@ -1633,7 +1638,7 @@ export default function App() {
         if (ph.bank_account_id && b.account_id && ph.bank_account_id !== b.account_id) return false;
         if (Math.abs(Math.abs(bankAmt) - expAmt) > tolAmt) return false;
         const bDate = new Date(b.date);
-        if (Math.abs(bDate - phDate) > twoDays) return false;
+        if (Math.abs(bDate - anchorDate) > matchWindow) return false;
         return true;
       });
 
@@ -1643,7 +1648,7 @@ export default function App() {
         let score = 0;
         if (ph.order_number && (b.description || '').includes(ph.order_number)) score += 1000;
         score -= Math.abs(Math.abs(Number(b.amount)) - expAmt);
-        score -= Math.abs(new Date(b.date) - phDate) / 86400000;
+        score -= Math.abs(new Date(b.date) - anchorDate) / 86400000;
         return { b, score };
       }).sort((a, b) => b.score - a.score);
 
@@ -1730,8 +1735,22 @@ export default function App() {
           }).eq('id', bank.id);
 
           // Recalc the linked invoice from DB truth (cash_in + bank_in on linked rows).
+          // v55.83-A.6.7 (CRIT-6): retry once on failure so a network blip
+          // between match and recalc doesn't leave the invoice with stale
+          // totals. If both attempts fail, log loudly — next loadAllData
+          // will re-trigger via state change.
           if (updates.linked_invoice_id) {
-            try { await recalcInvoiceCollected(updates.linked_invoice_id); } catch(e) {}
+            var recalcOk = false;
+            try { await recalcInvoiceCollected(updates.linked_invoice_id); recalcOk = true; } catch(e) { console.warn('[auto-match] recalc attempt 1 failed:', e && e.message); }
+            if (!recalcOk) {
+              try {
+                await new Promise(function (r) { setTimeout(r, 750); });
+                await recalcInvoiceCollected(updates.linked_invoice_id);
+                recalcOk = true;
+              } catch (e2) {
+                console.error('[auto-match] recalc retry failed for invoice ' + updates.linked_invoice_id + ':', e2 && e2.message);
+              }
+            }
           }
         }
         if (toast) toast.success(matches.length + ' bank transaction(s) auto-matched ✓');
@@ -1853,6 +1872,17 @@ export default function App() {
             + ' [auto-matched from bank ' + bank.date + ']';
 
           // 1. Treasury row
+          // v55.83-A.6.7 (round 2 audit) — resolve linked_invoice_id from
+          // order_number if check doesn't have invoice_id directly. Mirrors
+          // the dbInsert auto-link logic to keep all treasury insert paths
+          // consistent.
+          var resolvedInvoiceId = chk.invoice_id || null;
+          if (!resolvedInvoiceId && chk.order_number) {
+            try {
+              var lk = await supabase.from('invoices').select('id').eq('order_number', String(chk.order_number).trim()).maybeSingle();
+              if (lk && lk.data && lk.data.id) resolvedInvoiceId = lk.data.id;
+            } catch (lkErr) { /* don't block — just log */ console.warn('[auto-match] invoice lookup failed:', lkErr && lkErr.message); }
+          }
           var ins = await supabase.from('treasury').insert({
             transaction_date: collectionDate,
             order_number: chk.order_number || '',
@@ -1861,7 +1891,7 @@ export default function App() {
             cash_out: 0,
             source: 'main',
             category: 'مبيعات',
-            linked_invoice_id: chk.invoice_id || null,
+            linked_invoice_id: resolvedInvoiceId,
           }).select('id').single();
           if (!ins.data) continue;
           var newTxnId = ins.data.id;
@@ -2210,7 +2240,9 @@ export default function App() {
   // We keep it for backward compat with reports/exports built before the split.
   const recalcInvoiceCollected = async (invoiceId) => {
     if (!invoiceId) return;
-    const { data: inv } = await supabase.from('invoices').select('id, total_amount, order_number').eq('id', invoiceId).maybeSingle();
+    // v55.83-A.6.8 (Max May 13 2026) — also load total_written_off so the
+    // outstanding calculation subtracts written-off amounts.
+    const { data: inv } = await supabase.from('invoices').select('id, total_amount, order_number, total_written_off').eq('id', invoiceId).maybeSingle();
     if (!inv) return;
     const { data: linked } = await supabase.from('treasury')
       .select('id, cash_in, bank_in, is_bank_placeholder, needs_bank_match, matched_bank_txn_id, description, dedup_sibling_id')
@@ -2254,13 +2286,19 @@ export default function App() {
 
     // Cap at invoice total — the system never claims a customer paid more
     // than they were billed.
+    //
+    // v55.83-A.6.7 (Max May 13 2026) — CRIT-4 fix: don't SILENTLY cap.
+    // Track the overflow amount in overpayment_amount so the UI can show
+    // a warning like "Treasury exceeds invoice by EGP 700 — review for
+    // duplicate payments." Without this, a double-entered payment is
+    // hidden by the cap and looks like a normal paid-in-full invoice.
     const totalAmt = Number(inv.total_amount || 0);
     const totalAll = confirmed + pending;
-    // If sum exceeds total, scale both proportionally so the cap is respected
-    // but the confirmed/pending split is preserved.
     let cappedConfirmed = confirmed;
     let cappedPending = pending;
+    let overpaymentAmount = 0;
     if (totalAll > totalAmt && totalAll > 0) {
+      overpaymentAmount = totalAll - totalAmt;
       const scale = totalAmt / totalAll;
       cappedConfirmed = confirmed * scale;
       cappedPending = pending * scale;
@@ -2271,9 +2309,147 @@ export default function App() {
       total_collected: capped,
       total_confirmed: cappedConfirmed,
       total_pending_bank: cappedPending,
-      outstanding: Math.max(0, totalAmt - capped),
+      overpayment_amount: overpaymentAmount,
+      // v55.83-A.6.8 (Max May 13 2026) — short-payment write-off support.
+      // Outstanding subtracts any amount that's been formally written off
+      // (e.g. customer short-paid by 50 EGP and we accept it). Without
+      // this, the invoice would stay OPEN indefinitely on tiny rounding.
+      // total_written_off field is set/cleared by handleWriteOffShortPayment.
+      // Tolerance: 0.50 EGP for rounding (HIGH-1).
+      outstanding: (function() {
+        var writtenOff = Number(inv.total_written_off || 0);
+        var remainder = totalAmt - capped - writtenOff;
+        return Math.abs(remainder) < 0.50 ? 0 : Math.max(0, remainder);
+      })(),
     }, userProfile?.id || user?.id);
     return capped;
+  };
+
+  // v55.83-A.6.8 (Max May 13 2026) — Short-payment write-off.
+  //
+  // Soft cap: anyone with invoice edit can write off up to this amount;
+  // super_admin can override beyond. Every write-off is logged to audit.
+  // Threshold is intentionally generous — most short-payments are <100 EGP.
+  const WRITE_OFF_SOFT_CAP_EGP = 1000;
+
+  // Reason is locked to a single category per Max's request. Bilingual.
+  const WRITE_OFF_REASON = 'Customer short-payment';
+  const WRITE_OFF_REASON_AR = 'خصم لعدم سداد العميل';
+
+  // (isSuperAdmin already declared above at line ~1476)
+
+  // Handler: apply write-off to an invoice.
+  // - Validates amount > 0 and <= invoice.outstanding (can't write off more
+  //   than what's actually outstanding).
+  // - Soft-cap enforced; super_admin bypass.
+  // - Writes total_written_off, write_off_reason, write_off_notes, then
+  //   re-runs recalc so outstanding drops by the written-off amount.
+  // - Audit entry tagged 'invoice.write_off' with English + Arabic note.
+  const handleWriteOffShortPayment = async (invoice, amount, notesEN) => {
+    if (!canEditInvoices) {
+      toast.error('You do not have permission to write off / لا تملك صلاحية الخصم');
+      return false;
+    }
+    if (!invoice || !invoice.id) {
+      toast.error('Invalid invoice / فاتورة غير صالحة');
+      return false;
+    }
+    var amt = Number(amount);
+    if (!isFinite(amt) || amt <= 0) {
+      toast.error('Enter a positive amount / أدخل مبلغ موجب');
+      return false;
+    }
+    var outstanding = Number(invoice.outstanding || 0);
+    if (amt > outstanding + 0.50) {
+      toast.error('Cannot write off more than outstanding (' + fE(outstanding) + ') / لا يمكن خصم أكثر من المتبقي');
+      return false;
+    }
+    // Soft cap enforcement
+    if (amt > WRITE_OFF_SOFT_CAP_EGP && !isSuperAdmin) {
+      toast.error('Amount exceeds ' + fE(WRITE_OFF_SOFT_CAP_EGP) + ' soft cap. Only super_admin can override / تجاوز الحد الأقصى، يلزم صلاحية المسؤول');
+      return false;
+    }
+    var prior = Number(invoice.total_written_off || 0);
+    var newTotal = prior + amt;
+    // Bilingual notes: user note (optional) + automatic translation hint.
+    // Per Max's "always translate any text added" rule, we store both EN
+    // and AR. If user gave English notes, AR is the reason in Arabic +
+    // English passthrough so the audit log carries both.
+    var notesPart = notesEN ? (' — ' + notesEN) : '';
+    var auditEN = WRITE_OFF_REASON + ' write-off: ' + fE(amt) + notesPart;
+    var auditAR = WRITE_OFF_REASON_AR + ': ' + fE(amt) + (notesEN ? (' — ' + notesEN) : '');
+    try {
+      await dbUpdate('invoices', invoice.id, {
+        total_written_off: newTotal,
+        write_off_reason: WRITE_OFF_REASON,
+        write_off_notes: notesEN || null,
+      }, userProfile?.id || user?.id);
+      // Audit log gets a distinct action tag so reports can filter on it.
+      try {
+        await supabase.from('audit_log').insert({
+          table_name: 'invoices',
+          record_id: invoice.id,
+          action: 'write_off',
+          changed_by: (userProfile && userProfile.id) || (user && user.id) || null,
+          new_values: {
+            amount: amt,
+            reason: WRITE_OFF_REASON,
+            reason_ar: WRITE_OFF_REASON_AR,
+            notes_en: notesEN || null,
+            total_written_off_after: newTotal,
+            soft_cap_overridden: amt > WRITE_OFF_SOFT_CAP_EGP,
+            note_en: auditEN,
+            note_ar: auditAR,
+          },
+        });
+      } catch (auditErr) { console.warn('[write-off] audit log failed:', auditErr && auditErr.message); }
+      // Recalc to update outstanding
+      await recalcInvoiceCollected(invoice.id);
+      await loadAllData();
+      toast.success('Wrote off ' + fE(amt) + ' as short-payment ✓ / تم خصم ' + fE(amt));
+      return true;
+    } catch (err) {
+      toast.error('Write-off failed: ' + (err.message || 'unknown') + ' / فشل الخصم');
+      return false;
+    }
+  };
+
+  // Reverse a write-off (in case it was applied in error). Clears the
+  // total_written_off field entirely. Outstanding restored on recalc.
+  const handleReverseWriteOff = async (invoice) => {
+    if (!canEditInvoices) {
+      toast.error('No permission / لا تملك الصلاحية');
+      return false;
+    }
+    if (!invoice || !invoice.id || !Number(invoice.total_written_off || 0)) return false;
+    var amt = Number(invoice.total_written_off || 0);
+    try {
+      await dbUpdate('invoices', invoice.id, {
+        total_written_off: 0,
+        write_off_reason: null,
+        write_off_notes: null,
+      }, userProfile?.id || user?.id);
+      try {
+        await supabase.from('audit_log').insert({
+          table_name: 'invoices',
+          record_id: invoice.id,
+          action: 'write_off_reverse',
+          changed_by: (userProfile && userProfile.id) || (user && user.id) || null,
+          new_values: {
+            amount_reversed: amt,
+            note_en: 'Reversed short-payment write-off of ' + fE(amt),
+            note_ar: 'تم إلغاء خصم بقيمة ' + fE(amt),
+          },
+        });
+      } catch (auditErr) { console.warn('[write-off-reverse] audit log failed:', auditErr && auditErr.message); }
+      await recalcInvoiceCollected(invoice.id);
+      await loadAllData();
+      toast.success('Write-off reversed ✓ / تم إلغاء الخصم');
+      return true;
+    } catch (err) {
+      toast.error('Reverse failed: ' + (err.message || 'unknown') + ' / فشل');
+      return false;
+    }
   };
 
   const handleAddPayment = async (pf) => {
@@ -2384,8 +2560,7 @@ export default function App() {
     // 1. Categorize all invoices
     const mismatch = [], unverified = [], overpaid = [], overdue = [];
     invoices.forEach(inv => {
-      const txns = treasuryByOrder[inv.order_number] || [];
-      const tTotal = txns.reduce((a, t) => a + Number(t.cash_in || 0) + Number(t.bank_in || 0), 0);
+      const tTotal = tTotalForInvoice(inv);
       const status = getReconStatus(inv, tTotal);
       const row = {
         'Order # / رقم الأمر': inv.order_number,
@@ -2828,6 +3003,12 @@ export default function App() {
         record.expected_amount = amt;
         record.expected_direction = isIncome ? 'in' : 'out';
         record.bank_account_id = formData.bankAccountId;
+        // v55.83-A.6.9 (Max May 13 2026) — expected_date is when the user
+        // anticipates the bank statement entry to appear. Defaults to
+        // transaction_date but user can specify (e.g. employee has cash,
+        // plans to deposit next Tuesday). Auto-matcher uses this to find
+        // the right bank statement entry with a ±14-day window.
+        record.expected_date = formData.expectedDate || record.transaction_date;
         record.description = (record.description || '') + ' [awaiting bank confirmation]';
         const mode = formData.bankEntryMode || 'order';
         if (mode === 'nonorder') {
@@ -3862,6 +4043,16 @@ export default function App() {
           || (evalResult.mode === 'no_invoice')) {
         const checkNum = reconcileCheck.check_number ? ' #' + reconcileCheck.check_number : '';
         const desc = (reconcileCheck.customer_name || '') + ' — شيك محصّل' + checkNum;
+        // v55.83-A.6.7 round 2 audit — resolve invoice_id from order_number
+        // if both evalResult.invoice and check.invoice_id are null. Keeps
+        // every treasury insert path consistent with dbInsert's auto-link.
+        let resolvedInv2 = evalResult.invoice ? evalResult.invoice.id : (reconcileCheck.invoice_id || null);
+        if (!resolvedInv2 && reconcileCheck.order_number) {
+          try {
+            const lk2 = await supabase.from('invoices').select('id').eq('order_number', String(reconcileCheck.order_number).trim()).maybeSingle();
+            if (lk2 && lk2.data && lk2.data.id) resolvedInv2 = lk2.data.id;
+          } catch (lk2Err) { console.warn('[reconcileCheck] invoice lookup failed:', lk2Err && lk2Err.message); }
+        }
         const { data: newTxn } = await supabase.from('treasury').insert({
           transaction_date: reconcileDate,
           order_number: reconcileCheck.order_number || '',
@@ -3870,7 +4061,7 @@ export default function App() {
           cash_out: 0,
           source: 'main',
           category: 'مبيعات',
-          linked_invoice_id: evalResult.invoice ? evalResult.invoice.id : (reconcileCheck.invoice_id || null),
+          linked_invoice_id: resolvedInv2,
           source_check_id: reconcileCheck.id,
           payment_source: 'check',
         }).select('id').single();
@@ -3880,7 +4071,11 @@ export default function App() {
           linked_treasury_id: newTxn?.id || null,
           physical_check_returned: physicalReturned,
         }, user?.id);
+        // Recalc whichever invoice ended up linked (evalResult.invoice OR
+        // resolvedInv2 fallback). Without this, the check shows collected
+        // but the invoice doesn't reflect it.
         if (evalResult.invoice) await recalcInvoiceCollected(evalResult.invoice.id);
+        else if (resolvedInv2) await recalcInvoiceCollected(resolvedInv2);
         toast.success(physicalReturned ? 'Check collected as cash swap ✓' : 'Check collected + treasury entry added ✓');
         setReconcileCheck(null); setReconcileDate(''); setReconcileCheckChoice(null); setReconcileCheckReturned(false);
         await loadAllData();
@@ -4096,9 +4291,35 @@ export default function App() {
     </div>
   );
 
-  const StatusBadge = ({ invoice }) => {
+  // v55.83-A.6.6 (Max May 13 2026) — single source of truth for "treasury
+  // total for this invoice" used by reconciliation status everywhere
+  // (StatusBadge, sales report, invoice modal).
+  //
+  // v55.83-A.6.7 (Max May 13 2026) — CRIT-5 fix: when a post-dated check
+  // is collected, the system inserts a "shadow" treasury row stamped with
+  // source_check_id. If we sum that row AND the collected check itself,
+  // we double-count. Exclude treasury rows where source_check_id IS NOT
+  // NULL — those are shadows, the check is the source of truth.
+  //
+  // Defensive: source_check_id column may not exist yet on older DBs.
+  // The shim treats `undefined` and `null` the same — both mean "not a
+  // shadow row" — so behavior is unchanged on old schemas.
+  const tTotalForInvoice = (invoice) => {
+    if (!invoice) return 0;
     const txns = treasuryByOrder[invoice.order_number] || [];
-    const tTotal = txns.reduce((a, t) => a + Number(t.cash_in || 0) + Number(t.bank_in || 0), 0);
+    const txnSum = txns.reduce((a, t) => {
+      // Skip shadow rows tied to a check (CRIT-5)
+      if (t.source_check_id) return a;
+      return a + Number(t.cash_in || 0) + Number(t.bank_in || 0);
+    }, 0);
+    const chkSum = (checks || [])
+      .filter(c => (c.order_number === invoice.order_number || c.invoice_id === invoice.id) && c.status === 'collected')
+      .reduce((a, c) => a + Number(c.amount || 0), 0);
+    return txnSum + chkSum;
+  };
+
+  const StatusBadge = ({ invoice }) => {
+    const tTotal = tTotalForInvoice(invoice);
     const status = getReconStatus(invoice, tTotal);
     const s = STATUS_STYLES[status];
     return (
@@ -4333,7 +4554,7 @@ export default function App() {
               {/* Brand mark — bracket prefix is a terminal callout convention. */}
               <span className="text-emerald-400 font-mono text-xs font-bold tracking-tight" style={{ fontFamily: '"JetBrains Mono", monospace' }}>[KTC]</span>
               <h1 className="text-sm font-bold text-white tracking-tight whitespace-nowrap">NEXTTRADE HUB</h1>
-              <span className="text-[10px] text-zinc-500 font-mono hidden md:inline" style={{ fontFamily: '"JetBrains Mono", monospace' }}>v55.83-A.6.5</span>
+              <span className="text-[10px] text-zinc-500 font-mono hidden md:inline" style={{ fontFamily: '"JetBrains Mono", monospace' }}>v55.83-A.6.10</span>
               {/* Live clock — terminals always show one. Updates via the
                   existing tick state; if not present, falls back to no clock. */}
               <span className="hidden lg:inline text-[10px] text-zinc-500 font-mono ml-2 pl-2 border-l border-zinc-800" style={{ fontFamily: '"JetBrains Mono", monospace' }}>
@@ -5016,6 +5237,14 @@ export default function App() {
                 {Number(selectedInvoice.total_collected) > Number(selectedInvoice.total_amount) && (
                   <div className="text-[9px] text-red-500 font-bold mt-1">⚠️ OVERPAID — may be doubled</div>
                 )}
+                {/* v55.83-A.6.7 — CRIT-4: show overpayment amount tracked
+                    by recalc, so duplicate payments don't hide silently
+                    behind the cap. */}
+                {Number(selectedInvoice.overpayment_amount || 0) > 0.50 && (
+                  <div className="mt-1 px-2 py-1 rounded bg-red-100 border border-red-300 text-[10px] text-red-800 font-bold">
+                    ⚠️ Treasury exceeds invoice by {fE(Number(selectedInvoice.overpayment_amount))} — review for duplicate payments
+                  </div>
+                )}
                 <button onClick={async () => {
                   const newAmt = prompt('Correct collected amount for this invoice:\n\nCurrent: ' + fE(selectedInvoice.total_collected) + '\nInvoiced: ' + fE(selectedInvoice.total_amount) + '\n\nEnter correct amount:', selectedInvoice.total_collected);
                   if (newAmt === null) return;
@@ -5031,17 +5260,94 @@ export default function App() {
                 <div className={`text-xl font-extrabold ${selectedInvoice.outstanding > 0 ? 'text-red-500' : 'text-emerald-500'}`}>
                   {selectedInvoice.outstanding > 0 ? fE(selectedInvoice.outstanding) : 'Paid ✓'}
                 </div>
+                {/* v55.83-A.6.8 (Max May 13 2026) — Short-payment write-off.
+                    Auto-suggests when outstanding is small (1000 EGP soft
+                    cap or less). One-click write-off after confirmation
+                    prompt. Already-written-off amount shown for visibility. */}
+                {Number(selectedInvoice.total_written_off || 0) > 0 && (
+                  <div className="mt-1 text-[10px] text-amber-700 font-semibold">
+                    📝 Written off: {fE(Number(selectedInvoice.total_written_off))} <span className="text-slate-500">/ مخصوم</span>
+                    {canEditInvoices && (
+                      <button
+                        onClick={async () => {
+                          if (confirm('Reverse the ' + fE(Number(selectedInvoice.total_written_off)) + ' write-off?\n\nهل تريد إلغاء الخصم؟')) {
+                            await handleReverseWriteOff(selectedInvoice);
+                          }
+                        }}
+                        className="text-[9px] text-blue-500 underline ml-2">↩ Reverse / إلغاء</button>
+                    )}
+                  </div>
+                )}
+                {selectedInvoice.outstanding > 0
+                  && selectedInvoice.outstanding <= WRITE_OFF_SOFT_CAP_EGP
+                  && Number(selectedInvoice.total_pending_bank || 0) === 0
+                  && canEditInvoices && (
+                  <div className="mt-2 p-2 rounded bg-white border border-amber-300">
+                    <div className="text-[10px] text-amber-900 font-semibold mb-1">
+                      💡 Small outstanding — write off as short-payment?
+                    </div>
+                    <div className="text-[9px] text-slate-600 mb-1.5" style={{direction:'rtl'}}>
+                      مبلغ صغير متبقي — هل تريد خصمه كعدم سداد؟
+                    </div>
+                    <button
+                      onClick={async () => {
+                        var amt = Number(selectedInvoice.outstanding);
+                        var confirmEN = 'Write off ' + fE(amt) + ' as Customer short-payment?\n\nThis will close the invoice. Logged to audit trail.';
+                        var confirmAR = 'خصم ' + fE(amt) + ' كعدم سداد؟ سيتم إغلاق الفاتورة.';
+                        if (confirm(confirmEN + '\n\n' + confirmAR)) {
+                          await handleWriteOffShortPayment(selectedInvoice, amt, null);
+                        }
+                      }}
+                      className="w-full px-2 py-1 bg-amber-500 hover:bg-amber-600 text-white rounded text-[10px] font-bold">
+                      Write off {fE(Number(selectedInvoice.outstanding))} / خصم
+                    </button>
+                  </div>
+                )}
+                {/* Super-admin can write off larger amounts manually */}
+                {selectedInvoice.outstanding > WRITE_OFF_SOFT_CAP_EGP && isSuperAdmin && (
+                  <button
+                    onClick={async () => {
+                      var amtStr = prompt('Write off amount (above ' + fE(WRITE_OFF_SOFT_CAP_EGP) + ' soft cap — super_admin override):\nمبلغ الخصم (تجاوز الحد الأقصى):', selectedInvoice.outstanding);
+                      if (amtStr === null) return;
+                      var amt = Number(amtStr);
+                      if (!isFinite(amt) || amt <= 0) { toast.error('Invalid amount'); return; }
+                      if (confirm('Write off ' + fE(amt) + ' as short-payment?\nخصم ' + fE(amt) + '؟')) {
+                        await handleWriteOffShortPayment(selectedInvoice, amt, null);
+                      }
+                    }}
+                    className="mt-2 w-full px-2 py-1 bg-amber-700 hover:bg-amber-800 text-white rounded text-[10px] font-bold">
+                    ⚠️ Write off (admin override) / خصم (تجاوز)
+                  </button>
+                )}
               </div>
             </div>
 
             {/* ===== H3: Payment-Source Breakdown =====
                 Shows how the collected amount was actually paid —
                 Cash / Bank / Check / Vodafone / InstaPay. Only renders
-                when there's at least one positive-amount linked txn. */}
+                when there's at least one positive-amount linked txn.
+                v55.83-A.6.6 (Max May 13 2026) — also includes collected
+                post-dated checks for this order, so an invoice paid
+                10,700 cash + 20,000 check shows the correct mix instead
+                of "100% Cash". */}
             {(() => {
               const txns = treasuryByOrder[selectedInvoice.order_number] || [];
-              if (txns.length === 0) return null;
-              const agg = aggregatePaymentSources(txns);
+              // v55.83-A.6.6 — pull collected checks too and shim them as
+              // virtual check-source rows for aggregatePaymentSources.
+              const collectedChks = (checks || []).filter(c =>
+                (c.order_number === selectedInvoice.order_number || c.invoice_id === selectedInvoice.id)
+                && c.status === 'collected'
+              );
+              const virtualCheckRows = collectedChks.map(c => ({
+                cash_in: 0,
+                bank_in: 0,
+                check_amount: Number(c.amount || 0),
+                payment_source: 'check',
+                amount: Number(c.amount || 0),
+              }));
+              const txnsWithChecks = txns.concat(virtualCheckRows);
+              if (txnsWithChecks.length === 0) return null;
+              const agg = aggregatePaymentSources(txnsWithChecks);
               if (agg.total <= 0) return null;
               const rows = PAYMENT_SOURCE_META.filter(r => agg.buckets[r.key] > 0);
               if (rows.length === 0) return null;
@@ -5080,8 +5386,10 @@ export default function App() {
 
             {/* Reconciliation Status */}
             {(() => {
-              const txns = treasuryByOrder[selectedInvoice.order_number] || [];
-              const tTotal = txns.reduce((a, t) => a + Number(t.cash_in || 0) + Number(t.bank_in || 0), 0);
+              // v55.83-A.6.6 — uses tTotalForInvoice helper which includes
+              // collected post-dated checks. Prevents false MISMATCH on
+              // invoices paid partly in checks.
+              const tTotal = tTotalForInvoice(selectedInvoice);
               const status = getReconStatus(selectedInvoice, tTotal);
               const s = STATUS_STYLES[status];
               return (
@@ -5309,7 +5617,46 @@ export default function App() {
                 <h4 className="text-sm font-bold text-emerald-800 mb-2">🏦 Treasury / الخزنة #{selectedInvoice.order_number}</h4>
                 {(treasuryByOrder[selectedInvoice.order_number] || []).map((txn, i) => (
                   <div key={txn.id}>
-                    {editingTxn === txn.id ? (
+                    {/* v55.83-A.6.9 (Max May 13 2026) — Placeholder rows
+                        previously showed as "EGP 0" with no visible
+                        indication of pending amount. Invoice 2317 had a
+                        25,000 EGP placeholder that was invisible in the
+                        treasury totals. Now placeholders get a distinct
+                        amber visual treatment with "⏳ EGP X awaiting bank
+                        confirmation" + show their expected_amount in the
+                        total. */}
+                    {txn.is_bank_placeholder ? (
+                      <div className="flex justify-between items-center py-2 border-b border-amber-200 bg-amber-50 -mx-1 px-2 rounded mb-1">
+                        <div className="flex-1">
+                          <div className="text-xs font-semibold text-amber-900" style={{ direction: lang === 'ar' ? 'rtl' : 'ltr' }}>
+                            ⏳ {tx(txn.description, txn.description_en)}
+                          </div>
+                          <div className="text-[10px] text-amber-700">
+                            {txn.transaction_date}
+                            {txn.expected_date && txn.expected_date !== txn.transaction_date && (
+                              <span> · Expected to clear ~{txn.expected_date} / متوقع التحصيل</span>
+                            )}
+                            <span className="ml-1 font-semibold">· Awaiting bank confirmation / في انتظار تأكيد البنك</span>
+                          </div>
+                        </div>
+                        <div className="text-sm font-bold text-amber-700 mr-2">
+                          {fE(Number(txn.expected_amount || 0))}
+                          <span className="text-[9px] text-amber-600 ml-1">pending</span>
+                        </div>
+                        <button onClick={() => setInspectedTreasury(txn)}
+                          className="px-2 py-0.5 rounded border border-amber-400 text-amber-700 text-[10px] mr-1 hover:bg-amber-100" title="Inspect / فحص">
+                          ⓘ Inspect
+                        </button>
+                        <button onClick={() => { setEditingTxn(txn.id); setFormData({ txEditDate: txn.transaction_date, txExpectedDate: txn.expected_date || txn.transaction_date }); }}
+                          className="px-2 py-0.5 rounded border border-blue-300 text-blue-600 text-[10px] mr-1 hover:bg-blue-50">
+                          Edit
+                        </button>
+                        <button onClick={() => handleUnlinkTreasury(txn)}
+                          className="px-2 py-0.5 rounded border border-red-300 text-red-500 text-[10px] hover:bg-red-50">
+                          Unlink
+                        </button>
+                      </div>
+                    ) : editingTxn === txn.id ? (
                       <div className="bg-blue-50 rounded-lg p-3 mb-2 border border-blue-200">
                         <div className="grid grid-cols-2 gap-2">
                           <div>
@@ -5407,9 +5754,36 @@ export default function App() {
                 <div className="flex justify-between pt-2 mt-1 border-t-2 border-emerald-300">
                   <span className="text-xs font-bold">Total / الإجمالي</span>
                   <span className="text-sm font-extrabold text-emerald-600">
-                    {fE((treasuryByOrder[selectedInvoice.order_number] || []).reduce((a, t) => a + Number(t.cash_in || 0) + Number(t.bank_in || 0), 0))}
+                    {/* v55.83-A.6.9 — include placeholder expected_amount
+                        so totals match what users see line-by-line. The
+                        "pending" portion is broken out below for clarity. */}
+                    {fE((treasuryByOrder[selectedInvoice.order_number] || []).reduce((a, t) => {
+                      var confirmed = Number(t.cash_in || 0) + Number(t.bank_in || 0);
+                      var pending = t.is_bank_placeholder ? Number(t.expected_amount || 0) : 0;
+                      return a + confirmed + pending;
+                    }, 0))}
                   </span>
                 </div>
+                {/* Confirmed + pending breakdown below the total, only if
+                    any placeholder exists. */}
+                {(treasuryByOrder[selectedInvoice.order_number] || []).some(t => t.is_bank_placeholder) && (
+                  <div className="mt-1 space-y-0.5 text-[10px]">
+                    <div className="flex justify-between">
+                      <span className="text-emerald-700">✓ Confirmed / مؤكد</span>
+                      <span className="font-bold text-emerald-700">
+                        {fE((treasuryByOrder[selectedInvoice.order_number] || []).reduce((a, t) =>
+                          t.is_bank_placeholder ? a : a + Number(t.cash_in || 0) + Number(t.bank_in || 0), 0))}
+                      </span>
+                    </div>
+                    <div className="flex justify-between">
+                      <span className="text-amber-700">⏳ Pending bank confirmation / في انتظار البنك</span>
+                      <span className="font-bold text-amber-700">
+                        {fE((treasuryByOrder[selectedInvoice.order_number] || []).reduce((a, t) =>
+                          t.is_bank_placeholder ? a + Number(t.expected_amount || 0) : a, 0))}
+                      </span>
+                    </div>
+                  </div>
+                )}
               </div>
             )}
 
@@ -11587,7 +11961,19 @@ export default function App() {
         )}
 
         {tab === 'reports' && (
-          <SafeSection label="Reports"><ReportsTab treasury={treasury} invoices={invoices} warehouseExpenses={warehouse} egyptBankTxns={egyptBankTxns} canViewFinancials={isSuperAdmin || modulePerms?.['View Financial Reports'] === true} /></SafeSection>
+          <SafeSection label="Reports">
+            <ReportsTab treasury={treasury} invoices={invoices} warehouseExpenses={warehouse} egyptBankTxns={egyptBankTxns} canViewFinancials={isSuperAdmin || modulePerms?.['View Financial Reports'] === true} />
+            {/* v55.83-A.6.9 — Write-offs audit report. Reuses same
+                permission gate as financial reports. */}
+            <div className="mt-4">
+              <WriteOffsReport
+                invoices={invoices}
+                customers={customers}
+                users={teamUsers}
+                canView={isSuperAdmin || modulePerms?.['View Financial Reports'] === true}
+              />
+            </div>
+          </SafeSection>
         )}
 
         {tab === 'quotes' && (
@@ -11883,7 +12269,7 @@ export default function App() {
                       latest fix is actually deployed. If he doesn't see this
                       tag in the modal, his browser is running stale JS. */}
                   <div className="mt-1.5 inline-block px-2 py-0.5 rounded bg-amber-900/60 text-amber-100 text-[10px] font-mono font-bold tracking-wide">
-                    BUILD v55.83-A.6.5
+                    BUILD v55.83-A.6.10
                   </div>
                 </div>
                 <button onClick={() => closePendingTreasuryModal()}
@@ -12518,7 +12904,7 @@ export default function App() {
                     معاملة قد تكون مكررة
                   </div>
                   <div className="mt-1.5 inline-block px-2 py-0.5 rounded bg-amber-900/60 text-amber-100 text-[10px] font-mono font-bold tracking-wide">
-                    BUILD v55.83-A.6.5
+                    BUILD v55.83-A.6.10
                   </div>
                 </div>
                 <button

@@ -62,6 +62,31 @@ export async function dbInsert(table, record, userId) {
   var strippedColumns = [];
   var data, error;
 
+  // v55.83-A.6.7 (Max May 13 2026) — CRIT-1 fix: when inserting into
+  // treasury with order_number set but linked_invoice_id missing, auto-
+  // resolve the invoice id so the row joins to the correct invoice from
+  // the start. Without this, recalcInvoiceCollected (which joins on
+  // linked_invoice_id) silently misses these rows — invoice 2303 had
+  // 4 placeholder rows totaling 1.32M but invoice showed Collected = 0.
+  if (table === 'treasury'
+      && attemptRecord
+      && typeof attemptRecord === 'object'
+      && attemptRecord.order_number
+      && !attemptRecord.linked_invoice_id) {
+    try {
+      var lookup = await supabase.from('invoices')
+        .select('id')
+        .eq('order_number', String(attemptRecord.order_number).trim())
+        .maybeSingle();
+      if (lookup && lookup.data && lookup.data.id) {
+        attemptRecord = Object.assign({}, attemptRecord, { linked_invoice_id: lookup.data.id });
+      }
+    } catch (lookupErr) {
+      // Don't block insert; log so a missed link is debuggable.
+      console.warn('[dbInsert] treasury auto-link lookup failed:', lookupErr && lookupErr.message);
+    }
+  }
+
   // First attempt
   var first = await supabase.from(table).insert(attemptRecord).select().single();
   data = first.data;
