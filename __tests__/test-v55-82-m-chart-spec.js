@@ -85,19 +85,19 @@ ok('3b: Market-floor "_best" line picks lowest across ALL active rates',
 
 ok('4a: lastBestForLine map tracks the most recent best per line/group',
   // v55.83-A.6 — variable iteration var renamed L → G (group, not just shipping_line)
+  // v55.83-A.6.24 — added wasStale field for solid/dashed bridge logic; accept either shape
   /var lastBestForLine = \{\}/.test(src) &&
   (/lastBestForLine\[L\] = \{ price: Number\(winner\.rate_amount\), rateId: winner\.id, asOfMonth: m \}/.test(src) ||
-   /lastBestForLine\[G\] = \{ price: Number\(winner\.rate_amount\), rateId: winner\.id, asOfMonth: m \}/.test(src))
+   /lastBestForLine\[G\] = \{ price: Number\(winner\.rate_amount\), rateId: winner\.id, asOfMonth: m \}/.test(src) ||
+   /lastBestForLine\[G\] = \{ price: winPrice, rateId: winner\.id, asOfMonth: m, wasStale: false \}/.test(src))
 );
 
 ok('4b: When no active rate exists, carry-forward branch runs',
-  // v55.83-A.6.3 (Max May 13 2026) — carry-forward NO LONGER marks the point
-  // as stale. Per Max's request, the chart shows ONE continuous solid line
-  // ("the best historical rate at this point in time"). Expiration is shown
-  // via separate ✕ markers, not via a stale ⏳ flag on the line itself.
-  // Verify that carry-forward branch exists; either marking is acceptable.
+  // v55.83-A.6.3 — carry-forward propagates the lastBestForLine price.
+  // v55.83-A.6.24 — also writes G__stale via the dual-key system.
+  // Either shape acceptable for back-compat.
   /else if \(lastBestForLine\[L\]\) \{[\s\S]{0,500}point\[G\] = lastBestForLine\[G\]\.price/.test(src) ||
-  /else if \(lastBestForLine\[G\]\) \{[\s\S]{0,500}point\[G\] = lastBestForLine\[G\]\.price/.test(src),
+  /else if \(lastBestForLine\[G\]\) \{[\s\S]{0,800}point\[G\][^\n]*= lastBestForLine\[G\]\.price/.test(src),
   'carry-forward must still propagate the lastBestForLine price'
 );
 

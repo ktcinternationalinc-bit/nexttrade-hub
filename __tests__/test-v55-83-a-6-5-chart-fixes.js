@@ -45,11 +45,12 @@ ok('3b: ExpiryMarkerShape renders ×N text badge when count > 1',
 
 // 4. Per-group CASE 3 bootstrap for By Line / By Vendor views
 ok('4a: per-group CASE 3 bootstrap fallback exists',
-  /CASE 3 \(v55\.83-A\.6\.5\)[\s\S]{0,800}fallbackForGroup = null/.test(tab));
+  /CASE 3[\s\S]{0,800}fallbackForGroup = null/.test(tab));
 ok('4b: bootstrap scans ratesForView for rates matching the group',
   /fallbackForGroup[\s\S]{0,800}fbgrG !== G/.test(tab));
 ok('4c: bootstrap seeds lastBestForLine[G] so subsequent months can carry forward',
-  /fallbackForGroup\)[\s\S]{0,400}lastBestForLine\[G\] = \{ price: Number\(fallbackForGroup\.rate_amount\)/.test(tab));
+  // v55.83-A.6.24 — fallbackForGroup hoisted via fbPrice variable; accept either form
+  /fallbackForGroup\)[\s\S]{0,500}lastBestForLine\[G\] = \{ price: (?:Number\(fallbackForGroup\.rate_amount\)|fbPrice)/.test(tab));
 
 // 5. Tooltip handles new __expiredAtY__ dataKey
 ok('5a: tooltip handles __expiredAtY__ dataKey',

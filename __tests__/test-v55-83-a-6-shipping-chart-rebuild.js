@@ -80,8 +80,10 @@ ok('7a: groupsToPlot resolved from breakdownField',
   /breakdownField = null[\s\S]{0,200}chartView === 'vendor'[\s\S]{0,80}breakdownField = 'vendor_name'/.test(tab));
 ok('7b: groupsToPlot capped at 10 to avoid spaghetti',
   /groupsToPlot\.length > 10[\s\S]{0,400}\.slice\(0, 10\)/.test(tab));
-ok('7c: Chart renders one Line per group when not in floor view',
-  /chartView === 'floor' \?[\s\S]{0,800}groupsToPlot\.map\(function\(G, i\)/.test(tab));
+ok('7c: Chart renders Line(s) per group when not in floor view',
+  // v55.83-A.6.24 — now renders TWO Lines per group (active solid + stale dashed)
+  // wrapped in a Fragment. Earlier builds rendered just one. Either is acceptable.
+  /chartView === 'floor' \?[\s\S]{0,1500}groupsToPlot\.map\(function\(G, i\)/.test(tab));
 
 // 8. Scope filter (chartShippingLine) still works
 ok('8: chartShippingLine narrows ratesForView (scope filter, independent of view)',

@@ -1,5 +1,5 @@
 'use client';
-import { useState, useMemo, useEffect, useCallback, useRef } from 'react';
+import { useState, useMemo, useEffect, useCallback, useRef, Fragment } from 'react';
 import { supabase, dbInsert, dbUpdate, dbDelete, logActivity } from '../lib/supabase';
 import { notifyShippingRate, notifyShippingBooked } from '../lib/notify';
 import { fE, fmt } from '../lib/utils';
@@ -2377,6 +2377,15 @@ Date: ${today}`;
         // Same for the "_best" market floor: lastBest = { ... }.
         var lastBestForLine = {};
         var lastBest = null;
+        // v55.83-A.6.24 (Max May 14 2026) — Track the previous point so we
+        // can BACK-WRITE _bestStale onto it at a solid→dashed transition.
+        // Without this back-write, the dashed line starts at month N+1 with
+        // no value at month N, leaving a visual gap between the solid line
+        // (ending at N) and the dashed line (starting at N+1). The dashed→solid
+        // bridge already works because we write _bestStale on the CURRENT
+        // (newly active) point, completing the dashed segment's endpoint.
+        // Symmetric back-write needed here.
+        var prevPoint = null;
 
         var trendPoints = months.map(function(m) {
           var monthStart = firstDayOf(m);
@@ -2393,39 +2402,59 @@ Date: ${today}`;
           var point = { month: m };
           var pointSourceIds = [];
 
-          // v55.83-A.6 — per-group (vendor or shipping_line, based on chartView)
+          // v55.83-A.6.3 → A.6.24 (Max May 14 2026) — spec update:
+          // "The same logic must apply across all toggles: Market Floor,
+          // By Vendor, By Line." Previously CASE 2 carried forward as solid
+          // (single dataKey per group). Now each group writes to TWO data
+          // keys — `G__active` (solid color) and `G__stale` (dashed grey
+          // version of the same color) — mirroring the market floor's
+          // _bestActive / _bestStale system. The line stays visually
+          // continuous (solid → dashed → solid) without gaps.
           linesToPlot.forEach(function(G) {
             var activeForGroup = activeInMonth.filter(function(r) {
               if (!breakdownField) return false;
               var v = (r[breakdownField] || '(none)').trim() || '(none)';
               return v === G;
             });
+            var prevPriceForG = lastBestForLine[G] && lastBestForLine[G].price;
+            var prevWasStaleForG = lastBestForLine[G] && lastBestForLine[G].wasStale;
+
             if (activeForGroup.length > 0) {
-              // CASE 1 — there is at least one active rate this month for this group.
-              // Pick the lowest, mark stale=false, remember it for carry-forward.
+              // CASE 1 — active rate this month for this group. Solid.
               var winner = activeForGroup.reduce(function(acc, r) {
                 if (!acc) return r;
                 return Number(r.rate_amount) < Number(acc.rate_amount) ? r : acc;
               }, null);
-              point[G] = Number(winner.rate_amount);
+              var winPrice = Number(winner.rate_amount);
+              point[G + '__active'] = winPrice;
+              // Keep legacy `G` field too so existing tooltip/click code that
+              // reads `point[G]` keeps working.
+              point[G] = winPrice;
               point['__stale__' + G] = false;
               point['__source__' + G] = winner.id;
               pointSourceIds.push(winner.id);
-              lastBestForLine[G] = { price: Number(winner.rate_amount), rateId: winner.id, asOfMonth: m };
+              // Bridge dashed → solid: if prev month was stale, write
+              // G__stale at this same Y so the dashed segment ends here.
+              if (prevWasStaleForG) {
+                point[G + '__stale'] = winPrice;
+              }
+              lastBestForLine[G] = { price: winPrice, rateId: winner.id, asOfMonth: m, wasStale: false };
             } else if (lastBestForLine[G]) {
-              // CASE 2 — carry forward the last known best for this group.
-              // v55.83-A.6.3 — no longer marked stale; line stays solid.
-              point[G] = lastBestForLine[G].price;
-              point['__stale__' + G] = false;
+              // CASE 2 — carry forward last known best as STALE (dashed).
+              // Bridge solid → dashed: if previous month was fresh, back-write
+              // G__stale onto the PREVIOUS point at its active value so the
+              // dashed line starts from the previous point.
+              if (prevWasStaleForG === false && prevPoint && prevPoint[G + '__active'] != null) {
+                prevPoint[G + '__stale'] = prevPoint[G + '__active'];
+              }
+              point[G + '__stale'] = lastBestForLine[G].price;
+              point[G] = lastBestForLine[G].price; // back-compat
+              point['__stale__' + G] = true;
               point['__source__' + G] = lastBestForLine[G].rateId;
               pointSourceIds.push(lastBestForLine[G].rateId);
+              lastBestForLine[G].wasStale = true;
             } else {
-              // CASE 3 (v55.83-A.6.5) — no active rate AND no prior best known.
-              // Bootstrap: look backward through ratesForView for the most
-              // recent rate belonging to THIS group with effective_date <=
-              // this month's end. If found, seed lastBestForLine[G] from it.
-              // Without this, the first month of a group's line would be
-              // blank — line discontinuity.
+              // CASE 3 — no prior best known. Bootstrap as ACTIVE (solid).
               var fallbackForGroup = null;
               for (var fbgi = 0; fbgi < ratesForView.length; fbgi++) {
                 var fbgr = ratesForView[fbgi];
@@ -2439,11 +2468,13 @@ Date: ${today}`;
                 }
               }
               if (fallbackForGroup) {
-                point[G] = Number(fallbackForGroup.rate_amount);
+                var fbPrice = Number(fallbackForGroup.rate_amount);
+                point[G + '__active'] = fbPrice;
+                point[G] = fbPrice;
                 point['__stale__' + G] = false;
                 point['__source__' + G] = fallbackForGroup.id;
                 pointSourceIds.push(fallbackForGroup.id);
-                lastBestForLine[G] = { price: Number(fallbackForGroup.rate_amount), rateId: fallbackForGroup.id, asOfMonth: m };
+                lastBestForLine[G] = { price: fbPrice, rateId: fallbackForGroup.id, asOfMonth: m, wasStale: false };
               }
             }
           });
@@ -2489,6 +2520,17 @@ Date: ${today}`;
           } else if (lastBest) {
             // CASE 2: No active rate this month — carry forward as STALE
             // (dashed grey line). Write _bestStale, NOT _bestActive.
+            // v55.83-A.6.24 (Max May 14 2026) — Detect solid→dashed transition
+            // and back-write _bestStale onto the PREVIOUS point so the dashed
+            // line starts at the previous month (joining the solid line
+            // visually) instead of starting at the current month (leaving a
+            // gap). Detection: `lastBest.wasStale === false` here means the
+            // previous month was active (solid). prevPoint is the trendPoint
+            // object for that previous month — give it _bestStale at the
+            // active value so the dashed segment has an anchor there.
+            if (lastBest.wasStale === false && prevPoint && prevPoint._bestActive != null) {
+              prevPoint._bestStale = prevPoint._bestActive;
+            }
             point._bestStale = lastBest.price;
             point._best = lastBest.price; // back-compat for tooltip
             point.__stale___best = true;
@@ -2528,6 +2570,9 @@ Date: ${today}`;
           }
 
           point.__sourceIds__ = pointSourceIds;
+          // v55.83-A.6.24 — capture this point as prevPoint so the NEXT
+          // iteration's back-write (solid→dashed bridge) can see it.
+          prevPoint = point;
           return point;
         });
 
@@ -2841,9 +2886,30 @@ Date: ${today}`;
                     <Line type="monotone" dataKey="_bestStale" name="Expired — no fresh rate" stroke="#94a3b8" strokeWidth={2} strokeDasharray="6 4" connectNulls={true} dot={{r: 3, fill: '#94a3b8', stroke: '#94a3b8'}} activeDot={{r: 6, stroke: '#94a3b8', strokeWidth: 2, fill: '#fff', cursor: 'pointer'}} />
                   </>
                 ) : (
+                  // v55.83-A.6.24 (Max May 14 2026) — per-group view (By Vendor /
+                  // By Line) now emits TWO <Line> elements per group, mirroring
+                  // the market floor's active/stale pair:
+                  //   `${G}__active` — solid in the group's color
+                  //   `${G}__stale`  — dashed in a desaturated/grey-tinted version
+                  // connectNulls on both makes the line bridge transition months
+                  // (the data layer already writes the bridge values).
                   groupsToPlot.map(function(G, i) {
                     var col = LINE_COLORS[i % LINE_COLORS.length];
-                    return (<Line key={G} type="monotone" dataKey={G} name={G} stroke={col} strokeWidth={2} connectNulls={true} dot={makeDotRenderer(G, col)} activeDot={{r: 6, stroke: col, strokeWidth: 2, fill: '#fff', cursor: 'pointer'}} />);
+                    return (
+                      <Fragment key={G}>
+                        <Line type="monotone" dataKey={G + '__active'} name={G}
+                          stroke={col} strokeWidth={2} connectNulls={true}
+                          dot={makeDotRenderer(G, col)}
+                          activeDot={{r: 6, stroke: col, strokeWidth: 2, fill: '#fff', cursor: 'pointer'}}
+                          legendType="none" />
+                        <Line type="monotone" dataKey={G + '__stale'} name={G + ' (expired)'}
+                          stroke={col} strokeWidth={2} strokeOpacity={0.5}
+                          strokeDasharray="6 4" connectNulls={true}
+                          dot={{r: 3, fill: col, stroke: col, fillOpacity: 0.5}}
+                          activeDot={{r: 6, stroke: col, strokeWidth: 2, fill: '#fff', cursor: 'pointer'}}
+                          legendType="none" />
+                      </Fragment>
+                    );
                   })
                 )}
                 {bookingStars.length > 0 && (

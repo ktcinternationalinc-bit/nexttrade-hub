@@ -26,7 +26,7 @@ function ok(label, cond, hint) {
 ok('1a: CASE 1 (active in month) writes point._bestActive',
   /CASE 1[\s\S]{0,300}point\._bestActive = Number\(bestRow\.rate_amount\)/.test(tab));
 ok('1b: CASE 2 (carry-forward) writes point._bestStale',
-  /CASE 2[\s\S]{0,300}point\._bestStale = lastBest\.price/.test(tab));
+  /CASE 2[\s\S]{0,1500}point\._bestStale = lastBest\.price/.test(tab));
 ok('1c: lastBest tracks wasStale flag for bridge writes',
   /lastBest = \{[^}]*wasStale: false[^}]*\}/.test(tab));
 ok('1d: stale→fresh transition writes _bestStale at fresh value (bridge)',
