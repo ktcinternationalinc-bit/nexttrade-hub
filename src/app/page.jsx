@@ -352,6 +352,11 @@ export default function App() {
 
   // Navigation
   const [tab, setTab] = useState('dashboard');
+  // v55.83-A.6.13 (Max May 14 2026) — when user clicks a ticket from
+  // dashboard (or any non-tickets tab), we switch to tickets, open the
+  // ticket modal, and remember which tab to return to when modal closes.
+  // Clears after the return tab switch fires.
+  const [returnToTabAfterTicket, setReturnToTabAfterTicket] = useState(null);
   const [mode, setMode] = useState('ytd');
   const [df, setDf] = useState(() => { const d = new Date(); d.setMonth(d.getMonth() - 1); return d.toISOString().substring(0, 10); });
   const [dt, setDt] = useState(today());
@@ -4579,7 +4584,7 @@ export default function App() {
               {/* Brand mark — bracket prefix is a terminal callout convention. */}
               <span className="text-emerald-400 font-mono text-xs font-bold tracking-tight" style={{ fontFamily: '"JetBrains Mono", monospace' }}>[KTC]</span>
               <h1 className="text-sm font-bold text-white tracking-tight whitespace-nowrap">NEXTTRADE HUB</h1>
-              <span className="text-[10px] text-zinc-500 font-mono hidden md:inline" style={{ fontFamily: '"JetBrains Mono", monospace' }}>v55.83-A.6.12</span>
+              <span className="text-[10px] text-zinc-500 font-mono hidden md:inline" style={{ fontFamily: '"JetBrains Mono", monospace' }}>v55.83-A.6.14</span>
               {/* Live clock — terminals always show one. Updates via the
                   existing tick state; if not present, falls back to no clock. */}
               <span className="hidden lg:inline text-[10px] text-zinc-500 font-mono ml-2 pl-2 border-l border-zinc-800" style={{ fontFamily: '"JetBrains Mono", monospace' }}>
@@ -8097,12 +8102,28 @@ export default function App() {
               const prevLogins = (lastLoginInfo || []).filter(s => s.date !== todayStr);
               const lastDate = prevLogins.length > 0 ? prevLogins[0].date : null;
               const daysSinceLast = lastDate ? Math.floor((new Date(todayStr) - new Date(lastDate)) / 86400000) : null;
+              // v55.83-A.6.13 (Max May 14 2026) — STRICT streak: only consecutive
+              // days count. Old logic allowed up to 2-day gap which produced
+              // "3-day streak" even when user had logged in May 14, May 12,
+              // May 10 — gaps that shouldn't count. A streak should mean
+              // "today AND every day before today until a gap."
               const loginStreak = (() => {
-                let streak = 1;
                 const dates = (lastLoginInfo || []).map(s => s.date).filter((v, i, a) => a.indexOf(v) === i).sort().reverse();
-                for (let i = 1; i < dates.length; i++) {
-                  const diff = Math.floor((new Date(dates[i-1]) - new Date(dates[i])) / 86400000);
-                  if (diff <= 2) streak++; else break;
+                if (dates.length === 0) return 0;
+                // Walk backwards from today requiring strict +1 day progression.
+                let streak = 0;
+                let cursor = todayStr;
+                for (let i = 0; i < dates.length; i++) {
+                  if (dates[i] === cursor) {
+                    streak++;
+                    const prev = new Date(cursor);
+                    prev.setDate(prev.getDate() - 1);
+                    cursor = prev.toISOString().substring(0, 10);
+                  } else if (dates[i] < cursor) {
+                    // Gap detected — streak ends.
+                    break;
+                  }
+                  // If dates[i] > cursor (future date), skip — shouldn't happen but defensive.
                 }
                 return streak;
               })();
@@ -8141,9 +8162,15 @@ export default function App() {
               const messages = [];
 
               // Login commentary
+              // v55.83-A.6.13 (Max May 14 2026) — guard against contradiction.
+              // Old logic could show BOTH "3-day streak" header AND "haven't
+              // logged in for 6 days" red banner — impossible to be true at
+              // the same time. If user logged in today (loginStreak >= 1),
+              // the "haven't logged in for N days" message is suppressed.
+              const loggedInToday = (lastLoginInfo || []).some(s => s.date === todayStr);
               if (daysSinceLast === null) {
                 messages.push({ icon: '👋', text: 'Welcome to NextTrade Hub! This is your first time here.', type: 'info' });
-              } else if (daysSinceLast === 0 || daysSinceLast === 1) {
+              } else if (loggedInToday || daysSinceLast === 0 || daysSinceLast === 1) {
                 if (loginStreak >= 5) messages.push({ icon: '🔥', text: loginStreak + '-day streak! You\'re on fire. Keep it up.', type: 'success' });
               } else if (daysSinceLast === 2) {
                 messages.push({ icon: '👀', text: 'You missed yesterday. Things may have piled up — let\'s catch up.', type: 'warning' });
@@ -8156,10 +8183,10 @@ export default function App() {
               // the SLA is "within hours" — even if not yet overdue, it needs
               // immediate attention.
               if (hasTickets && criticalPriority.length > 0) {
-                messages.push({ icon: '🚨', text: criticalPriority.length + ' CRITICAL ticket' + (criticalPriority.length > 1 ? 's' : '') + ' — must be handled within hours. Drop everything and resolve now.', type: 'error', items: criticalPriority.map(t => t.ticket_number + ' — ' + t.title) });
+                messages.push({ icon: '🚨', text: criticalPriority.length + ' CRITICAL ticket' + (criticalPriority.length > 1 ? 's' : '') + ' — must be handled within hours. Drop everything and resolve now.', type: 'error', items: criticalPriority.map(t => ({ id: t.id, label: t.ticket_number + ' — ' + t.title })) });
               }
               if (hasTickets && overdueTickets.length > 0) {
-                messages.push({ icon: '🚨', text: overdueTickets.length + ' ticket' + (overdueTickets.length > 1 ? 's are' : ' is') + ' OVERDUE. These need to be resolved immediately — clients are waiting.', type: 'error', items: overdueTickets.map(t => t.ticket_number + ' — ' + t.title) });
+                messages.push({ icon: '🚨', text: overdueTickets.length + ' ticket' + (overdueTickets.length > 1 ? 's are' : ' is') + ' OVERDUE. These need to be resolved immediately — clients are waiting.', type: 'error', items: overdueTickets.map(t => ({ id: t.id, label: t.ticket_number + ' — ' + t.title })) });
               }
               if (hasTickets && highPriority.length > 0 && overdueTickets.length === 0 && criticalPriority.length === 0) {
                 messages.push({ icon: '🔴', text: highPriority.length + ' high-priority ticket' + (highPriority.length > 1 ? 's' : '') + ' in your queue. Handle these before anything else.', type: 'warning' });
@@ -8226,9 +8253,44 @@ export default function App() {
                         </div>
                         {m.items && (
                           <div style={{ marginTop: 6, marginLeft: 28 }}>
-                            {m.items.slice(0, 5).map((item, j) => (
-                              <div key={j} style={{ fontSize: 11, color: typeColors[m.type], fontWeight: 600, padding: '2px 0' }}>• {item}</div>
-                            ))}
+                            {m.items.slice(0, 5).map((item, j) => {
+                              // v55.83-A.6.13 — items can now be either strings
+                              // (legacy) or { id, label } objects. Object items
+                              // are clickable and open the ticket modal directly,
+                              // remembering the current tab so closing returns here.
+                              if (item && typeof item === 'object' && item.id) {
+                                return (
+                                  <button
+                                    key={j}
+                                    type="button"
+                                    onClick={() => {
+                                      setReturnToTabAfterTicket(tab);
+                                      setOpenTicketId(item.id);
+                                      setTab('tickets');
+                                    }}
+                                    style={{
+                                      display: 'block',
+                                      background: 'transparent',
+                                      border: 'none',
+                                      padding: '2px 0',
+                                      fontSize: 11,
+                                      color: typeColors[m.type],
+                                      fontWeight: 600,
+                                      textAlign: 'left',
+                                      cursor: 'pointer',
+                                      textDecoration: 'underline',
+                                      textDecorationStyle: 'dotted',
+                                      textUnderlineOffset: '2px',
+                                    }}
+                                    title="Open this ticket / افتح التذكرة">
+                                    • {item.label}
+                                  </button>
+                                );
+                              }
+                              return (
+                                <div key={j} style={{ fontSize: 11, color: typeColors[m.type], fontWeight: 600, padding: '2px 0' }}>• {item}</div>
+                              );
+                            })}
                             {m.items.length > 5 && <div style={{ fontSize: 10, color: '#64748b' }}>+ {m.items.length - 5} more</div>}
                           </div>
                         )}
@@ -11977,7 +12039,15 @@ export default function App() {
             v55.83-A — Restored to byte-exact match with v55.82-Z baseline.
         ========================================== */}
         {tab === 'tickets' && (
-          <SafeSection label="Tickets"><TicketsTab toast={toast} customers={customers} user={user} userProfile={userProfile} users={teamUsers} onReload={loadAllData} lang={lang} isAdmin={isAdmin} modulePerms={modulePerms} openTicketId={openTicketId} onOpenTicketHandled={() => setOpenTicketId(null)} /></SafeSection>
+          <SafeSection label="Tickets"><TicketsTab toast={toast} customers={customers} user={user} userProfile={userProfile} users={teamUsers} onReload={loadAllData} lang={lang} isAdmin={isAdmin} modulePerms={modulePerms} openTicketId={openTicketId} onOpenTicketHandled={() => setOpenTicketId(null)} onTicketModalClosed={() => {
+            // v55.83-A.6.13 — return to whichever tab the user was on
+            // when they clicked the ticket link (e.g. dashboard).
+            if (returnToTabAfterTicket) {
+              const t = returnToTabAfterTicket;
+              setReturnToTabAfterTicket(null);
+              setTab(t);
+            }
+          }} /></SafeSection>
         )}
 
         {/* ==========================================
@@ -12319,7 +12389,7 @@ export default function App() {
                       latest fix is actually deployed. If he doesn't see this
                       tag in the modal, his browser is running stale JS. */}
                   <div className="mt-1.5 inline-block px-2 py-0.5 rounded bg-amber-900/60 text-amber-100 text-[10px] font-mono font-bold tracking-wide">
-                    BUILD v55.83-A.6.12
+                    BUILD v55.83-A.6.14
                   </div>
                 </div>
                 <button onClick={() => closePendingTreasuryModal()}
@@ -12954,7 +13024,7 @@ export default function App() {
                     معاملة قد تكون مكررة
                   </div>
                   <div className="mt-1.5 inline-block px-2 py-0.5 rounded bg-amber-900/60 text-amber-100 text-[10px] font-mono font-bold tracking-wide">
-                    BUILD v55.83-A.6.12
+                    BUILD v55.83-A.6.14
                   </div>
                 </div>
                 <button

@@ -294,6 +294,96 @@ export default function EgyptBankTab({ toast, user, userProfile, isAdmin, invoic
     return parsed;
   };
 
+  // v55.83-A.6.14 (Max May 14 2026) — TWO-STAGE IMPORT with duplicate review.
+  //
+  // Old import had a critical bug: the duplicate check filtered by account_id.
+  // Importing the same bank statement to two different accounts bypassed dedup
+  // entirely, creating duplicate rows that propagated downstream into treasury
+  // and invoice totals (see post-mortem: ~100 duplicate rows across 6 invoices,
+  // ~163K EGP fake overpayment money).
+  //
+  // New flow:
+  //   1. Pre-scan all rows against ENTIRE bank table (every account)
+  //   2. Classify each row: clean / exact-duplicate / possible-duplicate
+  //   3. If any non-clean rows, show review UI; user decides per row
+  //   4. Only after user confirms, write the approved rows
+  //   5. Audit log every override decision (who, when, why)
+  //
+  // Three classifications:
+  //   • CLEAN: no match anywhere → imported automatically
+  //   • EXACT: same date + amount + (first 60 chars of) description in ANY
+  //     account → auto-skipped (with override-all option for edge cases)
+  //   • POSSIBLE: same amount + adjacent date (±2 days) OR same amount + same
+  //     date in different account but slightly different description →
+  //     shown for per-row decision
+  const classifyDuplicates = async (toImport, accId) => {
+    // Load ALL existing transactions across ALL accounts (was the original bug).
+    var allExisting = [];
+    var pageSize = 1000;
+    var from = 0;
+    while (true) {
+      var resp = await supabase.from('egypt_bank_transactions')
+        .select('id, date, description, amount, account_id')
+        .range(from, from + pageSize - 1);
+      if (resp.error || !resp.data || resp.data.length === 0) break;
+      allExisting = allExisting.concat(resp.data);
+      if (resp.data.length < pageSize) break;
+      from += pageSize;
+    }
+    // Build lookup index: key = date|amount|desc60, value = list of existing rows
+    var exactIndex = {};
+    var amountDateIndex = {}; // key = date|amount (for cross-description match)
+    allExisting.forEach(function (e) {
+      var dsc60 = (e.description || '').substring(0, 60).trim().toLowerCase();
+      var key = e.date + '|' + e.amount + '|' + dsc60;
+      if (!exactIndex[key]) exactIndex[key] = [];
+      exactIndex[key].push(e);
+      var ak = e.date + '|' + e.amount;
+      if (!amountDateIndex[ak]) amountDateIndex[ak] = [];
+      amountDateIndex[ak].push(e);
+    });
+
+    var classified = toImport.map(function (row) {
+      var dsc60 = (row.description || '').substring(0, 60).trim().toLowerCase();
+      var key = row.date + '|' + row.amount + '|' + dsc60;
+      var exactMatches = exactIndex[key] || [];
+      if (exactMatches.length > 0) {
+        return { row: row, status: 'exact', matches: exactMatches, decision: 'skip' };
+      }
+      // Same date + amount but different description?
+      var ak = row.date + '|' + row.amount;
+      var sameDayAmount = (amountDateIndex[ak] || []).filter(function (e) {
+        var edsc = (e.description || '').substring(0, 60).trim().toLowerCase();
+        return edsc !== dsc60;
+      });
+      if (sameDayAmount.length > 0) {
+        return { row: row, status: 'possible', matches: sameDayAmount, decision: 'review' };
+      }
+      // Adjacent date (±2 days), same amount, similar description?
+      var rowDate = new Date(row.date);
+      var nearMatches = allExisting.filter(function (e) {
+        if (e.amount !== row.amount) return false;
+        var ed = new Date(e.date);
+        var diffDays = Math.abs((ed - rowDate) / 86400000);
+        if (diffDays > 2 || diffDays === 0) return false;
+        var edsc = (e.description || '').substring(0, 40).trim().toLowerCase();
+        var rdsc = (row.description || '').substring(0, 40).trim().toLowerCase();
+        // Both strings contain a common token longer than 6 chars
+        if (edsc.length === 0 || rdsc.length === 0) return false;
+        return edsc === rdsc || (edsc.length > 10 && rdsc.includes(edsc.substring(0, 10))) || (rdsc.length > 10 && edsc.includes(rdsc.substring(0, 10)));
+      });
+      if (nearMatches.length > 0) {
+        return { row: row, status: 'possible', matches: nearMatches, decision: 'review' };
+      }
+      return { row: row, status: 'clean', matches: [], decision: 'import' };
+    });
+    return classified;
+  };
+
+  // State for the review step (v55.83-A.6.14)
+  const [reviewClassified, setReviewClassified] = useState(null); // null = no review pending
+  const [reviewOverrideAll, setReviewOverrideAll] = useState(false);
+
   const doImport = async () => {
     let accId = importAccount;
     if (!accId && accounts.length > 0) { accId = accounts[0].id; setImportAccount(accId); }
@@ -301,40 +391,111 @@ export default function EgyptBankTab({ toast, user, userProfile, isAdmin, invoic
       try {
         const { data: newAcc } = await dbInsert('egypt_bank_accounts', { bank_name: 'Default Bank', account_number: 'AUTO-001', currency: 'EGP' }, myId);
         if (newAcc) { accId = newAcc.id; setImportAccount(accId); }
-      } catch(err) { alert('Create an account first'); return; }
+      } catch(err) { alert('Create an account first / أنشئ حسابًا أولاً'); return; }
     }
-    if (!accId) { alert('Select an account first'); return; }
+    if (!accId) { alert('Select an account first / اختر حسابًا أولاً'); return; }
     const toImport = importData.filter(r => r._include);
-    if (toImport.length === 0) { alert('No rows selected'); return; }
+    if (toImport.length === 0) { alert('No rows selected / لم يتم اختيار صفوف'); return; }
+
+    setImportStep('analyzing');
+    // v55.83-A.6.14 — classify before importing
+    var classified = await classifyDuplicates(toImport, accId);
+    var cleanCount = classified.filter(function (c) { return c.status === 'clean'; }).length;
+    var exactCount = classified.filter(function (c) { return c.status === 'exact'; }).length;
+    var possibleCount = classified.filter(function (c) { return c.status === 'possible'; }).length;
+
+    // If anything needs review, show the review UI; otherwise import clean rows directly.
+    if (exactCount > 0 || possibleCount > 0) {
+      setReviewClassified(classified);
+      setImportStep('review');
+      return;
+    }
+    // All clean — proceed to insert
+    await executeImport(classified, accId);
+  };
+
+  // v55.83-A.6.14 — actually write the approved rows after review
+  const executeImport = async (classified, accId) => {
     setImportStep('importing');
-    let imported = 0, skipped = 0, duplicates = 0;
-    
-    // Load existing transactions for duplicate detection
-    const { data: existing } = await supabase.from('egypt_bank_transactions').select('date, description, amount').eq('account_id', accId);
-    const existingSet = new Set((existing || []).map(e => `${e.date}|${e.amount}|${(e.description || '').substring(0, 30)}`));
-    
-    // Filter out duplicates
-    const newRows = [];
-    for (const row of toImport) {
-      const key = `${row.date}|${row.amount}|${(row.description || '').substring(0, 30)}`;
-      if (existingSet.has(key)) { duplicates++; skipped++; }
-      else { newRows.push({ account_id: accId, date: row.date, description: row.description, amount: row.amount, imported_by: myId }); existingSet.add(key); }
-    }
-    
+    var imported = 0, skipped = 0, exactSkipped = 0, possibleSkipped = 0, overridden = 0;
+    var toInsert = [];
+    var auditEntries = [];
+    classified.forEach(function (c) {
+      if (c.decision === 'import') {
+        toInsert.push({ account_id: accId, date: c.row.date, description: c.row.description, amount: c.row.amount, imported_by: myId });
+        if (c.status !== 'clean') overridden += 1;
+      } else if (c.decision === 'skip') {
+        skipped += 1;
+        if (c.status === 'exact') exactSkipped += 1;
+        else if (c.status === 'possible') possibleSkipped += 1;
+      }
+      // Build audit entry for non-clean rows
+      if (c.status !== 'clean') {
+        auditEntries.push({
+          row_date: c.row.date,
+          amount: c.row.amount,
+          description_short: (c.row.description || '').substring(0, 80),
+          status: c.status,
+          decision: c.decision,
+          matched_ids: c.matches.map(function (m) { return m.id; }),
+          decided_by: myId,
+          decided_at: new Date().toISOString(),
+        });
+      }
+    });
+
     // Batch insert in chunks of 100
-    for (let i = 0; i < newRows.length; i += 100) {
-      const chunk = newRows.slice(i, i + 100);
+    for (var i = 0; i < toInsert.length; i += 100) {
+      var chunk = toInsert.slice(i, i + 100);
       try {
-        const { error } = await supabase.from('egypt_bank_transactions').insert(chunk);
-        if (error) skipped += chunk.length; else imported += chunk.length;
-      } catch(e) { skipped += chunk.length; }
+        var resp = await supabase.from('egypt_bank_transactions').insert(chunk);
+        if (resp.error) skipped += chunk.length;
+        else imported += chunk.length;
+      } catch (e) { skipped += chunk.length; }
     }
-    setImportStats({ imported, skipped, duplicates, total: toImport.length });
+
+    // Write audit log for every override decision (best-effort, swallows errors)
+    if (auditEntries.length > 0) {
+      try {
+        await supabase.from('bank_import_audit').insert(auditEntries.map(function (a) {
+          return { /* schema-friendly minimal columns */
+            user_id: myId,
+            action: 'bank_import_duplicate_decision',
+            details: JSON.stringify(a),
+            created_at: a.decided_at,
+          };
+        }));
+      } catch (e) { /* audit_log fallback below */ }
+      // Also try writing to audit_log if the dedicated table doesn't exist
+      try {
+        for (var ai = 0; ai < auditEntries.length; ai++) {
+          await supabase.from('audit_log').insert({
+            user_id: myId,
+            entity_type: 'egypt_bank_transactions',
+            action: 'import_dedup_' + auditEntries[ai].decision,
+            details: auditEntries[ai],
+            created_at: auditEntries[ai].decided_at,
+          });
+        }
+      } catch (e) { /* ignore */ }
+    }
+
+    setImportStats({ imported: imported, skipped: skipped, duplicates: exactSkipped + possibleSkipped, exactSkipped: exactSkipped, possibleSkipped: possibleSkipped, overridden: overridden, total: classified.length });
     setImportStep('done');
-    await logActivity(myId, `Imported ${imported} Egypt bank transactions (${duplicates} duplicates skipped)`, 'finance');
+    setReviewClassified(null);
+    await logActivity(myId, 'Imported ' + imported + ' Egypt bank transactions (' + exactSkipped + ' exact duplicates skipped, ' + possibleSkipped + ' possible duplicates skipped, ' + overridden + ' overridden)', 'finance');
     await load();
-    // Auto-categorize new transactions based on existing patterns
     await autoCategorizeTxns();
+  };
+
+  // v55.83-A.6.14 — update a single row's decision in the review UI
+  const setReviewDecision = (idx, decision) => {
+    setReviewClassified(function (prev) {
+      if (!prev) return prev;
+      var next = prev.slice();
+      next[idx] = Object.assign({}, next[idx], { decision: decision });
+      return next;
+    });
   };
 
   // ───── Smart Auto-categorize (amount-first + keywords + timing patterns + direction) ─────
@@ -790,6 +951,146 @@ export default function EgyptBankTab({ toast, user, userProfile, isAdmin, invoic
             );
           })()}
 
+          {importStep === 'analyzing' && (
+            <div className="text-center py-12">
+              <div className="text-3xl mb-2 animate-pulse">🔍</div>
+              <p className="text-sm font-semibold">Scanning for duplicates across all accounts...</p>
+              <p className="text-[11px] text-slate-500 mt-1">جاري فحص التكرارات في جميع الحسابات</p>
+            </div>
+          )}
+
+          {importStep === 'review' && reviewClassified && (() => {
+            var cleanCount = reviewClassified.filter(function (c) { return c.status === 'clean'; }).length;
+            var exactCount = reviewClassified.filter(function (c) { return c.status === 'exact'; }).length;
+            var possibleCount = reviewClassified.filter(function (c) { return c.status === 'possible'; }).length;
+            var importing = reviewClassified.filter(function (c) { return c.decision === 'import'; }).length;
+            var skipping = reviewClassified.filter(function (c) { return c.decision === 'skip'; }).length;
+            return (
+              <div>
+                <div className="bg-amber-50 border-2 border-amber-300 rounded-xl p-4 mb-3">
+                  <h3 className="font-bold text-amber-900 mb-1">
+                    🔍 Duplicate review needed / مراجعة التكرارات
+                  </h3>
+                  <p className="text-[12px] text-amber-900">
+                    Some rows in this statement already exist in your data. Review and decide each one below.
+                    Your import on April 12 and May 13 created ~100 duplicates because the system used to only check
+                    within the selected account. That bug is now fixed — we check across ALL accounts. /
+                    بعض الصفوف موجودة بالفعل. راجع كل صف وحدد ما إذا كنت تريد استيراده أم تخطيه.
+                  </p>
+                </div>
+
+                <div className="grid grid-cols-2 md:grid-cols-4 gap-2 mb-3">
+                  <div className="bg-emerald-50 border border-emerald-200 rounded p-2 text-center">
+                    <div className="text-xs text-emerald-700">🟢 Clean / نظيف</div>
+                    <div className="text-xl font-extrabold text-emerald-800">{cleanCount}</div>
+                  </div>
+                  <div className="bg-red-50 border border-red-200 rounded p-2 text-center">
+                    <div className="text-xs text-red-700">🔴 Exact duplicate / مكرر</div>
+                    <div className="text-xl font-extrabold text-red-700">{exactCount}</div>
+                  </div>
+                  <div className="bg-amber-50 border border-amber-200 rounded p-2 text-center">
+                    <div className="text-xs text-amber-800">🟡 Possible duplicate / محتمل</div>
+                    <div className="text-xl font-extrabold text-amber-800">{possibleCount}</div>
+                  </div>
+                  <div className="bg-blue-50 border border-blue-200 rounded p-2 text-center">
+                    <div className="text-xs text-blue-700">Will import / سيتم استيراده</div>
+                    <div className="text-xl font-extrabold text-blue-700">{importing}</div>
+                    <div className="text-[9px] text-blue-600">({skipping} skip)</div>
+                  </div>
+                </div>
+
+                <div className="bg-white rounded-xl border border-slate-200 overflow-auto max-h-[500px]">
+                  <table className="w-full text-xs">
+                    <thead className="bg-slate-50 sticky top-0">
+                      <tr>
+                        <th className="px-2 py-2 text-left text-[10px]">Status</th>
+                        <th className="px-2 py-2 text-left text-[10px]">Date / تاريخ</th>
+                        <th className="px-2 py-2 text-right text-[10px]">Amount / مبلغ</th>
+                        <th className="px-2 py-2 text-left text-[10px]">Description / وصف</th>
+                        <th className="px-2 py-2 text-left text-[10px]">Existing match / السجل الحالي</th>
+                        <th className="px-2 py-2 text-center text-[10px]">Decision / القرار</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {reviewClassified.map(function (c, idx) {
+                        if (c.status === 'clean') return null; // hide clean rows from review table
+                        var statusBadge = c.status === 'exact'
+                          ? <span className="px-1.5 py-0.5 rounded bg-red-100 text-red-800 font-bold text-[10px]">🔴 EXACT</span>
+                          : <span className="px-1.5 py-0.5 rounded bg-amber-100 text-amber-800 font-bold text-[10px]">🟡 POSSIBLE</span>;
+                        var firstMatch = c.matches[0] || {};
+                        return (
+                          <tr key={idx} className="border-b border-slate-100 align-top">
+                            <td className="px-2 py-2">{statusBadge}</td>
+                            <td className="px-2 py-2 whitespace-nowrap">{c.row.date}</td>
+                            <td className="px-2 py-2 text-right font-mono">{Number(c.row.amount).toLocaleString()}</td>
+                            <td className="px-2 py-2 text-[11px]">{(c.row.description || '').substring(0, 80)}</td>
+                            <td className="px-2 py-2 text-[10px] text-slate-600">
+                              <div>{firstMatch.date} · acct ending {(firstMatch.account_id || '').slice(-6)}</div>
+                              <div className="text-slate-500">{(firstMatch.description || '').substring(0, 60)}</div>
+                              {c.matches.length > 1 && <div className="text-amber-600 font-bold">+ {c.matches.length - 1} more</div>}
+                            </td>
+                            <td className="px-2 py-2 text-center">
+                              <div className="inline-flex rounded border border-slate-300 overflow-hidden text-[10px] font-bold">
+                                <button onClick={function () { setReviewDecision(idx, 'skip'); }}
+                                  className={'px-2 py-1 ' + (c.decision === 'skip' ? 'bg-red-600 text-white' : 'bg-white text-slate-700 hover:bg-red-50')}>
+                                  Skip / تخطى
+                                </button>
+                                <button onClick={function () { setReviewDecision(idx, 'import'); }}
+                                  className={'px-2 py-1 ' + (c.decision === 'import' ? 'bg-emerald-600 text-white' : 'bg-white text-slate-700 hover:bg-emerald-50')}>
+                                  Import anyway / استورد رغماً
+                                </button>
+                              </div>
+                            </td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                </div>
+
+                <div className="mt-3 flex justify-between items-center flex-wrap gap-2">
+                  <div className="flex gap-2">
+                    <button onClick={function () {
+                      // Skip all flagged duplicates (default safe action)
+                      setReviewClassified(function (prev) {
+                        return prev.map(function (c) {
+                          return c.status === 'clean' ? c : Object.assign({}, c, { decision: 'skip' });
+                        });
+                      });
+                    }} className="px-3 py-1.5 rounded bg-red-100 text-red-800 text-[11px] font-bold hover:bg-red-200">
+                      🛑 Skip all flagged / تخطى الكل
+                    </button>
+                    {isAdmin && (
+                      <button onClick={function () {
+                        // Super-admin override: import EVERYTHING including exact duplicates.
+                        // This is rare — only use if you're absolutely sure these aren't real duplicates.
+                        if (!confirm('You are about to import ALL flagged rows including exact duplicates. This will be logged with your name. Continue? / استورد جميع الصفوف بما فيها المكررة؟ سيتم تسجيل هذا.')) return;
+                        setReviewClassified(function (prev) {
+                          return prev.map(function (c) {
+                            return c.status === 'clean' ? c : Object.assign({}, c, { decision: 'import' });
+                          });
+                        });
+                        setReviewOverrideAll(true);
+                      }} className="px-3 py-1.5 rounded bg-amber-100 text-amber-800 text-[11px] font-bold hover:bg-amber-200">
+                        ⚠️ Override: import ALL (super-admin)
+                      </button>
+                    )}
+                  </div>
+                  <div className="flex gap-2">
+                    <button onClick={function () { setImportStep('preview'); setReviewClassified(null); }}
+                      className="px-3 py-1.5 rounded border border-slate-300 text-[11px] font-bold hover:bg-slate-50">
+                      ← Back / رجوع
+                    </button>
+                    <button onClick={function () { executeImport(reviewClassified, importAccount); }}
+                      className="px-4 py-1.5 rounded bg-blue-600 text-white text-[11px] font-bold hover:bg-blue-700">
+                      Confirm and import / تأكيد واستيراد
+                    </button>
+                  </div>
+                </div>
+              </div>
+            );
+          })()}
+
           {importStep === 'importing' && (
             <div className="text-center py-12">
               <div className="text-3xl mb-2 animate-spin">⏳</div>
@@ -800,9 +1101,23 @@ export default function EgyptBankTab({ toast, user, userProfile, isAdmin, invoic
           {importStep === 'done' && importStats && (
             <div className="bg-green-50 rounded-xl p-6 text-center border border-green-200">
               <div className="text-3xl mb-2">✅</div>
-              <h3 className="font-bold text-lg text-green-800">Import Complete!</h3>
-              <p className="text-sm mt-2">{importStats.imported} imported{importStats.duplicates > 0 ? `, ${importStats.duplicates} duplicates skipped` : ''}{importStats.skipped > importStats.duplicates ? `, ${importStats.skipped - (importStats.duplicates||0)} errors` : ''}</p>
-              <button onClick={() => { setImportStep('select'); setImportData([]); setImportStats(null); setView('transactions'); }} className="mt-3 px-4 py-2 bg-blue-500 text-white rounded-lg text-xs font-semibold">View Transactions</button>
+              <h3 className="font-bold text-lg text-green-800">Import Complete! / اكتمل الاستيراد</h3>
+              <div className="text-sm mt-2 space-y-0.5">
+                <div><span className="font-bold text-emerald-700">{importStats.imported}</span> imported / تم استيرادها</div>
+                {importStats.exactSkipped > 0 && (
+                  <div className="text-red-700">🔴 {importStats.exactSkipped} exact duplicates skipped / مكررات تم تخطيها</div>
+                )}
+                {importStats.possibleSkipped > 0 && (
+                  <div className="text-amber-700">🟡 {importStats.possibleSkipped} possible duplicates skipped / مكررات محتملة تم تخطيها</div>
+                )}
+                {importStats.overridden > 0 && (
+                  <div className="text-amber-900 font-bold">⚠️ {importStats.overridden} flagged rows imported anyway (override) / تم تجاوز التحذير</div>
+                )}
+                {importStats.skipped > (importStats.duplicates || 0) && (
+                  <div className="text-slate-600">{importStats.skipped - (importStats.duplicates || 0)} errors / أخطاء</div>
+                )}
+              </div>
+              <button onClick={() => { setImportStep('select'); setImportData([]); setImportStats(null); setReviewClassified(null); setView('transactions'); }} className="mt-3 px-4 py-2 bg-blue-500 text-white rounded-lg text-xs font-semibold">View Transactions / عرض المعاملات</button>
             </div>
           )}
         </div>

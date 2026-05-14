@@ -7,6 +7,7 @@ import HRReport from './HRReport';
 import AdminHRInbox from './AdminHRInbox';
 import EmailStatusPanel from './EmailStatusPanel';
 import BackupsPanel from './BackupsPanel';
+import LoginHistoryV2 from './LoginHistoryV2';
 
 const STATUS_COLORS = {New:'#3b82f6',Acknowledged:'#8b5cf6','In Progress':'#f59e0b',Waiting:'#6b7280',Review:'#ec4899',Testing:'#14b8a6',Ready:'#10b981',Closed:'#374151',Reopened:'#ef4444'};
 const CAT_ICONS = { ticket:'🎫', crm:'🤝', shipping:'🛳️', customs:'🚢', calendar:'📅', finance:'💰', inventory:'📦', communication:'📬', ai:'🤖', manual:'✏️', other:'⚡', login:'🟢' };
@@ -31,6 +32,10 @@ export default function AdminTab({ user, userProfile, users, isAdmin, customers,
   const [announcements, setAnnouncements] = useState([]);
   const [annAcks, setAnnAcks] = useState([]);
   const [sessions, setSessions] = useState([]);
+  // v55.83-A.6.13 — Separate 30-day session set always loaded for Quick view's
+  // Today/Yesterday/7d/30d buckets so they don't go blank when the user picks
+  // a narrow custom range like "Today".
+  const [sessionsLast30d, setSessionsLast30d] = useState([]);
   const [loginSummary, setLoginSummary] = useState([]);  // user_login_summary view (ET-aware)
   // v55.61 — Track whether the login_events table is set up. If the SQL
   // wasn't run, every user appears "Offline" forever even when they're
@@ -177,6 +182,16 @@ export default function AdminTab({ user, userProfile, users, isAdmin, customers,
       // Sessions — date-bounded, capped at 500
       supabase.from('user_sessions').select('*').gte('date', dateFrom).lte('date', dateTo).order('login_at', { ascending: false }).limit(500)
         .then(function (r) { setSessions(r.data || []); }).catch(function (e) { console.warn('sessions:', e); }),
+      // v55.83-A.6.13 — Always-loaded 30-day session set for Quick view buckets.
+      // Independent of the user's date filter so Today/Yesterday/7d/30d
+      // counts in Quick view never go blank when the filter is narrow.
+      (function () {
+        var d = new Date();
+        d.setDate(d.getDate() - 30);
+        var thirtyAgo = new Intl.DateTimeFormat('en-CA', { timeZone: 'America/New_York' }).format(d);
+        return supabase.from('user_sessions').select('*').gte('date', thirtyAgo).order('login_at', { ascending: false }).limit(2000)
+          .then(function (r) { setSessionsLast30d(r.data || []); }).catch(function (e) { console.warn('sessionsLast30d:', e); });
+      })(),
       // Login summary endpoint
       fetch('/api/login-event?summary=1').then(function (r) { return r.json(); }).then(function (d) {
         if (d && d.summary) setLoginSummary(d.summary);
@@ -1652,133 +1667,26 @@ export default function AdminTab({ user, userProfile, users, isAdmin, customers,
               </div>
             );
           })()}
-          {/* Per-user daily breakdown — only when no individual focused */}
-          {selUser === 'all' && (
-            <div className="bg-white rounded-xl p-4 mb-3">
-              <h3 className="text-sm font-bold mb-3">👥 Team Login Summary</h3>
-
-              {/* v55.61 — Warning banner when login_events table isn't set up.
-                  Without it, the Online column shows everyone as Offline forever
-                  even when actively using the portal. Reported by Max May 7
-                  2026: "admin page.. login. why is online status offline if I
-                  am online". */}
-              {loginSummaryWarning && (
-                <div className="bg-amber-50 border-2 border-amber-300 rounded-lg p-3 mb-3">
-                  <div className="font-bold text-amber-900 text-xs mb-1">⚠️ Online status not working — database setup needed</div>
-                  <div className="text-[11px] text-amber-900 mb-2">
-                    Everyone shows as "Offline" because the login-events table doesn't exist in Supabase yet. To fix:
-                    open Supabase → SQL Editor → New query, paste the SQL from <code className="bg-amber-100 px-1 rounded">supabase/login-events.sql</code> in the project repo, click Run. Then refresh this page. Logins from this point forward will track correctly.
-                  </div>
-                  <div className="text-[10px] font-mono bg-amber-100 text-amber-900 p-2 rounded border border-amber-200 break-all">
-                    Server returned: {loginSummaryWarning}
-                  </div>
-                </div>
-              )}
-              <div className="overflow-auto max-h-[300px] rounded-lg border border-slate-200">
-                <table className="w-full border-collapse text-xs">
-                  <thead className="sticky top-0"><tr className="bg-slate-50">
-                    <th className="px-3 py-2 text-[10px] text-left">Team Member</th>
-                    <th className="px-3 py-2 text-[10px] text-center" title="Online if heartbeat within last 10 min">Status</th>
-                    <th className="px-3 py-2 text-[10px] text-center" title="Logins today (Eastern Time, midnight–midnight)">Today (ET)</th>
-                    <th className="px-3 py-2 text-[10px] text-center" title="Logins yesterday (ET)">Yesterday (ET)</th>
-                    <th className="px-3 py-2 text-[10px] text-center" title="Logins in last 7 ET days">7 days (ET)</th>
-                    <th className="px-3 py-2 text-[10px] text-center">Logins (range)</th>
-                    <th className="px-3 py-2 text-[10px] text-center">Days Active</th>
-                    <th className="px-3 py-2 text-[10px] text-center">Auto Timeouts</th>
-                    <th className="px-3 py-2 text-[10px] text-center">Avg Session</th>
-                    <th className="px-3 py-2 text-[10px] text-left">Last Login</th>
-                  </tr></thead>
-                  <tbody>
-                    {visibleUsers.map(u => {
-                      const uSess = sessions.filter(s => s.user_id === u.id);
-                      const uAuto = uSess.filter(s => s.logout_reason === 'auto_timeout').length;
-                      const uDays = [...new Set(uSess.map(s => s.date))].length;
-                      const uDurations = uSess.filter(s => s.login_at && s.logout_at).map(s => (new Date(s.logout_at) - new Date(s.login_at)) / 60000);
-                      const uAvg = uDurations.length > 0 ? Math.round(uDurations.reduce((a, b) => a + b, 0) / uDurations.length) : 0;
-                      // ET-aware data from user_login_summary view
-                      const lsRow = loginSummary.find(l => l.id === u.id) || {};
-                      const lastLoginAt = lsRow.last_login_at || uSess[0]?.login_at;
-                      const lastLogin = lastLoginAt ? fmtET(lastLoginAt, 'datetime') : '—';
-                      const isOnline = !!lsRow.is_online;
-                      // Belt-and-suspenders: if login_events count is 0 but the user actually has an
-                      // active session today (from the older user_sessions table), use the session count.
-                      // Prevents the "0 logins today" bug when login_events writes fail silently.
-                      const etTodayStr = todayET();
-                      const etYesterdayStr = yesterdayET();
-                      const sessionsTodayCount = uSess.filter(s => (s.date || '') === etTodayStr).length;
-                      const sessionsYesterdayCount = uSess.filter(s => (s.date || '') === etYesterdayStr).length;
-                      const todayCnt = Math.max(Number(lsRow.logins_today_et || 0), sessionsTodayCount);
-                      const yesterdayCnt = Math.max(Number(lsRow.logins_yesterday_et || 0), sessionsYesterdayCount);
-                      const sevenDayCnt = Number(lsRow.logins_last_7d_et || 0);
-                      return (
-                        <tr key={u.id} className="border-b border-slate-50 hover:bg-blue-50 cursor-pointer" onClick={() => setSelUser(u.id)}>
-                          <td className="px-3 py-2 font-semibold">{u.name}</td>
-                          <td className="px-3 py-2 text-center">
-                            {isOnline
-                              ? <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded bg-emerald-100 text-emerald-700 text-[10px] font-bold">🟢 Online</span>
-                              : <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded bg-slate-100 text-slate-500 text-[10px]">⚪ Offline</span>}
-                          </td>
-                          <td className="px-3 py-2 text-center font-bold text-blue-600">{todayCnt}</td>
-                          <td className="px-3 py-2 text-center text-slate-600">{yesterdayCnt}</td>
-                          <td className="px-3 py-2 text-center text-slate-600">{sevenDayCnt}</td>
-                          <td className="px-3 py-2 text-center font-bold text-emerald-600">{uSess.length}</td>
-                          <td className="px-3 py-2 text-center">{uDays}</td>
-                          <td className="px-3 py-2 text-center"><span className={uAuto > 0 ? 'text-red-500 font-bold' : 'text-slate-400'}>{uAuto}</span></td>
-                          <td className="px-3 py-2 text-center">{uAvg}m</td>
-                          <td className="px-3 py-2 text-slate-500">{lastLogin}</td>
-                        </tr>
-                      );
-                    })}
-                  </tbody>
-                </table>
-              </div>
-            </div>
-          )}
-
-          {/* Daily session log */}
-          <div className="bg-white rounded-xl p-4">
-            <h3 className="text-sm font-bold mb-3">🕐 {selUserName} — Daily Login Archive</h3>
-            <div className="space-y-3 max-h-[500px] overflow-auto">
-              {dates.map(date => {
-                const daySessions = byDate[date];
-                const dayAutoLogouts = daySessions.filter(s => s.logout_reason === 'auto_timeout').length;
-                return (
-                  <div key={date} className="border border-slate-100 rounded-lg overflow-hidden">
-                    <div className="bg-slate-50 px-3 py-2 flex justify-between items-center">
-                      <span className="text-xs font-bold text-slate-700">📅 {fmtET(date, 'date')} <span className="text-slate-400 font-normal">({fmtET(date, 'weekday', { tag: false })})</span></span>
-                      <div className="flex gap-3 text-[10px]">
-                        <span className="text-emerald-600 font-semibold">🟢 {daySessions.length} login{daySessions.length !== 1 ? 's' : ''}</span>
-                        {dayAutoLogouts > 0 && <span className="text-red-500 font-bold">⏱️ {dayAutoLogouts} auto-timeout{dayAutoLogouts !== 1 ? 's' : ''}</span>}
-                      </div>
-                    </div>
-                    <div className="divide-y divide-slate-50">
-                      {daySessions.map((s, i) => {
-                        const loginTime = s.login_at ? fmtET(s.login_at, 'time', { tag: false }) : '—';
-                        const logoutTime = s.logout_at ? fmtET(s.logout_at, 'time', { tag: false }) : '—';
-                        const duration = s.login_at && s.logout_at ? Math.round((new Date(s.logout_at) - new Date(s.login_at)) / 60000) : null;
-                        const isTimeout = s.logout_reason === 'auto_timeout';
-                        return (
-                          <div key={s.id || i} className="px-3 py-2 flex items-center gap-3 text-xs">
-                            <span className="text-blue-600 font-semibold min-w-[80px]">{getUserName(s.user_id) || 'Unknown'}</span>
-                            <span className="text-emerald-600 font-mono">🟢 {loginTime}</span>
-                            <span className="text-slate-300">→</span>
-                            <span className={isTimeout ? 'text-red-500 font-bold font-mono' : 'text-slate-500 font-mono'}>
-                              {isTimeout ? '⏱️' : '🔴'} {logoutTime}
-                            </span>
-                            {duration !== null && <span className="text-slate-500 text-[10px]">({duration}m)</span>}
-                            {isTimeout && <span className="px-1.5 py-0.5 bg-red-50 text-red-900 rounded text-[9px] font-bold border border-red-300">AUTO TIMEOUT</span>}
-                            {s.logout_reason === 'manual' && <span className="px-1.5 py-0.5 bg-blue-50 text-blue-600 rounded text-[9px] font-bold">CLOCKED OUT</span>}
-                            {!s.logout_at && <span className="px-1.5 py-0.5 bg-emerald-50 text-emerald-600 rounded text-[9px] font-bold animate-pulse">ACTIVE</span>}
-                          </div>
-                        );
-                      })}
-                    </div>
-                  </div>
-                );
-              })}
-              {dates.length === 0 && <div className="text-center text-slate-400 text-sm py-6">No login records found</div>}
-            </div>
-          </div>
+          {/* v55.83-A.6.13 — Login History redesign. Replaces the old
+              summary table + archive with a single component that:
+              - Merges overlapping sessions per ET day (no more 3x duplicate
+                rows for one workday)
+              - Offers Quick view (4 fixed buckets) + Detail view (custom range)
+              - Side-panel drill-down keeps team summary visible
+              - HR-grade stats: workdays / total time / avg per day / longest
+                day / typical start time / auto-timeout rate
+              - Inactive users faded to 50% opacity
+              - Bilingual EN + AR throughout. */}
+          <LoginHistoryV2
+            users={visibleUsers}
+            sessions={sessions}
+            sessionsWide={sessionsLast30d}
+            loginSummary={loginSummary}
+            loginSummaryWarning={loginSummaryWarning}
+            dateFrom={dateFrom}
+            dateTo={dateTo}
+            isSuperAdmin={isSuperAdmin}
+          />
         </>);
       })()}
     </div>)}

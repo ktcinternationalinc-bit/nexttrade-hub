@@ -30,7 +30,7 @@ const STATUS_DESC = {New:'Just created — nobody has looked at it yet',Acknowle
   'On Hold':'Paused intentionally — not urgent right now',Review:'Work done — needs someone to check/approve',Closed:'Complete — no more action needed',Reopened:'Was closed but needs more work'};
 const USER_COLORS = ['#8b5cf6','#0ea5e9','#f59e0b','#10b981','#ec4899','#ef4444','#6366f1','#14b8a6','#f97316','#06b6d4','#a855f7','#84cc16'];
 
-export default function TicketsTab({ toast, customers, user, userProfile, users, onReload, lang, isAdmin, modulePerms, openTicketId, onOpenTicketHandled }) {
+export default function TicketsTab({ toast, customers, user, userProfile, users, onReload, lang, isAdmin, modulePerms, openTicketId, onOpenTicketHandled, onTicketModalClosed }) {
   const myId = userProfile?.id || user?.id;
   const canManage = isAdmin || userProfile?.role === 'super_admin' || userProfile?.role === 'admin';
   const isSuperAdmin = userProfile?.role === 'super_admin';
@@ -162,6 +162,18 @@ export default function TicketsTab({ toast, customers, user, userProfile, users,
       if (onOpenTicketHandled) onOpenTicketHandled();
     }
   }, [openTicketId, tickets]);
+
+  // v55.83-A.6.13 (Max May 14 2026) — fire onTicketModalClosed when the
+  // selected ticket goes back to null. Page.jsx uses this to return the
+  // user to whichever tab (e.g. dashboard) they were on before they
+  // clicked the ticket link.
+  const prevSelRef = useRef(null);
+  useEffect(() => {
+    if (prevSelRef.current && !sel && typeof onTicketModalClosed === 'function') {
+      try { onTicketModalClosed(); } catch (_) {}
+    }
+    prevSelRef.current = sel;
+  }, [sel, onTicketModalClosed]);
 
   const filtered = useMemo(() => {
     let arr = tickets;
