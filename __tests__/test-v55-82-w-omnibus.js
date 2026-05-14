@@ -94,7 +94,7 @@ ok('8a: Floor view renders market-best line(s)',
   // _bestActive (solid) + _bestStale (dashed grey). Accept any historic form.
   (/chartShippingLine === 'all' && \(\s*<>[\s\S]{0,800}_bestActive[\s\S]{0,400}_bestStale[\s\S]{0,400}<\/>\s*\)/.test(shipping)) ||
   /chartView === 'floor' \?\s*\(?\s*<Line type="monotone" dataKey="_best"/.test(shipping) ||
-  /chartView === 'floor' \?[\s\S]{0,400}dataKey="_bestActive"[\s\S]{0,400}dataKey="_bestStale"/.test(shipping));
+  /chartView === 'floor' \?[\s\S]{0,1500}dataKey="_bestActive"[\s\S]{0,1500}dataKey="_bestStale"/.test(shipping));
 
 // =============================================================
 // ITEM 9 — Stale carry-forward best rate as dotted grey

@@ -68,7 +68,7 @@ ok('3d: both per-group lines use connectNulls so transitions bridge cleanly',
 
 // === 4. Market floor render unchanged (still has both _bestActive and _bestStale) ===
 ok('4a: _bestActive line still rendered (solid dark)',
-  /dataKey="_bestActive"[\s\S]{0,200}stroke="#0f172a"[\s\S]{0,100}connectNulls=\{true\}/.test(src));
+  /dataKey="_bestActive"[\s\S]{0,200}stroke="(#0f172a|#38bdf8)"[\s\S]{0,100}connectNulls=\{true\}/.test(src));
 ok('4b: _bestStale line still rendered (dashed grey)',
   /dataKey="_bestStale"[\s\S]{0,300}strokeDasharray="6 4"[\s\S]{0,100}connectNulls=\{true\}/.test(src));
 

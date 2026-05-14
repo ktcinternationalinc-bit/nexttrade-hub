@@ -53,7 +53,7 @@ ok('3b: stale represented either by dashed line OR icon',
 ok('3c: market-floor line is solid (active rate, no dasharray)',
   /<Line type="monotone" dataKey="_best"[^>]*strokeWidth=\{3\}[^>]*\/>/.test(tab) ||
   /<Line type="monotone" dataKey="_best" name="Market best" stroke="#0f172a" strokeWidth=\{3\} connectNulls=\{true\}/.test(tab) ||
-  /<Line type="monotone" dataKey="_bestActive" name="Active rate" stroke="#0f172a" strokeWidth=\{3\}/.test(tab));
+  /<Line type="monotone" dataKey="_bestActive" name="Active rate" stroke="(#0f172a|#38bdf8)" strokeWidth=\{3\}/.test(tab));
 
 // 4. Date filter semantics
 ok('4a: Date filter uses "rate active during window" semantics',
@@ -81,9 +81,8 @@ ok('7a: groupsToPlot resolved from breakdownField',
 ok('7b: groupsToPlot capped at 10 to avoid spaghetti',
   /groupsToPlot\.length > 10[\s\S]{0,400}\.slice\(0, 10\)/.test(tab));
 ok('7c: Chart renders Line(s) per group when not in floor view',
-  // v55.83-A.6.24 — now renders TWO Lines per group (active solid + stale dashed)
-  // wrapped in a Fragment. Earlier builds rendered just one. Either is acceptable.
-  /chartView === 'floor' \?[\s\S]{0,1500}groupsToPlot\.map\(function\(G, i\)/.test(tab));
+  // v55.83-A.6.24 — TWO Lines per group; v55.83-A.6.26 — added contrast comment.
+  /chartView === 'floor' \?[\s\S]{0,2500}groupsToPlot\.map\(function\(G, i\)/.test(tab));
 
 // 8. Scope filter (chartShippingLine) still works
 ok('8: chartShippingLine narrows ratesForView (scope filter, independent of view)',

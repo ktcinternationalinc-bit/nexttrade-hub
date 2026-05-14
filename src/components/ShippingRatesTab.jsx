@@ -2882,7 +2882,15 @@ Date: ${today}`;
                     solid and dashed segments visually meet. */}
                 {chartView === 'floor' ? (
                   <>
-                    <Line type="monotone" dataKey="_bestActive" name="Active rate" stroke="#0f172a" strokeWidth={3} connectNulls={true} dot={{r: 4, fill: '#0f172a', stroke: '#0f172a'}} activeDot={{r: 7, stroke: '#0f172a', strokeWidth: 2, fill: '#fff', cursor: 'pointer'}} />
+                    {/* v55.83-A.6.26 (Max May 14 2026) — color fix.
+                        Previously stroke="#0f172a" (slate-950) which was
+                        invisible against the dark theme background — looked
+                        like the line had a gap between 2026-04 and 2026-05
+                        when in fact the segment WAS being drawn, just in
+                        a near-black color on a near-black background. Switched
+                        to #38bdf8 (sky-400) which is high-contrast on both
+                        dark and light themes. */}
+                    <Line type="monotone" dataKey="_bestActive" name="Active rate" stroke="#38bdf8" strokeWidth={3} connectNulls={true} dot={{r: 4, fill: '#38bdf8', stroke: '#38bdf8'}} activeDot={{r: 7, stroke: '#38bdf8', strokeWidth: 2, fill: '#fff', cursor: 'pointer'}} />
                     <Line type="monotone" dataKey="_bestStale" name="Expired — no fresh rate" stroke="#94a3b8" strokeWidth={2} strokeDasharray="6 4" connectNulls={true} dot={{r: 3, fill: '#94a3b8', stroke: '#94a3b8'}} activeDot={{r: 6, stroke: '#94a3b8', strokeWidth: 2, fill: '#fff', cursor: 'pointer'}} />
                   </>
                 ) : (
