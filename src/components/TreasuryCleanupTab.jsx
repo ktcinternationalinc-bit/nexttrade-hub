@@ -89,7 +89,7 @@ function classifyRow(row, allRowsForInvoice) {
   return { kind: 'ok', label: 'Looks normal', labelAr: 'عادي', tone: 'green' };
 }
 
-export default function TreasuryCleanupTab({ supabase, treasury, invoices, checks, egyptBankTxns, customers, userProfile, isSuperAdmin, onReload, toast, recalcInvoiceCollected }) {
+export default function TreasuryCleanupTab({ supabase, treasury, invoices, checks, egyptBankTxns, customers, userProfile, isSuperAdmin, onReload, toast, recalcInvoiceCollected, onOpenInvoice }) {
   var myId = userProfile && userProfile.id;
   var [selectedInvoiceId, setSelectedInvoiceId] = useState(null);
   var [working, setWorking] = useState(false);
@@ -311,7 +311,20 @@ export default function TreasuryCleanupTab({ supabase, treasury, invoices, check
                         className={'border-b border-slate-50 cursor-pointer ' + (selectedInvoiceId === e.invoice.id ? 'bg-indigo-50' : 'hover:bg-blue-50')}
                         onClick={function () { setSelectedInvoiceId(e.invoice.id); }}>
                         <td className="px-2 py-2">
-                          <div className="font-bold text-slate-900">{e.invoice.order_number || e.invoice.id.substring(0, 8)}</div>
+                          {/* v55.83-A.6.16 — invoice # is now a link that opens the full invoice
+                              modal in Sales tab (where Add Payment, Edit, etc all live). Clicking
+                              row body still just selects-in-cleanup. */}
+                          {onOpenInvoice ? (
+                            <button
+                              type="button"
+                              onClick={function (ev) { ev.stopPropagation(); onOpenInvoice(e.invoice); }}
+                              className="font-bold text-blue-600 hover:text-blue-800 hover:underline text-left"
+                              title="Open invoice / افتح الفاتورة">
+                              📄 {e.invoice.order_number || e.invoice.id.substring(0, 8)}
+                            </button>
+                          ) : (
+                            <div className="font-bold text-slate-900">{e.invoice.order_number || e.invoice.id.substring(0, 8)}</div>
+                          )}
                           <div className="text-[9px] text-slate-500">{customerNameFor(e.invoice)}</div>
                         </td>
                         <td className="px-2 py-2 text-right text-[10px]">{fmtMoney(e.invoice.total_amount)}</td>
@@ -345,6 +358,7 @@ export default function TreasuryCleanupTab({ supabase, treasury, invoices, check
                   onUnlink={doUnlink}
                   onMarkSibling={doMarkSibling}
                   onClearOrphanMatch={doClearOrphanMatch}
+                  onOpenInvoice={onOpenInvoice}
                 />
               )}
             </div>
@@ -355,7 +369,7 @@ export default function TreasuryCleanupTab({ supabase, treasury, invoices, check
   );
 }
 
-function InvoiceDetailPanel({ entry, customerName, checks, egyptBankTxns, working, onDelete, onUnlink, onMarkSibling, onClearOrphanMatch }) {
+function InvoiceDetailPanel({ entry, customerName, checks, egyptBankTxns, working, onDelete, onUnlink, onMarkSibling, onClearOrphanMatch, onOpenInvoice }) {
   var inv = entry.invoice;
   var rowsClassified = entry.rows.map(function (r) {
     return { row: r, c: classifyRow(r, entry.rows) };
@@ -380,6 +394,21 @@ function InvoiceDetailPanel({ entry, customerName, checks, egyptBankTxns, workin
           )}
         </div>
       </div>
+
+      {/* v55.83-A.6.16 — Open the full invoice. Before deleting/unlinking any row,
+          the user should see the invoice itself: line items, customer history,
+          add-payment button, edit invoice, etc. The Sales-tab modal has all of that.
+          Closing returns you back here. */}
+      {onOpenInvoice && (
+        <button
+          type="button"
+          onClick={function () { onOpenInvoice(inv); }}
+          disabled={working}
+          className="w-full mb-3 px-3 py-2 rounded-lg bg-blue-600 hover:bg-blue-700 disabled:opacity-50 text-white text-xs font-bold flex items-center justify-center gap-2">
+          📄 Open Full Invoice / فتح الفاتورة الكاملة
+          <span className="text-[10px] opacity-80">— see line items, edit, add payment, etc.</span>
+        </button>
+      )}
 
       {linkedChecks.length > 0 && (
         <div className="bg-blue-50 border border-blue-200 rounded p-2 mb-2 text-[11px]">

@@ -357,6 +357,10 @@ export default function App() {
   // ticket modal, and remember which tab to return to when modal closes.
   // Clears after the return tab switch fires.
   const [returnToTabAfterTicket, setReturnToTabAfterTicket] = useState(null);
+  // v55.83-A.6.16 (Max May 14 2026) — same pattern for invoices opened from
+  // the Reports → Cleanup tool. When user clicks an invoice number in the
+  // cleanup review, we switch to Sales + open it; closing returns here.
+  const [returnToTabAfterInvoice, setReturnToTabAfterInvoice] = useState(null);
   const [mode, setMode] = useState('ytd');
   const [df, setDf] = useState(() => { const d = new Date(); d.setMonth(d.getMonth() - 1); return d.toISOString().substring(0, 10); });
   const [dt, setDt] = useState(today());
@@ -393,6 +397,18 @@ export default function App() {
 
   // Modals
   const [selectedInvoice, setSelectedInvoice] = useState(null);
+  // v55.83-A.6.16 — when selectedInvoice transitions back to null AND we
+  // remembered a returnToTabAfterInvoice (set when user clicked invoice
+  // from Reports → Cleanup), switch back to that tab.
+  const prevSelectedInvoiceRef = useRef(null);
+  useEffect(() => {
+    if (prevSelectedInvoiceRef.current && !selectedInvoice && returnToTabAfterInvoice) {
+      const t = returnToTabAfterInvoice;
+      setReturnToTabAfterInvoice(null);
+      setTab(t);
+    }
+    prevSelectedInvoiceRef.current = selectedInvoice;
+  }, [selectedInvoice, returnToTabAfterInvoice]);
   const [drillType, setDrillType] = useState(null);
   const [selectedCustomer, setSelectedCustomer] = useState(null);
   const [selectedDebtor, setSelectedDebtor] = useState(null);
@@ -4584,7 +4600,7 @@ export default function App() {
               {/* Brand mark — bracket prefix is a terminal callout convention. */}
               <span className="text-emerald-400 font-mono text-xs font-bold tracking-tight" style={{ fontFamily: '"JetBrains Mono", monospace' }}>[KTC]</span>
               <h1 className="text-sm font-bold text-white tracking-tight whitespace-nowrap">NEXTTRADE HUB</h1>
-              <span className="text-[10px] text-zinc-500 font-mono hidden md:inline" style={{ fontFamily: '"JetBrains Mono", monospace' }}>v55.83-A.6.15</span>
+              <span className="text-[10px] text-zinc-500 font-mono hidden md:inline" style={{ fontFamily: '"JetBrains Mono", monospace' }}>v55.83-A.6.16</span>
               {/* Live clock — terminals always show one. Updates via the
                   existing tick state; if not present, falls back to no clock. */}
               <span className="hidden lg:inline text-[10px] text-zinc-500 font-mono ml-2 pl-2 border-l border-zinc-800" style={{ fontFamily: '"JetBrains Mono", monospace' }}>
@@ -12082,7 +12098,13 @@ export default function App() {
 
         {tab === 'reports' && (
           <SafeSection label="Reports">
-            <ReportsTab treasury={treasury} invoices={invoices} warehouseExpenses={warehouse} egyptBankTxns={egyptBankTxns} canViewFinancials={isSuperAdmin || modulePerms?.['View Financial Reports'] === true} supabase={supabase} isSuperAdmin={isSuperAdmin} userProfile={userProfile} checks={checks} customers={customers} onReload={loadAllData} toast={toast} recalcInvoiceCollected={recalcInvoiceCollected} />
+            <ReportsTab treasury={treasury} invoices={invoices} warehouseExpenses={warehouse} egyptBankTxns={egyptBankTxns} canViewFinancials={isSuperAdmin || modulePerms?.['View Financial Reports'] === true} supabase={supabase} isSuperAdmin={isSuperAdmin} userProfile={userProfile} checks={checks} customers={customers} onReload={loadAllData} toast={toast} recalcInvoiceCollected={recalcInvoiceCollected} onOpenInvoice={(inv) => {
+              // v55.83-A.6.16 — opens an invoice in Sales tab with return-to-Reports
+              if (!inv) return;
+              setReturnToTabAfterInvoice('reports');
+              setSelectedInvoice(inv);
+              setTab('sales');
+            }} />
             {/* v55.83-A.6.9 — Write-offs audit report. Reuses same
                 permission gate as financial reports. */}
             <div className="mt-4">
@@ -12389,7 +12411,7 @@ export default function App() {
                       latest fix is actually deployed. If he doesn't see this
                       tag in the modal, his browser is running stale JS. */}
                   <div className="mt-1.5 inline-block px-2 py-0.5 rounded bg-amber-900/60 text-amber-100 text-[10px] font-mono font-bold tracking-wide">
-                    BUILD v55.83-A.6.15
+                    BUILD v55.83-A.6.16
                   </div>
                 </div>
                 <button onClick={() => closePendingTreasuryModal()}
@@ -13024,7 +13046,7 @@ export default function App() {
                     معاملة قد تكون مكررة
                   </div>
                   <div className="mt-1.5 inline-block px-2 py-0.5 rounded bg-amber-900/60 text-amber-100 text-[10px] font-mono font-bold tracking-wide">
-                    BUILD v55.83-A.6.15
+                    BUILD v55.83-A.6.16
                   </div>
                 </div>
                 <button

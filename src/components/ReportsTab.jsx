@@ -5,7 +5,7 @@ import { todayET, daysAgoET } from '../lib/et-time';
 
 const MONTHS = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
 
-export default function ReportsTab({ treasury, invoices, warehouseExpenses, egyptBankTxns, canViewFinancials, supabase, isSuperAdmin, userProfile, checks, customers, onReload, toast, recalcInvoiceCollected }) {
+export default function ReportsTab({ treasury, invoices, warehouseExpenses, egyptBankTxns, canViewFinancials, supabase, isSuperAdmin, userProfile, checks, customers, onReload, toast, recalcInvoiceCollected, onOpenInvoice }) {
   // Financial gate — all the data in this tab is cash totals, outstanding,
   // treasury breakdowns, P&L. None of that is appropriate for team members
   // without "View Financial Reports" permission (or super_admin).
