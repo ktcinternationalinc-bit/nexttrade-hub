@@ -95,16 +95,17 @@ ok('7e: positive qty in green, negative qty in red',
 // === 4. InventoryTab orchestrator ===
 ok('8a: imports Stage B components',
   /import ShipmentsManager/.test(tab) && /import InventoryView/.test(tab) && /import MovementsLedger/.test(tab));
-ok('8b: Stage B subtabs marked available',
-  /available = st\.stage === 'A' \|\| st\.stage === 'B'/.test(tab));
+ok('8b: Stage B subtabs marked available (v55.83-A.6.27: Stages A, B, C, D all available)',
+  /available = st\.stage === 'A' \|\| st\.stage === 'B'/.test(tab) ||
+  /\['A', 'B', 'C', 'D'\]\.indexOf\(st\.stage\) >= 0/.test(tab));
 ok('8c: inventory subtab renders InventoryView',
   /subtab === 'inventory'[\s\S]{0,200}<InventoryView/.test(tab));
 ok('8d: shipments subtab renders ShipmentsManager',
   /subtab === 'shipments'[\s\S]{0,200}<ShipmentsManager/.test(tab));
 ok('8e: movements subtab renders MovementsLedger',
   /subtab === 'movements'[\s\S]{0,200}<MovementsLedger/.test(tab));
-ok('8f: header badge updated to Stage 2 of 6',
-  /Stage 2 of 6/.test(tab));
+ok('8f: header badge updated (v55.83-A.6.27 ships Stage 4 of 6)',
+  /Stage 2 of 6/.test(tab) || /Stage 4 of 6/.test(tab));
 ok('8g: default subtab is inventory pivot view',
   /var \[subtab, setSubtab\] = useState\('inventory'\)/.test(tab));
 ok('8h: coming-soon only for E and F now',

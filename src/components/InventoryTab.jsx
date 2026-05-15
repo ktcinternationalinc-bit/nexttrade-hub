@@ -1,16 +1,17 @@
 // v55.83-A — Inventory Tab (Stage 1)
 // v55.83-A.6.21 — Stage B activated: Shipments + Inventory View + Movements
-//
-// Stage 1 (A): Master SKUs + Warehouses
-// Stage 2 (B): Shipments form/list/receive, Inventory pivot, Movements ledger,
-//              Reconciliation per shipment line item
-// Stage 3-6: Landed cost, P&L, adjustments, reports — future builds
-import { useState } from 'react';
+// v55.83-A.6.27 — Stage C+D activated: Layers ledger, per-SKU P&L,
+//                  landed cost finalization (via shipment detail), sale
+//                  deduction (via invoice line SKU linkage).
+import { useState, useEffect } from 'react';
+import { supabase } from '../lib/supabase';
 import MasterSKUList from './MasterSKUList';
 import WarehouseSettings from './WarehouseSettings';
 import ShipmentsManager from './ShipmentsManager';
 import InventoryView from './InventoryView';
 import MovementsLedger from './MovementsLedger';
+import LayersLedger from './LayersLedger';
+import InventoryPnL from './InventoryPnL';
 import {
   canViewInventory,
   canSeeInventoryCosts,
@@ -21,6 +22,8 @@ var SUBTABS = [
   { id: 'inventory', label: '📊 Inventory View', stage: 'B', desc: 'Master inventory with current quantities by SKU + warehouse' },
   { id: 'skus', label: '📦 Master SKUs', stage: 'A', desc: 'Define the products you stock' },
   { id: 'shipments', label: '🚢 Shipments', stage: 'B', desc: 'Receive inventory from suppliers' },
+  { id: 'layers', label: '🧱 Cost Layers', stage: 'C', desc: 'Per-shipment FIFO cost layers (Stage C: landed cost)' },
+  { id: 'pnl', label: '💵 Profit by SKU', stage: 'D', desc: 'Revenue minus COGS, per SKU (Stage D: sale deduction)' },
   { id: 'movements', label: '📜 Movements', stage: 'B', desc: 'Every stock change, append-only ledger' },
   { id: 'adjustments', label: '🔧 Adjustments', stage: 'E', desc: 'Damage, returns, transfers, count corrections' },
   { id: 'warehouses', label: '🏭 Warehouses', stage: 'A', desc: 'Physical stock locations' },
@@ -28,10 +31,28 @@ var SUBTABS = [
 ];
 
 export default function InventoryTab({ userProfile, modulePerms, toast }) {
-  // v55.83-A.6.21 — Stage B ships, so default landing is the Inventory pivot view
-  // (it's the most useful "where is my stock right now?" surface). User can still
-  // jump to skus/warehouses/shipments via the subtab nav.
   var [subtab, setSubtab] = useState('inventory');
+
+  // v55.83-A.6.27 — load SKUs + warehouses once at this level so Layers + P&L
+  // subtabs don't each refetch.
+  var [skus, setSkus] = useState([]);
+  var [warehouses, setWarehouses] = useState([]);
+  useEffect(function () {
+    var cancelled = false;
+    async function load() {
+      try {
+        var [sResp, wResp] = await Promise.all([
+          supabase.from('inv_skus').select('*').eq('is_active', true).order('sku_code'),
+          supabase.from('inv_warehouses').select('*').eq('is_active', true).order('name'),
+        ]);
+        if (cancelled) return;
+        setSkus(sResp.data || []);
+        setWarehouses(wResp.data || []);
+      } catch (e) {}
+    }
+    load();
+    return function () { cancelled = true; };
+  }, []);
 
   if (!canViewInventory(userProfile, modulePerms)) {
     return (
@@ -61,7 +82,7 @@ export default function InventoryTab({ userProfile, modulePerms, toast }) {
           </div>
           <div className="flex items-center gap-1 text-[10px]">
             <span className="px-2 py-0.5 rounded bg-blue-200 text-blue-900 font-bold">
-              v55.83-A.6.21 · Stage 2 of 6
+              v55.83-A.6.27 · Stage 4 of 6
             </span>
             {seePnL && (
               <span className="px-2 py-0.5 rounded bg-emerald-200 text-emerald-900 font-bold">
@@ -80,14 +101,18 @@ export default function InventoryTab({ userProfile, modulePerms, toast }) {
       {/* Subtab nav */}
       <div className="flex gap-1 flex-wrap bg-slate-50 rounded-lg p-1 border border-slate-200">
         {SUBTABS.map(function (st) {
-          // v55.83-A.6.21 — Stage B (Inventory View, Shipments, Movements) is now active.
-          var available = st.stage === 'A' || st.stage === 'B';
+          // v55.83-A.6.27 — Stages A, B, C, D all active. Only E, F remain.
+          var available = ['A', 'B', 'C', 'D'].indexOf(st.stage) >= 0;
+          // P&L tab requires the per-user pnl access permission
+          if (st.id === 'pnl' && !seePnL) available = false;
+          // Layers tab requires cost access (P&L access implies cost access)
+          if (st.id === 'layers' && !seeCosts && !seePnL) available = false;
           var isActive = subtab === st.id;
           return (
             <button key={st.id}
               onClick={function () { if (available) setSubtab(st.id); }}
               disabled={!available}
-              title={available ? st.desc : ('Coming in Stage ' + st.stage)}
+              title={available ? st.desc : (st.id === 'pnl' ? 'Requires P&L permission' : st.id === 'layers' ? 'Requires cost access' : 'Coming in Stage ' + st.stage)}
               className={'px-3 py-1.5 rounded-md text-xs font-bold transition '
                 + (isActive
                   ? 'bg-indigo-600 text-white shadow'
@@ -108,7 +133,6 @@ export default function InventoryTab({ userProfile, modulePerms, toast }) {
       {subtab === 'warehouses' && (
         <WarehouseSettings userProfile={userProfile} modulePerms={modulePerms} toast={toast} />
       )}
-      {/* v55.83-A.6.21 — Stage B components */}
       {subtab === 'inventory' && (
         <InventoryView userProfile={userProfile} modulePerms={modulePerms} toast={toast} />
       )}
@@ -117,6 +141,12 @@ export default function InventoryTab({ userProfile, modulePerms, toast }) {
       )}
       {subtab === 'movements' && (
         <MovementsLedger userProfile={userProfile} modulePerms={modulePerms} toast={toast} />
+      )}
+      {subtab === 'layers' && (
+        <LayersLedger skus={skus} warehouses={warehouses} toast={toast} />
+      )}
+      {subtab === 'pnl' && (
+        <InventoryPnL skus={skus} toast={toast} />
       )}
 
       {/* Coming-soon placeholders for Stage E+ only (adjustments, reports) */}
@@ -131,19 +161,24 @@ export default function InventoryTab({ userProfile, modulePerms, toast }) {
         </div>
       )}
 
-      {/* Stage 1 guidance */}
+      {/* Stage guidance */}
       <details className="bg-slate-50 border border-slate-200 rounded-lg p-3 text-xs">
         <summary className="font-bold text-slate-700 cursor-pointer">
-          ℹ️ What's in this build (v55.83-A.6.21 · Stage 2 of 6)
+          ℹ️ What's in this build (v55.83-A.6.27 · Stage 4 of 6)
         </summary>
         <div className="mt-2 space-y-2 text-slate-600 leading-relaxed">
           <p>
-            <strong>Stage 2 (B) adds operational inventory.</strong> You can now create shipments, track them from draft → in transit → arrived → received, add SKU line items with multi-unit quantities, reconcile expected vs actual on receipt, see current stock pivoted by SKU × Warehouse, and audit every movement.
+            <strong>Stages C + D add full landed cost + sale deduction.</strong> Each shipment
+            now has its own cost basis: open a shipment, click "💰 Finalize Landed Cost",
+            pick an allocation method (qty / weight / value), and the system writes locked
+            cost layers for FIFO consumption. When you save an invoice line with a linked
+            SKU, the layers drain oldest-first and COGS is stamped on the line — see
+            "Profit by SKU" for the result.
           </p>
           <p className="font-semibold text-slate-700">Roadmap:</p>
           <ul className="space-y-1 pl-4">
             {SUBTABS.map(function (st) {
-              var done = st.stage === 'A' || st.stage === 'B';
+              var done = ['A', 'B', 'C', 'D'].indexOf(st.stage) >= 0;
               return (
                 <li key={st.id} className={done ? 'text-emerald-700' : ''}>
                   <strong>Stage {st.stage}:</strong> {st.desc}
@@ -153,7 +188,8 @@ export default function InventoryTab({ userProfile, modulePerms, toast }) {
             })}
           </ul>
           <p className="text-[10px] text-slate-500 mt-2">
-            <strong>Setup:</strong> If you haven't run the inventory schema yet, run <code>sql/v55-83-a-inventory-schema.sql</code> in Supabase. For reconciliation columns, also run the v55.83-A.6.21 SQL inline in chat.
+            <strong>Setup:</strong> If you haven't run <code>sql/v55-83-a-6-27-inventory-stage-c-d.sql</code> in
+            Supabase yet, run it before using the Finalize Landed Cost feature.
           </p>
         </div>
       </details>

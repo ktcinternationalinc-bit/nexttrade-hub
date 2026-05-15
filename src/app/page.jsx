@@ -48,6 +48,8 @@ import WriteOffsReport from '../components/WriteOffsReport';
 import TreasuryInspectorModal from '../components/TreasuryInspectorModal';
 import AccountingAuditorModal from '../components/AccountingAuditorModal';
 import InventoryImport from '../components/InventoryImport';
+// v55.83-A.6.27 — Stage D: cost engine for sale deduction
+import { consumeFifo, reverseFifoConsumption } from '../lib/inventory-cost-engine';
 
 // Toast notification system — replaces alert() across entire app
 // v55.25 — ToastContext lives in src/lib/toast-context.js so child
@@ -376,6 +378,12 @@ export default function App() {
   const [customers, setCustomers] = useState([]);
   const [warehouse, setWarehouse] = useState([]);
   const [invoiceItems, setInvoiceItems] = useState([]);
+  // v55.83-A.6.27 — Stage D: invoice line items can optionally link to an
+  // inv_skus row. When set + qty present at save time, we drain FIFO layers
+  // and stamp COGS on the invoice line. These two states load once for
+  // the picker in the invoice modal.
+  const [invSkus, setInvSkus] = useState([]);
+  const [invWarehouses, setInvWarehouses] = useState([]);
   const [expenseRules, setExpenseRules] = useState([]);
   const [inventory, setInventory] = useState([]);
   const [invInbounds, setInvInbounds] = useState([]);
@@ -1245,6 +1253,15 @@ export default function App() {
         const { data: cats } = await supabase.from('categories').select('*').eq('active', true).order('sort_order').order('name_ar');
         setCategoriesList(cats || []);
       } catch (e) { setCategoriesList([]); }
+      // v55.83-A.6.27 — load Stage C/D inventory data for invoice SKU linkage
+      try {
+        const { data: skuRows } = await supabase.from('inv_skus').select('*').eq('is_active', true).order('sku_code');
+        setInvSkus(skuRows || []);
+      } catch (e) { setInvSkus([]); }
+      try {
+        const { data: whRows } = await supabase.from('inv_warehouses').select('*').eq('is_active', true).order('name');
+        setInvWarehouses(whRows || []);
+      } catch (e) { setInvWarehouses([]); }
       // Load team users separately (may not exist yet)
       try {
         const { data: usrs } = await supabase.from('users').select('*').order('name');
@@ -4642,7 +4659,7 @@ export default function App() {
               {/* Brand mark — bracket prefix is a terminal callout convention. */}
               <span className="text-emerald-400 font-mono text-xs font-bold tracking-tight" style={{ fontFamily: '"JetBrains Mono", monospace' }}>[KTC]</span>
               <h1 className="text-sm font-bold text-white tracking-tight whitespace-nowrap">NEXTTRADE HUB</h1>
-              <span className="text-[10px] text-zinc-500 font-mono hidden md:inline" style={{ fontFamily: '"JetBrains Mono", monospace' }}>v55.83-A.6.26</span>
+              <span className="text-[10px] text-zinc-500 font-mono hidden md:inline" style={{ fontFamily: '"JetBrains Mono", monospace' }}>v55.83-A.6.27.1</span>
               {/* Live clock — terminals always show one. Updates via the
                   existing tick state; if not present, falls back to no clock. */}
               <span className="hidden lg:inline text-[10px] text-zinc-500 font-mono ml-2 pl-2 border-l border-zinc-800" style={{ fontFamily: '"JetBrains Mono", monospace' }}>
@@ -5202,6 +5219,26 @@ export default function App() {
                       <div className="flex gap-2">
                         <button onClick={async () => {
                           try {
+                            // v55.83-A.6.27 — Stage D: before deleting items,
+                            // reverse FIFO consumption on any sale movements
+                            // linked to those items so the layers get their
+                            // qty back. Otherwise stock would stay drained.
+                            try {
+                              const { data: salesMovs } = await supabase.from('inv_movements')
+                                .select('id, consumed_layers, linked_invoice_item_id')
+                                .eq('linked_invoice_id', selectedInvoice.id)
+                                .eq('movement_type', 'sale');
+                              for (const m of (salesMovs || [])) {
+                                if (m.consumed_layers && Array.isArray(m.consumed_layers)) {
+                                  await reverseFifoConsumption(m.consumed_layers);
+                                }
+                                // Mark movement as reversed (delete it; the
+                                // layer qtys are already restored)
+                                await supabase.from('inv_movements').delete().eq('id', m.id);
+                              }
+                            } catch (revErr) {
+                              console.warn('[invoice-delete] reverse failed:', revErr && revErr.message);
+                            }
                             await supabase.from('invoice_items').delete().eq('invoice_id', selectedInvoice.id);
                             await supabase.from('invoices').delete().eq('id', selectedInvoice.id);
                             setSelectedInvoice(null); setFormData({});
@@ -5584,6 +5621,21 @@ export default function App() {
                 if (!lineItem || !lineItem.id) return;
                 if (!confirm('Delete this line item from the invoice? / حذف هذا البند من الفاتورة؟\n\n' + (lineItem.description || '').substring(0, 80))) return;
                 try {
+                  // v55.83-A.6.27 — Stage D: reverse FIFO consumption first
+                  // so the cost layers get their qty back, then delete the
+                  // sale movement, then delete the invoice item.
+                  if (lineItem.cogs_movement_id) {
+                    try {
+                      const { data: mov } = await supabase.from('inv_movements')
+                        .select('consumed_layers').eq('id', lineItem.cogs_movement_id).maybeSingle();
+                      if (mov && mov.consumed_layers) {
+                        await reverseFifoConsumption(mov.consumed_layers);
+                      }
+                      await supabase.from('inv_movements').delete().eq('id', lineItem.cogs_movement_id);
+                    } catch (revErr) {
+                      console.warn('[line-delete] reverse failed:', revErr && revErr.message);
+                    }
+                  }
                   await supabase.from('invoice_items').delete().eq('id', lineItem.id);
                   // Update local state immediately so the row disappears and totals recompute
                   setInvoiceItems(prev => prev.filter(it => it.id !== lineItem.id));
@@ -7327,6 +7379,7 @@ export default function App() {
                   <table className="w-full border-collapse text-xs mb-2">
                     <thead><tr className="bg-blue-100">
                       <th className="px-2 py-1 text-left text-[10px]">Item / البند</th>
+                      <th className="px-2 py-1 text-left text-[10px] w-28">📦 SKU (optional)</th>
                       <th className="px-2 py-1 text-right text-[10px] w-16">Qty</th>
                       <th className="px-2 py-1 text-right text-[10px] w-20">Price</th>
                       <th className="px-2 py-1 text-right text-[10px] w-20">Total</th>
@@ -7341,6 +7394,18 @@ export default function App() {
                               placeholder="Description / الوصف"
                               className="w-full text-[10px] border rounded px-1 py-0.5"
                               style={{direction: (item.inv_desc || '').match(/[\u0600-\u06FF]/) ? 'rtl' : 'ltr'}} />
+                          </td>
+                          {/* v55.83-A.6.27 — Stage D: link to inventory SKU.
+                              When set, save will drain FIFO layers + stamp COGS. */}
+                          <td className="px-2 py-1">
+                            <select value={item.inv_sku_id || ''}
+                              onChange={e => { const items = [...(formData.invoiceItems || [])]; items[idx] = {...items[idx], inv_sku_id: e.target.value || null}; setFormData({...formData, invoiceItems: items}); }}
+                              className="w-full text-[10px] border rounded px-1 py-0.5">
+                              <option value="">— none —</option>
+                              {(invSkus || []).map(s => (
+                                <option key={s.id} value={s.id}>{s.sku_code}</option>
+                              ))}
+                            </select>
                           </td>
                           <td className="px-2 py-1"><input type="number" value={item.inv_qty}
                             onChange={e => { const items = [...(formData.invoiceItems || [])]; items[idx] = {...items[idx], inv_qty: Number(e.target.value) || 0, inv_total: (Number(e.target.value) || 0) * items[idx].inv_price}; setFormData({...formData, invoiceItems: items}); }}
@@ -7429,17 +7494,65 @@ export default function App() {
                   }).select('id').single();
                   if (newInv && items.length > 0) {
                     for (const item of items) {
-                      await dbInsert('invoice_items', {
+                      // v55.83-A.6.27 — Stage D: insert with inv_sku_id, then
+                      // if the SKU is set, drain FIFO layers + create a sale
+                      // movement + stamp COGS back onto this invoice_item.
+                      const insertedItem = await dbInsert('invoice_items', {
                         invoice_id: newInv.id, description: item.inv_desc,
                         quantity: item.inv_qty, unit_price: item.inv_price, line_total: item.inv_total,
                         product_id: item.product_id || null,
+                        inv_sku_id: item.inv_sku_id || null,
                       }, user?.id);
-                      // Auto-deduct from inventory if product linked
+                      // Auto-deduct from OLD inventory if product_id set (legacy)
                       if (item.product_id) {
                         const prod = inventory.find(p => p.id === item.product_id);
                         if (prod) {
                           const newQty = Math.max(0, Number(prod.current_quantity || prod.roll_count || 0) - Number(item.inv_qty || 0));
                           await dbUpdate('inventory', prod.id, { current_quantity: newQty, stock_status: newQty <= 0 ? 'out_of_stock' : newQty < 5 ? 'low' : 'in_stock' }, user?.id);
+                        }
+                      }
+                      // v55.83-A.6.27 — Stage D: drain new inventory layers if inv_sku_id set
+                      if (item.inv_sku_id && Number(item.inv_qty) > 0 && insertedItem && insertedItem.id) {
+                        try {
+                          const drain = await consumeFifo(item.inv_sku_id, null, Number(item.inv_qty));
+                          if (drain && !drain.error && drain.qtyDrained > 0) {
+                            // Create sale movement
+                            const movInsert = await supabase.from('inv_movements').insert({
+                              sku_id: item.inv_sku_id,
+                              warehouse_id: (drain.consumed && drain.consumed[0])
+                                ? (await supabase.from('inv_layers').select('warehouse_id').eq('id', drain.consumed[0].layer_id).maybeSingle()).data?.warehouse_id
+                                : null,
+                              movement_type: 'sale',
+                              qty_change: -Number(drain.qtyDrained),
+                              source_table: 'invoices',
+                              source_id: newInv.id,
+                              linked_invoice_id: newInv.id,
+                              linked_invoice_item_id: insertedItem.id,
+                              consumed_layers: drain.consumed,
+                              unit_cost_usd: drain.weightedUnitUsd,
+                              unit_cost_egp: drain.weightedUnitEgp,
+                              total_cost_usd: drain.totalCogsUsd,
+                              total_cost_egp: drain.totalCogsEgp,
+                              occurred_at: new Date().toISOString(),
+                              note: 'Auto: sale from invoice ' + (newInv.id || ''),
+                              created_by: user?.id || null,
+                            }).select().single();
+                            if (!movInsert.error && movInsert.data) {
+                              // Stamp COGS + movement id on the invoice_item
+                              await supabase.from('invoice_items').update({
+                                cogs_usd: drain.totalCogsUsd,
+                                cogs_egp: drain.totalCogsEgp,
+                                cogs_movement_id: movInsert.data.id,
+                              }).eq('id', insertedItem.id);
+                            }
+                            if (drain.shortfall > 0) {
+                              toast.warn && toast.warn('Stock shortfall on ' + (item.inv_desc || 'item') + ': sold ' + drain.qtyDrained + ', short ' + drain.shortfall);
+                            }
+                          } else if (drain && drain.error) {
+                            toast.warn && toast.warn('Inventory drain failed for ' + (item.inv_desc || 'item') + ': ' + drain.error);
+                          }
+                        } catch (e) {
+                          console.warn('[sale-deduct] threw:', e && e.message);
                         }
                       }
                     }
@@ -12237,7 +12350,7 @@ export default function App() {
                       latest fix is actually deployed. If he doesn't see this
                       tag in the modal, his browser is running stale JS. */}
                   <div className="mt-1.5 inline-block px-2 py-0.5 rounded bg-amber-900/60 text-amber-100 text-[10px] font-mono font-bold tracking-wide">
-                    BUILD v55.83-A.6.26
+                    BUILD v55.83-A.6.27.1
                   </div>
                 </div>
                 <button onClick={() => closePendingTreasuryModal()}
@@ -12872,7 +12985,7 @@ export default function App() {
                     معاملة قد تكون مكررة
                   </div>
                   <div className="mt-1.5 inline-block px-2 py-0.5 rounded bg-amber-900/60 text-amber-100 text-[10px] font-mono font-bold tracking-wide">
-                    BUILD v55.83-A.6.26
+                    BUILD v55.83-A.6.27.1
                   </div>
                 </div>
                 <button
