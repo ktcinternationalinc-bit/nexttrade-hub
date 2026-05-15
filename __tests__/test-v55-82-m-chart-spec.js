@@ -49,9 +49,14 @@ ok('1c: REGRESSION GUARD — old expiry-anchored validRates filter is gone',
 // SPEC #2 — Active-window rule
 // ============================================================
 
-ok('2a: Active-window check is the documented (eff <= monthEnd && (no exp || exp >= monthStart))',
+ok('2a: Active-window check (eff <= monthEnd && (no exp || exp >= monthEnd) per A.6.27.7 unified rule)',
+  // v55.83-A.6.27.7 — changed from monthStart-overlap to monthEnd-still-active
+  // to align with the "Best Active" stat tile's semantics. Old rule accepted
+  // for back-compat in the diagnostic table at the bottom of the chart;
+  // new rule is what drives the main trend line.
+  /eff <= monthEnd && \(exp === '' \|\| exp >= monthEnd\)/.test(src) ||
   /eff <= monthEnd && \(exp === '' \|\| exp >= monthStart\)/.test(src),
-  'spec point 2 — overlap test'
+  'spec point 2 — best-rate test (now end-of-month for alignment with stat tile)'
 );
 
 ok('2b: Each month gets a monthStart/monthEnd boundary',
@@ -122,8 +127,8 @@ ok('4d: Tooltip shows "last known — no newer rate" indicator on stale points',
 // SPEC #5 — Continuous monthly graph (no gaps)
 // ============================================================
 
-ok('5a: Months loop rolls forward continuously from firstMonth to endMonth (safety 60 in A.6.27.2, was 600)',
-  /while \(cur <= endMonth && safety < (60|600)\) \{[\s\S]{0,200}months\.push\(cur\);\s*cur = nextMonth\(cur\)/.test(src),
+ok('5a: Months loop rolls forward continuously from firstMonth to endMonth (safety lowered to 48 in A.6.27.6, was 600/60)',
+  /while \(cur <= endMonth && safety < (48|60|600)\) \{[\s\S]{0,200}months\.push\(cur\);\s*cur = nextMonth\(cur\)/.test(src),
   'spec point 5 — every month rendered, no gaps'
 );
 

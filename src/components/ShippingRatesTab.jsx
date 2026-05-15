@@ -557,11 +557,41 @@ export default function ShippingRatesTab({ toast, user, userProfile, isAdmin, cu
   // is picked, behaviour is unchanged (group by origin → destination country).
   const groupByPort = filterPod !== 'all' || filterPol !== 'all';
   const routeGroups = useMemo(() => {
+    // v55.83-A.6.27.6 (Max May 15 2026) — case/whitespace-insensitive
+    // grouping. Without this, "HOUSTON" and "Houston" were creating
+    // duplicate cards for the same physical route. The routeHistory
+    // filter at line 633 already normalizes when matching rates to a
+    // selected route, but the GROUPER itself was using raw casing, so
+    // the cards appeared separately on the list view. Now the bucket
+    // key is built from the normalized values, and we pick the first
+    // non-empty raw casing seen for the display label.
+    var normForKey = function (s) { return (s || '').trim().toLowerCase(); };
+    var pickLabel = function (existing, candidate) {
+      // Prefer Title Case or Mixed Case over ALL CAPS for the visible label.
+      // If existing already looks like a "good" label, keep it; otherwise
+      // upgrade to the candidate if the candidate looks better.
+      if (!existing) return candidate || '';
+      if (!candidate) return existing;
+      var isAllCaps = function (s) { return s === s.toUpperCase() && /[A-Z]/.test(s); };
+      if (isAllCaps(existing) && !isAllCaps(candidate)) return candidate;
+      return existing;
+    };
     const groups = {};
     filtered.forEach(r => {
-      var leftLabel = groupByPort ? ((r.port_of_loading || r.origin || '?') + (r.port_of_loading && r.origin && r.port_of_loading !== r.origin ? ' (' + r.origin + ')' : '')) : (r.origin || '?');
-      var rightLabel = groupByPort ? ((r.port_of_discharge || r.destination || '?') + (r.port_of_discharge && r.destination && r.port_of_discharge !== r.destination ? ' (' + r.destination + ')' : '')) : (r.destination || '?');
-      const key = leftLabel + ' → ' + rightLabel;
+      var leftRaw = groupByPort ? (r.port_of_loading || r.origin || '?') : (r.origin || '?');
+      var rightRaw = groupByPort ? (r.port_of_discharge || r.destination || '?') : (r.destination || '?');
+      var leftSuffix = '';
+      var rightSuffix = '';
+      if (groupByPort && r.port_of_loading && r.origin && normForKey(r.port_of_loading) !== normForKey(r.origin)) {
+        leftSuffix = ' (' + r.origin + ')';
+      }
+      if (groupByPort && r.port_of_discharge && r.destination && normForKey(r.port_of_discharge) !== normForKey(r.destination)) {
+        rightSuffix = ' (' + r.destination + ')';
+      }
+      var leftLabel = leftRaw + leftSuffix;
+      var rightLabel = rightRaw + rightSuffix;
+      // KEY uses normalized values so case/whitespace differences collapse.
+      const key = normForKey(leftRaw) + '|' + normForKey(rightRaw);
       if (!groups[key]) groups[key] = {
         origin: r.origin,
         destination: r.destination,
@@ -571,6 +601,9 @@ export default function ShippingRatesTab({ toast, user, userProfile, isAdmin, cu
         rightLabel: rightLabel,
         rates: [], vendors: new Set(), lines: new Set(), modes: new Set()
       };
+      // Upgrade label casing if a better-cased variant comes through later
+      groups[key].leftLabel = pickLabel(groups[key].leftLabel, leftLabel);
+      groups[key].rightLabel = pickLabel(groups[key].rightLabel, rightLabel);
       groups[key].rates.push(r);
       if (r.vendor_name) groups[key].vendors.add(r.vendor_name);
       if (r.shipping_line) groups[key].lines.add(r.shipping_line);
@@ -1372,6 +1405,70 @@ export default function ShippingRatesTab({ toast, user, userProfile, isAdmin, cu
       return null;
     };
 
+    // --- v55.83-A.6.27.7 (Max May 15 2026) — BAD-DATA PATTERN detector.
+    //
+    // We've watched real imports produce rows that are syntactically valid
+    // (parseable dates, non-empty fields) but SEMANTICALLY broken — they
+    // poison the chart and the historical table. Per Max:
+    //   "BAD DATA - DO NOT IMPORT - CREATE A RECORD FOR THE USER TO FIX
+    //    LATER IF HE WANTS OTHERWISE DO NOT IMPORT THE BAD RECORDS"
+    //
+    // So instead of failing the row (which forces a re-import) OR letting
+    // it through (which poisons the chart), we quarantine it: store it in
+    // shipping_rates_import_quarantine for user review. User can fix dates
+    // in the quarantine UI and import; or discard it.
+    //
+    // Returns array of reason strings if bad, [] if OK.
+    var validateBadDataPatterns = function (raw) {
+      var reasons = [];
+      var eff = raw.effective_date ? String(raw.effective_date).substring(0, 10) : '';
+      var exp = raw.expiry_date ? String(raw.expiry_date).substring(0, 10) : '';
+      var amt = Number(raw.rate_amount || 0);
+
+      // Pattern 1: effective and expiry on the same day (zero-day window).
+      // Real shipping rates have a validity window — even short-tender rates
+      // have at least a few days. Same-day is almost always a botched import
+      // where the date column got copied into both. (Caught Max's 44-row
+      // USA→India case where every row had eff=exp=2025-12-31.)
+      if (eff && exp && eff === exp) {
+        reasons.push('Effective and expiry dates are identical (' + eff + ') — likely import error');
+      }
+
+      // Pattern 2: expiry BEFORE effective (impossible window).
+      if (eff && exp && exp < eff) {
+        reasons.push('Expiry date (' + exp + ') is before effective date (' + eff + ')');
+      }
+
+      // Pattern 3: effective_date too far in the past (before 2020).
+      // The year-2000 BIC row was driving Max's chart to span 317 months.
+      // Real freight rates are not still valid from before 2020.
+      if (eff && eff < '2020-01-01') {
+        reasons.push('Effective date is before 2020 (' + eff + ') — likely import error');
+      }
+
+      // Pattern 4: effective_date too far in the future (more than 2 years out).
+      var today = todayET();
+      var twoYearsOut = new Date(); twoYearsOut.setFullYear(twoYearsOut.getFullYear() + 2);
+      var twoYearsOutStr = twoYearsOut.toISOString().substring(0, 10);
+      if (eff && eff > twoYearsOutStr) {
+        reasons.push('Effective date is more than 2 years in the future (' + eff + ')');
+      }
+
+      // Pattern 5: zero or missing rate (a shipping rate of $0 is meaningless).
+      if (!amt || amt <= 0) {
+        reasons.push('Rate amount is missing or zero');
+      }
+
+      // Pattern 6: rate_amount suspiciously high (likely currency mismatch
+      // where EGP got loaded into a USD column or similar). Threshold: anything
+      // over $100,000 per container is almost certainly wrong.
+      if (amt > 100000) {
+        reasons.push('Rate amount unusually high ($' + amt.toLocaleString() + ') — possible currency mismatch');
+      }
+
+      return reasons;
+    };
+
     // --- normalize a row for DB write: strip blanks, fix common date issues
     var cleanForDB = function (r) {
       var clean = {};
@@ -1464,6 +1561,12 @@ export default function ShippingRatesTab({ toast, user, userProfile, isAdmin, cu
     // ============================================================
     setImportStatus('Validating rows…');
     var validRows = []; // rows that passed validation, will attempt DB write
+    var quarantineRows = []; // v55.83-A.6.27.7 — bad-data rows held for review
+    // Generate a single batch_id for all quarantined rows from this import
+    // so the user can see "the 44 rows from Tuesday's botched import" together.
+    var batchId = (typeof crypto !== 'undefined' && crypto.randomUUID)
+      ? crypto.randomUUID()
+      : (Date.now() + '-' + Math.random().toString(36).substring(2, 10));
     for (var vi = 0; vi < importData.length; vi++) {
       var rowNum = vi + 1;
       var raw = importData[vi];
@@ -1491,6 +1594,24 @@ export default function ShippingRatesTab({ toast, user, userProfile, isAdmin, cu
       if (dErr) {
         errors.push({ row: rowNum, field: 'date', reason: dErr });
         counts.failed++;
+        continue;
+      }
+      // v55.83-A.6.27.7 — bad-data PATTERNS: row is parseable but semantically
+      // broken (eff=exp, year-2000, etc.). Quarantine instead of importing.
+      var badPatterns = validateBadDataPatterns(raw);
+      if (badPatterns.length > 0) {
+        quarantineRows.push({
+          row_num: rowNum,
+          raw_row: raw,
+          errors: badPatterns,
+          origin: raw.origin || '',
+          destination: raw.destination || '',
+          vendor_name: raw.vendor_name || '',
+          effective_date_raw: raw.effective_date ? String(raw.effective_date) : '',
+          expiry_date_raw: raw.expiry_date ? String(raw.expiry_date) : '',
+          rate_amount: Number(raw.rate_amount || 0),
+        });
+        counts.quarantined = (counts.quarantined || 0) + 1;
         continue;
       }
       validRows.push({ rowNum: rowNum, data: cleanForDB(raw) });
@@ -1722,6 +1843,52 @@ export default function ShippingRatesTab({ toast, user, userProfile, isAdmin, cu
           'Audit log'
         );
       } catch (_) {}
+    }
+
+    // v55.83-A.6.27.7 — persist quarantined rows to the holding table
+    // so the user can review/fix/discard them later. If the table doesn't
+    // exist yet (SQL not run), warn but don't fail the import — the user
+    // will see the count in the result banner and can run the SQL.
+    if (quarantineRows.length > 0) {
+      setImportStatus('Saving ' + quarantineRows.length + ' row(s) to quarantine for review…');
+      try {
+        var qRecords = quarantineRows.map(function (q) {
+          return {
+            batch_id: batchId,
+            row_num: q.row_num,
+            raw_row: q.raw_row,
+            errors: q.errors,
+            origin: q.origin,
+            destination: q.destination,
+            vendor_name: q.vendor_name,
+            effective_date_raw: q.effective_date_raw,
+            expiry_date_raw: q.expiry_date_raw,
+            rate_amount: q.rate_amount,
+            imported_by: myId || null,
+            outcome: 'pending',
+          };
+        });
+        var qResp = await supabase.from('shipping_rates_import_quarantine').insert(qRecords);
+        if (qResp && qResp.error) {
+          console.warn('[import-quarantine] save failed:', qResp.error.message);
+          // Mark quarantine save failure visibly so the user knows
+          if (qResp.error.message && qResp.error.message.indexOf('does not exist') >= 0) {
+            errors.push({
+              row: 0,
+              field: 'quarantine',
+              reason: 'Quarantine table not created yet. Bad rows were SKIPPED but not saved for review. Ask the admin to run sql/v55-83-a-6-27-7-quarantine.sql in Supabase.'
+            });
+          } else {
+            errors.push({
+              row: 0,
+              field: 'quarantine',
+              reason: 'Could not save bad rows to quarantine: ' + qResp.error.message
+            });
+          }
+        }
+      } catch (qe) {
+        console.warn('[import-quarantine] threw:', qe && qe.message);
+      }
     }
 
     setImportProgress(100);
@@ -2280,15 +2447,18 @@ Date: ${today}`;
         });
 
         // Build the continuous month timeline.
-        // v55.83-A.6.27.2 (Max May 14 2026) — Cap the start to a sensible
-        // window. Previously: firstMonth = earliest effective_date in the
-        // data, which broke catastrophically if any rate row had a bad date
-        // like "2000-01-01" — the chart would span 317 months and collapse
-        // every dot into a single pixel (looked like one isolated point).
-        // Now: start = max(earliest_effective_date, today - 24 months) by
-        // default. If the user explicitly widens the period filter via
-        // rateHistoryDt, respect that. End: same as before — today or the
-        // latest expiry, whichever is later.
+        // v55.83-A.6.27.2 → A.6.27.6 (Max May 15 2026) — Cap the start to
+        // a sensible window. Previously bad data (year-2000 effective_date)
+        // could make this loop generate 300+ months, collapsing every dot
+        // into a single pixel column on the chart canvas.
+        //
+        // RULE (A.6.27.6): start = max of:
+        //   - earliestInData (the actual oldest rate)
+        //   - 24 months ago (default look-back; protects against bad data)
+        //   - rateHistoryDf (user period filter, if set)
+        // ... but NEVER more than 36 months ago, period. Even if a user
+        // explicitly picks "3 Years", we cap at 36 months. Wider needs are
+        // satisfied by the Historical Rates table below, not by the chart.
         var months = [];
         if (validRatesForChart.length > 0) {
           var earliestInData = validRatesForChart.reduce(function(acc, r) {
@@ -2296,21 +2466,32 @@ Date: ${today}`;
             return (!acc || m < acc) ? m : acc;
           }, null);
 
-          // Default look-back: 24 months from today.
-          var today24Back = new Date();
-          today24Back.setMonth(today24Back.getMonth() - 24);
-          var defaultStart = today24Back.toISOString().slice(0, 7);
+          // Build candidate start dates and pick the LATEST (most-recent).
+          var todayD = new Date();
+          var monthsAgo = function (n) {
+            var d = new Date(todayD); d.setMonth(d.getMonth() - n);
+            return d.toISOString().slice(0, 7);
+          };
+          var defaultStart = monthsAgo(24);
+          var hardCap = monthsAgo(36);   // absolute oldest the chart will go
 
-          // Use the wider of (24 months back) vs (earliest data) — but
-          // never go earlier than the explicit rateHistoryDf filter
-          // if the user set one.
-          var firstMonth = earliestInData < defaultStart ? defaultStart : earliestInData;
+          // Start with the LATER of (earliest data) and (default 24-mo).
+          var firstMonth = earliestInData > defaultStart ? earliestInData : defaultStart;
+
+          // If user explicitly set a period filter, respect it — but only
+          // if it's NEWER than the 36-month hard cap. If user picked "All
+          // Time" (rateHistoryDf=''), we keep the 24-month default.
           if (rateHistoryDf && rateHistoryDf.length >= 7) {
             var filterStart = rateHistoryDf.substring(0, 7);
-            firstMonth = filterStart;   // explicit user choice always wins
+            if (filterStart > firstMonth) firstMonth = filterStart;     // narrower wins
+            // Otherwise their filter is wider than our default — keep default.
           }
+
+          // Absolute hard floor: never go past 36 months even if data exists earlier.
+          if (firstMonth < hardCap) firstMonth = hardCap;
+
           // Sanity: never go past today (end will fix the other side)
-          var nowStr = (new Date()).toISOString().slice(0, 10);
+          var nowStr = todayD.toISOString().slice(0, 10);
           var endDateStr = rateHistoryDt && rateHistoryDt.length >= 10 ? rateHistoryDt : nowStr;
           validRatesForChart.forEach(function(r) {
             if (r.expiry_date && r.expiry_date > endDateStr) endDateStr = r.expiry_date;
@@ -2321,7 +2502,7 @@ Date: ${today}`;
 
           var cur = firstMonth;
           var safety = 0;
-          while (cur <= endMonth && safety < 60) { // 5 years max safety
+          while (cur <= endMonth && safety < 48) { // hard ceiling: 48 iterations
             months.push(cur);
             cur = nextMonth(cur);
             safety++;
@@ -2408,13 +2589,38 @@ Date: ${today}`;
         var trendPoints = months.map(function(m) {
           var monthStart = firstDayOf(m);
           var monthEnd = lastDayOf(m);
-          // v55.83-A.6 — use ratesForView (scope-filtered) instead of all
-          // validRatesForChart. If user picked a specific shipping line in
-          // the dropdown, only that line's rates feed the chart.
+          // v55.83-A.6.27.7 (Max May 15 2026) — UNIFIED ACTIVE-IN-MONTH RULE.
+          //
+          // Per Max's spec: "the chart must match the numbers shown below
+          // it." The stat tile "Best Active" uses isExpired(r.expiry_date)
+          // which is TRUE iff expiry < today. So a rate is "active right
+          // now" iff (no expiry OR expiry >= today).
+          //
+          // Generalized for any month M: a rate is "active in M" iff its
+          // validity window covers the END of M. Specifically:
+          //   effective_date <= last-of-M  (rate started by end of month)
+          //   AND
+          //   (expiry is null  OR  expiry >= last-of-M)  (still good through
+          //                                               end of month)
+          //
+          // Why end-of-month and not "any overlap":
+          // - If a rate is effective 2026-05-01 and expires 2026-05-15, it
+          //   was active in early May but NOT active in late May. Treating
+          //   it as "active in May" makes the chart's May point disagree
+          //   with the stat tile which says "Best Active" today is some
+          //   higher rate. Using end-of-month aligns chart and tile.
+          // - For past months, the same rule gives "the rate was still good
+          //   for booking at the end of that month" — which is the answer
+          //   the user wants when looking at historical trend.
+          //
+          // For mid-month-expired rates: they fall OUT of CASE 1 for the
+          // month they expired in. They drive CASE 2 (stale carry-forward,
+          // dashed grey line) for THIS month — which is correct because
+          // by end of month there's no active rate to plot.
           var activeInMonth = ratesForView.filter(function(r) {
             var eff = r.effective_date;
             var exp = r.expiry_date || ''; // empty = never expires
-            return eff <= monthEnd && (exp === '' || exp >= monthStart);
+            return eff <= monthEnd && (exp === '' || exp >= monthEnd);
           });
 
           var point = { month: m };
@@ -3070,10 +3276,12 @@ Date: ${today}`;
                     {trendPoints.map(function(pt) {
                       var monthStart = firstDayOf(pt.month);
                       var monthEnd = lastDayOf(pt.month);
+                      // v55.83-A.6.27.7 — use same end-of-month rule as the
+                      // main chart filter so the diagnostic table matches.
                       var actCount = ratesForView.filter(function(r) {
                         var eff = r.effective_date || '';
                         var exp = r.expiry_date || '';
-                        return eff <= monthEnd && (exp === '' || exp >= monthStart);
+                        return eff <= monthEnd && (exp === '' || exp >= monthEnd);
                       }).length;
                       var status = '∅ no data';
                       if (pt._best !== undefined) {
@@ -3124,7 +3332,25 @@ Date: ${today}`;
           a.click();
           URL.revokeObjectURL(url);
         };
-        return (<><button onClick={() => { var filtered = routeHistory; if (rateHistoryDf) filtered = filtered.filter(r => (r.effective_date || '') >= rateHistoryDf); if (rateHistoryDt) filtered = filtered.filter(r => (r.effective_date || '') <= rateHistoryDt); if (hideExpired) filtered = filtered.filter(r => !isExpired(r.expiry_date)); exportCSV(filtered); }} className="px-3 py-1 bg-emerald-500 text-white rounded text-[10px] font-semibold" title="Download as CSV">📥 Export</button><button onClick={()=>{setRequestQuoteData({vendor:null,origin:selectedRoute.origin,destination:selectedRoute.destination,container:'40ft'});}} className="px-3 py-1 bg-cyan-500 text-white rounded text-[10px] font-semibold">📋 Request Rate</button><button onClick={()=>{setF({origin:selectedRoute.origin,destination:selectedRoute.destination});setView('add_rate');}} className="px-3 py-1 bg-blue-500 text-white rounded text-[10px] font-semibold">+ Add Rate</button></>);
+        return (<><button onClick={() => {
+          // v55.83-A.6.27.5 — Export CSV honors the same "always include
+          // still-active rates" rule as the table below. Otherwise an export
+          // would omit a rate that's clearly visible (and driving costs)
+          // on screen.
+          var todayStrCSV = todayET();
+          function activeCSV(r) { return !r.expiry_date || r.expiry_date >= todayStrCSV; }
+          var filtered = routeHistory;
+          if (rateHistoryDf) filtered = filtered.filter(function(r) {
+            if (activeCSV(r)) return true;
+            return (r.effective_date || '') >= rateHistoryDf;
+          });
+          if (rateHistoryDt) filtered = filtered.filter(function(r) {
+            if (activeCSV(r)) return true;
+            return (r.effective_date || '') <= rateHistoryDt;
+          });
+          if (hideExpired) filtered = filtered.filter(function(r) { return !isExpired(r.expiry_date); });
+          exportCSV(filtered);
+        }} className="px-3 py-1 bg-emerald-500 text-white rounded text-[10px] font-semibold" title="Download as CSV">📥 Export</button><button onClick={()=>{setRequestQuoteData({vendor:null,origin:selectedRoute.origin,destination:selectedRoute.destination,container:'40ft'});}} className="px-3 py-1 bg-cyan-500 text-white rounded text-[10px] font-semibold">📋 Request Rate</button><button onClick={()=>{setF({origin:selectedRoute.origin,destination:selectedRoute.destination});setView('add_rate');}} className="px-3 py-1 bg-blue-500 text-white rounded text-[10px] font-semibold">+ Add Rate</button></>);
       })()}</div></div>
       <div className="flex gap-1 mb-2 flex-wrap items-center">
         <span className="text-[10px] text-slate-500 mr-1">Period:</span>
@@ -3149,8 +3375,32 @@ Date: ${today}`;
       </div>
       {(() => {
         var filtered = routeHistory;
-        if (rateHistoryDf) filtered = filtered.filter(r => (r.effective_date || '') >= rateHistoryDf);
-        if (rateHistoryDt) filtered = filtered.filter(r => (r.effective_date || '') <= rateHistoryDt);
+        // v55.83-A.6.27.5 (Max May 15 2026) — date window filter no longer
+        // drops rates that are STILL ACTIVE (no expiry, or expiry in future).
+        // Otherwise a long-lived "no-expiry" rate with an old effective_date
+        // becomes invisible in the table and the user can't see, edit, or
+        // delete it — even though it's still driving the floor on the chart.
+        //
+        // Rule: a rate stays visible when EITHER
+        //   (a) its effective_date is inside the period window, OR
+        //   (b) it's still active (no expiry, or expiry >= today)
+        var todayStrForFilter = todayET();
+        function isStillActive(r) {
+          if (!r.expiry_date) return true;        // no expiry = still active
+          return r.expiry_date >= todayStrForFilter;
+        }
+        if (rateHistoryDf) {
+          filtered = filtered.filter(function(r) {
+            if (isStillActive(r)) return true;     // always show active rates
+            return (r.effective_date || '') >= rateHistoryDf;
+          });
+        }
+        if (rateHistoryDt) {
+          filtered = filtered.filter(function(r) {
+            if (isStillActive(r)) return true;     // always show active rates
+            return (r.effective_date || '') <= rateHistoryDt;
+          });
+        }
         if (hideExpired) filtered = filtered.filter(r => !isExpired(r.expiry_date));
         // v55.33 — best-rate must be currency-aware. Compute primary currency
         // for the filtered window, restrict best-rate calc to that currency.
@@ -4121,6 +4371,17 @@ Date: ${today}`;
         <div className={(importCounts.failed > 0 ? 'bg-rose-200 border-rose-400' : 'bg-slate-100 border-slate-300') + ' border rounded-lg p-3'}>
           <div className={'text-[10px] font-extrabold uppercase tracking-wide ' + (importCounts.failed > 0 ? 'text-rose-950' : 'text-slate-700')}>Failed</div>
           <div className={'text-3xl font-black ' + (importCounts.failed > 0 ? 'text-rose-950' : 'text-slate-500')}>{importCounts.failed}</div>
+        </div>
+        {/* v55.83-A.6.27.7 — Quarantined tile: rows that had bad-data
+            patterns (eff=exp same day, year < 2020, expiry < effective,
+            zero rate, etc.). NOT imported. NOT failed. Held for the user
+            to review and either fix-and-import or discard. */}
+        <div className={((importCounts.quarantined || 0) > 0 ? 'bg-amber-100 border-amber-400' : 'bg-slate-100 border-slate-300') + ' border rounded-lg p-3'}>
+          <div className={'text-[10px] font-extrabold uppercase tracking-wide ' + ((importCounts.quarantined || 0) > 0 ? 'text-amber-950' : 'text-slate-700')}>Quarantined</div>
+          <div className={'text-3xl font-black ' + ((importCounts.quarantined || 0) > 0 ? 'text-amber-950' : 'text-slate-500')}>{importCounts.quarantined || 0}</div>
+          {(importCounts.quarantined || 0) > 0 && (
+            <div className="text-[9px] text-amber-900 mt-1">Bad-data patterns — review later</div>
+          )}
         </div>
         {importMode === 'full_sync' && (
           <div className={(importCounts.deleted > 0 ? 'bg-rose-200 border-rose-400' : 'bg-slate-100 border-slate-300') + ' border rounded-lg p-3'}>
