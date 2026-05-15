@@ -190,8 +190,11 @@ ok('3d: period-over-period uses best (lowest) price logic',
 
 // 4a — booking stars layer present with Scatter
 ok('4a: chart renders <Scatter name="Bookings" /> for booking stars',
-  // v55.83-A.6 — Scatter wraps to multiple lines now; loosen the search distance.
-  /<Scatter[\s\S]{0,500}name="Bookings"[\s\S]{0,500}data=\{bookingStars\}/.test(chartSlice)
+  // v55.83-A.6.27.4 — REMOVED the separate data={bookingStars} prop that
+  // was scrambling the X-axis. Bookings now read from trendPoints via
+  // __bookedAtY__. Either form is acceptable for back-compat.
+  /<Scatter[\s\S]{0,500}name="Bookings"[\s\S]{0,500}data=\{bookingStars\}/.test(chartSlice) ||
+  /<Scatter[\s\S]{0,500}name="Bookings"[\s\S]{0,500}dataKey="__bookedAtY__"/.test(chartSlice)
 );
 
 // 4b — bookingStars built from booked rows with proper (booking_date, rate) coords

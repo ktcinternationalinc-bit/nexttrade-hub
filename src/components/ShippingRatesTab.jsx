@@ -2417,15 +2417,6 @@ Date: ${today}`;
             return eff <= monthEnd && (exp === '' || exp >= monthStart);
           });
 
-          // v55.83-A.6.27.3 — DIAGNOSTIC: super_admin only, log per-month
-          // what activeInMonth found. Remove once chart bug is fixed.
-          if (typeof window !== 'undefined' && window.__KTC_CHART_DEBUG__) {
-            console.log('[chart-debug]', m, 'activeInMonth.length=', activeInMonth.length,
-              'sample=', activeInMonth.slice(0, 3).map(function(r) {
-                return r.vendor_name + ' ' + r.rate_amount + ' eff=' + r.effective_date + ' exp=' + r.expiry_date;
-              }));
-          }
-
           var point = { month: m };
           var pointSourceIds = [];
 
@@ -2603,19 +2594,6 @@ Date: ${today}`;
           return point;
         });
 
-        // v55.83-A.6.27.3 — DIAGNOSTIC: dump the full trendPoints array
-        // after the months loop. Toggle on by typing `window.__KTC_CHART_DEBUG__ = true`
-        // in the browser console, then reload the chart.
-        if (typeof window !== 'undefined' && window.__KTC_CHART_DEBUG__) {
-          console.log('[chart-debug] trendPoints after months.map:', trendPoints.map(function(p) {
-            return { m: p.month, _bestActive: p._bestActive, _bestStale: p._bestStale };
-          }));
-          console.log('[chart-debug] ratesForView (full):', ratesForView.map(function(r) {
-            return r.vendor_name + ' eff=' + r.effective_date + ' exp=' + r.expiry_date + ' amt=' + r.rate_amount;
-          }));
-          console.log('[chart-debug] months array:', months);
-        }
-
         // v55.83-A.6.5 (Max May 13 2026 — "from left to right it should be
         // the older date to the newer dates first of all"):
         //
@@ -2734,6 +2712,39 @@ Date: ${today}`;
         });
         trendPoints.sort(function(a, b) { return a.month < b.month ? -1 : a.month > b.month ? 1 : 0; });
         months.sort();
+
+        // v55.83-A.6.27.4 (Max May 15 2026) — write bookings into trendPoints.
+        //
+        // ROOT CAUSE OF THE "CHART ONLY SHOWS 2026-05" BUG:
+        // Recharts ComposedChart was given THREE data arrays:
+        //   1. trendPoints (13 months, attached to chart-level `data` prop)
+        //   2. bookingStars (1 entry, 2026-05, attached to Scatter's own `data` prop)
+        //   3. expiryMarkers (was a separate array — fixed in v55.83-A.6.5)
+        //
+        // With the booking Scatter still using its own data array, Recharts
+        // re-builds the X-axis from the union — but when one of the data
+        // arrays is much shorter, the auto-scale compresses the dense data
+        // toward one side. Result: 12 of the 13 trendPoints rendered at
+        // ~0 pixel width on the left edge (invisible), with everything
+        // crammed into 2026-05 on the right.
+        //
+        // FIX (same pattern as A.6.5 applied to expirations): write the
+        // booking value into the matching trendPoint as a __bookedAtY__
+        // field. The Scatter then reads from trendPoints (chart-level data)
+        // and the X-axis stops scrambling.
+        bookingStars.forEach(function (b) {
+          var pt = trendPoints.find(function (p) { return p.month === b.month; });
+          if (pt) {
+            // Multiple bookings in the same month: keep the highest (most
+            // visible). Could average or list — keeping max for clarity.
+            if (!pt.__bookedAtY__ || b.booked_rate > pt.__bookedAtY__) {
+              pt.__bookedAtY__ = b.booked_rate;
+              pt.__bookedRef__ = b.ref;
+              pt.__bookedVendor__ = b.vendor;
+              pt.__bookedFullDate__ = b.full_date;
+            }
+          }
+        });
 
         if (trendPoints.length === 0 && bookingStars.length === 0) {
           return (<div className="bg-white rounded-xl p-4 mb-4 border border-slate-200">
@@ -2892,9 +2903,17 @@ Date: ${today}`;
                 <YAxis tick={{fontSize: 10}} tickFormatter={function(v){ return chartSym + v; }} />
                 <RTooltip
                   formatter={function(v, name, p){
-                    if (name === 'booked_rate') {
+                    // v55.83-A.6.27.4 — bookings dataKey changed from
+                    // booked_rate (own data array) to __bookedAtY__
+                    // (trendPoints-attached). Tooltip accepts either.
+                    if (name === 'booked_rate' || name === '__bookedAtY__' || name === 'Bookings') {
                       var pl = p && p.payload ? p.payload : {};
-                      return [chartSym + Number(v).toLocaleString() + ' ⭐ ' + (pl.vendor || '?') + (pl.ref ? ' (' + pl.ref + ')' : ''), 'Booking ' + (pl.full_date || '')];
+                      // Field names differ between old data array and new
+                      // trendPoint embedding. Pull from either source.
+                      var vendor = pl.vendor || pl.__bookedVendor__ || '?';
+                      var ref = pl.ref || pl.__bookedRef__ || '';
+                      var fullDate = pl.full_date || pl.__bookedFullDate__ || '';
+                      return [chartSym + Number(v).toLocaleString() + ' ⭐ ' + vendor + (ref ? ' (' + ref + ')' : ''), 'Booking ' + fullDate];
                     }
                     if (name === '__expiredAtY__' || name === 'Expirations') {
                       // v55.83-A.6.5 — expiry marker tooltip, deduplicated by month
@@ -2960,11 +2979,15 @@ Date: ${today}`;
                     );
                   })
                 )}
+                {/* v55.83-A.6.27.4 — Bookings Scatter now reads from
+                    trendPoints (chart-level data) via __bookedAtY__ field
+                    instead of having its own data array. This was the
+                    silent bug crushing 12 of 13 month dots into a single
+                    pixel column. Same fix that A.6.5 applied to Expirations. */}
                 {bookingStars.length > 0 && (
                   <Scatter
                     name="Bookings"
-                    data={bookingStars}
-                    dataKey="booked_rate"
+                    dataKey="__bookedAtY__"
                     shape={StarShape}
                   />
                 )}
