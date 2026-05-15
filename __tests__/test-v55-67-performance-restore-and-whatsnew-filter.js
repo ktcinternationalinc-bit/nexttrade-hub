@@ -105,7 +105,8 @@ check('2.9 item renderer accepts both string and {text} shape',
 var pg = read('src/app/page.jsx');
 check('2.10 page.jsx passes isAdmin + isSuperAdmin to WhatsNewWidget',
   // v55.82-J: dashboard mount now also passes prominent={true}.
-  /<WhatsNewWidget isAdmin=\{isAdmin\} isSuperAdmin=\{isSuperAdmin\}( prominent=\{true\})? \/>/.test(pg));
+  // v55.83-A.6.27.9: collapsed-by-default per Max May 15 2026, so accept either form.
+  /<WhatsNewWidget isAdmin=\{isAdmin\} isSuperAdmin=\{isSuperAdmin\}( prominent=\{(true|false)\})? \/>/.test(pg));
 
 // ============================================================
 // 3. Specific items marked adminOnly in BUILD_HISTORY

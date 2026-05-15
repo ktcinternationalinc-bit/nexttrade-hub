@@ -4659,7 +4659,7 @@ export default function App() {
               {/* Brand mark — bracket prefix is a terminal callout convention. */}
               <span className="text-emerald-400 font-mono text-xs font-bold tracking-tight" style={{ fontFamily: '"JetBrains Mono", monospace' }}>[KTC]</span>
               <h1 className="text-sm font-bold text-white tracking-tight whitespace-nowrap">NEXTTRADE HUB</h1>
-              <span className="text-[10px] text-zinc-500 font-mono hidden md:inline" style={{ fontFamily: '"JetBrains Mono", monospace' }}>v55.83-A.6.27.4</span>
+              <span className="text-[10px] text-zinc-500 font-mono hidden md:inline" style={{ fontFamily: '"JetBrains Mono", monospace' }}>v55.83-A.6.27.9</span>
               {/* Live clock — terminals always show one. Updates via the
                   existing tick state; if not present, falls back to no clock. */}
               <span className="hidden lg:inline text-[10px] text-zinc-500 font-mono ml-2 pl-2 border-l border-zinc-800" style={{ fontFamily: '"JetBrains Mono", monospace' }}>
@@ -8020,6 +8020,20 @@ export default function App() {
         {tab === 'dashboard' && (
           <div className="flex flex-col">
 
+            {/* v55.83-A.6.27.9 (Max May 15 2026) — FX widget pinned to the
+                top of the dashboard. Compact: single small row, USD→EGP
+                only, doesn't push the AI hero down. Hidden when fxRate
+                isn't loaded yet (no flash of empty space). */}
+            {fxRate && (
+              <div className="flex justify-end mb-2">
+                <div className="flex items-center gap-2 px-3 py-1 bg-slate-900/60 rounded-lg border border-slate-700/60">
+                  <span className="text-[10px] text-slate-400 font-semibold">USD/EGP</span>
+                  <span className="text-sm font-black text-emerald-400 font-mono">{fxRate.rate.toFixed(2)}</span>
+                  <span className="text-[10px]">💱</span>
+                </div>
+              </div>
+            )}
+
             {/* v55.83-A.6.18 (Max May 14 2026) — In-place ticket editor.
                 Renders OVER the dashboard so the user never loses their
                 place. Mounted only while dashboardTicketModal is set, so
@@ -8047,6 +8061,38 @@ export default function App() {
                 reasons, but flex order makes them visually appear AFTER. */}
             <div className="flex flex-col" style={{ order: 2 }}>
 
+            {/* v55.83-A.6.27.9 (Max May 15 2026) — Compact action button row.
+                Replaces the two big mb-3 buttons that used to live separately
+                inside the announcement + reminder sections below. Now both
+                appear as small pills on one row right under the AI hero,
+                before the priority cards. Forms (announcement modal, reminder
+                form) still mount further down — these just toggle their
+                visibility state. Archive link sits under as a discreet link. */}
+            <div className="flex items-center gap-2 mb-2 flex-wrap">
+              {isAdmin && (
+                <button onClick={() => setShowAddAnnouncement(true)}
+                  className="px-3 py-1.5 bg-red-500 hover:bg-red-600 text-white rounded-lg text-xs font-bold shadow"
+                  title="Send an urgent broadcast to team members">
+                  📢 Send Message to Team
+                </button>
+              )}
+              {(isAdmin || modulePerms?.['Post Reminders']) && (
+                <button onClick={() => setShowReminderForm(!showReminderForm)}
+                  className="px-3 py-1.5 bg-amber-500 hover:bg-amber-600 text-white rounded-lg text-xs font-bold shadow"
+                  title="Post a reminder visible to selected team members">
+                  📢 {showReminderForm ? 'Close Reminder' : 'Post Reminder'}
+                </button>
+              )}
+            </div>
+            {archivedReminders.length > 0 && (
+              <div className="mb-3">
+                <button onClick={() => setShowReminderArchive(!showReminderArchive)}
+                  className="text-[11px] text-slate-400 hover:text-blue-400 hover:underline font-semibold">
+                  📋 {showReminderArchive ? 'Hide' : 'View'} past reminders ({archivedReminders.length})
+                </button>
+              </div>
+            )}
+
             {/* v55.83-A.6.18 (Max May 14 2026) — Three high-priority cards:
                 Overdue Tickets / Recent Updates / Newly Assigned. Inserted
                 FIRST in the order:2 cluster so they show immediately after
@@ -8063,20 +8109,10 @@ export default function App() {
               busyAckId={busyAckId}
             />
 
-            {/* v55.82-J — "What's New" widget now positioned as a prominent
-                banner immediately after the AI Workforce hero, per Max May 11
-                2026 ("the bill what's in the bill should be right after the
-                AI"). Was previously a small right-aligned pill that was easy
-                to miss; now a full-width banner that's the first thing
-                you see after Nadia/Sara/Jenna. */}
-            <div className="mb-3">
-              <WhatsNewWidget isAdmin={isAdmin} isSuperAdmin={isSuperAdmin} prominent={true} />
-            </div>
-
-            {/* v55.83-A.1 — Pending Bank Confirmations widget. Surfaces
-                invoices where payments are recorded as bank-channel but
-                haven't been matched against bank statements yet. Hidden
-                from users without financial-reports permission. */}
+            {/* v55.83-A.6.27.9 — Pending Bank Confirmations moved up to
+                immediately follow the priority cards per Max May 15 2026
+                ("Move Invoices Awaiting Bank Confirmation immediately after
+                Your Daily Priorities"). */}
             <PendingBankConfirmationsWidget
               invoices={invoices}
               isSuperAdmin={isSuperAdmin}
@@ -8084,6 +8120,13 @@ export default function App() {
               onSelectInvoice={(inv) => { setTab('sales'); setSelectedInvoice(inv); }}
               fE={fE}
             />
+
+            {/* v55.83-A.6.27.9 — What's New is COLLAPSED by default now.
+                Was auto-prominent at the top, which was repetitive on every
+                login. User can still expand to see latest builds. */}
+            <div className="mb-3">
+              <WhatsNewWidget isAdmin={isAdmin} isSuperAdmin={isSuperAdmin} prominent={false} />
+            </div>
 
             {/* v55.60 — Nadia highlights when a new build has deployed.
                 Shows the latest build version, label, and top 3 highlights
@@ -8797,20 +8840,10 @@ export default function App() {
                   )}
                   
                   {/* Admin/permitted create + archive link */}
-                  <div className="flex justify-between items-center mb-2">
-                    {(isAdmin || modulePerms?.['Post Reminders']) && (
-                      <button onClick={() => setShowReminderForm(!showReminderForm)}
-                        className="px-3 py-1.5 bg-amber-500 text-white rounded-lg text-xs font-bold hover:bg-amber-600">
-                        📢 {showReminderForm ? 'Close' : 'Post Reminder'}
-                      </button>
-                    )}
-                    {archivedReminders.length > 0 && (
-                      <button onClick={() => setShowReminderArchive(!showReminderArchive)}
-                        className="text-[10px] text-slate-400 hover:text-blue-500 hover:underline">
-                        📋 {showReminderArchive ? 'Hide' : 'View'} past reminders ({archivedReminders.length})
-                      </button>
-                    )}
-                  </div>
+                  {/* v55.83-A.6.27.9 — duplicate button + archive link
+                      removed. The compact "Post Reminder" pill above
+                      DashboardPrioritySections + the archive link below it
+                      now drive these. Keeping the form mount below. */}
 
                   {/* Create reminder form */}
                   {showReminderForm && (isAdmin || modulePerms?.['Post Reminders']) && (
@@ -8933,21 +8966,15 @@ export default function App() {
             <div className="flex justify-between flex-wrap gap-2 mb-4">
               <h2 className="text-xl font-extrabold">Dashboard / لوحة التحكم</h2>
               {isAdmin && <ModeBar />}
-              {fxRate && (
-                <div className="flex items-center gap-2 px-3 py-1.5 bg-slate-800 rounded-lg border border-slate-700">
-                  <span className="text-[10px] text-slate-400">USD/EGP</span>
-                  <span className="text-sm font-black text-emerald-400">{fxRate.rate.toFixed(2)}</span>
-                  <span className="text-[9px] text-slate-500">💱</span>
-                </div>
-              )}
+              {/* v55.83-A.6.27.9 — FX widget moved to dedicated top row above
+                  the dashboard. Removed from this header. */}
             </div>
 
 
             {/* ===== ANNOUNCEMENTS / URGENT MESSAGES ===== */}
-            {isAdmin && (
-              <button onClick={() => setShowAddAnnouncement(true)}
-                className="px-4 py-2 bg-red-500 text-white rounded-lg text-sm font-bold mb-3 shadow-lg">📢 Send Message to Team / إرسال رسالة للفريق</button>
-            )}
+            {/* v55.83-A.6.27.9 — button removed; the new compact "Send Message"
+                button at the top of the order:2 cluster now drives this form.
+                The form itself stays here so the modal experience is unchanged. */}
             {showAddAnnouncement && (
               <div className="bg-red-50 rounded-xl p-5 mb-4 border-2 border-red-400 shadow-lg">
                 <h4 className="text-lg font-extrabold text-red-800 mb-3">📢 New Message / رسالة جديدة</h4>
@@ -9222,59 +9249,8 @@ export default function App() {
               <div style={{ flex: 1, height: 1, background: 'rgba(148,163,184,0.1)' }} />
             </div>
 
-            {/* ===== TEAM ACTIVITY FEED ===== */}
-            {activityFeed.length > 0 && (() => {
-              const expanded = hideSections.dash_teamFeed;
-              const visible = expanded ? activityFeed.slice(0, 100) : activityFeed.slice(0, 5);
-              return (
-              <div style={{ background: 'rgba(17,24,39,0.7)', borderRadius: 14, border: '1px solid rgba(255,255,255,0.08)', marginBottom: 16, overflow: 'hidden' }}>
-                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '10px 14px', borderBottom: '1px solid rgba(255,255,255,0.06)', background: 'rgba(52,211,153,0.06)', cursor: 'pointer' }}
-                  onClick={() => setHideSections(prev => ({...prev, dash_teamFeed: !prev.dash_teamFeed}))}>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                    <span style={{ width: 8, height: 8, borderRadius: '50%', background: '#34d399', boxShadow: '0 0 8px rgba(52,211,153,0.5)', animation: 'pulse 2s infinite' }} />
-                    <span style={{ fontSize: 12, fontWeight: 800, color: '#34d399', letterSpacing: '0.03em' }}>Team Activity</span>
-                    <span style={{ fontSize: 10, fontWeight: 800, color: '#fff', background: '#34d399', borderRadius: 10, padding: '1px 8px' }}>{activityFeed.length}</span>
-                  </div>
-                  <span style={{ fontSize: 10, color: '#64748b' }}>{expanded ? '▲ Collapse' : '▼ Show All'}</span>
-                </div>
-                {visible.map((a, i) => {
-                  const who = (teamUsers || []).find(u => u.id === a.user_id);
-                  const name = who?.name || 'System';
-                  const initials = name.split(' ').map(w => w[0]).join('').toUpperCase().substring(0, 2);
-                  const colors = ['bg-blue-500','bg-purple-500','bg-emerald-500','bg-amber-500','bg-rose-500','bg-cyan-500'];
-                  const color = colors[(name.charCodeAt(0) || 0) % colors.length];
-                  const timeAgo = (() => {
-                    const diff = Date.now() - new Date(a.created_at).getTime();
-                    const mins = Math.floor(diff / 60000);
-                    if (mins < 1) return 'just now';
-                    if (mins < 60) return mins + 'm ago';
-                    const hrs = Math.floor(mins / 60);
-                    if (hrs < 24) return hrs + 'h ago';
-                    return Math.floor(hrs / 24) + 'd ago';
-                  })();
-                  const icon = a.log_category === 'finance' ? '💰' : a.log_category === 'crm' ? '🤝' : a.log_category === 'ticket' ? '🎫' : a.log_category === 'shipping' ? '🚢' : a.log_category === 'admin' ? '⚙️' : a.log_category === 'login' ? '🟢' : '📋';
-                  return (
-                    <div key={a.id || i} style={{ display: 'flex', alignItems: 'flex-start', gap: 10, padding: '8px 14px', borderBottom: '1px solid rgba(255,255,255,0.04)' }}>
-                      <div className={`w-7 h-7 rounded-full ${color} text-white text-[10px] font-bold flex items-center justify-center flex-shrink-0 mt-0.5`}>{initials}</div>
-                      <div style={{ flex: 1, minWidth: 0 }}>
-                        <div style={{ fontSize: 12 }}>
-                          <span style={{ fontWeight: 700, color: '#e2e8f0' }}>{name}</span>
-                          <span style={{ color: '#94a3b8', marginLeft: 6 }}>{a.entry_text}</span>
-                        </div>
-                        <div style={{ fontSize: 10, color: '#475569', marginTop: 2 }}>{icon} {a.log_category || 'general'} · {timeAgo}</div>
-                      </div>
-                    </div>
-                  );
-                })}
-                {!expanded && activityFeed.length > 5 && (
-                  <div style={{ padding: '8px 14px', fontSize: 11, color: '#34d399', fontWeight: 700, textAlign: 'center', cursor: 'pointer', background: 'rgba(255,255,255,0.02)' }}
-                    onClick={() => setHideSections(prev => ({...prev, dash_teamFeed: true}))}>
-                    Show all ({Math.min(activityFeed.length, 100)}) ▼
-                  </div>
-                )}
-              </div>
-              );
-            })()}
+            {/* v55.83-A.6.27.9 — Team Activity moved to AFTER Monthly Sales
+                per Max's reorder request May 15 2026. See new mount below. */}
 
             {/* ===== PENDING CHECKS ===== */}
             {pendingChecks && pendingChecks.length > 0 && (isSuperAdmin || modulePerms['Treasury']) && (() => {
@@ -9481,6 +9457,64 @@ export default function App() {
               })()}
             </div>
             )}{/* end monthly sales gate */}
+
+            {/* v55.83-A.6.27.9 — Team Activity Feed (moved from earlier
+                position per Max May 15 2026: "Move the Monthly Sales Report
+                down after the To-Do List. Put Team Activity after the
+                Monthly Sales Report."). */}
+            {/* ===== TEAM ACTIVITY FEED ===== */}
+            {activityFeed.length > 0 && (() => {
+              const expanded = hideSections.dash_teamFeed;
+              const visible = expanded ? activityFeed.slice(0, 100) : activityFeed.slice(0, 5);
+              return (
+              <div style={{ background: 'rgba(17,24,39,0.7)', borderRadius: 14, border: '1px solid rgba(255,255,255,0.08)', marginBottom: 16, overflow: 'hidden' }}>
+                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '10px 14px', borderBottom: '1px solid rgba(255,255,255,0.06)', background: 'rgba(52,211,153,0.06)', cursor: 'pointer' }}
+                  onClick={() => setHideSections(prev => ({...prev, dash_teamFeed: !prev.dash_teamFeed}))}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                    <span style={{ width: 8, height: 8, borderRadius: '50%', background: '#34d399', boxShadow: '0 0 8px rgba(52,211,153,0.5)', animation: 'pulse 2s infinite' }} />
+                    <span style={{ fontSize: 12, fontWeight: 800, color: '#34d399', letterSpacing: '0.03em' }}>Team Activity</span>
+                    <span style={{ fontSize: 10, fontWeight: 800, color: '#fff', background: '#34d399', borderRadius: 10, padding: '1px 8px' }}>{activityFeed.length}</span>
+                  </div>
+                  <span style={{ fontSize: 10, color: '#64748b' }}>{expanded ? '▲ Collapse' : '▼ Show All'}</span>
+                </div>
+                {visible.map((a, i) => {
+                  const who = (teamUsers || []).find(u => u.id === a.user_id);
+                  const name = who?.name || 'System';
+                  const initials = name.split(' ').map(w => w[0]).join('').toUpperCase().substring(0, 2);
+                  const colors = ['bg-blue-500','bg-purple-500','bg-emerald-500','bg-amber-500','bg-rose-500','bg-cyan-500'];
+                  const color = colors[(name.charCodeAt(0) || 0) % colors.length];
+                  const timeAgo = (() => {
+                    const diff = Date.now() - new Date(a.created_at).getTime();
+                    const mins = Math.floor(diff / 60000);
+                    if (mins < 1) return 'just now';
+                    if (mins < 60) return mins + 'm ago';
+                    const hrs = Math.floor(mins / 60);
+                    if (hrs < 24) return hrs + 'h ago';
+                    return Math.floor(hrs / 24) + 'd ago';
+                  })();
+                  const icon = a.log_category === 'finance' ? '💰' : a.log_category === 'crm' ? '🤝' : a.log_category === 'ticket' ? '🎫' : a.log_category === 'shipping' ? '🚢' : a.log_category === 'admin' ? '⚙️' : a.log_category === 'login' ? '🟢' : '📋';
+                  return (
+                    <div key={a.id || i} style={{ display: 'flex', alignItems: 'flex-start', gap: 10, padding: '8px 14px', borderBottom: '1px solid rgba(255,255,255,0.04)' }}>
+                      <div className={`w-7 h-7 rounded-full ${color} text-white text-[10px] font-bold flex items-center justify-center flex-shrink-0 mt-0.5`}>{initials}</div>
+                      <div style={{ flex: 1, minWidth: 0 }}>
+                        <div style={{ fontSize: 12 }}>
+                          <span style={{ fontWeight: 700, color: '#e2e8f0' }}>{name}</span>
+                          <span style={{ color: '#94a3b8', marginLeft: 6 }}>{a.entry_text}</span>
+                        </div>
+                        <div style={{ fontSize: 10, color: '#475569', marginTop: 2 }}>{icon} {a.log_category || 'general'} · {timeAgo}</div>
+                      </div>
+                    </div>
+                  );
+                })}
+                {!expanded && activityFeed.length > 5 && (
+                  <div style={{ padding: '8px 14px', fontSize: 11, color: '#34d399', fontWeight: 700, textAlign: 'center', cursor: 'pointer', background: 'rgba(255,255,255,0.02)' }}
+                    onClick={() => setHideSections(prev => ({...prev, dash_teamFeed: true}))}>
+                    Show all ({Math.min(activityFeed.length, 100)}) ▼
+                  </div>
+                )}
+              </div>
+              );
+            })()}
 
             {/* Income/Expense Buckets + USD — Treasury access only */}
             {(isSuperAdmin || modulePerms['Treasury']) && (<>
@@ -12350,7 +12384,7 @@ export default function App() {
                       latest fix is actually deployed. If he doesn't see this
                       tag in the modal, his browser is running stale JS. */}
                   <div className="mt-1.5 inline-block px-2 py-0.5 rounded bg-amber-900/60 text-amber-100 text-[10px] font-mono font-bold tracking-wide">
-                    BUILD v55.83-A.6.27.4
+                    BUILD v55.83-A.6.27.9
                   </div>
                 </div>
                 <button onClick={() => closePendingTreasuryModal()}
@@ -12985,7 +13019,7 @@ export default function App() {
                     معاملة قد تكون مكررة
                   </div>
                   <div className="mt-1.5 inline-block px-2 py-0.5 rounded bg-amber-900/60 text-amber-100 text-[10px] font-mono font-bold tracking-wide">
-                    BUILD v55.83-A.6.27.4
+                    BUILD v55.83-A.6.27.9
                   </div>
                 </div>
                 <button

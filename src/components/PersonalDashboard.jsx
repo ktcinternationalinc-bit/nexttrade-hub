@@ -313,7 +313,12 @@ export default function PersonalDashboard({ user, userProfile, isAdmin, isSuperA
           </div>);
         });
       })()}
-      {upcomingEvents.length>0&&(<div className="mt-2 pt-2 border-t border-slate-100"><div className="text-xs font-bold text-slate-700 mb-1">Upcoming</div>{upcomingEvents.map(ev=>(<div key={ev.id} className="flex justify-between py-1 text-xs text-slate-700"><span>{ev.title}</span><span>{ev.event_date} {ev.event_time?ev.event_time.substring(0,5):''}</span></div>))}</div>)}</div>
+      {/* v55.83-A.6.27.9 (Max May 15 2026) — REMOVED the "Upcoming" subsection
+          per Max's spec: "The Today area should only show: Tickets due today.
+          Meetings/events scheduled for today. True reminders for today.
+          Do not show a large upcoming-week section there." Calendar tab still
+          shows all upcoming events. */}
+      </div>
 
     {/* Reminders — split into Urgent (today or overdue) vs Normal (future).
         Today-due items (not yet overdue) get a blink animation so they stand out.
@@ -400,19 +405,12 @@ export default function PersonalDashboard({ user, userProfile, isAdmin, isSuperA
         assigned to them yet. Without this fix, a brand-new sales rep
         sees no Pipeline card at all and may think the feature doesn't
         exist for them. */}
-    {(myCustomers.length>0 || isAdmin || (Array.isArray(customers) && customers.length>0)) && (<div className="bg-white rounded-xl p-4 mb-3"><h3 className="text-sm font-bold mb-2">📊 My Pipeline ({myCustomers.length} clients)</h3>
-      {myCustomers.length === 0 ? (
-        <div className="text-center py-3">
-          <div className="text-xs text-slate-500 mb-1.5">No clients assigned to you yet</div>
-          <div className="text-[10px] text-slate-500">When customers are assigned to you in the CRM, you'll see them flow through Lead → Qualified → Proposal → Won here.</div>
-        </div>
-      ) : (
-        <div className="flex gap-1.5 flex-wrap mb-2">{PIPELINE_STAGES.map(s=>{const c=pipelineStats[s.v]||0; return (<div key={s.v} className="rounded-lg px-3 py-2 text-center min-w-[70px]" style={{background:c>0?s.c+'15':'#f8fafc',borderLeft:'3px solid '+(c>0?s.c:'#e2e8f0')}}><div className="text-lg font-extrabold" style={{color:c>0?s.c:'#cbd5e1'}}>{c}</div><div className="text-[9px] font-semibold text-slate-600">{s.icon} {s.l}</div></div>);})}</div>
-      )}
-      {notContacted30.length>0&&<div className="bg-amber-50 rounded-lg p-2 mt-2 border border-amber-200"><div className="text-[10px] font-bold text-amber-900">⚠️ {notContacted30.length} clients not contacted in 30+ days</div></div>}
-    </div>)}
-
-    {overdueFollowUps.length>0&&(<div className="bg-red-50 rounded-xl p-4 mb-3 border border-red-200"><h3 className="text-sm font-bold text-red-700 mb-2">⚠️ Overdue Follow-ups ({overdueFollowUps.length})</h3>{overdueFollowUps.map(fu=>(<div key={fu.id} className="flex justify-between items-center py-1.5 border-b border-red-100"><div><div className="text-xs font-semibold">{fu.task}</div><div className="text-xs text-slate-700">{fu.customers?.name||''} • Due: {fu.due_date}</div></div><span className="text-[10px] font-bold text-red-600">{Math.floor((Date.now()-new Date(fu.due_date).getTime())/86400000)}d late</span></div>))}</div>)}
+    {/* v55.83-A.6.27.9 (Max May 15 2026) — REMOVED "My Pipeline" and
+        "Overdue Follow-ups" blocks. The new Daily Priorities GUI on the
+        dashboard already surfaces overdue items, and pipeline counts are
+        better served from the CRM tab. Keeping the data calcs above
+        intact so the rest of the dashboard (Today's reminders, etc.)
+        still works. */}
 
     {/* Monthly Sales Report - visible to all */}
     {(() => {

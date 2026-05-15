@@ -618,17 +618,24 @@ function FloatingMini(props) {
 }
 
 function StatCard(props) {
+  // v55.83-A.6.27.9 (Max May 15 2026) — improved contrast and typography.
+  // Previous: text-[9px] opacity-70 label + soft -100/-800 palette. The
+  // labels were barely readable, especially on the dark dashboard background
+  // and on smaller screens. Now: label at text-[11px] with full opacity,
+  // value cranked to text-3xl + black weight, stronger border, deeper text
+  // color (-950) for max contrast on the lighter tile background.
   var colorClasses = {
-    amber: 'bg-amber-100 text-amber-900 border-amber-200',
-    blue: 'bg-blue-100 text-blue-800 border-blue-200',
-    rose: 'bg-rose-100 text-rose-800 border-rose-200',
-    violet: 'bg-violet-100 text-violet-800 border-violet-200',
+    amber: 'bg-amber-100 text-amber-950 border-amber-400',
+    blue: 'bg-sky-100 text-sky-950 border-sky-400',
+    rose: 'bg-rose-100 text-rose-950 border-rose-400',
+    violet: 'bg-violet-100 text-violet-950 border-violet-400',
   };
   var c = colorClasses[props.color] || colorClasses.blue;
+  var hot = Number(props.value) > 0;
   return (
-    <div className={'rounded-lg p-2 border ' + c}>
-      <div className="text-[9px] font-bold uppercase tracking-wide opacity-70">{props.label}</div>
-      <div className="text-2xl font-extrabold mt-0.5">{props.value}</div>
+    <div className={'rounded-lg p-3 border-2 transition ' + c + (hot ? ' shadow-md' : ' opacity-90')}>
+      <div className="text-[11px] font-extrabold uppercase tracking-wide">{props.label}</div>
+      <div className="text-3xl font-black mt-1 leading-none">{props.value}</div>
     </div>
   );
 }

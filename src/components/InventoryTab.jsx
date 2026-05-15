@@ -3,6 +3,8 @@
 // v55.83-A.6.27 — Stage C+D activated: Layers ledger, per-SKU P&L,
 //                  landed cost finalization (via shipment detail), sale
 //                  deduction (via invoice line SKU linkage).
+// v55.83-A.6.27.9 — Stage E + F activated: Adjustments + Reports.
+//                   ALL 6 STAGES NOW SHIPPED.
 import { useState, useEffect } from 'react';
 import { supabase } from '../lib/supabase';
 import MasterSKUList from './MasterSKUList';
@@ -12,6 +14,8 @@ import InventoryView from './InventoryView';
 import MovementsLedger from './MovementsLedger';
 import LayersLedger from './LayersLedger';
 import InventoryPnL from './InventoryPnL';
+import AdjustmentsManager from './AdjustmentsManager';
+import InventoryReports from './InventoryReports';
 import {
   canViewInventory,
   canSeeInventoryCosts,
@@ -81,8 +85,8 @@ export default function InventoryTab({ userProfile, modulePerms, toast }) {
             </p>
           </div>
           <div className="flex items-center gap-1 text-[10px]">
-            <span className="px-2 py-0.5 rounded bg-blue-200 text-blue-900 font-bold">
-              v55.83-A.6.27 · Stage 4 of 6
+            <span className="px-2 py-0.5 rounded bg-emerald-200 text-emerald-900 font-bold">
+              v55.83-A.6.27.9 · Stage 6 of 6 — COMPLETE ✓
             </span>
             {seePnL && (
               <span className="px-2 py-0.5 rounded bg-emerald-200 text-emerald-900 font-bold">
@@ -101,8 +105,8 @@ export default function InventoryTab({ userProfile, modulePerms, toast }) {
       {/* Subtab nav */}
       <div className="flex gap-1 flex-wrap bg-slate-50 rounded-lg p-1 border border-slate-200">
         {SUBTABS.map(function (st) {
-          // v55.83-A.6.27 — Stages A, B, C, D all active. Only E, F remain.
-          var available = ['A', 'B', 'C', 'D'].indexOf(st.stage) >= 0;
+          // v55.83-A.6.27.9 — ALL stages now active.
+          var available = true;
           // P&L tab requires the per-user pnl access permission
           if (st.id === 'pnl' && !seePnL) available = false;
           // Layers tab requires cost access (P&L access implies cost access)
@@ -148,49 +152,37 @@ export default function InventoryTab({ userProfile, modulePerms, toast }) {
       {subtab === 'pnl' && (
         <InventoryPnL skus={skus} toast={toast} />
       )}
-
-      {/* Coming-soon placeholders for Stage E+ only (adjustments, reports) */}
-      {['adjustments', 'reports'].indexOf(subtab) >= 0 && (
-        <div className="bg-blue-50 border border-blue-200 rounded-xl p-6 text-center">
-          <div className="text-3xl mb-2">🚧</div>
-          <div className="text-sm font-bold text-blue-900 mb-1">Coming in Stage {SUBTABS.find(function (s) { return s.id === subtab; }).stage}</div>
-          <div className="text-xs text-blue-800 max-w-md mx-auto">
-            {subtab === 'adjustments' && 'Damage, returns, transfers, and physical count corrections will live here (Stage E).'}
-            {subtab === 'reports' && 'Profitability, aging, and slow-moving inventory reports come in Stage F.'}
-          </div>
-        </div>
+      {/* v55.83-A.6.27.9 — Stage E + F live */}
+      {subtab === 'adjustments' && (
+        <AdjustmentsManager skus={skus} warehouses={warehouses} userProfile={userProfile} modulePerms={modulePerms} toast={toast} />
+      )}
+      {subtab === 'reports' && (
+        <InventoryReports skus={skus} warehouses={warehouses} toast={toast} />
       )}
 
       {/* Stage guidance */}
       <details className="bg-slate-50 border border-slate-200 rounded-lg p-3 text-xs">
         <summary className="font-bold text-slate-700 cursor-pointer">
-          ℹ️ What's in this build (v55.83-A.6.27 · Stage 4 of 6)
+          ℹ️ What's in this build (v55.83-A.6.27.9 · Stage 6 of 6 — ALL STAGES SHIPPED)
         </summary>
         <div className="mt-2 space-y-2 text-slate-600 leading-relaxed">
           <p>
-            <strong>Stages C + D add full landed cost + sale deduction.</strong> Each shipment
-            now has its own cost basis: open a shipment, click "💰 Finalize Landed Cost",
-            pick an allocation method (qty / weight / value), and the system writes locked
-            cost layers for FIFO consumption. When you save an invoice line with a linked
-            SKU, the layers drain oldest-first and COGS is stamped on the line — see
-            "Profit by SKU" for the result.
+            <strong>The inventory module is complete.</strong> All six stages
+            have shipped: master SKUs &amp; warehouses (A), shipments &amp;
+            movements (B), landed cost finalization (C), FIFO sale deduction
+            &amp; P&amp;L (D), adjustments with approval workflow (E), and
+            operational reports — stock value, aging, slow-moving (F).
           </p>
-          <p className="font-semibold text-slate-700">Roadmap:</p>
+          <p className="font-semibold text-slate-700">All stages:</p>
           <ul className="space-y-1 pl-4">
             {SUBTABS.map(function (st) {
-              var done = ['A', 'B', 'C', 'D'].indexOf(st.stage) >= 0;
               return (
-                <li key={st.id} className={done ? 'text-emerald-700' : ''}>
-                  <strong>Stage {st.stage}:</strong> {st.desc}
-                  {done && <span className="ml-1">✓ shipped</span>}
+                <li key={st.id} className="text-emerald-700">
+                  <strong>Stage {st.stage}:</strong> {st.desc} ✓ shipped
                 </li>
               );
             })}
           </ul>
-          <p className="text-[10px] text-slate-500 mt-2">
-            <strong>Setup:</strong> If you haven't run <code>sql/v55-83-a-6-27-inventory-stage-c-d.sql</code> in
-            Supabase yet, run it before using the Finalize Landed Cost feature.
-          </p>
         </div>
       </details>
     </div>

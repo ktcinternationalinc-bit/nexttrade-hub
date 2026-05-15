@@ -30,16 +30,20 @@ function ok(name, cond) {
 }
 
 console.log('PersonalDashboard — Pipeline empty state');
-ok('Pipeline card has the v55.81 #5 marker comment',
-  /v55\.81\s*#5[\s\S]*Pipeline shown for admins even with 0/.test(pdash));
-ok('Pipeline card branches on myCustomers.length === 0',
-  /myCustomers\.length\s*===\s*0\s*\?/.test(pdash));
-ok('Pipeline empty state copy mentions "No clients assigned"',
-  /No clients assigned to you yet/.test(pdash));
-ok('Pipeline empty state explains what the section is (Lead → Won)',
-  /Lead\s*→\s*Qualified\s*→\s*Proposal\s*→\s*Won/.test(pdash));
-ok('Pipeline pills only render when myCustomers.length > 0',
-  /myCustomers\.length\s*===\s*0\s*\?[\s\S]*?:\s*\(\s*<div className="flex gap-1\.5 flex-wrap mb-2">/.test(pdash));
+// v55.83-A.6.27.9 — Pipeline block REMOVED from dashboard per Max's reorder
+// spec. Accept either: old empty-state form intact, OR removed with the
+// deprecation marker comment in place.
+var pipelineRemoved = /REMOVED "My Pipeline" and[\s\S]*Overdue Follow-ups/.test(pdash);
+ok('Pipeline card has the v55.81 #5 marker comment (or has been removed)',
+  pipelineRemoved || /v55\.81\s*#5[\s\S]*Pipeline shown for admins even with 0/.test(pdash));
+ok('Pipeline card branches on myCustomers.length === 0 (or has been removed)',
+  pipelineRemoved || /myCustomers\.length\s*===\s*0\s*\?/.test(pdash));
+ok('Pipeline empty state copy mentions "No clients assigned" (or has been removed)',
+  pipelineRemoved || /No clients assigned to you yet/.test(pdash));
+ok('Pipeline empty state explains what the section is — Lead → Won (or has been removed)',
+  pipelineRemoved || /Lead\s*→\s*Qualified\s*→\s*Proposal\s*→\s*Won/.test(pdash));
+ok('Pipeline pills only render when myCustomers.length > 0 (or has been removed)',
+  pipelineRemoved || /myCustomers\.length\s*===\s*0\s*\?[\s\S]*?:\s*\(\s*<div className="flex gap-1\.5 flex-wrap mb-2">/.test(pdash));
 
 console.log('\nMyPerformance — empty activity state');
 ok('MyPerformance has the v55.81 #5 marker comment',

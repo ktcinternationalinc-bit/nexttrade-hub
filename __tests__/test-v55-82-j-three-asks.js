@@ -104,8 +104,8 @@ ok('2d: pill mode preserved for non-prominent usage (backward compat)',
   /\) : \([\s\S]{0,200}Inline pill — visible on the dashboard/.test(whatsNew)
 );
 
-ok('2e: Dashboard passes prominent={true} to WhatsNewWidget',
-  /<WhatsNewWidget isAdmin=\{isAdmin\} isSuperAdmin=\{isSuperAdmin\} prominent=\{true\} \/>/.test(pageSrc)
+ok('2e: Dashboard passes prominent to WhatsNewWidget (v55.83-A.6.27.9 may use false for collapsed-by-default)',
+  /<WhatsNewWidget isAdmin=\{isAdmin\} isSuperAdmin=\{isSuperAdmin\} prominent=\{(true|false)\} \/>/.test(pageSrc)
 );
 
 ok('2f: REGRESSION GUARD — Dashboard no longer wraps WhatsNew in flex justify-end (pill-on-right look)',

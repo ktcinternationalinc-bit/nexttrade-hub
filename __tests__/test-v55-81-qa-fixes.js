@@ -121,10 +121,14 @@ ok('QA-6 marker present',
 // =============================================================
 console.log('\nQA-7: Pipeline empty state for CRM team members');
 var pdash = read('src/components/PersonalDashboard.jsx');
-ok('Pipeline guard relaxed to include customers.length>0 case',
+// v55.83-A.6.27.9 — Pipeline block was REMOVED per Max's dashboard reorder.
+// Accept either the original guard OR a removal marker.
+var pipelineRemoved2 = /REMOVED "My Pipeline" and[\s\S]*Overdue Follow-ups/.test(pdash);
+ok('Pipeline guard relaxed (or block removed in v55.83-A.6.27.9)',
+  pipelineRemoved2 ||
   /myCustomers\.length>0 \|\| isAdmin \|\| \(Array\.isArray\(customers\) && customers\.length>0\)/.test(pdash));
-ok('QA-7 marker present',
-  pdash.indexOf('QA-7') !== -1);
+ok('QA-7 marker present (or block removed)',
+  pipelineRemoved2 || pdash.indexOf('QA-7') !== -1);
 
 // =============================================================
 // QA-8: relativeTime warns on future date

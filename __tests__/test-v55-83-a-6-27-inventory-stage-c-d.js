@@ -134,13 +134,15 @@ ok('7a: SUBTABS includes layers (stage C)',
   /id: 'layers'[\s\S]{0,200}stage: 'C'/.test(invTab));
 ok('7b: SUBTABS includes pnl (stage D)',
   /id: 'pnl'[\s\S]{0,200}stage: 'D'/.test(invTab));
-ok('7c: stages A B C D all available',
-  /\['A', 'B', 'C', 'D'\]\.indexOf\(st\.stage\) >= 0/.test(invTab));
+ok('7c: C and D stages available (A.6.27: A+B+C+D; A.6.27.9: all)',
+  /\['A', 'B', 'C', 'D'\]\.indexOf\(st\.stage\) >= 0/.test(invTab) ||
+  /var available = true/.test(invTab));
 ok('7d: imports LayersLedger + InventoryPnL',
   /import LayersLedger from '\.\/LayersLedger'/.test(invTab)
   && /import InventoryPnL from '\.\/InventoryPnL'/.test(invTab));
-ok('7e: version stamp says A.6.27 Stage 4 of 6',
-  /v55\.83-A\.6\.27 · Stage 4 of 6/.test(invTab));
+ok('7e: version stamp says Stage 4 of 6 or later (A.6.27.9 ships Stage 6 of 6)',
+  /v55\.83-A\.6\.27 · Stage 4 of 6/.test(invTab) ||
+  /v55\.83-A\.6\.27\.9 · Stage 6 of 6/.test(invTab));
 
 // ── 8. ShipmentsManager wires the dialog ─────────────────────────────
 ok('8a: imports FinalizeCostDialog',
@@ -185,8 +187,8 @@ ok('9l: single line item delete reverses FIFO + deletes movement',
 // ── 10. Version stamps in sync ───────────────────────────────────────
 ok('10a: page.jsx version stamp v55.83-A.6.27',
   /BUILD v55\.83-A\.6\.27/.test(page));
-ok('10b: WhatsNewWidget has v55.83-A.6.27 entry at top of BUILD_HISTORY',
-  /export const BUILD_HISTORY = \[\s*\{\s*version: 'v55\.83-A\.6\.27'/.test(read('src/components/WhatsNewWidget.jsx')));
+ok('10b: WhatsNewWidget has v55.83-A.6.27.x entry at top of BUILD_HISTORY',
+  /export const BUILD_HISTORY = \[\s*\{\s*version: 'v55\.83-A\.6\.27(\.\d+)?'/.test(read('src/components/WhatsNewWidget.jsx')));
 
 if (failures.length > 0) {
   console.log('\n❌ ' + failures.length + ' failure(s):');
