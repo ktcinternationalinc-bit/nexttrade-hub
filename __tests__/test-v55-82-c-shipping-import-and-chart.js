@@ -138,12 +138,11 @@ ok('2a: trendRates period filter narrows input rows (input narrowing)',
   'period filter still uses either-or anchor — narrows input rows'
 );
 
-// 2b — v55.82-M base; v55.83-A.6.27.2 caps timeline to keep chart readable
-ok('2b: months timeline anchored on earliest effective_date (with sensible cap added in A.6.27.2)',
+// 2b — v55.82-M: months timeline now built from earliest effective_date
+ok('2b: v55.82-M — months timeline starts at earliest effective_date',
   /r\.effective_date\.substring\(0,7\)/.test(chartSlice) &&
-  (/firstMonth = validRatesForChart\.reduce/.test(chartSlice) ||
-   /var earliestInData = validRatesForChart\.reduce/.test(chartSlice)),
-  'chart X-axis derives from effective-date timeline (with default 24-month look-back cap)'
+  /firstMonth = validRatesForChart\.reduce/.test(chartSlice),
+  'chart X-axis = effective-date timeline per Max May 12 spec'
 );
 
 // 2c — REGRESSION GUARD: chart should no longer build monthsSet from expiry_date

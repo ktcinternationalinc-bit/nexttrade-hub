@@ -20,7 +20,6 @@
 import { useState, useEffect, useMemo } from 'react';
 import { supabase } from '../lib/supabase';
 import { canEditInventory } from '../lib/inventory-permissions';
-import FinalizeCostDialog from './FinalizeCostDialog';
 
 var STATUSES = [
   { v: 'draft', label: 'Draft', tone: 'slate' },
@@ -405,8 +404,6 @@ function ShipmentDetail({ shipment, skus, warehouses, canEdit, myId, toast, work
   var [addingItem, setAddingItem] = useState(false);
   var [itemForm, setItemForm] = useState({ sku_id: '', qty_primary: '', roll_count: '', qty_kg: '', notes: '' });
   var [editingCosts, setEditingCosts] = useState(false);
-  // v55.83-A.6.27 — Stage C: show the FinalizeCostDialog modal
-  var [showFinalizeDialog, setShowFinalizeDialog] = useState(false);
   var [costForm, setCostForm] = useState({
     purchase_cost: shipment.purchase_cost || '',
     freight_cost: shipment.freight_cost || '',
@@ -639,44 +636,13 @@ function ShipmentDetail({ shipment, skus, warehouses, canEdit, myId, toast, work
       <div className="p-4 border-b border-slate-100">
         <div className="flex justify-between items-center mb-2">
           <h4 className="text-xs font-bold text-slate-700">💰 Cost Components ({shipment.purchase_currency || 'USD'})</h4>
-          <div className="flex items-center gap-2">
-            {/* v55.83-A.6.27 — Stage C: Finalize Landed Cost button shows for received shipments */}
-            {canEdit && isReceived && !shipment.cost_finalized_at && (
-              <button onClick={function () { setShowFinalizeDialog(true); }}
-                className="px-2.5 py-1 rounded-md bg-amber-500 hover:bg-amber-600 text-white text-[10px] font-extrabold whitespace-nowrap">
-                💰 Finalize Landed Cost
-              </button>
-            )}
-            {shipment.cost_finalized_at && (
-              <span className="text-[10px] px-2 py-0.5 rounded bg-emerald-100 text-emerald-900 font-bold">
-                ✓ Cost finalized {shipment.cost_finalized_at.substring(0, 10)}
-              </span>
-            )}
-            {canEdit && shipment.cost_finalized_at && (
-              <button onClick={function () { setShowFinalizeDialog(true); }}
-                className="text-[10px] text-blue-600 hover:underline">
-                Re-finalize
-              </button>
-            )}
-            {canEdit && !isReceived && (
-              <button onClick={function () { setEditingCosts(!editingCosts); }}
-                className="text-[10px] text-blue-600 hover:underline">
-                {editingCosts ? 'Cancel' : '✏️ Edit'}
-              </button>
-            )}
-          </div>
+          {canEdit && !isReceived && (
+            <button onClick={function () { setEditingCosts(!editingCosts); }}
+              className="text-[10px] text-blue-600 hover:underline">
+              {editingCosts ? 'Cancel' : '✏️ Edit'}
+            </button>
+          )}
         </div>
-        {/* v55.83-A.6.27 — Stage C: show landed cost totals if finalized */}
-        {shipment.cost_finalized_at && shipment.total_landed_cost_usd && (
-          <div className="bg-emerald-50 border border-emerald-200 rounded p-2 mb-2 text-[11px]">
-            <div className="flex gap-4 flex-wrap items-center">
-              <div><span className="text-slate-600">Landed Total:</span> <span className="font-bold font-mono">${Number(shipment.total_landed_cost_usd).toLocaleString(undefined, {maximumFractionDigits: 2})}</span></div>
-              <div><span className="text-slate-600">EGP:</span> <span className="font-bold font-mono">£E {Number(shipment.total_landed_cost_egp || 0).toLocaleString(undefined, {maximumFractionDigits: 2})}</span></div>
-              <div><span className="text-slate-600">FX:</span> <span className="font-mono">{Number(shipment.fx_usd_to_egp || 0).toFixed(4)}</span> <span className="text-slate-400 text-[9px]">({shipment.fx_source || 'unknown'})</span></div>
-              <div><span className="text-slate-600">Method:</span> <span className="font-bold">{shipment.allocation_method || 'by_qty'}</span></div>
-            </div>
-          </div>
-        )}
         {editingCosts ? (
           <div className="grid grid-cols-2 md:grid-cols-4 gap-2">
             {['purchase_cost', 'freight_cost', 'customs_cost', 'port_fees', 'inland_transport', 'handling_fees', 'other_charges'].map(function (k) {
@@ -817,25 +783,6 @@ function ShipmentDetail({ shipment, skus, warehouses, canEdit, myId, toast, work
             This shipment created {movements.length} inventory movement record{movements.length === 1 ? '' : 's'} when it was received. See the Movements tab for full audit history.
           </div>
         </div>
-      )}
-
-      {/* v55.83-A.6.27 — Stage C: FinalizeCostDialog modal. Opens via the
-          "💰 Finalize Landed Cost" button in the costs section above. On
-          successful finalize, reloads line items + tells the parent so the
-          shipment list refreshes (the cost_finalized_at column changes the
-          row's badge). */}
-      {showFinalizeDialog && (
-        <FinalizeCostDialog
-          shipment={shipment}
-          lineItems={lineItems}
-          userId={myId}
-          toast={toast}
-          onClose={function () { setShowFinalizeDialog(false); }}
-          onFinalized={async function () {
-            await loadLines();
-            if (onChanged) await onChanged();
-          }}
-        />
       )}
     </div>
   );

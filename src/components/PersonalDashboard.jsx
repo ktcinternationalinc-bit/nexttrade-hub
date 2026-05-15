@@ -143,13 +143,8 @@ export default function PersonalDashboard({ user, userProfile, isAdmin, isSuperA
   const thisMonth = todayStr.substring(0, 7);
   const monthlyTotal = mySales.filter(inv => (inv.invoice_date || '').startsWith(thisMonth)).reduce((a, i) => a + Number(i.total_amount || 0), 0);
 
-  // v55.83-A.6.27.2 (Max May 14 2026) — REMOVED tickets from this legacy
-  // "past-due" banner. The new DashboardPrioritySections cluster (rendered
-  // above this widget in page.jsx) now owns ALL late-ticket display,
-  // with proper My Direct / I Delegated breakdown. Keeping tickets here
-  // double-shows them. Follow-ups and reminders stay because they have
-  // no equivalent in the new cards yet.
   const allOverdue = [
+    ...overdueTickets.map(t => ({ type: 'ticket', title: t.title, due: t.due_date, assignee: getUserName(t.assigned_to), status: t.status })),
     ...overdueFollowUps.map(f => ({ type: 'followup', title: f.task, due: f.due_date, customer: f.customers?.name })),
     ...overdueReminders.map(r => ({ type: 'reminder', title: r.text, due: r.due_date })),
   ].sort((a, b) => (a.due || '').localeCompare(b.due || ''));

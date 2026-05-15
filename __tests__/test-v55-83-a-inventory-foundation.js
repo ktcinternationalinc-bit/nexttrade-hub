@@ -173,12 +173,10 @@ ok('tab: lists all 7 subtabs (skus, warehouses, inventory, shipments, movements,
   /id: 'adjustments'/.test(tab) &&
   /id: 'warehouses'/.test(tab) &&
   /id: 'reports'/.test(tab));
-ok('tab: clickable subtabs evolve with stages (A only at foundation; A+B+C+D after v55.83-A.6.27)',
-  /available = st\.stage === 'A'/.test(tab)
-  || /available = st\.stage === 'A' \|\| st\.stage === 'B'/.test(tab)
-  || /\['A', 'B', 'C', 'D'\]\.indexOf\(st\.stage\) >= 0/.test(tab));
-ok('tab: shows current stage badge (Stage 1 → 2 after B → 4 after C+D)',
-  /Stage [124] of 6/.test(tab));
+ok('tab: only Stage A subtabs are clickable; later stages disabled',
+  /available = st\.stage === 'A'/.test(tab));
+ok('tab: shows current stage badge (Stage 1 → 2 after Stage B ships in v55.83-A.6.21)',
+  /Stage [12] of 6/.test(tab));
 
 // ============================================================
 // PAGE.JSX INTEGRATION — old inline section replaced
