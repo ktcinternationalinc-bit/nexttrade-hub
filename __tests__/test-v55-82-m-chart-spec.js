@@ -49,14 +49,14 @@ ok('1c: REGRESSION GUARD — old expiry-anchored validRates filter is gone',
 // SPEC #2 — Active-window rule
 // ============================================================
 
-ok('2a: Active-window check (eff <= monthEnd && (no exp || exp >= monthEnd) per A.6.27.7 unified rule)',
-  // v55.83-A.6.27.7 — changed from monthStart-overlap to monthEnd-still-active
-  // to align with the "Best Active" stat tile's semantics. Old rule accepted
-  // for back-compat in the diagnostic table at the bottom of the chart;
-  // new rule is what drives the main trend line.
+ok('2a: Active-window check uses refDate (min of monthEnd, today) per A.6.27.8 — matches stat tile semantics',
+  // v55.83-A.6.27.8 — the rule evolved to: refDate = min(monthEnd, today);
+  // active iff eff <= refDate AND (no exp OR exp >= refDate). Accept refDate
+  // form OR either of the older forms for back-compat with older builds.
+  /eff <= refDate && \(exp === '' \|\| exp >= refDate\)/.test(src) ||
   /eff <= monthEnd && \(exp === '' \|\| exp >= monthEnd\)/.test(src) ||
   /eff <= monthEnd && \(exp === '' \|\| exp >= monthStart\)/.test(src),
-  'spec point 2 — best-rate test (now end-of-month for alignment with stat tile)'
+  'spec point 2 — best-rate test (current month uses today as reference; past months use month-end)'
 );
 
 ok('2b: Each month gets a monthStart/monthEnd boundary',

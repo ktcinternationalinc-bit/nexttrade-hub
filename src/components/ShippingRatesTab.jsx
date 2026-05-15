@@ -2589,38 +2589,42 @@ Date: ${today}`;
         var trendPoints = months.map(function(m) {
           var monthStart = firstDayOf(m);
           var monthEnd = lastDayOf(m);
-          // v55.83-A.6.27.7 (Max May 15 2026) — UNIFIED ACTIVE-IN-MONTH RULE.
+          // v55.83-A.6.27.8 (Max May 15 2026) — UNIFIED ACTIVE-IN-MONTH RULE
           //
-          // Per Max's spec: "the chart must match the numbers shown below
-          // it." The stat tile "Best Active" uses isExpired(r.expiry_date)
-          // which is TRUE iff expiry < today. So a rate is "active right
-          // now" iff (no expiry OR expiry >= today).
+          // The chart MUST match the "Best Active" stat tile and the Vendor
+          // Comparison table for the current month. Previously two attempts:
+          //   A.6.27.7: rate active in M iff (eff <= monthEnd AND exp >= monthEnd)
+          //             → broke May 2026 because a $3,575 rate expiring May 30
+          //                doesn't survive through May 31, so it got dropped.
+          //                Chart showed $3,050 (lowest historical) instead of $3,575.
+          //   Pre-A.6.27.7: rate active in M iff window overlaps M at any point
+          //             → broke May because a rate effective May 1 expiring May 3
+          //                counted as "active in May" even though it's long expired.
           //
-          // Generalized for any month M: a rate is "active in M" iff its
-          // validity window covers the END of M. Specifically:
-          //   effective_date <= last-of-M  (rate started by end of month)
-          //   AND
-          //   (expiry is null  OR  expiry >= last-of-M)  (still good through
-          //                                               end of month)
+          // CORRECT RULE — use a REFERENCE DATE that's:
+          //   - For the current month (or future): today's date (matches "Best Active")
+          //   - For past months: last day of that month (was it bookable at month-end?)
           //
-          // Why end-of-month and not "any overlap":
-          // - If a rate is effective 2026-05-01 and expires 2026-05-15, it
-          //   was active in early May but NOT active in late May. Treating
-          //   it as "active in May" makes the chart's May point disagree
-          //   with the stat tile which says "Best Active" today is some
-          //   higher rate. Using end-of-month aligns chart and tile.
-          // - For past months, the same rule gives "the rate was still good
-          //   for booking at the end of that month" — which is the answer
-          //   the user wants when looking at historical trend.
+          // In one line: refDate = min(monthEnd, today). The rate is "active in M"
+          // iff effective <= refDate AND (no expiry OR expiry >= refDate).
           //
-          // For mid-month-expired rates: they fall OUT of CASE 1 for the
-          // month they expired in. They drive CASE 2 (stale carry-forward,
-          // dashed grey line) for THIS month — which is correct because
-          // by end of month there's no active rate to plot.
+          // This means for May 2026 viewed today (May 15), refDate = May 15:
+          //   - Miami $3,575 exp May 30: eff <= May 15 ✓, exp May 30 >= May 15 ✓ → ACTIVE
+          //   - Chart's May point = $3,575 → matches stat tile + Vendor Comparison
+          //
+          // For April 2026 (past), refDate = April 30:
+          //   - A rate that expired April 13 → not active at month-end → drops to
+          //     CASE 2 (stale dashed grey) if no fresher April rate exists
+          //
+          // The expiry-marker layer (red ✕) is unchanged — it still marks every
+          // month a rate expired in, so the user sees the expiry events. It's
+          // SECONDARY visual data; it does NOT drive the main trend line.
+          var todayStrForChart = todayET();
+          var refDate = monthEnd < todayStrForChart ? monthEnd : todayStrForChart;
           var activeInMonth = ratesForView.filter(function(r) {
             var eff = r.effective_date;
             var exp = r.expiry_date || ''; // empty = never expires
-            return eff <= monthEnd && (exp === '' || exp >= monthEnd);
+            return eff <= refDate && (exp === '' || exp >= refDate);
           });
 
           var point = { month: m };
@@ -3276,12 +3280,15 @@ Date: ${today}`;
                     {trendPoints.map(function(pt) {
                       var monthStart = firstDayOf(pt.month);
                       var monthEnd = lastDayOf(pt.month);
-                      // v55.83-A.6.27.7 — use same end-of-month rule as the
-                      // main chart filter so the diagnostic table matches.
+                      // v55.83-A.6.27.8 — use same min(monthEnd, today) rule
+                      // as the main chart filter so the diagnostic table
+                      // counts reflect what's actually plotted.
+                      var todayStrDiag = todayET();
+                      var refDateDiag = monthEnd < todayStrDiag ? monthEnd : todayStrDiag;
                       var actCount = ratesForView.filter(function(r) {
                         var eff = r.effective_date || '';
                         var exp = r.expiry_date || '';
-                        return eff <= monthEnd && (exp === '' || exp >= monthEnd);
+                        return eff <= refDateDiag && (exp === '' || exp >= refDateDiag);
                       }).length;
                       var status = '∅ no data';
                       if (pt._best !== undefined) {

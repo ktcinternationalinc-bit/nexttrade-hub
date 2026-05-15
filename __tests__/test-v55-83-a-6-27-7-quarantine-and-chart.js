@@ -78,8 +78,10 @@ ok('5b: Quarantined tile amber styling for nonzero, slate for zero',
 // PART 2 — CHART/TABLE ALIGNMENT
 // ====================================================================
 
-ok('6a: activeInMonth filter uses end-of-month (NOT start-of-month) for expiry check',
-  /var activeInMonth = ratesForView\.filter\(function\(r\) \{[\s\S]{0,400}return eff <= monthEnd && \(exp === '' \|\| exp >= monthEnd\)/.test(tab));
+ok('6a: activeInMonth filter uses refDate = min(monthEnd, today) per A.6.27.8',
+  // Current rule (A.6.27.8) — refDate-based for chart/tile alignment.
+  /var refDate = monthEnd < todayStrForChart \? monthEnd : todayStrForChart/.test(tab) &&
+  /var activeInMonth = ratesForView\.filter\(function\(r\) \{[\s\S]{0,400}return eff <= refDate && \(exp === '' \|\| exp >= refDate\)/.test(tab));
 
 ok('6b: comment explains the unified-best-rate spec from Max',
   /UNIFIED ACTIVE-IN-MONTH RULE/.test(tab) &&
@@ -102,8 +104,8 @@ ok('7a: per-group filter (By Vendor/By Line) inherits the new activeInMonth defi
   // so once activeInMonth uses end-of-month, By Vendor and By Line do too.
   /var activeForGroup = activeInMonth\.filter\(function\(r\) \{/.test(tab));
 
-ok('8a: version stamp bumped to v55.83-A.6.27.7',
-  /BUILD v55\.83-A\.6\.27\.7/.test(read('src/app/page.jsx')));
+ok('8a: version stamp bumped to v55.83-A.6.27.8',
+  /BUILD v55\.83-A\.6\.27\.8/.test(read('src/app/page.jsx')));
 
 if (failures.length > 0) {
   console.log('\n❌ ' + failures.length + ' failure(s):');
