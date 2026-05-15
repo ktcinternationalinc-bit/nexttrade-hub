@@ -106,8 +106,8 @@ ok('11a: Today widget no longer shows Upcoming subsection',
   /REMOVED the "Upcoming" subsection/.test(pd));
 
 // ── 12. Version stamp ───────────────────────────────────────────────
-ok('12a: version stamp v55.83-A.6.27.9',
-  /BUILD v55\.83-A\.6\.27\.9/.test(page));
+ok('12a: version stamp v55.83-A.6.27.9 or later',
+  /BUILD v55\.83-A\.6\.27\.(9|1[0-9])/.test(page));
 
 if (failures.length > 0) {
   console.log('\n❌ ' + failures.length + ' failure(s):');
