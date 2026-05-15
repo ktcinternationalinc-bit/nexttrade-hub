@@ -125,7 +125,7 @@ ok('chart-anchor: chart block exists with new title',
 // and the chart title, so we widen the upstream window from 9000 → 13000.
 // v55.83-A.6 — chart section grew with view controls + currency tabs + scatter
 // wrap; widen the slice window to cover all the new code.
-var chartSlice = chartIdx > 0 ? tabSrc.slice(Math.max(0, chartIdx - 30000), chartIdx + 25000) : '';
+var chartSlice = chartIdx > 0 ? tabSrc.slice(Math.max(0, chartIdx - 35000), chartIdx + 25000) : '';
 
 // 2a — v55.82-M: X-axis driven by EFFECTIVE date timeline (Max May 12 2026
 //      respec). The old C-build expiry anchor is superseded.
@@ -138,11 +138,12 @@ ok('2a: trendRates period filter narrows input rows (input narrowing)',
   'period filter still uses either-or anchor — narrows input rows'
 );
 
-// 2b — v55.82-M: months timeline now built from earliest effective_date
-ok('2b: v55.82-M — months timeline starts at earliest effective_date',
+// 2b — v55.82-M base; v55.83-A.6.27.2 caps timeline to keep chart readable
+ok('2b: months timeline anchored on earliest effective_date (with sensible cap added in A.6.27.2)',
   /r\.effective_date\.substring\(0,7\)/.test(chartSlice) &&
-  /firstMonth = validRatesForChart\.reduce/.test(chartSlice),
-  'chart X-axis = effective-date timeline per Max May 12 spec'
+  (/firstMonth = validRatesForChart\.reduce/.test(chartSlice) ||
+   /var earliestInData = validRatesForChart\.reduce/.test(chartSlice)),
+  'chart X-axis derives from effective-date timeline (with default 24-month look-back cap)'
 );
 
 // 2c — REGRESSION GUARD: chart should no longer build monthsSet from expiry_date

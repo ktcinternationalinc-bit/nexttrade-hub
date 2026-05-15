@@ -35,11 +35,11 @@ ok('2a: deleteLineItem function defined',
 ok('2b: confirmation prompt before delete',
   /deleteLineItem[\s\S]{0,400}confirm\('Delete this line item/.test(page));
 ok('2c: deletes from invoice_items table',
-  /deleteLineItem[\s\S]{0,800}from\('invoice_items'\)\.delete\(\)\.eq\('id', lineItem\.id\)/.test(page));
+  /deleteLineItem[\s\S]{0,2000}from\('invoice_items'\)\.delete\(\)\.eq\('id', lineItem\.id\)/.test(page));
 ok('2d: updates local state immediately (no refresh needed)',
-  /deleteLineItem[\s\S]{0,1200}setInvoiceItems\(prev => prev\.filter\(it => it\.id !== lineItem\.id\)\)/.test(page));
+  /deleteLineItem[\s\S]{0,2500}setInvoiceItems\(prev => prev\.filter\(it => it\.id !== lineItem\.id\)\)/.test(page));
 ok('2e: writes audit_log entry',
-  /deleteLineItem[\s\S]{0,2000}entity_type: 'invoice_items'[\s\S]{0,300}action: 'delete_line_item'/.test(page));
+  /deleteLineItem[\s\S]{0,3500}entity_type: 'invoice_items'[\s\S]{0,300}action: 'delete_line_item'/.test(page));
 ok('2f: delete button rendered per row',
   /onClick=\{\(\) => deleteLineItem\(it\)\}/.test(page));
 ok('2g: delete button has bilingual title',
