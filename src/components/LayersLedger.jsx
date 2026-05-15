@@ -137,7 +137,7 @@ export default function LayersLedger({ skus, warehouses, toast }) {
             className="border border-slate-300 rounded px-2 py-1 text-xs">
             <option value="all">All SKUs</option>
             {(skus || []).map(function (s) {
-              return <option key={s.id} value={s.id}>{s.sku_code} — {s.name}</option>;
+              return <option key={s.id} value={s.id}>{s.sku_number} — {s.name}</option>;
             })}
           </select>
           <select value={warehouseFilter} onChange={function (e) { setWarehouseFilter(e.target.value); }}
@@ -169,7 +169,7 @@ export default function LayersLedger({ skus, warehouses, toast }) {
             <div key={skuId} className="bg-white rounded-lg border border-slate-200 overflow-hidden">
               <div className="bg-slate-50 px-3 py-2 border-b border-slate-200 flex justify-between items-center flex-wrap gap-2">
                 <div>
-                  <div className="text-xs font-extrabold">{sku ? sku.sku_code + ' — ' + sku.name : skuId.substring(0, 8)}</div>
+                  <div className="text-xs font-extrabold">{sku ? sku.sku_number + ' — ' + sku.description : skuId.substring(0, 8)}</div>
                   {sku && sku.description && <div className="text-[10px] text-slate-500">{sku.description}</div>}
                 </div>
                 <div className="flex items-center gap-3 text-[10px]">

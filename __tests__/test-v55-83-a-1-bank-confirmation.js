@@ -77,7 +77,8 @@ ok('6: PendingBankConfirmationsWidget component exists', fs.existsSync(widgetPat
 var widget = fs.readFileSync(widgetPath, 'utf8');
 ok('6a: widget filters for total_pending_bank > 0',
   /total_pending_bank \|\| 0\) > 0/.test(widget));
-ok('6b: widget gated by isSuperAdmin or View Financial Reports perm',
+ok('6b: widget gated by isSuperAdmin or Treasury or Financial Reports perm (A.6.27.11 tightened)',
+  /isSuperAdmin[\s\S]{0,200}modulePerms\['Treasury'\] === true[\s\S]{0,200}modulePerms\['View Financial Reports'\] === true/.test(widget) ||
   /isSuperAdmin \|\| \(modulePerms && modulePerms\['View Financial Reports'\]/.test(widget));
 ok('6c: widget shows days-waiting urgency coloring',
   /daysWaiting >= 14 \? 'text-red-600/.test(widget));

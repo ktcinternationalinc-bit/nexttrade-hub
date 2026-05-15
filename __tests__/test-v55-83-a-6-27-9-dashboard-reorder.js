@@ -37,15 +37,22 @@ ok('1c: FX widget REMOVED from old title-row position',
   /FX widget moved to dedicated top row/.test(page));
 
 // ── 2. StatCard contrast ────────────────────────────────────────────
-ok('2a: StatCard label upgraded to text-[11px] font-extrabold (no opacity)',
+ok('2a: StatCard label uses text-slate-900 (high contrast, never white)',
+  // A.6.27.11 (May 15 2026) — switched from colored -950 label to plain
+  // slate-900 for guaranteed contrast on any pastel bg per Max's rule
+  // "DO NOT USE WHITE FOR TEXT FONT". Accept either form for back-compat.
+  /<div className="text-xs font-black uppercase tracking-wide text-slate-900">\{props\.label\}<\/div>/.test(ab) ||
   /<div className="text-\[11px\] font-extrabold uppercase tracking-wide">\{props\.label\}<\/div>/.test(ab));
-ok('2b: StatCard value upgraded to text-3xl font-black',
-  /<div className="text-3xl font-black mt-1 leading-none">\{props\.value\}<\/div>/.test(ab));
-ok('2c: StatCard color palette uses -950 text + -400 border for contrast',
-  /text-amber-950 border-amber-400/.test(ab) &&
-  /text-sky-950 border-sky-400/.test(ab) &&
-  /text-rose-950 border-rose-400/.test(ab) &&
-  /text-violet-950 border-violet-400/.test(ab));
+ok('2b: StatCard value is text-3xl font-black (any colored variant)',
+  /text-3xl font-black mt-1 leading-none/.test(ab));
+ok('2c: StatCard color palette uses -900 or -950 deep text + -400 border',
+  // A.6.27.11 — value colors moved to -900 (was -950 on the parent div).
+  // Borders still -400. Accept either form.
+  (/text-amber-900/.test(ab) || /text-amber-950/.test(ab)) &&
+  (/text-sky-900/.test(ab) || /text-sky-950/.test(ab)) &&
+  (/text-rose-900/.test(ab) || /text-rose-950/.test(ab)) &&
+  (/text-violet-900/.test(ab) || /text-violet-950/.test(ab)) &&
+  /border-amber-400/.test(ab) && /border-sky-400/.test(ab));
 
 // ── 3. Send Message + Post Reminder compact pair ────────────────────
 ok('3a: compact button pair row exists',

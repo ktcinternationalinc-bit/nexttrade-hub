@@ -193,7 +193,7 @@ export default function InventoryReports({ skus, warehouses, toast }) {
                     return (
                       <tr key={r.skuId} className="border-t border-slate-100 hover:bg-slate-50">
                         <td className="px-2 py-2">
-                          {r.sku ? <><span className="font-bold">{r.sku.sku_code}</span> <span className="text-slate-500 text-[10px]">{r.sku.name}</span></> : r.skuId.substring(0, 8) + '…'}
+                          {r.sku ? <><span className="font-bold">{r.sku.sku_number}</span> <span className="text-slate-500 text-[10px]">{r.sku.description}</span></> : r.skuId.substring(0, 8) + '…'}
                         </td>
                         <td className="px-2 py-2 text-right font-mono">{fmt(r.qty, 0)}</td>
                         <td className="px-2 py-2 text-right font-mono font-bold text-emerald-700">${fmt(r.valueUsd)}</td>
@@ -250,7 +250,7 @@ export default function InventoryReports({ skus, warehouses, toast }) {
                                  r.bucket === 'm1to3' ? 'text-sky-700' : 'text-emerald-700';
                     return (
                       <tr key={r.layer.id} className="border-t border-slate-100 hover:bg-slate-50">
-                        <td className="px-2 py-2">{r.sku ? r.sku.sku_code : r.layer.sku_id.substring(0, 8) + '…'}</td>
+                        <td className="px-2 py-2">{r.sku ? r.sku.sku_number : r.layer.sku_id.substring(0, 8) + '…'}</td>
                         <td className="px-2 py-2 text-[10px] text-slate-500">{r.layer.received_at}</td>
                         <td className={'px-2 py-2 text-right font-mono font-bold ' + bColor}>{r.days != null ? r.days : '—'}</td>
                         <td className="px-2 py-2 text-right font-mono">{fmt(r.layer.qty_remaining, 0)}</td>
@@ -300,7 +300,7 @@ export default function InventoryReports({ skus, warehouses, toast }) {
                     return (
                       <tr key={r.skuId} className="border-t border-slate-100 hover:bg-slate-50">
                         <td className="px-2 py-2">
-                          {r.sku ? <><span className="font-bold">{r.sku.sku_code}</span> <span className="text-slate-500 text-[10px]">{r.sku.name}</span></> : r.skuId.substring(0, 8) + '…'}
+                          {r.sku ? <><span className="font-bold">{r.sku.sku_number}</span> <span className="text-slate-500 text-[10px]">{r.sku.description}</span></> : r.skuId.substring(0, 8) + '…'}
                         </td>
                         <td className="px-2 py-2 text-right font-mono">{fmt(r.qty, 0)}</td>
                         <td className="px-2 py-2 text-right font-mono font-bold text-red-700">${fmt(r.valueUsd)}</td>

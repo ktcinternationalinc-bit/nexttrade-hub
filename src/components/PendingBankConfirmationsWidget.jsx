@@ -33,7 +33,14 @@ export default function PendingBankConfirmationsWidget({
   }, [invoices]);
 
   // Gate (now AFTER all hooks)
-  var canView = isSuperAdmin || (modulePerms && modulePerms['View Financial Reports'] === true);
+  // v55.83-A.6.27.11 (Max May 15 2026) — Per Max's request: "no one except
+  // the super admin and those with treasury access permissioning can see any
+  // financial data on the dashboard from the banks or transactions or sales
+  // or otherwise (except for monthly sales)". Pending Bank Confirmations
+  // counts as bank/financial data — gate to Treasury OR Financial Reports.
+  var canView = isSuperAdmin
+    || (modulePerms && modulePerms['Treasury'] === true)
+    || (modulePerms && modulePerms['View Financial Reports'] === true);
   if (!canView) return null;
 
   if (pending.length === 0) return null;

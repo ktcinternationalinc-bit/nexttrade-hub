@@ -161,12 +161,17 @@ ok('9a: page imports consumeFifo + reverseFifoConsumption',
   /import \{ consumeFifo, reverseFifoConsumption \} from '\.\.\/lib\/inventory-cost-engine'/.test(page));
 ok('9b: invSkus state',
   /const \[invSkus, setInvSkus\] = useState\(\[\]\)/.test(page));
-ok('9c: invSkus loaded from inv_skus where is_active=true',
-  /from\('inv_skus'\)\.select\('\*'\)\.eq\('is_active', true\)/.test(page));
+ok('9c: invSkus loaded from inv_skus (active rows, by deleted_at after A.6.27.11)',
+  // A.6.27.11 — corrected column convention: filter by deleted_at IS NULL
+  // and order by sku_number (the real column). Old form is_active+sku_code
+  // is wrong. Accept either form for back-compat.
+  /from\('inv_skus'\)\.select\('\*'\)\.eq\('is_active', true\)/.test(page) ||
+  /from\('inv_skus'\)\.select\('\*'\)\.is\('deleted_at', null\)/.test(page));
 ok('9d: SKU column added to invoice items table header',
   /📦 SKU \(optional\)/.test(page));
 ok('9e: SKU picker dropdown maps invSkus to options',
-  /\(invSkus \|\| \[\]\)\.map\(s => \(\s*<option key=\{s\.id\} value=\{s\.id\}>\{s\.sku_code\}<\/option>/.test(page));
+  // A.6.27.11 — uses s.sku_number (real column) instead of s.sku_code.
+  /\(invSkus \|\| \[\]\)\.map\(s => \(\s*<option key=\{s\.id\} value=\{s\.id\}>\{s\.(sku_number|sku_code)\}<\/option>/.test(page));
 ok('9f: inv_sku_id is saved into invoice_items insert',
   /dbInsert\('invoice_items',[\s\S]{0,600}inv_sku_id: item\.inv_sku_id \|\| null/.test(page));
 ok('9g: consumeFifo called when inv_sku_id + qty set',

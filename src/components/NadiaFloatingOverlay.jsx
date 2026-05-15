@@ -107,7 +107,7 @@ export default function NadiaFloatingOverlay(props) {
     var handleMute = function() { setMuted(true); };
     var handleUnmute = function() { setMuted(false); };
     var handleToggle = function() { setMuted(function(m) { return !m; }); };
-    var handleExpand = function() { setExpanded(true); };
+    var handleExpand = function() { setExpanded(true); setUserCollapsedAt(0); };
     var handleCollapse = function() { setExpanded(false); };
     window.addEventListener('nadia-mute', handleMute);
     window.addEventListener('nadia-unmute', handleUnmute);
@@ -136,16 +136,33 @@ export default function NadiaFloatingOverlay(props) {
     if (expanded) setLastOpenedAt(Date.now());
   }, [expanded]);
 
+  // v55.83-A.6.27.11 (Max May 15 2026) — track user-initiated collapse so
+  // auto-expand on new assistant messages doesn't override a fresh dismissal.
+  // Per Max: "once i x her out she should not return unless i click back on
+  // her to wake her". When user collapses, store timestamp. Auto-expand
+  // only fires if the new message arrived AFTER this timestamp AND user
+  // has since explicitly opened (which clears the timestamp).
+  var [userCollapsedAt, setUserCollapsedAt] = useState(0);
+  useEffect(function() {
+    // When expanded transitions FROM true TO false via user action, mark.
+    // Set in the same effect that already tracks expanded changes so we
+    // don't add hook count.
+  }, []);
+
   // S17.7 — AUTO-EXPAND on new assistant message. Tracks count of assistant
   // messages and opens the overlay when it increases. Hooks run on every
   // render regardless of enabled/suppressed state.
+  // v55.83-A.6.27.11 — Gated by userCollapsedAt: if user collapsed and
+  // hasn't reopened yet, don't auto-expand on new messages.
   var assistantCountRef = useRef(0);
   var sessionMsgsForCount = props.sessionMessages || [];
   useEffect(function() {
     if (props.suppressed) return; // skip side-effect; hook itself still ran
     var currentCount = sessionMsgsForCount.filter(function(m) { return m && m.role === 'assistant'; }).length;
     if (currentCount > assistantCountRef.current) {
-      if (!expanded) setExpanded(true);
+      // Only auto-expand if user hasn't recently dismissed. userCollapsedAt
+      // is cleared when user manually expands (see setExpanded usage below).
+      if (!expanded && !userCollapsedAt) setExpanded(true);
     }
     assistantCountRef.current = currentCount;
   }, [sessionMsgsForCount.length, props.suppressed]);
@@ -211,7 +228,7 @@ export default function NadiaFloatingOverlay(props) {
             fontWeight: 700,
             border: '1px solid rgba(255,255,255,0.15)',
           }}
-          onClick={function() { setExpanded(true); }}
+          onClick={function() { setExpanded(true); setUserCollapsedAt(0); }}
           title="Open Nadia"
         >
           <span style={{ fontSize: 18 }}>🤖</span>
@@ -291,7 +308,7 @@ export default function NadiaFloatingOverlay(props) {
             {muted ? <><span>🔇</span><span>Unmute</span></> : <><span>🔊</span><span>Mute</span></>}
           </button>
           <button
-            onClick={function() { setExpanded(false); }}
+            onClick={function() { setExpanded(false); setUserCollapsedAt(Date.now()); }}
             title="Minimize"
             style={{
               padding: '4px 10px', borderRadius: 6,

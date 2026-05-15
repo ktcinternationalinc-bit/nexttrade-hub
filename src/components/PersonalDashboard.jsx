@@ -16,7 +16,18 @@ const PIPELINE_STAGES = [
   { v: 'lost', l: 'Lost', c: '#ef4444', icon: '❌' },
 ];
 
-export default function PersonalDashboard({ user, userProfile, isAdmin, isSuperAdmin, invoices, customers, navigate, fE, users, chatSurface }) {
+export default function PersonalDashboard({ user, userProfile, isAdmin, isSuperAdmin, invoices, customers, navigate, fE, users, chatSurface, renderSection }) {
+  // v55.83-A.6.27.11 (Max May 15 2026) — renderSection prop:
+  //   undefined / 'both' → render everything (legacy behavior)
+  //   'ai'              → render ONLY the AI hero + bug retest card
+  //   'rest'            → render ONLY summary cards, Today widget,
+  //                       Reminders, Monthly Sales
+  // This split lets page.jsx slot the Daily Priorities GUI BETWEEN the
+  // AI hero and the rest, per Max's spec: "These should be kept but go
+  // below (not above) the new dashboard GUI (overdue, new tickets etc...)".
+  var section = renderSection || 'both';
+  var showAI = section === 'both' || section === 'ai';
+  var showRest = section === 'both' || section === 'rest';
   const [tickets, setTickets] = useState([]);
   const [events, setEvents] = useState([]);
   const [followUps, setFollowUps] = useState([]);
@@ -169,6 +180,7 @@ export default function PersonalDashboard({ user, userProfile, isAdmin, isSuperA
           Coach section, highlighted briefly.
         - Each tile shows a one-line summary (urgent items count for
           Nadia, pending HR items + new responses for Jenna). */}
+    {showAI && (<>
     <AssistantsBar
       user={user} userProfile={userProfile} users={users}
       tickets={tickets} checks={[]}
@@ -181,16 +193,11 @@ export default function PersonalDashboard({ user, userProfile, isAdmin, isSuperA
       }}
     />
 
-    {allOverdue.length > 0 && (<div className="bg-red-50 rounded-xl p-4 mb-4 border-2 border-red-300">
-      <h3 className="text-sm font-extrabold text-red-700 mb-2">🚨 OVERDUE ({allOverdue.length})</h3>
-      <div className="space-y-1.5 max-h-[200px] overflow-auto">{allOverdue.map((item, i) => {
-        const d = Math.floor((Date.now() - new Date(item.due).getTime()) / 86400000);
-        return (<div key={i} className="flex justify-between items-center py-1.5 px-2 bg-red-100 rounded border border-red-200">
-          <div className="flex items-center gap-2 flex-1"><span className="text-xs">{item.type==='ticket'?'🎫':item.type==='followup'?'📞':'⏰'}</span>
-            <div><div className="text-xs font-bold text-red-800">{item.title}</div>
-              <div className="text-[10px] text-red-600">Due: {item.due}{item.assignee&&' • 👤 '+item.assignee}{item.customer&&' • '+item.customer}{item.status&&' • '+item.status}</div></div></div>
-          <span className="text-xs font-extrabold text-red-700 whitespace-nowrap">{d}d late</span></div>);
-      })}</div></div>)}
+    {/* v55.83-A.6.27.11 (Max May 15 2026) — REMOVED the entire OVERDUE
+        banner. The new DashboardPrioritySections (rendered in page.jsx above
+        this component) handles overdue tickets. Overdue follow-ups and
+        reminders surface through the Reminders widget. The standalone
+        red banner was double-display per Max's screenshot. */}
 
     {/* v55.71 — MyHRDesk and MyPerformance NO LONGER mount here directly.
         They mount INSIDE the AssistantsBar's expanded Jenna and Sara panels
@@ -245,7 +252,9 @@ export default function PersonalDashboard({ user, userProfile, isAdmin, isSuperA
         </div>
       </div>
     )}
+    </>)}{/* v55.83-A.6.27.11 — end showAI section */}
 
+    {showRest && (<>
     {/* v55.83-A.6.22 — REMOVED "My Tickets" stat card (duplicate of new priority cards).
         v55.83-A.6.23 — REMOVED "Assigned by Me" stat card. Now redundant because the
         new DashboardPrioritySections cluster shows delegated tickets as the "📤 I Delegated"
@@ -475,5 +484,6 @@ export default function PersonalDashboard({ user, userProfile, isAdmin, isSuperA
         </div>
       );
     })()}
+    </>)}{/* v55.83-A.6.27.11 — end showRest section */}
   </div>);
 }

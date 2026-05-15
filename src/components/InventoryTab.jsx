@@ -46,7 +46,7 @@ export default function InventoryTab({ userProfile, modulePerms, toast }) {
     async function load() {
       try {
         var [sResp, wResp] = await Promise.all([
-          supabase.from('inv_skus').select('*').eq('is_active', true).order('sku_code'),
+          supabase.from('inv_skus').select('*').is('deleted_at', null).order('sku_number'),
           supabase.from('inv_warehouses').select('*').eq('is_active', true).order('name'),
         ]);
         if (cancelled) return;

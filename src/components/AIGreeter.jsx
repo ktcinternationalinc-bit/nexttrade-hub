@@ -524,7 +524,27 @@ export default function AIGreeter({ user, userProfile, users, tickets, invoices,
     }
 
     // Tickets
-    var myTickets = (tickets || []).filter(function(t) { return t.assigned_to === myId && t.status !== 'Closed'; });
+    // v55.83-A.6.27.11 (Max May 15 2026) — Broaden "my tickets" to match
+    // what the dashboard Priority cards show. Previously this only counted
+    // assigned_to === myId, so super_admin Max who creates and delegates
+    // tickets but isn't usually the assignee saw "no open tickets" from
+    // Nadia even when he had 30+ in flight. Now include:
+    //   - tickets I'm the primary assignee on
+    //   - tickets I created (delegated to others)
+    //   - tickets where I'm an additional assignee
+    // Same private/confidential rules already applied upstream in dashTickets.
+    var myTickets = (tickets || []).filter(function(t) {
+      if (t.status === 'Closed') return false;
+      if (t.assigned_to === myId) return true;
+      if (t.created_by === myId) return true;
+      try {
+        var extras = typeof t.additional_assignees === 'string'
+          ? JSON.parse(t.additional_assignees)
+          : t.additional_assignees;
+        if (Array.isArray(extras) && extras.indexOf(myId) >= 0) return true;
+      } catch (_) {}
+      return false;
+    });
     var overdueTickets = myTickets.filter(function(t) { return t.due_date && t.due_date < todayStr; });
     var dueTodayTickets = myTickets.filter(function(t) { return t.due_date === todayStr; });
     var unackedTickets = myTickets.filter(function(t) { return t.status === 'New'; }); // unacknowledged — user hasn't accepted yet

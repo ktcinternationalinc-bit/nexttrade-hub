@@ -618,24 +618,33 @@ function FloatingMini(props) {
 }
 
 function StatCard(props) {
-  // v55.83-A.6.27.9 (Max May 15 2026) — improved contrast and typography.
-  // Previous: text-[9px] opacity-70 label + soft -100/-800 palette. The
-  // labels were barely readable, especially on the dark dashboard background
-  // and on smaller screens. Now: label at text-[11px] with full opacity,
-  // value cranked to text-3xl + black weight, stronger border, deeper text
-  // color (-950) for max contrast on the lighter tile background.
-  var colorClasses = {
-    amber: 'bg-amber-100 text-amber-950 border-amber-400',
-    blue: 'bg-sky-100 text-sky-950 border-sky-400',
-    rose: 'bg-rose-100 text-rose-950 border-rose-400',
-    violet: 'bg-violet-100 text-violet-950 border-violet-400',
+  // v55.83-A.6.27.11 (Max May 15 2026) — Max's screenshot showed the labels
+  // rendering near-invisible (looked white/washed-out) despite the -950 color.
+  // Root cause: small uppercase text in a colored hue blends with the matching
+  // pastel background at this font size. Fix: force label to slate-900 (almost
+  // black) which gives high contrast on EVERY pastel tile bg. Only the big
+  // numeric VALUE keeps the colored hue — that's what carries the
+  // color-coding (amber=ack, sky=due, rose=overdue, violet=checks).
+  // RULE per Max: "DO NOT USE WHITE FOR TEXT FONT".
+  var valueColor = {
+    amber: 'text-amber-900',
+    blue: 'text-sky-900',
+    rose: 'text-rose-900',
+    violet: 'text-violet-900',
   };
-  var c = colorClasses[props.color] || colorClasses.blue;
+  var bgClass = {
+    amber: 'bg-amber-100 border-amber-400',
+    blue: 'bg-sky-100 border-sky-400',
+    rose: 'bg-rose-100 border-rose-400',
+    violet: 'bg-violet-100 border-violet-400',
+  };
+  var bg = bgClass[props.color] || bgClass.blue;
+  var vc = valueColor[props.color] || valueColor.blue;
   var hot = Number(props.value) > 0;
   return (
-    <div className={'rounded-lg p-3 border-2 transition ' + c + (hot ? ' shadow-md' : ' opacity-90')}>
-      <div className="text-[11px] font-extrabold uppercase tracking-wide">{props.label}</div>
-      <div className="text-3xl font-black mt-1 leading-none">{props.value}</div>
+    <div className={'rounded-lg p-3 border-2 transition ' + bg + (hot ? ' shadow-md' : ' opacity-90')}>
+      <div className="text-xs font-black uppercase tracking-wide text-slate-900">{props.label}</div>
+      <div className={'text-3xl font-black mt-1 leading-none ' + vc}>{props.value}</div>
     </div>
   );
 }

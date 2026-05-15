@@ -220,8 +220,8 @@ export default function InventoryPnL({ skus, toast }) {
                       <td className="px-2 py-2">
                         {r.sku ? (
                           <div>
-                            <div className="font-bold">{r.sku.sku_code}</div>
-                            <div className="text-[10px] text-slate-500">{r.sku.name}</div>
+                            <div className="font-bold">{r.sku.sku_number}</div>
+                            <div className="text-[10px] text-slate-500">{r.sku.description}</div>
                           </div>
                         ) : (
                           <span className="font-mono text-[10px] text-slate-400">{r.skuId.substring(0, 8)}…</span>

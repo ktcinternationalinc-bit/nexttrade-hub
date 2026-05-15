@@ -44,6 +44,12 @@ export default function SystemTicketsPanel({ userId, isAdmin, getUserName, sanit
   var [submitting, setSubmitting] = useState(false);
   var [confirmDel, setConfirmDel] = useState(null);
   var [busyId, setBusyId] = useState(null);
+  // v55.83-A.6.27.11 (Max May 15 2026) — open ticket in an enlarged modal
+  // so the user can read full content + see attachments in detail.
+  var [expandedTicket, setExpandedTicket] = useState(null);
+  // v55.83-A.6.27.11 — toggle private/non-private after creation (super-admin only).
+  // Per Max: "super admin should be able to make a regular ticket private
+  // after it has been created".
   // v55.82-W (Max May 12 2026) — system ticket attachments. Files are
   // uploaded to Supabase Storage bucket 'ticket-attachments' and the
   // resulting public URLs are stored on system_tickets.attachments as
@@ -208,6 +214,40 @@ export default function SystemTicketsPanel({ userId, isAdmin, getUserName, sanit
     } catch (err) {
       var msg = (err && err.message) || String(err);
       if (toast) toast.error(msg); else alert(msg);
+    } finally {
+      setBusyId(null);
+    }
+  };
+
+  // v55.83-A.6.27.11 (Max May 15 2026) — flip a system ticket's private flag
+  // after creation. Super-admin only. When making private, sets private_to
+  // to the original creator so they retain access (alongside super_admin).
+  var togglePrivate = async function (ticket) {
+    if (busyId) return;
+    if (!isAdmin) {
+      if (toast) toast.warn && toast.warn('Only super admins can change private status');
+      return;
+    }
+    var makePrivate = !ticket.is_private;
+    var msg = makePrivate
+      ? 'Mark this ticket PRIVATE? Only the original reporter and super admins will be able to see it.'
+      : 'Make this ticket PUBLIC? It will become visible to all users with system ticket access.';
+    if (!window.confirm(msg)) return;
+    setBusyId(ticket.id);
+    try {
+      var patch = makePrivate
+        ? { is_private: true, private_to: ticket.created_by || userId }
+        : { is_private: false, private_to: null };
+      await dbUpdate('system_tickets', ticket.id, patch, userId);
+      if (toast) toast.success(makePrivate ? 'Marked private' : 'Made public');
+      // Update local view (expanded modal might be open with stale flag)
+      setExpandedTicket(function (cur) {
+        return cur && cur.id === ticket.id ? Object.assign({}, cur, patch) : cur;
+      });
+      await load();
+    } catch (err) {
+      var em = (err && err.message) || String(err);
+      if (toast) toast.error(em); else alert(em);
     } finally {
       setBusyId(null);
     }
@@ -519,7 +559,11 @@ export default function SystemTicketsPanel({ userId, isAdmin, getUserName, sanit
           )}
           {sorted.map(function (t) {
             return (
-              <div key={t.id} className="bg-white rounded-xl p-4 border border-slate-100">
+              <div key={t.id}
+                onClick={function () { setExpandedTicket(t); }}
+                className="bg-white rounded-xl p-4 border border-slate-100 cursor-pointer hover:shadow hover:border-blue-200 transition"
+                title="Click to open enlarged view"
+              >
                 <div className="flex justify-between items-start">
                   <div className="flex-1">
                     <div className="flex items-center gap-2 mb-1 flex-wrap">
@@ -549,6 +593,7 @@ export default function SystemTicketsPanel({ userId, isAdmin, getUserName, sanit
                               href={att.url}
                               target="_blank"
                               rel="noopener noreferrer"
+                              onClick={function (e) { e.stopPropagation(); }}
                               className="inline-flex items-center gap-1 px-2 py-1 rounded bg-blue-50 border border-blue-200 text-[10px] text-blue-800 hover:bg-blue-100 hover:underline"
                               title={'Open ' + att.name + ' (' + Math.round((att.size || 0) / 1024) + ' KB)'}
                             >
@@ -574,7 +619,8 @@ export default function SystemTicketsPanel({ userId, isAdmin, getUserName, sanit
                       {t.created_at ? fmtET(t.created_at, 'shortdate') : ''} · {(getUserName && getUserName(t.created_by)) || 'Unknown'}
                     </div>
                   </div>
-                  <div className="flex flex-col gap-1 flex-shrink-0 ml-2">
+                  <div className="flex flex-col gap-1 flex-shrink-0 ml-2"
+                    onClick={function (e) { e.stopPropagation(); }}>
                     {isAdmin && (
                       <label className="flex items-center gap-1 text-[10px] font-semibold text-indigo-600 cursor-pointer select-none px-2 py-1 rounded hover:bg-indigo-50">
                         <input
@@ -751,6 +797,106 @@ export default function SystemTicketsPanel({ userId, isAdmin, getUserName, sanit
               >
                 {busyId === confirmDel.id ? '⏳ Deleting…' : 'Delete Permanently'}
               </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* v55.83-A.6.27.11 (Max May 15 2026) — Enlarged ticket modal.
+          Click anywhere in the backdrop to close. Click inside the modal
+          content does not close. Attachments render as larger image
+          thumbnails (192px square) or prominent link chips. Admin gets
+          a "Make Private / Make Public" toggle. */}
+      {expandedTicket && (
+        <div className="fixed inset-0 bg-black/60 z-[280] flex items-start justify-center p-4 overflow-auto"
+          onClick={function () { setExpandedTicket(null); }}>
+          <div className="bg-white rounded-xl shadow-2xl w-full max-w-3xl my-8 max-h-[90vh] overflow-auto"
+            onClick={function (e) { e.stopPropagation(); }}>
+            <div className="sticky top-0 z-10 bg-white border-b border-slate-200 px-5 py-3 flex items-start justify-between gap-3">
+              <div className="flex-1 min-w-0">
+                <div className="flex items-center gap-2 flex-wrap mb-1">
+                  <span className="text-xs font-mono text-slate-400">{expandedTicket.ticket_number}</span>
+                  <span>{CATS[expandedTicket.category] || '🐛'}</span>
+                  <span>{PRIS[expandedTicket.priority] || '🟡'}</span>
+                  <span className={'px-2 py-0.5 rounded text-[10px] font-bold ' + (STATS[expandedTicket.status] || STATS.Open)}>{expandedTicket.status}</span>
+                  {expandedTicket.is_private && (
+                    <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-slate-800 text-white">🔒 Private</span>
+                  )}
+                </div>
+                <h3 className="text-lg font-extrabold text-slate-900">{expandedTicket.title}</h3>
+                <div className="text-[10px] text-slate-500 mt-1">
+                  {expandedTicket.created_at ? fmtET(expandedTicket.created_at, 'shortdate') : ''} · {(getUserName && getUserName(expandedTicket.created_by)) || 'Unknown'}
+                </div>
+              </div>
+              <button onClick={function () { setExpandedTicket(null); }}
+                className="px-3 py-1.5 rounded border border-slate-300 hover:bg-slate-50 text-sm font-bold text-slate-700">
+                ✕ Close
+              </button>
+            </div>
+            <div className="p-5 space-y-4">
+              {expandedTicket.description && (
+                <div>
+                  <div className="text-[11px] font-bold text-slate-600 uppercase mb-1">Description</div>
+                  <div className="text-sm text-slate-800 whitespace-pre-wrap leading-relaxed">{expandedTicket.description}</div>
+                </div>
+              )}
+              {expandedTicket.attachments && Array.isArray(expandedTicket.attachments) && expandedTicket.attachments.length > 0 && (
+                <div>
+                  <div className="text-[11px] font-bold text-slate-600 uppercase mb-2">Attachments &amp; links ({expandedTicket.attachments.length})</div>
+                  <div className="grid grid-cols-2 md:grid-cols-3 gap-2">
+                    {expandedTicket.attachments.map(function (att, i) {
+                      var isImg = (att.type || '').indexOf('image/') === 0;
+                      if (isImg) {
+                        return (
+                          <a key={i} href={att.url} target="_blank" rel="noopener noreferrer"
+                            className="block rounded border border-slate-200 overflow-hidden hover:border-blue-400 hover:shadow"
+                            title={att.name}>
+                            <img src={att.url} alt={att.name}
+                              className="w-full h-48 object-cover bg-slate-50" />
+                            <div className="px-2 py-1 text-[10px] text-slate-600 truncate">{att.name}</div>
+                          </a>
+                        );
+                      }
+                      return (
+                        <a key={i} href={att.url} target="_blank" rel="noopener noreferrer"
+                          className="flex items-center gap-2 px-3 py-2 rounded bg-blue-50 border border-blue-200 text-xs text-blue-800 hover:bg-blue-100 hover:underline"
+                          title={'Open ' + att.name}>
+                          📎 <span className="truncate flex-1">{att.name}</span>
+                          <span className="text-[9px] text-blue-500">{Math.round((att.size || 0) / 1024)}KB</span>
+                        </a>
+                      );
+                    })}
+                  </div>
+                </div>
+              )}
+              {expandedTicket.claude_fix_notes && (
+                <div className="bg-violet-50 border border-violet-200 rounded p-3">
+                  <div className="text-[11px] font-bold text-violet-800 uppercase mb-1">Claude fix notes ({expandedTicket.claude_fixed_in_build_version})</div>
+                  <div className="text-xs text-violet-900 whitespace-pre-wrap">{expandedTicket.claude_fix_notes}</div>
+                </div>
+              )}
+              {expandedTicket.retest_notes && (
+                <div className="bg-amber-50 border border-amber-200 rounded p-3">
+                  <div className="text-[11px] font-bold text-amber-800 uppercase mb-1">Retest notes</div>
+                  <div className="text-xs text-amber-900 whitespace-pre-wrap">{expandedTicket.retest_notes}</div>
+                </div>
+              )}
+              {/* Admin actions row */}
+              {isAdmin && (
+                <div className="pt-3 border-t border-slate-200 flex items-center gap-2 flex-wrap">
+                  <button onClick={function () { togglePrivate(expandedTicket); }}
+                    disabled={busyId === expandedTicket.id}
+                    className={'px-3 py-1.5 rounded text-xs font-bold disabled:opacity-50 ' +
+                      (expandedTicket.is_private ? 'bg-slate-200 text-slate-800 hover:bg-slate-300' : 'bg-slate-800 text-white hover:bg-slate-900')}>
+                    {expandedTicket.is_private ? '🔓 Make Public' : '🔒 Make Private'}
+                  </button>
+                  <span className="text-[10px] text-slate-500">
+                    {expandedTicket.is_private
+                      ? 'Currently visible only to the original reporter and super admins.'
+                      : 'Currently visible to all users with system ticket access.'}
+                  </span>
+                </div>
+              )}
             </div>
           </div>
         </div>

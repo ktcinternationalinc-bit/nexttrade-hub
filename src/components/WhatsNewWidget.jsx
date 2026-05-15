@@ -33,6 +33,32 @@ import { supabase } from '../lib/supabase';
 //     WhatsApp, the calendar, the Sales tab.
 export const BUILD_HISTORY = [
   {
+    version: 'v55.83-A.6.27.11',
+    date: '2026-05-15',
+    label: 'Dashboard cleanup + System Tickets enlarged view + AI fixes',
+    items: [
+      '**Dashboard is reorganized again.** Daily Priorities GUI (Overdue, Recent Updates, Newly Assigned) now appears right after the AI assistants. Summary cards (Team Tickets, Today\'s Events, Follow-ups), the Today widget, Reminders, and Monthly Sales now sit BELOW it — not above. The duplicate "OVERDUE" red banner is gone (the new GUI handles it).',
+      '**Labels on the stat tiles are now readable.** Need Ack / Due Today / Overdue / Checks Due labels were rendering near-invisible white on pastel. Now they\'re dark slate-900 (near-black) for guaranteed contrast on every tile color. Numbers keep their color coding.',
+      '**Financial data is locked down.** No one except super admins or users with Treasury access can see invoices, cash register, bank transactions, or Egypt Bank totals on the dashboard. Monthly Sales stays visible to everyone (sales reps still see their numbers).',
+      '**Inventory: adding SKUs now works correctly.** The wrong column name (`sku_code`) was being used in 4 internal components — the system thought SKUs didn\'t exist. Fixed to `sku_number` everywhere, plus made shipment line-item entry more discoverable with a clear "What\'s next?" banner explaining you add SKUs in the shipment detail view after creating a draft.',
+      '**Inventory adjustments handle stock shortfall properly.** Before, trying to damage 50 units when only 10 are in stock would silently record a phantom -50 movement. Now it asks: cancel, or proceed with the actual 10 (and the adjustment is corrected to match what was actually drained).',
+      '**System Tickets open in an enlarged modal.** Click any ticket card to see full description, full-size attachment thumbnails (192px images), and link chips. Super admins get a "🔒 Make Private / 🔓 Make Public" toggle inside the modal to flip a ticket\'s visibility after it\'s been created.',
+      '**Shipping rates: trucking rates now have their own section.** New top-of-tab toggle: All Modes / 🚢 Ocean / 🚛 Trucking / ✈️ Air. Switch to Trucking to see only truck rates.',
+      '**Shipping rates: bubble cards now show ports AND countries.** Was just "USA → ALGERIA", now shows "Houston, USA → Skikda, ALGERIA" when port info is available — easier to spot the route you want.',
+      '**Nadia stops returning after you close her.** Once you click the minimize button or X out, she stays closed — no more auto-popping back open on the next assistant message. Click her avatar or the pill to bring her back.',
+      '**Nadia\'s briefing data is correct now.** She no longer claims "you haven\'t logged in a week" when you log in daily (now cross-references the newer login_events table). She no longer says "no open tickets" when you have 30 in flight (now counts tickets you created and delegated, not just tickets directly assigned to you).',
+      { superAdminOnly: true, text: 'AssistantsBar StatCard: label changed from text-amber-950 (etc) to text-slate-900. Per Max rule "DO NOT USE WHITE FOR TEXT FONT" — small uppercase colored hue on matching pastel bg was reading as white at small sizes. Value keeps colored hue at -900 family.' },
+      { superAdminOnly: true, text: 'PersonalDashboard now accepts renderSection prop ("ai" | "rest" | "both" default). page.jsx mounts twice: order:1 wrapper renders ai-only (AssistantsBar + bug-retest), then within order:2 cluster after PendingBankConfirmations a second mount renders rest-only (summary cards + Today + Reminders + Monthly Sales). This puts the Daily Priorities GUI between the two halves.' },
+      { superAdminOnly: true, text: 'PendingBankConfirmationsWidget canView now: isSuperAdmin OR modulePerms[Treasury] OR modulePerms[View Financial Reports]. Treasury permission alone was missing before. FINANCIAL OVERVIEW + COMMAND CENTER block in page.jsx wrapped in outer (isSuperAdmin || modulePerms[Treasury]) gate. Sales-only users no longer see invoices/cash sections on dashboard.' },
+      { superAdminOnly: true, text: 'Inventory column-name fix: AdjustmentsManager, InventoryReports, InventoryPnL, LayersLedger were using sku.sku_code and sku.name — real columns are sku_number and description. Batch-fixed via sed. InventoryTab + page.jsx loaders updated to .is(deleted_at, null).order(sku_number).' },
+      { superAdminOnly: true, text: 'NadiaFloatingOverlay: new userCollapsedAt state. Auto-expand on new assistant messages now skipped if userCollapsedAt > 0. Cleared on user expand (pill click or nadia-expand event). Set on user collapse (minimize button click). Full X dismissal unmounts and resets naturally.' },
+      { superAdminOnly: true, text: 'AIGreeter myTickets filter broadened: t.assigned_to === myId OR t.created_by === myId OR myId in additional_assignees JSON array. Matches DashboardPrioritySections "My Direct + I Delegated" union. page.jsx loginHistory loader now Promise.all([user_sessions, login_events]) and merges any login_events dates not in user_sessions before passing to AIGreeter.' },
+      { superAdminOnly: true, text: 'SystemTicketsPanel: expandedTicket state. Card onClick=setExpandedTicket(t). Action button container has onClick stopPropagation. Modal renders attachments as 192px image thumbnails or link chips. togglePrivate function flips is_private + sets private_to to original creator on private, clears on public. Admin-only button rendered in modal footer.' },
+      { superAdminOnly: true, text: 'AdjustmentsManager shortfall: when drain.shortfall > 0, prompt user with window.confirm. Cancel → reverseFifoConsumption(consumed) + return. Proceed → qty corrected to -drain.qtyDrained, movRow.qty_change updated, adj.qty_change persisted on the final inv_adjustments.update.' },
+      { superAdminOnly: true, text: 'ShippingRatesTab: filterMode toggle row added above stat tiles. Options: all/Ocean/Truck/Air. renderRouteCard reworked to always emit port+country format via fromLabel/fromSub/toLabel/toSub regardless of groupByPort. New What\'s Next blue banner in NewShipmentForm explaining the post-Create-Draft flow.' },
+    ],
+  },
+  {
     version: 'v55.83-A.6.27.9',
     date: '2026-05-15',
     label: 'Dashboard reorder + Inventory complete (Stages E + F shipped)',

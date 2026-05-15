@@ -1255,7 +1255,7 @@ export default function App() {
       } catch (e) { setCategoriesList([]); }
       // v55.83-A.6.27 — load Stage C/D inventory data for invoice SKU linkage
       try {
-        const { data: skuRows } = await supabase.from('inv_skus').select('*').eq('is_active', true).order('sku_code');
+        const { data: skuRows } = await supabase.from('inv_skus').select('*').is('deleted_at', null).order('sku_number');
         setInvSkus(skuRows || []);
       } catch (e) { setInvSkus([]); }
       try {
@@ -1998,18 +1998,52 @@ export default function App() {
     })();
   }, [checks, egyptBankTxns]);
 
-  // Load last login info for welcome briefing
+  // v55.83-A.6.27.11 (Max May 15 2026) — Fix Nadia briefing claiming
+  // "you haven't logged in a week" when the user is logged in RIGHT NOW.
+  // Root cause: user_sessions can miss recent activity. Cross-reference
+  // with the newer login_events table (per the same pattern AdminTab's
+  // "Did Not Login Yesterday" widget uses). Synthesize today's entry if
+  // login_events shows activity today but user_sessions doesn't.
   const [loginHistoryLoaded, setLoginHistoryLoaded] = useState(false);
   useEffect(() => {
     if (!userProfile?.id) return;
     (async () => {
       try {
-        const { data } = await supabase.from('user_sessions')
-          .select('date, login_at')
-          .eq('user_id', userProfile.id)
-          .order('login_at', { ascending: false })
-          .limit(30);
-        setLastLoginInfo(data || []);
+        const [sessionsResp, eventsResp] = await Promise.all([
+          supabase.from('user_sessions')
+            .select('date, login_at')
+            .eq('user_id', userProfile.id)
+            .order('login_at', { ascending: false })
+            .limit(30),
+          // login_events is the newer, more reliable source. Used to
+          // backfill any missing recent days. Don't fail if the table
+          // doesn't exist on a fresh deploy.
+          supabase.from('login_events')
+            .select('event_time, event_type')
+            .eq('user_id', userProfile.id)
+            .eq('event_type', 'login')
+            .order('event_time', { ascending: false })
+            .limit(30)
+            .then(r => r, () => ({ data: [] })),
+        ]);
+        var merged = sessionsResp.data || [];
+        // Build a Set of dates already in user_sessions
+        var haveDates = {};
+        merged.forEach(function (s) { if (s.date) haveDates[s.date] = true; });
+        // Append any login_events dates that aren't already covered
+        (eventsResp.data || []).forEach(function (e) {
+          if (!e.event_time) return;
+          var d = String(e.event_time).substring(0, 10);
+          if (!haveDates[d]) {
+            haveDates[d] = true;
+            merged.push({ date: d, login_at: e.event_time });
+          }
+        });
+        // Sort newest first so AIGreeter's previousDays[0] gives the right answer
+        merged.sort(function (a, b) {
+          return (b.login_at || b.date || '').localeCompare(a.login_at || a.date || '');
+        });
+        setLastLoginInfo(merged);
       } catch(e) { setLastLoginInfo([]); }
       setLoginHistoryLoaded(true);
     })();
@@ -4659,7 +4693,7 @@ export default function App() {
               {/* Brand mark — bracket prefix is a terminal callout convention. */}
               <span className="text-emerald-400 font-mono text-xs font-bold tracking-tight" style={{ fontFamily: '"JetBrains Mono", monospace' }}>[KTC]</span>
               <h1 className="text-sm font-bold text-white tracking-tight whitespace-nowrap">NEXTTRADE HUB</h1>
-              <span className="text-[10px] text-zinc-500 font-mono hidden md:inline" style={{ fontFamily: '"JetBrains Mono", monospace' }}>v55.83-A.6.27.10</span>
+              <span className="text-[10px] text-zinc-500 font-mono hidden md:inline" style={{ fontFamily: '"JetBrains Mono", monospace' }}>v55.83-A.6.27.11</span>
               {/* Live clock — terminals always show one. Updates via the
                   existing tick state; if not present, falls back to no clock. */}
               <span className="hidden lg:inline text-[10px] text-zinc-500 font-mono ml-2 pl-2 border-l border-zinc-800" style={{ fontFamily: '"JetBrains Mono", monospace' }}>
@@ -7403,7 +7437,7 @@ export default function App() {
                               className="w-full text-[10px] border rounded px-1 py-0.5">
                               <option value="">— none —</option>
                               {(invSkus || []).map(s => (
-                                <option key={s.id} value={s.id}>{s.sku_code}</option>
+                                <option key={s.id} value={s.id}>{s.sku_number}</option>
                               ))}
                             </select>
                           </td>
@@ -8136,6 +8170,18 @@ export default function App() {
               onSelectInvoice={(inv) => { setTab('sales'); setSelectedInvoice(inv); }}
               fE={fE}
             />
+
+            {/* v55.83-A.6.27.11 (Max May 15 2026) — Summary cards (Team
+                Tickets / Today's Events / Follow-ups) + Today widget +
+                Reminders + Monthly Sales mount HERE, below the new Daily
+                Priorities GUI. Previously they rendered ABOVE the priorities
+                inside the order:1 PersonalDashboard mount; the AI hero
+                stays up top (renderSection="ai" below) but the rest follows
+                the priorities per Max's spec: "These should be kept but go
+                below (not above) the new dashboard GUI". */}
+            <PersonalDashboard user={user} userProfile={userProfile} isAdmin={isAdmin} isSuperAdmin={isSuperAdmin}
+              invoices={invoices} customers={customers} navigate={navigate} fE={fE} users={teamUsers}
+              renderSection="rest" />
 
             {/* v55.83-A.6.27.9 — What's New is COLLAPSED by default now.
                 Was auto-prominent at the top, which was repetitive on every
@@ -9307,6 +9353,16 @@ export default function App() {
 
 
 
+            {/* v55.83-A.6.27.11 (Max May 15 2026) — Per Max: "no one except
+                the super admin and those with treasury access permissioning
+                can see any financial data on the dashboard from the banks
+                or transactions or sales or otherwise (except for monthly
+                sales)". Wrap the entire Financial Overview block in a single
+                top-level gate so Sales-only users no longer see ANY of it
+                (invoices, cash register, etc.). Monthly Sales is rendered
+                inside PersonalDashboard and stays available to all per the
+                "except for monthly sales" carve-out. */}
+            {(isSuperAdmin || modulePerms['Treasury']) && (<>
             {/* Section: Financial */}
             <div style={{ display: 'flex', alignItems: 'center', gap: 10, margin: '20px 0 12px' }}>
               <div style={{ width: 3, height: 20, borderRadius: 2, background: '#10b981' }} />
@@ -9340,7 +9396,9 @@ export default function App() {
               )}
             </div>
 
-            {/* Invoices — Sales or Treasury access */}
+            {/* Invoices — Sales or Treasury access. After A.6.27.11 the outer
+                gate is already Treasury OR super_admin, so this inner gate is
+                effectively the same; keeping it for defense-in-depth. */}
             {(isSuperAdmin || modulePerms['Sales'] || modulePerms['Treasury']) && (<>
             <div className="bg-blue-100 rounded-lg px-3 py-2 mb-3 flex justify-between items-center cursor-pointer" onClick={() => setHideSections({...hideSections, invoices: !hideSections.invoices})}>
               <span className="text-sm font-bold text-blue-800">📋 INVOICES / فواتير العملاء</span>
@@ -9625,6 +9683,7 @@ export default function App() {
             })()}
             </>)}{/* end treasury gate for buckets */}
             </div>{/* end financial-command */}
+            </>)}{/* v55.83-A.6.27.11 — end gate: super_admin OR Treasury only */}
 
             {/* ===== EGYPT BANK TRANSACTIONS DASHBOARD ===== */}
             {egyptBankTxns.length > 0 && (isSuperAdmin || modulePerms['Egypt Bank']) && (() => {
@@ -9968,7 +10027,7 @@ export default function App() {
               return (
                 <PersonalDashboard user={user} userProfile={userProfile} isAdmin={isAdmin} isSuperAdmin={isSuperAdmin}
                   invoices={invoices} customers={customers} navigate={navigate} fE={fE} users={teamUsers}
-                  chatSurface={nadiaChatSurface} />
+                  chatSurface={nadiaChatSurface} renderSection="ai" />
               );
             })()}
 
@@ -12400,7 +12459,7 @@ export default function App() {
                       latest fix is actually deployed. If he doesn't see this
                       tag in the modal, his browser is running stale JS. */}
                   <div className="mt-1.5 inline-block px-2 py-0.5 rounded bg-amber-900/60 text-amber-100 text-[10px] font-mono font-bold tracking-wide">
-                    BUILD v55.83-A.6.27.10
+                    BUILD v55.83-A.6.27.11
                   </div>
                 </div>
                 <button onClick={() => closePendingTreasuryModal()}
@@ -13035,7 +13094,7 @@ export default function App() {
                     معاملة قد تكون مكررة
                   </div>
                   <div className="mt-1.5 inline-block px-2 py-0.5 rounded bg-amber-900/60 text-amber-100 text-[10px] font-mono font-bold tracking-wide">
-                    BUILD v55.83-A.6.27.10
+                    BUILD v55.83-A.6.27.11
                   </div>
                 </div>
                 <button

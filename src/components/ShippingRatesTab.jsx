@@ -4510,6 +4510,32 @@ Date: ${today}`;
         <button onClick={()=>{setRequestQuoteData({vendor:null,origin:'',destination:'Egypt',container:'40ft'});}} className="px-3 py-1.5 bg-cyan-500 text-white rounded-lg text-xs font-semibold">📋 Request Rate</button>
       </div>
     </div>
+
+    {/* v55.83-A.6.27.11 (Max May 15 2026) — Transport mode tabs. Per Max:
+        "in the shipping rates section we need to create a section also for
+        trucking rates from different loading destination to destination
+        ports a separate tab". Uses the existing filterMode which already
+        scopes the entire view (cards, table, chart). Adding "+ Rate" while
+        on the Trucking tab pre-fills transport_mode='Truck'. */}
+    <div className="flex gap-1 mb-3 bg-slate-100 rounded-lg p-1 inline-flex">
+      <button onClick={() => setFilterMode('all')}
+        className={'px-4 py-1.5 rounded-md text-xs font-bold transition ' + (filterMode === 'all' ? 'bg-white shadow text-slate-900' : 'text-slate-600 hover:text-slate-900')}>
+        🌐 All Modes
+      </button>
+      <button onClick={() => setFilterMode('Ocean')}
+        className={'px-4 py-1.5 rounded-md text-xs font-bold transition ' + (filterMode === 'Ocean' ? 'bg-white shadow text-blue-700' : 'text-slate-600 hover:text-slate-900')}>
+        🚢 Ocean
+      </button>
+      <button onClick={() => setFilterMode('Truck')}
+        className={'px-4 py-1.5 rounded-md text-xs font-bold transition ' + (filterMode === 'Truck' ? 'bg-white shadow text-amber-700' : 'text-slate-600 hover:text-slate-900')}>
+        🚛 Trucking
+      </button>
+      <button onClick={() => setFilterMode('Air')}
+        className={'px-4 py-1.5 rounded-md text-xs font-bold transition ' + (filterMode === 'Air' ? 'bg-white shadow text-violet-700' : 'text-slate-600 hover:text-slate-900')}>
+        ✈️ Air
+      </button>
+    </div>
+
     <div className="grid grid-cols-5 gap-3 mb-4">
       <div className="bg-white rounded-lg p-3" style={{borderLeftWidth:3,borderLeftColor:'#0ea5e9'}}><div className="text-[10px] text-slate-500">Total</div><div className="text-lg font-extrabold">{rates.length}</div></div>
       <div className="bg-white rounded-lg p-3" style={{borderLeftWidth:3,borderLeftColor:'#10b981'}}><div className="text-[10px] text-slate-500">Active</div><div className="text-lg font-extrabold text-emerald-600">{rates.filter(r=>!isExpired(r.expiry_date)).length}</div></div>
@@ -4659,9 +4685,28 @@ Date: ${today}`;
       // version — only the wrapper changed.
       var renderRouteCard = function (rg) {
         var c = rg.cheapest;
+        // v55.83-A.6.27.11 (Max May 15 2026) — Always show port + country
+        // format when port info exists, regardless of groupByPort toggle.
+        // Per Max: "shipping rates on bubble should state POL and country
+        // to the POD and country so easier to identify".
+        var fromLabel, fromSub, toLabel, toSub;
+        if (rg.pol && rg.pol !== rg.origin) {
+          fromLabel = rg.pol;
+          fromSub = rg.origin; // country name
+        } else {
+          fromLabel = rg.origin;
+          fromSub = null;
+        }
+        if (rg.pod && rg.pod !== rg.destination) {
+          toLabel = rg.pod;
+          toSub = rg.destination;
+        } else {
+          toLabel = rg.destination;
+          toSub = null;
+        }
         return (
           <div key={rg.key} onClick={function(){setSelectedRoute({origin:rg.origin,destination:rg.destination,pol:rg.pol||null,pod:rg.pod||null});setView('route_detail');}} className="bg-white rounded-xl p-4 cursor-pointer border border-slate-200 hover:shadow-lg hover:-translate-y-0.5 transition-all">
-            <div className="flex justify-between items-start mb-2"><div><div className="text-sm font-extrabold text-blue-700">{groupByPort && rg.pol ? rg.pol : rg.origin}{groupByPort && rg.pol && rg.origin && rg.pol !== rg.origin && <span className="text-[9px] text-slate-500 font-normal ml-1">({rg.origin})</span>}</div><div className="text-[10px] text-slate-500">↓</div><div className="text-sm font-extrabold text-emerald-700">{groupByPort && rg.pod ? rg.pod : rg.destination}{groupByPort && rg.pod && rg.destination && rg.pod !== rg.destination && <span className="text-[9px] text-slate-500 font-normal ml-1">({rg.destination})</span>}</div></div><div className="text-right">{c?(<><div className="text-[9px] text-slate-500">Best Active</div><div className="text-lg font-extrabold text-emerald-600">{fCur(c.rate_amount,c.currency)}</div><div className="text-[9px] text-blue-500">{c.vendor_name}{c.shipping_line?' / '+c.shipping_line:''}</div><ExpiryBadge date={c.expiry_date}/></>):(<div className="text-xs text-red-400 font-bold">All Expired</div>)}</div></div>
+            <div className="flex justify-between items-start mb-2"><div><div className="text-sm font-extrabold text-blue-700">{fromLabel}{fromSub && <span className="text-[9px] text-slate-500 font-normal ml-1">, {fromSub}</span>}</div><div className="text-[10px] text-slate-500">↓</div><div className="text-sm font-extrabold text-emerald-700">{toLabel}{toSub && <span className="text-[9px] text-slate-500 font-normal ml-1">, {toSub}</span>}</div></div><div className="text-right">{c?(<><div className="text-[9px] text-slate-500">Best Active</div><div className="text-lg font-extrabold text-emerald-600">{fCur(c.rate_amount,c.currency)}</div><div className="text-[9px] text-blue-500">{c.vendor_name}{c.shipping_line?' / '+c.shipping_line:''}</div><ExpiryBadge date={c.expiry_date}/></>):(<div className="text-xs text-red-400 font-bold">All Expired</div>)}</div></div>
             {/* v55.63 — show TT / FT / ETD on the cheapest active rate when a port
                 is picked, so you can compare at a glance without opening the card. */}
             {groupByPort && c && (

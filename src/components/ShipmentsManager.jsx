@@ -376,8 +376,16 @@ function ShipmentCreateForm({ skus, warehouses, canEdit, myId, toast, onCancel, 
         </div>
       </div>
 
-      <div className="mt-3 text-[10px] text-slate-500">
-        Cost components (freight, customs, etc.) and SKU line items are added next, in the detail view.
+      <div className="mt-3 p-3 bg-blue-50 border-2 border-blue-200 rounded-lg">
+        <div className="text-xs font-bold text-blue-900 mb-1">📦 What's next?</div>
+        <div className="text-[11px] text-blue-800 leading-relaxed">
+          After you click <strong>Create Draft</strong> below, this shipment opens in detail view. There you can:
+        </div>
+        <ul className="text-[11px] text-blue-800 mt-1 pl-4 list-disc">
+          <li>Add cost components (freight, customs, port fees, etc.)</li>
+          <li>Click <strong>➕ Add SKU</strong> to attach the products you're receiving — for each one, qty + unit + optional weight</li>
+          <li>When goods arrive, click <strong>Mark Received</strong> to commit stock to inventory and create FIFO cost layers</li>
+        </ul>
       </div>
 
       <div className="flex justify-end gap-2 mt-3 pt-3 border-t border-slate-100">

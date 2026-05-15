@@ -117,7 +117,7 @@ export default function AdjustmentsManager({ skus, warehouses, userProfile, modu
 
   async function approveAdjustment(adj) {
     if (!canApprove) return;
-    if (!confirm('Approve adjustment: ' + (adj.adjustment_type) + ' ' + adj.qty_change + ' for ' + ((skuById[adj.sku_id] || {}).sku_code || adj.sku_id.substring(0,8)) + '?')) return;
+    if (!confirm('Approve adjustment: ' + (adj.adjustment_type) + ' ' + adj.qty_change + ' for ' + ((skuById[adj.sku_id] || {}).sku_number || adj.sku_id.substring(0,8)) + '?')) return;
     setBusyApproveId(adj.id);
     try {
       var qty = Number(adj.qty_change);
@@ -146,7 +146,27 @@ export default function AdjustmentsManager({ skus, warehouses, userProfile, modu
           movRow.total_cost_egp = drain.totalCogsEgp;
           consumed = drain.consumed;
           if (drain.shortfall > 0) {
-            toast && toast.warn && toast.warn('Stock shortfall: drained ' + drain.qtyDrained + ', short ' + drain.shortfall);
+            // v55.83-A.6.27.11 — shortfall handling. Block by default; let
+            // user choose to proceed with partial (in which case the
+            // adjustment's qty_change is updated to reflect what was
+            // ACTUALLY drained, otherwise we'd record a phantom -50 when
+            // only -10 came off layers).
+            var partialOK = window.confirm(
+              'Only ' + drain.qtyDrained + ' units in stock (you requested ' + Math.abs(qty) + ').\n\n' +
+              'OK = Adjust qty_change to ' + drain.qtyDrained + ' and proceed.\n' +
+              'Cancel = Cancel approval, leave adjustment pending.'
+            );
+            if (!partialOK) {
+              // Rollback the drain we already did
+              await reverseFifoConsumption(consumed);
+              setBusyApproveId(null);
+              return;
+            }
+            // Update qty on the adjustment record to match actual drained
+            qty = -drain.qtyDrained;
+            movRow.qty_change = qty;
+            // Reflect in the adjustment update below
+            adj = Object.assign({}, adj, { qty_change: qty });
           }
         } else if (drain && drain.error) {
           toast && toast.error && toast.error('Drain failed: ' + drain.error);
@@ -197,6 +217,8 @@ export default function AdjustmentsManager({ skus, warehouses, userProfile, modu
         approved_by: myId,
         approved_at: new Date().toISOString(),
         movement_id: mRes.data.id,
+        // v55.83-A.6.27.11 — persist any qty correction made during partial-drain flow
+        qty_change: qty,
       }).eq('id', adj.id);
       toast && toast.success && toast.success('Approved');
       await load();
@@ -256,7 +278,7 @@ export default function AdjustmentsManager({ skus, warehouses, userProfile, modu
                 <select value={form.sku_id} onChange={function (e) { setForm(Object.assign({}, form, { sku_id: e.target.value })); }}
                   className="w-full border border-slate-300 rounded px-2 py-1 text-xs">
                   <option value="">— select —</option>
-                  {(skus || []).map(function (s) { return <option key={s.id} value={s.id}>{s.sku_code} — {s.name}</option>; })}
+                  {(skus || []).map(function (s) { return <option key={s.id} value={s.id}>{s.sku_number} — {s.name}</option>; })}
                 </select>
               </div>
               <div>
@@ -350,7 +372,7 @@ export default function AdjustmentsManager({ skus, warehouses, userProfile, modu
                   return (
                     <tr key={a.id} className="border-t border-slate-100 hover:bg-slate-50">
                       <td className="px-2 py-2">{a.created_at ? a.created_at.substring(0, 10) : '—'}</td>
-                      <td className="px-2 py-2">{sku ? sku.sku_code : a.sku_id.substring(0, 8) + '…'}</td>
+                      <td className="px-2 py-2">{sku ? sku.sku_number : a.sku_id.substring(0, 8) + '…'}</td>
                       <td className="px-2 py-2">{wh ? wh.name : a.warehouse_id.substring(0, 8) + '…'}</td>
                       <td className="px-2 py-2">{typeDef ? typeDef.label : a.adjustment_type}</td>
                       <td className={'px-2 py-2 text-right font-mono font-bold ' + (q < 0 ? 'text-red-700' : 'text-emerald-700')}>
