@@ -34,9 +34,9 @@ ok('1a: validRatesForChart now requires effective_date (was expiry_date)',
   'spec point 1 — X-axis driven by effective date, not expiry'
 );
 
-ok('1b: Earliest effective month computed as starting point',
-  /firstMonth = validRatesForChart\.reduce[\s\S]{0,300}r\.effective_date\.substring\(0,7\)/.test(src),
-  'X-axis must start from the first existing effective month per spec'
+ok('1b: Earliest effective month computed as anchor (renamed to earliestInData in A.6.27.2)',
+  /(firstMonth|earliestInData) = validRatesForChart\.reduce[\s\S]{0,300}r\.effective_date\.substring\(0,7\)/.test(src),
+  'X-axis must derive from the first existing effective month (then capped to 24mo default per A.6.27.2)'
 );
 
 ok('1c: REGRESSION GUARD — old expiry-anchored validRates filter is gone',
@@ -122,8 +122,8 @@ ok('4d: Tooltip shows "last known — no newer rate" indicator on stale points',
 // SPEC #5 — Continuous monthly graph (no gaps)
 // ============================================================
 
-ok('5a: Months loop rolls forward continuously from firstMonth to endMonth',
-  /while \(cur <= endMonth && safety < 600\) \{[\s\S]{0,200}months\.push\(cur\);\s*cur = nextMonth\(cur\)/.test(src),
+ok('5a: Months loop rolls forward continuously from firstMonth to endMonth (safety 60 in A.6.27.2, was 600)',
+  /while \(cur <= endMonth && safety < (60|600)\) \{[\s\S]{0,200}months\.push\(cur\);\s*cur = nextMonth\(cur\)/.test(src),
   'spec point 5 — every month rendered, no gaps'
 );
 

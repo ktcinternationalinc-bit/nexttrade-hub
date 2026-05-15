@@ -2279,31 +2279,49 @@ Date: ${today}`;
           return eff.length >= 10 && amt > 0;
         });
 
-        // Build the continuous month timeline. Start = earliest effective
-        // month in the data; end = today's month (or the rateHistoryDt
-        // filter's month if narrower). If there are no valid rates, the
-        // chart shows its empty state below.
+        // Build the continuous month timeline.
+        // v55.83-A.6.27.2 (Max May 14 2026) — Cap the start to a sensible
+        // window. Previously: firstMonth = earliest effective_date in the
+        // data, which broke catastrophically if any rate row had a bad date
+        // like "2000-01-01" — the chart would span 317 months and collapse
+        // every dot into a single pixel (looked like one isolated point).
+        // Now: start = max(earliest_effective_date, today - 24 months) by
+        // default. If the user explicitly widens the period filter via
+        // rateHistoryDt, respect that. End: same as before — today or the
+        // latest expiry, whichever is later.
         var months = [];
         if (validRatesForChart.length > 0) {
-          var firstMonth = validRatesForChart.reduce(function(acc, r) {
+          var earliestInData = validRatesForChart.reduce(function(acc, r) {
             var m = r.effective_date.substring(0,7);
             return (!acc || m < acc) ? m : acc;
           }, null);
-          // End month: prefer the filter's "to" date if set, else today.
-          // v55.82-M — explicit slice() avoids tripping the b10 stale-UTC
-          // detector regex while doing the same thing.
+
+          // Default look-back: 24 months from today.
+          var today24Back = new Date();
+          today24Back.setMonth(today24Back.getMonth() - 24);
+          var defaultStart = today24Back.toISOString().slice(0, 7);
+
+          // Use the wider of (24 months back) vs (earliest data) — but
+          // never go earlier than the explicit rateHistoryDf filter
+          // if the user set one.
+          var firstMonth = earliestInData < defaultStart ? defaultStart : earliestInData;
+          if (rateHistoryDf && rateHistoryDf.length >= 7) {
+            var filterStart = rateHistoryDf.substring(0, 7);
+            firstMonth = filterStart;   // explicit user choice always wins
+          }
+          // Sanity: never go past today (end will fix the other side)
           var nowStr = (new Date()).toISOString().slice(0, 10);
           var endDateStr = rateHistoryDt && rateHistoryDt.length >= 10 ? rateHistoryDt : nowStr;
-          // Also extend if any rate's expiry pushes past the end date (so
-          // an active rate's tail shows up too).
           validRatesForChart.forEach(function(r) {
             if (r.expiry_date && r.expiry_date > endDateStr) endDateStr = r.expiry_date;
           });
           var endMonth = endDateStr.substring(0,7);
-          // Roll forward from firstMonth to endMonth, inclusive.
+
+          if (firstMonth > endMonth) firstMonth = endMonth;  // safety
+
           var cur = firstMonth;
           var safety = 0;
-          while (cur <= endMonth && safety < 600) { // 50 years max safety
+          while (cur <= endMonth && safety < 60) { // 5 years max safety
             months.push(cur);
             cur = nextMonth(cur);
             safety++;
