@@ -57,12 +57,7 @@ test('S17.11.7 Time period filter no longer contains "Active Only"', function() 
 });
 
 test('S17.11.8 Filter logic applies hideExpired AFTER date filters', function() {
-  // v55.83-A.6.27.5 — filter rewritten as multi-line block to ALWAYS show
-  // still-active rates regardless of period. Accept either old one-liner
-  // or new multi-line variant, as long as hideExpired runs at the end.
-  var oldShape = /if \(rateHistoryDf\) filtered = filtered\.filter\(r => \(r\.effective_date \|\| ''\) >= rateHistoryDf\);[\s\S]{0,120}if \(rateHistoryDt\)[\s\S]{0,120}if \(hideExpired\) filtered = filtered\.filter\(r => !isExpired\(r\.expiry_date\)\);/.test(tab);
-  var newShape = /if \(rateHistoryDf\) \{[\s\S]{0,600}if \(rateHistoryDt\) \{[\s\S]{0,600}if \(hideExpired\) filtered = filtered\.filter\(r => !isExpired\(r\.expiry_date\)\);/.test(tab);
-  assert(oldShape || newShape,
+  assert(/if \(rateHistoryDf\) filtered = filtered\.filter\(r => \(r\.effective_date \|\| ''\) >= rateHistoryDf\);[\s\S]{0,120}if \(rateHistoryDt\)[\s\S]{0,120}if \(hideExpired\) filtered = filtered\.filter\(r => !isExpired\(r\.expiry_date\)\);/.test(tab),
     'filter chain must use hideExpired (not rateHistoryMode===active)');
 });
 
