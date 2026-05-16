@@ -28,7 +28,8 @@ function ok(label, cond, hint) {
 
 // ── 1. StatCard contrast: label is slate-900 (NEVER white) ─────────
 ok('1a: StatCard label uses text-slate-900 (high contrast, never white)',
-  /<div className="text-xs font-black uppercase tracking-wide text-slate-900">\{props\.label\}<\/div>/.test(ab));
+  // Accepted forms: text-xs (A.6.27.11) or text-sm (A.6.27.12 bump)
+  /<div className="text-(xs|sm) font-black uppercase tracking-wide text-slate-900">\{props\.label\}<\/div>/.test(ab));
 ok('1b: StatCard value uses dark colored hue per palette',
   /amber: 'text-amber-900'/.test(ab) && /blue: 'text-sky-900'/.test(ab));
 ok('1c: regression — no white text classes for label',
@@ -129,8 +130,8 @@ ok('13c: qty_change persisted on approval',
   /qty_change: qty,/.test(adj));
 
 // ── 14. Version stamp ─────────────────────────────────────────────
-ok('14a: version stamp v55.83-A.6.27.11',
-  /BUILD v55\.83-A\.6\.27\.11/.test(page));
+ok('14a: version stamp v55.83-A.6.27.11 or later',
+  /BUILD v55\.83-A\.6\.27\.1[12]/.test(page));
 
 if (failures.length > 0) {
   console.log('\n❌ ' + failures.length + ' failure(s):');

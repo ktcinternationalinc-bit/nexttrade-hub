@@ -58,8 +58,10 @@ check('1.2 Tile padding bumped to p-4 sm:p-6 (was p-3 sm:p-4)',
   && /(transition-all duration-300|transition-\[transform,opacity\] duration-300)/.test(ab));
 check('1.3 Name text scaled up to text-3xl sm:text-4xl (was text-2xl sm:text-3xl)',
   /<h3 className="text-3xl sm:text-4xl font-extrabold text-white">/.test(ab));
-check('1.4 Role badge text scaled up to text-xs (was text-[10px])',
-  /<span className="text-xs font-bold uppercase tracking-wide px-2\.5 py-1 rounded-full bg-white\/30 backdrop-blur text-white">/.test(ab));
+check('1.4 Role badge has text-xs with high-contrast bg (A.6.27.12: bg-white text-slate-900)',
+  // A.6.27.12 — switched from bg-white/30 text-white (low contrast) to
+  // bg-white text-slate-900 for readability per Max May 15 2026.
+  /<span className="text-xs font-(bold|black) uppercase tracking-wide px-2\.5 py-1 rounded-full (bg-white text-slate-900 shadow|bg-white\/30 backdrop-blur text-white)">/.test(ab));
 check('1.5 Summary line text scaled up to text-sm (was text-xs)',
   /<p className="text-sm text-white font-semibold mt-2 px-2 leading-snug min-h-\[2\.5em\]"/.test(ab));
 check('1.6 Notification badge bumped to h-7 + px-2.5 (was h-6 + px-2)',

@@ -70,7 +70,7 @@ function renderDecisionPanel(d, keyId, lang) {
   );
 }
 
-export default function AIGreeter({ user, userProfile, users, tickets, invoices, treasury, checks, loginHistory, loginHistoryLoaded, lang, personality, greeterLang, onToggle, toast, enabled, hasGreeted, onGreeted, sessionMessages, onMessagesUpdate, contextTab, contextSelectedCustomer, contextSelectedInvoice, contextOpenTicketId, muted, selectedAssistant }) {
+export default function AIGreeter({ user, userProfile, users, tickets, invoices, treasury, checks, loginHistory, loginHistoryLoaded, lang, personality, greeterLang, onToggle, toast, enabled, hasGreeted, onGreeted, sessionMessages, onMessagesUpdate, contextTab, contextSelectedCustomer, contextSelectedInvoice, contextOpenTicketId, muted, selectedAssistant, modulePerms, isSuperAdmin }) {
   // v55.73 — Persona resolution. SAFE NADIA DEFAULT so the file behaves
   // identically when selectedAssistant is omitted (e.g. older mounts).
   // The voice/listening/recording engine continues to use the existing
@@ -533,8 +533,13 @@ export default function AIGreeter({ user, userProfile, users, tickets, invoices,
     //   - tickets I created (delegated to others)
     //   - tickets where I'm an additional assignee
     // Same private/confidential rules already applied upstream in dashTickets.
-    var myTickets = (tickets || []).filter(function(t) {
-      if (t.status === 'Closed') return false;
+    // v55.83-A.6.27.12 (Max May 15 2026) — build TWO ticket lists:
+    //   - myTickets: open only (drives "X overdue" / "Y due today" / etc.)
+    //   - allMyTickets: open + closed (drives history queries like
+    //     "what was that ticket about leather samples last month")
+    // Per Max: "nadia needs to get access to closed tickets as well when
+    // we ask for information about tickets".
+    var ticketBelongsToMe = function (t) {
       if (t.assigned_to === myId) return true;
       if (t.created_by === myId) return true;
       try {
@@ -544,7 +549,9 @@ export default function AIGreeter({ user, userProfile, users, tickets, invoices,
         if (Array.isArray(extras) && extras.indexOf(myId) >= 0) return true;
       } catch (_) {}
       return false;
-    });
+    };
+    var allMyTickets = (tickets || []).filter(ticketBelongsToMe);
+    var myTickets = allMyTickets.filter(function (t) { return t.status !== 'Closed'; });
     var overdueTickets = myTickets.filter(function(t) { return t.due_date && t.due_date < todayStr; });
     var dueTodayTickets = myTickets.filter(function(t) { return t.due_date === todayStr; });
     var unackedTickets = myTickets.filter(function(t) { return t.status === 'New'; }); // unacknowledged — user hasn't accepted yet
@@ -612,12 +619,39 @@ export default function AIGreeter({ user, userProfile, users, tickets, invoices,
     if (overdueTickets.length) {
       ctx += '🔴 OVERDUE tickets: ' + overdueTickets.length + ' — ' + overdueTickets.map(function(t) { return (t.ticket_number || '') + ' (was due ' + t.due_date + ')'; }).join(', ') + '\n';
     }
+    // v55.83-A.6.27.12 (Max May 15 2026) — gate financial data behind
+    // permissions. Per Max: "nadia should not be divulging treasury and
+    // accounting data to people who have no permission for treasury data
+    // or financial data". Super_admin always sees everything; Treasury or
+    // View Financial Reports permission grants financial-data access in
+    // the briefing.
+    var canSeeFinancials = isSuperAdmin
+      || (modulePerms && modulePerms['Treasury'] === true)
+      || (modulePerms && modulePerms['View Financial Reports'] === true);
+    var canSeeSales = canSeeFinancials
+      || (modulePerms && modulePerms['Sales'] === true);
+
     ctx += 'Total open tickets: ' + myTickets.length + '\n';
     if (staleTickets.length) ctx += 'Stale (not updated 3+ days): ' + staleTickets.length + ' — ' + staleTickets.slice(0, 5).map(function(t) { return (t.ticket_number || '') + ' ' + (t.title || ''); }).join(', ') + '. Nudge them!\n';
-    if (overdueInvoices.length) ctx += 'Overdue invoices: ' + overdueInvoices.length + ', EGP ' + overdueInvoices.reduce(function(a, i) { return a + Number(i.outstanding || 0); }, 0).toLocaleString() + '\n';
-    if (pendingChecks.length) ctx += 'Checks due today: ' + pendingChecks.length + ', EGP ' + pendingChecks.reduce(function(a, c) { return a + Number(c.amount || 0); }, 0).toLocaleString() + '\n';
-    ctx += 'Treasury net: EGP ' + net.toLocaleString() + '\n';
-    if (!myTickets.length && !overdueInvoices.length && !pendingChecks.length) ctx += 'No urgent items — all clear!\n';
+    // v55.83-A.6.27.12 — closed ticket access for history queries. Nadia
+    // can reference these but they don't add to "open" counts. List the
+    // 10 most recently-closed so she can answer "what was that ticket about
+    // X" questions without needing a fresh DB call.
+    var recentlyClosed = allMyTickets.filter(function (t) { return t.status === 'Closed'; })
+      .sort(function (a, b) { return (b.updated_at || b.created_at || '').localeCompare(a.updated_at || a.created_at || ''); })
+      .slice(0, 10);
+    if (recentlyClosed.length) {
+      ctx += 'Recently CLOSED tickets (available for history queries; not in active counts): ' +
+        recentlyClosed.map(function (t) { return (t.ticket_number || '') + ' "' + (t.title || '').substring(0, 50) + '"'; }).join(', ') + '\n';
+    }
+    if (canSeeFinancials) {
+      if (overdueInvoices.length) ctx += 'Overdue invoices: ' + overdueInvoices.length + ', EGP ' + overdueInvoices.reduce(function(a, i) { return a + Number(i.outstanding || 0); }, 0).toLocaleString() + '\n';
+      if (pendingChecks.length) ctx += 'Checks due today: ' + pendingChecks.length + ', EGP ' + pendingChecks.reduce(function(a, c) { return a + Number(c.amount || 0); }, 0).toLocaleString() + '\n';
+      ctx += 'Treasury net: EGP ' + net.toLocaleString() + '\n';
+    } else {
+      ctx += '\n⛔ IMPORTANT: This user does NOT have Treasury or Financial Reports permissions. DO NOT discuss invoice amounts, treasury totals, cash flow, debts, check amounts, or any financial figures. If they ask about financials, tell them politely that they don\'t have access and to ask a super admin or someone with treasury permissions.\n';
+    }
+    if (!myTickets.length && (!canSeeFinancials || (!overdueInvoices.length && !pendingChecks.length))) ctx += 'No urgent items — all clear!\n';
 
     // S15 — Phase 2 sub-project 3: Context-aware screens.
     // Inject what the user is currently looking at so Nadia can tailor her
@@ -2377,6 +2411,16 @@ export default function AIGreeter({ user, userProfile, users, tickets, invoices,
       {/* Chat */}
       <div className="px-4 py-3 max-h-[220px] overflow-y-auto" style={{ minHeight: 50 }}>
         {messages.slice(0, -1).map(function(m, i) {
+          // v55.83-A.6.27.12 (Max May 15 2026) — skip empty bubbles. Per
+          // Max's screenshot showing 9 placeholder bubbles with no content
+          // in the chat. A message with no text AND no briefing AND no
+          // decision panel has nothing to show — render null.
+          if (!m) return null;
+          var hasText = m.text && String(m.text).trim().length > 0;
+          var hasBriefing = !!m.briefing;
+          var hasDecision = !!m.decision;
+          var hasRecordError = !!m.isRecordError;
+          if (!hasText && !hasBriefing && !hasDecision && !hasRecordError) return null;
           // Record-error messages get loud red styling so they can't be missed.
           if (m.isRecordError) {
             return (
@@ -2398,10 +2442,12 @@ export default function AIGreeter({ user, userProfile, users, tickets, invoices,
                   <MorningBriefing briefing={m.briefing} onAction={handleBriefingAction} useLang={useLang} />
                 </div>
               )}
-              <div className={'max-w-[80%] px-3 py-2 rounded-2xl text-xs leading-relaxed ' + (m.role === 'user' ? 'bg-blue-500 text-white rounded-br-sm' : 'text-slate-200 rounded-bl-sm')}
-                style={m.role !== 'user' ? { background: uiColor + '20', direction: useLang === 'ar' ? 'rtl' : 'ltr' } : {}}>
-                {m.text}
-              </div>
+              {hasText && (
+                <div className={'max-w-[80%] px-3 py-2 rounded-2xl text-xs leading-relaxed ' + (m.role === 'user' ? 'bg-blue-500 text-white rounded-br-sm' : 'text-slate-200 rounded-bl-sm')}
+                  style={m.role !== 'user' ? { background: uiColor + '20', direction: useLang === 'ar' ? 'rtl' : 'ltr' } : {}}>
+                  {m.text}
+                </div>
+              )}
               {m.decision && renderDecisionPanel(m.decision, i, useLang)}
             </div>
           );

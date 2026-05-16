@@ -326,7 +326,7 @@ export default function AssistantsBar({
         </div>
         <div className="flex items-center gap-2 flex-wrap justify-center">
           <h3 className="text-3xl sm:text-4xl font-extrabold text-white">{props.name}</h3>
-          <span className="text-xs font-bold uppercase tracking-wide px-2.5 py-1 rounded-full bg-white/30 backdrop-blur text-white">{props.role}</span>
+          <span className="text-xs font-black uppercase tracking-wide px-2.5 py-1 rounded-full bg-white text-slate-900 shadow">{props.role}</span>
         </div>
         <p className="text-sm text-white font-semibold mt-2 px-2 leading-snug min-h-[2.5em]" style={{ textShadow: '0 1px 3px rgba(0,0,0,0.4)' }}>
           {props.line}
@@ -643,8 +643,8 @@ function StatCard(props) {
   var hot = Number(props.value) > 0;
   return (
     <div className={'rounded-lg p-3 border-2 transition ' + bg + (hot ? ' shadow-md' : ' opacity-90')}>
-      <div className="text-xs font-black uppercase tracking-wide text-slate-900">{props.label}</div>
-      <div className={'text-3xl font-black mt-1 leading-none ' + vc}>{props.value}</div>
+      <div className="text-sm font-black uppercase tracking-wide text-slate-900">{props.label}</div>
+      <div className={'text-4xl font-black mt-1 leading-none ' + vc}>{props.value}</div>
     </div>
   );
 }

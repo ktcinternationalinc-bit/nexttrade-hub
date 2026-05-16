@@ -540,10 +540,10 @@ function UpdateRow({ item, users, onOpenTicket }) {
             <span className="text-[10px] text-slate-500">👤 {assignedName}</span>
           </div>
           <div className="text-sm font-bold text-slate-900 leading-snug">{t.title}</div>
-          <div className="mt-1.5 bg-slate-50 border-l-2 border-blue-400 px-2 py-1 rounded text-[11px] text-slate-700 italic">
+          <div className="mt-1.5 bg-slate-100 border-l-4 border-blue-500 px-3 py-2 rounded text-sm text-slate-900 font-medium">
             "{commentPreview}{(c.comment_text || '').length > 140 ? '…' : ''}"
           </div>
-          <div className="flex items-center gap-3 mt-1.5 text-[10px] text-slate-500">
+          <div className="flex items-center gap-3 mt-1.5 text-xs text-slate-700 font-semibold">
             <span>by {commentBy}</span>
             <span>· {fmtRelative(c.created_at)}</span>
           </div>

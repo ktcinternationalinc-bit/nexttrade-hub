@@ -33,6 +33,27 @@ import { supabase } from '../lib/supabase';
 //     WhatsApp, the calendar, the Sales tab.
 export const BUILD_HISTORY = [
   {
+    version: 'v55.83-A.6.27.12',
+    date: '2026-05-15',
+    label: 'Regression fixes + Phone hang-up + Nadia financial gating',
+    items: [
+      '**Send Message and Post Reminder buttons work again.** They were rendering the form 4000 lines below the click point — so clicking the button appeared to do nothing because the form was off-screen. Both forms now open as proper centered modals over the dashboard. Click outside to close.',
+      '**Phone now has a cancel/hang-up button at every stage.** Before, the hang-up only appeared once the call was fully connected. If you got stuck on "Connecting…" or "Ringing…" or an AccessTokenInvalid error, there was no way to cancel. Now there\'s a 📵 Cancel button for connecting + ringing states.',
+      '**Phone errors now tell you what to do.** AccessTokenInvalid (code 20101) now says: "Refresh the page; if that fails, ask the admin to verify TWILIO_API_KEY/SECRET in Vercel". Mic-permission errors point you to the browser address bar lock icon.',
+      '**Nadia stops leaking financial data.** Users without Treasury or Financial Reports permission no longer see treasury totals, invoice amounts, debts, or check amounts in Nadia\'s briefing or answers. If they ask about money, she politely says they need to ask someone with treasury access.',
+      '**Nadia can now answer about closed tickets.** She maintains TWO ticket lists: active tickets (for "what\'s on my plate today" counts) and the 10 most recently closed (for "what was that ticket about leather samples last month" history queries). Closed tickets are not counted as urgent but are referenceable.',
+      '**Stat tile labels and values are bigger.** Need Ack / Due Today / Overdue / Checks Due labels bumped from text-xs to text-sm. Numbers from text-3xl to text-4xl. Persona role badge ("EXECUTIVE ASSISTANT") switched from low-contrast translucent white-on-white to solid white background with dark text.',
+      '**Recent Updates comments are readable.** Comment previews were tiny italic light-gray (text-[11px] text-slate-700). Now full-size text-sm slate-900 in a stronger card with a thicker blue accent bar.',
+      '**Empty bubbles in Nadia chat are gone.** Messages with no text, no briefing, and no decision panel no longer render empty placeholder bubbles.',
+      '**Voicemail issue is likely the same Twilio token problem.** If you\'re not receiving voicemails, that\'s probably because the same access token is failing on the incoming call path. Verify Twilio config (TWILIO_API_KEY/SECRET in Vercel env vars). Code path itself was not changed.',
+      { superAdminOnly: true, text: 'page.jsx: showAddAnnouncement and showReminderForm forms wrapped in fixed inset-0 z-[300] flex centered modal overlays with backdrop onClick close + content onClick stopPropagation. Root cause: forms lived in source 4000 lines below the trigger; with my A.6.27.9 reorder the trigger moved to top of order:2 cluster, exposing the gap. The compact buttons did flip state correctly — the issue was render position.' },
+      { superAdminOnly: true, text: 'PhoneWidget: hang-up branch added for callState in (connecting, ringing). formatErr in PhoneWidget switches on e.code for 20101/31005/31201 and appends actionable hint. Error banner whitespace-pre-line so multi-line hints render. Old text-only connecting/ringing indicators removed.' },
+      { superAdminOnly: true, text: 'AIGreeter: now accepts modulePerms + isSuperAdmin props. ticketBelongsToMe extracted as named function; allMyTickets includes Closed, myTickets filters them out. recentlyClosed slice(0,10) appended to ctx for history queries. canSeeFinancials gate (super_admin OR Treasury OR View Financial Reports) wraps invoice/check/treasury context lines; explicit prohibition string added for non-permitted users. page.jsx mount passes both props.' },
+      { superAdminOnly: true, text: 'AssistantsBar StatCard typography: label text-xs → text-sm; value text-3xl → text-4xl. Role badge: bg-white/30 backdrop-blur text-white → bg-white text-slate-900 shadow (high contrast). DashboardPrioritySections UpdateRow comment preview: text-[11px] text-slate-700 italic → text-sm text-slate-900 font-medium with bg-slate-100 border-l-4 border-blue-500. Author/time line: text-[10px] text-slate-500 → text-xs text-slate-700 font-semibold.' },
+      { superAdminOnly: true, text: 'AIGreeter message render: short-circuit return null if !hasText && !hasBriefing && !hasDecision && !hasRecordError. Text bubble wrapped in {hasText && (...)} so briefing-only or decision-only messages don\'t render an empty bubble.' },
+    ],
+  },
+  {
     version: 'v55.83-A.6.27.11',
     date: '2026-05-15',
     label: 'Dashboard cleanup + System Tickets enlarged view + AI fixes',

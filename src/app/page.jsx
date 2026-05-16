@@ -4693,7 +4693,7 @@ export default function App() {
               {/* Brand mark — bracket prefix is a terminal callout convention. */}
               <span className="text-emerald-400 font-mono text-xs font-bold tracking-tight" style={{ fontFamily: '"JetBrains Mono", monospace' }}>[KTC]</span>
               <h1 className="text-sm font-bold text-white tracking-tight whitespace-nowrap">NEXTTRADE HUB</h1>
-              <span className="text-[10px] text-zinc-500 font-mono hidden md:inline" style={{ fontFamily: '"JetBrains Mono", monospace' }}>v55.83-A.6.27.11</span>
+              <span className="text-[10px] text-zinc-500 font-mono hidden md:inline" style={{ fontFamily: '"JetBrains Mono", monospace' }}>v55.83-A.6.27.12</span>
               {/* Live clock — terminals always show one. Updates via the
                   existing tick state; if not present, falls back to no clock. */}
               <span className="hidden lg:inline text-[10px] text-zinc-500 font-mono ml-2 pl-2 border-l border-zinc-800" style={{ fontFamily: '"JetBrains Mono", monospace' }}>
@@ -8908,8 +8908,13 @@ export default function App() {
                       now drive these. Keeping the form mount below. */}
 
                   {/* Create reminder form */}
+                  {/* v55.83-A.6.27.12 — wrapped in fixed centered modal so
+                      the form is visible regardless of scroll position. */}
                   {showReminderForm && (isAdmin || modulePerms?.['Post Reminders']) && (
-                    <div className="bg-white rounded-xl p-4 border border-amber-200 mb-3">
+                    <div className="fixed inset-0 bg-black/60 z-[300] flex items-start justify-center p-4 overflow-auto"
+                      onClick={() => setShowReminderForm(false)}>
+                    <div className="bg-white rounded-xl p-4 border border-amber-200 mb-3 shadow-2xl w-full max-w-2xl my-8"
+                      onClick={(e) => e.stopPropagation()}>
                       <h4 className="text-sm font-bold mb-2">📢 Post Team Reminder</h4>
                       {/* v55.72 — bigger textarea + formatting hint so Max knows
                           that line breaks, blank lines, and bullet/numbered lists
@@ -9002,6 +9007,7 @@ export default function App() {
                         📢 Post Reminder
                       </button>
                     </div>
+                    </div>
                   )}
 
                   {/* Archive */}
@@ -9037,8 +9043,16 @@ export default function App() {
             {/* v55.83-A.6.27.9 — button removed; the new compact "Send Message"
                 button at the top of the order:2 cluster now drives this form.
                 The form itself stays here so the modal experience is unchanged. */}
+            {/* v55.83-A.6.27.12 (Max May 15 2026) — REGRESSION FIX.
+                Form was an inline block 4000 lines below the trigger button,
+                so clicking "Send Message to Team" at the top of dashboard
+                appeared to do nothing — the form was rendering offscreen.
+                Now wrap in a fixed centered modal overlay. */}
             {showAddAnnouncement && (
-              <div className="bg-red-50 rounded-xl p-5 mb-4 border-2 border-red-400 shadow-lg">
+              <div className="fixed inset-0 bg-black/60 z-[300] flex items-start justify-center p-4 overflow-auto"
+                onClick={() => setShowAddAnnouncement(false)}>
+              <div className="bg-red-50 rounded-xl p-5 mb-4 border-2 border-red-400 shadow-2xl w-full max-w-2xl my-8"
+                onClick={(e) => e.stopPropagation()}>
                 <h4 className="text-lg font-extrabold text-red-800 mb-3">📢 New Message / رسالة جديدة</h4>
                 <input value={formData.annTitle || ''} onChange={e => setFormData({...formData, annTitle: e.target.value})}
                   placeholder="Subject / الموضوع *" className="w-full px-4 py-3 rounded-lg border-2 border-red-200 text-base font-bold mb-3" aria-label="Message subject" />
@@ -9125,6 +9139,7 @@ export default function App() {
                   }} className="px-6 py-3 bg-red-600 text-white rounded-lg text-sm font-extrabold shadow-lg">📢 SEND NOW / أرسل الآن</button>
                   <button onClick={() => { setShowAddAnnouncement(false); setFormData({}); }} className="px-4 py-3 border-2 border-slate-300 rounded-lg text-sm font-bold">Cancel</button>
                 </div>
+              </div>
               </div>
             )}
             {/* Active Announcements */}
@@ -10015,6 +10030,7 @@ export default function App() {
                       onToggle={(on) => { if (!on) setGreeterDismissed(true); }}
                       toast={toast}
                       selectedAssistant={selectedAssistant}
+                      modulePerms={modulePerms} isSuperAdmin={isSuperAdmin}
                     />
                   </SafeSection>
                 </div>
@@ -12459,7 +12475,7 @@ export default function App() {
                       latest fix is actually deployed. If he doesn't see this
                       tag in the modal, his browser is running stale JS. */}
                   <div className="mt-1.5 inline-block px-2 py-0.5 rounded bg-amber-900/60 text-amber-100 text-[10px] font-mono font-bold tracking-wide">
-                    BUILD v55.83-A.6.27.11
+                    BUILD v55.83-A.6.27.12
                   </div>
                 </div>
                 <button onClick={() => closePendingTreasuryModal()}
@@ -13094,7 +13110,7 @@ export default function App() {
                     معاملة قد تكون مكررة
                   </div>
                   <div className="mt-1.5 inline-block px-2 py-0.5 rounded bg-amber-900/60 text-amber-100 text-[10px] font-mono font-bold tracking-wide">
-                    BUILD v55.83-A.6.27.11
+                    BUILD v55.83-A.6.27.12
                   </div>
                 </div>
                 <button

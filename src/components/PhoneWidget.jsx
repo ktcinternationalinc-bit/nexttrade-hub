@@ -25,7 +25,21 @@ function formatErr(e) {
   if (typeof e === 'string') return e;
   if (e instanceof Error) {
     // Twilio errors have a .code in addition to .message; show both
-    if (e.code !== undefined) return '[' + e.code + '] ' + e.message;
+    if (e.code !== undefined) {
+      var base = '[' + e.code + '] ' + e.message;
+      // v55.83-A.6.27.12 — add actionable hints for the codes we keep
+      // hitting in production so the operator knows what to do next.
+      if (e.code === 20101 || e.code === '20101') {
+        return base + '\n→ Action: Twilio access token is invalid or expired. Refresh the page; if that fails, ask the admin to verify TWILIO_API_KEY/SECRET in Vercel env vars.';
+      }
+      if (e.code === 31005 || e.code === '31005') {
+        return base + '\n→ Action: WebSocket connection lost. Check network and reload.';
+      }
+      if (e.code === 31201 || e.code === '31201') {
+        return base + '\n→ Action: Microphone permission denied. Click the 🔒/🎙 icon in the browser address bar and allow microphone.';
+      }
+      return base;
+    }
     return e.message || 'Error (no message)';
   }
   // DOM Event — try to get the source URL or type
@@ -607,16 +621,33 @@ export default function PhoneWidget({ user, userProfile, users, customers }) {
                 </div>
                 <div className="flex gap-2">
                   <button onClick={toggleMute} className={'w-8 h-8 rounded-full text-sm flex items-center justify-center ' + (muted ? 'bg-red-500' : 'bg-white/20')}>{muted ? '🔇' : '🎤'}</button>
-                  <button onClick={endCall} className="w-8 h-8 rounded-full bg-red-500 text-sm flex items-center justify-center">📵</button>
+                  <button onClick={endCall} title="Hang up" className="w-8 h-8 rounded-full bg-red-500 text-sm flex items-center justify-center">📵</button>
                 </div>
               </div>
             )}
-            {callState === 'connecting' && <div className="mt-2 text-xs text-amber-400 animate-pulse">Connecting...</div>}
-            {callState === 'ringing' && <div className="mt-2 text-xs text-blue-400 animate-pulse">Ringing...</div>}
+            {/* v55.83-A.6.27.12 (Max May 15 2026) — hang-up button for
+                connecting/ringing states. Was missing entirely, so on a
+                stuck connection (AccessTokenInvalid, slow Twilio, network
+                glitch) user had no way to cancel. */}
+            {(callState === 'connecting' || callState === 'ringing') && (
+              <div className="mt-2 bg-slate-800 rounded-lg p-2 flex items-center justify-between">
+                <div className="text-xs">
+                  {callState === 'connecting' ? (
+                    <span className="text-amber-400 animate-pulse font-bold">📞 Connecting…</span>
+                  ) : (
+                    <span className="text-blue-400 animate-pulse font-bold">📞 Ringing…</span>
+                  )}
+                </div>
+                <button onClick={endCall} title="Cancel call"
+                  className="px-3 py-1 rounded-lg bg-red-500 hover:bg-red-600 text-white text-xs font-bold">
+                  📵 Cancel
+                </button>
+              </div>
+            )}
           </div>
 
           {error && (
-            <div className="bg-red-50 text-red-900 text-[10px] p-2 border border-red-200 font-semibold">{error} <button onClick={() => setError('')} className="underline ml-1">dismiss</button></div>
+            <div className="bg-red-50 text-red-900 text-[11px] p-2 border border-red-200 font-semibold" style={{ whiteSpace: 'pre-line' }}>{error} <button onClick={() => setError('')} className="underline ml-1">dismiss</button></div>
           )}
 
           {/* Tabs */}
