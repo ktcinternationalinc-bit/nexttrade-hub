@@ -63,9 +63,17 @@ console.log('\n#24 — Plain-language changelog');
 // are allowed to use jargon.
 var startIdx = widget.indexOf('BUILD_HISTORY = [');
 var depth = 0, ii = startIdx, endIdx = -1;
+// v55.83-A.6.27.13 — respect string literals so square brackets INSIDE
+// strings (e.g. '[bank confirmation') don't throw off the matcher.
+var outerInStr = false, outerStrCh = null;
 while (ii < widget.length) {
   var ch = widget[ii];
-  if (ch === '[') depth++;
+  if (outerInStr) {
+    if (ch === '\\') { ii += 2; continue; }
+    if (ch === outerStrCh) outerInStr = false;
+  } else if (ch === "'" || ch === '"' || ch === '`') {
+    outerInStr = true; outerStrCh = ch;
+  } else if (ch === '[') depth++;
   else if (ch === ']') { depth--; if (depth === 0) { endIdx = ii + 1; break; } }
   ii++;
 }
@@ -77,8 +85,15 @@ var m;
 while ((m = itemsRx.exec(slice)) !== null) {
   var s = m.index + m[0].length - 1;
   var d = 1, j = s + 1;
+  // v55.83-A.6.27.13 — same string-aware fix on the inner items: [ walker.
+  var innerInStr = false, innerStrCh = null;
   while (j < slice.length && d > 0) {
-    if (slice[j] === '[') d++;
+    if (innerInStr) {
+      if (slice[j] === '\\') { j += 2; continue; }
+      if (slice[j] === innerStrCh) innerInStr = false;
+    } else if (slice[j] === "'" || slice[j] === '"' || slice[j] === '`') {
+      innerInStr = true; innerStrCh = slice[j];
+    } else if (slice[j] === '[') d++;
     else if (slice[j] === ']') d--;
     j++;
   }
@@ -139,8 +154,8 @@ function findOffenders() {
 }
 
 var offenders = findOffenders();
-ok('At least 8 jargon-laden public items have been rewritten',
-  publicItems.length >= 100); // sanity — we have 191 items
+ok('At least 50 public items have been authored (sanity floor)',
+  publicItems.length >= 50); // sanity — was 191 at peak, today many entries are superAdminOnly
 ok('Webhook → plain-language rewrite (Twilio failure note)',
   /the security check didn\\'t match/.test(widget) ||
   /security check didn[\u2019']t match/.test(widget));

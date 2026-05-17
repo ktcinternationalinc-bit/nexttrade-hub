@@ -94,7 +94,7 @@ ok('7g: page.jsx passes modulePerms + isSuperAdmin to AIGreeter',
 
 // ── 8. Version stamp ─────────────────────────────────────────────
 ok('8a: version stamp v55.83-A.6.27.12',
-  /BUILD v55\.83-A\.6\.27\.12/.test(page));
+  /BUILD v55\.83-A\.6\.27\.1[234]/.test(page));
 
 if (failures.length > 0) {
   console.log('\n❌ ' + failures.length + ' failure(s):');

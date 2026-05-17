@@ -5,7 +5,7 @@ import * as XLSX from 'xlsx';
 import { EXPENSE_CATS } from '../lib/utils';
 import { todayET } from '../lib/et-time';
 
-export default function EgyptBankTab({ toast, user, userProfile, isAdmin, invoices, onReload }) {
+export default function EgyptBankTab({ toast, user, userProfile, isAdmin, invoices, onReload, recalcInvoiceCollected }) {
   const [accounts, setAccounts] = useState([]);
   const [transactions, setTransactions] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -793,72 +793,234 @@ export default function EgyptBankTab({ toast, user, userProfile, isAdmin, invoic
   };
 
   // ───── Match ─────
+  //
+  // v55.83-A.6.27.14 (Max May 16 2026) — ARCHITECTURAL FIX.
+  //
+  // OLD BEHAVIOR (BROKEN): this function wrote invoices.total_collected
+  // directly, which violated the contract in src/lib/supabase.js (line ~245):
+  // "all invoice recalculation MUST go through recalcInvoiceCollected". It
+  // also didn't create or update any treasury row to represent the bank
+  // inflow, so recalcInvoiceCollected (when fired from any other code path
+  // afterward) would see ZERO linked rows and reset total_collected to 0 —
+  // silently wiping the bank match. Plus total_confirmed, total_pending_bank,
+  // overpayment_amount, and the write-off tolerance on outstanding were
+  // all going stale.
+  //
+  // NEW BEHAVIOR: prefer to update an existing placeholder (consistent with
+  // the auto-match path in page.jsx). If no matching placeholder exists,
+  // create a treasury row representing the bank inflow with the right
+  // bookkeeping (bank_in set, cash_in=0, linked_invoice_id UUID set,
+  // matched_bank_txn_id set, needs_bank_match=false because it IS the
+  // bank-side confirmation). Then defer to recalcInvoiceCollected.
   const matchToInvoice = async (txnId, invoiceId) => {
     const txn = transactions.find(t => t.id === txnId);
     const inv = (invoices || []).find(i => i.id === invoiceId);
-    await dbUpdate('egypt_bank_transactions', txnId, { matched_invoice_id: invoiceId, matched_at: new Date().toISOString(), matched_by: myId }, myId);
-    
-    if (inv && txn && txn.amount > 0) {
-      const bankAmt = Number(txn.amount);
-      
-      // Check if a pending check exists for same order + similar amount → auto-collect it
-      try {
+    if (!inv || !txn || !(Number(txn.amount) > 0)) {
+      // Nothing meaningful to link — just mark the bank txn matched.
+      await dbUpdate('egypt_bank_transactions', txnId, { matched_invoice_id: invoiceId, matched_at: new Date().toISOString(), matched_by: myId }, myId);
+      setMatchingTxn(null);
+      setTransactions(prev => prev.map(t => t.id === txnId ? { ...t, matched_invoice_id: invoiceId, matched_at: new Date().toISOString() } : t));
+      if (onReload) setTimeout(() => onReload(), 500);
+      return;
+    }
+    const bankAmt = Number(txn.amount);
+    let touchedTreasuryId = null;
+    try {
+      // Step 1: look for an existing placeholder on this invoice matching
+      // the amount. Same dedup tolerance as the auto-match path
+      // (2% of expected, capped at 500 EGP).
+      const { data: candidates } = await supabase.from('treasury')
+        .select('*')
+        .eq('linked_invoice_id', invoiceId)
+        .eq('is_bank_placeholder', true);
+      const tol = Math.min(bankAmt * 0.02, 500);
+      const matchingPlaceholder = (candidates || []).find(p => {
+        const exp = Number(p.expected_amount || p.bank_in || 0);
+        return Math.abs(exp - bankAmt) < tol && !p.matched_bank_txn_id;
+      });
+
+      if (matchingPlaceholder) {
+        // Promote placeholder to confirmed bank-in
+        await dbUpdate('treasury', matchingPlaceholder.id, {
+          is_bank_placeholder: false,
+          bank_in: bankAmt,
+          matched_bank_txn_id: txnId,
+          needs_bank_match: false,
+        }, myId);
+        touchedTreasuryId = matchingPlaceholder.id;
+      } else {
+        // Step 2: look for a pending check on this invoice matching the
+        // amount EXACTLY. If found, auto-collect it AND create a treasury
+        // row tied to it via source_check_id.
         const { data: pendingChecks } = await supabase.from('checks')
           .select('*')
           .eq('invoice_id', invoiceId)
           .eq('status', 'pending');
-        
-        const matchingCheck = (pendingChecks || []).find(c => 
-          Math.abs(Number(c.amount) - bankAmt) < 1 // Exact match — checks must be the exact amount
+        const matchingCheck = (pendingChecks || []).find(c =>
+          Math.abs(Number(c.amount) - bankAmt) < 1
         );
-        
+
         if (matchingCheck) {
-          // Auto-collect the check — the bank confirmed it
+          // v55.83-A.6.27.14 harden — before creating a new treasury row,
+          // check whether one already represents this check (via
+          // source_check_id). If so, just update it with the bank match.
+          // Per Max's clarification: marking a check collected should NOT
+          // create a duplicate treasury row when one already exists for
+          // that money.
+          const { data: existingForCheck } = await supabase.from('treasury')
+            .select('*')
+            .eq('source_check_id', matchingCheck.id)
+            .limit(1)
+            .maybeSingle();
+
           await dbUpdate('checks', matchingCheck.id, {
             status: 'collected',
             collection_date: txn.date || todayET(),
           }, myId);
-          // Update invoice collected (check wasn't counted before, bank confirms it now)
-          const newCollected = Number(inv.total_collected || 0) + bankAmt;
-          const capped = Math.min(newCollected, Number(inv.total_amount || 0));
-          await dbUpdate('invoices', invoiceId, { 
-            total_collected: capped,
-            outstanding: Math.max(0, Number(inv.total_amount || 0) - capped),
-          }, myId);
-        } else {
-          // No matching check — check if this amount was already collected (dedup)
-          const existingCollected = Number(inv.total_collected || 0);
-          // Only add if it wouldn't exceed invoice total
-          const newCollected = Math.min(existingCollected + bankAmt, Number(inv.total_amount || 0));
-          if (newCollected > existingCollected) {
-            await dbUpdate('invoices', invoiceId, { 
-              total_collected: newCollected,
-              outstanding: Math.max(0, Number(inv.total_amount || 0) - newCollected),
+
+          if (existingForCheck) {
+            // Update the existing row with the bank match. If it was sitting
+            // in cash_in (e.g. recorded as cash-swap earlier — unusual flow
+            // but possible), don't overwrite the channel; just stamp the
+            // bank match metadata. If it was sitting as a placeholder, the
+            // earlier placeholder branch would have caught it — so by the
+            // time we get here, the existing row is either an unmatched
+            // bank row or some odd legacy state. Be conservative: stamp the
+            // bank match link, leave the channel/amount alone.
+            await dbUpdate('treasury', existingForCheck.id, {
+              matched_bank_txn_id: txnId,
+              needs_bank_match: false,
+              is_bank_placeholder: false,
             }, myId);
+            touchedTreasuryId = existingForCheck.id;
+          } else {
+            // No existing treasury row for this check — create one.
+            const { data: newRow, error: insErr } = await supabase.from('treasury').insert({
+              transaction_date: txn.date || todayET(),
+              cash_in: 0,
+              cash_out: 0,
+              bank_in: bankAmt,
+              bank_out: 0,
+              linked_invoice_id: invoiceId,
+              order_number: inv.order_number,
+              matched_bank_txn_id: txnId,
+              needs_bank_match: false,
+              is_bank_placeholder: false,
+              source_check_id: matchingCheck.id,
+              description: 'Bank collection of check #' + (matchingCheck.check_number || matchingCheck.id),
+              created_by: myId,
+            }).select().single();
+            if (insErr) throw insErr;
+            touchedTreasuryId = newRow && newRow.id;
           }
+        } else {
+          // Step 3: no placeholder, no matching check. Create a fresh
+          // treasury row for the bank inflow.
+          const { data: newRow, error: insErr } = await supabase.from('treasury').insert({
+            transaction_date: txn.date || todayET(),
+            cash_in: 0,
+            cash_out: 0,
+            bank_in: bankAmt,
+            bank_out: 0,
+            linked_invoice_id: invoiceId,
+            order_number: inv.order_number,
+            matched_bank_txn_id: txnId,
+            needs_bank_match: false,
+            is_bank_placeholder: false,
+            description: 'Bank deposit matched to invoice #' + inv.order_number,
+            created_by: myId,
+          }).select().single();
+          if (insErr) throw insErr;
+          touchedTreasuryId = newRow && newRow.id;
         }
-      } catch(e) {
-        // Fallback: simple add but capped
-        const newCollected = Math.min(Number(inv.total_collected || 0) + bankAmt, Number(inv.total_amount || 0));
-        await dbUpdate('invoices', invoiceId, { total_collected: newCollected }, myId);
       }
+
+      // Step 4: mark the bank txn matched AFTER treasury is in good shape.
+      await dbUpdate('egypt_bank_transactions', txnId, {
+        matched_invoice_id: invoiceId,
+        matched_treasury_id: touchedTreasuryId,
+        matched_at: new Date().toISOString(),
+        matched_by: myId,
+      }, myId);
+
+      // Step 5: delegate to the canonical recalc. This computes
+      // total_collected / total_confirmed / total_pending_bank /
+      // overpayment_amount / outstanding correctly — no parallel math.
+      if (recalcInvoiceCollected) {
+        try { await recalcInvoiceCollected(invoiceId); }
+        catch (e) { console.warn('[EgyptBankTab.match] recalc failed (non-fatal, will retry on reload):', e && e.message); }
+      } else {
+        console.warn('[EgyptBankTab.match] recalcInvoiceCollected prop not provided — totals may be stale until next page reload');
+      }
+    } catch (err) {
+      if (toast && toast.error) toast.error('Match failed: ' + (err && err.message ? err.message : String(err)));
+      else alert('Match failed: ' + (err && err.message ? err.message : String(err)));
+      // Make sure we don't leave a half-matched state. If the bank txn was
+      // already marked matched by step 4, leave it; the next reload will
+      // surface the inconsistency.
     }
-    
+
     setMatchingTxn(null);
     setTransactions(prev => prev.map(t => t.id === txnId ? { ...t, matched_invoice_id: invoiceId, matched_at: new Date().toISOString() } : t));
     if (onReload) setTimeout(() => onReload(), 500);
   };
+
+  // v55.83-A.6.27.14 — unmatch follows the same architecture. Instead of
+  // subtracting from total_collected, it unlinks the treasury row from the
+  // bank txn (and unlinks from the invoice if the treasury row was created
+  // SOLELY for this bank match — i.e. there's no source_check_id and the
+  // description matches our auto-created pattern). Then recalc fires.
   const unmatch = async (txnId) => {
     const txn = transactions.find(t => t.id === txnId);
-    const inv = txn?.matched_invoice_id ? (invoices || []).find(i => i.id === txn.matched_invoice_id) : null;
-    await dbUpdate('egypt_bank_transactions', txnId, { matched_invoice_id: null, matched_at: null, matched_by: null }, myId);
-    // Reduce invoice total_collected
-    if (inv && txn && txn.amount > 0) {
-      const newCollected = Math.max(0, Number(inv.total_collected || 0) - Number(txn.amount));
-      await dbUpdate('invoices', inv.id, { total_collected: newCollected }, myId);
+    if (!txn) return;
+    const invoiceId = txn.matched_invoice_id;
+    const treasuryId = txn.matched_treasury_id;
+    try {
+      // If a treasury row was tied to this bank txn, unlink it carefully.
+      if (treasuryId) {
+        // Look up the treasury row to decide whether it should be reverted
+        // to a placeholder, deleted, or just have matched_bank_txn_id cleared.
+        const { data: tRow } = await supabase.from('treasury').select('*').eq('id', treasuryId).maybeSingle();
+        if (tRow) {
+          var wasAutoCreated = /^Bank deposit matched to invoice|^Bank collection of check/.test(tRow.description || '');
+          if (wasAutoCreated && !tRow.source_check_id) {
+            // We created it solely for this bank match — delete it.
+            await supabase.from('treasury').delete().eq('id', treasuryId);
+          } else if (tRow.source_check_id) {
+            // Treasury row backs a collected check. Revert check + delete the bank-side row.
+            await dbUpdate('checks', tRow.source_check_id, {
+              status: 'pending',
+              collection_date: null,
+            }, myId);
+            await supabase.from('treasury').delete().eq('id', treasuryId);
+          } else {
+            // It's an existing placeholder we promoted — revert it.
+            await dbUpdate('treasury', treasuryId, {
+              is_bank_placeholder: true,
+              bank_in: 0,
+              matched_bank_txn_id: null,
+              needs_bank_match: true,
+            }, myId);
+          }
+        }
+      }
+      // Clear the bank txn match
+      await dbUpdate('egypt_bank_transactions', txnId, {
+        matched_invoice_id: null,
+        matched_treasury_id: null,
+        matched_at: null,
+        matched_by: null,
+      }, myId);
+      // Recalc the invoice (do NOT subtract from total_collected directly).
+      if (invoiceId && recalcInvoiceCollected) {
+        try { await recalcInvoiceCollected(invoiceId); }
+        catch (e) { console.warn('[EgyptBankTab.unmatch] recalc failed (non-fatal):', e && e.message); }
+      }
+    } catch (err) {
+      if (toast && toast.error) toast.error('Unmatch failed: ' + (err && err.message ? err.message : String(err)));
+      else alert('Unmatch failed: ' + (err && err.message ? err.message : String(err)));
     }
-    setTransactions(prev => prev.map(t => t.id === txnId ? { ...t, matched_invoice_id: null, matched_at: null } : t));
-    // Refresh dashboard data
+    setTransactions(prev => prev.map(t => t.id === txnId ? { ...t, matched_invoice_id: null, matched_at: null, matched_treasury_id: null } : t));
     if (onReload) setTimeout(() => onReload(), 500);
   };
 

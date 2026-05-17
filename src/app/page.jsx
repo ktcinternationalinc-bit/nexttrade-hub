@@ -1945,6 +1945,15 @@ export default function App() {
             + ' [auto-matched from bank ' + bank.date + ']';
 
           // 1. Treasury row
+          //
+          // v55.83-A.6.27.14 (Max May 16 2026) — channel FIX. This is the
+          // auto-matcher firing when an Egypt Bank statement entry matches a
+          // pending check. The money landed in the BANK, not the safe — so
+          // bank_in is the correct channel. Previously this used cash_in,
+          // which silently inflated the safe balance for every auto-matched
+          // check. Invoice "collected" is unaffected because the recalc sums
+          // cash_in + bank_in either way.
+          //
           // v55.83-A.6.7 (round 2 audit) — resolve linked_invoice_id from
           // order_number if check doesn't have invoice_id directly. Mirrors
           // the dbInsert auto-link logic to keep all treasury insert paths
@@ -1960,11 +1969,18 @@ export default function App() {
             transaction_date: collectionDate,
             order_number: chk.order_number || '',
             description: desc,
-            cash_in: Number(chk.amount),
+            cash_in: 0,
             cash_out: 0,
+            bank_in: Number(chk.amount),
+            bank_out: 0,
+            matched_bank_txn_id: bank.id,
+            needs_bank_match: false,
+            is_bank_placeholder: false,
             source: 'main',
             category: 'مبيعات',
             linked_invoice_id: resolvedInvoiceId,
+            source_check_id: chk.id,
+            payment_source: 'check',
           }).select('id').single();
           if (!ins.data) continue;
           var newTxnId = ins.data.id;
@@ -2081,6 +2097,73 @@ export default function App() {
     });
     return map;
   }, [treasury]);
+
+  // v55.83-A.6.27.13 (Max May 16 2026) — UUID-keyed treasury map.
+  //
+  // ROOT CAUSE OF INVOICE 2330 RECONCILIATION BUG:
+  // The recalcInvoiceCollected function queries treasury by linked_invoice_id
+  // (UUID). The display panel was using treasuryByOrder which keys by
+  // order_number (string). The two paths can disagree:
+  //   - A row with linked_invoice_id=X but order_number empty/wrong is
+  //     COUNTED by recalc but HIDDEN from the display → "collected total
+  //     includes invisible money"
+  //   - A row with order_number=Y but no UUID link is DISPLAYED but NOT
+  //     counted → "panel shows a payment that isn't in the total"
+  //
+  // The fix: panel now reads from this UUID-keyed map, which mirrors EXACTLY
+  // the row set recalcInvoiceCollected uses. Now what the user sees in the
+  // panel and what the "Collected" tile shows MUST agree.
+  //
+  // Includes placeholders + pending rows so the panel renders them too —
+  // they were already counted (as pending) by the recalc, and previously
+  // hidden by the panel for "cosmetic" reasons. Hidden pending money is the
+  // real bug, not a UI nicety.
+  const treasuryByInvoiceId = useMemo(() => {
+    const map = {};
+    treasury.forEach(t => {
+      if (!t.linked_invoice_id) return;
+      // Skip dedup mirrors and bank-confirmation markers — these are not
+      // separate money, they're audit-trail rows for already-counted amounts.
+      // (Same filter recalcInvoiceCollected uses.)
+      if (t.dedup_sibling_id) return;
+      if (t.description && String(t.description).indexOf('[bank confirmation') >= 0) return;
+      if (!map[t.linked_invoice_id]) map[t.linked_invoice_id] = [];
+      map[t.linked_invoice_id].push(t);
+    });
+    return map;
+  }, [treasury]);
+
+  // v55.83-A.6.27.13 — Linkage drift detector.
+  //
+  // Returns the rows that are linked-by-order-number to this invoice but
+  // NOT linked-by-UUID. These DISPLAY in the panel under old logic but are
+  // NOT counted by the recalc. Surfacing them lets the user see the broken
+  // link and click Fix Links to repair.
+  //
+  // v55.83-A.6.27.14 (Max May 16 2026) — additional guard: if a row is
+  // already linked-by-UUID to ANOTHER invoice, don't show it as an orphan
+  // here. Otherwise clicking "Link Now" on invoice A would steal a row
+  // legitimately owned by invoice B (possible when two invoices share the
+  // same order_number string — legacy data or duplicate-import scenario).
+  const findOrphanedOrderNumberMatches = (invoice) => {
+    if (!invoice || !invoice.order_number) return [];
+    var on = String(invoice.order_number).trim();
+    if (!on) return [];
+    var byUuid = treasuryByInvoiceId[invoice.id] || [];
+    var byUuidIds = {};
+    byUuid.forEach(function (t) { byUuidIds[t.id] = true; });
+    return treasury.filter(function (t) {
+      if (!t.order_number) return false;
+      if (String(t.order_number).trim() !== on) return false;
+      if (byUuidIds[t.id]) return false; // already counted via UUID
+      // Already linked-by-UUID to a DIFFERENT invoice? Leave it alone.
+      // Linking it here would steal from that other invoice.
+      if (t.linked_invoice_id && t.linked_invoice_id !== invoice.id) return false;
+      if (t.dedup_sibling_id) return false;
+      if (t.description && String(t.description).indexOf('[bank confirmation') >= 0) return false;
+      return true;
+    });
+  };
 
   // Monthly treasury totals
   const monthlyTreasury = useMemo(() => {
@@ -4178,6 +4261,15 @@ export default function App() {
       // ---- Case C: no_match OR user chose to create a new treasury row ----
       // (Cash-swap "customer brought cash, took check back" → new cash_in row + physical_check_returned=true)
       // (Or pure "new entry" fallback when user disagrees with all candidates)
+      //
+      // v55.83-A.6.27.14 (Max May 16 2026) — channel selection FIX. Previously
+      // this path ALWAYS inserted as cash_in, even when the check was a normal
+      // bank deposit (no physical return). That silently inflated the safe
+      // balance every time a check was collected the "no match" way. Now:
+      //   - physicalReturned = true  → cash_in (customer brought cash, swap)
+      //   - physicalReturned = false → bank_in (the check was deposited at the bank)
+      // Either way, the invoice's "collected" total goes up the same amount
+      // because the recalc sums cash_in + bank_in.
       if ((evalResult.mode === 'no_match' || (evalResult.mode === 'candidate_match' && choice && choice.kind === 'new'))
           || (evalResult.mode === 'no_invoice')) {
         const checkNum = reconcileCheck.check_number ? ' #' + reconcileCheck.check_number : '';
@@ -4192,12 +4284,15 @@ export default function App() {
             if (lk2 && lk2.data && lk2.data.id) resolvedInv2 = lk2.data.id;
           } catch (lk2Err) { console.warn('[reconcileCheck] invoice lookup failed:', lk2Err && lk2Err.message); }
         }
+        var checkAmt = Number(reconcileCheck.amount);
         const { data: newTxn } = await supabase.from('treasury').insert({
           transaction_date: reconcileDate,
           order_number: reconcileCheck.order_number || '',
           description: desc,
-          cash_in: Number(reconcileCheck.amount),
+          cash_in: physicalReturned ? checkAmt : 0,
           cash_out: 0,
+          bank_in: physicalReturned ? 0 : checkAmt,
+          bank_out: 0,
           source: 'main',
           category: 'مبيعات',
           linked_invoice_id: resolvedInv2,
@@ -4693,7 +4788,7 @@ export default function App() {
               {/* Brand mark — bracket prefix is a terminal callout convention. */}
               <span className="text-emerald-400 font-mono text-xs font-bold tracking-tight" style={{ fontFamily: '"JetBrains Mono", monospace' }}>[KTC]</span>
               <h1 className="text-sm font-bold text-white tracking-tight whitespace-nowrap">NEXTTRADE HUB</h1>
-              <span className="text-[10px] text-zinc-500 font-mono hidden md:inline" style={{ fontFamily: '"JetBrains Mono", monospace' }}>v55.83-A.6.27.12</span>
+              <span className="text-[10px] text-zinc-500 font-mono hidden md:inline" style={{ fontFamily: '"JetBrains Mono", monospace' }}>v55.83-A.6.27.14</span>
               {/* Live clock — terminals always show one. Updates via the
                   existing tick state; if not present, falls back to no clock. */}
               <span className="hidden lg:inline text-[10px] text-zinc-500 font-mono ml-2 pl-2 border-l border-zinc-800" style={{ fontFamily: '"JetBrains Mono", monospace' }}>
@@ -5432,6 +5527,97 @@ export default function App() {
                 <div className={`text-xl font-extrabold ${selectedInvoice.outstanding > 0 ? 'text-red-500' : 'text-emerald-500'}`}>
                   {selectedInvoice.outstanding > 0 ? fE(selectedInvoice.outstanding) : 'Paid ✓'}
                 </div>
+                {/* v55.83-A.6.27.14 (Max May 16 2026) — Close pending checks
+                    when invoice is fully paid. Per Max: "Just have confirm
+                    button to close." Manual click, manual confirm. Only
+                    visible when:
+                      • Outstanding = 0 (invoice is fully paid)
+                      • At least one pending check exists tied to this invoice
+                    For each pending check, this flips status to 'collected'
+                    and links the check to an existing treasury row that
+                    matches its amount (via source_check_id stamp). NO new
+                    treasury rows are created — the money is already in the
+                    books, which is why outstanding hit 0. */}
+                {!(selectedInvoice.outstanding > 0) && (() => {
+                  var pending = (checks || []).filter(function (c) {
+                    return c.status === 'pending' && (
+                      c.invoice_id === selectedInvoice.id ||
+                      (c.order_number && String(c.order_number).trim() === String(selectedInvoice.order_number || '').trim())
+                    );
+                  });
+                  if (pending.length === 0) return null;
+                  return (
+                    <div className="mt-2 pt-2 border-t border-emerald-200">
+                      <div className="text-[10px] text-emerald-800 font-semibold mb-1">
+                        {pending.length} pending check{pending.length === 1 ? '' : 's'} on this paid invoice
+                      </div>
+                      <button onClick={async () => {
+                        var labels = pending.map(function (c) {
+                          return '• #' + (c.check_number || c.id) + ' — ' + fE(Number(c.amount));
+                        }).join('\n');
+                        if (!confirm(
+                          'Close ' + pending.length + ' pending check' + (pending.length === 1 ? '' : 's') + ' for this paid invoice?\n\n' +
+                          labels + '\n\n' +
+                          'Each check will be marked collected. If a treasury row already represents the money (from a cash deposit, bank match, or other path) the check will be linked to it. No new treasury rows will be created.\n\n' +
+                          'إغلاق الشيكات المعلّقة لهذه الفاتورة المدفوعة؟'
+                        )) return;
+                        try {
+                          var closed = 0, attached = 0, skipped = 0;
+                          for (var i = 0; i < pending.length; i++) {
+                            var chk = pending[i];
+                            var amt = Number(chk.amount);
+                            // Find a treasury row tied to this invoice with matching amount and no source_check_id yet.
+                            var candidate = (treasury || []).find(function (t) {
+                              if (t.linked_invoice_id !== selectedInvoice.id) return false;
+                              if (t.is_bank_placeholder) return false;
+                              if (t.source_check_id) return false;
+                              if (t.dedup_sibling_id) return false;
+                              if (t.description && String(t.description).indexOf('[bank confirmation') >= 0) return false;
+                              var rowAmt = Number(t.cash_in || 0) + Number(t.bank_in || 0);
+                              return Math.abs(rowAmt - amt) < 1;
+                            });
+                            if (candidate) {
+                              await dbUpdate('treasury', candidate.id, {
+                                source_check_id: chk.id,
+                                payment_source: 'check',
+                              }, user?.id);
+                              await dbUpdate('checks', chk.id, {
+                                status: 'collected',
+                                collection_date: todayET(),
+                                linked_treasury_id: candidate.id,
+                              }, user?.id);
+                              attached++;
+                            } else {
+                              // No exact-match treasury row. Don't create one — that would
+                              // double-count if a non-exact-match row covers this check
+                              // (e.g. consolidated bank deposit covering multiple checks).
+                              // Just flip the check status; the user can manually reconcile
+                              // through the Checks tab if they want a per-check audit trail.
+                              await dbUpdate('checks', chk.id, {
+                                status: 'collected',
+                                collection_date: todayET(),
+                              }, user?.id);
+                              skipped++;
+                            }
+                            closed++;
+                          }
+                          // Recalc to ensure derived fields are fresh.
+                          try { await recalcInvoiceCollected(selectedInvoice.id); } catch (_) {}
+                          var msg = closed + ' check' + (closed === 1 ? '' : 's') + ' closed';
+                          if (attached > 0) msg += ' (' + attached + ' linked to existing treasury row' + (attached === 1 ? '' : 's') + ')';
+                          if (skipped > 0) msg += ' (' + skipped + ' marked collected without an exact-match treasury row — review if needed)';
+                          if (toast && toast.success) toast.success(msg);
+                          await loadAllData();
+                        } catch (err) {
+                          if (toast && toast.error) toast.error('Close failed: ' + (err && err.message ? err.message : String(err)));
+                          else alert('Close failed: ' + (err && err.message ? err.message : String(err)));
+                        }
+                      }} className="px-3 py-1.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded text-[11px] font-bold w-full">
+                        ✓ Confirm and close pending checks
+                      </button>
+                    </div>
+                  );
+                })()}
                 {/* v55.83-A.6.8 (Max May 13 2026) — Short-payment write-off.
                     Auto-suggests when outstanding is small (1000 EGP soft
                     cap or less). One-click write-off after confirmation
@@ -5521,7 +5707,12 @@ export default function App() {
                 10,700 cash + 20,000 check shows the correct mix instead
                 of "100% Cash". */}
             {(() => {
-              const txns = treasuryByOrder[selectedInvoice.order_number] || [];
+              // v55.83-A.6.27.13 (Max May 16 2026) — use UUID-keyed map so
+              // the payment-source mix (Cash vs Bank vs Check) reflects
+              // exactly the rows the Collected total counts. Previously
+              // keyed by order_number string which could miss UUID-linked
+              // rows that had a wrong/empty order_number.
+              const txns = treasuryByInvoiceId[selectedInvoice.id] || [];
               // v55.83-A.6.6 — pull collected checks too and shim them as
               // virtual check-source rows for aggregatePaymentSources.
               const collectedChks = (checks || []).filter(c =>
@@ -5864,17 +6055,61 @@ export default function App() {
               );
             })()}
 
-            {/* Treasury Transactions */}
-            {(treasuryByOrder[selectedInvoice.order_number] || []).length > 0 && (
-              <div className="bg-emerald-50 rounded-lg p-4 mb-4 border border-emerald-200">
-                <h4 className="text-sm font-bold text-emerald-800 mb-2">🏦 Treasury / الخزنة #{selectedInvoice.order_number}</h4>
-                {(treasuryByOrder[selectedInvoice.order_number] || []).map((txn, i) => (
-                  <div key={txn.id}>
-                    {/* v55.83-A.6.9 (Max May 13 2026) — Placeholder rows
-                        previously showed as "EGP 0" with no visible
-                        indication of pending amount. Invoice 2317 had a
-                        25,000 EGP placeholder that was invisible in the
-                        treasury totals. Now placeholders get a distinct
+            {/* v55.83-A.6.27.13 (Max May 16 2026) — Treasury panel.
+                Reads from treasuryByInvoiceId (UUID-keyed) so what's shown
+                matches what the "Collected" total counts. Previously used
+                treasuryByOrder (string-keyed), which could disagree silently
+                with the recalc — exactly the invoice 2330 bug. */}
+            {(() => {
+              var uuidLinked = treasuryByInvoiceId[selectedInvoice.id] || [];
+              var orphans = findOrphanedOrderNumberMatches(selectedInvoice);
+              if (uuidLinked.length === 0 && orphans.length === 0) return null;
+              return (
+                <div>
+                  {orphans.length > 0 && (
+                    <div className="bg-amber-100 rounded-lg p-3 mb-2 border-2 border-amber-400">
+                      <div className="text-xs font-bold text-amber-900 mb-1">⚠️ Linkage drift detected ({orphans.length} row{orphans.length === 1 ? '' : 's'})</div>
+                      <div className="text-[11px] text-amber-900 mb-2">
+                        These treasury rows have order_number = <strong>{selectedInvoice.order_number}</strong> but are not properly linked to this invoice by ID. They are NOT counted in the Collected total. This usually means the invoice was re-created or the link was broken during an edit.
+                      </div>
+                      <div className="space-y-1">
+                        {orphans.map(function (t) {
+                          var amt = Number(t.cash_in || 0) + Number(t.bank_in || 0);
+                          return (
+                            <div key={t.id} className="flex items-center justify-between bg-white rounded px-2 py-1.5 text-[11px]">
+                              <div className="flex-1">
+                                <span className="font-mono font-bold text-amber-900">{fE(amt)}</span>
+                                <span className="text-slate-600 ml-2">{t.transaction_date}</span>
+                                <span className="text-slate-500 ml-2 truncate inline-block max-w-[200px] align-bottom" title={t.description}>{t.description}</span>
+                              </div>
+                              <div className="flex gap-1">
+                                <button onClick={() => setInspectedTreasury(t)}
+                                  className="px-2 py-0.5 rounded border border-amber-400 text-amber-800 text-[10px] hover:bg-amber-50">Inspect</button>
+                                <button onClick={async () => {
+                                  await dbUpdate('treasury', t.id, { linked_invoice_id: selectedInvoice.id }, userProfile?.id || user?.id);
+                                  await recalcInvoiceCollected(selectedInvoice.id);
+                                  await loadAllData();
+                                  if (toast && toast.success) toast.success('Linked + recalculated');
+                                }}
+                                  className="px-2 py-0.5 rounded bg-blue-500 hover:bg-blue-600 text-white text-[10px] font-bold">Link Now</button>
+                              </div>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    </div>
+                  )}
+
+                  {uuidLinked.length > 0 && (
+                    <div className="bg-emerald-50 rounded-lg p-4 mb-4 border border-emerald-200">
+                      <h4 className="text-sm font-bold text-emerald-800 mb-2">🏦 Treasury / الخزنة #{selectedInvoice.order_number}</h4>
+                      {uuidLinked.map((txn, i) => (
+                        <div key={txn.id}>
+                          {/* v55.83-A.6.9 (Max May 13 2026) — Placeholder rows
+                              previously showed as "EGP 0" with no visible
+                              indication of pending amount. Invoice 2317 had a
+                              25,000 EGP placeholder that was invisible in the
+                              treasury totals. Now placeholders get a distinct
                         amber visual treatment with "⏳ EGP X awaiting bank
                         confirmation" + show their expected_amount in the
                         total. */}
@@ -6017,7 +6252,7 @@ export default function App() {
                     {/* v55.83-A.6.9 — include placeholder expected_amount
                         so totals match what users see line-by-line. The
                         "pending" portion is broken out below for clarity. */}
-                    {fE((treasuryByOrder[selectedInvoice.order_number] || []).reduce((a, t) => {
+                    {fE((treasuryByInvoiceId[selectedInvoice.id] || []).reduce((a, t) => {
                       var confirmed = Number(t.cash_in || 0) + Number(t.bank_in || 0);
                       var pending = t.is_bank_placeholder ? Number(t.expected_amount || 0) : 0;
                       return a + confirmed + pending;
@@ -6026,19 +6261,19 @@ export default function App() {
                 </div>
                 {/* Confirmed + pending breakdown below the total, only if
                     any placeholder exists. */}
-                {(treasuryByOrder[selectedInvoice.order_number] || []).some(t => t.is_bank_placeholder) && (
+                {(treasuryByInvoiceId[selectedInvoice.id] || []).some(t => t.is_bank_placeholder) && (
                   <div className="mt-1 space-y-0.5 text-[10px]">
                     <div className="flex justify-between">
                       <span className="text-emerald-700">✓ Confirmed / مؤكد</span>
                       <span className="font-bold text-emerald-700">
-                        {fE((treasuryByOrder[selectedInvoice.order_number] || []).reduce((a, t) =>
+                        {fE((treasuryByInvoiceId[selectedInvoice.id] || []).reduce((a, t) =>
                           t.is_bank_placeholder ? a : a + Number(t.cash_in || 0) + Number(t.bank_in || 0), 0))}
                       </span>
                     </div>
                     <div className="flex justify-between">
                       <span className="text-amber-700">⏳ Pending bank confirmation / في انتظار البنك</span>
                       <span className="font-bold text-amber-700">
-                        {fE((treasuryByOrder[selectedInvoice.order_number] || []).reduce((a, t) =>
+                        {fE((treasuryByInvoiceId[selectedInvoice.id] || []).reduce((a, t) =>
                           t.is_bank_placeholder ? a + Number(t.expected_amount || 0) : a, 0))}
                       </span>
                     </div>
@@ -6046,6 +6281,9 @@ export default function App() {
                 )}
               </div>
             )}
+                </div>
+              );
+            })()}
 
             {/* Egypt Bank Linked Entries */}
             {(() => {
@@ -6064,11 +6302,13 @@ export default function App() {
                         <span className="text-sm font-bold text-emerald-600">{fE(txn.amount)}</span>
                         <button onClick={async () => {
                           try {
+                            // v55.83-A.6.27.14 (Max May 16 2026) — delegate
+                            // to recalc instead of subtracting from
+                            // total_collected directly. Same architectural
+                            // fix as EgyptBankTab.unmatch.
                             await dbUpdate('egypt_bank_transactions', txn.id, { matched_invoice_id: null, matched_at: null, matched_by: null }, userProfile?.id);
-                            const newCollected = Math.max(0, Number(selectedInvoice.total_collected || 0) - Number(txn.amount));
-                            await dbUpdate('invoices', selectedInvoice.id, { total_collected: newCollected }, userProfile?.id);
-                            setSelectedInvoice({...selectedInvoice, total_collected: newCollected});
-                            setEgyptBankTxns(prev => prev.map(t => t.id === txn.id ? {...t, matched_invoice_id: null} : t));
+                            await recalcInvoiceCollected(selectedInvoice.id);
+                            await loadAllData();
                           } catch(err) { alert(err.message); }
                         }} className="text-[10px] text-red-400 underline">unlink</button>
                       </div>
@@ -6144,11 +6384,39 @@ export default function App() {
                           {!alreadyLinked && (
                           <button onClick={async () => {
                             try {
-                              await dbUpdate('egypt_bank_transactions', txn.id, { matched_invoice_id: selectedInvoice.id, matched_at: new Date().toISOString(), matched_by: userProfile?.id }, userProfile?.id);
-                              const newCollected = Number(selectedInvoice.total_collected || 0) + Number(txn.amount);
-                              await dbUpdate('invoices', selectedInvoice.id, { total_collected: newCollected }, userProfile?.id);
-                              setSelectedInvoice({...selectedInvoice, total_collected: newCollected});
-                              setEgyptBankTxns(prev => prev.map(t => t.id === txn.id ? {...t, matched_invoice_id: selectedInvoice.id} : t));
+                              // v55.83-A.6.27.14 (Max May 16 2026) — when
+                              // linking an Egypt Bank txn from inside the
+                              // invoice view, do the same thing
+                              // EgyptBankTab.matchToInvoice does: create a
+                              // treasury row representing the bank inflow,
+                              // then defer to recalcInvoiceCollected.
+                              // Without this, total_collected went stale on
+                              // the next recalc.
+                              var amt = Number(txn.amount);
+                              var insertRes = await supabase.from('treasury').insert({
+                                transaction_date: txn.date || todayET(),
+                                cash_in: 0,
+                                cash_out: 0,
+                                bank_in: amt,
+                                bank_out: 0,
+                                linked_invoice_id: selectedInvoice.id,
+                                order_number: selectedInvoice.order_number,
+                                matched_bank_txn_id: txn.id,
+                                needs_bank_match: false,
+                                is_bank_placeholder: false,
+                                description: 'Bank deposit matched to invoice #' + selectedInvoice.order_number,
+                                created_by: userProfile?.id,
+                              }).select().single();
+                              if (insertRes.error) throw insertRes.error;
+                              var newTreasuryId = insertRes.data && insertRes.data.id;
+                              await dbUpdate('egypt_bank_transactions', txn.id, {
+                                matched_invoice_id: selectedInvoice.id,
+                                matched_treasury_id: newTreasuryId,
+                                matched_at: new Date().toISOString(),
+                                matched_by: userProfile?.id,
+                              }, userProfile?.id);
+                              await recalcInvoiceCollected(selectedInvoice.id);
+                              await loadAllData();
                               setShowLinkSearch(false); setLinkSearch('');
                             } catch(err) { toast.error(err.message); }
                           }}
@@ -12157,7 +12425,7 @@ export default function App() {
         )}
 
         {tab === 'egyptbank' && (
-          <SafeSection label="Egypt Bank"><EgyptBankTab toast={toast} user={user} userProfile={userProfile} isAdmin={isAdmin} invoices={invoices} onReload={loadAllData} /></SafeSection>
+          <SafeSection label="Egypt Bank"><EgyptBankTab toast={toast} user={user} userProfile={userProfile} isAdmin={isAdmin} invoices={invoices} recalcInvoiceCollected={recalcInvoiceCollected} onReload={loadAllData} /></SafeSection>
         )}
 
         {tab === 'reports' && (
@@ -12475,7 +12743,7 @@ export default function App() {
                       latest fix is actually deployed. If he doesn't see this
                       tag in the modal, his browser is running stale JS. */}
                   <div className="mt-1.5 inline-block px-2 py-0.5 rounded bg-amber-900/60 text-amber-100 text-[10px] font-mono font-bold tracking-wide">
-                    BUILD v55.83-A.6.27.12
+                    BUILD v55.83-A.6.27.14
                   </div>
                 </div>
                 <button onClick={() => closePendingTreasuryModal()}
@@ -13110,7 +13378,7 @@ export default function App() {
                     معاملة قد تكون مكررة
                   </div>
                   <div className="mt-1.5 inline-block px-2 py-0.5 rounded bg-amber-900/60 text-amber-100 text-[10px] font-mono font-bold tracking-wide">
-                    BUILD v55.83-A.6.27.12
+                    BUILD v55.83-A.6.27.14
                   </div>
                 </div>
                 <button
