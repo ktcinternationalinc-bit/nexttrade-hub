@@ -33,6 +33,23 @@ import { supabase } from '../lib/supabase';
 //     WhatsApp, the calendar, the Sales tab.
 export const BUILD_HISTORY = [
   {
+    version: 'v55.83-A.6.27.21',
+    date: '2026-05-17',
+    label: 'AI Treasury Review — readability + Fix Links + escape hatch',
+    items: [
+      '**AI Accountant Review modal is now readable.** The header was light purple with text that looked white in some environments — completely unreadable. Now the header is a solid dark indigo bar with white text that\'s impossible to misread regardless of theme or browser quirks.',
+      '**Big bright close button at the top right.** The old ✕ was a tiny low-contrast button you could easily miss. Now it\'s a big 40×40 white circle with a dark X and a drop shadow — you can\'t miss it.',
+      '**Press Escape to close the modal.** A guaranteed way out, no matter where the close button ends up or whether you can see it. Works from anywhere inside the modal.',
+      '**AI summary, verdict, and top actions now render correctly.** The previous version sometimes showed raw computer output instead of the formatted summary — caused by the AI occasionally wrapping its response in extra characters. The system now intelligently extracts the real content and presents it as readable text on a white card with dark text.',
+      '**Red error messages are now bigger and bolder.** Errors and critical findings were too small to take seriously. Now: text-base font-extrabold with red background panel.',
+      '**Finding titles, impact lines, and recommended actions are all bigger.** All set to text-base with strong font weights. The 💰 emoji marks the financial impact line so it jumps out.',
+      '**Metric cards (Treasury Net, Outstanding, Pending Checks, Unmatched Bank) now have a light background with dark text.** Previously light text on dark which could fail to render.',
+      '**Fix Links button works again — and shows you it\'s working.** Press it and you see "🔍 Scanning..." immediately, then either "✓ No missing links found" (clear success), or "Cancelled" if you back out of the confirm, or "✓ Linked X rows" when it does work. The button shows "⏳ Working..." while running. Errors are caught and shown explicitly. No more silent button.',
+      { superAdminOnly: true, text: 'NINE FIXES: (1) Header now bg #3730a3 with inline-style white text — defends against Tailwind class failures. (2) Close button 40x40 with shadow + onClose wired + Esc key handler in useEffect with cleanup. (3) /api/accountant now uses balanced-brace extractor when JSON.parse fails; system prompt strengthened with explicit "first char must be {" rule; UI also unwraps if summary field itself starts with {. (4) VERDICT/SUMMARY/TOP ACTIONS cards switched from bg-slate-900 + text-white to bg-white + text-slate-900. (5) AI error: text-base font-extrabold + bg-red-50 border-2 border-red-300 panel. (6) Finding title text-sm→text-base, font-bold→font-extrabold; impact text-xs→text-sm font-extrabold with 💰. (7) Metric strip bg-slate-800→bg-slate-50, text-slate-300→text-slate-700, text-*-300→text-*-700. (8) Recommended Action + Affected Records: bg-slate-900/bg-slate-800 → bg-white. (9) Fix Links: fixLinksBusy state, console.log on press, toast.info on scan start, toast.success on no-links, toast.info on cancel, explicit catch + finally release.' },
+      { superAdminOnly: true, text: 'TEST: __tests__/test-v55-83-a-6-27-21-readability-and-fix-links.js — 50 assertions across all 9 fixes + 6 regression guards on A.6.27.17/18/19/20. Sweep: 205/0.' },
+    ],
+  },
+  {
     version: 'v55.83-A.6.27.20',
     date: '2026-05-17',
     label: 'Payment Instruments — now in the New Invoice creation flow',

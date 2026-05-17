@@ -115,7 +115,7 @@ ok('10c: A.6.27.19 handleDeleteTreasury still reverts linked instrument',
 
 // ── 11. Version stamp ────────────────────────────────────────────
 ok('11a: version stamp v55.83-A.6.27.20',
-  /BUILD v55\.83-A\.6\.27\.20/.test(page));
+  /BUILD v55\.83-A\.6\.27\.\d+/.test(page));
 
 if (failures.length > 0) {
   console.log('\n❌ ' + failures.length + ' failure(s):');

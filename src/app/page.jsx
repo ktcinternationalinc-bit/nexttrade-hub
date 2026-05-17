@@ -475,6 +475,10 @@ export default function App() {
   const [editTreasuryModal, setEditTreasuryModal] = useState(null);
   const [inspectedTreasury, setInspectedTreasury] = useState(null);
   const [showAccountantReview, setShowAccountantReview] = useState(false);
+  // v55.83-A.6.27.21 (Max May 17 2026) — Fix Links button busy state.
+  // Per Max: "FIX button doesn't do anything anymore." Button now shows
+  // explicit feedback during scan/link operations and toasts result.
+  const [fixLinksBusy, setFixLinksBusy] = useState(false);
   // Treasury ↔ Sales navigation return state
   const [treasuryReturnState, setTreasuryReturnState] = useState(null);
   // Mini-modal for "order# doesn't exist, create now?" flow
@@ -5118,7 +5122,7 @@ export default function App() {
               {/* Brand mark — bracket prefix is a terminal callout convention. */}
               <span className="text-emerald-400 font-mono text-xs font-bold tracking-tight" style={{ fontFamily: '"JetBrains Mono", monospace' }}>[KTC]</span>
               <h1 className="text-sm font-bold text-white tracking-tight whitespace-nowrap">NEXTTRADE HUB</h1>
-              <span className="text-[10px] text-zinc-500 font-mono hidden md:inline" style={{ fontFamily: '"JetBrains Mono", monospace' }}>v55.83-A.6.27.20</span>
+              <span className="text-[10px] text-zinc-500 font-mono hidden md:inline" style={{ fontFamily: '"JetBrains Mono", monospace' }}>v55.83-A.6.27.21</span>
               {/* Live clock — terminals always show one. Updates via the
                   existing tick state; if not present, falls back to no clock. */}
               <span className="hidden lg:inline text-[10px] text-zinc-500 font-mono ml-2 pl-2 border-l border-zinc-800" style={{ fontFamily: '"JetBrains Mono", monospace' }}>
@@ -11785,25 +11789,46 @@ export default function App() {
                   title="Run AI accounting review / تشغيل مراجعة المحاسب الذكي">
                   🤖 AI Review
                 </button>
-                <button onClick={async () => {
-                  // Find all treasury rows with an order# but no linked_invoice_id where an invoice
-                  // with that order# DOES exist. Link them, recalc each affected invoice.
-                  const byOrder = {};
-                  invoices.forEach(i => { if (i.order_number) byOrder[String(i.order_number).trim()] = i; });
-                  const needsLink = treasury.filter(t => {
-                    if (t.linked_invoice_id) return false;
-                    if (t.is_bank_placeholder) return false;
-                    if (!t.order_number) return false;
-                    const inflow = Number(t.cash_in || 0) + Number(t.bank_in || 0);
-                    if (inflow <= 0) return false;
-                    return !!byOrder[String(t.order_number).trim()];
-                  });
-                  if (needsLink.length === 0) {
-                    toast.success('No missing links found — everything is in order ✓');
-                    return;
-                  }
-                  if (!confirm('Found ' + needsLink.length + ' treasury row(s) that should be linked to existing invoices but aren\'t. Link them now and recalculate the affected invoices?')) return;
+                <button
+                  disabled={fixLinksBusy}
+                  onClick={async () => {
+                  // v55.83-A.6.27.21 (Max May 17 2026) — Max reported "FIX
+                  // button doesn't do anything anymore." Multiple possible
+                  // causes: confirm() was being dismissed silently, every
+                  // row already linked so "no missing links" toast was
+                  // unreadable, or async handler failed silently. This
+                  // build adds: console log on every press, busy state
+                  // (button disabled while running), info toast BEFORE
+                  // confirm so user sees the click was registered, loud
+                  // success toast (toast.info with explicit "0 found"),
+                  // and a clear "Cancelled" toast if confirm is dismissed.
+                  console.log('[fix-links] button pressed');
+                  setFixLinksBusy(true);
                   try {
+                    toast.info('🔍 Scanning treasury for missing invoice links...');
+                    // Find all treasury rows with an order# but no linked_invoice_id where an invoice
+                    // with that order# DOES exist. Link them, recalc each affected invoice.
+                    const byOrder = {};
+                    invoices.forEach(i => { if (i.order_number) byOrder[String(i.order_number).trim()] = i; });
+                    const needsLink = treasury.filter(t => {
+                      if (t.linked_invoice_id) return false;
+                      if (t.is_bank_placeholder) return false;
+                      if (!t.order_number) return false;
+                      const inflow = Number(t.cash_in || 0) + Number(t.bank_in || 0);
+                      if (inflow <= 0) return false;
+                      return !!byOrder[String(t.order_number).trim()];
+                    });
+                    console.log('[fix-links] found ' + needsLink.length + ' rows needing link');
+                    if (needsLink.length === 0) {
+                      toast.success('✓ No missing links found — every treasury row with a matching invoice is already linked.');
+                      setFixLinksBusy(false);
+                      return;
+                    }
+                    if (!confirm('Found ' + needsLink.length + ' treasury row(s) that should be linked to existing invoices but aren\'t. Link them now and recalculate the affected invoices?')) {
+                      toast.info('Cancelled — no changes made.');
+                      setFixLinksBusy(false);
+                      return;
+                    }
                     const affectedInvoiceIds = new Set();
                     for (const t of needsLink) {
                       const inv = byOrder[String(t.order_number).trim()];
@@ -11814,15 +11839,18 @@ export default function App() {
                     for (const invId of affectedInvoiceIds) {
                       await recalcInvoiceCollected(invId);
                     }
-                    toast.success('Linked ' + needsLink.length + ' row(s) and recalculated ' + affectedInvoiceIds.size + ' invoice(s) ✓');
+                    toast.success('✓ Linked ' + needsLink.length + ' row(s) and recalculated ' + affectedInvoiceIds.size + ' invoice(s).');
                     await loadAllData();
                   } catch (err) {
-                    toast.error('Fix failed: ' + err.message);
+                    console.error('[fix-links] failed:', err);
+                    toast.error('Fix failed: ' + (err && err.message ? err.message : String(err)));
+                  } finally {
+                    setFixLinksBusy(false);
                   }
                 }}
-                  className="px-3 py-1.5 bg-amber-500 text-white rounded-lg text-xs font-extrabold hover:bg-amber-600 shadow"
+                  className="px-3 py-1.5 bg-amber-500 text-white rounded-lg text-xs font-extrabold hover:bg-amber-600 shadow disabled:opacity-50 disabled:cursor-wait"
                   title="Find and link treasury rows whose order# matches an existing invoice but aren't linked. Fixes the invoice collected totals. / ابحث عن قيود الخزنة التي يطابق رقم أمرها فاتورة موجودة لكنها غير مربوطة، واربطها.">
-                  🔗 Fix Links
+                  {fixLinksBusy ? '⏳ Working...' : '🔗 Fix Links'}
                 </button>
                 <button onClick={() => {
                     // v55.82-E — RESET-OPEN HARDENING. Previously this button
@@ -13812,7 +13840,7 @@ export default function App() {
                       latest fix is actually deployed. If he doesn't see this
                       tag in the modal, his browser is running stale JS. */}
                   <div className="mt-1.5 inline-block px-2 py-0.5 rounded bg-amber-900/60 text-amber-100 text-[10px] font-mono font-bold tracking-wide">
-                    BUILD v55.83-A.6.27.20
+                    BUILD v55.83-A.6.27.21
                   </div>
                 </div>
                 <button onClick={() => closePendingTreasuryModal()}
@@ -14447,7 +14475,7 @@ export default function App() {
                     معاملة قد تكون مكررة
                   </div>
                   <div className="mt-1.5 inline-block px-2 py-0.5 rounded bg-amber-900/60 text-amber-100 text-[10px] font-mono font-bold tracking-wide">
-                    BUILD v55.83-A.6.27.20
+                    BUILD v55.83-A.6.27.21
                   </div>
                 </div>
                 <button

@@ -50,12 +50,18 @@ export async function POST(req) {
       '3. Give practical, business-specific advice.',
       '4. Be direct. Do NOT hedge excessively. Do NOT recommend "consult a professional" — the user IS the professional.',
       '5. Return BOTH English and Arabic versions.',
-      'Format your response as strict JSON with this shape:',
+      '',
+      'CRITICAL OUTPUT RULES:',
+      '- Return ONLY a JSON object — no preamble, no explanation, no markdown code fences, no surrounding text.',
+      '- The very first character of your response MUST be {',
+      '- The very last character of your response MUST be }',
+      '- All string values must be plain text (no markdown, no newlines escaped as literal \\n inside strings — use actual line breaks if needed).',
+      '',
+      'Required JSON shape:',
       '{',
       '  "en": { "summary": "...", "topActions": ["action 1", "action 2", "action 3"], "verdict": "one-line overall verdict" },',
       '  "ar": { "summary": "...", "topActions": ["إجراء 1", "إجراء 2", "إجراء 3"], "verdict": "حكم عام من سطر واحد" }',
-      '}',
-      'Do not include any text outside the JSON.'
+      '}'
     ].join('\n');
 
     var userMessage = 'Here is the audit output:\n\n' + JSON.stringify(summary, null, 2);
@@ -94,15 +100,60 @@ export async function POST(req) {
     // Strip code fences if the model added them
     raw = raw.replace(/```json\s*/g, '').replace(/```\s*/g, '').trim();
 
+    // v55.83-A.6.27.21 (Max May 17 2026) — robust JSON extraction.
+    // Previously: if Claude returned ANY prose before/after the JSON
+    // (a stray sentence, an explanation), JSON.parse threw and the
+    // fallback put the entire raw response into the `summary` field —
+    // which the UI then rendered as the summary text. Max saw the raw
+    // JSON object printed as if it were the summary string.
+    //
+    // Fix: try JSON.parse first; if it fails, try to extract the first
+    // balanced { ... } object substring and parse that.
     var parsed;
     try {
       parsed = JSON.parse(raw);
-    } catch (e) {
-      // Fallback: return raw text so UI can still show something
-      parsed = {
-        en: { summary: raw, topActions: [], verdict: '' },
-        ar: { summary: '', topActions: [], verdict: '' }
-      };
+    } catch (e1) {
+      // Try to extract the first complete JSON object by finding matching braces
+      var extracted = null;
+      var firstBrace = raw.indexOf('{');
+      if (firstBrace >= 0) {
+        var depth = 0;
+        var inString = false;
+        var escape = false;
+        for (var p = firstBrace; p < raw.length; p++) {
+          var ch = raw[p];
+          if (escape) { escape = false; continue; }
+          if (ch === '\\') { escape = true; continue; }
+          if (ch === '"' && !escape) { inString = !inString; continue; }
+          if (inString) continue;
+          if (ch === '{') depth++;
+          else if (ch === '}') {
+            depth--;
+            if (depth === 0) {
+              extracted = raw.substring(firstBrace, p + 1);
+              break;
+            }
+          }
+        }
+      }
+      if (extracted) {
+        try {
+          parsed = JSON.parse(extracted);
+        } catch (e2) {
+          // Both attempts failed — last-resort fallback. Log so we can debug.
+          console.error('[accountant] JSON parse failed twice. Raw length:', raw.length, 'Extracted length:', extracted ? extracted.length : 0);
+          parsed = {
+            en: { summary: 'AI response could not be parsed. Raw output below for diagnosis:\n\n' + raw.substring(0, 1000), topActions: [], verdict: '' },
+            ar: { summary: '', topActions: [], verdict: '' }
+          };
+        }
+      } else {
+        console.error('[accountant] No JSON object found in response. Raw length:', raw.length);
+        parsed = {
+          en: { summary: 'AI did not return structured output. Raw text:\n\n' + raw.substring(0, 1000), topActions: [], verdict: '' },
+          ar: { summary: '', topActions: [], verdict: '' }
+        };
+      }
     }
 
     return new Response(JSON.stringify(parsed), {

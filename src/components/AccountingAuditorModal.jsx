@@ -39,6 +39,21 @@ export default function AccountingAuditorModal(props) {
   var [aiResult, setAiResult] = useState(null);
   var [aiError, setAiError] = useState(null);
 
+  // v55.83-A.6.27.21 (Max May 17 2026) — Max reported "no way to go back
+  // unless I click back on the browser." The close X was a tiny low-contrast
+  // button on a light header. This effect adds an Esc key listener so the
+  // user always has a guaranteed escape hatch regardless of where the
+  // close button ends up rendered.
+  useEffect(function () {
+    function onKey(e) {
+      if (e.key === 'Escape' || e.key === 'Esc') {
+        try { onClose(); } catch (_) {}
+      }
+    }
+    window.addEventListener('keydown', onKey);
+    return function () { window.removeEventListener('keydown', onKey); };
+  }, [onClose]);
+
   var audit = useMemo(function () {
     return runAccountingAudit(data);
   }, [data.treasury, data.invoices, data.checks, data.egyptBankTxns, data.warehouse, data.customers, data.debts]);
@@ -57,6 +72,17 @@ export default function AccountingAuditorModal(props) {
       if (json.error) {
         setAiError(json.error);
       } else {
+        // v55.83-A.6.27.21 — defensive: if Claude double-wrapped (summary
+        // field contains a stringified JSON object), unwrap it. Previously
+        // this rendered as raw "{" "en": { "summary": "..." }" in the UI.
+        try {
+          if (json.en && typeof json.en.summary === 'string' && json.en.summary.trim().startsWith('{')) {
+            var maybeInner = JSON.parse(json.en.summary);
+            if (maybeInner && (maybeInner.en || maybeInner.ar)) {
+              json = maybeInner;
+            }
+          }
+        } catch (_) { /* swallow; render whatever we got */ }
         setAiResult(json);
       }
     } catch (e) {
@@ -80,25 +106,35 @@ export default function AccountingAuditorModal(props) {
         className="bg-white rounded-2xl shadow-2xl w-full max-w-4xl my-2"
         onClick={function (e) { e.stopPropagation(); }}
       >
-        {/* ---------- Header ---------- */}
-        <div className="px-5 py-4 rounded-t-2xl border-b-2 border-indigo-300 bg-gradient-to-br from-indigo-100 to-blue-100">
+        {/* ---------- Header ----------
+            v55.83-A.6.27.21 — per Max: previous header had white-ish text
+            on light bg-indigo-100. Switched to SOLID DARK bg (indigo-700)
+            with white text, using inline style for color to defend against
+            any class-loading failure. Close button is now BIG, DARK, and
+            obvious (was small slate-300 border on white/70 — easily missed). */}
+        <div
+          className="px-5 py-4 rounded-t-2xl"
+          style={{ background: '#3730a3', borderBottom: '2px solid #4338ca' }}
+        >
           <div className="flex justify-between items-start gap-3">
             <div className="flex-1">
               <div className="flex items-center gap-2">
                 <span className="text-3xl">🤖</span>
-                <span className="text-lg font-extrabold text-indigo-950">AI Accountant Review</span>
+                <span className="text-lg font-extrabold" style={{ color: '#ffffff' }}>AI Accountant Review</span>
               </div>
-              <div className="text-base font-extrabold text-indigo-900 mt-1" style={{ direction: 'rtl' }}>مراجعة المحاسب الذكي</div>
-              <div className="text-sm text-slate-800 mt-2 font-medium">
+              <div className="text-base font-extrabold mt-1" style={{ direction: 'rtl', color: '#e0e7ff' }}>مراجعة المحاسب الذكي</div>
+              <div className="text-sm mt-2 font-medium" style={{ color: '#e0e7ff' }}>
                 Scans treasury, invoices, checks, Egypt Bank, and debts for reconciliation issues.
               </div>
-              <div className="text-sm text-slate-800 font-medium mt-0.5" style={{ direction: 'rtl' }}>
+              <div className="text-sm font-medium mt-0.5" style={{ direction: 'rtl', color: '#e0e7ff' }}>
                 يفحص الخزنة والفواتير والشيكات وبنك مصر والمديونيات للبحث عن مشاكل مطابقة.
               </div>
             </div>
             <button
               onClick={onClose}
-              className="px-2.5 py-1 rounded-lg border border-slate-300 text-xs font-bold text-slate-600 hover:bg-white bg-white/70 shrink-0"
+              aria-label="Close"
+              className="shrink-0 rounded-full font-extrabold hover:opacity-80 active:scale-95 transition"
+              style={{ background: '#ffffff', color: '#1e293b', width: 40, height: 40, fontSize: 22, lineHeight: 1, border: '2px solid #cbd5e1', boxShadow: '0 2px 8px rgba(0,0,0,0.2)' }}
             >
               ✕
             </button>
@@ -133,22 +169,22 @@ export default function AccountingAuditorModal(props) {
 
           {/* ---------- Metrics strip ---------- */}
           <div className="grid grid-cols-2 md:grid-cols-4 gap-2">
-            <div className="bg-slate-800 rounded-lg p-3">
-              <div className="text-[11px] text-slate-300 font-bold">Treasury Net / صافي الخزنة</div>
-              <div className={'text-base font-extrabold ' + (audit.metrics.treasuryNet >= 0 ? 'text-emerald-300' : 'text-red-300')}>{fE(audit.metrics.treasuryNet)}</div>
+            <div className="bg-slate-50 rounded-lg p-3 border border-slate-200">
+              <div className="text-[11px] text-slate-700 font-extrabold">Treasury Net / صافي الخزنة</div>
+              <div className={'text-base font-extrabold ' + (audit.metrics.treasuryNet >= 0 ? 'text-emerald-700' : 'text-red-700')}>{fE(audit.metrics.treasuryNet)}</div>
             </div>
-            <div className="bg-slate-800 rounded-lg p-3">
-              <div className="text-[11px] text-slate-300 font-bold">Outstanding / المتبقي</div>
-              <div className="text-base font-extrabold text-amber-300">{fE(audit.metrics.totalOutstanding)}</div>
+            <div className="bg-slate-50 rounded-lg p-3 border border-slate-200">
+              <div className="text-[11px] text-slate-700 font-extrabold">Outstanding / المتبقي</div>
+              <div className="text-base font-extrabold text-amber-700">{fE(audit.metrics.totalOutstanding)}</div>
             </div>
-            <div className="bg-slate-800 rounded-lg p-3">
-              <div className="text-[11px] text-slate-300 font-bold">Pending Checks / شيكات معلقة</div>
-              <div className="text-base font-extrabold text-blue-300">{fE(audit.metrics.pendingChecksTotal)}</div>
-              <div className="text-[10px] text-slate-500">{audit.metrics.pendingCheckCount} checks</div>
+            <div className="bg-slate-50 rounded-lg p-3 border border-slate-200">
+              <div className="text-[11px] text-slate-700 font-extrabold">Pending Checks / شيكات معلقة</div>
+              <div className="text-base font-extrabold text-blue-700">{fE(audit.metrics.pendingChecksTotal)}</div>
+              <div className="text-[10px] text-slate-700 font-semibold">{audit.metrics.pendingCheckCount} checks</div>
             </div>
-            <div className="bg-slate-800 rounded-lg p-3">
-              <div className="text-[11px] text-slate-300 font-bold">Unmatched Bank / بنك غير مطابق</div>
-              <div className="text-base font-extrabold text-indigo-300">{audit.metrics.unmatchedBankCount}</div>
+            <div className="bg-slate-50 rounded-lg p-3 border border-slate-200">
+              <div className="text-[11px] text-slate-700 font-extrabold">Unmatched Bank / بنك غير مطابق</div>
+              <div className="text-base font-extrabold text-indigo-700">{audit.metrics.unmatchedBankCount}</div>
             </div>
           </div>
 
@@ -172,34 +208,34 @@ export default function AccountingAuditorModal(props) {
               )}
             </div>
             {aiError && (
-              <div className="mt-2 text-sm text-red-700 font-semibold">Error: {aiError}</div>
+              <div className="mt-2 text-base text-red-700 font-extrabold bg-red-50 border-2 border-red-300 rounded-lg p-2">⚠ Error: {aiError}</div>
             )}
             {aiResult && (
               <div className="mt-3 space-y-3">
                 {aiResult.en && aiResult.en.verdict && (
-                  <div className="bg-slate-900 rounded-lg p-4 border-2 border-indigo-500">
-                    <div className="text-[11px] text-indigo-300 font-extrabold mb-1.5 tracking-wider">VERDICT / الحكم</div>
-                    <div className="text-sm font-bold text-white leading-relaxed">{aiResult.en.verdict}</div>
-                    <div className="text-sm font-bold text-slate-100 mt-1.5 leading-relaxed" style={{ direction: 'rtl' }}>{aiResult.ar && aiResult.ar.verdict}</div>
+                  <div className="bg-white rounded-lg p-4 border-2 border-indigo-500 shadow-sm">
+                    <div className="text-[11px] text-indigo-700 font-extrabold mb-1.5 tracking-wider">VERDICT / الحكم</div>
+                    <div className="text-base font-extrabold text-slate-900 leading-relaxed">{aiResult.en.verdict}</div>
+                    <div className="text-base font-extrabold text-slate-800 mt-2 leading-relaxed pt-2 border-t border-slate-200" style={{ direction: 'rtl' }}>{aiResult.ar && aiResult.ar.verdict}</div>
                   </div>
                 )}
                 {aiResult.en && aiResult.en.summary && (
-                  <div className="bg-slate-900 rounded-lg p-4 border-2 border-indigo-500">
-                    <div className="text-[11px] text-indigo-300 font-extrabold mb-1.5 tracking-wider">SUMMARY / الملخص</div>
-                    <div className="text-sm leading-relaxed whitespace-pre-wrap text-white">{aiResult.en.summary}</div>
+                  <div className="bg-white rounded-lg p-4 border-2 border-indigo-500 shadow-sm">
+                    <div className="text-[11px] text-indigo-700 font-extrabold mb-1.5 tracking-wider">SUMMARY / الملخص</div>
+                    <div className="text-base leading-relaxed whitespace-pre-wrap text-slate-900 font-medium">{aiResult.en.summary}</div>
                     {aiResult.ar && aiResult.ar.summary && (
-                      <div className="text-sm leading-relaxed whitespace-pre-wrap mt-3 pt-3 border-t border-slate-700 text-slate-100" style={{ direction: 'rtl' }}>{aiResult.ar.summary}</div>
+                      <div className="text-base leading-relaxed whitespace-pre-wrap mt-3 pt-3 border-t border-slate-200 text-slate-800 font-medium" style={{ direction: 'rtl' }}>{aiResult.ar.summary}</div>
                     )}
                   </div>
                 )}
                 {aiResult.en && aiResult.en.topActions && aiResult.en.topActions.length > 0 && (
-                  <div className="bg-slate-900 rounded-lg p-4 border-2 border-indigo-500">
-                    <div className="text-[11px] text-indigo-300 font-extrabold mb-2 tracking-wider">TOP ACTIONS / أهم الإجراءات</div>
-                    <ol className="text-sm list-decimal ml-5 space-y-1.5 text-white font-medium">
+                  <div className="bg-white rounded-lg p-4 border-2 border-indigo-500 shadow-sm">
+                    <div className="text-[11px] text-indigo-700 font-extrabold mb-2 tracking-wider">TOP ACTIONS / أهم الإجراءات</div>
+                    <ol className="text-base list-decimal ml-5 space-y-1.5 text-slate-900 font-semibold">
                       {aiResult.en.topActions.map(function (a, i) { return <li key={i} className="leading-relaxed">{a}</li>; })}
                     </ol>
                     {aiResult.ar && aiResult.ar.topActions && aiResult.ar.topActions.length > 0 && (
-                      <ol className="text-sm list-decimal mr-5 space-y-1.5 mt-3 pt-3 border-t border-slate-700 text-slate-100 font-medium" style={{ direction: 'rtl' }}>
+                      <ol className="text-base list-decimal mr-5 space-y-1.5 mt-3 pt-3 border-t border-slate-200 text-slate-800 font-semibold" style={{ direction: 'rtl' }}>
                         {aiResult.ar.topActions.map(function (a, i) { return <li key={i} className="leading-relaxed">{a}</li>; })}
                       </ol>
                     )}
@@ -232,38 +268,38 @@ export default function AccountingAuditorModal(props) {
                         <div className="flex-1 min-w-0">
                           <div className="flex items-center gap-2 flex-wrap">
                             <Badge severity={f.severity} />
-                            <span className={'text-sm font-extrabold ' + c.text}>{f.titleEn}</span>
+                            <span className={'text-base font-extrabold ' + c.text}>{f.titleEn}</span>
                           </div>
-                          <div className={'text-sm font-bold mt-1 ' + c.text} style={{ direction: 'rtl' }}>{f.titleAr}</div>
+                          <div className={'text-base font-extrabold mt-1 ' + c.text} style={{ direction: 'rtl' }}>{f.titleAr}</div>
                           {f.totalImpact && f.totalImpact > 0 && (
-                            <div className="text-xs text-slate-800 mt-1.5 font-bold">Impact: {fE(f.totalImpact)}</div>
+                            <div className="text-sm text-slate-900 mt-1.5 font-extrabold">💰 Impact: {fE(f.totalImpact)}</div>
                           )}
                         </div>
-                        <div className="text-slate-600 text-xl shrink-0 font-bold">{open ? '▲' : '▼'}</div>
+                        <div className="text-slate-700 text-xl shrink-0 font-bold">{open ? '▲' : '▼'}</div>
                       </div>
                     </button>
                     {open && (
                       <div className="px-3 pb-3 space-y-2 border-t-2 border-white pt-3">
-                        <div className="text-sm text-slate-900 font-medium leading-relaxed">{f.descEn}</div>
-                        <div className="text-sm text-slate-800 font-medium leading-relaxed" style={{ direction: 'rtl' }}>{f.descAr}</div>
+                        <div className="text-base text-slate-900 font-semibold leading-relaxed">{f.descEn}</div>
+                        <div className="text-base text-slate-800 font-semibold leading-relaxed" style={{ direction: 'rtl' }}>{f.descAr}</div>
 
-                        <div className="bg-slate-900 rounded-lg p-3 border-2 border-slate-700">
-                          <div className="text-[11px] font-extrabold text-emerald-300 mb-1.5 tracking-wider">💡 RECOMMENDED ACTION / الإجراء المقترح</div>
-                          <div className="text-sm text-white font-medium leading-relaxed">{f.actionEn}</div>
-                          <div className="text-sm text-slate-100 font-medium leading-relaxed mt-1.5" style={{ direction: 'rtl' }}>{f.actionAr}</div>
+                        <div className="bg-white rounded-lg p-3 border-2 border-emerald-400 shadow-sm">
+                          <div className="text-[11px] font-extrabold text-emerald-700 mb-1.5 tracking-wider">💡 RECOMMENDED ACTION / الإجراء المقترح</div>
+                          <div className="text-base text-slate-900 font-semibold leading-relaxed">{f.actionEn}</div>
+                          <div className="text-base text-slate-800 font-semibold leading-relaxed mt-1.5 pt-1.5 border-t border-slate-200" style={{ direction: 'rtl' }}>{f.actionAr}</div>
                         </div>
 
                         {f.items && f.items.length > 0 && (
-                          <div className="bg-slate-800 rounded-lg p-3 border-2 border-slate-600">
-                            <div className="text-[11px] font-extrabold text-amber-300 mb-1.5 tracking-wider">📄 AFFECTED RECORDS ({f.count}){f.items.length < f.count ? ' — showing first ' + f.items.length : ''}</div>
-                            <div className="text-xs font-mono text-slate-100 space-y-1 max-h-56 overflow-auto">
+                          <div className="bg-white rounded-lg p-3 border-2 border-amber-400 shadow-sm">
+                            <div className="text-[11px] font-extrabold text-amber-700 mb-1.5 tracking-wider">📄 AFFECTED RECORDS ({f.count}){f.items.length < f.count ? ' — showing first ' + f.items.length : ''}</div>
+                            <div className="text-xs font-mono text-slate-900 space-y-1 max-h-56 overflow-auto">
                               {f.items.map(function (item, idx) {
                                 return (
-                                  <div key={idx} className="pb-1 border-b border-slate-700 last:border-0">
+                                  <div key={idx} className="pb-1 border-b border-slate-200 last:border-0">
                                     {Object.entries(item).map(function (entry, ei) {
                                       return (
                                         <span key={ei} className="mr-3 inline-block">
-                                          <span className="text-amber-300 font-bold">{entry[0]}:</span> <span className="text-white">{typeof entry[1] === 'number' ? entry[1].toLocaleString() : String(entry[1] || '—').substring(0, 50)}</span>
+                                          <span className="text-amber-700 font-bold">{entry[0]}:</span> <span className="text-slate-900 font-semibold">{typeof entry[1] === 'number' ? entry[1].toLocaleString() : String(entry[1] || '—').substring(0, 50)}</span>
                                         </span>
                                       );
                                     })}
