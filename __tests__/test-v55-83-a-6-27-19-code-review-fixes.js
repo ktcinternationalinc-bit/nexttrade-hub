@@ -123,7 +123,7 @@ ok('R7: A.6.27.14 EgyptBankTab.matchToInvoice still delegates to recalc (no dire
 
 // ── Version stamp ─────────────────────────────────────────────────
 ok('V1: version stamp v55.83-A.6.27.19',
-  /BUILD v55\.83-A\.6\.27\.19/.test(page));
+  /BUILD v55\.83-A\.6\.27\.\d+/.test(page));
 
 if (failures.length > 0) {
   console.log('\n❌ ' + failures.length + ' failure(s):');

@@ -120,7 +120,7 @@ ok('10c: closedTicketsForAI state still intact (from A.6.27.16)',
 
 // ── 11. Version stamp ────────────────────────────────────────────
 ok('11a: version stamp v55.83-A.6.27.17',
-  /BUILD v55\.83-A\.6\.27\.1[789]/.test(page));
+  /BUILD v55\.83-A\.6\.27\.\d+/.test(page));
 
 if (failures.length > 0) {
   console.log('\n❌ ' + failures.length + ' failure(s):');

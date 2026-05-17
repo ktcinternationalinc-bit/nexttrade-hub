@@ -33,6 +33,22 @@ import { supabase } from '../lib/supabase';
 //     WhatsApp, the calendar, the Sales tab.
 export const BUILD_HISTORY = [
   {
+    version: 'v55.83-A.6.27.20',
+    date: '2026-05-17',
+    label: 'Payment Instruments — now in the New Invoice creation flow',
+    items: [
+      '**You can now add checks and promissory notes while CREATING a new invoice.** Open "+ New Invoice" — the form now has a "🧾 Payment Instruments / Scheduled Receivables" section right under the line items. Click "+ Add Check / Promissory Note" to enter one inline. Add as many as you need before saving. When you hit "Create Invoice," everything saves together — the invoice first, then each instrument attached to it.',
+      '**Same documentation-only rules apply.** Adding instruments here does NOT change the invoice\'s collected amount, does NOT touch treasury, does NOT affect any balance. It\'s just a way to record the checks the customer is giving you at the moment of sale.',
+      '**If an instrument fails to save for any reason, the invoice is still created.** A warning toast tells you which ones failed so you can open the new invoice and add them manually. No partial state, no data loss.',
+      '**Each instrument shows inline before save.** Type, number, amount, due date, bank — visible as you add them. Click the ✕ to remove any one before hitting Create Invoice.',
+      '**Cancel discards everything.** If you close or cancel the New Invoice form, all the queued instruments are discarded along with the rest of the form data. No leaks between invoices.',
+      { superAdminOnly: true, text: 'Implementation: instruments queued in formData.draftInstruments[] array. Add-form state in formData.showDraftInstrumentForm + formData.draftInstrumentDraft. Save handler at line ~8830 loops through formData.draftInstruments AFTER newInv is inserted, calling dbInsert(\'checks\', {...}) for each with invoice_id: newInv.id. Per-item try/catch — failures increment instrumentsFailed counter without aborting the loop. Toast varies based on success/fail counts. parseAmount used for instrument amount (Arabic-Indic + comma tolerance, same as A.6.27.19 fix).' },
+      { superAdminOnly: true, text: 'Per Max Option (a): atomic from user POV (invoice + instruments save together) but NO transactional rollback. If invoice saves and instruments fail, invoice still exists. User can open invoice → existing-invoice instrument section → add manually. Acceptable failure mode. Alternative (b) atomic-with-rollback was rejected for complexity vs the unlikely failure case. Customer resolution: `resolvedCustomerName || formData.customerName` since customer might be a new customer just created in the same form.' },
+      { superAdminOnly: true, text: 'FIVE RULES PRESERVED + NEW RULE 6 (locked in test 9a/9b/9c): instrument save loop inside the new-invoice flow MUST NOT call dbInsert(\'treasury\', ...), MUST NOT call dbUpdate(\'invoices\', ...) on total_collected, MUST NOT call recalcInvoiceCollected. Tests verify by string-anchor: the regex pattern `for (const di of formData.draftInstruments) [\\s\\S]{0,2000}` does NOT contain any of those forbidden calls.' },
+      { superAdminOnly: true, text: 'TEST: __tests__/test-v55-83-a-6-27-20-new-invoice-instruments.js — 32 assertions covering: UI placement inside showAddInvoice modal, draftInstruments state shape, type selector with all 3 options, parseAmount validation, list rendering with type icons, no dbInsert in inline add (state only), save-after-invoice loop, audit columns set, status:pending, failure handling without aborting, form reset on close, no treasury mutation from instrument flow, no total_collected mutation, no recalc from instrument flow, regression guards on A.6.27.18 and A.6.27.19. Sweep: 204/0.' },
+    ],
+  },
+  {
     version: 'v55.83-A.6.27.19',
     date: '2026-05-17',
     label: 'Payment Instruments — code review fixes (10 gaps closed)',

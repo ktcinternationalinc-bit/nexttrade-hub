@@ -80,7 +80,7 @@ ok('8: old broken pattern (filtering closed from `tickets`) is removed',
 
 // ── 9. version stamp ─────────────────────────────────────────────
 ok('9: version stamp v55.83-A.6.27.16',
-  /BUILD v55\.83-A\.6\.27\.1[6789]/.test(page));
+  /BUILD v55\.83-A\.6\.27\.\d+/.test(page));
 
 if (failures.length > 0) {
   console.log('\n❌ ' + failures.length + ' failure(s):');

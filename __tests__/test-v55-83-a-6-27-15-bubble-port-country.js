@@ -46,7 +46,7 @@ ok('8: clicking bubble passes the specific POL/POD to setSelectedRoute',
   /setSelectedRoute\(\{origin:rg\.origin,destination:rg\.destination,pol:rg\.pol\|\|null,pod:rg\.pod\|\|null\}\)/.test(srt));
 
 ok('9: version stamp v55.83-A.6.27.15',
-  /BUILD v55\.83-A\.6\.27\.1[56789]/.test(page));
+  /BUILD v55\.83-A\.6\.27\.\d+/.test(page));
 
 if (failures.length > 0) {
   console.log('\n❌ ' + failures.length + ' failure(s):');

@@ -5118,7 +5118,7 @@ export default function App() {
               {/* Brand mark — bracket prefix is a terminal callout convention. */}
               <span className="text-emerald-400 font-mono text-xs font-bold tracking-tight" style={{ fontFamily: '"JetBrains Mono", monospace' }}>[KTC]</span>
               <h1 className="text-sm font-bold text-white tracking-tight whitespace-nowrap">NEXTTRADE HUB</h1>
-              <span className="text-[10px] text-zinc-500 font-mono hidden md:inline" style={{ fontFamily: '"JetBrains Mono", monospace' }}>v55.83-A.6.27.19</span>
+              <span className="text-[10px] text-zinc-500 font-mono hidden md:inline" style={{ fontFamily: '"JetBrains Mono", monospace' }}>v55.83-A.6.27.20</span>
               {/* Live clock — terminals always show one. Updates via the
                   existing tick state; if not present, falls back to no clock. */}
               <span className="hidden lg:inline text-[10px] text-zinc-500 font-mono ml-2 pl-2 border-l border-zinc-800" style={{ fontFamily: '"JetBrains Mono", monospace' }}>
@@ -8438,6 +8438,229 @@ export default function App() {
               )}
             </div>
 
+            {/* v55.83-A.6.27.20 (Max May 17 2026) — Payment Instruments section
+                for the NEW INVOICE create flow. Same data model as the existing
+                section that lives on the invoice detail modal, but instruments
+                are held in form state (`draftInstruments`) and saved AFTER
+                the invoice itself is inserted (so they get the real invoice_id).
+                Per Max's Option (a): if an instrument fails to save, the
+                invoice is still valid — user can open it and add manually.
+                Five rules unchanged: still pure documentation. */}
+            <div className="mt-4 border border-indigo-200 rounded-xl overflow-hidden bg-indigo-50/30">
+              <div className="px-3 py-2 bg-indigo-100">
+                <div className="flex items-center gap-2">
+                  <span style={{ fontSize: 16 }}>🧾</span>
+                  <div>
+                    <div className="text-xs font-bold text-indigo-900">
+                      Payment Instruments / Scheduled Receivables
+                    </div>
+                    <div className="text-[10px] text-indigo-700 italic">
+                      Optional — checks or promissory notes the customer is providing for this invoice. Documentation only.
+                    </div>
+                  </div>
+                </div>
+              </div>
+              <div className="p-2 space-y-1.5">
+                {/* List of instruments queued for this invoice */}
+                {(formData.draftInstruments || []).map(function (di, idx) {
+                  return (
+                    <div key={idx} className="flex items-center gap-2 bg-white border border-slate-200 rounded p-1.5">
+                      <span className="text-base">{di.instrument_type === 'promissory_note' ? '📜' : '🧾'}</span>
+                      <div className="flex-1 min-w-0">
+                        <div className="text-[11px] font-bold text-slate-900">
+                          {di.instrument_type === 'promissory_note' ? 'Promissory Note' : 'Check'}
+                          {di.check_number ? ' #' + di.check_number : ''}
+                          {' — '}{fE(Number(di.amount || 0))}
+                        </div>
+                        <div className="text-[10px] text-slate-600">
+                          Due: <strong>{di.due_date}</strong>
+                          {di.bank_name ? ' · ' + di.bank_name : ''}
+                          {di.notes ? ' · ' + di.notes.substring(0, 40) : ''}
+                        </div>
+                      </div>
+                      <button
+                        onClick={function () {
+                          setFormData(Object.assign({}, formData, {
+                            draftInstruments: (formData.draftInstruments || []).filter(function (_, i) { return i !== idx; }),
+                          }));
+                        }}
+                        className="text-red-500 hover:text-red-700 text-xs px-1 font-bold"
+                        title="Remove"
+                      >
+                        ✕
+                      </button>
+                    </div>
+                  );
+                })}
+
+                {/* Inline add form OR the "+ Add" button */}
+                {!formData.showDraftInstrumentForm ? (
+                  <button
+                    onClick={function () {
+                      setFormData(Object.assign({}, formData, {
+                        showDraftInstrumentForm: true,
+                        draftInstrumentDraft: {
+                          instrument_type: 'check',
+                          check_number: '',
+                          amount: '',
+                          issue_date: formData.date || today(),
+                          due_date: '',
+                          bank_name: '',
+                          notes: '',
+                        },
+                      }));
+                    }}
+                    className="w-full px-2 py-1.5 bg-white hover:bg-indigo-100 text-indigo-900 rounded text-[11px] font-bold border-2 border-dashed border-indigo-300"
+                  >
+                    + Add Check / Promissory Note
+                  </button>
+                ) : (
+                  <div className="border border-indigo-300 rounded p-2 bg-white space-y-1.5">
+                    <div className="grid grid-cols-2 gap-1.5">
+                      <label className="text-[10px] font-semibold text-slate-700">Type
+                        <select
+                          value={(formData.draftInstrumentDraft || {}).instrument_type || 'check'}
+                          onChange={function (e) {
+                            setFormData(Object.assign({}, formData, {
+                              draftInstrumentDraft: Object.assign({}, formData.draftInstrumentDraft, { instrument_type: e.target.value }),
+                            }));
+                          }}
+                          className="w-full mt-0.5 px-1.5 py-1 border border-slate-300 rounded text-[11px] bg-white"
+                        >
+                          <option value="check">Check / شيك</option>
+                          <option value="promissory_note">Promissory Note / كمبيالة</option>
+                          <option value="other">Other / آخر</option>
+                        </select>
+                      </label>
+                      <label className="text-[10px] font-semibold text-slate-700">Number
+                        <input
+                          type="text"
+                          value={(formData.draftInstrumentDraft || {}).check_number || ''}
+                          onChange={function (e) {
+                            setFormData(Object.assign({}, formData, {
+                              draftInstrumentDraft: Object.assign({}, formData.draftInstrumentDraft, { check_number: e.target.value }),
+                            }));
+                          }}
+                          placeholder="e.g. 1234"
+                          className="w-full mt-0.5 px-1.5 py-1 border border-slate-300 rounded text-[11px]"
+                        />
+                      </label>
+                    </div>
+                    <div className="grid grid-cols-2 gap-1.5">
+                      <label className="text-[10px] font-semibold text-slate-700">Amount *
+                        <input
+                          type="text"
+                          value={(formData.draftInstrumentDraft || {}).amount || ''}
+                          onChange={function (e) {
+                            setFormData(Object.assign({}, formData, {
+                              draftInstrumentDraft: Object.assign({}, formData.draftInstrumentDraft, { amount: e.target.value }),
+                            }));
+                          }}
+                          placeholder="50000"
+                          className="w-full mt-0.5 px-1.5 py-1 border border-slate-300 rounded text-[11px] font-mono"
+                        />
+                      </label>
+                      <label className="text-[10px] font-semibold text-slate-700">Bank
+                        <input
+                          type="text"
+                          value={(formData.draftInstrumentDraft || {}).bank_name || ''}
+                          onChange={function (e) {
+                            setFormData(Object.assign({}, formData, {
+                              draftInstrumentDraft: Object.assign({}, formData.draftInstrumentDraft, { bank_name: e.target.value }),
+                            }));
+                          }}
+                          placeholder="CIB / NBE"
+                          className="w-full mt-0.5 px-1.5 py-1 border border-slate-300 rounded text-[11px]"
+                        />
+                      </label>
+                    </div>
+                    <div className="grid grid-cols-2 gap-1.5">
+                      <label className="text-[10px] font-semibold text-slate-700">Issue Date
+                        <input
+                          type="date"
+                          value={(formData.draftInstrumentDraft || {}).issue_date || ''}
+                          onChange={function (e) {
+                            setFormData(Object.assign({}, formData, {
+                              draftInstrumentDraft: Object.assign({}, formData.draftInstrumentDraft, { issue_date: e.target.value }),
+                            }));
+                          }}
+                          className="w-full mt-0.5 px-1.5 py-1 border border-slate-300 rounded text-[11px]"
+                        />
+                      </label>
+                      <label className="text-[10px] font-semibold text-slate-700">Due Date *
+                        <input
+                          type="date"
+                          value={(formData.draftInstrumentDraft || {}).due_date || ''}
+                          onChange={function (e) {
+                            setFormData(Object.assign({}, formData, {
+                              draftInstrumentDraft: Object.assign({}, formData.draftInstrumentDraft, { due_date: e.target.value }),
+                            }));
+                          }}
+                          className="w-full mt-0.5 px-1.5 py-1 border border-slate-300 rounded text-[11px]"
+                        />
+                      </label>
+                    </div>
+                    <label className="text-[10px] font-semibold text-slate-700 block">Notes
+                      <input
+                        type="text"
+                        value={(formData.draftInstrumentDraft || {}).notes || ''}
+                        onChange={function (e) {
+                          setFormData(Object.assign({}, formData, {
+                            draftInstrumentDraft: Object.assign({}, formData.draftInstrumentDraft, { notes: e.target.value }),
+                          }));
+                        }}
+                        placeholder="Optional"
+                        className="w-full mt-0.5 px-1.5 py-1 border border-slate-300 rounded text-[11px]"
+                      />
+                    </label>
+                    <div className="flex gap-1.5 pt-1">
+                      <button
+                        onClick={function () {
+                          var d = formData.draftInstrumentDraft || {};
+                          var amt = parseAmount(d.amount);
+                          if (!amt || amt <= 0) { toast.error('Amount required'); return; }
+                          if (!d.due_date) { toast.error('Due date required'); return; }
+                          var queued = (formData.draftInstruments || []).concat([{
+                            instrument_type: d.instrument_type || 'check',
+                            check_number: d.check_number || '',
+                            amount: amt,
+                            issue_date: d.issue_date || null,
+                            due_date: d.due_date,
+                            bank_name: d.bank_name || '',
+                            notes: d.notes || '',
+                          }]);
+                          setFormData(Object.assign({}, formData, {
+                            draftInstruments: queued,
+                            showDraftInstrumentForm: false,
+                            draftInstrumentDraft: null,
+                          }));
+                        }}
+                        className="flex-1 px-2 py-1 bg-indigo-600 hover:bg-indigo-700 text-white rounded text-[11px] font-bold"
+                      >
+                        Add to invoice
+                      </button>
+                      <button
+                        onClick={function () {
+                          setFormData(Object.assign({}, formData, {
+                            showDraftInstrumentForm: false,
+                            draftInstrumentDraft: null,
+                          }));
+                        }}
+                        className="px-2 py-1 bg-slate-200 hover:bg-slate-300 text-slate-700 rounded text-[11px] font-semibold"
+                      >
+                        Cancel
+                      </button>
+                    </div>
+                  </div>
+                )}
+                {(formData.draftInstruments || []).length > 0 && (
+                  <div className="text-[10px] text-indigo-800 italic text-center pt-1">
+                    {(formData.draftInstruments || []).length} instrument{(formData.draftInstruments || []).length === 1 ? '' : 's'} will be saved with this invoice
+                  </div>
+                )}
+              </div>
+            </div>
+
             <div className="flex gap-2">
               <button onClick={async () => {
                 // v55.47 — Smarter validation. The "Please fill order#, customer,
@@ -8603,8 +8826,52 @@ export default function App() {
                     };
                     setInvoices(prev => [optimistic, ...prev]);
                   }
+
+                  // v55.83-A.6.27.20 (Max May 17 2026) — save any draft
+                  // Payment Instruments queued during invoice creation. Per
+                  // Max's Option (a): atomic from user POV but no rollback.
+                  // If any instrument fails, the invoice still exists and
+                  // we tell the user to open it and add manually.
+                  // Rules unchanged: pure documentation, never writes to
+                  // treasury or invoice money math.
+                  var instrumentsSaved = 0;
+                  var instrumentsFailed = 0;
+                  if (newInv && newInv.id && (formData.draftInstruments || []).length > 0) {
+                    for (const di of formData.draftInstruments) {
+                      try {
+                        await dbInsert('checks', {
+                          instrument_type: di.instrument_type || 'check',
+                          customer_name: sanitize(resolvedCustomerName || formData.customerName),
+                          customer_id: resolvedCustomerId || null,
+                          order_number: orderNum,
+                          invoice_id: newInv.id,
+                          amount: Number(di.amount),
+                          check_number: di.check_number || '',
+                          bank_name: di.bank_name || '',
+                          issue_date: di.issue_date || null,
+                          check_date: di.due_date,    // legacy column — kept in sync
+                          due_date: di.due_date,
+                          status: 'pending',
+                          notes: di.notes || '',
+                          created_by: user?.id,
+                          updated_by: user?.id,
+                        }, user?.id);
+                        instrumentsSaved++;
+                      } catch (instErr) {
+                        console.warn('[create-invoice] instrument save failed:', instErr && instErr.message, di);
+                        instrumentsFailed++;
+                      }
+                    }
+                  }
+
                   setShowAddInvoice(false); setFormData({});
-                  if (backfillCount > 0) {
+                  if (instrumentsFailed > 0) {
+                    toast.warning('Invoice created ✓ — but ' + instrumentsFailed + ' instrument' + (instrumentsFailed === 1 ? '' : 's') + ' failed to save. Open the invoice to add manually.');
+                  } else if (instrumentsSaved > 0 && backfillCount > 0) {
+                    toast.success('Invoice + ' + instrumentsSaved + ' instrument' + (instrumentsSaved === 1 ? '' : 's') + ' + ' + backfillCount + ' linked treasury entr' + (backfillCount === 1 ? 'y' : 'ies') + ' ✓');
+                  } else if (instrumentsSaved > 0) {
+                    toast.success('Invoice + ' + instrumentsSaved + ' instrument' + (instrumentsSaved === 1 ? '' : 's') + ' saved ✓');
+                  } else if (backfillCount > 0) {
                     toast.success('Invoice created + linked ' + backfillCount + ' waiting treasury entr' + (backfillCount === 1 ? 'y' : 'ies') + ' ✓');
                   } else {
                     toast.success('Invoice created ✓');
@@ -13545,7 +13812,7 @@ export default function App() {
                       latest fix is actually deployed. If he doesn't see this
                       tag in the modal, his browser is running stale JS. */}
                   <div className="mt-1.5 inline-block px-2 py-0.5 rounded bg-amber-900/60 text-amber-100 text-[10px] font-mono font-bold tracking-wide">
-                    BUILD v55.83-A.6.27.19
+                    BUILD v55.83-A.6.27.20
                   </div>
                 </div>
                 <button onClick={() => closePendingTreasuryModal()}
@@ -14180,7 +14447,7 @@ export default function App() {
                     معاملة قد تكون مكررة
                   </div>
                   <div className="mt-1.5 inline-block px-2 py-0.5 rounded bg-amber-900/60 text-amber-100 text-[10px] font-mono font-bold tracking-wide">
-                    BUILD v55.83-A.6.27.19
+                    BUILD v55.83-A.6.27.20
                   </div>
                 </div>
                 <button

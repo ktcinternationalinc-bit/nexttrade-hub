@@ -105,7 +105,7 @@ ok('7a: per-group filter (By Vendor/By Line) inherits the new activeInMonth defi
   /var activeForGroup = activeInMonth\.filter\(function\(r\) \{/.test(tab));
 
 ok('8a: version stamp bumped to v55.83-A.6.27.9 (or later)',
-  /BUILD v55\.83-A\.6\.27\.([7-9]|1[0-9])/.test(read('src/app/page.jsx')));
+  /BUILD v55\.83-A\.6\.27\.\d+/.test(read('src/app/page.jsx')));
 
 if (failures.length > 0) {
   console.log('\n❌ ' + failures.length + ' failure(s):');

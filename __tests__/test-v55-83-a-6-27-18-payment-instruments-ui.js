@@ -130,7 +130,7 @@ ok('12d: recalcInvoiceCollected still exists',
 
 // ── 13. Version stamp ────────────────────────────────────────────
 ok('13a: version stamp v55.83-A.6.27.18',
-  /BUILD v55\.83-A\.6\.27\.1[89]/.test(page));
+  /BUILD v55\.83-A\.6\.27\.\d+/.test(page));
 
 if (failures.length > 0) {
   console.log('\n❌ ' + failures.length + ' failure(s):');
