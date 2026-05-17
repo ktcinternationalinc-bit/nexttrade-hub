@@ -479,6 +479,119 @@ export default function App() {
   const [treasuryReturnState, setTreasuryReturnState] = useState(null);
   // Mini-modal for "order# doesn't exist, create now?" flow
   const [pendingTreasuryRecord, setPendingTreasuryRecord] = useState(null);
+  // v55.83-A.6.27.17 (Max May 17 2026) — Phase 1 Payment Instruments / Scheduled Receivables.
+  // When the accountant enters a treasury cash_in or bank_in row that matches
+  // the amount of a pending instrument (check or promissory note) on the
+  // same invoice, this state holds the candidate match while the popup is
+  // shown. User picks "Yes link" → we stamp source_check_id on the treasury
+  // row AND flip the instrument to 'cleared'. User picks "No, separate
+  // payment" → we proceed with the treasury insert without the link.
+  //
+  // Rule 5 enforcement: this code path NEVER creates an extra treasury row.
+  // The treasury row was already being created — the popup only adds metadata.
+  const [pendingInstrumentMatch, setPendingInstrumentMatch] = useState(null);
+
+  // v55.83-A.6.27.18 (Max May 17 2026) — Phase 2 of Payment Instruments.
+  // State for the invoice-level "Payment Instruments / Scheduled
+  // Receivables" section at the BOTTOM of the invoice screen. Collapsible
+  // (default expanded so it's visible). Add form expands inline below
+  // the list. Per Max: documentation-only, never affects treasury or
+  // invoice totals.
+  const [instrumentSectionExpanded, setInstrumentSectionExpanded] = useState(true);
+  const [showAddInstrumentForm, setShowAddInstrumentForm] = useState(false);
+  const [instrumentForm, setInstrumentForm] = useState({
+    instrument_type: 'check',
+    check_number: '',
+    amount: '',
+    issue_date: '',
+    due_date: '',
+    bank_name: '',
+    notes: '',
+  });
+  const [instrumentBusy, setInstrumentBusy] = useState(false);
+
+  // v55.83-A.6.27.19 (Max May 17 2026) — code review fix.
+  //
+  // Helper: find pending/deposited instruments on the given invoice whose
+  // amount matches the given EGP amount. Returns an ARRAY so the caller
+  // can handle multiple candidates (e.g. two pending checks of identical
+  // amount on the same invoice). Previously the popup hardcoded .find()
+  // and only offered the first one.
+  //
+  // Rules:
+  //   - Match on invoice_id OR order_number for legacy rows.
+  //   - Only pending or deposited instruments are eligible.
+  //   - Skip instruments already linked to another treasury row.
+  //   - Amount tolerance: 1 EGP (rounding).
+  const findMatchingInstruments = (invoice, amt) => {
+    if (!invoice || !(amt > 0)) return [];
+    return (checks || []).filter(function (c) {
+      if (c.invoice_id !== invoice.id && c.order_number !== invoice.order_number) return false;
+      if (c.status !== 'pending' && c.status !== 'deposited') return false;
+      if (c.linked_treasury_id) return false;
+      return Math.abs(Number(c.amount) - amt) < 1;
+    });
+  };
+
+  // v55.83-A.6.27.17 (Max May 17 2026) — Phase 1 helper. Commits a treasury
+  // row that the instrument-match popup has already stamped with the user's
+  // decision. Two cases:
+  //   __instrument_popup_decision === 'link' → record.source_check_id is set;
+  //       after the insert succeeds, flip the instrument to 'cleared' and
+  //       point linked_treasury_id at the new treasury row.
+  //   __instrument_popup_decision === 'no_link' → just insert and recalc;
+  //       the instrument stays pending. No second treasury row, no money
+  //       math change.
+  // Either way, exactly ONE treasury row is created — Rule 5 enforcement.
+  const commitInstrumentLinkedTreasury = async (record, matchingInvoice, isBankPlaceholder) => {
+    try {
+      const inserted = await dbInsert('treasury', record, user?.id);
+      // If the user accepted the link, flip the instrument to cleared.
+      if (record.__instrument_popup_decision === 'link' && record.source_check_id) {
+        try {
+          await dbUpdate('checks', record.source_check_id, {
+            status: 'cleared',
+            collection_date: record.transaction_date || new Date().toISOString().slice(0, 10),
+            linked_treasury_id: inserted.id,
+            updated_by: user?.id,
+          }, user?.id);
+        } catch (instErr) {
+          console.warn('[commitInstrumentLinkedTreasury] instrument flip failed:', instErr && instErr.message);
+          try { toast.warning('Saved ✓ — but the linked instrument needs manual update to "cleared".'); } catch (_) {}
+        }
+      }
+      // Recalc the invoice unless it's a placeholder (placeholders recalc on bank-match).
+      if (!isBankPlaceholder) {
+        try { await recalcInvoiceCollected(matchingInvoice.id); }
+        catch (recalcErr) {
+          console.warn('[commitInstrumentLinkedTreasury] recalc failed:', recalcErr && recalcErr.message);
+          try { toast.warning('Saved ✓ — but the invoice total may need a manual refresh.'); } catch (_) {}
+        }
+      }
+      setTreasury(prev => [inserted, ...prev]);
+      setShowAddTreasury(false);
+      setPendingTreasuryRecord(null);
+      setPendingInstrumentMatch(null);
+      setDuplicateConfirm(null);
+      setTreasuryFormErrors([]);
+      setIsCreatingInvoice(false);
+      setCreateInvoiceError(null);
+      var msg;
+      if (record.__instrument_popup_decision === 'link') {
+        msg = 'Saved ✓ — instrument marked cleared';
+      } else {
+        msg = (isBankPlaceholder ? 'Bank entry saved (awaiting statement) + linked to ' : 'Transaction saved + linked to ')
+          + (matchingInvoice.customer_name || ('#' + matchingInvoice.order_number)) + ' ✓';
+      }
+      toast.success(msg);
+      setFormData({});
+      setTimeout(() => loadAllData(), 500);
+    } catch (err) {
+      console.error('[commitInstrumentLinkedTreasury] failed:', err);
+      try { toast.error('Save failed: ' + (err && err.message ? err.message : String(err))); }
+      catch (_) { alert('Save failed: ' + (err && err.message ? err.message : String(err))); }
+    }
+  };
   // v55.41 — Suspected-duplicate confirmation modal.
   // When the user tries to save a treasury row whose date + amount +
   // description match an existing row, instead of silently saving (which
@@ -576,6 +689,15 @@ export default function App() {
   const [reminders, setReminders] = useState([]);
   const [recentTicketUpdates, setRecentTicketUpdates] = useState([]);
   const [dashTickets, setDashTickets] = useState([]);
+  // v55.83-A.6.27.16 (Max May 17 2026) — separate closed-ticket fetch for
+  // Nadia. dashTickets is filtered server-side to exclude Closed (line ~1446)
+  // because the dashboard priority cards don't need them. But Nadia needs
+  // them for history queries like "what was that ticket about leather
+  // samples last month". Three prior builds tried to fix this inside
+  // AIGreeter by branching on status, but the data never reached her in
+  // the first place. This state is a separate, smaller fetch scoped to
+  // the user with a sane LIMIT so it doesn't bloat memory.
+  const [closedTicketsForAI, setClosedTicketsForAI] = useState([]);
   const [activityFeed, setActivityFeed] = useState([]);
   const [dashEvents, setDashEvents] = useState([]);
   const [dashFollowUps, setDashFollowUps] = useState([]);
@@ -1465,6 +1587,39 @@ export default function App() {
         });
         setDashTickets(filteredTix);
       } catch(e) { setDashTickets([]); }
+
+      // v55.83-A.6.27.16 (Max May 17 2026) — fetch Closed tickets separately
+      // for Nadia's history queries. dashTickets above excludes Closed at
+      // the server side; this query is purely for the AI assistant. Scoped
+      // to the user (super-admin sees all; others see tickets where they're
+      // the creator, primary assignee, or additional assignee). LIMIT 100
+      // to keep payload reasonable — Nadia only references the most recent
+      // anyway when answering "what was that ticket about X".
+      try {
+        var closedQuery = supabase.from('tickets').select('*')
+          .eq('status', 'Closed')
+          .order('updated_at', { ascending: false })
+          .limit(100);
+        const { data: closedTix } = await closedQuery;
+        var closedMeId = profile && profile.id;
+        var closedMeIsSA = profile && profile.role === 'super_admin';
+        var filteredClosed = (closedTix || []).filter(function (t) {
+          // Same privacy gates as dashTickets
+          if (closedMeIsSA) return true;
+          if (t.is_private) return t.private_to === closedMeId;
+          // For non-super-admins, only include if THEY were involved
+          if (t.created_by === closedMeId) return true;
+          if (t.assigned_to === closedMeId) return true;
+          try {
+            var extras = typeof t.additional_assignees === 'string'
+              ? JSON.parse(t.additional_assignees)
+              : t.additional_assignees;
+            if (Array.isArray(extras) && extras.indexOf(closedMeId) >= 0) return true;
+          } catch (_) {}
+          return false;
+        });
+        setClosedTicketsForAI(filteredClosed);
+      } catch(e) { setClosedTicketsForAI([]); }
       // Load Egypt bank transactions
       try {
         const { data: ebt } = await supabase.from('egypt_bank_transactions').select('*').order('date', { ascending: false }).limit(500);
@@ -2719,7 +2874,13 @@ export default function App() {
         var methodLabel = method === 'vodafone' ? '📱 Vodafone Cash'
                         : method === 'instapay' ? '⚡ InstaPay'
                         : '💵 Cash';
-        await dbInsert('treasury', {
+        // v55.83-A.6.27.19 — code review fix #1. Build the record FIRST so we
+        // can check for matching instruments BEFORE the insert. Without this,
+        // the popup never fired for PaymentForm cash/bank paths and instruments
+        // entered against this invoice silently stayed pending after the
+        // accountant collected the cash. Same architectural pattern as
+        // handleAddTreasury at ~line 3425.
+        var cashRecord = {
           transaction_date: pd.date,
           order_number: selectedInvoice.order_number,
           description: sanitize((pd.desc || selectedInvoice.customer_name + ' payment') + ' [' + methodLabel + ']'),
@@ -2731,7 +2892,49 @@ export default function App() {
           category: pd.category || 'مبيعات',
           subcategory: pd.subcategory || '',
           linked_invoice_id: selectedInvoice.id,
-        }, user?.id);
+        };
+        if (!pd.__instrument_popup_decision) {
+          var cashInstrumentMatches = findMatchingInstruments(selectedInvoice, Number(pd.amount));
+          if (cashInstrumentMatches.length > 0) {
+            addPaymentRunning.current = false; // release re-entry guard so the resume can come back in
+            setPendingInstrumentMatch({
+              record: cashRecord,
+              amount: Number(pd.amount),
+              invoice: selectedInvoice,
+              instruments: cashInstrumentMatches,
+              isBankPlaceholder: false,
+              onResume: async function (stamped) {
+                // Resume: insert the row (with or without source_check_id stamp),
+                // flip the linked instrument if applicable, recalc.
+                try {
+                  var inserted = await dbInsert('treasury', stamped, user?.id);
+                  if (stamped.__instrument_popup_decision === 'link' && stamped.source_check_id) {
+                    try {
+                      await dbUpdate('checks', stamped.source_check_id, {
+                        status: 'cleared',
+                        collection_date: stamped.transaction_date || new Date().toISOString().slice(0, 10),
+                        linked_treasury_id: inserted.id,
+                        updated_by: user?.id,
+                      }, user?.id);
+                    } catch (instErr) {
+                      console.warn('[handleAddPayment cash] instrument flip failed:', instErr && instErr.message);
+                      toast.warning('Saved ✓ — but the linked instrument needs manual update to "cleared".');
+                    }
+                  }
+                  try { await recalcInvoiceCollected(selectedInvoice.id); } catch (_) {}
+                  await loadAllData();
+                  setShowAddPayment(false);
+                  setFormData({});
+                  toast.success(stamped.__instrument_popup_decision === 'link' ? 'Payment saved + instrument cleared ✓' : 'Payment saved ✓');
+                } catch (resumeErr) {
+                  toast.error('Save failed: ' + (resumeErr && resumeErr.message ? resumeErr.message : String(resumeErr)));
+                }
+              },
+            });
+            return; // form stays open; popup will fire
+          }
+        }
+        await dbInsert('treasury', cashRecord, user?.id);
         await recalcInvoiceCollected(selectedInvoice.id);
       } else if (isBankChannel) {
         // BANK TRANSFER → treasury bank_in + invoice link. Does NOT hit safe.
@@ -2744,7 +2947,17 @@ export default function App() {
         // (Path B). Previously this path trusted the user immediately, which
         // caused invoices to show fully-paid even when the money hadn't
         // actually landed yet.
-        await dbInsert('treasury', {
+        //
+        // v55.83-A.6.27.19 — same instrument-match popup hook as the cash
+        // branch above. Build record first; if a matching instrument exists,
+        // defer via the popup. If user picks "Yes, link" we record that
+        // intent; the actual instrument doesn't flip to "cleared" until
+        // total_confirmed catches up (still requires bank-statement match)
+        // — for now we DO flip on click since the popup is showing
+        // intent, but we keep needs_bank_match=true so the dashboard
+        // continues to show this as pending bank confirmation. Treasury
+        // and recalc behavior is unchanged.
+        var bankRecord = {
           transaction_date: pd.date,
           order_number: selectedInvoice.order_number,
           description: sanitize((pd.desc || selectedInvoice.customer_name + ' payment') + ' [🏦 Bank Transfer · awaiting match]'),
@@ -2754,8 +2967,48 @@ export default function App() {
           category: pd.category || 'مبيعات',
           subcategory: pd.subcategory || '',
           linked_invoice_id: selectedInvoice.id,
-          needs_bank_match: true,  // v55.83-A.1 — flag for matcher
-        }, user?.id);
+          needs_bank_match: true,
+        };
+        if (!pd.__instrument_popup_decision) {
+          var bankInstrumentMatches = findMatchingInstruments(selectedInvoice, Number(pd.amount));
+          if (bankInstrumentMatches.length > 0) {
+            addPaymentRunning.current = false;
+            setPendingInstrumentMatch({
+              record: bankRecord,
+              amount: Number(pd.amount),
+              invoice: selectedInvoice,
+              instruments: bankInstrumentMatches,
+              isBankPlaceholder: false,
+              onResume: async function (stamped) {
+                try {
+                  var inserted = await dbInsert('treasury', stamped, user?.id);
+                  if (stamped.__instrument_popup_decision === 'link' && stamped.source_check_id) {
+                    try {
+                      await dbUpdate('checks', stamped.source_check_id, {
+                        status: 'cleared',
+                        collection_date: stamped.transaction_date || new Date().toISOString().slice(0, 10),
+                        linked_treasury_id: inserted.id,
+                        updated_by: user?.id,
+                      }, user?.id);
+                    } catch (instErr) {
+                      console.warn('[handleAddPayment bank] instrument flip failed:', instErr && instErr.message);
+                      toast.warning('Saved ✓ — but the linked instrument needs manual update to "cleared".');
+                    }
+                  }
+                  try { await recalcInvoiceCollected(selectedInvoice.id); } catch (_) {}
+                  await loadAllData();
+                  setShowAddPayment(false);
+                  setFormData({});
+                  toast.success(stamped.__instrument_popup_decision === 'link' ? 'Bank payment saved + instrument cleared ✓' : 'Bank payment saved ✓');
+                } catch (resumeErr) {
+                  toast.error('Save failed: ' + (resumeErr && resumeErr.message ? resumeErr.message : String(resumeErr)));
+                }
+              },
+            });
+            return;
+          }
+        }
+        await dbInsert('treasury', bankRecord, user?.id);
         await recalcInvoiceCollected(selectedInvoice.id);
       } else {
         // "Other" — no treasury row, just a note. Invoice collected unchanged.
@@ -3274,8 +3527,60 @@ export default function App() {
         if (matchingInvoice) {
           // Auto-link — set linked_invoice_id so recalcInvoiceCollected picks it up
           record.linked_invoice_id = matchingInvoice.id;
+
+          // ── v55.83-A.6.27.17 (Max May 17 2026) — Phase 1 instrument match ──
+          // Before inserting the treasury row, check whether a pending or
+          // deposited instrument on this invoice matches the amount the
+          // accountant is entering. If yes AND the user hasn't already
+          // dismissed/answered the popup for THIS record, defer the insert
+          // until they answer.
+          //
+          // RULE 5 — the popup never creates an extra treasury row. It only
+          // stamps source_check_id on the record we're about to insert, OR
+          // proceeds without the link if the user says "separate payment".
+          //
+          // Suppression key: record.__instrument_popup_decision is set by
+          // the popup handler when the user picks Yes/No, so this code
+          // doesn't loop. Bank placeholders are excluded (their match
+          // already happens via the bank-statement reconciliation path).
+          if (!isBankPlaceholder && !record.__instrument_popup_decision) {
+            var matchingInstruments = findMatchingInstruments(matchingInvoice, amt);
+            if (matchingInstruments.length > 0) {
+              console.log('[treasury-add] INSTRUMENT MATCH — ' + matchingInstruments.length + ' candidate(s) for invoice #' + matchingInvoice.order_number + ' at ' + amt + ' EGP');
+              setPendingInstrumentMatch({
+                record: record,
+                amount: amt,
+                invoice: matchingInvoice,
+                instruments: matchingInstruments,
+                isBankPlaceholder: isBankPlaceholder,
+                onResume: function (stamped) { return commitInstrumentLinkedTreasury(stamped, matchingInvoice, isBankPlaceholder); },
+              });
+              return; // form stays open; popup fires; will re-enter handler when user picks
+            }
+          }
+          // No instrument match (or user already answered) → proceed with normal insert.
+
           // Insert. Only recalc for real cash_in; placeholders wait for the match.
           const inserted = await dbInsert('treasury', record, user?.id);
+
+          // v55.83-A.6.27.17 — if the user accepted the instrument link, flip
+          // the instrument to 'cleared' AFTER the treasury row is inserted
+          // (so we have the treasury id to stamp on linked_treasury_id).
+          if (record.__instrument_popup_decision === 'link' && record.source_check_id) {
+            try {
+              await dbUpdate('checks', record.source_check_id, {
+                status: 'cleared',
+                collection_date: record.transaction_date || new Date().toISOString().slice(0, 10),
+                linked_treasury_id: inserted.id,
+                updated_by: user?.id,
+              }, user?.id);
+              console.log('[treasury-add] instrument ' + record.source_check_id + ' marked cleared, linked to treasury ' + inserted.id);
+            } catch (instErr) {
+              console.warn('[treasury-add] insert succeeded but instrument flip failed:', instErr && instErr.message);
+              try { toast.warning('Saved ✓ — but the linked instrument needs manual update to "cleared".'); } catch (_) {}
+            }
+          }
+
           // v55.82-E ROOT-CAUSE #1 FIX. Previously a recalcInvoiceCollected()
           // throw was poisoning the entire save. The treasury row WAS inserted
           // successfully (Max's "system not recording amounts properly" report
@@ -3303,6 +3608,7 @@ export default function App() {
           // v55.82-E — ALSO clear modal-companion state so a future open
           // is clean. Belt-and-suspenders with the open-button reset.
           setPendingTreasuryRecord(null);
+          setPendingInstrumentMatch(null);
           setDuplicateConfirm(null);
           setTreasuryFormErrors([]);
           setIsCreatingInvoice(false);
@@ -3726,9 +4032,33 @@ export default function App() {
       const txn = treasury.find(t => t.id === txnId);
       if (!txn) return;
       const invoiceToRecalc = txn.linked_invoice_id || null;
+      const linkedCheckId = txn.source_check_id || null;
       await dbDelete('treasury', txnId, userProfile?.id || user?.id);
       setTreasury(prev => prev.filter(t => t.id !== txnId));
       setEditTreasuryModal(null);
+      // v55.83-A.6.27.19 — if this treasury row backed an instrument (via
+      // source_check_id) AND the instrument has linked_treasury_id pointing
+      // at this exact row, revert the instrument from 'cleared' back to
+      // 'pending'. Otherwise the instrument shows cleared with a dangling
+      // reference to a deleted treasury row.
+      // We only revert if the link points at THIS treasury row, in case the
+      // instrument has been re-linked to a different treasury row since.
+      if (linkedCheckId) {
+        try {
+          var inst = (checks || []).find(function (c) { return c.id === linkedCheckId; });
+          if (inst && inst.linked_treasury_id === txnId) {
+            await dbUpdate('checks', linkedCheckId, {
+              status: 'pending',
+              collection_date: null,
+              linked_treasury_id: null,
+              updated_by: userProfile?.id || user?.id,
+            }, userProfile?.id || user?.id);
+            console.log('[treasury-delete] reverted linked instrument ' + linkedCheckId + ' back to pending');
+          }
+        } catch (instErr) {
+          console.warn('[treasury-delete] failed to revert linked instrument:', instErr && instErr.message);
+        }
+      }
       // Recalc from DB truth — handles cash_in and bank_in correctly for any channel.
       if (invoiceToRecalc) {
         try { await recalcInvoiceCollected(invoiceToRecalc); } catch(e) {}
@@ -4788,7 +5118,7 @@ export default function App() {
               {/* Brand mark — bracket prefix is a terminal callout convention. */}
               <span className="text-emerald-400 font-mono text-xs font-bold tracking-tight" style={{ fontFamily: '"JetBrains Mono", monospace' }}>[KTC]</span>
               <h1 className="text-sm font-bold text-white tracking-tight whitespace-nowrap">NEXTTRADE HUB</h1>
-              <span className="text-[10px] text-zinc-500 font-mono hidden md:inline" style={{ fontFamily: '"JetBrains Mono", monospace' }}>v55.83-A.6.27.15</span>
+              <span className="text-[10px] text-zinc-500 font-mono hidden md:inline" style={{ fontFamily: '"JetBrains Mono", monospace' }}>v55.83-A.6.27.19</span>
               {/* Live clock — terminals always show one. Updates via the
                   existing tick state; if not present, falls back to no clock. */}
               <span className="hidden lg:inline text-[10px] text-zinc-500 font-mono ml-2 pl-2 border-l border-zinc-800" style={{ fontFamily: '"JetBrains Mono", monospace' }}>
@@ -5240,7 +5570,11 @@ export default function App() {
         {selectedInvoice && (
           <Modal onClose={() => {
             if (treasuryReturnState) { returnToTreasury(); return; }
+            // v55.83-A.6.27.19 — reset instrument form state on close so
+            // values don't leak between invoices.
             setSelectedInvoice(null); setShowAddPayment(false); setFormData({}); setEditingTxn(null); setShowLinkSearch(false); setLinkSearch('');
+            setShowAddInstrumentForm(false);
+            setInstrumentForm({ instrument_type: 'check', check_number: '', amount: '', issue_date: '', due_date: '', bank_name: '', notes: '' });
           }}
             title={`Invoice / فاتورة #${selectedInvoice.order_number}`}>
             {treasuryReturnState && (
@@ -6455,6 +6789,380 @@ export default function App() {
                 setFormData={setFormData}
               />
             )}
+
+            {/* ==========================================
+                v55.83-A.6.27.18 — PAYMENT INSTRUMENTS / SCHEDULED RECEIVABLES
+                Per Max: documentation only. Never writes to treasury,
+                never changes invoice.total_collected. The smart popup
+                in the treasury entry flow handles clearing. This UI is
+                for entering instruments and seeing what's outstanding.
+            ========================================== */}
+            {(function () {
+              // Pull instruments for this invoice — match on invoice_id OR order_number for legacy
+              var invInstruments = (checks || []).filter(function (c) {
+                if (c.invoice_id === selectedInvoice.id) return true;
+                if (c.order_number && String(c.order_number).trim() === String(selectedInvoice.order_number || '').trim()) return true;
+                return false;
+              });
+              // Group by status for summary
+              var byStatus = { pending: [], deposited: [], cleared: [], bounced: [], cancelled: [], replaced: [] };
+              invInstruments.forEach(function (c) {
+                var s = c.status || 'pending';
+                // Compat: legacy 'collected' → 'cleared'
+                if (s === 'collected') s = 'cleared';
+                if (s === 'uncollected') s = 'pending';
+                if (!byStatus[s]) byStatus[s] = [];
+                byStatus[s].push(c);
+              });
+              var pendingSum = byStatus.pending.reduce(function (a, c) { return a + Number(c.amount || 0); }, 0);
+              var depositedSum = byStatus.deposited.reduce(function (a, c) { return a + Number(c.amount || 0); }, 0);
+              var clearedSum = byStatus.cleared.reduce(function (a, c) { return a + Number(c.amount || 0); }, 0);
+              var bouncedSum = byStatus.bounced.reduce(function (a, c) { return a + Number(c.amount || 0); }, 0);
+              var totalCount = invInstruments.length;
+              var today = new Date().toISOString().slice(0, 10);
+
+              // Order list: overdue pending first, then upcoming pending by due date,
+              // then deposited, then cleared, then bounced/cancelled/replaced.
+              var statusOrder = { pending: 1, deposited: 2, cleared: 3, bounced: 4, cancelled: 5, replaced: 6 };
+              var sortedList = invInstruments.slice().sort(function (a, b) {
+                var sa = (a.status === 'collected') ? 'cleared' : (a.status === 'uncollected') ? 'pending' : (a.status || 'pending');
+                var sb = (b.status === 'collected') ? 'cleared' : (b.status === 'uncollected') ? 'pending' : (b.status || 'pending');
+                var ra = statusOrder[sa] || 99;
+                var rb = statusOrder[sb] || 99;
+                if (ra !== rb) return ra - rb;
+                var da = a.due_date || a.check_date || '';
+                var db = b.due_date || b.check_date || '';
+                return da < db ? -1 : (da > db ? 1 : 0);
+              });
+
+              // v55.83-A.6.27.19 — use the existing canEditTreasury gate
+              // (super_admin OR modulePerms['Edit Treasury'] OR modulePerms['Treasury'])
+              // instead of just modulePerms['Treasury']. Otherwise users with
+              // 'Edit Treasury' but not 'Treasury' could edit treasury rows
+              // but couldn't add instruments — inconsistent.
+              var canEditInstruments = canEditTreasury;
+
+              return (
+                <div className="mt-4 border border-slate-200 rounded-xl overflow-hidden">
+                  {/* Header — clickable to expand/collapse */}
+                  <button
+                    onClick={function () { setInstrumentSectionExpanded(function (e) { return !e; }); }}
+                    className="w-full flex items-center justify-between px-4 py-3 bg-slate-50 hover:bg-slate-100 transition"
+                  >
+                    <div className="flex items-center gap-2">
+                      <span style={{ fontSize: 18 }}>🧾</span>
+                      <div className="text-left">
+                        <div className="text-sm font-bold text-slate-900">
+                          Payment Instruments / Scheduled Receivables
+                        </div>
+                        <div className="text-[11px] text-slate-600">
+                          {totalCount === 0 ? 'No instruments yet — checks or promissory notes for this order' :
+                            (byStatus.pending.length + ' pending · ' +
+                             byStatus.deposited.length + ' deposited · ' +
+                             byStatus.cleared.length + ' cleared' +
+                             (byStatus.bounced.length > 0 ? ' · ' + byStatus.bounced.length + ' bounced' : ''))}
+                        </div>
+                      </div>
+                    </div>
+                    <div className="flex items-center gap-3">
+                      {totalCount > 0 && (
+                        <div className="text-right">
+                          <div className="text-[10px] text-slate-500">Pending</div>
+                          <div className="text-sm font-extrabold text-amber-700">{fE(pendingSum)}</div>
+                        </div>
+                      )}
+                      <span className="text-slate-500 text-lg">{instrumentSectionExpanded ? '▾' : '▸'}</span>
+                    </div>
+                  </button>
+
+                  {instrumentSectionExpanded && (
+                    <div className="bg-white p-3 space-y-2">
+                      {/* Summary chips */}
+                      {totalCount > 0 && (
+                        <div className="flex flex-wrap gap-2 text-[11px] mb-2">
+                          <span className="px-2 py-1 bg-amber-100 text-amber-900 rounded-md font-medium">
+                            ⏳ Pending: {byStatus.pending.length} · {fE(pendingSum)}
+                          </span>
+                          {byStatus.deposited.length > 0 && (
+                            <span className="px-2 py-1 bg-sky-100 text-sky-900 rounded-md font-medium">
+                              🏦 Deposited: {byStatus.deposited.length} · {fE(depositedSum)}
+                            </span>
+                          )}
+                          {byStatus.cleared.length > 0 && (
+                            <span className="px-2 py-1 bg-emerald-100 text-emerald-900 rounded-md font-medium">
+                              ✓ Cleared: {byStatus.cleared.length} · {fE(clearedSum)}
+                            </span>
+                          )}
+                          {byStatus.bounced.length > 0 && (
+                            <span className="px-2 py-1 bg-red-100 text-red-900 rounded-md font-medium">
+                              ⚠ Bounced: {byStatus.bounced.length} · {fE(bouncedSum)}
+                            </span>
+                          )}
+                        </div>
+                      )}
+
+                      {/* Empty state */}
+                      {totalCount === 0 && !showAddInstrumentForm && (
+                        <div className="text-center py-4 text-slate-500 text-xs italic">
+                          No checks or promissory notes recorded for this order yet.
+                        </div>
+                      )}
+
+                      {/* List */}
+                      {sortedList.map(function (inst) {
+                        var st = (inst.status === 'collected') ? 'cleared' : (inst.status === 'uncollected') ? 'pending' : (inst.status || 'pending');
+                        var due = inst.due_date || inst.check_date || '';
+                        var isOverdue = (st === 'pending' || st === 'deposited') && due && due < today;
+                        var isDueSoon = (st === 'pending' || st === 'deposited') && due && due >= today && due <= (new Date(Date.now() + 7 * 86400000).toISOString().slice(0, 10));
+                        var typeLabel = inst.instrument_type === 'promissory_note' ? 'Promissory Note' : (inst.instrument_type === 'other' ? 'Other' : 'Check');
+                        var typeIcon = inst.instrument_type === 'promissory_note' ? '📜' : '🧾';
+                        var rowStyle = (st === 'cleared' || st === 'cancelled' || st === 'replaced') ? 'bg-slate-100' : (st === 'bounced' ? 'bg-red-50' : (isOverdue ? 'bg-red-50' : (isDueSoon ? 'bg-amber-50' : 'bg-white')));
+                        var titleStyle = (st === 'cleared' || st === 'cancelled' || st === 'replaced') ? 'line-through text-slate-500' : 'text-slate-900';
+                        return (
+                          <div key={inst.id} className={'border border-slate-200 rounded-lg p-2.5 ' + rowStyle}>
+                            <div className="flex items-start justify-between gap-2">
+                              <div className="flex-1 min-w-0">
+                                <div className="flex items-center gap-1.5 flex-wrap">
+                                  <span className="text-base">{typeIcon}</span>
+                                  <span className={'text-sm font-bold ' + titleStyle}>
+                                    {typeLabel}{inst.check_number ? ' #' + inst.check_number : ''}
+                                  </span>
+                                  <span className={'text-sm font-extrabold ' + titleStyle}>
+                                    {fE(Number(inst.amount || 0))}
+                                  </span>
+                                  {/* Status badge */}
+                                  {st === 'pending' && <span className={'px-1.5 py-0.5 rounded text-[10px] font-bold ' + (isOverdue ? 'bg-red-200 text-red-900' : (isDueSoon ? 'bg-amber-200 text-amber-900' : 'bg-slate-200 text-slate-700'))}>
+                                    {isOverdue ? 'OVERDUE' : (isDueSoon ? 'DUE SOON' : 'PENDING')}
+                                  </span>}
+                                  {st === 'deposited' && <span className="px-1.5 py-0.5 rounded text-[10px] font-bold bg-sky-200 text-sky-900">DEPOSITED</span>}
+                                  {st === 'cleared' && <span className="px-1.5 py-0.5 rounded text-[10px] font-bold bg-emerald-200 text-emerald-900">✓ CLEARED</span>}
+                                  {st === 'bounced' && <span className="px-1.5 py-0.5 rounded text-[10px] font-bold bg-red-200 text-red-900">⚠ BOUNCED</span>}
+                                  {st === 'cancelled' && <span className="px-1.5 py-0.5 rounded text-[10px] font-bold bg-slate-300 text-slate-700">CANCELLED</span>}
+                                  {st === 'replaced' && <span className="px-1.5 py-0.5 rounded text-[10px] font-bold bg-slate-300 text-slate-700">REPLACED</span>}
+                                </div>
+                                <div className="text-[11px] text-slate-600 mt-1 flex flex-wrap gap-x-3 gap-y-0.5">
+                                  {due && <span>Due: <strong className={isOverdue ? 'text-red-700' : ''}>{due}</strong></span>}
+                                  {inst.bank_name && <span>Bank: {inst.bank_name}</span>}
+                                  {inst.customer_name && <span>Customer: {inst.customer_name}</span>}
+                                  {st === 'cleared' && inst.collection_date && <span className="text-emerald-700">Cleared: {inst.collection_date}</span>}
+                                  {st === 'bounced' && inst.bounce_reason && <span className="text-red-700">Reason: {inst.bounce_reason}</span>}
+                                </div>
+                                {inst.notes && <div className="text-[11px] text-slate-500 italic mt-1">📝 {inst.notes}</div>}
+                              </div>
+                              {/* Action buttons — only for pending/deposited rows and only for users with permission.
+                                  Note per Max: Mark Cleared is intentionally NOT here. Clearing only happens via
+                                  the smart popup when a treasury transaction is entered. */}
+                              {canEditInstruments && (st === 'pending' || st === 'deposited') && (
+                                <div className="flex flex-col gap-1">
+                                  {st === 'pending' && (
+                                    <button
+                                      onClick={async function () {
+                                        if (!confirm('Mark instrument #' + (inst.check_number || inst.id) + ' as deposited at the bank? This is documentation only — it does NOT post any treasury or invoice changes.')) return;
+                                        try {
+                                          await dbUpdate('checks', inst.id, { status: 'deposited', updated_by: user?.id }, user?.id);
+                                          toast.success('Marked as deposited');
+                                          await loadAllData();
+                                        } catch (err) { toast.error('Failed: ' + (err.message || String(err))); }
+                                      }}
+                                      className="px-2 py-1 text-[10px] bg-sky-100 hover:bg-sky-200 text-sky-900 rounded font-semibold"
+                                    >
+                                      Mark Deposited
+                                    </button>
+                                  )}
+                                  <button
+                                    onClick={async function () {
+                                      var reason = prompt('Why did this instrument bounce? (Required — appears in audit log)');
+                                      if (!reason || !reason.trim()) return;
+                                      try {
+                                        await dbUpdate('checks', inst.id, {
+                                          status: 'bounced',
+                                          bounce_reason: reason.trim(),
+                                          updated_by: user?.id,
+                                        }, user?.id);
+                                        toast.warning('Marked as bounced — please follow up with customer');
+                                        await loadAllData();
+                                      } catch (err) { toast.error('Failed: ' + (err.message || String(err))); }
+                                    }}
+                                    className="px-2 py-1 text-[10px] bg-red-100 hover:bg-red-200 text-red-900 rounded font-semibold"
+                                  >
+                                    Mark Bounced
+                                  </button>
+                                  <button
+                                    onClick={async function () {
+                                      if (!confirm('Cancel instrument #' + (inst.check_number || inst.id) + '? This is documentation only — does NOT change any treasury or invoice totals.')) return;
+                                      try {
+                                        await dbUpdate('checks', inst.id, { status: 'cancelled', updated_by: user?.id }, user?.id);
+                                        toast.success('Cancelled');
+                                        await loadAllData();
+                                      } catch (err) { toast.error('Failed: ' + (err.message || String(err))); }
+                                    }}
+                                    className="px-2 py-1 text-[10px] bg-slate-200 hover:bg-slate-300 text-slate-700 rounded font-semibold"
+                                  >
+                                    Cancel
+                                  </button>
+                                </div>
+                              )}
+                            </div>
+                          </div>
+                        );
+                      })}
+
+                      {/* Add Instrument toggle + inline form */}
+                      {canEditInstruments && !showAddInstrumentForm && (
+                        <button
+                          onClick={function () {
+                            setShowAddInstrumentForm(true);
+                            setInstrumentForm({
+                              instrument_type: 'check',
+                              check_number: '',
+                              amount: '',
+                              issue_date: new Date().toISOString().slice(0, 10),
+                              due_date: '',
+                              bank_name: '',
+                              notes: '',
+                            });
+                          }}
+                          className="w-full px-4 py-2 bg-indigo-50 hover:bg-indigo-100 text-indigo-900 rounded-lg font-bold text-sm border-2 border-dashed border-indigo-300"
+                        >
+                          + Add Check / Promissory Note
+                        </button>
+                      )}
+
+                      {showAddInstrumentForm && (
+                        <div className="border-2 border-indigo-300 rounded-lg p-3 bg-indigo-50 space-y-2">
+                          <div className="text-sm font-bold text-indigo-900 mb-1">New Instrument</div>
+                          <div className="text-[11px] text-indigo-800 italic mb-2">
+                            Documentation only — this does NOT affect the invoice's Collected amount or any treasury balance.
+                          </div>
+                          {/* Type */}
+                          <div className="grid grid-cols-2 gap-2">
+                            <label className="text-[11px] font-semibold text-slate-700">Type
+                              <select
+                                value={instrumentForm.instrument_type}
+                                onChange={function (e) { setInstrumentForm(Object.assign({}, instrumentForm, { instrument_type: e.target.value })); }}
+                                className="w-full mt-0.5 px-2 py-1.5 border border-slate-300 rounded text-sm bg-white"
+                              >
+                                <option value="check">Check / شيك</option>
+                                <option value="promissory_note">Promissory Note / كمبيالة</option>
+                                <option value="other">Other / آخر</option>
+                              </select>
+                            </label>
+                            <label className="text-[11px] font-semibold text-slate-700">Number / Reference
+                              <input
+                                type="text"
+                                value={instrumentForm.check_number}
+                                onChange={function (e) { setInstrumentForm(Object.assign({}, instrumentForm, { check_number: e.target.value })); }}
+                                placeholder="e.g. 1234"
+                                className="w-full mt-0.5 px-2 py-1.5 border border-slate-300 rounded text-sm bg-white"
+                              />
+                            </label>
+                          </div>
+                          <div className="grid grid-cols-2 gap-2">
+                            <label className="text-[11px] font-semibold text-slate-700">Amount (EGP) *
+                              <input
+                                type="text"
+                                value={instrumentForm.amount}
+                                onChange={function (e) { setInstrumentForm(Object.assign({}, instrumentForm, { amount: e.target.value })); }}
+                                placeholder="50000"
+                                className="w-full mt-0.5 px-2 py-1.5 border border-slate-300 rounded text-sm bg-white font-mono"
+                              />
+                            </label>
+                            <label className="text-[11px] font-semibold text-slate-700">Bank
+                              <input
+                                type="text"
+                                value={instrumentForm.bank_name}
+                                onChange={function (e) { setInstrumentForm(Object.assign({}, instrumentForm, { bank_name: e.target.value })); }}
+                                placeholder="CIB / NBE / etc."
+                                className="w-full mt-0.5 px-2 py-1.5 border border-slate-300 rounded text-sm bg-white"
+                              />
+                            </label>
+                          </div>
+                          <div className="grid grid-cols-2 gap-2">
+                            <label className="text-[11px] font-semibold text-slate-700">Issue Date
+                              <input
+                                type="date"
+                                value={instrumentForm.issue_date}
+                                onChange={function (e) { setInstrumentForm(Object.assign({}, instrumentForm, { issue_date: e.target.value })); }}
+                                className="w-full mt-0.5 px-2 py-1.5 border border-slate-300 rounded text-sm bg-white"
+                              />
+                            </label>
+                            <label className="text-[11px] font-semibold text-slate-700">Due Date *
+                              <input
+                                type="date"
+                                value={instrumentForm.due_date}
+                                onChange={function (e) { setInstrumentForm(Object.assign({}, instrumentForm, { due_date: e.target.value })); }}
+                                className="w-full mt-0.5 px-2 py-1.5 border border-slate-300 rounded text-sm bg-white"
+                              />
+                            </label>
+                          </div>
+                          <label className="text-[11px] font-semibold text-slate-700 block">Notes
+                            <textarea
+                              value={instrumentForm.notes}
+                              onChange={function (e) { setInstrumentForm(Object.assign({}, instrumentForm, { notes: e.target.value })); }}
+                              rows={2}
+                              placeholder="Optional notes (e.g. brought by son, post-dated, etc.)"
+                              className="w-full mt-0.5 px-2 py-1.5 border border-slate-300 rounded text-sm bg-white resize-none"
+                            />
+                          </label>
+                          <div className="flex gap-2 pt-1">
+                            <button
+                              disabled={instrumentBusy}
+                              onClick={async function () {
+                                // Validation — use parseAmount (Arabic-Indic digits, comma separators)
+                                var amt = parseAmount(instrumentForm.amount);
+                                if (!amt || amt <= 0) { toast.error('Amount is required and must be greater than 0'); return; }
+                                if (!instrumentForm.due_date) { toast.error('Due date is required'); return; }
+                                setInstrumentBusy(true);
+                                try {
+                                  // Per Max: documentation only.
+                                  // - NO treasury insert.
+                                  // - NO invoice.total_collected change.
+                                  // Just a row in `checks` with status='pending'.
+                                  await dbInsert('checks', {
+                                    instrument_type: instrumentForm.instrument_type,
+                                    customer_name: selectedInvoice.customer_name,
+                                    customer_id: selectedInvoice.customer_id || null,
+                                    order_number: selectedInvoice.order_number,
+                                    invoice_id: selectedInvoice.id,
+                                    amount: amt,
+                                    check_number: instrumentForm.check_number || '',
+                                    bank_name: instrumentForm.bank_name || '',
+                                    issue_date: instrumentForm.issue_date || null,
+                                    check_date: instrumentForm.due_date,    // legacy column — kept in sync
+                                    due_date: instrumentForm.due_date,
+                                    status: 'pending',
+                                    notes: instrumentForm.notes || '',
+                                    created_by: user?.id,
+                                    updated_by: user?.id,
+                                  }, user?.id);
+                                  toast.success('Instrument recorded — does not affect invoice total');
+                                  setShowAddInstrumentForm(false);
+                                  setInstrumentForm({ instrument_type: 'check', check_number: '', amount: '', issue_date: '', due_date: '', bank_name: '', notes: '' });
+                                  await loadAllData();
+                                } catch (err) {
+                                  toast.error('Failed to add instrument: ' + (err.message || String(err)));
+                                } finally {
+                                  setInstrumentBusy(false);
+                                }
+                              }}
+                              className="flex-1 px-3 py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded font-bold text-sm disabled:opacity-50"
+                            >
+                              {instrumentBusy ? 'Saving...' : '+ Add Instrument'}
+                            </button>
+                            <button
+                              onClick={function () { setShowAddInstrumentForm(false); }}
+                              className="px-3 py-2 bg-slate-300 hover:bg-slate-400 text-slate-900 rounded font-semibold text-sm"
+                            >
+                              Cancel
+                            </button>
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  )}
+                </div>
+              );
+            })()}
           </Modal>
         )}
 
@@ -10288,7 +10996,8 @@ export default function App() {
                   <SafeSection label="Nadia">
                     <AIGreeter
                       user={user} userProfile={userProfile} users={teamUsers}
-                      tickets={dashTickets} invoices={invoices} treasury={treasury}
+                      tickets={dashTickets} closedTickets={closedTicketsForAI}
+                      invoices={invoices} treasury={treasury}
                       checks={pendingChecks} loginHistory={lastLoginInfo} loginHistoryLoaded={loginHistoryLoaded}
                       lang={lang} personality={greeterSettings.personality}
                       greeterLang={greeterSettings.language}
@@ -12721,6 +13430,99 @@ export default function App() {
           form Modal even on devices that exhibit weird stacking-context
           behavior. Plus the form Modal now hides itself when this modal
           is open, so there's no overlap to worry about anyway. */}
+      {/* v55.83-A.6.27.17 (Max May 17 2026) — Phase 1 Payment Instruments.
+          Smart-popup that fires when a treasury entry's amount matches a
+          pending/deposited instrument on the same invoice. Per Max: this is
+          documentation-only, never creates a second treasury row, never
+          changes invoice money math. The popup's Yes path just stamps
+          source_check_id on the record we're about to insert. The No path
+          inserts without the link. Either way → exactly ONE treasury row. */}
+      {pendingInstrumentMatch && (() => {
+        // v55.83-A.6.27.19 — popup shape now carries an ARRAY of candidate
+        // instruments. Each gets its own button. Plus "No, separate
+        // payment" and Cancel. The onResume callback is supplied by the
+        // caller (handleAddTreasury or PaymentForm) so the same popup
+        // works from both flows.
+        var candidates = pendingInstrumentMatch.instruments || (pendingInstrumentMatch.instrument ? [pendingInstrumentMatch.instrument] : []);
+        var multiple = candidates.length > 1;
+        return (
+          <div
+            className="fixed inset-0 z-[210] bg-black/70"
+            onClick={() => { setPendingInstrumentMatch(null); }}
+            style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 12 }}
+          >
+            <div
+              className="bg-white rounded-2xl shadow-2xl w-full max-w-md"
+              onClick={(e) => e.stopPropagation()}
+              style={{ padding: 20, maxHeight: 'calc(100vh - 24px)', overflowY: 'auto' }}
+            >
+              <div className="flex items-center gap-2 mb-2">
+                <span style={{ fontSize: 24 }}>🧾</span>
+                <h3 className="text-base font-extrabold text-slate-900">
+                  {multiple ? candidates.length + ' matching instruments found' : 'Matching instrument found'}
+                </h3>
+              </div>
+              <div className="text-[11px] text-slate-600 mb-3">
+                {multiple
+                  ? 'Multiple instruments on this invoice have the same amount. Pick which one this payment clears, or "Separate payment" if none.'
+                  : 'Does this payment clear that instrument? Picking "Yes" links them and marks the instrument as cleared — it does NOT change the amount you entered.'}
+                <span className="italic"> Documentation only — this never changes any treasury or invoice money math.</span>
+              </div>
+              <div className="flex flex-col gap-2">
+                {candidates.map(function (inst) {
+                  var instLabel = (inst.instrument_type === 'promissory_note' ? '📜 Promissory Note' : '🧾 Check')
+                    + (inst.check_number ? ' #' + inst.check_number : '');
+                  return (
+                    <button
+                      key={inst.id}
+                      onClick={async () => {
+                        var stamped = pendingInstrumentMatch.record;
+                        stamped.source_check_id = inst.id;
+                        stamped.payment_source = 'check';
+                        stamped.__instrument_popup_decision = 'link';
+                        setPendingInstrumentMatch(null);
+                        // Use caller-supplied onResume if provided; fall back to commitInstrumentLinkedTreasury otherwise.
+                        var resume = pendingInstrumentMatch.onResume || (function (s) { return commitInstrumentLinkedTreasury(s, pendingInstrumentMatch.invoice, pendingInstrumentMatch.isBankPlaceholder); });
+                        await resume(stamped);
+                      }}
+                      className="text-left px-4 py-2.5 bg-emerald-50 hover:bg-emerald-100 border-2 border-emerald-300 rounded-lg"
+                    >
+                      <div className="text-sm font-bold text-emerald-900">
+                        ✓ Yes, this clears {instLabel} — {fE(Number(inst.amount))}
+                      </div>
+                      <div className="text-[11px] text-emerald-800 mt-0.5">
+                        Customer: <strong>{inst.customer_name || 'N/A'}</strong>
+                        {inst.bank_name ? ' · Bank: ' + inst.bank_name : ''}
+                        {' · Due: '}<strong>{inst.due_date || inst.check_date || 'N/A'}</strong>
+                        {' · '}{inst.status}
+                      </div>
+                    </button>
+                  );
+                })}
+                <button
+                  onClick={async () => {
+                    var stamped = pendingInstrumentMatch.record;
+                    stamped.__instrument_popup_decision = 'no_link';
+                    setPendingInstrumentMatch(null);
+                    var resume = pendingInstrumentMatch.onResume || (function (s) { return commitInstrumentLinkedTreasury(s, pendingInstrumentMatch.invoice, pendingInstrumentMatch.isBankPlaceholder); });
+                    await resume(stamped);
+                  }}
+                  className="px-4 py-2.5 bg-slate-200 hover:bg-slate-300 text-slate-900 rounded-lg font-semibold text-sm"
+                >
+                  ✕ No, this is a separate payment
+                </button>
+                <button
+                  onClick={() => { setPendingInstrumentMatch(null); }}
+                  className="px-4 py-1 text-[11px] text-slate-500 hover:text-slate-700"
+                >
+                  Cancel — go back to the form
+                </button>
+              </div>
+            </div>
+          </div>
+        );
+      })()}
+
       {pendingTreasuryRecord && (
         <div
           className="fixed inset-0 z-[200] bg-black/70"
@@ -12743,7 +13545,7 @@ export default function App() {
                       latest fix is actually deployed. If he doesn't see this
                       tag in the modal, his browser is running stale JS. */}
                   <div className="mt-1.5 inline-block px-2 py-0.5 rounded bg-amber-900/60 text-amber-100 text-[10px] font-mono font-bold tracking-wide">
-                    BUILD v55.83-A.6.27.15
+                    BUILD v55.83-A.6.27.19
                   </div>
                 </div>
                 <button onClick={() => closePendingTreasuryModal()}
@@ -13378,7 +14180,7 @@ export default function App() {
                     معاملة قد تكون مكررة
                   </div>
                   <div className="mt-1.5 inline-block px-2 py-0.5 rounded bg-amber-900/60 text-amber-100 text-[10px] font-mono font-bold tracking-wide">
-                    BUILD v55.83-A.6.27.15
+                    BUILD v55.83-A.6.27.19
                   </div>
                 </div>
                 <button

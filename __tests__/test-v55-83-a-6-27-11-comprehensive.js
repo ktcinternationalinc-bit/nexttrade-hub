@@ -131,7 +131,7 @@ ok('13c: qty_change persisted on approval',
 
 // ── 14. Version stamp ─────────────────────────────────────────────
 ok('14a: version stamp v55.83-A.6.27.11 or later',
-  /BUILD v55\.83-A\.6\.27\.1[12345]/.test(page));
+  /BUILD v55\.83-A\.6\.27\.1[123456789]/.test(page));
 
 if (failures.length > 0) {
   console.log('\n❌ ' + failures.length + ' failure(s):');

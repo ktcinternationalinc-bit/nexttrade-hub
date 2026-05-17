@@ -57,7 +57,10 @@ ok('2e: recalc handles overflow by scaling proportionally (cap)',
   /scale = totalAmt \/ totalAll/.test(page));
 
 ok('3: Path A (Add Payment > Bank Transfer) flags needs_bank_match',
-  /needs_bank_match: true,\s*\/\/ v55\.83-A\.1/.test(page));
+  // A.6.27.19: the inline `// v55.83-A.1` comment was lost during the
+  // record-extraction refactor. The flag itself is still set on the bank
+  // record. Verify it appears in the bank-channel context.
+  /isBankChannel[\s\S]{0,3000}needs_bank_match: true/.test(page));
 ok('3a: Path A description includes "awaiting match" tag',
   /\[🏦 Bank Transfer · awaiting match\]/.test(page));
 

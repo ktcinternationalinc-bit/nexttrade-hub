@@ -78,11 +78,20 @@ ok('6b: formatErr hints for code 31201 (mic perms)',
 
 // ── 7. Nadia: closed-ticket access + financial gating ─────────────
 ok('7a: AIGreeter builds allMyTickets (open + closed)',
-  /var allMyTickets = \(tickets \|\| \[\]\)\.filter\(ticketBelongsToMe\)/.test(ag));
-ok('7b: AIGreeter myTickets filters out Closed',
-  /var myTickets = allMyTickets\.filter\(function \(t\) \{ return t\.status !== 'Closed'; \}\)/.test(ag));
+  // A.6.27.12 form: var allMyTickets = (tickets || []).filter(ticketBelongsToMe)
+  //   — broken because `tickets` excluded Closed at the server.
+  // A.6.27.16 form: allMyTickets is built as a union of openMyTickets + closedMyTickets.
+  /var allMyTickets = \(tickets \|\| \[\]\)\.filter\(ticketBelongsToMe\)/.test(ag) ||
+  /var allMyTickets = \[\];[\s\S]{0,400}openMyTickets\.forEach[\s\S]{0,300}closedMyTickets\.forEach/.test(ag));
+ok('7b: AIGreeter myTickets excludes Closed',
+  // A.6.27.12: filter from allMyTickets. A.6.27.16: assigned directly from openMyTickets
+  // (because dashTickets is already Closed-free at the server).
+  /var myTickets = allMyTickets\.filter\(function \(t\) \{ return t\.status !== 'Closed'; \}\)/.test(ag) ||
+  /var myTickets = openMyTickets;/.test(ag));
 ok('7c: AIGreeter surfaces recentlyClosed tickets for history queries',
-  /Recently CLOSED tickets \(available for history queries; not in active counts\)/.test(ag));
+  // A.6.27.12 banner text vs A.6.27.16 banner text
+  /Recently CLOSED tickets \(available for history queries; not in active counts\)/.test(ag) ||
+  /Closed tickets accessible for history queries/.test(ag));
 ok('7d: AIGreeter accepts modulePerms + isSuperAdmin props',
   /modulePerms, isSuperAdmin \}\)/.test(ag));
 ok('7e: financial context behind canSeeFinancials gate',
@@ -94,7 +103,7 @@ ok('7g: page.jsx passes modulePerms + isSuperAdmin to AIGreeter',
 
 // ── 8. Version stamp ─────────────────────────────────────────────
 ok('8a: version stamp v55.83-A.6.27.12',
-  /BUILD v55\.83-A\.6\.27\.1[2345]/.test(page));
+  /BUILD v55\.83-A\.6\.27\.1[23456789]/.test(page));
 
 if (failures.length > 0) {
   console.log('\n❌ ' + failures.length + ' failure(s):');

@@ -70,7 +70,7 @@ function renderDecisionPanel(d, keyId, lang) {
   );
 }
 
-export default function AIGreeter({ user, userProfile, users, tickets, invoices, treasury, checks, loginHistory, loginHistoryLoaded, lang, personality, greeterLang, onToggle, toast, enabled, hasGreeted, onGreeted, sessionMessages, onMessagesUpdate, contextTab, contextSelectedCustomer, contextSelectedInvoice, contextOpenTicketId, muted, selectedAssistant, modulePerms, isSuperAdmin }) {
+export default function AIGreeter({ user, userProfile, users, tickets, closedTickets, invoices, treasury, checks, loginHistory, loginHistoryLoaded, lang, personality, greeterLang, onToggle, toast, enabled, hasGreeted, onGreeted, sessionMessages, onMessagesUpdate, contextTab, contextSelectedCustomer, contextSelectedInvoice, contextOpenTicketId, muted, selectedAssistant, modulePerms, isSuperAdmin }) {
   // v55.73 — Persona resolution. SAFE NADIA DEFAULT so the file behaves
   // identically when selectedAssistant is omitted (e.g. older mounts).
   // The voice/listening/recording engine continues to use the existing
@@ -533,12 +533,20 @@ export default function AIGreeter({ user, userProfile, users, tickets, invoices,
     //   - tickets I created (delegated to others)
     //   - tickets where I'm an additional assignee
     // Same private/confidential rules already applied upstream in dashTickets.
+    //
     // v55.83-A.6.27.12 (Max May 15 2026) — build TWO ticket lists:
-    //   - myTickets: open only (drives "X overdue" / "Y due today" / etc.)
+    //   - myTickets:    open only (drives "X overdue" / "Y due today" / etc.)
     //   - allMyTickets: open + closed (drives history queries like
-    //     "what was that ticket about leather samples last month")
-    // Per Max: "nadia needs to get access to closed tickets as well when
-    // we ask for information about tickets".
+    //                   "what was that ticket about leather samples last month")
+    //
+    // v55.83-A.6.27.16 (Max May 17 2026) — THE PREVIOUS FIX DID NOT WORK.
+    // page.jsx loads `tickets` (=dashTickets) with `.neq('status', 'Closed')`
+    // at line 1446, so filtering closed tickets OUT of an array that never
+    // contained them was a no-op. Now closed tickets come in via a separate
+    // `closedTickets` prop loaded with its own query in page.jsx. Union them
+    // here.
+    // Per Max (asked THREE TIMES): "nadia needs to get access to closed
+    // tickets as well when we ask for information about tickets".
     var ticketBelongsToMe = function (t) {
       if (t.assigned_to === myId) return true;
       if (t.created_by === myId) return true;
@@ -550,8 +558,14 @@ export default function AIGreeter({ user, userProfile, users, tickets, invoices,
       } catch (_) {}
       return false;
     };
-    var allMyTickets = (tickets || []).filter(ticketBelongsToMe);
-    var myTickets = allMyTickets.filter(function (t) { return t.status !== 'Closed'; });
+    var openMyTickets = (tickets || []).filter(ticketBelongsToMe);
+    var closedMyTickets = (closedTickets || []).filter(ticketBelongsToMe);
+    // Combined list, deduped by id (in case a ticket somehow appears in both).
+    var seenTicketIds = {};
+    var allMyTickets = [];
+    openMyTickets.forEach(function (t) { if (!seenTicketIds[t.id]) { seenTicketIds[t.id] = true; allMyTickets.push(t); } });
+    closedMyTickets.forEach(function (t) { if (!seenTicketIds[t.id]) { seenTicketIds[t.id] = true; allMyTickets.push(t); } });
+    var myTickets = openMyTickets; // open only (dashTickets is already open-only at the server)
     var overdueTickets = myTickets.filter(function(t) { return t.due_date && t.due_date < todayStr; });
     var dueTodayTickets = myTickets.filter(function(t) { return t.due_date === todayStr; });
     var unackedTickets = myTickets.filter(function(t) { return t.status === 'New'; }); // unacknowledged — user hasn't accepted yet
@@ -633,16 +647,28 @@ export default function AIGreeter({ user, userProfile, users, tickets, invoices,
 
     ctx += 'Total open tickets: ' + myTickets.length + '\n';
     if (staleTickets.length) ctx += 'Stale (not updated 3+ days): ' + staleTickets.length + ' — ' + staleTickets.slice(0, 5).map(function(t) { return (t.ticket_number || '') + ' ' + (t.title || ''); }).join(', ') + '. Nudge them!\n';
-    // v55.83-A.6.27.12 — closed ticket access for history queries. Nadia
-    // can reference these but they don't add to "open" counts. List the
-    // 10 most recently-closed so she can answer "what was that ticket about
-    // X" questions without needing a fresh DB call.
-    var recentlyClosed = allMyTickets.filter(function (t) { return t.status === 'Closed'; })
+    // v55.83-A.6.27.16 (Max May 17 2026) — closed-ticket access. Per Max
+    // asked THREE TIMES: Nadia must be able to reference closed tickets
+    // for history queries like "what was that ticket about leather
+    // samples last month". Now lists up to 25 most-recently-closed with
+    // descriptions so she can match on topic, not just title.
+    var recentlyClosed = closedMyTickets
+      .slice() // don't mutate the prop
       .sort(function (a, b) { return (b.updated_at || b.created_at || '').localeCompare(a.updated_at || a.created_at || ''); })
-      .slice(0, 10);
+      .slice(0, 25);
     if (recentlyClosed.length) {
-      ctx += 'Recently CLOSED tickets (available for history queries; not in active counts): ' +
-        recentlyClosed.map(function (t) { return (t.ticket_number || '') + ' "' + (t.title || '').substring(0, 50) + '"'; }).join(', ') + '\n';
+      ctx += 'Closed tickets accessible for history queries (' + closedMyTickets.length + ' total):\n';
+      recentlyClosed.forEach(function (t) {
+        var closedAt = (t.updated_at || t.created_at || '').substring(0, 10);
+        var summary = (t.title || '');
+        if (t.description) summary += ' — ' + String(t.description).substring(0, 80);
+        ctx += '  • ' + (t.ticket_number || '') + ' [' + closedAt + '] ' + summary + '\n';
+      });
+      if (closedMyTickets.length > 25) {
+        ctx += '  (... and ' + (closedMyTickets.length - 25) + ' more closed tickets — ask me to search by topic/customer if you need older ones)\n';
+      }
+    } else {
+      ctx += 'Closed tickets accessible: 0 (no closed tickets for this user)\n';
     }
     if (canSeeFinancials) {
       if (overdueInvoices.length) ctx += 'Overdue invoices: ' + overdueInvoices.length + ', EGP ' + overdueInvoices.reduce(function(a, i) { return a + Number(i.outstanding || 0); }, 0).toLocaleString() + '\n';
