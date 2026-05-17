@@ -84,7 +84,7 @@ ok('6a: payment source mix reads from treasuryByInvoiceId',
 
 // ── 7. Version stamp ──────────────────────────────────────────────
 ok('7a: version stamp v55.83-A.6.27.13',
-  /BUILD v55\.83-A\.6\.27\.1[34]/.test(page));
+  /BUILD v55\.83-A\.6\.27\.1[345]/.test(page));
 
 // ── 8. Money-trail data integrity invariants (no regression in math) ─
 ok('8a: recalc still caps at total_amount (no over-100% collected)',

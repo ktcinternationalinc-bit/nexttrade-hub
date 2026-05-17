@@ -99,7 +99,7 @@ ok('8c: recalc skips dedup_sibling_id and [bank confirmation markers',
 
 // ── 9. Version stamp ──────────────────────────────────────────────
 ok('9a: version stamp v55.83-A.6.27.14',
-  /BUILD v55\.83-A\.6\.27\.14/.test(page));
+  /BUILD v55\.83-A\.6\.27\.1[12345]/.test(page));
 
 if (failures.length > 0) {
   console.log('\n❌ ' + failures.length + ' failure(s):');

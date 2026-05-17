@@ -93,7 +93,11 @@ ok('3b: routeGroups filters by continentFilter when not "all"',
 );
 
 ok('3c: routeGroups useMemo dep includes continentFilter',
-  /\}, \[filtered, groupByPort, continentFilter\]\)/.test(src),
+  // A.6.27.15: groupByPort no longer affects bubble grouping (every bubble
+  // is per-port already), so it was dropped from the dep array. Accept either
+  // shape for back-compat.
+  /\}, \[filtered, groupByPort, continentFilter\]\)/.test(src) ||
+  /\}, \[filtered, continentFilter\]\)/.test(src),
   'memo invalidates when continent filter changes'
 );
 

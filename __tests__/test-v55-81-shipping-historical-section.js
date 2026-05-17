@@ -92,9 +92,13 @@ console.log('\n#19 — Sort: active first then alphabetical destination');
 ok('Bubble view sort function: active groups before historical',
   /if \(a\.historicalGroup !== b\.historicalGroup\) return a\.historicalGroup \? 1 : -1;/.test(ship));
 ok('Bubble view sort: alphabetical by destination',
-  /var ad = \(a\.destination \|\| a\.rightLabel \|\| ''\)\.toLowerCase\(\);/.test(ship));
+  // A.6.27.15: dropped the rightLabel fallback in the sort since every
+  // group has a populated destination now. Accept either shape.
+  /var ad = \(a\.destination \|\| a\.rightLabel \|\| ''\)\.toLowerCase\(\);/.test(ship) ||
+  /var ad = \(a\.destination \|\| ''\)\.toLowerCase\(\);/.test(ship));
 ok('Bubble view sort: secondary alphabetical by origin',
-  /var ao = \(a\.origin \|\| a\.leftLabel \|\| ''\)\.toLowerCase\(\);/.test(ship));
+  /var ao = \(a\.origin \|\| a\.leftLabel \|\| ''\)\.toLowerCase\(\);/.test(ship) ||
+  /var ao = \(a\.origin \|\| ''\)\.toLowerCase\(\);/.test(ship));
 ok('Old "sort by count desc" pattern is gone',
   !/sort\(\(a,b\) => b\.count - a\.count\)/.test(ship));
 ok('List view sort: active rows always before historical (primary key)',

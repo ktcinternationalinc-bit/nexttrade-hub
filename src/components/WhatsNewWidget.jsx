@@ -33,6 +33,20 @@ import { supabase } from '../lib/supabase';
 //     WhatsApp, the calendar, the Sales tab.
 export const BUILD_HISTORY = [
   {
+    version: 'v55.83-A.6.27.15',
+    date: '2026-05-16',
+    label: 'Shipping bubbles broken down by port — every port pair is its own card',
+    items: [
+      '**Shipping rate bubbles now show port AND country, broken down per port pair.** Previously the bubble grouped by country only, so all the USA → Algeria rates collapsed into one card that could only show one port label (or none). Now each unique (origin country, POL, destination country, POD) combination gets its OWN bubble. Houston → Skikda, NYC → Algiers, and Savannah → Oran are three separate cards even though they\'re all USA → Algeria. If a rate has no port recorded, it gets its own country-only bubble — won\'t merge with port-specific ones.',
+      '**Bubble label shows the port front and center.** Big bold text on top is the port (Houston). Smaller grey subtext is the country (USA). Same on the destination side. If no port exists for a rate, the country shows alone.',
+      '**Transit time, free days, and earliest departure now show on every bubble.** They used to only appear when you turned on a port filter. Now that every bubble is already port-specific, those details are always relevant and always visible.',
+      '**Click a bubble to drill into just THAT port-pair\'s rates.** No more "I clicked USA to Algeria and got 47 quotes across 8 ports mixed together." The drill-down view filters to your exact port pair.',
+      { superAdminOnly: true, text: 'routeGroups builder switched from (origin, destination) 2-tuple key to (origin, POL, destination, POD) 4-tuple key. Each tuple is normalized lowercase/trimmed for case-insensitive collapsing, but display labels preserve the best-cased version. groupByPort no longer affects bubble grouping at all — it now only controls whether the POL/POD filter dropdowns are active. useMemo dep array dropped groupByPort.' },
+      { superAdminOnly: true, text: 'render path: leftLabel = port + " (country)" when port differs from country; right side same. Sort: active groups first, then alphabetical by destination → POD → origin → POL. TT/FT/ETD chips: gate removed (was `groupByPort && c`, now just `c`). Continent-filter dropdown count recomputed against the 4-part key so per-continent counts match actual bubble count.' },
+      { superAdminOnly: true, text: 'TEST: __tests__/test-v55-83-a-6-27-15-bubble-port-country.js (9 asserts) locks the 4-part keying contract: bubble grouping uses (origin, POL, destination, POD); pol/pod preserved on group object; useMemo deps include only [filtered, continentFilter]; continent count uses same 4-part key; TT/FT/ETD ungated; render uses fromLabel/fromSub with country sub when port differs. Sweep: 199/0.' },
+    ],
+  },
+  {
     version: 'v55.83-A.6.27.14',
     date: '2026-05-16',
     label: 'Financial architecture pass — Egypt Bank, checks, and dedup hardening',

@@ -557,19 +557,22 @@ export default function ShippingRatesTab({ toast, user, userProfile, isAdmin, cu
   // is picked, behaviour is unchanged (group by origin → destination country).
   const groupByPort = filterPod !== 'all' || filterPol !== 'all';
   const routeGroups = useMemo(() => {
-    // v55.83-A.6.27.6 (Max May 15 2026) — case/whitespace-insensitive
-    // grouping. Without this, "HOUSTON" and "Houston" were creating
-    // duplicate cards for the same physical route. The routeHistory
-    // filter at line 633 already normalizes when matching rates to a
-    // selected route, but the GROUPER itself was using raw casing, so
-    // the cards appeared separately on the list view. Now the bucket
-    // key is built from the normalized values, and we pick the first
-    // non-empty raw casing seen for the display label.
+    // v55.83-A.6.27.15 (Max May 16 2026) — group by the FULL 4-tuple:
+    // (origin country, POL, destination country, POD). Each unique
+    // combination is its own bubble. Per Max: "bubbles need to have
+    // country/pol and country of destination/pod MUST HAVE and broken
+    // down by this and displayed -- if anything is different in those
+    // 4 combinations then you need a separate bubble".
+    //
+    // Previously the key was just (origin country, destination country),
+    // so rates with the same country pair but different ports got merged
+    // into one bubble that could only show one port label. Now they
+    // properly split into multiple bubbles, one per port pair.
+    //
+    // Case/whitespace insensitive for the KEY, but display labels keep
+    // the best-cased version seen across rates in the group.
     var normForKey = function (s) { return (s || '').trim().toLowerCase(); };
     var pickLabel = function (existing, candidate) {
-      // Prefer Title Case or Mixed Case over ALL CAPS for the visible label.
-      // If existing already looks like a "good" label, keep it; otherwise
-      // upgrade to the candidate if the candidate looks better.
       if (!existing) return candidate || '';
       if (!candidate) return existing;
       var isAllCaps = function (s) { return s === s.toUpperCase() && /[A-Z]/.test(s); };
@@ -578,30 +581,34 @@ export default function ShippingRatesTab({ toast, user, userProfile, isAdmin, cu
     };
     const groups = {};
     filtered.forEach(r => {
-      var leftRaw = groupByPort ? (r.port_of_loading || r.origin || '?') : (r.origin || '?');
-      var rightRaw = groupByPort ? (r.port_of_discharge || r.destination || '?') : (r.destination || '?');
-      var leftSuffix = '';
-      var rightSuffix = '';
-      if (groupByPort && r.port_of_loading && r.origin && normForKey(r.port_of_loading) !== normForKey(r.origin)) {
-        leftSuffix = ' (' + r.origin + ')';
+      var originRaw = r.origin || '?';
+      var destRaw = r.destination || '?';
+      var polRaw = r.port_of_loading || '';   // empty string in key when missing
+      var podRaw = r.port_of_discharge || '';
+      // 4-part key: any difference in any of the four creates a new bubble.
+      var key = normForKey(originRaw) + '|' + normForKey(polRaw)
+              + '||' + normForKey(destRaw) + '|' + normForKey(podRaw);
+      // Display labels for the bubble — port preferred as main, country as sub.
+      var leftLabel, rightLabel;
+      if (polRaw && normForKey(polRaw) !== normForKey(originRaw)) {
+        leftLabel = polRaw + ' (' + originRaw + ')';
+      } else {
+        leftLabel = originRaw;
       }
-      if (groupByPort && r.port_of_discharge && r.destination && normForKey(r.port_of_discharge) !== normForKey(r.destination)) {
-        rightSuffix = ' (' + r.destination + ')';
+      if (podRaw && normForKey(podRaw) !== normForKey(destRaw)) {
+        rightLabel = podRaw + ' (' + destRaw + ')';
+      } else {
+        rightLabel = destRaw;
       }
-      var leftLabel = leftRaw + leftSuffix;
-      var rightLabel = rightRaw + rightSuffix;
-      // KEY uses normalized values so case/whitespace differences collapse.
-      const key = normForKey(leftRaw) + '|' + normForKey(rightRaw);
       if (!groups[key]) groups[key] = {
-        origin: r.origin,
-        destination: r.destination,
-        pol: groupByPort ? (r.port_of_loading || null) : null,
-        pod: groupByPort ? (r.port_of_discharge || null) : null,
+        origin: originRaw,
+        destination: destRaw,
+        pol: polRaw || null,
+        pod: podRaw || null,
         leftLabel: leftLabel,
         rightLabel: rightLabel,
         rates: [], vendors: new Set(), lines: new Set(), modes: new Set()
       };
-      // Upgrade label casing if a better-cased variant comes through later
       groups[key].leftLabel = pickLabel(groups[key].leftLabel, leftLabel);
       groups[key].rightLabel = pickLabel(groups[key].rightLabel, rightLabel);
       groups[key].rates.push(r);
@@ -609,16 +616,6 @@ export default function ShippingRatesTab({ toast, user, userProfile, isAdmin, cu
       if (r.shipping_line) groups[key].lines.add(r.shipping_line);
       if (r.transport_mode) groups[key].modes.add(r.transport_mode);
     });
-    // v55.81 #16 + #19 (Max May 9 2026): mark each group as `historicalGroup`
-    // when ALL its rates are expired, so the renderer can move it into a
-    // separate "Historical Rates" section instead of mixing it with active
-    // rates. Sort alphabetically by destination first (Max's spec), with
-    // groups that have any active rates appearing before groups that are
-    // fully historical when both show in the same render (i.e. the "All"
-    // toggle below). Previously sorted by `count desc` which moved high-
-    // volume historical routes to the top.
-    // v55.82-J: also annotate every group with `destContinent` so the
-    // continent dropdown can filter without re-deriving on every render.
     return Object.entries(groups).map(([key, data]) => {
       const ar = data.rates.filter(r => !isExpired(r.expiry_date));
       const ch = ar.length > 0 ? ar.reduce((a,b) => (a.rate_amount||Infinity) < (b.rate_amount||Infinity) ? a : b) : null;
@@ -628,17 +625,23 @@ export default function ShippingRatesTab({ toast, user, userProfile, isAdmin, cu
       if (continentFilter === 'all') return true;
       return rg.destContinent === continentFilter;
     }).sort(function (a, b) {
-      // Active groups first, then alphabetical by destination
+      // Active groups first, then alphabetical by destination, then POD,
+      // then origin, then POL — keeps related routes near each other.
       if (a.historicalGroup !== b.historicalGroup) return a.historicalGroup ? 1 : -1;
-      var ad = (a.destination || a.rightLabel || '').toLowerCase();
-      var bd = (b.destination || b.rightLabel || '').toLowerCase();
+      var ad = (a.destination || '').toLowerCase();
+      var bd = (b.destination || '').toLowerCase();
       if (ad !== bd) return ad < bd ? -1 : 1;
-      // Same destination — secondary sort by origin so cards group sensibly
-      var ao = (a.origin || a.leftLabel || '').toLowerCase();
-      var bo = (b.origin || b.leftLabel || '').toLowerCase();
-      return ao < bo ? -1 : (ao > bo ? 1 : 0);
+      var apd = (a.pod || '').toLowerCase();
+      var bpd = (b.pod || '').toLowerCase();
+      if (apd !== bpd) return apd < bpd ? -1 : 1;
+      var ao = (a.origin || '').toLowerCase();
+      var bo = (b.origin || '').toLowerCase();
+      if (ao !== bo) return ao < bo ? -1 : 1;
+      var apl = (a.pol || '').toLowerCase();
+      var bpl = (b.pol || '').toLowerCase();
+      return apl < bpl ? -1 : (apl > bpl ? 1 : 0);
     });
-  }, [filtered, groupByPort, continentFilter]);
+  }, [filtered, continentFilter]);
 
   // v55.81 #16 (Max May 9 2026): pre-split routeGroups for the renderer
   // when filterExpiry === 'all'. The renderer reads activeRouteGroups and
@@ -4593,9 +4596,12 @@ Date: ${today}`;
         CONTINENTS.forEach(function (c) { byContinent[c] = 0; });
         var seenKey = {};
         filtered.forEach(function (r) {
-          var leftLabel = groupByPort ? ((r.port_of_loading || r.origin || '?') + (r.port_of_loading && r.origin && r.port_of_loading !== r.origin ? ' (' + r.origin + ')' : '')) : (r.origin || '?');
-          var rightLabel = groupByPort ? ((r.port_of_discharge || r.destination || '?') + (r.port_of_discharge && r.destination && r.port_of_discharge !== r.destination ? ' (' + r.destination + ')' : '')) : (r.destination || '?');
-          var key = leftLabel + ' → ' + rightLabel;
+          // v55.83-A.6.27.15 — match the bubble's 4-part grouping so the
+          // dropdown count reflects what the user actually sees.
+          var key = (r.origin || '').toLowerCase().trim() + '|'
+                  + (r.port_of_loading || '').toLowerCase().trim() + '||'
+                  + (r.destination || '').toLowerCase().trim() + '|'
+                  + (r.port_of_discharge || '').toLowerCase().trim();
           if (seenKey[key]) return;
           seenKey[key] = true;
           var c = continentOf(r.destination);
@@ -4707,9 +4713,10 @@ Date: ${today}`;
         return (
           <div key={rg.key} onClick={function(){setSelectedRoute({origin:rg.origin,destination:rg.destination,pol:rg.pol||null,pod:rg.pod||null});setView('route_detail');}} className="bg-white rounded-xl p-4 cursor-pointer border border-slate-200 hover:shadow-lg hover:-translate-y-0.5 transition-all">
             <div className="flex justify-between items-start mb-2"><div><div className="text-sm font-extrabold text-blue-700">{fromLabel}{fromSub && <span className="text-[9px] text-slate-500 font-normal ml-1">, {fromSub}</span>}</div><div className="text-[10px] text-slate-500">↓</div><div className="text-sm font-extrabold text-emerald-700">{toLabel}{toSub && <span className="text-[9px] text-slate-500 font-normal ml-1">, {toSub}</span>}</div></div><div className="text-right">{c?(<><div className="text-[9px] text-slate-500">Best Active</div><div className="text-lg font-extrabold text-emerald-600">{fCur(c.rate_amount,c.currency)}</div><div className="text-[9px] text-blue-500">{c.vendor_name}{c.shipping_line?' / '+c.shipping_line:''}</div><ExpiryBadge date={c.expiry_date}/></>):(<div className="text-xs text-red-400 font-bold">All Expired</div>)}</div></div>
-            {/* v55.63 — show TT / FT / ETD on the cheapest active rate when a port
-                is picked, so you can compare at a glance without opening the card. */}
-            {groupByPort && c && (
+            {/* v55.63 — show TT / FT / ETD on the cheapest active rate.
+                v55.83-A.6.27.15 — show always (every bubble is now per-port,
+                so this info is always specific to ONE port pair). */}
+            {c && (
               <div className="flex gap-2 flex-wrap text-[10px] mb-2">
                 {c.transit_days != null && <span className="px-1.5 py-0.5 bg-sky-50 text-sky-700 rounded"><strong>TT:</strong> {c.transit_days}d</span>}
                 {c.free_days != null && <span className="px-1.5 py-0.5 bg-amber-50 text-amber-900 rounded"><strong>FT:</strong> {c.free_days}d</span>}
