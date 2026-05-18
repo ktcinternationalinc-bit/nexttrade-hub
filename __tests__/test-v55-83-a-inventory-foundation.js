@@ -188,7 +188,7 @@ ok('page: imports InventoryTab', /import InventoryTab from '\.\.\/components\/In
 ok('page: renders <InventoryTab> when tab === inventory',
   /tab === 'inventory'[\s\S]{0,300}<InventoryTab/.test(page));
 ok('page: passes userProfile, modulePerms, toast props',
-  /<InventoryTab userProfile=\{userProfile\} modulePerms=\{modulePerms\} toast=\{toast\}/.test(page));
+  /<InventoryTab userProfile=\{userProfile\} modulePerms=\{modulePerms\}[^>]*toast=\{toast\}/.test(page));
 ok('page: REGRESSION GUARD — old inline inventory grid removed',
   // The old section had ~1900 lines with these characteristic markers.
   !/setFormData\(\{\.\.\.formData, invTypeFilter:/.test(page) &&

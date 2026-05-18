@@ -16,6 +16,7 @@ import LayersLedger from './LayersLedger';
 import InventoryPnL from './InventoryPnL';
 import AdjustmentsManager from './AdjustmentsManager';
 import InventoryReports from './InventoryReports';
+import InventoryMasterAdmin from './InventoryMasterAdmin';
 import {
   canViewInventory,
   canSeeInventoryCosts,
@@ -32,9 +33,11 @@ var SUBTABS = [
   { id: 'adjustments', label: '🔧 Adjustments', stage: 'E', desc: 'Damage, returns, transfers, count corrections' },
   { id: 'warehouses', label: '🏭 Warehouses', stage: 'A', desc: 'Physical stock locations' },
   { id: 'reports', label: '📈 Reports', stage: 'F', desc: 'Profitability, aging, slow-moving' },
+  // v55.83-A.6.27.22 — Phase 1 Build 1 of the classification system
+  { id: 'masterlists', label: '🗂️ Master Lists', stage: 'Classification', desc: 'Manage the 8 classification levels (Product Family, Category, Grade, etc.) — super-admin only' },
 ];
 
-export default function InventoryTab({ userProfile, modulePerms, toast }) {
+export default function InventoryTab({ userProfile, modulePerms, toast, isSuperAdmin }) {
   var [subtab, setSubtab] = useState('inventory');
 
   // v55.83-A.6.27 — load SKUs + warehouses once at this level so Layers + P&L
@@ -111,6 +114,12 @@ export default function InventoryTab({ userProfile, modulePerms, toast }) {
           if (st.id === 'pnl' && !seePnL) available = false;
           // Layers tab requires cost access (P&L access implies cost access)
           if (st.id === 'layers' && !seeCosts && !seePnL) available = false;
+          // v55.83-A.6.27.22 — Master Lists tab requires super_admin or
+          // "Manage Inventory Master" permission. Hidden entirely for
+          // users without it (not just disabled) — this is admin-only.
+          if (st.id === 'masterlists' && !(isSuperAdmin || (modulePerms && modulePerms['Manage Inventory Master'] === true))) {
+            return null;
+          }
           var isActive = subtab === st.id;
           return (
             <button key={st.id}
@@ -158,6 +167,10 @@ export default function InventoryTab({ userProfile, modulePerms, toast }) {
       )}
       {subtab === 'reports' && (
         <InventoryReports skus={skus} warehouses={warehouses} toast={toast} />
+      )}
+      {/* v55.83-A.6.27.22 — Phase 1 Build 1: Master Lists admin */}
+      {subtab === 'masterlists' && (
+        <InventoryMasterAdmin userProfile={userProfile} modulePerms={modulePerms} isSuperAdmin={isSuperAdmin} toast={toast} />
       )}
 
       {/* Stage guidance */}

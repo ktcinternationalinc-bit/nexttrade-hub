@@ -33,6 +33,25 @@ import { supabase } from '../lib/supabase';
 //     WhatsApp, the calendar, the Sales tab.
 export const BUILD_HISTORY = [
   {
+    version: 'v55.83-A.6.27.22',
+    date: '2026-05-18',
+    label: 'Inventory Phase 1 Build 1 — Master Lists admin (foundation)',
+    items: [
+      '**New: Inventory Master Lists admin screen.** This is the foundation of the new inventory classification system. Find it under Inventory → Master Lists tab. Super-admin (or anyone granted the new "Manage Inventory Master" permission) manages the 8 classification levels here: Product Family, Category, Grade, Construction, Backing, Color, Pattern, and Spec Class.',
+      '**Pre-loaded with your spec.** All 62 options from the spec document are already in the database — Leather, Textile, PVC Pool, Boat Decking; Smooth, Embossed, Mosaic, Anti-Slip, all the grades, constructions, backings, 16 colors (11 standard + 5 pool), 7 patterns, 4 spec classes. You can edit, add to, or deactivate any of them.',
+      '**Smart hierarchy is built in.** Category options are tied to their valid Product Families — pick Leather, you only see Smooth and Embossed. Pick PVC Pool, you only see Smooth Liner, Roofing, Mosaic, Anti-Slip. Pool colors (Baby Blue, Sky Blue, Medium Blue, Dark Blue, Navy Blue) only show when PVC Pool is selected. The other 6 levels are universal by default — you can restrict any of them per Family if needed.',
+      '**Bilingual everywhere.** Every option has both English and Arabic labels, both required when adding new ones. The screen shows both side by side for easy verification.',
+      '**Soft delete protects history.** When you deactivate an option, it disappears from new dropdowns but stays in the database so any existing inventory referencing it remains valid. One click to reactivate if you change your mind.',
+      '**Add new options without a build.** Need a new color? New category? Super-admin clicks "+ Add Option," types the code (1-4 uppercase letters/digits), English and Arabic labels, ticks which Product Families it applies to, saves. New option is immediately available across the system — no developer involvement.',
+      '**Run the SQL migration BEFORE deploying.** Creates two tables (inventory_lists, inventory_list_rules) and pre-loads the 62 options. Migration is purely additive — does not touch any existing data.',
+      '**This is Build 1 of 5.** The Master Lists alone don\'t affect day-to-day operations yet. Coming next: Build 2 (Product Master screen — define each product with quick-code + classification + defaults), Build 3 (bulk import tool for legacy data), Build 4 (warehouse receiving updated to use quick codes), Build 5 (reporting with filter combinations). Each build ships independently and we test before moving to the next.',
+      { superAdminOnly: true, text: 'Tables: inventory_lists (id uuid PK, level int 1-8, code text, label_en, label_ar, active, display_order, audit columns; CHECK code ~ \'^[A-Z0-9]{1,4}$\'; UNIQUE INDEX on (level, code) WHERE active=true so deactivated codes can be reused). inventory_list_rules (child_list_id, parent_list_id; rows present → child restricted to those parents; no rows → child applies to all parents at the parent level). Seed data: 62 options across 8 levels + 16 parent rules (11 category-family + 5 pool-color-PVC). New permission key "Manage Inventory Master" added to SettingsTab (both the master array at line 361 and the action permissions render list at line 1368).' },
+      { superAdminOnly: true, text: 'UI: src/components/InventoryMasterAdmin.jsx (560 lines). Sidebar lists all 8 levels with active counts and inactive-count badges. Main pane shows search + show-inactive toggle + Add button + inline add/edit form + options table. Form includes parent-rules checkbox grid when relevant. Uses dbInsert/dbUpdate so audit_log captures everything. Code field uppercases on input. Both labels required client-side AND DB level. Duplicate code check excludes self when editing. Soft delete via active toggle with confirm prompt. Component is gated — non-permitted users see "Access restricted" panel.' },
+      { superAdminOnly: true, text: 'WIRING: InventoryTab gets new "🗂️ Master Lists" subtab gated to super_admin OR Manage Inventory Master permission. Tab is HIDDEN (returns null) for users without permission, not just disabled. page.jsx now passes isSuperAdmin prop to InventoryTab → InventoryMasterAdmin. Existing inv_skus and existing inventory subtabs untouched — Build 1 is purely additive.' },
+      { superAdminOnly: true, text: 'TEST: __tests__/test-v55-83-a-6-27-22-inventory-master-lists.js — 39 assertions covering SQL schema constraints, all 62 seed-data entries, parent rules, component permission gating, code format validation, bilingual requirement, soft delete, duplicate-code check, parent-rule sync (delete-then-insert pattern), regression guards on A.6.27.19/20/21 work. Sweep: 206/0.' },
+    ],
+  },
+  {
     version: 'v55.83-A.6.27.21',
     date: '2026-05-17',
     label: 'AI Treasury Review — readability + Fix Links + escape hatch',

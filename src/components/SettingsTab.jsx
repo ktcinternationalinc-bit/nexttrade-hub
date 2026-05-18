@@ -358,7 +358,7 @@ const MODULES = [
   // Granular permissions
   'Edit Treasury', 'Edit Invoices', 'Delete Invoices', 'Edit Inventory', 'Adjust Inventory Quantities', 'Edit Warehouse',
   'Edit CRM', 'View Costs', 'Delete Tickets', 'Assign Tickets', 'Merge Customers',
-  'Manage Categories', 'Export Data', 'Post Reminders', 'Welcome Briefing', 'HR Report',
+  'Manage Categories', 'Manage Inventory Master', 'Export Data', 'Post Reminders', 'Welcome Briefing', 'HR Report',
 ];
 
 const NOTIF_TYPES = [
@@ -1365,7 +1365,7 @@ export default function SettingsTab({ toast, user, users, onReload, isAdmin, use
               ))}
               {/* Action Permissions */}
               <tr><td colSpan={nonSuperUsers.length + 1} className="px-2 py-2 bg-amber-50 text-[10px] font-bold text-amber-900 border-b border-amber-200 mt-2">🔐 ACTION PERMISSIONS — what the user can do (Tab ON + Edit OFF = Read Only 👁️)</td></tr>
-              {['Edit Treasury', 'Edit Invoices', 'Delete Invoices', 'Edit Inventory', 'Adjust Inventory Quantities', 'Edit Warehouse', 'Edit CRM', 'View Costs', 'View Financial Reports', 'CRM View All', 'CRM View Contacts', 'Delete Tickets', 'Assign Tickets', 'Merge Customers', 'Manage Categories', 'Export Data', 'Post Reminders', 'HR Report'].map(mod => (
+              {['Edit Treasury', 'Edit Invoices', 'Delete Invoices', 'Edit Inventory', 'Adjust Inventory Quantities', 'Edit Warehouse', 'Edit CRM', 'View Costs', 'View Financial Reports', 'CRM View All', 'CRM View Contacts', 'Delete Tickets', 'Assign Tickets', 'Merge Customers', 'Manage Categories', 'Manage Inventory Master', 'Export Data', 'Post Reminders', 'HR Report'].map(mod => (
                 <tr key={mod} className="border-b border-slate-50">
                   <td className="px-2 py-1.5 text-[10px] font-semibold text-amber-900">{mod}</td>
                   {nonSuperUsers.map(u => {
