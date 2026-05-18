@@ -79,6 +79,18 @@ export default function InventoryMasterAdmin(props) {
     return function () { cancelled = true; };
   }, [canManage]);
 
+  // v55.83-A.6.27.24 — Esc key closes the modal. Guaranteed escape hatch
+  // matching Build 2 Product Master modal behavior.
+  useEffect(function () {
+    function onKey(e) {
+      if ((e.key === 'Escape' || e.key === 'Esc') && editing) {
+        try { cancelEdit(); } catch (_) {}
+      }
+    }
+    window.addEventListener('keydown', onKey);
+    return function () { window.removeEventListener('keydown', onKey); };
+  }, [editing]);
+
   async function reload() {
     try {
       var [optRes, ruleRes] = await Promise.all([
@@ -139,24 +151,59 @@ export default function InventoryMasterAdmin(props) {
   }
 
   async function save() {
+    // v55.83-A.6.27.25 (Max May 18 2026) — Max reported "Add button does
+    // NOTHING" after Build 1 deployment. Multiple possible causes —
+    // unknown without seeing browser console. This rewrite adds:
+    //   1. console.log on EVERY step so any failure is debuggable
+    //   2. alert() fallback for validation errors (visible regardless
+    //      of toast rendering quirks)
+    //   3. alert() on caught dbInsert errors so user definitely sees
+    //      what failed (most likely: SQL migration was not run yet)
+    console.log('[inv-master] save() called. editing =', editing, ' activeLevel =', activeLevel, ' form =', form);
+
     // Client-side validation
     var code = (form.code || '').trim().toUpperCase();
     var labelEn = (form.label_en || '').trim();
     var labelAr = (form.label_ar || '').trim();
-    if (!validCode(code)) { toast.error('Code must be 1-4 uppercase letters/digits (A-Z, 0-9)'); return; }
-    if (!labelEn) { toast.error('English label required'); return; }
-    if (!labelAr) { toast.error('Arabic label required'); return; }
+    console.log('[inv-master] validation inputs: code=', JSON.stringify(code), ' labelEn=', JSON.stringify(labelEn), ' labelAr=', JSON.stringify(labelAr));
+
+    if (!validCode(code)) {
+      console.warn('[inv-master] validation FAILED: code must be 1-4 uppercase letters/digits');
+      toast.error('Code must be 1-4 uppercase letters/digits (A-Z, 0-9)');
+      alert('Code must be 1-4 uppercase letters/digits (A-Z, 0-9). You entered: "' + code + '"');
+      return;
+    }
+    if (!labelEn) {
+      console.warn('[inv-master] validation FAILED: English label empty');
+      toast.error('English label required');
+      alert('English Label is required.');
+      return;
+    }
+    if (!labelAr) {
+      console.warn('[inv-master] validation FAILED: Arabic label empty');
+      toast.error('Arabic label required');
+      alert('Arabic Label is required.');
+      return;
+    }
+
     // Check duplicate code at same level among ACTIVE rows (excluding current)
     var duplicate = options.find(function (o) {
       return o.level === activeLevel && o.code === code && o.active && o.id !== editing;
     });
-    if (duplicate) { toast.error('Code "' + code + '" already in use at this level'); return; }
+    if (duplicate) {
+      console.warn('[inv-master] validation FAILED: duplicate code', code, 'at level', activeLevel);
+      toast.error('Code "' + code + '" already in use at this level');
+      alert('Code "' + code + '" is already in use at this level. Pick a different code.');
+      return;
+    }
 
+    console.log('[inv-master] validation PASSED. Saving to Supabase...');
     setBusy(true);
     try {
       var savedId;
       if (editing === 'new') {
         var nextOrder = Math.max.apply(null, [0].concat(options.filter(function (o) { return o.level === activeLevel; }).map(function (o) { return o.display_order || 0; }))) + 1;
+        console.log('[inv-master] dbInsert called. nextOrder =', nextOrder);
         var inserted = await dbInsert('inventory_lists', {
           level: activeLevel,
           code: code,
@@ -168,8 +215,10 @@ export default function InventoryMasterAdmin(props) {
           updated_by: userProfile && userProfile.id,
         }, userProfile && userProfile.id);
         savedId = inserted.id;
+        console.log('[inv-master] dbInsert SUCCESS. savedId =', savedId);
         toast.success('Added: ' + labelEn);
       } else {
+        console.log('[inv-master] dbUpdate called. id =', editing);
         await dbUpdate('inventory_lists', editing, {
           code: code,
           label_en: labelEn,
@@ -177,27 +226,43 @@ export default function InventoryMasterAdmin(props) {
           updated_by: userProfile && userProfile.id,
         }, userProfile && userProfile.id);
         savedId = editing;
+        console.log('[inv-master] dbUpdate SUCCESS');
         toast.success('Saved: ' + labelEn);
       }
 
       // Sync parent rules — only if this level uses them
       if (hasParentLevel || activeLevel === 6) {
+        console.log('[inv-master] syncing parent rules for level', activeLevel, ' parentIds =', form.parentIds);
         // Delete existing rules for this child
-        await supabase.from('inventory_list_rules').delete().eq('child_list_id', savedId);
+        var delRes = await supabase.from('inventory_list_rules').delete().eq('child_list_id', savedId);
+        if (delRes.error) console.error('[inv-master] rule delete error:', delRes.error);
         // Insert new rules
         if (form.parentIds && form.parentIds.length > 0) {
           var ruleRows = form.parentIds.map(function (pid) {
             return { child_list_id: savedId, parent_list_id: pid };
           });
-          await supabase.from('inventory_list_rules').insert(ruleRows);
+          var insRes = await supabase.from('inventory_list_rules').insert(ruleRows);
+          if (insRes.error) console.error('[inv-master] rule insert error:', insRes.error);
         }
       }
 
+      console.log('[inv-master] reload + close modal');
       await reload();
       cancelEdit();
     } catch (err) {
-      console.error('[inv-master] save failed:', err);
-      toast.error('Save failed: ' + ((err && err.message) || String(err)));
+      console.error('[inv-master] save FAILED with caught error:', err);
+      var msg = (err && err.message) || String(err);
+      toast.error('Save failed: ' + msg);
+      // Visible fallback for users who can't see toasts. Most likely
+      // cause: SQL migration was not run yet, so inventory_lists table
+      // does not exist in Supabase. Tell user clearly.
+      var hint = '';
+      if (msg.indexOf('inventory_lists') >= 0 && (msg.toLowerCase().indexOf('does not exist') >= 0 || msg.toLowerCase().indexOf('relation') >= 0)) {
+        hint = '\n\nLikely cause: the SQL migration was not run yet in Supabase. Run the v55.83-A.6.27.22 migration first, then try again.';
+      } else if (msg.toLowerCase().indexOf('row-level security') >= 0 || msg.toLowerCase().indexOf('rls') >= 0) {
+        hint = '\n\nLikely cause: Row Level Security policies on inventory_lists are blocking the insert. Check the policy block at the bottom of the SQL migration.';
+      }
+      alert('Save failed: ' + msg + hint);
     } finally {
       setBusy(false);
     }
@@ -304,90 +369,143 @@ export default function InventoryMasterAdmin(props) {
             </button>
           </div>
 
-          {/* Inline add/edit form */}
+          {/* Inline add/edit form
+              v55.83-A.6.27.24 (Max May 18 2026) — Max reported "no save
+              button" when adding a Category option. Root cause: form was
+              inline above the table; with 3 input fields + 4 family
+              checkboxes the form grew tall enough to push the save
+              button below the viewport. User didn't see it without
+              scrolling.
+              Fix: convert to centered modal with sticky footer so save
+              + cancel are ALWAYS visible regardless of form height.
+              Matches the Build 2 Product Master modal pattern. */}
           {editing && (
-            <div className="bg-indigo-50 border-2 border-indigo-300 rounded-xl mb-3" style={{ padding: 16 }}>
-              <div className="text-sm font-extrabold text-indigo-900 mb-2">
-                {editing === 'new' ? '+ New option in ' : '✏️ Edit option in '}{levelMeta.en}
-              </div>
-              <div className="grid grid-cols-3 gap-3">
-                <label className="text-[11px] font-extrabold text-slate-700">Code *
-                  <input
-                    type="text"
-                    value={form.code}
-                    onChange={function (e) { setForm(Object.assign({}, form, { code: e.target.value.toUpperCase() })); }}
-                    maxLength={4}
-                    placeholder="A-Z, 0-9 (max 4)"
-                    className="w-full mt-0.5 px-2 py-1.5 border border-slate-300 rounded text-sm font-mono uppercase bg-white"
-                  />
-                </label>
-                <label className="text-[11px] font-extrabold text-slate-700">English Label *
-                  <input
-                    type="text"
-                    value={form.label_en}
-                    onChange={function (e) { setForm(Object.assign({}, form, { label_en: e.target.value })); }}
-                    placeholder="e.g. Premium"
-                    className="w-full mt-0.5 px-2 py-1.5 border border-slate-300 rounded text-sm bg-white"
-                  />
-                </label>
-                <label className="text-[11px] font-extrabold text-slate-700">Arabic Label *
-                  <input
-                    type="text"
-                    value={form.label_ar}
-                    onChange={function (e) { setForm(Object.assign({}, form, { label_ar: e.target.value })); }}
-                    placeholder="مثال: بريميوم"
-                    className="w-full mt-0.5 px-2 py-1.5 border border-slate-300 rounded text-sm bg-white"
-                    style={{ direction: 'rtl' }}
-                  />
-                </label>
-              </div>
-
-              {(hasParentLevel || activeLevel === 6) && (
-                <div className="mt-3">
-                  <div className="text-[11px] font-extrabold text-slate-700 mb-1">
-                    Valid under which Product Family? <span className="font-normal text-slate-500">(leave all unchecked → applies to ALL families)</span>
+            <div
+              className="fixed inset-0 z-[200] bg-black/70 backdrop-blur-sm overflow-y-auto"
+              onClick={cancelEdit}
+              style={{ padding: 16 }}
+            >
+              <div
+                className="bg-white rounded-2xl shadow-2xl mx-auto"
+                onClick={function (e) { e.stopPropagation(); }}
+                style={{ maxWidth: 720 }}
+              >
+                {/* Modal header */}
+                <div
+                  className="rounded-t-2xl flex justify-between items-center gap-2"
+                  style={{ background: '#3730a3', padding: '14px 20px' }}
+                >
+                  <div>
+                    <div className="text-lg font-extrabold" style={{ color: '#ffffff' }}>
+                      {editing === 'new' ? '+ New option in ' : '✏️ Edit option in '}{levelMeta.en}
+                    </div>
+                    <div className="text-xs font-semibold" style={{ color: '#e0e7ff' }} >
+                      L{activeLevel} · {levelMeta.en} / <span style={{ direction: 'rtl' }}>{levelMeta.ar}</span>
+                    </div>
                   </div>
-                  <div className="flex flex-wrap gap-2">
-                    {parentOptions.map(function (p) {
-                      var checked = form.parentIds.indexOf(p.id) >= 0;
-                      return (
-                        <label key={p.id} className={'flex items-center gap-1.5 px-2 py-1 rounded border text-xs font-semibold cursor-pointer ' + (checked ? 'bg-emerald-100 border-emerald-400 text-emerald-900' : 'bg-white border-slate-300 text-slate-700')}>
-                          <input
-                            type="checkbox"
-                            checked={checked}
-                            onChange={function (e) {
-                              var next = form.parentIds.slice();
-                              if (e.target.checked) {
-                                if (next.indexOf(p.id) < 0) next.push(p.id);
-                              } else {
-                                next = next.filter(function (x) { return x !== p.id; });
-                              }
-                              setForm(Object.assign({}, form, { parentIds: next }));
-                            }}
-                          />
-                          <span>{p.code} · {p.label_en}</span>
-                        </label>
-                      );
-                    })}
-                  </div>
+                  <button
+                    onClick={cancelEdit}
+                    aria-label="Close"
+                    style={{ background: '#ffffff', color: '#1e293b', width: 36, height: 36, fontSize: 20, lineHeight: 1, border: '2px solid #cbd5e1', boxShadow: '0 2px 8px rgba(0,0,0,0.2)', borderRadius: '50%', fontWeight: 800 }}
+                  >
+                    ✕
+                  </button>
                 </div>
-              )}
 
-              <div className="flex gap-2 mt-3">
-                <button
-                  onClick={save}
-                  disabled={busy}
-                  className="px-4 py-2 bg-indigo-600 hover:bg-indigo-700 disabled:opacity-50 text-white text-sm font-extrabold rounded-lg"
+                {/* Modal body */}
+                <div style={{ padding: 20, maxHeight: 'calc(100vh - 220px)', overflowY: 'auto' }}>
+                  <div className="grid grid-cols-3 gap-3">
+                    <label className="text-[11px] font-extrabold text-slate-700">Code *
+                      <input
+                        type="text"
+                        value={form.code}
+                        onChange={function (e) { setForm(Object.assign({}, form, { code: e.target.value.toUpperCase() })); }}
+                        maxLength={4}
+                        placeholder="A-Z, 0-9 (max 4)"
+                        className="w-full mt-0.5 px-2 py-1.5 border border-slate-300 rounded text-sm font-mono uppercase bg-white"
+                      />
+                    </label>
+                    <label className="text-[11px] font-extrabold text-slate-700">English Label *
+                      <input
+                        type="text"
+                        value={form.label_en}
+                        onChange={function (e) { setForm(Object.assign({}, form, { label_en: e.target.value })); }}
+                        placeholder="e.g. Premium"
+                        className="w-full mt-0.5 px-2 py-1.5 border border-slate-300 rounded text-sm bg-white"
+                      />
+                    </label>
+                    <label className="text-[11px] font-extrabold text-slate-700">Arabic Label *
+                      <input
+                        type="text"
+                        value={form.label_ar}
+                        onChange={function (e) { setForm(Object.assign({}, form, { label_ar: e.target.value })); }}
+                        placeholder="مثال: بريميوم"
+                        className="w-full mt-0.5 px-2 py-1.5 border border-slate-300 rounded text-sm bg-white"
+                        style={{ direction: 'rtl' }}
+                      />
+                    </label>
+                  </div>
+
+                  {(hasParentLevel || activeLevel === 6) && (
+                    <div className="mt-4">
+                      <div className="text-[11px] font-extrabold text-slate-700 mb-1">
+                        Valid under which Product Family? <span className="font-normal text-slate-500">(leave all unchecked → applies to ALL families)</span>
+                      </div>
+                      <div className="flex flex-wrap gap-2">
+                        {parentOptions.map(function (p) {
+                          var checked = form.parentIds.indexOf(p.id) >= 0;
+                          return (
+                            <label key={p.id} className={'flex items-center gap-1.5 px-2 py-1 rounded border text-xs font-semibold cursor-pointer ' + (checked ? 'bg-emerald-100 border-emerald-400 text-emerald-900' : 'bg-white border-slate-300 text-slate-700')}>
+                              <input
+                                type="checkbox"
+                                checked={checked}
+                                onChange={function (e) {
+                                  var next = form.parentIds.slice();
+                                  if (e.target.checked) {
+                                    if (next.indexOf(p.id) < 0) next.push(p.id);
+                                  } else {
+                                    next = next.filter(function (x) { return x !== p.id; });
+                                  }
+                                  setForm(Object.assign({}, form, { parentIds: next }));
+                                }}
+                              />
+                              <span>{p.code} · {p.label_en}</span>
+                            </label>
+                          );
+                        })}
+                      </div>
+                    </div>
+                  )}
+                </div>
+
+                {/* Modal footer — sticky, always visible */}
+                <div
+                  className="flex justify-end gap-2 border-t border-slate-200 bg-slate-50 rounded-b-2xl"
+                  style={{ padding: '12px 20px' }}
                 >
-                  {busy ? 'Saving...' : (editing === 'new' ? '+ Add' : 'Save')}
-                </button>
-                <button
-                  onClick={cancelEdit}
-                  disabled={busy}
-                  className="px-4 py-2 bg-slate-300 hover:bg-slate-400 text-slate-900 text-sm font-bold rounded-lg"
-                >
-                  Cancel
-                </button>
+                  <button
+                    onClick={cancelEdit}
+                    disabled={busy}
+                    className="px-4 py-2 bg-slate-300 hover:bg-slate-400 disabled:opacity-50 text-slate-900 text-sm font-bold rounded-lg"
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    onClick={function () {
+                      // v55.83-A.6.27.25 — confirm click is firing.
+                      // If user reports "nothing happens" and this log
+                      // does NOT appear in console, it's a render/event-
+                      // handler problem. If it DOES appear, save() is
+                      // running and we'll see further logs from there.
+                      console.log('[inv-master] Save/Add button CLICKED');
+                      save();
+                    }}
+                    disabled={busy}
+                    className="px-5 py-2 bg-indigo-600 hover:bg-indigo-700 disabled:opacity-50 text-white text-sm font-extrabold rounded-lg shadow"
+                  >
+                    {busy ? 'Saving...' : (editing === 'new' ? '+ Add Option' : 'Save Changes')}
+                  </button>
+                </div>
               </div>
             </div>
           )}

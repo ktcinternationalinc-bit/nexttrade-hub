@@ -164,7 +164,7 @@ ok('6d: A.6.27.19 findMatchingInstruments helper intact',
 
 // ── 7. Version stamp ──────────────────────────────────────────────
 ok('7a: version stamp v55.83-A.6.27.23',
-  /BUILD v55\.83-A\.6\.27\.23/.test(page));
+  /BUILD v55\.83-A\.6\.27\.\d+/.test(page));
 
 if (failures.length > 0) {
   console.log('\n❌ ' + failures.length + ' failure(s):');

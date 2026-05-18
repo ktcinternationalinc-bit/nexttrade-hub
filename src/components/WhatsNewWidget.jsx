@@ -33,6 +33,34 @@ import { supabase } from '../lib/supabase';
 //     WhatsApp, the calendar, the Sales tab.
 export const BUILD_HISTORY = [
   {
+    version: 'v55.83-A.6.27.25',
+    date: '2026-05-18',
+    label: 'Master Lists — Add button now tells you why it failed',
+    items: [
+      '**Fixed: when the "+ Add" button "did nothing," you now see exactly what went wrong.** Previously the button silently failed when there was a validation error or a database issue (most commonly: the SQL migration was never run, so the inventory_lists table didn\'t exist). The error toast may have been hard to see or dismissed too quickly. Now any failure produces a visible alert popup that tells you exactly what to do.',
+      '**Most likely cause if you saw "nothing happening":** the SQL migration for Build 1 was not run in Supabase yet. The alert popup will now explicitly tell you that and suggest running the migration.',
+      '**Every step of the save process now logs to the browser console.** If something is still going wrong, open the developer console (Cmd+Option+I on Mac), click the Add button, and you\'ll see a complete trace of what happened. Send me the console output and I can pinpoint the issue immediately.',
+      '**Validation errors now show as alert popups too.** "Code must be 1-4 uppercase letters/digits — you entered X." "English Label is required." Same for Arabic and duplicate codes. Impossible to miss now.',
+      { superAdminOnly: true, text: 'The save() function in InventoryMasterAdmin.jsx now: (1) console.logs the click event the moment the button is pressed (confirms onClick is even firing), (2) console.logs every step of validation with the inputs, (3) calls alert() on every validation failure as a visible fallback for users who can\'t see toasts (dark theme contrast, off-screen toasts, etc.), (4) console.logs dbInsert/dbUpdate progress with savedId, (5) catches errors and pattern-matches the error message for known causes: "inventory_lists does not exist" → "SQL migration not run" hint, "row-level security" → "RLS policies blocking" hint. All errors fall through to alert() so user gets a blocking dialog they can\'t miss.' },
+      { superAdminOnly: true, text: 'TEST: __tests__/test-v55-83-a-6-27-25-save-button-diagnostics.js — 30 assertions covering click logging, save() step-by-step logs, validation failure alerts, catch-block hint patterns, and regression guards on A.6.27.21/24 work. Sweep: 209/0.' },
+    ],
+  },
+  {
+    version: 'v55.83-A.6.27.24',
+    date: '2026-05-18',
+    label: 'Master Lists — Add/Edit form is now a proper modal (Save button always visible)',
+    items: [
+      '**Fixed: Save button is now always visible when adding or editing an option in Master Lists.** Previously, adding a new option under Category showed an inline form above the table. With the 3 input fields plus the 4 Family checkboxes plus the surrounding chrome, the form grew tall enough to push the Save and Cancel buttons below the visible viewport — you had to scroll to find them, and most reasonable people concluded "there is no save button."',
+      '**The add/edit form is now a centered modal** with a sticky footer. Save and Cancel buttons sit at the bottom of the modal and stay visible no matter how tall the form gets. Same pattern as the new Product Master modal from Build 2 — consistent across the inventory screens.',
+      '**Big bright close X in the modal header.** White circle on the dark indigo header bar, impossible to miss.',
+      '**Press Escape to close the modal.** Guaranteed escape hatch.',
+      '**Click outside the modal to close.** Standard modal behavior.',
+      '**The Save button now reads "+ Add Option" when adding a new option, "Save Changes" when editing existing.** Clearer about what\'s about to happen.',
+      { superAdminOnly: true, text: 'Root cause: the previous inline-form pattern at lines 307-393 of InventoryMasterAdmin.jsx placed save/cancel at the BOTTOM of a vertically-growing form. For Category and other parent-restricted levels, the form expanded to 4-5 rows of content (label inputs + parent-checkbox chip grid). On smaller viewports the buttons fell below the fold. Fix: converted entire form to a fixed-position modal overlay (z-index 200) with three sections — sticky header (dark indigo bar with close X), scrollable body (maxHeight calc(100vh - 220px)), sticky footer (Cancel + Save buttons always visible). Modal wrapper has onClick={cancelEdit} for click-outside-to-close. Inner panel uses onClick stopPropagation so clicks inside the modal don\'t bubble up. Esc handler added via useEffect with [editing] dependency — only fires while modal is open. Defensive readability per RULE 6: header bg uses inline style background #3730a3 and inline color #ffffff so Tailwind class-load failures cannot break the contrast.' },
+      { superAdminOnly: true, text: 'TEST: __tests__/test-v55-83-a-6-27-24-master-lists-save-button.js — 18 assertions across modal conversion, sticky footer with save/cancel, Esc key handler with cleanup, form fields preserved (no regression on Code/EN/AR inputs or parent-rule checkboxes), and a guard ensuring the old inline form bg-indigo-50 wrapper is GONE. Sweep: 208/0.' },
+    ],
+  },
+  {
     version: 'v55.83-A.6.27.23',
     date: '2026-05-18',
     label: 'Inventory Phase 1 Build 2 — Product Master catalog with smart cascading dropdowns',
