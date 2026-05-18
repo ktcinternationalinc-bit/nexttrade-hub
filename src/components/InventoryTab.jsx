@@ -17,6 +17,7 @@ import InventoryPnL from './InventoryPnL';
 import AdjustmentsManager from './AdjustmentsManager';
 import InventoryReports from './InventoryReports';
 import InventoryMasterAdmin from './InventoryMasterAdmin';
+import InventoryProductMaster from './InventoryProductMaster';
 import {
   canViewInventory,
   canSeeInventoryCosts,
@@ -35,6 +36,8 @@ var SUBTABS = [
   { id: 'reports', label: '📈 Reports', stage: 'F', desc: 'Profitability, aging, slow-moving' },
   // v55.83-A.6.27.22 — Phase 1 Build 1 of the classification system
   { id: 'masterlists', label: '🗂️ Master Lists', stage: 'Classification', desc: 'Manage the 8 classification levels (Product Family, Category, Grade, etc.) — super-admin only' },
+  // v55.83-A.6.27.23 — Phase 1 Build 2: Product Master catalog
+  { id: 'productmaster', label: '🏷️ Product Master', stage: 'Classification', desc: 'Define each product with classification + quick code + defaults' },
 ];
 
 export default function InventoryTab({ userProfile, modulePerms, toast, isSuperAdmin }) {
@@ -120,6 +123,12 @@ export default function InventoryTab({ userProfile, modulePerms, toast, isSuperA
           if (st.id === 'masterlists' && !(isSuperAdmin || (modulePerms && modulePerms['Manage Inventory Master'] === true))) {
             return null;
           }
+          // v55.83-A.6.27.23 — Product Master tab visible to anyone with
+          // Inventory access (read-only) or super_admin / Edit Product
+          // Master (full CRUD). Component itself handles edit-gating.
+          if (st.id === 'productmaster' && !(isSuperAdmin || (modulePerms && (modulePerms['Inventory'] === true || modulePerms['Edit Product Master'] === true)))) {
+            return null;
+          }
           var isActive = subtab === st.id;
           return (
             <button key={st.id}
@@ -171,6 +180,10 @@ export default function InventoryTab({ userProfile, modulePerms, toast, isSuperA
       {/* v55.83-A.6.27.22 — Phase 1 Build 1: Master Lists admin */}
       {subtab === 'masterlists' && (
         <InventoryMasterAdmin userProfile={userProfile} modulePerms={modulePerms} isSuperAdmin={isSuperAdmin} toast={toast} />
+      )}
+      {/* v55.83-A.6.27.23 — Phase 1 Build 2: Product Master catalog */}
+      {subtab === 'productmaster' && (
+        <InventoryProductMaster userProfile={userProfile} modulePerms={modulePerms} isSuperAdmin={isSuperAdmin} toast={toast} />
       )}
 
       {/* Stage guidance */}

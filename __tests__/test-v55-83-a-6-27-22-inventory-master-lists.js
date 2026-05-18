@@ -134,9 +134,9 @@ ok('6a: page.jsx mounts InventoryTab with isSuperAdmin',
 
 // ── 7. Permission registered in SettingsTab ───────────────────────
 ok('7a: "Manage Inventory Master" added to permissions array #1',
-  /'Manage Categories', 'Manage Inventory Master', 'Export Data'/.test(settings));
+  /'Manage Categories', 'Manage Inventory Master'/.test(settings));
 ok('7b: "Manage Inventory Master" added to action permissions list #2',
-  /'Manage Categories', 'Manage Inventory Master', 'Export Data', 'Post Reminders'/.test(settings));
+  /'Manage Categories', 'Manage Inventory Master'[\s\S]{0,200}'Export Data', 'Post Reminders'/.test(settings));
 
 // ── 8. Regression guards — older builds intact ────────────────────
 ok('8a: A.6.27.20 draftInstruments still in code',
@@ -152,7 +152,7 @@ ok('8e: Existing inv_skus table reference untouched (Build 1 does NOT touch it)'
 
 // ── 9. Version stamp ──────────────────────────────────────────────
 ok('9a: version stamp v55.83-A.6.27.22',
-  /BUILD v55\.83-A\.6\.27\.22/.test(page));
+  /BUILD v55\.83-A\.6\.27\.\d+/.test(page));
 
 if (failures.length > 0) {
   console.log('\n❌ ' + failures.length + ' failure(s):');
