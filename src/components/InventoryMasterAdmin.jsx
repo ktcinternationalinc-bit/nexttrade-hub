@@ -19,15 +19,22 @@
 import { useState, useEffect, useMemo } from 'react';
 import { supabase, dbInsert, dbUpdate } from '../lib/supabase';
 
+// v55.83-A.6.27.26 (Max May 18 2026) — Max wants EVERY level (2-8) to
+// support parent-rule restriction back to Level 1 (Family). Previously
+// only Levels 2 and 6 had the parent-rule editor exposed; Max says he
+// should be able to restrict Luxurious to Leather only, restrict Foam
+// Perforated to Leather + Textile, restrict Honeycomb to PVC Pool, etc.
+// Universal application per his earlier direction. All rules cascade
+// back to Level 1 — the top of the hierarchy.
 var LEVELS = [
   { num: 1, en: 'Product Family',  ar: 'عائلة المنتج',     hasParent: false, parentLevel: null },
   { num: 2, en: 'Category',         ar: 'التصنيف',          hasParent: true,  parentLevel: 1 },
-  { num: 3, en: 'Grade',            ar: 'الدرجة',           hasParent: false, parentLevel: null },
-  { num: 4, en: 'Construction',     ar: 'التركيب',          hasParent: false, parentLevel: null },
-  { num: 5, en: 'Backing',          ar: 'الظهر',            hasParent: false, parentLevel: null },
-  { num: 6, en: 'Color',            ar: 'اللون',            hasParent: false, parentLevel: 1 }, // optional parent rules per Max — pool colors restricted
-  { num: 7, en: 'Pattern',          ar: 'النمط',            hasParent: false, parentLevel: null },
-  { num: 8, en: 'Spec Class',       ar: 'فئة المواصفات',    hasParent: false, parentLevel: null },
+  { num: 3, en: 'Grade',            ar: 'الدرجة',           hasParent: true,  parentLevel: 1 },
+  { num: 4, en: 'Construction',     ar: 'التركيب',          hasParent: true,  parentLevel: 1 },
+  { num: 5, en: 'Backing',          ar: 'الظهر',            hasParent: true,  parentLevel: 1 },
+  { num: 6, en: 'Color',            ar: 'اللون',            hasParent: true,  parentLevel: 1 },
+  { num: 7, en: 'Pattern',          ar: 'النمط',            hasParent: true,  parentLevel: 1 },
+  { num: 8, en: 'Spec Class',       ar: 'فئة المواصفات',    hasParent: true,  parentLevel: 1 },
 ];
 
 // Code validation — uppercase alphanumeric, 1-4 chars
@@ -230,8 +237,10 @@ export default function InventoryMasterAdmin(props) {
         toast.success('Saved: ' + labelEn);
       }
 
-      // Sync parent rules — only if this level uses them
-      if (hasParentLevel || activeLevel === 6) {
+      // Sync parent rules — every level except Level 1 supports them.
+      // v55.83-A.6.27.26 — was previously gated to L2 + L6 only;
+      // unblocked for L3-L5 + L7-L8 per Max's request.
+      if (hasParentLevel) {
         console.log('[inv-master] syncing parent rules for level', activeLevel, ' parentIds =', form.parentIds);
         // Delete existing rules for this child
         var delRes = await supabase.from('inventory_list_rules').delete().eq('child_list_id', savedId);
@@ -446,7 +455,7 @@ export default function InventoryMasterAdmin(props) {
                     </label>
                   </div>
 
-                  {(hasParentLevel || activeLevel === 6) && (
+                  {hasParentLevel && (
                     <div className="mt-4">
                       <div className="text-[11px] font-extrabold text-slate-700 mb-1">
                         Valid under which Product Family? <span className="font-normal text-slate-500">(leave all unchecked → applies to ALL families)</span>

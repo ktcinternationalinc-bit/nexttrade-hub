@@ -108,6 +108,7 @@ ok('4i: soft delete only — toggleActive flips active flag, never deletes row',
 ok('4j: parent rules synced via delete-then-insert of inventory_list_rules',
   /from\('inventory_list_rules'\)\.delete\(\)\.eq\('child_list_id', savedId\)[\s\S]{0,500}\.insert\(ruleRows\)/.test(admin));
 ok('4k: parent-rule editor only shown when level has parent',
+  /\{hasParentLevel && \(/.test(admin) ||
   /\(hasParentLevel \|\| activeLevel === 6\)/.test(admin));
 ok('4l: confirms before deactivate / reactivate',
   /if \(!confirm\('Are you sure you want to ' \+ action/.test(admin));

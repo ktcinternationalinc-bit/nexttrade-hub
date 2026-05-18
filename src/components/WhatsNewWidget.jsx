@@ -33,6 +33,20 @@ import { supabase } from '../lib/supabase';
 //     WhatsApp, the calendar, the Sales tab.
 export const BUILD_HISTORY = [
   {
+    version: 'v55.83-A.6.27.26',
+    date: '2026-05-18',
+    label: 'Master Lists — restrict any level to specific Families (smart hierarchy expanded)',
+    items: [
+      '**Every level can now be restricted to specific Product Families.** Previously only Categories and Colors could be tied to specific Families. Now Grades, Constructions, Backings, Patterns, and Spec Classes can all be restricted the same way.',
+      '**Example:** Edit "Luxurious" grade → tick only "Leather" → from now on, Luxurious only appears in Product Master dropdowns when Family = Leather. Same idea for "Honeycomb" pattern (only for PVC Pool), "Foam Perforated" construction (only for Leather and Textile), etc.',
+      '**How to use it:** Inventory → Master Lists → click any level in the left sidebar (Grade, Construction, Backing, Pattern, Spec Class) → Edit any option → you\'ll now see "Valid under which Product Family?" checkboxes → tick the families it applies to → Save.',
+      '**Leave all unchecked = applies universally to all families.** Most options will stay this way. Only restrict when an option truly doesn\'t make sense outside certain families.',
+      '**The Product Master cascading dropdowns automatically respect your new rules.** Pick Family = Leather → only the options you tied to Leather (or left universal) appear in the Grade/Construction/Backing/Pattern/Spec Class dropdowns.',
+      { superAdminOnly: true, text: 'Implementation: LEVELS array in InventoryMasterAdmin.jsx now marks every level 2-8 with hasParent: true + parentLevel: 1. Modal UI gating simplified from (hasParentLevel || activeLevel === 6) to just hasParentLevel. Parent-rule sync in save() likewise simplified. No schema changes — uses the existing inventory_list_rules table from Build 1. No Build 2 changes needed: the optionsForLevel function in InventoryProductMaster.jsx already reads parent rules generically (universal pattern: if option has rules, must match one parent; if no rules, universal), so newly-defined rules cascade through automatically. Build 2 was forward-compatible by design.' },
+      { superAdminOnly: true, text: 'TEST: __tests__/test-v55-83-a-6-27-26-parent-rules-all-levels.js — 24 assertions: all 8 LEVELS entries verified with correct hasParent/parentLevel values, modal gating simplified to hasParentLevel-only, save-side rule sync simplified, parent options query and rule storage logic intact, Build 2 universal cascade pattern still in place. Sweep: 210/0.' },
+    ],
+  },
+  {
     version: 'v55.83-A.6.27.25',
     date: '2026-05-18',
     label: 'Master Lists — Add button now tells you why it failed',

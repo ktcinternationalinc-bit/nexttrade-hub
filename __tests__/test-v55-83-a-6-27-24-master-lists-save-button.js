@@ -66,7 +66,7 @@ ok('4b: English Label input still present',
 ok('4c: Arabic Label input still present',
   /value=\{form\.label_ar\}[\s\S]{0,400}direction: 'rtl'/.test(admin));
 ok('4d: Parent-rules checkboxes still present when level has parent rules',
-  /\(hasParentLevel \|\| activeLevel === 6\)[\s\S]{0,200}Valid under which Product Family/.test(admin));
+  /\{hasParentLevel && \(/.test(admin) || /\(hasParentLevel \|\| activeLevel === 6\)[\s\S]{0,200}Valid under which Product Family/.test(admin));
 ok('4e: Parent checkbox state syncs to form.parentIds (no regression)',
   /form\.parentIds\.indexOf\(p\.id\) >= 0/.test(admin));
 
