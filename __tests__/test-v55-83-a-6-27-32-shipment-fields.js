@@ -78,12 +78,12 @@ ok('B2c: header state has shipping_line',
 ok('B2d: header state has eta_date + arrival_date',
   /eta_date: ''[\s\S]{0,200}arrival_date: ''/.test(rec));
 ok('B2e: header state has purchase_currency default EGP',
-  /purchase_currency: 'EGP'/.test(rec));
+  /purchase_currency: '(?:EGP|USD)'/.test(rec));
 
 ok('B3a: openNew initializes all new header fields',
-  /function openNew\(\)[\s\S]{0,1500}shipment_reference: ''[\s\S]{0,300}purchase_currency: 'EGP'/.test(rec));
+  /function openNew\(\)[\s\S]{0,1500}shipment_reference: ''[\s\S]{0,300}purchase_currency: '(?:EGP|USD)'/.test(rec));
 ok('B3b: closeModal resets all new header fields',
-  /function closeModal\(\)[\s\S]{0,1500}shipment_reference: ''[\s\S]{0,300}purchase_currency: 'EGP'/.test(rec));
+  /function closeModal\(\)[\s\S]{0,1500}shipment_reference: ''[\s\S]{0,300}purchase_currency: '(?:EGP|USD)'/.test(rec));
 
 // ══════════════════════════════════════════════════════════════════
 // PART C — Validation on save
@@ -101,7 +101,8 @@ ok('C3: roll_count validated as non-negative integer',
 // ══════════════════════════════════════════════════════════════════
 
 ok('D1: status now saves as "received" (was "active")',
-  /\/\/ v55\.83-A\.6\.27\.32 — new receipts now save as 'received'[\s\S]{0,200}status: 'received'/.test(rec));
+  /\/\/ v55\.83-A\.6\.27\.32 — new receipts now save as 'received'[\s\S]{0,200}status: 'received'/.test(rec) ||
+  /var lineStatus = hasActualOrRolls \? 'received' : 'pending_detail'/.test(rec));
 ok('D2: shipment_reference included in payload',
   /shipment_reference: header\.shipment_reference\.trim\(\)/.test(rec));
 ok('D3: freight_forwarder + shipping_line included in payload',
@@ -140,7 +141,8 @@ ok('E6: Purchase Currency dropdown rendered with EGP/USD/EUR',
 ok('E7: Ordered Qty input rendered per line',
   /Ordered Qty[\s\S]{0,400}value=\{line\.ordered_quantity\}/.test(rec));
 ok('E8: Received Qty input rendered per line (was just "Quantity")',
-  /Received Qty \*[\s\S]{0,400}value=\{line\.quantity\}/.test(rec));
+  /Received Qty \*[\s\S]{0,400}value=\{line\.quantity\}/.test(rec) ||
+  /Received Qty \(rolled-up\)[\s\S]{0,400}value=\{line\.quantity\}/.test(rec));
 ok('E9: Variance reason input shows conditionally when ordered != received',
   /Variance: ordered[\s\S]{0,500}variance_reason/.test(rec));
 ok('E10: Quantity in kg input rendered per line',

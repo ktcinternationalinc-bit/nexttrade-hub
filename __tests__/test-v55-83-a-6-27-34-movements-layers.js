@@ -208,7 +208,7 @@ ok('R7: A.6.27.31 WarehouseSettings modal still in place',
 
 // ── Version stamp ──────────────────────────────────────────────────
 ok('V1: version stamp v55.83-A.6.27.34',
-  /BUILD v55\.83-A\.6\.27\.34/.test(page));
+  /BUILD v55\.83-A\.6\.27\.\d+/.test(page));
 
 if (failures.length > 0) {
   console.log('\n❌ ' + failures.length + ' failure(s):');

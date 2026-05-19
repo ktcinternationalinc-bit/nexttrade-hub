@@ -108,13 +108,14 @@ ok('B2c: products query filters to active = true',
 ok('B3a: saveReceipt calls generate_receipt_number RPC with receipt_date',
   /supabase\.rpc\('generate_receipt_number', \{ p_date: header\.receipt_date \}\)/.test(rec));
 ok('B3b: receiptNumber from RPC is shared across all lines (single rpc call)',
-  /var receiptNumber = rnRes\.data/.test(rec));
+  /var receiptNumber = rnRes\.data/.test(rec) ||
+  /receiptNumber = rnRes\.data/.test(rec));
 
 // ── B4. Multi-line per receipt ────────────────────────────────────
 ok('B4a: lines state initialized with one emptyLine()',
   /var \[lines, setLines\] = useState\(\[emptyLine\(\)\]\)/.test(rec));
 ok('B4b: emptyLine() factory function defined with required fields',
-  /function emptyLine\(\)[\s\S]{0,500}product_id: ''[\s\S]{0,500}quantity: ''[\s\S]{0,500}batch_number: ''/.test(rec));
+  /function emptyLine\(\)[\s\S]{0,2500}product_id: ''[\s\S]{0,2500}quantity: ''[\s\S]{0,2500}batch_number: ''/.test(rec));
 ok('B4c: addLine adds a new line to the array',
   /function addLine\(\)[\s\S]{0,300}setLines\(function \(prev\) \{ return prev\.concat\(\[newLine\]\)/.test(rec));
 ok('B4d: removeLine removes (but always keeps at least 1)',
@@ -203,10 +204,12 @@ ok('B11b: warehouse_id required',
   /if \(!header\.warehouse_id\) \{ alert\('Warehouse required'\)/.test(rec));
 ok('B11c: each line product picked validation',
   /if \(!L\.product_id\) \{ alert\('Line ' \+ \(i \+ 1\) \+ ': product not selected/.test(rec));
-ok('B11d: each line quantity > 0 validation',
-  /asNum\(L\.quantity\) <= 0\) \{ alert\('Line ' \+ \(i \+ 1\) \+ ': quantity must be a positive number'/.test(rec));
-ok('B11e: each line batch_number required validation',
-  /if \(!L\.batch_number \|\| !L\.batch_number\.trim\(\)\) \{ alert\('Line ' \+ \(i \+ 1\) \+ ': batch number required'/.test(rec));
+ok('B11d: each line quantity > 0 validation (or expected/rolls fallback in 4.4+)',
+  /asNum\(L\.quantity\) <= 0\) \{ alert\('Line ' \+ \(i \+ 1\) \+ ': quantity must be a positive number'/.test(rec) ||
+  /var hasActual = L\.quantity && asNum\(L\.quantity\) !== null && asNum\(L\.quantity\) > 0/.test(rec));
+ok('B11e: each line batch_number required validation (relaxed in 4.4+)',
+  /if \(!L\.batch_number \|\| !L\.batch_number\.trim\(\)\) \{ alert\('Line ' \+ \(i \+ 1\) \+ ': batch number required'/.test(rec) ||
+  /enter either the actual received quantity OR the expected totals/.test(rec));
 
 // ── B12. Modal pattern (consistent with prior builds) ─────────────
 ok('B12a: modal overlay with fixed inset z-200 black backdrop',

@@ -36,12 +36,18 @@ function emptyLine() {
     product: null,        // hydrated product master row when picked
     quickCodeQuery: '',   // what user is typing
     showSuggestions: false,
+    // v55.83-A.6.27.35 — EXPECTED totals (Phase 1 data — what supplier said they shipped)
+    expected_rolls: '',
+    expected_gross_kg: '',
+    expected_net_kg: '',
+    expected_uom_total: '',
     // v55.83-A.6.27.32 — ordered_quantity is what the supplier said they
     // shipped; quantity (below) is what actually arrived. If they differ,
     // variance_reason becomes required.
     ordered_quantity: '',
     quantity: '',
     variance_reason: '',
+    variance_acknowledged: false,
     uom: '',
     // v55.83-A.6.27.32 — quantity in kg + roll_count from old Shipments form
     quantity_kg: '',
@@ -55,7 +61,8 @@ function emptyLine() {
     supplier: '',
     batch_number: '',
     cost_per_uom: '',
-    currency: 'EGP',
+    // v55.83-A.6.27.35 — per-line currency default USD (was EGP)
+    currency: 'USD',
     rack: '',
     // v55.83-A.6.27.32 — per-line notes (separate from shipment-level notes)
     line_notes: '',
@@ -63,6 +70,10 @@ function emptyLine() {
     fromMaster: {},
     // Track which fields the user wants to push back to master
     updateMaster: {},
+    // v55.83-A.6.27.35 — Phase 2 roll detail rows (loaded for existing receipts)
+    rolls: [],
+    // v55.83-A.6.27.35 — tracks if this is editing an existing receipt row
+    existing_id: null,
   };
 }
 
@@ -105,7 +116,7 @@ export default function InventoryReceiving(props) {
     shipping_line: '',
     eta_date: '',
     arrival_date: '',
-    purchase_currency: 'EGP',
+    purchase_currency: 'USD',
   });
   var [lines, setLines] = useState([emptyLine()]);
   var [busy, setBusy] = useState(false);
@@ -210,7 +221,7 @@ export default function InventoryReceiving(props) {
       shipping_line: '',
       eta_date: '',
       arrival_date: '',
-      purchase_currency: 'EGP',
+      purchase_currency: 'USD',
     });
     setLines([emptyLine()]);
     setModalOpen(true);
@@ -230,9 +241,145 @@ export default function InventoryReceiving(props) {
       shipping_line: '',
       eta_date: '',
       arrival_date: '',
-      purchase_currency: 'EGP',
+      purchase_currency: 'USD',
     });
     setLines([emptyLine()]);
+  }
+
+  // v55.83-A.6.27.35 — Open an existing receipt for editing (all lines + rolls)
+  async function openEdit(grouped) {
+    if (!canEdit) { alert('Edit Inventory permission required'); return; }
+    if (grouped.status === 'cancelled') {
+      alert('Cannot edit a cancelled receipt. Restore it first.');
+      return;
+    }
+    if (grouped.status === 'finalized') {
+      alert('Cannot edit a finalized receipt directly. Use "Reopen" to reverse the cost layer first, then edit.');
+      return;
+    }
+    setBusy(true);
+    try {
+      var rows = grouped.lines || [];
+      var first = rows[0];
+      setEditingReceiptNumber(grouped.receipt_number);
+      setHeader({
+        receipt_date: first.receipt_date || '',
+        warehouse_id: first.warehouse_id || '',
+        supplier: first.supplier || '',
+        container_number: first.container_number || '',
+        notes: first.notes || '',
+        shipment_reference: first.shipment_reference || '',
+        freight_forwarder: first.freight_forwarder || '',
+        shipping_line: first.shipping_line || '',
+        eta_date: first.eta_date || '',
+        arrival_date: first.arrival_date || '',
+        purchase_currency: first.purchase_currency || 'USD',
+      });
+
+      // Fetch rolls for all line ids in parallel
+      var ids = rows.map(function (r) { return r.id; });
+      var rollsRes = ids.length
+        ? await supabase.from('inventory_receipt_rolls').select('*').in('receipt_id', ids).order('roll_sequence')
+        : { data: [] };
+      var rollsByReceipt = {};
+      (rollsRes.data || []).forEach(function (r) {
+        if (!rollsByReceipt[r.receipt_id]) rollsByReceipt[r.receipt_id] = [];
+        rollsByReceipt[r.receipt_id].push(r);
+      });
+
+      var loadedLines = rows.map(function (r) {
+        var L = emptyLine();
+        L.existing_id = r.id;
+        L.product_id = r.product_id;
+        L.product = productById(r.product_id) || null;
+        L.quickCodeQuery = L.product ? (L.product.quick_code || L.product.name_en) : '';
+        L.expected_rolls = r.expected_rolls != null ? String(r.expected_rolls) : '';
+        L.expected_gross_kg = r.expected_gross_kg != null ? String(r.expected_gross_kg) : '';
+        L.expected_net_kg = r.expected_net_kg != null ? String(r.expected_net_kg) : '';
+        L.expected_uom_total = r.expected_uom_total != null ? String(r.expected_uom_total) : '';
+        L.ordered_quantity = r.ordered_quantity != null ? String(r.ordered_quantity) : '';
+        L.quantity = r.quantity != null && r.status !== 'pending_detail' ? String(r.quantity) : '';
+        L.variance_reason = r.variance_reason || '';
+        L.variance_acknowledged = r.variance_acknowledged === true;
+        L.uom = r.uom || '';
+        L.quantity_kg = r.quantity_kg != null ? String(r.quantity_kg) : '';
+        L.roll_count = r.roll_count != null ? String(r.roll_count) : '';
+        L.actual_thickness_mm = r.actual_thickness_mm != null ? String(r.actual_thickness_mm) : '';
+        L.actual_width_m = r.actual_width_m != null ? String(r.actual_width_m) : '';
+        L.actual_gsm = r.actual_gsm != null ? String(r.actual_gsm) : '';
+        L.actual_density = r.actual_density != null ? String(r.actual_density) : '';
+        L.actual_weight_per_roll = r.actual_weight_per_roll != null ? String(r.actual_weight_per_roll) : '';
+        L.actual_roll_length_m = r.actual_roll_length_m != null ? String(r.actual_roll_length_m) : '';
+        L.supplier = r.supplier || '';
+        L.batch_number = r.batch_number || '';
+        L.cost_per_uom = r.cost_per_uom != null ? String(r.cost_per_uom) : '';
+        L.currency = r.currency || 'USD';
+        L.rack = r.rack || '';
+        L.line_notes = r.line_notes || '';
+        L.rolls = (rollsByReceipt[r.id] || []).map(function (rl) {
+          return {
+            existing_id: rl.id,
+            roll_number: rl.roll_number || '',
+            gross_kg: rl.gross_kg != null ? String(rl.gross_kg) : '',
+            net_kg: rl.net_kg != null ? String(rl.net_kg) : '',
+            meters: rl.meters != null ? String(rl.meters) : '',
+            rack: rl.rack || '',
+            notes: rl.notes || '',
+          };
+        });
+        return L;
+      });
+
+      setLines(loadedLines.length ? loadedLines : [emptyLine()]);
+      setModalOpen(true);
+    } catch (err) {
+      console.error('[receiving] openEdit failed:', err);
+      toast.error('Failed to load receipt for editing: ' + ((err && err.message) || String(err)));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  // v55.83-A.6.27.35 — Reopen a finalized receipt (super_admin only)
+  // Calls the reopen_finalized_receipt SQL function which reverses the FIFO layer
+  // and flips status back to 'received'. Re-finalization later creates a new layer.
+  async function reopenReceipt(grouped) {
+    if (!isSuperAdmin) {
+      alert('Reopening a finalized receipt is restricted to super_admin.');
+      return;
+    }
+    if (grouped.status !== 'finalized') {
+      alert('Receipt is not in Finalized state. Status: ' + grouped.status);
+      return;
+    }
+    var reason = window.prompt('Reopening "' + grouped.receipt_number + '" will REVERSE its cost layer and any sales that drew from it will need COGS restatement.\n\nEnter a reason for reopening:');
+    if (!reason || !reason.trim()) { alert('Reason required.'); return; }
+    if (!window.confirm('Confirm reopen of ' + grouped.receipt_number + '?\n\nThis creates a reversal movement, marks the cost layer as reversed, and changes status back to "Received" so you can edit and re-finalize.\n\nReason: ' + reason.trim())) return;
+
+    setBusy(true);
+    try {
+      // The reopen function processes the FIRST line of the receipt by default.
+      // For multi-line receipts, iterate.
+      for (var i = 0; i < (grouped.lines || []).length; i++) {
+        var lineRow = grouped.lines[i];
+        if (lineRow.status === 'finalized') {
+          var res = await supabase.rpc('reopen_finalized_receipt', {
+            p_receipt_id: lineRow.id,
+            p_user_id: userProfile && userProfile.id,
+            p_reason: reason.trim(),
+          });
+          if (res.error) throw res.error;
+        }
+      }
+      toast.success('Receipt ' + grouped.receipt_number + ' reopened. Cost layer reversed. You can edit and re-finalize.');
+      await reload();
+    } catch (err) {
+      console.error('[receiving] reopen failed:', err);
+      toast.error('Reopen failed: ' + ((err && err.message) || String(err)));
+      alert('Reopen failed: ' + ((err && err.message) || String(err)) + '\n\nMost likely the v55.83-A.6.27.35 SQL migration was not run. Run it in Supabase.');
+    } finally {
+      setBusy(false);
+    }
   }
 
   // When user picks a product on a line — autofill defaults from master
@@ -342,10 +489,11 @@ export default function InventoryReceiving(props) {
 
   // ── Save receipt ─────────────────────────────────────────────────
   async function saveReceipt() {
-    // Validate
+    // v55.83-A.6.27.35 — Validation rewritten for two-phase flow.
+    // Phase 1: header + at least one product line with expected_* totals (quantity can be blank)
+    // Phase 2: roll details + actual quantity filled in
     if (!header.receipt_date) { alert('Receipt date required'); return; }
     if (!header.warehouse_id) { alert('Warehouse required'); return; }
-    // v55.83-A.6.27.32 — shipment_reference now required (container # or PO ref)
     if (!header.shipment_reference || !header.shipment_reference.trim()) {
       alert('Shipment Reference required (e.g. container number, PO number, or supplier reference).');
       return;
@@ -354,9 +502,23 @@ export default function InventoryReceiving(props) {
     for (var i = 0; i < lines.length; i++) {
       var L = lines[i];
       if (!L.product_id) { alert('Line ' + (i + 1) + ': product not selected. Pick a product or remove the line.'); return; }
-      if (!L.quantity || asNum(L.quantity) === null || asNum(L.quantity) <= 0) { alert('Line ' + (i + 1) + ': quantity must be a positive number'); return; }
-      if (!L.batch_number || !L.batch_number.trim()) { alert('Line ' + (i + 1) + ': batch number required'); return; }
-      // v55.83-A.6.27.32 — variance reason required if ordered != actual
+      // v55.83-A.6.27.35 — at least one of: actual quantity, expected_uom_total, expected_rolls, or rolls[] must be present
+      var hasActual = L.quantity && asNum(L.quantity) !== null && asNum(L.quantity) > 0;
+      var hasExpected = asNum(L.expected_uom_total) > 0 || asNum(L.expected_rolls) > 0 || asNum(L.expected_gross_kg) > 0;
+      var hasRolls = (L.rolls || []).length > 0;
+      if (!hasActual && !hasExpected && !hasRolls) {
+        alert('Line ' + (i + 1) + ': enter either the actual received quantity OR the expected totals (rolls / gross kg / uom total) — at least one is required.');
+        return;
+      }
+      // Validate roll_count
+      if (L.roll_count !== '' && L.roll_count != null) {
+        var rc = Number(L.roll_count);
+        if (isNaN(rc) || rc < 0 || rc !== Math.floor(rc)) {
+          alert('Line ' + (i + 1) + ': roll count must be a non-negative whole number.');
+          return;
+        }
+      }
+      // If both ordered & actual exist and differ → variance reason required
       var ordered = asNum(L.ordered_quantity);
       var actual = asNum(L.quantity);
       if (ordered != null && actual != null && ordered !== actual) {
@@ -365,11 +527,18 @@ export default function InventoryReceiving(props) {
           return;
         }
       }
-      // v55.83-A.6.27.32 — roll_count if provided must be a positive integer
-      if (L.roll_count !== '' && L.roll_count != null) {
-        var rc = Number(L.roll_count);
-        if (isNaN(rc) || rc < 0 || rc !== Math.floor(rc)) {
-          alert('Line ' + (i + 1) + ': roll count must be a non-negative whole number.');
+      // If rolls exist and roll-sum variance vs expected → ack required
+      if (hasRolls && hasExpected) {
+        var rollSumGross = (L.rolls || []).reduce(function (a, r) { return a + (Number(r.gross_kg) || 0); }, 0);
+        var rollSumMeters = (L.rolls || []).reduce(function (a, r) { return a + (Number(r.meters) || 0); }, 0);
+        var expGross = asNum(L.expected_gross_kg);
+        var expMeters = asNum(L.expected_uom_total);
+        var hasVarianceVsExpected =
+          (expGross != null && Math.abs(rollSumGross - expGross) > 0.01) ||
+          (expMeters != null && Math.abs(rollSumMeters - expMeters) > 0.01) ||
+          (asNum(L.expected_rolls) != null && (L.rolls || []).length !== asNum(L.expected_rolls));
+        if (hasVarianceVsExpected && !L.variance_acknowledged && (!L.variance_reason || !L.variance_reason.trim())) {
+          alert('Line ' + (i + 1) + ': roll-sum totals differ from expected. Please enter a variance reason OR check the acknowledge box.');
           return;
         }
       }
@@ -379,28 +548,41 @@ export default function InventoryReceiving(props) {
 
     setBusy(true);
     try {
-      // Generate receipt number ONCE — all lines of this shipment share it
-      var rnRes = await supabase.rpc('generate_receipt_number', { p_date: header.receipt_date });
-      if (rnRes.error) throw rnRes.error;
-      var receiptNumber = rnRes.data;
+      // Decide receipt_number: existing if editing, else generate new
+      var receiptNumber;
+      if (editingReceiptNumber) {
+        receiptNumber = editingReceiptNumber;
+      } else {
+        var rnRes = await supabase.rpc('generate_receipt_number', { p_date: header.receipt_date });
+        if (rnRes.error) throw rnRes.error;
+        receiptNumber = rnRes.data;
+      }
 
       var masterUpdatesQueued = []; // {product_id, patch}
 
-      // Insert each line
+      // Process each line
       for (var j = 0; j < lines.length; j++) {
         var L2 = lines[j];
         var qty = asNum(L2.quantity);
         var cost = asNum(L2.cost_per_uom);
-        var total = (qty != null && cost != null) ? qty * cost : null;
+        // Use expected_uom_total as a fallback if no actual quantity entered yet
+        var effectiveQty = qty != null ? qty : asNum(L2.expected_uom_total);
+        var total = (effectiveQty != null && cost != null) ? effectiveQty * cost : null;
+        // v55.83-A.6.27.35 — status derivation:
+        //   pending_detail → no actual quantity AND no rolls (only expected totals)
+        //   received       → has actual quantity OR rolls
+        var hasActualOrRolls = (qty != null && qty > 0) || (L2.rolls || []).length > 0;
+        var lineStatus = hasActualOrRolls ? 'received' : 'pending_detail';
+
         var payload = {
           receipt_number: receiptNumber,
           receipt_type: 'new_shipment',
           receipt_date: header.receipt_date,
-          // v55.83-A.6.27.32 — new receipts now save as 'received' (was 'active').
-          // Build 4.2 will flip this to 'finalized' when landed cost is calculated.
-          status: 'received',
+          status: lineStatus,
           product_id: L2.product_id,
-          quantity: qty,
+          // Store actual quantity if entered, else fall back to expected_uom_total so
+          // downstream queries (movements/layers) get a number to work with.
+          quantity: effectiveQty != null ? effectiveQty : 0.001, // CHECK requires > 0; use tiny number if neither set
           uom: L2.uom || null,
           actual_thickness_mm: asNum(L2.actual_thickness_mm),
           actual_width_m: asNum(L2.actual_width_m),
@@ -409,7 +591,7 @@ export default function InventoryReceiving(props) {
           actual_weight_per_roll: asNum(L2.actual_weight_per_roll),
           actual_roll_length_m: asNum(L2.actual_roll_length_m),
           supplier: (L2.supplier || header.supplier || '').trim() || null,
-          batch_number: (L2.batch_number || '').trim(),
+          batch_number: (L2.batch_number || '').trim() || null,
           container_number: (header.container_number || '').trim() || null,
           cost_per_uom: cost,
           currency: L2.currency || null,
@@ -417,23 +599,61 @@ export default function InventoryReceiving(props) {
           warehouse_id: header.warehouse_id,
           rack: (L2.rack || '').trim() || null,
           notes: (header.notes || '').trim() || null,
-          // v55.83-A.6.27.32 — new header fields, shared across all lines
           shipment_reference: header.shipment_reference.trim(),
           freight_forwarder: (header.freight_forwarder || '').trim() || null,
           shipping_line: (header.shipping_line || '').trim() || null,
           eta_date: header.eta_date || null,
           arrival_date: header.arrival_date || null,
           purchase_currency: header.purchase_currency || null,
-          // v55.83-A.6.27.32 — new per-line fields
           ordered_quantity: asNum(L2.ordered_quantity),
           variance_reason: (L2.variance_reason || '').trim() || null,
+          variance_acknowledged: L2.variance_acknowledged === true,
           quantity_kg: asNum(L2.quantity_kg),
           roll_count: (L2.roll_count !== '' && L2.roll_count != null) ? Number(L2.roll_count) : null,
           line_notes: (L2.line_notes || '').trim() || null,
-          created_by: userProfile && userProfile.id,
+          // v55.83-A.6.27.35 — expected totals (Phase 1 data)
+          expected_rolls: asNum(L2.expected_rolls),
+          expected_gross_kg: asNum(L2.expected_gross_kg),
+          expected_net_kg: asNum(L2.expected_net_kg),
+          expected_uom_total: asNum(L2.expected_uom_total),
           updated_by: userProfile && userProfile.id,
         };
-        await dbInsert('inventory_stock_receipts', payload, userProfile && userProfile.id);
+
+        // v55.83-A.6.27.35 — INSERT new line vs UPDATE existing
+        var lineId;
+        if (L2.existing_id) {
+          // Edit mode: update existing row
+          await dbUpdate('inventory_stock_receipts', L2.existing_id, payload, userProfile && userProfile.id);
+          lineId = L2.existing_id;
+        } else {
+          // New line: insert
+          payload.created_by = userProfile && userProfile.id;
+          var ins = await dbInsert('inventory_stock_receipts', payload, userProfile && userProfile.id);
+          lineId = ins && ins.id;
+        }
+
+        // v55.83-A.6.27.35 — save rolls if any (delete-then-insert for simplicity)
+        if (lineId && (L2.rolls || []).length > 0) {
+          // Delete existing rolls for this line (cascades on receipt cancel; this is for edit-mode replacement)
+          if (L2.existing_id) {
+            await supabase.from('inventory_receipt_rolls').delete().eq('receipt_id', lineId);
+          }
+          for (var ri = 0; ri < L2.rolls.length; ri++) {
+            var roll = L2.rolls[ri];
+            await dbInsert('inventory_receipt_rolls', {
+              receipt_id: lineId,
+              roll_number: (roll.roll_number || '').trim() || null,
+              roll_sequence: ri + 1,
+              gross_kg: asNum(roll.gross_kg),
+              net_kg: asNum(roll.net_kg),
+              meters: asNum(roll.meters),
+              rack: (roll.rack || '').trim() || null,
+              notes: (roll.notes || '').trim() || null,
+              created_by: userProfile && userProfile.id,
+              updated_by: userProfile && userProfile.id,
+            }, userProfile && userProfile.id);
+          }
+        }
 
         // Queue any master updates the user requested
         if (L2.product_id && L2.updateMaster) {
@@ -458,13 +678,14 @@ export default function InventoryReceiving(props) {
         await dbUpdate('inventory_products', mu.product_id, mu.patch, userProfile && userProfile.id);
       }
 
-      toast.success('Receipt ' + receiptNumber + ' saved — ' + lines.length + ' line(s)' + (masterUpdatesQueued.length ? '. Updated ' + masterUpdatesQueued.length + ' master record(s).' : ''));
+      var verb = editingReceiptNumber ? 'updated' : 'saved';
+      toast.success('Receipt ' + receiptNumber + ' ' + verb + ' — ' + lines.length + ' line(s)' + (masterUpdatesQueued.length ? '. Updated ' + masterUpdatesQueued.length + ' master record(s).' : ''));
       await reload();
       closeModal();
     } catch (err) {
       console.error('[receiving] save failed:', err);
       toast.error('Save failed: ' + ((err && err.message) || String(err)));
-      alert('Save failed: ' + ((err && err.message) || String(err)) + '\n\nIf this is the first time you\'re using Receive Stock, make sure the v55.83-A.6.27.29 SQL migration has been run in Supabase.');
+      alert('Save failed: ' + ((err && err.message) || String(err)) + '\n\nIf this is the first time you\'re using Receive Stock, make sure the v55.83-A.6.27.29 + v55.83-A.6.27.35 SQL migrations have been run in Supabase.');
     } finally {
       setBusy(false);
     }
@@ -606,6 +827,7 @@ export default function InventoryReceiving(props) {
           className="px-3 py-2 border border-slate-300 rounded-lg text-sm bg-white font-semibold"
         >
           <option value="all">All status</option>
+          <option value="pending_detail">Pending Detail (no rolls/qty yet)</option>
           <option value="received">Received (not finalized)</option>
           <option value="finalized">Finalized</option>
           <option value="active">Active (legacy)</option>
@@ -653,14 +875,16 @@ export default function InventoryReceiving(props) {
             var typeBadge = g.receipt_type === 'legacy_import' ? 'bg-purple-100 text-purple-900' :
                             g.receipt_type === 'adjustment' ? 'bg-amber-100 text-amber-900' :
                             'bg-emerald-100 text-emerald-900';
-            // v55.83-A.6.27.32 — status badge variants
+            // v55.83-A.6.27.32 + .35 — status badge variants (added pending_detail)
             var statusBadge = isCancelled ? 'bg-slate-200 text-slate-600' :
                               isFinalized ? 'bg-blue-100 text-blue-900' :
                               g.status === 'received' ? 'bg-amber-100 text-amber-900' :
+                              g.status === 'pending_detail' ? 'bg-orange-100 text-orange-900' :
                               'bg-slate-100 text-slate-700';
             var statusLabel = isCancelled ? 'Cancelled' :
                               isFinalized ? 'Finalized' :
                               g.status === 'received' ? 'Received' :
+                              g.status === 'pending_detail' ? 'Pending Detail' :
                               'Active';
             return (
               <div key={g.receipt_number} className={rowClass}
@@ -696,6 +920,26 @@ export default function InventoryReceiving(props) {
                   </div>
                 )}
                 <div className="text-right flex justify-end gap-1 flex-wrap">
+                  {/* v55.83-A.6.27.35 — Edit button: any non-finalized, non-cancelled receipt; Edit Inventory perm */}
+                  {canEdit && !isCancelled && !isFinalized && (
+                    <button
+                      onClick={function () { openEdit(g); }}
+                      className="px-2 py-1 text-[10px] bg-slate-200 hover:bg-slate-300 text-slate-900 rounded font-bold"
+                      title="Edit this receipt — change header, lines, rolls, costs"
+                    >
+                      ✏️ Edit
+                    </button>
+                  )}
+                  {/* v55.83-A.6.27.35 — Reopen button: finalized receipts only, super_admin only */}
+                  {isSuperAdmin && isFinalized && (
+                    <button
+                      onClick={function () { reopenReceipt(g); }}
+                      className="px-2 py-1 text-[10px] bg-amber-100 hover:bg-amber-200 text-amber-900 rounded font-bold"
+                      title="Reopen this finalized receipt for editing (reverses the cost layer)"
+                    >
+                      🔓 Reopen
+                    </button>
+                  )}
                   {/* v55.83-A.6.27.33 — Finalize Cost button opens landed-cost dialog */}
                   {canEdit && !isCancelled && !isFinalized && seeCosts && g.status === 'received' && (
                     <button
@@ -752,7 +996,7 @@ export default function InventoryReceiving(props) {
               style={{ background: '#3730a3', padding: '14px 20px' }}
             >
               <div>
-                <div className="text-lg font-extrabold" style={{ color: '#ffffff' }}>🚚 New Stock Receipt</div>
+                <div className="text-lg font-extrabold" style={{ color: '#ffffff' }}>🚚 {editingReceiptNumber ? 'Edit Receipt ' + editingReceiptNumber : 'New Stock Receipt'}</div>
                 <div className="text-xs font-semibold" style={{ color: '#e0e7ff' }}>
                   One shipment can contain multiple product lines. Receipt # auto-generated on save.
                 </div>
@@ -902,13 +1146,176 @@ export default function InventoryReceiving(props) {
                           <div className="font-mono text-indigo-700">Classification: {line.product.classification_slug}</div>
                         </div>
 
+                        {/* v55.83-A.6.27.35 — PHASE 1: Expected totals (from supplier) */}
+                        <div className="bg-amber-50 border-2 border-amber-300 rounded p-2 mb-2">
+                          <div className="text-[11px] font-extrabold text-amber-900 tracking-wider mb-1">📋 PHASE 1 — EXPECTED TOTALS (from supplier invoice / packing list)</div>
+                          <div className="text-[10px] text-amber-800 mb-2 italic">Save these now even if rolls haven't arrived yet. Saves as "Pending Detail" status.</div>
+                          <div className="grid grid-cols-4 gap-2">
+                            <label className="text-[11px] font-extrabold text-amber-900">Expected Rolls
+                              <input type="text" value={line.expected_rolls} onChange={function (e) { updateLineField(lineIdx, 'expected_rolls', e.target.value); }} placeholder="e.g. 20" className="w-full mt-0.5 px-2 py-1.5 border border-amber-300 rounded text-sm bg-white" />
+                            </label>
+                            <label className="text-[11px] font-extrabold text-amber-900">Expected Gross (kg)
+                              <input type="text" value={line.expected_gross_kg} onChange={function (e) { updateLineField(lineIdx, 'expected_gross_kg', e.target.value); }} placeholder="e.g. 5000" className="w-full mt-0.5 px-2 py-1.5 border border-amber-300 rounded text-sm bg-white" />
+                            </label>
+                            <label className="text-[11px] font-extrabold text-amber-900">Expected Net (kg)
+                              <input type="text" value={line.expected_net_kg} onChange={function (e) { updateLineField(lineIdx, 'expected_net_kg', e.target.value); }} placeholder="optional" className="w-full mt-0.5 px-2 py-1.5 border border-amber-300 rounded text-sm bg-white" />
+                            </label>
+                            <label className="text-[11px] font-extrabold text-amber-900">Expected Total ({line.uom || 'UOM'})
+                              <input type="text" value={line.expected_uom_total} onChange={function (e) { updateLineField(lineIdx, 'expected_uom_total', e.target.value); }} placeholder="e.g. 10000 (meters)" className="w-full mt-0.5 px-2 py-1.5 border border-amber-300 rounded text-sm bg-white" />
+                            </label>
+                          </div>
+                        </div>
+
+                        {/* v55.83-A.6.27.35 — PHASE 2: Individual rolls + variance summary */}
+                        {(function () {
+                          var rolls = line.rolls || [];
+                          // Variance computations
+                          var rollSumGross = rolls.reduce(function (a, r) { return a + (Number(r.gross_kg) || 0); }, 0);
+                          var rollSumNet = rolls.reduce(function (a, r) { return a + (Number(r.net_kg) || 0); }, 0);
+                          var rollSumMeters = rolls.reduce(function (a, r) { return a + (Number(r.meters) || 0); }, 0);
+                          var expRolls = Number(line.expected_rolls) || null;
+                          var expGross = Number(line.expected_gross_kg) || null;
+                          var expNet = Number(line.expected_net_kg) || null;
+                          var expMeters = Number(line.expected_uom_total) || null;
+                          var hasAnyVariance =
+                            (expRolls != null && rolls.length !== expRolls) ||
+                            (expGross != null && Math.abs(rollSumGross - expGross) > 0.01) ||
+                            (expNet != null && rollSumNet > 0 && Math.abs(rollSumNet - expNet) > 0.01) ||
+                            (expMeters != null && Math.abs(rollSumMeters - expMeters) > 0.01);
+
+                          return (
+                            <div className="bg-blue-50 border-2 border-blue-300 rounded p-2 mb-2">
+                              <div className="flex justify-between items-center mb-1">
+                                <div className="text-[11px] font-extrabold text-blue-900 tracking-wider">📦 PHASE 2 — INDIVIDUAL ROLLS ({rolls.length})</div>
+                                <button
+                                  onClick={function () {
+                                    var newRolls = (line.rolls || []).slice();
+                                    newRolls.push({ roll_number: '', gross_kg: '', net_kg: '', meters: '', rack: line.rack || '', notes: '' });
+                                    updateLineField(lineIdx, 'rolls', newRolls);
+                                  }}
+                                  className="px-2 py-1 text-[10px] bg-blue-600 hover:bg-blue-700 text-white rounded font-extrabold"
+                                >+ Add Roll</button>
+                              </div>
+                              <div className="text-[10px] text-blue-800 mb-2 italic">Add each physical roll as it arrives. Variance vs expected is shown below.</div>
+
+                              {rolls.length === 0 ? (
+                                <div className="text-[11px] italic text-blue-700 text-center py-2">No rolls entered yet. Click "+ Add Roll" once physical units arrive.</div>
+                              ) : (
+                                <div className="space-y-1">
+                                  {/* Roll header */}
+                                  <div className="grid gap-1 text-[10px] font-extrabold text-blue-900 tracking-wider px-1" style={{ gridTemplateColumns: '40px 110px 90px 90px 90px 90px 1fr 40px' }}>
+                                    <div>#</div>
+                                    <div>Roll #</div>
+                                    <div>Gross kg</div>
+                                    <div>Net kg</div>
+                                    <div>{line.uom || 'UOM'}</div>
+                                    <div>Rack</div>
+                                    <div>Notes</div>
+                                    <div></div>
+                                  </div>
+                                  {rolls.map(function (r, rIdx) {
+                                    return (
+                                      <div key={rIdx} className="grid gap-1 items-center bg-white rounded px-1 py-1" style={{ gridTemplateColumns: '40px 110px 90px 90px 90px 90px 1fr 40px' }}>
+                                        <div className="text-[11px] font-mono font-extrabold text-blue-900">{rIdx + 1}</div>
+                                        <input type="text" value={r.roll_number} onChange={function (e) {
+                                          var nr = (line.rolls || []).slice(); nr[rIdx] = Object.assign({}, nr[rIdx], { roll_number: e.target.value }); updateLineField(lineIdx, 'rolls', nr);
+                                        }} placeholder="batch / ID" className="w-full px-1 py-1 border border-slate-300 rounded text-xs bg-white font-mono" />
+                                        <input type="text" value={r.gross_kg} onChange={function (e) {
+                                          var nr = (line.rolls || []).slice(); nr[rIdx] = Object.assign({}, nr[rIdx], { gross_kg: e.target.value }); updateLineField(lineIdx, 'rolls', nr);
+                                        }} placeholder="0.00" className="w-full px-1 py-1 border border-slate-300 rounded text-xs bg-white font-mono" />
+                                        <input type="text" value={r.net_kg} onChange={function (e) {
+                                          var nr = (line.rolls || []).slice(); nr[rIdx] = Object.assign({}, nr[rIdx], { net_kg: e.target.value }); updateLineField(lineIdx, 'rolls', nr);
+                                        }} placeholder="0.00" className="w-full px-1 py-1 border border-slate-300 rounded text-xs bg-white font-mono" />
+                                        <input type="text" value={r.meters} onChange={function (e) {
+                                          var nr = (line.rolls || []).slice(); nr[rIdx] = Object.assign({}, nr[rIdx], { meters: e.target.value }); updateLineField(lineIdx, 'rolls', nr);
+                                        }} placeholder="0.00" className="w-full px-1 py-1 border border-slate-300 rounded text-xs bg-white font-mono" />
+                                        <input type="text" value={r.rack} onChange={function (e) {
+                                          var nr = (line.rolls || []).slice(); nr[rIdx] = Object.assign({}, nr[rIdx], { rack: e.target.value }); updateLineField(lineIdx, 'rolls', nr);
+                                        }} placeholder="A-12" className="w-full px-1 py-1 border border-slate-300 rounded text-xs bg-white" />
+                                        <input type="text" value={r.notes} onChange={function (e) {
+                                          var nr = (line.rolls || []).slice(); nr[rIdx] = Object.assign({}, nr[rIdx], { notes: e.target.value }); updateLineField(lineIdx, 'rolls', nr);
+                                        }} placeholder="optional" className="w-full px-1 py-1 border border-slate-300 rounded text-xs bg-white" />
+                                        <button
+                                          onClick={function () {
+                                            var nr = (line.rolls || []).slice(); nr.splice(rIdx, 1); updateLineField(lineIdx, 'rolls', nr);
+                                          }}
+                                          className="px-1 py-1 text-[10px] bg-red-100 hover:bg-red-200 text-red-900 rounded font-bold"
+                                          title="Remove this roll"
+                                        >✕</button>
+                                      </div>
+                                    );
+                                  })}
+                                </div>
+                              )}
+
+                              {/* Variance summary panel */}
+                              {(rolls.length > 0 || expRolls != null || expGross != null) && (
+                                <div className={'mt-2 rounded p-2 border-2 ' + (hasAnyVariance ? 'bg-red-50 border-red-300' : 'bg-emerald-50 border-emerald-300')}>
+                                  <div className={'text-[11px] font-extrabold tracking-wider mb-1 ' + (hasAnyVariance ? 'text-red-900' : 'text-emerald-900')}>
+                                    {hasAnyVariance ? '⚠ VARIANCE DETECTED' : '✓ EXPECTED MATCHES ACTUAL'}
+                                  </div>
+                                  <div className="grid grid-cols-4 gap-2 text-[11px]">
+                                    <div>
+                                      <div className="font-bold text-slate-700">Rolls</div>
+                                      <div className="font-mono">{rolls.length}{expRolls != null && <span className="text-slate-500"> / {expRolls}</span>}</div>
+                                      {expRolls != null && rolls.length !== expRolls && (
+                                        <div className={'text-[10px] font-extrabold ' + (rolls.length > expRolls ? 'text-emerald-700' : 'text-red-700')}>
+                                          {rolls.length > expRolls ? '+' : ''}{rolls.length - expRolls}
+                                        </div>
+                                      )}
+                                    </div>
+                                    <div>
+                                      <div className="font-bold text-slate-700">Gross kg</div>
+                                      <div className="font-mono">{rollSumGross.toLocaleString(undefined, {maximumFractionDigits: 2})}{expGross != null && <span className="text-slate-500"> / {expGross}</span>}</div>
+                                      {expGross != null && Math.abs(rollSumGross - expGross) > 0.01 && (
+                                        <div className={'text-[10px] font-extrabold ' + (rollSumGross > expGross ? 'text-emerald-700' : 'text-red-700')}>
+                                          {rollSumGross > expGross ? '+' : ''}{(rollSumGross - expGross).toFixed(2)}
+                                        </div>
+                                      )}
+                                    </div>
+                                    <div>
+                                      <div className="font-bold text-slate-700">Net kg</div>
+                                      <div className="font-mono">{rollSumNet.toLocaleString(undefined, {maximumFractionDigits: 2})}{expNet != null && <span className="text-slate-500"> / {expNet}</span>}</div>
+                                      {expNet != null && rollSumNet > 0 && Math.abs(rollSumNet - expNet) > 0.01 && (
+                                        <div className={'text-[10px] font-extrabold ' + (rollSumNet > expNet ? 'text-emerald-700' : 'text-red-700')}>
+                                          {rollSumNet > expNet ? '+' : ''}{(rollSumNet - expNet).toFixed(2)}
+                                        </div>
+                                      )}
+                                    </div>
+                                    <div>
+                                      <div className="font-bold text-slate-700">{line.uom || 'UOM Total'}</div>
+                                      <div className="font-mono">{rollSumMeters.toLocaleString(undefined, {maximumFractionDigits: 2})}{expMeters != null && <span className="text-slate-500"> / {expMeters}</span>}</div>
+                                      {expMeters != null && Math.abs(rollSumMeters - expMeters) > 0.01 && (
+                                        <div className={'text-[10px] font-extrabold ' + (rollSumMeters > expMeters ? 'text-emerald-700' : 'text-red-700')}>
+                                          {rollSumMeters > expMeters ? '+' : ''}{(rollSumMeters - expMeters).toFixed(2)}
+                                        </div>
+                                      )}
+                                    </div>
+                                  </div>
+                                  {hasAnyVariance && (
+                                    <div className="mt-2 space-y-1">
+                                      <label className="text-[11px] font-extrabold text-red-900 block">Variance reason *
+                                        <input type="text" value={line.variance_reason} onChange={function (e) { updateLineField(lineIdx, 'variance_reason', e.target.value); }} placeholder="e.g. short shipment / damaged / overage / counting error" className="w-full mt-0.5 px-2 py-1.5 border border-red-300 rounded text-sm bg-white" />
+                                      </label>
+                                      <label className="flex items-center gap-1 text-[11px] text-red-800">
+                                        <input type="checkbox" checked={line.variance_acknowledged === true} onChange={function (e) { updateLineField(lineIdx, 'variance_acknowledged', e.target.checked); }} />
+                                        <span>Acknowledge variance (will be saved with audit trail)</span>
+                                      </label>
+                                    </div>
+                                  )}
+                                </div>
+                              )}
+                            </div>
+                          );
+                        })()}
+
                         {/* Quantity row 1: ordered + received + variance reason (conditional) + batch */}
                         <div className="grid grid-cols-4 gap-2 mb-2">
                           <label className="text-[11px] font-extrabold text-slate-700">Ordered Qty
                             <input type="text" value={line.ordered_quantity} onChange={function (e) { updateLineField(lineIdx, 'ordered_quantity', e.target.value); }} placeholder="what supplier shipped" className="w-full mt-0.5 px-2 py-1.5 border border-slate-300 rounded text-sm bg-white" />
                           </label>
-                          <label className="text-[11px] font-extrabold text-slate-700">Received Qty *
-                            <input type="text" value={line.quantity} onChange={function (e) { updateLineField(lineIdx, 'quantity', e.target.value); }} placeholder="what actually arrived" className="w-full mt-0.5 px-2 py-1.5 border border-slate-300 rounded text-sm bg-white" />
+                          <label className="text-[11px] font-extrabold text-slate-700">Received Qty (rolled-up)
+                            <input type="text" value={line.quantity} onChange={function (e) { updateLineField(lineIdx, 'quantity', e.target.value); }} placeholder="actual UOM total (or auto)" className="w-full mt-0.5 px-2 py-1.5 border border-slate-300 rounded text-sm bg-white" />
                           </label>
                           <label className="text-[11px] font-extrabold text-slate-700">UOM
                             <select value={line.uom} onChange={function (e) { updateLineField(lineIdx, 'uom', e.target.value); }} className={'w-full mt-0.5 px-2 py-1.5 border border-slate-300 rounded text-sm ' + (line.fromMaster.uom ? 'bg-blue-50' : 'bg-white')}>
