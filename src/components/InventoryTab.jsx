@@ -21,6 +21,8 @@ import InventoryProductMaster from './InventoryProductMaster';
 import InventoryImportProducts from './InventoryImportProducts';
 import InventoryReceiving from './InventoryReceiving';
 import InventoryStockImport from './InventoryStockImport';
+import InventoryMovementsLedger from './InventoryMovementsLedger';
+import InventoryCostLayers from './InventoryCostLayers';
 import {
   canViewInventory,
   canSeeInventoryCosts,
@@ -28,15 +30,22 @@ import {
 } from '../lib/inventory-permissions';
 
 var SUBTABS = [
-  { id: 'inventory', label: '📊 Inventory View', stage: 'B', desc: 'Master inventory with current quantities by SKU + warehouse' },
-  { id: 'skus', label: '📦 Master SKUs', stage: 'A', desc: 'Define the products you stock' },
-  { id: 'shipments', label: '🚢 Shipments', stage: 'B', desc: 'Receive inventory from suppliers' },
-  { id: 'layers', label: '🧱 Cost Layers', stage: 'C', desc: 'Per-shipment FIFO cost layers (Stage C: landed cost)' },
-  { id: 'pnl', label: '💵 Profit by SKU', stage: 'D', desc: 'Revenue minus COGS, per SKU (Stage D: sale deduction)' },
-  { id: 'movements', label: '📜 Movements', stage: 'B', desc: 'Every stock change, append-only ledger' },
-  { id: 'adjustments', label: '🔧 Adjustments', stage: 'E', desc: 'Damage, returns, transfers, count corrections' },
+  // v55.83-A.6.27.32 — old-system subtabs HIDDEN from nav (Max never used
+  // them; new Phase 1 system replaces them). Components stay imported and
+  // in code for the eventual cleanup build, but no nav entries point here.
+  // Old tabs that were hidden: inventory (view), skus (Master SKUs),
+  // shipments, layers (Cost Layers), pnl (Profit by SKU), movements,
+  // adjustments, reports. These will be rebuilt in Builds 4.2-5 against
+  // the new Product Master.
+  // { id: 'inventory', label: '📊 Inventory View', stage: 'B', desc: '...' },
+  // { id: 'skus', label: '📦 Master SKUs', stage: 'A', desc: '...' },
+  // { id: 'shipments', label: '🚢 Shipments', stage: 'B', desc: '...' },
+  // { id: 'layers', label: '🧱 Cost Layers', stage: 'C', desc: '...' },
+  // { id: 'pnl', label: '💵 Profit by SKU', stage: 'D', desc: '...' },
+  // { id: 'movements', label: '📜 Movements', stage: 'B', desc: '...' },
+  // { id: 'adjustments', label: '🔧 Adjustments', stage: 'E', desc: '...' },
+  // { id: 'reports', label: '📈 Reports', stage: 'F', desc: '...' },
   { id: 'warehouses', label: '🏭 Warehouses', stage: 'A', desc: 'Physical stock locations' },
-  { id: 'reports', label: '📈 Reports', stage: 'F', desc: 'Profitability, aging, slow-moving' },
   // v55.83-A.6.27.22 — Phase 1 Build 1 of the classification system
   { id: 'masterlists', label: '🗂️ Master Lists', stage: 'Classification', desc: 'Manage the 8 classification levels (Product Family, Category, Grade, etc.) — super-admin only' },
   // v55.83-A.6.27.23 — Phase 1 Build 2: Product Master catalog
@@ -47,6 +56,9 @@ var SUBTABS = [
   { id: 'receivestock', label: '🚚 Receive Stock', stage: 'Receiving', desc: 'Record incoming shipments. Multi-line per receipt with autofill from Product Master.' },
   // v55.83-A.6.27.30 — Phase 1 Build 4.5: Bulk import legacy stock
   { id: 'importstock', label: '📦 Import Stock', stage: 'Receiving', desc: 'One-time bulk import of existing inventory from Excel.' },
+  // v55.83-A.6.27.34 — Phase 1 Build 4.3: Movements Ledger + FIFO Cost Layers (engine)
+  { id: 'movementsledger', label: '📜 Movements', stage: 'Engine', desc: 'Append-only log of every stock change. Auto-populated when receipts are finalized.' },
+  { id: 'costlayers',      label: '🧱 Cost Layers', stage: 'Engine', desc: 'FIFO cost layers per product per warehouse. Stock-on-hand + inventory value.' },
 ];
 
 export default function InventoryTab({ userProfile, modulePerms, toast, isSuperAdmin }) {
@@ -158,6 +170,14 @@ export default function InventoryTab({ userProfile, modulePerms, toast, isSuperA
           if (st.id === 'importstock' && !(isSuperAdmin || (modulePerms && modulePerms['Edit Inventory'] === true))) {
             return null;
           }
+          // v55.83-A.6.27.34 — Movements Ledger + Cost Layers: read-only views.
+          // Available to anyone with Inventory access (read-only) or super_admin
+          // / Edit Inventory. Cost columns inside each component are gated
+          // separately by canSeeInventoryCosts.
+          if ((st.id === 'movementsledger' || st.id === 'costlayers') &&
+              !(isSuperAdmin || (modulePerms && (modulePerms['Inventory'] === true || modulePerms['Edit Inventory'] === true)))) {
+            return null;
+          }
           var isActive = subtab === st.id;
           return (
             <button key={st.id}
@@ -225,6 +245,14 @@ export default function InventoryTab({ userProfile, modulePerms, toast, isSuperA
       {/* v55.83-A.6.27.30 — Phase 1 Build 4.5: Bulk Import Legacy Stock */}
       {subtab === 'importstock' && (
         <InventoryStockImport userProfile={userProfile} modulePerms={modulePerms} isSuperAdmin={isSuperAdmin} toast={toast} />
+      )}
+      {/* v55.83-A.6.27.34 — Phase 1 Build 4.3: Movements Ledger (read-only) */}
+      {subtab === 'movementsledger' && (
+        <InventoryMovementsLedger userProfile={userProfile} modulePerms={modulePerms} isSuperAdmin={isSuperAdmin} toast={toast} />
+      )}
+      {/* v55.83-A.6.27.34 — Phase 1 Build 4.3: Cost Layers (read-only) */}
+      {subtab === 'costlayers' && (
+        <InventoryCostLayers userProfile={userProfile} modulePerms={modulePerms} isSuperAdmin={isSuperAdmin} toast={toast} />
       )}
 
       {/* Stage guidance */}

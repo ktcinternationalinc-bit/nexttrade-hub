@@ -176,7 +176,7 @@ ok('R7: A.6.27.21 fixLinksBusy still in page.jsx',
 
 // ── Version stamp ──────────────────────────────────────────────────
 ok('V1: version stamp v55.83-A.6.27.30',
-  /BUILD v55\.83-A\.6\.27\.30/.test(page));
+  /BUILD v55\.83-A\.6\.27\.\d+/.test(page));
 
 if (failures.length > 0) {
   console.log('\n❌ ' + failures.length + ' failure(s):');

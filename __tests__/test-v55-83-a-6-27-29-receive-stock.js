@@ -156,7 +156,7 @@ ok('B7e: NO 📌 button on tech specs (thickness/width/GSM/density/weight/length
   !/toggleUpdateMaster\(lineIdx, 'actual_width_m'\)/.test(rec) &&
   !/toggleUpdateMaster\(lineIdx, 'actual_gsm'\)/.test(rec));
 ok('B7f: save applies queued master updates AFTER inserting all receipt rows',
-  /var masterUpdatesQueued = \[\][\s\S]{0,3000}for \(var k2 = 0; k2 < masterUpdatesQueued\.length; k2\+\+\)[\s\S]{0,500}dbUpdate\('inventory_products', mu\.product_id, mu\.patch/.test(rec));
+  /var masterUpdatesQueued = \[\][\s\S]{0,6000}for \(var k2 = 0; k2 < masterUpdatesQueued\.length; k2\+\+\)[\s\S]{0,500}dbUpdate\('inventory_products', mu\.product_id, mu\.patch/.test(rec));
 
 // ── B8. Cost field gating ─────────────────────────────────────────
 ok('B8a: cost column in list only shown when seeCosts',
@@ -166,7 +166,8 @@ ok('B8b: cost input in modal only shown when seeCosts',
 ok('B8c: currency input in modal only shown when seeCosts',
   /\{seeCosts && \(\s*<label[\s\S]{0,500}Currency/.test(rec));
 ok('B8d: Cost column header conditionally added to gridTemplateColumns',
-  /gridTemplateColumns: '170px 100px 90px 1fr 110px 130px ' \+ \(seeCosts \? '130px ' : ''\) \+ '110px'/.test(rec));
+  /gridTemplateColumns: '170px 100px 90px 1fr 110px 130px ' \+ \(seeCosts \? '130px ' : ''\) \+ '110px'/.test(rec) ||
+  /gridTemplateColumns: '170px 100px 80px 90px 1fr 110px 120px ' \+ \(seeCosts \? '120px ' : ''\) \+ '140px'/.test(rec));
 
 // ── B9. Cancel / restore ──────────────────────────────────────────
 ok('B9a: cancelTarget state + confirmCancelReceipt function',
@@ -175,7 +176,8 @@ ok('B9a: cancelTarget state + confirmCancelReceipt function',
 ok('B9b: cancel requires reason (validated)',
   /if \(!cancelReason \|\| !cancelReason\.trim\(\)\) \{ alert\('Cancellation reason required'\)/.test(rec));
 ok('B9c: cancel acts on ALL lines sharing the receipt_number (whole shipment)',
-  /receipts\.filter\(function \(r\) \{ return r\.receipt_number === rn && r\.status === 'active'/.test(rec));
+  /receipts\.filter\(function \(r\) \{ return r\.receipt_number === rn && r\.status === 'active'/.test(rec) ||
+  /receipts\.filter\(function \(r\) \{ return r\.receipt_number === rn && r\.status !== 'cancelled'/.test(rec));
 ok('B9d: cancel does soft-delete (status → cancelled, cancelled_at/by/reason set)',
   /status: 'cancelled',\s+cancelled_at: new Date\(\)\.toISOString\(\),\s+cancelled_by: userProfile && userProfile\.id,\s+cancel_reason: cancelReason\.trim\(\)/.test(rec));
 ok('B9e: restoreReceipt un-cancels all lines (sets status back to active)',
@@ -191,7 +193,8 @@ ok('B10b: grouped row shows line count + product preview',
   /lineCount: rows\.length/.test(rec) && /g\.lineCount > 2/.test(rec));
 ok('B10c: grouped row shows total qty + total cost summed',
   /totalQty: rows\.reduce\(function \(a, b\) \{ return a \+ Number\(b\.quantity \|\| 0\)/.test(rec) &&
-  /totalCost: rows\.reduce\(function \(a, b\) \{ return a \+ Number\(b\.total_cost \|\| 0\)/.test(rec));
+  (/totalCost: rows\.reduce\(function \(a, b\) \{ return a \+ Number\(b\.total_cost \|\| 0\)/.test(rec) ||
+   /var v = b\.landed_total != null \? Number\(b\.landed_total\) : Number\(b\.total_cost \|\| 0\)/.test(rec)));
 
 // ── B11. Validation on save ───────────────────────────────────────
 ok('B11a: receipt_date required',

@@ -18,6 +18,7 @@
 import { useState, useEffect, useMemo, useRef } from 'react';
 import { supabase, dbInsert, dbUpdate } from '../lib/supabase';
 import { canSeeInventoryCosts } from '../lib/inventory-permissions';
+import InventoryFinalizeCostDialog from './InventoryFinalizeCostDialog';
 
 var UOM_OPTIONS = ['kg','meter','yard','roll','piece','liter','sqm'];
 var CURRENCY_OPTIONS = ['EGP','USD','EUR'];
@@ -35,8 +36,16 @@ function emptyLine() {
     product: null,        // hydrated product master row when picked
     quickCodeQuery: '',   // what user is typing
     showSuggestions: false,
+    // v55.83-A.6.27.32 — ordered_quantity is what the supplier said they
+    // shipped; quantity (below) is what actually arrived. If they differ,
+    // variance_reason becomes required.
+    ordered_quantity: '',
     quantity: '',
+    variance_reason: '',
     uom: '',
+    // v55.83-A.6.27.32 — quantity in kg + roll_count from old Shipments form
+    quantity_kg: '',
+    roll_count: '',
     actual_thickness_mm: '',
     actual_width_m: '',
     actual_gsm: '',
@@ -48,6 +57,8 @@ function emptyLine() {
     cost_per_uom: '',
     currency: 'EGP',
     rack: '',
+    // v55.83-A.6.27.32 — per-line notes (separate from shipment-level notes)
+    line_notes: '',
     // Track which fields came from master vs user-typed (for visual cue)
     fromMaster: {},
     // Track which fields the user wants to push back to master
@@ -75,7 +86,7 @@ export default function InventoryReceiving(props) {
   // Filters
   var [search, setSearch] = useState('');
   var [filterWarehouse, setFilterWarehouse] = useState('all');
-  var [filterStatus, setFilterStatus] = useState('active');
+  var [filterStatus, setFilterStatus] = useState('all');
   var [filterFrom, setFilterFrom] = useState('');
   var [filterTo, setFilterTo] = useState('');
 
@@ -88,6 +99,13 @@ export default function InventoryReceiving(props) {
     supplier: '',
     container_number: '',
     notes: '',
+    // v55.83-A.6.27.32 — new header fields from old Shipments form
+    shipment_reference: '',
+    freight_forwarder: '',
+    shipping_line: '',
+    eta_date: '',
+    arrival_date: '',
+    purchase_currency: 'EGP',
   });
   var [lines, setLines] = useState([emptyLine()]);
   var [busy, setBusy] = useState(false);
@@ -95,6 +113,9 @@ export default function InventoryReceiving(props) {
   // Cancel-receipt prompt
   var [cancelTarget, setCancelTarget] = useState(null);
   var [cancelReason, setCancelReason] = useState('');
+
+  // v55.83-A.6.27.33 — Finalize Cost dialog target
+  var [finalizeTarget, setFinalizeTarget] = useState(null);
 
   // ── Load reference data ──────────────────────────────────────────
   useEffect(function () {
@@ -184,6 +205,12 @@ export default function InventoryReceiving(props) {
       supplier: '',
       container_number: '',
       notes: '',
+      shipment_reference: '',
+      freight_forwarder: '',
+      shipping_line: '',
+      eta_date: '',
+      arrival_date: '',
+      purchase_currency: 'EGP',
     });
     setLines([emptyLine()]);
     setModalOpen(true);
@@ -198,6 +225,12 @@ export default function InventoryReceiving(props) {
       supplier: '',
       container_number: '',
       notes: '',
+      shipment_reference: '',
+      freight_forwarder: '',
+      shipping_line: '',
+      eta_date: '',
+      arrival_date: '',
+      purchase_currency: 'EGP',
     });
     setLines([emptyLine()]);
   }
@@ -312,12 +345,34 @@ export default function InventoryReceiving(props) {
     // Validate
     if (!header.receipt_date) { alert('Receipt date required'); return; }
     if (!header.warehouse_id) { alert('Warehouse required'); return; }
+    // v55.83-A.6.27.32 — shipment_reference now required (container # or PO ref)
+    if (!header.shipment_reference || !header.shipment_reference.trim()) {
+      alert('Shipment Reference required (e.g. container number, PO number, or supplier reference).');
+      return;
+    }
     var anyValid = false;
     for (var i = 0; i < lines.length; i++) {
       var L = lines[i];
       if (!L.product_id) { alert('Line ' + (i + 1) + ': product not selected. Pick a product or remove the line.'); return; }
       if (!L.quantity || asNum(L.quantity) === null || asNum(L.quantity) <= 0) { alert('Line ' + (i + 1) + ': quantity must be a positive number'); return; }
       if (!L.batch_number || !L.batch_number.trim()) { alert('Line ' + (i + 1) + ': batch number required'); return; }
+      // v55.83-A.6.27.32 — variance reason required if ordered != actual
+      var ordered = asNum(L.ordered_quantity);
+      var actual = asNum(L.quantity);
+      if (ordered != null && actual != null && ordered !== actual) {
+        if (!L.variance_reason || !L.variance_reason.trim()) {
+          alert('Line ' + (i + 1) + ': ordered quantity (' + ordered + ') differs from received quantity (' + actual + ') — please enter a variance reason.');
+          return;
+        }
+      }
+      // v55.83-A.6.27.32 — roll_count if provided must be a positive integer
+      if (L.roll_count !== '' && L.roll_count != null) {
+        var rc = Number(L.roll_count);
+        if (isNaN(rc) || rc < 0 || rc !== Math.floor(rc)) {
+          alert('Line ' + (i + 1) + ': roll count must be a non-negative whole number.');
+          return;
+        }
+      }
       anyValid = true;
     }
     if (!anyValid) { alert('At least one valid line required'); return; }
@@ -341,7 +396,9 @@ export default function InventoryReceiving(props) {
           receipt_number: receiptNumber,
           receipt_type: 'new_shipment',
           receipt_date: header.receipt_date,
-          status: 'active',
+          // v55.83-A.6.27.32 — new receipts now save as 'received' (was 'active').
+          // Build 4.2 will flip this to 'finalized' when landed cost is calculated.
+          status: 'received',
           product_id: L2.product_id,
           quantity: qty,
           uom: L2.uom || null,
@@ -360,6 +417,19 @@ export default function InventoryReceiving(props) {
           warehouse_id: header.warehouse_id,
           rack: (L2.rack || '').trim() || null,
           notes: (header.notes || '').trim() || null,
+          // v55.83-A.6.27.32 — new header fields, shared across all lines
+          shipment_reference: header.shipment_reference.trim(),
+          freight_forwarder: (header.freight_forwarder || '').trim() || null,
+          shipping_line: (header.shipping_line || '').trim() || null,
+          eta_date: header.eta_date || null,
+          arrival_date: header.arrival_date || null,
+          purchase_currency: header.purchase_currency || null,
+          // v55.83-A.6.27.32 — new per-line fields
+          ordered_quantity: asNum(L2.ordered_quantity),
+          variance_reason: (L2.variance_reason || '').trim() || null,
+          quantity_kg: asNum(L2.quantity_kg),
+          roll_count: (L2.roll_count !== '' && L2.roll_count != null) ? Number(L2.roll_count) : null,
+          line_notes: (L2.line_notes || '').trim() || null,
           created_by: userProfile && userProfile.id,
           updated_by: userProfile && userProfile.id,
         };
@@ -407,7 +477,7 @@ export default function InventoryReceiving(props) {
     try {
       // Cancel ALL lines sharing the same receipt_number
       var rn = cancelTarget.receipt_number;
-      var rows = receipts.filter(function (r) { return r.receipt_number === rn && r.status === 'active'; });
+      var rows = receipts.filter(function (r) { return r.receipt_number === rn && r.status !== 'cancelled'; });
       for (var i = 0; i < rows.length; i++) {
         await dbUpdate('inventory_stock_receipts', rows[i].id, {
           status: 'cancelled',
@@ -475,6 +545,12 @@ export default function InventoryReceiving(props) {
   });
   var grouped = Object.keys(groupedReceipts).map(function (rn) {
     var rows = groupedReceipts[rn];
+    // v55.83-A.6.27.33 — when finalized, prefer landed_total (purchase + freight/duty/etc).
+    // Otherwise show provisional total_cost (just purchase cost × qty).
+    var totalCost = rows.reduce(function (a, b) {
+      var v = b.landed_total != null ? Number(b.landed_total) : Number(b.total_cost || 0);
+      return a + v;
+    }, 0);
     return {
       receipt_number: rn,
       receipt_date: rows[0].receipt_date,
@@ -482,10 +558,11 @@ export default function InventoryReceiving(props) {
       receipt_type: rows[0].receipt_type,
       warehouse_id: rows[0].warehouse_id,
       supplier: rows[0].supplier,
+      shipment_reference: rows[0].shipment_reference,
       lines: rows,
       lineCount: rows.length,
       totalQty: rows.reduce(function (a, b) { return a + Number(b.quantity || 0); }, 0),
-      totalCost: rows.reduce(function (a, b) { return a + Number(b.total_cost || 0); }, 0),
+      totalCost: totalCost,
     };
   });
 
@@ -529,7 +606,9 @@ export default function InventoryReceiving(props) {
           className="px-3 py-2 border border-slate-300 rounded-lg text-sm bg-white font-semibold"
         >
           <option value="all">All status</option>
-          <option value="active">Active</option>
+          <option value="received">Received (not finalized)</option>
+          <option value="finalized">Finalized</option>
+          <option value="active">Active (legacy)</option>
           <option value="cancelled">Cancelled</option>
         </select>
         <input type="date" value={filterFrom} onChange={function (e) { setFilterFrom(e.target.value); }} className="px-2 py-1.5 border border-slate-300 rounded-lg text-sm bg-white" />
@@ -547,10 +626,11 @@ export default function InventoryReceiving(props) {
       {/* Receipts list */}
       <div className="bg-white rounded-xl border border-slate-200 overflow-hidden">
         <div className="grid bg-slate-100 text-[10px] font-extrabold text-slate-700 tracking-wider uppercase"
-             style={{ gridTemplateColumns: '170px 100px 90px 1fr 110px 130px ' + (seeCosts ? '130px ' : '') + '110px', padding: '8px 12px' }}>
-          <div>Receipt #</div>
+             style={{ gridTemplateColumns: '170px 100px 80px 90px 1fr 110px 120px ' + (seeCosts ? '120px ' : '') + '140px', padding: '8px 12px' }}>
+          <div>Receipt # / Ref</div>
           <div>Date</div>
           <div>Type</div>
+          <div>Status</div>
           <div>Products</div>
           <div>Total Qty</div>
           <div>Warehouse</div>
@@ -567,19 +647,37 @@ export default function InventoryReceiving(props) {
           grouped.map(function (g) {
             var wh = warehouseById(g.warehouse_id);
             var isCancelled = g.status === 'cancelled';
+            var isFinalized = g.status === 'finalized';
             var rowClass = 'grid items-center border-t border-slate-100 ' +
               (isCancelled ? 'bg-slate-100 opacity-60' : '');
             var typeBadge = g.receipt_type === 'legacy_import' ? 'bg-purple-100 text-purple-900' :
                             g.receipt_type === 'adjustment' ? 'bg-amber-100 text-amber-900' :
                             'bg-emerald-100 text-emerald-900';
+            // v55.83-A.6.27.32 — status badge variants
+            var statusBadge = isCancelled ? 'bg-slate-200 text-slate-600' :
+                              isFinalized ? 'bg-blue-100 text-blue-900' :
+                              g.status === 'received' ? 'bg-amber-100 text-amber-900' :
+                              'bg-slate-100 text-slate-700';
+            var statusLabel = isCancelled ? 'Cancelled' :
+                              isFinalized ? 'Finalized' :
+                              g.status === 'received' ? 'Received' :
+                              'Active';
             return (
               <div key={g.receipt_number} className={rowClass}
-                   style={{ gridTemplateColumns: '170px 100px 90px 1fr 110px 130px ' + (seeCosts ? '130px ' : '') + '110px', padding: '12px 12px' }}>
-                <div className={'text-sm font-mono font-extrabold ' + (isCancelled ? 'text-slate-500 line-through' : 'text-slate-900')}>{g.receipt_number}</div>
+                   style={{ gridTemplateColumns: '170px 100px 80px 90px 1fr 110px 120px ' + (seeCosts ? '120px ' : '') + '140px', padding: '12px 12px' }}>
+                <div>
+                  <div className={'text-sm font-mono font-extrabold ' + (isCancelled ? 'text-slate-500 line-through' : 'text-slate-900')}>{g.receipt_number}</div>
+                  {g.shipment_reference && <div className={'text-[10px] font-mono ' + (isCancelled ? 'text-slate-500 line-through' : 'text-slate-600')}>{g.shipment_reference}</div>}
+                </div>
                 <div className={'text-sm font-semibold ' + (isCancelled ? 'text-slate-500 line-through' : 'text-slate-900')}>{g.receipt_date}</div>
                 <div>
                   <span className={'text-[10px] px-1.5 py-0.5 rounded font-extrabold ' + (isCancelled ? 'bg-slate-200 text-slate-600' : typeBadge)}>
                     {g.receipt_type === 'legacy_import' ? 'Legacy' : g.receipt_type === 'adjustment' ? 'Adjust' : 'New'}
+                  </span>
+                </div>
+                <div>
+                  <span className={'text-[10px] px-1.5 py-0.5 rounded font-extrabold ' + statusBadge}>
+                    {statusLabel}
                   </span>
                 </div>
                 <div className={'text-sm ' + (isCancelled ? 'text-slate-500 line-through' : 'text-slate-900')}>
@@ -597,7 +695,17 @@ export default function InventoryReceiving(props) {
                     {g.totalCost > 0 ? g.totalCost.toLocaleString(undefined, { maximumFractionDigits: 2 }) : <span className="italic text-slate-400 font-normal">—</span>}
                   </div>
                 )}
-                <div className="text-right flex justify-end gap-1">
+                <div className="text-right flex justify-end gap-1 flex-wrap">
+                  {/* v55.83-A.6.27.33 — Finalize Cost button opens landed-cost dialog */}
+                  {canEdit && !isCancelled && !isFinalized && seeCosts && g.status === 'received' && (
+                    <button
+                      onClick={function () { setFinalizeTarget(g); }}
+                      className="px-2 py-1 text-[10px] bg-blue-100 hover:bg-blue-200 text-blue-900 rounded font-bold"
+                      title="Add freight / customs / duty / insurance / clearing costs and allocate them across all lines"
+                    >
+                      Finalize Cost
+                    </button>
+                  )}
                   {canEdit && !isCancelled && (
                     <button
                       onClick={function () { setCancelTarget(g); setCancelReason(''); }}
@@ -659,12 +767,20 @@ export default function InventoryReceiving(props) {
             </div>
 
             <div style={{ padding: 20, maxHeight: 'calc(100vh - 220px)', overflowY: 'auto' }}>
-              {/* Header section */}
+              {/* Header section — v55.83-A.6.27.32 extended with old Shipments form fields */}
               <div className="mb-4 bg-slate-50 rounded-lg p-3 border border-slate-200">
                 <div className="text-[11px] font-extrabold text-slate-700 tracking-wider mb-2">SHIPMENT INFO (applies to all lines)</div>
-                <div className="grid grid-cols-4 gap-2">
-                  <label className="text-[11px] font-extrabold text-slate-700">Receipt Date *
-                    <input type="date" value={header.receipt_date} onChange={function (e) { setHeader(Object.assign({}, header, { receipt_date: e.target.value })); }} className="w-full mt-0.5 px-2 py-1.5 border border-slate-300 rounded text-sm bg-white" />
+
+                {/* Row 1: reference + warehouse + receipt date + container # */}
+                <div className="grid grid-cols-4 gap-2 mb-2">
+                  <label className="text-[11px] font-extrabold text-slate-700">Shipment Reference *
+                    <input
+                      type="text"
+                      value={header.shipment_reference}
+                      onChange={function (e) { setHeader(Object.assign({}, header, { shipment_reference: e.target.value })); }}
+                      placeholder="e.g. KTC-2026-042"
+                      className="w-full mt-0.5 px-2 py-1.5 border border-slate-300 rounded text-sm bg-white font-mono"
+                    />
                   </label>
                   <label className="text-[11px] font-extrabold text-slate-700">Warehouse *
                     <select value={header.warehouse_id} onChange={function (e) { setHeader(Object.assign({}, header, { warehouse_id: e.target.value })); }} className="w-full mt-0.5 px-2 py-1.5 border border-slate-300 rounded text-sm bg-white">
@@ -674,13 +790,44 @@ export default function InventoryReceiving(props) {
                       })}
                     </select>
                   </label>
-                  <label className="text-[11px] font-extrabold text-slate-700">Default Supplier
-                    <input type="text" value={header.supplier} onChange={function (e) { setHeader(Object.assign({}, header, { supplier: e.target.value })); }} placeholder="e.g. ABC Suppliers" className="w-full mt-0.5 px-2 py-1.5 border border-slate-300 rounded text-sm bg-white" />
+                  <label className="text-[11px] font-extrabold text-slate-700">Receipt Date *
+                    <input type="date" value={header.receipt_date} onChange={function (e) { setHeader(Object.assign({}, header, { receipt_date: e.target.value })); }} className="w-full mt-0.5 px-2 py-1.5 border border-slate-300 rounded text-sm bg-white" />
                   </label>
                   <label className="text-[11px] font-extrabold text-slate-700">Container #
                     <input type="text" value={header.container_number} onChange={function (e) { setHeader(Object.assign({}, header, { container_number: e.target.value })); }} className="w-full mt-0.5 px-2 py-1.5 border border-slate-300 rounded text-sm bg-white" />
                   </label>
                 </div>
+
+                {/* Row 2: supplier + freight forwarder + shipping line + purchase currency */}
+                <div className="grid grid-cols-4 gap-2 mb-2">
+                  <label className="text-[11px] font-extrabold text-slate-700">Default Supplier
+                    <input type="text" value={header.supplier} onChange={function (e) { setHeader(Object.assign({}, header, { supplier: e.target.value })); }} placeholder="e.g. ABC Suppliers" className="w-full mt-0.5 px-2 py-1.5 border border-slate-300 rounded text-sm bg-white" />
+                  </label>
+                  <label className="text-[11px] font-extrabold text-slate-700">Freight Forwarder
+                    <input type="text" value={header.freight_forwarder} onChange={function (e) { setHeader(Object.assign({}, header, { freight_forwarder: e.target.value })); }} placeholder="e.g. DHL" className="w-full mt-0.5 px-2 py-1.5 border border-slate-300 rounded text-sm bg-white" />
+                  </label>
+                  <label className="text-[11px] font-extrabold text-slate-700">Shipping Line
+                    <input type="text" value={header.shipping_line} onChange={function (e) { setHeader(Object.assign({}, header, { shipping_line: e.target.value })); }} placeholder="e.g. Maersk" className="w-full mt-0.5 px-2 py-1.5 border border-slate-300 rounded text-sm bg-white" />
+                  </label>
+                  <label className="text-[11px] font-extrabold text-slate-700">Purchase Currency
+                    <select value={header.purchase_currency} onChange={function (e) { setHeader(Object.assign({}, header, { purchase_currency: e.target.value })); }} className="w-full mt-0.5 px-2 py-1.5 border border-slate-300 rounded text-sm bg-white">
+                      <option value="EGP">EGP</option>
+                      <option value="USD">USD</option>
+                      <option value="EUR">EUR</option>
+                    </select>
+                  </label>
+                </div>
+
+                {/* Row 3: ETA + arrival */}
+                <div className="grid grid-cols-4 gap-2">
+                  <label className="text-[11px] font-extrabold text-slate-700">ETA Date
+                    <input type="date" value={header.eta_date} onChange={function (e) { setHeader(Object.assign({}, header, { eta_date: e.target.value })); }} className="w-full mt-0.5 px-2 py-1.5 border border-slate-300 rounded text-sm bg-white" />
+                  </label>
+                  <label className="text-[11px] font-extrabold text-slate-700">Arrival Date
+                    <input type="date" value={header.arrival_date} onChange={function (e) { setHeader(Object.assign({}, header, { arrival_date: e.target.value })); }} className="w-full mt-0.5 px-2 py-1.5 border border-slate-300 rounded text-sm bg-white" />
+                  </label>
+                </div>
+
                 <label className="text-[11px] font-extrabold text-slate-700 block mt-2">Shipment Notes
                   <textarea value={header.notes} onChange={function (e) { setHeader(Object.assign({}, header, { notes: e.target.value })); }} rows={1} className="w-full mt-0.5 px-2 py-1.5 border border-slate-300 rounded text-sm bg-white resize-none" />
                 </label>
@@ -755,10 +902,13 @@ export default function InventoryReceiving(props) {
                           <div className="font-mono text-indigo-700">Classification: {line.product.classification_slug}</div>
                         </div>
 
-                        {/* Quantity + UOM + batch (required) */}
+                        {/* Quantity row 1: ordered + received + variance reason (conditional) + batch */}
                         <div className="grid grid-cols-4 gap-2 mb-2">
-                          <label className="text-[11px] font-extrabold text-slate-700">Quantity *
-                            <input type="text" value={line.quantity} onChange={function (e) { updateLineField(lineIdx, 'quantity', e.target.value); }} className="w-full mt-0.5 px-2 py-1.5 border border-slate-300 rounded text-sm bg-white" />
+                          <label className="text-[11px] font-extrabold text-slate-700">Ordered Qty
+                            <input type="text" value={line.ordered_quantity} onChange={function (e) { updateLineField(lineIdx, 'ordered_quantity', e.target.value); }} placeholder="what supplier shipped" className="w-full mt-0.5 px-2 py-1.5 border border-slate-300 rounded text-sm bg-white" />
+                          </label>
+                          <label className="text-[11px] font-extrabold text-slate-700">Received Qty *
+                            <input type="text" value={line.quantity} onChange={function (e) { updateLineField(lineIdx, 'quantity', e.target.value); }} placeholder="what actually arrived" className="w-full mt-0.5 px-2 py-1.5 border border-slate-300 rounded text-sm bg-white" />
                           </label>
                           <label className="text-[11px] font-extrabold text-slate-700">UOM
                             <select value={line.uom} onChange={function (e) { updateLineField(lineIdx, 'uom', e.target.value); }} className={'w-full mt-0.5 px-2 py-1.5 border border-slate-300 rounded text-sm ' + (line.fromMaster.uom ? 'bg-blue-50' : 'bg-white')}>
@@ -769,6 +919,32 @@ export default function InventoryReceiving(props) {
                           <label className="text-[11px] font-extrabold text-slate-700">Batch # *
                             <input type="text" value={line.batch_number} onChange={function (e) { updateLineField(lineIdx, 'batch_number', e.target.value); }} className="w-full mt-0.5 px-2 py-1.5 border border-slate-300 rounded text-sm bg-white" />
                           </label>
+                        </div>
+
+                        {/* Variance reason — only shows when ordered != received */}
+                        {(function () {
+                          var ord = Number(line.ordered_quantity);
+                          var rec = Number(line.quantity);
+                          var diff = (line.ordered_quantity !== '' && line.quantity !== '' && !isNaN(ord) && !isNaN(rec) && ord !== rec);
+                          if (!diff) return null;
+                          return (
+                            <div className="mb-2 bg-amber-50 border border-amber-300 rounded px-2 py-1.5">
+                              <label className="text-[11px] font-extrabold text-amber-900 block">
+                                ⚠ Variance: ordered {ord} vs received {rec} ({rec > ord ? '+' : ''}{(rec - ord).toFixed(2)}) — reason required *
+                                <input type="text" value={line.variance_reason} onChange={function (e) { updateLineField(lineIdx, 'variance_reason', e.target.value); }} placeholder="e.g. damaged on arrival, short shipment, free samples added..." className="w-full mt-0.5 px-2 py-1.5 border border-amber-300 rounded text-sm bg-white" />
+                              </label>
+                            </div>
+                          );
+                        })()}
+
+                        {/* Quantity row 2: qty_kg + roll_count + rack */}
+                        <div className="grid grid-cols-4 gap-2 mb-2">
+                          <label className="text-[11px] font-extrabold text-slate-700">Quantity in kg
+                            <input type="text" value={line.quantity_kg} onChange={function (e) { updateLineField(lineIdx, 'quantity_kg', e.target.value); }} placeholder="for cross-unit tracking" className="w-full mt-0.5 px-2 py-1.5 border border-slate-300 rounded text-sm bg-white" />
+                          </label>
+                          <label className="text-[11px] font-extrabold text-slate-700">Roll Count
+                            <input type="text" value={line.roll_count} onChange={function (e) { updateLineField(lineIdx, 'roll_count', e.target.value); }} placeholder="# of physical rolls" className="w-full mt-0.5 px-2 py-1.5 border border-slate-300 rounded text-sm bg-white" />
+                          </label>
                           <label className="text-[11px] font-extrabold text-slate-700">Rack
                             <input type="text" value={line.rack} onChange={function (e) { updateLineField(lineIdx, 'rack', e.target.value); }} className={'w-full mt-0.5 px-2 py-1.5 border border-slate-300 rounded text-sm ' + (line.fromMaster.rack ? 'bg-blue-50' : 'bg-white')} />
                             {line.product && !line.fromMaster.rack && line.product.default_rack && line.rack && line.rack !== line.product.default_rack && (
@@ -776,6 +952,9 @@ export default function InventoryReceiving(props) {
                                 📌 {line.updateMaster.rack ? 'Will update master' : 'Update master?'}
                               </button>
                             )}
+                          </label>
+                          <label className="text-[11px] font-extrabold text-slate-700">Line Notes
+                            <input type="text" value={line.line_notes} onChange={function (e) { updateLineField(lineIdx, 'line_notes', e.target.value); }} placeholder="per-line note" className="w-full mt-0.5 px-2 py-1.5 border border-slate-300 rounded text-sm bg-white" />
                           </label>
                         </div>
 
@@ -879,6 +1058,17 @@ export default function InventoryReceiving(props) {
             </div>
           </div>
         </div>
+      )}
+      {/* v55.83-A.6.27.33 — Finalize Landed Cost dialog */}
+      {finalizeTarget && (
+        <InventoryFinalizeCostDialog
+          shipmentGroup={finalizeTarget}
+          productById={productById}
+          userProfile={userProfile}
+          toast={toast}
+          onClose={function () { setFinalizeTarget(null); }}
+          onFinalized={function () { reload(); }}
+        />
       )}
     </div>
   );

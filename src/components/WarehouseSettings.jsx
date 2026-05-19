@@ -28,9 +28,29 @@ export default function WarehouseSettings({ userProfile, modulePerms, toast }) {
 
   useEffect(function () { loadWarehouses(); }, []);
 
+  // v55.83-A.6.27.31 — Esc closes the modal
+  useEffect(function () {
+    function onKey(e) {
+      if ((e.key === 'Escape' || e.key === 'Esc') && showAdd) {
+        setShowAdd(false); setEditing(null); setForm({});
+      }
+    }
+    window.addEventListener('keydown', onKey);
+    return function () { window.removeEventListener('keydown', onKey); };
+  }, [showAdd]);
+
   var handleSave = async function () {
+    // v55.83-A.6.27.31 (Max May 19 2026) — Max reported "click Add Warehouse,
+    // nothing happens". Same root cause pattern as A.6.27.24 Master Lists:
+    // inline form rendered ABOVE the list grew the page downward but didn't
+    // auto-scroll. Form WAS opening, just below the fold. Fix below: convert
+    // to centered modal. Save also gets diagnostic logging + alert fallback
+    // so failures are never silent.
+    console.log('[warehouse] handleSave called. editing =', editing, ' form =', form);
     if (!form.name || !form.code) {
+      console.warn('[warehouse] validation failed: name or code missing');
       if (toast) toast.warning('Name and code are required');
+      alert('Name and Code are both required.\n\nName: "' + (form.name || '') + '"\nCode: "' + (form.code || '') + '"');
       return;
     }
     try {
@@ -43,18 +63,26 @@ export default function WarehouseSettings({ userProfile, modulePerms, toast }) {
         is_active: form.is_active !== false,
         notes: form.notes || null,
       };
+      console.log('[warehouse] payload =', payload);
       if (editing) {
+        console.log('[warehouse] dbUpdate id =', editing.id);
         await dbUpdate('inv_warehouses', editing.id, payload, userProfile && userProfile.id);
+        console.log('[warehouse] update SUCCESS');
         if (toast) toast.success('Warehouse updated');
       } else {
         payload.created_by = (userProfile && userProfile.id) || null;
+        console.log('[warehouse] dbInsert');
         await dbInsert('inv_warehouses', payload, userProfile && userProfile.id);
+        console.log('[warehouse] insert SUCCESS');
         if (toast) toast.success('Warehouse added');
       }
       setForm({}); setEditing(null); setShowAdd(false);
       loadWarehouses();
     } catch (err) {
-      if (toast) toast.error('Save failed: ' + (err && err.message));
+      console.error('[warehouse] save FAILED:', err);
+      var msg = (err && err.message) || String(err);
+      if (toast) toast.error('Save failed: ' + msg);
+      alert('Save failed: ' + msg + '\n\nIf this is the first time you\'re adding a warehouse, make sure your user account has Edit Inventory permission, and that the inv_warehouses table exists in Supabase.');
     }
   };
 
@@ -92,71 +120,116 @@ export default function WarehouseSettings({ userProfile, modulePerms, toast }) {
         </div>
         {canEdit && !showAdd && (
           <button
-            onClick={function () { setForm({ default_currency: 'USD', is_active: true }); setEditing(null); setShowAdd(true); }}
+            onClick={function () {
+              console.log('[warehouse] + Add Warehouse button CLICKED — opening modal');
+              setForm({ default_currency: 'USD', is_active: true });
+              setEditing(null);
+              setShowAdd(true);
+            }}
             className="px-3 py-1.5 rounded-lg bg-emerald-600 text-white text-xs font-bold hover:bg-emerald-700"
           >+ Add Warehouse</button>
         )}
       </div>
 
+      {/* v55.83-A.6.27.31 — converted inline form to centered modal.
+          Previously the form rendered inline above the warehouse list,
+          growing the page downward. On longer pages users clicked "Add"
+          and the form opened below the fold — looking like nothing happened.
+          Now: centered modal with sticky footer, always visible regardless
+          of page length. Click outside / Esc to close. */}
       {showAdd && (
-        <div className="bg-emerald-50 border border-emerald-200 rounded-xl p-4 space-y-2">
-          <div className="text-xs font-bold text-emerald-900 mb-2">
-            {editing ? 'Edit warehouse' : 'New warehouse'}
-          </div>
-          <div className="grid grid-cols-2 gap-2">
-            <div>
-              <label className="text-[10px] font-semibold block">Name *</label>
-              <input value={form.name || ''} onChange={function (e) { setForm(Object.assign({}, form, { name: e.target.value })); }}
-                placeholder="e.g. Cairo Main"
-                className="w-full px-2 py-1.5 rounded border text-xs" />
+        <div
+          className="fixed inset-0 z-[200] bg-black/70 backdrop-blur-sm overflow-y-auto"
+          onClick={function () { setShowAdd(false); setEditing(null); setForm({}); }}
+          style={{ padding: 16 }}
+        >
+          <div
+            className="bg-white rounded-2xl shadow-2xl mx-auto"
+            onClick={function (e) { e.stopPropagation(); }}
+            style={{ maxWidth: 640 }}
+          >
+            {/* Modal header */}
+            <div
+              className="rounded-t-2xl flex justify-between items-center gap-2"
+              style={{ background: '#3730a3', padding: '14px 20px' }}
+            >
+              <div>
+                <div className="text-lg font-extrabold" style={{ color: '#ffffff' }}>
+                  🏭 {editing ? 'Edit warehouse' : 'New warehouse'}
+                </div>
+                <div className="text-xs font-semibold" style={{ color: '#e0e7ff' }}>
+                  Physical stock location. Every receipt needs a warehouse.
+                </div>
+              </div>
+              <button
+                onClick={function () { setShowAdd(false); setEditing(null); setForm({}); }}
+                aria-label="Close"
+                style={{ background: '#ffffff', color: '#1e293b', width: 36, height: 36, fontSize: 20, lineHeight: 1, border: '2px solid #cbd5e1', boxShadow: '0 2px 8px rgba(0,0,0,0.2)', borderRadius: '50%', fontWeight: 800 }}
+              >
+                ✕
+              </button>
             </div>
-            <div>
-              <label className="text-[10px] font-semibold block">Code * (short ID)</label>
-              <input value={form.code || ''} onChange={function (e) { setForm(Object.assign({}, form, { code: e.target.value.toUpperCase() })); }}
-                placeholder="EG-CAI"
-                className="w-full px-2 py-1.5 rounded border text-xs font-mono" />
+
+            {/* Modal body */}
+            <div style={{ padding: 20, maxHeight: 'calc(100vh - 220px)', overflowY: 'auto' }}>
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="text-[11px] font-extrabold text-slate-700 block">Name *</label>
+                  <input value={form.name || ''} onChange={function (e) { setForm(Object.assign({}, form, { name: e.target.value })); }}
+                    placeholder="e.g. Cairo Main"
+                    className="w-full mt-0.5 px-2 py-1.5 rounded border border-slate-300 text-sm bg-white" />
+                </div>
+                <div>
+                  <label className="text-[11px] font-extrabold text-slate-700 block">Code * (short ID)</label>
+                  <input value={form.code || ''} onChange={function (e) { setForm(Object.assign({}, form, { code: e.target.value.toUpperCase() })); }}
+                    placeholder="EG-CAI"
+                    className="w-full mt-0.5 px-2 py-1.5 rounded border border-slate-300 text-sm font-mono bg-white" />
+                </div>
+                <div>
+                  <label className="text-[11px] font-extrabold text-slate-700 block">Country</label>
+                  <input value={form.country || ''} onChange={function (e) { setForm(Object.assign({}, form, { country: e.target.value })); }}
+                    placeholder="EG / US / etc."
+                    className="w-full mt-0.5 px-2 py-1.5 rounded border border-slate-300 text-sm bg-white" />
+                </div>
+                <div>
+                  <label className="text-[11px] font-extrabold text-slate-700 block">Default currency</label>
+                  <select value={form.default_currency || 'USD'} onChange={function (e) { setForm(Object.assign({}, form, { default_currency: e.target.value })); }}
+                    className="w-full mt-0.5 px-2 py-1.5 rounded border border-slate-300 text-sm bg-white">
+                    <option value="EGP">EGP — Egyptian Pound</option>
+                    <option value="USD">USD — US Dollar</option>
+                    <option value="EUR">EUR — Euro</option>
+                  </select>
+                </div>
+                <div className="col-span-2">
+                  <label className="text-[11px] font-extrabold text-slate-700 block">Address</label>
+                  <input value={form.address || ''} onChange={function (e) { setForm(Object.assign({}, form, { address: e.target.value })); }}
+                    className="w-full mt-0.5 px-2 py-1.5 rounded border border-slate-300 text-sm bg-white" />
+                </div>
+                <div className="col-span-2">
+                  <label className="text-[11px] font-extrabold text-slate-700 block">Notes</label>
+                  <textarea value={form.notes || ''} onChange={function (e) { setForm(Object.assign({}, form, { notes: e.target.value })); }}
+                    rows={2}
+                    className="w-full mt-0.5 px-2 py-1.5 rounded border border-slate-300 text-sm bg-white resize-none" />
+                </div>
+                <label className="col-span-2 flex items-center gap-2 text-xs">
+                  <input type="checkbox" checked={form.is_active !== false}
+                    onChange={function (e) { setForm(Object.assign({}, form, { is_active: e.target.checked })); }} />
+                  <span className="font-semibold text-slate-700">Active (uncheck to hide from new shipments without deleting)</span>
+                </label>
+              </div>
             </div>
-            <div>
-              <label className="text-[10px] font-semibold block">Country</label>
-              <input value={form.country || ''} onChange={function (e) { setForm(Object.assign({}, form, { country: e.target.value })); }}
-                placeholder="EG / US / etc."
-                className="w-full px-2 py-1.5 rounded border text-xs" />
+
+            {/* Sticky footer */}
+            <div className="flex justify-end gap-2 border-t border-slate-200 bg-slate-50 rounded-b-2xl" style={{ padding: '12px 20px' }}>
+              <button onClick={function () { setShowAdd(false); setEditing(null); setForm({}); }}
+                className="px-4 py-2 rounded-lg bg-slate-300 hover:bg-slate-400 text-slate-900 text-sm font-bold">
+                Cancel
+              </button>
+              <button onClick={function () { console.log('[warehouse] Save button CLICKED'); handleSave(); }}
+                className="px-5 py-2 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white text-sm font-extrabold shadow">
+                {editing ? '✓ Save changes' : '✓ Add warehouse'}
+              </button>
             </div>
-            <div>
-              <label className="text-[10px] font-semibold block">Default currency</label>
-              <select value={form.default_currency || 'USD'} onChange={function (e) { setForm(Object.assign({}, form, { default_currency: e.target.value })); }}
-                className="w-full px-2 py-1.5 rounded border text-xs">
-                <option value="EGP">EGP — Egyptian Pound</option>
-                <option value="USD">USD — US Dollar</option>
-                <option value="EUR">EUR — Euro</option>
-              </select>
-            </div>
-            <div className="col-span-2">
-              <label className="text-[10px] font-semibold block">Address</label>
-              <input value={form.address || ''} onChange={function (e) { setForm(Object.assign({}, form, { address: e.target.value })); }}
-                className="w-full px-2 py-1.5 rounded border text-xs" />
-            </div>
-            <div className="col-span-2">
-              <label className="text-[10px] font-semibold block">Notes</label>
-              <textarea value={form.notes || ''} onChange={function (e) { setForm(Object.assign({}, form, { notes: e.target.value })); }}
-                rows={2}
-                className="w-full px-2 py-1.5 rounded border text-xs" />
-            </div>
-            <label className="col-span-2 flex items-center gap-2 text-xs">
-              <input type="checkbox" checked={form.is_active !== false}
-                onChange={function (e) { setForm(Object.assign({}, form, { is_active: e.target.checked })); }} />
-              <span>Active (uncheck to hide from new shipments without deleting)</span>
-            </label>
-          </div>
-          <div className="flex gap-2 pt-2">
-            <button onClick={handleSave}
-              className="px-3 py-1.5 rounded bg-emerald-600 text-white text-xs font-bold hover:bg-emerald-700">
-              {editing ? 'Save changes' : 'Add warehouse'}
-            </button>
-            <button onClick={function () { setShowAdd(false); setEditing(null); setForm({}); }}
-              className="px-3 py-1.5 rounded bg-slate-200 text-slate-700 text-xs font-bold hover:bg-slate-300">
-              Cancel
-            </button>
           </div>
         </div>
       )}
