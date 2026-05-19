@@ -1599,11 +1599,16 @@ export default function App() {
       // the creator, primary assignee, or additional assignee). LIMIT 100
       // to keep payload reasonable — Nadia only references the most recent
       // anyway when answering "what was that ticket about X".
+      // v55.83-A.6.27.28 (Max May 18 2026 — REPEATED FOR THE 4TH TIME):
+      // "the AI must be able to see the closed ticket items when I
+      // request a search for any item — THIS IS MANDATORY". The prior
+      // .limit(100) was capping closed-ticket history. Removed. AI now
+      // sees EVERY closed ticket the user is allowed to see (privacy
+      // filtering preserved below). Permanent rule.
       try {
         var closedQuery = supabase.from('tickets').select('*')
           .eq('status', 'Closed')
-          .order('updated_at', { ascending: false })
-          .limit(100);
+          .order('updated_at', { ascending: false });
         const { data: closedTix } = await closedQuery;
         var closedMeId = profile && profile.id;
         var closedMeIsSA = profile && profile.role === 'super_admin';
@@ -5122,7 +5127,7 @@ export default function App() {
               {/* Brand mark — bracket prefix is a terminal callout convention. */}
               <span className="text-emerald-400 font-mono text-xs font-bold tracking-tight" style={{ fontFamily: '"JetBrains Mono", monospace' }}>[KTC]</span>
               <h1 className="text-sm font-bold text-white tracking-tight whitespace-nowrap">NEXTTRADE HUB</h1>
-              <span className="text-[10px] text-zinc-500 font-mono hidden md:inline" style={{ fontFamily: '"JetBrains Mono", monospace' }}>v55.83-A.6.27.26</span>
+              <span className="text-[10px] text-zinc-500 font-mono hidden md:inline" style={{ fontFamily: '"JetBrains Mono", monospace' }}>v55.83-A.6.27.30</span>
               {/* Live clock — terminals always show one. Updates via the
                   existing tick state; if not present, falls back to no clock. */}
               <span className="hidden lg:inline text-[10px] text-zinc-500 font-mono ml-2 pl-2 border-l border-zinc-800" style={{ fontFamily: '"JetBrains Mono", monospace' }}>
@@ -13840,7 +13845,7 @@ export default function App() {
                       latest fix is actually deployed. If he doesn't see this
                       tag in the modal, his browser is running stale JS. */}
                   <div className="mt-1.5 inline-block px-2 py-0.5 rounded bg-amber-900/60 text-amber-100 text-[10px] font-mono font-bold tracking-wide">
-                    BUILD v55.83-A.6.27.26
+                    BUILD v55.83-A.6.27.30
                   </div>
                 </div>
                 <button onClick={() => closePendingTreasuryModal()}
@@ -14475,7 +14480,7 @@ export default function App() {
                     معاملة قد تكون مكررة
                   </div>
                   <div className="mt-1.5 inline-block px-2 py-0.5 rounded bg-amber-900/60 text-amber-100 text-[10px] font-mono font-bold tracking-wide">
-                    BUILD v55.83-A.6.27.26
+                    BUILD v55.83-A.6.27.30
                   </div>
                 </div>
                 <button

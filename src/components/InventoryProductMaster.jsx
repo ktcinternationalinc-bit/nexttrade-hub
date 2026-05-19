@@ -486,7 +486,7 @@ export default function InventoryProductMaster(props) {
       {/* Products table */}
       <div className="bg-white rounded-xl border border-slate-200 overflow-hidden">
         <div className="grid bg-slate-100 text-[10px] font-extrabold text-slate-700 tracking-wider uppercase"
-             style={{ gridTemplateColumns: '90px 1fr 150px 200px 80px 120px', padding: '8px 12px' }}>
+             style={{ gridTemplateColumns: '90px 1.2fr 180px 200px 80px 120px', padding: '8px 12px' }}>
           <div>Code</div>
           <div>Name</div>
           <div>Classification</div>
@@ -506,16 +506,23 @@ export default function InventoryProductMaster(props) {
               <div
                 key={p.id}
                 className={'grid items-center border-t border-slate-100 ' + (p.active ? '' : 'bg-slate-50 opacity-60')}
-                style={{ gridTemplateColumns: '90px 1fr 150px 200px 80px 120px', padding: '10px 12px' }}
+                style={{ gridTemplateColumns: '90px 1.2fr 180px 200px 80px 120px', padding: '12px 12px' }}
               >
                 <div className="text-sm font-mono font-extrabold text-slate-900">
                   {p.quick_code || <span className="text-slate-400 italic font-normal">—</span>}
                 </div>
                 <div>
-                  <div className={'text-sm font-bold ' + (p.active ? 'text-slate-900' : 'text-slate-500 line-through')}>{p.name_en}</div>
-                  <div className={'text-[11px] font-semibold ' + (p.active ? 'text-slate-700' : 'text-slate-500 line-through')} style={{ direction: 'rtl' }}>{p.name_ar}</div>
+                  {/* v55.83-A.6.27.27 — Max requested Arabic description and
+                      classification slug be larger + bolder. Bumped Arabic
+                      name from text-[11px] font-semibold to text-base
+                      font-extrabold. Bumped slug from text-[11px] font-semibold
+                      to text-sm font-extrabold. Also bumped English name from
+                      text-sm font-bold to text-base font-extrabold for parity
+                      and widened the Classification column. */}
+                  <div className={'text-base font-extrabold ' + (p.active ? 'text-slate-900' : 'text-slate-500 line-through')}>{p.name_en}</div>
+                  <div className={'text-base font-extrabold mt-0.5 ' + (p.active ? 'text-slate-800' : 'text-slate-500 line-through')} style={{ direction: 'rtl' }}>{p.name_ar}</div>
                 </div>
-                <div className="text-[11px] font-mono text-slate-700 font-semibold">{p.classification_slug || describeProduct(p)}</div>
+                <div className="text-sm font-mono font-extrabold text-slate-900 break-words">{p.classification_slug || describeProduct(p)}</div>
                 <div className="text-[11px] text-slate-600">
                   {p.design_sku && <div className="font-semibold text-slate-700">{p.design_sku}</div>}
                   {p.notes && <div className="italic truncate" title={p.notes}>{p.notes.length > 40 ? p.notes.substring(0, 40) + '...' : p.notes}</div>}

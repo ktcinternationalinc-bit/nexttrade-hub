@@ -36,11 +36,11 @@ ok('1: page.jsx declares closedTicketsForAI state',
 ok('2a: dashTickets fetch still excludes Closed (kept for dashboard speed)',
   /\.neq\('status', 'Closed'\)/.test(page));
 ok('2b: SEPARATE fetch for closed tickets exists',
-  /fetch Closed tickets separately[\s\S]{0,800}\.eq\('status', 'Closed'\)/.test(page));
+  /\.eq\('status', 'Closed'\)\s*\.order\('updated_at', \{ ascending: false \}\)/.test(page));
 ok('2c: closed-tickets fetch is ordered by updated_at desc',
   /eq\('status', 'Closed'\)\s*\.order\('updated_at', \{ ascending: false \}\)/.test(page));
-ok('2d: closed-tickets fetch is limited to 100',
-  /eq\('status', 'Closed'\)[\s\S]{0,300}\.limit\(100\)/.test(page));
+ok('2d: closed-tickets fetch — NO LIMIT now (A.6.27.28 removed .limit(100) so AI sees ALL closed)',
+  !/\.eq\('status', 'Closed'\)[\s\S]{0,300}\.limit\(100\)/.test(page));
 ok('2e: closed-tickets fetch result feeds setClosedTicketsForAI',
   /setClosedTicketsForAI\(filteredClosed\)/.test(page));
 
@@ -67,12 +67,14 @@ ok('6c: allMyTickets is union of open and closed (deduped by id)',
 // ── 7. closed-ticket context block uses closedMyTickets ──────────
 ok('7a: recentlyClosed reads from closedMyTickets (not allMyTickets.filter)',
   /var recentlyClosed = closedMyTickets/.test(ag));
-ok('7b: recentlyClosed shows up to 25 (was 10 in A.6.27.12)',
-  /recentlyClosed[\s\S]{0,300}\.slice\(0, 25\)/.test(ag));
+ok('7b: recentlyClosed now serializes ALL closed tickets (A.6.27.28 removed .slice(0,25))',
+  !/recentlyClosed[\s\S]{0,300}\.slice\(0, 25\)/.test(ag) &&
+  /closedMyTickets[\s\S]{0,400}\.sort\([\s\S]{0,200}\);\s+if \(recentlyClosed\.length\)/.test(ag));
 ok('7c: closed-ticket context includes description (for topic matching)',
-  /ctx \+= 'Closed tickets accessible for history queries[\s\S]{0,1000}t\.description/.test(ag));
+  /ctx \+= '(Closed tickets accessible for history queries|Closed tickets searchable by AI)[\s\S]{0,1000}t\.description/.test(ag));
 ok('7d: context shows TOTAL closed count (not just shown subset)',
-  /Closed tickets accessible for history queries \(' \+ closedMyTickets\.length \+ ' total\)/.test(ag));
+  /Closed tickets accessible for history queries \(' \+ closedMyTickets\.length \+ ' total\)/.test(ag) ||
+  /Closed tickets searchable by AI \(' \+ recentlyClosed\.length \+ ' total/.test(ag));
 
 // ── 8. regression guard: the OLD broken pattern is gone ──────────
 ok('8: old broken pattern (filtering closed from `tickets`) is removed',

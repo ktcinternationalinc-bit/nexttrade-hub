@@ -647,26 +647,26 @@ export default function AIGreeter({ user, userProfile, users, tickets, closedTic
 
     ctx += 'Total open tickets: ' + myTickets.length + '\n';
     if (staleTickets.length) ctx += 'Stale (not updated 3+ days): ' + staleTickets.length + ' — ' + staleTickets.slice(0, 5).map(function(t) { return (t.ticket_number || '') + ' ' + (t.title || ''); }).join(', ') + '. Nudge them!\n';
-    // v55.83-A.6.27.16 (Max May 17 2026) — closed-ticket access. Per Max
-    // asked THREE TIMES: Nadia must be able to reference closed tickets
-    // for history queries like "what was that ticket about leather
-    // samples last month". Now lists up to 25 most-recently-closed with
-    // descriptions so she can match on topic, not just title.
+    // v55.83-A.6.27.28 (Max May 18 2026 — REPEATED FOR THE 4TH TIME):
+    // Max: "the AI must be able to see the closed ticket items when I
+    // request a search for any item — THIS IS MANDATORY". Previously
+    // capped at 25 most recent which meant searches for older tickets
+    // genuinely failed. Now emits ALL closed tickets the user is
+    // entitled to see (privacy-filtered at fetch time in page.jsx).
+    // For each: ticket#, customer (if available), title, description
+    // truncated to 80 chars, closed date.
     var recentlyClosed = closedMyTickets
       .slice() // don't mutate the prop
-      .sort(function (a, b) { return (b.updated_at || b.created_at || '').localeCompare(a.updated_at || a.created_at || ''); })
-      .slice(0, 25);
+      .sort(function (a, b) { return (b.updated_at || b.created_at || '').localeCompare(a.updated_at || a.created_at || ''); });
     if (recentlyClosed.length) {
-      ctx += 'Closed tickets accessible for history queries (' + closedMyTickets.length + ' total):\n';
+      ctx += 'Closed tickets searchable by AI (' + recentlyClosed.length + ' total — ALL included for search/history queries):\n';
       recentlyClosed.forEach(function (t) {
         var closedAt = (t.updated_at || t.created_at || '').substring(0, 10);
         var summary = (t.title || '');
+        if (t.customer_name) summary = '[' + t.customer_name + '] ' + summary;
         if (t.description) summary += ' — ' + String(t.description).substring(0, 80);
         ctx += '  • ' + (t.ticket_number || '') + ' [' + closedAt + '] ' + summary + '\n';
       });
-      if (closedMyTickets.length > 25) {
-        ctx += '  (... and ' + (closedMyTickets.length - 25) + ' more closed tickets — ask me to search by topic/customer if you need older ones)\n';
-      }
     } else {
       ctx += 'Closed tickets accessible: 0 (no closed tickets for this user)\n';
     }

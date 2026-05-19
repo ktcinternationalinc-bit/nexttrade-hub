@@ -18,6 +18,9 @@ import AdjustmentsManager from './AdjustmentsManager';
 import InventoryReports from './InventoryReports';
 import InventoryMasterAdmin from './InventoryMasterAdmin';
 import InventoryProductMaster from './InventoryProductMaster';
+import InventoryImportProducts from './InventoryImportProducts';
+import InventoryReceiving from './InventoryReceiving';
+import InventoryStockImport from './InventoryStockImport';
 import {
   canViewInventory,
   canSeeInventoryCosts,
@@ -38,6 +41,12 @@ var SUBTABS = [
   { id: 'masterlists', label: '🗂️ Master Lists', stage: 'Classification', desc: 'Manage the 8 classification levels (Product Family, Category, Grade, etc.) — super-admin only' },
   // v55.83-A.6.27.23 — Phase 1 Build 2: Product Master catalog
   { id: 'productmaster', label: '🏷️ Product Master', stage: 'Classification', desc: 'Define each product with classification + quick code + defaults' },
+  // v55.83-A.6.27.28 — Phase 1 Build 3: Bulk import products from Excel
+  { id: 'importproducts', label: '📥 Import Products', stage: 'Classification', desc: 'Bulk-import products from an Excel file with template + preview + validation' },
+  // v55.83-A.6.27.29 — Phase 1 Build 4.0: Receive Stock (warehouse receiving)
+  { id: 'receivestock', label: '🚚 Receive Stock', stage: 'Receiving', desc: 'Record incoming shipments. Multi-line per receipt with autofill from Product Master.' },
+  // v55.83-A.6.27.30 — Phase 1 Build 4.5: Bulk import legacy stock
+  { id: 'importstock', label: '📦 Import Stock', stage: 'Receiving', desc: 'One-time bulk import of existing inventory from Excel.' },
 ];
 
 export default function InventoryTab({ userProfile, modulePerms, toast, isSuperAdmin }) {
@@ -129,6 +138,26 @@ export default function InventoryTab({ userProfile, modulePerms, toast, isSuperA
           if (st.id === 'productmaster' && !(isSuperAdmin || (modulePerms && (modulePerms['Inventory'] === true || modulePerms['Edit Product Master'] === true)))) {
             return null;
           }
+          // v55.83-A.6.27.28 — Import Products tab requires Edit Product
+          // Master (same as creating individual products). Hidden if no
+          // perm. This is a heavy-impact action — strict gate.
+          if (st.id === 'importproducts' && !(isSuperAdmin || (modulePerms && modulePerms['Edit Product Master'] === true))) {
+            return null;
+          }
+          // v55.83-A.6.27.29 — Receive Stock tab visible to anyone with
+          // Inventory access (read-only) or super_admin / Edit Inventory
+          // (full CRUD). Cost fields inside the component are gated
+          // separately by canSeeInventoryCosts.
+          if (st.id === 'receivestock' && !(isSuperAdmin || (modulePerms && (modulePerms['Inventory'] === true || modulePerms['Edit Inventory'] === true)))) {
+            return null;
+          }
+          // v55.83-A.6.27.30 — Import Stock tab gated to super_admin OR
+          // Edit Inventory (same as Receive Stock — both write to the
+          // same table). Cost columns in the template/preview are gated
+          // separately by canSeeInventoryCosts inside the component.
+          if (st.id === 'importstock' && !(isSuperAdmin || (modulePerms && modulePerms['Edit Inventory'] === true))) {
+            return null;
+          }
           var isActive = subtab === st.id;
           return (
             <button key={st.id}
@@ -184,6 +213,18 @@ export default function InventoryTab({ userProfile, modulePerms, toast, isSuperA
       {/* v55.83-A.6.27.23 — Phase 1 Build 2: Product Master catalog */}
       {subtab === 'productmaster' && (
         <InventoryProductMaster userProfile={userProfile} modulePerms={modulePerms} isSuperAdmin={isSuperAdmin} toast={toast} />
+      )}
+      {/* v55.83-A.6.27.28 — Phase 1 Build 3: Bulk Import Products */}
+      {subtab === 'importproducts' && (
+        <InventoryImportProducts userProfile={userProfile} modulePerms={modulePerms} isSuperAdmin={isSuperAdmin} toast={toast} />
+      )}
+      {/* v55.83-A.6.27.29 — Phase 1 Build 4.0: Receive Stock */}
+      {subtab === 'receivestock' && (
+        <InventoryReceiving userProfile={userProfile} modulePerms={modulePerms} isSuperAdmin={isSuperAdmin} toast={toast} />
+      )}
+      {/* v55.83-A.6.27.30 — Phase 1 Build 4.5: Bulk Import Legacy Stock */}
+      {subtab === 'importstock' && (
+        <InventoryStockImport userProfile={userProfile} modulePerms={modulePerms} isSuperAdmin={isSuperAdmin} toast={toast} />
       )}
 
       {/* Stage guidance */}

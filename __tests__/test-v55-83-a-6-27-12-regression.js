@@ -89,9 +89,10 @@ ok('7b: AIGreeter myTickets excludes Closed',
   /var myTickets = allMyTickets\.filter\(function \(t\) \{ return t\.status !== 'Closed'; \}\)/.test(ag) ||
   /var myTickets = openMyTickets;/.test(ag));
 ok('7c: AIGreeter surfaces recentlyClosed tickets for history queries',
-  // A.6.27.12 banner text vs A.6.27.16 banner text
+  // A.6.27.12 banner text vs A.6.27.16 banner text vs A.6.27.28 banner text
   /Recently CLOSED tickets \(available for history queries; not in active counts\)/.test(ag) ||
-  /Closed tickets accessible for history queries/.test(ag));
+  /Closed tickets accessible for history queries/.test(ag) ||
+  /Closed tickets searchable by AI/.test(ag));
 ok('7d: AIGreeter accepts modulePerms + isSuperAdmin props',
   /modulePerms, isSuperAdmin \}\)/.test(ag));
 ok('7e: financial context behind canSeeFinancials gate',
