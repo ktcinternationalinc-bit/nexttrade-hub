@@ -74,6 +74,17 @@ function emptyLine() {
     rolls: [],
     // v55.83-A.6.27.35 — tracks if this is editing an existing receipt row
     existing_id: null,
+    // v55.83-A.6.27.39 — Variant specs (mandatory when product is a family template)
+    //   When operator picks a family template, these 4 are required before save.
+    //   On save, the system calls get_or_create_variant() to either reuse an
+    //   existing variant or create a new one with the next sequential suffix.
+    variant_category_code: '',     // SM / EM
+    variant_construction_code: '', // RG / PF / FN / FP / TL
+    variant_backing_code: '',      // BK / CT / FL / GR / GS / NW / OT
+    variant_pattern_code: '',      // NA / HC / MG / RG
+    // After save, the picker shows the resolved variant info:
+    resolved_variant_id: '',       // the actual product_id used in the receipt insert
+    resolved_variant_suffix: '',   // -001, -002, etc.
   };
 }
 
@@ -90,6 +101,8 @@ export default function InventoryReceiving(props) {
 
   // Data
   var [receipts, setReceipts] = useState([]);
+  // v55.83-A.6.27.37 — shipment headers (shell shipments before product lines added)
+  var [headers, setHeaders] = useState([]);
   var [products, setProducts] = useState([]);
   var [warehouses, setWarehouses] = useState([]);
   var [loading, setLoading] = useState(true);
@@ -117,6 +130,7 @@ export default function InventoryReceiving(props) {
     eta_date: '',
     arrival_date: '',
     purchase_currency: 'USD',
+    origin_country_code: 'US',
   });
   var [lines, setLines] = useState([emptyLine()]);
   var [busy, setBusy] = useState(false);
@@ -135,15 +149,17 @@ export default function InventoryReceiving(props) {
     async function load() {
       setLoading(true);
       try {
-        var [recRes, prodRes, whRes] = await Promise.all([
+        var [recRes, prodRes, whRes, hdrRes] = await Promise.all([
           supabase.from('inventory_stock_receipts').select('*').order('created_at', { ascending: false }),
           supabase.from('inventory_products').select('*').eq('active', true),
           supabase.from('inv_warehouses').select('*').order('name'),
+          supabase.from('inventory_shipment_headers').select('*').order('created_at', { ascending: false }),
         ]);
         if (cancelled) return;
         setReceipts(recRes.data || []);
         setProducts(prodRes.data || []);
         setWarehouses(whRes.data || []);
+        setHeaders(hdrRes.data || []);
       } catch (e) {
         console.error('[receiving] load failed:', e);
         toast.error('Failed to load receiving data');
@@ -157,14 +173,16 @@ export default function InventoryReceiving(props) {
 
   async function reload() {
     try {
-      var [recRes, prodRes, whRes] = await Promise.all([
+      var [recRes, prodRes, whRes, hdrRes] = await Promise.all([
         supabase.from('inventory_stock_receipts').select('*').order('created_at', { ascending: false }),
         supabase.from('inventory_products').select('*').eq('active', true),
         supabase.from('inv_warehouses').select('*').order('name'),
+        supabase.from('inventory_shipment_headers').select('*').order('created_at', { ascending: false }),
       ]);
       setReceipts(recRes.data || []);
       setProducts(prodRes.data || []);
       setWarehouses(whRes.data || []);
+      setHeaders(hdrRes.data || []);
     } catch (e) { console.error('[receiving] reload failed:', e); }
   }
 
@@ -196,15 +214,39 @@ export default function InventoryReceiving(props) {
   // Autocomplete matches for typed quick code (also matches by name)
   function suggestionsFor(query) {
     if (!query || !query.trim()) return [];
-    var q = query.trim().toLowerCase();
-    return products.filter(function (p) {
-      return p.active && (
-        (p.quick_code || '').toLowerCase().indexOf(q) >= 0
-        || (p.name_en || '').toLowerCase().indexOf(q) >= 0
-        || (p.name_ar || '').indexOf(query.trim()) >= 0
-        || (p.classification_slug || '').toLowerCase().indexOf(q) >= 0
-      );
-    }).slice(0, 10);
+    // v55.83-A.6.27.39 — Smart multi-keyword search.
+    // Split on whitespace, every keyword must appear (substring, case-insensitive)
+    // in the product's searchable string (quick_code, name_en, name_ar, slug, suffix).
+    // Sort: featured first, then by use_count DESC, then name ASC.
+    var keywords = query.trim().toLowerCase().split(/\s+/).filter(function (k) { return k.length > 0; });
+    if (keywords.length === 0) return [];
+    var matches = products.filter(function (p) {
+      if (!p.active) return false;
+      // Build searchable string for this product
+      var searchable = ((p.quick_code || '') + ' ' +
+        (p.variant_suffix ? p.quick_code + '-' + p.variant_suffix + ' ' : '') +
+        (p.name_en || '') + ' ' +
+        (p.name_ar || '') + ' ' +
+        (p.classification_slug || '')).toLowerCase();
+      // Every keyword must appear somewhere in the searchable string
+      for (var i = 0; i < keywords.length; i++) {
+        if (searchable.indexOf(keywords[i]) < 0) return false;
+      }
+      return true;
+    });
+    matches.sort(function (a, b) {
+      // featured DESC
+      if ((b.featured === true ? 1 : 0) !== (a.featured === true ? 1 : 0)) {
+        return (b.featured === true ? 1 : 0) - (a.featured === true ? 1 : 0);
+      }
+      // use_count DESC
+      var au = Number(a.use_count || 0);
+      var bu = Number(b.use_count || 0);
+      if (bu !== au) return bu - au;
+      // name ASC
+      return (a.name_en || '').localeCompare(b.name_en || '');
+    });
+    return matches.slice(0, 20);
   }
 
   // ── Modal management ─────────────────────────────────────────────
@@ -222,6 +264,7 @@ export default function InventoryReceiving(props) {
       eta_date: '',
       arrival_date: '',
       purchase_currency: 'USD',
+    origin_country_code: 'US',
     });
     setLines([emptyLine()]);
     setModalOpen(true);
@@ -242,6 +285,7 @@ export default function InventoryReceiving(props) {
       eta_date: '',
       arrival_date: '',
       purchase_currency: 'USD',
+    origin_country_code: 'US',
     });
     setLines([emptyLine()]);
   }
@@ -259,6 +303,30 @@ export default function InventoryReceiving(props) {
     }
     setBusy(true);
     try {
+      // v55.83-A.6.27.37 — Header-only shell: open with empty line, load header data from grouped.header
+      if (grouped.isHeaderOnly && grouped.header) {
+        var h = grouped.header;
+        setEditingReceiptNumber(grouped.receipt_number);
+        setHeader({
+          receipt_date: h.receipt_date || '',
+          warehouse_id: h.warehouse_id || '',
+          supplier: h.supplier || '',
+          container_number: h.container_number || '',
+          notes: h.notes || '',
+          shipment_reference: h.shipment_reference || '',
+          freight_forwarder: h.freight_forwarder || '',
+          shipping_line: h.shipping_line || '',
+          eta_date: h.eta_date || '',
+          arrival_date: h.arrival_date || '',
+          purchase_currency: h.purchase_currency || 'USD',
+          origin_country_code: h.origin_country_code || 'US',
+        });
+        setLines([emptyLine()]);
+        setModalOpen(true);
+        setBusy(false);
+        return;
+      }
+
       var rows = grouped.lines || [];
       var first = rows[0];
       setEditingReceiptNumber(grouped.receipt_number);
@@ -274,6 +342,7 @@ export default function InventoryReceiving(props) {
         eta_date: first.eta_date || '',
         arrival_date: first.arrival_date || '',
         purchase_currency: first.purchase_currency || 'USD',
+        origin_country_code: first.origin_country_code || 'US',
       });
 
       // Fetch rolls for all line ids in parallel
@@ -488,6 +557,69 @@ export default function InventoryReceiving(props) {
   }
 
   // ── Save receipt ─────────────────────────────────────────────────
+  // v55.83-A.6.27.37 — Save just the shipment shell (no products yet).
+  // Writes to inventory_shipment_headers (separate from inventory_stock_receipts
+  // which requires product_id NOT NULL). Operator returns later via Edit to add
+  // product lines and the lines link back via header_id.
+  async function saveShipmentHeaderOnly() {
+    if (!header.receipt_date) { alert('Receipt date required'); return; }
+    if (!header.warehouse_id) { alert('Warehouse required'); return; }
+    if (!header.shipment_reference || !header.shipment_reference.trim()) {
+      alert('Shipment Reference required (container number, PO number, or supplier reference).');
+      return;
+    }
+
+    setBusy(true);
+    try {
+      // Generate a receipt_number for this shell shipment
+      var receiptNumber;
+      if (editingReceiptNumber) {
+        receiptNumber = editingReceiptNumber;
+      } else {
+        var rnRes = await supabase.rpc('generate_receipt_number', { p_date: header.receipt_date });
+        if (rnRes.error) throw rnRes.error;
+        receiptNumber = rnRes.data;
+      }
+
+      var payload = {
+        receipt_number: receiptNumber,
+        receipt_date: header.receipt_date,
+        status: 'pending_detail',
+        shipment_reference: header.shipment_reference.trim(),
+        supplier: (header.supplier || '').trim() || null,
+        warehouse_id: header.warehouse_id,
+        freight_forwarder: (header.freight_forwarder || '').trim() || null,
+        shipping_line: (header.shipping_line || '').trim() || null,
+        container_number: (header.container_number || '').trim() || null,
+        eta_date: header.eta_date || null,
+        arrival_date: header.arrival_date || null,
+        purchase_currency: header.purchase_currency || 'USD',
+        origin_country_code: header.origin_country_code || null,
+        notes: (header.notes || '').trim() || null,
+        updated_by: userProfile && userProfile.id,
+      };
+
+      // Upsert: insert new, or update existing
+      var existingHeaderRes = await supabase.from('inventory_shipment_headers').select('id').eq('receipt_number', receiptNumber).maybeSingle();
+      if (existingHeaderRes.data && existingHeaderRes.data.id) {
+        await dbUpdate('inventory_shipment_headers', existingHeaderRes.data.id, payload, userProfile && userProfile.id);
+      } else {
+        payload.created_by = userProfile && userProfile.id;
+        await dbInsert('inventory_shipment_headers', payload, userProfile && userProfile.id);
+      }
+
+      toast.success('Shipment ' + receiptNumber + ' saved as Pending Detail. Add products later via Edit.');
+      await reload();
+      closeModal();
+    } catch (err) {
+      console.error('[receiving] header save failed:', err);
+      toast.error('Save failed: ' + ((err && err.message) || String(err)));
+      alert('Save failed: ' + ((err && err.message) || String(err)) + '\n\nMake sure the v55.83-A.6.27.37 SQL migration has been run in Supabase (creates inventory_shipment_headers table).');
+    } finally {
+      setBusy(false);
+    }
+  }
+
   async function saveReceipt() {
     // v55.83-A.6.27.35 — Validation rewritten for two-phase flow.
     // Phase 1: header + at least one product line with expected_* totals (quantity can be blank)
@@ -502,6 +634,25 @@ export default function InventoryReceiving(props) {
     for (var i = 0; i < lines.length; i++) {
       var L = lines[i];
       if (!L.product_id) { alert('Line ' + (i + 1) + ': product not selected. Pick a product or remove the line.'); return; }
+      // v55.83-A.6.27.39 — Variant specs required when product is a family template
+      if (L.product && L.product.is_family_template === true) {
+        if (!L.variant_category_code) {
+          alert('Line ' + (i + 1) + ': Category required (Smooth or Embossed) for family template ' + (L.product.quick_code || '?') + '.');
+          return;
+        }
+        if (!L.variant_construction_code) {
+          alert('Line ' + (i + 1) + ': Construction required for family template ' + (L.product.quick_code || '?') + '.');
+          return;
+        }
+        if (!L.variant_backing_code) {
+          alert('Line ' + (i + 1) + ': Backing required for family template ' + (L.product.quick_code || '?') + '.');
+          return;
+        }
+        if (!L.variant_pattern_code) {
+          alert('Line ' + (i + 1) + ': Pattern required for family template ' + (L.product.quick_code || '?') + '.');
+          return;
+        }
+      }
       // v55.83-A.6.27.35 — at least one of: actual quantity, expected_uom_total, expected_rolls, or rolls[] must be present
       var hasActual = L.quantity && asNum(L.quantity) !== null && asNum(L.quantity) > 0;
       var hasExpected = asNum(L.expected_uom_total) > 0 || asNum(L.expected_rolls) > 0 || asNum(L.expected_gross_kg) > 0;
@@ -563,6 +714,26 @@ export default function InventoryReceiving(props) {
       // Process each line
       for (var j = 0; j < lines.length; j++) {
         var L2 = lines[j];
+        // v55.83-A.6.27.39 — If product is a family template, resolve to a variant
+        // via get_or_create_variant() — either reuses existing or creates a new one.
+        var effectiveProductId = L2.product_id;
+        if (L2.product && L2.product.is_family_template === true) {
+          var vRes = await supabase.rpc('get_or_create_variant', {
+            p_template_id:       L2.product_id,
+            p_category_code:     L2.variant_category_code,
+            p_construction_code: L2.variant_construction_code,
+            p_backing_code:      L2.variant_backing_code,
+            p_pattern_code:      L2.variant_pattern_code,
+            p_user_id:           userProfile && userProfile.id,
+          });
+          if (vRes.error) {
+            console.error('[receiving] get_or_create_variant failed:', vRes.error);
+            toast.error('Variant resolution failed: ' + vRes.error.message);
+            setBusy(false);
+            return;
+          }
+          effectiveProductId = vRes.data;
+        }
         var qty = asNum(L2.quantity);
         var cost = asNum(L2.cost_per_uom);
         // Use expected_uom_total as a fallback if no actual quantity entered yet
@@ -579,7 +750,7 @@ export default function InventoryReceiving(props) {
           receipt_type: 'new_shipment',
           receipt_date: header.receipt_date,
           status: lineStatus,
-          product_id: L2.product_id,
+          product_id: effectiveProductId,
           // Store actual quantity if entered, else fall back to expected_uom_total so
           // downstream queries (movements/layers) get a number to work with.
           quantity: effectiveQty != null ? effectiveQty : 0.001, // CHECK requires > 0; use tiny number if neither set
@@ -784,7 +955,48 @@ export default function InventoryReceiving(props) {
       lineCount: rows.length,
       totalQty: rows.reduce(function (a, b) { return a + Number(b.quantity || 0); }, 0),
       totalCost: totalCost,
+      isHeaderOnly: false,
     };
+  });
+
+  // v55.83-A.6.27.37 — merge in shell shipments (headers with no product lines yet).
+  // Apply the same filter logic to headers, then add phantom rows for any header
+  // whose receipt_number isn't already represented in grouped.
+  var existingNumbers = {};
+  grouped.forEach(function (g) { existingNumbers[g.receipt_number] = true; });
+  headers.forEach(function (h) {
+    if (existingNumbers[h.receipt_number]) return; // already represented by lines
+    // Apply same filter rules
+    if (filterStatus !== 'all' && h.status !== filterStatus) return;
+    if (filterWarehouse !== 'all' && h.warehouse_id !== filterWarehouse) return;
+    if (filterFrom && h.receipt_date < filterFrom) return;
+    if (filterTo && h.receipt_date > filterTo) return;
+    if (search.trim()) {
+      var q = search.trim().toLowerCase();
+      var hay = ((h.shipment_reference || '') + ' ' + (h.supplier || '') + ' ' + (h.receipt_number || '') + ' ' + (h.notes || '')).toLowerCase();
+      if (hay.indexOf(q) < 0) return;
+    }
+    grouped.push({
+      receipt_number: h.receipt_number,
+      receipt_date: h.receipt_date,
+      status: h.status || 'pending_detail',
+      receipt_type: 'new_shipment',
+      warehouse_id: h.warehouse_id,
+      supplier: h.supplier,
+      shipment_reference: h.shipment_reference,
+      lines: [],
+      lineCount: 0,
+      totalQty: 0,
+      totalCost: 0,
+      isHeaderOnly: true,
+      header_id: h.id,
+      header: h,
+    });
+  });
+  // Sort newest first by date desc then receipt_number desc
+  grouped.sort(function (a, b) {
+    if (a.receipt_date !== b.receipt_date) return a.receipt_date < b.receipt_date ? 1 : -1;
+    return a.receipt_number < b.receipt_number ? 1 : -1;
   });
 
   return (
@@ -988,7 +1200,7 @@ export default function InventoryReceiving(props) {
           <div
             className="bg-white rounded-2xl shadow-2xl mx-auto"
             onClick={function (e) { e.stopPropagation(); }}
-            style={{ maxWidth: 1100 }}
+            style={{ maxWidth: 1400 }}
           >
             {/* Modal header */}
             <div
@@ -1010,7 +1222,7 @@ export default function InventoryReceiving(props) {
               </button>
             </div>
 
-            <div style={{ padding: 20, maxHeight: 'calc(100vh - 220px)', overflowY: 'auto' }}>
+            <div style={{ padding: 20, maxHeight: 'calc(100vh - 140px)', overflowY: 'auto' }}>
               {/* Header section — v55.83-A.6.27.32 extended with old Shipments form fields */}
               <div className="mb-4 bg-slate-50 rounded-lg p-3 border border-slate-200">
                 <div className="text-[11px] font-extrabold text-slate-700 tracking-wider mb-2">SHIPMENT INFO (applies to all lines)</div>
@@ -1058,6 +1270,14 @@ export default function InventoryReceiving(props) {
                       <option value="EGP">EGP</option>
                       <option value="USD">USD</option>
                       <option value="EUR">EUR</option>
+                    </select>
+                  </label>
+                  {/* v55.83-A.6.27.37 — Origin Country (US / CA / CN only) */}
+                  <label className="text-[11px] font-extrabold text-slate-700">Origin Country
+                    <select value={header.origin_country_code || 'US'} onChange={function (e) { setHeader(Object.assign({}, header, { origin_country_code: e.target.value })); }} className="w-full mt-0.5 px-2 py-1.5 border border-slate-300 rounded text-sm bg-white">
+                      <option value="US">🇺🇸 United States</option>
+                      <option value="CA">🇨🇦 Canada</option>
+                      <option value="CN">🇨🇳 China</option>
                     </select>
                   </label>
                 </div>
@@ -1122,13 +1342,21 @@ export default function InventoryReceiving(props) {
                       {line.showSuggestions && suggestions.length > 0 && (
                         <div className="absolute z-10 left-0 right-0 mt-1 bg-white border-2 border-indigo-300 rounded-lg shadow-lg max-h-60 overflow-auto">
                           {suggestions.map(function (s) {
+                            // v55.83-A.6.27.39 — show ⭐ for featured + variant suffix + use_count badge
+                            var displayCode = s.variant_suffix ? (s.quick_code + '-' + s.variant_suffix) : s.quick_code;
                             return (
                               <button
                                 key={s.id}
                                 onClick={function () { pickProductForLine(lineIdx, s); }}
                                 className="w-full text-left px-3 py-1.5 text-xs hover:bg-indigo-50 border-b border-slate-100 last:border-0"
                               >
-                                <div className="font-mono font-extrabold text-slate-900">{s.quick_code || '(no code)'}</div>
+                                <div className="flex items-center gap-2">
+                                  {s.featured === true && <span title="Featured" className="text-amber-500">⭐</span>}
+                                  <span className="font-mono font-extrabold text-slate-900">{displayCode || '(no code)'}</span>
+                                  {s.is_family_template === true && <span className="text-[9px] bg-indigo-100 text-indigo-800 font-bold rounded px-1.5">FAMILY</span>}
+                                  {s.is_family_template === false && s.variant_suffix && <span className="text-[9px] bg-emerald-100 text-emerald-800 font-bold rounded px-1.5">VARIANT</span>}
+                                  {Number(s.use_count || 0) > 0 && <span className="text-[10px] text-slate-500 ml-auto">used {s.use_count}×</span>}
+                                </div>
                                 <div className="text-slate-700">{s.name_en} / <span style={{ direction: 'rtl' }}>{s.name_ar}</span></div>
                                 <div className="text-[10px] text-slate-500 font-mono">{s.classification_slug}</div>
                               </button>
@@ -1144,7 +1372,70 @@ export default function InventoryReceiving(props) {
                         <div className="bg-indigo-50 border border-indigo-200 rounded px-2 py-1.5 mb-2 text-[11px]">
                           <div className="font-extrabold text-indigo-900">{line.product.name_en} / <span style={{ direction: 'rtl' }}>{line.product.name_ar}</span></div>
                           <div className="font-mono text-indigo-700">Classification: {line.product.classification_slug}</div>
+                          {line.product.is_family_template === true && (
+                            <div className="font-bold text-amber-700 mt-1">⚠ Family template — fill the 4 spec dropdowns below to create or match a variant</div>
+                          )}
                         </div>
+
+                        {/* v55.83-A.6.27.39 — VARIANT SPEC DROPDOWNS (only for family templates) */}
+                        {line.product.is_family_template === true && (
+                          <div className="bg-purple-50 border-2 border-purple-300 rounded p-2 mb-2">
+                            <div className="text-[11px] font-extrabold text-purple-900 tracking-wider mb-1">🎯 VARIANT SPECS — fill in to identify the exact product variant</div>
+                            <div className="text-[10px] text-purple-800 mb-2 italic">Each combination creates a unique variant (e.g. {line.product.quick_code}-001). System reuses an existing variant if specs match.</div>
+                            <div className="grid grid-cols-4 gap-2">
+                              <label className="text-[11px] font-extrabold text-purple-900">Category *
+                                <select value={line.variant_category_code} onChange={function (e) { updateLineField(lineIdx, 'variant_category_code', e.target.value); }} className="w-full mt-0.5 px-2 py-1.5 border border-purple-300 rounded text-sm bg-white">
+                                  <option value="">— pick —</option>
+                                  <option value="SM">SM · Smooth</option>
+                                  <option value="EM">EM · Embossed</option>
+                                </select>
+                              </label>
+                              <label className="text-[11px] font-extrabold text-purple-900">Construction *
+                                <select value={line.variant_construction_code} onChange={function (e) { updateLineField(lineIdx, 'variant_construction_code', e.target.value); }} className="w-full mt-0.5 px-2 py-1.5 border border-purple-300 rounded text-sm bg-white">
+                                  <option value="">— pick —</option>
+                                  <option value="RG">RG · Regular</option>
+                                  <option value="PF">PF · Perforated</option>
+                                  <option value="FN">FN · Foam Non-Perforated</option>
+                                  <option value="FP">FP · Foam Perforated</option>
+                                  <option value="TL">TL · Tri-Lam</option>
+                                </select>
+                              </label>
+                              <label className="text-[11px] font-extrabold text-purple-900">Backing *
+                                <select value={line.variant_backing_code} onChange={function (e) { updateLineField(lineIdx, 'variant_backing_code', e.target.value); }} className="w-full mt-0.5 px-2 py-1.5 border border-purple-300 rounded text-sm bg-white">
+                                  <option value="">— pick —</option>
+                                  <option value="BK">BK · Black</option>
+                                  <option value="CT">CT · Cotton</option>
+                                  <option value="FL">FL · Felt</option>
+                                  <option value="GR">GR · Gray</option>
+                                  <option value="GS">GS · Gray Suede</option>
+                                  <option value="NW">NW · Non-Woven</option>
+                                  <option value="OT">OT · Other</option>
+                                </select>
+                              </label>
+                              <label className="text-[11px] font-extrabold text-purple-900">Pattern *
+                                <select value={line.variant_pattern_code} onChange={function (e) { updateLineField(lineIdx, 'variant_pattern_code', e.target.value); }} className="w-full mt-0.5 px-2 py-1.5 border border-purple-300 rounded text-sm bg-white">
+                                  <option value="">— pick —</option>
+                                  <option value="NA">NA · None</option>
+                                  <option value="HC">HC · Honeycomb</option>
+                                  <option value="MG">MG · Mechanical Grain</option>
+                                  <option value="RG">RG · Normal Emboss</option>
+                                </select>
+                              </label>
+                            </div>
+                            {/* v55.83-A.6.27.39 — Smooth-Black soft warning (overridable) */}
+                            {line.variant_category_code === 'SM' && line.product && (function () {
+                              var colorCode = (line.product.classification_slug || '').split('-')[5] || '';
+                              if (colorCode && colorCode !== 'BK') {
+                                return (
+                                  <div className="mt-2 bg-yellow-100 border border-yellow-400 rounded px-2 py-1.5 text-[11px] text-yellow-900">
+                                    <span className="font-extrabold">⚠ Heads up:</span> Smooth leather is typically only available in Black, but you picked color <span className="font-mono font-bold">{colorCode}</span>. You can still proceed if this is correct.
+                                  </div>
+                                );
+                              }
+                              return null;
+                            })()}
+                          </div>
+                        )}
 
                         {/* v55.83-A.6.27.35 — PHASE 1: Expected totals (from supplier) */}
                         <div className="bg-amber-50 border-2 border-amber-300 rounded p-2 mb-2">
@@ -1436,9 +1727,17 @@ export default function InventoryReceiving(props) {
             </div>
 
             {/* Footer */}
-            <div className="flex justify-end gap-2 border-t border-slate-200 bg-slate-50 rounded-b-2xl" style={{ padding: '12px 20px' }}>
+            <div className="flex justify-end gap-2 border-t border-slate-200 bg-slate-50 rounded-b-2xl flex-wrap" style={{ padding: '12px 20px' }}>
               <button onClick={closeModal} disabled={busy} className="px-4 py-2 bg-slate-300 hover:bg-slate-400 disabled:opacity-50 text-slate-900 text-sm font-bold rounded-lg">
                 Cancel
+              </button>
+              {/* v55.83-A.6.27.37 — Save Shipment Only: writes JUST the header (no products). Useful when supplier confirms shipment but you don't know what's in it yet. */}
+              <button
+                onClick={saveShipmentHeaderOnly}
+                disabled={busy}
+                title="Save the shipment shell (header info only) without any products. You can add products later via Edit."
+                className="px-4 py-2 bg-amber-500 hover:bg-amber-600 disabled:opacity-50 text-white text-sm font-extrabold rounded-lg shadow">
+                {busy ? 'Saving...' : '📋 Save Shipment Only (no products)'}
               </button>
               <button onClick={saveReceipt} disabled={busy} className="px-5 py-2 bg-indigo-600 hover:bg-indigo-700 disabled:opacity-50 text-white text-sm font-extrabold rounded-lg shadow">
                 {busy ? 'Saving...' : '✓ Save Receipt (' + lines.length + ' line' + (lines.length === 1 ? '' : 's') + ')'}

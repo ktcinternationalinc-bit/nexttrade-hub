@@ -101,12 +101,12 @@ ok('B3g: default_currency validated against VALID_CURRENCY list',
   /if \(currency && VALID_CURRENCY\.indexOf\(currency\) < 0\) errs\.push\('default_currency must be one of:/.test(imp));
 ok('B3h: numeric fields validated as numbers',
   /n === 'INVALID'\) errs\.push\(k \+ ' must be a number/.test(imp));
-ok('B3i: quick_code uniqueness within file enforced',
-  /quick_code "' \+ quickCode \+ '" appears more than once in this file/.test(imp));
+ok('B3i: quick_code uniqueness within file enforced (composite with variant_suffix)',
+  /quick_code "' \+ quickCode \+ '"[\s\S]{0,200}appears more than once in this file/.test(imp));
 
 // ── B4. Duplicate handling: skip-if-no-new-info OR enrich ─────────
 ok('B4a: existing-product detection on quick_code',
-  /var existing = findProductByQuickCode\(quickCode\)/.test(imp));
+  /var existing = findProductByQuickCode\(quickCode/.test(imp));
 ok('B4b: enrich-only pattern — only fills existing null/empty fields',
   /if \(\(existingVal === null \|\| existingVal === undefined \|\| existingVal === ''\) && newVal !== null && newVal !== ''\)/.test(imp));
 ok('B4c: enrich never overwrites identity fields (quick_code, names, slug, classification FKs)',

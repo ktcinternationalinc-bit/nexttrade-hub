@@ -29,6 +29,7 @@ var LEVEL_COL = {
   6: 'color_code',
   7: 'pattern_code',
   8: 'spec_class_code',
+  9: 'origin_code',
 };
 
 // Map of level number → FK column on inventory_products
@@ -41,7 +42,12 @@ var LEVEL_FK = {
   6: 'color_list_id',
   7: 'pattern_list_id',
   8: 'spec_class_list_id',
+  9: 'origin_list_id',
 };
+
+// v55.83-A.6.27.38 — Levels that are REQUIRED on import (must have a code).
+// The other levels can be left blank and filled at receipt time.
+var REQUIRED_LEVELS = [1, 3, 6, 9];  // Family, Grade, Color, Origin
 
 var TEMPLATE_HEADERS = [
   'name_en',
@@ -56,6 +62,8 @@ var TEMPLATE_HEADERS = [
   'color_code',
   'pattern_code',
   'spec_class_code',
+  'origin_code',           // v55.83-A.6.27.38 — Level 9 origin country
+  'classification_slug',   // optional — generated if absent
   'default_uom',
   'default_thickness_mm',
   'default_width_m',
@@ -68,6 +76,10 @@ var TEMPLATE_HEADERS = [
   'default_currency',
   'default_rack',
   'notes',
+  'featured',              // v55.83-A.6.27.38 — TRUE/FALSE, default FALSE
+  'active',                // v55.83-A.6.27.38 — TRUE/FALSE, default TRUE
+  'is_family_template',    // v55.83-A.6.27.39 — TRUE for the 27 family templates
+  'variant_suffix',        // v55.83-A.6.27.39 — '001'/'002'/... for variants; blank for templates
 ];
 
 var VALID_UOM = ['kg','meter','yard','roll','piece','liter','sqm'];
@@ -135,11 +147,15 @@ export default function InventoryImportProducts(props) {
     return lists.find(function (l) { return l.level === level && l.code === u; }) || null;
   }
 
-  function findProductByQuickCode(code) {
+  function findProductByQuickCode(code, variantSuffix) {
+    // v55.83-A.6.27.39 — Match by composite (quick_code, variant_suffix).
+    // Two products can share the same quick_code if they have different suffixes.
     if (isBlank(code)) return null;
     var k = String(code).trim().toLowerCase();
+    var v = String(variantSuffix || '').trim();
     return products.find(function (p) {
-      return p.active && (p.quick_code || '').toLowerCase() === k;
+      var pv = String(p.variant_suffix || '').trim();
+      return p.active && (p.quick_code || '').toLowerCase() === k && pv === v;
     }) || null;
   }
 
@@ -159,8 +175,10 @@ export default function InventoryImportProducts(props) {
     // Sheet 1: Products (empty rows ready to fill)
     var prodSheet = XLSX.utils.aoa_to_sheet([
       TEMPLATE_HEADERS,
-      // One example row so the user sees the format
-      ['Premium New Mosaic Dark Blue', 'موزاييك جديد بريميوم أزرق غامق', 'NM-204', '', 'P', 'MS', 'PR', 'RG', 'NA', 'DB', 'NM', '15', 'meter', '1.5', '1.65', '', '', '', '', 'ABC Suppliers', '250', 'EGP', 'A-12', 'Example row — delete before importing'],
+      // v55.83-A.6.27.38 — Example row showing the 9-level + featured/active format
+      // Required: name_en, name_ar, family_code, grade_code, color_code, origin_code
+      // Optional: everything else (operator fills at receipt time)
+      ['Leather Luxurious Smooth Black US', 'جلد فاخر ناعم أسود', 'LLBKUS', '', 'L', 'SM', 'LX', 'RG', 'CT', 'BK', 'NA', 'NA', 'US', 'L-SM-LX-RG-CT-BK-NA-NA-US', 'meter', '', '', '', '', '', '', 'ABC Suppliers', '4.50', 'USD', 'A-12', 'Example row — delete before importing', 'FALSE', 'TRUE'],
     ]);
 
     // Apply column widths
@@ -333,14 +351,19 @@ export default function InventoryImportProducts(props) {
       if (!nameEn) errs.push('name_en required');
       if (!nameAr) errs.push('name_ar required');
 
-      // Resolve all 8 classification codes
+      // Resolve all 9 classification codes
+      // v55.83-A.6.27.38 — Only Levels 1/3/6/9 (Family/Grade/Color/Origin) are REQUIRED.
+      // The other 5 levels are optional placeholders — operator fills them at receipt time.
       var resolvedLevels = {};
       var unknownCodes = [];
-      [1, 2, 3, 4, 5, 6, 7, 8].forEach(function (lvl) {
+      [1, 2, 3, 4, 5, 6, 7, 8, 9].forEach(function (lvl) {
         var col = LEVEL_COL[lvl];
         var rawCode = String(raw[col] || '').trim();
+        var isRequired = REQUIRED_LEVELS.indexOf(lvl) >= 0;
         if (!rawCode) {
-          errs.push('L' + lvl + ' (' + col + ') is required');
+          if (isRequired) {
+            errs.push('L' + lvl + ' (' + col + ') is required');
+          }
           return;
         }
         var opt = findListByLevelAndCode(lvl, rawCode);
@@ -353,8 +376,9 @@ export default function InventoryImportProducts(props) {
       });
 
       // Cascade rule check — every non-Level-1 option must be valid under chosen Family
+      // v55.83-A.6.27.38 — extended to Level 9
       if (resolvedLevels[1]) {
-        [2, 3, 4, 5, 6, 7, 8].forEach(function (lvl) {
+        [2, 3, 4, 5, 6, 7, 8, 9].forEach(function (lvl) {
           var opt = resolvedLevels[lvl];
           if (opt && !familyValidForChild(opt, resolvedLevels[1])) {
             errs.push('L' + lvl + ' "' + opt.code + '" is not valid under Family "' + resolvedLevels[1].code + '"');
@@ -374,10 +398,16 @@ export default function InventoryImportProducts(props) {
       });
 
       // Quick code uniqueness within file
+      // v55.83-A.6.27.39 — Allow duplicate quick_codes when variant_suffix differs
+      // (variants share their template's quick_code but have unique suffixes).
+      // Composite key = quick_code + '-' + (variant_suffix || '')
       if (quickCode) {
-        var qk = quickCode.toLowerCase();
+        var variantSfx = String(raw.variant_suffix || '').trim();
+        var qk = quickCode.toLowerCase() + '|' + variantSfx;
         if (seenQuickCodes[qk]) {
-          errs.push('quick_code "' + quickCode + '" appears more than once in this file (also on row ' + seenQuickCodes[qk] + ')');
+          errs.push('quick_code "' + quickCode + '"' +
+            (variantSfx ? ' with variant_suffix "' + variantSfx + '"' : '') +
+            ' appears more than once in this file (also on row ' + seenQuickCodes[qk] + ')');
         } else {
           seenQuickCodes[qk] = rowNum;
         }
@@ -389,20 +419,28 @@ export default function InventoryImportProducts(props) {
       }
 
       // Build the canonical payload
-      var slug = [1,2,3,4,5,6,7,8].map(function (l) { return resolvedLevels[l].code; }).join('.');
+      // v55.83-A.6.27.38 — Levels 2/4/5/7/8 are optional → use null when not provided.
+      // classification_slug uses dashes (matches the slug rebuild SQL).
+      // Includes origin_list_id (Level 9) + featured boolean.
+      var slug = [1,2,3,4,5,6,7,8,9].map(function (l) {
+        return resolvedLevels[l] ? resolvedLevels[l].code : '';
+      }).join('-');
+      var featuredRaw = String(raw.featured || '').trim().toUpperCase();
+      var activeRaw = String(raw.active || '').trim().toUpperCase();
       var payload = {
         name_en: nameEn,
         name_ar: nameAr,
         quick_code: quickCode || null,
         design_sku: designSku || null,
-        family_list_id: resolvedLevels[1].id,
-        category_list_id: resolvedLevels[2].id,
-        grade_list_id: resolvedLevels[3].id,
-        construction_list_id: resolvedLevels[4].id,
-        backing_list_id: resolvedLevels[5].id,
-        color_list_id: resolvedLevels[6].id,
-        pattern_list_id: resolvedLevels[7].id,
-        spec_class_list_id: resolvedLevels[8].id,
+        family_list_id:        resolvedLevels[1] ? resolvedLevels[1].id : null,
+        category_list_id:      resolvedLevels[2] ? resolvedLevels[2].id : null,
+        grade_list_id:         resolvedLevels[3] ? resolvedLevels[3].id : null,
+        construction_list_id:  resolvedLevels[4] ? resolvedLevels[4].id : null,
+        backing_list_id:       resolvedLevels[5] ? resolvedLevels[5].id : null,
+        color_list_id:         resolvedLevels[6] ? resolvedLevels[6].id : null,
+        pattern_list_id:       resolvedLevels[7] ? resolvedLevels[7].id : null,
+        spec_class_list_id:    resolvedLevels[8] ? resolvedLevels[8].id : null,
+        origin_list_id:        resolvedLevels[9] ? resolvedLevels[9].id : null,
         classification_slug: slug,
         default_uom: uom || null,
         default_thickness_mm: asNumber(raw.default_thickness_mm) === 'INVALID' ? null : asNumber(raw.default_thickness_mm),
@@ -416,11 +454,16 @@ export default function InventoryImportProducts(props) {
         default_currency: currency || null,
         default_rack: String(raw.default_rack || '').trim() || null,
         notes: String(raw.notes || '').trim() || null,
+        featured: featuredRaw === 'TRUE' || featuredRaw === '1' || featuredRaw === 'YES',
+        active: activeRaw === '' ? true : (activeRaw === 'TRUE' || activeRaw === '1' || activeRaw === 'YES'),
+        // v55.83-A.6.27.39 — family template + variant suffix support
+        is_family_template: String(raw.is_family_template || '').trim().toUpperCase() === 'TRUE',
+        variant_suffix: String(raw.variant_suffix || '').trim() || null,
       };
 
-      // Duplicate against DB
+      // Duplicate against DB (v55.83-A.6.27.39: composite key with variant_suffix)
       if (quickCode) {
-        var existing = findProductByQuickCode(quickCode);
+        var existing = findProductByQuickCode(quickCode, payload.variant_suffix);
         if (existing) {
           // Decide: skip or enrich?
           // Enrich = the import row has values for fields where the existing product is null/empty.
@@ -468,8 +511,9 @@ export default function InventoryImportProducts(props) {
       for (var i = 0; i < parsedRows.valid.length; i++) {
         var row = parsedRows.valid[i];
         try {
+          // v55.83-A.6.27.38 — preserve payload.active (already TRUE by default)
+          // instead of hardcoding, so an explicit FALSE in the import is respected.
           var rowPayload = Object.assign({}, row.payload, {
-            active: true,
             created_by: userProfile && userProfile.id,
             updated_by: userProfile && userProfile.id,
           });

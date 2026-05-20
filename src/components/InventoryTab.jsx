@@ -23,6 +23,7 @@ import InventoryReceiving from './InventoryReceiving';
 import InventoryStockImport from './InventoryStockImport';
 import InventoryMovementsLedger from './InventoryMovementsLedger';
 import InventoryCostLayers from './InventoryCostLayers';
+import InventoryAdjustments from './InventoryAdjustments';
 import {
   canViewInventory,
   canSeeInventoryCosts,
@@ -59,6 +60,8 @@ var SUBTABS = [
   // v55.83-A.6.27.34 — Phase 1 Build 4.3: Movements Ledger + FIFO Cost Layers (engine)
   { id: 'movementsledger', label: '📜 Movements', stage: 'Engine', desc: 'Append-only log of every stock change. Auto-populated when receipts are finalized.' },
   { id: 'costlayers',      label: '🧱 Cost Layers', stage: 'Engine', desc: 'FIFO cost layers per product per warehouse. Stock-on-hand + inventory value.' },
+  // v55.83-A.6.27.36 — Phase 1 Build 4.5: Adjustments (qty / transfer / cost)
+  { id: 'adjustments',     label: '🔧 Adjustments', stage: 'Engine', desc: 'Damage / theft / count corrections, warehouse transfers, cost restatements.' },
 ];
 
 export default function InventoryTab({ userProfile, modulePerms, toast, isSuperAdmin }) {
@@ -178,6 +181,11 @@ export default function InventoryTab({ userProfile, modulePerms, toast, isSuperA
               !(isSuperAdmin || (modulePerms && (modulePerms['Inventory'] === true || modulePerms['Edit Inventory'] === true)))) {
             return null;
           }
+          // v55.83-A.6.27.36 — Adjustments tab: view requires Inventory; creating requires Edit Inventory (handled in component)
+          if (st.id === 'adjustments' &&
+              !(isSuperAdmin || (modulePerms && (modulePerms['Inventory'] === true || modulePerms['Edit Inventory'] === true)))) {
+            return null;
+          }
           var isActive = subtab === st.id;
           return (
             <button key={st.id}
@@ -253,6 +261,10 @@ export default function InventoryTab({ userProfile, modulePerms, toast, isSuperA
       {/* v55.83-A.6.27.34 — Phase 1 Build 4.3: Cost Layers (read-only) */}
       {subtab === 'costlayers' && (
         <InventoryCostLayers userProfile={userProfile} modulePerms={modulePerms} isSuperAdmin={isSuperAdmin} toast={toast} />
+      )}
+      {/* v55.83-A.6.27.36 — Phase 1 Build 4.5: Adjustments */}
+      {subtab === 'adjustments' && (
+        <InventoryAdjustments userProfile={userProfile} modulePerms={modulePerms} isSuperAdmin={isSuperAdmin} toast={toast} />
       )}
 
       {/* Stage guidance */}

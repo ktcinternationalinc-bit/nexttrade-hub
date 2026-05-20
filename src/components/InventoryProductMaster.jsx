@@ -103,6 +103,10 @@ export default function InventoryProductMaster(props) {
   var [search, setSearch] = useState('');
   var [familyFilter, setFamilyFilter] = useState('all');
   var [showInactive, setShowInactive] = useState(false);
+  // v55.83-A.6.27.40 — featured-only filter ("show me my starred favorites")
+  var [featuredOnly, setFeaturedOnly] = useState(false);
+  // v55.83-A.6.27.40 — type filter: all | family templates | variants
+  var [typeFilter, setTypeFilter] = useState('all');
 
   // Modal state
   var [modalMode, setModalMode] = useState(null); // null | 'new' | 'edit'
@@ -238,18 +242,48 @@ export default function InventoryProductMaster(props) {
     if (familyFilter !== 'all') {
       list = list.filter(function (p) { return p.family_list_id === familyFilter; });
     }
-    if (search.trim()) {
-      var q = search.trim().toLowerCase();
-      list = list.filter(function (p) {
-        return (p.name_en || '').toLowerCase().indexOf(q) >= 0
-          || (p.name_ar || '').toLowerCase().indexOf(q) >= 0
-          || (p.quick_code || '').toLowerCase().indexOf(q) >= 0
-          || (p.design_sku || '').toLowerCase().indexOf(q) >= 0
-          || (p.classification_slug || '').toLowerCase().indexOf(q) >= 0;
-      });
+    // v55.83-A.6.27.40 — featured-only filter
+    if (featuredOnly) {
+      list = list.filter(function (p) { return p.featured === true; });
     }
+    // v55.83-A.6.27.40 — type filter (family templates vs variants vs all)
+    if (typeFilter === 'templates') {
+      list = list.filter(function (p) { return p.is_family_template === true; });
+    } else if (typeFilter === 'variants') {
+      list = list.filter(function (p) { return p.is_family_template === false && p.variant_suffix; });
+    }
+    // v55.83-A.6.27.40 — smart multi-keyword search (multi-word, any-order, substring)
+    if (search.trim()) {
+      var keywords = search.trim().toLowerCase().split(/\s+/).filter(function (k) { return k.length > 0; });
+      if (keywords.length > 0) {
+        list = list.filter(function (p) {
+          var searchable = (
+            (p.quick_code || '') + ' ' +
+            (p.variant_suffix ? p.quick_code + '-' + p.variant_suffix + ' ' : '') +
+            (p.name_en || '') + ' ' +
+            (p.name_ar || '') + ' ' +
+            (p.design_sku || '') + ' ' +
+            (p.classification_slug || '')
+          ).toLowerCase();
+          for (var i = 0; i < keywords.length; i++) {
+            if (searchable.indexOf(keywords[i]) < 0) return false;
+          }
+          return true;
+        });
+      }
+    }
+    // v55.83-A.6.27.40 — Sort: featured DESC, use_count DESC, then alphabetical
+    list.sort(function (a, b) {
+      var af = a.featured === true ? 1 : 0;
+      var bf = b.featured === true ? 1 : 0;
+      if (af !== bf) return bf - af;
+      var au = Number(a.use_count || 0);
+      var bu = Number(b.use_count || 0);
+      if (bu !== au) return bu - au;
+      return (a.name_en || '').localeCompare(b.name_en || '');
+    });
     return list;
-  }, [products, showInactive, familyFilter, search]);
+  }, [products, showInactive, familyFilter, search, featuredOnly, typeFilter]);
 
   var familyOptions = useMemo(function () {
     return lists.filter(function (l) { return l.level === 1 && l.active; });
@@ -415,6 +449,24 @@ export default function InventoryProductMaster(props) {
     }
   }
 
+  // v55.83-A.6.27.40 — Star toggle: marks/unmarks a product as featured.
+  // Featured products always appear at the top of search dropdowns in
+  // Receive Stock, Adjustments, and Sales Invoice pickers.
+  async function toggleFeatured(p) {
+    var newVal = !(p.featured === true);
+    try {
+      await dbUpdate('inventory_products', p.id, {
+        featured: newVal,
+        updated_by: userProfile && userProfile.id,
+      }, userProfile && userProfile.id);
+      toast.success((newVal ? '⭐ Starred: ' : '☆ Unstarred: ') + (p.name_en || p.quick_code || 'product'));
+      await reload();
+    } catch (err) {
+      console.error('[product-master] toggleFeatured failed:', err);
+      toast.error('Star toggle failed: ' + ((err && err.message) || String(err)));
+    }
+  }
+
   // Permission denied
   if (!canView) {
     return (
@@ -473,6 +525,21 @@ export default function InventoryProductMaster(props) {
           <input type="checkbox" checked={showInactive} onChange={function (e) { setShowInactive(e.target.checked); }} />
           Show inactive
         </label>
+        {/* v55.83-A.6.27.40 — Featured-only filter */}
+        <label className="text-xs font-bold text-amber-700 flex items-center gap-1 px-2 py-1 rounded bg-amber-50 border border-amber-200">
+          <input type="checkbox" checked={featuredOnly} onChange={function (e) { setFeaturedOnly(e.target.checked); }} />
+          ⭐ Starred only
+        </label>
+        {/* v55.83-A.6.27.40 — Type filter: all / templates / variants */}
+        <select
+          value={typeFilter}
+          onChange={function (e) { setTypeFilter(e.target.value); }}
+          className="px-3 py-2 border border-slate-300 rounded-lg text-sm bg-white font-semibold"
+        >
+          <option value="all">All products</option>
+          <option value="templates">Family templates only</option>
+          <option value="variants">Variants only</option>
+        </select>
         {canEdit && (
           <button
             onClick={openNew}
@@ -509,7 +576,22 @@ export default function InventoryProductMaster(props) {
                 style={{ gridTemplateColumns: '90px 1.2fr 180px 200px 80px 120px', padding: '12px 12px' }}
               >
                 <div className="text-sm font-mono font-extrabold text-slate-900">
-                  {p.quick_code || <span className="text-slate-400 italic font-normal">—</span>}
+                  {/* v55.83-A.6.27.40 — show variant suffix appended if this is a variant */}
+                  {p.quick_code ? (
+                    <span>
+                      {p.quick_code}{p.variant_suffix ? ('-' + p.variant_suffix) : ''}
+                    </span>
+                  ) : <span className="text-slate-400 italic font-normal">—</span>}
+                  {/* v55.83-A.6.27.40 — badges for family templates vs variants */}
+                  {p.is_family_template === true && (
+                    <div className="text-[9px] bg-indigo-100 text-indigo-800 font-bold rounded px-1 inline-block mt-0.5">FAMILY</div>
+                  )}
+                  {p.is_family_template === false && p.variant_suffix && (
+                    <div className="text-[9px] bg-emerald-100 text-emerald-800 font-bold rounded px-1 inline-block mt-0.5">VARIANT</div>
+                  )}
+                  {Number(p.use_count || 0) > 0 && (
+                    <div className="text-[9px] text-slate-500 mt-0.5">used {p.use_count}×</div>
+                  )}
                 </div>
                 <div>
                   {/* v55.83-A.6.27.27 — Max requested Arabic description and
@@ -529,6 +611,16 @@ export default function InventoryProductMaster(props) {
                 </div>
                 <div className="text-[11px] text-slate-700 font-semibold">{p.default_uom || <span className="text-slate-400 italic font-normal">—</span>}</div>
                 <div className="text-right flex justify-end gap-1">
+                  {/* v55.83-A.6.27.40 — ⭐ Star toggle (always shown, click to toggle featured) */}
+                  {canEdit && (
+                    <button
+                      onClick={function () { toggleFeatured(p); }}
+                      className={'px-2 py-1 text-[14px] rounded font-bold ' + (p.featured === true ? 'bg-amber-100 hover:bg-amber-200 text-amber-700' : 'bg-slate-100 hover:bg-amber-50 text-slate-400 hover:text-amber-500')}
+                      title={p.featured === true ? 'Featured — click to unstar (will no longer pin to top of pickers)' : 'Star this product (will pin to top of pickers)'}
+                    >
+                      {p.featured === true ? '⭐' : '☆'}
+                    </button>
+                  )}
                   {canEdit && (
                     <button
                       onClick={function () { openEdit(p); }}

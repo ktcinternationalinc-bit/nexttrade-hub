@@ -126,10 +126,10 @@ ok('B4f: save loops through ALL lines and inserts each row sharing receiptNumber
   /for \(var j = 0; j < lines\.length; j\+\+\)[\s\S]{0,3000}receipt_number: receiptNumber/.test(rec));
 
 // ── B5. Autocomplete / quick-code picker ──────────────────────────
-ok('B5a: suggestionsFor matches by quick_code / name_en / name_ar / slug',
-  /suggestionsFor\(query\)[\s\S]{0,600}\.quick_code[\s\S]{0,200}\.name_en[\s\S]{0,200}\.name_ar[\s\S]{0,200}classification_slug/.test(rec));
-ok('B5b: suggestions capped at 10',
-  /\.slice\(0, 10\)/.test(rec));
+ok('B5a: suggestionsFor searchable string includes quick_code / name_en / name_ar / slug',
+  /function suggestionsFor\(query\)[\s\S]{0,2500}p\.quick_code[\s\S]{0,500}p\.name_en[\s\S]{0,500}p\.name_ar[\s\S]{0,500}p\.classification_slug/.test(rec));
+ok('B5b: suggestions capped at 20 (raised from 10 for variant lists)',
+  /matches\.slice\(0, 20\)/.test(rec));
 ok('B5c: pickProductForLine autofills defaults from product master',
   /function pickProductForLine\(lineIdx, product\)[\s\S]{0,2000}line\.uom = product\.default_uom/.test(rec));
 ok('B5d: pickProductForLine sets fromMaster flag for inherited fields',
@@ -157,7 +157,7 @@ ok('B7e: NO 📌 button on tech specs (thickness/width/GSM/density/weight/length
   !/toggleUpdateMaster\(lineIdx, 'actual_width_m'\)/.test(rec) &&
   !/toggleUpdateMaster\(lineIdx, 'actual_gsm'\)/.test(rec));
 ok('B7f: save applies queued master updates AFTER inserting all receipt rows',
-  /var masterUpdatesQueued = \[\][\s\S]{0,6000}for \(var k2 = 0; k2 < masterUpdatesQueued\.length; k2\+\+\)[\s\S]{0,500}dbUpdate\('inventory_products', mu\.product_id, mu\.patch/.test(rec));
+  /var masterUpdatesQueued = \[\][\s\S]{0,12000}for \(var k2 = 0; k2 < masterUpdatesQueued\.length; k2\+\+\)[\s\S]{0,500}dbUpdate\('inventory_products', mu\.product_id, mu\.patch/.test(rec));
 
 // ── B8. Cost field gating ─────────────────────────────────────────
 ok('B8a: cost column in list only shown when seeCosts',
