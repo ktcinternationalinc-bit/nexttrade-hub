@@ -43,9 +43,9 @@ ok('3a: English name in row is text-base font-extrabold (was text-sm font-bold)'
 
 // ── 4. Column widths widened ──────────────────────────────────────
 ok('4a: row grid columns expanded: name 1.2fr, classification 180px',
-  /gridTemplateColumns: '90px 1\.2fr 180px 200px 80px 120px', padding: '12px 12px'/.test(pm));
+  /gridTemplateColumns: '110px 1\.2fr 180px 180px 70px 280px', padding: '12px 12px'/.test(pm));
 ok('4b: header row grid columns ALSO expanded (match row)',
-  /gridTemplateColumns: '90px 1\.2fr 180px 200px 80px 120px', padding: '8px 12px'/.test(pm));
+  /gridTemplateColumns: '110px 1\.2fr 180px 180px 70px 280px', padding: '8px 12px'/.test(pm));
 ok('4c: old 150px slug column width is GONE from both rows',
   !/gridTemplateColumns: '90px 1fr 150px/.test(pm));
 

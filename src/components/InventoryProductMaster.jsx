@@ -110,6 +110,16 @@ export default function InventoryProductMaster(props) {
 
   // Modal state
   var [modalMode, setModalMode] = useState(null); // null | 'new' | 'edit'
+  // v55.83-A.6.27.42 — Create Variant modal state
+  var [variantModalOpen, setVariantModalOpen] = useState(false);
+  var [variantTemplate, setVariantTemplate] = useState(null); // the family template the variant will belong to
+  var [variantForm, setVariantForm] = useState({
+    category_code: '',
+    construction_code: '',
+    backing_code: '',
+    pattern_code: '',
+  });
+  var [variantBusy, setVariantBusy] = useState(false);
   var [modalProductId, setModalProductId] = useState(null);
   var [form, setForm] = useState(emptyForm());
   var [busy, setBusy] = useState(false);
@@ -467,6 +477,55 @@ export default function InventoryProductMaster(props) {
     }
   }
 
+  // v55.83-A.6.27.42 — Create Variant flow.
+  // openCreateVariant: opens the modal pre-bound to a family template.
+  // saveVariant: calls get_or_create_variant RPC, silent-reuses or creates new.
+  function openCreateVariant(template) {
+    if (!template || template.is_family_template !== true) {
+      toast.error('Variants can only be created from a Family template row.');
+      return;
+    }
+    setVariantTemplate(template);
+    setVariantForm({ category_code: '', construction_code: '', backing_code: '', pattern_code: '' });
+    setVariantModalOpen(true);
+  }
+
+  function closeVariantModal() {
+    setVariantModalOpen(false);
+    setVariantTemplate(null);
+    setVariantForm({ category_code: '', construction_code: '', backing_code: '', pattern_code: '' });
+  }
+
+  async function saveVariant() {
+    if (!variantTemplate) return;
+    if (!variantForm.category_code)     { alert('Category required.'); return; }
+    if (!variantForm.construction_code) { alert('Construction required.'); return; }
+    if (!variantForm.backing_code)      { alert('Backing required.'); return; }
+    if (!variantForm.pattern_code)      { alert('Pattern required.'); return; }
+    setVariantBusy(true);
+    try {
+      var res = await supabase.rpc('get_or_create_variant', {
+        p_template_id:       variantTemplate.id,
+        p_category_code:     variantForm.category_code,
+        p_construction_code: variantForm.construction_code,
+        p_backing_code:      variantForm.backing_code,
+        p_pattern_code:      variantForm.pattern_code,
+        p_user_id:           userProfile && userProfile.id,
+      });
+      if (res.error) throw res.error;
+      await reload();
+      toast.success('Variant ready — ' + variantTemplate.quick_code + ' · ' +
+        variantForm.category_code + ' · ' + variantForm.construction_code + ' · ' +
+        variantForm.backing_code + ' · ' + variantForm.pattern_code);
+      closeVariantModal();
+    } catch (err) {
+      console.error('[product-master] saveVariant failed:', err);
+      toast.error('Variant creation failed: ' + ((err && err.message) || String(err)));
+    } finally {
+      setVariantBusy(false);
+    }
+  }
+
   // Permission denied
   if (!canView) {
     return (
@@ -553,7 +612,7 @@ export default function InventoryProductMaster(props) {
       {/* Products table */}
       <div className="bg-white rounded-xl border border-slate-200 overflow-hidden">
         <div className="grid bg-slate-100 text-[10px] font-extrabold text-slate-700 tracking-wider uppercase"
-             style={{ gridTemplateColumns: '90px 1.2fr 180px 200px 80px 120px', padding: '8px 12px' }}>
+             style={{ gridTemplateColumns: '110px 1.2fr 180px 180px 70px 280px', padding: '8px 12px' }}>
           <div>Code</div>
           <div>Name</div>
           <div>Classification</div>
@@ -572,8 +631,8 @@ export default function InventoryProductMaster(props) {
             return (
               <div
                 key={p.id}
-                className={'grid items-center border-t border-slate-100 ' + (p.active ? '' : 'bg-slate-50 opacity-60')}
-                style={{ gridTemplateColumns: '90px 1.2fr 180px 200px 80px 120px', padding: '12px 12px' }}
+                className={'grid items-center border-t border-slate-200 bg-white text-slate-900 ' + (p.active ? '' : 'opacity-60')}
+                style={{ gridTemplateColumns: '110px 1.2fr 180px 180px 70px 280px', padding: '12px 12px' }}
               >
                 <div className="text-sm font-mono font-extrabold text-slate-900">
                   {/* v55.83-A.6.27.40 — show variant suffix appended if this is a variant */}
@@ -611,11 +670,11 @@ export default function InventoryProductMaster(props) {
                 </div>
                 <div className="text-[11px] text-slate-700 font-semibold">{p.default_uom || <span className="text-slate-400 italic font-normal">—</span>}</div>
                 <div className="text-right flex justify-end gap-1">
-                  {/* v55.83-A.6.27.40 — ⭐ Star toggle (always shown, click to toggle featured) */}
+                  {/* v55.83-A.6.27.40/41 — ⭐ Star toggle (always shown, click to toggle featured) */}
                   {canEdit && (
                     <button
                       onClick={function () { toggleFeatured(p); }}
-                      className={'px-2 py-1 text-[14px] rounded font-bold ' + (p.featured === true ? 'bg-amber-100 hover:bg-amber-200 text-amber-700' : 'bg-slate-100 hover:bg-amber-50 text-slate-400 hover:text-amber-500')}
+                      className={'px-3 py-1.5 text-[16px] leading-none rounded font-bold border-2 ' + (p.featured === true ? 'bg-amber-200 hover:bg-amber-300 text-amber-700 border-amber-400 shadow' : 'bg-white hover:bg-amber-50 text-amber-500 border-amber-300')}
                       title={p.featured === true ? 'Featured — click to unstar (will no longer pin to top of pickers)' : 'Star this product (will pin to top of pickers)'}
                     >
                       {p.featured === true ? '⭐' : '☆'}
@@ -624,15 +683,27 @@ export default function InventoryProductMaster(props) {
                   {canEdit && (
                     <button
                       onClick={function () { openEdit(p); }}
-                      className="px-2 py-1 text-[10px] bg-slate-200 hover:bg-slate-300 text-slate-800 rounded font-bold"
+                      className="px-2 py-1 text-[10px] bg-slate-200 hover:bg-slate-300 text-slate-900 rounded font-bold"
                     >
                       Edit
+                    </button>
+                  )}
+                  {/* v55.83-A.6.27.42 — Create Variant button (only on family templates).
+                      Opens a modal that picks 4 spec dropdowns and calls get_or_create_variant().
+                      Silent-reuses if a matching variant exists, else creates new with next suffix. */}
+                  {canEdit && p.is_family_template === true && (
+                    <button
+                      onClick={function () { openCreateVariant(p); }}
+                      className="px-2 py-1 text-[10px] bg-purple-600 hover:bg-purple-700 text-white rounded font-bold shadow"
+                      title="Create a spec variant of this family template (Category + Construction + Backing + Pattern)"
+                    >
+                      + Variant
                     </button>
                   )}
                   {canEdit && (
                     <button
                       onClick={function () { openDuplicate(p); }}
-                      className="px-2 py-1 text-[10px] bg-blue-100 hover:bg-blue-200 text-blue-900 rounded font-bold"
+                      className="px-2 py-1 text-[10px] bg-blue-100 hover:bg-blue-200 text-blue-950 rounded font-bold"
                       title="Duplicate this product as a starting point for a similar one"
                     >
                       Copy
@@ -868,6 +939,114 @@ export default function InventoryProductMaster(props) {
                   {busy ? 'Saving...' : (modalMode === 'new' ? '+ Add Product' : 'Save Changes')}
                 </button>
               )}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* v55.83-A.6.27.42 — Create Variant modal */}
+      {variantModalOpen && variantTemplate && (
+        <div className="fixed inset-0 bg-black/60 z-[60] flex items-center justify-center p-4" onClick={closeVariantModal}>
+          <div
+            className="bg-white text-slate-900 rounded-2xl shadow-2xl w-full max-w-2xl"
+            onClick={function (e) { e.stopPropagation(); }}
+          >
+            <div className="bg-purple-700 text-white rounded-t-2xl px-6 py-4">
+              <div className="text-xs font-bold uppercase tracking-wider text-purple-100">Create Variant</div>
+              <div className="text-xl font-extrabold mt-0.5">{variantTemplate.quick_code} — {variantTemplate.name_en}</div>
+              <div className="text-xs text-purple-100 mt-1">
+                Pick the 4 specs below. If a variant with these specs already exists, the system reuses it. Otherwise a new variant is created (next sequential suffix like {variantTemplate.quick_code}-001, -002, ...).
+              </div>
+            </div>
+            <div className="p-6 space-y-4">
+              <div className="grid grid-cols-2 gap-4">
+                <label className="text-xs font-extrabold text-slate-900">Category *
+                  <select
+                    value={variantForm.category_code}
+                    onChange={function (e) { setVariantForm(Object.assign({}, variantForm, { category_code: e.target.value })); }}
+                    className="w-full mt-1 px-3 py-2 border-2 border-slate-300 rounded text-sm bg-white text-slate-900 font-semibold"
+                  >
+                    <option value="">— pick —</option>
+                    <option value="SM">SM · Smooth</option>
+                    <option value="EM">EM · Embossed</option>
+                  </select>
+                </label>
+                <label className="text-xs font-extrabold text-slate-900">Construction *
+                  <select
+                    value={variantForm.construction_code}
+                    onChange={function (e) { setVariantForm(Object.assign({}, variantForm, { construction_code: e.target.value })); }}
+                    className="w-full mt-1 px-3 py-2 border-2 border-slate-300 rounded text-sm bg-white text-slate-900 font-semibold"
+                  >
+                    <option value="">— pick —</option>
+                    <option value="RG">RG · Regular</option>
+                    <option value="PF">PF · Perforated</option>
+                    <option value="FN">FN · Foam Non-Perforated</option>
+                    <option value="FP">FP · Foam Perforated</option>
+                    <option value="TL">TL · Tri-Lam</option>
+                  </select>
+                </label>
+                <label className="text-xs font-extrabold text-slate-900">Backing *
+                  <select
+                    value={variantForm.backing_code}
+                    onChange={function (e) { setVariantForm(Object.assign({}, variantForm, { backing_code: e.target.value })); }}
+                    className="w-full mt-1 px-3 py-2 border-2 border-slate-300 rounded text-sm bg-white text-slate-900 font-semibold"
+                  >
+                    <option value="">— pick —</option>
+                    <option value="BK">BK · Black</option>
+                    <option value="CT">CT · Cotton</option>
+                    <option value="FL">FL · Felt</option>
+                    <option value="GR">GR · Gray</option>
+                    <option value="GS">GS · Gray Suede</option>
+                    <option value="NW">NW · Non-Woven</option>
+                    <option value="OT">OT · Other</option>
+                  </select>
+                </label>
+                <label className="text-xs font-extrabold text-slate-900">Pattern *
+                  <select
+                    value={variantForm.pattern_code}
+                    onChange={function (e) { setVariantForm(Object.assign({}, variantForm, { pattern_code: e.target.value })); }}
+                    className="w-full mt-1 px-3 py-2 border-2 border-slate-300 rounded text-sm bg-white text-slate-900 font-semibold"
+                  >
+                    <option value="">— pick —</option>
+                    <option value="NA">NA · None</option>
+                    <option value="HC">HC · Honeycomb</option>
+                    <option value="MG">MG · Mechanical Grain</option>
+                    <option value="RG">RG · Normal Emboss</option>
+                  </select>
+                </label>
+              </div>
+              {/* Smooth-Black soft warning — Smooth typically only available in Black */}
+              {variantForm.category_code === 'SM' && variantTemplate && (function () {
+                var slug = variantTemplate.classification_slug || '';
+                var parts = slug.split('-');
+                // Slug order: family - category - grade - construction - backing - color - pattern - spec - country
+                // For templates, category/constr/back/pattern are blank, so color is at index 5
+                var colorCode = parts[5] || '';
+                if (colorCode && colorCode !== 'BK') {
+                  return (
+                    <div className="bg-yellow-100 border-2 border-yellow-400 rounded p-3 text-sm text-yellow-950 font-semibold">
+                      ⚠ <span className="font-extrabold">Heads up:</span> Smooth leather is typically only available in Black, but this template is for color <span className="font-mono font-extrabold">{colorCode}</span>. You can still proceed if this is correct.
+                    </div>
+                  );
+                }
+                return null;
+              })()}
+            </div>
+            <div className="bg-slate-100 rounded-b-2xl px-6 py-4 flex justify-end gap-2">
+              <button
+                onClick={closeVariantModal}
+                disabled={variantBusy}
+                className="px-4 py-2 bg-slate-300 hover:bg-slate-400 disabled:opacity-50 text-slate-900 text-sm font-bold rounded-lg"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={saveVariant}
+                disabled={variantBusy}
+                className="px-5 py-2 bg-purple-600 hover:bg-purple-700 disabled:opacity-50 text-white text-sm font-extrabold rounded-lg shadow"
+              >
+                {variantBusy ? 'Creating...' : '✓ Create / Reuse Variant'}
+              </button>
             </div>
           </div>
         </div>

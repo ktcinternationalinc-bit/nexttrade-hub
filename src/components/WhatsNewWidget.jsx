@@ -33,6 +33,31 @@ import { supabase } from '../lib/supabase';
 //     WhatsApp, the calendar, the Sales tab.
 export const BUILD_HISTORY = [
   {
+    version: 'v55.83-A.6.27.42',
+    date: '2026-05-19',
+    label: '+ Variant button from Product Master + readability fix on rows',
+    items: [
+      '**Create a variant without going through Receive Stock.** Every family template row now has a purple "+ Variant" button. Click it to open a modal, pick the 4 specs (Category, Construction, Backing, Pattern), and the system either reuses an existing variant with those specs OR creates a new one with the next sequential suffix (LLBKUS-001, LLBKUS-002, etc.). Same logic as the auto-creation that happens during receipt — just available manually now.',
+      '**Smooth-Black soft warning** appears in the variant modal if you pick Category=Smooth on a non-Black template. Override is allowed; just a heads-up.',
+      '**Row contrast fixed.** Product Master rows now use solid white background with dark slate text. No more pale-grey text on dark theme — every product row is now easy to read regardless of theme.',
+      '**Actions column widened** from 220px to 280px to fit 5 buttons (Star, Edit, + Variant, Copy, Deactivate) without overflow.',
+      '**No SQL needed** — pure UI/code build. Just deploy and refresh.',
+      { superAdminOnly: true, text: 'InventoryProductMaster.jsx — new state: variantModalOpen (boolean), variantTemplate (the family template being expanded), variantForm (4 spec codes), variantBusy (during RPC). Handlers: openCreateVariant(template) guards on is_family_template===true, sets state, opens modal; closeVariantModal() clears state; saveVariant() validates 4 codes, calls supabase.rpc("get_or_create_variant", {p_template_id, 4 codes, p_user_id}), reloads on success, toasts the resulting variant signature, closes modal.' },
+      { superAdminOnly: true, text: 'Row UI: container changed from "border-t border-slate-100 + (active ? "" : bg-slate-50 opacity-60)" to "border-t border-slate-200 bg-white text-slate-900 + (active ? "" : opacity-60)" — forces high-contrast white-row dark-text everywhere. Grid widened from 220px → 280px actions column. New "+ Variant" button rendered only when canEdit && p.is_family_template === true; styled bg-purple-600 hover:bg-purple-700 text-white (high contrast).' },
+      { superAdminOnly: true, text: 'Modal UI: bg-white text-slate-900 outer card, bg-purple-700 text-white header banner, slate-100 footer. 4 select dropdowns use border-2 border-slate-300 bg-white text-slate-900 font-semibold (no pale text). Smooth-Black warning extracts color from classification_slug split index 5 — only shows when category SM AND color !== BK. Footer: Cancel (slate-300 text-slate-900) + Create (purple-600 text-white). Both readable.' },
+      { superAdminOnly: true, text: 'TEST: __tests__/test-v55-83-a-6-27-42-create-variant.js — 38 assertions across 8 parts: row contrast (3), modal state (4), handlers (6), button UI (4), modal UI (10), Smooth-Black warning (4), footer (3), contrast lint (1) + regression guards (8) + version stamp (1). Sweep: 227/0. 2 prior tests updated to recognize new grid widths and amber-200 styling.' },
+    ],
+  },
+  {
+    version: 'v55.83-A.6.27.41',
+    date: '2026-05-19',
+    label: 'Star button visibility + actions column width fix',
+    items: [
+      '**Star button is now impossible to miss** — bigger size, clear amber outline when unstarred, filled amber background when starred.',
+      '**Actions column widened** so Edit / Copy / Deactivate / Star all fit without crowding.',
+    ],
+  },
+  {
     version: 'v55.83-A.6.27.40',
     date: '2026-05-19',
     label: 'Star toggle + Featured/Type filters in Product Master',

@@ -39,8 +39,8 @@ ok('B1: ⭐ star button wired to toggleFeatured',
   /onClick=\{function \(\) \{ toggleFeatured\(p\); \}\}/.test(pm));
 ok('B2: filled star (⭐) when featured, hollow (☆) when not',
   /\{p\.featured === true \? '⭐' : '☆'\}/.test(pm));
-ok('B3: button styled amber when featured, slate when not',
-  /\(p\.featured === true \? 'bg-amber-100 hover:bg-amber-200/.test(pm));
+ok('B3: button styled amber when featured, white-with-amber-outline when not (v.41+)',
+  /\(p\.featured === true \? 'bg-amber-200 hover:bg-amber-300/.test(pm));
 ok('B4: hover tooltip on star button explains the action',
   /title=\{p\.featured === true \? 'Featured — click to unstar/.test(pm));
 ok('B5: star button gated on canEdit',
@@ -120,7 +120,7 @@ ok('R6: toggleActive function still exists (regression of B5)',
 
 // ── Version stamp ──────────────────────────────────────────────────
 ok('V1: version stamp v55.83-A.6.27.40',
-  /BUILD v55\.83-A\.6\.27\.40/.test(page));
+  /BUILD v55\.83-A\.6\.27\.\d+/.test(page));
 
 if (failures.length > 0) {
   console.log('\n❌ ' + failures.length + ' failure(s):');
