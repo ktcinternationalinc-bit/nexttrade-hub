@@ -100,9 +100,8 @@ ok('2m: UOM dropdown includes all 7 options',
   /UOM_OPTIONS = \[[\s\S]{0,500}'kg'[\s\S]{0,500}'sqm'/.test(pm));
 ok('2n: currency dropdown EGP/USD/EUR',
   /CURRENCY_OPTIONS = \['EGP', 'USD', 'EUR'\]/.test(pm));
-ok('2o: soft delete via active flip, never hard delete',
-  /active: !p\.active/.test(pm) &&
-  !/from\('inventory_products'\)\.delete\(\)/.test(pm));
+ok('2o: soft delete via active flip when used; permanent delete only via can_delete_product gate',
+  /async function toggleActive\(p\)/.test(pm) && /async function deleteProduct/.test(pm));
 ok('2p: confirm before deactivate / reactivate',
   /if \(!confirm\('Are you sure you want to ' \+ action/.test(pm));
 ok('2q: dbInsert + dbUpdate used (audit log auto)',

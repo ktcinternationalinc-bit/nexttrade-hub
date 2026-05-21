@@ -43,6 +43,13 @@ export default function EgyptBankTab({ toast, user, userProfile, isAdmin, invoic
 
   const myId = userProfile?.id || user?.id;
   const isSuperAdmin = userProfile?.role === 'super_admin';
+  // v55.83-A.6.27.45 — Owner deposit + rules engine state
+  const [rules, setRules] = useState([]);                  // egypt_bank_rules rows
+  const [rulesModalOpen, setRulesModalOpen] = useState(false);
+  const [ruleEditOpen, setRuleEditOpen] = useState(false);
+  const [ruleDraft, setRuleDraft] = useState(null);        // null | { ...rule fields }
+  const [ruleBusy, setRuleBusy] = useState(false);
+  const [applyingRules, setApplyingRules] = useState(false);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -52,8 +59,19 @@ export default function EgyptBankTab({ toast, user, userProfile, isAdmin, invoic
     ]);
     setAccounts(acc || []);
     setTransactions(txn || []);
+    // v55.83-A.6.27.45 — Load rules (best-effort; tolerates missing table).
+    // Non-super-admins do NOT see private rules.
+    try {
+      let q = supabase.from('egypt_bank_rules').select('*').order('is_private', { ascending: false }).order('created_at', { ascending: false });
+      if (!isSuperAdmin) q = q.eq('is_private', false);
+      const { data: ruleRows } = await q;
+      setRules(ruleRows || []);
+    } catch (e) {
+      console.warn('[EgyptBankTab] rules load failed (table may be missing):', e && e.message);
+      setRules([]);
+    }
     setLoading(false);
-  }, []);
+  }, [isSuperAdmin]);
   useEffect(() => { load(); }, [load]);
 
   // ───── Account CRUD ─────
@@ -513,6 +531,15 @@ export default function EgyptBankTab({ toast, user, userProfile, isAdmin, invoic
     await logActivity(myId, 'Imported ' + imported + ' Egypt bank transactions (' + exactSkipped + ' exact duplicates skipped, ' + possibleSkipped + ' possible duplicates skipped, ' + overridden + ' overridden)', 'finance');
     await load();
     await autoCategorizeTxns();
+    // v55.83-A.6.27.45 — Auto-apply rules to newly imported (untouched) transactions.
+    // Failure here is non-fatal: import completes either way.
+    try {
+      const ruleResult = await applyRulesAtImport();
+      if (ruleResult && (ruleResult.newly_hidden > 0 || ruleResult.newly_categorized > 0)) {
+        toast?.info?.('Rules applied to import: ' + (ruleResult.newly_hidden || 0) + ' hidden, ' + (ruleResult.newly_categorized || 0) + ' categorized');
+        await load();
+      }
+    } catch (e) { /* non-fatal */ }
   };
 
   // v55.83-A.6.14 — update a single row's decision in the review UI
@@ -812,6 +839,209 @@ export default function EgyptBankTab({ toast, user, userProfile, isAdmin, invoic
   // bookkeeping (bank_in set, cash_in=0, linked_invoice_id UUID set,
   // matched_bank_txn_id set, needs_bank_match=false because it IS the
   // bank-side confirmation). Then defer to recalcInvoiceCollected.
+  // ─────────────────────────────────────────────────────────────────
+  // v55.83-A.6.27.45 — OWNER DEPOSIT toggle (super_admin OR isAdmin)
+  // ─────────────────────────────────────────────────────────────────
+  // Marks a bank transaction as an owner capital injection so it doesn't
+  // need to be linked to an invoice. The transaction still:
+  //   - counts toward totalIn (bank inflow is real)
+  //   - is excluded from the "Unmatched" filter noise (covered in filter logic below)
+  //   - cannot be matched to an invoice (UI disables the button)
+  // Does NOT touch treasury, invoices, checks, or anything else.
+  const canMarkOwnerDeposit = isSuperAdmin || isAdmin;
+
+  const toggleOwnerDeposit = async (txnId) => {
+    if (!canMarkOwnerDeposit) { toast?.error?.('Permission denied / غير مسموح'); return; }
+    const txn = transactions.find(t => t.id === txnId);
+    if (!txn) return;
+    if (txn.matched_invoice_id) {
+      const ok = confirm('This transaction is matched to an invoice. Unmatch it first before marking as owner deposit.\n\nهذه المعاملة مرتبطة بفاتورة. يرجى فك الربط أولاً.');
+      if (!ok) return;
+      return;
+    }
+    const newVal = !txn.is_owner_deposit;
+    try {
+      await dbUpdate('egypt_bank_transactions', txnId, { is_owner_deposit: newVal }, myId);
+      setTransactions(prev => prev.map(t => t.id === txnId ? { ...t, is_owner_deposit: newVal } : t));
+      try {
+        await supabase.from('audit_log').insert({
+          user_id: myId,
+          entity_type: 'egypt_bank_transactions',
+          entity_id: txnId,
+          action: newVal ? 'mark_owner_deposit' : 'unmark_owner_deposit',
+          details: { txn_amount: txn.amount, txn_date: txn.date, txn_description: txn.description },
+        });
+      } catch (e) { /* audit failure is non-fatal */ }
+      toast?.success?.(newVal
+        ? '💰 Marked as owner deposit / تم تحديدها كإيداع المالك'
+        : 'Owner deposit flag removed / تم إلغاء العلامة');
+    } catch (e) {
+      console.error('[toggleOwnerDeposit]', e);
+      toast?.error?.('Failed to update / فشل التحديث: ' + ((e && e.message) || String(e)));
+    }
+  };
+
+  // ─────────────────────────────────────────────────────────────────
+  // v55.83-A.6.27.45 — RULES ENGINE (categorize + hide, retroactive + forward)
+  // ─────────────────────────────────────────────────────────────────
+  // Permissions:
+  //   - Non-private rules: super_admin OR isAdmin can create/edit/delete
+  //   - Private rules:     super_admin ONLY can create/edit/delete or even see
+  const canManageNormalRules = isSuperAdmin || isAdmin;
+  const canManagePrivateRules = isSuperAdmin;
+
+  // Open rule editor (new or edit). draft = null for new, or existing rule object.
+  const openRuleEditor = (draft) => {
+    const isPrivateDraft = draft ? !!draft.is_private : false;
+    if (isPrivateDraft && !canManagePrivateRules) { toast?.error?.('Permission denied / غير مسموح'); return; }
+    setRuleDraft(draft ? { ...draft } : {
+      match_description: '',
+      match_amount: '',
+      match_account_id: '',
+      set_category: '',
+      set_subcategory: '',
+      set_hidden: false,
+      rule_name: '',
+      notes: '',
+      is_private: false,
+      active: true,
+    });
+    setRuleEditOpen(true);
+  };
+
+  const saveRule = async () => {
+    if (!ruleDraft) return;
+    // Validation
+    if (!ruleDraft.rule_name || !String(ruleDraft.rule_name).trim()) {
+      alert('Rule name is required / اسم القاعدة مطلوب');
+      return;
+    }
+    const hasMatcher = !!(ruleDraft.match_description || ruleDraft.match_amount || ruleDraft.match_account_id);
+    if (!hasMatcher) {
+      alert('At least one match criterion is required (description, amount, or account) / يجب تحديد معيار مطابقة واحد على الأقل');
+      return;
+    }
+    const hasAction = !!(ruleDraft.set_category || ruleDraft.set_hidden);
+    if (!hasAction) {
+      alert('At least one action is required (category or hide) / يجب تحديد إجراء واحد على الأقل');
+      return;
+    }
+    // Private rule permission gate
+    if (ruleDraft.is_private && !canManagePrivateRules) {
+      alert('Only super admin can create or edit private rules / المسؤول الأعلى فقط');
+      return;
+    }
+    setRuleBusy(true);
+    try {
+      const payload = {
+        match_description: ruleDraft.match_description || null,
+        match_amount: ruleDraft.match_amount === '' || ruleDraft.match_amount == null ? null : Number(ruleDraft.match_amount),
+        match_account_id: ruleDraft.match_account_id || null,
+        set_category: ruleDraft.set_category || null,
+        set_subcategory: ruleDraft.set_subcategory || null,
+        set_hidden: !!ruleDraft.set_hidden,
+        rule_name: String(ruleDraft.rule_name).trim(),
+        notes: ruleDraft.notes || null,
+        is_private: !!ruleDraft.is_private,
+        active: ruleDraft.active !== false,
+      };
+      let saved;
+      if (ruleDraft.id) {
+        const { data, error } = await supabase.from('egypt_bank_rules').update(payload).eq('id', ruleDraft.id).select().single();
+        if (error) throw error;
+        saved = data;
+        setRules(prev => prev.map(r => r.id === saved.id ? saved : r));
+      } else {
+        payload.created_by = myId;
+        const { data, error } = await supabase.from('egypt_bank_rules').insert(payload).select().single();
+        if (error) throw error;
+        saved = data;
+        setRules(prev => [saved, ...prev]);
+      }
+      toast?.success?.((ruleDraft.id ? 'Rule updated' : 'Rule created') + ' / تم الحفظ');
+      setRuleEditOpen(false);
+      setRuleDraft(null);
+      // Offer to apply right after save
+      if (saved && saved.active) {
+        setTimeout(async () => {
+          const ok = confirm('Apply this rule now to all existing transactions (retroactive)?\n\nتطبيق هذه القاعدة على جميع المعاملات الحالية؟');
+          if (ok) await applyRules({ ruleId: saved.id });
+        }, 200);
+      }
+    } catch (e) {
+      console.error('[saveRule]', e);
+      toast?.error?.('Failed to save rule / فشل: ' + ((e && e.message) || String(e)));
+    } finally {
+      setRuleBusy(false);
+    }
+  };
+
+  const deleteRule = async (ruleId) => {
+    const rule = rules.find(r => r.id === ruleId);
+    if (!rule) return;
+    if (rule.is_private && !canManagePrivateRules) { toast?.error?.('Permission denied / غير مسموح'); return; }
+    const ok = confirm('Delete this rule?\n"' + (rule.rule_name || '') + '"\n\nThis does NOT un-hide or un-categorize any transactions the rule already touched.\n\nحذف هذه القاعدة؟');
+    if (!ok) return;
+    try {
+      await supabase.from('egypt_bank_rules').delete().eq('id', ruleId);
+      setRules(prev => prev.filter(r => r.id !== ruleId));
+      toast?.success?.('Rule deleted / تم الحذف');
+    } catch (e) {
+      console.error('[deleteRule]', e);
+      toast?.error?.('Failed to delete / فشل: ' + ((e && e.message) || String(e)));
+    }
+  };
+
+  // Apply rules to existing transactions (RETROACTIVE).
+  // opts = { ruleId, onlyPrivate }  — both optional
+  //   - if ruleId given: apply only that one rule
+  //   - if onlyPrivate true/false: filter to that subset
+  //   - if neither: apply all rules visible to the caller
+  const applyRules = async (opts) => {
+    opts = opts || {};
+    if (opts.onlyPrivate === true && !canManagePrivateRules) { toast?.error?.('Permission denied / غير مسموح'); return; }
+    if (opts.onlyPrivate !== true && !canManageNormalRules) { toast?.error?.('Permission denied / غير مسموح'); return; }
+    setApplyingRules(true);
+    try {
+      const params = {
+        p_only_private: opts.onlyPrivate === undefined ? null : !!opts.onlyPrivate,
+        p_only_rule_id: opts.ruleId || null,
+        p_only_unprocessed: false,  // retroactive: re-process even already-touched rows
+      };
+      const { data, error } = await supabase.rpc('apply_egypt_bank_rules', params);
+      if (error) throw error;
+      const result = data || {};
+      toast?.success?.(
+        'Rules applied — ' +
+        (result.newly_hidden || 0) + ' hidden, ' +
+        (result.newly_categorized || 0) + ' categorized / تم تطبيق القواعد'
+      );
+      // Reload transactions to reflect updated category/hidden state
+      await load();
+    } catch (e) {
+      console.error('[applyRules]', e);
+      toast?.error?.('Failed to apply rules / فشل: ' + ((e && e.message) || String(e)));
+    } finally {
+      setApplyingRules(false);
+    }
+  };
+
+  // Auto-apply at import time. Caller (the import flow) calls this after batch insert.
+  // Uses p_only_unprocessed=true to avoid touching already-categorized old data.
+  const applyRulesAtImport = async () => {
+    try {
+      const { data } = await supabase.rpc('apply_egypt_bank_rules', {
+        p_only_private: null,
+        p_only_rule_id: null,
+        p_only_unprocessed: true,
+      });
+      return data || {};
+    } catch (e) {
+      console.warn('[applyRulesAtImport] non-fatal:', e && e.message);
+      return null;
+    }
+  };
+
   const matchToInvoice = async (txnId, invoiceId) => {
     const txn = transactions.find(t => t.id === txnId);
     const inv = (invoices || []).find(i => i.id === invoiceId);
@@ -1032,7 +1262,7 @@ export default function EgyptBankTab({ toast, user, userProfile, isAdmin, invoic
     else if (!showHidden) arr = arr.filter(t => !t.hidden);
     if (selAccount !== 'all') arr = arr.filter(t => t.account_id === selAccount);
     if (matchFilter === 'matched') arr = arr.filter(t => t.matched_invoice_id);
-    if (matchFilter === 'unmatched') arr = arr.filter(t => !t.matched_invoice_id);
+    if (matchFilter === 'unmatched') arr = arr.filter(t => !t.matched_invoice_id && !t.is_owner_deposit);
     if (catFilter === 'uncategorized') arr = arr.filter(t => !t.category);
     else if (catFilter !== 'all') arr = arr.filter(t => t.category === catFilter);
     if (search) {
@@ -1049,7 +1279,7 @@ export default function EgyptBankTab({ toast, user, userProfile, isAdmin, invoic
   const totalIn = filtered.filter(t => t.amount > 0).reduce((s, t) => s + t.amount, 0);
   const totalOut = filtered.filter(t => t.amount < 0).reduce((s, t) => s + Math.abs(t.amount), 0);
   const matchedCount = filtered.filter(t => t.matched_invoice_id).length;
-  const unmatchedCount = filtered.filter(t => !t.matched_invoice_id).length;
+  const unmatchedCount = filtered.filter(t => !t.matched_invoice_id && !t.is_owner_deposit).length;
 
   const fmtE = (n) => 'E£' + Math.abs(n || 0).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
   const getAccName = (id) => { const a = accounts.find(a => a.id === id); return a ? `${a.bank_name} - ${a.account_number}` : ''; };
@@ -1085,6 +1315,16 @@ export default function EgyptBankTab({ toast, user, userProfile, isAdmin, invoic
           <button onClick={() => setView('accounts')} className={'px-3 py-1.5 rounded-lg text-xs font-semibold ' + (view === 'accounts' ? 'bg-blue-500 text-white' : 'bg-slate-100 text-slate-600')}>🏛️ Accounts</button>
           <button onClick={() => { setView('import'); setImportStep('select'); }} className={'px-3 py-1.5 rounded-lg text-xs font-semibold ' + (view === 'import' ? 'bg-blue-500 text-white' : 'bg-slate-100 text-slate-600')}>📥 Import</button>
           <button onClick={() => setView('transactions')} className={'px-3 py-1.5 rounded-lg text-xs font-semibold ' + (view === 'transactions' ? 'bg-blue-500 text-white' : 'bg-slate-100 text-slate-600')}>📋 Transactions</button>
+          {canManageNormalRules && (
+            <button
+              onClick={() => setRulesModalOpen(true)}
+              className="px-3 py-1.5 rounded-lg text-xs font-semibold bg-purple-600 hover:bg-purple-700 text-white"
+              title="Rules — auto-categorize and auto-hide transactions / القواعد"
+            >
+              ⚙️ Rules / القواعد
+              {rules.length > 0 && <span className="ml-1 bg-white text-purple-700 rounded px-1 text-[9px] font-extrabold">{rules.length}</span>}
+            </button>
+          )}
           {isSuperAdmin && (
             <button onClick={() => setView('history')} className={'px-3 py-1.5 rounded-lg text-xs font-semibold ' + (view === 'history' ? 'bg-blue-500 text-white' : 'bg-slate-100 text-slate-600')}>📜 Import History / السجل</button>
           )}
@@ -1742,8 +1982,24 @@ export default function EgyptBankTab({ toast, user, userProfile, isAdmin, invoic
                         <div className={'font-bold text-sm ' + (isDeposit ? 'text-green-600' : 'text-red-600')}>
                           {isDeposit ? '+' : ''}{fmtE(t.amount)}
                         </div>
-                        {!t.matched_invoice_id && (
+                        {!t.matched_invoice_id && !t.is_owner_deposit && (
                           <button onClick={() => { setMatchingTxn(t); setSearchInv(''); }} className="text-[10px] text-blue-500 font-semibold mt-1">🔗 Match</button>
+                        )}
+                        {/* v55.83-A.6.27.45 — Owner Deposit badge + toggle button */}
+                        {t.is_owner_deposit && (
+                          <div className="mt-1">
+                            <span className="text-[9px] bg-emerald-600 text-white font-extrabold rounded px-1.5 py-0.5 inline-block">💰 OWNER DEPOSIT</span>
+                            <div className="text-[8px] text-emerald-700 font-bold" style={{direction:'rtl'}}>إيداع المالك</div>
+                          </div>
+                        )}
+                        {canMarkOwnerDeposit && !t.matched_invoice_id && isDeposit && (
+                          <button
+                            onClick={() => toggleOwnerDeposit(t.id)}
+                            className={'text-[10px] font-semibold mt-1 block ' + (t.is_owner_deposit ? 'text-amber-500' : 'text-emerald-600')}
+                            title={t.is_owner_deposit ? 'Click to remove owner-deposit flag' : 'Mark as owner capital injection — no invoice link needed'}
+                          >
+                            {t.is_owner_deposit ? '↩ Unmark Owner / إلغاء' : '💰 Owner / مالك'}
+                          </button>
                         )}
                         {/* Hide/Unhide (Super Admin) */}
                         {isSuperAdmin && (
@@ -2078,6 +2334,158 @@ function ImportHistoryView({ supabase, accounts, myId, toast, onReload, reload }
           </div>
         )}
       </div>
+
+      {/* v55.83-A.6.27.45 — RULES MANAGER MODAL */}
+      {rulesModalOpen && canManageNormalRules && (
+        <div className="fixed inset-0 z-[200] bg-black/70 flex items-center justify-center p-4" onClick={() => setRulesModalOpen(false)}>
+          <div className="bg-white text-slate-900 rounded-2xl shadow-2xl max-w-4xl w-full max-h-[90vh] flex flex-col" onClick={(e) => e.stopPropagation()}>
+            <div className="bg-purple-700 text-white rounded-t-2xl px-5 py-3 flex items-center justify-between">
+              <div>
+                <div className="text-xs font-bold uppercase tracking-wide text-purple-100">Bank Rules / قواعد البنك</div>
+                <div className="text-lg font-extrabold">⚙️ Auto-categorize & Auto-hide</div>
+                <div className="text-xs text-purple-100 mt-0.5">Rules apply retroactively AND at import time / تطبق على الماضي والمستقبل</div>
+              </div>
+              <button onClick={() => setRulesModalOpen(false)} className="px-3 py-1 bg-white text-purple-700 hover:bg-purple-100 text-sm font-extrabold rounded-lg">✕ Close</button>
+            </div>
+            <div className="flex-1 overflow-auto p-5 space-y-3">
+              {/* Toolbar */}
+              <div className="flex flex-wrap items-center gap-2 mb-3">
+                <button onClick={() => openRuleEditor(null)} disabled={ruleBusy} className="px-3 py-1.5 bg-emerald-600 hover:bg-emerald-700 text-white text-sm font-extrabold rounded shadow disabled:opacity-50">+ New Rule / قاعدة جديدة</button>
+                <button onClick={() => applyRules({ onlyPrivate: false })} disabled={applyingRules || ruleBusy} className="px-3 py-1.5 bg-blue-600 hover:bg-blue-700 text-white text-sm font-bold rounded disabled:opacity-50">
+                  {applyingRules ? 'Applying...' : '🔄 Apply All Normal Rules Now / تطبيق'}
+                </button>
+                {canManagePrivateRules && (
+                  <button onClick={() => applyRules({ onlyPrivate: true })} disabled={applyingRules || ruleBusy} className="px-3 py-1.5 bg-slate-700 hover:bg-slate-800 text-white text-sm font-bold rounded disabled:opacity-50">
+                    🔒 Apply Private Rules / تطبيق القواعد الخاصة
+                  </button>
+                )}
+                <span className="text-xs text-slate-600 ml-auto">{rules.length} rule(s) / قاعدة</span>
+              </div>
+              {/* Rules list */}
+              {rules.length === 0 ? (
+                <div className="text-center py-8 text-slate-600 font-bold">No rules yet. Click "+ New Rule" to create one. / لا توجد قواعد</div>
+              ) : (
+                <div className="space-y-2">
+                  {rules.map((r) => (
+                    <div key={r.id} className={'border-2 rounded-lg p-3 ' + (r.is_private ? 'bg-slate-100 border-slate-400' : 'bg-white border-purple-200')}>
+                      <div className="flex items-start justify-between gap-2">
+                        <div className="flex-1">
+                          <div className="flex items-center gap-2 flex-wrap">
+                            <span className="font-extrabold text-slate-900">{r.rule_name}</span>
+                            {r.is_private && <span className="text-[9px] bg-slate-700 text-white font-extrabold rounded px-1.5 py-0.5">🔒 PRIVATE</span>}
+                            {!r.active && <span className="text-[9px] bg-amber-500 text-white font-extrabold rounded px-1.5 py-0.5">PAUSED</span>}
+                            {r.total_matches > 0 && <span className="text-[10px] text-slate-600">→ matched {r.total_matches} txns</span>}
+                          </div>
+                          <div className="text-xs text-slate-700 mt-1">
+                            <strong>Match:</strong>{' '}
+                            {r.match_description && <span>desc contains "<em>{r.match_description}</em>"</span>}
+                            {r.match_amount != null && <span>{r.match_description ? ' AND ' : ''}amount = {r.match_amount}</span>}
+                            {r.match_account_id && <span>{(r.match_description || r.match_amount != null) ? ' AND ' : ''}specific account</span>}
+                          </div>
+                          <div className="text-xs text-slate-700 mt-0.5">
+                            <strong>Action:</strong>{' '}
+                            {r.set_category && <span className="text-purple-700 font-bold">Set category to "{r.set_category}{r.set_subcategory ? ' / ' + r.set_subcategory : ''}"</span>}
+                            {r.set_category && r.set_hidden && <span> AND </span>}
+                            {r.set_hidden && <span className="text-red-700 font-bold">Hide from non-admin views</span>}
+                          </div>
+                          {r.notes && <div className="text-[10px] text-slate-500 mt-1 italic">{r.notes}</div>}
+                        </div>
+                        <div className="flex flex-col gap-1">
+                          <button onClick={() => applyRules({ ruleId: r.id })} disabled={applyingRules || ruleBusy} className="px-2 py-1 bg-blue-600 hover:bg-blue-700 text-white text-[10px] font-bold rounded disabled:opacity-50">🔄 Apply</button>
+                          <button onClick={() => openRuleEditor(r)} disabled={ruleBusy || (r.is_private && !canManagePrivateRules)} className="px-2 py-1 bg-indigo-600 hover:bg-indigo-700 text-white text-[10px] font-bold rounded disabled:opacity-50">Edit</button>
+                          <button onClick={() => deleteRule(r.id)} disabled={ruleBusy || (r.is_private && !canManagePrivateRules)} className="px-2 py-1 bg-red-600 hover:bg-red-700 text-white text-[10px] font-bold rounded disabled:opacity-50">Delete</button>
+                        </div>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* v55.83-A.6.27.45 — RULE EDITOR MODAL */}
+      {ruleEditOpen && ruleDraft && (
+        <div className="fixed inset-0 z-[210] bg-black/80 flex items-center justify-center p-4" onClick={() => { if (!ruleBusy) { setRuleEditOpen(false); setRuleDraft(null); } }}>
+          <div className="bg-white text-slate-900 rounded-2xl shadow-2xl max-w-2xl w-full max-h-[90vh] flex flex-col" onClick={(e) => e.stopPropagation()}>
+            <div className="bg-indigo-700 text-white rounded-t-2xl px-5 py-3">
+              <div className="text-lg font-extrabold">{ruleDraft.id ? '✏️ Edit Rule' : '+ New Rule'} / قاعدة</div>
+              <div className="text-xs text-indigo-100">Define a match pattern and what to do when it matches.</div>
+            </div>
+            <div className="flex-1 overflow-auto p-5 space-y-4">
+              <label className="block">
+                <span className="text-xs font-extrabold text-slate-900">Rule Name * / اسم القاعدة</span>
+                <input type="text" value={ruleDraft.rule_name || ''} onChange={(e) => setRuleDraft({...ruleDraft, rule_name: e.target.value})} className="w-full mt-1 px-3 py-2 border-2 border-slate-300 rounded text-sm bg-white text-slate-900 font-bold" placeholder="e.g. Bank wire fees / رسوم التحويل" />
+              </label>
+
+              {/* MATCH CRITERIA */}
+              <div className="bg-blue-50 border-2 border-blue-300 rounded-lg p-3 space-y-2">
+                <div className="text-xs font-extrabold text-blue-900">📌 Match Criteria (AND) / معايير المطابقة</div>
+                <label className="block">
+                  <span className="text-[11px] font-bold text-slate-700">Description contains / الوصف يحتوي</span>
+                  <input type="text" value={ruleDraft.match_description || ''} onChange={(e) => setRuleDraft({...ruleDraft, match_description: e.target.value})} className="w-full mt-0.5 px-2 py-1.5 border border-slate-300 rounded text-sm bg-white text-slate-900" placeholder="case-insensitive substring" />
+                </label>
+                <label className="block">
+                  <span className="text-[11px] font-bold text-slate-700">Amount = (exact) / المبلغ بالضبط</span>
+                  <input type="number" step="0.01" value={ruleDraft.match_amount === null || ruleDraft.match_amount === undefined ? '' : ruleDraft.match_amount} onChange={(e) => setRuleDraft({...ruleDraft, match_amount: e.target.value})} className="w-full mt-0.5 px-2 py-1.5 border border-slate-300 rounded text-sm bg-white text-slate-900" placeholder="(positive=deposit, negative=withdrawal)" />
+                </label>
+                <label className="block">
+                  <span className="text-[11px] font-bold text-slate-700">Specific Account (optional) / حساب محدد</span>
+                  <select value={ruleDraft.match_account_id || ''} onChange={(e) => setRuleDraft({...ruleDraft, match_account_id: e.target.value || null})} className="w-full mt-0.5 px-2 py-1.5 border border-slate-300 rounded text-sm bg-white text-slate-900">
+                    <option value="">— Any account / أي حساب —</option>
+                    {accounts.map(a => <option key={a.id} value={a.id}>{a.bank_name} — {a.account_number}</option>)}
+                  </select>
+                </label>
+                <div className="text-[10px] text-blue-800 italic">At least ONE criterion required. All filled criteria must match (AND).</div>
+              </div>
+
+              {/* ACTIONS */}
+              <div className="bg-emerald-50 border-2 border-emerald-300 rounded-lg p-3 space-y-2">
+                <div className="text-xs font-extrabold text-emerald-900">⚡ Actions / الإجراءات</div>
+                <label className="block">
+                  <span className="text-[11px] font-bold text-slate-700">Set Category / الفئة</span>
+                  <input type="text" value={ruleDraft.set_category || ''} onChange={(e) => setRuleDraft({...ruleDraft, set_category: e.target.value})} className="w-full mt-0.5 px-2 py-1.5 border border-slate-300 rounded text-sm bg-white text-slate-900" placeholder="e.g. Bank Charges" />
+                </label>
+                <label className="block">
+                  <span className="text-[11px] font-bold text-slate-700">Set Subcategory (optional) / الفئة الفرعية</span>
+                  <input type="text" value={ruleDraft.set_subcategory || ''} onChange={(e) => setRuleDraft({...ruleDraft, set_subcategory: e.target.value})} className="w-full mt-0.5 px-2 py-1.5 border border-slate-300 rounded text-sm bg-white text-slate-900" placeholder="e.g. Wire Fee" />
+                </label>
+                <label className="flex items-center gap-2 mt-1">
+                  <input type="checkbox" checked={!!ruleDraft.set_hidden} onChange={(e) => setRuleDraft({...ruleDraft, set_hidden: e.target.checked, is_private: e.target.checked ? true : ruleDraft.is_private})} className="w-4 h-4" />
+                  <span className="text-sm font-bold text-slate-900">🔒 Hide from non-admin views (forces private) / إخفاء</span>
+                </label>
+                <div className="text-[10px] text-emerald-800 italic">At least ONE action required (category or hide).</div>
+              </div>
+
+              {/* PRIVACY */}
+              {canManagePrivateRules && (
+                <div className="bg-slate-100 border-2 border-slate-400 rounded-lg p-3">
+                  <label className="flex items-center gap-2">
+                    <input type="checkbox" checked={!!ruleDraft.is_private} disabled={!!ruleDraft.set_hidden} onChange={(e) => setRuleDraft({...ruleDraft, is_private: e.target.checked})} className="w-4 h-4" />
+                    <span className="text-sm font-extrabold text-slate-900">🔒 Private rule (super-admin only) / قاعدة خاصة</span>
+                  </label>
+                  <div className="text-[10px] text-slate-600 mt-1 italic">Private rules are visible only to you. Auto-checked when "Hide" is enabled.</div>
+                </div>
+              )}
+
+              <label className="block">
+                <span className="text-xs font-extrabold text-slate-900">Notes (optional) / ملاحظات</span>
+                <textarea value={ruleDraft.notes || ''} onChange={(e) => setRuleDraft({...ruleDraft, notes: e.target.value})} className="w-full mt-1 px-3 py-2 border-2 border-slate-300 rounded text-sm bg-white text-slate-900" rows={2} />
+              </label>
+
+              <label className="flex items-center gap-2">
+                <input type="checkbox" checked={ruleDraft.active !== false} onChange={(e) => setRuleDraft({...ruleDraft, active: e.target.checked})} className="w-4 h-4" />
+                <span className="text-sm font-bold text-slate-900">Active (will fire at import + when applied) / نشطة</span>
+              </label>
+            </div>
+            <div className="border-t border-slate-200 px-5 py-3 flex justify-end gap-2 bg-slate-50 rounded-b-2xl">
+              <button onClick={() => { setRuleEditOpen(false); setRuleDraft(null); }} disabled={ruleBusy} className="px-4 py-2 bg-slate-300 hover:bg-slate-400 text-slate-900 text-sm font-bold rounded disabled:opacity-50">Cancel / إلغاء</button>
+              <button onClick={saveRule} disabled={ruleBusy} className="px-4 py-2 bg-emerald-600 hover:bg-emerald-700 text-white text-sm font-extrabold rounded shadow disabled:opacity-50">{ruleBusy ? 'Saving...' : '💾 Save Rule / حفظ'}</button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

@@ -190,10 +190,10 @@ ok('E15: Modal title shows edit mode when editingReceiptNumber is set',
 // PART F — Status badge + filter
 // ══════════════════════════════════════════════════════════════════
 
-ok('F1: pending_detail badge variant',
-  /g\.status === 'pending_detail' \? 'bg-orange-100 text-orange-900'/.test(rec));
-ok('F2: pending_detail label "Pending Detail"',
-  /g\.status === 'pending_detail' \? 'Pending Detail'/.test(rec));
+ok('F1: pending_detail badge variant (orange-600 high contrast in v.43)',
+  /'pending_detail' \? 'bg-orange-600 text-white'/.test(rec));
+ok('F2: pending_detail label renders in badge mapping',
+  /'pending_detail' \? 'PENDING DETAIL'/.test(rec));
 ok('F3: filter dropdown includes pending_detail option',
   /<option value="pending_detail">Pending Detail \(no rolls\/qty yet\)<\/option>/.test(rec));
 

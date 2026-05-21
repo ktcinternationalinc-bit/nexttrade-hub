@@ -384,6 +384,13 @@ export default function App() {
   // the picker in the invoice modal.
   const [invSkus, setInvSkus] = useState([]);
   const [invWarehouses, setInvWarehouses] = useState([]);
+  // v55.83-A.6.27.44b — Inventory-linked invoice state.
+  // inventoryProducts: variants from inventory_products (NOT the legacy `inventory` table).
+  //   Loaded alongside other data. Used by the new "📦 From Inventory" tab in invoice product picker.
+  // inventoryCutoffDate: loaded from app_settings.inventory_cutoff_date.
+  //   When set, invoices on/after this date force inventory mode (enforced in 44c). Today it's just a guide.
+  const [inventoryProducts, setInventoryProducts] = useState([]);
+  const [inventoryCutoffDate, setInventoryCutoffDate] = useState(null);
   const [expenseRules, setExpenseRules] = useState([]);
   const [inventory, setInventory] = useState([]);
   const [invInbounds, setInvInbounds] = useState([]);
@@ -1388,6 +1395,32 @@ export default function App() {
         const { data: whRows } = await supabase.from('inv_warehouses').select('*').eq('is_active', true).order('name');
         setInvWarehouses(whRows || []);
       } catch (e) { setInvWarehouses([]); }
+      // v55.83-A.6.27.44b — load inventory_products (variants) for the invoice picker.
+      // Safe to fail silently — invoice form falls back to legacy/manual mode.
+      try {
+        const { data: ipRows } = await supabase.from('inventory_products').select('*').eq('active', true).order('name_en');
+        setInventoryProducts(ipRows || []);
+      } catch (e) { setInventoryProducts([]); }
+      // v55.83-A.6.27.44b — load cutoff date setting.
+      // When null/missing, both modes always available. When set, future-dated invoices force inventory mode (in 44c).
+      try {
+        const { data: cutoffRow } = await supabase
+          .from('app_settings')
+          .select('setting_value')
+          .eq('setting_key', 'inventory_cutoff_date')
+          .maybeSingle();
+        if (cutoffRow && cutoffRow.setting_value) {
+          var rawCut = cutoffRow.setting_value;
+          try {
+            var parsedCut = JSON.parse(rawCut);
+            if (parsedCut && typeof parsedCut === 'string' && /^\d{4}-\d{2}-\d{2}/.test(parsedCut)) {
+              setInventoryCutoffDate(parsedCut.substring(0, 10));
+            }
+          } catch (e2) {
+            if (/^\d{4}-\d{2}-\d{2}/.test(rawCut)) setInventoryCutoffDate(rawCut.substring(0, 10));
+          }
+        }
+      } catch (e) { /* no-op — cutoff just stays null */ }
       // Load team users separately (may not exist yet)
       try {
         const { data: usrs } = await supabase.from('users').select('*').order('name');
@@ -5127,7 +5160,7 @@ export default function App() {
               {/* Brand mark — bracket prefix is a terminal callout convention. */}
               <span className="text-emerald-400 font-mono text-xs font-bold tracking-tight" style={{ fontFamily: '"JetBrains Mono", monospace' }}>[KTC]</span>
               <h1 className="text-sm font-bold text-white tracking-tight whitespace-nowrap">NEXTTRADE HUB</h1>
-              <span className="text-[10px] text-zinc-500 font-mono hidden md:inline" style={{ fontFamily: '"JetBrains Mono", monospace' }}>v55.83-A.6.27.42</span>
+              <span className="text-[10px] text-zinc-500 font-mono hidden md:inline" style={{ fontFamily: '"JetBrains Mono", monospace' }}>v55.83-A.6.27.45</span>
               {/* Live clock — terminals always show one. Updates via the
                   existing tick state; if not present, falls back to no clock. */}
               <span className="hidden lg:inline text-[10px] text-zinc-500 font-mono ml-2 pl-2 border-l border-zinc-800" style={{ fontFamily: '"JetBrains Mono", monospace' }}>
@@ -8348,7 +8381,162 @@ export default function App() {
 
               {/* Product Picker */}
               {formData.showProductPicker && (
-                <div className="bg-white rounded-lg p-3 mb-2 border border-blue-300">
+                <div className="bg-white rounded-lg p-3 mb-2 border-2 border-blue-300">
+                  {/* v55.83-A.6.27.44b — Two-tab picker: 📦 From Inventory + ✏️ Manual/Legacy.
+                      Default tab: Inventory if invoiceDate is on/after cutoff OR cutoff is null AND
+                      inventory_products has data. Otherwise falls back to Manual.
+                      Mode is stored in formData.pickerMode ('inventory' | 'manual'). */}
+                  {(function () {
+                    var invDate = formData.date || today();
+                    var hasInventoryProducts = (inventoryProducts || []).length > 0;
+                    // Cutoff guidance text — used to nudge but NOT enforce (enforcement comes in 44c)
+                    var cutoffMessage = null;
+                    if (inventoryCutoffDate) {
+                      if (invDate >= inventoryCutoffDate) {
+                        cutoffMessage = { kind: 'force-inventory', text: '📦 This invoice date is on/after the cutoff (' + inventoryCutoffDate + ') — inventory mode recommended / يُنصح باستخدام المخزون' };
+                      } else {
+                        cutoffMessage = { kind: 'allow-both', text: '✏️ This invoice date is before the cutoff (' + inventoryCutoffDate + ') — either mode works / كلا الوضعين متاحان' };
+                      }
+                    }
+                    // Default tab: use formData.pickerMode if set, else derive from cutoff + data availability
+                    var defaultMode = formData.pickerMode
+                      || (cutoffMessage && cutoffMessage.kind === 'force-inventory' ? 'inventory'
+                          : hasInventoryProducts ? 'inventory' : 'manual');
+                    return (
+                      <>
+                        {cutoffMessage && (
+                          <div className={'text-[10px] font-semibold mb-2 px-2 py-1 rounded ' + (cutoffMessage.kind === 'force-inventory' ? 'bg-emerald-100 text-emerald-900 border border-emerald-300' : 'bg-blue-100 text-blue-900 border border-blue-300')}>
+                            {cutoffMessage.text}
+                          </div>
+                        )}
+                        {/* Tab toggle */}
+                        <div className="flex gap-1 mb-2 bg-slate-100 p-1 rounded border border-slate-200">
+                          <button
+                            onClick={() => setFormData({ ...formData, pickerMode: 'inventory' })}
+                            className={'flex-1 px-3 py-1.5 text-xs font-extrabold rounded ' + (defaultMode === 'inventory' ? 'bg-emerald-600 text-white shadow' : 'bg-white text-slate-700 hover:bg-slate-50')}
+                          >
+                            📦 From Inventory / من المخزون
+                            {hasInventoryProducts && <span className="ml-1 opacity-75">({(inventoryProducts || []).length})</span>}
+                          </button>
+                          <button
+                            onClick={() => setFormData({ ...formData, pickerMode: 'manual' })}
+                            className={'flex-1 px-3 py-1.5 text-xs font-extrabold rounded ' + (defaultMode === 'manual' ? 'bg-slate-600 text-white shadow' : 'bg-white text-slate-700 hover:bg-slate-50')}
+                          >
+                            ✏️ Manual / يدوي
+                          </button>
+                        </div>
+
+                        {/* ─── TAB 1: INVENTORY (NEW v55.83-A.6.27.44b) ─── */}
+                        {defaultMode === 'inventory' && (
+                          <div>
+                            {!hasInventoryProducts ? (
+                              <div className="bg-amber-50 border border-amber-300 rounded p-3 text-xs text-amber-900">
+                                <div className="font-extrabold">⚠ No inventory products yet / لا توجد منتجات في المخزون</div>
+                                <div className="mt-1">Import family templates and receive stock first, or switch to Manual mode.</div>
+                              </div>
+                            ) : (
+                              <>
+                                <input
+                                  value={formData.invProdSearch || ''}
+                                  onChange={e => setFormData({ ...formData, invProdSearch: e.target.value })}
+                                  placeholder="Search by code, name (Eng/Ar), or specs... / بحث متعدد الكلمات"
+                                  className="w-full px-3 py-2 border-2 border-slate-300 rounded text-sm bg-white text-slate-900 font-medium mb-2"
+                                  autoFocus
+                                />
+                                <div className="max-h-[280px] overflow-auto border border-slate-200 rounded">
+                                  {(function () {
+                                    // Smart multi-keyword search (same pattern as Receive Stock)
+                                    var q = (formData.invProdSearch || '').trim().toLowerCase();
+                                    var keywords = q ? q.split(/\s+/).filter(function (k) { return k.length > 0; }) : [];
+                                    var matches = (inventoryProducts || []).filter(function (p) {
+                                      if (!p.active) return false;
+                                      if (keywords.length === 0) return true;
+                                      var searchable = (
+                                        (p.quick_code || '') + ' ' +
+                                        (p.variant_suffix ? p.quick_code + '-' + p.variant_suffix + ' ' : '') +
+                                        (p.name_en || '') + ' ' +
+                                        (p.name_ar || '') + ' ' +
+                                        (p.classification_slug || '')
+                                      ).toLowerCase();
+                                      for (var i = 0; i < keywords.length; i++) {
+                                        if (searchable.indexOf(keywords[i]) < 0) return false;
+                                      }
+                                      return true;
+                                    });
+                                    // Sort: featured first, then by use_count, then alphabetical
+                                    matches.sort(function (a, b) {
+                                      var af = a.featured === true ? 1 : 0;
+                                      var bf = b.featured === true ? 1 : 0;
+                                      if (af !== bf) return bf - af;
+                                      var au = Number(a.use_count || 0);
+                                      var bu = Number(b.use_count || 0);
+                                      if (bu !== au) return bu - au;
+                                      return (a.name_en || '').localeCompare(b.name_en || '');
+                                    });
+                                    matches = matches.slice(0, 30);
+                                    if (matches.length === 0) {
+                                      return <div className="px-3 py-4 text-xs text-slate-500 text-center italic">No matches / لا توجد نتائج</div>;
+                                    }
+                                    return matches.map(function (p) {
+                                      var displayCode = p.quick_code ? (p.quick_code + (p.variant_suffix ? '-' + p.variant_suffix : '')) : '(no code)';
+                                      return (
+                                        <div
+                                          key={p.id}
+                                          onClick={() => {
+                                            // v55.83-A.6.27.44b — Add line as inventory-linked.
+                                            // Records the linkage (uses_inventory=true + variant_id + warehouse pending)
+                                            // WITHOUT calling FIFO consumption — that comes in 44c.
+                                            const items = formData.invoiceItems || [];
+                                            items.push({
+                                              inv_desc: displayCode + ' — ' + (p.name_en || '') + ' / ' + (p.name_ar || ''),
+                                              inv_qty: 1,
+                                              inv_price: 0,
+                                              inv_total: 0,
+                                              // v55.83-A.6.27.44b inventory linkage fields
+                                              uses_inventory: true,
+                                              variant_id: p.id,
+                                              variant_quick_code: displayCode,
+                                              variant_name_en: p.name_en || '',
+                                              variant_name_ar: p.name_ar || '',
+                                              variant_uom: p.default_uom || 'meter',
+                                              warehouse_id: null, // operator picks this on the line itself (44c)
+                                              is_family_template: p.is_family_template === true,
+                                            });
+                                            setFormData({
+                                              ...formData,
+                                              invoiceItems: items,
+                                              showProductPicker: false,
+                                              invProdSearch: '',
+                                            });
+                                          }}
+                                          className="px-3 py-2 text-xs cursor-pointer hover:bg-emerald-600 hover:text-white border-b border-slate-100 last:border-0 transition-colors"
+                                        >
+                                          <div className="flex items-center gap-2">
+                                            {p.featured === true && <span className="text-amber-500">⭐</span>}
+                                            <span className="font-mono font-extrabold text-slate-900 hover:text-white">{displayCode}</span>
+                                            {p.is_family_template === true && <span className="text-[9px] bg-indigo-600 text-white font-bold rounded px-1.5 py-0.5">FAMILY</span>}
+                                            {p.is_family_template === false && p.variant_suffix && <span className="text-[9px] bg-emerald-600 text-white font-bold rounded px-1.5 py-0.5">VARIANT</span>}
+                                            {Number(p.use_count || 0) > 0 && <span className="text-[10px] text-slate-500 hover:text-white ml-auto">used {p.use_count}×</span>}
+                                          </div>
+                                          <div className="text-slate-700 hover:text-white mt-0.5">{p.name_en}</div>
+                                          <div className="text-slate-700 hover:text-white" style={{ direction: 'rtl' }}>{p.name_ar}</div>
+                                          <div className="text-[10px] text-slate-500 hover:text-white font-mono mt-0.5">{p.classification_slug}</div>
+                                        </div>
+                                      );
+                                    });
+                                  })()}
+                                </div>
+                                <div className="mt-2 text-[10px] text-slate-600 italic">
+                                  💡 Picking a variant tags this line for inventory tracking. FIFO consumption activates in next build. / FIFO سيعمل في الإصدار القادم
+                                </div>
+                              </>
+                            )}
+                          </div>
+                        )}
+
+                        {/* ─── TAB 2: MANUAL/LEGACY (unchanged behavior) ─── */}
+                        {defaultMode === 'manual' && (
+                          <div>
                   <input value={formData.prodSearch || ''} onChange={e => setFormData({...formData, prodSearch: e.target.value})}
                     placeholder="Search inventory by ref#, name... / بحث" className="w-full px-2 py-1.5 border rounded text-xs mb-2" autoFocus />
                   <div className="max-h-[150px] overflow-auto">
@@ -8387,8 +8575,13 @@ export default function App() {
                       }} className="px-2 py-1 bg-emerald-500 text-white rounded text-[10px]">Add</button>
                     </div>
                   </div>
+                          </div>
+                        )}
+                      </>
+                    );
+                  })()}
                   <button onClick={() => setFormData({...formData, showProductPicker: false})}
-                    className="mt-2 px-2 py-1 border border-slate-200 rounded text-[10px] w-full">Close</button>
+                    className="mt-2 px-2 py-1 border border-slate-200 rounded text-[10px] w-full">Close / إغلاق</button>
                 </div>
               )}
 
@@ -8408,6 +8601,18 @@ export default function App() {
                       {(formData.invoiceItems || []).map((item, idx) => (
                         <tr key={idx} className="border-b border-blue-100">
                           <td className="px-2 py-1">
+                            {/* v55.83-A.6.27.44b — Show 📦 inventory badge + variant info if linked */}
+                            {item.uses_inventory && (
+                              <div className="mb-0.5 flex items-center gap-1 flex-wrap">
+                                <span className="text-[8px] bg-emerald-600 text-white font-extrabold rounded px-1.5 py-0.5">📦 INVENTORY</span>
+                                {item.variant_quick_code && (
+                                  <span className="text-[9px] font-mono font-extrabold text-emerald-800">{item.variant_quick_code}</span>
+                                )}
+                                {item.is_family_template && (
+                                  <span className="text-[8px] bg-amber-500 text-white font-bold rounded px-1 py-0.5" title="Family template — variant will be created at consumption">⚠ Template</span>
+                                )}
+                              </div>
+                            )}
                             <input type="text" value={item.inv_desc || ''}
                               onChange={e => { const items = [...(formData.invoiceItems || [])]; items[idx] = {...items[idx], inv_desc: e.target.value}; setFormData({...formData, invoiceItems: items}); }}
                               placeholder="Description / الوصف"
@@ -8739,12 +8944,48 @@ export default function App() {
                       // v55.83-A.6.27 — Stage D: insert with inv_sku_id, then
                       // if the SKU is set, drain FIFO layers + create a sale
                       // movement + stamp COGS back onto this invoice_item.
-                      const insertedItem = await dbInsert('invoice_items', {
+                      // v55.83-A.6.27.44b — Also persist NEW inventory variant linkage when present.
+                      //   uses_inventory + variant_id + warehouse_id + sale_quantity + sale_price_per_uom
+                      //   are saved here but FIFO consumption does NOT run yet (lands in 44c).
+                      const itemPayload = {
                         invoice_id: newInv.id, description: item.inv_desc,
                         quantity: item.inv_qty, unit_price: item.inv_price, line_total: item.inv_total,
                         product_id: item.product_id || null,
                         inv_sku_id: item.inv_sku_id || null,
-                      }, user?.id);
+                      };
+                      // Only attach the new variant-linkage fields when this item came from the
+                      // 📦 From Inventory tab. Other items keep legacy/manual behavior unchanged.
+                      if (item.uses_inventory === true && item.variant_id) {
+                        itemPayload.uses_inventory = true;
+                        itemPayload.variant_id = item.variant_id;
+                        if (item.warehouse_id) itemPayload.warehouse_id = item.warehouse_id;
+                        itemPayload.uom = item.variant_uom || null;
+                        itemPayload.sale_quantity = Number(item.inv_qty) || 0;
+                        itemPayload.sale_price_per_uom = Number(item.inv_price) || 0;
+                        itemPayload.inventory_status = 'draft';
+                      }
+                      const insertedItem = await dbInsert('invoice_items', itemPayload, user?.id);
+                      // v55.83-A.6.27.44c — Auto-FIFO-consume for inventory-linked items.
+                      // Fires on submit (insert). Reads from inventory_layers oldest-first,
+                      // stamps cogs_total + gross_profit + consumed_layers on the item,
+                      // creates an inventory_backorders row if sale qty > available stock.
+                      // Failure here does NOT fail the whole invoice — operator gets a
+                      // toast warning and can review/fix manually.
+                      if (item.uses_inventory === true && item.variant_id && insertedItem && insertedItem.id) {
+                        try {
+                          const consumeRes = await supabase.rpc('consume_invoice_item_inventory', { p_item_id: insertedItem.id });
+                          if (consumeRes.error) {
+                            console.error('[invoice-save] consume_invoice_item_inventory failed:', consumeRes.error);
+                            toast.warning('Inventory consumption failed for line "' + (item.inv_desc || '?').substring(0, 50) + '" — ' + (consumeRes.error.message || 'unknown') + '. Invoice saved but stock not deducted; reopen to fix. / فشل خصم المخزون');
+                          } else if (consumeRes.data && consumeRes.data.backorder_qty && Number(consumeRes.data.backorder_qty) > 0) {
+                            // Soft-warn backorder
+                            toast.warning('⚠ Sold more than available stock — created backorder for ' + consumeRes.data.backorder_qty + ' units on "' + (item.inv_desc || '?').substring(0, 50) + '" / تم إنشاء طلب معلق');
+                          }
+                        } catch (e) {
+                          console.error('[invoice-save] consume RPC threw:', e);
+                          toast.warning('Inventory deduction failed for line "' + (item.inv_desc || '?').substring(0, 30) + '". Invoice still saved. / فشل خصم المخزون');
+                        }
+                      }
                       // Auto-deduct from OLD inventory if product_id set (legacy)
                       if (item.product_id) {
                         const prod = inventory.find(p => p.id === item.product_id);
@@ -13845,7 +14086,7 @@ export default function App() {
                       latest fix is actually deployed. If he doesn't see this
                       tag in the modal, his browser is running stale JS. */}
                   <div className="mt-1.5 inline-block px-2 py-0.5 rounded bg-amber-900/60 text-amber-100 text-[10px] font-mono font-bold tracking-wide">
-                    BUILD v55.83-A.6.27.42
+                    BUILD v55.83-A.6.27.45
                   </div>
                 </div>
                 <button onClick={() => closePendingTreasuryModal()}
@@ -14480,7 +14721,7 @@ export default function App() {
                     معاملة قد تكون مكررة
                   </div>
                   <div className="mt-1.5 inline-block px-2 py-0.5 rounded bg-amber-900/60 text-amber-100 text-[10px] font-mono font-bold tracking-wide">
-                    BUILD v55.83-A.6.27.42
+                    BUILD v55.83-A.6.27.45
                   </div>
                 </div>
                 <button

@@ -67,10 +67,100 @@ var SUBTABS = [
 export default function InventoryTab({ userProfile, modulePerms, toast, isSuperAdmin }) {
   var [subtab, setSubtab] = useState('inventory');
 
-  // v55.83-A.6.27 — load SKUs + warehouses once at this level so Layers + P&L
+  // v55.83-A.6.27.44 — load SKUs + warehouses once at this level so Layers + P&L
   // subtabs don't each refetch.
   var [skus, setSkus] = useState([]);
   var [warehouses, setWarehouses] = useState([]);
+
+  // v55.83-A.6.27.44a — Inventory Cutoff Date setting (admin panel).
+  // When set, new invoices dated on/after this date are required to use inventory linkage.
+  // When NULL (default), both manual and inventory-linked modes always allowed.
+  // Only super_admin OR users with 'Adjust Inventory' permission can change this.
+  var [cutoffDate, setCutoffDate] = useState(null);          // ISO date string or null
+  var [cutoffLoading, setCutoffLoading] = useState(true);
+  var [cutoffSaving, setCutoffSaving] = useState(false);
+  var [cutoffPanelOpen, setCutoffPanelOpen] = useState(false);
+
+  // Permission to edit the cutoff (matches the bilingual "Adjust Inventory" permission).
+  var canManageCutoff = isSuperAdmin
+    || (modulePerms && modulePerms['Adjust Inventory'] === true);
+
+  useEffect(function () {
+    var cancelled = false;
+    async function loadCutoff() {
+      try {
+        var resp = await supabase
+          .from('app_settings')
+          .select('setting_value')
+          .eq('setting_key', 'inventory_cutoff_date')
+          .maybeSingle();
+        if (cancelled) return;
+        if (resp && resp.data && resp.data.setting_value) {
+          var raw = resp.data.setting_value;
+          // setting_value is text — could be JSON 'null', or a quoted/unquoted date string
+          try {
+            var parsed = JSON.parse(raw);
+            if (parsed && typeof parsed === 'string' && /^\d{4}-\d{2}-\d{2}/.test(parsed)) {
+              setCutoffDate(parsed.substring(0, 10));
+            } else {
+              setCutoffDate(null);
+            }
+          } catch (e) {
+            // Not JSON — accept as raw date string
+            if (/^\d{4}-\d{2}-\d{2}/.test(raw)) setCutoffDate(raw.substring(0, 10));
+            else setCutoffDate(null);
+          }
+        } else {
+          setCutoffDate(null);
+        }
+      } catch (e) {
+        console.warn('[inventory] load cutoff failed:', e);
+        if (!cancelled) setCutoffDate(null);
+      } finally {
+        if (!cancelled) setCutoffLoading(false);
+      }
+    }
+    loadCutoff();
+    return function () { cancelled = true; };
+  }, []);
+
+  async function saveCutoff(newValue) {
+    // newValue: ISO date string "2026-06-01" OR null to clear
+    setCutoffSaving(true);
+    try {
+      var jsonVal = newValue ? JSON.stringify(newValue) : 'null';
+      // Try update first; fall back to insert if no row exists
+      var existing = await supabase
+        .from('app_settings')
+        .select('id')
+        .eq('setting_key', 'inventory_cutoff_date')
+        .maybeSingle();
+      if (existing && existing.data && existing.data.id) {
+        var upd = await supabase
+          .from('app_settings')
+          .update({ setting_value: jsonVal })
+          .eq('id', existing.data.id);
+        if (upd.error) throw upd.error;
+      } else {
+        var ins = await supabase
+          .from('app_settings')
+          .insert({ setting_key: 'inventory_cutoff_date', setting_value: jsonVal });
+        if (ins.error) throw ins.error;
+      }
+      setCutoffDate(newValue);
+      if (toast && toast.success) {
+        toast.success(newValue
+          ? 'Inventory cutoff set to ' + newValue + ' — invoices on/after this date will require inventory linkage'
+          : 'Inventory cutoff cleared — both modes always allowed');
+      }
+    } catch (e) {
+      console.error('[inventory] saveCutoff failed:', e);
+      if (toast && toast.error) toast.error('Failed to save cutoff: ' + ((e && e.message) || String(e)));
+    } finally {
+      setCutoffSaving(false);
+    }
+  }
+
   useEffect(function () {
     var cancelled = false;
     async function load() {
@@ -114,9 +204,9 @@ export default function InventoryTab({ userProfile, modulePerms, toast, isSuperA
               Track every shipment from arrival through sale. Costs, stock, and profit in one place.
             </p>
           </div>
-          <div className="flex items-center gap-1 text-[10px]">
-            <span className="px-2 py-0.5 rounded bg-emerald-200 text-emerald-900 font-bold">
-              v55.83-A.6.27.9 · Stage 6 of 6 — COMPLETE ✓
+          <div className="flex items-center gap-1 text-[11px]">
+            <span className="px-2 py-1 rounded bg-emerald-600 text-white font-extrabold">
+              v55.83-A.6.27.45 · Invoice variant picker
             </span>
             {seePnL && (
               <span className="px-2 py-0.5 rounded bg-emerald-200 text-emerald-900 font-bold">
@@ -131,6 +221,81 @@ export default function InventoryTab({ userProfile, modulePerms, toast, isSuperA
           </div>
         </div>
       </div>
+
+      {/* v55.83-A.6.27.44a — INVENTORY CUTOFF DATE admin panel (super_admin OR Adjust Inventory only).
+          When set, new invoices on/after this date will be required to use inventory linkage.
+          Sits between header and subtab nav so it's discoverable but not in the way. */}
+      {canManageCutoff && (
+        <div className="bg-white border-2 border-indigo-200 rounded-xl overflow-hidden">
+          <button
+            onClick={function () { setCutoffPanelOpen(!cutoffPanelOpen); }}
+            className="w-full px-4 py-2.5 flex items-center justify-between hover:bg-indigo-50 transition-colors"
+          >
+            <div className="flex items-center gap-2">
+              <span className="text-base">⚙️</span>
+              <div className="text-left">
+                <div className="text-sm font-extrabold text-slate-900">
+                  Inventory Cutoff Date <span className="text-slate-500 font-normal">/</span> <span style={{ direction: 'rtl' }}>تاريخ بدء ربط المخزون</span>
+                </div>
+                <div className="text-[11px] text-slate-600 font-semibold">
+                  {cutoffLoading
+                    ? 'Loading… / جاري التحميل…'
+                    : (cutoffDate
+                        ? '🟢 Active from ' + cutoffDate + ' / نشط من ' + cutoffDate
+                        : '⚪ Not set — both modes always allowed / غير محدد — كلا الوضعين متاحان')}
+                </div>
+              </div>
+            </div>
+            <span className="text-slate-500 text-xs font-bold">{cutoffPanelOpen ? '▲' : '▼'}</span>
+          </button>
+          {cutoffPanelOpen && (
+            <div className="border-t-2 border-indigo-200 bg-indigo-50 px-4 py-3 space-y-3">
+              <div className="text-xs text-slate-800 font-semibold leading-relaxed">
+                When set, invoices dated <strong>on or after</strong> this date will be required to use inventory linkage (pick a warehouse and variant, with FIFO consumption on submit). Invoices dated <strong>before</strong> this date can still use manual entry. Leave blank to allow both modes for all dates.
+                <br /><br />
+                <span style={{ direction: 'rtl' }} className="block">
+                  عند تحديد هذا التاريخ، يجب على الفواتير المؤرخة في هذا التاريخ أو بعده استخدام ربط المخزون (اختيار مستودع ومنتج، مع خصم FIFO عند الإرسال). الفواتير المؤرخة قبل هذا التاريخ يمكن أن تستخدم الإدخال اليدوي. اتركه فارغًا للسماح بكلا الوضعين لجميع التواريخ.
+                </span>
+              </div>
+              <div className="flex items-end gap-2 flex-wrap">
+                <label className="text-xs font-extrabold text-slate-900">
+                  Cutoff Date / التاريخ
+                  <input
+                    type="date"
+                    value={cutoffDate || ''}
+                    onChange={function (e) {
+                      // Just stage the value; user must click Save to commit
+                      setCutoffDate(e.target.value || null);
+                    }}
+                    disabled={cutoffSaving}
+                    className="block mt-1 px-3 py-2 border-2 border-slate-300 rounded text-sm bg-white text-slate-900 font-bold"
+                  />
+                </label>
+                <button
+                  onClick={function () { saveCutoff(cutoffDate); }}
+                  disabled={cutoffSaving || cutoffLoading}
+                  className="px-4 py-2 bg-emerald-600 hover:bg-emerald-700 disabled:opacity-50 text-white text-sm font-extrabold rounded-lg shadow"
+                >
+                  {cutoffSaving ? 'Saving… / حفظ…' : '💾 Save / حفظ'}
+                </button>
+                <button
+                  onClick={function () { saveCutoff(null); }}
+                  disabled={cutoffSaving || cutoffLoading || !cutoffDate}
+                  className="px-4 py-2 bg-slate-300 hover:bg-slate-400 disabled:opacity-50 text-slate-900 text-sm font-bold rounded-lg"
+                  title="Clear the cutoff. Both modes will be allowed for all dates."
+                >
+                  Clear / مسح
+                </button>
+              </div>
+              {!isSuperAdmin && (
+                <div className="text-[10px] text-amber-800 font-semibold italic">
+                  ⚠ You have Adjust Inventory permission. Changes affect all invoice creation going forward.
+                </div>
+              )}
+            </div>
+          )}
+        </div>
+      )}
 
       {/* Subtab nav */}
       <div className="flex gap-1 flex-wrap bg-slate-50 rounded-lg p-1 border border-slate-200">
@@ -270,7 +435,7 @@ export default function InventoryTab({ userProfile, modulePerms, toast, isSuperA
       {/* Stage guidance */}
       <details className="bg-slate-50 border border-slate-200 rounded-lg p-3 text-xs">
         <summary className="font-bold text-slate-700 cursor-pointer">
-          ℹ️ What's in this build (v55.83-A.6.27.9 · Stage 6 of 6 — ALL STAGES SHIPPED)
+          ℹ️ What's in this build (v55.83-A.6.27.43 — Family templates + Variants + Reconciliation)
         </summary>
         <div className="mt-2 space-y-2 text-slate-600 leading-relaxed">
           <p>

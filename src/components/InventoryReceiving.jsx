@@ -131,9 +131,20 @@ export default function InventoryReceiving(props) {
     arrival_date: '',
     purchase_currency: 'USD',
     origin_country_code: 'US',
+    // v55.83-A.6.27.43 — Shipment-level expected totals (supplier docs / "what they said is in the container").
+    // Required at Submit time (not at Save Draft). Drives reconciliation against per-line actuals.
+    expected_total_rolls: '',
+    expected_total_gross_kg: '',
+    expected_total_net_kg: '',
+    expected_total_uom: '',
+    expected_uom_type: 'meter',   // meter | yard | piece | sqm
+    variance_notes: '',
   });
   var [lines, setLines] = useState([emptyLine()]);
   var [busy, setBusy] = useState(false);
+  // v55.83-A.6.27.43 — Variance prompt modal (shown on Submit click when variance exists)
+  var [variancePromptOpen, setVariancePromptOpen] = useState(false);
+  var [variancePromptData, setVariancePromptData] = useState(null);  // { rolls, gross, net, uom }
 
   // Cancel-receipt prompt
   var [cancelTarget, setCancelTarget] = useState(null);
@@ -620,7 +631,96 @@ export default function InventoryReceiving(props) {
     }
   }
 
-  async function saveReceipt() {
+  // v55.83-A.6.27.43 — Reconciliation helpers.
+  // Computes the sum of all per-line actuals to compare against the shipment-level expected.
+  function computeActualTotals(linesArr) {
+    var totals = { rolls: 0, gross: 0, net: 0, uom: 0 };
+    for (var i = 0; i < linesArr.length; i++) {
+      var L = linesArr[i];
+      // Sum from the per-roll details if present
+      if (Array.isArray(L.rolls) && L.rolls.length) {
+        for (var j = 0; j < L.rolls.length; j++) {
+          var r = L.rolls[j];
+          totals.rolls += 1;
+          totals.gross += Number(r.gross_kg || 0) || 0;
+          totals.net   += Number(r.net_kg   || 0) || 0;
+        }
+      }
+      // UOM: use the line's quantity (which is the total UOM count for that line)
+      totals.uom += Number(L.quantity || 0) || 0;
+    }
+    return totals;
+  }
+
+  function computeVariance(headerObj, linesArr) {
+    var actual = computeActualTotals(linesArr);
+    var expectedRolls = headerObj.expected_total_rolls === '' || headerObj.expected_total_rolls == null ? null : Number(headerObj.expected_total_rolls);
+    var expectedGross = headerObj.expected_total_gross_kg === '' || headerObj.expected_total_gross_kg == null ? null : Number(headerObj.expected_total_gross_kg);
+    var expectedNet   = headerObj.expected_total_net_kg   === '' || headerObj.expected_total_net_kg   == null ? null : Number(headerObj.expected_total_net_kg);
+    var expectedUom   = headerObj.expected_total_uom      === '' || headerObj.expected_total_uom      == null ? null : Number(headerObj.expected_total_uom);
+    // Per-dimension variance is null when no expected was provided (can't compare).
+    // Otherwise it's expected - actual (positive = under-delivered, negative = over-delivered).
+    var variance = {
+      rolls: expectedRolls == null ? null : (expectedRolls - actual.rolls),
+      gross: expectedGross == null ? null : (Math.round((expectedGross - actual.gross) * 1000) / 1000),
+      net:   expectedNet   == null ? null : (Math.round((expectedNet   - actual.net)   * 1000) / 1000),
+      uom:   expectedUom   == null ? null : (Math.round((expectedUom   - actual.uom)   * 1000) / 1000),
+    };
+    // is_balanced: true ONLY if every comparable dimension is exactly zero.
+    // Any dimension where expected wasn't provided is ignored.
+    var anyMismatch = false;
+    var compared = 0;
+    if (variance.rolls != null) { compared++; if (variance.rolls !== 0) anyMismatch = true; }
+    if (variance.gross != null) { compared++; if (variance.gross !== 0) anyMismatch = true; }
+    if (variance.net   != null) { compared++; if (variance.net   !== 0) anyMismatch = true; }
+    if (variance.uom   != null) { compared++; if (variance.uom   !== 0) anyMismatch = true; }
+    return {
+      actual: actual,
+      variance: variance,
+      compared: compared,
+      is_balanced: compared > 0 && !anyMismatch,
+      has_any_expected: compared > 0,
+    };
+  }
+
+  // v55.83-A.6.27.43 — Submit flow: save receipt + run reconciliation + capture variance.
+  // On Submit click, if variance exists, the variancePromptOpen modal asks for notes BEFORE
+  // the save actually fires. If notes are filled, status becomes submitted_unbalanced (yellow).
+  // If no variance, status becomes submitted_balanced (green).
+  async function submitReceipt() {
+    var rec = computeVariance(header, lines);
+    if (!rec.has_any_expected) {
+      // No expected totals filled in — can't reconcile, force user back to fill them
+      alert('Please fill in at least one Shipment Expected Total (rolls, gross kg, net kg, or UOM) before submitting.\n\nIf you want to save without committing yet, use "Save Draft" instead.');
+      return;
+    }
+    if (!rec.is_balanced) {
+      // Variance exists → prompt for notes before submitting
+      setVariancePromptData(rec);
+      setVariancePromptOpen(true);
+      return;
+    }
+    // Balanced — save with submitted_balanced + green status
+    await saveReceipt({ submitWithStatus: 'submitted_balanced', variance: rec });
+  }
+
+  // Called from the variance prompt modal after user fills notes
+  async function submitWithVarianceNote(noteText) {
+    if (!noteText || !noteText.trim()) {
+      alert('Variance notes are required when expected totals do not match actuals.');
+      return;
+    }
+    setHeader(Object.assign({}, header, { variance_notes: noteText.trim() }));
+    setVariancePromptOpen(false);
+    var rec = variancePromptData;
+    await saveReceipt({
+      submitWithStatus: 'submitted_unbalanced',
+      variance: rec,
+      varianceNotesOverride: noteText.trim(),
+    });
+  }
+
+  async function saveReceipt(opts) {
     // v55.83-A.6.27.35 — Validation rewritten for two-phase flow.
     // Phase 1: header + at least one product line with expected_* totals (quantity can be blank)
     // Phase 2: roll details + actual quantity filled in
@@ -630,16 +730,21 @@ export default function InventoryReceiving(props) {
       alert('Shipment Reference required (e.g. container number, PO number, or supplier reference).');
       return;
     }
+    // v55.83-A.6.27.43 — Draft saves are lenient — skip product line validation.
+    // Submit (with status) enforces full validation including filled lines.
+    var optsForSafetyCheck = opts || {};
+    var isSubmitting = !!optsForSafetyCheck.submitWithStatus;
     var anyValid = false;
-    for (var i = 0; i < lines.length; i++) {
-      var L = lines[i];
-      if (!L.product_id) { alert('Line ' + (i + 1) + ': product not selected. Pick a product or remove the line.'); return; }
-      // v55.83-A.6.27.39 — Variant specs required when product is a family template
-      if (L.product && L.product.is_family_template === true) {
-        if (!L.variant_category_code) {
-          alert('Line ' + (i + 1) + ': Category required (Smooth or Embossed) for family template ' + (L.product.quick_code || '?') + '.');
-          return;
-        }
+    if (isSubmitting) {
+      for (var i = 0; i < lines.length; i++) {
+        var L = lines[i];
+        if (!L.product_id) { alert('Line ' + (i + 1) + ': product not selected. Pick a product or remove the line.'); return; }
+        // v55.83-A.6.27.39 — Variant specs required when product is a family template
+        if (L.product && L.product.is_family_template === true) {
+          if (!L.variant_category_code) {
+            alert('Line ' + (i + 1) + ': Category required (Smooth or Embossed) for family template ' + (L.product.quick_code || '?') + '.');
+            return;
+          }
         if (!L.variant_construction_code) {
           alert('Line ' + (i + 1) + ': Construction required for family template ' + (L.product.quick_code || '?') + '.');
           return;
@@ -696,6 +801,7 @@ export default function InventoryReceiving(props) {
       anyValid = true;
     }
     if (!anyValid) { alert('At least one valid line required'); return; }
+    } // end if (isSubmitting)
 
     setBusy(true);
     try {
@@ -709,11 +815,71 @@ export default function InventoryReceiving(props) {
         receiptNumber = rnRes.data;
       }
 
+      // v55.83-A.6.27.43 — Upsert the shipment header with expected totals + status.
+      // opts.submitWithStatus = 'submitted_balanced' | 'submitted_unbalanced' | undefined (draft save)
+      var optsSafe = opts || {};
+      var statusToSet = optsSafe.submitWithStatus || null;
+      var variance = optsSafe.variance || null;
+      var varianceNotes = optsSafe.varianceNotesOverride != null ? optsSafe.varianceNotesOverride : (header.variance_notes || null);
+
+      var headerPayload = {
+        receipt_number: receiptNumber,
+        receipt_date: header.receipt_date,
+        shipment_reference: header.shipment_reference.trim(),
+        supplier: (header.supplier || '').trim() || null,
+        warehouse_id: header.warehouse_id,
+        freight_forwarder: (header.freight_forwarder || '').trim() || null,
+        shipping_line: (header.shipping_line || '').trim() || null,
+        container_number: (header.container_number || '').trim() || null,
+        eta_date: header.eta_date || null,
+        arrival_date: header.arrival_date || null,
+        purchase_currency: header.purchase_currency || 'USD',
+        origin_country_code: header.origin_country_code || null,
+        notes: (header.notes || '').trim() || null,
+        // v55.83-A.6.27.43 expected totals
+        expected_total_rolls: header.expected_total_rolls === '' || header.expected_total_rolls == null ? null : Number(header.expected_total_rolls),
+        expected_total_gross_kg: header.expected_total_gross_kg === '' || header.expected_total_gross_kg == null ? null : Number(header.expected_total_gross_kg),
+        expected_total_net_kg: header.expected_total_net_kg === '' || header.expected_total_net_kg == null ? null : Number(header.expected_total_net_kg),
+        expected_total_uom: header.expected_total_uom === '' || header.expected_total_uom == null ? null : Number(header.expected_total_uom),
+        expected_uom_type: header.expected_uom_type || null,
+        updated_by: userProfile && userProfile.id,
+      };
+
+      if (statusToSet) {
+        headerPayload.status = statusToSet;
+        headerPayload.submitted_at = new Date().toISOString();
+        headerPayload.submitted_by = userProfile && userProfile.id;
+        headerPayload.is_balanced = (statusToSet === 'submitted_balanced');
+        if (variance) {
+          headerPayload.variance_rolls    = variance.variance.rolls;
+          headerPayload.variance_gross_kg = variance.variance.gross;
+          headerPayload.variance_net_kg   = variance.variance.net;
+          headerPayload.variance_uom      = variance.variance.uom;
+          headerPayload.variance_notes    = varianceNotes;
+        }
+      } else {
+        headerPayload.status = 'draft';
+      }
+
+      var existingHeaderRes = await supabase.from('inventory_shipment_headers').select('id').eq('receipt_number', receiptNumber).maybeSingle();
+      var savedHeaderId;
+      if (existingHeaderRes.data && existingHeaderRes.data.id) {
+        await dbUpdate('inventory_shipment_headers', existingHeaderRes.data.id, headerPayload, userProfile && userProfile.id);
+        savedHeaderId = existingHeaderRes.data.id;
+      } else {
+        headerPayload.created_by = userProfile && userProfile.id;
+        var insHeader = await dbInsert('inventory_shipment_headers', headerPayload, userProfile && userProfile.id);
+        savedHeaderId = insHeader && insHeader.id;
+      }
+
       var masterUpdatesQueued = []; // {product_id, patch}
 
       // Process each line
       for (var j = 0; j < lines.length; j++) {
         var L2 = lines[j];
+        // v55.83-A.6.27.43 — On Draft save, skip lines that have no product picked yet
+        // (operator may have added blank rows but not filled them)
+        if (!isSubmitting && !L2.product_id) continue;
         // v55.83-A.6.27.39 — If product is a family template, resolve to a variant
         // via get_or_create_variant() — either reuses existing or creates a new one.
         var effectiveProductId = L2.product_id;
@@ -849,8 +1015,15 @@ export default function InventoryReceiving(props) {
         await dbUpdate('inventory_products', mu.product_id, mu.patch, userProfile && userProfile.id);
       }
 
-      var verb = editingReceiptNumber ? 'updated' : 'saved';
-      toast.success('Receipt ' + receiptNumber + ' ' + verb + ' — ' + lines.length + ' line(s)' + (masterUpdatesQueued.length ? '. Updated ' + masterUpdatesQueued.length + ' master record(s).' : ''));
+      // v55.83-A.6.27.43 — Submit-aware toast
+      if (statusToSet === 'submitted_balanced') {
+        toast.success('✓ Receipt ' + receiptNumber + ' submitted (balanced). All totals match — green status.');
+      } else if (statusToSet === 'submitted_unbalanced') {
+        toast.success('⚠ Receipt ' + receiptNumber + ' submitted with variance. Yellow status. Notes recorded.');
+      } else {
+        var verb = editingReceiptNumber ? 'updated' : 'saved';
+        toast.success('Receipt ' + receiptNumber + ' draft ' + verb + ' — ' + lines.length + ' line(s)' + (masterUpdatesQueued.length ? '. Updated ' + masterUpdatesQueued.length + ' master record(s).' : ''));
+      }
       await reload();
       closeModal();
     } catch (err) {
@@ -1084,20 +1257,27 @@ export default function InventoryReceiving(props) {
             var isFinalized = g.status === 'finalized';
             var rowClass = 'grid items-center border-t border-slate-100 ' +
               (isCancelled ? 'bg-slate-100 opacity-60' : '');
-            var typeBadge = g.receipt_type === 'legacy_import' ? 'bg-purple-100 text-purple-900' :
-                            g.receipt_type === 'adjustment' ? 'bg-amber-100 text-amber-900' :
-                            'bg-emerald-100 text-emerald-900';
-            // v55.83-A.6.27.32 + .35 — status badge variants (added pending_detail)
-            var statusBadge = isCancelled ? 'bg-slate-200 text-slate-600' :
-                              isFinalized ? 'bg-blue-100 text-blue-900' :
-                              g.status === 'received' ? 'bg-amber-100 text-amber-900' :
-                              g.status === 'pending_detail' ? 'bg-orange-100 text-orange-900' :
-                              'bg-slate-100 text-slate-700';
-            var statusLabel = isCancelled ? 'Cancelled' :
-                              isFinalized ? 'Finalized' :
-                              g.status === 'received' ? 'Received' :
-                              g.status === 'pending_detail' ? 'Pending Detail' :
-                              'Active';
+            var typeBadge = g.receipt_type === 'legacy_import' ? 'bg-purple-700 text-white' :
+                            g.receipt_type === 'adjustment' ? 'bg-amber-600 text-white' :
+                            'bg-emerald-600 text-white';
+            // v55.83-A.6.27.43 — High-contrast status badges. Solid bg + white text.
+            // Statuses: draft / pending_detail / received / submitted_balanced / submitted_unbalanced / finalized / cancelled
+            var statusBadge = isCancelled ? 'bg-red-700 text-white' :
+                              isFinalized ? 'bg-blue-700 text-white' :
+                              g.status === 'submitted_balanced' ? 'bg-emerald-600 text-white' :
+                              g.status === 'submitted_unbalanced' ? 'bg-amber-500 text-white' :
+                              g.status === 'received' ? 'bg-indigo-600 text-white' :
+                              g.status === 'pending_detail' ? 'bg-orange-600 text-white' :
+                              g.status === 'draft' ? 'bg-slate-600 text-white' :
+                              'bg-slate-500 text-white';
+            var statusLabel = isCancelled ? 'CANCELLED' :
+                              isFinalized ? 'FINALIZED' :
+                              g.status === 'submitted_balanced' ? '✓ SUBMITTED' :
+                              g.status === 'submitted_unbalanced' ? '⚠ VARIANCE' :
+                              g.status === 'received' ? 'RECEIVED' :
+                              g.status === 'pending_detail' ? 'PENDING DETAIL' :
+                              g.status === 'draft' ? 'DRAFT' :
+                              'ACTIVE';
             return (
               <div key={g.receipt_number} className={rowClass}
                    style={{ gridTemplateColumns: '170px 100px 80px 90px 1fr 110px 120px ' + (seeCosts ? '120px ' : '') + '140px', padding: '12px 12px' }}>
@@ -1112,7 +1292,7 @@ export default function InventoryReceiving(props) {
                   </span>
                 </div>
                 <div>
-                  <span className={'text-[10px] px-1.5 py-0.5 rounded font-extrabold ' + statusBadge}>
+                  <span className={'text-xs px-2 py-1 rounded font-extrabold ' + statusBadge}>
                     {statusLabel}
                   </span>
                 </div>
@@ -1198,9 +1378,9 @@ export default function InventoryReceiving(props) {
           style={{ padding: 16 }}
         >
           <div
-            className="bg-white rounded-2xl shadow-2xl mx-auto"
+            className="bg-white text-slate-900 rounded-2xl shadow-2xl mx-auto"
             onClick={function (e) { e.stopPropagation(); }}
-            style={{ maxWidth: 1400 }}
+            style={{ width: '95vw', maxWidth: 1800 }}
           >
             {/* Modal header */}
             <div
@@ -1295,6 +1475,74 @@ export default function InventoryReceiving(props) {
                 <label className="text-[11px] font-extrabold text-slate-700 block mt-2">Shipment Notes
                   <textarea value={header.notes} onChange={function (e) { setHeader(Object.assign({}, header, { notes: e.target.value })); }} rows={1} className="w-full mt-0.5 px-2 py-1.5 border border-slate-300 rounded text-sm bg-white resize-none" />
                 </label>
+              </div>
+
+              {/* v55.83-A.6.27.43 — SHIPMENT EXPECTED TOTALS (per supplier docs)
+                  Big, prominent, can't-miss. Optional during Draft, required at Submit. */}
+              <div className="bg-amber-50 border-2 border-amber-400 rounded-xl p-4 mt-4">
+                <div className="flex items-baseline justify-between mb-3">
+                  <div>
+                    <div className="text-base font-extrabold text-slate-900">📦 Shipment Expected Totals</div>
+                    <div className="text-sm text-slate-700 font-medium mt-0.5">
+                      What the supplier&apos;s shipping documents say came in this container.
+                      Per-product details go in the lines below. We reconcile at the bottom.
+                    </div>
+                  </div>
+                </div>
+                <div className="grid grid-cols-5 gap-3">
+                  <label className="text-sm font-extrabold text-slate-900 block">Expected Total Rolls
+                    <input
+                      type="number"
+                      step="1"
+                      value={header.expected_total_rolls}
+                      onChange={function (e) { setHeader(Object.assign({}, header, { expected_total_rolls: e.target.value })); }}
+                      placeholder="e.g. 23"
+                      className="w-full mt-1 px-3 py-2.5 border-2 border-slate-300 rounded text-base bg-white text-slate-900 font-bold"
+                    />
+                  </label>
+                  <label className="text-sm font-extrabold text-slate-900 block">Expected Gross Weight (kg)
+                    <input
+                      type="number"
+                      step="0.001"
+                      value={header.expected_total_gross_kg}
+                      onChange={function (e) { setHeader(Object.assign({}, header, { expected_total_gross_kg: e.target.value })); }}
+                      placeholder="e.g. 5750.000"
+                      className="w-full mt-1 px-3 py-2.5 border-2 border-slate-300 rounded text-base bg-white text-slate-900 font-bold"
+                    />
+                  </label>
+                  <label className="text-sm font-extrabold text-slate-900 block">Expected Net Weight (kg)
+                    <input
+                      type="number"
+                      step="0.001"
+                      value={header.expected_total_net_kg}
+                      onChange={function (e) { setHeader(Object.assign({}, header, { expected_total_net_kg: e.target.value })); }}
+                      placeholder="e.g. 5400.000"
+                      className="w-full mt-1 px-3 py-2.5 border-2 border-slate-300 rounded text-base bg-white text-slate-900 font-bold"
+                    />
+                  </label>
+                  <label className="text-sm font-extrabold text-slate-900 block">Expected Total UOM
+                    <input
+                      type="number"
+                      step="0.001"
+                      value={header.expected_total_uom}
+                      onChange={function (e) { setHeader(Object.assign({}, header, { expected_total_uom: e.target.value })); }}
+                      placeholder="optional"
+                      className="w-full mt-1 px-3 py-2.5 border-2 border-slate-300 rounded text-base bg-white text-slate-900 font-bold"
+                    />
+                  </label>
+                  <label className="text-sm font-extrabold text-slate-900 block">UOM Type
+                    <select
+                      value={header.expected_uom_type || 'meter'}
+                      onChange={function (e) { setHeader(Object.assign({}, header, { expected_uom_type: e.target.value })); }}
+                      className="w-full mt-1 px-3 py-2.5 border-2 border-slate-300 rounded text-base bg-white text-slate-900 font-bold"
+                    >
+                      <option value="meter">meter</option>
+                      <option value="yard">yard</option>
+                      <option value="piece">piece</option>
+                      <option value="sqm">square meter</option>
+                    </select>
+                  </label>
+                </div>
               </div>
 
               {/* Lines */}
@@ -1726,26 +1974,157 @@ export default function InventoryReceiving(props) {
               </button>
             </div>
 
+            {/* v55.83-A.6.27.43 — RECONCILIATION PANEL (always visible). Shows live diff of
+                expected vs actual. Green when balanced, yellow when variance. Lives at the
+                bottom of the modal so it's always visible regardless of how many lines. */}
+            {(function () {
+              var rec = computeVariance(header, lines);
+              if (!rec.has_any_expected) {
+                return (
+                  <div className="bg-slate-100 border-t-2 border-slate-300 px-5 py-3">
+                    <div className="text-sm font-bold text-slate-700">
+                      📊 Reconciliation will appear once you fill in Shipment Expected Totals above.
+                    </div>
+                  </div>
+                );
+              }
+              var bgClass = rec.is_balanced ? 'bg-emerald-100 border-emerald-500' : 'bg-amber-100 border-amber-500';
+              var titleColor = rec.is_balanced ? 'text-emerald-900' : 'text-amber-900';
+              return (
+                <div className={'border-t-4 ' + bgClass + ' px-5 py-3'}>
+                  <div className={'text-base font-extrabold ' + titleColor + ' mb-2'}>
+                    {rec.is_balanced ? '✓ Reconciliation: Balanced (all totals match)' : '⚠ Reconciliation: Variance detected (yellow status on submit)'}
+                  </div>
+                  <div className="grid grid-cols-4 gap-3 text-sm">
+                    <div className="bg-white border border-slate-300 rounded p-2">
+                      <div className="text-[11px] font-bold text-slate-600 uppercase">Rolls</div>
+                      <div className="text-slate-900 font-bold">Expected: {header.expected_total_rolls === '' ? '—' : header.expected_total_rolls}</div>
+                      <div className="text-slate-900 font-bold">Actual: {rec.actual.rolls}</div>
+                      <div className={'font-extrabold ' + (rec.variance.rolls === 0 || rec.variance.rolls == null ? 'text-emerald-700' : 'text-amber-800')}>
+                        {rec.variance.rolls == null ? '—' : (rec.variance.rolls === 0 ? '✓ match' : (rec.variance.rolls > 0 ? 'short ' + rec.variance.rolls : 'extra ' + Math.abs(rec.variance.rolls)))}
+                      </div>
+                    </div>
+                    <div className="bg-white border border-slate-300 rounded p-2">
+                      <div className="text-[11px] font-bold text-slate-600 uppercase">Gross kg</div>
+                      <div className="text-slate-900 font-bold">Expected: {header.expected_total_gross_kg === '' ? '—' : header.expected_total_gross_kg}</div>
+                      <div className="text-slate-900 font-bold">Actual: {rec.actual.gross.toFixed(3)}</div>
+                      <div className={'font-extrabold ' + (rec.variance.gross === 0 || rec.variance.gross == null ? 'text-emerald-700' : 'text-amber-800')}>
+                        {rec.variance.gross == null ? '—' : (rec.variance.gross === 0 ? '✓ match' : (rec.variance.gross > 0 ? 'short ' + rec.variance.gross.toFixed(3) : 'extra ' + Math.abs(rec.variance.gross).toFixed(3)))}
+                      </div>
+                    </div>
+                    <div className="bg-white border border-slate-300 rounded p-2">
+                      <div className="text-[11px] font-bold text-slate-600 uppercase">Net kg</div>
+                      <div className="text-slate-900 font-bold">Expected: {header.expected_total_net_kg === '' ? '—' : header.expected_total_net_kg}</div>
+                      <div className="text-slate-900 font-bold">Actual: {rec.actual.net.toFixed(3)}</div>
+                      <div className={'font-extrabold ' + (rec.variance.net === 0 || rec.variance.net == null ? 'text-emerald-700' : 'text-amber-800')}>
+                        {rec.variance.net == null ? '—' : (rec.variance.net === 0 ? '✓ match' : (rec.variance.net > 0 ? 'short ' + rec.variance.net.toFixed(3) : 'extra ' + Math.abs(rec.variance.net).toFixed(3)))}
+                      </div>
+                    </div>
+                    <div className="bg-white border border-slate-300 rounded p-2">
+                      <div className="text-[11px] font-bold text-slate-600 uppercase">UOM ({header.expected_uom_type || 'meter'})</div>
+                      <div className="text-slate-900 font-bold">Expected: {header.expected_total_uom === '' ? '—' : header.expected_total_uom}</div>
+                      <div className="text-slate-900 font-bold">Actual: {rec.actual.uom.toFixed(3)}</div>
+                      <div className={'font-extrabold ' + (rec.variance.uom === 0 || rec.variance.uom == null ? 'text-emerald-700' : 'text-amber-800')}>
+                        {rec.variance.uom == null ? '—' : (rec.variance.uom === 0 ? '✓ match' : (rec.variance.uom > 0 ? 'short ' + rec.variance.uom.toFixed(3) : 'extra ' + Math.abs(rec.variance.uom).toFixed(3)))}
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              );
+            })()}
+
             {/* Footer */}
             <div className="flex justify-end gap-2 border-t border-slate-200 bg-slate-50 rounded-b-2xl flex-wrap" style={{ padding: '12px 20px' }}>
-              <button onClick={closeModal} disabled={busy} className="px-4 py-2 bg-slate-300 hover:bg-slate-400 disabled:opacity-50 text-slate-900 text-sm font-bold rounded-lg">
+              <button onClick={closeModal} disabled={busy} className="px-4 py-2 bg-slate-300 hover:bg-slate-400 disabled:opacity-50 text-slate-900 text-base font-bold rounded-lg">
                 Cancel
               </button>
-              {/* v55.83-A.6.27.37 — Save Shipment Only: writes JUST the header (no products). Useful when supplier confirms shipment but you don't know what's in it yet. */}
+              {/* v55.83-A.6.27.37 — Save Shipment Only: writes JUST the header (no products). */}
               <button
                 onClick={saveShipmentHeaderOnly}
                 disabled={busy}
-                title="Save the shipment shell (header info only) without any products. You can add products later via Edit."
-                className="px-4 py-2 bg-amber-500 hover:bg-amber-600 disabled:opacity-50 text-white text-sm font-extrabold rounded-lg shadow">
-                {busy ? 'Saving...' : '📋 Save Shipment Only (no products)'}
+                title="Save shipment shell (header only, no products). Come back later via Edit to add products."
+                className="px-4 py-2 bg-amber-600 hover:bg-amber-700 disabled:opacity-50 text-white text-base font-extrabold rounded-lg shadow">
+                {busy ? 'Saving...' : '📋 Save Shell Only'}
               </button>
-              <button onClick={saveReceipt} disabled={busy} className="px-5 py-2 bg-indigo-600 hover:bg-indigo-700 disabled:opacity-50 text-white text-sm font-extrabold rounded-lg shadow">
-                {busy ? 'Saving...' : '✓ Save Receipt (' + lines.length + ' line' + (lines.length === 1 ? '' : 's') + ')'}
+              {/* v55.83-A.6.27.43 — Save Draft (no submission, no reconciliation gate, no variance check) */}
+              <button
+                onClick={function () { saveReceipt(); }}
+                disabled={busy}
+                title="Save your work-in-progress. Can be reopened and edited freely. Does not generate inventory layers or submit."
+                className="px-4 py-2 bg-slate-600 hover:bg-slate-700 disabled:opacity-50 text-white text-base font-extrabold rounded-lg shadow">
+                {busy ? 'Saving...' : '💾 Save Draft'}
+              </button>
+              {/* v55.83-A.6.27.43 — Submit: runs reconciliation. Balanced → green. Variance → yellow + note required. */}
+              <button
+                onClick={submitReceipt}
+                disabled={busy}
+                title="Submit this receipt. Reconciliation will run — if totals match it'll be green; if they don't, you'll be asked for a variance note."
+                className="px-5 py-2 bg-emerald-600 hover:bg-emerald-700 disabled:opacity-50 text-white text-base font-extrabold rounded-lg shadow">
+                {busy ? 'Submitting...' : '✓ Submit (' + lines.length + ' line' + (lines.length === 1 ? '' : 's') + ')'}
               </button>
             </div>
           </div>
         </div>
       )}
+
+      {/* v55.83-A.6.27.43 — Variance prompt modal (shown when Submit is clicked with variance) */}
+      {variancePromptOpen && variancePromptData && (() => {
+        var rec = variancePromptData;
+        var noteRef = { current: header.variance_notes || '' };
+        return (
+          <div className="fixed inset-0 z-[300] bg-black/70 flex items-center justify-center p-4">
+            <div className="bg-white text-slate-900 rounded-2xl shadow-2xl w-full max-w-2xl">
+              <div className="bg-amber-500 text-white rounded-t-2xl px-6 py-4">
+                <div className="text-xs font-bold uppercase tracking-wider text-amber-100">Variance detected</div>
+                <div className="text-xl font-extrabold">⚠ Expected totals don&apos;t match actual</div>
+                <div className="text-sm text-amber-50 mt-1">Please document why before submitting. This will be saved with the receipt and audited.</div>
+              </div>
+              <div className="p-6 space-y-3">
+                <div className="bg-amber-50 border-2 border-amber-300 rounded p-3 text-sm font-semibold text-slate-900">
+                  <div className="font-extrabold text-amber-900 mb-2">Variance summary:</div>
+                  {rec.variance.rolls != null && rec.variance.rolls !== 0 && (
+                    <div>• Rolls: <span className="font-extrabold">{rec.variance.rolls > 0 ? 'short ' + rec.variance.rolls : 'extra ' + Math.abs(rec.variance.rolls)}</span></div>
+                  )}
+                  {rec.variance.gross != null && rec.variance.gross !== 0 && (
+                    <div>• Gross kg: <span className="font-extrabold">{rec.variance.gross > 0 ? 'short ' + rec.variance.gross.toFixed(3) : 'extra ' + Math.abs(rec.variance.gross).toFixed(3)}</span></div>
+                  )}
+                  {rec.variance.net != null && rec.variance.net !== 0 && (
+                    <div>• Net kg: <span className="font-extrabold">{rec.variance.net > 0 ? 'short ' + rec.variance.net.toFixed(3) : 'extra ' + Math.abs(rec.variance.net).toFixed(3)}</span></div>
+                  )}
+                  {rec.variance.uom != null && rec.variance.uom !== 0 && (
+                    <div>• UOM: <span className="font-extrabold">{rec.variance.uom > 0 ? 'short ' + rec.variance.uom.toFixed(3) : 'extra ' + Math.abs(rec.variance.uom).toFixed(3)}</span></div>
+                  )}
+                </div>
+                <label className="block text-sm font-extrabold text-slate-900">Variance Notes <span className="text-red-600">*</span>
+                  <textarea
+                    defaultValue={noteRef.current}
+                    onChange={function (e) { noteRef.current = e.target.value; }}
+                    placeholder="e.g. Truck broke a roll during unloading. 2 rolls damaged, supplier credit pending. Net weight short by 30 kg explained by paper-wrap residue removed."
+                    rows={5}
+                    className="w-full mt-1 px-3 py-2.5 border-2 border-slate-300 rounded text-base bg-white text-slate-900 font-medium resize-y"
+                  />
+                </label>
+              </div>
+              <div className="bg-slate-100 rounded-b-2xl px-6 py-4 flex justify-end gap-2">
+                <button
+                  onClick={function () { setVariancePromptOpen(false); setVariancePromptData(null); }}
+                  disabled={busy}
+                  className="px-4 py-2 bg-slate-300 hover:bg-slate-400 disabled:opacity-50 text-slate-900 text-base font-bold rounded-lg"
+                >
+                  Back
+                </button>
+                <button
+                  onClick={function () { submitWithVarianceNote(noteRef.current); }}
+                  disabled={busy}
+                  className="px-5 py-2 bg-amber-600 hover:bg-amber-700 disabled:opacity-50 text-white text-base font-extrabold rounded-lg shadow"
+                >
+                  {busy ? 'Submitting...' : '⚠ Submit with Variance Note'}
+                </button>
+              </div>
+            </div>
+          </div>
+        );
+      })()}
 
       {/* Cancel-receipt prompt */}
       {cancelTarget && (

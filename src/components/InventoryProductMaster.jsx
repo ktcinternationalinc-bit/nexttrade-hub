@@ -18,6 +18,7 @@
 
 import { useState, useEffect, useMemo } from 'react';
 import { supabase, dbInsert, dbUpdate } from '../lib/supabase';
+import InventoryVariantHistory from './InventoryVariantHistory';
 
 var UOM_OPTIONS = [
   { v: 'kg',     en: 'Kilograms',     ar: 'كيلوغرام' },
@@ -41,6 +42,7 @@ var LEVEL_FIELD_MAP = {
   6: 'color_list_id',
   7: 'pattern_list_id',
   8: 'spec_class_list_id',
+  9: 'origin_list_id',
 };
 
 var LEVEL_LABELS = {
@@ -120,6 +122,9 @@ export default function InventoryProductMaster(props) {
     pattern_code: '',
   });
   var [variantBusy, setVariantBusy] = useState(false);
+
+  // v55.83-A.6.27.44d.1 — Variant History modal state
+  var [historyVariant, setHistoryVariant] = useState(null);  // when non-null, modal is open
   var [modalProductId, setModalProductId] = useState(null);
   var [form, setForm] = useState(emptyForm());
   var [busy, setBusy] = useState(false);
@@ -245,6 +250,35 @@ export default function InventoryProductMaster(props) {
     return parts.join('.');
   }
 
+  // v55.83-A.6.27.43 — Build a labeled list of classification levels for a product.
+  // Order: Family → Grade → Category → Construction → Backing → Color → Pattern → Spec → Country.
+  // (Grade comes BEFORE Category per Max's request — "swap category with grade, then keep the rest".)
+  // Returns array of { label_en, code, label_full } so the UI can bullet them.
+  function describeProductBullets(p) {
+    var order = [
+      { lvl: 1, label: 'Family' },
+      { lvl: 3, label: 'Grade' },
+      { lvl: 2, label: 'Category' },
+      { lvl: 4, label: 'Construction' },
+      { lvl: 5, label: 'Backing' },
+      { lvl: 6, label: 'Color' },
+      { lvl: 7, label: 'Pattern' },
+      { lvl: 8, label: 'Spec Class' },
+      { lvl: 9, label: 'Country' },
+    ];
+    var out = [];
+    for (var i = 0; i < order.length; i++) {
+      var spec = order[i];
+      var fieldName = LEVEL_FIELD_MAP[spec.lvl];
+      var id = p[fieldName];
+      if (!id) continue;  // skip levels that aren't filled
+      var opt = lists.find(function (l) { return l.id === id; });
+      if (!opt) continue;
+      out.push({ label: spec.label, code: opt.code, value: opt.label_en });
+    }
+    return out;
+  }
+
   // Filtered product list for the table
   var filteredProducts = useMemo(function () {
     var list = products.slice();
@@ -305,9 +339,30 @@ export default function InventoryProductMaster(props) {
     setForm(emptyForm());
   }
 
-  function openEdit(p) {
+  // v55.83-A.6.27.43 — Track if the currently-edited product has any usage references.
+  // If yes (used in receipts/movements/layers/adjustments), spec fields are locked.
+  var [editLocked, setEditLocked] = useState(false);
+  var [editIsTemplate, setEditIsTemplate] = useState(false);
+
+  async function openEdit(p) {
     setModalMode('edit');
     setModalProductId(p.id);
+    setEditIsTemplate(p.is_family_template === true);
+    // v55.83-A.6.27.43 — Check usage. If product has been used, lock the spec fields.
+    var locked = false;
+    try {
+      var res = await supabase.rpc('can_delete_product', { p_id: p.id });
+      if (res.error) {
+        // RPC missing or other failure — fall back to permissive (allow edit)
+        console.warn('[product-master] can_delete_product unavailable, falling back to edit-allowed:', res.error.message);
+      } else {
+        // can_delete returns TRUE when no references → safe to edit. FALSE → locked.
+        locked = (res.data === false);
+      }
+    } catch (e) {
+      console.warn('[product-master] can_delete_product RPC threw, falling back to edit-allowed:', e);
+    }
+    setEditLocked(locked);
     setForm({
       name_en: p.name_en || '',
       name_ar: p.name_ar || '',
@@ -334,6 +389,45 @@ export default function InventoryProductMaster(props) {
       default_rack: p.default_rack || '',
       notes: p.notes || '',
     });
+  }
+
+  // v55.83-A.6.27.43 — Delete handler. Only allowed when product has zero references.
+  // Two-step confirmation: dialog → require user to type DELETE.
+  async function deleteProduct(p) {
+    // Re-check at click time (in case usage was added since list-render)
+    try {
+      var chk = await supabase.rpc('can_delete_product', { p_id: p.id });
+      if (chk.error) throw chk.error;
+      if (chk.data === false) {
+        alert('Cannot delete "' + (p.name_en || p.quick_code) + '" — it is referenced by one or more receipts, movements, layers, or adjustments. Use Deactivate instead.');
+        await reload();
+        return;
+      }
+    } catch (e) {
+      console.error('[product-master] can_delete check failed:', e);
+      toast.error('Could not verify deletion safety: ' + ((e && e.message) || String(e)));
+      return;
+    }
+    var typed = prompt(
+      'PERMANENT DELETE — this cannot be undone.\n\n' +
+      'Product: ' + (p.name_en || p.quick_code) + '\n' +
+      'Quick code: ' + (p.quick_code || '—') + (p.variant_suffix ? '-' + p.variant_suffix : '') + '\n\n' +
+      'Verified: zero references in receipts, movements, layers, or adjustments.\n\n' +
+      'Type DELETE (in capitals) to confirm:'
+    );
+    if (typed !== 'DELETE') {
+      if (typed !== null) toast.error('Delete cancelled — confirmation text did not match.');
+      return;
+    }
+    try {
+      var del = await supabase.from('inventory_products').delete().eq('id', p.id);
+      if (del.error) throw del.error;
+      toast.success('Permanently deleted: ' + (p.name_en || p.quick_code));
+      await reload();
+    } catch (e) {
+      console.error('[product-master] deleteProduct failed:', e);
+      toast.error('Delete failed: ' + ((e && e.message) || String(e)));
+    }
   }
 
   function openDuplicate(p) {
@@ -612,7 +706,7 @@ export default function InventoryProductMaster(props) {
       {/* Products table */}
       <div className="bg-white rounded-xl border border-slate-200 overflow-hidden">
         <div className="grid bg-slate-100 text-[10px] font-extrabold text-slate-700 tracking-wider uppercase"
-             style={{ gridTemplateColumns: '110px 1.2fr 180px 180px 70px 280px', padding: '8px 12px' }}>
+             style={{ gridTemplateColumns: '110px 1.5fr 2fr 140px 60px 370px', padding: '8px 12px' }}>
           <div>Code</div>
           <div>Name</div>
           <div>Classification</div>
@@ -632,7 +726,7 @@ export default function InventoryProductMaster(props) {
               <div
                 key={p.id}
                 className={'grid items-center border-t border-slate-200 bg-white text-slate-900 ' + (p.active ? '' : 'opacity-60')}
-                style={{ gridTemplateColumns: '110px 1.2fr 180px 180px 70px 280px', padding: '12px 12px' }}
+                style={{ gridTemplateColumns: '110px 1.5fr 2fr 140px 60px 370px', padding: '12px 12px' }}
               >
                 <div className="text-sm font-mono font-extrabold text-slate-900">
                   {/* v55.83-A.6.27.40 — show variant suffix appended if this is a variant */}
@@ -663,7 +757,30 @@ export default function InventoryProductMaster(props) {
                   <div className={'text-base font-extrabold ' + (p.active ? 'text-slate-900' : 'text-slate-500 line-through')}>{p.name_en}</div>
                   <div className={'text-base font-extrabold mt-0.5 ' + (p.active ? 'text-slate-800' : 'text-slate-500 line-through')} style={{ direction: 'rtl' }}>{p.name_ar}</div>
                 </div>
-                <div className="text-sm font-mono font-extrabold text-slate-900 break-words">{p.classification_slug || describeProduct(p)}</div>
+                {/* v55.83-A.6.27.43 — Classification breakdown as bullets per level.
+                    Order: Family → Grade → Category → Construction → Backing → Color → Pattern → Spec → Country.
+                    Each level shows label + value with high contrast (slate-900 on white). */}
+                <div className="text-xs">
+                  {(function () {
+                    var bullets = describeProductBullets(p);
+                    if (bullets.length === 0) {
+                      return <span className="text-slate-500 italic">No classification set</span>;
+                    }
+                    return (
+                      <ul className="space-y-0.5 list-disc list-inside marker:text-indigo-500">
+                        {bullets.map(function (b, i) {
+                          return (
+                            <li key={i} className="text-slate-900 leading-tight">
+                              <span className="font-bold text-slate-600">{b.label}:</span>{' '}
+                              <span className="font-extrabold text-slate-900">{b.value}</span>
+                              <span className="text-slate-500 font-mono"> ({b.code})</span>
+                            </li>
+                          );
+                        })}
+                      </ul>
+                    );
+                  })()}
+                </div>
                 <div className="text-[11px] text-slate-600">
                   {p.design_sku && <div className="font-semibold text-slate-700">{p.design_sku}</div>}
                   {p.notes && <div className="italic truncate" title={p.notes}>{p.notes.length > 40 ? p.notes.substring(0, 40) + '...' : p.notes}</div>}
@@ -680,10 +797,19 @@ export default function InventoryProductMaster(props) {
                       {p.featured === true ? '⭐' : '☆'}
                     </button>
                   )}
+                  {/* v55.83-A.6.27.44d.1 — 🔍 History button (read-only, available to all viewers).
+                      Opens the Variant History modal: 4 tabs (Summary / Inbound / Outbound / Adjustments). */}
+                  <button
+                    onClick={function () { setHistoryVariant(p); }}
+                    className="px-2 py-1 text-[10px] bg-slate-700 hover:bg-slate-800 text-white rounded font-extrabold shadow"
+                    title="View full history of this variant — inbound shipments, sales, adjustments, stock summary / سجل المنتج"
+                  >
+                    🔍 History
+                  </button>
                   {canEdit && (
                     <button
                       onClick={function () { openEdit(p); }}
-                      className="px-2 py-1 text-[10px] bg-slate-200 hover:bg-slate-300 text-slate-900 rounded font-bold"
+                      className="px-2 py-1 text-[10px] bg-indigo-700 hover:bg-indigo-800 text-white rounded font-extrabold shadow"
                     >
                       Edit
                     </button>
@@ -703,7 +829,7 @@ export default function InventoryProductMaster(props) {
                   {canEdit && (
                     <button
                       onClick={function () { openDuplicate(p); }}
-                      className="px-2 py-1 text-[10px] bg-blue-100 hover:bg-blue-200 text-blue-950 rounded font-bold"
+                      className="px-2 py-1 text-[10px] bg-blue-700 hover:bg-blue-800 text-white rounded font-extrabold shadow"
                       title="Duplicate this product as a starting point for a similar one"
                     >
                       Copy
@@ -711,8 +837,17 @@ export default function InventoryProductMaster(props) {
                   )}
                   {canEdit && (
                     <button
+                      onClick={function () { deleteProduct(p); }}
+                      className="px-2 py-1 text-[10px] bg-red-700 hover:bg-red-800 text-white rounded font-extrabold shadow"
+                      title="Permanently delete this product. Only allowed if it has zero references anywhere."
+                    >
+                      Delete
+                    </button>
+                  )}
+                  {canEdit && (
+                    <button
                       onClick={function () { toggleActive(p); }}
-                      className={'px-2 py-1 text-[10px] rounded font-bold ' + (p.active ? 'bg-red-100 hover:bg-red-200 text-red-900' : 'bg-emerald-100 hover:bg-emerald-200 text-emerald-900')}
+                      className={'px-2 py-1 text-[10px] rounded font-extrabold shadow ' + (p.active ? 'bg-amber-600 hover:bg-amber-700 text-white' : 'bg-emerald-600 hover:bg-emerald-700 text-white')}
                     >
                       {p.active ? 'Deactivate' : 'Reactivate'}
                     </button>
@@ -763,6 +898,28 @@ export default function InventoryProductMaster(props) {
             </div>
 
             <div style={{ padding: 20, maxHeight: 'calc(100vh - 140px)', overflowY: 'auto' }}>
+              {/* v55.83-A.6.27.43 — Edit lock banner: shown when this product has references
+                  (used in receipts/movements/layers/adjustments). Spec dropdowns are read-only.
+                  Name + notes + defaults remain editable. To change specs, create a new variant. */}
+              {modalMode === 'edit' && editLocked && (
+                <div className="bg-amber-100 border-2 border-amber-500 rounded-lg p-3 mb-4">
+                  <div className="text-base font-extrabold text-amber-900">🔒 This {editIsTemplate ? 'family template' : 'variant'} is in use — spec fields are read-only</div>
+                  <div className="text-sm text-amber-900 mt-1 font-semibold">
+                    {editIsTemplate
+                      ? 'Receipts, movements, or layers reference this template. To change specs, use the "+ Variant" button on the row to create a new variant instead.'
+                      : 'Receipts, movements, or layers reference this variant. To change specs, create a new variant via the "+ Variant" button on the parent family template. You CAN still edit the Name and Notes here.'}
+                  </div>
+                </div>
+              )}
+              {modalMode === 'edit' && !editLocked && (
+                <div className="bg-emerald-100 border-2 border-emerald-500 rounded-lg p-3 mb-4">
+                  <div className="text-base font-extrabold text-emerald-900">✏️ This product has zero references — all fields fully editable</div>
+                  <div className="text-sm text-emerald-900 mt-1 font-semibold">
+                    Once it&apos;s used in any receipt, the spec fields will become read-only to protect historical accuracy.
+                  </div>
+                </div>
+              )}
+
               {/* Section 1: Identity */}
               <div className="mb-4">
                 <div className="text-[11px] font-extrabold text-slate-700 tracking-wider mb-2">IDENTITY / الهوية</div>
@@ -829,7 +986,8 @@ export default function InventoryProductMaster(props) {
                         <select
                           value={currentValue}
                           onChange={function (e) { handleLevelChange(lvl, e.target.value); }}
-                          className="w-full mt-0.5 px-2 py-1.5 border border-slate-300 rounded text-sm bg-white"
+                          disabled={editLocked}
+                          className={'w-full mt-0.5 px-2 py-1.5 border border-slate-300 rounded text-sm ' + (editLocked ? 'bg-slate-100 text-slate-600 cursor-not-allowed' : 'bg-white text-slate-900')}
                         >
                           <option value="">— pick {LEVEL_LABELS[lvl].en.toLowerCase()} —</option>
                           {opts.map(function (o) {
@@ -945,6 +1103,13 @@ export default function InventoryProductMaster(props) {
       )}
 
       {/* v55.83-A.6.27.42 — Create Variant modal */}
+      {/* v55.83-A.6.27.44d.1 — Variant History modal */}
+      <InventoryVariantHistory
+        variant={historyVariant}
+        isOpen={!!historyVariant}
+        onClose={function () { setHistoryVariant(null); }}
+      />
+
       {variantModalOpen && variantTemplate && (
         <div className="fixed inset-0 bg-black/60 z-[60] flex items-center justify-center p-4" onClick={closeVariantModal}>
           <div

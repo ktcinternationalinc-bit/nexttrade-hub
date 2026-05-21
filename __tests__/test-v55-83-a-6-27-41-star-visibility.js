@@ -17,12 +17,12 @@ function ok(label, cond) {
 // PART A — Grid width widened (header + row)
 // ══════════════════════════════════════════════════════════════════
 
-ok('A1: grid widened — actions column 120px → 220px',
-  /gridTemplateColumns: '110px 1\.2fr 180px 180px 70px 280px'/.test(pm));
-ok('A2: code column 90px → 110px (room for FAMILY/VARIANT badge)',
-  /'110px 1\.2fr/.test(pm));
+ok('A1: grid widened to v.43 dimensions (370px actions column)',
+  /'110px 1\.5fr 2fr 140px 60px 370px'/.test(pm));
+ok('A2: code column 110px (room for FAMILY/VARIANT badge)',
+  /'110px 1\.5fr/.test(pm));
 ok('A3: grid applied in both header and row (count = 2)',
-  pm.split("gridTemplateColumns: '110px 1.2fr 180px 180px 70px 280px'").length - 1 === 2);
+  pm.split("gridTemplateColumns: '110px 1.5fr 2fr 140px 60px 370px'").length - 1 === 2);
 ok('A4: old narrow 120px-actions grid no longer present',
   !/gridTemplateColumns: '90px 1\.2fr 180px 200px 80px 120px'/.test(pm));
 

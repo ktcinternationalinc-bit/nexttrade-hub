@@ -105,14 +105,14 @@ ok('C7: success toast uses receipt number and Pending Detail message',
 // PART D — UI: footer button + origin dropdown + wider modal
 // ══════════════════════════════════════════════════════════════════
 
-ok('D1: Save Shipment Only button wired to saveShipmentHeaderOnly',
-  /onClick=\{saveShipmentHeaderOnly\}[\s\S]{0,500}📋 Save Shipment Only \(no products\)/.test(rec));
+ok('D1: Save Shell Only button wired to saveShipmentHeaderOnly (renamed in v.43)',
+  /onClick=\{saveShipmentHeaderOnly\}/.test(rec) && /📋 Save Shell Only/.test(rec));
 ok('D2: Origin Country dropdown rendered',
   /Origin Country\s+<select value=\{header\.origin_country_code \|\| 'US'\}/.test(rec));
 ok('D3: Origin dropdown limited to US/CA/CN ONLY',
   /<option value="US">🇺🇸 United States<\/option>\s+<option value="CA">🇨🇦 Canada<\/option>\s+<option value="CN">🇨🇳 China<\/option>/.test(rec));
-ok('D4: Modal widened to 1400px maxWidth',
-  /maxWidth: 1400/.test(rec));
+ok('D4: Modal widened to 95vw / 1800 max in v.43',
+  /width: '95vw', maxWidth: 1800/.test(rec));
 ok('D5: Modal body taller — maxHeight calc(100vh - 140px)',
   /maxHeight: 'calc\(100vh - 140px\)'/.test(rec));
 
@@ -151,8 +151,8 @@ ok('F4: openEdit reads origin_country_code in both shell and line paths',
 // Regression guards
 // ══════════════════════════════════════════════════════════════════
 
-ok('R1: Build 4.4 — saveReceipt still exists and is wired',
-  /async function saveReceipt\(\)/.test(rec) && /onClick=\{saveReceipt\}/.test(rec));
+ok('R1: Build 4.4 — saveReceipt still exists and is wired (now accepts opts)',
+  /async function saveReceipt\(opts\)/.test(rec) && /onClick=\{submitReceipt\}/.test(rec));
 ok('R2: Build 4.4 — openEdit still handles existing lines path',
   /var rows = grouped\.lines \|\| \[\];\s+var first = rows\[0\]/.test(rec));
 ok('R3: Build 4.4 — reopen_finalized_receipt RPC still wired',

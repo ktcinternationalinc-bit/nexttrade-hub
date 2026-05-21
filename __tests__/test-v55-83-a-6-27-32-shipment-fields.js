@@ -164,8 +164,8 @@ ok('F3: status filter dropdown includes Finalized option',
   /<option value="finalized">Finalized<\/option>/.test(rec));
 ok('F4: status filter dropdown keeps Active (legacy) for old rows',
   /<option value="active">Active \(legacy\)<\/option>/.test(rec));
-ok('F5: list row shows status badge with conditional variants',
-  /var statusBadge = isCancelled \? 'bg-slate-200 text-slate-600' :[\s\S]{0,300}isFinalized \? 'bg-blue-100 text-blue-900' :[\s\S]{0,200}received' \? 'bg-amber-100/.test(rec));
+ok('F5: list row shows status badge with high-contrast variants (v.43)',
+  /statusBadge/.test(rec) && /bg-emerald-600 text-white/.test(rec));
 ok('F6: list row shows shipment_reference below receipt_number',
   /g\.shipment_reference && <div className=\{'text-\[10px\] font-mono '/.test(rec));
 ok('F7: Status column added to list header (8 columns total when seeCosts)',

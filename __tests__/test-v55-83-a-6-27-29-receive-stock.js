@@ -220,8 +220,8 @@ ok('B12c: modal header uses solid dark indigo (#3730a3) with inline white text',
   /background: '#3730a3'[\s\S]{0,300}color: '#ffffff'/.test(rec));
 ok('B12d: header has close X button (36x36 white circle with shadow)',
   /aria-label="Close"[\s\S]{0,400}width: 36/.test(rec));
-ok('B12e: sticky footer with Save + Cancel buttons',
-  /Save Receipt \(' \+ lines\.length \+ ' line/.test(rec));
+ok('B12e: footer has Save Draft + Submit + Cancel buttons (v.43 redesign)',
+  /💾 Save Draft/.test(rec) && /✓ Submit/.test(rec) && /Cancel/.test(rec));
 
 // ══════════════════════════════════════════════════════════════════
 // PART C — InventoryTab wiring

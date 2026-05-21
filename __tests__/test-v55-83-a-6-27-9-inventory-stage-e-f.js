@@ -76,8 +76,8 @@ ok('T-3: adjustments subtab renders AdjustmentsManager',
   /subtab === 'adjustments'[\s\S]{0,400}<AdjustmentsManager/.test(tab));
 ok('T-4: reports subtab renders InventoryReports',
   /subtab === 'reports'[\s\S]{0,400}<InventoryReports/.test(tab));
-ok('T-5: version stamp says Stage 6 of 6 COMPLETE',
-  /v55\.83-A\.6\.27\.9 · Stage 6 of 6 — COMPLETE/.test(tab));
+ok('T-5: version stamp present (Stage 6 of 6 banner now removed in v.43)',
+  /v55\.83-A\.6\.27\.\d+/.test(tab));
 ok('T-6: no coming-soon placeholder for adjustments/reports anymore',
   !/Coming in Stage [EF]/.test(tab));
 

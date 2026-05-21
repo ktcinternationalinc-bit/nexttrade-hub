@@ -32,8 +32,8 @@ ok('1b: old Arabic-name small/light style is GONE',
   !/'text-\[11px\] font-semibold ' \+ \(p\.active \? 'text-slate-700' : 'text-slate-500 line-through'\)\)[^"]*"\}\s+style=\{\{ direction: 'rtl' \}\}>\{p\.name_ar\}/.test(pm));
 
 // ── 2. Classification slug bigger + bolder ─────────────────────────
-ok('2a: classification slug is text-sm font-extrabold (was text-[11px] font-semibold)',
-  /<div className="text-sm font-mono font-extrabold text-slate-900 break-words">\{p\.classification_slug \|\| describeProduct\(p\)\}/.test(pm));
+ok('2a: classification rendered as bulleted list with text-slate-900 contrast',
+  /describeProductBullets/.test(pm) && /<li key=\{i\} className="text-slate-900 leading-tight">/.test(pm));
 ok('2b: old classification-slug small/light style is GONE',
   !/<div className="text-\[11px\] font-mono text-slate-700 font-semibold">\{p\.classification_slug/.test(pm));
 
@@ -42,10 +42,10 @@ ok('3a: English name in row is text-base font-extrabold (was text-sm font-bold)'
   /text-base font-extrabold ' \+ \(p\.active \? 'text-slate-900' : 'text-slate-500 line-through'\)\}>\{p\.name_en\}/.test(pm));
 
 // ── 4. Column widths widened ──────────────────────────────────────
-ok('4a: row grid columns expanded: name 1.2fr, classification 180px',
-  /gridTemplateColumns: '110px 1\.2fr 180px 180px 70px 280px', padding: '12px 12px'/.test(pm));
-ok('4b: header row grid columns ALSO expanded (match row)',
-  /gridTemplateColumns: '110px 1\.2fr 180px 180px 70px 280px', padding: '8px 12px'/.test(pm));
+ok('4a: row grid columns expanded to v55.83-A.6.27.43 widths (name 1.5fr, classification 2fr, actions 370px)',
+  /gridTemplateColumns: '110px 1\.5fr 2fr 140px 60px 370px'/.test(pm));
+ok('4b: header row grid columns match new widths',
+  pm.split("gridTemplateColumns: '110px 1.5fr 2fr 140px 60px 370px'").length - 1 === 2);
 ok('4c: old 150px slug column width is GONE from both rows',
   !/gridTemplateColumns: '90px 1fr 150px/.test(pm));
 

@@ -178,8 +178,8 @@ ok('tab: clickable subtabs evolve with stages (A → A+B → A+B+C+D → ALL aft
   || /available = st\.stage === 'A' \|\| st\.stage === 'B'/.test(tab)
   || /\['A', 'B', 'C', 'D'\]\.indexOf\(st\.stage\) >= 0/.test(tab)
   || /var available = true/.test(tab));
-ok('tab: shows current stage badge (1 → 2 → 4 → 6 of 6 as stages ship)',
-  /Stage [1246] of 6/.test(tab));
+ok('tab: shows current version badge (Stage X of 6 banner removed in v.43)',
+  /v55\.83-A\.6\.27\.\d+/.test(tab));
 
 // ============================================================
 // PAGE.JSX INTEGRATION — old inline section replaced

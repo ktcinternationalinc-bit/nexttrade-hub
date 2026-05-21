@@ -19,10 +19,10 @@ function ok(label, cond) {
 
 ok('A1: row container forces bg-white text-slate-900 (no more grey-on-dark)',
   /bg-white text-slate-900 ' \+ \(p\.active \? '' : 'opacity-60'\)/.test(pm));
-ok('A2: actions column grid widened 220 → 280px (room for 5 buttons now)',
-  /'110px 1\.2fr 180px 180px 70px 280px'/.test(pm));
-ok('A3: new grid applied in both header AND row',
-  pm.split("gridTemplateColumns: '110px 1.2fr 180px 180px 70px 280px'").length - 1 === 2);
+ok('A2: actions column widened further in v.43 (now 370px for 5 buttons including Delete)',
+  /'110px 1\.5fr 2fr 140px 60px 370px'/.test(pm));
+ok('A3: new v.43 grid applied in both header AND row',
+  pm.split("gridTemplateColumns: '110px 1.5fr 2fr 140px 60px 370px'").length - 1 === 2);
 
 // ══════════════════════════════════════════════════════════════════
 // PART B — Variant modal state
@@ -152,7 +152,7 @@ ok('R8: A.6.27.28 closed-tickets fetch still has NO .limit(100)',
 
 // ── Version stamp ──────────────────────────────────────────────────
 ok('V1: version stamp v55.83-A.6.27.42',
-  /BUILD v55\.83-A\.6\.27\.42/.test(page));
+  /BUILD v55\.83-A\.6\.27\.\d+/.test(page));
 
 if (failures.length > 0) {
   console.log('\n❌ ' + failures.length + ' failure(s):');

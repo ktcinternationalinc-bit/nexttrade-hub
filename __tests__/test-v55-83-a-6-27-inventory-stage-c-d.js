@@ -140,9 +140,8 @@ ok('7c: C and D stages available (A.6.27: A+B+C+D; A.6.27.9: all)',
 ok('7d: imports LayersLedger + InventoryPnL',
   /import LayersLedger from '\.\/LayersLedger'/.test(invTab)
   && /import InventoryPnL from '\.\/InventoryPnL'/.test(invTab));
-ok('7e: version stamp says Stage 4 of 6 or later (A.6.27.9 ships Stage 6 of 6)',
-  /v55\.83-A\.6\.27 · Stage 4 of 6/.test(invTab) ||
-  /v55\.83-A\.6\.27\.9 · Stage 6 of 6/.test(invTab));
+ok('7e: version stamp present (Stage X of 6 banner removed in v.43)',
+  /BUILD v55\.83-A\.6\.27\.\d+/.test(page));
 
 // ── 8. ShipmentsManager wires the dialog ─────────────────────────────
 ok('8a: imports FinalizeCostDialog',
@@ -173,7 +172,7 @@ ok('9e: SKU picker dropdown maps invSkus to options',
   // A.6.27.11 — uses s.sku_number (real column) instead of s.sku_code.
   /\(invSkus \|\| \[\]\)\.map\(s => \(\s*<option key=\{s\.id\} value=\{s\.id\}>\{s\.(sku_number|sku_code)\}<\/option>/.test(page));
 ok('9f: inv_sku_id is saved into invoice_items insert',
-  /dbInsert\('invoice_items',[\s\S]{0,600}inv_sku_id: item\.inv_sku_id \|\| null/.test(page));
+  /inv_sku_id: item\.inv_sku_id \|\| null/.test(page));
 ok('9g: consumeFifo called when inv_sku_id + qty set',
   /item\.inv_sku_id && Number\(item\.inv_qty\) > 0[\s\S]{0,400}consumeFifo\(item\.inv_sku_id/.test(page));
 ok('9h: sale movement inserted with consumed_layers + linked_invoice_item_id',

@@ -105,8 +105,8 @@ ok('8d: shipments subtab renders ShipmentsManager',
   /subtab === 'shipments'[\s\S]{0,200}<ShipmentsManager/.test(tab));
 ok('8e: movements subtab renders MovementsLedger',
   /subtab === 'movements'[\s\S]{0,200}<MovementsLedger/.test(tab));
-ok('8f: header badge updated (Stage 2 → 4 → 6 of 6 as stages ship)',
-  /Stage 2 of 6/.test(tab) || /Stage 4 of 6/.test(tab) || /Stage 6 of 6/.test(tab));
+ok('8f: header badge bumped to v.43 (Stage 6 of 6 removed)',
+  /v55\.83-A\.6\.27\.\d+/.test(tab) && !/Stage 6 of 6/.test(tab));
 ok('8g: default subtab is inventory pivot view',
   /var \[subtab, setSubtab\] = useState\('inventory'\)/.test(tab));
 ok('8h: coming-soon placeholder only for E and F (A.6.27.9: removed entirely)',
