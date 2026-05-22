@@ -51,6 +51,11 @@ export default function InventoryOverview(props) {
   var [search, setSearch] = useState('');
   var [collapsedGroups, setCollapsedGroups] = useState({});  // { familyId: true } when collapsed
   var [showZeroStock, setShowZeroStock] = useState(false);   // hide rows with 0 current AND 0 received by default
+  // v55.83-A.6.27.55 — hide Template Products by default. Templates have no
+  // physical stock (they exist only to spawn variants), so including them in
+  // "what's in stock" pollutes the totals + accordion. Off by default; toggle
+  // exposes them for the rare case someone wants to audit templates too.
+  var [showTemplates, setShowTemplates] = useState(false);
 
   // v55.83-A.6.27.51 — Cascading multi-level filters. User can filter by ANY
   // combination of the 9 classification levels. Each dropdown shows only the
@@ -178,6 +183,8 @@ export default function InventoryOverview(props) {
     var keywords = q ? q.split(/\s+/).filter(Boolean) : [];
     var levelFields = Object.keys(filterLevels);
     return products.filter(function (p) {
+      // v55.83-A.6.27.55 — hide template products by default (no physical stock).
+      if (!showTemplates && p.is_family_template === true) return false;
       var s = productStats[p.id] || { current_qty: 0, original_qty: 0 };
       // Hide rows with zero current AND zero original unless toggle on
       if (!showZeroStock && s.current_qty === 0 && s.original_qty === 0) return false;
@@ -199,7 +206,7 @@ export default function InventoryOverview(props) {
       }
       return true;
     });
-  }, [products, productStats, listsById, search, showZeroStock, filterLevels]);
+  }, [products, productStats, listsById, search, showZeroStock, showTemplates, filterLevels]);
 
   // v55.83-A.6.27.51 — Cascading dropdown options.
   // For each level, the available options are derived from products that match
@@ -352,6 +359,10 @@ export default function InventoryOverview(props) {
         <label className="flex items-center gap-1.5 text-xs font-extrabold text-slate-900">
           <input type="checkbox" checked={showZeroStock} onChange={function (e) { setShowZeroStock(e.target.checked); }} className="w-4 h-4" />
           Show zero-stock items / إظهار المخزون الصفري
+        </label>
+        <label className="flex items-center gap-1.5 text-xs font-extrabold text-slate-900" title="Template Products have no physical stock — they're only used to create variants.">
+          <input type="checkbox" checked={showTemplates} onChange={function (e) { setShowTemplates(e.target.checked); }} className="w-4 h-4" />
+          Show Template Products / إظهار قوالب المنتجات
         </label>
         {activeFilterCount > 0 && (
           <button

@@ -151,8 +151,8 @@ ok('E6: results limited to 20 (was 10)',
 
 ok('E7: suggestion dropdown shows ⭐ for featured',
   /\{s\.featured === true && <span title="Featured" className="text-amber-500">⭐<\/span>\}/.test(rec));
-ok('E8: suggestion dropdown shows FAMILY badge for templates',
-  /\{s\.is_family_template === true && <span className=[^>]*>FAMILY<\/span>\}/.test(rec));
+ok('E8: suggestion dropdown shows TEMPLATE badge for templates (renamed in .55)',
+  /\{s\.is_family_template === true && <span className=[^>]*>TEMPLATE<\/span>\}/.test(rec));
 ok('E9: suggestion dropdown shows VARIANT badge for variants',
   /\{s\.is_family_template === false && s\.variant_suffix && <span[^>]*>VARIANT<\/span>\}/.test(rec));
 ok('E10: suggestion dropdown shows use_count when > 0',

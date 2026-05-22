@@ -5162,10 +5162,16 @@ export default function App() {
               {/* Brand mark — bracket prefix is a terminal callout convention. */}
               <span className="text-emerald-400 font-mono text-xs font-bold tracking-tight" style={{ fontFamily: '"JetBrains Mono", monospace' }}>[KTC]</span>
               <h1 className="text-sm font-bold text-white tracking-tight whitespace-nowrap">NEXTTRADE HUB</h1>
-              <span className="text-[10px] text-zinc-500 font-mono hidden md:inline" style={{ fontFamily: '"JetBrains Mono", monospace' }}>v55.83-A.6.27.53</span>
-              {/* Live clock — terminals always show one. Updates via the
-                  existing tick state; if not present, falls back to no clock. */}
-              <span className="hidden lg:inline text-[10px] text-zinc-500 font-mono ml-2 pl-2 border-l border-zinc-800" style={{ fontFamily: '"JetBrains Mono", monospace' }}>
+              {/* v55.83-A.6.27.54 — Version label HIGH CONTRAST per repeated Max feedback.
+                  Was: text-zinc-500 (mid-gray) on #0a0a0a (true black) — barely readable.
+                  Now: bright amber pill on dark background — readable at any zoom, still
+                  matches the terminal aesthetic. */}
+              <span className="text-[10px] font-mono font-extrabold hidden md:inline px-2 py-0.5 rounded" style={{ fontFamily: '"JetBrains Mono", monospace', background: '#fef3c7', color: '#451a03', border: '1px solid #d97706' }}>v55.83-A.6.27.56</span>
+              {/* Live clock — also bumped to readable amber. */}
+              <span
+                className="hidden lg:inline text-[10px] font-mono ml-2 pl-2 border-l border-zinc-700"
+                style={{ fontFamily: '"JetBrains Mono", monospace', color: '#fcd34d' /* amber-300 */ }}
+              >
                 {(new Date()).toISOString().substring(0, 10).replace(/-/g, '.')} {(new Date()).toTimeString().substring(0, 5)}
               </span>
             </div>
@@ -5505,7 +5511,7 @@ export default function App() {
           <div className="py-2">
             {[
               { group: 'OVERVIEW', items: ['dashboard'] },
-              { group: 'FINANCE', items: ['sales', 'treasury', 'checks', 'debts', 'egyptbank', 'bank', 'quotes', 'reports'] },
+              { group: 'FINANCE', items: ['sales', 'treasury', 'checks', 'debts', 'openaccounts', 'egyptbank', 'bank', 'quotes', 'reports'] },
               { group: 'OPERATIONS', items: ['warehouse', 'inventory', 'customs', 'shipping'] },
               { group: 'PEOPLE', items: ['customers', 'crm', 'tickets', 'calendar', 'comms', 'dailylog'] },
               { group: 'SYSTEM', items: ['admin', 'ai', 'settings', 'import', 'systemtickets'] },
@@ -14096,7 +14102,7 @@ export default function App() {
                       latest fix is actually deployed. If he doesn't see this
                       tag in the modal, his browser is running stale JS. */}
                   <div className="mt-1.5 inline-block px-2 py-0.5 rounded bg-amber-900/60 text-amber-100 text-[10px] font-mono font-bold tracking-wide">
-                    BUILD v55.83-A.6.27.53
+                    BUILD v55.83-A.6.27.56
                   </div>
                 </div>
                 <button onClick={() => closePendingTreasuryModal()}
@@ -14731,7 +14737,7 @@ export default function App() {
                     معاملة قد تكون مكررة
                   </div>
                   <div className="mt-1.5 inline-block px-2 py-0.5 rounded bg-amber-900/60 text-amber-100 text-[10px] font-mono font-bold tracking-wide">
-                    BUILD v55.83-A.6.27.53
+                    BUILD v55.83-A.6.27.56
                   </div>
                 </div>
                 <button

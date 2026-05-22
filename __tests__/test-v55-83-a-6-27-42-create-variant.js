@@ -64,8 +64,8 @@ ok('D2: + Variant button uses purple-600 (high contrast)',
   /bg-purple-600 hover:bg-purple-700 text-white rounded font-bold/.test(pm));
 ok('D3: + Variant button label literal',
   /\+ Variant/.test(pm));
-ok('D4: + Variant button title tooltip',
-  /title="Create a spec variant of this family template/.test(pm));
+ok('D4: + Variant button title tooltip (renamed "family template" → "template product" in .55)',
+  /title="Create a spec variant of this template product/.test(pm));
 
 // ══════════════════════════════════════════════════════════════════
 // PART E — Modal UI

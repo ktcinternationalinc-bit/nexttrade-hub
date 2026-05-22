@@ -120,6 +120,9 @@ export default function InventoryReceiving(props) {
   // Modal state for new/edit receipt
   var [modalOpen, setModalOpen] = useState(false);
   var [editingReceiptNumber, setEditingReceiptNumber] = useState(null);
+  // v55.83-A.6.27.56 — collapsible Shipment Info section. Default expanded.
+  // Auto-collapses after Save Draft (so user can focus on product lines).
+  var [headerCollapsed, setHeaderCollapsed] = useState(false);
   var [header, setHeader] = useState({
     receipt_date: new Date().toISOString().substring(0, 10),
     warehouse_id: '',
@@ -317,6 +320,7 @@ export default function InventoryReceiving(props) {
     origin_country_code: 'US',
     });
     setLines([emptyLine()]);
+    setHeaderCollapsed(false);  // v55.83-A.6.27.56 — always start with header expanded
     setModalOpen(true);
   }
 
@@ -372,6 +376,7 @@ export default function InventoryReceiving(props) {
           origin_country_code: h.origin_country_code || 'US',
         });
         setLines([emptyLine()]);
+        setHeaderCollapsed(false);
         setModalOpen(true);
         setBusy(false);
         return;
@@ -450,6 +455,7 @@ export default function InventoryReceiving(props) {
       });
 
       setLines(loadedLines.length ? loadedLines : [emptyLine()]);
+      setHeaderCollapsed(false);
       setModalOpen(true);
     } catch (err) {
       console.error('[receiving] openEdit failed:', err);
@@ -580,7 +586,15 @@ export default function InventoryReceiving(props) {
     var newLine = emptyLine();
     // Inherit supplier from header by default
     newLine.supplier = header.supplier || '';
-    setLines(function (prev) { return prev.concat([newLine]); });
+    setLines(function (prev) {
+      var next = prev.concat([newLine]);
+      // v55.83-A.6.27.56 — auto-collapse Shipment Info when going from 1 line → 2+
+      // lines (user is in lines-editing mode now). Saves vertical space.
+      if (prev.length >= 1) {
+        try { setHeaderCollapsed(true); } catch (_) {}
+      }
+      return next;
+    });
   }
 
   function duplicateLine(lineIdx) {
@@ -1463,10 +1477,33 @@ export default function InventoryReceiving(props) {
               </button>
             </div>
 
-            <div style={{ padding: 20, flex: 1, overflowY: 'auto' }}>
-              {/* Header section — v55.83-A.6.27.32 extended with old Shipments form fields */}
-              <div className="mb-4 bg-slate-50 rounded-lg p-3 border border-slate-200">
-                <div className="text-[11px] font-extrabold text-slate-700 tracking-wider mb-2">SHIPMENT INFO (applies to all lines)</div>
+            {/* v55.83-A.6.27.56 — 3-region modal layout:
+                Region 1 (this div): non-scrolling top — Shipment Info form (collapsible)
+                Region 2 (next div): scrollable middle — only Product Lines scroll
+                Region 3: existing footer (Cancel/Save Draft/Submit) stays sticky at bottom
+
+                Why: previously the entire modal scrolled as one block, so the Shipment
+                Info form got pushed off-screen once you added 2-3 product lines. Now you
+                can keep adding lines without losing sight of the header or the Save button. */}
+            <div style={{ padding: '20px 20px 0 20px', flexShrink: 0, borderBottom: '1px solid #e2e8f0' }}>
+              {/* Header section — v55.83-A.6.27.32 extended with old Shipments form fields
+                  v55.83-A.6.27.56 — collapsible header */}
+              <div className="mb-3 bg-slate-50 rounded-lg border border-slate-200">
+                <button
+                  onClick={function () { setHeaderCollapsed(!headerCollapsed); }}
+                  className="w-full flex items-center justify-between px-3 py-2 hover:bg-slate-100 transition-colors rounded-t-lg"
+                  title={headerCollapsed ? 'Click to expand Shipment Info' : 'Click to collapse Shipment Info and give product lines more space'}
+                >
+                  <div className="text-[11px] font-extrabold text-slate-700 tracking-wider">
+                    {headerCollapsed ? '▶' : '▼'} SHIPMENT INFO (applies to all lines)
+                    {headerCollapsed && header.shipment_reference && (
+                      <span className="ml-2 font-mono font-bold text-indigo-700">{header.shipment_reference}</span>
+                    )}
+                  </div>
+                  <span className="text-[10px] text-slate-500 font-semibold">{headerCollapsed ? 'expand' : 'collapse'}</span>
+                </button>
+                {!headerCollapsed && (
+                <div className="px-3 pb-3">
 
                 {/* Row 1: reference + warehouse + receipt date + container # */}
                 <div className="grid grid-cols-4 gap-2 mb-2">
@@ -1537,10 +1574,12 @@ export default function InventoryReceiving(props) {
                   <textarea value={header.notes} onChange={function (e) { setHeader(Object.assign({}, header, { notes: e.target.value })); }} rows={1} className="w-full mt-0.5 px-2 py-1.5 border border-slate-300 rounded text-sm bg-white resize-none" />
                 </label>
               </div>
+              )}
 
               {/* v55.83-A.6.27.43 — SHIPMENT EXPECTED TOTALS (per supplier docs)
                   Big, prominent, can't-miss. Optional during Draft, required at Submit.
-                  v55.83-A.6.27.48 — widened: more padding + larger inputs to use the full modal width. */}
+                  v55.83-A.6.27.48 — widened: more padding + larger inputs to use the full modal width.
+                  v55.83-A.6.27.56 — NOT collapsible (small and important; stays visible). */}
               <div className="bg-amber-50 border-2 border-amber-400 rounded-xl p-6 mt-4">
                 <div className="flex items-baseline justify-between mb-4">
                   <div>
@@ -1605,8 +1644,13 @@ export default function InventoryReceiving(props) {
                     </select>
                   </label>
                 </div>
+                </div>
               </div>
+            </div>
 
+            {/* v55.83-A.6.27.56 — Region 2: scrollable middle. ONLY product lines scroll here.
+                The Shipment Info form above stays put. The footer below stays put. */}
+            <div style={{ padding: '12px 20px', flex: 1, overflowY: 'auto', minHeight: 0 }}>
               {/* Lines */}
               <div className="text-[11px] font-extrabold text-slate-700 tracking-wider mb-2">PRODUCT LINES ({lines.length})</div>
 
@@ -1658,17 +1702,17 @@ export default function InventoryReceiving(props) {
                               <button
                                 key={s.id}
                                 onClick={function () { pickProductForLine(lineIdx, s); }}
-                                className="w-full text-left px-3 py-1.5 text-xs hover:bg-indigo-50 border-b border-slate-100 last:border-0"
+                                className="w-full text-left px-3 py-1.5 text-xs hover:bg-indigo-100 active:bg-indigo-200 border-b border-slate-200 last:border-0 transition-colors"
                               >
                                 <div className="flex items-center gap-2">
                                   {s.featured === true && <span title="Featured" className="text-amber-500">⭐</span>}
                                   <span className="font-mono font-extrabold text-slate-900">{displayCode || '(no code)'}</span>
-                                  {s.is_family_template === true && <span className="text-[9px] bg-indigo-100 text-indigo-800 font-bold rounded px-1.5">FAMILY</span>}
-                                  {s.is_family_template === false && s.variant_suffix && <span className="text-[9px] bg-emerald-100 text-emerald-800 font-bold rounded px-1.5">VARIANT</span>}
-                                  {Number(s.use_count || 0) > 0 && <span className="text-[10px] text-slate-500 ml-auto">used {s.use_count}×</span>}
+                                  {s.is_family_template === true && <span className="text-[9px] bg-indigo-200 text-indigo-900 font-bold rounded px-1.5">TEMPLATE</span>}
+                                  {s.is_family_template === false && s.variant_suffix && <span className="text-[9px] bg-emerald-200 text-emerald-900 font-bold rounded px-1.5">VARIANT</span>}
+                                  {Number(s.use_count || 0) > 0 && <span className="text-[10px] text-slate-700 font-bold ml-auto">used {s.use_count}×</span>}
                                 </div>
-                                <div className="text-slate-700">{s.name_en} / <span style={{ direction: 'rtl' }}>{s.name_ar}</span></div>
-                                <div className="text-[10px] text-slate-500 font-mono">{s.classification_slug}</div>
+                                <div className="text-slate-800 font-semibold">{s.name_en} / <span style={{ direction: 'rtl' }}>{s.name_ar}</span></div>
+                                <div className="text-[10px] text-slate-700 font-mono font-semibold">{s.classification_slug}</div>
                               </button>
                             );
                           })}
@@ -1747,25 +1791,11 @@ export default function InventoryReceiving(props) {
                           </div>
                         )}
 
-                        {/* v55.83-A.6.27.35 — PHASE 1: Expected totals (from supplier) */}
-                        <div className="bg-amber-50 border-2 border-amber-300 rounded p-2 mb-2">
-                          <div className="text-[11px] font-extrabold text-amber-900 tracking-wider mb-1">📋 PHASE 1 — EXPECTED TOTALS (from supplier invoice / packing list)</div>
-                          <div className="text-[10px] text-amber-800 mb-2 italic">Save these now even if rolls haven't arrived yet. Saves as "Pending Detail" status.</div>
-                          <div className="grid grid-cols-4 gap-2">
-                            <label className="text-[11px] font-extrabold text-amber-900">Expected Rolls
-                              <input type="text" value={line.expected_rolls} onChange={function (e) { updateLineField(lineIdx, 'expected_rolls', e.target.value); }} placeholder="e.g. 20" className="w-full mt-0.5 px-2 py-1.5 border border-amber-300 rounded text-sm bg-white" />
-                            </label>
-                            <label className="text-[11px] font-extrabold text-amber-900">Expected Gross (kg)
-                              <input type="text" value={line.expected_gross_kg} onChange={function (e) { updateLineField(lineIdx, 'expected_gross_kg', e.target.value); }} placeholder="e.g. 5000" className="w-full mt-0.5 px-2 py-1.5 border border-amber-300 rounded text-sm bg-white" />
-                            </label>
-                            <label className="text-[11px] font-extrabold text-amber-900">Expected Net (kg)
-                              <input type="text" value={line.expected_net_kg} onChange={function (e) { updateLineField(lineIdx, 'expected_net_kg', e.target.value); }} placeholder="optional" className="w-full mt-0.5 px-2 py-1.5 border border-amber-300 rounded text-sm bg-white" />
-                            </label>
-                            <label className="text-[11px] font-extrabold text-amber-900">Expected Total ({line.uom || 'UOM'})
-                              <input type="text" value={line.expected_uom_total} onChange={function (e) { updateLineField(lineIdx, 'expected_uom_total', e.target.value); }} placeholder="e.g. 10000 (meters)" className="w-full mt-0.5 px-2 py-1.5 border border-amber-300 rounded text-sm bg-white" />
-                            </label>
-                          </div>
-                        </div>
+                        {/* v55.83-A.6.27.55 — REMOVED per-line PHASE 1 EXPECTED TOTALS box.
+                            Max repeatedly asked for this. The shipment-level Expected Totals
+                            card at the top of the modal is the one that matters. Per-line
+                            expected_* fields still exist in state + DB for back-compat with
+                            older receipts; they're just no longer surfaced in the UI. */}
 
                         {/* v55.83-A.6.27.35 — PHASE 2: Individual rolls + variance summary */}
                         {(function () {

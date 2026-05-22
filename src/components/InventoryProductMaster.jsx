@@ -108,7 +108,11 @@ export default function InventoryProductMaster(props) {
   // v55.83-A.6.27.40 — featured-only filter ("show me my starred favorites")
   var [featuredOnly, setFeaturedOnly] = useState(false);
   // v55.83-A.6.27.40 — type filter: all | family templates | variants
-  var [typeFilter, setTypeFilter] = useState('all');
+  // v55.83-A.6.27.55 — DEFAULT CHANGED to 'variants' per Max:
+  // "default of product list should be the variants. Family products should not
+  //  display on the main overview as product lists; only there for user to use
+  //  to create products." User can switch to 'all' or 'templates' explicitly.
+  var [typeFilter, setTypeFilter] = useState('variants');
 
   // Modal state
   var [modalMode, setModalMode] = useState(null); // null | 'new' | 'edit'
@@ -434,6 +438,10 @@ export default function InventoryProductMaster(props) {
   // v55.83-A.6.27.43 — Delete handler. Only allowed when product has zero references.
   // Two-step confirmation: dialog → require user to type DELETE.
   async function deleteProduct(p) {
+    // v55.83-A.6.27.55 — Defense in depth: surface failures via BOTH toast AND
+    // alert so a broken toast system doesn't make the button look dead.
+    // Also log to console so dev can diagnose.
+    console.log('[product-master] deleteProduct clicked for:', p && p.quick_code, p && p.id);
     // Re-check at click time (in case usage was added since list-render)
     try {
       var chk = await supabase.rpc('can_delete_product', { p_id: p.id });
@@ -445,7 +453,15 @@ export default function InventoryProductMaster(props) {
       }
     } catch (e) {
       console.error('[product-master] can_delete check failed:', e);
-      toast.error('Could not verify deletion safety: ' + ((e && e.message) || String(e)));
+      var errMsg = (e && e.message) || String(e);
+      // v55.83-A.6.27.55 — fire both. Some browsers throttle toast; alert always shows.
+      try { toast.error('Could not verify deletion safety: ' + errMsg); } catch (_) {}
+      // If it's a "function does not exist" error, give a clear actionable message.
+      if (/function.*can_delete_product.*does not exist|could not find the function/i.test(errMsg)) {
+        alert('Delete is not available yet — the database function `can_delete_product` is missing.\n\nFIX: Run SQL migration v55.83-A.6.27.43 (sql/v55-83-a-6-27-43-expected-totals-variance.sql) in Supabase SQL Editor.\n\nUntil then, use Deactivate instead.');
+      } else {
+        alert('Delete failed: ' + errMsg);
+      }
       return;
     }
     var typed = prompt(
@@ -456,17 +472,21 @@ export default function InventoryProductMaster(props) {
       'Type DELETE (in capitals) to confirm:'
     );
     if (typed !== 'DELETE') {
-      if (typed !== null) toast.error('Delete cancelled — confirmation text did not match.');
+      if (typed !== null) {
+        try { toast.error('Delete cancelled — confirmation text did not match.'); } catch (_) {}
+      }
       return;
     }
     try {
       var del = await supabase.from('inventory_products').delete().eq('id', p.id);
       if (del.error) throw del.error;
-      toast.success('Permanently deleted: ' + (p.name_en || p.quick_code));
+      try { toast.success('Permanently deleted: ' + (p.name_en || p.quick_code)); } catch (_) {}
       await reload();
     } catch (e) {
       console.error('[product-master] deleteProduct failed:', e);
-      toast.error('Delete failed: ' + ((e && e.message) || String(e)));
+      var errMsg2 = (e && e.message) || String(e);
+      try { toast.error('Delete failed: ' + errMsg2); } catch (_) {}
+      alert('Delete failed: ' + errMsg2);
     }
   }
 
@@ -824,9 +844,9 @@ export default function InventoryProductMaster(props) {
           onChange={function (e) { setTypeFilter(e.target.value); }}
           className="px-3 py-2 border border-slate-300 rounded-lg text-sm bg-white font-semibold"
         >
-          <option value="all">All products</option>
-          <option value="templates">Family templates only</option>
-          <option value="variants">Variants only</option>
+          <option value="variants">Variants (default — actual products)</option>
+          <option value="all">All (variants + templates)</option>
+          <option value="templates">Template Products only (for creating variants)</option>
         </select>
         {canEdit && (
           <button
@@ -870,9 +890,10 @@ export default function InventoryProductMaster(props) {
                       {p.quick_code}{p.variant_suffix ? ('-' + p.variant_suffix) : ''}
                     </span>
                   ) : <span className="text-slate-400 italic font-normal">—</span>}
-                  {/* v55.83-A.6.27.40 — badges for family templates vs variants */}
+                  {/* v55.83-A.6.27.40 — badges for template vs variant
+                      v55.83-A.6.27.55 — "FAMILY" → "TEMPLATE" per Max */}
                   {p.is_family_template === true && (
-                    <div className="text-[9px] bg-indigo-100 text-indigo-800 font-bold rounded px-1 inline-block mt-0.5">FAMILY</div>
+                    <div className="text-[9px] bg-indigo-100 text-indigo-800 font-bold rounded px-1 inline-block mt-0.5">TEMPLATE</div>
                   )}
                   {p.is_family_template === false && p.variant_suffix && (
                     <div className="text-[9px] bg-emerald-100 text-emerald-800 font-bold rounded px-1 inline-block mt-0.5">VARIANT</div>
@@ -963,7 +984,7 @@ export default function InventoryProductMaster(props) {
                     <button
                       onClick={function () { openCreateVariant(p); }}
                       className="px-2 py-1 text-[10px] bg-purple-600 hover:bg-purple-700 text-white rounded font-bold shadow"
-                      title="Create a spec variant of this family template (Category + Construction + Backing + Pattern)"
+                      title="Create a spec variant of this template product (Category + Construction + Backing + Pattern)"
                     >
                       + Variant
                     </button>
@@ -1045,11 +1066,11 @@ export default function InventoryProductMaster(props) {
                   Name + notes + defaults remain editable. To change specs, create a new variant. */}
               {modalMode === 'edit' && editLocked && (
                 <div className="bg-amber-100 border-2 border-amber-500 rounded-lg p-3 mb-4">
-                  <div className="text-base font-extrabold text-amber-900">🔒 This {editIsTemplate ? 'family template' : 'variant'} is in use — spec fields are read-only</div>
+                  <div className="text-base font-extrabold text-amber-900">🔒 This {editIsTemplate ? 'template product' : 'variant'} is in use — spec fields are read-only</div>
                   <div className="text-sm text-amber-900 mt-1 font-semibold">
                     {editIsTemplate
                       ? 'Receipts, movements, or layers reference this template. To change specs, use the "+ Variant" button on the row to create a new variant instead.'
-                      : 'Receipts, movements, or layers reference this variant. To change specs, create a new variant via the "+ Variant" button on the parent family template. You CAN still edit the Name and Notes here.'}
+                      : 'Receipts, movements, or layers reference this variant. To change specs, create a new variant via the "+ Variant" button on the parent template product. You CAN still edit the Name and Notes here.'}
                   </div>
                 </div>
               )}

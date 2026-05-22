@@ -52,8 +52,8 @@ ok('B5: star button gated on canEdit',
 
 ok('C1: quick_code display appends variant_suffix for variants',
   /\{p\.quick_code\}\{p\.variant_suffix \? \('-' \+ p\.variant_suffix\) : ''\}/.test(pm));
-ok('C2: FAMILY badge shown when is_family_template is true',
-  /p\.is_family_template === true && \([\s\S]{0,200}FAMILY/.test(pm));
+ok('C2: TEMPLATE badge shown when is_family_template is true (renamed from FAMILY in .55)',
+  /p\.is_family_template === true && \([\s\S]{0,200}TEMPLATE/.test(pm));
 ok('C3: VARIANT badge shown when not template and has suffix',
   /p\.is_family_template === false && p\.variant_suffix && \([\s\S]{0,200}VARIANT/.test(pm));
 ok('C4: use_count display when > 0',
@@ -65,14 +65,14 @@ ok('C4: use_count display when > 0',
 
 ok('D1: featuredOnly state declared',
   /var \[featuredOnly, setFeaturedOnly\] = useState\(false\)/.test(pm));
-ok('D2: typeFilter state declared',
-  /var \[typeFilter, setTypeFilter\] = useState\('all'\)/.test(pm));
+ok('D2: typeFilter state declared (default changed to "variants" in .55 — templates pollute product list)',
+  /var \[typeFilter, setTypeFilter\] = useState\('variants'\)/.test(pm));
 
 ok('D3: Featured-only checkbox rendered',
   /⭐ Starred only/.test(pm) &&
   /<input type="checkbox" checked=\{featuredOnly\} onChange=\{function \(e\) \{ setFeaturedOnly\(e\.target\.checked\); \}\} \/>/.test(pm));
-ok('D4: Type filter select with 3 options',
-  /<option value="all">All products<\/option>\s+<option value="templates">Family templates only<\/option>\s+<option value="variants">Variants only<\/option>/.test(pm));
+ok('D4: Type filter select with 3 options (renamed in .55: Variants first as default; Template Products replaces "Family templates only")',
+  /<option value="variants">Variants \(default — actual products\)<\/option>\s+<option value="all">All \(variants \+ templates\)<\/option>\s+<option value="templates">Template Products only \(for creating variants\)<\/option>/.test(pm));
 
 // ══════════════════════════════════════════════════════════════════
 // PART E — Filter logic + smart multi-keyword search + featured sort

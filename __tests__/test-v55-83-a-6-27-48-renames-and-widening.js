@@ -72,8 +72,8 @@ ok('C4: DB column batch_number references PRESERVED (label-only rename, no DB re
 
 ok('D1: modal container is 97vw / 1900max (was 95vw / 1800)',
   /style=\{\{ width: '97vw', maxWidth: 1900, maxHeight: '96vh', display: 'flex', flexDirection: 'column' \}\}/.test(receiv));
-ok('D2: inner content uses flex:1 (fills modal height) instead of fixed maxHeight calc',
-  /style=\{\{ padding: 20, flex: 1, overflowY: 'auto' \}\}/.test(receiv));
+ok('D2: inner content uses flex:1 (fills modal height) — v.48 used single scrolling div; v.56 split into 3 regions, scrollable middle still has flex:1',
+  /flex: 1, overflowY: 'auto'/.test(receiv));
 ok('D3: old "calc(100vh - 140px)" pattern removed',
   !/maxHeight: 'calc\(100vh - 140px\)', overflowY: 'auto'/.test(receiv));
 

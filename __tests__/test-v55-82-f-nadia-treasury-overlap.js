@@ -235,8 +235,8 @@ ok('5d: editTreasuryModal is in suppression check',
 
 // 6a — Global header badge must match the current build letter
 // v55.83-A — accept v55.83+ family (was v55.82-* only)
-ok('6a: Global header badge reads current build letter (not stale)',
-  /<span className="text-\[10px\] text-zinc-500 font-mono hidden md:inline"[^>]*>v55\.\d+-[A-Z][0-9]*(?:\.\d+)*<\/span>/.test(pageSrc),
+ok('6a: Global header badge reads current build letter (not stale, .54 changed className to amber-pill HIGH CONTRAST)',
+  /<span className="text-\[10px\] font-mono font-extrabold hidden md:inline px-2 py-0\.5 rounded"[^>]*>v55\.\d+-[A-Z][0-9]*(?:\.\d+)*<\/span>/.test(pageSrc),
   'the visible app-header version badge must move with each build letter — Max May 11 2026 caught v55.81 left over on F'
 );
 

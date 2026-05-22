@@ -152,14 +152,17 @@ ok('D11: reopenReceipt calls reopen_finalized_receipt RPC per line',
 // PART E — UI: Phase 1 + Phase 2 + Variance + Edit/Reopen buttons
 // ══════════════════════════════════════════════════════════════════
 
-ok('E1: Phase 1 section renders with expected_rolls input',
-  /PHASE 1 — EXPECTED TOTALS[\s\S]{0,2000}Expected Rolls[\s\S]{0,500}value=\{line\.expected_rolls\}/.test(rec));
-ok('E2: Phase 1 has expected_gross_kg input',
-  /Expected Gross \(kg\)[\s\S]{0,400}value=\{line\.expected_gross_kg\}/.test(rec));
-ok('E3: Phase 1 has expected_net_kg input',
-  /Expected Net \(kg\)[\s\S]{0,400}value=\{line\.expected_net_kg\}/.test(rec));
-ok('E4: Phase 1 has expected_uom_total input',
-  /Expected Total[\s\S]{0,400}value=\{line\.expected_uom_total\}/.test(rec));
+// v55.83-A.6.27.55 — per-line PHASE 1 UI removed (Max repeated request).
+// State fields preserved for back-compat with old receipts. UI rendering is now
+// gone from each line; shipment-level Expected Totals card is the canonical place.
+ok('E1: expected_rolls state field still present (back-compat with old receipts)',
+  /expected_rolls: '',/.test(rec));
+ok('E2: expected_gross_kg state field still present (back-compat)',
+  /expected_gross_kg/.test(rec));
+ok('E3: expected_net_kg state field still present (back-compat)',
+  /expected_net_kg/.test(rec));
+ok('E4: expected_uom_total state field still present (back-compat)',
+  /expected_uom_total/.test(rec));
 ok('E5: Phase 2 section renders with INDIVIDUAL ROLLS header',
   /PHASE 2 — INDIVIDUAL ROLLS/.test(rec));
 ok('E6: Add Roll button appends a new empty roll row',

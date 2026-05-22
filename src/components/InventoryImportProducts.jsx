@@ -181,6 +181,33 @@ export default function InventoryImportProducts(props) {
       ['Leather Luxurious Smooth Black US', 'جلد فاخر ناعم أسود', 'LLBKUS', '', 'L', 'SM', 'LX', 'RG', 'CT', 'BK', 'NA', 'NA', 'US', 'L-SM-LX-RG-CT-BK-NA-NA-US', 'meter', '', '', '', '', '', '', 'ABC Suppliers', '4.50', 'USD', 'A-12', 'Example row — delete before importing', 'FALSE', 'TRUE'],
     ]);
 
+    // v55.83-A.6.27.55 — pre-fill the classification_slug column (column N) with
+    // =TEXTJOIN("-",TRUE,E#:M#) for the next 200 blank rows. This auto-builds
+    // the slug from the 9 code columns (E=family, F=category, G=grade,
+    // H=construction, I=backing, J=color, K=pattern, L=spec_class, M=origin)
+    // so the user only has to fill the dropdown columns and the slug appears
+    // automatically. Skips empty rows (TEXTJOIN with delimiter="-" and
+    // ignore_empty=TRUE returns "" when every input is blank).
+    //
+    // Per Max May 22 2026 — bonus from the deferred Excel-template cascading
+    // request. Auto-formula only; cascading dropdowns still flat per .56 plan.
+    var slugColIndex = TEMPLATE_HEADERS.indexOf('classification_slug');  // 13 (column N)
+    if (slugColIndex >= 0) {
+      var slugColLetter = XLSX.utils.encode_col(slugColIndex);  // 'N'
+      for (var rowNum = 3; rowNum <= 202; rowNum++) {           // rows 3..202 (200 blanks below example row at 2)
+        var cellAddr = slugColLetter + rowNum;
+        prodSheet[cellAddr] = {
+          t: 's',                                                  // string type (formula result)
+          f: 'TEXTJOIN("-",TRUE,E' + rowNum + ':M' + rowNum + ')', // the formula itself
+          v: '',                                                   // initial value before Excel evaluates
+        };
+      }
+      // Extend the sheet range to include row 202 so Excel renders the formulas
+      var ref = prodSheet['!ref'];
+      var range = XLSX.utils.decode_range(ref || 'A1');
+      if (range.e.r < 201) { range.e.r = 201; prodSheet['!ref'] = XLSX.utils.encode_range(range); }
+    }
+
     // Apply column widths
     prodSheet['!cols'] = TEMPLATE_HEADERS.map(function (h) {
       if (h.indexOf('name_') === 0) return { wch: 40 };

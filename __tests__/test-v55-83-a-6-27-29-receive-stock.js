@@ -117,7 +117,7 @@ ok('B4a: lines state initialized with one emptyLine()',
 ok('B4b: emptyLine() factory function defined with required fields',
   /function emptyLine\(\)[\s\S]{0,2500}product_id: ''[\s\S]{0,2500}quantity: ''[\s\S]{0,2500}batch_number: ''/.test(rec));
 ok('B4c: addLine adds a new line to the array',
-  /function addLine\(\)[\s\S]{0,300}setLines\(function \(prev\) \{ return prev\.concat\(\[newLine\]\)/.test(rec));
+  /function addLine\(\)[\s\S]{0,500}setLines\(function \(prev\)[\s\S]{0,200}prev\.concat\(\[newLine\]\)/.test(rec));
 ok('B4d: removeLine removes (but always keeps at least 1)',
   /function removeLine\(lineIdx\)[\s\S]{0,300}if \(prev\.length === 1\) return prev/.test(rec));
 ok('B4e: duplicateLine clones a line (with empty batch_number)',
