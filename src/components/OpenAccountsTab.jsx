@@ -19,6 +19,7 @@
 import { useState, useEffect, useMemo } from 'react';
 import { supabase, dbInsert, dbUpdate } from '../lib/supabase';
 import { printAccountLedger, exportAccountLedgerToExcel } from '../lib/open-account-export';
+import { printOpenAccountInvoice } from '../lib/open-account-invoice-print';
 
 function fmtNum(n) {
   if (n == null || isNaN(Number(n))) return '—';
@@ -44,6 +45,9 @@ export default function OpenAccountsTab(props) {
   var [entries, setEntries] = useState([]);
   // v55.83-A.6.27.53 — entities for branding on prints + Excel exports
   var [entities, setEntities] = useState([]);
+  // v55.83-A.6.27.59 — mini-invoices + line items
+  var [invoices, setInvoices] = useState([]);
+  var [invoiceItems, setInvoiceItems] = useState([]);
   var [loading, setLoading] = useState(true);
   var [error, setError] = useState(null);
 
@@ -53,6 +57,13 @@ export default function OpenAccountsTab(props) {
   var [accountDraft, setAccountDraft] = useState(null); // null | { id?, account_name, account_name_ar, notes }
   var [entryModalOpen, setEntryModalOpen] = useState(false);
   var [entryDraft, setEntryDraft] = useState(null); // null | { id?, account_id, entry_date, description, reference_number, credit_amount, debit_amount, notes }
+  // v55.83-A.6.27.59 — invoice modal state
+  var [invoiceModalOpen, setInvoiceModalOpen] = useState(false);
+  var [invoiceDraft, setInvoiceDraft] = useState(null);
+    // shape: { id?, account_id, invoice_number, direction, counterparty_name, counterparty_name_ar,
+    //          counterparty_address, counterparty_email, counterparty_phone,
+    //          invoice_date, due_date, currency, tax_enabled, tax_rate_pct,
+    //          shipping_amount, notes, terms, items: [{id?, description, quantity, unit_price}] }
   var [busy, setBusy] = useState(false);
   var [search, setSearch] = useState('');
 
@@ -63,10 +74,13 @@ export default function OpenAccountsTab(props) {
       setLoading(true);
       setError(null);
       try {
-        var [accRes, entRes, bizRes] = await Promise.all([
+        var [accRes, entRes, bizRes, invRes, itmRes] = await Promise.all([
           supabase.from('open_accounts').select('*').order('account_name'),
           supabase.from('open_account_entries').select('*').order('entry_date', { ascending: true }).order('created_at', { ascending: true }),
           supabase.from('business_entities').select('*').eq('active', true).order('display_order'),
+          // v55.83-A.6.27.59 — invoices + items. Errors gracefully if migration not run.
+          supabase.from('open_account_invoices').select('*').order('invoice_date', { ascending: false }),
+          supabase.from('open_account_invoice_items').select('*').order('sort_order', { ascending: true }),
         ]);
         if (cancelled) return;
         if (accRes.error) throw accRes.error;
@@ -74,6 +88,11 @@ export default function OpenAccountsTab(props) {
         // bizRes errors gracefully — if migration .53 hasn't been run, we just have no entities
         if (bizRes && !bizRes.error) setEntities(bizRes.data || []);
         else if (bizRes && bizRes.error) console.warn('[open-accounts] business_entities not loaded:', bizRes.error.message);
+        // v55.83-A.6.27.59 — invoices/items error gracefully if .59 SQL not run yet
+        if (invRes && !invRes.error) setInvoices(invRes.data || []);
+        else if (invRes && invRes.error) console.warn('[open-accounts] open_account_invoices not loaded — run sql/v55-83-a-6-27-59 in Supabase:', invRes.error.message);
+        if (itmRes && !itmRes.error) setInvoiceItems(itmRes.data || []);
+        else if (itmRes && itmRes.error) console.warn('[open-accounts] open_account_invoice_items not loaded:', itmRes.error.message);
         setAccounts(accRes.data || []);
         setEntries(entRes.data || []);
       } catch (e) {
@@ -411,16 +430,329 @@ export default function OpenAccountsTab(props) {
       setBusy(false);
     }
   }
+
+  // ── Invoice modal (v55.83-A.6.27.59) ──────────────────────────────
+  // Helper: lookup invoice line items by invoice id (from cached invoiceItems)
+  function itemsForInvoice(invoiceId) {
+    return invoiceItems.filter(function (it) { return it.invoice_id === invoiceId; });
+  }
+
+  // Helper: compute subtotal / tax / total from a draft's items + shipping + tax_rate
+  function computeInvoiceTotals(draft) {
+    if (!draft) return { subtotal: 0, taxAmount: 0, total: 0 };
+    var subtotal = 0;
+    (draft.items || []).forEach(function (it) {
+      var qty = Number(it.quantity || 0);
+      var unit = Number(it.unit_price || 0);
+      var line = qty * unit;
+      subtotal += line;
+    });
+    var shipping = Number(draft.shipping_amount || 0);
+    var taxableBase = subtotal + shipping;
+    var taxAmount = 0;
+    if (draft.tax_enabled && draft.tax_rate_pct != null && draft.tax_rate_pct !== '') {
+      var rate = Number(draft.tax_rate_pct) / 100;
+      taxAmount = taxableBase * rate;
+    }
+    var total = taxableBase + taxAmount;
+    return {
+      subtotal: Math.round(subtotal * 100) / 100,
+      taxAmount: Math.round(taxAmount * 100) / 100,
+      total: Math.round(total * 100) / 100,
+    };
+  }
+
+  function openNewInvoice(accountId) {
+    var today = new Date().toISOString().substring(0, 10);
+    var acc = accounts.find(function (a) { return a.id === accountId; });
+    var ent = acc ? entityFor(acc) : null;
+    var defaultCur = (ent && ent.default_currency) || 'USD';
+    setInvoiceDraft({
+      account_id: accountId,
+      invoice_number: '',
+      direction: 'credit',  // default: we billed them
+      counterparty_name: (acc && acc.account_name) || '',
+      counterparty_name_ar: (acc && acc.account_name_ar) || '',
+      counterparty_address: '',
+      counterparty_email: '',
+      counterparty_phone: '',
+      invoice_date: today,
+      due_date: '',
+      currency: defaultCur,
+      tax_enabled: false,        // Q1 — optional, default off (Max May 22)
+      tax_rate_pct: '',
+      shipping_amount: '',
+      notes: '',
+      terms: '',
+      items: [{ description: '', quantity: '1', unit_price: '' }],
+    });
+    setInvoiceModalOpen(true);
+  }
+
+  function openEditInvoice(invoice) {
+    var rows = itemsForInvoice(invoice.id);
+    setInvoiceDraft({
+      id: invoice.id,
+      account_id: invoice.account_id,
+      invoice_number: invoice.invoice_number || '',
+      direction: invoice.direction || 'credit',
+      counterparty_name: invoice.counterparty_name || '',
+      counterparty_name_ar: invoice.counterparty_name_ar || '',
+      counterparty_address: invoice.counterparty_address || '',
+      counterparty_email: invoice.counterparty_email || '',
+      counterparty_phone: invoice.counterparty_phone || '',
+      invoice_date: invoice.invoice_date || '',
+      due_date: invoice.due_date || '',
+      currency: String(invoice.currency || 'USD').toUpperCase(),
+      tax_enabled: invoice.tax_rate_pct != null || Number(invoice.tax_amount || 0) > 0,
+      tax_rate_pct: invoice.tax_rate_pct != null ? String(invoice.tax_rate_pct) : '',
+      shipping_amount: invoice.shipping_amount != null ? String(invoice.shipping_amount) : '',
+      notes: invoice.notes || '',
+      terms: invoice.terms || '',
+      items: rows.length > 0
+        ? rows.map(function (it) {
+            return {
+              id: it.id,
+              description: it.description || '',
+              quantity: String(it.quantity || ''),
+              unit_price: String(it.unit_price || ''),
+            };
+          })
+        : [{ description: '', quantity: '1', unit_price: '' }],
+    });
+    setInvoiceModalOpen(true);
+  }
+
+  // Update / add / remove line items within the draft
+  function setInvoiceItemField(idx, field, value) {
+    setInvoiceDraft(function (prev) {
+      if (!prev) return prev;
+      var next = Object.assign({}, prev);
+      next.items = (prev.items || []).slice();
+      next.items[idx] = Object.assign({}, next.items[idx] || {}, {});
+      next.items[idx][field] = value;
+      return next;
+    });
+  }
+  function addInvoiceItem() {
+    setInvoiceDraft(function (prev) {
+      if (!prev) return prev;
+      var next = Object.assign({}, prev);
+      next.items = (prev.items || []).slice();
+      next.items.push({ description: '', quantity: '1', unit_price: '' });
+      return next;
+    });
+  }
+  function removeInvoiceItem(idx) {
+    setInvoiceDraft(function (prev) {
+      if (!prev) return prev;
+      var next = Object.assign({}, prev);
+      var nextItems = (prev.items || []).slice();
+      nextItems.splice(idx, 1);
+      // Always keep at least one row visible
+      if (nextItems.length === 0) nextItems.push({ description: '', quantity: '1', unit_price: '' });
+      next.items = nextItems;
+      return next;
+    });
+  }
+
+  async function saveInvoice() {
+    if (!invoiceDraft) return;
+    // Validation
+    var invNum = (invoiceDraft.invoice_number || '').trim();
+    if (!invNum) { alert('Invoice number is required / رقم الفاتورة مطلوب'); return; }
+    if (!invoiceDraft.counterparty_name || !invoiceDraft.counterparty_name.trim()) {
+      alert('Counterparty name is required / اسم الطرف الآخر مطلوب');
+      return;
+    }
+    if (!invoiceDraft.invoice_date) { alert('Invoice date is required / تاريخ الفاتورة مطلوب'); return; }
+    if (!invoiceDraft.direction) { alert('Direction is required (we billed them OR they billed us)'); return; }
+    var cur = String(invoiceDraft.currency || 'USD').toUpperCase().trim();
+    if (cur.length < 2) { alert('Currency code is required / كود العملة مطلوب'); return; }
+
+    // Filter blank items, validate at least one
+    var validItems = (invoiceDraft.items || []).filter(function (it) {
+      var d = (it.description || '').trim();
+      var q = Number(it.quantity);
+      var u = Number(it.unit_price);
+      return d.length > 0 && !isNaN(q) && q > 0 && !isNaN(u) && u >= 0;
+    });
+    if (validItems.length === 0) {
+      alert('Add at least one line item with description, quantity > 0, and unit price.\n\nأضف بندًا واحدًا على الأقل');
+      return;
+    }
+
+    var totals = computeInvoiceTotals(Object.assign({}, invoiceDraft, { items: validItems }));
+
+    setBusy(true);
+    try {
+      var nowUserId = userProfile && userProfile.id;
+      var invPayload = {
+        account_id: invoiceDraft.account_id,
+        invoice_number: invNum,
+        direction: invoiceDraft.direction,
+        counterparty_name: invoiceDraft.counterparty_name.trim(),
+        counterparty_name_ar: (invoiceDraft.counterparty_name_ar || '').trim() || null,
+        counterparty_address: (invoiceDraft.counterparty_address || '').trim() || null,
+        counterparty_email: (invoiceDraft.counterparty_email || '').trim() || null,
+        counterparty_phone: (invoiceDraft.counterparty_phone || '').trim() || null,
+        invoice_date: invoiceDraft.invoice_date,
+        due_date: invoiceDraft.due_date || null,
+        currency: cur,
+        subtotal: totals.subtotal,
+        shipping_amount: Number(invoiceDraft.shipping_amount || 0) || 0,
+        tax_rate_pct: invoiceDraft.tax_enabled && invoiceDraft.tax_rate_pct !== '' ? Number(invoiceDraft.tax_rate_pct) : null,
+        tax_amount: totals.taxAmount,
+        total_amount: totals.total,
+        notes: (invoiceDraft.notes || '').trim() || null,
+        terms: (invoiceDraft.terms || '').trim() || null,
+      };
+
+      var invoiceId;
+      if (invoiceDraft.id) {
+        // UPDATE existing invoice + items + linked ledger entry
+        invoiceId = invoiceDraft.id;
+        var updRes = await supabase.from('open_account_invoices').update(invPayload).eq('id', invoiceId).select().single();
+        if (updRes.error) throw updRes.error;
+
+        // Replace items: delete existing, insert new
+        var delItemsRes = await supabase.from('open_account_invoice_items').delete().eq('invoice_id', invoiceId);
+        if (delItemsRes.error) throw delItemsRes.error;
+      } else {
+        // INSERT new invoice
+        invPayload.created_by = nowUserId;
+        invPayload.updated_by = nowUserId;
+        var insRes = await supabase.from('open_account_invoices').insert(invPayload).select().single();
+        if (insRes.error) throw insRes.error;
+        invoiceId = insRes.data.id;
+      }
+
+      // Insert line items
+      var itemRows = validItems.map(function (it, idx) {
+        var qty = Number(it.quantity);
+        var unit = Number(it.unit_price);
+        return {
+          invoice_id: invoiceId,
+          sort_order: idx,
+          description: (it.description || '').trim(),
+          quantity: qty,
+          unit_price: unit,
+          line_total: Math.round(qty * unit * 100) / 100,
+        };
+      });
+      if (itemRows.length > 0) {
+        var insItemsRes = await supabase.from('open_account_invoice_items').insert(itemRows);
+        if (insItemsRes.error) throw insItemsRes.error;
+      }
+
+      // Auto-create or auto-update the linked ledger entry (per Max Q3 = A: auto-update on edit).
+      // The entry's amount = total_amount, currency = invoice currency, side = direction.
+      var linkedEntryPayload = {
+        account_id: invoiceDraft.account_id,
+        entry_date: invoiceDraft.invoice_date,
+        description: 'Invoice ' + invNum + ' — ' + invoiceDraft.counterparty_name.trim(),
+        reference_number: invNum,
+        credit_amount: invoiceDraft.direction === 'credit' ? totals.total : null,
+        debit_amount: invoiceDraft.direction === 'debit' ? totals.total : null,
+        currency: cur,
+        notes: 'Auto-synced from invoice ' + invNum + '. Edit the invoice to change this entry.',
+        linked_open_invoice_id: invoiceId,
+      };
+
+      // Find existing linked entry (if any) for this invoice id
+      var existingLinked = entries.find(function (e) { return e.linked_open_invoice_id === invoiceId; });
+      if (existingLinked) {
+        var updLinkedRes = await supabase.from('open_account_entries').update(linkedEntryPayload).eq('id', existingLinked.id);
+        if (updLinkedRes.error) throw updLinkedRes.error;
+      } else {
+        linkedEntryPayload.created_by = nowUserId;
+        var insLinkedRes = await supabase.from('open_account_entries').insert(linkedEntryPayload);
+        if (insLinkedRes.error) throw insLinkedRes.error;
+      }
+
+      toast.success(invoiceDraft.id ? 'Invoice updated' : 'Invoice saved + linked to ledger');
+      setInvoiceModalOpen(false);
+      setInvoiceDraft(null);
+      await reload();
+    } catch (e) {
+      console.error('[open-accounts] saveInvoice failed:', e);
+      var errMsg = (e && e.message) || String(e);
+      var hint = '';
+      if (/relation.*open_account_invoices.*does not exist/i.test(errMsg)) {
+        hint = '\n\nThe open_account_invoices table does not exist. Run SQL migration v55.83-A.6.27.59 in Supabase.';
+      } else if (/column.*does not exist/i.test(errMsg)) {
+        hint = '\n\nA database column is missing. The .59 SQL migration was likely not fully run.';
+      }
+      try { toast.error('Save failed: ' + errMsg); } catch (_) {}
+      alert('Save failed: ' + errMsg + hint);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function deleteInvoice(invoice) {
+    if (!invoice) return;
+    var confirmMsg = 'Delete invoice ' + invoice.invoice_number + '?\n\n' +
+      'This will ALSO delete the linked ledger entry (auto-cascade).\n\n' +
+      'This cannot be undone.';
+    if (!confirm(confirmMsg)) return;
+    setBusy(true);
+    try {
+      // FK CASCADE on linked_open_invoice_id deletes the ledger entry automatically.
+      // Items also cascade via invoice_id FK.
+      var delRes = await supabase.from('open_account_invoices').delete().eq('id', invoice.id);
+      if (delRes.error) throw delRes.error;
+      toast.success('Invoice deleted + linked ledger entry removed');
+      await reload();
+    } catch (e) {
+      console.error('[open-accounts] deleteInvoice failed:', e);
+      toast.error('Failed to delete invoice: ' + ((e && e.message) || String(e)));
+      alert('Delete failed: ' + ((e && e.message) || String(e)));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  // Print an existing (saved) invoice
+  function handlePrintInvoice(invoice) {
+    if (!invoice) return;
+    var acc = accounts.find(function (a) { return a.id === invoice.account_id; });
+    var ent = acc ? entityFor(acc) : null;
+    var rows = itemsForInvoice(invoice.id);
+    try {
+      printOpenAccountInvoice(invoice, rows, ent);
+    } catch (e) {
+      console.error('[open-accounts] print invoice failed:', e);
+      toast.error('Print failed: ' + ((e && e.message) || String(e)));
+    }
+  }
+
+  // When a user clicks a ledger row that has a linked invoice, open that invoice for review/edit.
+  function openInvoiceFromEntry(entry) {
+    if (!entry || !entry.linked_open_invoice_id) return;
+    var inv = invoices.find(function (i) { return i.id === entry.linked_open_invoice_id; });
+    if (inv) openEditInvoice(inv);
+  }
+
+  // Quick lookup: invoices for a given account
+  function invoicesForAccount(accountId) {
+    return invoices.filter(function (i) { return i.account_id === accountId; });
+  }
+
   async function reload() {
     try {
-      var [accRes, entRes, bizRes] = await Promise.all([
+      var [accRes, entRes, bizRes, invRes, itmRes] = await Promise.all([
         supabase.from('open_accounts').select('*').order('account_name'),
         supabase.from('open_account_entries').select('*').order('entry_date', { ascending: true }).order('created_at', { ascending: true }),
         supabase.from('business_entities').select('*').eq('active', true).order('display_order'),
+        supabase.from('open_account_invoices').select('*').order('invoice_date', { ascending: false }),
+        supabase.from('open_account_invoice_items').select('*').order('sort_order', { ascending: true }),
       ]);
       setAccounts(accRes.data || []);
       setEntries(entRes.data || []);
       if (bizRes && !bizRes.error) setEntities(bizRes.data || []);
+      if (invRes && !invRes.error) setInvoices(invRes.data || []);
+      if (itmRes && !itmRes.error) setInvoiceItems(itmRes.data || []);
     } catch (e) { console.error('[open-accounts] reload failed:', e); }
   }
 
@@ -581,6 +913,7 @@ export default function OpenAccountsTab(props) {
                 {canEdit && (
                   <div className="flex gap-1 flex-wrap">
                     <button onClick={function () { openNewEntry(a.id); }} className="px-2 py-1 bg-emerald-600 hover:bg-emerald-700 text-white text-[10px] font-extrabold rounded shadow">+ Entry</button>
+                    <button onClick={function () { openNewInvoice(a.id); }} className="px-2 py-1 bg-blue-600 hover:bg-blue-700 text-white text-[10px] font-extrabold rounded shadow" title="Create a mini-invoice. Will auto-create a linked ledger entry.">+ Invoice</button>
                     <button onClick={function () { handlePrintLedger(a); }} className="px-2 py-1 bg-slate-700 hover:bg-slate-800 text-white text-[10px] font-extrabold rounded shadow" title="Print or save as PDF">🖨️ Print</button>
                     <button onClick={function () { handleExportExcel(a); }} className="px-2 py-1 bg-green-700 hover:bg-green-800 text-white text-[10px] font-extrabold rounded shadow" title="Download Excel file">📊 Excel</button>
                     <button onClick={function () { openEditAccount(a); }} className="px-2 py-1 bg-indigo-600 hover:bg-indigo-700 text-white text-[10px] font-extrabold rounded shadow">Edit</button>
@@ -625,7 +958,20 @@ export default function OpenAccountsTab(props) {
                           <tr key={entry.id} className="border-b border-slate-200 hover:bg-slate-50">
                             <td className="px-3 py-1.5 font-mono text-slate-900">{fmtDate(entry.entry_date)}</td>
                             <td className="px-3 py-1.5 text-slate-900">
-                              <div className="font-bold">{entry.description}</div>
+                              {entry.linked_open_invoice_id ? (
+                                <button
+                                  onClick={function () { openInvoiceFromEntry(entry); }}
+                                  className="text-left hover:underline focus:underline w-full"
+                                  title="This entry was auto-created from an invoice. Click to open the invoice."
+                                >
+                                  <div className="font-bold flex items-center gap-1">
+                                    <span className="text-[10px] bg-blue-100 text-blue-900 px-1 rounded font-bold">📄 INV</span>
+                                    <span>{entry.description}</span>
+                                  </div>
+                                </button>
+                              ) : (
+                                <div className="font-bold">{entry.description}</div>
+                              )}
                               {entry.notes && <div className="text-[10px] text-slate-600 italic">{entry.notes}</div>}
                             </td>
                             <td className="px-3 py-1.5 font-mono text-slate-700">{entry.reference_number || '—'}</td>
@@ -656,8 +1002,18 @@ export default function OpenAccountsTab(props) {
                             })}
                             {canEdit && (
                               <td className="px-3 py-1.5 text-right">
-                                <button onClick={function () { openEditEntry(entry); }} className="px-2 py-0.5 bg-indigo-600 hover:bg-indigo-700 text-white text-[10px] font-bold rounded mr-1">Edit</button>
-                                <button onClick={function () { deleteEntry(entry); }} className="px-2 py-0.5 bg-red-700 hover:bg-red-800 text-white text-[10px] font-bold rounded">Del</button>
+                                {entry.linked_open_invoice_id ? (
+                                  <button
+                                    onClick={function () { openInvoiceFromEntry(entry); }}
+                                    className="px-2 py-0.5 bg-blue-600 hover:bg-blue-700 text-white text-[10px] font-bold rounded"
+                                    title="This entry is auto-synced from an invoice. Open the invoice to edit or delete."
+                                  >Open Inv</button>
+                                ) : (
+                                  <>
+                                    <button onClick={function () { openEditEntry(entry); }} className="px-2 py-0.5 bg-indigo-600 hover:bg-indigo-700 text-white text-[10px] font-bold rounded mr-1">Edit</button>
+                                    <button onClick={function () { deleteEntry(entry); }} className="px-2 py-0.5 bg-red-700 hover:bg-red-800 text-white text-[10px] font-bold rounded">Del</button>
+                                  </>
+                                )}
                               </td>
                             )}
                           </tr>
@@ -812,6 +1168,247 @@ export default function OpenAccountsTab(props) {
           </div>
         </div>
       )}
+
+      {/* v55.83-A.6.27.59 — Invoice modal */}
+      {invoiceModalOpen && invoiceDraft && (() => {
+        var totals = computeInvoiceTotals(invoiceDraft);
+        var cur = invoiceDraft.currency || 'USD';
+        return (
+          <div className="fixed inset-0 bg-black/60 z-[120] flex items-center justify-center p-4 overflow-auto">
+            <div className="bg-white rounded-2xl shadow-2xl w-full max-w-4xl my-4">
+              {/* Modal header */}
+              <div className="bg-gradient-to-r from-blue-700 to-indigo-700 text-white rounded-t-2xl px-5 py-3 flex justify-between items-center">
+                <div>
+                  <div className="text-lg font-extrabold">📄 {invoiceDraft.id ? 'Edit Invoice' : 'New Mini-Invoice'}</div>
+                  <div className="text-xs font-semibold text-blue-100">
+                    {invoiceDraft.id ? 'Editing — linked ledger entry will auto-sync on save' : 'Will auto-create a linked ledger entry on save'}
+                  </div>
+                </div>
+                <button
+                  onClick={function () { setInvoiceModalOpen(false); setInvoiceDraft(null); }}
+                  aria-label="Close"
+                  className="bg-white text-slate-800 w-9 h-9 rounded-full font-bold text-lg shadow"
+                >✕</button>
+              </div>
+
+              <div className="px-5 py-4 space-y-4">
+
+                {/* Direction toggle */}
+                <div className="grid grid-cols-2 gap-3">
+                  <label className={'border-2 rounded-lg p-3 cursor-pointer ' + (invoiceDraft.direction === 'credit' ? 'border-emerald-600 bg-emerald-50' : 'border-slate-300 bg-white')}>
+                    <input
+                      type="radio" name="direction" value="credit"
+                      checked={invoiceDraft.direction === 'credit'}
+                      onChange={function () { setInvoiceDraft(Object.assign({}, invoiceDraft, { direction: 'credit' })); }}
+                      className="mr-2"
+                    />
+                    <span className="text-sm font-extrabold text-emerald-900">We&apos;re billing them</span>
+                    <div className="text-[10px] text-slate-700 mt-1">Creates a CREDIT ledger entry (they owe us)</div>
+                  </label>
+                  <label className={'border-2 rounded-lg p-3 cursor-pointer ' + (invoiceDraft.direction === 'debit' ? 'border-red-600 bg-red-50' : 'border-slate-300 bg-white')}>
+                    <input
+                      type="radio" name="direction" value="debit"
+                      checked={invoiceDraft.direction === 'debit'}
+                      onChange={function () { setInvoiceDraft(Object.assign({}, invoiceDraft, { direction: 'debit' })); }}
+                      className="mr-2"
+                    />
+                    <span className="text-sm font-extrabold text-red-900">They&apos;re billing us</span>
+                    <div className="text-[10px] text-slate-700 mt-1">Creates a DEBIT ledger entry (we owe them)</div>
+                  </label>
+                </div>
+
+                {/* Invoice meta row */}
+                <div className="grid grid-cols-2 md:grid-cols-4 gap-2">
+                  <label className="block">
+                    <span className="text-xs font-extrabold text-slate-900">Invoice # * / رقم الفاتورة</span>
+                    <input type="text" value={invoiceDraft.invoice_number} onChange={function (e) { setInvoiceDraft(Object.assign({}, invoiceDraft, { invoice_number: e.target.value })); }} placeholder="INV-2026-001" className="w-full mt-0.5 px-2 py-1.5 border-2 border-slate-300 rounded text-sm bg-white text-slate-900 font-mono font-bold" />
+                  </label>
+                  <label className="block">
+                    <span className="text-xs font-extrabold text-slate-900">Date * / التاريخ</span>
+                    <input type="date" value={invoiceDraft.invoice_date} onChange={function (e) { setInvoiceDraft(Object.assign({}, invoiceDraft, { invoice_date: e.target.value })); }} className="w-full mt-0.5 px-2 py-1.5 border-2 border-slate-300 rounded text-sm bg-white text-slate-900" />
+                  </label>
+                  <label className="block">
+                    <span className="text-xs font-extrabold text-slate-900">Due Date / تاريخ الاستحقاق</span>
+                    <input type="date" value={invoiceDraft.due_date} onChange={function (e) { setInvoiceDraft(Object.assign({}, invoiceDraft, { due_date: e.target.value })); }} className="w-full mt-0.5 px-2 py-1.5 border-2 border-slate-300 rounded text-sm bg-white text-slate-900" />
+                  </label>
+                  <label className="block">
+                    <span className="text-xs font-extrabold text-slate-900">Currency * / العملة</span>
+                    <select value={cur} onChange={function (e) { setInvoiceDraft(Object.assign({}, invoiceDraft, { currency: e.target.value })); }} className="w-full mt-0.5 px-2 py-1.5 border-2 border-slate-300 rounded text-sm bg-white text-slate-900 font-extrabold">
+                      <option value="USD">USD</option>
+                      <option value="EGP">EGP</option>
+                      <option value="EUR">EUR</option>
+                      <option value="GBP">GBP</option>
+                      <option value="AED">AED</option>
+                      <option value="SAR">SAR</option>
+                      <option value="CNY">CNY</option>
+                    </select>
+                  </label>
+                </div>
+
+                {/* Counterparty info */}
+                <div className="bg-slate-50 border border-slate-200 rounded p-3 space-y-2">
+                  <div className="text-[11px] font-extrabold text-slate-700 tracking-wider">
+                    {invoiceDraft.direction === 'credit' ? 'BILL TO (counterparty)' : 'BILL FROM (counterparty)'} / الطرف الآخر
+                  </div>
+                  <div className="grid grid-cols-2 gap-2">
+                    <label className="block">
+                      <span className="text-xs font-bold text-slate-700">Name * / الاسم</span>
+                      <input type="text" value={invoiceDraft.counterparty_name} onChange={function (e) { setInvoiceDraft(Object.assign({}, invoiceDraft, { counterparty_name: e.target.value })); }} className="w-full mt-0.5 px-2 py-1.5 border border-slate-300 rounded text-sm bg-white text-slate-900 font-semibold" />
+                    </label>
+                    <label className="block">
+                      <span className="text-xs font-bold text-slate-700">Name (Arabic) / بالعربية</span>
+                      <input type="text" value={invoiceDraft.counterparty_name_ar} onChange={function (e) { setInvoiceDraft(Object.assign({}, invoiceDraft, { counterparty_name_ar: e.target.value })); }} className="w-full mt-0.5 px-2 py-1.5 border border-slate-300 rounded text-sm bg-white text-slate-900" style={{ direction: 'rtl' }} />
+                    </label>
+                  </div>
+                  <label className="block">
+                    <span className="text-xs font-bold text-slate-700">Address / العنوان</span>
+                    <textarea value={invoiceDraft.counterparty_address} onChange={function (e) { setInvoiceDraft(Object.assign({}, invoiceDraft, { counterparty_address: e.target.value })); }} rows={2} className="w-full mt-0.5 px-2 py-1.5 border border-slate-300 rounded text-sm bg-white text-slate-900 resize-none" />
+                  </label>
+                  <div className="grid grid-cols-2 gap-2">
+                    <label className="block">
+                      <span className="text-xs font-bold text-slate-700">Phone / الهاتف</span>
+                      <input type="text" value={invoiceDraft.counterparty_phone} onChange={function (e) { setInvoiceDraft(Object.assign({}, invoiceDraft, { counterparty_phone: e.target.value })); }} className="w-full mt-0.5 px-2 py-1.5 border border-slate-300 rounded text-sm bg-white text-slate-900 font-mono" />
+                    </label>
+                    <label className="block">
+                      <span className="text-xs font-bold text-slate-700">Email / البريد</span>
+                      <input type="email" value={invoiceDraft.counterparty_email} onChange={function (e) { setInvoiceDraft(Object.assign({}, invoiceDraft, { counterparty_email: e.target.value })); }} className="w-full mt-0.5 px-2 py-1.5 border border-slate-300 rounded text-sm bg-white text-slate-900 font-mono" />
+                    </label>
+                  </div>
+                </div>
+
+                {/* Line items */}
+                <div>
+                  <div className="text-[11px] font-extrabold text-slate-700 tracking-wider mb-1">LINE ITEMS / البنود</div>
+                  <div className="border-2 border-slate-200 rounded overflow-hidden">
+                    <table className="w-full text-sm">
+                      <thead className="bg-slate-100">
+                        <tr>
+                          <th className="px-2 py-1.5 text-left text-[10px] font-extrabold text-slate-900">Description</th>
+                          <th className="px-2 py-1.5 text-right text-[10px] font-extrabold text-slate-900" style={{ width: 100 }}>Qty</th>
+                          <th className="px-2 py-1.5 text-right text-[10px] font-extrabold text-slate-900" style={{ width: 130 }}>Unit Price ({cur})</th>
+                          <th className="px-2 py-1.5 text-right text-[10px] font-extrabold text-slate-900" style={{ width: 130 }}>Line Total</th>
+                          <th style={{ width: 36 }}></th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {(invoiceDraft.items || []).map(function (it, idx) {
+                          var qty = Number(it.quantity || 0);
+                          var unit = Number(it.unit_price || 0);
+                          var line = qty * unit;
+                          return (
+                            <tr key={idx} className="border-b border-slate-200">
+                              <td className="px-2 py-1">
+                                <input type="text" value={it.description || ''} onChange={function (e) { setInvoiceItemField(idx, 'description', e.target.value); }} placeholder="e.g. Premium leather panels" className="w-full px-2 py-1 border border-slate-300 rounded text-sm bg-white text-slate-900" />
+                              </td>
+                              <td className="px-2 py-1">
+                                <input type="number" step="0.001" min="0" value={it.quantity || ''} onChange={function (e) { setInvoiceItemField(idx, 'quantity', e.target.value); }} className="w-full px-2 py-1 border border-slate-300 rounded text-sm bg-white text-slate-900 text-right font-mono" />
+                              </td>
+                              <td className="px-2 py-1">
+                                <input type="number" step="0.01" min="0" value={it.unit_price || ''} onChange={function (e) { setInvoiceItemField(idx, 'unit_price', e.target.value); }} className="w-full px-2 py-1 border border-slate-300 rounded text-sm bg-white text-slate-900 text-right font-mono" />
+                              </td>
+                              <td className="px-2 py-1 text-right font-mono font-bold text-slate-900">
+                                {line > 0 ? line.toFixed(2) : '—'}
+                              </td>
+                              <td className="px-1 py-1 text-center">
+                                <button onClick={function () { removeInvoiceItem(idx); }} className="text-red-600 hover:text-red-800 font-bold text-base" title="Remove this line">✕</button>
+                              </td>
+                            </tr>
+                          );
+                        })}
+                      </tbody>
+                    </table>
+                    <button onClick={addInvoiceItem} className="w-full px-3 py-2 bg-slate-100 hover:bg-slate-200 text-slate-800 text-xs font-extrabold border-t border-slate-200">
+                      + Add Line Item / إضافة بند
+                    </button>
+                  </div>
+                </div>
+
+                {/* Totals + Shipping + Tax */}
+                <div className="grid grid-cols-2 gap-4">
+                  {/* Left: Tax & Shipping */}
+                  <div className="space-y-2">
+                    <label className="block">
+                      <span className="text-xs font-extrabold text-slate-900">Shipping / الشحن (optional)</span>
+                      <div className="flex items-center gap-1 mt-0.5">
+                        <input type="number" step="0.01" min="0" value={invoiceDraft.shipping_amount} onChange={function (e) { setInvoiceDraft(Object.assign({}, invoiceDraft, { shipping_amount: e.target.value })); }} placeholder="0.00" className="flex-1 px-2 py-1.5 border-2 border-slate-300 rounded text-sm bg-white text-slate-900 text-right font-mono" />
+                        <span className="text-xs font-bold text-slate-600">{cur}</span>
+                      </div>
+                    </label>
+                    {/* Tax opt-in */}
+                    <label className="flex items-center gap-2 mt-2 cursor-pointer">
+                      <input type="checkbox" checked={!!invoiceDraft.tax_enabled} onChange={function (e) { setInvoiceDraft(Object.assign({}, invoiceDraft, { tax_enabled: e.target.checked, tax_rate_pct: e.target.checked ? (invoiceDraft.tax_rate_pct || '14') : '' })); }} />
+                      <span className="text-xs font-extrabold text-slate-900">Apply tax / تطبيق الضريبة</span>
+                      <span className="text-[10px] text-slate-600 italic">(optional, off by default)</span>
+                    </label>
+                    {invoiceDraft.tax_enabled && (
+                      <label className="block">
+                        <span className="text-xs font-extrabold text-slate-900">Tax Rate (%) / نسبة الضريبة</span>
+                        <div className="flex items-center gap-1 mt-0.5">
+                          <input type="number" step="0.001" min="0" max="100" value={invoiceDraft.tax_rate_pct} onChange={function (e) { setInvoiceDraft(Object.assign({}, invoiceDraft, { tax_rate_pct: e.target.value })); }} placeholder="e.g. 14 for VAT" className="flex-1 px-2 py-1.5 border-2 border-slate-300 rounded text-sm bg-white text-slate-900 text-right font-mono" />
+                          <span className="text-xs font-bold text-slate-600">%</span>
+                        </div>
+                      </label>
+                    )}
+                  </div>
+                  {/* Right: Totals */}
+                  <div className="bg-slate-50 border border-slate-300 rounded p-3 space-y-1">
+                    <div className="flex justify-between text-sm">
+                      <span className="text-slate-700 font-semibold">Subtotal</span>
+                      <span className="font-mono font-bold text-slate-900">{totals.subtotal.toFixed(2)} {cur}</span>
+                    </div>
+                    {Number(invoiceDraft.shipping_amount || 0) > 0 && (
+                      <div className="flex justify-between text-sm">
+                        <span className="text-slate-700 font-semibold">Shipping</span>
+                        <span className="font-mono font-bold text-slate-900">{Number(invoiceDraft.shipping_amount).toFixed(2)} {cur}</span>
+                      </div>
+                    )}
+                    {invoiceDraft.tax_enabled && totals.taxAmount > 0 && (
+                      <div className="flex justify-between text-sm">
+                        <span className="text-slate-700 font-semibold">Tax ({invoiceDraft.tax_rate_pct}%)</span>
+                        <span className="font-mono font-bold text-slate-900">{totals.taxAmount.toFixed(2)} {cur}</span>
+                      </div>
+                    )}
+                    <div className="border-t-2 border-slate-400 mt-1 pt-1 flex justify-between text-base">
+                      <span className="font-extrabold text-slate-900">TOTAL</span>
+                      <span className="font-mono font-extrabold text-slate-900">{totals.total.toFixed(2)} {cur}</span>
+                    </div>
+                    <div className="text-[10px] text-slate-600 italic mt-1">
+                      Ledger entry will be a {invoiceDraft.direction === 'credit' ? 'CREDIT (they owe us)' : 'DEBIT (we owe them)'} of {totals.total.toFixed(2)} {cur}
+                    </div>
+                  </div>
+                </div>
+
+                {/* Notes + Terms */}
+                <div className="grid grid-cols-2 gap-3">
+                  <label className="block">
+                    <span className="text-xs font-extrabold text-slate-900">Payment Terms / شروط الدفع</span>
+                    <input type="text" value={invoiceDraft.terms} onChange={function (e) { setInvoiceDraft(Object.assign({}, invoiceDraft, { terms: e.target.value })); }} placeholder="e.g. Net 30" className="w-full mt-0.5 px-2 py-1.5 border border-slate-300 rounded text-sm bg-white text-slate-900" />
+                  </label>
+                  <label className="block">
+                    <span className="text-xs font-extrabold text-slate-900">Notes / ملاحظات</span>
+                    <input type="text" value={invoiceDraft.notes} onChange={function (e) { setInvoiceDraft(Object.assign({}, invoiceDraft, { notes: e.target.value })); }} className="w-full mt-0.5 px-2 py-1.5 border border-slate-300 rounded text-sm bg-white text-slate-900" />
+                  </label>
+                </div>
+              </div>
+
+              {/* Modal footer */}
+              <div className="border-t border-slate-200 px-5 py-3 flex justify-end gap-2 bg-slate-50 rounded-b-2xl flex-wrap">
+                <button onClick={function () { setInvoiceModalOpen(false); setInvoiceDraft(null); }} disabled={busy} className="px-4 py-2 bg-slate-300 hover:bg-slate-400 text-slate-900 text-sm font-bold rounded disabled:opacity-50">Cancel</button>
+                {invoiceDraft.id && (
+                  <>
+                    <button onClick={function () { handlePrintInvoice(Object.assign({}, invoiceDraft, { subtotal: totals.subtotal, tax_amount: totals.taxAmount, total_amount: totals.total })); }} disabled={busy} className="px-4 py-2 bg-slate-700 hover:bg-slate-800 text-white text-sm font-extrabold rounded shadow disabled:opacity-50" title="Print or save as PDF">🖨️ Print</button>
+                    <button onClick={function () {
+                      var inv = invoices.find(function (i) { return i.id === invoiceDraft.id; });
+                      if (inv) { setInvoiceModalOpen(false); setInvoiceDraft(null); deleteInvoice(inv); }
+                    }} disabled={busy} className="px-4 py-2 bg-red-700 hover:bg-red-800 text-white text-sm font-extrabold rounded shadow disabled:opacity-50">🗑️ Delete Invoice</button>
+                  </>
+                )}
+                <button onClick={saveInvoice} disabled={busy} className="px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white text-sm font-extrabold rounded shadow disabled:opacity-50">{busy ? 'Saving...' : '💾 Save Invoice'}</button>
+              </div>
+            </div>
+          </div>
+        );
+      })()}
     </div>
   );
 }
