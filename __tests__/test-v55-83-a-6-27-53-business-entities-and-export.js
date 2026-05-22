@@ -182,10 +182,11 @@ ok('R1: 52 — open_accounts SQL still loads (table referenced in load query)',
   /supabase\.from\('open_accounts'\)\.select\('\*'\)\.order\('account_name'\)/.test(oa));
 ok('R2: 52 — open_account_entries still ordered by entry_date asc then created_at asc',
   /supabase\.from\('open_account_entries'\)\.select\('\*'\)\.order\('entry_date', \{ ascending: true \}\)\.order\('created_at', \{ ascending: true \}\)/.test(oa));
-ok('R3: 52 — running balance computation preserved (credit adds, debit subtracts)',
-  /running \+= credit - debit;\s+entry\._running_balance = running/.test(oa));
-ok('R4: 52 — summaryFor returns totalCredit/totalDebit/balance/entryCount',
-  /balance: totalCredit - totalDebit,\s+entryCount: arr\.length/.test(oa));
+ok('R3: 52 — running balance computation preserved (credit adds, debit subtracts) — now per-currency in .58',
+  /running\[cur\] \+= credit - debit/.test(oa) &&
+  /entry\._running_balance = running\[cur\]/.test(oa));
+ok('R4: 52 — summaryFor still returns balance + entryCount (back-compat legacy fields preserved in .58)',
+  /balance: legacyCredit - legacyDebit,\s+entryCount: arr\.length/.test(oa));
 ok('R5: 52 — CREDIT/DEBIT radio side selector preserved',
   /CREDIT — money IN/.test(oa) && /DEBIT — money OUT/.test(oa));
 ok('R6: 52 — entry modal validates description + date + positive amount',

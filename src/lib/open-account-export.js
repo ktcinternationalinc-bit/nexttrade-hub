@@ -1,15 +1,22 @@
-// v55.83-A.6.27.53 — Open Accounts print + Excel helpers.
+// v55.83-A.6.27.58 — Open Accounts print + Excel helpers (multi-currency).
 //
 // Two exported functions:
 //   - printAccountLedger(account, entity, entries, summary)
-//     Opens a new window with a printable statement and auto-fires window.print().
+//     Opens a new window with a printable statement. PDF-suitable. Per
+//     currency: split the table into a section per currency (cleaner on
+//     paper than one mega-table with parallel running balance columns).
 //
 //   - exportAccountLedgerToExcel(account, entity, entries, summary)
-//     Generates an .xlsx file using the already-installed xlsx package and
-//     triggers a download.
+//     Generates an .xlsx file. One sheet, per-currency total rows at the
+//     bottom. Numeric values stay numeric so Excel SUM works.
 //
-// Both are pure functions. No DB calls. Caller is responsible for passing
-// the correct entity + entries + summary computed upstream.
+// `summary` must be the multi-currency shape from .58:
+//   { byCurrency: {USD: {credit, debit, balance, count}, ...},
+//     currencies: ['USD', 'EGP'],
+//     totalEntryCount: N }
+//
+// `entries` is the array as returned by entriesByAccount[accountId] — each
+// row carries _currency and _running_by_currency from the upstream walk.
 
 import * as XLSX from 'xlsx';
 
@@ -36,20 +43,15 @@ function escapeHtml(s) {
 
 // ──────────────────────────────────────────────────────────────────
 // PRINTABLE LEDGER STATEMENT (opens new window, auto-prints)
+// Layout: entity header → statement-for box → ONE section per currency
+//   (each section has its own running-balance walk + totals + balance box).
 // ──────────────────────────────────────────────────────────────────
 export function printAccountLedger(account, entity, entries, summary) {
   if (!account) return;
   var win;
-  try {
-    win = window.open('', '_blank', 'width=900,height=700');
-  } catch (e) {
-    alert('Could not open print window. Please allow popups for this site.');
-    return;
-  }
-  if (!win) {
-    alert('Could not open print window. Please allow popups for this site.');
-    return;
-  }
+  try { win = window.open('', '_blank', 'width=900,height=700'); }
+  catch (e) { alert('Could not open print window. Please allow popups for this site.'); return; }
+  if (!win) { alert('Could not open print window. Please allow popups for this site.'); return; }
 
   var generatedAt = new Date().toISOString().substring(0, 16).replace('T', ' ');
   var firstDate = entries.length > 0 ? fmtDate(entries[0].entry_date) : '';
@@ -76,17 +78,24 @@ export function printAccountLedger(account, entity, entries, summary) {
     entityLines.push('<em style="color:#666">No business entity selected for this account</em>');
   }
 
-  // Build ledger rows HTML
-  var rowsHtml = '';
-  if (entries.length === 0) {
-    rowsHtml = '<tr><td colspan="6" style="padding:20px; text-align:center; color:#666;">No entries yet</td></tr>';
-  } else {
+  // v55.83-A.6.27.58 — Per-currency sections.
+  // Group entries by currency, walk each group with its own running balance.
+  var currencies = (summary && summary.currencies) || [];
+  var byCurrency = (summary && summary.byCurrency) || {};
+
+  function sectionHtml(cur) {
+    var cs = byCurrency[cur] || { credit: 0, debit: 0, balance: 0, count: 0 };
+    var rowsHtml = '';
     var running = 0;
-    rowsHtml = entries.map(function (e) {
+    var anyRows = false;
+    entries.forEach(function (e) {
+      var entryCur = e._currency || String(e.currency || 'USD').toUpperCase();
+      if (entryCur !== cur) return;
+      anyRows = true;
       var credit = Number(e.credit_amount || 0);
       var debit  = Number(e.debit_amount  || 0);
       running += credit - debit;
-      return '<tr>'
+      rowsHtml += '<tr>'
         + '<td>' + escapeHtml(fmtDate(e.entry_date)) + '</td>'
         + '<td>' + escapeHtml(e.description || '') + (e.notes ? '<br><em style="color:#666;font-size:10px">' + escapeHtml(e.notes) + '</em>' : '') + '</td>'
         + '<td class="mono">' + escapeHtml(e.reference_number || '') + '</td>'
@@ -94,14 +103,46 @@ export function printAccountLedger(account, entity, entries, summary) {
         + '<td class="num debit">'  + (debit  > 0 ? fmtMoney(debit)  : '') + '</td>'
         + '<td class="num">' + fmtMoney(running) + '</td>'
         + '</tr>';
-    }).join('');
+    });
+    if (!anyRows) {
+      rowsHtml = '<tr><td colspan="6" style="padding:20px; text-align:center; color:#666;">No entries in ' + escapeHtml(cur) + '</td></tr>';
+    }
+    var balanceLabel = cs.balance > 0 ? 'They owe us' : cs.balance < 0 ? 'We owe them' : 'Settled';
+    var balanceColor = cs.balance > 0 ? '#15803d' : cs.balance < 0 ? '#b91c1c' : '#475569';
+    var bgColor = cs.balance >= 0 ? '#f0fdf4' : '#fef2f2';
+
+    return ''
+      + '<div class="currency-section">'
+      + '<h2>' + escapeHtml(cur) + ' Ledger</h2>'
+      + '<table>'
+      + '<thead><tr>'
+      + '<th style="width:80px">Date</th>'
+      + '<th>Description</th>'
+      + '<th style="width:110px">Reference</th>'
+      + '<th class="num" style="width:90px">Credit</th>'
+      + '<th class="num" style="width:90px">Debit</th>'
+      + '<th class="num" style="width:120px">Running Balance</th>'
+      + '</tr></thead>'
+      + '<tbody>' + rowsHtml + '</tbody>'
+      + (cs.count > 0
+          ? '<tfoot><tr class="totals">'
+            + '<td colspan="3" style="text-align:right; text-transform:uppercase; font-size:10px">' + escapeHtml(cur) + ' Totals</td>'
+            + '<td class="num credit">' + fmtMoney(cs.credit) + '</td>'
+            + '<td class="num debit">'  + fmtMoney(cs.debit)  + '</td>'
+            + '<td class="num">' + fmtMoney(cs.balance) + '</td>'
+            + '</tr></tfoot>'
+          : '')
+      + '</table>'
+      + '<div class="balance-box" style="border-color:' + balanceColor + '; background:' + bgColor + ';">'
+      + '<div class="balance-label">' + balanceLabel + '</div>'
+      + '<div class="balance-value" style="color:' + balanceColor + ';">' + fmtMoney(Math.abs(cs.balance)) + ' ' + escapeHtml(cur) + '</div>'
+      + '</div>'
+      + '</div>';
   }
 
-  var balance = summary.balance;
-  var balanceLabel = balance > 0 ? 'They owe us'
-                   : balance < 0 ? 'We owe them'
-                   : 'Settled';
-  var balanceColor = balance > 0 ? '#15803d' : balance < 0 ? '#b91c1c' : '#475569';
+  var allSections = currencies.length > 0
+    ? currencies.map(sectionHtml).join('')
+    : '<p style="text-align:center; color:#666; padding:24px;">No ledger entries yet.</p>';
 
   var html = ''
     + '<!DOCTYPE html><html><head><meta charset="utf-8">'
@@ -120,6 +161,7 @@ export function printAccountLedger(account, entity, entries, summary) {
     + '.recipient { background: #f1f5f9; padding: 12px 16px; border-radius: 4px; margin-bottom: 16px; }'
     + '.recipient-label { font-size: 9px; text-transform: uppercase; letter-spacing: 1px; color: #555; }'
     + '.recipient-name { font-size: 14px; font-weight: 700; margin-top: 2px; }'
+    + '.currency-section { page-break-inside: avoid; margin-bottom: 28px; }'
     + 'table { width: 100%; border-collapse: collapse; margin-top: 8px; }'
     + 'th { background: #1e293b; color: white; padding: 8px 6px; text-align: left; font-size: 11px; font-weight: 700; }'
     + 'th.num { text-align: right; }'
@@ -130,11 +172,11 @@ export function printAccountLedger(account, entity, entries, summary) {
     + 'td.debit { color: #991b1b; font-weight: 700; }'
     + 'tr.totals { background: #f1f5f9; font-weight: 800; }'
     + 'tr.totals td { border-top: 2px solid #111; border-bottom: 2px solid #111; }'
-    + '.balance-box { margin-top: 20px; padding: 12px 16px; border: 2px solid ' + balanceColor + '; background: ' + (balance >= 0 ? '#f0fdf4' : '#fef2f2') + '; border-radius: 4px; }'
+    + '.balance-box { margin-top: 12px; padding: 12px 16px; border: 2px solid; border-radius: 4px; }'
     + '.balance-label { font-size: 10px; text-transform: uppercase; letter-spacing: 1px; color: #555; }'
-    + '.balance-value { font-size: 22px; font-weight: 800; color: ' + balanceColor + '; }'
-    + '.balance-note { font-size: 11px; color: #444; margin-top: 4px; }'
+    + '.balance-value { font-size: 22px; font-weight: 800; }'
     + '.convention { margin-top: 24px; padding: 8px 12px; background: #fafafa; border-left: 3px solid #999; font-size: 10px; color: #555; }'
+    + '.multi-currency-note { margin: 12px 0 0 0; padding: 6px 10px; background: #fef3c7; border-left: 3px solid #d97706; font-size: 10px; color: #451a03; }'
     + '@media print { body { margin: 16px; } .no-print { display: none; } }'
     + '.no-print { margin-bottom: 12px; padding: 8px; background: #fef3c7; border: 1px solid #fde68a; border-radius: 4px; font-size: 11px; }'
     + '.no-print button { padding: 6px 12px; background: #1e293b; color: white; border: 0; border-radius: 3px; font-weight: 700; cursor: pointer; margin-right: 8px; }'
@@ -155,38 +197,17 @@ export function printAccountLedger(account, entity, entries, summary) {
     + '<div class="statement-title">Statement</div>'
     + '<div class="meta">Generated: ' + escapeHtml(generatedAt) + '</div>'
     + (firstDate ? '<div class="meta">Period: ' + escapeHtml(firstDate) + ' to ' + escapeHtml(lastDate) + '</div>' : '')
-    + (entity && entity.default_currency ? '<div class="meta">Currency: ' + escapeHtml(entity.default_currency) + '</div>' : '')
+    + (currencies.length > 1 ? '<div class="meta">Currencies: ' + currencies.map(escapeHtml).join(', ') + '</div>' : '')
     + '</div></div>'
     + '<div class="recipient">'
     + '<div class="recipient-label">Statement For / كشف حساب</div>'
     + '<div class="recipient-name">' + escapeHtml(account.account_name) + (account.account_name_ar ? '  &middot;  <span dir="rtl">' + escapeHtml(account.account_name_ar) + '</span>' : '') + '</div>'
     + (account.notes ? '<div style="font-size:11px;color:#555;margin-top:4px">' + escapeHtml(account.notes) + '</div>' : '')
     + '</div>'
-    + '<h2>Ledger Entries</h2>'
-    + '<table>'
-    + '<thead><tr>'
-    + '<th style="width:80px">Date</th>'
-    + '<th>Description</th>'
-    + '<th style="width:110px">Reference</th>'
-    + '<th class="num" style="width:90px">Credit</th>'
-    + '<th class="num" style="width:90px">Debit</th>'
-    + '<th class="num" style="width:100px">Running Balance</th>'
-    + '</tr></thead>'
-    + '<tbody>' + rowsHtml + '</tbody>'
-    + (entries.length > 0
-        ? '<tfoot><tr class="totals">'
-          + '<td colspan="3" style="text-align:right; text-transform:uppercase; font-size:10px">Totals</td>'
-          + '<td class="num credit">' + fmtMoney(summary.totalCredit) + '</td>'
-          + '<td class="num debit">'  + fmtMoney(summary.totalDebit)  + '</td>'
-          + '<td class="num">' + fmtMoney(summary.balance) + '</td>'
-          + '</tr></tfoot>'
+    + (currencies.length > 1
+        ? '<div class="multi-currency-note"><strong>Multi-currency account.</strong> This statement shows a separate section per currency. Currency balances are NOT added together — each currency has its own running balance.</div>'
         : '')
-    + '</table>'
-    + '<div class="balance-box">'
-    + '<div class="balance-label">' + balanceLabel + '</div>'
-    + '<div class="balance-value">' + fmtMoney(Math.abs(balance)) + ' ' + escapeHtml((entity && entity.default_currency) || '') + '</div>'
-    + (balance !== 0 ? '<div class="balance-note">Net balance as of ' + escapeHtml(generatedAt) + '</div>' : '')
-    + '</div>'
+    + allSections
     + '<div class="convention">'
     + 'Convention: <strong>Credit</strong> = money paid to us. <strong>Debit</strong> = money paid by us. '
     + 'A positive running balance means the counterparty owes us; a negative balance means we owe them.'
@@ -201,71 +222,97 @@ export function printAccountLedger(account, entity, entries, summary) {
 
 // ──────────────────────────────────────────────────────────────────
 // EXCEL EXPORT (.xlsx via SheetJS)
+// One sheet. Entries listed chronologically (regardless of currency), each
+// with its currency column. Per-currency totals at the bottom (one row each).
+// Each currency has its own running-balance column so the recipient can
+// trace both balances side-by-side.
 // ──────────────────────────────────────────────────────────────────
 export function exportAccountLedgerToExcel(account, entity, entries, summary) {
   if (!account) return;
 
   var rows = [];
-  // Header block
-  rows.push([(entity && entity.entity_name) || 'KTC', '', '', '', '', '']);
-  if (entity && entity.entity_name_ar) rows.push([entity.entity_name_ar, '', '', '', '', '']);
+  // Entity header block
+  rows.push([(entity && entity.entity_name) || 'KTC', '', '', '', '', '', '']);
+  if (entity && entity.entity_name_ar) rows.push([entity.entity_name_ar, '', '', '', '', '', '']);
   var addrLine = [entity && entity.address_line1, entity && entity.address_line2].filter(Boolean).join(' / ');
-  if (addrLine) rows.push([addrLine, '', '', '', '', '']);
+  if (addrLine) rows.push([addrLine, '', '', '', '', '', '']);
   var cityLine = [entity && entity.city, entity && entity.region, entity && entity.postal_code, entity && entity.country].filter(Boolean).join(', ');
-  if (cityLine) rows.push([cityLine, '', '', '', '', '']);
+  if (cityLine) rows.push([cityLine, '', '', '', '', '', '']);
   var contactLine = [entity && entity.phone ? 'Tel: ' + entity.phone : '', entity && entity.email].filter(Boolean).join(' · ');
-  if (contactLine) rows.push([contactLine, '', '', '', '', '']);
-  if (entity && entity.tax_id) rows.push(['Tax ID: ' + entity.tax_id, '', '', '', '', '']);
-  rows.push(['', '', '', '', '', '']);
+  if (contactLine) rows.push([contactLine, '', '', '', '', '', '']);
+  if (entity && entity.tax_id) rows.push(['Tax ID: ' + entity.tax_id, '', '', '', '', '', '']);
+  rows.push(['', '', '', '', '', '', '']);
 
-  rows.push(['Statement of Account', '', '', '', '', '']);
-  rows.push(['Account:', account.account_name + (account.account_name_ar ? ' / ' + account.account_name_ar : ''), '', '', '', '']);
-  rows.push(['Generated:', new Date().toISOString().substring(0, 16).replace('T', ' '), '', '', '', '']);
-  if (entity && entity.default_currency) rows.push(['Currency:', entity.default_currency, '', '', '', '']);
-  rows.push(['', '', '', '', '', '']);
+  rows.push(['Statement of Account', '', '', '', '', '', '']);
+  rows.push(['Account:', account.account_name + (account.account_name_ar ? ' / ' + account.account_name_ar : ''), '', '', '', '', '']);
+  rows.push(['Generated:', new Date().toISOString().substring(0, 16).replace('T', ' '), '', '', '', '', '']);
+  var currencies = (summary && summary.currencies) || [];
+  if (currencies.length > 0) rows.push(['Currencies:', currencies.join(', '), '', '', '', '', '']);
+  rows.push(['', '', '', '', '', '', '']);
 
-  // Column headers
-  rows.push(['Date', 'Description', 'Reference', 'Credit', 'Debit', 'Running Balance']);
+  // v55.83-A.6.27.58 — Column headers: Date, Description, Reference, Currency,
+  // Credit, Debit, then one "Running CUR" column per currency.
+  var colHeaders = ['Date', 'Description', 'Reference', 'Currency', 'Credit', 'Debit'];
+  currencies.forEach(function (cur) { colHeaders.push('Running ' + cur); });
+  rows.push(colHeaders);
 
-  // Ledger rows — keep numeric values as Numbers so Excel SUM() works
-  var running = 0;
+  // Per-currency running totals (rolling)
+  var running = {}; // cur → running balance
+  currencies.forEach(function (c) { running[c] = 0; });
+
   entries.forEach(function (e) {
+    var entryCur = e._currency || String(e.currency || 'USD').toUpperCase();
     var credit = Number(e.credit_amount || 0);
     var debit  = Number(e.debit_amount  || 0);
-    running += credit - debit;
-    rows.push([
+    if (!(entryCur in running)) running[entryCur] = 0;
+    running[entryCur] += credit - debit;
+    var row = [
       fmtDate(e.entry_date),
       (e.description || '') + (e.notes ? ' — ' + e.notes : ''),
       e.reference_number || '',
+      entryCur,
       credit > 0 ? credit : '',
       debit  > 0 ? debit  : '',
-      running,
-    ]);
+    ];
+    // One column per currency: show the running balance after this entry
+    currencies.forEach(function (cur) {
+      row.push(running[cur] !== undefined ? running[cur] : 0);
+    });
+    rows.push(row);
   });
 
-  // Totals
-  if (entries.length > 0) {
-    rows.push(['', '', 'TOTALS', summary.totalCredit, summary.totalDebit, summary.balance]);
-  }
+  // v55.83-A.6.27.58 — Per-currency totals rows
+  rows.push(['', '', '', '', '', '', '']);
+  rows.push(['─── Totals by Currency ───', '', '', '', '', '', '']);
+  var byCurrency = (summary && summary.byCurrency) || {};
+  currencies.forEach(function (cur) {
+    var cs = byCurrency[cur] || { credit: 0, debit: 0, balance: 0 };
+    var totalsRow = ['', '', cur + ' TOTALS', cur, cs.credit, cs.debit];
+    currencies.forEach(function (col) {
+      totalsRow.push(col === cur ? cs.balance : '');
+    });
+    rows.push(totalsRow);
+  });
 
-  // Plain-English balance line
-  rows.push(['', '', '', '', '', '']);
-  var balanceLabel = summary.balance > 0 ? 'They owe us'
-                   : summary.balance < 0 ? 'We owe them'
-                   : 'Settled';
-  rows.push([balanceLabel + ':', Math.abs(summary.balance), '', '', '', '']);
+  // Plain-English per-currency balance lines
+  rows.push(['', '', '', '', '', '', '']);
+  currencies.forEach(function (cur) {
+    var cs = byCurrency[cur] || { balance: 0 };
+    var label = cs.balance > 0 ? 'They owe us' : cs.balance < 0 ? 'We owe them' : 'Settled';
+    rows.push([label + ' (' + cur + '):', Math.abs(cs.balance), cur, '', '', '', '']);
+  });
 
   // Build sheet
   var ws = XLSX.utils.aoa_to_sheet(rows);
-  // Set column widths
   ws['!cols'] = [
-    { wch: 14 }, // Date
-    { wch: 42 }, // Description
-    { wch: 16 }, // Reference
-    { wch: 14 }, // Credit
-    { wch: 14 }, // Debit
-    { wch: 18 }, // Running Balance
+    { wch: 14 },  // Date
+    { wch: 42 },  // Description
+    { wch: 16 },  // Reference
+    { wch: 10 },  // Currency
+    { wch: 14 },  // Credit
+    { wch: 14 },  // Debit
   ];
+  currencies.forEach(function () { ws['!cols'].push({ wch: 18 }); });  // one per currency running
 
   var wb = XLSX.utils.book_new();
   XLSX.utils.book_append_sheet(wb, ws, 'Ledger');

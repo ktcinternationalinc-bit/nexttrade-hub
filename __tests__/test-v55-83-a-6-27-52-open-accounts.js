@@ -89,10 +89,11 @@ ok('C2: detects "table does not exist" error and tells user to run the migration
   /relation.*open_accounts.*does not exist[\s\S]{0,300}Run SQL migration v55\.83-A\.6\.27\.52/.test(oa));
 ok('C3: entriesByAccount memo groups by account_id',
   /var entriesByAccount = useMemo[\s\S]{0,500}byAcc\[e\.account_id\]/.test(oa));
-ok('C4: running balance walks each account entries in date order (credit adds, debit subtracts)',
-  /var running = 0;\s+arr\.forEach\(function \(entry\) \{\s+var credit = Number\(entry\.credit_amount \|\| 0\);\s+var debit = Number\(entry\.debit_amount \|\| 0\);\s+running \+= credit - debit;\s+entry\._running_balance = running;/.test(oa));
-ok('C5: summaryFor returns totalCredit / totalDebit / balance / entryCount',
-  /function summaryFor\(accountId\) \{[\s\S]{0,500}totalCredit: totalCredit,\s+totalDebit: totalDebit,\s+balance: totalCredit - totalDebit,\s+entryCount: arr\.length/.test(oa));
+ok('C4: running balance walks per-currency (credit adds, debit subtracts, keyed by currency in .58)',
+  /var running = \{\};[\s\S]{0,500}running\[cur\] \+= credit - debit/.test(oa));
+ok('C5: summaryFor returns per-currency shape + back-compat legacy fields (.58)',
+  /function summaryFor\(accountId\) \{[\s\S]{0,2000}byCurrency: byCur,\s+currencies: currencies/.test(oa) &&
+  /totalCredit: legacyCredit,\s+totalDebit: legacyDebit,\s+balance: legacyCredit - legacyDebit,\s+entryCount: arr\.length/.test(oa));
 
 // ══════════════════════════════════════════════════════════════════
 // PART D — Save / delete logic
@@ -126,22 +127,24 @@ ok('E2: ▶/▼ chevron indicates collapsed state',
 ok('E3: Expand All + Collapse All buttons',
   /onClick=\{expandAll\}[\s\S]{0,200}Expand All/.test(oa) &&
   /onClick=\{collapseAll\}[\s\S]{0,200}Collapse All/.test(oa));
-ok('E4: per-account summary pills (Credit / Debit / Balance / entry count)',
-  /Credit: <span className="text-emerald-800">/.test(oa) &&
-  /Debit: <span className="text-red-700">/.test(oa) &&
-  /Balance: \{fmtNum\(s\.balance\)\}/.test(oa));
-ok('E5: balance pill color-coded (green=they owe us, red=we owe them, gray=settled)',
-  /s\.balance > 0 \? 'bg-emerald-700 text-white' : s\.balance < 0 \? 'bg-red-700 text-white' : 'bg-slate-500/.test(oa));
-ok('E6: ledger table columns: Date / Description / Reference / Credit / Debit / Running Balance',
+ok('E4: per-account summary pills now PER-CURRENCY (Cr / Dr / Bal per currency in .58)',
+  /Cr: <span className="text-emerald-800">/.test(oa) &&
+  /Dr: <span className="text-red-700">/.test(oa) &&
+  /Bal: \{fmtNum\(cs\.balance\)\} \{cur\}/.test(oa));
+ok('E5: balance pill color-coded (green=they owe us, red=we owe them, gray=settled) — now per currency',
+  /cs\.balance > 0 \? 'bg-emerald-700 text-white' : cs\.balance < 0 \? 'bg-red-700 text-white' : 'bg-slate-500/.test(oa));
+ok('E6: ledger table columns: Date / Description / Reference / Cur / Credit / Debit / Running CUR per currency (.58 added Cur + per-currency Running cols)',
   />Date</.test(oa) && />Description</.test(oa) && />Reference</.test(oa) &&
-  />Credit</.test(oa) && />Debit</.test(oa) && />Running Balance</.test(oa));
+  />Cur</.test(oa) &&
+  />Credit</.test(oa) && />Debit</.test(oa) &&
+  /Running \{cur\}/.test(oa));
 ok('E7: Credit column has emerald background, Debit column has red background',
   /text-emerald-900 border-b-2 border-slate-300 bg-emerald-50/.test(oa) &&
   /text-red-900 border-b-2 border-slate-300 bg-red-50/.test(oa));
-ok('E8: running balance color-coded',
-  /rb > 0 \? 'text-emerald-800' : rb < 0 \? 'text-red-700' : 'text-slate-600'/.test(oa));
-ok('E9: totals row at bottom of each account table',
-  /<tr className="bg-slate-100 font-extrabold">[\s\S]{0,500}Totals/.test(oa));
+ok('E8: running balance color-coded (now per-currency in .58: rbForCur instead of rb)',
+  /rbForCur > 0 \? 'text-emerald-800' : rbForCur < 0 \? 'text-red-700' : 'text-slate-500'/.test(oa));
+ok('E9: totals row at bottom of each account table (now one row per currency in .58)',
+  /<tr key=\{cur\} className="bg-slate-100 font-extrabold">[\s\S]{0,800}Totals →/.test(oa));
 ok('E10: entry modal has CREDIT vs DEBIT radio selector with side panels',
   /CREDIT — money IN/.test(oa) && /DEBIT — money OUT/.test(oa) &&
   /type="radio" name="side"/.test(oa));

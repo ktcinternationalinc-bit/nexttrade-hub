@@ -696,10 +696,91 @@ export default function ShippingRatesTab({ toast, user, userProfile, isAdmin, cu
   };
 
   const handleSaveRate = async () => {
-    if (!f.origin || !f.destination || !f.vendorName) { alert('Fill Origin, Destination, Vendor'); return; }
-    if (!f.rateType) { alert('Rate Type is required! Select Shipping, Trucking, or Customs/Brokerage.\n\nنوع السعر مطلوب! اختر شحن أو نقل بري أو جمارك'); return; }
+    // v55.83-A.6.27.57 — Full diagnostic instrumentation. Previously the save
+    // handler had a buggy "toast ? toast.error : toast ? toast.error : alert"
+    // chain that swallowed silently when toast was malformed. Now BOTH toast
+    // AND alert fire so save failures are always visible. Also logs to console
+    // so we can diagnose what's actually going wrong with trucking-rate saves.
+    console.log('[shipping-rates] save attempt:', { editingRate: editingRate && editingRate.id, formState: f });
+
+    if (!f.origin || !f.destination || !f.vendorName) {
+      var missingMsg = 'Cannot save: missing required field(s).\n\n' +
+        'Origin: ' + (f.origin || '(empty)') + '\n' +
+        'Destination: ' + (f.destination || '(empty)') + '\n' +
+        'Vendor: ' + (f.vendorName || '(empty)') + '\n\n' +
+        'Please fill in all three before saving.';
+      alert(missingMsg);
+      return;
+    }
+    if (!f.rateType) {
+      alert('Cannot save: Rate Type is required.\n\nSelect one of: Shipping, Trucking, or Customs/Brokerage.\n\nنوع السعر مطلوب! اختر شحن أو نقل بري أو جمارك');
+      return;
+    }
+    // v55.83-A.6.27.57 — Trucking-specific sanity check.
+    // The form defaults transport_mode to 'Ocean'. If the user picked rate_type
+    // = 'Trucking' but never changed transport_mode away from Ocean, that's
+    // almost always a mistake — surface a confirm dialog so they can fix it
+    // (or proceed anyway if intentional). Saves data quality.
+    if (f.rateType === 'Trucking' && (!f.transportMode || f.transportMode === 'Ocean')) {
+      var proceed = confirm(
+        'Heads-up: this is a TRUCKING rate but Transport Mode is set to "' + (f.transportMode || 'Ocean') + '".\n\n' +
+        'Did you mean to set Mode = Trucking?\n\n' +
+        'Click OK to save anyway, or Cancel to go back and change the Mode dropdown.'
+      );
+      if (!proceed) return;
+    }
+
     const record = { origin: f.origin, destination: f.destination, vendor_name: f.vendorName, shipping_line: f.shippingLine || '', transport_mode: f.transportMode || 'Ocean', rate_type: f.rateType, container_type: f.containerType || '40ft', rate_amount: Number(f.rateAmount) || 0, currency: f.currency || 'USD', transit_days: f.transitDays ? Number(f.transitDays) : null, free_days: f.freeDays ? Number(f.freeDays) : null, port_fees: Number(f.portFees) || 0, thc_fees: Number(f.thcFees) || 0, documentation_fees: Number(f.docFees) || 0, customs_fees: Number(f.customsFees) || 0, other_fees: Number(f.otherFees) || 0, other_fees_desc: f.otherFeesDesc || '', total_cost: Number(f.rateAmount||0)+Number(f.portFees||0)+Number(f.thcFees||0)+Number(f.docFees||0)+Number(f.customsFees||0)+Number(f.otherFees||0), effective_date: f.effectiveDate || todayET(), expiry_date: f.expiryDate || null, port_of_loading: f.pol || '', port_of_discharge: f.pod || '', notes: f.notes || '', booked: f.booked || false, shipment_reference: f.shipmentRef || '', booking_date: f.bookingDate || null, booking_notes: f.bookingNotes || '' };
-    try { if (editingRate) await dbUpdate('shipping_rates', editingRate.id, record, myId); else { await dbInsert('shipping_rates', record, myId); notifyShippingRate('all', f.origin, f.destination, myId); } await logActivity(myId, (editingRate ? 'Updated' : 'Created') + ' ' + (f.rateType || 'shipping') + ' rate: ' + f.origin + ' → ' + f.destination + ' (' + f.vendorName + ', ' + (f.currency || 'USD') + ' ' + (f.rateAmount || 0) + ')', 'shipping'); setF({}); setEditingRate(null); setView(selectedRoute ? 'route_detail' : 'routes'); await loadData(); } catch (err) { toast ? toast.error(err.message) : toast ? toast.error(err.message) : alert(err.message); }
+    console.log('[shipping-rates] record to save:', record);
+    try {
+      var saved;
+      if (editingRate) {
+        saved = await dbUpdate('shipping_rates', editingRate.id, record, myId);
+        console.log('[shipping-rates] dbUpdate returned:', saved);
+      } else {
+        saved = await dbInsert('shipping_rates', record, myId);
+        console.log('[shipping-rates] dbInsert returned:', saved);
+        notifyShippingRate('all', f.origin, f.destination, myId);
+      }
+      // v55.83-A.6.27.57 — Verify that critical fields made it through dbInsert
+      // (which strips columns the table doesn't have, silently).
+      if (saved && saved.id) {
+        if (saved.rate_type !== record.rate_type) {
+          console.warn('[shipping-rates] rate_type mismatch after save — wanted "' + record.rate_type + '", got "' + saved.rate_type + '". Check that the shipping_rates table has a rate_type column.');
+          alert('⚠ Warning: rate_type was stripped during save.\n\nWanted: ' + record.rate_type + '\nActual: ' + (saved.rate_type || '(null)') + '\n\nThe shipping_rates table may be missing the rate_type column. Tell Claude this happened.');
+        }
+        if (saved.transport_mode !== record.transport_mode) {
+          console.warn('[shipping-rates] transport_mode mismatch after save.');
+        }
+      }
+      await logActivity(myId, (editingRate ? 'Updated' : 'Created') + ' ' + (f.rateType || 'shipping') + ' rate: ' + f.origin + ' → ' + f.destination + ' (' + f.vendorName + ', ' + (f.currency || 'USD') + ' ' + (f.rateAmount || 0) + ')', 'shipping');
+      // v55.83-A.6.27.57 — Explicit success toast + alert so user KNOWS it saved.
+      var successMsg = (editingRate ? 'Updated' : 'Saved') + ' ' + (f.rateType || 'shipping') + ' rate: ' + f.origin + ' → ' + f.destination + ' (' + f.vendorName + ', ' + (f.currency || 'USD') + ' ' + (f.rateAmount || 0) + ')';
+      try { if (toast && toast.success) toast.success(successMsg); } catch (_) {}
+      console.log('[shipping-rates] save SUCCESS:', successMsg);
+      setF({});
+      setEditingRate(null);
+      setView(selectedRoute ? 'route_detail' : 'routes');
+      await loadData();
+    } catch (err) {
+      console.error('[shipping-rates] save FAILED:', err);
+      var errMsg = (err && err.message) || String(err);
+      // v55.83-A.6.27.57 — Defense in depth: try toast AND alert (toast may be
+      // broken or undefined). User MUST see the actual error message.
+      try { if (toast && toast.error) toast.error('Save failed: ' + errMsg); } catch (_) {}
+      // Map common error patterns to actionable messages.
+      var actionable = '';
+      if (/relation.*shipping_rates.*does not exist/i.test(errMsg)) {
+        actionable = '\n\nThe shipping_rates table is missing entirely. The setup SQL was never run.';
+      } else if (/column.*does not exist/i.test(errMsg)) {
+        actionable = '\n\nA column is missing from the shipping_rates table. Tell Claude which column the error message names — that points to which SQL migration is missing.';
+      } else if (/violates row-level security policy|new row violates row-level security/i.test(errMsg)) {
+        actionable = '\n\nRow-level security blocked this save. The shipping_rates table has an RLS policy that does not allow you to insert. Ask Claude to check the policy.';
+      } else if (/duplicate key|already exists/i.test(errMsg)) {
+        actionable = '\n\nA rate already exists with this combination of (origin, destination, vendor, dates). Edit the existing one instead, or change one of those fields.';
+      }
+      alert('Save failed:\n\n' + errMsg + actionable);
+    }
   };
 
   const [bookingModal, setBookingModal] = useState(null);

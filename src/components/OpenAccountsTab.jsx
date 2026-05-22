@@ -103,33 +103,76 @@ export default function OpenAccountsTab(props) {
       if (!byAcc[e.account_id]) byAcc[e.account_id] = [];
       byAcc[e.account_id].push(e);
     });
-    // Walk each account's entries and compute running balance
+    // v55.83-A.6.27.58 — Per-currency running balance.
+    // Walk each account's entries (already sorted by date asc then created_at
+    // asc from the DB query). For each entry, track a separate running balance
+    // per currency. Each entry gets:
+    //   entry._currency           — its own currency (normalized, defaults USD)
+    //   entry._running_by_currency — full map of all running balances after this entry
+    //                                (so the ledger table can show parallel running
+    //                                columns for every currency in this account)
     Object.keys(byAcc).forEach(function (accId) {
       var arr = byAcc[accId];
-      // Already sorted by entry_date asc then created_at asc from the DB query
-      var running = 0;
+      var running = {}; // currency code → running balance
       arr.forEach(function (entry) {
+        var cur = String(entry.currency || 'USD').toUpperCase().trim() || 'USD';
+        entry._currency = cur;
         var credit = Number(entry.credit_amount || 0);
         var debit = Number(entry.debit_amount || 0);
-        running += credit - debit;
-        entry._running_balance = running;
+        if (!(cur in running)) running[cur] = 0;
+        running[cur] += credit - debit;
+        // Snapshot all running balances after this entry (deep copy)
+        entry._running_by_currency = Object.assign({}, running);
+        // Back-compat: legacy code referenced _running_balance singular — keep
+        // a "for this entry's currency only" value for any old consumer.
+        entry._running_balance = running[cur];
       });
     });
     return byAcc;
   }, [accounts, entries]);
 
-  // Per-account summary: total credits, total debits, balance (credits - debits)
+  // v55.83-A.6.27.58 — Per-currency summary.
+  // Returns { byCurrency: { USD: {credit, debit, balance, count}, EGP: {...} },
+  //           currencies: ['USD', 'EGP'],   // sorted, only currencies present
+  //           totalEntryCount: N }
+  // Back-compat fields totalCredit/totalDebit/balance are kept as the SUM ACROSS
+  // ALL CURRENCIES (which is meaningless for display — UI should not show this —
+  // but old code that hasn't been migrated still calls them).
   function summaryFor(accountId) {
     var arr = entriesByAccount[accountId] || [];
-    var totalCredit = 0, totalDebit = 0;
+    var byCur = {};
     arr.forEach(function (e) {
-      totalCredit += Number(e.credit_amount || 0);
-      totalDebit += Number(e.debit_amount || 0);
+      var cur = e._currency || String(e.currency || 'USD').toUpperCase().trim() || 'USD';
+      if (!byCur[cur]) byCur[cur] = { credit: 0, debit: 0, balance: 0, count: 0 };
+      var credit = Number(e.credit_amount || 0);
+      var debit = Number(e.debit_amount || 0);
+      byCur[cur].credit += credit;
+      byCur[cur].debit += debit;
+      byCur[cur].count += 1;
+    });
+    Object.keys(byCur).forEach(function (cur) {
+      byCur[cur].balance = byCur[cur].credit - byCur[cur].debit;
+    });
+    // Sort currencies — USD first if present (most common), then alphabetical
+    var currencies = Object.keys(byCur).sort(function (a, b) {
+      if (a === 'USD' && b !== 'USD') return -1;
+      if (b === 'USD' && a !== 'USD') return 1;
+      return a.localeCompare(b);
+    });
+    // Back-compat aggregates (DO NOT use for display — sums different currencies)
+    var legacyCredit = 0, legacyDebit = 0;
+    currencies.forEach(function (cur) {
+      legacyCredit += byCur[cur].credit;
+      legacyDebit += byCur[cur].debit;
     });
     return {
-      totalCredit: totalCredit,
-      totalDebit: totalDebit,
-      balance: totalCredit - totalDebit,
+      byCurrency: byCur,
+      currencies: currencies,
+      totalEntryCount: arr.length,
+      // Legacy fields — back-compat only
+      totalCredit: legacyCredit,
+      totalDebit: legacyDebit,
+      balance: legacyCredit - legacyDebit,
       entryCount: arr.length,
     };
   }
@@ -173,16 +216,32 @@ export default function OpenAccountsTab(props) {
     });
   }, [accounts, search]);
 
-  // Grand totals across filtered accounts
+  // v55.83-A.6.27.58 — Grand totals broken out per currency.
+  // { byCurrency: {USD: {credit, debit, balance, accountsWithCurrency}, EGP: ...},
+  //   currencies: ['USD', 'EGP'], accountCount }
   var grandTotals = useMemo(function () {
-    var t = { credit: 0, debit: 0, balance: 0, accountCount: filteredAccounts.length };
+    var byCur = {};
     filteredAccounts.forEach(function (a) {
       var s = summaryFor(a.id);
-      t.credit += s.totalCredit;
-      t.debit += s.totalDebit;
-      t.balance += s.balance;
+      s.currencies.forEach(function (cur) {
+        var cs = s.byCurrency[cur];
+        if (!byCur[cur]) byCur[cur] = { credit: 0, debit: 0, balance: 0, accountsWithCurrency: 0 };
+        byCur[cur].credit += cs.credit;
+        byCur[cur].debit += cs.debit;
+        byCur[cur].balance += cs.balance;
+        byCur[cur].accountsWithCurrency += 1;
+      });
     });
-    return t;
+    var currencies = Object.keys(byCur).sort(function (a, b) {
+      if (a === 'USD' && b !== 'USD') return -1;
+      if (b === 'USD' && a !== 'USD') return 1;
+      return a.localeCompare(b);
+    });
+    return {
+      byCurrency: byCur,
+      currencies: currencies,
+      accountCount: filteredAccounts.length,
+    };
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [filteredAccounts, entriesByAccount]);
 
@@ -268,6 +327,10 @@ export default function OpenAccountsTab(props) {
   // ── Entry modal ─────────────────────────────────────────────────
   function openNewEntry(accountId) {
     var today = new Date().toISOString().substring(0, 10);
+    // v55.83-A.6.27.58 — default currency from the account's entity
+    var acc = accounts.find(function (a) { return a.id === accountId; });
+    var ent = acc ? entityFor(acc) : null;
+    var defaultCur = (ent && ent.default_currency) || 'USD';
     setEntryDraft({
       account_id: accountId,
       entry_date: today,
@@ -275,6 +338,7 @@ export default function OpenAccountsTab(props) {
       reference_number: '',
       side: 'credit',          // 'credit' or 'debit' — UI choice
       amount: '',              // user enters amount in one box
+      currency: defaultCur,    // v55.83-A.6.27.58 — per-entry currency
       notes: '',
     });
     setEntryModalOpen(true);
@@ -288,6 +352,7 @@ export default function OpenAccountsTab(props) {
       reference_number: entry.reference_number || '',
       side: (Number(entry.credit_amount || 0) > 0) ? 'credit' : 'debit',
       amount: String(entry.credit_amount || entry.debit_amount || ''),
+      currency: String(entry.currency || 'USD').toUpperCase(),  // v55.83-A.6.27.58
       notes: entry.notes || '',
     });
     setEntryModalOpen(true);
@@ -299,6 +364,9 @@ export default function OpenAccountsTab(props) {
     if (!entryDraft.entry_date) { alert('Date is required / التاريخ مطلوب'); return; }
     var amt = Number(entryDraft.amount);
     if (isNaN(amt) || amt <= 0) { alert('Amount must be a positive number / المبلغ يجب أن يكون رقم موجب'); return; }
+    // v55.83-A.6.27.58 — currency validation
+    var cur = String(entryDraft.currency || 'USD').toUpperCase().trim();
+    if (cur.length < 2) { alert('Currency code is required / كود العملة مطلوب'); return; }
     setBusy(true);
     try {
       var payload = {
@@ -308,6 +376,7 @@ export default function OpenAccountsTab(props) {
         reference_number: (entryDraft.reference_number || '').trim() || null,
         credit_amount: entryDraft.side === 'credit' ? amt : null,
         debit_amount: entryDraft.side === 'debit' ? amt : null,
+        currency: cur,
         notes: (entryDraft.notes || '').trim() || null,
       };
       if (entryDraft.id) {
@@ -401,25 +470,52 @@ export default function OpenAccountsTab(props) {
         />
       </div>
 
-      <div className="grid grid-cols-2 md:grid-cols-4 gap-2">
-        <div className="bg-slate-800 text-white rounded p-2 shadow">
+      {/* v55.83-A.6.27.58 — Grand totals broken out PER CURRENCY.
+          Previously mixed USD and EGP into one number, which was meaningless.
+          Now: one row per currency with Credit / Debit / Balance for that currency.
+          Plus an "Accounts" tile on top showing how many accounts use each currency. */}
+      <div className="bg-slate-800 text-white rounded p-2 shadow flex items-baseline gap-3">
+        <div>
           <div className="text-[10px] font-bold uppercase tracking-wider">Accounts</div>
           <div className="text-xl font-extrabold mt-0.5">{grandTotals.accountCount}</div>
         </div>
-        <div className="bg-emerald-700 text-white rounded p-2 shadow">
-          <div className="text-[10px] font-bold uppercase tracking-wider">Total Credit (money in)</div>
-          <div className="text-xl font-extrabold mt-0.5">{fmtNum(grandTotals.credit)}</div>
-        </div>
-        <div className="bg-red-700 text-white rounded p-2 shadow">
-          <div className="text-[10px] font-bold uppercase tracking-wider">Total Debit (money out)</div>
-          <div className="text-xl font-extrabold mt-0.5">{fmtNum(grandTotals.debit)}</div>
-        </div>
-        <div className={(grandTotals.balance >= 0 ? 'bg-emerald-800' : 'bg-red-800') + ' text-white rounded p-2 shadow'}>
-          <div className="text-[10px] font-bold uppercase tracking-wider">Net Balance</div>
-          <div className="text-xl font-extrabold mt-0.5">{fmtNum(grandTotals.balance)}</div>
-          <div className="text-[10px] font-semibold opacity-90">{grandTotals.balance >= 0 ? 'they owe us' : 'we owe them'}</div>
-        </div>
+        {grandTotals.currencies.length > 0 && (
+          <div className="text-[10px] text-slate-300 font-semibold">
+            Currencies in use: {grandTotals.currencies.map(function (cur) {
+              return cur + ' (' + grandTotals.byCurrency[cur].accountsWithCurrency + ' acct' + (grandTotals.byCurrency[cur].accountsWithCurrency === 1 ? '' : 's') + ')';
+            }).join(' · ')}
+          </div>
+        )}
       </div>
+
+      {grandTotals.currencies.length === 0 && (
+        <div className="bg-slate-100 border-2 border-slate-300 rounded p-3 text-center text-slate-600 text-sm font-bold">
+          No entries yet — add ledger entries to see currency totals
+        </div>
+      )}
+
+      {grandTotals.currencies.map(function (cur) {
+        var t = grandTotals.byCurrency[cur];
+        return (
+          <div key={cur} className="grid grid-cols-3 gap-2">
+            <div className="bg-emerald-700 text-white rounded p-2 shadow">
+              <div className="text-[10px] font-bold uppercase tracking-wider">{cur} Total Credit (money in)</div>
+              <div className="text-xl font-extrabold mt-0.5">{fmtNum(t.credit)} {cur}</div>
+            </div>
+            <div className="bg-red-700 text-white rounded p-2 shadow">
+              <div className="text-[10px] font-bold uppercase tracking-wider">{cur} Total Debit (money out)</div>
+              <div className="text-xl font-extrabold mt-0.5">{fmtNum(t.debit)} {cur}</div>
+            </div>
+            <div className={(t.balance >= 0 ? 'bg-emerald-800' : 'bg-red-800') + ' text-white rounded p-2 shadow'}>
+              <div className="text-[10px] font-bold uppercase tracking-wider">{cur} Net Balance</div>
+              <div className="text-xl font-extrabold mt-0.5">{fmtNum(t.balance)} {cur}</div>
+              <div className="text-[10px] font-semibold opacity-90">
+                {t.balance > 0 ? 'they owe us' : t.balance < 0 ? 'we owe them' : 'settled'}
+              </div>
+            </div>
+          </div>
+        );
+      })}
 
       {/* Loading / error / empty states */}
       {loading && <div className="text-center py-10 text-slate-600 font-bold">Loading accounts... / جاري التحميل</div>}
@@ -460,16 +556,26 @@ export default function OpenAccountsTab(props) {
                       </span>
                     );
                   })()}
-                  <div className="flex items-center gap-3 text-xs font-bold text-slate-800 flex-wrap ml-auto">
-                    <div>Credit: <span className="text-emerald-800">{fmtNum(s.totalCredit)}</span></div>
-                    <div>Debit: <span className="text-red-700">{fmtNum(s.totalDebit)}</span></div>
-                    <div className={'px-2 py-0.5 rounded font-extrabold ' + (s.balance > 0 ? 'bg-emerald-700 text-white' : s.balance < 0 ? 'bg-red-700 text-white' : 'bg-slate-500 text-white')}>
-                      Balance: {fmtNum(s.balance)}
-                      <span className="ml-1 text-[10px] opacity-90">
-                        {s.balance > 0 ? '(they owe us)' : s.balance < 0 ? '(we owe them)' : '(settled)'}
-                      </span>
-                    </div>
-                    <div className="text-slate-700">({s.entryCount} {s.entryCount === 1 ? 'entry' : 'entries'})</div>
+                  <div className="flex flex-col gap-1 text-xs font-bold text-slate-800 ml-auto">
+                    {s.currencies.length === 0 ? (
+                      <div className="text-slate-500 italic">No entries yet</div>
+                    ) : s.currencies.map(function (cur) {
+                      var cs = s.byCurrency[cur];
+                      return (
+                        <div key={cur} className="flex items-center gap-2 flex-wrap">
+                          <span className="px-1.5 py-0.5 bg-slate-200 text-slate-900 text-[10px] font-mono font-extrabold rounded">{cur}</span>
+                          <span>Cr: <span className="text-emerald-800">{fmtNum(cs.credit)}</span></span>
+                          <span>Dr: <span className="text-red-700">{fmtNum(cs.debit)}</span></span>
+                          <span className={'px-2 py-0.5 rounded font-extrabold ' + (cs.balance > 0 ? 'bg-emerald-700 text-white' : cs.balance < 0 ? 'bg-red-700 text-white' : 'bg-slate-500 text-white')}>
+                            Bal: {fmtNum(cs.balance)} {cur}
+                            <span className="ml-1 text-[10px] opacity-90">
+                              {cs.balance > 0 ? '(they owe us)' : cs.balance < 0 ? '(we owe them)' : '(settled)'}
+                            </span>
+                          </span>
+                        </div>
+                      );
+                    })}
+                    <div className="text-slate-700 text-[10px]">({s.totalEntryCount} {s.totalEntryCount === 1 ? 'entry' : 'entries'})</div>
                   </div>
                 </button>
                 {canEdit && (
@@ -501,15 +607,20 @@ export default function OpenAccountsTab(props) {
                         <th className="px-3 py-2 text-left text-xs font-extrabold text-slate-900 border-b-2 border-slate-300">Date</th>
                         <th className="px-3 py-2 text-left text-xs font-extrabold text-slate-900 border-b-2 border-slate-300">Description</th>
                         <th className="px-3 py-2 text-left text-xs font-extrabold text-slate-900 border-b-2 border-slate-300">Reference</th>
+                        <th className="px-3 py-2 text-center text-xs font-extrabold text-slate-900 border-b-2 border-slate-300">Cur</th>
                         <th className="px-3 py-2 text-right text-xs font-extrabold text-emerald-900 border-b-2 border-slate-300 bg-emerald-50">Credit</th>
                         <th className="px-3 py-2 text-right text-xs font-extrabold text-red-900 border-b-2 border-slate-300 bg-red-50">Debit</th>
-                        <th className="px-3 py-2 text-right text-xs font-extrabold text-slate-900 border-b-2 border-slate-300">Running Balance</th>
+                        {/* v55.83-A.6.27.58 — One Running Balance column PER currency in this account.
+                            User sees parallel running balances for USD and EGP side-by-side. */}
+                        {s.currencies.map(function (cur) {
+                          return <th key={cur} className="px-3 py-2 text-right text-xs font-extrabold text-slate-900 border-b-2 border-slate-300 bg-slate-100">Running {cur}</th>;
+                        })}
                         {canEdit && <th className="px-3 py-2 text-right text-xs font-extrabold text-slate-900 border-b-2 border-slate-300">Actions</th>}
                       </tr>
                     </thead>
                     <tbody>
                       {accEntries.map(function (entry) {
-                        var rb = Number(entry._running_balance || 0);
+                        var entryCur = entry._currency;
                         return (
                           <tr key={entry.id} className="border-b border-slate-200 hover:bg-slate-50">
                             <td className="px-3 py-1.5 font-mono text-slate-900">{fmtDate(entry.entry_date)}</td>
@@ -518,15 +629,31 @@ export default function OpenAccountsTab(props) {
                               {entry.notes && <div className="text-[10px] text-slate-600 italic">{entry.notes}</div>}
                             </td>
                             <td className="px-3 py-1.5 font-mono text-slate-700">{entry.reference_number || '—'}</td>
+                            <td className="px-3 py-1.5 text-center font-mono font-bold text-slate-800 text-[11px]">{entryCur}</td>
                             <td className="px-3 py-1.5 text-right font-mono font-extrabold text-emerald-800 bg-emerald-50">
                               {entry.credit_amount ? fmtNum(entry.credit_amount) : ''}
                             </td>
                             <td className="px-3 py-1.5 text-right font-mono font-extrabold text-red-700 bg-red-50">
                               {entry.debit_amount ? fmtNum(entry.debit_amount) : ''}
                             </td>
-                            <td className={'px-3 py-1.5 text-right font-mono font-extrabold ' + (rb > 0 ? 'text-emerald-800' : rb < 0 ? 'text-red-700' : 'text-slate-600')}>
-                              {fmtNum(rb)}
-                            </td>
+                            {/* v55.83-A.6.27.58 — parallel running balances. For currencies the entry
+                                does NOT affect, we still show the carried-forward running value
+                                (or 0 if no entry in that currency has happened yet). The entry's
+                                OWN currency cell is highlighted so you can see which line moved. */}
+                            {s.currencies.map(function (cur) {
+                              var rbForCur = (entry._running_by_currency && entry._running_by_currency[cur]) || 0;
+                              var isThisEntryCur = (cur === entryCur);
+                              return (
+                                <td
+                                  key={cur}
+                                  className={'px-3 py-1.5 text-right font-mono font-extrabold ' +
+                                    (isThisEntryCur ? 'bg-slate-100 ' : 'text-slate-400 ') +
+                                    (rbForCur > 0 ? 'text-emerald-800' : rbForCur < 0 ? 'text-red-700' : 'text-slate-500')}
+                                >
+                                  {fmtNum(rbForCur)}
+                                </td>
+                              );
+                            })}
                             {canEdit && (
                               <td className="px-3 py-1.5 text-right">
                                 <button onClick={function () { openEditEntry(entry); }} className="px-2 py-0.5 bg-indigo-600 hover:bg-indigo-700 text-white text-[10px] font-bold rounded mr-1">Edit</button>
@@ -536,16 +663,31 @@ export default function OpenAccountsTab(props) {
                           </tr>
                         );
                       })}
-                      {/* Totals row */}
-                      <tr className="bg-slate-100 font-extrabold">
-                        <td colSpan={3} className="px-3 py-2 text-right text-xs uppercase text-slate-900">Totals</td>
-                        <td className="px-3 py-2 text-right font-mono text-emerald-900 bg-emerald-100">{fmtNum(s.totalCredit)}</td>
-                        <td className="px-3 py-2 text-right font-mono text-red-900 bg-red-100">{fmtNum(s.totalDebit)}</td>
-                        <td className={'px-3 py-2 text-right font-mono ' + (s.balance > 0 ? 'text-emerald-900' : s.balance < 0 ? 'text-red-900' : 'text-slate-900')}>
-                          {fmtNum(s.balance)}
-                        </td>
-                        {canEdit && <td></td>}
-                      </tr>
+                      {/* v55.83-A.6.27.58 — Totals row: one row per currency for credit+debit,
+                          plus the final balance in each currency's running column. */}
+                      {s.currencies.map(function (cur, ci) {
+                        var cs = s.byCurrency[cur];
+                        return (
+                          <tr key={cur} className="bg-slate-100 font-extrabold">
+                            <td colSpan={2} className="px-3 py-2 text-right text-xs uppercase text-slate-900">
+                              {ci === 0 ? 'Totals →' : ''}
+                            </td>
+                            <td className="px-3 py-2 text-center text-xs font-mono text-slate-900">{cur}</td>
+                            <td className="px-3 py-2 text-center font-mono text-slate-800 text-[11px]">{cur}</td>
+                            <td className="px-3 py-2 text-right font-mono text-emerald-900 bg-emerald-100">{fmtNum(cs.credit)}</td>
+                            <td className="px-3 py-2 text-right font-mono text-red-900 bg-red-100">{fmtNum(cs.debit)}</td>
+                            {s.currencies.map(function (col, colI) {
+                              if (col !== cur) return <td key={col + '-' + colI}></td>;
+                              return (
+                                <td key={col + '-' + colI} className={'px-3 py-2 text-right font-mono ' + (cs.balance > 0 ? 'text-emerald-900' : cs.balance < 0 ? 'text-red-900' : 'text-slate-900')}>
+                                  {fmtNum(cs.balance)}
+                                </td>
+                              );
+                            })}
+                            {canEdit && <td></td>}
+                          </tr>
+                        );
+                      })}
                     </tbody>
                   </table>
                 )}
@@ -635,10 +777,29 @@ export default function OpenAccountsTab(props) {
                   <div className="text-[10px] text-slate-700 mt-1">We paid them / we owe them more</div>
                 </label>
               </div>
-              <label className="block">
-                <span className="text-xs font-extrabold text-slate-900">Amount * / المبلغ</span>
-                <input type="number" step="0.01" min="0" value={entryDraft.amount} onChange={function (e) { setEntryDraft(Object.assign({}, entryDraft, { amount: e.target.value })); }} placeholder="positive number" className="w-full mt-1 px-3 py-2 border-2 border-slate-300 rounded text-base bg-white text-slate-900 font-bold" />
-              </label>
+              <div className="grid grid-cols-3 gap-3">
+                <label className="block col-span-2">
+                  <span className="text-xs font-extrabold text-slate-900">Amount * / المبلغ</span>
+                  <input type="number" step="0.01" min="0" value={entryDraft.amount} onChange={function (e) { setEntryDraft(Object.assign({}, entryDraft, { amount: e.target.value })); }} placeholder="positive number" className="w-full mt-1 px-3 py-2 border-2 border-slate-300 rounded text-base bg-white text-slate-900 font-bold" />
+                </label>
+                {/* v55.83-A.6.27.58 — Per-entry currency. Defaults from entity. */}
+                <label className="block">
+                  <span className="text-xs font-extrabold text-slate-900">Currency * / العملة</span>
+                  <select
+                    value={entryDraft.currency || 'USD'}
+                    onChange={function (e) { setEntryDraft(Object.assign({}, entryDraft, { currency: e.target.value })); }}
+                    className="w-full mt-1 px-3 py-2 border-2 border-slate-300 rounded text-base bg-white text-slate-900 font-extrabold"
+                  >
+                    <option value="USD">USD</option>
+                    <option value="EGP">EGP</option>
+                    <option value="EUR">EUR</option>
+                    <option value="GBP">GBP</option>
+                    <option value="AED">AED</option>
+                    <option value="SAR">SAR</option>
+                    <option value="CNY">CNY</option>
+                  </select>
+                </label>
+              </div>
               <label className="block">
                 <span className="text-xs font-extrabold text-slate-900">Notes (optional) / ملاحظات</span>
                 <textarea value={entryDraft.notes} onChange={function (e) { setEntryDraft(Object.assign({}, entryDraft, { notes: e.target.value })); }} rows={2} className="w-full mt-1 px-3 py-2 border-2 border-slate-300 rounded text-sm bg-white text-slate-900" />
