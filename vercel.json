@@ -15,6 +15,14 @@
     {
       "path": "/api/nadia/watch",
       "schedule": "*/5 * * * *"
+    },
+    {
+      "path": "/api/phone/transcribe-cron",
+      "schedule": "*/5 * * * *"
+    },
+    {
+      "path": "/api/backup/snapshot",
+      "schedule": "0 8 * * *"
     }
   ]
 }

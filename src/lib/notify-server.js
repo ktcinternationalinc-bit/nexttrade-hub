@@ -71,7 +71,7 @@ export async function notifyServer(type, recipientIds, subject, body, triggeredB
   var users = [];
   try {
     var usrRes = await supabase.from('users').select('id, email, name, active').in('id', ids);
-    if (usrRes && usrRes.data) users = usrRes.data.filter(function(u) { return u.active !== false && u.email; });
+    if (usrRes && usrRes.data) users = usrRes.data.filter(function(u) { return u && u.active !== false && u.active !== null && u.email; });
   } catch (e) {
     console.log('[notify-server] user fetch failed: ' + e.message);
     return { attempted: ids.length, sent: 0, skipped: ids.length, error: e.message };

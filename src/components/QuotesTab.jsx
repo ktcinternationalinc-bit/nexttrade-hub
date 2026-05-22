@@ -179,7 +179,7 @@ function CompanyManager({ companies, onSave, onDelete, editCompany, setEditCompa
                 {form.logo_url ? '🔄 Change Logo' : '📁 Upload Logo'}
               </button>
               <input ref={fileRef} type="file" accept="image/*" className="hidden" onChange={handleLogo} />
-              <p className="text-[9px] text-slate-400 mt-0.5">Recommended: PNG/SVG, transparent bg</p>
+              <p className="text-[9px] text-slate-500 mt-0.5">Recommended: PNG/SVG, transparent bg</p>
             </div>
           </div>
         </div>
@@ -198,11 +198,11 @@ function CompanyManager({ companies, onSave, onDelete, editCompany, setEditCompa
             {c.logo_url ? <img src={c.logo_url} alt="" className="h-10 w-10 rounded object-contain border" /> : <div className="h-10 w-10 rounded bg-slate-100 flex items-center justify-center text-lg">🏢</div>}
             <div className="flex-1 min-w-0">
               <div className="font-bold text-sm">{c.name}</div>
-              <div className="text-[10px] text-slate-400 truncate">{c.address || 'No address'} {c.tax_id ? `• Tax: ${c.tax_id}` : ''}</div>
+              <div className="text-[10px] text-slate-500 truncate">{c.address || 'No address'} {c.tax_id ? `• Tax: ${c.tax_id}` : ''}</div>
             </div>
             <div className="flex gap-1">
               <button onClick={() => setEditCompany(c)} className="px-2 py-1 bg-blue-50 text-blue-600 rounded text-[10px] font-semibold">Edit</button>
-              <button onClick={() => onDelete(c.id)} className="px-2 py-1 bg-red-50 text-red-600 rounded text-[10px] font-semibold">Delete</button>
+              <button onClick={() => onDelete(c.id)} className="px-2 py-1 bg-red-50 text-red-800 rounded text-[10px] font-semibold border border-red-200">Delete</button>
             </div>
           </div>
         ))}
@@ -314,7 +314,7 @@ function QuoteBuilder({ quote, companies, customers, user, onCustomerCreated, on
           <div>
             <label className="text-[10px] text-slate-500 font-bold">Validity (days)</label>
             <input type="number" value={q.validity_days || ''} onChange={e => set('validity_days', e.target.value)} className="w-full border rounded-lg px-3 py-2 text-xs" />
-            {expiryDate && <p className="text-[9px] text-slate-400 mt-0.5">Expires: {expiryDate}</p>}
+            {expiryDate && <p className="text-[9px] text-slate-500 mt-0.5">Expires: {expiryDate}</p>}
           </div>
           <div className="relative">
             <label className="text-[10px] text-slate-500 font-bold">Client / العميل (from CRM)</label>
@@ -501,7 +501,10 @@ function QuoteList({ quotes, companies, onEdit, onPreview, onDelete }) {
     return true;
   });
 
-  const statusColor = { draft: 'bg-slate-100 text-slate-600', sent: 'bg-blue-100 text-blue-600', accepted: 'bg-green-100 text-green-700', rejected: 'bg-red-100 text-red-600', expired: 'bg-amber-100 text-amber-600' };
+  // v55.81 #6 (Max May 9 2026): bumped status badge contrast — amber-600 on
+  // amber-100 fails WCAG AA at small badge sizes; amber-900 + border clears it.
+  // Also nudged blue-600/red-600 to 700 to match the v55.75 Phase A4 baseline.
+  const statusColor = { draft: 'bg-slate-100 text-slate-600', sent: 'bg-blue-100 text-blue-700', accepted: 'bg-green-100 text-green-700', rejected: 'bg-red-100 text-red-700', expired: 'bg-amber-100 text-amber-900 border border-amber-200' };
 
   return (
     <div>
@@ -537,9 +540,9 @@ function QuoteList({ quotes, companies, onEdit, onPreview, onDelete }) {
                     <div className="flex items-center gap-2">
                       <span className="font-bold text-sm">{qt.quote_number}</span>
                       <span className={`px-1.5 py-0.5 rounded text-[9px] font-bold ${statusColor[qt.status] || statusColor.draft}`}>{qt.status}</span>
-                      {isExp && qt.status !== 'expired' && <span className="px-1.5 py-0.5 rounded text-[9px] font-bold bg-red-100 text-red-600">EXPIRED</span>}
+                      {isExp && qt.status !== 'expired' && <span className="px-1.5 py-0.5 rounded text-[9px] font-bold bg-red-100 text-red-900 border border-red-300">EXPIRED</span>}
                     </div>
-                    <div className="text-[10px] text-slate-400 mt-0.5">
+                    <div className="text-[10px] text-slate-500 mt-0.5">
                       {qt.client_name || 'No client'} {co ? `• ${co.name}` : ''} • {qt.date}
                       {expiry && ` → valid until ${expiry}`}
                     </div>
@@ -548,7 +551,7 @@ function QuoteList({ quotes, companies, onEdit, onPreview, onDelete }) {
                   <div className="flex gap-1 ml-2">
                     <button onClick={() => onPreview(qt)} className="px-2 py-1 bg-purple-50 text-purple-600 rounded text-[10px] font-semibold">📄 PDF</button>
                     <button onClick={() => onEdit(qt)} className="px-2 py-1 bg-blue-50 text-blue-600 rounded text-[10px] font-semibold">Edit</button>
-                    <button onClick={() => onDelete(qt.id)} className="px-2 py-1 bg-red-50 text-red-600 rounded text-[10px] font-semibold">✕</button>
+                    <button onClick={() => onDelete(qt.id)} className="px-2 py-1 bg-red-50 text-red-800 rounded text-[10px] font-semibold border border-red-200">✕</button>
                   </div>
                 </div>
               </div>

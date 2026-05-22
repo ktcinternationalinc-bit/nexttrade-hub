@@ -1,0 +1,9 @@
+// v55.83-A.4 — RETIRED (Max May 13 2026)
+// Era: v55.65 coach + system-tickets
+// Reason: reads supabase/system-tickets-setup.sql which doesn't exist (current schema is sql/s40_system_tickets_retest.sql)
+//
+// Retired because the file dependency referenced in this suite has never
+// existed in this repository layout. Tests for the relevant feature areas
+// live in newer suites; see git history / handoff docs for migration paths.
+console.log('⚠️  test-v55-65-coach-and-system-tickets.js RETIRED — file dependency does not exist in repo');
+process.exit(0);

@@ -1,17 +1,35 @@
 'use client';
 import React, { useState, useEffect, useMemo, useCallback, useRef, useContext, createContext } from 'react';
 import { supabase, dbInsert, dbUpdate, dbDelete } from '../lib/supabase';
-import { fmt, fE, COLORS, EXPENSE_CATS, getReconStatus, STATUS_STYLES, today, inRange, monthOf, getWarehouseCat, sanitize, resolveCatName, buildCatOptions, isKnownCat, aggregatePaymentSources, PAYMENT_SOURCE_META } from '../lib/utils';
+import { filterActiveUsers } from '../lib/active-users';
+import { fmt, fE, COLORS, EXPENSE_CATS, getReconStatus, STATUS_STYLES, today, inRange, monthOf, getWarehouseCat, sanitize, stripBankMatchMetadata, resolveCatName, buildCatOptions, isKnownCat, aggregatePaymentSources, PAYMENT_SOURCE_META, parseAmount, isValidAmount } from '../lib/utils';
 import { evaluateCheckReconcile as libEvaluateCheckReconcile } from '../lib/check-reconcile';
+import { fmtET, todayET, etDateStr } from '../lib/et-time';
 import * as XLSX from 'xlsx';
 import CRMTab from '../components/CRMTab';
 import TicketsTab from '../components/TicketsTab';
+import SystemTicketsPanel from '../components/SystemTicketsPanel';
+import WhatsNewWidget from '../components/WhatsNewWidget';
+import PendingNadiaMessages from '../components/PendingNadiaMessages';
+// v55.83-A — new Inventory module replaces the inline inventory section
+import InventoryTab from '../components/InventoryTab';
+// v55.83-A.1 — bank-confirmation status badge for invoices
+import InvoicePaymentBadge from '../components/InvoicePaymentBadge';
+// v55.83-A.1 — dashboard widget surfacing invoices awaiting bank match
+import PendingBankConfirmationsWidget from '../components/PendingBankConfirmationsWidget';
+import NadiaNewBuildCard from '../components/NadiaNewBuildCard';
 import CalendarTab from '../components/CalendarTab';
 import DailyLogTab from '../components/DailyLogTab';
 import AdminTab from '../components/AdminTab';
 import SettingsTab from '../components/SettingsTab';
 import CustomsTab from '../components/CustomsTab';
 import PersonalDashboard from '../components/PersonalDashboard';
+// v55.83-A.6.18 (Max May 14 2026) — Three high-priority dashboard cards
+// (Overdue / Recent Updates / Newly Assigned) and an in-place ticket modal
+// that renders on the dashboard without a tab switch.
+import DashboardPrioritySections from '../components/DashboardPrioritySections';
+import DashboardTicketModalOverlay from '../components/DashboardTicketModalOverlay';
+import VoicemailsWidget from '../components/VoicemailsWidget';
 import AIAssistant from '../components/AIAssistant';
 import AIGreeter, { PERSONALITIES } from '../components/AIGreeter';
 import VoiceController from '../components/VoiceController';
@@ -26,12 +44,18 @@ import QuotesTab from '../components/QuotesTab';
 import EgyptBankTab from '../components/EgyptBankTab';
 import PhoneWidget from '../components/PhoneWidget';
 import ReportsTab from '../components/ReportsTab';
+import WriteOffsReport from '../components/WriteOffsReport';
 import TreasuryInspectorModal from '../components/TreasuryInspectorModal';
 import AccountingAuditorModal from '../components/AccountingAuditorModal';
 import InventoryImport from '../components/InventoryImport';
+// v55.83-A.6.27 — Stage D: cost engine for sale deduction
+import { consumeFifo, reverseFifoConsumption } from '../lib/inventory-cost-engine';
 
 // Toast notification system — replaces alert() across entire app
-const ToastContext = React.createContext();
+// v55.25 — ToastContext lives in src/lib/toast-context.js so child
+// components (CalendarTab, AdminTab, etc) can consume it without a
+// circular import via page.jsx.
+import { ToastContext } from '../lib/toast-context';
 const ToastProvider = ({ children }) => {
   const [toasts, setToasts] = useState([]);
   const [confirmState, setConfirmState] = useState(null);
@@ -63,7 +87,7 @@ const ToastProvider = ({ children }) => {
             success: 'bg-emerald-50 border-emerald-200 text-emerald-800',
             error: 'bg-red-50 border-red-200 text-red-800',
             info: 'bg-blue-50 border-blue-200 text-blue-800',
-            warning: 'bg-amber-50 border-amber-200 text-amber-800',
+            warning: 'bg-amber-50 border-amber-200 text-amber-900',
           }[t.type] || 'bg-white border-slate-200 text-slate-800')}>
             <span>{t.type === 'success' ? '✅' : t.type === 'error' ? '❌' : t.type === 'warning' ? '⚠️' : 'ℹ️'}</span>
             <span className="flex-1">{t.message}</span>
@@ -199,7 +223,7 @@ function DatePickerSelect({ value, onChange, className }) {
 // PAYMENT FORM (isolated state to prevent focus loss)
 // ============================================
 function PaymentForm({ invoice, categories, catOptions, existingSubcats, onSave, onCancel, formData, setFormData }) {
-  const [pf, setPf] = useState({ date: formData.date || new Date().toISOString().substring(0, 10), amount: formData.amount || '', payMethod: formData.payMethod || 'cash', desc: formData.desc || '', category: formData.category || 'مبيعات', subcategory: formData.subcategory || '' });
+  const [pf, setPf] = useState({ date: formData.date || todayET(), amount: formData.amount || '', payMethod: formData.payMethod || 'cash', desc: formData.desc || '', category: formData.category || 'مبيعات', subcategory: formData.subcategory || '' });
   // Option source chain (first non-empty wins):
   //   1. catOptions prop  (new, from buildCatOptions via parent)
   //   2. categories tuple prop  (legacy callers passing [[ar,en],...])
@@ -254,7 +278,7 @@ function PaymentForm({ invoice, categories, catOptions, existingSubcats, onSave,
         </div>
         {pf.payMethod === 'check' && (
           <div className="mt-2 bg-amber-50 rounded-lg p-3 border border-amber-200">
-            <div className="text-[10px] text-amber-700 font-bold mb-2">📝 Post-dated check — NOT added to treasury until collected</div>
+            <div className="text-[10px] text-amber-900 font-bold mb-2">📝 Post-dated check — NOT added to treasury until collected</div>
             <div className="grid grid-cols-2 gap-2">
               <div>
                 <label className="text-[9px] font-bold text-slate-500">Due Date / تاريخ الاستحقاق</label>
@@ -335,6 +359,11 @@ export default function App() {
 
   // Navigation
   const [tab, setTab] = useState('dashboard');
+  // v55.83-A.6.13 (Max May 14 2026) — when user clicks a ticket from
+  // dashboard (or any non-tickets tab), we switch to tickets, open the
+  // ticket modal, and remember which tab to return to when modal closes.
+  // Clears after the return tab switch fires.
+  const [returnToTabAfterTicket, setReturnToTabAfterTicket] = useState(null);
   const [mode, setMode] = useState('ytd');
   const [df, setDf] = useState(() => { const d = new Date(); d.setMonth(d.getMonth() - 1); return d.toISOString().substring(0, 10); });
   const [dt, setDt] = useState(today());
@@ -349,6 +378,19 @@ export default function App() {
   const [customers, setCustomers] = useState([]);
   const [warehouse, setWarehouse] = useState([]);
   const [invoiceItems, setInvoiceItems] = useState([]);
+  // v55.83-A.6.27 — Stage D: invoice line items can optionally link to an
+  // inv_skus row. When set + qty present at save time, we drain FIFO layers
+  // and stamp COGS on the invoice line. These two states load once for
+  // the picker in the invoice modal.
+  const [invSkus, setInvSkus] = useState([]);
+  const [invWarehouses, setInvWarehouses] = useState([]);
+  // v55.83-A.6.27.44b — Inventory-linked invoice state.
+  // inventoryProducts: variants from inventory_products (NOT the legacy `inventory` table).
+  //   Loaded alongside other data. Used by the new "📦 From Inventory" tab in invoice product picker.
+  // inventoryCutoffDate: loaded from app_settings.inventory_cutoff_date.
+  //   When set, invoices on/after this date force inventory mode (enforced in 44c). Today it's just a guide.
+  const [inventoryProducts, setInventoryProducts] = useState([]);
+  const [inventoryCutoffDate, setInventoryCutoffDate] = useState(null);
   const [expenseRules, setExpenseRules] = useState([]);
   const [inventory, setInventory] = useState([]);
   const [invInbounds, setInvInbounds] = useState([]);
@@ -410,6 +452,26 @@ export default function App() {
   const [showAddPayment, setShowAddPayment] = useState(false);
   const [showAddInvoice, setShowAddInvoice] = useState(false);
   const [showAddTreasury, setShowAddTreasury] = useState(false);
+  // v55.82-F — Per-tab opt-in: Nadia is suppressed by default in Treasury
+  // (per Max May 11 2026 spec), and only appears when the user explicitly
+  // clicks "Wake Nadia" on the Treasury tab. Resets on tab change so each
+  // visit to Treasury starts in suppressed mode again.
+  const [nadiaWokenInTab, setNadiaWokenInTab] = useState({});
+  // v55.82-F — Reset effect. Without this, clicking "Wake Nadia" on
+  // Treasury, then navigating to Sales (or any other tab), then coming
+  // BACK to Treasury, would find Nadia still woken — violating the
+  // "default suppressed" spec. Now we drop the treasury flag whenever
+  // the user leaves the Treasury tab. Re-entering Treasury is a fresh
+  // suppressed-by-default visit.
+  useEffect(function() {
+    if (tab !== 'treasury' && nadiaWokenInTab.treasury) {
+      setNadiaWokenInTab(function(prev) {
+        var next = Object.assign({}, prev);
+        delete next.treasury;
+        return next;
+      });
+    }
+  }, [tab]);
   const [editingTxn, setEditingTxn] = useState(null);
   const [splittingTxn, setSplittingTxn] = useState(null);
   const [splits, setSplits] = useState([{ order: '', amount: 0 }, { order: '', amount: 0 }]);
@@ -420,10 +482,193 @@ export default function App() {
   const [editTreasuryModal, setEditTreasuryModal] = useState(null);
   const [inspectedTreasury, setInspectedTreasury] = useState(null);
   const [showAccountantReview, setShowAccountantReview] = useState(false);
+  // v55.83-A.6.27.21 (Max May 17 2026) — Fix Links button busy state.
+  // Per Max: "FIX button doesn't do anything anymore." Button now shows
+  // explicit feedback during scan/link operations and toasts result.
+  const [fixLinksBusy, setFixLinksBusy] = useState(false);
   // Treasury ↔ Sales navigation return state
   const [treasuryReturnState, setTreasuryReturnState] = useState(null);
   // Mini-modal for "order# doesn't exist, create now?" flow
   const [pendingTreasuryRecord, setPendingTreasuryRecord] = useState(null);
+  // v55.83-A.6.27.17 (Max May 17 2026) — Phase 1 Payment Instruments / Scheduled Receivables.
+  // When the accountant enters a treasury cash_in or bank_in row that matches
+  // the amount of a pending instrument (check or promissory note) on the
+  // same invoice, this state holds the candidate match while the popup is
+  // shown. User picks "Yes link" → we stamp source_check_id on the treasury
+  // row AND flip the instrument to 'cleared'. User picks "No, separate
+  // payment" → we proceed with the treasury insert without the link.
+  //
+  // Rule 5 enforcement: this code path NEVER creates an extra treasury row.
+  // The treasury row was already being created — the popup only adds metadata.
+  const [pendingInstrumentMatch, setPendingInstrumentMatch] = useState(null);
+
+  // v55.83-A.6.27.18 (Max May 17 2026) — Phase 2 of Payment Instruments.
+  // State for the invoice-level "Payment Instruments / Scheduled
+  // Receivables" section at the BOTTOM of the invoice screen. Collapsible
+  // (default expanded so it's visible). Add form expands inline below
+  // the list. Per Max: documentation-only, never affects treasury or
+  // invoice totals.
+  const [instrumentSectionExpanded, setInstrumentSectionExpanded] = useState(true);
+  const [showAddInstrumentForm, setShowAddInstrumentForm] = useState(false);
+  const [instrumentForm, setInstrumentForm] = useState({
+    instrument_type: 'check',
+    check_number: '',
+    amount: '',
+    issue_date: '',
+    due_date: '',
+    bank_name: '',
+    notes: '',
+  });
+  const [instrumentBusy, setInstrumentBusy] = useState(false);
+
+  // v55.83-A.6.27.19 (Max May 17 2026) — code review fix.
+  //
+  // Helper: find pending/deposited instruments on the given invoice whose
+  // amount matches the given EGP amount. Returns an ARRAY so the caller
+  // can handle multiple candidates (e.g. two pending checks of identical
+  // amount on the same invoice). Previously the popup hardcoded .find()
+  // and only offered the first one.
+  //
+  // Rules:
+  //   - Match on invoice_id OR order_number for legacy rows.
+  //   - Only pending or deposited instruments are eligible.
+  //   - Skip instruments already linked to another treasury row.
+  //   - Amount tolerance: 1 EGP (rounding).
+  const findMatchingInstruments = (invoice, amt) => {
+    if (!invoice || !(amt > 0)) return [];
+    return (checks || []).filter(function (c) {
+      if (c.invoice_id !== invoice.id && c.order_number !== invoice.order_number) return false;
+      if (c.status !== 'pending' && c.status !== 'deposited') return false;
+      if (c.linked_treasury_id) return false;
+      return Math.abs(Number(c.amount) - amt) < 1;
+    });
+  };
+
+  // v55.83-A.6.27.17 (Max May 17 2026) — Phase 1 helper. Commits a treasury
+  // row that the instrument-match popup has already stamped with the user's
+  // decision. Two cases:
+  //   __instrument_popup_decision === 'link' → record.source_check_id is set;
+  //       after the insert succeeds, flip the instrument to 'cleared' and
+  //       point linked_treasury_id at the new treasury row.
+  //   __instrument_popup_decision === 'no_link' → just insert and recalc;
+  //       the instrument stays pending. No second treasury row, no money
+  //       math change.
+  // Either way, exactly ONE treasury row is created — Rule 5 enforcement.
+  const commitInstrumentLinkedTreasury = async (record, matchingInvoice, isBankPlaceholder) => {
+    try {
+      const inserted = await dbInsert('treasury', record, user?.id);
+      // If the user accepted the link, flip the instrument to cleared.
+      if (record.__instrument_popup_decision === 'link' && record.source_check_id) {
+        try {
+          await dbUpdate('checks', record.source_check_id, {
+            status: 'cleared',
+            collection_date: record.transaction_date || new Date().toISOString().slice(0, 10),
+            linked_treasury_id: inserted.id,
+            updated_by: user?.id,
+          }, user?.id);
+        } catch (instErr) {
+          console.warn('[commitInstrumentLinkedTreasury] instrument flip failed:', instErr && instErr.message);
+          try { toast.warning('Saved ✓ — but the linked instrument needs manual update to "cleared".'); } catch (_) {}
+        }
+      }
+      // Recalc the invoice unless it's a placeholder (placeholders recalc on bank-match).
+      if (!isBankPlaceholder) {
+        try { await recalcInvoiceCollected(matchingInvoice.id); }
+        catch (recalcErr) {
+          console.warn('[commitInstrumentLinkedTreasury] recalc failed:', recalcErr && recalcErr.message);
+          try { toast.warning('Saved ✓ — but the invoice total may need a manual refresh.'); } catch (_) {}
+        }
+      }
+      setTreasury(prev => [inserted, ...prev]);
+      setShowAddTreasury(false);
+      setPendingTreasuryRecord(null);
+      setPendingInstrumentMatch(null);
+      setDuplicateConfirm(null);
+      setTreasuryFormErrors([]);
+      setIsCreatingInvoice(false);
+      setCreateInvoiceError(null);
+      var msg;
+      if (record.__instrument_popup_decision === 'link') {
+        msg = 'Saved ✓ — instrument marked cleared';
+      } else {
+        msg = (isBankPlaceholder ? 'Bank entry saved (awaiting statement) + linked to ' : 'Transaction saved + linked to ')
+          + (matchingInvoice.customer_name || ('#' + matchingInvoice.order_number)) + ' ✓';
+      }
+      toast.success(msg);
+      setFormData({});
+      setTimeout(() => loadAllData(), 500);
+    } catch (err) {
+      console.error('[commitInstrumentLinkedTreasury] failed:', err);
+      try { toast.error('Save failed: ' + (err && err.message ? err.message : String(err))); }
+      catch (_) { alert('Save failed: ' + (err && err.message ? err.message : String(err))); }
+    }
+  };
+  // v55.41 — Suspected-duplicate confirmation modal.
+  // When the user tries to save a treasury row whose date + amount +
+  // description match an existing row, instead of silently saving (which
+  // could create a real duplicate) OR silently blocking (which loses
+  // legitimate same-amount-same-day repeat payments), we open this modal
+  // showing the existing match(es) and ask the user to confirm. They can
+  // either:
+  //   • Cancel  — they'll edit the row to make it unique
+  //   • Confirm — it really IS a separate payment that happens to look
+  //               identical (common with regular weekly cash payments,
+  //               two identical fuel purchases, etc.). The save proceeds
+  //               and the new row is stamped confirmed_not_duplicate=true
+  //               so the AI auditor doesn't flag it later.
+  const [duplicateConfirm, setDuplicateConfirm] = useState(null);
+  // v55.47 — Persistent in-form validation errors for the New Transaction
+  // modal. Toasts at the screen corner are easy to miss on mobile (Amad
+  // reported "I tap Submit and nothing happens" — actually amount was blank
+  // and the toast pop-and-disappeared in 2s). This state drives a red
+  // banner INSIDE the modal listing every missing/invalid field, plus per-
+  // field highlighting. Cleared whenever the form is reset or submitted OK.
+  const [treasuryFormErrors, setTreasuryFormErrors] = useState([]);
+  // v55.82-E — In-flight visual state for the Submit button. Disables the
+  // button + shows "Saving…" while handleAddTreasury is running so users
+  // can't double-tap and don't think the system froze when there's actually
+  // a slow network round-trip in progress.
+  const [treasurySaving, setTreasurySaving] = useState(false);
+  // shape: { record, amount, txDate, matches: [...existing rows], invoiceToLink }
+  // Loading flag for the inline "Create Invoice + Save Treasury" button so
+  // the user gets immediate feedback (button disables + shows spinner) and
+  // can't double-tap during the async Supabase round-trip. Was missing
+  // previously — looked like "nothing happens" on slow mobile networks.
+  const [isCreatingInvoice, setIsCreatingInvoice] = useState(false);
+  // Apr 26 2026 — Loading flag for "Create new customer" button in the
+  // create-invoice picker. Prevents double-tap creating two customer rows.
+  const [isCreatingCustomer, setIsCreatingCustomer] = useState(false);
+  // Apr 25 2026 — Visible error banner for the create-invoice modal. Toasts
+  // disappear in 5s and are easy to miss on mobile. This banner stays in the
+  // modal until dismissed, so any failure surfaces unmissable feedback.
+  const [createInvoiceError, setCreateInvoiceError] = useState(null);
+  // Apr 25 2026 — Helper that cleanly closes the "Order Not Found" mini-modal
+  // AND wipes every piece of stale state that could pollute the next attempt.
+  // Without this, switching between Cash Out → Cash In with the modal having
+  // been open even briefly left __creatingInvoice / __newInvCustomer / etc.
+  // hanging around. Next save would jump straight to the create-invoice form
+  // with stale or empty values, and the green button would silently fail
+  // validation. Using this helper everywhere the modal closes prevents that.
+  const closePendingTreasuryModal = () => {
+    setPendingTreasuryRecord(null);
+    setIsCreatingInvoice(false);
+    setCreateInvoiceError(null);
+    setFormData(function(prev) {
+      var next = Object.assign({}, prev);
+      delete next.__creatingInvoice;
+      delete next.__newInvCustomer;
+      delete next.__newInvCustomerId;
+      // v55.82-B — also strip the auto-link flag and search seed so a
+      // subsequent open of the modal starts clean. Without these, the
+      // green "Auto-linked" chip could re-appear with stale customer
+      // info on a fresh transaction attempt.
+      delete next.__newInvCustomerAutoLinked;
+      delete next.__newInvSearch;
+      delete next.__newInvTotal;
+      delete next.__newInvDate;
+      return next;
+    });
+  };
   const [formData, setFormData] = useState({});
   const [hideSections, setHideSections] = useState({});
   const [announcements, setAnnouncements] = useState([]);
@@ -455,6 +700,15 @@ export default function App() {
   const [reminders, setReminders] = useState([]);
   const [recentTicketUpdates, setRecentTicketUpdates] = useState([]);
   const [dashTickets, setDashTickets] = useState([]);
+  // v55.83-A.6.27.16 (Max May 17 2026) — separate closed-ticket fetch for
+  // Nadia. dashTickets is filtered server-side to exclude Closed (line ~1446)
+  // because the dashboard priority cards don't need them. But Nadia needs
+  // them for history queries like "what was that ticket about leather
+  // samples last month". Three prior builds tried to fix this inside
+  // AIGreeter by branching on status, but the data never reached her in
+  // the first place. This state is a separate, smaller fetch scoped to
+  // the user with a sane LIMIT so it doesn't bloat memory.
+  const [closedTicketsForAI, setClosedTicketsForAI] = useState([]);
   const [activityFeed, setActivityFeed] = useState([]);
   const [dashEvents, setDashEvents] = useState([]);
   const [dashFollowUps, setDashFollowUps] = useState([]);
@@ -462,6 +716,10 @@ export default function App() {
   const [globalSearch, setGlobalSearch] = useState('');
   const [showGlobalSearch, setShowGlobalSearch] = useState(false);
   const [showNotifBell, setShowNotifBell] = useState(false);
+  // v55.40 — Unread voicemail count for the header badge. Polled every
+  // 30 seconds via the same endpoint the dashboard widget uses, so the
+  // header and the dashboard stay in sync within a window.
+  const [unreadVoicemails, setUnreadVoicemails] = useState(0);
   const [showFAB, setShowFAB] = useState(false);
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [welcomeDismissed, setWelcomeDismissed] = useState(false);
@@ -469,65 +727,233 @@ export default function App() {
   const [tabLoading, setTabLoading] = useState(false);
   const [greeterDismissed, setGreeterDismissed] = useState(false);
   const [greeterHasGreeted, setGreeterHasGreeted] = useState(false);
+  // v55.73 — Active assistant persona ('nadia' | 'jenna' | 'sara').
+  // The AssistantsBar drives this via ktc:assistant-changed event so a
+  // single source of truth lives in this top-level component. AIGreeter
+  // receives selectedAssistant as a prop — it uses it to swap header
+  // photo, name, greeting, voice ID, and personality prompt — but the
+  // underlying voice/listening/recording engine is unchanged.
+  // Nadia is the default per Max's spec.
+  // v55.78 — Gap #4 — Persist last-active persona across page reloads.
+  // Before, every reload reset to Nadia. If a user spent most of their
+  // time with Sara (coaching) or Jenna (HR), they had to manually re-click
+  // every refresh. Now we read the last-active persona from localStorage
+  // on mount. Default = 'nadia'. Falls back to 'nadia' on any read error.
+  //
+  // v55.80 BD-AUDIT FIX: persona preference is per-user. The lazy-init
+  // can't see userProfile.id yet (auth hasn't resolved), so we open with
+  // 'nadia' as the safe default. Once auth completes, the useEffect below
+  // hydrates from the per-user key. The OLD global key is intentionally
+  // ignored — anything saved there belongs to whoever last used the
+  // browser, not necessarily the current user.
+  const [selectedAssistant, setSelectedAssistant] = useState('nadia');
+  // Hydrate per-user preference once user id is known.
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    var uid = userProfile && userProfile.id;
+    if (!uid) return;
+    try {
+      var saved = window.localStorage.getItem('ktc.lastPersona.' + uid);
+      if (saved === 'nadia' || saved === 'jenna' || saved === 'sara') {
+        setSelectedAssistant(saved);
+      }
+    } catch (_) {}
+  }, [userProfile?.id]);
+  // Persist whenever it changes — writes to PER-USER key only.
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    var uid = userProfile && userProfile.id;
+    if (!uid) return; // don't write before auth resolves
+    try { window.localStorage.setItem('ktc.lastPersona.' + uid, selectedAssistant); } catch (_) {}
+  }, [selectedAssistant, userProfile?.id]);
+  useEffect(() => {
+    var handler = function (e) {
+      var who = e && e.detail && e.detail.agent;
+      if (who === 'nadia' || who === 'jenna' || who === 'sara') {
+        setSelectedAssistant(who);
+        // When user activates an assistant, ensure the AIGreeter is visible
+        // (un-dismiss). The AIGreeter is the chat surface for ALL three.
+        setGreeterDismissed(false);
+      }
+    };
+    if (typeof window !== 'undefined') {
+      window.addEventListener('ktc:assistant-changed', handler);
+      return function () { window.removeEventListener('ktc:assistant-changed', handler); };
+    }
+  }, []);
+  // v55.70 — when the user clicks the "Nadia" tile in the AssistantsBar
+  // on the dashboard, we receive a ktc:open-nadia event. If Nadia is
+  // currently dismissed (collapsed), un-dismiss her so the chat is visible
+  // for the click-through. Listener is mounted once per session.
+  useEffect(() => {
+    var handler = function () { setGreeterDismissed(false); };
+    if (typeof window !== 'undefined') {
+      window.addEventListener('ktc:open-nadia', handler);
+      return function () { window.removeEventListener('ktc:open-nadia', handler); };
+    }
+  }, []);
   // S22 (Apr 23 2026) — Persistent chat memory.
   // Previously greeterMessages started empty on every reload, so every
   // "Hey Nadia" felt like a fresh introduction. Now we hydrate from
   // localStorage (keyed by user id once we know it) and write back
   // whenever it changes.
-  const [greeterMessages, setGreeterMessages] = useState([]);
-  // Hydrate from localStorage once we know whose messages to load
+  //
+  // v55.78 — PER-PERSONA conversation threads.
+  // Before this change, all three personas shared a single message array,
+  // so when user switched from Nadia → Jenna, Jenna would see Nadia's
+  // entire conversation in her history (including operational queries
+  // unrelated to HR). Now each persona has her own thread. The active
+  // persona's thread is exposed via greeterMessages getter so AIGreeter
+  // sees only her own conversation. Updates from AIGreeter route to the
+  // active persona's slot.
+  // Storage shape: {nadia:[...], jenna:[...], sara:[...]}
+  // Migration: if old single-array localStorage entry exists, treat it
+  // as Nadia's thread (she was the only persona before).
+  const [greeterMessagesByAgent, setGreeterMessagesByAgent] = useState({ nadia: [], jenna: [], sara: [] });
+  // Computed accessor for the ACTIVE persona's thread. AIGreeter receives
+  // this. When persona switches, this re-evaluates and AIGreeter re-renders
+  // with that persona's history — Jenna sees only Jenna conversations.
+  const greeterMessages = (greeterMessagesByAgent && greeterMessagesByAgent[selectedAssistant]) || [];
+  // Setter that AIGreeter calls when it appends or updates messages. Routes
+  // the update into the active persona's slot, leaving other slots alone.
+  const setGreeterMessages = (next) => {
+    setGreeterMessagesByAgent(function (prev) {
+      var updated = Object.assign({}, prev || {});
+      // AIGreeter passes either a new array OR a function (functional update).
+      var resolved = typeof next === 'function' ? next(prev[selectedAssistant] || []) : next;
+      updated[selectedAssistant] = resolved;
+      return updated;
+    });
+  };
+  // Hydrate from localStorage once we know whose messages to load.
+  // Reads the new per-persona shape if present; falls back to the old
+  // single-array entry (treating it as Nadia's history) for migration.
   useEffect(() => {
     if (typeof window === 'undefined') return;
     const uid = userProfile?.id;
     if (!uid) return;
     try {
-      const raw = localStorage.getItem('nadia.messages.' + uid);
-      if (raw) {
-        const parsed = JSON.parse(raw);
-        if (Array.isArray(parsed) && parsed.length > 0) {
-          setGreeterMessages(parsed);
+      // New shape first
+      const newRaw = localStorage.getItem('nadia.messages.byAgent.' + uid);
+      if (newRaw) {
+        const parsed = JSON.parse(newRaw);
+        if (parsed && typeof parsed === 'object') {
+          const localState = {
+            nadia: Array.isArray(parsed.nadia) ? parsed.nadia : [],
+            jenna: Array.isArray(parsed.jenna) ? parsed.jenna : [],
+            sara:  Array.isArray(parsed.sara)  ? parsed.sara  : [],
+          };
+          setGreeterMessagesByAgent(localState);
+
+          // v55.81 QA-16 (Max May 9 2026): also pull server-side
+          // conversation_logs and merge in. The server has the canonical
+          // history (cross-device). Local takes precedence ONLY if the
+          // server returned nothing (e.g. first deploy of this feature).
+          // Otherwise the longer of the two wins per persona — protects
+          // against losing a long thread when switching to a new device
+          // that has a stale-but-shorter local copy.
+          (async () => {
+            try {
+              const r = await fetch('/api/conversation-log?userId=' + encodeURIComponent(uid));
+              if (!r.ok) return;
+              const sd = await r.json();
+              if (!sd || !sd.byPersona) return;
+              const merged = { nadia: localState.nadia, jenna: localState.jenna, sara: localState.sara };
+              ['nadia', 'jenna', 'sara'].forEach(function (p) {
+                const sv = Array.isArray(sd.byPersona[p]) ? sd.byPersona[p] : [];
+                if (sv.length > merged[p].length) merged[p] = sv;
+              });
+              setGreeterMessagesByAgent(merged);
+            } catch (_) { /* offline / endpoint missing — keep local */ }
+          })();
+          return;
         }
+      }
+      // Migrate old single-array shape — assume it was Nadia
+      const legacyRaw = localStorage.getItem('nadia.messages.' + uid);
+      if (legacyRaw) {
+        const legacyParsed = JSON.parse(legacyRaw);
+        if (Array.isArray(legacyParsed) && legacyParsed.length > 0) {
+          setGreeterMessagesByAgent({ nadia: legacyParsed, jenna: [], sara: [] });
+        }
+      } else {
+        // v55.81 QA-16: no local cache at all — fresh device. Hydrate
+        // entirely from the server.
+        (async () => {
+          try {
+            const r = await fetch('/api/conversation-log?userId=' + encodeURIComponent(uid));
+            if (!r.ok) return;
+            const sd = await r.json();
+            if (sd && sd.byPersona) {
+              setGreeterMessagesByAgent({
+                nadia: Array.isArray(sd.byPersona.nadia) ? sd.byPersona.nadia : [],
+                jenna: Array.isArray(sd.byPersona.jenna) ? sd.byPersona.jenna : [],
+                sara:  Array.isArray(sd.byPersona.sara)  ? sd.byPersona.sara  : [],
+              });
+            }
+          } catch (_) { /* offline / endpoint missing */ }
+        })();
       }
     } catch (e) { /* corrupted localStorage entry — ignore */ }
     // Only run once per userProfile id; not on every render.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [userProfile?.id]);
-  // Persist on every change (cap to last 80 messages to stay under
-  // localStorage's practical size limits)
+  // Persist on every change (cap each thread to last 80 messages to stay
+  // under localStorage's practical size limits — total cap ~240 messages).
   useEffect(() => {
     if (typeof window === 'undefined') return;
     const uid = userProfile?.id;
     if (!uid) return;
     try {
-      const trimmed = (greeterMessages || []).slice(-80);
-      localStorage.setItem('nadia.messages.' + uid, JSON.stringify(trimmed));
+      const trim = function (arr) { return Array.isArray(arr) ? arr.slice(-80) : []; };
+      const trimmed = {
+        nadia: trim(greeterMessagesByAgent && greeterMessagesByAgent.nadia),
+        jenna: trim(greeterMessagesByAgent && greeterMessagesByAgent.jenna),
+        sara:  trim(greeterMessagesByAgent && greeterMessagesByAgent.sara),
+      };
+      localStorage.setItem('nadia.messages.byAgent.' + uid, JSON.stringify(trimmed));
     } catch (e) { /* quota errors are non-fatal */ }
-  }, [greeterMessages, userProfile?.id]);
+  }, [greeterMessagesByAgent, userProfile?.id]);
   // S17 — Shared Nadia mute state. Read from localStorage on mount so the
   // user's mute preference persists across sessions. Both the dashboard
   // AIGreeter and the NadiaFloatingOverlay read this same value, so muting
   // on one instance silences the other too.
-  const [nadiaMuted, setNadiaMuted] = useState(() => {
-    if (typeof window === 'undefined') return false;
-    try { return localStorage.getItem('nadia.muted') === 'true'; } catch (e) { return false; }
-  });
+  // v55.80 BD-AUDIT FIX: nadia mute is per-user. Same fix as lastPersona —
+  // can't read user id at lazy-init time, so default to false and hydrate
+  // once auth resolves.
+  const [nadiaMuted, setNadiaMuted] = useState(false);
   useEffect(() => {
     if (typeof window === 'undefined') return;
-    try { localStorage.setItem('nadia.muted', nadiaMuted ? 'true' : 'false'); } catch (e) {}
+    var uid = userProfile && userProfile.id;
+    if (!uid) return;
+    try {
+      var saved = localStorage.getItem('nadia.muted.' + uid);
+      if (saved === 'true') setNadiaMuted(true);
+      else if (saved === 'false') setNadiaMuted(false);
+    } catch (e) {}
+  }, [userProfile?.id]);
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    var uid = userProfile && userProfile.id;
+    if (!uid) return;
+    try { localStorage.setItem('nadia.muted.' + uid, nadiaMuted ? 'true' : 'false'); } catch (e) {}
     // Also dispatch events so components that listen (like the overlay)
     // stay in sync if another part of the app toggles mute.
     try {
       window.dispatchEvent(new CustomEvent(nadiaMuted ? 'nadia-mute' : 'nadia-unmute'));
     } catch (e) {}
-  }, [nadiaMuted]);
+  }, [nadiaMuted, userProfile?.id]);
   const [greeterSettings, setGreeterSettings] = useState({ personality: 'friendly', language: 'en', enabled: true });
-  // Voice system ("Hey Bob"). Defaults to ON for super_admin, but each
-  // user can toggle in Settings. Off entirely in browsers without support.
+  // v55.42 — VOICE DISABLED.
+  // After many sessions chasing Web Speech API quirks (wake-word reliability,
+  // OFF button bugs, transcription dropping, mobile mic permissions), we're
+  // taking voice off the surface. The typed Nadia chat is unchanged and
+  // works perfectly. If we revisit voice later, it'll be a clean rebuild
+  // on a more reliable foundation than browser-side Web Speech.
   const [voiceEnabled, setVoiceEnabled] = useState(false);
-  // Hydrate voiceEnabled from user profile once loaded
-  useEffect(() => {
-    if (userProfile) setVoiceEnabled(userProfile.voice_enabled !== false);
-  }, [userProfile?.id, userProfile?.voice_enabled]);
+  // Hydration intentionally removed — voice stays off regardless of what's
+  // stored on the user profile. Re-enabling would require more than just
+  // flipping this back, since the underlying issues weren't fully resolved.
   // Session-persistent greeted state: set greeterHasGreeted=true if
   // the current login session already has greeted_at stamped. Prevents
   // re-greeting when user navigates back to dashboard from another tab.
@@ -539,7 +965,7 @@ export default function App() {
     if (!userProfile?.id || greeterHasGreeted) return;
     // Local check first — fast path, no round trip
     try {
-      const todayKey = new Date().toISOString().substring(0, 10);
+      const todayKey = todayET();
       const stamped = localStorage.getItem('nadia.greeted.' + userProfile.id + '.' + todayKey);
       if (stamped) { setGreeterHasGreeted(true); return; }
     } catch (_) {}
@@ -564,7 +990,7 @@ export default function App() {
     // or the column doesn't exist, the next dashboard visit won't re-greet.
     try {
       if (userProfile?.id) {
-        const todayKey = new Date().toISOString().substring(0, 10);
+        const todayKey = todayET();
         localStorage.setItem('nadia.greeted.' + userProfile.id + '.' + todayKey, new Date().toISOString());
       }
     } catch (_) {}
@@ -580,6 +1006,11 @@ export default function App() {
   }, [userProfile?.id]);
   const [lastLoaded, setLastLoaded] = useState(null);
   const [openTicketId, setOpenTicketId] = useState(null);
+  // v55.83-A.6.18 (Max May 14 2026) — dashboard-side ticket modal. When user
+  // clicks a ticket from the three priority cards, we open it IN PLACE on the
+  // dashboard via this overlay instead of switching to the Tickets tab.
+  const [dashboardTicketModal, setDashboardTicketModal] = useState(null);
+  const [busyAckId, setBusyAckId] = useState(null);
   const [egyptBankTxns, setEgyptBankTxns] = useState([]);
   const [egyptBankAccounts, setEgyptBankAccounts] = useState([]);
   const [showReminderForm, setShowReminderForm] = useState(false);
@@ -589,7 +1020,7 @@ export default function App() {
   // Emergency sound for new reminders
   useEffect(() => {
     if (!reminders.length || !userProfile) return;
-    const todayStr = new Date().toISOString().substring(0, 10);
+    const todayStr = todayET();
     const myActive = reminders.filter(r => {
       const isForMe = !r.target_users || r.target_users === 'all' || (r.target_users || '').includes(userProfile?.id);
       const isToday = r.reminder_date === todayStr || (!r.reminder_date && r.created_at && r.created_at.substring(0, 10) === todayStr);
@@ -660,6 +1091,39 @@ export default function App() {
     return () => clearInterval(pollAnn);
   }, []);
 
+  // v55.40 — Poll the unread voicemail count for the header badge.
+  // Mirrors the dashboard VoicemailsWidget's 30s refresh cadence so
+  // when the user marks one read in the widget, the header badge
+  // catches up within a window. Uses the same /api/phone/voicemails
+  // endpoint with limit=1 so it stays a cheap query.
+  useEffect(() => {
+    var myId = user?.id;
+    if (!myId) return;
+    var cancelled = false;
+
+    var fetchCount = async function () {
+      try {
+        var sess = await supabase.auth.getSession();
+        var tok = sess && sess.data && sess.data.session ? sess.data.session.access_token : '';
+        var url = '/api/phone/voicemails?assigned_to=' + encodeURIComponent(myId)
+          + '&unread=true&limit=200';
+        var r = await fetch(url, {
+          headers: tok ? { 'Authorization': 'Bearer ' + tok } : {},
+        });
+        if (!r.ok) return; // 401 during logout etc — silent
+        var d = await r.json();
+        if (cancelled) return;
+        // The API may return {voicemails: [...]} or [...] depending on shape.
+        var list = Array.isArray(d) ? d : (d.voicemails || d.data || []);
+        setUnreadVoicemails(Array.isArray(list) ? list.length : 0);
+      } catch (_e) { /* silent — header badge is best-effort */ }
+    };
+
+    fetchCount();
+    var interval = setInterval(fetchCount, 30 * 1000);
+    return function () { cancelled = true; clearInterval(interval); };
+  }, [user]);
+
   // Import
   const [importStep, setImportStep] = useState('select'); // select, preview, importing, done
   const [importType, setImportType] = useState(null);
@@ -686,12 +1150,22 @@ export default function App() {
       else setUser(session.user);
     });
 
-    // Heartbeat: update last_seen every 5 min
-    const heartbeat = setInterval(async () => {
-      const { data: { session: s } } = await supabase.auth.getSession();
-      if (s?.user) {
-        const today = new Intl.DateTimeFormat('en-CA', { timeZone: 'America/New_York' }).format(new Date()); // ET, not UTC — fixes 'you werent here yesterday' bug
-        const uid = profileIdRef.current || s.user.id;
+    // v55.61 — Heartbeat fires IMMEDIATELY on login + every 2 minutes
+    // (was: only every 5 minutes, no initial pulse). Effects:
+    //   1) "Online" status appears within seconds of login instead of
+    //      taking up to 5 minutes for the first heartbeat.
+    //   2) The 10-minute online window now tolerates 4 consecutive missed
+    //      heartbeats (was tolerating only 1) — far less likely to flip
+    //      a logged-in user to "Offline" from a single network blip.
+    // Reported by Max May 7 2026: "admin page.. login. why is online
+    // status offline if I am online".
+    var heartbeatTick = async function () {
+      try {
+        var sessRes = await supabase.auth.getSession();
+        var s = sessRes && sessRes.data && sessRes.data.session;
+        if (!s || !s.user) return;
+        var today = new Intl.DateTimeFormat('en-CA', { timeZone: 'America/New_York' }).format(new Date());
+        var uid = profileIdRef.current || s.user.id;
         await supabase.from('user_sessions')
           .update({ last_seen: new Date().toISOString() })
           .eq('user_id', uid)
@@ -706,10 +1180,15 @@ export default function App() {
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ user_id: uid, event_type: 'heartbeat' }),
             keepalive: true,
-          }).catch(() => {});
-        } catch(e) {}
-      }
-    }, 5 * 60 * 1000);
+          }).catch(function () {});
+        } catch (e) {}
+      } catch (e) { /* never let a heartbeat error crash the page */ }
+    };
+    // Fire FIRST heartbeat right away — don't wait 5 minutes for online status
+    heartbeatTick();
+    // Then every 2 minutes. With the SQL view's 10-minute online window,
+    // up to 4 consecutive misses are tolerated before flipping to Offline.
+    const heartbeat = setInterval(heartbeatTick, 2 * 60 * 1000);
 
     // Keyboard shortcuts
     const handleKey = (e) => {
@@ -736,7 +1215,38 @@ export default function App() {
     // Session timeout: auto-logout after 2 hours of inactivity (except super_admin)
     let idleTimer;
     const IDLE_TIMEOUT = 2 * 60 * 60 * 1000; // 2 hours
+    // v55.80 (Phase B+ feedback from Max May 8 2026):
+    //   Track ACTIVE time, not just "tab was open." Real activity = user
+    //   input (mouse/key/touch/scroll). Idle tab open all night should NOT
+    //   count as 8h of work.
+    //
+    //   We bump `user_sessions.last_active` only when user actually
+    //   interacts. Throttled to 30s so a busy typist doesn't hammer the DB.
+    //   The presence calculator reads last_active (separate from last_seen)
+    //   to compute "how long they were really working."
+    let lastActivePingMs = 0;
+    const ACTIVE_PING_MIN_GAP_MS = 30 * 1000;
+    const pingActive = function () {
+      var now = Date.now();
+      if (now - lastActivePingMs < ACTIVE_PING_MIN_GAP_MS) return;
+      lastActivePingMs = now;
+      try {
+        var uid = profileIdRef.current || user?.id;
+        if (!uid) return;
+        var today = todayET();
+        // Best-effort — don't block UI on this. Throttle = 1 write per 30s.
+        supabase.from('user_sessions')
+          .update({ last_active: new Date().toISOString(), last_seen: new Date().toISOString() })
+          .eq('user_id', uid)
+          .eq('date', today)
+          .order('login_at', { ascending: false })
+          .limit(1)
+          .then(function () {});
+      } catch (e) { /* swallow — don't crash on activity ping */ }
+    };
     const resetIdle = () => {
+      // Bump active timestamp on every real user input — throttled inside.
+      pingActive();
       clearTimeout(idleTimer);
       idleTimer = setTimeout(async () => {
         try {
@@ -745,7 +1255,7 @@ export default function App() {
           const { data: profile } = await supabase.from('users').select('role').eq('email', s.user.email).single();
           if (profile?.role === 'super_admin') return; // super admins stay logged in
           // Record auto-logout in session
-          const today = new Intl.DateTimeFormat('en-CA', { timeZone: 'America/New_York' }).format(new Date()); // ET, not UTC — fixes 'you werent here yesterday' bug
+          const today = todayET();
           const uid = profileIdRef.current || s.user.id;
           await supabase.from('user_sessions')
             .update({ logout_at: new Date().toISOString(), logout_reason: 'auto_timeout' })
@@ -764,7 +1274,7 @@ export default function App() {
     const handleUnload = () => {
       const uid = profileIdRef.current || user?.id;
       if (uid) {
-        const today = new Intl.DateTimeFormat('en-CA', { timeZone: 'America/New_York' }).format(new Date()); // ET, not UTC — fixes 'you werent here yesterday' bug
+        const today = todayET(); // ET — fixes 'you werent here yesterday' bug
         // Best-effort logout event via beacon (survives navigation)
         try {
           const blob = new Blob([JSON.stringify({ user_id: uid, event_type: 'logout' })], { type: 'application/json' });
@@ -778,7 +1288,59 @@ export default function App() {
     };
     window.addEventListener('beforeunload', handleUnload);
 
-    return () => { subscription?.unsubscribe(); clearInterval(heartbeat); clearTimeout(idleTimer); ['mousedown','keydown','touchstart','scroll'].forEach(evt => window.removeEventListener(evt, resetIdle)); window.removeEventListener('beforeunload', handleUnload); window.removeEventListener('keydown', handleKey); document.removeEventListener('click', handleClickOutside); };
+    // v55.80 (Phase B / Section 13 — login reliability)
+    // ----------------------------------------------------------------
+    // The "still online" bug: if the user closes a tab and the
+    // beforeunload beacon doesn't fire (which happens — Safari drops
+    // them, mobile background-kill drops them), heartbeats keep going
+    // for the full 10-minute online window or until the browser stops
+    // running our timer. Fix: when the tab becomes hidden, START a
+    // 3-minute soft-logout timer. If they come back before it fires,
+    // cancel. If 3 min pass with the tab hidden, fire a logout event
+    // so admin sees them go offline. We do NOT clear the auth session
+    // — they're still signed in; they just stop pulsing as "online".
+    let hiddenTimer = null;
+    const HIDDEN_TIMEOUT_MS = 3 * 60 * 1000;
+    const handleVisibilityChange = () => {
+      try {
+        if (document.visibilityState === 'hidden') {
+          if (hiddenTimer) clearTimeout(hiddenTimer);
+          hiddenTimer = setTimeout(() => {
+            try {
+              const uid = profileIdRef.current || user?.id;
+              if (!uid) return;
+              // Fire a soft 'logout' event so user_login_summary.is_online
+              // flips false within 10 minutes regardless of beacon delivery.
+              // v55.80 BUG-8 FIX: try beacon first; only fall through to
+              // fetch if the beacon failed. Otherwise we double-fire.
+              let beaconSent = false;
+              try {
+                const blob = new Blob([JSON.stringify({ user_id: uid, event_type: 'logout', notes: 'tab_hidden_timeout' })], { type: 'application/json' });
+                beaconSent = navigator.sendBeacon('/api/login-event', blob);
+              } catch (e) { beaconSent = false; }
+              if (!beaconSent) {
+                try {
+                  fetch('/api/login-event', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ user_id: uid, event_type: 'logout', notes: 'tab_hidden_timeout' }),
+                    keepalive: true,
+                  }).catch(function () {});
+                } catch (e) {}
+              }
+            } catch (e) { /* never let this crash the tab */ }
+          }, HIDDEN_TIMEOUT_MS);
+        } else if (document.visibilityState === 'visible') {
+          // Tab is back — cancel the pending logout, and re-pulse a
+          // heartbeat right away so admin sees them come back online.
+          if (hiddenTimer) { clearTimeout(hiddenTimer); hiddenTimer = null; }
+          heartbeatTick();
+        }
+      } catch (e) { /* swallow */ }
+    };
+    document.addEventListener('visibilitychange', handleVisibilityChange);
+
+    return () => { subscription?.unsubscribe(); clearInterval(heartbeat); clearTimeout(idleTimer); if (hiddenTimer) clearTimeout(hiddenTimer); ['mousedown','keydown','touchstart','scroll'].forEach(evt => window.removeEventListener(evt, resetIdle)); window.removeEventListener('beforeunload', handleUnload); window.removeEventListener('keydown', handleKey); document.removeEventListener('click', handleClickOutside); document.removeEventListener('visibilitychange', handleVisibilityChange); };
   }, []);
 
   // ==========================================
@@ -824,6 +1386,41 @@ export default function App() {
         const { data: cats } = await supabase.from('categories').select('*').eq('active', true).order('sort_order').order('name_ar');
         setCategoriesList(cats || []);
       } catch (e) { setCategoriesList([]); }
+      // v55.83-A.6.27 — load Stage C/D inventory data for invoice SKU linkage
+      try {
+        const { data: skuRows } = await supabase.from('inv_skus').select('*').is('deleted_at', null).order('sku_number');
+        setInvSkus(skuRows || []);
+      } catch (e) { setInvSkus([]); }
+      try {
+        const { data: whRows } = await supabase.from('inv_warehouses').select('*').eq('is_active', true).order('name');
+        setInvWarehouses(whRows || []);
+      } catch (e) { setInvWarehouses([]); }
+      // v55.83-A.6.27.44b — load inventory_products (variants) for the invoice picker.
+      // Safe to fail silently — invoice form falls back to legacy/manual mode.
+      try {
+        const { data: ipRows } = await supabase.from('inventory_products').select('*').eq('active', true).order('name_en');
+        setInventoryProducts(ipRows || []);
+      } catch (e) { setInventoryProducts([]); }
+      // v55.83-A.6.27.44b — load cutoff date setting.
+      // When null/missing, both modes always available. When set, future-dated invoices force inventory mode (in 44c).
+      try {
+        const { data: cutoffRow } = await supabase
+          .from('app_settings')
+          .select('setting_value')
+          .eq('setting_key', 'inventory_cutoff_date')
+          .maybeSingle();
+        if (cutoffRow && cutoffRow.setting_value) {
+          var rawCut = cutoffRow.setting_value;
+          try {
+            var parsedCut = JSON.parse(rawCut);
+            if (parsedCut && typeof parsedCut === 'string' && /^\d{4}-\d{2}-\d{2}/.test(parsedCut)) {
+              setInventoryCutoffDate(parsedCut.substring(0, 10));
+            }
+          } catch (e2) {
+            if (/^\d{4}-\d{2}-\d{2}/.test(rawCut)) setInventoryCutoffDate(rawCut.substring(0, 10));
+          }
+        }
+      } catch (e) { /* no-op — cutoff just stays null */ }
       // Load team users separately (may not exist yet)
       try {
         const { data: usrs } = await supabase.from('users').select('*').order('name');
@@ -831,8 +1428,12 @@ export default function App() {
         // Find current user's profile
         const authUser = (await supabase.auth.getUser())?.data?.user;
         if (authUser && usrs) {
-          const authEmail = (authUser.email || '').toLowerCase();
-          const profile = usrs.find(u => (u.email || '').toLowerCase() === authEmail);
+          // v55.33 — case-insensitive match with trim, plus auth-id fallback
+          const authEmail = (authUser.email || '').toLowerCase().trim();
+          let profile = usrs.find(u => (u.email || '').toLowerCase().trim() === authEmail);
+          if (!profile && authUser.id) {
+            profile = usrs.find(u => u.id === authUser.id);
+          }
           if (profile) {
             setUserProfile(profile);
             profileIdRef.current = profile.id;
@@ -844,8 +1445,8 @@ export default function App() {
             });
             // Log first login of the day (legacy daily_log entry)
             try {
-              const todayStr = new Date().toISOString().substring(0, 10);
-              const loginTime = new Date().toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' });
+              const todayStr = todayET();
+              const loginTime = fmtET(new Date(), 'time', { tag: false });
               const { data: existing } = await supabase.from('daily_log')
                 .select('id').eq('user_id', profile.id).eq('log_date', todayStr)
                 .ilike('entry_text', '%logged in%').limit(1);
@@ -944,16 +1545,123 @@ export default function App() {
         setAnnouncementAcks(acks || []);
       } catch(e) { setAnnouncements([]); }
       // Load recent ticket updates (comments from last 7 days)
+      // v55.75 (A3) — Bumped limit 30→100 because the next-step filter
+      // narrows to "tickets the user is involved in" and 30 comments
+      // shared across ~10 team members often left only 1-2 visible.
+      // Also added created_by to the embedded tickets() select — without
+      // it, the c.tickets.created_by === myId filter silently failed and
+      // tickets the user CREATED but didn't have assigned never appeared.
+      // v55.82-Z QA — also pull privacy columns on the joined ticket so
+      // we can filter out comments tied to tickets the current user
+      // shouldn't see (private super-admin tickets, confidential tickets
+      // they aren't part of). Super admin sees everything.
       try {
+        // v55.83-A.6.20 (Max May 14 2026) — bumped limit from 100 to 300
+        // because the dashboard "Recent Updates to Your Assigned Tickets"
+        // card was coming up empty for super admin even when their tickets
+        // had recent comments. With 10 team members + 50+ open tickets, 100
+        // comments in 7 days hits the ceiling fast and the user's specific
+        // ticket comments get pushed out by load order. 300 is generous
+        // enough to capture every relevant comment without straining the API.
         const sevenDaysAgo = new Date(Date.now() - 7 * 86400000).toISOString();
-        const { data: comments } = await supabase.from('ticket_comments').select('*, tickets(id, ticket_number, title, status, priority, assigned_to)').gte('created_at', sevenDaysAgo).order('created_at', { ascending: false }).limit(30);
-        setRecentTicketUpdates(comments || []);
+        const { data: comments } = await supabase.from('ticket_comments')
+          .select('*, tickets(id, ticket_number, title, status, priority, assigned_to, created_by, additional_assignees, is_private, private_to, is_confidential)')
+          .gte('created_at', sevenDaysAgo)
+          .order('created_at', { ascending: false })
+          .limit(300);
+        var meId = profile && profile.id;
+        var meIsSA = profile && profile.role === 'super_admin';
+        var filteredComments = (comments || []).filter(function (c) {
+          var t = c.tickets;
+          if (!t) return true; // orphan comment — keep
+          if (meIsSA) return true;
+          if (t.is_private) return t.private_to === meId;
+          if (t.is_confidential) {
+            if (t.created_by === meId) return true;
+            if (t.assigned_to === meId) return true;
+            try {
+              var extras = typeof t.additional_assignees === 'string'
+                ? JSON.parse(t.additional_assignees)
+                : t.additional_assignees;
+              if (Array.isArray(extras) && extras.indexOf(meId) >= 0) return true;
+            } catch (_) {}
+            return false;
+          }
+          return true;
+        });
+        setRecentTicketUpdates(filteredComments);
       } catch(e) { setRecentTicketUpdates([]); }
       // Load tickets for dashboard
+      // v55.83-A.6.22 (Max May 14 2026) — REMOVED limit(200). Overdue tickets
+      // are by definition OLD tickets, so limiting to the 200 newest ORDER BY
+      // created_at DESC pushed every overdue ticket out of the window when the
+      // team has 200+ active tickets. Now loads ALL non-closed tickets so the
+      // dashboard priority cards can find them. Closed tickets are excluded
+      // server-side — they're not needed for dashboard cards and would only
+      // bloat the payload. For a typical KTC volume (a few hundred open
+      // tickets) this is a small fetch.
       try {
-        const { data: tix } = await supabase.from('tickets').select('*').order('created_at', { ascending: false }).limit(200);
-        setDashTickets(tix || []);
+        const { data: tix } = await supabase.from('tickets').select('*')
+          .neq('status', 'Closed')
+          .order('created_at', { ascending: false });
+        var dashMeId = profile && profile.id;
+        var dashMeIsSA = profile && profile.role === 'super_admin';
+        var filteredTix = (tix || []).filter(function (t) {
+          if (dashMeIsSA) return true;
+          if (t.is_private) return t.private_to === dashMeId;
+          if (t.is_confidential) {
+            if (t.created_by === dashMeId) return true;
+            if (t.assigned_to === dashMeId) return true;
+            try {
+              var extras = typeof t.additional_assignees === 'string'
+                ? JSON.parse(t.additional_assignees)
+                : t.additional_assignees;
+              if (Array.isArray(extras) && extras.indexOf(dashMeId) >= 0) return true;
+            } catch (_) {}
+            return false;
+          }
+          return true;
+        });
+        setDashTickets(filteredTix);
       } catch(e) { setDashTickets([]); }
+
+      // v55.83-A.6.27.16 (Max May 17 2026) — fetch Closed tickets separately
+      // for Nadia's history queries. dashTickets above excludes Closed at
+      // the server side; this query is purely for the AI assistant. Scoped
+      // to the user (super-admin sees all; others see tickets where they're
+      // the creator, primary assignee, or additional assignee). LIMIT 100
+      // to keep payload reasonable — Nadia only references the most recent
+      // anyway when answering "what was that ticket about X".
+      // v55.83-A.6.27.28 (Max May 18 2026 — REPEATED FOR THE 4TH TIME):
+      // "the AI must be able to see the closed ticket items when I
+      // request a search for any item — THIS IS MANDATORY". The prior
+      // .limit(100) was capping closed-ticket history. Removed. AI now
+      // sees EVERY closed ticket the user is allowed to see (privacy
+      // filtering preserved below). Permanent rule.
+      try {
+        var closedQuery = supabase.from('tickets').select('*')
+          .eq('status', 'Closed')
+          .order('updated_at', { ascending: false });
+        const { data: closedTix } = await closedQuery;
+        var closedMeId = profile && profile.id;
+        var closedMeIsSA = profile && profile.role === 'super_admin';
+        var filteredClosed = (closedTix || []).filter(function (t) {
+          // Same privacy gates as dashTickets
+          if (closedMeIsSA) return true;
+          if (t.is_private) return t.private_to === closedMeId;
+          // For non-super-admins, only include if THEY were involved
+          if (t.created_by === closedMeId) return true;
+          if (t.assigned_to === closedMeId) return true;
+          try {
+            var extras = typeof t.additional_assignees === 'string'
+              ? JSON.parse(t.additional_assignees)
+              : t.additional_assignees;
+            if (Array.isArray(extras) && extras.indexOf(closedMeId) >= 0) return true;
+          } catch (_) {}
+          return false;
+        });
+        setClosedTicketsForAI(filteredClosed);
+      } catch(e) { setClosedTicketsForAI([]); }
       // Load Egypt bank transactions
       try {
         const { data: ebt } = await supabase.from('egypt_bank_transactions').select('*').order('date', { ascending: false }).limit(500);
@@ -970,7 +1678,7 @@ export default function App() {
       } catch(e) { setActivityFeed([]); }
       // Load calendar events for dashboard
       try {
-        const todayStr = new Date().toISOString().substring(0, 10);
+        const todayStr = todayET();
         const { data: evts } = await supabase.from('calendar_events').select('*').gte('event_date', todayStr).order('event_date').order('event_time').limit(30);
         setDashEvents(evts || []);
       } catch(e) { setDashEvents([]); }
@@ -1012,8 +1720,22 @@ export default function App() {
   // ==========================================
   const isAdmin = userProfile?.role === 'super_admin' || userProfile?.role === 'admin';
   const isSuperAdmin = userProfile?.role === 'super_admin';
-  const activeTeamUsers = useMemo(() => teamUsers.filter(u => u.active !== false), [teamUsers]);
-  const toast = useContext(ToastContext);
+  const activeTeamUsers = useMemo(() => filterActiveUsers(teamUsers), [teamUsers]);
+  // Apr 25 2026 — Defensive toast fallback. This is the App component, but
+  // the ToastProvider is mounted INSIDE App's own return tree, which means
+  // useContext(ToastContext) here always returns undefined (App is the
+  // PARENT of the provider, not a child). Without the fallback, any
+  // toast.success / .error / .warning call inside App's event handlers
+  // throws "Cannot read properties of undefined (reading 'success')".
+  // The fallback gives every call site a guaranteed-valid object — calls
+  // become no-ops if there's no provider, and otherwise behave normally.
+  // Real toast UI still works for child components (CalendarTab, AdminTab,
+  // etc.) because they ARE inside the provider.
+  const _toastRaw = useContext(ToastContext);
+  const toast = _toastRaw || {
+    success: () => {}, error: () => {}, warning: () => {}, info: () => {},
+    confirm: async () => true,
+  };
 
   // Breadcrumb — shows current location
   const TAB_GROUPS = { dashboard:'Overview', sales:'Finance', treasury:'Finance', checks:'Finance', debts:'Finance', egyptbank:'Finance', bank:'Finance', quotes:'Finance', reports:'Finance', warehouse:'Operations', inventory:'Operations', customs:'Operations', shipping:'Operations', customers:'People', crm:'People', tickets:'People', calendar:'People', comms:'People', dailylog:'People', admin:'System', ai:'System', settings:'System', import:'System', systemtickets:'System' };
@@ -1029,7 +1751,7 @@ export default function App() {
     const ws = XLSX.utils.json_to_sheet(data);
     const wb = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(wb, ws, sheetName || 'Data');
-    XLSX.writeFile(wb, fileName + '_' + new Date().toISOString().substring(0, 10) + '.xlsx');
+    XLSX.writeFile(wb, fileName + '_' + todayET() + '.xlsx');
     if (toast) toast.success('Exported ' + data.length + ' rows to Excel');
   };
   const canEditTreasury = isSuperAdmin || modulePerms?.['Edit Treasury'] === true || modulePerms?.['Treasury'] === true;
@@ -1125,6 +1847,13 @@ export default function App() {
   // LOOKS right, but safe totals inflate by the duplicate amount. This ref
   // lets us reject the second call within the same logical submission.
   const addPaymentRunning = useRef(false);
+  // v55.82-E — Same re-entry guard as addPaymentRunning, but for the
+  // Treasury "+ New Transaction" Submit button. Without this, a fast
+  // double-tap inserted two cash_in rows for the same payment. Caught
+  // during the v55.82-E root-cause review of Max's "amounts not
+  // recording properly" report. The freeze users perceived was made
+  // worse by the second click hitting an unguarded handler.
+  const addTreasuryRunning = useRef(false);
   useEffect(() => {
     if (autoMatchRunning.current) return;
     if (!treasury.length || !egyptBankTxns.length) return;
@@ -1138,19 +1867,30 @@ export default function App() {
     placeholders.forEach(ph => {
       const expAmt = Number(ph.expected_amount || 0);
       const expDir = ph.expected_direction;
-      const phDate = new Date(ph.transaction_date);
+      // v55.83-A.6.9 (Max May 13 2026) — anchor on expected_date if set,
+      // else fall back to transaction_date. Old 2-day window was too
+      // narrow for employee-held money waiting on a deposit run.
+      // 14 days covers most "money sitting with Haitham" cases.
+      const anchorDate = new Date(ph.expected_date || ph.transaction_date);
       const tolAmt = Math.max(expAmt * 0.01, 1);
-      const twoDays = 2 * 86400000;
+      const matchWindow = 14 * 86400000;
 
       const candidates = unmatchedBank.filter(b => {
         const bankAmt = Number(b.amount);
         const bankIsIn = bankAmt > 0;
         if (expDir === 'in' && !bankIsIn) return false;
         if (expDir === 'out' && bankIsIn) return false;
-        if (ph.bank_account_id && b.account_id && ph.bank_account_id !== b.account_id) return false;
+        // v55.83-A.6.12 (Max May 13 2026) — bank_account_id mismatch was
+        // BLOCKING matches even when amount/date/order# were perfect. This
+        // was the root cause of invoice 2303's 570K placeholder not matching
+        // the 570K bank entry on 2026-03-29. The customer deposited to a
+        // different company account than was expected when the placeholder
+        // was created. We no longer EXCLUDE on account mismatch — instead,
+        // we apply a score penalty (see scoring below). Match still has
+        // 1% amount tolerance + 14-day date window, so false matches stay rare.
         if (Math.abs(Math.abs(bankAmt) - expAmt) > tolAmt) return false;
         const bDate = new Date(b.date);
-        if (Math.abs(bDate - phDate) > twoDays) return false;
+        if (Math.abs(bDate - anchorDate) > matchWindow) return false;
         return true;
       });
 
@@ -1160,7 +1900,15 @@ export default function App() {
         let score = 0;
         if (ph.order_number && (b.description || '').includes(ph.order_number)) score += 1000;
         score -= Math.abs(Math.abs(Number(b.amount)) - expAmt);
-        score -= Math.abs(new Date(b.date) - phDate) / 86400000;
+        score -= Math.abs(new Date(b.date) - anchorDate) / 86400000;
+        // v55.83-A.6.12 — penalize account_id mismatch instead of excluding.
+        // If accounts match → no penalty. If different → 500-point penalty
+        // (less than the order# bonus of 1000, so a perfect order# match on
+        // wrong account still beats no order# on right account). Prevents
+        // false matches while allowing the right one to surface.
+        if (ph.bank_account_id && b.account_id && ph.bank_account_id !== b.account_id) {
+          score -= 500;
+        }
         return { b, score };
       }).sort((a, b) => b.score - a.score);
 
@@ -1179,14 +1927,18 @@ export default function App() {
 
           // POST-MATCH: amount lives in bank_in/bank_out (NOT cash_in/cash_out).
           // Treasury safe net is cash-only; bank hits only affect invoice collected.
+          // v55.83-A.1 — also clear needs_bank_match flag. The row is now
+          // confirmed by a real statement entry and contributes to
+          // total_confirmed (not total_pending_bank) on the invoice.
           const updates = {
             is_bank_placeholder: false,
+            needs_bank_match: false,
             matched_bank_txn_id: bank.id,
             cash_in: 0,
             cash_out: 0,
             bank_in:  isIn ?  expAmt : 0,
             bank_out: !isIn ? expAmt : 0,
-            description: (placeholder.description || '').replace(' [awaiting bank confirmation]', '') + ' ✅ matched bank ' + bank.date,
+            description: (placeholder.description || '').replace(' [awaiting bank confirmation]', '').replace(' [🏦 Bank Transfer · awaiting match]', ' [🏦 Bank Transfer]') + ' ✅ matched bank ' + bank.date,
           };
 
           if (placeholder.order_number && !placeholder.linked_invoice_id) {
@@ -1243,8 +1995,32 @@ export default function App() {
           }).eq('id', bank.id);
 
           // Recalc the linked invoice from DB truth (cash_in + bank_in on linked rows).
-          if (updates.linked_invoice_id) {
-            try { await recalcInvoiceCollected(updates.linked_invoice_id); } catch(e) {}
+          //
+          // v55.83-A.6.11 (Max May 13 2026) — BUG FIX: previously this only
+          // fired when `updates.linked_invoice_id` was freshly set on this
+          // run. If the placeholder ALREADY had linked_invoice_id (e.g.
+          // because the v55.83-A.6.7 backfill SQL filled it on existing
+          // rows), the conditional was falsy and recalc was SKIPPED. Result:
+          // invoice 2303 stayed at "Confirmed 0, Pending 1.32M" even after
+          // 3 of its placeholders were matched to real bank statements.
+          //
+          // FIX: resolve target invoice from EITHER newly-set or existing
+          // linked_invoice_id and always run recalc.
+          //
+          // v55.83-A.6.7 (CRIT-6): retry once on failure.
+          var recalcTargetId = updates.linked_invoice_id || placeholder.linked_invoice_id;
+          if (recalcTargetId) {
+            var recalcOk = false;
+            try { await recalcInvoiceCollected(recalcTargetId); recalcOk = true; } catch(e) { console.warn('[auto-match] recalc attempt 1 failed:', e && e.message); }
+            if (!recalcOk) {
+              try {
+                await new Promise(function (r) { setTimeout(r, 750); });
+                await recalcInvoiceCollected(recalcTargetId);
+                recalcOk = true;
+              } catch (e2) {
+                console.error('[auto-match] recalc retry failed for invoice ' + recalcTargetId + ':', e2 && e2.message);
+              }
+            }
           }
         }
         if (toast) toast.success(matches.length + ' bank transaction(s) auto-matched ✓');
@@ -1366,15 +2142,42 @@ export default function App() {
             + ' [auto-matched from bank ' + bank.date + ']';
 
           // 1. Treasury row
+          //
+          // v55.83-A.6.27.14 (Max May 16 2026) — channel FIX. This is the
+          // auto-matcher firing when an Egypt Bank statement entry matches a
+          // pending check. The money landed in the BANK, not the safe — so
+          // bank_in is the correct channel. Previously this used cash_in,
+          // which silently inflated the safe balance for every auto-matched
+          // check. Invoice "collected" is unaffected because the recalc sums
+          // cash_in + bank_in either way.
+          //
+          // v55.83-A.6.7 (round 2 audit) — resolve linked_invoice_id from
+          // order_number if check doesn't have invoice_id directly. Mirrors
+          // the dbInsert auto-link logic to keep all treasury insert paths
+          // consistent.
+          var resolvedInvoiceId = chk.invoice_id || null;
+          if (!resolvedInvoiceId && chk.order_number) {
+            try {
+              var lk = await supabase.from('invoices').select('id').eq('order_number', String(chk.order_number).trim()).maybeSingle();
+              if (lk && lk.data && lk.data.id) resolvedInvoiceId = lk.data.id;
+            } catch (lkErr) { /* don't block — just log */ console.warn('[auto-match] invoice lookup failed:', lkErr && lkErr.message); }
+          }
           var ins = await supabase.from('treasury').insert({
             transaction_date: collectionDate,
             order_number: chk.order_number || '',
             description: desc,
-            cash_in: Number(chk.amount),
+            cash_in: 0,
             cash_out: 0,
+            bank_in: Number(chk.amount),
+            bank_out: 0,
+            matched_bank_txn_id: bank.id,
+            needs_bank_match: false,
+            is_bank_placeholder: false,
             source: 'main',
             category: 'مبيعات',
-            linked_invoice_id: chk.invoice_id || null,
+            linked_invoice_id: resolvedInvoiceId,
+            source_check_id: chk.id,
+            payment_source: 'check',
           }).select('id').single();
           if (!ins.data) continue;
           var newTxnId = ins.data.id;
@@ -1408,18 +2211,52 @@ export default function App() {
     })();
   }, [checks, egyptBankTxns]);
 
-  // Load last login info for welcome briefing
+  // v55.83-A.6.27.11 (Max May 15 2026) — Fix Nadia briefing claiming
+  // "you haven't logged in a week" when the user is logged in RIGHT NOW.
+  // Root cause: user_sessions can miss recent activity. Cross-reference
+  // with the newer login_events table (per the same pattern AdminTab's
+  // "Did Not Login Yesterday" widget uses). Synthesize today's entry if
+  // login_events shows activity today but user_sessions doesn't.
   const [loginHistoryLoaded, setLoginHistoryLoaded] = useState(false);
   useEffect(() => {
     if (!userProfile?.id) return;
     (async () => {
       try {
-        const { data } = await supabase.from('user_sessions')
-          .select('date, login_at')
-          .eq('user_id', userProfile.id)
-          .order('login_at', { ascending: false })
-          .limit(30);
-        setLastLoginInfo(data || []);
+        const [sessionsResp, eventsResp] = await Promise.all([
+          supabase.from('user_sessions')
+            .select('date, login_at')
+            .eq('user_id', userProfile.id)
+            .order('login_at', { ascending: false })
+            .limit(30),
+          // login_events is the newer, more reliable source. Used to
+          // backfill any missing recent days. Don't fail if the table
+          // doesn't exist on a fresh deploy.
+          supabase.from('login_events')
+            .select('event_time, event_type')
+            .eq('user_id', userProfile.id)
+            .eq('event_type', 'login')
+            .order('event_time', { ascending: false })
+            .limit(30)
+            .then(r => r, () => ({ data: [] })),
+        ]);
+        var merged = sessionsResp.data || [];
+        // Build a Set of dates already in user_sessions
+        var haveDates = {};
+        merged.forEach(function (s) { if (s.date) haveDates[s.date] = true; });
+        // Append any login_events dates that aren't already covered
+        (eventsResp.data || []).forEach(function (e) {
+          if (!e.event_time) return;
+          var d = String(e.event_time).substring(0, 10);
+          if (!haveDates[d]) {
+            haveDates[d] = true;
+            merged.push({ date: d, login_at: e.event_time });
+          }
+        });
+        // Sort newest first so AIGreeter's previousDays[0] gives the right answer
+        merged.sort(function (a, b) {
+          return (b.login_at || b.date || '').localeCompare(a.login_at || a.date || '');
+        });
+        setLastLoginInfo(merged);
       } catch(e) { setLastLoginInfo([]); }
       setLoginHistoryLoaded(true);
     })();
@@ -1457,6 +2294,73 @@ export default function App() {
     });
     return map;
   }, [treasury]);
+
+  // v55.83-A.6.27.13 (Max May 16 2026) — UUID-keyed treasury map.
+  //
+  // ROOT CAUSE OF INVOICE 2330 RECONCILIATION BUG:
+  // The recalcInvoiceCollected function queries treasury by linked_invoice_id
+  // (UUID). The display panel was using treasuryByOrder which keys by
+  // order_number (string). The two paths can disagree:
+  //   - A row with linked_invoice_id=X but order_number empty/wrong is
+  //     COUNTED by recalc but HIDDEN from the display → "collected total
+  //     includes invisible money"
+  //   - A row with order_number=Y but no UUID link is DISPLAYED but NOT
+  //     counted → "panel shows a payment that isn't in the total"
+  //
+  // The fix: panel now reads from this UUID-keyed map, which mirrors EXACTLY
+  // the row set recalcInvoiceCollected uses. Now what the user sees in the
+  // panel and what the "Collected" tile shows MUST agree.
+  //
+  // Includes placeholders + pending rows so the panel renders them too —
+  // they were already counted (as pending) by the recalc, and previously
+  // hidden by the panel for "cosmetic" reasons. Hidden pending money is the
+  // real bug, not a UI nicety.
+  const treasuryByInvoiceId = useMemo(() => {
+    const map = {};
+    treasury.forEach(t => {
+      if (!t.linked_invoice_id) return;
+      // Skip dedup mirrors and bank-confirmation markers — these are not
+      // separate money, they're audit-trail rows for already-counted amounts.
+      // (Same filter recalcInvoiceCollected uses.)
+      if (t.dedup_sibling_id) return;
+      if (t.description && String(t.description).indexOf('[bank confirmation') >= 0) return;
+      if (!map[t.linked_invoice_id]) map[t.linked_invoice_id] = [];
+      map[t.linked_invoice_id].push(t);
+    });
+    return map;
+  }, [treasury]);
+
+  // v55.83-A.6.27.13 — Linkage drift detector.
+  //
+  // Returns the rows that are linked-by-order-number to this invoice but
+  // NOT linked-by-UUID. These DISPLAY in the panel under old logic but are
+  // NOT counted by the recalc. Surfacing them lets the user see the broken
+  // link and click Fix Links to repair.
+  //
+  // v55.83-A.6.27.14 (Max May 16 2026) — additional guard: if a row is
+  // already linked-by-UUID to ANOTHER invoice, don't show it as an orphan
+  // here. Otherwise clicking "Link Now" on invoice A would steal a row
+  // legitimately owned by invoice B (possible when two invoices share the
+  // same order_number string — legacy data or duplicate-import scenario).
+  const findOrphanedOrderNumberMatches = (invoice) => {
+    if (!invoice || !invoice.order_number) return [];
+    var on = String(invoice.order_number).trim();
+    if (!on) return [];
+    var byUuid = treasuryByInvoiceId[invoice.id] || [];
+    var byUuidIds = {};
+    byUuid.forEach(function (t) { byUuidIds[t.id] = true; });
+    return treasury.filter(function (t) {
+      if (!t.order_number) return false;
+      if (String(t.order_number).trim() !== on) return false;
+      if (byUuidIds[t.id]) return false; // already counted via UUID
+      // Already linked-by-UUID to a DIFFERENT invoice? Leave it alone.
+      // Linking it here would steal from that other invoice.
+      if (t.linked_invoice_id && t.linked_invoice_id !== invoice.id) return false;
+      if (t.dedup_sibling_id) return false;
+      if (t.description && String(t.description).indexOf('[bank confirmation') >= 0) return false;
+      return true;
+    });
+  };
 
   // Monthly treasury totals
   const monthlyTreasury = useMemo(() => {
@@ -1595,12 +2499,25 @@ export default function App() {
     };
   }, []);
 
-  const navigate = (t) => {
+  // v55.55 — `navigate` now accepts an optional opts object with { from, to }.
+  // When supplied, mode is set to 'custom' and the date pickers are pre-filled
+  // so the destination tab opens already filtered to that exact range.
+  // Used by the Monthly Sales Report click-to-drill: tap a month → land on
+  // the Sales tab showing only that month's invoices.
+  const navigate = (t, opts) => {
     setTabLoading(true);
     setTab(t); setQuery(''); setCustomerFilter(''); setSelectedCustomer(null); setSelectedDebtor(null);
     setSelectedInvoice(null); setDrillType(null); setTreasuryDrill(null); setSelectedMonth(null);
-    if (t === 'treasury') setMode('all');
-    else if (t === 'sales' || t === 'checks') setMode('ytd');
+    if (opts && opts.from && opts.to) {
+      // Custom date range supplied — honor it on whatever tab we're going to.
+      setMode('custom');
+      setDf(opts.from);
+      setDt(opts.to);
+    } else if (t === 'treasury') {
+      setMode('all');
+    } else if (t === 'sales' || t === 'checks') {
+      setMode('ytd');
+    }
     setTimeout(() => setTabLoading(false), 300);
   };
 
@@ -1645,6 +2562,38 @@ export default function App() {
         window.scrollTo({ top: saved.scrollY, behavior: 'instant' });
       }
     }, 50);
+  };
+
+  // v55.83-A.6.18 (Max May 14 2026) — Acknowledge a ticket from the dashboard
+  // priority card. Changes status from 'New' → 'Acknowledged' AND logs a system
+  // comment so the audit trail captures the action. Matches the behavior of the
+  // Acknowledge button inside TicketsTab.
+  const ackDashboardTicket = async (ticket) => {
+    if (!ticket || !ticket.id) return;
+    setBusyAckId(ticket.id);
+    try {
+      const myUid = userProfile?.id || user?.id;
+      const myName = (userProfile && (userProfile.full_name || userProfile.email)) || 'User';
+      // 1. Status update
+      await dbUpdate('tickets', ticket.id, { status: 'Acknowledged' }, myUid);
+      // 2. System comment for audit trail (mirrors TicketsTab.updateStatus)
+      try {
+        await dbInsert('ticket_comments', {
+          ticket_id: ticket.id,
+          comment_text: '📋 Status changed to Acknowledged by ' + myName,
+          is_system: true,
+          created_by: myUid,
+        }, myUid);
+      } catch (_) { /* non-fatal */ }
+      toast && toast.success && toast.success('Acknowledged / تم التأكيد');
+      // 3. Reload tickets so the card disappears
+      try { await loadAllData(); } catch (_) {}
+    } catch (err) {
+      var msg = (err && err.message) ? err.message : String(err);
+      toast && toast.error && toast.error('Acknowledge failed: ' + msg);
+    } finally {
+      setBusyAckId(null);
+    }
   };
 
   const handleSignOut = async () => {
@@ -1695,39 +2644,231 @@ export default function App() {
   // Called after ANY payment/link/unlink/match action
   // Queries DB directly — always accurate, prevents double counting
   // ==========================================
+  // v55.83-A.1 (Max May 13 2026) — split collected into confirmed + pending.
+  //
+  // CONFIRMED = money that's either:
+  //   • Cash/safe channel (cash_in > 0) — physically counted, no bank needed
+  //   • Bank channel matched against a real statement entry (matched_bank_txn_id IS NOT NULL)
+  //     OR rows that came from the bank-statement auto-matcher itself
+  //
+  // PENDING BANK = recorded as bank-channel but not yet matched to a statement:
+  //   • is_bank_placeholder = TRUE (Path B awaiting matcher)
+  //   • OR needs_bank_match = TRUE (Path A bank_transfer awaiting matcher under v55.83-A.1)
+  //
+  // total_collected (legacy) = total_confirmed + total_pending_bank.
+  // We keep it for backward compat with reports/exports built before the split.
   const recalcInvoiceCollected = async (invoiceId) => {
     if (!invoiceId) return;
-    // Get invoice from DB
-    const { data: inv } = await supabase.from('invoices').select('id, total_amount, order_number').eq('id', invoiceId).maybeSingle();
+    // v55.83-A.6.8 (Max May 13 2026) — also load total_written_off so the
+    // outstanding calculation subtracts written-off amounts.
+    const { data: inv } = await supabase.from('invoices').select('id, total_amount, order_number, total_written_off').eq('id', invoiceId).maybeSingle();
     if (!inv) return;
-    // Source of truth: treasury rows with linked_invoice_id pointing to this invoice.
-    // "Collected" sums BOTH safe cash_in AND bank_in (both are real money received
-    // for this invoice — just via different channels). We do NOT filter on cash_in>0
-    // in the query anymore because a row might have bank_in>0 and cash_in=0.
     const { data: linked } = await supabase.from('treasury')
-      .select('id, cash_in, bank_in, is_bank_placeholder, description, dedup_sibling_id')
+      .select('id, cash_in, bank_in, is_bank_placeholder, needs_bank_match, matched_bank_txn_id, description, dedup_sibling_id')
       .eq('linked_invoice_id', invoiceId);
-    // Sum only real entries (not placeholders, not bank-confirmation dedup markers).
-    // BUG 5 fix: prefer dedup_sibling_id (the stable DB column set at auto-match
-    // time) as the authoritative dedup signal, with the old description substring
-    // check kept as a legacy fallback. Previously the marker check relied purely
-    // on the description containing "[bank confirmation" — if a user edited the
-    // description and removed that marker, the row became "real" and got counted,
-    // reintroducing the double-counting the marker was meant to prevent.
-    let total = 0;
+
+    let confirmed = 0;
+    let pending = 0;
     for (const t of (linked || [])) {
-      if (t.is_bank_placeholder) continue;
-      if (t.dedup_sibling_id) continue;                                // authoritative
-      if (t.description && t.description.includes('[bank confirmation')) continue; // legacy fallback
-      total += Number(t.cash_in || 0) + Number(t.bank_in || 0);
+      // Always skip dedup markers (the legacy "[bank confirmation" rows and
+      // the new dedup_sibling_id rows) — these mirror another row that's
+      // already counted. Double-count guard.
+      if (t.dedup_sibling_id) continue;
+      if (t.description && t.description.includes('[bank confirmation')) continue;
+
+      const cashAmt = Number(t.cash_in || 0);
+      const bankAmt = Number(t.bank_in || 0);
+
+      // PLACEHOLDER rows (Path B before match) — pending. expected_amount
+      // semantics: the row's bank_in is 0 until the matcher writes it, but
+      // the placeholder shouldn't be hidden from the user — they recorded
+      // it intentionally. We count its expected amount as pending.
+      if (t.is_bank_placeholder) {
+        // For placeholders, bank_in is 0 until matched. The expected_amount
+        // column holds the user-entered amount. Fall back to bank_in just
+        // in case (defensive).
+        pending += Number(t.bank_in || t.expected_amount || 0);
+        continue;
+      }
+
+      // BANK ROWS AWAITING MATCH (Path A trust-immediate under old behavior,
+      // or any unmatched bank_in/bank_out row under v55.83-A.1).
+      if (t.needs_bank_match && !t.matched_bank_txn_id) {
+        pending += bankAmt;
+        continue;
+      }
+
+      // Everything else is confirmed: cash, safe channels (cash_in > 0), or
+      // bank rows that have been matched against a real statement entry.
+      confirmed += cashAmt + bankAmt;
     }
-    // Cap at invoice total
-    const capped = Math.min(total, Number(inv.total_amount || 0));
+
+    // Cap at invoice total — the system never claims a customer paid more
+    // than they were billed.
+    //
+    // v55.83-A.6.7 (Max May 13 2026) — CRIT-4 fix: don't SILENTLY cap.
+    // Track the overflow amount in overpayment_amount so the UI can show
+    // a warning like "Treasury exceeds invoice by EGP 700 — review for
+    // duplicate payments." Without this, a double-entered payment is
+    // hidden by the cap and looks like a normal paid-in-full invoice.
+    const totalAmt = Number(inv.total_amount || 0);
+    const totalAll = confirmed + pending;
+    let cappedConfirmed = confirmed;
+    let cappedPending = pending;
+    let overpaymentAmount = 0;
+    if (totalAll > totalAmt && totalAll > 0) {
+      overpaymentAmount = totalAll - totalAmt;
+      const scale = totalAmt / totalAll;
+      cappedConfirmed = confirmed * scale;
+      cappedPending = pending * scale;
+    }
+    const capped = cappedConfirmed + cappedPending;
+
     await dbUpdate('invoices', invoiceId, {
       total_collected: capped,
-      outstanding: Math.max(0, Number(inv.total_amount || 0) - capped),
+      total_confirmed: cappedConfirmed,
+      total_pending_bank: cappedPending,
+      overpayment_amount: overpaymentAmount,
+      // v55.83-A.6.8 (Max May 13 2026) — short-payment write-off support.
+      // Outstanding subtracts any amount that's been formally written off
+      // (e.g. customer short-paid by 50 EGP and we accept it). Without
+      // this, the invoice would stay OPEN indefinitely on tiny rounding.
+      // total_written_off field is set/cleared by handleWriteOffShortPayment.
+      // Tolerance: 0.50 EGP for rounding (HIGH-1).
+      outstanding: (function() {
+        var writtenOff = Number(inv.total_written_off || 0);
+        var remainder = totalAmt - capped - writtenOff;
+        return Math.abs(remainder) < 0.50 ? 0 : Math.max(0, remainder);
+      })(),
     }, userProfile?.id || user?.id);
     return capped;
+  };
+
+  // v55.83-A.6.8 (Max May 13 2026) — Short-payment write-off.
+  //
+  // Soft cap: anyone with invoice edit can write off up to this amount;
+  // super_admin can override beyond. Every write-off is logged to audit.
+  // Threshold is intentionally generous — most short-payments are <100 EGP.
+  const WRITE_OFF_SOFT_CAP_EGP = 1000;
+
+  // Reason is locked to a single category per Max's request. Bilingual.
+  const WRITE_OFF_REASON = 'Customer short-payment';
+  const WRITE_OFF_REASON_AR = 'خصم لعدم سداد العميل';
+
+  // (isSuperAdmin already declared above at line ~1476)
+
+  // Handler: apply write-off to an invoice.
+  // - Validates amount > 0 and <= invoice.outstanding (can't write off more
+  //   than what's actually outstanding).
+  // - Soft-cap enforced; super_admin bypass.
+  // - Writes total_written_off, write_off_reason, write_off_notes, then
+  //   re-runs recalc so outstanding drops by the written-off amount.
+  // - Audit entry tagged 'invoice.write_off' with English + Arabic note.
+  const handleWriteOffShortPayment = async (invoice, amount, notesEN) => {
+    if (!canEditInvoices) {
+      toast.error('You do not have permission to write off / لا تملك صلاحية الخصم');
+      return false;
+    }
+    if (!invoice || !invoice.id) {
+      toast.error('Invalid invoice / فاتورة غير صالحة');
+      return false;
+    }
+    var amt = Number(amount);
+    if (!isFinite(amt) || amt <= 0) {
+      toast.error('Enter a positive amount / أدخل مبلغ موجب');
+      return false;
+    }
+    var outstanding = Number(invoice.outstanding || 0);
+    if (amt > outstanding + 0.50) {
+      toast.error('Cannot write off more than outstanding (' + fE(outstanding) + ') / لا يمكن خصم أكثر من المتبقي');
+      return false;
+    }
+    // Soft cap enforcement
+    if (amt > WRITE_OFF_SOFT_CAP_EGP && !isSuperAdmin) {
+      toast.error('Amount exceeds ' + fE(WRITE_OFF_SOFT_CAP_EGP) + ' soft cap. Only super_admin can override / تجاوز الحد الأقصى، يلزم صلاحية المسؤول');
+      return false;
+    }
+    var prior = Number(invoice.total_written_off || 0);
+    var newTotal = prior + amt;
+    // Bilingual notes: user note (optional) + automatic translation hint.
+    // Per Max's "always translate any text added" rule, we store both EN
+    // and AR. If user gave English notes, AR is the reason in Arabic +
+    // English passthrough so the audit log carries both.
+    var notesPart = notesEN ? (' — ' + notesEN) : '';
+    var auditEN = WRITE_OFF_REASON + ' write-off: ' + fE(amt) + notesPart;
+    var auditAR = WRITE_OFF_REASON_AR + ': ' + fE(amt) + (notesEN ? (' — ' + notesEN) : '');
+    try {
+      await dbUpdate('invoices', invoice.id, {
+        total_written_off: newTotal,
+        write_off_reason: WRITE_OFF_REASON,
+        write_off_notes: notesEN || null,
+      }, userProfile?.id || user?.id);
+      // Audit log gets a distinct action tag so reports can filter on it.
+      try {
+        await supabase.from('audit_log').insert({
+          table_name: 'invoices',
+          record_id: invoice.id,
+          action: 'write_off',
+          changed_by: (userProfile && userProfile.id) || (user && user.id) || null,
+          new_values: {
+            amount: amt,
+            reason: WRITE_OFF_REASON,
+            reason_ar: WRITE_OFF_REASON_AR,
+            notes_en: notesEN || null,
+            total_written_off_after: newTotal,
+            soft_cap_overridden: amt > WRITE_OFF_SOFT_CAP_EGP,
+            note_en: auditEN,
+            note_ar: auditAR,
+          },
+        });
+      } catch (auditErr) { console.warn('[write-off] audit log failed:', auditErr && auditErr.message); }
+      // Recalc to update outstanding
+      await recalcInvoiceCollected(invoice.id);
+      await loadAllData();
+      toast.success('Wrote off ' + fE(amt) + ' as short-payment ✓ / تم خصم ' + fE(amt));
+      return true;
+    } catch (err) {
+      toast.error('Write-off failed: ' + (err.message || 'unknown') + ' / فشل الخصم');
+      return false;
+    }
+  };
+
+  // Reverse a write-off (in case it was applied in error). Clears the
+  // total_written_off field entirely. Outstanding restored on recalc.
+  const handleReverseWriteOff = async (invoice) => {
+    if (!canEditInvoices) {
+      toast.error('No permission / لا تملك الصلاحية');
+      return false;
+    }
+    if (!invoice || !invoice.id || !Number(invoice.total_written_off || 0)) return false;
+    var amt = Number(invoice.total_written_off || 0);
+    try {
+      await dbUpdate('invoices', invoice.id, {
+        total_written_off: 0,
+        write_off_reason: null,
+        write_off_notes: null,
+      }, userProfile?.id || user?.id);
+      try {
+        await supabase.from('audit_log').insert({
+          table_name: 'invoices',
+          record_id: invoice.id,
+          action: 'write_off_reverse',
+          changed_by: (userProfile && userProfile.id) || (user && user.id) || null,
+          new_values: {
+            amount_reversed: amt,
+            note_en: 'Reversed short-payment write-off of ' + fE(amt),
+            note_ar: 'تم إلغاء خصم بقيمة ' + fE(amt),
+          },
+        });
+      } catch (auditErr) { console.warn('[write-off-reverse] audit log failed:', auditErr && auditErr.message); }
+      await recalcInvoiceCollected(invoice.id);
+      await loadAllData();
+      toast.success('Write-off reversed ✓ / تم إلغاء الخصم');
+      return true;
+    } catch (err) {
+      toast.error('Reverse failed: ' + (err.message || 'unknown') + ' / فشل');
+      return false;
+    }
   };
 
   const handleAddPayment = async (pf) => {
@@ -1775,7 +2916,13 @@ export default function App() {
         var methodLabel = method === 'vodafone' ? '📱 Vodafone Cash'
                         : method === 'instapay' ? '⚡ InstaPay'
                         : '💵 Cash';
-        await dbInsert('treasury', {
+        // v55.83-A.6.27.19 — code review fix #1. Build the record FIRST so we
+        // can check for matching instruments BEFORE the insert. Without this,
+        // the popup never fired for PaymentForm cash/bank paths and instruments
+        // entered against this invoice silently stayed pending after the
+        // accountant collected the cash. Same architectural pattern as
+        // handleAddTreasury at ~line 3425.
+        var cashRecord = {
           transaction_date: pd.date,
           order_number: selectedInvoice.order_number,
           description: sanitize((pd.desc || selectedInvoice.customer_name + ' payment') + ' [' + methodLabel + ']'),
@@ -1787,21 +2934,123 @@ export default function App() {
           category: pd.category || 'مبيعات',
           subcategory: pd.subcategory || '',
           linked_invoice_id: selectedInvoice.id,
-        }, user?.id);
+        };
+        if (!pd.__instrument_popup_decision) {
+          var cashInstrumentMatches = findMatchingInstruments(selectedInvoice, Number(pd.amount));
+          if (cashInstrumentMatches.length > 0) {
+            addPaymentRunning.current = false; // release re-entry guard so the resume can come back in
+            setPendingInstrumentMatch({
+              record: cashRecord,
+              amount: Number(pd.amount),
+              invoice: selectedInvoice,
+              instruments: cashInstrumentMatches,
+              isBankPlaceholder: false,
+              onResume: async function (stamped) {
+                // Resume: insert the row (with or without source_check_id stamp),
+                // flip the linked instrument if applicable, recalc.
+                try {
+                  var inserted = await dbInsert('treasury', stamped, user?.id);
+                  if (stamped.__instrument_popup_decision === 'link' && stamped.source_check_id) {
+                    try {
+                      await dbUpdate('checks', stamped.source_check_id, {
+                        status: 'cleared',
+                        collection_date: stamped.transaction_date || new Date().toISOString().slice(0, 10),
+                        linked_treasury_id: inserted.id,
+                        updated_by: user?.id,
+                      }, user?.id);
+                    } catch (instErr) {
+                      console.warn('[handleAddPayment cash] instrument flip failed:', instErr && instErr.message);
+                      toast.warning('Saved ✓ — but the linked instrument needs manual update to "cleared".');
+                    }
+                  }
+                  try { await recalcInvoiceCollected(selectedInvoice.id); } catch (_) {}
+                  await loadAllData();
+                  setShowAddPayment(false);
+                  setFormData({});
+                  toast.success(stamped.__instrument_popup_decision === 'link' ? 'Payment saved + instrument cleared ✓' : 'Payment saved ✓');
+                } catch (resumeErr) {
+                  toast.error('Save failed: ' + (resumeErr && resumeErr.message ? resumeErr.message : String(resumeErr)));
+                }
+              },
+            });
+            return; // form stays open; popup will fire
+          }
+        }
+        await dbInsert('treasury', cashRecord, user?.id);
         await recalcInvoiceCollected(selectedInvoice.id);
       } else if (isBankChannel) {
         // BANK TRANSFER → treasury bank_in + invoice link. Does NOT hit safe.
-        await dbInsert('treasury', {
+        // v55.83-A.1 (Max May 13 2026) — bank-channel payments now ALWAYS
+        // require statement confirmation, even via this "trusted" Add Payment
+        // path. The row is created with needs_bank_match=TRUE so it counts
+        // toward total_pending_bank on the invoice (not total_confirmed)
+        // until the bank-statement auto-matcher links it to a real bank
+        // statement entry. This unifies behavior with the placeholder flow
+        // (Path B). Previously this path trusted the user immediately, which
+        // caused invoices to show fully-paid even when the money hadn't
+        // actually landed yet.
+        //
+        // v55.83-A.6.27.19 — same instrument-match popup hook as the cash
+        // branch above. Build record first; if a matching instrument exists,
+        // defer via the popup. If user picks "Yes, link" we record that
+        // intent; the actual instrument doesn't flip to "cleared" until
+        // total_confirmed catches up (still requires bank-statement match)
+        // — for now we DO flip on click since the popup is showing
+        // intent, but we keep needs_bank_match=true so the dashboard
+        // continues to show this as pending bank confirmation. Treasury
+        // and recalc behavior is unchanged.
+        var bankRecord = {
           transaction_date: pd.date,
           order_number: selectedInvoice.order_number,
-          description: sanitize((pd.desc || selectedInvoice.customer_name + ' payment') + ' [🏦 Bank Transfer]'),
+          description: sanitize((pd.desc || selectedInvoice.customer_name + ' payment') + ' [🏦 Bank Transfer · awaiting match]'),
           cash_in: 0, cash_out: 0,
           bank_in: Number(pd.amount),
           bank_out: 0,
           category: pd.category || 'مبيعات',
           subcategory: pd.subcategory || '',
           linked_invoice_id: selectedInvoice.id,
-        }, user?.id);
+          needs_bank_match: true,
+        };
+        if (!pd.__instrument_popup_decision) {
+          var bankInstrumentMatches = findMatchingInstruments(selectedInvoice, Number(pd.amount));
+          if (bankInstrumentMatches.length > 0) {
+            addPaymentRunning.current = false;
+            setPendingInstrumentMatch({
+              record: bankRecord,
+              amount: Number(pd.amount),
+              invoice: selectedInvoice,
+              instruments: bankInstrumentMatches,
+              isBankPlaceholder: false,
+              onResume: async function (stamped) {
+                try {
+                  var inserted = await dbInsert('treasury', stamped, user?.id);
+                  if (stamped.__instrument_popup_decision === 'link' && stamped.source_check_id) {
+                    try {
+                      await dbUpdate('checks', stamped.source_check_id, {
+                        status: 'cleared',
+                        collection_date: stamped.transaction_date || new Date().toISOString().slice(0, 10),
+                        linked_treasury_id: inserted.id,
+                        updated_by: user?.id,
+                      }, user?.id);
+                    } catch (instErr) {
+                      console.warn('[handleAddPayment bank] instrument flip failed:', instErr && instErr.message);
+                      toast.warning('Saved ✓ — but the linked instrument needs manual update to "cleared".');
+                    }
+                  }
+                  try { await recalcInvoiceCollected(selectedInvoice.id); } catch (_) {}
+                  await loadAllData();
+                  setShowAddPayment(false);
+                  setFormData({});
+                  toast.success(stamped.__instrument_popup_decision === 'link' ? 'Bank payment saved + instrument cleared ✓' : 'Bank payment saved ✓');
+                } catch (resumeErr) {
+                  toast.error('Save failed: ' + (resumeErr && resumeErr.message ? resumeErr.message : String(resumeErr)));
+                }
+              },
+            });
+            return;
+          }
+        }
+        await dbInsert('treasury', bankRecord, user?.id);
         await recalcInvoiceCollected(selectedInvoice.id);
       } else {
         // "Other" — no treasury row, just a note. Invoice collected unchanged.
@@ -1823,13 +3072,12 @@ export default function App() {
   // ========== RECONCILIATION REPORT GENERATOR ==========
   const generateReconReport = () => {
     const wb = XLSX.utils.book_new();
-    const now = new Date().toLocaleDateString();
+    const now = fmtET(new Date(), 'shortdate');
 
     // 1. Categorize all invoices
     const mismatch = [], unverified = [], overpaid = [], overdue = [];
     invoices.forEach(inv => {
-      const txns = treasuryByOrder[inv.order_number] || [];
-      const tTotal = txns.reduce((a, t) => a + Number(t.cash_in || 0) + Number(t.bank_in || 0), 0);
+      const tTotal = tTotalForInvoice(inv);
       const status = getReconStatus(inv, tTotal);
       const row = {
         'Order # / رقم الأمر': inv.order_number,
@@ -1892,26 +3140,67 @@ export default function App() {
     addSheet('No Order #', noOrder);
     addSheet('No Category', noCat);
 
-    XLSX.writeFile(wb, 'KTC_Reconciliation_Report_' + new Date().toISOString().substring(0, 10) + '.xlsx');
+    XLSX.writeFile(wb, 'KTC_Reconciliation_Report_' + todayET() + '.xlsx');
   };
 
   const handleAddInvoice = async () => {
-    if (!formData.orderNumber) { toast.warning('Order number is required / رقم الأمر مطلوب'); return; }
-    if (!formData.customerName) { toast.warning('Customer name is required / اسم العميل مطلوب'); return; }
-    if (!formData.amount || Number(formData.amount) <= 0) { toast.warning('Amount must be greater than zero / المبلغ يجب أن يكون أكبر من صفر'); return; }
+    // v55.47 — Same custSearch→customerName promotion as the inline invoice
+    // form, applied here. Without this, users who typed a customer name and
+    // tabbed away (instead of clicking a dropdown row) would see "Customer
+    // name is required" even though the field clearly had their text.
+    let resolvedCustomerName = formData.customerName;
+    let resolvedCustomerId = formData.customerId;
+    if (!resolvedCustomerName && formData.custSearch && String(formData.custSearch).trim()) {
+      const typed = String(formData.custSearch).trim();
+      const exact = (customers || []).find(c =>
+        (c.name && c.name.toLowerCase() === typed.toLowerCase()) ||
+        (c.name_ar && c.name_ar === typed)
+      );
+      if (exact) {
+        resolvedCustomerName = exact.name || exact.name_ar;
+        resolvedCustomerId = exact.id;
+      } else {
+        resolvedCustomerName = typed;
+      }
+    }
+
+    // v55.49 — Friendly error wrapping. Previously the catch block surfaced
+    // the raw Supabase error (e.g. "duplicate key value violates unique
+    // constraint 'invoices_order_number_key'") which confused users. Now
+    // we detect common database errors and translate to plain language.
+    if (!formData.orderNumber || !String(formData.orderNumber).trim()) { toast.warning('Order number is required / رقم الأمر مطلوب'); return; }
+    if (!resolvedCustomerName) { toast.warning('Customer name is required / اسم العميل مطلوب'); return; }
+    // v55.82-E — same parseAmount/isValidAmount upgrade as handleAddTreasury.
+    // Comma-thousands and Arabic-Indic digits previously slipped through
+    // Number(...) <= 0 and saved an invoice with NaN total_amount.
+    if (!isValidAmount(formData.amount)) { toast.warning('Amount must be greater than zero / المبلغ يجب أن يكون أكبر من صفر'); return; }
     try {
       const orderNum = sanitize(formData.orderNumber);
-      const { data: inserted } = await supabase.from('invoices').insert({
+      const { data: inserted, error: insErr } = await supabase.from('invoices').insert({
         order_number: orderNum,
-        customer_name: sanitize(formData.customerName),
-        customer_id: formData.customerId || null,
+        customer_name: sanitize(resolvedCustomerName),
+        customer_id: resolvedCustomerId || null,
         invoice_date: formData.date || today(),
-        total_amount: Number(formData.amount),
+        total_amount: parseAmount(formData.amount),
         total_collected: 0,
         sales_rep: formData.salesRep || '',
         notes: sanitize(formData.notes || ''),
         source: 'manual',
       }).select('id').single();
+      // v55.49 — Surface insert errors in plain language. The raw DB error
+      // "duplicate key value violates unique constraint" was the most
+      // common confusing message users saw.
+      if (insErr) {
+        var msg = String(insErr.message || '');
+        if (/duplicate key|unique constraint/i.test(msg)) {
+          toast.error('Order #' + orderNum + ' already exists as an invoice. Open it from the Sales tab if you want to edit it. / رقم الأمر #' + orderNum + ' موجود بالفعل كفاتورة. افتحها من تبويب المبيعات للتعديل.');
+        } else if (/permission|policy|rls/i.test(msg)) {
+          toast.error('You do not have permission to create invoices. / ليس لديك إذن لإنشاء فواتير.');
+        } else {
+          toast.error('Could not save invoice: ' + msg + ' / تعذر حفظ الفاتورة');
+        }
+        return;
+      }
 
       // BACKFILL: link any existing treasury rows that reference this order_number
       // but don't yet have linked_invoice_id. Recalc collected afterward.
@@ -1938,7 +3227,16 @@ export default function App() {
       setFormData({});
       await loadAllData();
     } catch (err) {
-      toast.error(err.message);
+      // v55.49 — Friendly error wrapping for thrown exceptions (network
+      // drops, Supabase client crashes, etc). Raw err.message was scary.
+      var emsg = String((err && err.message) || err || 'Unknown error');
+      if (/network|fetch|failed/i.test(emsg)) {
+        toast.error('Network problem saving the invoice. Check your connection and try again. / مشكلة في الاتصال أثناء حفظ الفاتورة.');
+      } else if (/duplicate key|unique constraint/i.test(emsg)) {
+        toast.error('This order number already exists as an invoice. Open it from the Sales tab to edit. / رقم الأمر موجود بالفعل كفاتورة.');
+      } else {
+        toast.error('Could not save invoice: ' + emsg + ' / تعذر حفظ الفاتورة');
+      }
     }
   };
 
@@ -1973,12 +3271,99 @@ export default function App() {
     return scored.slice(0, 3).map(x => x.inv);
   };
 
-  const handleAddTreasury = async () => {
+  // v55.41 — Helper: find treasury rows that look like potential duplicates
+  // of what the user is about to save.
+  //
+  // "Potential duplicate" = same calendar date, same amount in the same
+  // direction (cash_in/cash_out/bank_in/bank_out), same trimmed/case-insensitive
+  // description. Order# and category are NOT part of the match because two
+  // legitimate same-amount payments could land on the same invoice.
+  //
+  // Returns an array of matching rows (capped at 5 for UI sanity).
+  // Returns [] if nothing matches — the save proceeds normally.
+  const findPotentialDuplicates = (txDate, amount, descRaw, isIncome, isBankPlaceholder) => {
+    var amt = Number(amount || 0);
+    if (!amt || amt <= 0) return [];
+    var desc = String(descRaw || '').trim().toLowerCase();
+    if (!desc) return []; // empty description — never block, no signal to dedup on
+    var dateStr = String(txDate || '').substring(0, 10);
+    var matches = (treasury || []).filter(function(t) {
+      if (!t) return false;
+      // Date must match exactly
+      var tDate = String(t.transaction_date || '').substring(0, 10);
+      if (tDate !== dateStr) return false;
+      // Direction must match — cash_in row dedups against cash_in/bank_in,
+      // cash_out against cash_out/bank_out
+      var tIn = Number(t.cash_in || 0) + Number(t.bank_in || 0) + Number(t.expected_amount || 0) * (t.expected_direction === 'in' ? 1 : 0);
+      var tOut = Number(t.cash_out || 0) + Number(t.bank_out || 0) + Number(t.expected_amount || 0) * (t.expected_direction === 'out' ? 1 : 0);
+      var tAmt = isIncome ? tIn : tOut;
+      // 1 EGP tolerance for FX rounding
+      if (Math.abs(tAmt - amt) > 1) return false;
+      // Description match — case-insensitive, trim, ignore the bank-confirmation suffix
+      var tDesc = String(t.description || '')
+        .replace(' [awaiting bank confirmation]', '')
+        .replace(/\s*\[bank confirmation[^\]]*\]/g, '')
+        .trim().toLowerCase();
+      if (!tDesc) return false;
+      return tDesc === desc;
+    });
+    return matches.slice(0, 5);
+  };
+
+  const handleAddTreasury = async (opts) => {
+    opts = opts || {};
     if (!canEditTreasury) { toast.error('You do not have permission to add treasury entries.'); return; }
+    // v55.82-E — RE-ENTRY GUARD. Without this, a fast double-tap on the
+    // Save button fired two parallel saves: both passed validation,
+    // both reached dbInsert, both wrote rows. The second one then
+    // tripped the unique-index dedup check (if enabled) and opened
+    // the duplicate-confirmation modal — which the user couldn't tell
+    // apart from the legitimate dup flow. Either way, books were off
+    // by a duplicate. This ref-based guard rejects any concurrent
+    // entry while a save is in flight. Released in finally so it
+    // resets even on a thrown error.
+    if (addTreasuryRunning.current) {
+      console.log('[treasury-add] re-entry blocked — save already in flight');
+      return;
+    }
+    addTreasuryRunning.current = true;
+    setTreasurySaving(true);
+    try {
+      return await _handleAddTreasuryImpl(opts);
+    } finally {
+      addTreasuryRunning.current = false;
+      setTreasurySaving(false);
+    }
+  };
+
+  // v55.82-E — Body of handleAddTreasury extracted into a private impl so
+  // the entry-point can wrap the whole thing in the re-entry guard above
+  // without repeating the unwrap/wrap code at every early-return path.
+  // All `return` statements below close out the SAVE flow normally; the
+  // guard release happens in the wrapper's finally block.
+  const _handleAddTreasuryImpl = async (opts) => {
+    opts = opts || {};
+    // v55.47 — Collect ALL validation errors first instead of bailing on
+    // the first one with a toast. The user sees every problem at once in
+    // a persistent banner inside the modal, plus per-field highlighting.
+    // Toasts at the screen corner were getting missed on mobile (Amad
+    // reported "I tap Submit and nothing happens" — actually the Amount
+    // field was blank and the toast popped and died in 2s).
+    const errs = [];
     const txDate = formData.date || today();
-    if (!formData.amount) { toast.warning('Please enter an amount / الرجاء إدخال المبلغ'); return; }
+    // v55.82-E — Use isValidAmount() instead of Number(...). Number("5,000")
+    // returns NaN, so the OLD check `Number(...) <= 0` was FALSE for NaN
+    // (NaN <= 0 is false), letting the form pass validation but then
+    // writing NaN/0 to cash_in. Now: parseAmount handles commas, spaces,
+    // and Arabic-Indic digits; isValidAmount returns true only when the
+    // typed value is a real positive number.
+    if (!isValidAmount(formData.amount)) {
+      errs.push({ field: 'amount', label: 'Amount / المبلغ', msg: 'Required — type the amount of money for this transaction.' });
+    }
     const isBankPlaceholder = formData.type === 'bank_in' || formData.type === 'bank_out';
-    if (isBankPlaceholder && !formData.bankAccountId) { toast.warning('Please select a bank account'); return; }
+    if (isBankPlaceholder && !formData.bankAccountId) {
+      errs.push({ field: 'bankAccountId', label: 'Bank Account / الحساب البنكي', msg: 'Required — pick which bank account this entry is against.' });
+    }
     // Bank entries must declare their identity: either an Order (links to a
     // sales invoice) or a Non-Order category (owner draw, inter-bank transfer,
     // bank fee, loan, refund, other). Prevents orderless mystery rows that
@@ -1988,24 +3373,113 @@ export default function App() {
       if (mode === 'order') {
         const orderTrim = String(formData.orderNumber || '').trim();
         if (!orderTrim) {
-          toast.warning('Order mode requires an order number. Switch to Non-Order and pick a category if this is not an invoice payment. / وضع الأمر يتطلب رقم أمر.');
-          return;
+          errs.push({ field: 'orderNumber', label: 'Order # / رقم الأمر', msg: 'Required for Order mode. If this is not a customer payment (owner draw, transfer, fee, etc.), switch to "Non-Order" above.' });
         }
       } else {
         if (!formData.bankNonOrderCategory) {
-          toast.warning('Non-Order bank entries require a category (Owner Draw, Inter-Bank Transfer, Bank Fee, Loan, Refund, or Other). / قيد بنكي بدون أمر يتطلب تصنيف.');
-          return;
+          errs.push({ field: 'bankNonOrderCategory', label: 'Non-Order Category', msg: 'Required for Non-Order mode — pick Owner Draw, Inter-Bank Transfer, Bank Fee, Loan, Refund, or Other.' });
         }
       }
       if (!String(formData.desc || '').trim()) {
-        toast.warning('Description is required for bank entries. / الوصف مطلوب للقيود البنكية.');
-        return;
+        errs.push({ field: 'desc', label: 'Description / الوصف', msg: 'Required for bank entries.' });
       }
     }
+
+    // v55.82-B — Income (cash_in) without Order# moved into the persistent
+    // banner. The same rule existed at line 2700+ as a one-shot toast, but
+    // toasts at the corner are easy to miss on mobile and disappear after
+    // a few seconds. Now: same gate, same exception list (Refund, Owner
+    // Contribution, etc.), but the message stays pinned at the top of the
+    // form until fixed. Bank IN already had its own banner-level check
+    // above. Only applies when no override category is selected.
+    var preTxType = formData.type || 'in';
+    var preIsIncome = preTxType === 'in' || preTxType === 'bank_in';
+    if (preIsIncome && !isBankPlaceholder) {
+      var preOrderTrim = String(formData.orderNumber || '').trim();
+      if (!preOrderTrim) {
+        var preCatName = String(formData.category || '').trim();
+        var preNonOrderIncomeCats = ['Refund', 'Advance', 'Owner Contribution', 'Owner Draw', 'Loan', 'Loan Received', 'Other Income', 'Inter-Bank Transfer', 'Bank Fee', 'استرداد', 'سلفة', 'إيداع المالك', 'قرض', 'دخل آخر'];
+        var preIsNonOrderIncome = preCatName && preNonOrderIncomeCats.some(function(n) {
+          return preCatName.toLowerCase() === n.toLowerCase();
+        });
+        if (!preIsNonOrderIncome) {
+          errs.push({
+            field: 'orderNumber',
+            label: 'Order # / رقم الأمر',
+            msg: 'Required for Cash IN — needed to link the payment to a customer invoice. If this is not a customer payment (refund, advance, owner deposit, loan), pick a non-order Category instead. / مطلوب لربط الدفعة بفاتورة عميل. لو ليست دفعة عميل، اختر تصنيف غير العميل.'
+          });
+        }
+      }
+    }
+
+    if (errs.length > 0) {
+      // Persistent in-form banner + corner toast (belt + suspenders so the
+      // user sees the failure at least one of the two ways).
+      setTreasuryFormErrors(errs);
+      try {
+        toast.warning('Cannot save — ' + errs.length + ' field' + (errs.length === 1 ? '' : 's') + ' need attention. See the red box at the top of the form.');
+      } catch (_) {}
+      // Scroll the first missing field into view so the user can't miss it
+      try {
+        var firstField = errs[0].field;
+        setTimeout(function () {
+          try {
+            var el = document.querySelector('[data-treasury-field="' + firstField + '"]');
+            if (el && el.scrollIntoView) el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+          } catch (_) {}
+        }, 50);
+      } catch (_) {}
+      return;
+    }
+    // All checks passed — clear any stale errors from a previous attempt
+    if (treasuryFormErrors.length > 0) setTreasuryFormErrors([]);
     try {
-      const isIncome = formData.type === 'in' || formData.type === 'bank_in';
+      // v55.12 (Apr 26 2026): The Type radio defaults to "Cash In" visually,
+      // but formData.type is `undefined` until the user actually clicks a
+      // radio. Without this normalization, isIncome was false on the silent
+      // save path, which let cash-in transactions slip through the
+      // require-an-invoice gate. Now: if type isn't set, assume cash_in (the
+      // visual default) so the rest of the flow works as the user expects.
+      const txType = formData.type || 'in';
+      const isIncome = txType === 'in' || txType === 'bank_in';
       const currency = formData.currency || 'EGP';
-      const amt = Number(formData.amount);
+      // v55.82-E — parseAmount instead of Number(). See utils.js comment.
+      // BEFORE this fix, typing "5,000" (with thousands separator) or
+      // "٥٠٠٠" (Arabic-Indic digits, common on iOS Arabic keyboard)
+      // produced amt=NaN, which then got written into cash_in as
+      // either NaN (rejected by Postgres) or 0 (silently coerced).
+      // Either way, Max's typed amount was lost. parseAmount handles
+      // both cases plus comma decimals and embedded whitespace.
+      const amt = parseAmount(formData.amount);
+
+      // v55.41 — DUPLICATE PREFLIGHT.
+      // Open a confirmation modal if an existing treasury row matches
+      // (same date + same amount + same direction + same description).
+      // The save is paused until the user explicitly confirms it's a
+      // legitimate separate payment. Skipped on retry (opts.bypassDupCheck
+      // is set when the user has already confirmed in the modal).
+      // Only runs for fresh inserts — never for edits, never for the
+      // pending-invoice retry path.
+      if (!opts.bypassDupCheck) {
+        var dupMatches = findPotentialDuplicates(
+          txDate, amt, formData.desc, isIncome, isBankPlaceholder
+        );
+        if (dupMatches && dupMatches.length > 0) {
+          // Capture the form snapshot so the modal's "Confirm" button can
+          // re-call handleAddTreasury with bypassDupCheck=true and the
+          // exact same values, even if the user pokes the form behind it.
+          setDuplicateConfirm({
+            txDate: txDate,
+            amount: amt,
+            description: formData.desc,
+            isIncome: isIncome,
+            matches: dupMatches,
+          });
+          // Don't insert. The modal calls handleAddTreasury({bypassDupCheck:true}) on confirm.
+          return;
+        }
+      }
+
       let cat = formData.category || '';
       let subcat = formData.subcategory || '';
       if (!cat && formData.desc) {
@@ -2024,6 +3498,14 @@ export default function App() {
         subcategory: subcat,
         currency: currency,
       };
+      // v55.41 — If the user confirmed past the duplicate-warning modal,
+      // stamp the row so the AI auditor doesn't flag it again later.
+      // The column is added by sql/s38_treasury_confirmed_not_duplicate.sql.
+      // dbInsert.js auto-strips unknown columns and retries — so this is
+      // safe to set even if the migration hasn't been run yet.
+      if (opts.bypassDupCheck) {
+        record.confirmed_not_duplicate = true;
+      }
       // Tag cash_method for safe-channel rows so Vodafone/InstaPay flows
       // can be reconciled separately from physical cash.
       if (!isBankPlaceholder && (formData.type === 'in' || formData.type === 'out' || !formData.type)) {
@@ -2038,6 +3520,12 @@ export default function App() {
         record.expected_amount = amt;
         record.expected_direction = isIncome ? 'in' : 'out';
         record.bank_account_id = formData.bankAccountId;
+        // v55.83-A.6.9 (Max May 13 2026) — expected_date is when the user
+        // anticipates the bank statement entry to appear. Defaults to
+        // transaction_date but user can specify (e.g. employee has cash,
+        // plans to deposit next Tuesday). Auto-matcher uses this to find
+        // the right bank statement entry with a ±14-day window.
+        record.expected_date = formData.expectedDate || record.transaction_date;
         record.description = (record.description || '') + ' [awaiting bank confirmation]';
         const mode = formData.bankEntryMode || 'order';
         if (mode === 'nonorder') {
@@ -2068,21 +3556,105 @@ export default function App() {
           (isBankPlaceholder && bankEntryMode === 'order')  // bank_in Order mode
         );
       const orderNumTrimmed = String(record.order_number || '').trim();
+      // DIAGNOSTIC LOGGING — added so we can see exactly which branch fires
+      // when the user reports "no modal appeared". The four-line signature
+      // tells us if the modal SHOULD have opened, and if not, why not.
+      console.log('[treasury-add] type=' + formData.type + ' isIncome=' + isIncome
+        + ' isBankPlaceholder=' + isBankPlaceholder + ' bankEntryMode=' + bankEntryMode);
+      console.log('[treasury-add] isOrderLinkable=' + isOrderLinkable
+        + ' orderNumTrimmed="' + orderNumTrimmed + '" invoices.length=' + (invoices ? invoices.length : 'undefined'));
       if (isOrderLinkable && orderNumTrimmed) {
         const matchingInvoice = invoices.find(i => String(i.order_number || '').trim() === orderNumTrimmed);
+        console.log('[treasury-add] matchingInvoice=' + (matchingInvoice ? ('#' + matchingInvoice.order_number + ' (id=' + matchingInvoice.id + ')') : 'NONE'));
         if (matchingInvoice) {
           // Auto-link — set linked_invoice_id so recalcInvoiceCollected picks it up
           record.linked_invoice_id = matchingInvoice.id;
+
+          // ── v55.83-A.6.27.17 (Max May 17 2026) — Phase 1 instrument match ──
+          // Before inserting the treasury row, check whether a pending or
+          // deposited instrument on this invoice matches the amount the
+          // accountant is entering. If yes AND the user hasn't already
+          // dismissed/answered the popup for THIS record, defer the insert
+          // until they answer.
+          //
+          // RULE 5 — the popup never creates an extra treasury row. It only
+          // stamps source_check_id on the record we're about to insert, OR
+          // proceeds without the link if the user says "separate payment".
+          //
+          // Suppression key: record.__instrument_popup_decision is set by
+          // the popup handler when the user picks Yes/No, so this code
+          // doesn't loop. Bank placeholders are excluded (their match
+          // already happens via the bank-statement reconciliation path).
+          if (!isBankPlaceholder && !record.__instrument_popup_decision) {
+            var matchingInstruments = findMatchingInstruments(matchingInvoice, amt);
+            if (matchingInstruments.length > 0) {
+              console.log('[treasury-add] INSTRUMENT MATCH — ' + matchingInstruments.length + ' candidate(s) for invoice #' + matchingInvoice.order_number + ' at ' + amt + ' EGP');
+              setPendingInstrumentMatch({
+                record: record,
+                amount: amt,
+                invoice: matchingInvoice,
+                instruments: matchingInstruments,
+                isBankPlaceholder: isBankPlaceholder,
+                onResume: function (stamped) { return commitInstrumentLinkedTreasury(stamped, matchingInvoice, isBankPlaceholder); },
+              });
+              return; // form stays open; popup fires; will re-enter handler when user picks
+            }
+          }
+          // No instrument match (or user already answered) → proceed with normal insert.
+
           // Insert. Only recalc for real cash_in; placeholders wait for the match.
           const inserted = await dbInsert('treasury', record, user?.id);
-          if (!isBankPlaceholder) {
-            await recalcInvoiceCollected(matchingInvoice.id);
+
+          // v55.83-A.6.27.17 — if the user accepted the instrument link, flip
+          // the instrument to 'cleared' AFTER the treasury row is inserted
+          // (so we have the treasury id to stamp on linked_treasury_id).
+          if (record.__instrument_popup_decision === 'link' && record.source_check_id) {
+            try {
+              await dbUpdate('checks', record.source_check_id, {
+                status: 'cleared',
+                collection_date: record.transaction_date || new Date().toISOString().slice(0, 10),
+                linked_treasury_id: inserted.id,
+                updated_by: user?.id,
+              }, user?.id);
+              console.log('[treasury-add] instrument ' + record.source_check_id + ' marked cleared, linked to treasury ' + inserted.id);
+            } catch (instErr) {
+              console.warn('[treasury-add] insert succeeded but instrument flip failed:', instErr && instErr.message);
+              try { toast.warning('Saved ✓ — but the linked instrument needs manual update to "cleared".'); } catch (_) {}
+            }
           }
-          // Use the REAL UUID returned by dbInsert. Previously a fake 'temp-<ts>' id
-          // was used, which broke Edit/Delete during the 500ms window before loadAllData
-          // refreshed — Postgres rejects 'temp-...' as invalid uuid syntax.
+
+          // v55.82-E ROOT-CAUSE #1 FIX. Previously a recalcInvoiceCollected()
+          // throw was poisoning the entire save. The treasury row WAS inserted
+          // successfully (Max's "system not recording amounts properly" report
+          // — actually it WAS recording, but the UI lied and said it failed).
+          // The recalc throws bubbled up to the outer catch at line 2762 which
+          // treated it as a duplicate-or-error and left the modal open with
+          // unreset state. User retried, got real duplicates. Refreshed the
+          // page, found the row already there.
+          //
+          // Fix: recalc gets its own try/catch. If it fails we log + warn the
+          // user that the invoice's collected total may need a manual refresh,
+          // BUT we still complete the success flow — modal closes, form clears,
+          // toast confirms. The insert is the source of truth; recalc is a
+          // derived view.
+          if (!isBankPlaceholder) {
+            try {
+              await recalcInvoiceCollected(matchingInvoice.id);
+            } catch (recalcErr) {
+              console.warn('[treasury-add] insert succeeded but recalcInvoiceCollected threw:', recalcErr && recalcErr.message);
+              try { toast.warning('Saved ✓ — but the invoice total may need a manual refresh (Fix Links button).'); } catch (_) {}
+            }
+          }
           setTreasury(prev => [inserted, ...prev]);
           setShowAddTreasury(false);
+          // v55.82-E — ALSO clear modal-companion state so a future open
+          // is clean. Belt-and-suspenders with the open-button reset.
+          setPendingTreasuryRecord(null);
+          setPendingInstrumentMatch(null);
+          setDuplicateConfirm(null);
+          setTreasuryFormErrors([]);
+          setIsCreatingInvoice(false);
+          setCreateInvoiceError(null);
           toast.success(
             (isBankPlaceholder ? 'Bank entry saved (awaiting statement) + linked to ' : 'Transaction saved + linked to ')
             + (matchingInvoice.customer_name || ('#' + matchingInvoice.order_number)) + ' ✓'
@@ -2092,6 +3664,25 @@ export default function App() {
           return;
         }
         // Order# provided but no matching invoice → open "create now or cancel" flow
+        console.log('[treasury-add] OPENING modal — order#' + orderNumTrimmed + ' not found locally');
+        // v55.48 — Visible toast so user gets immediate feedback. Combined
+        // with the form Modal hiding itself when pendingTreasuryRecord is
+        // set, the user now sees a clear state transition: form goes away,
+        // toast pops, "Order # not found" modal appears.
+        try {
+          toast.info('Order #' + orderNumTrimmed + ' not found in your invoice list — see modal to create or pick a typo suggestion.');
+        } catch (_) {}
+        setIsCreatingInvoice(false);
+        setCreateInvoiceError(null);
+        setFormData(function(prev) {
+          var next = Object.assign({}, prev);
+          delete next.__creatingInvoice;
+          delete next.__newInvCustomer;
+          delete next.__newInvCustomerId;
+          delete next.__newInvTotal;
+          delete next.__newInvDate;
+          return next;
+        });
         setPendingTreasuryRecord({
           record: record,
           amount: amt,
@@ -2100,23 +3691,121 @@ export default function App() {
         return; // form stays open behind the mini-modal; no insert yet
       }
 
-      // No order# branch covers: expenses with/without order#, non-order bank entries, cash_in without order#
+      // v55.12 (Apr 26 2026) — REQUIRE order# for Cash IN / Bank IN.
+      // Previously, income with no order# was silently saved without any
+      // customer link. The Treasury Inspector then showed it as "greyed out"
+      // because the row implied a customer payment but had nothing to point
+      // to, and downstream reports lost the money trail.
+      // Now: if income has no order#, we block save and force the user to
+      // either (a) provide an order#, or (b) explicitly mark it as non-order
+      // income (refund, advance, owner contribution, etc.) via a category.
+      if (isOrderLinkable && !orderNumTrimmed) {
+        console.log('[treasury-add] BLOCKING — income without order#');
+        // If they picked an income category that's clearly non-order
+        // (refund/advance/owner contribution/loan), we accept the entry as
+        // non-order income. Otherwise we block and prompt.
+        var nonOrderIncomeCats = ['Refund', 'Advance', 'Owner Contribution', 'Owner Draw', 'Loan', 'Loan Received', 'Other Income', 'Inter-Bank Transfer', 'Bank Fee', 'استرداد', 'سلفة', 'إيداع المالك', 'قرض', 'دخل آخر'];
+        var catName = String(record.category || '').trim();
+        var isNonOrderIncome = catName && nonOrderIncomeCats.some(function(n) { return catName.toLowerCase() === n.toLowerCase(); });
+        if (!isNonOrderIncome) {
+          toast.warning(
+            'Income transactions need an Order # so we can link to a customer. ' +
+            'If this is NOT a customer payment (e.g. owner deposit, refund, loan, advance), pick a non-order Category. ' +
+            '/ معاملات الوارد تحتاج رقم أمر للربط بالعميل. لو ليست دفعة عميل، اختر تصنيف.'
+          );
+          return;
+        }
+        // Non-order income with explicit category — fall through to silent save below
+        console.log('[treasury-add] non-order income accepted via category: ' + catName);
+      }
+
+      // No order# branch covers: expenses (cash_out / bank_out), non-order bank entries, and explicitly-classified non-order income
+      console.log('[treasury-add] SILENT SAVE path — no modal will appear.');
       const inserted = await dbInsert('treasury', record, user?.id);
-      // Real UUID from dbInsert (see note above). Fake 'temp-' ids broke Edit/Delete.
       setTreasury(prev => [inserted, ...prev]);
       setShowAddTreasury(false);
+      // v55.82-E — clear modal-companion state on every successful save
+      // so the next open is guaranteed clean.
+      setPendingTreasuryRecord(null);
+      setDuplicateConfirm(null);
+      setTreasuryFormErrors([]);
+      setIsCreatingInvoice(false);
+      setCreateInvoiceError(null);
       toast.success(isBankPlaceholder ? 'Bank entry saved — awaiting bank statement ✓' : 'Transaction saved ✓');
       setFormData({});
       setTimeout(() => loadAllData(), 500);
     } catch (err) {
-      toast.error(err.message);
+      // v55.41 — If Postgres rejected the insert because of a unique
+      // constraint (e.g. the optional dedup-hardening unique index that
+      // some Supabase projects have enabled on date+amount+order#), don't
+      // surface a cryptic SQL error to the user. Open the same
+      // confirmation modal we'd open from the JS-side preflight, so the
+      // user can decide whether it really is a separate payment that
+      // happens to look identical. If they confirm, we re-call with
+      // bypassDupCheck=true; the row gets stamped confirmed_not_duplicate
+      // and saved.
+      var msg = err && err.message ? String(err.message) : '';
+      var pgcode = err && err.code ? String(err.code) : '';
+      var isUniqueViolation = pgcode === '23505'
+        || /duplicate key value/i.test(msg)
+        || /unique constraint/i.test(msg);
+      if (isUniqueViolation && !opts.bypassDupCheck) {
+        console.warn('[treasury-add] DB unique-constraint violation — opening duplicate confirmation modal');
+        // v55.82-E — parseAmount here too. The dup-recovery path was
+        // calling Number(formData.amount) which would mis-match ON RETRY
+        // for the same comma-typed input that broke the original save.
+        var dupAmt = parseAmount(formData.amount);
+        var probableMatches = findPotentialDuplicates(
+          formData.date || today(),
+          dupAmt,
+          formData.desc,
+          formData.type === 'in' || formData.type === 'bank_in' || !formData.type,
+          formData.type === 'bank_in' || formData.type === 'bank_out'
+        );
+        setDuplicateConfirm({
+          txDate: formData.date || today(),
+          amount: dupAmt,
+          description: formData.desc,
+          isIncome: formData.type === 'in' || formData.type === 'bank_in' || !formData.type,
+          matches: probableMatches,
+          fromDbError: true,
+        });
+        return;
+      }
+      // v55.82-E — Non-unique-violation errors used to fire only toast.error
+      // and fall off the end of the function with the modal still open and
+      // formData intact. Toast at the corner on mobile gets missed easily,
+      // and the user couldn't tell whether the save actually happened. Now
+      // we ALSO push the error into treasuryFormErrors so the persistent red
+      // banner stays visible until the user explicitly retries or closes.
+      console.error('[treasury-add] save failed:', err);
+      try { toast.error('Save failed: ' + (err && err.message)); } catch (_) {}
+      setTreasuryFormErrors([{
+        field: 'amount',
+        label: 'Save failed',
+        msg: 'Database error: ' + (err && err.message ? err.message : String(err)) + ' — try again, or close this dialog and check the transaction list to see if the row was already saved before retrying.'
+      }]);
     }
   };
+  // End of _handleAddTreasuryImpl
 
   // Finalize the pending treasury record after the user either:
   // (a) accepts a typo suggestion → use that invoice's id
   // (b) creates a new invoice inline → use the new invoice id
   const finalizePendingTreasury = async (invoiceToLink) => {
+    // Apr 25 2026 — Bulletproof local toast wrapper. The screenshot showed
+    // "Cannot read properties of undefined (reading 'success')" which means
+    // `toast` itself was somehow undefined when this closure ran. The line
+    // 1057 fallback should prevent that, but to be 100% safe in this critical
+    // save path, every toast call below uses safeT — same API, but never
+    // throws even if toast is null/undefined. The save itself never fails
+    // because of a toast bug now.
+    var safeT = {
+      success: function(m) { try { (toast && toast.success) ? toast.success(m) : console.log('[toast.success]', m); } catch (_) {} },
+      error: function(m) { try { (toast && toast.error) ? toast.error(m) : console.error('[toast.error]', m); } catch (_) {} },
+      warning: function(m) { try { (toast && toast.warning) ? toast.warning(m) : console.warn('[toast.warning]', m); } catch (_) {} },
+      info: function(m) { try { (toast && toast.info) ? toast.info(m) : console.log('[toast.info]', m); } catch (_) {} },
+    };
     if (!pendingTreasuryRecord) return;
     const rec = { ...pendingTreasuryRecord.record };
     if (invoiceToLink && invoiceToLink.id) {
@@ -2128,28 +3817,80 @@ export default function App() {
       if (invoiceToLink && invoiceToLink.id) {
         await recalcInvoiceCollected(invoiceToLink.id);
       }
-      // Real UUID from dbInsert. Fake 'temp-' ids broke Edit/Delete during the
-      // 500ms window before loadAllData refreshed.
       setTreasury(prev => [inserted, ...prev]);
+      if (invoiceToLink && invoiceToLink.id) {
+        setInvoices(function(prev) {
+          if (prev.some(function(i) { return i.id === invoiceToLink.id; })) return prev;
+          return [invoiceToLink].concat(prev);
+        });
+      }
       setShowAddTreasury(false);
-      setPendingTreasuryRecord(null);
-      toast.success(invoiceToLink
+      closePendingTreasuryModal();
+      safeT.success(invoiceToLink
         ? 'Transaction saved + linked to ' + (invoiceToLink.customer_name || ('#' + invoiceToLink.order_number)) + ' ✓'
         : 'Transaction saved ✓');
       setFormData({});
       setTimeout(() => loadAllData(), 500);
     } catch (err) {
-      toast.error(err.message);
+      console.error('[finalizePendingTreasury] error', err);
+      var rawMsg = (err && err.message) ? String(err.message) : String(err);
+      var pgcode = (err && err.code) ? String(err.code) : '';
+      var isUniqueViolation = pgcode === '23505'
+        || /duplicate key value/i.test(rawMsg)
+        || /unique constraint/i.test(rawMsg);
+
+      if (isUniqueViolation) {
+        // v55.82-B — Graceful recovery for the orphan-invoice failure mode.
+        // Before this fix, if the user got past the "Order # not found"
+        // dialog and clicked "Create Invoice + Save Treasury", the invoice
+        // was created first and THEN the treasury insert ran. If a unique
+        // constraint on (date, amount, order#) tripped on the treasury
+        // insert, the user saw a raw SQL error in the red banner with no
+        // path forward — and the invoice was already in Sales as an orphan
+        // with $0 collected.
+        //
+        // Now: detect 23505 specifically, tell the user plainly what
+        // happened (invoice DID get created, but a matching cash entry
+        // already exists), and point to the recovery action (open the
+        // existing treasury row in Treasury and link it to the new invoice
+        // via the link button). The pending modal stays open so the user
+        // can copy the order# if they want.
+        var invoiceTag = invoiceToLink && invoiceToLink.id
+          ? ('Invoice #' + (invoiceToLink.order_number || invoiceToLink.id) + ' was saved to Sales.')
+          : 'The invoice may have already been created.';
+        var friendly = 'A matching cash/bank entry already exists for this date and amount. ' + invoiceTag
+          + ' To finish: close this dialog, find the existing treasury row, and click its link button to attach it to the invoice. '
+          + ' / يوجد قيد خزنة مطابق بنفس التاريخ والمبلغ. الفاتورة محفوظة في المبيعات. لإكمال الربط، أغلق هذه النافذة وافتح القيد الموجود في الخزنة واضغط زر الربط.';
+        setCreateInvoiceError(friendly);
+        safeT.warning('Invoice saved — but a matching treasury entry already exists. See banner for next step.');
+        return;
+      }
+
+      // Non-duplicate error path: surface message as before.
+      safeT.error(rawMsg);
+      setCreateInvoiceError('Saving the transaction failed: ' + rawMsg);
     }
   };
 
   const handleEditTreasury = async (txn) => {
     try {
+      // v55.42 — Detect row type so we read the right inputs and write the
+      // right columns. Without this, editing a bank row from the inline
+      // table converted it into a cash row (the cash inputs read 0, the
+      // bank fields were never preserved, and is_bank_placeholder was
+      // implicitly cleared on next data flow).
+      var hasBankIn  = Number(txn.bank_in  || 0) > 0;
+      var hasBankOut = Number(txn.bank_out || 0) > 0;
+      var isPlaceholder = !!txn.is_bank_placeholder;
+      var isBankRow = hasBankIn || hasBankOut || isPlaceholder;
+
       const fd = {
         date: formData.txEditDate || txn.transaction_date,
         desc: document.getElementById('tx-desc')?.value,
-        cashIn: document.getElementById('tx-in')?.value,
-        cashOut: document.getElementById('tx-out')?.value,
+        cashIn:  isBankRow ? null : document.getElementById('tx-in')?.value,
+        cashOut: isBankRow ? null : document.getElementById('tx-out')?.value,
+        bankIn:  isBankRow ? document.getElementById('tx-bank-in')?.value  : null,
+        bankOut: isBankRow ? document.getElementById('tx-bank-out')?.value : null,
         orderNumber: document.getElementById('tx-order')?.value,
         category: document.getElementById('tx-cat')?.value,
         subcategory: document.getElementById('tx-subcat')?.value,
@@ -2157,17 +3898,57 @@ export default function App() {
       // Guard against placeholder values
       if (fd.category === '__custom') fd.category = txn.category || '';
       if (fd.subcategory === '__custom') fd.subcategory = txn.subcategory || '';
-      const updates = {
-        transaction_date: fd.date || txn.transaction_date,
-        description: fd.desc || txn.description,
-        cash_in: fd.cashIn != null ? Number(fd.cashIn) : txn.cash_in,
-        cash_out: fd.cashOut != null ? Number(fd.cashOut) : txn.cash_out,
-        bank_in:  fd.bankIn  != null ? Number(fd.bankIn)  : txn.bank_in,
-        bank_out: fd.bankOut != null ? Number(fd.bankOut) : txn.bank_out,
-        order_number: fd.orderNumber != null ? fd.orderNumber : txn.order_number,
-        category: fd.category != null ? fd.category : txn.category,
-        subcategory: fd.subcategory != null ? fd.subcategory : txn.subcategory,
-      };
+
+      // v55.42 — Build updates by ROW TYPE so we never cross-contaminate
+      // cash and bank fields. Bank rows never write cash_in/cash_out;
+      // cash rows never write bank_in/bank_out. is_bank_placeholder and
+      // bank_account_id are NEVER included in the update — they're
+      // intrinsic identity fields and must not change via this edit.
+      var updates;
+      if (isBankRow) {
+        updates = {
+          transaction_date: fd.date || txn.transaction_date,
+          description: fd.desc || txn.description,
+          order_number: fd.orderNumber != null ? fd.orderNumber : txn.order_number,
+          category: fd.category != null ? fd.category : txn.category,
+          subcategory: fd.subcategory != null ? fd.subcategory : txn.subcategory,
+        };
+        if (isPlaceholder) {
+          // Pending placeholder — amount lives in expected_amount
+          // v55.82-E — parseAmount instead of Number() so comma/Arabic/
+          // whitespace inputs don't get coerced to NaN. Same root-cause fix
+          // as handleAddTreasury — was hitting the same bug on edit.
+          var inAmt  = parseAmount(fd.bankIn  || 0);
+          var outAmt = parseAmount(fd.bankOut || 0);
+          if (inAmt > 0) {
+            updates.expected_amount = inAmt;
+            updates.expected_direction = 'in';
+          } else if (outAmt > 0) {
+            updates.expected_amount = outAmt;
+            updates.expected_direction = 'out';
+          } else {
+            updates.expected_amount = Number(txn.expected_amount) || 0;
+          }
+        } else {
+          // Confirmed bank row — amount lives in bank_in/bank_out
+          // v55.82-E — parseAmount on user-typed values; Number() retained
+          // for the txn.* fallbacks since those came straight from the DB.
+          updates.bank_in  = fd.bankIn  != null ? parseAmount(fd.bankIn)  : Number(txn.bank_in  || 0);
+          updates.bank_out = fd.bankOut != null ? parseAmount(fd.bankOut) : Number(txn.bank_out || 0);
+        }
+      } else {
+        // Cash row — original behavior preserved
+        updates = {
+          transaction_date: fd.date || txn.transaction_date,
+          description: fd.desc || txn.description,
+          // v55.82-E — same parseAmount upgrade for cash edits.
+          cash_in:  fd.cashIn  != null ? parseAmount(fd.cashIn)  : txn.cash_in,
+          cash_out: fd.cashOut != null ? parseAmount(fd.cashOut) : txn.cash_out,
+          order_number: fd.orderNumber != null ? fd.orderNumber : txn.order_number,
+          category: fd.category != null ? fd.category : txn.category,
+          subcategory: fd.subcategory != null ? fd.subcategory : txn.subcategory,
+        };
+      }
       await dbUpdate('treasury', txn.id, updates, user?.id);
 
       // BUG 2 fix: if amounts changed AND row is linked to an invoice, the
@@ -2179,7 +3960,8 @@ export default function App() {
         Number(updates.cash_in  || 0) !== Number(txn.cash_in  || 0) ||
         Number(updates.cash_out || 0) !== Number(txn.cash_out || 0) ||
         Number(updates.bank_in  || 0) !== Number(txn.bank_in  || 0) ||
-        Number(updates.bank_out || 0) !== Number(txn.bank_out || 0);
+        Number(updates.bank_out || 0) !== Number(txn.bank_out || 0) ||
+        Number(updates.expected_amount || 0) !== Number(txn.expected_amount || 0);
       if (amountsChanged && txn.linked_invoice_id) {
         try { await recalcInvoiceCollected(txn.linked_invoice_id); } catch (e) { /* don't block UI */ }
       }
@@ -2278,7 +4060,12 @@ export default function App() {
       await dbUpdate('treasury', txnId, { linked_invoice_id: null }, userProfile?.id || user?.id);
       // Recalculate invoice collected (will now exclude this entry)
       await recalcInvoiceCollected(invoiceId);
-    } catch (err) { alert('Unlink error: ' + err.message); }
+    } catch (err) {
+      // v55.82-B — toast over native alert. See handleSaveTreasuryEdit comment.
+      console.error('[treasury-unlink] failed', err);
+      var msg = (err && err.message) ? err.message : String(err);
+      try { (toast && toast.error) ? toast.error('Unlink error: ' + msg) : alert('Unlink error: ' + msg); } catch (_) {}
+    }
   };
 
   // ── Delete Treasury Transaction ──
@@ -2287,23 +4074,160 @@ export default function App() {
       const txn = treasury.find(t => t.id === txnId);
       if (!txn) return;
       const invoiceToRecalc = txn.linked_invoice_id || null;
+      const linkedCheckId = txn.source_check_id || null;
       await dbDelete('treasury', txnId, userProfile?.id || user?.id);
       setTreasury(prev => prev.filter(t => t.id !== txnId));
       setEditTreasuryModal(null);
+      // v55.83-A.6.27.19 — if this treasury row backed an instrument (via
+      // source_check_id) AND the instrument has linked_treasury_id pointing
+      // at this exact row, revert the instrument from 'cleared' back to
+      // 'pending'. Otherwise the instrument shows cleared with a dangling
+      // reference to a deleted treasury row.
+      // We only revert if the link points at THIS treasury row, in case the
+      // instrument has been re-linked to a different treasury row since.
+      if (linkedCheckId) {
+        try {
+          var inst = (checks || []).find(function (c) { return c.id === linkedCheckId; });
+          if (inst && inst.linked_treasury_id === txnId) {
+            await dbUpdate('checks', linkedCheckId, {
+              status: 'pending',
+              collection_date: null,
+              linked_treasury_id: null,
+              updated_by: userProfile?.id || user?.id,
+            }, userProfile?.id || user?.id);
+            console.log('[treasury-delete] reverted linked instrument ' + linkedCheckId + ' back to pending');
+          }
+        } catch (instErr) {
+          console.warn('[treasury-delete] failed to revert linked instrument:', instErr && instErr.message);
+        }
+      }
       // Recalc from DB truth — handles cash_in and bank_in correctly for any channel.
       if (invoiceToRecalc) {
         try { await recalcInvoiceCollected(invoiceToRecalc); } catch(e) {}
       }
-    } catch (err) { alert('Delete error / خطأ حذف: ' + err.message); }
+    } catch (err) {
+      // v55.82-B — toast over native alert. See handleSaveTreasuryEdit comment.
+      console.error('[treasury-delete] failed', err);
+      var msg = (err && err.message) ? err.message : String(err);
+      try { (toast && toast.error) ? toast.error('Delete error: ' + msg) : alert('Delete error: ' + msg); } catch (_) {}
+    }
   };
 
   // ── Save Treasury Edit from Modal ──
   const handleSaveTreasuryEdit = async (txnId, updates) => {
     try {
+      // v55.42 — Find the original row so we can detect amount changes and
+      // recalc any linked invoice. Without this, edits to bank_in/bank_out
+      // (or cash_in/cash_out) on a linked row left the invoice's
+      // total_collected stale until a manual "Fix Links" pass.
+      var original = (treasury || []).find(function(t) { return t.id === txnId; });
+
+      // v55.82-B — AUTO-LINK ON ORDER# CHANGE.
+      // Before this fix, editing a row to ADD an order# (e.g., user forgot
+      // to fill it on first save) wrote the new value but never set
+      // linked_invoice_id. The row stayed unlinked even though a matching
+      // invoice existed. Treasury Inspector showed it as orphaned and the
+      // invoice's outstanding never moved. Reports lost the trail.
+      //
+      // Now: when order_number is in the update payload AND it differs
+      // from the original, we look up the matching invoice and set
+      // linked_invoice_id accordingly. Both old and new invoice are then
+      // recalced so totals stay truthful. Same pattern as the Add path.
+      var oldOrderTrim = String((original && original.order_number) || '').trim();
+      var newOrderTrim = Object.prototype.hasOwnProperty.call(updates, 'order_number')
+        ? String(updates.order_number || '').trim()
+        : oldOrderTrim;
+      var orderChanged = newOrderTrim !== oldOrderTrim;
+      var oldLinkedInvoiceId = (original && original.linked_invoice_id) || null;
+      var newLinkedInvoiceId = oldLinkedInvoiceId;
+      var matchingInvoice = null;
+
+      if (orderChanged) {
+        if (!newOrderTrim) {
+          // Order# cleared → unlink. recalcInvoiceCollected on the old
+          // invoice runs below so its outstanding bumps back up.
+          updates.linked_invoice_id = null;
+          newLinkedInvoiceId = null;
+        } else {
+          matchingInvoice = (invoices || []).find(function(i) {
+            return String(i.order_number || '').trim() === newOrderTrim;
+          });
+          if (matchingInvoice) {
+            updates.linked_invoice_id = matchingInvoice.id;
+            newLinkedInvoiceId = matchingInvoice.id;
+          } else {
+            // Order# changed to a value that doesn't match any invoice —
+            // unlink. We surface a non-blocking warning at the end so the
+            // user knows the row is now orphaned. Save still proceeds —
+            // user might be typing the order# before the invoice exists.
+            updates.linked_invoice_id = null;
+            newLinkedInvoiceId = null;
+          }
+        }
+      }
+
       await dbUpdate('treasury', txnId, updates, userProfile?.id || user?.id);
       setTreasury(prev => prev.map(t => t.id === txnId ? { ...t, ...updates } : t));
+
+      // Recalc the OLD linked invoice if we just unlinked or relinked away.
+      if (oldLinkedInvoiceId && oldLinkedInvoiceId !== newLinkedInvoiceId) {
+        try { await recalcInvoiceCollected(oldLinkedInvoiceId); }
+        catch (e) { console.warn('[treasury-edit] old invoice recalc failed:', e && e.message); }
+      }
+
+      // Recalc the NEW (or still-linked) invoice if either:
+      //   (a) we just newly linked it (relinking case), OR
+      //   (b) any money-bearing field changed on a row that was already linked.
+      // We compare the OLD row's totals to what's in `updates` for fields
+      // that are present (Object.prototype.hasOwnProperty so a missing
+      // field counts as "unchanged" — never overwrite with 0 by accident).
+      if (newLinkedInvoiceId) {
+        var moneyFields = ['cash_in', 'cash_out', 'bank_in', 'bank_out', 'expected_amount'];
+        var amountChanged = original && moneyFields.some(function(f) {
+          if (!Object.prototype.hasOwnProperty.call(updates, f)) return false;
+          return Number(updates[f] || 0) !== Number(original[f] || 0);
+        });
+        var newlyLinked = oldLinkedInvoiceId !== newLinkedInvoiceId;
+        if (amountChanged || newlyLinked) {
+          try { await recalcInvoiceCollected(newLinkedInvoiceId); }
+          catch (e) { console.warn('[treasury-edit] new invoice recalc failed:', e && e.message); }
+        }
+      }
+
       setEditTreasuryModal(null);
-    } catch (err) { alert('Save error / خطأ حفظ: ' + err.message); }
+
+      // v55.82-B — User-visible feedback. Was previously silent on success.
+      try {
+        if (orderChanged && matchingInvoice) {
+          if (toast && toast.success) {
+            toast.success('Saved + linked to ' + (matchingInvoice.customer_name || ('#' + matchingInvoice.order_number)) + ' ✓');
+          }
+        } else if (orderChanged && newOrderTrim && !matchingInvoice) {
+          if (toast && toast.warning) {
+            toast.warning('Saved — but order #' + newOrderTrim + ' does not match any invoice. Row is unlinked. / لا توجد فاتورة بهذا الرقم. الصف غير مرتبط.');
+          }
+        } else if (orderChanged && !newOrderTrim && oldLinkedInvoiceId) {
+          if (toast && toast.info) {
+            toast.info('Saved — order# cleared, row unlinked. / تم الحفظ، الصف غير مرتبط.');
+          }
+        } else {
+          if (toast && toast.success) toast.success('Saved ✓');
+        }
+      } catch (_) { /* never let a toast bug break the save */ }
+    } catch (err) {
+      // v55.82-B — Replace native alert() with toast.error(). Native alerts
+      // are jarring system-level dialogs on mobile, easily mistaken for
+      // browser errors rather than app feedback. Toast pattern matches the
+      // rest of the Treasury handlers.
+      console.error('[treasury-edit] save failed', err);
+      var msg = (err && err.message) ? err.message : String(err);
+      try {
+        if (toast && toast.error) toast.error('Save error: ' + msg);
+        else alert('Save error: ' + msg);
+      } catch (_) {
+        try { alert('Save error: ' + msg); } catch (__) {}
+      }
+    }
   };
 
   const handleSplitTreasury = async () => {
@@ -2709,19 +4633,41 @@ export default function App() {
       // ---- Case C: no_match OR user chose to create a new treasury row ----
       // (Cash-swap "customer brought cash, took check back" → new cash_in row + physical_check_returned=true)
       // (Or pure "new entry" fallback when user disagrees with all candidates)
+      //
+      // v55.83-A.6.27.14 (Max May 16 2026) — channel selection FIX. Previously
+      // this path ALWAYS inserted as cash_in, even when the check was a normal
+      // bank deposit (no physical return). That silently inflated the safe
+      // balance every time a check was collected the "no match" way. Now:
+      //   - physicalReturned = true  → cash_in (customer brought cash, swap)
+      //   - physicalReturned = false → bank_in (the check was deposited at the bank)
+      // Either way, the invoice's "collected" total goes up the same amount
+      // because the recalc sums cash_in + bank_in.
       if ((evalResult.mode === 'no_match' || (evalResult.mode === 'candidate_match' && choice && choice.kind === 'new'))
           || (evalResult.mode === 'no_invoice')) {
         const checkNum = reconcileCheck.check_number ? ' #' + reconcileCheck.check_number : '';
         const desc = (reconcileCheck.customer_name || '') + ' — شيك محصّل' + checkNum;
+        // v55.83-A.6.7 round 2 audit — resolve invoice_id from order_number
+        // if both evalResult.invoice and check.invoice_id are null. Keeps
+        // every treasury insert path consistent with dbInsert's auto-link.
+        let resolvedInv2 = evalResult.invoice ? evalResult.invoice.id : (reconcileCheck.invoice_id || null);
+        if (!resolvedInv2 && reconcileCheck.order_number) {
+          try {
+            const lk2 = await supabase.from('invoices').select('id').eq('order_number', String(reconcileCheck.order_number).trim()).maybeSingle();
+            if (lk2 && lk2.data && lk2.data.id) resolvedInv2 = lk2.data.id;
+          } catch (lk2Err) { console.warn('[reconcileCheck] invoice lookup failed:', lk2Err && lk2Err.message); }
+        }
+        var checkAmt = Number(reconcileCheck.amount);
         const { data: newTxn } = await supabase.from('treasury').insert({
           transaction_date: reconcileDate,
           order_number: reconcileCheck.order_number || '',
           description: desc,
-          cash_in: Number(reconcileCheck.amount),
+          cash_in: physicalReturned ? checkAmt : 0,
           cash_out: 0,
+          bank_in: physicalReturned ? 0 : checkAmt,
+          bank_out: 0,
           source: 'main',
           category: 'مبيعات',
-          linked_invoice_id: evalResult.invoice ? evalResult.invoice.id : (reconcileCheck.invoice_id || null),
+          linked_invoice_id: resolvedInv2,
           source_check_id: reconcileCheck.id,
           payment_source: 'check',
         }).select('id').single();
@@ -2731,7 +4677,11 @@ export default function App() {
           linked_treasury_id: newTxn?.id || null,
           physical_check_returned: physicalReturned,
         }, user?.id);
+        // Recalc whichever invoice ended up linked (evalResult.invoice OR
+        // resolvedInv2 fallback). Without this, the check shows collected
+        // but the invoice doesn't reflect it.
         if (evalResult.invoice) await recalcInvoiceCollected(evalResult.invoice.id);
+        else if (resolvedInv2) await recalcInvoiceCollected(resolvedInv2);
         toast.success(physicalReturned ? 'Check collected as cash swap ✓' : 'Check collected + treasury entry added ✓');
         setReconcileCheck(null); setReconcileDate(''); setReconcileCheckChoice(null); setReconcileCheckReturned(false);
         await loadAllData();
@@ -2889,7 +4839,7 @@ export default function App() {
           user_id: (userProfile && userProfile.id) || null,
           entry_text: auditNote + ' — Check #' + (check.check_number || '?') + ' for ' + Number(check.amount).toLocaleString() + ' EGP',
           log_category: 'check',
-          log_date: new Date().toISOString().substring(0, 10),
+          log_date: todayET(),
           auto_generated: true,
         });
       } catch (e) { console.warn('[uncollect] daily_log insert failed (non-fatal):', e.message); }
@@ -2947,9 +4897,35 @@ export default function App() {
     </div>
   );
 
-  const StatusBadge = ({ invoice }) => {
+  // v55.83-A.6.6 (Max May 13 2026) — single source of truth for "treasury
+  // total for this invoice" used by reconciliation status everywhere
+  // (StatusBadge, sales report, invoice modal).
+  //
+  // v55.83-A.6.7 (Max May 13 2026) — CRIT-5 fix: when a post-dated check
+  // is collected, the system inserts a "shadow" treasury row stamped with
+  // source_check_id. If we sum that row AND the collected check itself,
+  // we double-count. Exclude treasury rows where source_check_id IS NOT
+  // NULL — those are shadows, the check is the source of truth.
+  //
+  // Defensive: source_check_id column may not exist yet on older DBs.
+  // The shim treats `undefined` and `null` the same — both mean "not a
+  // shadow row" — so behavior is unchanged on old schemas.
+  const tTotalForInvoice = (invoice) => {
+    if (!invoice) return 0;
     const txns = treasuryByOrder[invoice.order_number] || [];
-    const tTotal = txns.reduce((a, t) => a + Number(t.cash_in || 0) + Number(t.bank_in || 0), 0);
+    const txnSum = txns.reduce((a, t) => {
+      // Skip shadow rows tied to a check (CRIT-5)
+      if (t.source_check_id) return a;
+      return a + Number(t.cash_in || 0) + Number(t.bank_in || 0);
+    }, 0);
+    const chkSum = (checks || [])
+      .filter(c => (c.order_number === invoice.order_number || c.invoice_id === invoice.id) && c.status === 'collected')
+      .reduce((a, c) => a + Number(c.amount || 0), 0);
+    return txnSum + chkSum;
+  };
+
+  const StatusBadge = ({ invoice }) => {
+    const tTotal = tTotalForInvoice(invoice);
     const status = getReconStatus(invoice, tTotal);
     const s = STATUS_STYLES[status];
     return (
@@ -3057,6 +5033,30 @@ export default function App() {
         <div className="w-6 h-6 border-2 border-blue-400 border-t-transparent rounded-full animate-spin" />
       </div>
       <DashboardSkeleton />
+      {/* v55.65 — Nadia presence on the loading screen. Just a small pill
+          telling the user "I'm here and getting your day ready" so the
+          assistant feels available from the very first moment, not
+          something that appears 5 seconds later. Pure decoration: full
+          chat lives in AIGreeter once data has loaded. */}
+      <div className="fixed bottom-4 left-4 z-50 flex items-center gap-2 px-3 py-2 rounded-full shadow-lg"
+        style={{background:'linear-gradient(135deg, rgba(139,92,246,0.95), rgba(236,72,153,0.95))', backdropFilter:'blur(8px)'}}>
+        <div className="relative" style={{width:24, height:24}}>
+          <svg width="24" height="24" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
+            <circle cx="12" cy="12" r="11" fill="white" />
+            <circle cx="9" cy="11" r="1.2" fill="#1f2937">
+              <animate attributeName="r" values="1.2;0.4;1.2" dur="3s" repeatCount="indefinite" />
+            </circle>
+            <circle cx="15" cy="11" r="1.2" fill="#1f2937">
+              <animate attributeName="r" values="1.2;0.4;1.2" dur="3s" repeatCount="indefinite" />
+            </circle>
+            <path d="M 8 15 Q 12 17 16 15" stroke="#1f2937" strokeWidth="1.4" fill="none" strokeLinecap="round" />
+          </svg>
+          <span className="absolute -bottom-0.5 -right-0.5 w-2 h-2 rounded-full bg-emerald-400 ring-2 ring-white animate-pulse"></span>
+        </div>
+        <div className="text-white text-xs font-bold">
+          Nadia is here · getting your day ready…
+        </div>
+      </div>
     </div>
   );
 
@@ -3066,9 +5066,12 @@ export default function App() {
   return (
     <ToastProvider>
     <ErrorBoundary label="KTC Hub encountered an error" showDetails>
-    {/* Global voice controller — "Hey Nadia" listens across all tabs,
-        cross-browser, per-user opt-out via voiceEnabled state. */}
-    <VoiceController userId={userProfile?.id} userProfile={userProfile} enabled={voiceEnabled} />
+    {/* v55.42 — VOICE DISABLED.
+        VoiceController (the "Hey Nadia" wake-word listener with the
+        bottom-left pill and OFF button) is no longer mounted. Reasoning
+        in the voiceEnabled state declaration above. The typed Nadia chat
+        is unaffected — only the voice surface is removed.
+        Component file kept on disk for ease of future reactivation. */}
     {/* Action bridge — catches nadia-decision-action events from the Decision
         Engine's chips and executes them (draft email, create reminder, flag
         invoice, etc.). Headless component, safe to mount once globally. */}
@@ -3078,7 +5081,27 @@ export default function App() {
         greetings and briefing cards). Shared muted state means toggling
         on one instance also silences the other.
         User can mute/unmute via button in the pill. Starts collapsed. */}
-    {greeterSettings.enabled && !greeterDismissed && tab !== 'dashboard' && (
+    {greeterSettings.enabled && !greeterDismissed && tab !== 'dashboard' && (() => {
+      // v55.82-F — Compute Nadia suppression for the current view.
+      // Three independent reasons to suppress:
+      //   1. ANY blocking Treasury modal is open (Add Treasury, pending-
+      //      invoice "Order # not found", duplicate-confirmation). Without
+      //      this, Nadia's floating panel (z-index 9998) covers form
+      //      fields on the modal (z-index 50). Auto-expand on new
+      //      assistant messages used to fire mid data-entry too.
+      //   2. The user is on the Treasury tab and has NOT explicitly
+      //      clicked "Wake Nadia" yet. Per Max's spec ("Nadia disabled
+      //      by default inside the Treasury module"), Nadia stays gone
+      //      until invited. nadiaWokenInTab resets per-session so each
+      //      page reload starts clean.
+      //   3. The Edit Treasury modal is open. Same reason as #1 — would
+      //      cover the form.
+      // suppressed=true → NadiaFloatingOverlay returns null + cancels any
+      // active speech.
+      var anyTreasuryModalOpen = !!(showAddTreasury || pendingTreasuryRecord || duplicateConfirm || editTreasuryModal);
+      var inTreasuryAndNotWoken = tab === 'treasury' && !nadiaWokenInTab.treasury;
+      var suppressNadia = anyTreasuryModalOpen || inTreasuryAndNotWoken;
+      return (
       <NadiaFloatingOverlay
         user={user} userProfile={userProfile} users={teamUsers}
         tickets={dashTickets} invoices={invoices} treasury={treasury}
@@ -3096,123 +5119,268 @@ export default function App() {
         contextOpenTicketId={openTicketId}
         externalMuted={nadiaMuted}
         onMutedChange={setNadiaMuted}
+        suppressed={suppressNadia}
       />
-    )}
-    <div className="min-h-screen" style={{background:'var(--bg-primary)'}}>
-      {/* Header */}
-      <div style={{background:'linear-gradient(135deg, #0f172a 0%, #1e1b4b 50%, #0f172a 100%)', borderBottom:'1px solid rgba(56,189,248,0.15)'}} role="banner" aria-label="App header" className="px-5 py-3 flex justify-between items-center sticky top-0 z-[101]">
-        <div className="flex items-center gap-3">
-          <button onClick={() => setSidebarOpen(!sidebarOpen)} className="lg:hidden text-white/70 hover:text-white text-xl p-1">☰</button>
-          <div>
-            <h1 className="text-xl sm:text-2xl font-black tracking-tight" style={{background:'linear-gradient(135deg, #38bdf8, #818cf8, #a78bfa)',WebkitBackgroundClip:'text',WebkitTextFillColor:'transparent'}}>KANDIL KTC EGYPT HUB</h1>
-            <p style={{color:'rgba(148,163,184,0.5)'}} className="text-[10px] font-medium tracking-widest uppercase hidden sm:block">{lang === 'en' ? 'KTC Trading Operations' : 'KTC — لوحة التحكم المالية'}</p>
-          </div>
-        </div>
-        <div className="flex items-center gap-2">
-          {/* Treasury Net — ONLY shown to users with Treasury permission.
-              S16 (Apr 22 2026): tightened check to require explicit === true
-              (matches the tab-visibility logic at line 980). Prevents the
-              header number from leaking to users who happened to have an
-              unrelated truthy value in modulePerms['Treasury']. */}
-          {(isSuperAdmin || modulePerms?.['Treasury'] === true) && (
-          <div onClick={() => { setTab('treasury'); setMode('all'); }}
-            className="cursor-pointer px-3 sm:px-4 py-2 rounded-lg flex flex-col items-center justify-center text-center transition-all hover:scale-[1.03]"
-            style={{
-              background: allTimeNet >= 0
-                ? 'linear-gradient(135deg, rgba(16,185,129,0.12), rgba(16,185,129,0.06))'
-                : 'linear-gradient(135deg, rgba(239,68,68,0.12), rgba(239,68,68,0.06))',
-              border: '1px solid ' + (allTimeNet >= 0 ? 'rgba(16,185,129,0.4)' : 'rgba(239,68,68,0.4)'),
-              minWidth: 130,
-            }}>
-            <div style={{color:'rgba(203,213,225,0.7)'}} className="text-[8px] sm:text-[9px] font-bold uppercase tracking-wider leading-tight">Treasury Net</div>
-            <div className="text-sm sm:text-base font-black tracking-tight"
-              style={{
-                color: allTimeNet >= 0 ? '#34d399' : '#f87171',
-                textShadow: '0 0 12px ' + (allTimeNet >= 0 ? 'rgba(52,211,153,0.4)' : 'rgba(248,113,113,0.4)'),
-              }}>
-              {fE(allTimeNet)}
+      );
+    })()}
+    <div className="min-h-screen" style={{background:'#000000', color: '#e4e4e7', fontFamily: '"Inter Tight", "Inter", system-ui, sans-serif'}}>
+      {/* Terminal grid background — subtle dot pattern, never moves, low opacity.
+          Adds depth without distraction. CSS-only, no JS cost. */}
+      <div aria-hidden="true" style={{
+        position: 'fixed', inset: 0, zIndex: 0, pointerEvents: 'none',
+        backgroundImage: 'radial-gradient(rgba(63,63,70,0.25) 1px, transparent 1px)',
+        backgroundSize: '24px 24px',
+      }} />
+      <div style={{ position: 'relative', zIndex: 1 }}>
+      {/* ===========================================================
+           TERMINAL HEADER (v55.8-TERMINAL — Apr 25 2026 redesign)
+           ===========================================================
+           Bloomberg/Reuters terminal aesthetic. Replaces the previous
+           gradient-blue header. Design tokens:
+             • Background: #0a0a0a (true black) with #1a1a1a inner row
+             • Type: 'JetBrains Mono' for all numerics, 'Inter Tight' for labels
+             • Borders: 1px solid #262626 (zinc-800), no rounding above sm
+             • Status pills: minimal text + colored dot, never gradient
+             • Accent: emerald-400 (#34d399) for positives, red-500 for negatives,
+               amber-500 for warnings. NO purple/indigo/violet anywhere.
+           =========================================================== */}
+      <div role="banner" aria-label="App header" className="sticky top-0 z-[101] border-b border-zinc-800"
+        style={{ background: '#0a0a0a', fontFamily: '"Inter Tight", "Inter", system-ui, sans-serif' }}>
+        {/* Inline font import for the terminal aesthetic. Loaded once at the
+            top-of-app banner, applies to descendants via fontFamily inheritance. */}
+        <style>{"@import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600;700&family=Inter+Tight:wght@400;500;600;700;800&display=swap');"}</style>
+
+        {/* PRIMARY ROW — brand, treasury net, user, controls */}
+        <div className="px-4 py-2 flex justify-between items-center gap-4">
+          <div className="flex items-center gap-3 min-w-0">
+            <button onClick={() => setSidebarOpen(!sidebarOpen)}
+              className="lg:hidden text-zinc-400 hover:text-emerald-400 text-lg w-8 h-8 flex items-center justify-center border border-zinc-800 rounded-sm transition-colors"
+              aria-label="Toggle sidebar">≡</button>
+            <div className="flex items-baseline gap-2 min-w-0">
+              {/* Brand mark — bracket prefix is a terminal callout convention. */}
+              <span className="text-emerald-400 font-mono text-xs font-bold tracking-tight" style={{ fontFamily: '"JetBrains Mono", monospace' }}>[KTC]</span>
+              <h1 className="text-sm font-bold text-white tracking-tight whitespace-nowrap">NEXTTRADE HUB</h1>
+              <span className="text-[10px] text-zinc-500 font-mono hidden md:inline" style={{ fontFamily: '"JetBrains Mono", monospace' }}>v55.83-A.6.27.45</span>
+              {/* Live clock — terminals always show one. Updates via the
+                  existing tick state; if not present, falls back to no clock. */}
+              <span className="hidden lg:inline text-[10px] text-zinc-500 font-mono ml-2 pl-2 border-l border-zinc-800" style={{ fontFamily: '"JetBrains Mono", monospace' }}>
+                {(new Date()).toISOString().substring(0, 10).replace(/-/g, '.')} {(new Date()).toTimeString().substring(0, 5)}
+              </span>
             </div>
           </div>
-          )}
-          {userProfile && (
-            <div className="text-right">
-              <div className="text-sm font-bold" style={{color:'#f1f5f9'}}>{userProfile?.name}</div>
-              <div style={{color:'rgba(148,163,184,0.6)'}} className="text-[10px]">{userProfile?.role === 'super_admin' ? '🔴 Super Admin' : userProfile?.role === 'admin' ? '🟣 Admin' : '🔵 Team'}</div>
-            </div>
-          )}
-          {(true) && (
-            <button onClick={() => setLang(lang === 'ar' ? 'en' : 'ar')}
-              style={{background: lang === 'en' ? 'linear-gradient(135deg, #0ea5e9, #6366f1)' : 'rgba(255,255,255,0.06)', border:'1px solid rgba(255,255,255,0.1)', color: lang === 'en' ? 'white' : 'rgba(255,255,255,0.6)'}}
-              className="px-3 py-1.5 rounded-lg text-xs font-bold transition">
-              {lang === 'ar' ? '🌐 EN' : '🌐 AR'}
+
+          <div className="flex items-center gap-2">
+            {/* Treasury Net — terminal-style status block.
+                Permission gate unchanged from original. */}
+            {(isSuperAdmin || modulePerms?.['Treasury'] === true) && (
+              <button onClick={() => { setTab('treasury'); setMode('all'); }}
+                className="group flex items-center gap-2 px-3 py-1.5 border border-zinc-800 hover:border-zinc-600 rounded-sm transition-colors"
+                style={{ background: '#0a0a0a' }}
+                aria-label="View Treasury">
+                <span className="text-[9px] text-zinc-500 font-bold uppercase tracking-wider">NET</span>
+                <span className="text-sm font-bold tabular-nums"
+                  style={{
+                    fontFamily: '"JetBrains Mono", monospace',
+                    color: allTimeNet >= 0 ? '#34d399' : '#f87171',
+                  }}>
+                  {allTimeNet >= 0 ? '+' : ''}{fE(allTimeNet)}
+                </span>
+                <span className="w-1.5 h-1.5 rounded-full"
+                  style={{ background: allTimeNet >= 0 ? '#34d399' : '#f87171', boxShadow: '0 0 6px ' + (allTimeNet >= 0 ? '#34d399' : '#f87171') }} />
+              </button>
+            )}
+
+            {/* Global search — terminal command convention */}
+            <button onClick={() => setShowGlobalSearch(true)}
+              className="px-3 py-1.5 text-[11px] font-mono text-zinc-400 hover:text-white border border-zinc-800 hover:border-zinc-600 rounded-sm transition-colors flex items-center gap-2"
+              style={{ background: '#0a0a0a', fontFamily: '"JetBrains Mono", monospace' }}>
+              <span>/</span>
+              <span className="hidden sm:inline">SEARCH</span>
+              <kbd className="text-[9px] text-zinc-500 hidden md:inline">⌘K</kbd>
             </button>
-          )}
-          <button onClick={() => setShowGlobalSearch(true)} style={{background:'rgba(255,255,255,0.06)', border:'1px solid rgba(255,255,255,0.1)', color:'rgba(255,255,255,0.6)'}} className="px-3 py-1.5 text-xs rounded-lg font-medium hover:bg-white/10 transition flex items-center gap-1.5">
-            🔍 <span className="hidden sm:inline">Search</span> <kbd className="text-[9px] bg-white/10 px-1 rounded">⌘K</kbd>
-          </button>
-          <NotificationBell userId={userProfile?.id || user?.id} users={teamUsers} />
-          {/* Notification Bell */}
-          {(() => {
-            const overdueCount = invoices.filter(i => i.outstanding > 0 && i.invoice_date && (Date.now() - new Date(i.invoice_date).getTime()) > 30 * 86400000).length;
-            const openTickets = dashTickets.filter(t => t.status !== 'Closed' && t.status !== 'Resolved').length;
-            const pendingCount = pendingChecks?.length || 0;
-            const todayN = new Date().toISOString().substring(0, 10);
-            const tomorrowN = new Date(Date.now() + 86400000).toISOString().substring(0, 10);
-            const overdueChecks = pendingChecks.filter(c => (c.due_date || c.check_date || '') < todayN && (c.due_date || c.check_date));
-            const dueTomorrowChecks = pendingChecks.filter(c => (c.due_date || c.check_date || '') === tomorrowN);
-            const thisMonthChecks = pendingChecks.filter(c => (c.due_date || c.check_date || '').substring(0, 7) === todayN.substring(0, 7));
-            const total = overdueCount + openTickets + overdueChecks.length + dueTomorrowChecks.length;
-            return (
-              <div className="relative notif-bell-wrap">
-                <button onClick={() => setShowNotifBell(!showNotifBell)} style={{background:'rgba(255,255,255,0.06)', border:'1px solid rgba(255,255,255,0.1)', color:'rgba(255,255,255,0.6)'}} className="px-2.5 py-1.5 text-sm rounded-lg hover:bg-white/10 transition relative">
-                  🔔
-                  {total > 0 && <span className="absolute -top-1 -right-1 w-4 h-4 bg-red-500 text-white text-[8px] font-bold rounded-full flex items-center justify-center">{total > 9 ? '9+' : total}</span>}
-                </button>
-                {showNotifBell && (
-                  <div className="absolute right-0 top-10 w-72 bg-white rounded-xl shadow-2xl border z-50 overflow-hidden">
-                    <div className="px-3 py-2 bg-slate-50 border-b text-xs font-bold text-slate-700">Notifications</div>
-                    <div className="max-h-[300px] overflow-auto">
-                      {overdueChecks.length > 0 && (
-                        <div className="px-3 py-2.5 border-b border-slate-50 hover:bg-red-50 cursor-pointer" onClick={() => { setTab('checks'); setShowNotifBell(false); }}>
-                          <div className="text-xs font-semibold text-red-600">🚨 {overdueChecks.length} OVERDUE checks — {fE(overdueChecks.reduce((a,c) => a + Number(c.amount||0), 0))}</div>
-                          <div className="text-[10px] text-slate-400">Past due date, not collected</div>
-                        </div>
-                      )}
-                      {dueTomorrowChecks.length > 0 && (
-                        <div className="px-3 py-2.5 border-b border-slate-50 hover:bg-amber-50 cursor-pointer" onClick={() => { setTab('checks'); setShowNotifBell(false); }}>
-                          <div className="text-xs font-semibold text-amber-600">⏰ {dueTomorrowChecks.length} checks due TOMORROW — {fE(dueTomorrowChecks.reduce((a,c) => a + Number(c.amount||0), 0))}</div>
-                          <div className="text-[10px] text-slate-400">Collect these tomorrow</div>
-                        </div>
-                      )}
-                      {thisMonthChecks.length > 0 && (
-                        <div className="px-3 py-2.5 border-b border-slate-50 hover:bg-blue-50 cursor-pointer" onClick={() => { setTab('checks'); setShowNotifBell(false); }}>
-                          <div className="text-xs font-semibold text-blue-600">📅 {thisMonthChecks.length} checks due this month — {fE(thisMonthChecks.reduce((a,c) => a + Number(c.amount||0), 0))}</div>
-                          <div className="text-[10px] text-slate-400">Expected income this month</div>
-                        </div>
-                      )}
-                      {overdueCount > 0 && (
-                        <div className="px-3 py-2.5 border-b border-slate-50 hover:bg-red-50 cursor-pointer" onClick={() => { setTab('sales'); setShowNotifBell(false); }}>
-                          <div className="text-xs font-semibold text-red-600">⚠️ {overdueCount} overdue invoices</div>
-                          <div className="text-[10px] text-slate-400">30+ days past invoice date</div>
-                        </div>
-                      )}
-                      {openTickets > 0 && (
-                        <div className="px-3 py-2.5 border-b border-slate-50 hover:bg-blue-50 cursor-pointer" onClick={() => { setTab('tickets'); setShowNotifBell(false); }}>
-                          <div className="text-xs font-semibold text-blue-600">🎫 {openTickets} open tickets</div>
-                          <div className="text-[10px] text-slate-400">Awaiting resolution</div>
-                        </div>
-                      )}
-                      {total === 0 && pendingCount === 0 && <div className="px-3 py-6 text-center text-xs text-slate-400">All clear! ✨</div>}
+
+            {/* Lang toggle */}
+            <button onClick={() => setLang(lang === 'ar' ? 'en' : 'ar')}
+              className="px-2.5 py-1.5 text-[11px] font-mono font-bold border border-zinc-800 hover:border-zinc-600 rounded-sm transition-colors"
+              style={{
+                background: '#0a0a0a',
+                color: lang === 'en' ? '#34d399' : '#71717a',
+                fontFamily: '"JetBrains Mono", monospace',
+              }}>
+              {lang === 'ar' ? 'EN' : 'AR'}
+            </button>
+
+            {/* v55.23 — Always-visible LOGOUT in header.
+                Previously logout lived only at the bottom of the left
+                sidebar. On mobile/tablet (<1024px) the sidebar is hidden
+                by default, so users couldn't find logout without first
+                tapping the menu icon and scrolling. Max reported "I lost
+                the ability to logout" — that was the actual cause.
+                Solution: top-right button, visible on every screen size,
+                every tab. Sidebar logout is kept for redundancy. */}
+            <button onClick={handleSignOut}
+              className="px-2.5 py-1.5 text-[11px] font-mono font-bold border border-zinc-800 text-zinc-400 hover:border-red-700 hover:text-red-400 rounded-sm transition-colors flex items-center gap-1.5"
+              style={{ background: '#0a0a0a', fontFamily: '"JetBrains Mono", monospace' }}
+              title={lang === 'en' ? 'Sign out' : 'تسجيل الخروج'}
+              aria-label={lang === 'en' ? 'Sign out' : 'تسجيل الخروج'}>
+              <span>⏻</span>
+              <span className="hidden sm:inline">{lang === 'en' ? 'EXIT' : 'خروج'}</span>
+            </button>
+
+            {/* Notification bell from existing component */}
+            <NotificationBell userId={userProfile?.id || user?.id} users={teamUsers} />
+
+            {/* v55.40 — Unread voicemail badge.
+                Shows whenever the current user has unread voicemails assigned
+                to them. Click → switch to dashboard (where the VoicemailsWidget
+                lives) and scroll to it. Hidden when zero unread, so it doesn't
+                add noise for users without voicemails to handle. */}
+            {unreadVoicemails > 0 && (
+              <button
+                onClick={() => {
+                  setTab('dashboard');
+                  // Scroll after the dashboard finishes mounting/painting.
+                  setTimeout(() => {
+                    var el = document.getElementById('voicemails-widget');
+                    if (el && el.scrollIntoView) {
+                      el.scrollIntoView({ behavior: 'smooth', block: 'start' });
+                    }
+                  }, 200);
+                }}
+                className="px-2.5 py-1.5 text-[11px] font-mono font-bold border border-zinc-800 hover:border-amber-500 rounded-sm transition-colors flex items-center gap-1.5"
+                style={{
+                  background: '#0a0a0a',
+                  color: '#fbbf24',
+                  fontFamily: '"JetBrains Mono", monospace',
+                }}
+                title={unreadVoicemails === 1
+                  ? '1 unread voicemail — click to view'
+                  : unreadVoicemails + ' unread voicemails — click to view'}
+                aria-label={unreadVoicemails + ' unread voicemails'}>
+                <span>📬</span>
+                <span>{unreadVoicemails}</span>
+              </button>
+            )}
+
+            {/* Dashboard alerts bell — same data as before, redesigned */}
+            {(() => {
+              const overdueCount = invoices.filter(i => i.outstanding > 0 && i.invoice_date && (Date.now() - new Date(i.invoice_date).getTime()) > 30 * 86400000).length;
+              const openTickets = dashTickets.filter(t => t.status !== 'Closed' && t.status !== 'Resolved').length;
+              const todayN = todayET();
+              const tomorrowN = new Date(Date.now() + 86400000).toISOString().substring(0, 10);
+              const overdueChecks = pendingChecks.filter(c => (c.due_date || c.check_date || '') < todayN && (c.due_date || c.check_date));
+              const dueTomorrowChecks = pendingChecks.filter(c => (c.due_date || c.check_date || '') === tomorrowN);
+              const total = overdueCount + openTickets + overdueChecks.length + dueTomorrowChecks.length;
+              return (
+                <div className="relative notif-bell-wrap">
+                  <button onClick={() => setShowNotifBell(!showNotifBell)}
+                    className="relative px-2.5 py-1.5 text-sm border border-zinc-800 hover:border-zinc-600 rounded-sm transition-colors"
+                    style={{ background: '#0a0a0a', color: total > 0 ? '#fbbf24' : '#71717a' }}
+                    aria-label={'Alerts: ' + total}>
+                    {total > 0 ? '⚑' : '⚐'}
+                    {total > 0 && <span className="absolute -top-1.5 -right-1.5 min-w-4 h-4 px-1 bg-red-500 text-white text-[9px] font-bold rounded-sm flex items-center justify-center font-mono" style={{ fontFamily: '"JetBrains Mono", monospace' }}>{total > 99 ? '99' : total}</span>}
+                  </button>
+                  {showNotifBell && (
+                    <div className="absolute right-0 top-10 w-80 border border-zinc-800 shadow-2xl z-50 overflow-hidden rounded-sm"
+                      style={{ background: '#0a0a0a' }}>
+                      <div className="px-3 py-2 border-b border-zinc-800 text-[10px] font-bold text-zinc-400 uppercase tracking-widest font-mono flex items-center justify-between" style={{ fontFamily: '"JetBrains Mono", monospace' }}>
+                        <span>ALERTS // {total}</span>
+                        <button onClick={() => setShowNotifBell(false)} className="text-zinc-600 hover:text-zinc-300">×</button>
+                      </div>
+                      <div className="max-h-[320px] overflow-auto">
+                        {overdueChecks.length > 0 && (
+                          <div className="px-3 py-2.5 border-b border-zinc-900 hover:bg-zinc-950 cursor-pointer" onClick={() => { setTab('checks'); setShowNotifBell(false); }}>
+                            <div className="flex items-center gap-2">
+                              <span className="w-1.5 h-1.5 rounded-full bg-red-500" style={{ boxShadow: '0 0 6px #ef4444' }} />
+                              <div className="text-[11px] font-bold text-red-400">{overdueChecks.length} OVERDUE CHECKS</div>
+                            </div>
+                            <div className="mt-1 ml-3.5 text-[11px] text-zinc-300 font-mono tabular-nums" style={{ fontFamily: '"JetBrains Mono", monospace' }}>{fE(overdueChecks.reduce((a,c) => a + Number(c.amount||0), 0))}</div>
+                          </div>
+                        )}
+                        {dueTomorrowChecks.length > 0 && (
+                          <div className="px-3 py-2.5 border-b border-zinc-900 hover:bg-zinc-950 cursor-pointer" onClick={() => { setTab('checks'); setShowNotifBell(false); }}>
+                            <div className="flex items-center gap-2">
+                              <span className="w-1.5 h-1.5 rounded-full bg-amber-500" style={{ boxShadow: '0 0 6px #f59e0b' }} />
+                              <div className="text-[11px] font-bold text-amber-400">{dueTomorrowChecks.length} CHECKS DUE TOMORROW</div>
+                            </div>
+                            <div className="mt-1 ml-3.5 text-[11px] text-zinc-300 font-mono tabular-nums" style={{ fontFamily: '"JetBrains Mono", monospace' }}>{fE(dueTomorrowChecks.reduce((a,c) => a + Number(c.amount||0), 0))}</div>
+                          </div>
+                        )}
+                        {openTickets > 0 && (
+                          <div className="px-3 py-2.5 border-b border-zinc-900 hover:bg-zinc-950 cursor-pointer" onClick={() => { setTab('tickets'); setShowNotifBell(false); }}>
+                            <div className="flex items-center gap-2">
+                              <span className="w-1.5 h-1.5 rounded-full bg-sky-500" style={{ boxShadow: '0 0 6px #0ea5e9' }} />
+                              <div className="text-[11px] font-bold text-sky-400">{openTickets} OPEN TICKETS</div>
+                            </div>
+                          </div>
+                        )}
+                        {overdueCount > 0 && (
+                          <div className="px-3 py-2.5 border-b border-zinc-900 hover:bg-zinc-950 cursor-pointer" onClick={() => { setTab('sales'); setShowNotifBell(false); }}>
+                            <div className="flex items-center gap-2">
+                              <span className="w-1.5 h-1.5 rounded-full bg-orange-500" style={{ boxShadow: '0 0 6px #f97316' }} />
+                              <div className="text-[11px] font-bold text-orange-400">{overdueCount} INVOICES &gt; 30D</div>
+                            </div>
+                          </div>
+                        )}
+                        {total === 0 && (
+                          <div className="px-3 py-6 text-center text-[11px] text-zinc-600 font-mono uppercase tracking-widest" style={{ fontFamily: '"JetBrains Mono", monospace' }}>// no alerts</div>
+                        )}
+                      </div>
                     </div>
+                  )}
+                </div>
+              );
+            })()}
+
+            {/* User identity block */}
+            {userProfile && (
+              <div className="hidden md:flex items-center gap-2 pl-3 ml-1 border-l border-zinc-800">
+                <div className="text-right">
+                  <div className="text-[11px] font-semibold text-zinc-100 leading-tight">{userProfile?.name}</div>
+                  <div className="text-[9px] text-zinc-500 font-mono uppercase tracking-wider" style={{ fontFamily: '"JetBrains Mono", monospace' }}>
+                    <span className="w-1 h-1 inline-block rounded-full mr-1 align-middle" style={{ background: userProfile?.role === 'super_admin' ? '#ef4444' : userProfile?.role === 'admin' ? '#a855f7' : '#0ea5e9' }} />
+                    {userProfile?.role === 'super_admin' ? 'SUPERADMIN' : userProfile?.role === 'admin' ? 'ADMIN' : 'TEAM'}
                   </div>
-                )}
+                </div>
               </div>
-            );
-          })()}
-          <button onClick={handleSignOut} style={{background:'rgba(255,255,255,0.06)', border:'1px solid rgba(255,255,255,0.1)', color:'rgba(255,255,255,0.7)'}} className="px-3 py-1.5 text-xs rounded-lg font-medium hover:bg-white/10 transition hidden sm:block">
-            Sign Out
-          </button>
+            )}
+          </div>
         </div>
+
+        {/* SECONDARY ROW — live ticker of key metrics. Pure terminal flair.
+            Renders only on dashboard to keep other tabs distraction-free. */}
+        {tab === 'dashboard' && (isSuperAdmin || modulePerms?.['Treasury'] === true) && (
+          <div className="hidden md:block px-4 py-1.5 border-t border-zinc-900 overflow-hidden" style={{ background: '#0a0a0a' }}>
+            <div className="flex items-center gap-6 text-[10px] font-mono whitespace-nowrap overflow-x-auto" style={{ fontFamily: '"JetBrains Mono", monospace' }}>
+              {(() => {
+                const todayN = todayET();
+                const monthStart = todayN.substring(0, 7) + '-01';
+                const monthIn = treasury.filter(t => (t.transaction_date || '') >= monthStart).reduce((a, t) => a + Number(t.cash_in || 0) + Number(t.bank_in || 0), 0);
+                const monthOut = treasury.filter(t => (t.transaction_date || '') >= monthStart).reduce((a, t) => a + Number(t.cash_out || 0) + Number(t.bank_out || 0), 0);
+                const monthNet = monthIn - monthOut;
+                const ar = invoices.reduce((a, i) => a + Number(i.outstanding || 0), 0);
+                const overdue = invoices.filter(i => i.outstanding > 0 && i.invoice_date && (Date.now() - new Date(i.invoice_date).getTime()) > 30 * 86400000).reduce((a, i) => a + Number(i.outstanding || 0), 0);
+                const pendCk = pendingChecks.reduce((a, c) => a + Number(c.amount || 0), 0);
+                return (
+                  <>
+                    <span><span className="text-zinc-500">MTD IN</span> <span className="text-emerald-400 tabular-nums">+{fE(monthIn)}</span></span>
+                    <span><span className="text-zinc-500">MTD OUT</span> <span className="text-red-400 tabular-nums">-{fE(monthOut)}</span></span>
+                    <span><span className="text-zinc-500">MTD NET</span> <span className={'tabular-nums ' + (monthNet >= 0 ? 'text-emerald-400' : 'text-red-400')}>{monthNet >= 0 ? '+' : ''}{fE(monthNet)}</span></span>
+                    <span className="text-zinc-700">│</span>
+                    <span><span className="text-zinc-500">A/R</span> <span className="text-zinc-200 tabular-nums">{fE(ar)}</span></span>
+                    <span><span className="text-zinc-500">OVERDUE</span> <span className={'tabular-nums ' + (overdue > 0 ? 'text-orange-400' : 'text-zinc-200')}>{fE(overdue)}</span></span>
+                    <span className="text-zinc-700">│</span>
+                    <span><span className="text-zinc-500">CHECKS PEND</span> <span className="text-zinc-200 tabular-nums">{fE(pendCk)}</span></span>
+                    <span className="text-zinc-700">│</span>
+                    <span><span className="text-zinc-500">USERS</span> <span className="text-zinc-200 tabular-nums">{teamUsers.length}</span></span>
+                    <span><span className="text-zinc-500">INV</span> <span className="text-zinc-200 tabular-nums">{invoices.length}</span></span>
+                    <span><span className="text-zinc-500">TXN</span> <span className="text-zinc-200 tabular-nums">{treasury.length}</span></span>
+                  </>
+                );
+              })()}
+            </div>
+          </div>
+        )}
       </div>
 
       {/* Global Search Modal */}
@@ -3221,16 +5389,39 @@ export default function App() {
           <div className="bg-white rounded-2xl shadow-2xl w-full max-w-lg overflow-hidden" onClick={e => e.stopPropagation()}>
             <div className="flex items-center gap-3 px-4 py-3 border-b">
               <span className="text-lg">🔍</span>
-              <input autoFocus value={globalSearch} onChange={e => setGlobalSearch(e.target.value)} placeholder="Search invoices, customers, tickets, bank..." aria-label="Global search" className="flex-1 outline-none text-sm" />
-              <button onClick={() => setShowGlobalSearch(false)} className="text-xs text-slate-400 bg-slate-100 px-2 py-1 rounded">ESC</button>
+              <input autoFocus value={globalSearch} onChange={e => setGlobalSearch(e.target.value)}
+                placeholder={(isSuperAdmin || modulePerms?.['Treasury'] === true || modulePerms?.['Egypt Bank'] === true)
+                  ? 'Search invoices, customers, tickets, bank...'
+                  : 'Search customers, tickets...'}
+                aria-label="Global search" className="flex-1 outline-none text-sm" />
+              <button onClick={() => setShowGlobalSearch(false)} className="text-xs text-slate-700 bg-slate-200 px-2 py-1 rounded font-bold">ESC</button>
             </div>
             {globalSearch.length >= 2 && (() => {
               const q = globalSearch.toLowerCase();
-              const invResults = (invoices || []).filter(i => [i.invoice_number, i.order_number, i.customer, i.customer_name, i.customer_name_en].filter(Boolean).join(' ').toLowerCase().includes(q)).slice(0, 5);
+              // v55.22 — Permission gates for financial categories.
+              // Previously, EVERY logged-in user could search treasury and
+              // Egypt-bank rows from the global search modal, regardless
+              // of whether they had Treasury permission. That leaked
+              // sensitive amounts/descriptions to non-finance team members.
+              // Now we mirror the same gates used by the dashboard tiles
+              // and top-bar Treasury widget: super_admin OR explicit
+              // module permission. Sales (invoice amounts) gets its own
+              // gate so non-sales people don't see invoice totals either.
+              const canSeeTreasury = isSuperAdmin || modulePerms?.['Treasury'] === true;
+              const canSeeBank = isSuperAdmin || modulePerms?.['Egypt Bank'] === true || modulePerms?.['Treasury'] === true;
+              const canSeeSales = isSuperAdmin || modulePerms?.['Sales'] === true;
+
+              const invResults = canSeeSales
+                ? (invoices || []).filter(i => [i.invoice_number, i.order_number, i.customer, i.customer_name, i.customer_name_en].filter(Boolean).join(' ').toLowerCase().includes(q)).slice(0, 5)
+                : [];
               const custResults = (customers || []).filter(c => [c.name, c.customer_name, c.phone, c.email].filter(Boolean).join(' ').toLowerCase().includes(q)).slice(0, 5);
               const tickResults = (dashTickets || []).filter(t => [t.title, t.ticket_number, t.description].filter(Boolean).join(' ').toLowerCase().includes(q)).slice(0, 5);
-              const bankResults = (egyptBankTxns || []).filter(t => [t.description, t.date, String(t.amount||'')].filter(Boolean).join(' ').toLowerCase().includes(q)).slice(0, 5);
-              const tresResults = (treasury || []).filter(t => [t.description, t.order_number, t.transaction_date].filter(Boolean).join(' ').toLowerCase().includes(q)).slice(0, 5);
+              const bankResults = canSeeBank
+                ? (egyptBankTxns || []).filter(t => [t.description, t.date, String(t.amount||'')].filter(Boolean).join(' ').toLowerCase().includes(q)).slice(0, 5)
+                : [];
+              const tresResults = canSeeTreasury
+                ? (treasury || []).filter(t => [t.description, t.order_number, t.transaction_date].filter(Boolean).join(' ').toLowerCase().includes(q)).slice(0, 5)
+                : [];
               const total = invResults.length + custResults.length + tickResults.length + bankResults.length + tresResults.length;
               return (
                 <div className="max-h-[50vh] overflow-auto">
@@ -3303,45 +5494,56 @@ export default function App() {
       {sidebarOpen && <div className="fixed inset-0 top-[56px] bg-black/50 z-[99] lg:hidden" onClick={() => setSidebarOpen(false)} />}
 
       <div className="flex flex-1" style={{ minHeight: 'calc(100vh - 60px)' }}>
-        {/* Sidebar */}
-        <aside role="navigation" aria-label="Main navigation" className={'fixed lg:sticky top-[56px] lg:top-[56px] left-0 z-[100] lg:z-10 overflow-y-auto transition-transform duration-200 ' + (sidebarOpen ? 'translate-x-0' : '-translate-x-full lg:translate-x-0')}
-          style={{ width: 210, height: 'calc(100vh - 56px)', background: 'linear-gradient(180deg, #0f172a 0%, #1e1b4b 100%)', borderRight: '1px solid rgba(56,189,248,0.1)', paddingTop: 'env(safe-area-inset-top, 0px)' }}>
-          {/* Extra top spacer on mobile so the first item (Dashboard) clears the iOS/Android status bar */}
+        {/* SIDEBAR — terminal navigation. Pure black with zinc-800 dividers,
+            mono uppercase group labels, sharp left-border accent for active. */}
+        <aside role="navigation" aria-label="Main navigation"
+          className={'fixed lg:sticky top-[56px] lg:top-[56px] left-0 z-[100] lg:z-10 overflow-y-auto transition-transform duration-200 border-r border-zinc-800 ' + (sidebarOpen ? 'translate-x-0' : '-translate-x-full lg:translate-x-0')}
+          style={{ width: 220, height: 'calc(100vh - 56px)', background: '#0a0a0a', paddingTop: 'env(safe-area-inset-top, 0px)', fontFamily: '"Inter Tight", "Inter", system-ui, sans-serif' }}>
           <div className="h-6 lg:h-0"></div>
-          <div className="py-3">
+          <div className="py-2">
             {[
-              { group: 'Overview', items: ['dashboard'] },
-              { group: 'Finance', items: ['sales', 'treasury', 'checks', 'debts', 'egyptbank', 'bank', 'quotes', 'reports'] },
-              { group: 'Operations', items: ['warehouse', 'inventory', 'customs', 'shipping'] },
-              { group: 'People', items: ['customers', 'crm', 'tickets', 'calendar', 'comms', 'dailylog'] },
-              { group: 'System', items: ['admin', 'ai', 'settings', 'import', 'systemtickets'] },
+              { group: 'OVERVIEW', items: ['dashboard'] },
+              { group: 'FINANCE', items: ['sales', 'treasury', 'checks', 'debts', 'egyptbank', 'bank', 'quotes', 'reports'] },
+              { group: 'OPERATIONS', items: ['warehouse', 'inventory', 'customs', 'shipping'] },
+              { group: 'PEOPLE', items: ['customers', 'crm', 'tickets', 'calendar', 'comms', 'dailylog'] },
+              { group: 'SYSTEM', items: ['admin', 'ai', 'settings', 'import', 'systemtickets'] },
             ].map(g => {
               const groupTabs = g.items.map(id => visibleTabs.find(t => t.id === id)).filter(Boolean);
               if (!groupTabs.length) return null;
               return (
-                <div key={g.group} className="mb-2">
-                  <div className="px-4 py-1.5 text-[9px] font-bold uppercase tracking-widest" style={{ color: 'rgba(148,163,184,0.4)' }}>{g.group}</div>
-                  {groupTabs.map(t => (
-                    <button key={t.id} onClick={() => { navigate(t.id); setSidebarOpen(false); }}
-                      className={'w-full text-left px-4 py-2 text-xs font-medium flex items-center gap-2 transition-colors ' + (tab === t.id
-                        ? 'text-white bg-white/10 border-r-2 border-blue-400'
-                        : 'text-slate-400 hover:text-white hover:bg-white/5'
-                      )}>
-                      <span className="text-sm">{t.icon}</span>
-                      <span className="truncate">
-                        <span>{t.label.split(' / ')[0]}</span>
-                        {t.label.includes(' / ') && <span className="text-[8px] text-slate-500 block" style={{direction:'rtl'}}>{t.label.split(' / ')[1]}</span>}
-                      </span>
-                    </button>
-                  ))}
+                <div key={g.group} className="mb-1">
+                  <div className="px-3 pt-3 pb-1.5 text-[9px] font-bold uppercase tracking-[0.18em] text-zinc-600 font-mono"
+                    style={{ fontFamily: '"JetBrains Mono", monospace' }}>
+                    <span className="text-zinc-700">// </span>{g.group}
+                  </div>
+                  {groupTabs.map(t => {
+                    const isActive = tab === t.id;
+                    return (
+                      <button key={t.id} onClick={() => { navigate(t.id); setSidebarOpen(false); }}
+                        className={'w-full text-left pl-3 pr-2 py-1.5 text-[12px] font-medium flex items-center gap-2.5 transition-colors border-l-2 ' + (isActive
+                          ? 'text-emerald-400 border-emerald-400 bg-zinc-900'
+                          : 'text-zinc-400 border-transparent hover:text-zinc-100 hover:bg-zinc-900/50'
+                        )}
+                        style={isActive ? { boxShadow: 'inset 1px 0 0 #34d399' } : {}}>
+                        <span className="text-[13px] w-4 text-center opacity-80">{t.icon}</span>
+                        <span className="truncate flex-1">
+                          <span>{t.label.split(' / ')[0]}</span>
+                          {t.label.includes(' / ') && <span className="text-[9px] text-zinc-600 block leading-tight" style={{direction:'rtl'}}>{t.label.split(' / ')[1]}</span>}
+                        </span>
+                        {isActive && <span className="text-emerald-400 text-[10px] font-mono" style={{ fontFamily: '"JetBrains Mono", monospace' }}>▸</span>}
+                      </button>
+                    );
+                  })}
                 </div>
               );
             })}
           </div>
-          {/* Sign Out at bottom of sidebar */}
-          <div className="px-4 py-3 border-t" style={{ borderColor: 'rgba(255,255,255,0.06)' }}>
-            <button onClick={handleSignOut} className="w-full px-3 py-2 rounded-lg text-xs font-medium text-slate-400 hover:text-white hover:bg-white/5 transition text-left flex items-center gap-2">
-              🚪 <span>{lang === 'en' ? 'Sign Out' : 'تسجيل خروج'}</span>
+          {/* Sign Out */}
+          <div className="px-3 py-3 border-t border-zinc-800 mt-2">
+            <button onClick={handleSignOut}
+              className="w-full px-3 py-2 text-[11px] font-mono uppercase tracking-wider text-zinc-500 hover:text-red-400 transition text-left flex items-center gap-2"
+              style={{ fontFamily: '"JetBrains Mono", monospace' }}>
+              <span>⏻</span><span>{lang === 'en' ? 'SIGN OUT' : 'تسجيل خروج'}</span>
             </button>
           </div>
         </aside>
@@ -3410,7 +5612,11 @@ export default function App() {
         {selectedInvoice && (
           <Modal onClose={() => {
             if (treasuryReturnState) { returnToTreasury(); return; }
+            // v55.83-A.6.27.19 — reset instrument form state on close so
+            // values don't leak between invoices.
             setSelectedInvoice(null); setShowAddPayment(false); setFormData({}); setEditingTxn(null); setShowLinkSearch(false); setLinkSearch('');
+            setShowAddInstrumentForm(false);
+            setInstrumentForm({ instrument_type: 'check', check_number: '', amount: '', issue_date: '', due_date: '', bank_name: '', notes: '' });
           }}
             title={`Invoice / فاتورة #${selectedInvoice.order_number}`}>
             {treasuryReturnState && (
@@ -3456,6 +5662,19 @@ export default function App() {
                   </button>
                 </div>
               )}
+              {/* v55.83-A.6.19 (Max May 14 2026) — Invoice date row, always visible.
+                  Was hidden behind Edit mode before. Per Max: "Every invoice must
+                  display the date of sale clearly on the invoice itself." */}
+              <div className="mt-2 flex items-center gap-3 flex-wrap" style={{ direction: 'ltr' }}>
+                <div className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-blue-50 border border-blue-200">
+                  <span className="text-[10px] font-bold uppercase tracking-wider text-blue-700">📅 Invoice Date / تاريخ الفاتورة</span>
+                  <span className="text-sm font-extrabold text-blue-900">{selectedInvoice.invoice_date || '—'}</span>
+                </div>
+                {selectedInvoice.created_at && selectedInvoice.created_at.substring(0, 10) !== selectedInvoice.invoice_date && (
+                  <span className="text-[10px] text-slate-500">Created: {selectedInvoice.created_at.substring(0, 10)}</span>
+                )}
+                <span className="text-[10px] text-slate-500">Order # {selectedInvoice.order_number}</span>
+              </div>
             </div>
             {/* Edit Fields + Delete + PDF Export */}
             {(() => {
@@ -3475,7 +5694,7 @@ export default function App() {
                   + '<table><tr><td><strong>Total</strong></td><td class="r lg">EGP ' + Number(inv.amount || inv.total_amount || 0).toLocaleString() + '</td></tr>'
                   + '<tr><td>Collected</td><td class="r">EGP ' + Number(inv.total_collected || 0).toLocaleString() + '</td></tr>'
                   + '<tr><td><strong>Outstanding</strong></td><td class="r" style="color:#ef4444;font-weight:700">EGP ' + Number(inv.outstanding || 0).toLocaleString() + '</td></tr></table>'
-                  + '<p class="meta" style="margin-top:30px">Generated by KTC NextTrade Hub — ' + new Date().toLocaleDateString() + '</p></body></html>');
+                  + '<p class="meta" style="margin-top:30px">Generated by KTC NextTrade Hub — ' + fmtET(new Date(), 'shortdate') + '</p></body></html>');
                 w.document.close();
                 setTimeout(function() { w.print(); }, 500);
               };
@@ -3505,6 +5724,26 @@ export default function App() {
                       <div className="flex gap-2">
                         <button onClick={async () => {
                           try {
+                            // v55.83-A.6.27 — Stage D: before deleting items,
+                            // reverse FIFO consumption on any sale movements
+                            // linked to those items so the layers get their
+                            // qty back. Otherwise stock would stay drained.
+                            try {
+                              const { data: salesMovs } = await supabase.from('inv_movements')
+                                .select('id, consumed_layers, linked_invoice_item_id')
+                                .eq('linked_invoice_id', selectedInvoice.id)
+                                .eq('movement_type', 'sale');
+                              for (const m of (salesMovs || [])) {
+                                if (m.consumed_layers && Array.isArray(m.consumed_layers)) {
+                                  await reverseFifoConsumption(m.consumed_layers);
+                                }
+                                // Mark movement as reversed (delete it; the
+                                // layer qtys are already restored)
+                                await supabase.from('inv_movements').delete().eq('id', m.id);
+                              }
+                            } catch (revErr) {
+                              console.warn('[invoice-delete] reverse failed:', revErr && revErr.message);
+                            }
                             await supabase.from('invoice_items').delete().eq('invoice_id', selectedInvoice.id);
                             await supabase.from('invoices').delete().eq('id', selectedInvoice.id);
                             setSelectedInvoice(null); setFormData({});
@@ -3519,7 +5758,7 @@ export default function App() {
                   {/* Edit fields */}
                   {formData.editingInvoice && (
                     <div className="bg-amber-50 border border-amber-200 rounded-lg p-4 mb-3">
-                      <h4 className="text-xs font-bold text-amber-800 mb-3">Edit Invoice Details / تعديل الفاتورة</h4>
+                      <h4 className="text-xs font-bold text-amber-900 mb-3">Edit Invoice Details / تعديل الفاتورة</h4>
                       <div className="grid grid-cols-2 gap-3 mb-3">
                         <div>
                           <label className="text-[10px] font-bold text-slate-500">Order # / رقم الأمر</label>
@@ -3550,7 +5789,13 @@ export default function App() {
                       <button onClick={async () => {
                         try {
                           const newOrder = document.getElementById('inv-edit-order')?.value?.trim();
-                          const newAmount = Number(document.getElementById('inv-edit-amount')?.value) || selectedInvoice.total_amount;
+                          // v55.82-E — parseAmount: invoice edit was hitting
+                          // the same comma/Arabic-Indic NaN bug as add. The
+                          // `|| selectedInvoice.total_amount` fallback meant
+                          // typing "5,000" silently kept the OLD amount —
+                          // looked like the edit didn't save.
+                          const newAmountParsed = parseAmount(document.getElementById('inv-edit-amount')?.value);
+                          const newAmount = newAmountParsed > 0 ? newAmountParsed : selectedInvoice.total_amount;
                           const newDate = formData.invEditDate || selectedInvoice.invoice_date;
                           const newRep = document.getElementById('inv-edit-rep')?.value?.trim();
                           const newNotes = document.getElementById('inv-edit-notes')?.value?.trim();
@@ -3611,10 +5856,37 @@ export default function App() {
                 <div className="text-xl font-extrabold text-blue-500">{fE(selectedInvoice.total_amount)}</div>
               </div>
               <div className="bg-emerald-50 rounded-lg p-3">
-                <div className="text-[10px] text-emerald-700">Collected / المحصّل</div>
+                <div className="flex items-center justify-between mb-1">
+                  <div className="text-[10px] text-emerald-700">Collected / المحصّل</div>
+                  <InvoicePaymentBadge invoice={selectedInvoice} fE={fE} compact />
+                </div>
                 <div className="text-xl font-extrabold text-emerald-500">{fE(selectedInvoice.total_collected)}</div>
+                {/* v55.83-A.1 — confirmed/pending split. When the SQL migration
+                    is in place AND there's a pending amount, show the
+                    breakdown so the user can see exactly what's confirmed
+                    vs what's awaiting bank-statement match. */}
+                {Number(selectedInvoice.total_pending_bank || 0) > 0 && (
+                  <div className="mt-1.5 space-y-0.5 text-[10px] leading-tight">
+                    <div className="flex justify-between">
+                      <span className="text-emerald-700">✓ Confirmed</span>
+                      <span className="font-bold text-emerald-700">{fE(Number(selectedInvoice.total_confirmed || 0))}</span>
+                    </div>
+                    <div className="flex justify-between">
+                      <span className="text-amber-700">⏳ Pending bank match</span>
+                      <span className="font-bold text-amber-700">{fE(Number(selectedInvoice.total_pending_bank || 0))}</span>
+                    </div>
+                  </div>
+                )}
                 {Number(selectedInvoice.total_collected) > Number(selectedInvoice.total_amount) && (
                   <div className="text-[9px] text-red-500 font-bold mt-1">⚠️ OVERPAID — may be doubled</div>
+                )}
+                {/* v55.83-A.6.7 — CRIT-4: show overpayment amount tracked
+                    by recalc, so duplicate payments don't hide silently
+                    behind the cap. */}
+                {Number(selectedInvoice.overpayment_amount || 0) > 0.50 && (
+                  <div className="mt-1 px-2 py-1 rounded bg-red-100 border border-red-300 text-[10px] text-red-800 font-bold">
+                    ⚠️ Treasury exceeds invoice by {fE(Number(selectedInvoice.overpayment_amount))} — review for duplicate payments
+                  </div>
                 )}
                 <button onClick={async () => {
                   const newAmt = prompt('Correct collected amount for this invoice:\n\nCurrent: ' + fE(selectedInvoice.total_collected) + '\nInvoiced: ' + fE(selectedInvoice.total_amount) + '\n\nEnter correct amount:', selectedInvoice.total_collected);
@@ -3631,17 +5903,208 @@ export default function App() {
                 <div className={`text-xl font-extrabold ${selectedInvoice.outstanding > 0 ? 'text-red-500' : 'text-emerald-500'}`}>
                   {selectedInvoice.outstanding > 0 ? fE(selectedInvoice.outstanding) : 'Paid ✓'}
                 </div>
+                {/* v55.83-A.6.27.14 (Max May 16 2026) — Close pending checks
+                    when invoice is fully paid. Per Max: "Just have confirm
+                    button to close." Manual click, manual confirm. Only
+                    visible when:
+                      • Outstanding = 0 (invoice is fully paid)
+                      • At least one pending check exists tied to this invoice
+                    For each pending check, this flips status to 'collected'
+                    and links the check to an existing treasury row that
+                    matches its amount (via source_check_id stamp). NO new
+                    treasury rows are created — the money is already in the
+                    books, which is why outstanding hit 0. */}
+                {!(selectedInvoice.outstanding > 0) && (() => {
+                  var pending = (checks || []).filter(function (c) {
+                    return c.status === 'pending' && (
+                      c.invoice_id === selectedInvoice.id ||
+                      (c.order_number && String(c.order_number).trim() === String(selectedInvoice.order_number || '').trim())
+                    );
+                  });
+                  if (pending.length === 0) return null;
+                  return (
+                    <div className="mt-2 pt-2 border-t border-emerald-200">
+                      <div className="text-[10px] text-emerald-800 font-semibold mb-1">
+                        {pending.length} pending check{pending.length === 1 ? '' : 's'} on this paid invoice
+                      </div>
+                      <button onClick={async () => {
+                        var labels = pending.map(function (c) {
+                          return '• #' + (c.check_number || c.id) + ' — ' + fE(Number(c.amount));
+                        }).join('\n');
+                        if (!confirm(
+                          'Close ' + pending.length + ' pending check' + (pending.length === 1 ? '' : 's') + ' for this paid invoice?\n\n' +
+                          labels + '\n\n' +
+                          'Each check will be marked collected. If a treasury row already represents the money (from a cash deposit, bank match, or other path) the check will be linked to it. No new treasury rows will be created.\n\n' +
+                          'إغلاق الشيكات المعلّقة لهذه الفاتورة المدفوعة؟'
+                        )) return;
+                        try {
+                          var closed = 0, attached = 0, skipped = 0;
+                          for (var i = 0; i < pending.length; i++) {
+                            var chk = pending[i];
+                            var amt = Number(chk.amount);
+                            // Find a treasury row tied to this invoice with matching amount and no source_check_id yet.
+                            var candidate = (treasury || []).find(function (t) {
+                              if (t.linked_invoice_id !== selectedInvoice.id) return false;
+                              if (t.is_bank_placeholder) return false;
+                              if (t.source_check_id) return false;
+                              if (t.dedup_sibling_id) return false;
+                              if (t.description && String(t.description).indexOf('[bank confirmation') >= 0) return false;
+                              var rowAmt = Number(t.cash_in || 0) + Number(t.bank_in || 0);
+                              return Math.abs(rowAmt - amt) < 1;
+                            });
+                            if (candidate) {
+                              await dbUpdate('treasury', candidate.id, {
+                                source_check_id: chk.id,
+                                payment_source: 'check',
+                              }, user?.id);
+                              await dbUpdate('checks', chk.id, {
+                                status: 'collected',
+                                collection_date: todayET(),
+                                linked_treasury_id: candidate.id,
+                              }, user?.id);
+                              attached++;
+                            } else {
+                              // No exact-match treasury row. Don't create one — that would
+                              // double-count if a non-exact-match row covers this check
+                              // (e.g. consolidated bank deposit covering multiple checks).
+                              // Just flip the check status; the user can manually reconcile
+                              // through the Checks tab if they want a per-check audit trail.
+                              await dbUpdate('checks', chk.id, {
+                                status: 'collected',
+                                collection_date: todayET(),
+                              }, user?.id);
+                              skipped++;
+                            }
+                            closed++;
+                          }
+                          // Recalc to ensure derived fields are fresh.
+                          try { await recalcInvoiceCollected(selectedInvoice.id); } catch (_) {}
+                          var msg = closed + ' check' + (closed === 1 ? '' : 's') + ' closed';
+                          if (attached > 0) msg += ' (' + attached + ' linked to existing treasury row' + (attached === 1 ? '' : 's') + ')';
+                          if (skipped > 0) msg += ' (' + skipped + ' marked collected without an exact-match treasury row — review if needed)';
+                          if (toast && toast.success) toast.success(msg);
+                          await loadAllData();
+                        } catch (err) {
+                          if (toast && toast.error) toast.error('Close failed: ' + (err && err.message ? err.message : String(err)));
+                          else alert('Close failed: ' + (err && err.message ? err.message : String(err)));
+                        }
+                      }} className="px-3 py-1.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded text-[11px] font-bold w-full">
+                        ✓ Confirm and close pending checks
+                      </button>
+                    </div>
+                  );
+                })()}
+                {/* v55.83-A.6.8 (Max May 13 2026) — Short-payment write-off.
+                    Auto-suggests when outstanding is small (1000 EGP soft
+                    cap or less). One-click write-off after confirmation
+                    prompt. Already-written-off amount shown for visibility. */}
+                {Number(selectedInvoice.total_written_off || 0) > 0 && (
+                  <div className="mt-1 text-[10px] text-amber-700 font-semibold">
+                    📝 Written off: {fE(Number(selectedInvoice.total_written_off))} <span className="text-slate-500">/ مخصوم</span>
+                    {canEditInvoices && (
+                      <button
+                        onClick={async () => {
+                          if (confirm('Reverse the ' + fE(Number(selectedInvoice.total_written_off)) + ' write-off?\n\nهل تريد إلغاء الخصم؟')) {
+                            await handleReverseWriteOff(selectedInvoice);
+                          }
+                        }}
+                        className="text-[9px] text-blue-500 underline ml-2">↩ Reverse / إلغاء</button>
+                    )}
+                  </div>
+                )}
+                {/* v55.83-A.6.12 (Max May 13 2026) — TIGHTENED write-off
+                    auto-suggest conditions:
+                      1. Outstanding > 0 (something left to pay)
+                      2. Outstanding ≤ 1000 (small remainder)
+                      3. AT LEAST 90% of the invoice has been collected
+                         (otherwise it's not a "short-payment" — it's just
+                         a small invoice that hasn't been paid yet)
+                      4. No pending bank confirmation (don't write off money
+                         that's just waiting on bank statement match)
+                      5. User has invoice edit permission
+                    Combination of all five gates the button correctly. */}
+                {selectedInvoice.outstanding > 0
+                  && selectedInvoice.outstanding <= WRITE_OFF_SOFT_CAP_EGP
+                  && Number(selectedInvoice.total_collected || 0) >= Number(selectedInvoice.total_amount || 0) * 0.90
+                  && Number(selectedInvoice.total_pending_bank || 0) === 0
+                  && canEditInvoices && (
+                  <div className="mt-2 p-2 rounded bg-white border border-amber-300">
+                    <div className="text-[10px] text-amber-900 font-semibold mb-1">
+                      💡 Customer short-paid by {fE(Number(selectedInvoice.outstanding))} — write off?
+                    </div>
+                    <div className="text-[9px] text-slate-600 mb-1.5" style={{direction:'rtl'}}>
+                      نقص دفع العميل {fE(Number(selectedInvoice.outstanding))} — هل تريد خصمه؟
+                    </div>
+                    <button
+                      onClick={async () => {
+                        var amt = Number(selectedInvoice.outstanding);
+                        var confirmEN = 'Write off ' + fE(amt) + ' as Customer short-payment?\n\nThis will close the invoice. Logged to audit trail.';
+                        var confirmAR = 'خصم ' + fE(amt) + ' كعدم سداد؟ سيتم إغلاق الفاتورة.';
+                        if (confirm(confirmEN + '\n\n' + confirmAR)) {
+                          await handleWriteOffShortPayment(selectedInvoice, amt, null);
+                        }
+                      }}
+                      className="w-full px-2 py-1 bg-amber-500 hover:bg-amber-600 text-white rounded text-[10px] font-bold">
+                      Write off {fE(Number(selectedInvoice.outstanding))} / خصم
+                    </button>
+                  </div>
+                )}
+                {/* v55.83-A.6.12 — Super-admin override path for write-offs > 1000.
+                    Permission-gated to super_admin AND requires explicit module
+                    permission "Write off discounts" (new). This prevents accidental
+                    large write-offs even by accounts with super_admin role.
+                    Every override is flagged in the audit log. */}
+                {selectedInvoice.outstanding > WRITE_OFF_SOFT_CAP_EGP
+                  && isSuperAdmin
+                  && (modulePerms?.['Write off discounts'] === true) && (
+                  <button
+                    onClick={async () => {
+                      var amtStr = prompt('Write off amount (above ' + fE(WRITE_OFF_SOFT_CAP_EGP) + ' soft cap — super_admin override):\nمبلغ الخصم (تجاوز الحد الأقصى):', selectedInvoice.outstanding);
+                      if (amtStr === null) return;
+                      var amt = Number(amtStr);
+                      if (!isFinite(amt) || amt <= 0) { toast.error('Invalid amount'); return; }
+                      if (confirm('Write off ' + fE(amt) + ' as short-payment?\nخصم ' + fE(amt) + '؟')) {
+                        await handleWriteOffShortPayment(selectedInvoice, amt, null);
+                      }
+                    }}
+                    className="mt-2 w-full px-2 py-1 bg-amber-700 hover:bg-amber-800 text-white rounded text-[10px] font-bold">
+                    ⚠️ Write off (admin override) / خصم (تجاوز)
+                  </button>
+                )}
               </div>
             </div>
 
             {/* ===== H3: Payment-Source Breakdown =====
                 Shows how the collected amount was actually paid —
                 Cash / Bank / Check / Vodafone / InstaPay. Only renders
-                when there's at least one positive-amount linked txn. */}
+                when there's at least one positive-amount linked txn.
+                v55.83-A.6.6 (Max May 13 2026) — also includes collected
+                post-dated checks for this order, so an invoice paid
+                10,700 cash + 20,000 check shows the correct mix instead
+                of "100% Cash". */}
             {(() => {
-              const txns = treasuryByOrder[selectedInvoice.order_number] || [];
-              if (txns.length === 0) return null;
-              const agg = aggregatePaymentSources(txns);
+              // v55.83-A.6.27.13 (Max May 16 2026) — use UUID-keyed map so
+              // the payment-source mix (Cash vs Bank vs Check) reflects
+              // exactly the rows the Collected total counts. Previously
+              // keyed by order_number string which could miss UUID-linked
+              // rows that had a wrong/empty order_number.
+              const txns = treasuryByInvoiceId[selectedInvoice.id] || [];
+              // v55.83-A.6.6 — pull collected checks too and shim them as
+              // virtual check-source rows for aggregatePaymentSources.
+              const collectedChks = (checks || []).filter(c =>
+                (c.order_number === selectedInvoice.order_number || c.invoice_id === selectedInvoice.id)
+                && c.status === 'collected'
+              );
+              const virtualCheckRows = collectedChks.map(c => ({
+                cash_in: 0,
+                bank_in: 0,
+                check_amount: Number(c.amount || 0),
+                payment_source: 'check',
+                amount: Number(c.amount || 0),
+              }));
+              const txnsWithChecks = txns.concat(virtualCheckRows);
+              if (txnsWithChecks.length === 0) return null;
+              const agg = aggregatePaymentSources(txnsWithChecks);
               if (agg.total <= 0) return null;
               const rows = PAYMENT_SOURCE_META.filter(r => agg.buckets[r.key] > 0);
               if (rows.length === 0) return null;
@@ -3680,8 +6143,10 @@ export default function App() {
 
             {/* Reconciliation Status */}
             {(() => {
-              const txns = treasuryByOrder[selectedInvoice.order_number] || [];
-              const tTotal = txns.reduce((a, t) => a + Number(t.cash_in || 0) + Number(t.bank_in || 0), 0);
+              // v55.83-A.6.6 — uses tTotalForInvoice helper which includes
+              // collected post-dated checks. Prevents false MISMATCH on
+              // invoices paid partly in checks.
+              const tTotal = tTotalForInvoice(selectedInvoice);
               const status = getReconStatus(selectedInvoice, tTotal);
               const s = STATUS_STYLES[status];
               return (
@@ -3713,7 +6178,7 @@ export default function App() {
               if (orderChecks.length === 0) return null;
               return (
                 <div className="bg-amber-50 rounded-lg p-4 mb-4 border border-amber-200">
-                  <h4 className="text-sm font-bold text-amber-800 mb-2">📝 Post-dated Checks / شيكات آجلة ({orderChecks.length})</h4>
+                  <h4 className="text-sm font-bold text-amber-900 mb-2">📝 Post-dated Checks / شيكات آجلة ({orderChecks.length})</h4>
                   {pendingOC.length > 0 && (
                     <div className="mb-2">
                       <div className="text-[10px] font-bold text-amber-600 mb-1">Pending / معلقة ({pendingOC.length}) — {fE(pendingOC.reduce((a,c) => a + Number(c.amount||0), 0))}</div>
@@ -3749,6 +6214,56 @@ export default function App() {
             {/* Invoice Line Items — always visible */}
             {(() => {
               const items = invoiceItems.filter(it => it.invoice_id === selectedInvoice.id || (it.order_number && it.order_number === String(selectedInvoice.order_number)));
+              // v55.83-A.6.19 (Max May 14 2026) — Delete a single line item.
+              // Persists immediately (no "save invoice" needed since each line is
+              // its own row in invoice_items table). Re-runs the local state
+              // refresh so totals update without a full reload.
+              const deleteLineItem = async (lineItem) => {
+                if (!lineItem || !lineItem.id) return;
+                if (!confirm('Delete this line item from the invoice? / حذف هذا البند من الفاتورة؟\n\n' + (lineItem.description || '').substring(0, 80))) return;
+                try {
+                  // v55.83-A.6.27 — Stage D: reverse FIFO consumption first
+                  // so the cost layers get their qty back, then delete the
+                  // sale movement, then delete the invoice item.
+                  if (lineItem.cogs_movement_id) {
+                    try {
+                      const { data: mov } = await supabase.from('inv_movements')
+                        .select('consumed_layers').eq('id', lineItem.cogs_movement_id).maybeSingle();
+                      if (mov && mov.consumed_layers) {
+                        await reverseFifoConsumption(mov.consumed_layers);
+                      }
+                      await supabase.from('inv_movements').delete().eq('id', lineItem.cogs_movement_id);
+                    } catch (revErr) {
+                      console.warn('[line-delete] reverse failed:', revErr && revErr.message);
+                    }
+                  }
+                  await supabase.from('invoice_items').delete().eq('id', lineItem.id);
+                  // Update local state immediately so the row disappears and totals recompute
+                  setInvoiceItems(prev => prev.filter(it => it.id !== lineItem.id));
+                  // Audit log
+                  try {
+                    await supabase.from('audit_log').insert({
+                      user_id: userProfile?.id || user?.id,
+                      entity_type: 'invoice_items',
+                      action: 'delete_line_item',
+                      details: {
+                        invoice_id: selectedInvoice.id,
+                        order_number: selectedInvoice.order_number,
+                        line_item_id: lineItem.id,
+                        description: (lineItem.description || '').substring(0, 200),
+                        quantity: lineItem.quantity,
+                        unit_price: lineItem.unit_price,
+                        line_total: lineItem.line_total,
+                        source: 'v55.83-A.6.19 invoice modal delete line item',
+                      },
+                      created_at: new Date().toISOString(),
+                    });
+                  } catch (_) { /* non-fatal */ }
+                  toast && toast.success && toast.success('Line item deleted / تم حذف البند');
+                } catch (err) {
+                  toast && toast.error && toast.error('Delete failed: ' + (err.message || err));
+                }
+              };
               return (
                 <div className="bg-blue-50 rounded-lg p-4 mb-4 border border-blue-200">
                   <h4 className="text-sm font-bold text-blue-800 mb-2">📦 Order Breakdown / تفاصيل الأمر {items.length > 0 ? '(' + items.length + ' items)' : ''}</h4>
@@ -3761,14 +6276,27 @@ export default function App() {
                             <th className="px-2 py-1.5 text-[10px] text-right">Qty / الكمية</th>
                             <th className="px-2 py-1.5 text-[10px] text-right">Unit Price / السعر</th>
                             <th className="px-2 py-1.5 text-[10px] text-right">Total / الإجمالي</th>
+                            <th className="px-2 py-1.5 text-[10px] text-center w-10">—</th>
                           </tr></thead>
                           <tbody>
                             {items.map(it => (
-                              <tr key={it.id} className="border-b border-blue-100">
+                              <tr key={it.id} className="border-b border-blue-100 group">
                                 <td className="px-2 py-1.5 text-xs" style={{ direction: lang === 'ar' ? 'rtl' : 'ltr' }}>{tx(it.description, it.description_en)}</td>
                                 <td className="px-2 py-1.5 text-xs text-right">{fmt(it.quantity)}</td>
                                 <td className="px-2 py-1.5 text-xs text-right">{fE(it.unit_price)}</td>
                                 <td className="px-2 py-1.5 text-xs text-right font-semibold">{fE(it.line_total)}</td>
+                                <td className="px-2 py-1.5 text-center">
+                                  {/* v55.83-A.6.19 — Always visible per-row delete button.
+                                      Per Max May 14 2026: "Each invoice line item must have
+                                      a clear delete/remove button." */}
+                                  <button
+                                    type="button"
+                                    onClick={() => deleteLineItem(it)}
+                                    title="Delete this line / حذف هذا البند"
+                                    className="px-1.5 py-0.5 rounded text-red-600 hover:bg-red-100 hover:text-red-800 text-sm font-bold border border-red-200 hover:border-red-400 transition">
+                                    🗑
+                                  </button>
+                                </td>
                               </tr>
                             ))}
                           </tbody>
@@ -3785,7 +6313,7 @@ export default function App() {
                     </div>
                   ) : (
                     <div>
-                      <div className="text-xs text-slate-400 mb-2 text-center">No item breakdown available / لا يوجد تفاصيل بنود</div>
+                      <div className="text-xs text-slate-500 mb-2 text-center">No item breakdown available / لا يوجد تفاصيل بنود</div>
                       {!formData.addingItems && (
                         <div className="text-center">
                           <button onClick={() => setFormData({...formData, addingItems: true, newItems: [], prodSearch: ''})}
@@ -3903,13 +6431,96 @@ export default function App() {
               );
             })()}
 
-            {/* Treasury Transactions */}
-            {(treasuryByOrder[selectedInvoice.order_number] || []).length > 0 && (
-              <div className="bg-emerald-50 rounded-lg p-4 mb-4 border border-emerald-200">
-                <h4 className="text-sm font-bold text-emerald-800 mb-2">🏦 Treasury / الخزنة #{selectedInvoice.order_number}</h4>
-                {(treasuryByOrder[selectedInvoice.order_number] || []).map((txn, i) => (
-                  <div key={txn.id}>
-                    {editingTxn === txn.id ? (
+            {/* v55.83-A.6.27.13 (Max May 16 2026) — Treasury panel.
+                Reads from treasuryByInvoiceId (UUID-keyed) so what's shown
+                matches what the "Collected" total counts. Previously used
+                treasuryByOrder (string-keyed), which could disagree silently
+                with the recalc — exactly the invoice 2330 bug. */}
+            {(() => {
+              var uuidLinked = treasuryByInvoiceId[selectedInvoice.id] || [];
+              var orphans = findOrphanedOrderNumberMatches(selectedInvoice);
+              if (uuidLinked.length === 0 && orphans.length === 0) return null;
+              return (
+                <div>
+                  {orphans.length > 0 && (
+                    <div className="bg-amber-100 rounded-lg p-3 mb-2 border-2 border-amber-400">
+                      <div className="text-xs font-bold text-amber-900 mb-1">⚠️ Linkage drift detected ({orphans.length} row{orphans.length === 1 ? '' : 's'})</div>
+                      <div className="text-[11px] text-amber-900 mb-2">
+                        These treasury rows have order_number = <strong>{selectedInvoice.order_number}</strong> but are not properly linked to this invoice by ID. They are NOT counted in the Collected total. This usually means the invoice was re-created or the link was broken during an edit.
+                      </div>
+                      <div className="space-y-1">
+                        {orphans.map(function (t) {
+                          var amt = Number(t.cash_in || 0) + Number(t.bank_in || 0);
+                          return (
+                            <div key={t.id} className="flex items-center justify-between bg-white rounded px-2 py-1.5 text-[11px]">
+                              <div className="flex-1">
+                                <span className="font-mono font-bold text-amber-900">{fE(amt)}</span>
+                                <span className="text-slate-600 ml-2">{t.transaction_date}</span>
+                                <span className="text-slate-500 ml-2 truncate inline-block max-w-[200px] align-bottom" title={t.description}>{t.description}</span>
+                              </div>
+                              <div className="flex gap-1">
+                                <button onClick={() => setInspectedTreasury(t)}
+                                  className="px-2 py-0.5 rounded border border-amber-400 text-amber-800 text-[10px] hover:bg-amber-50">Inspect</button>
+                                <button onClick={async () => {
+                                  await dbUpdate('treasury', t.id, { linked_invoice_id: selectedInvoice.id }, userProfile?.id || user?.id);
+                                  await recalcInvoiceCollected(selectedInvoice.id);
+                                  await loadAllData();
+                                  if (toast && toast.success) toast.success('Linked + recalculated');
+                                }}
+                                  className="px-2 py-0.5 rounded bg-blue-500 hover:bg-blue-600 text-white text-[10px] font-bold">Link Now</button>
+                              </div>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    </div>
+                  )}
+
+                  {uuidLinked.length > 0 && (
+                    <div className="bg-emerald-50 rounded-lg p-4 mb-4 border border-emerald-200">
+                      <h4 className="text-sm font-bold text-emerald-800 mb-2">🏦 Treasury / الخزنة #{selectedInvoice.order_number}</h4>
+                      {uuidLinked.map((txn, i) => (
+                        <div key={txn.id}>
+                          {/* v55.83-A.6.9 (Max May 13 2026) — Placeholder rows
+                              previously showed as "EGP 0" with no visible
+                              indication of pending amount. Invoice 2317 had a
+                              25,000 EGP placeholder that was invisible in the
+                              treasury totals. Now placeholders get a distinct
+                        amber visual treatment with "⏳ EGP X awaiting bank
+                        confirmation" + show their expected_amount in the
+                        total. */}
+                    {txn.is_bank_placeholder ? (
+                      <div className="flex justify-between items-center py-2 border-b border-amber-200 bg-amber-50 -mx-1 px-2 rounded mb-1">
+                        <div className="flex-1">
+                          <div className="text-xs font-semibold text-amber-900" style={{ direction: lang === 'ar' ? 'rtl' : 'ltr' }}>
+                            ⏳ {tx(txn.description, txn.description_en)}
+                          </div>
+                          <div className="text-[10px] text-amber-700">
+                            {txn.transaction_date}
+                            {txn.expected_date && txn.expected_date !== txn.transaction_date && (
+                              <span> · Expected to clear ~{txn.expected_date} / متوقع التحصيل</span>
+                            )}
+                            <span className="ml-1 font-semibold">· Awaiting bank confirmation / في انتظار تأكيد البنك</span>
+                          </div>
+                        </div>
+                        <div className="text-sm font-bold text-amber-700 mr-2">
+                          {fE(Number(txn.expected_amount || 0))}
+                          <span className="text-[9px] text-amber-600 ml-1">pending</span>
+                        </div>
+                        <button onClick={() => setInspectedTreasury(txn)}
+                          className="px-2 py-0.5 rounded border border-amber-400 text-amber-700 text-[10px] mr-1 hover:bg-amber-100" title="Inspect / فحص">
+                          ⓘ Inspect
+                        </button>
+                        <button onClick={() => { setEditingTxn(txn.id); setFormData({ txEditDate: txn.transaction_date, txExpectedDate: txn.expected_date || txn.transaction_date }); }}
+                          className="px-2 py-0.5 rounded border border-blue-300 text-blue-600 text-[10px] mr-1 hover:bg-blue-50">
+                          Edit
+                        </button>
+                        <button onClick={() => handleUnlinkTreasury(txn)}
+                          className="px-2 py-0.5 rounded border border-red-300 text-red-500 text-[10px] hover:bg-red-50">
+                          Unlink
+                        </button>
+                      </div>
+                    ) : editingTxn === txn.id ? (
                       <div className="bg-blue-50 rounded-lg p-3 mb-2 border border-blue-200">
                         <div className="grid grid-cols-2 gap-2">
                           <div>
@@ -3983,7 +6594,14 @@ export default function App() {
                           <div className="text-xs font-semibold" style={{ direction: lang === 'ar' ? 'rtl' : 'ltr' }}>{tx(txn.description, txn.description_en)}</div>
                           <div className="text-[10px] text-slate-500">{txn.transaction_date}</div>
                         </div>
-                        <div className="text-sm font-bold text-emerald-600 mr-2">{fE(txn.cash_in)}</div>
+                        <div className="text-sm font-bold text-emerald-600 mr-2">
+                          {/* v55.83-A.6.11 — show bank_in OR cash_in, not
+                              just cash_in. Matched bank rows have
+                              bank_in=<amount> and cash_in=0; displaying
+                              only cash_in made them look like EGP 0
+                              empty rows on invoice 2303. */}
+                          {fE(Number(txn.cash_in || 0) + Number(txn.bank_in || 0))}
+                        </div>
                         <button onClick={() => setInspectedTreasury(txn)}
                           className="px-2 py-0.5 rounded border border-indigo-300 text-indigo-600 text-[10px] mr-1 hover:bg-indigo-50" title="Inspect / فحص">
                           ⓘ Inspect
@@ -4007,11 +6625,41 @@ export default function App() {
                 <div className="flex justify-between pt-2 mt-1 border-t-2 border-emerald-300">
                   <span className="text-xs font-bold">Total / الإجمالي</span>
                   <span className="text-sm font-extrabold text-emerald-600">
-                    {fE((treasuryByOrder[selectedInvoice.order_number] || []).reduce((a, t) => a + Number(t.cash_in || 0) + Number(t.bank_in || 0), 0))}
+                    {/* v55.83-A.6.9 — include placeholder expected_amount
+                        so totals match what users see line-by-line. The
+                        "pending" portion is broken out below for clarity. */}
+                    {fE((treasuryByInvoiceId[selectedInvoice.id] || []).reduce((a, t) => {
+                      var confirmed = Number(t.cash_in || 0) + Number(t.bank_in || 0);
+                      var pending = t.is_bank_placeholder ? Number(t.expected_amount || 0) : 0;
+                      return a + confirmed + pending;
+                    }, 0))}
                   </span>
                 </div>
+                {/* Confirmed + pending breakdown below the total, only if
+                    any placeholder exists. */}
+                {(treasuryByInvoiceId[selectedInvoice.id] || []).some(t => t.is_bank_placeholder) && (
+                  <div className="mt-1 space-y-0.5 text-[10px]">
+                    <div className="flex justify-between">
+                      <span className="text-emerald-700">✓ Confirmed / مؤكد</span>
+                      <span className="font-bold text-emerald-700">
+                        {fE((treasuryByInvoiceId[selectedInvoice.id] || []).reduce((a, t) =>
+                          t.is_bank_placeholder ? a : a + Number(t.cash_in || 0) + Number(t.bank_in || 0), 0))}
+                      </span>
+                    </div>
+                    <div className="flex justify-between">
+                      <span className="text-amber-700">⏳ Pending bank confirmation / في انتظار البنك</span>
+                      <span className="font-bold text-amber-700">
+                        {fE((treasuryByInvoiceId[selectedInvoice.id] || []).reduce((a, t) =>
+                          t.is_bank_placeholder ? a + Number(t.expected_amount || 0) : a, 0))}
+                      </span>
+                    </div>
+                  </div>
+                )}
               </div>
             )}
+                </div>
+              );
+            })()}
 
             {/* Egypt Bank Linked Entries */}
             {(() => {
@@ -4030,11 +6678,13 @@ export default function App() {
                         <span className="text-sm font-bold text-emerald-600">{fE(txn.amount)}</span>
                         <button onClick={async () => {
                           try {
+                            // v55.83-A.6.27.14 (Max May 16 2026) — delegate
+                            // to recalc instead of subtracting from
+                            // total_collected directly. Same architectural
+                            // fix as EgyptBankTab.unmatch.
                             await dbUpdate('egypt_bank_transactions', txn.id, { matched_invoice_id: null, matched_at: null, matched_by: null }, userProfile?.id);
-                            const newCollected = Math.max(0, Number(selectedInvoice.total_collected || 0) - Number(txn.amount));
-                            await dbUpdate('invoices', selectedInvoice.id, { total_collected: newCollected }, userProfile?.id);
-                            setSelectedInvoice({...selectedInvoice, total_collected: newCollected});
-                            setEgyptBankTxns(prev => prev.map(t => t.id === txn.id ? {...t, matched_invoice_id: null} : t));
+                            await recalcInvoiceCollected(selectedInvoice.id);
+                            await loadAllData();
                           } catch(err) { alert(err.message); }
                         }} className="text-[10px] text-red-400 underline">unlink</button>
                       </div>
@@ -4110,11 +6760,39 @@ export default function App() {
                           {!alreadyLinked && (
                           <button onClick={async () => {
                             try {
-                              await dbUpdate('egypt_bank_transactions', txn.id, { matched_invoice_id: selectedInvoice.id, matched_at: new Date().toISOString(), matched_by: userProfile?.id }, userProfile?.id);
-                              const newCollected = Number(selectedInvoice.total_collected || 0) + Number(txn.amount);
-                              await dbUpdate('invoices', selectedInvoice.id, { total_collected: newCollected }, userProfile?.id);
-                              setSelectedInvoice({...selectedInvoice, total_collected: newCollected});
-                              setEgyptBankTxns(prev => prev.map(t => t.id === txn.id ? {...t, matched_invoice_id: selectedInvoice.id} : t));
+                              // v55.83-A.6.27.14 (Max May 16 2026) — when
+                              // linking an Egypt Bank txn from inside the
+                              // invoice view, do the same thing
+                              // EgyptBankTab.matchToInvoice does: create a
+                              // treasury row representing the bank inflow,
+                              // then defer to recalcInvoiceCollected.
+                              // Without this, total_collected went stale on
+                              // the next recalc.
+                              var amt = Number(txn.amount);
+                              var insertRes = await supabase.from('treasury').insert({
+                                transaction_date: txn.date || todayET(),
+                                cash_in: 0,
+                                cash_out: 0,
+                                bank_in: amt,
+                                bank_out: 0,
+                                linked_invoice_id: selectedInvoice.id,
+                                order_number: selectedInvoice.order_number,
+                                matched_bank_txn_id: txn.id,
+                                needs_bank_match: false,
+                                is_bank_placeholder: false,
+                                description: 'Bank deposit matched to invoice #' + selectedInvoice.order_number,
+                                created_by: userProfile?.id,
+                              }).select().single();
+                              if (insertRes.error) throw insertRes.error;
+                              var newTreasuryId = insertRes.data && insertRes.data.id;
+                              await dbUpdate('egypt_bank_transactions', txn.id, {
+                                matched_invoice_id: selectedInvoice.id,
+                                matched_treasury_id: newTreasuryId,
+                                matched_at: new Date().toISOString(),
+                                matched_by: userProfile?.id,
+                              }, userProfile?.id);
+                              await recalcInvoiceCollected(selectedInvoice.id);
+                              await loadAllData();
                               setShowLinkSearch(false); setLinkSearch('');
                             } catch(err) { toast.error(err.message); }
                           }}
@@ -4153,6 +6831,380 @@ export default function App() {
                 setFormData={setFormData}
               />
             )}
+
+            {/* ==========================================
+                v55.83-A.6.27.18 — PAYMENT INSTRUMENTS / SCHEDULED RECEIVABLES
+                Per Max: documentation only. Never writes to treasury,
+                never changes invoice.total_collected. The smart popup
+                in the treasury entry flow handles clearing. This UI is
+                for entering instruments and seeing what's outstanding.
+            ========================================== */}
+            {(function () {
+              // Pull instruments for this invoice — match on invoice_id OR order_number for legacy
+              var invInstruments = (checks || []).filter(function (c) {
+                if (c.invoice_id === selectedInvoice.id) return true;
+                if (c.order_number && String(c.order_number).trim() === String(selectedInvoice.order_number || '').trim()) return true;
+                return false;
+              });
+              // Group by status for summary
+              var byStatus = { pending: [], deposited: [], cleared: [], bounced: [], cancelled: [], replaced: [] };
+              invInstruments.forEach(function (c) {
+                var s = c.status || 'pending';
+                // Compat: legacy 'collected' → 'cleared'
+                if (s === 'collected') s = 'cleared';
+                if (s === 'uncollected') s = 'pending';
+                if (!byStatus[s]) byStatus[s] = [];
+                byStatus[s].push(c);
+              });
+              var pendingSum = byStatus.pending.reduce(function (a, c) { return a + Number(c.amount || 0); }, 0);
+              var depositedSum = byStatus.deposited.reduce(function (a, c) { return a + Number(c.amount || 0); }, 0);
+              var clearedSum = byStatus.cleared.reduce(function (a, c) { return a + Number(c.amount || 0); }, 0);
+              var bouncedSum = byStatus.bounced.reduce(function (a, c) { return a + Number(c.amount || 0); }, 0);
+              var totalCount = invInstruments.length;
+              var today = new Date().toISOString().slice(0, 10);
+
+              // Order list: overdue pending first, then upcoming pending by due date,
+              // then deposited, then cleared, then bounced/cancelled/replaced.
+              var statusOrder = { pending: 1, deposited: 2, cleared: 3, bounced: 4, cancelled: 5, replaced: 6 };
+              var sortedList = invInstruments.slice().sort(function (a, b) {
+                var sa = (a.status === 'collected') ? 'cleared' : (a.status === 'uncollected') ? 'pending' : (a.status || 'pending');
+                var sb = (b.status === 'collected') ? 'cleared' : (b.status === 'uncollected') ? 'pending' : (b.status || 'pending');
+                var ra = statusOrder[sa] || 99;
+                var rb = statusOrder[sb] || 99;
+                if (ra !== rb) return ra - rb;
+                var da = a.due_date || a.check_date || '';
+                var db = b.due_date || b.check_date || '';
+                return da < db ? -1 : (da > db ? 1 : 0);
+              });
+
+              // v55.83-A.6.27.19 — use the existing canEditTreasury gate
+              // (super_admin OR modulePerms['Edit Treasury'] OR modulePerms['Treasury'])
+              // instead of just modulePerms['Treasury']. Otherwise users with
+              // 'Edit Treasury' but not 'Treasury' could edit treasury rows
+              // but couldn't add instruments — inconsistent.
+              var canEditInstruments = canEditTreasury;
+
+              return (
+                <div className="mt-4 border border-slate-200 rounded-xl overflow-hidden">
+                  {/* Header — clickable to expand/collapse */}
+                  <button
+                    onClick={function () { setInstrumentSectionExpanded(function (e) { return !e; }); }}
+                    className="w-full flex items-center justify-between px-4 py-3 bg-slate-50 hover:bg-slate-100 transition"
+                  >
+                    <div className="flex items-center gap-2">
+                      <span style={{ fontSize: 18 }}>🧾</span>
+                      <div className="text-left">
+                        <div className="text-sm font-bold text-slate-900">
+                          Payment Instruments / Scheduled Receivables
+                        </div>
+                        <div className="text-[11px] text-slate-600">
+                          {totalCount === 0 ? 'No instruments yet — checks or promissory notes for this order' :
+                            (byStatus.pending.length + ' pending · ' +
+                             byStatus.deposited.length + ' deposited · ' +
+                             byStatus.cleared.length + ' cleared' +
+                             (byStatus.bounced.length > 0 ? ' · ' + byStatus.bounced.length + ' bounced' : ''))}
+                        </div>
+                      </div>
+                    </div>
+                    <div className="flex items-center gap-3">
+                      {totalCount > 0 && (
+                        <div className="text-right">
+                          <div className="text-[10px] text-slate-500">Pending</div>
+                          <div className="text-sm font-extrabold text-amber-700">{fE(pendingSum)}</div>
+                        </div>
+                      )}
+                      <span className="text-slate-500 text-lg">{instrumentSectionExpanded ? '▾' : '▸'}</span>
+                    </div>
+                  </button>
+
+                  {instrumentSectionExpanded && (
+                    <div className="bg-white p-3 space-y-2">
+                      {/* Summary chips */}
+                      {totalCount > 0 && (
+                        <div className="flex flex-wrap gap-2 text-[11px] mb-2">
+                          <span className="px-2 py-1 bg-amber-100 text-amber-900 rounded-md font-medium">
+                            ⏳ Pending: {byStatus.pending.length} · {fE(pendingSum)}
+                          </span>
+                          {byStatus.deposited.length > 0 && (
+                            <span className="px-2 py-1 bg-sky-100 text-sky-900 rounded-md font-medium">
+                              🏦 Deposited: {byStatus.deposited.length} · {fE(depositedSum)}
+                            </span>
+                          )}
+                          {byStatus.cleared.length > 0 && (
+                            <span className="px-2 py-1 bg-emerald-100 text-emerald-900 rounded-md font-medium">
+                              ✓ Cleared: {byStatus.cleared.length} · {fE(clearedSum)}
+                            </span>
+                          )}
+                          {byStatus.bounced.length > 0 && (
+                            <span className="px-2 py-1 bg-red-100 text-red-900 rounded-md font-medium">
+                              ⚠ Bounced: {byStatus.bounced.length} · {fE(bouncedSum)}
+                            </span>
+                          )}
+                        </div>
+                      )}
+
+                      {/* Empty state */}
+                      {totalCount === 0 && !showAddInstrumentForm && (
+                        <div className="text-center py-4 text-slate-500 text-xs italic">
+                          No checks or promissory notes recorded for this order yet.
+                        </div>
+                      )}
+
+                      {/* List */}
+                      {sortedList.map(function (inst) {
+                        var st = (inst.status === 'collected') ? 'cleared' : (inst.status === 'uncollected') ? 'pending' : (inst.status || 'pending');
+                        var due = inst.due_date || inst.check_date || '';
+                        var isOverdue = (st === 'pending' || st === 'deposited') && due && due < today;
+                        var isDueSoon = (st === 'pending' || st === 'deposited') && due && due >= today && due <= (new Date(Date.now() + 7 * 86400000).toISOString().slice(0, 10));
+                        var typeLabel = inst.instrument_type === 'promissory_note' ? 'Promissory Note' : (inst.instrument_type === 'other' ? 'Other' : 'Check');
+                        var typeIcon = inst.instrument_type === 'promissory_note' ? '📜' : '🧾';
+                        var rowStyle = (st === 'cleared' || st === 'cancelled' || st === 'replaced') ? 'bg-slate-100' : (st === 'bounced' ? 'bg-red-50' : (isOverdue ? 'bg-red-50' : (isDueSoon ? 'bg-amber-50' : 'bg-white')));
+                        var titleStyle = (st === 'cleared' || st === 'cancelled' || st === 'replaced') ? 'line-through text-slate-500' : 'text-slate-900';
+                        return (
+                          <div key={inst.id} className={'border border-slate-200 rounded-lg p-2.5 ' + rowStyle}>
+                            <div className="flex items-start justify-between gap-2">
+                              <div className="flex-1 min-w-0">
+                                <div className="flex items-center gap-1.5 flex-wrap">
+                                  <span className="text-base">{typeIcon}</span>
+                                  <span className={'text-sm font-bold ' + titleStyle}>
+                                    {typeLabel}{inst.check_number ? ' #' + inst.check_number : ''}
+                                  </span>
+                                  <span className={'text-sm font-extrabold ' + titleStyle}>
+                                    {fE(Number(inst.amount || 0))}
+                                  </span>
+                                  {/* Status badge */}
+                                  {st === 'pending' && <span className={'px-1.5 py-0.5 rounded text-[10px] font-bold ' + (isOverdue ? 'bg-red-200 text-red-900' : (isDueSoon ? 'bg-amber-200 text-amber-900' : 'bg-slate-200 text-slate-700'))}>
+                                    {isOverdue ? 'OVERDUE' : (isDueSoon ? 'DUE SOON' : 'PENDING')}
+                                  </span>}
+                                  {st === 'deposited' && <span className="px-1.5 py-0.5 rounded text-[10px] font-bold bg-sky-200 text-sky-900">DEPOSITED</span>}
+                                  {st === 'cleared' && <span className="px-1.5 py-0.5 rounded text-[10px] font-bold bg-emerald-200 text-emerald-900">✓ CLEARED</span>}
+                                  {st === 'bounced' && <span className="px-1.5 py-0.5 rounded text-[10px] font-bold bg-red-200 text-red-900">⚠ BOUNCED</span>}
+                                  {st === 'cancelled' && <span className="px-1.5 py-0.5 rounded text-[10px] font-bold bg-slate-300 text-slate-700">CANCELLED</span>}
+                                  {st === 'replaced' && <span className="px-1.5 py-0.5 rounded text-[10px] font-bold bg-slate-300 text-slate-700">REPLACED</span>}
+                                </div>
+                                <div className="text-[11px] text-slate-600 mt-1 flex flex-wrap gap-x-3 gap-y-0.5">
+                                  {due && <span>Due: <strong className={isOverdue ? 'text-red-700' : ''}>{due}</strong></span>}
+                                  {inst.bank_name && <span>Bank: {inst.bank_name}</span>}
+                                  {inst.customer_name && <span>Customer: {inst.customer_name}</span>}
+                                  {st === 'cleared' && inst.collection_date && <span className="text-emerald-700">Cleared: {inst.collection_date}</span>}
+                                  {st === 'bounced' && inst.bounce_reason && <span className="text-red-700">Reason: {inst.bounce_reason}</span>}
+                                </div>
+                                {inst.notes && <div className="text-[11px] text-slate-500 italic mt-1">📝 {inst.notes}</div>}
+                              </div>
+                              {/* Action buttons — only for pending/deposited rows and only for users with permission.
+                                  Note per Max: Mark Cleared is intentionally NOT here. Clearing only happens via
+                                  the smart popup when a treasury transaction is entered. */}
+                              {canEditInstruments && (st === 'pending' || st === 'deposited') && (
+                                <div className="flex flex-col gap-1">
+                                  {st === 'pending' && (
+                                    <button
+                                      onClick={async function () {
+                                        if (!confirm('Mark instrument #' + (inst.check_number || inst.id) + ' as deposited at the bank? This is documentation only — it does NOT post any treasury or invoice changes.')) return;
+                                        try {
+                                          await dbUpdate('checks', inst.id, { status: 'deposited', updated_by: user?.id }, user?.id);
+                                          toast.success('Marked as deposited');
+                                          await loadAllData();
+                                        } catch (err) { toast.error('Failed: ' + (err.message || String(err))); }
+                                      }}
+                                      className="px-2 py-1 text-[10px] bg-sky-100 hover:bg-sky-200 text-sky-900 rounded font-semibold"
+                                    >
+                                      Mark Deposited
+                                    </button>
+                                  )}
+                                  <button
+                                    onClick={async function () {
+                                      var reason = prompt('Why did this instrument bounce? (Required — appears in audit log)');
+                                      if (!reason || !reason.trim()) return;
+                                      try {
+                                        await dbUpdate('checks', inst.id, {
+                                          status: 'bounced',
+                                          bounce_reason: reason.trim(),
+                                          updated_by: user?.id,
+                                        }, user?.id);
+                                        toast.warning('Marked as bounced — please follow up with customer');
+                                        await loadAllData();
+                                      } catch (err) { toast.error('Failed: ' + (err.message || String(err))); }
+                                    }}
+                                    className="px-2 py-1 text-[10px] bg-red-100 hover:bg-red-200 text-red-900 rounded font-semibold"
+                                  >
+                                    Mark Bounced
+                                  </button>
+                                  <button
+                                    onClick={async function () {
+                                      if (!confirm('Cancel instrument #' + (inst.check_number || inst.id) + '? This is documentation only — does NOT change any treasury or invoice totals.')) return;
+                                      try {
+                                        await dbUpdate('checks', inst.id, { status: 'cancelled', updated_by: user?.id }, user?.id);
+                                        toast.success('Cancelled');
+                                        await loadAllData();
+                                      } catch (err) { toast.error('Failed: ' + (err.message || String(err))); }
+                                    }}
+                                    className="px-2 py-1 text-[10px] bg-slate-200 hover:bg-slate-300 text-slate-700 rounded font-semibold"
+                                  >
+                                    Cancel
+                                  </button>
+                                </div>
+                              )}
+                            </div>
+                          </div>
+                        );
+                      })}
+
+                      {/* Add Instrument toggle + inline form */}
+                      {canEditInstruments && !showAddInstrumentForm && (
+                        <button
+                          onClick={function () {
+                            setShowAddInstrumentForm(true);
+                            setInstrumentForm({
+                              instrument_type: 'check',
+                              check_number: '',
+                              amount: '',
+                              issue_date: new Date().toISOString().slice(0, 10),
+                              due_date: '',
+                              bank_name: '',
+                              notes: '',
+                            });
+                          }}
+                          className="w-full px-4 py-2 bg-indigo-50 hover:bg-indigo-100 text-indigo-900 rounded-lg font-bold text-sm border-2 border-dashed border-indigo-300"
+                        >
+                          + Add Check / Promissory Note
+                        </button>
+                      )}
+
+                      {showAddInstrumentForm && (
+                        <div className="border-2 border-indigo-300 rounded-lg p-3 bg-indigo-50 space-y-2">
+                          <div className="text-sm font-bold text-indigo-900 mb-1">New Instrument</div>
+                          <div className="text-[11px] text-indigo-800 italic mb-2">
+                            Documentation only — this does NOT affect the invoice's Collected amount or any treasury balance.
+                          </div>
+                          {/* Type */}
+                          <div className="grid grid-cols-2 gap-2">
+                            <label className="text-[11px] font-semibold text-slate-700">Type
+                              <select
+                                value={instrumentForm.instrument_type}
+                                onChange={function (e) { setInstrumentForm(Object.assign({}, instrumentForm, { instrument_type: e.target.value })); }}
+                                className="w-full mt-0.5 px-2 py-1.5 border border-slate-300 rounded text-sm bg-white"
+                              >
+                                <option value="check">Check / شيك</option>
+                                <option value="promissory_note">Promissory Note / كمبيالة</option>
+                                <option value="other">Other / آخر</option>
+                              </select>
+                            </label>
+                            <label className="text-[11px] font-semibold text-slate-700">Number / Reference
+                              <input
+                                type="text"
+                                value={instrumentForm.check_number}
+                                onChange={function (e) { setInstrumentForm(Object.assign({}, instrumentForm, { check_number: e.target.value })); }}
+                                placeholder="e.g. 1234"
+                                className="w-full mt-0.5 px-2 py-1.5 border border-slate-300 rounded text-sm bg-white"
+                              />
+                            </label>
+                          </div>
+                          <div className="grid grid-cols-2 gap-2">
+                            <label className="text-[11px] font-semibold text-slate-700">Amount (EGP) *
+                              <input
+                                type="text"
+                                value={instrumentForm.amount}
+                                onChange={function (e) { setInstrumentForm(Object.assign({}, instrumentForm, { amount: e.target.value })); }}
+                                placeholder="50000"
+                                className="w-full mt-0.5 px-2 py-1.5 border border-slate-300 rounded text-sm bg-white font-mono"
+                              />
+                            </label>
+                            <label className="text-[11px] font-semibold text-slate-700">Bank
+                              <input
+                                type="text"
+                                value={instrumentForm.bank_name}
+                                onChange={function (e) { setInstrumentForm(Object.assign({}, instrumentForm, { bank_name: e.target.value })); }}
+                                placeholder="CIB / NBE / etc."
+                                className="w-full mt-0.5 px-2 py-1.5 border border-slate-300 rounded text-sm bg-white"
+                              />
+                            </label>
+                          </div>
+                          <div className="grid grid-cols-2 gap-2">
+                            <label className="text-[11px] font-semibold text-slate-700">Issue Date
+                              <input
+                                type="date"
+                                value={instrumentForm.issue_date}
+                                onChange={function (e) { setInstrumentForm(Object.assign({}, instrumentForm, { issue_date: e.target.value })); }}
+                                className="w-full mt-0.5 px-2 py-1.5 border border-slate-300 rounded text-sm bg-white"
+                              />
+                            </label>
+                            <label className="text-[11px] font-semibold text-slate-700">Due Date *
+                              <input
+                                type="date"
+                                value={instrumentForm.due_date}
+                                onChange={function (e) { setInstrumentForm(Object.assign({}, instrumentForm, { due_date: e.target.value })); }}
+                                className="w-full mt-0.5 px-2 py-1.5 border border-slate-300 rounded text-sm bg-white"
+                              />
+                            </label>
+                          </div>
+                          <label className="text-[11px] font-semibold text-slate-700 block">Notes
+                            <textarea
+                              value={instrumentForm.notes}
+                              onChange={function (e) { setInstrumentForm(Object.assign({}, instrumentForm, { notes: e.target.value })); }}
+                              rows={2}
+                              placeholder="Optional notes (e.g. brought by son, post-dated, etc.)"
+                              className="w-full mt-0.5 px-2 py-1.5 border border-slate-300 rounded text-sm bg-white resize-none"
+                            />
+                          </label>
+                          <div className="flex gap-2 pt-1">
+                            <button
+                              disabled={instrumentBusy}
+                              onClick={async function () {
+                                // Validation — use parseAmount (Arabic-Indic digits, comma separators)
+                                var amt = parseAmount(instrumentForm.amount);
+                                if (!amt || amt <= 0) { toast.error('Amount is required and must be greater than 0'); return; }
+                                if (!instrumentForm.due_date) { toast.error('Due date is required'); return; }
+                                setInstrumentBusy(true);
+                                try {
+                                  // Per Max: documentation only.
+                                  // - NO treasury insert.
+                                  // - NO invoice.total_collected change.
+                                  // Just a row in `checks` with status='pending'.
+                                  await dbInsert('checks', {
+                                    instrument_type: instrumentForm.instrument_type,
+                                    customer_name: selectedInvoice.customer_name,
+                                    customer_id: selectedInvoice.customer_id || null,
+                                    order_number: selectedInvoice.order_number,
+                                    invoice_id: selectedInvoice.id,
+                                    amount: amt,
+                                    check_number: instrumentForm.check_number || '',
+                                    bank_name: instrumentForm.bank_name || '',
+                                    issue_date: instrumentForm.issue_date || null,
+                                    check_date: instrumentForm.due_date,    // legacy column — kept in sync
+                                    due_date: instrumentForm.due_date,
+                                    status: 'pending',
+                                    notes: instrumentForm.notes || '',
+                                    created_by: user?.id,
+                                    updated_by: user?.id,
+                                  }, user?.id);
+                                  toast.success('Instrument recorded — does not affect invoice total');
+                                  setShowAddInstrumentForm(false);
+                                  setInstrumentForm({ instrument_type: 'check', check_number: '', amount: '', issue_date: '', due_date: '', bank_name: '', notes: '' });
+                                  await loadAllData();
+                                } catch (err) {
+                                  toast.error('Failed to add instrument: ' + (err.message || String(err)));
+                                } finally {
+                                  setInstrumentBusy(false);
+                                }
+                              }}
+                              className="flex-1 px-3 py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded font-bold text-sm disabled:opacity-50"
+                            >
+                              {instrumentBusy ? 'Saving...' : '+ Add Instrument'}
+                            </button>
+                            <button
+                              onClick={function () { setShowAddInstrumentForm(false); }}
+                              className="px-3 py-2 bg-slate-300 hover:bg-slate-400 text-slate-900 rounded font-semibold text-sm"
+                            >
+                              Cancel
+                            </button>
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  )}
+                </div>
+              );
+            })()}
           </Modal>
         )}
 
@@ -4252,10 +7304,45 @@ export default function App() {
                                 <option value="__custom">+ New Subcategory</option>
                               </select>
                             </td>
-                            <td className="px-2 py-1.5"><input type="number" id="tx-in" defaultValue={txn.cash_in || 0}
-                              className="w-20 text-xs border rounded px-1 py-1" /></td>
-                            <td className="px-2 py-1.5"><input type="number" id="tx-out" defaultValue={txn.cash_out || 0}
-                              className="w-20 text-xs border rounded px-1 py-1" /></td>
+                            {/* v55.42 — Inline edit row is bank-aware. The
+                                old code always showed cash_in/cash_out, which
+                                read 0 for bank rows and tricked users into
+                                typing the amount in the wrong field. */}
+                            {(() => {
+                              var hasBankIn  = Number(txn.bank_in  || 0) > 0;
+                              var hasBankOut = Number(txn.bank_out || 0) > 0;
+                              var isPlaceholder = !!txn.is_bank_placeholder;
+                              var isBankRow = hasBankIn || hasBankOut || isPlaceholder;
+                              if (isBankRow) {
+                                var bankInVal  = isPlaceholder && txn.expected_direction === 'in'  ? (txn.expected_amount || 0) : (txn.bank_in  || 0);
+                                var bankOutVal = isPlaceholder && txn.expected_direction === 'out' ? (txn.expected_amount || 0) : (txn.bank_out || 0);
+                                return (
+                                  <>
+                                    <td className="px-2 py-1.5">
+                                      <input type="number" id="tx-bank-in" defaultValue={bankInVal}
+                                        className="w-20 text-xs border-2 border-indigo-300 rounded px-1 py-1 bg-indigo-50 text-indigo-700"
+                                        title="Bank In — bank-side row" />
+                                      <div className="text-[8px] text-indigo-600 font-bold mt-0.5">🏦 Bank</div>
+                                    </td>
+                                    <td className="px-2 py-1.5">
+                                      <input type="number" id="tx-bank-out" defaultValue={bankOutVal}
+                                        className="w-20 text-xs border-2 border-indigo-300 rounded px-1 py-1 bg-indigo-50 text-indigo-700"
+                                        title="Bank Out — bank-side row" />
+                                      <div className="text-[8px] text-indigo-600 font-bold mt-0.5">🏦 Bank</div>
+                                    </td>
+                                  </>
+                                );
+                              }
+                              // Cash row — original behavior preserved
+                              return (
+                                <>
+                                  <td className="px-2 py-1.5"><input type="number" id="tx-in" defaultValue={txn.cash_in || 0}
+                                    className="w-20 text-xs border rounded px-1 py-1" /></td>
+                                  <td className="px-2 py-1.5"><input type="number" id="tx-out" defaultValue={txn.cash_out || 0}
+                                    className="w-20 text-xs border rounded px-1 py-1" /></td>
+                                </>
+                              );
+                            })()}
                             <td className="px-2 py-1.5 flex gap-1">
                               <button onClick={() => handleEditTreasury(txn)}
                                 className="px-2 py-0.5 rounded bg-emerald-500 text-white text-[10px]">Save</button>
@@ -4366,8 +7453,42 @@ export default function App() {
                     </div>
                     )}
                   </div>
-                ) : (
+                ) : (() => {
+                  // v55.42 — DETECT what KIND of treasury row we're editing.
+                  // The legacy modal only showed Cash In / Cash Out fields.
+                  // For bank rows (matched bank statement OR pending placeholder)
+                  // it showed 0 / 0 because cash_in and cash_out are zero on
+                  // bank rows — the money lives in bank_in / bank_out. Users
+                  // typed the amount into the cash field thinking the system
+                  // had the wrong value, which DOUBLED the amount AND silently
+                  // converted a bank row into a cash row (losing the bank
+                  // matching, the bank account link, and the audit trail).
+                  //
+                  // Now we detect row type and show the correct fields.
+                  var hasBankIn  = Number(txn.bank_in  || 0) > 0;
+                  var hasBankOut = Number(txn.bank_out || 0) > 0;
+                  var isPlaceholder = !!txn.is_bank_placeholder;
+                  var isBankRow = hasBankIn || hasBankOut || isPlaceholder;
+                  var isMatched = !!txn.matched_bank_txn_id;
+                  return (
                   <div className="p-4 space-y-3">
+                    {/* v55.42 — Big visible badge so the user knows what
+                        kind of row this is. Without this, bank rows looked
+                        identical to cash rows in the edit modal. */}
+                    {isBankRow && (
+                      <div className={'rounded-lg p-3 border-2 ' + (isMatched ? 'bg-indigo-50 border-indigo-300' : 'bg-amber-50 border-amber-300')}>
+                        <div className={'text-xs font-extrabold uppercase ' + (isMatched ? 'text-indigo-800' : 'text-amber-900')}>
+                          {isMatched
+                            ? '🏦 Bank Transaction (matched bank statement)'
+                            : '🏦 Bank Transaction (placeholder — awaiting statement)'}
+                        </div>
+                        <div className={'text-[11px] mt-0.5 ' + (isMatched ? 'text-indigo-700' : 'text-amber-900')}>
+                          The money for this entry is tracked in <code>bank_in</code> / <code>bank_out</code>, not cash.
+                          {isMatched ? ' Editing the amount here will update the bank-side total and recalc any linked invoice.' : ''}
+                        </div>
+                      </div>
+                    )}
+
                     <div>
                       <label className="text-[10px] font-bold text-slate-500">Date / التاريخ</label>
                       <DatePickerSelect value={txn.transaction_date || today()} onChange={v => setEditTreasuryModal({...txn, transaction_date: v})} />
@@ -4376,24 +7497,102 @@ export default function App() {
                       <label className="text-[10px] font-bold text-slate-500">Order # / رقم الأمر</label>
                       <input value={txn.order_number || ''} onChange={e => setEditTreasuryModal({...txn, order_number: e.target.value})}
                         className="w-full px-3 py-2 rounded-lg border text-sm" />
+                      {/* v55.82-B — Live link-status indicator. Before this fix,
+                          the user could type any order# they wanted with no
+                          feedback on whether it matched a real invoice. They'd
+                          save, the row would silently stay unlinked, and the
+                          invoice's collected total never moved. Now the user
+                          sees right under the field whether the typed number
+                          will link to an invoice on save, who that customer
+                          is, and the invoice total. If no match, an amber
+                          "no match" hint appears so they can fix the typo or
+                          create the invoice in Sales first. */}
+                      {(() => {
+                        var typed = String(txn.order_number || '').trim();
+                        if (!typed) {
+                          return (
+                            <div className="text-[10px] text-slate-500 mt-1 italic">
+                              No order # — row will be saved unlinked. / بدون رقم أمر، الصف غير مرتبط.
+                            </div>
+                          );
+                        }
+                        var match = (invoices || []).find(function(i) {
+                          return String(i.order_number || '').trim() === typed;
+                        });
+                        if (match) {
+                          return (
+                            <div className="mt-1 flex items-center gap-2 px-2 py-1.5 rounded-md bg-emerald-50 border border-emerald-300">
+                              <span className="text-emerald-700 text-sm">✓</span>
+                              <div className="flex-1 min-w-0">
+                                <div className="text-[10px] font-extrabold text-emerald-800 uppercase tracking-wide">Will link on save</div>
+                                <div className="text-xs font-bold text-emerald-900 truncate" style={{ direction: 'rtl' }}>
+                                  {match.customer_name || ('#' + match.order_number)} — {fE(match.total_amount)}
+                                </div>
+                              </div>
+                            </div>
+                          );
+                        }
+                        return (
+                          <div className="mt-1 flex items-center gap-2 px-2 py-1.5 rounded-md bg-amber-50 border border-amber-300">
+                            <span className="text-amber-900 text-sm">⚠</span>
+                            <div className="flex-1 min-w-0">
+                              <div className="text-[10px] font-extrabold text-amber-900 uppercase tracking-wide">No matching invoice</div>
+                              <div className="text-[11px] text-amber-900">Save will succeed, but row will stay unlinked. Create the invoice in Sales first, or fix the typo. / لا توجد فاتورة بهذا الرقم.</div>
+                            </div>
+                          </div>
+                        );
+                      })()}
                     </div>
                     <div>
                       <label className="text-[10px] font-bold text-slate-500">Description / الوصف</label>
                       <input value={txn.description || ''} onChange={e => setEditTreasuryModal({...txn, description: e.target.value})}
                         className="w-full px-3 py-2 rounded-lg border text-sm" style={{direction:'rtl'}} />
                     </div>
-                    <div className="grid grid-cols-2 gap-2">
-                      <div>
-                        <label className="text-[10px] font-bold text-emerald-600">Cash In / وارد</label>
-                        <input type="number" value={txn.cash_in || 0} onChange={e => setEditTreasuryModal({...txn, cash_in: Number(e.target.value) || 0})}
-                          className="w-full px-3 py-2 rounded-lg border text-sm text-emerald-600 font-semibold" />
+                    {isBankRow ? (
+                      // BANK row — show bank_in / bank_out fields
+                      <div className="grid grid-cols-2 gap-2">
+                        <div>
+                          <label className="text-[10px] font-bold text-indigo-600">🏦 Bank In / وارد بنكي</label>
+                          <input type="number" value={isPlaceholder ? (txn.expected_amount || 0) : (txn.bank_in || 0)}
+                            onChange={e => {
+                              var v = Number(e.target.value) || 0;
+                              if (isPlaceholder) {
+                                setEditTreasuryModal({...txn, expected_amount: v, expected_direction: v > 0 ? 'in' : txn.expected_direction});
+                              } else {
+                                setEditTreasuryModal({...txn, bank_in: v});
+                              }
+                            }}
+                            className="w-full px-3 py-2 rounded-lg border-2 border-indigo-300 text-sm text-indigo-700 font-semibold bg-indigo-50" />
+                        </div>
+                        <div>
+                          <label className="text-[10px] font-bold text-indigo-600">🏦 Bank Out / صادر بنكي</label>
+                          <input type="number" value={isPlaceholder && txn.expected_direction === 'out' ? (txn.expected_amount || 0) : (txn.bank_out || 0)}
+                            onChange={e => {
+                              var v = Number(e.target.value) || 0;
+                              if (isPlaceholder) {
+                                setEditTreasuryModal({...txn, expected_amount: v, expected_direction: v > 0 ? 'out' : txn.expected_direction});
+                              } else {
+                                setEditTreasuryModal({...txn, bank_out: v});
+                              }
+                            }}
+                            className="w-full px-3 py-2 rounded-lg border-2 border-indigo-300 text-sm text-indigo-700 font-semibold bg-indigo-50" />
+                        </div>
                       </div>
-                      <div>
-                        <label className="text-[10px] font-bold text-red-500">Cash Out / منصرف</label>
-                        <input type="number" value={txn.cash_out || 0} onChange={e => setEditTreasuryModal({...txn, cash_out: Number(e.target.value) || 0})}
-                          className="w-full px-3 py-2 rounded-lg border text-sm text-red-500 font-semibold" />
+                    ) : (
+                      // CASH row — show cash_in / cash_out fields (unchanged)
+                      <div className="grid grid-cols-2 gap-2">
+                        <div>
+                          <label className="text-[10px] font-bold text-emerald-600">Cash In / وارد</label>
+                          <input type="number" value={txn.cash_in || 0} onChange={e => setEditTreasuryModal({...txn, cash_in: Number(e.target.value) || 0})}
+                            className="w-full px-3 py-2 rounded-lg border text-sm text-emerald-600 font-semibold" />
+                        </div>
+                        <div>
+                          <label className="text-[10px] font-bold text-red-500">Cash Out / منصرف</label>
+                          <input type="number" value={txn.cash_out || 0} onChange={e => setEditTreasuryModal({...txn, cash_out: Number(e.target.value) || 0})}
+                            className="w-full px-3 py-2 rounded-lg border text-sm text-red-500 font-semibold" />
+                        </div>
                       </div>
-                    </div>
+                    )}
                     <div>
                       <label className="text-[10px] font-bold text-slate-500">Category / التصنيف</label>
                       <select value={txn.category || ''} onChange={e => setEditTreasuryModal({...txn, category: e.target.value})}
@@ -4410,15 +7609,37 @@ export default function App() {
                       <datalist id="edit-subcats">{uniqueSubcats.map(s => <option key={s} value={s} />)}</datalist>
                     </div>
                     <div className="flex gap-2 pt-2">
-                      <button onClick={() => handleSaveTreasuryEdit(txn.id, {
-                        transaction_date: txn.transaction_date,
-                        order_number: txn.order_number || '',
-                        description: txn.description || '',
-                        cash_in: Number(txn.cash_in) || 0,
-                        cash_out: Number(txn.cash_out) || 0,
-                        category: txn.category || null,
-                        subcategory: txn.subcategory || null,
-                      })} className="flex-1 px-4 py-2.5 bg-blue-500 text-white rounded-lg font-bold text-sm hover:bg-blue-600">
+                      <button onClick={() => {
+                        // v55.42 — Build the update payload based on row type.
+                        // Bank rows preserve their bank-side fields and do
+                        // NOT touch cash_in/cash_out. Cash rows preserve
+                        // their cash fields and do NOT touch bank_in/bank_out.
+                        var payload = {
+                          transaction_date: txn.transaction_date,
+                          order_number: txn.order_number || '',
+                          description: txn.description || '',
+                          category: txn.category || null,
+                          subcategory: txn.subcategory || null,
+                        };
+                        if (isBankRow) {
+                          // Preserve all bank-side identity fields, only
+                          // update the amount the user actually changed.
+                          if (isPlaceholder) {
+                            payload.expected_amount = Number(txn.expected_amount) || 0;
+                            if (txn.expected_direction) payload.expected_direction = txn.expected_direction;
+                          } else {
+                            payload.bank_in  = Number(txn.bank_in)  || 0;
+                            payload.bank_out = Number(txn.bank_out) || 0;
+                          }
+                          // Cash side stays at zero; we do NOT include it
+                          // in the update so any value already there
+                          // (which would be a data anomaly) isn't disturbed.
+                        } else {
+                          payload.cash_in  = Number(txn.cash_in)  || 0;
+                          payload.cash_out = Number(txn.cash_out) || 0;
+                        }
+                        handleSaveTreasuryEdit(txn.id, payload);
+                      }} className="flex-1 px-4 py-2.5 bg-blue-500 text-white rounded-lg font-bold text-sm hover:bg-blue-600">
                         Save / حفظ
                       </button>
                       {canDeleteTxn && (
@@ -4433,7 +7654,8 @@ export default function App() {
                       </button>
                     </div>
                   </div>
-                )}
+                  );
+                })()}
               </div>
             </div>
           );
@@ -4749,7 +7971,7 @@ export default function App() {
                                 ) : (
                                   <div onClick={() => { setEditSubTxnId(txn.id); setEditCatValue(txn.category || ''); setEditSubValue(txn.subcategory || ''); }}
                                     className="cursor-pointer hover:bg-slate-100 rounded px-1 py-0.5">
-                                    <div className="text-[9px] font-semibold text-amber-700">{txn.category ? txCat(txn.category) : <span className="text-slate-300 italic">+ category</span>}</div>
+                                    <div className="text-[9px] font-semibold text-amber-900">{txn.category ? txCat(txn.category) : <span className="text-slate-300 italic">+ category</span>}</div>
                                     <div className="text-[9px] text-orange-500">{txn.subcategory || <span className="text-slate-300 italic">+ subcategory</span>}</div>
                                   </div>
                                 )}
@@ -4858,7 +8080,7 @@ export default function App() {
               <div className="mb-4 space-y-2">
                 {evalResult.warnings.map((w, idx) => (
                   <div key={idx} className={'rounded-lg p-3 border-2 ' + (w.level === 'error' ? 'bg-red-50 border-red-400' : 'bg-amber-50 border-amber-400')}>
-                    <div className={'text-xs font-extrabold uppercase mb-1 ' + (w.level === 'error' ? 'text-red-800' : 'text-amber-800')}>
+                    <div className={'text-xs font-extrabold uppercase mb-1 ' + (w.level === 'error' ? 'text-red-800' : 'text-amber-900')}>
                       {w.level === 'error' ? '⛔ Cannot proceed' : '⚠️ Warning'}
                     </div>
                     <div className={'text-sm font-medium ' + (w.level === 'error' ? 'text-red-900' : 'text-amber-900')}>{w.en}</div>
@@ -4900,7 +8122,7 @@ export default function App() {
                     <div className="flex-1 text-xs">
                       <div className="font-semibold text-amber-900">None of the above — create a new treasury entry for this check</div>
                       <div className="font-semibold text-amber-900" style={{direction:'rtl'}}>لا شيء مما سبق — أنشئ قيد خزنة جديد لهذا الشيك</div>
-                      <div className="text-amber-700 text-[10px] mt-0.5">Use only if the existing matches above are coincidences (different payments that happen to share the same amount).</div>
+                      <div className="text-amber-900 text-[10px] mt-0.5">Use only if the existing matches above are coincidences (different payments that happen to share the same amount).</div>
                     </div>
                   </label>
                 </div>
@@ -4910,11 +8132,11 @@ export default function App() {
             {/* ===== MODE C: No match — user must choose how check was collected ===== */}
             {evalResult.mode === 'no_match' && (
               <div className="bg-amber-50 border-2 border-amber-400 rounded-lg p-3 mb-4">
-                <div className="text-xs font-extrabold text-amber-800 uppercase mb-2">📥 How was this check collected? / كيف تم تحصيل هذا الشيك؟</div>
+                <div className="text-xs font-extrabold text-amber-900 uppercase mb-2">📥 How was this check collected? / كيف تم تحصيل هذا الشيك؟</div>
                 <div className="text-sm text-amber-900">No existing treasury entry on invoice #{evalResult.invoice.order_number || ''} matches the check amount of {fE(evalResult.checkAmount)} exactly.</div>
                 <div className="text-sm text-amber-900 mt-1" style={{direction:'rtl'}}>لا يوجد قيد خزنة على الفاتورة بنفس مبلغ الشيك بالضبط.</div>
-                <div className="text-xs text-amber-700 italic mt-2">Pick the option that matches what physically happened. The system will create a new treasury entry tagged as 'check' so it doesn't get confused with cash payments.</div>
-                <div className="text-xs text-amber-700 italic" style={{direction:'rtl'}}>اختر الذي يطابق ما حدث فعلًا.</div>
+                <div className="text-xs text-amber-900 italic mt-2">Pick the option that matches what physically happened. The system will create a new treasury entry tagged as 'check' so it doesn't get confused with cash payments.</div>
+                <div className="text-xs text-amber-900 italic" style={{direction:'rtl'}}>اختر الذي يطابق ما حدث فعلًا.</div>
                 <div className="space-y-2 mt-3">
                   <label className="flex items-start gap-2 p-2 rounded cursor-pointer border-2 border-amber-200 bg-white hover:bg-amber-50">
                     <input type="radio" name="reconcile-choice" className="mt-1" checked={reconcileCheckChoice && reconcileCheckChoice.kind === 'new' && !reconcileCheckReturned} onChange={() => { setReconcileCheckChoice({ kind: 'new' }); setReconcileCheckReturned(false); }} />
@@ -5049,6 +8271,46 @@ export default function App() {
                       <input value={formData.custSearch !== undefined ? formData.custSearch : (formData.customerName || '')}
                         onChange={e => setFormData({...formData, custSearch: e.target.value, showCustDropdown: true})}
                         onFocus={() => setFormData({...formData, showCustDropdown: true})}
+                        onBlur={(e) => {
+                          // v55.47 — Auto-commit typed text on blur. If the
+                          // user typed a customer name and clicked elsewhere
+                          // without picking from the dropdown, this rescues
+                          // them by committing the typed text (or matching
+                          // an existing customer) into customerName so the
+                          // submit doesn't fail with "missing customer."
+                          // Use a small timeout so a click on a dropdown row
+                          // still gets to fire its onClick handler first.
+                          setTimeout(() => {
+                            const typed = (e.target.value || '').trim();
+                            if (!typed) return;
+                            // If a customer was already picked AND the typed
+                            // text matches their name, do nothing.
+                            if (formData.customerName && typed === formData.customerName) return;
+                            // Try to find an exact match in the customers list
+                            const exact = (customers || []).find(c =>
+                              (c.name && c.name.toLowerCase() === typed.toLowerCase()) ||
+                              (c.name_ar && c.name_ar === typed)
+                            );
+                            if (exact) {
+                              setFormData(prev => ({...prev,
+                                customerId: exact.id,
+                                customerName: exact.name || exact.name_ar,
+                                custSearch: undefined,
+                                showCustDropdown: false,
+                                salesRep: prev.salesRep || exact.assigned_rep || '',
+                              }));
+                            } else {
+                              // No match → keep typed text as the customer name
+                              // (legacy free-text path). Submit will accept it.
+                              setFormData(prev => ({...prev,
+                                customerName: typed,
+                                customerId: null,
+                                custSearch: undefined,
+                                showCustDropdown: false,
+                              }));
+                            }
+                          }, 150);
+                        }}
                         placeholder="Search or select customer..."
                         className="w-full px-3 py-2 rounded-lg border border-slate-200 text-sm" />
                       {formData.showCustDropdown && (
@@ -5119,7 +8381,162 @@ export default function App() {
 
               {/* Product Picker */}
               {formData.showProductPicker && (
-                <div className="bg-white rounded-lg p-3 mb-2 border border-blue-300">
+                <div className="bg-white rounded-lg p-3 mb-2 border-2 border-blue-300">
+                  {/* v55.83-A.6.27.44b — Two-tab picker: 📦 From Inventory + ✏️ Manual/Legacy.
+                      Default tab: Inventory if invoiceDate is on/after cutoff OR cutoff is null AND
+                      inventory_products has data. Otherwise falls back to Manual.
+                      Mode is stored in formData.pickerMode ('inventory' | 'manual'). */}
+                  {(function () {
+                    var invDate = formData.date || today();
+                    var hasInventoryProducts = (inventoryProducts || []).length > 0;
+                    // Cutoff guidance text — used to nudge but NOT enforce (enforcement comes in 44c)
+                    var cutoffMessage = null;
+                    if (inventoryCutoffDate) {
+                      if (invDate >= inventoryCutoffDate) {
+                        cutoffMessage = { kind: 'force-inventory', text: '📦 This invoice date is on/after the cutoff (' + inventoryCutoffDate + ') — inventory mode recommended / يُنصح باستخدام المخزون' };
+                      } else {
+                        cutoffMessage = { kind: 'allow-both', text: '✏️ This invoice date is before the cutoff (' + inventoryCutoffDate + ') — either mode works / كلا الوضعين متاحان' };
+                      }
+                    }
+                    // Default tab: use formData.pickerMode if set, else derive from cutoff + data availability
+                    var defaultMode = formData.pickerMode
+                      || (cutoffMessage && cutoffMessage.kind === 'force-inventory' ? 'inventory'
+                          : hasInventoryProducts ? 'inventory' : 'manual');
+                    return (
+                      <>
+                        {cutoffMessage && (
+                          <div className={'text-[10px] font-semibold mb-2 px-2 py-1 rounded ' + (cutoffMessage.kind === 'force-inventory' ? 'bg-emerald-100 text-emerald-900 border border-emerald-300' : 'bg-blue-100 text-blue-900 border border-blue-300')}>
+                            {cutoffMessage.text}
+                          </div>
+                        )}
+                        {/* Tab toggle */}
+                        <div className="flex gap-1 mb-2 bg-slate-100 p-1 rounded border border-slate-200">
+                          <button
+                            onClick={() => setFormData({ ...formData, pickerMode: 'inventory' })}
+                            className={'flex-1 px-3 py-1.5 text-xs font-extrabold rounded ' + (defaultMode === 'inventory' ? 'bg-emerald-600 text-white shadow' : 'bg-white text-slate-700 hover:bg-slate-50')}
+                          >
+                            📦 From Inventory / من المخزون
+                            {hasInventoryProducts && <span className="ml-1 opacity-75">({(inventoryProducts || []).length})</span>}
+                          </button>
+                          <button
+                            onClick={() => setFormData({ ...formData, pickerMode: 'manual' })}
+                            className={'flex-1 px-3 py-1.5 text-xs font-extrabold rounded ' + (defaultMode === 'manual' ? 'bg-slate-600 text-white shadow' : 'bg-white text-slate-700 hover:bg-slate-50')}
+                          >
+                            ✏️ Manual / يدوي
+                          </button>
+                        </div>
+
+                        {/* ─── TAB 1: INVENTORY (NEW v55.83-A.6.27.44b) ─── */}
+                        {defaultMode === 'inventory' && (
+                          <div>
+                            {!hasInventoryProducts ? (
+                              <div className="bg-amber-50 border border-amber-300 rounded p-3 text-xs text-amber-900">
+                                <div className="font-extrabold">⚠ No inventory products yet / لا توجد منتجات في المخزون</div>
+                                <div className="mt-1">Import family templates and receive stock first, or switch to Manual mode.</div>
+                              </div>
+                            ) : (
+                              <>
+                                <input
+                                  value={formData.invProdSearch || ''}
+                                  onChange={e => setFormData({ ...formData, invProdSearch: e.target.value })}
+                                  placeholder="Search by code, name (Eng/Ar), or specs... / بحث متعدد الكلمات"
+                                  className="w-full px-3 py-2 border-2 border-slate-300 rounded text-sm bg-white text-slate-900 font-medium mb-2"
+                                  autoFocus
+                                />
+                                <div className="max-h-[280px] overflow-auto border border-slate-200 rounded">
+                                  {(function () {
+                                    // Smart multi-keyword search (same pattern as Receive Stock)
+                                    var q = (formData.invProdSearch || '').trim().toLowerCase();
+                                    var keywords = q ? q.split(/\s+/).filter(function (k) { return k.length > 0; }) : [];
+                                    var matches = (inventoryProducts || []).filter(function (p) {
+                                      if (!p.active) return false;
+                                      if (keywords.length === 0) return true;
+                                      var searchable = (
+                                        (p.quick_code || '') + ' ' +
+                                        (p.variant_suffix ? p.quick_code + '-' + p.variant_suffix + ' ' : '') +
+                                        (p.name_en || '') + ' ' +
+                                        (p.name_ar || '') + ' ' +
+                                        (p.classification_slug || '')
+                                      ).toLowerCase();
+                                      for (var i = 0; i < keywords.length; i++) {
+                                        if (searchable.indexOf(keywords[i]) < 0) return false;
+                                      }
+                                      return true;
+                                    });
+                                    // Sort: featured first, then by use_count, then alphabetical
+                                    matches.sort(function (a, b) {
+                                      var af = a.featured === true ? 1 : 0;
+                                      var bf = b.featured === true ? 1 : 0;
+                                      if (af !== bf) return bf - af;
+                                      var au = Number(a.use_count || 0);
+                                      var bu = Number(b.use_count || 0);
+                                      if (bu !== au) return bu - au;
+                                      return (a.name_en || '').localeCompare(b.name_en || '');
+                                    });
+                                    matches = matches.slice(0, 30);
+                                    if (matches.length === 0) {
+                                      return <div className="px-3 py-4 text-xs text-slate-500 text-center italic">No matches / لا توجد نتائج</div>;
+                                    }
+                                    return matches.map(function (p) {
+                                      var displayCode = p.quick_code ? (p.quick_code + (p.variant_suffix ? '-' + p.variant_suffix : '')) : '(no code)';
+                                      return (
+                                        <div
+                                          key={p.id}
+                                          onClick={() => {
+                                            // v55.83-A.6.27.44b — Add line as inventory-linked.
+                                            // Records the linkage (uses_inventory=true + variant_id + warehouse pending)
+                                            // WITHOUT calling FIFO consumption — that comes in 44c.
+                                            const items = formData.invoiceItems || [];
+                                            items.push({
+                                              inv_desc: displayCode + ' — ' + (p.name_en || '') + ' / ' + (p.name_ar || ''),
+                                              inv_qty: 1,
+                                              inv_price: 0,
+                                              inv_total: 0,
+                                              // v55.83-A.6.27.44b inventory linkage fields
+                                              uses_inventory: true,
+                                              variant_id: p.id,
+                                              variant_quick_code: displayCode,
+                                              variant_name_en: p.name_en || '',
+                                              variant_name_ar: p.name_ar || '',
+                                              variant_uom: p.default_uom || 'meter',
+                                              warehouse_id: null, // operator picks this on the line itself (44c)
+                                              is_family_template: p.is_family_template === true,
+                                            });
+                                            setFormData({
+                                              ...formData,
+                                              invoiceItems: items,
+                                              showProductPicker: false,
+                                              invProdSearch: '',
+                                            });
+                                          }}
+                                          className="px-3 py-2 text-xs cursor-pointer hover:bg-emerald-600 hover:text-white border-b border-slate-100 last:border-0 transition-colors"
+                                        >
+                                          <div className="flex items-center gap-2">
+                                            {p.featured === true && <span className="text-amber-500">⭐</span>}
+                                            <span className="font-mono font-extrabold text-slate-900 hover:text-white">{displayCode}</span>
+                                            {p.is_family_template === true && <span className="text-[9px] bg-indigo-600 text-white font-bold rounded px-1.5 py-0.5">FAMILY</span>}
+                                            {p.is_family_template === false && p.variant_suffix && <span className="text-[9px] bg-emerald-600 text-white font-bold rounded px-1.5 py-0.5">VARIANT</span>}
+                                            {Number(p.use_count || 0) > 0 && <span className="text-[10px] text-slate-500 hover:text-white ml-auto">used {p.use_count}×</span>}
+                                          </div>
+                                          <div className="text-slate-700 hover:text-white mt-0.5">{p.name_en}</div>
+                                          <div className="text-slate-700 hover:text-white" style={{ direction: 'rtl' }}>{p.name_ar}</div>
+                                          <div className="text-[10px] text-slate-500 hover:text-white font-mono mt-0.5">{p.classification_slug}</div>
+                                        </div>
+                                      );
+                                    });
+                                  })()}
+                                </div>
+                                <div className="mt-2 text-[10px] text-slate-600 italic">
+                                  💡 Picking a variant tags this line for inventory tracking. FIFO consumption activates in next build. / FIFO سيعمل في الإصدار القادم
+                                </div>
+                              </>
+                            )}
+                          </div>
+                        )}
+
+                        {/* ─── TAB 2: MANUAL/LEGACY (unchanged behavior) ─── */}
+                        {defaultMode === 'manual' && (
+                          <div>
                   <input value={formData.prodSearch || ''} onChange={e => setFormData({...formData, prodSearch: e.target.value})}
                     placeholder="Search inventory by ref#, name... / بحث" className="w-full px-2 py-1.5 border rounded text-xs mb-2" autoFocus />
                   <div className="max-h-[150px] overflow-auto">
@@ -5158,8 +8575,13 @@ export default function App() {
                       }} className="px-2 py-1 bg-emerald-500 text-white rounded text-[10px]">Add</button>
                     </div>
                   </div>
+                          </div>
+                        )}
+                      </>
+                    );
+                  })()}
                   <button onClick={() => setFormData({...formData, showProductPicker: false})}
-                    className="mt-2 px-2 py-1 border border-slate-200 rounded text-[10px] w-full">Close</button>
+                    className="mt-2 px-2 py-1 border border-slate-200 rounded text-[10px] w-full">Close / إغلاق</button>
                 </div>
               )}
 
@@ -5169,6 +8591,7 @@ export default function App() {
                   <table className="w-full border-collapse text-xs mb-2">
                     <thead><tr className="bg-blue-100">
                       <th className="px-2 py-1 text-left text-[10px]">Item / البند</th>
+                      <th className="px-2 py-1 text-left text-[10px] w-28">📦 SKU (optional)</th>
                       <th className="px-2 py-1 text-right text-[10px] w-16">Qty</th>
                       <th className="px-2 py-1 text-right text-[10px] w-20">Price</th>
                       <th className="px-2 py-1 text-right text-[10px] w-20">Total</th>
@@ -5178,11 +8601,35 @@ export default function App() {
                       {(formData.invoiceItems || []).map((item, idx) => (
                         <tr key={idx} className="border-b border-blue-100">
                           <td className="px-2 py-1">
+                            {/* v55.83-A.6.27.44b — Show 📦 inventory badge + variant info if linked */}
+                            {item.uses_inventory && (
+                              <div className="mb-0.5 flex items-center gap-1 flex-wrap">
+                                <span className="text-[8px] bg-emerald-600 text-white font-extrabold rounded px-1.5 py-0.5">📦 INVENTORY</span>
+                                {item.variant_quick_code && (
+                                  <span className="text-[9px] font-mono font-extrabold text-emerald-800">{item.variant_quick_code}</span>
+                                )}
+                                {item.is_family_template && (
+                                  <span className="text-[8px] bg-amber-500 text-white font-bold rounded px-1 py-0.5" title="Family template — variant will be created at consumption">⚠ Template</span>
+                                )}
+                              </div>
+                            )}
                             <input type="text" value={item.inv_desc || ''}
                               onChange={e => { const items = [...(formData.invoiceItems || [])]; items[idx] = {...items[idx], inv_desc: e.target.value}; setFormData({...formData, invoiceItems: items}); }}
                               placeholder="Description / الوصف"
                               className="w-full text-[10px] border rounded px-1 py-0.5"
                               style={{direction: (item.inv_desc || '').match(/[\u0600-\u06FF]/) ? 'rtl' : 'ltr'}} />
+                          </td>
+                          {/* v55.83-A.6.27 — Stage D: link to inventory SKU.
+                              When set, save will drain FIFO layers + stamp COGS. */}
+                          <td className="px-2 py-1">
+                            <select value={item.inv_sku_id || ''}
+                              onChange={e => { const items = [...(formData.invoiceItems || [])]; items[idx] = {...items[idx], inv_sku_id: e.target.value || null}; setFormData({...formData, invoiceItems: items}); }}
+                              className="w-full text-[10px] border rounded px-1 py-0.5">
+                              <option value="">— none —</option>
+                              {(invSkus || []).map(s => (
+                                <option key={s.id} value={s.id}>{s.sku_number}</option>
+                              ))}
+                            </select>
                           </td>
                           <td className="px-2 py-1"><input type="number" value={item.inv_qty}
                             onChange={e => { const items = [...(formData.invoiceItems || [])]; items[idx] = {...items[idx], inv_qty: Number(e.target.value) || 0, inv_total: (Number(e.target.value) || 0) * items[idx].inv_price}; setFormData({...formData, invoiceItems: items}); }}
@@ -5205,34 +8652,390 @@ export default function App() {
               )}
             </div>
 
+            {/* v55.83-A.6.27.20 (Max May 17 2026) — Payment Instruments section
+                for the NEW INVOICE create flow. Same data model as the existing
+                section that lives on the invoice detail modal, but instruments
+                are held in form state (`draftInstruments`) and saved AFTER
+                the invoice itself is inserted (so they get the real invoice_id).
+                Per Max's Option (a): if an instrument fails to save, the
+                invoice is still valid — user can open it and add manually.
+                Five rules unchanged: still pure documentation. */}
+            <div className="mt-4 border border-indigo-200 rounded-xl overflow-hidden bg-indigo-50/30">
+              <div className="px-3 py-2 bg-indigo-100">
+                <div className="flex items-center gap-2">
+                  <span style={{ fontSize: 16 }}>🧾</span>
+                  <div>
+                    <div className="text-xs font-bold text-indigo-900">
+                      Payment Instruments / Scheduled Receivables
+                    </div>
+                    <div className="text-[10px] text-indigo-700 italic">
+                      Optional — checks or promissory notes the customer is providing for this invoice. Documentation only.
+                    </div>
+                  </div>
+                </div>
+              </div>
+              <div className="p-2 space-y-1.5">
+                {/* List of instruments queued for this invoice */}
+                {(formData.draftInstruments || []).map(function (di, idx) {
+                  return (
+                    <div key={idx} className="flex items-center gap-2 bg-white border border-slate-200 rounded p-1.5">
+                      <span className="text-base">{di.instrument_type === 'promissory_note' ? '📜' : '🧾'}</span>
+                      <div className="flex-1 min-w-0">
+                        <div className="text-[11px] font-bold text-slate-900">
+                          {di.instrument_type === 'promissory_note' ? 'Promissory Note' : 'Check'}
+                          {di.check_number ? ' #' + di.check_number : ''}
+                          {' — '}{fE(Number(di.amount || 0))}
+                        </div>
+                        <div className="text-[10px] text-slate-600">
+                          Due: <strong>{di.due_date}</strong>
+                          {di.bank_name ? ' · ' + di.bank_name : ''}
+                          {di.notes ? ' · ' + di.notes.substring(0, 40) : ''}
+                        </div>
+                      </div>
+                      <button
+                        onClick={function () {
+                          setFormData(Object.assign({}, formData, {
+                            draftInstruments: (formData.draftInstruments || []).filter(function (_, i) { return i !== idx; }),
+                          }));
+                        }}
+                        className="text-red-500 hover:text-red-700 text-xs px-1 font-bold"
+                        title="Remove"
+                      >
+                        ✕
+                      </button>
+                    </div>
+                  );
+                })}
+
+                {/* Inline add form OR the "+ Add" button */}
+                {!formData.showDraftInstrumentForm ? (
+                  <button
+                    onClick={function () {
+                      setFormData(Object.assign({}, formData, {
+                        showDraftInstrumentForm: true,
+                        draftInstrumentDraft: {
+                          instrument_type: 'check',
+                          check_number: '',
+                          amount: '',
+                          issue_date: formData.date || today(),
+                          due_date: '',
+                          bank_name: '',
+                          notes: '',
+                        },
+                      }));
+                    }}
+                    className="w-full px-2 py-1.5 bg-white hover:bg-indigo-100 text-indigo-900 rounded text-[11px] font-bold border-2 border-dashed border-indigo-300"
+                  >
+                    + Add Check / Promissory Note
+                  </button>
+                ) : (
+                  <div className="border border-indigo-300 rounded p-2 bg-white space-y-1.5">
+                    <div className="grid grid-cols-2 gap-1.5">
+                      <label className="text-[10px] font-semibold text-slate-700">Type
+                        <select
+                          value={(formData.draftInstrumentDraft || {}).instrument_type || 'check'}
+                          onChange={function (e) {
+                            setFormData(Object.assign({}, formData, {
+                              draftInstrumentDraft: Object.assign({}, formData.draftInstrumentDraft, { instrument_type: e.target.value }),
+                            }));
+                          }}
+                          className="w-full mt-0.5 px-1.5 py-1 border border-slate-300 rounded text-[11px] bg-white"
+                        >
+                          <option value="check">Check / شيك</option>
+                          <option value="promissory_note">Promissory Note / كمبيالة</option>
+                          <option value="other">Other / آخر</option>
+                        </select>
+                      </label>
+                      <label className="text-[10px] font-semibold text-slate-700">Number
+                        <input
+                          type="text"
+                          value={(formData.draftInstrumentDraft || {}).check_number || ''}
+                          onChange={function (e) {
+                            setFormData(Object.assign({}, formData, {
+                              draftInstrumentDraft: Object.assign({}, formData.draftInstrumentDraft, { check_number: e.target.value }),
+                            }));
+                          }}
+                          placeholder="e.g. 1234"
+                          className="w-full mt-0.5 px-1.5 py-1 border border-slate-300 rounded text-[11px]"
+                        />
+                      </label>
+                    </div>
+                    <div className="grid grid-cols-2 gap-1.5">
+                      <label className="text-[10px] font-semibold text-slate-700">Amount *
+                        <input
+                          type="text"
+                          value={(formData.draftInstrumentDraft || {}).amount || ''}
+                          onChange={function (e) {
+                            setFormData(Object.assign({}, formData, {
+                              draftInstrumentDraft: Object.assign({}, formData.draftInstrumentDraft, { amount: e.target.value }),
+                            }));
+                          }}
+                          placeholder="50000"
+                          className="w-full mt-0.5 px-1.5 py-1 border border-slate-300 rounded text-[11px] font-mono"
+                        />
+                      </label>
+                      <label className="text-[10px] font-semibold text-slate-700">Bank
+                        <input
+                          type="text"
+                          value={(formData.draftInstrumentDraft || {}).bank_name || ''}
+                          onChange={function (e) {
+                            setFormData(Object.assign({}, formData, {
+                              draftInstrumentDraft: Object.assign({}, formData.draftInstrumentDraft, { bank_name: e.target.value }),
+                            }));
+                          }}
+                          placeholder="CIB / NBE"
+                          className="w-full mt-0.5 px-1.5 py-1 border border-slate-300 rounded text-[11px]"
+                        />
+                      </label>
+                    </div>
+                    <div className="grid grid-cols-2 gap-1.5">
+                      <label className="text-[10px] font-semibold text-slate-700">Issue Date
+                        <input
+                          type="date"
+                          value={(formData.draftInstrumentDraft || {}).issue_date || ''}
+                          onChange={function (e) {
+                            setFormData(Object.assign({}, formData, {
+                              draftInstrumentDraft: Object.assign({}, formData.draftInstrumentDraft, { issue_date: e.target.value }),
+                            }));
+                          }}
+                          className="w-full mt-0.5 px-1.5 py-1 border border-slate-300 rounded text-[11px]"
+                        />
+                      </label>
+                      <label className="text-[10px] font-semibold text-slate-700">Due Date *
+                        <input
+                          type="date"
+                          value={(formData.draftInstrumentDraft || {}).due_date || ''}
+                          onChange={function (e) {
+                            setFormData(Object.assign({}, formData, {
+                              draftInstrumentDraft: Object.assign({}, formData.draftInstrumentDraft, { due_date: e.target.value }),
+                            }));
+                          }}
+                          className="w-full mt-0.5 px-1.5 py-1 border border-slate-300 rounded text-[11px]"
+                        />
+                      </label>
+                    </div>
+                    <label className="text-[10px] font-semibold text-slate-700 block">Notes
+                      <input
+                        type="text"
+                        value={(formData.draftInstrumentDraft || {}).notes || ''}
+                        onChange={function (e) {
+                          setFormData(Object.assign({}, formData, {
+                            draftInstrumentDraft: Object.assign({}, formData.draftInstrumentDraft, { notes: e.target.value }),
+                          }));
+                        }}
+                        placeholder="Optional"
+                        className="w-full mt-0.5 px-1.5 py-1 border border-slate-300 rounded text-[11px]"
+                      />
+                    </label>
+                    <div className="flex gap-1.5 pt-1">
+                      <button
+                        onClick={function () {
+                          var d = formData.draftInstrumentDraft || {};
+                          var amt = parseAmount(d.amount);
+                          if (!amt || amt <= 0) { toast.error('Amount required'); return; }
+                          if (!d.due_date) { toast.error('Due date required'); return; }
+                          var queued = (formData.draftInstruments || []).concat([{
+                            instrument_type: d.instrument_type || 'check',
+                            check_number: d.check_number || '',
+                            amount: amt,
+                            issue_date: d.issue_date || null,
+                            due_date: d.due_date,
+                            bank_name: d.bank_name || '',
+                            notes: d.notes || '',
+                          }]);
+                          setFormData(Object.assign({}, formData, {
+                            draftInstruments: queued,
+                            showDraftInstrumentForm: false,
+                            draftInstrumentDraft: null,
+                          }));
+                        }}
+                        className="flex-1 px-2 py-1 bg-indigo-600 hover:bg-indigo-700 text-white rounded text-[11px] font-bold"
+                      >
+                        Add to invoice
+                      </button>
+                      <button
+                        onClick={function () {
+                          setFormData(Object.assign({}, formData, {
+                            showDraftInstrumentForm: false,
+                            draftInstrumentDraft: null,
+                          }));
+                        }}
+                        className="px-2 py-1 bg-slate-200 hover:bg-slate-300 text-slate-700 rounded text-[11px] font-semibold"
+                      >
+                        Cancel
+                      </button>
+                    </div>
+                  </div>
+                )}
+                {(formData.draftInstruments || []).length > 0 && (
+                  <div className="text-[10px] text-indigo-800 italic text-center pt-1">
+                    {(formData.draftInstruments || []).length} instrument{(formData.draftInstruments || []).length === 1 ? '' : 's'} will be saved with this invoice
+                  </div>
+                )}
+              </div>
+            </div>
+
             <div className="flex gap-2">
               <button onClick={async () => {
+                // v55.47 — Smarter validation. The "Please fill order#, customer,
+                // and add items" alert was firing even when the user clearly had
+                // all three filled in. Root cause: the customer search input
+                // writes typed text to `formData.custSearch`, and `customerName`
+                // is ONLY set when the user explicitly taps a row in the
+                // dropdown. If they typed and the dropdown closed (or they
+                // clicked elsewhere) without picking, customerName stayed
+                // empty even though the visible field had their text.
+                //
+                // The fix: if customerName is empty but custSearch has text,
+                // promote custSearch to customerName here. Also try to match
+                // against the customers list so we set customerId too. Plus
+                // a specific error per missing field instead of the generic
+                // "fill all" message.
                 const items = formData.invoiceItems || [];
-                const totalAmt = items.reduce((a, i) => a + (i.inv_total || 0), 0) || Number(formData.amount) || 0;
-                if (!formData.orderNumber || !formData.customerName || totalAmt <= 0) {
-                  alert('Please fill order#, customer, and add items / الرجاء ملء رقم الأمر والعميل وإضافة بنود'); return;
+                // v55.82-E — parseAmount for the fallback typed amount.
+                // The items.reduce path is already numeric (built from
+                // line items), but the fallback `formData.amount` is a
+                // user-typed string and was hitting the comma/Arabic NaN
+                // bug.
+                const totalAmt = items.reduce((a, i) => a + (i.inv_total || 0), 0) || parseAmount(formData.amount) || 0;
+
+                // Promote custSearch → customerName if needed
+                let resolvedCustomerName = formData.customerName;
+                let resolvedCustomerId = formData.customerId;
+                if (!resolvedCustomerName && formData.custSearch && String(formData.custSearch).trim()) {
+                  const typed = String(formData.custSearch).trim();
+                  // Try exact-match against customers list (case-insensitive,
+                  // English or Arabic name). If found, use that customer's id.
+                  const exact = (customers || []).find(c =>
+                    (c.name && c.name.toLowerCase() === typed.toLowerCase()) ||
+                    (c.name_ar && c.name_ar === typed)
+                  );
+                  if (exact) {
+                    resolvedCustomerName = exact.name || exact.name_ar;
+                    resolvedCustomerId = exact.id;
+                  } else {
+                    // No match → use typed text as the customer name (legacy
+                    // free-text path; the invoices.customer_name column is
+                    // just text so this is fine).
+                    resolvedCustomerName = typed;
+                  }
+                }
+
+                // Specific error per missing field
+                const missing = [];
+                if (!formData.orderNumber || !String(formData.orderNumber).trim()) missing.push('Order #');
+                if (!resolvedCustomerName) missing.push('Customer');
+                if (totalAmt <= 0) missing.push('Items (or amount)');
+                if (missing.length > 0) {
+                  alert('Missing: ' + missing.join(', ') + '\n\nPlease fill these fields and try again. / يرجى ملء الحقول المفقودة.');
+                  return;
                 }
                 try {
                   const orderNum = sanitize(formData.orderNumber);
                   const { data: newInv } = await supabase.from('invoices').insert({
-                    order_number: orderNum, customer_name: sanitize(formData.customerName),
+                    order_number: orderNum, customer_name: sanitize(resolvedCustomerName),
+                    customer_id: resolvedCustomerId || null,
                     invoice_date: formData.date || today(), total_amount: totalAmt,
                     total_collected: 0, outstanding: totalAmt, sales_rep: formData.salesRep || '',
                     notes: sanitize(formData.notes || ''), source: 'manual',
                   }).select('id').single();
                   if (newInv && items.length > 0) {
                     for (const item of items) {
-                      await dbInsert('invoice_items', {
+                      // v55.83-A.6.27 — Stage D: insert with inv_sku_id, then
+                      // if the SKU is set, drain FIFO layers + create a sale
+                      // movement + stamp COGS back onto this invoice_item.
+                      // v55.83-A.6.27.44b — Also persist NEW inventory variant linkage when present.
+                      //   uses_inventory + variant_id + warehouse_id + sale_quantity + sale_price_per_uom
+                      //   are saved here but FIFO consumption does NOT run yet (lands in 44c).
+                      const itemPayload = {
                         invoice_id: newInv.id, description: item.inv_desc,
                         quantity: item.inv_qty, unit_price: item.inv_price, line_total: item.inv_total,
                         product_id: item.product_id || null,
-                      }, user?.id);
-                      // Auto-deduct from inventory if product linked
+                        inv_sku_id: item.inv_sku_id || null,
+                      };
+                      // Only attach the new variant-linkage fields when this item came from the
+                      // 📦 From Inventory tab. Other items keep legacy/manual behavior unchanged.
+                      if (item.uses_inventory === true && item.variant_id) {
+                        itemPayload.uses_inventory = true;
+                        itemPayload.variant_id = item.variant_id;
+                        if (item.warehouse_id) itemPayload.warehouse_id = item.warehouse_id;
+                        itemPayload.uom = item.variant_uom || null;
+                        itemPayload.sale_quantity = Number(item.inv_qty) || 0;
+                        itemPayload.sale_price_per_uom = Number(item.inv_price) || 0;
+                        itemPayload.inventory_status = 'draft';
+                      }
+                      const insertedItem = await dbInsert('invoice_items', itemPayload, user?.id);
+                      // v55.83-A.6.27.44c — Auto-FIFO-consume for inventory-linked items.
+                      // Fires on submit (insert). Reads from inventory_layers oldest-first,
+                      // stamps cogs_total + gross_profit + consumed_layers on the item,
+                      // creates an inventory_backorders row if sale qty > available stock.
+                      // Failure here does NOT fail the whole invoice — operator gets a
+                      // toast warning and can review/fix manually.
+                      if (item.uses_inventory === true && item.variant_id && insertedItem && insertedItem.id) {
+                        try {
+                          const consumeRes = await supabase.rpc('consume_invoice_item_inventory', { p_item_id: insertedItem.id });
+                          if (consumeRes.error) {
+                            console.error('[invoice-save] consume_invoice_item_inventory failed:', consumeRes.error);
+                            toast.warning('Inventory consumption failed for line "' + (item.inv_desc || '?').substring(0, 50) + '" — ' + (consumeRes.error.message || 'unknown') + '. Invoice saved but stock not deducted; reopen to fix. / فشل خصم المخزون');
+                          } else if (consumeRes.data && consumeRes.data.backorder_qty && Number(consumeRes.data.backorder_qty) > 0) {
+                            // Soft-warn backorder
+                            toast.warning('⚠ Sold more than available stock — created backorder for ' + consumeRes.data.backorder_qty + ' units on "' + (item.inv_desc || '?').substring(0, 50) + '" / تم إنشاء طلب معلق');
+                          }
+                        } catch (e) {
+                          console.error('[invoice-save] consume RPC threw:', e);
+                          toast.warning('Inventory deduction failed for line "' + (item.inv_desc || '?').substring(0, 30) + '". Invoice still saved. / فشل خصم المخزون');
+                        }
+                      }
+                      // Auto-deduct from OLD inventory if product_id set (legacy)
                       if (item.product_id) {
                         const prod = inventory.find(p => p.id === item.product_id);
                         if (prod) {
                           const newQty = Math.max(0, Number(prod.current_quantity || prod.roll_count || 0) - Number(item.inv_qty || 0));
                           await dbUpdate('inventory', prod.id, { current_quantity: newQty, stock_status: newQty <= 0 ? 'out_of_stock' : newQty < 5 ? 'low' : 'in_stock' }, user?.id);
+                        }
+                      }
+                      // v55.83-A.6.27 — Stage D: drain new inventory layers if inv_sku_id set
+                      if (item.inv_sku_id && Number(item.inv_qty) > 0 && insertedItem && insertedItem.id) {
+                        try {
+                          const drain = await consumeFifo(item.inv_sku_id, null, Number(item.inv_qty));
+                          if (drain && !drain.error && drain.qtyDrained > 0) {
+                            // Create sale movement
+                            const movInsert = await supabase.from('inv_movements').insert({
+                              sku_id: item.inv_sku_id,
+                              warehouse_id: (drain.consumed && drain.consumed[0])
+                                ? (await supabase.from('inv_layers').select('warehouse_id').eq('id', drain.consumed[0].layer_id).maybeSingle()).data?.warehouse_id
+                                : null,
+                              movement_type: 'sale',
+                              qty_change: -Number(drain.qtyDrained),
+                              source_table: 'invoices',
+                              source_id: newInv.id,
+                              linked_invoice_id: newInv.id,
+                              linked_invoice_item_id: insertedItem.id,
+                              consumed_layers: drain.consumed,
+                              unit_cost_usd: drain.weightedUnitUsd,
+                              unit_cost_egp: drain.weightedUnitEgp,
+                              total_cost_usd: drain.totalCogsUsd,
+                              total_cost_egp: drain.totalCogsEgp,
+                              occurred_at: new Date().toISOString(),
+                              note: 'Auto: sale from invoice ' + (newInv.id || ''),
+                              created_by: user?.id || null,
+                            }).select().single();
+                            if (!movInsert.error && movInsert.data) {
+                              // Stamp COGS + movement id on the invoice_item
+                              await supabase.from('invoice_items').update({
+                                cogs_usd: drain.totalCogsUsd,
+                                cogs_egp: drain.totalCogsEgp,
+                                cogs_movement_id: movInsert.data.id,
+                              }).eq('id', insertedItem.id);
+                            }
+                            if (drain.shortfall > 0) {
+                              toast.warn && toast.warn('Stock shortfall on ' + (item.inv_desc || 'item') + ': sold ' + drain.qtyDrained + ', short ' + drain.shortfall);
+                            }
+                          } else if (drain && drain.error) {
+                            toast.warn && toast.warn('Inventory drain failed for ' + (item.inv_desc || 'item') + ': ' + drain.error);
+                          }
+                        } catch (e) {
+                          console.warn('[sale-deduct] threw:', e && e.message);
                         }
                       }
                     }
@@ -5273,8 +9076,52 @@ export default function App() {
                     };
                     setInvoices(prev => [optimistic, ...prev]);
                   }
+
+                  // v55.83-A.6.27.20 (Max May 17 2026) — save any draft
+                  // Payment Instruments queued during invoice creation. Per
+                  // Max's Option (a): atomic from user POV but no rollback.
+                  // If any instrument fails, the invoice still exists and
+                  // we tell the user to open it and add manually.
+                  // Rules unchanged: pure documentation, never writes to
+                  // treasury or invoice money math.
+                  var instrumentsSaved = 0;
+                  var instrumentsFailed = 0;
+                  if (newInv && newInv.id && (formData.draftInstruments || []).length > 0) {
+                    for (const di of formData.draftInstruments) {
+                      try {
+                        await dbInsert('checks', {
+                          instrument_type: di.instrument_type || 'check',
+                          customer_name: sanitize(resolvedCustomerName || formData.customerName),
+                          customer_id: resolvedCustomerId || null,
+                          order_number: orderNum,
+                          invoice_id: newInv.id,
+                          amount: Number(di.amount),
+                          check_number: di.check_number || '',
+                          bank_name: di.bank_name || '',
+                          issue_date: di.issue_date || null,
+                          check_date: di.due_date,    // legacy column — kept in sync
+                          due_date: di.due_date,
+                          status: 'pending',
+                          notes: di.notes || '',
+                          created_by: user?.id,
+                          updated_by: user?.id,
+                        }, user?.id);
+                        instrumentsSaved++;
+                      } catch (instErr) {
+                        console.warn('[create-invoice] instrument save failed:', instErr && instErr.message, di);
+                        instrumentsFailed++;
+                      }
+                    }
+                  }
+
                   setShowAddInvoice(false); setFormData({});
-                  if (backfillCount > 0) {
+                  if (instrumentsFailed > 0) {
+                    toast.warning('Invoice created ✓ — but ' + instrumentsFailed + ' instrument' + (instrumentsFailed === 1 ? '' : 's') + ' failed to save. Open the invoice to add manually.');
+                  } else if (instrumentsSaved > 0 && backfillCount > 0) {
+                    toast.success('Invoice + ' + instrumentsSaved + ' instrument' + (instrumentsSaved === 1 ? '' : 's') + ' + ' + backfillCount + ' linked treasury entr' + (backfillCount === 1 ? 'y' : 'ies') + ' ✓');
+                  } else if (instrumentsSaved > 0) {
+                    toast.success('Invoice + ' + instrumentsSaved + ' instrument' + (instrumentsSaved === 1 ? '' : 's') + ' saved ✓');
+                  } else if (backfillCount > 0) {
                     toast.success('Invoice created + linked ' + backfillCount + ' waiting treasury entr' + (backfillCount === 1 ? 'y' : 'ies') + ' ✓');
                   } else {
                     toast.success('Invoice created ✓');
@@ -5291,9 +9138,57 @@ export default function App() {
 
         {/* ==========================================
             ADD TREASURY MODAL
+            v55.49 — Hides itself when ANY child modal is open
+            (duplicateConfirm OR pendingTreasuryRecord). Previously the
+            form Modal at z-50 could trap child modals behind it on iOS
+            Safari due to a backdrop-filter stacking-context quirk —
+            user reported "I tap Confirm on the duplicate warning, the
+            invoice form opens, I fill it, tap Save, nothing happens"
+            (actually the next modal was opening invisibly). Now: only
+            ONE modal on screen at a time. formData is preserved in
+            state so when the child closes via Cancel, the form returns
+            with all values intact.
         ========================================== */}
-        {showAddTreasury && (
-          <Modal onClose={() => { setShowAddTreasury(false); setFormData({}); }} title="New Transaction / معاملة جديدة">
+        {showAddTreasury && !pendingTreasuryRecord && !duplicateConfirm && (
+          <Modal onClose={() => {
+            // v55.82-E — Full reset on every close path. See companion notes
+            // on the Cancel button + the "+ New Transaction" button.
+            setShowAddTreasury(false);
+            setFormData({});
+            setTreasuryFormErrors([]);
+            setPendingTreasuryRecord(null);
+            setDuplicateConfirm(null);
+            setIsCreatingInvoice(false);
+            setCreateInvoiceError(null);
+          }} title="New Transaction / معاملة جديدة">
+            {/* v55.47 — Persistent in-form validation error banner. When the
+                user taps Save and validation fails, this red box appears at
+                the top of the form listing every missing field. The user
+                cannot miss this even if they don't see the corner toast.
+                Cleared automatically the next time validation passes. */}
+            {treasuryFormErrors.length > 0 && (
+              <div className="mb-3 rounded-lg border-2 border-red-500 bg-red-50 p-3" role="alert">
+                <div className="flex items-start gap-2">
+                  <span className="text-2xl flex-shrink-0">⚠️</span>
+                  <div className="flex-1 min-w-0">
+                    <div className="text-sm font-extrabold text-red-900 mb-1">
+                      Cannot save — please fix {treasuryFormErrors.length} item{treasuryFormErrors.length === 1 ? '' : 's'}:
+                    </div>
+                    <ul className="text-xs text-red-800 space-y-1 mt-1">
+                      {treasuryFormErrors.map((e, i) => (
+                        <li key={i} className="flex items-start gap-1.5">
+                          <span className="font-bold flex-shrink-0">•</span>
+                          <span><b>{e.label}:</b> {e.msg}</span>
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+                  <button onClick={() => setTreasuryFormErrors([])}
+                    className="text-red-600 hover:text-red-800 text-lg leading-none px-1 flex-shrink-0"
+                    aria-label="Dismiss errors">×</button>
+                </div>
+              </div>
+            )}
             <div className="grid grid-cols-2 gap-3">
               <div className="col-span-2">
                 <label className="text-xs font-semibold text-slate-600 block mb-2">Type / النوع</label>
@@ -5359,18 +9254,26 @@ export default function App() {
 
                       {/* Non-Order category selector — only in non-order mode */}
                       {mode === 'nonorder' && (
-                        <div className="p-2 bg-indigo-50 border border-indigo-200 rounded">
+                        <div className="p-2 bg-indigo-50 border border-indigo-200 rounded" data-treasury-field="bankNonOrderCategory">
                           <label className="text-[11px] font-bold text-indigo-900 block mb-1">
                             What is this? / ما نوع هذا القيد؟ *
                           </label>
                           <select value={formData.bankNonOrderCategory || ''}
-                            onChange={e => setFormData({ ...formData, bankNonOrderCategory: e.target.value })}
-                            className="w-full px-2 py-1.5 rounded border border-indigo-300 text-sm bg-white">
+                            onChange={e => {
+                              setFormData({ ...formData, bankNonOrderCategory: e.target.value });
+                              if (treasuryFormErrors.length > 0 && e.target.value) {
+                                setTreasuryFormErrors(prev => prev.filter(x => x.field !== 'bankNonOrderCategory'));
+                              }
+                            }}
+                            className={'w-full px-2 py-1.5 rounded border text-sm bg-white ' + (treasuryFormErrors.some(x => x.field === 'bankNonOrderCategory') ? 'border-red-500' : 'border-indigo-300')}>
                             <option value="">Select a category…</option>
                             {BANK_NONORDER_CATS.map(c => (
                               <option key={c.v} value={c.v}>{c.en} / {c.ar}</option>
                             ))}
                           </select>
+                          {treasuryFormErrors.some(x => x.field === 'bankNonOrderCategory') && (
+                            <div className="text-[10px] text-red-600 font-semibold mt-0.5">⚠️ Required</div>
+                          )}
                         </div>
                       )}
 
@@ -5391,11 +9294,24 @@ export default function App() {
                 <label className="text-xs font-semibold text-slate-600">Date / التاريخ</label>
                 <DatePickerSelect value={formData.date || today()} onChange={v => setFormData({ ...formData, date: v })} />
               </div>
-              <div>
-                <label className="text-xs font-semibold text-slate-600">{(formData.type === 'bank_in' || formData.type === 'bank_out') ? 'Expected Amount / المبلغ المتوقع' : 'Amount / المبلغ'}</label>
+              <div data-treasury-field="amount">
+                <label className="text-xs font-semibold text-slate-600">
+                  {(formData.type === 'bank_in' || formData.type === 'bank_out') ? 'Expected Amount / المبلغ المتوقع' : 'Amount / المبلغ'}
+                  <span className="text-red-500 ml-0.5">*</span>
+                </label>
                 <input type="number" value={formData.amount || ''}
-                  onChange={e => setFormData({ ...formData, amount: e.target.value })}
-                  className="w-full px-3 py-2 rounded-lg border border-slate-200 text-sm" />
+                  onChange={e => {
+                    setFormData({ ...formData, amount: e.target.value });
+                    // v55.47 — clear the amount error as soon as the user types something valid
+                    if (treasuryFormErrors.length > 0 && e.target.value && Number(e.target.value) > 0) {
+                      setTreasuryFormErrors(prev => prev.filter(x => x.field !== 'amount'));
+                    }
+                  }}
+                  placeholder="0.00"
+                  className={'w-full px-3 py-2 rounded-lg border text-sm ' + (treasuryFormErrors.some(x => x.field === 'amount') ? 'border-red-500 bg-red-50' : 'border-slate-200')} />
+                {treasuryFormErrors.some(x => x.field === 'amount') && (
+                  <div className="text-[10px] text-red-600 font-semibold mt-0.5">⚠️ Required</div>
+                )}
               </div>
               <div>
                 <label className="text-xs font-semibold text-slate-600">Currency / العملة</label>
@@ -5411,11 +9327,16 @@ export default function App() {
                 </select>
               </div>
               {(formData.type === 'bank_in' || formData.type === 'bank_out') && (
-                <div className="col-span-2">
+                <div className="col-span-2" data-treasury-field="bankAccountId">
                   <label className="text-xs font-semibold text-slate-600">Bank Account / الحساب البنكي *</label>
                   <select value={formData.bankAccountId || ''}
-                    onChange={e => setFormData({ ...formData, bankAccountId: e.target.value })}
-                    className="w-full px-3 py-2 rounded-lg border border-indigo-300 text-sm bg-indigo-50">
+                    onChange={e => {
+                      setFormData({ ...formData, bankAccountId: e.target.value });
+                      if (treasuryFormErrors.length > 0 && e.target.value) {
+                        setTreasuryFormErrors(prev => prev.filter(x => x.field !== 'bankAccountId'));
+                      }
+                    }}
+                    className={'w-full px-3 py-2 rounded-lg border text-sm bg-indigo-50 ' + (treasuryFormErrors.some(x => x.field === 'bankAccountId') ? 'border-red-500' : 'border-indigo-300')}>
                     <option value="">Select bank account...</option>
                     {egyptBankAccounts.map(a => (
                       <option key={a.id} value={a.id}>
@@ -5423,6 +9344,9 @@ export default function App() {
                       </option>
                     ))}
                   </select>
+                  {treasuryFormErrors.some(x => x.field === 'bankAccountId') && (
+                    <div className="text-[10px] text-red-600 font-semibold mt-0.5">⚠️ Required</div>
+                  )}
                   {egyptBankAccounts.length === 0 && (
                     <div className="text-[10px] text-red-500 mt-1">⚠️ No bank accounts configured. Add them in Egypt Bank tab first. / لا توجد حسابات بنكية. أضفها في تبويب بنك مصر أولاً.</div>
                   )}
@@ -5464,12 +9388,20 @@ export default function App() {
                 // Hide Order# in non-order bank mode — it doesn't apply.
                 if (isBank && bankMode === 'nonorder') return null;
                 return (
-                  <div>
+                  <div data-treasury-field="orderNumber">
                     <label className="text-xs font-semibold text-slate-600">Order # / رقم{isBank ? ' *' : ''}</label>
                     <input value={formData.orderNumber || ''}
-                      onChange={e => setFormData({ ...formData, orderNumber: e.target.value })}
+                      onChange={e => {
+                        setFormData({ ...formData, orderNumber: e.target.value });
+                        if (treasuryFormErrors.length > 0 && e.target.value.trim()) {
+                          setTreasuryFormErrors(prev => prev.filter(x => x.field !== 'orderNumber'));
+                        }
+                      }}
                       placeholder="Type to search..."
-                      className="w-full px-3 py-2 rounded-lg border border-slate-200 text-sm" />
+                      className={'w-full px-3 py-2 rounded-lg border text-sm ' + (treasuryFormErrors.some(x => x.field === 'orderNumber') ? 'border-red-500 bg-red-50' : 'border-slate-200')} />
+                    {treasuryFormErrors.some(x => x.field === 'orderNumber') && (
+                      <div className="text-[10px] text-red-600 font-semibold mt-0.5">⚠️ Required</div>
+                    )}
                     {formData.orderNumber && formData.orderNumber.length >= 2 && (
                       <div className="mt-1 max-h-[120px] overflow-auto rounded border border-slate-200 bg-white">
                         {invoices
@@ -5487,11 +9419,22 @@ export default function App() {
                   </div>
                 );
               })()}
-              <div className="col-span-2">
-                <label className="text-xs font-semibold text-slate-600">Description / الوصف</label>
+              <div className="col-span-2" data-treasury-field="desc">
+                <label className="text-xs font-semibold text-slate-600">
+                  Description / الوصف
+                  {(formData.type === 'bank_in' || formData.type === 'bank_out') && <span className="text-red-500 ml-0.5">*</span>}
+                </label>
                 <input value={formData.desc || ''}
-                  onChange={e => setFormData({ ...formData, desc: e.target.value })}
-                  className="w-full px-3 py-2 rounded-lg border border-slate-200 text-sm" />
+                  onChange={e => {
+                    setFormData({ ...formData, desc: e.target.value });
+                    if (treasuryFormErrors.length > 0 && e.target.value.trim()) {
+                      setTreasuryFormErrors(prev => prev.filter(x => x.field !== 'desc'));
+                    }
+                  }}
+                  className={'w-full px-3 py-2 rounded-lg border text-sm ' + (treasuryFormErrors.some(x => x.field === 'desc') ? 'border-red-500 bg-red-50' : 'border-slate-200')} />
+                {treasuryFormErrors.some(x => x.field === 'desc') && (
+                  <div className="text-[10px] text-red-600 font-semibold mt-0.5">⚠️ Required for bank entries</div>
+                )}
               </div>
               {(formData.type === 'out' || formData.type === 'in' || formData.type === 'bank_in' || formData.type === 'bank_out' || !formData.type) && (
                 <div className="col-span-2">
@@ -5554,8 +9497,23 @@ export default function App() {
             </div>
             <div className="flex gap-2 mt-4">
               <button onClick={handleAddTreasury}
-                className="px-4 py-2 bg-blue-500 text-white rounded-lg font-semibold">Save / حفظ ✓</button>
-              <button onClick={() => { setShowAddTreasury(false); setFormData({}); }}
+                disabled={treasurySaving}
+                className={'px-4 py-2 bg-blue-500 text-white rounded-lg font-semibold ' + (treasurySaving ? 'opacity-60 cursor-wait' : 'hover:bg-blue-600')}>
+                {treasurySaving ? 'Saving… / جاري الحفظ' : 'Save / حفظ ✓'}
+              </button>
+              <button onClick={() => {
+                  // v55.82-E — Cancel must clean ALL modal-companion state too,
+                  // not just showAddTreasury + formData. Otherwise leftover
+                  // pendingTreasuryRecord / duplicateConfirm / treasuryFormErrors
+                  // can keep the next "+ New Transaction" open from rendering.
+                  setShowAddTreasury(false);
+                  setFormData({});
+                  setTreasuryFormErrors([]);
+                  setPendingTreasuryRecord(null);
+                  setDuplicateConfirm(null);
+                  setIsCreatingInvoice(false);
+                  setCreateInvoiceError(null);
+                }}
                 className="px-4 py-2 border border-slate-200 rounded-lg font-semibold">Cancel / إلغاء</button>
             </div>
           </Modal>
@@ -5563,7 +9521,7 @@ export default function App() {
 
         {/* ===== FLOATING REMINDER BANNER (all tabs) ===== */}
         {tab !== 'dashboard' && (() => {
-          const todayStr = new Date().toISOString().substring(0, 10);
+          const todayStr = todayET();
           const myActive = reminders.filter(r => {
             const isForMe = !r.target_users || r.target_users === 'all' || (r.target_users || '').includes(userProfile?.id);
             const isToday = r.reminder_date === todayStr;
@@ -5588,6 +9546,356 @@ export default function App() {
         ========================================== */}
         {tab === 'dashboard' && (
           <div className="flex flex-col">
+
+            {/* v55.83-A.6.27.9 (Max May 15 2026) — FX widget pinned to the
+                top of the dashboard. Compact: single small row, USD→EGP
+                only, doesn't push the AI hero down. Hidden when fxRate
+                isn't loaded yet (no flash of empty space). */}
+            {fxRate && (
+              <div className="flex justify-end mb-2">
+                <div className="flex items-center gap-2 px-3 py-1 bg-slate-900/60 rounded-lg border border-slate-700/60">
+                  <span className="text-[10px] text-slate-400 font-semibold">USD/EGP</span>
+                  <span className="text-sm font-black text-emerald-400 font-mono">{fxRate.rate.toFixed(2)}</span>
+                  <span className="text-[10px]">💱</span>
+                </div>
+              </div>
+            )}
+
+            {/* v55.83-A.6.18 (Max May 14 2026) — In-place ticket editor.
+                Renders OVER the dashboard so the user never loses their
+                place. Mounted only while dashboardTicketModal is set, so
+                the underlying TicketsTab in its own tab is never duplicated. */}
+            <DashboardTicketModalOverlay
+              ticketId={dashboardTicketModal}
+              onClose={() => setDashboardTicketModal(null)}
+              toast={toast}
+              customers={customers}
+              user={user}
+              userProfile={userProfile}
+              users={teamUsers}
+              onReload={loadAllData}
+              lang={lang}
+              isAdmin={isAdmin}
+              modulePerms={modulePerms}
+            />
+
+            {/* v55.81 — Per Max May 9 2026: AI Workforce (Nadia/Sara/Jenna)
+                must be the focal point of the dashboard. Use flex `order:`
+                to pin PersonalDashboard (the AI Workforce hero) ABOVE the
+                widget cluster (WhatsNew, NadiaNewBuildCard, PendingMessages,
+                Treasury terminal, etc.) regardless of render order. The
+                widgets render in JSX before PersonalDashboard for code-flow
+                reasons, but flex order makes them visually appear AFTER. */}
+            <div className="flex flex-col" style={{ order: 2 }}>
+
+            {/* v55.83-A.6.27.9 (Max May 15 2026) — Compact action button row.
+                Replaces the two big mb-3 buttons that used to live separately
+                inside the announcement + reminder sections below. Now both
+                appear as small pills on one row right under the AI hero,
+                before the priority cards. Forms (announcement modal, reminder
+                form) still mount further down — these just toggle their
+                visibility state. Archive link sits under as a discreet link. */}
+            <div className="flex items-center gap-2 mb-2 flex-wrap">
+              {isAdmin && (
+                <button onClick={() => setShowAddAnnouncement(true)}
+                  className="px-3 py-1.5 bg-red-500 hover:bg-red-600 text-white rounded-lg text-xs font-bold shadow"
+                  title="Send an urgent broadcast to team members">
+                  📢 Send Message to Team
+                </button>
+              )}
+              {(isAdmin || modulePerms?.['Post Reminders']) && (
+                <button onClick={() => setShowReminderForm(!showReminderForm)}
+                  className="px-3 py-1.5 bg-amber-500 hover:bg-amber-600 text-white rounded-lg text-xs font-bold shadow"
+                  title="Post a reminder visible to selected team members">
+                  📢 {showReminderForm ? 'Close Reminder' : 'Post Reminder'}
+                </button>
+              )}
+            </div>
+            {/* v55.83-A.6.27.10 — fix ReferenceError: archivedReminders was
+                a local var inside the reminder widget's IIFE further down,
+                not in scope here. Compute inline from component-level
+                `reminders` state so the archive link works wherever the
+                button is placed. */}
+            {(() => {
+              var myIdLocal = userProfile?.id || user?.id;
+              var todayStrLocal = todayET();
+              var archCount = (reminders || []).filter(function (r) {
+                var isForMe = !r.target_users || r.target_users === 'all' || (r.target_users || '').includes(myIdLocal);
+                if (!isForMe) return false;
+                var d = r.reminder_date || (r.created_at && r.created_at.substring(0, 10));
+                return d && d < todayStrLocal;
+              }).length;
+              if (archCount === 0) return null;
+              return (
+                <div className="mb-3">
+                  <button onClick={() => setShowReminderArchive(!showReminderArchive)}
+                    className="text-[11px] text-slate-400 hover:text-blue-400 hover:underline font-semibold">
+                    📋 {showReminderArchive ? 'Hide' : 'View'} past reminders ({archCount})
+                  </button>
+                </div>
+              );
+            })()}
+
+            {/* v55.83-A.6.18 (Max May 14 2026) — Three high-priority cards:
+                Overdue Tickets / Recent Updates / Newly Assigned. Inserted
+                FIRST in the order:2 cluster so they show immediately after
+                the AI Workforce hero. Each ticket click opens a dashboard-
+                mounted modal so the user stays on the dashboard. */}
+            <DashboardPrioritySections
+              dashTickets={dashTickets}
+              recentTicketUpdates={recentTicketUpdates}
+              myId={userProfile?.id || user?.id}
+              users={teamUsers}
+              todayStr={todayET()}
+              onOpenTicket={(t) => { setDashboardTicketModal(t.id); }}
+              onAcknowledge={ackDashboardTicket}
+              busyAckId={busyAckId}
+            />
+
+            {/* v55.83-A.6.27.9 — Pending Bank Confirmations moved up to
+                immediately follow the priority cards per Max May 15 2026
+                ("Move Invoices Awaiting Bank Confirmation immediately after
+                Your Daily Priorities"). */}
+            <PendingBankConfirmationsWidget
+              invoices={invoices}
+              isSuperAdmin={isSuperAdmin}
+              modulePerms={modulePerms}
+              onSelectInvoice={(inv) => { setTab('sales'); setSelectedInvoice(inv); }}
+              fE={fE}
+            />
+
+            {/* v55.83-A.6.27.11 (Max May 15 2026) — Summary cards (Team
+                Tickets / Today's Events / Follow-ups) + Today widget +
+                Reminders + Monthly Sales mount HERE, below the new Daily
+                Priorities GUI. Previously they rendered ABOVE the priorities
+                inside the order:1 PersonalDashboard mount; the AI hero
+                stays up top (renderSection="ai" below) but the rest follows
+                the priorities per Max's spec: "These should be kept but go
+                below (not above) the new dashboard GUI". */}
+            <PersonalDashboard user={user} userProfile={userProfile} isAdmin={isAdmin} isSuperAdmin={isSuperAdmin}
+              invoices={invoices} customers={customers} navigate={navigate} fE={fE} users={teamUsers}
+              renderSection="rest" />
+
+            {/* v55.83-A.6.27.9 — What's New is COLLAPSED by default now.
+                Was auto-prominent at the top, which was repetitive on every
+                login. User can still expand to see latest builds. */}
+            <div className="mb-3">
+              <WhatsNewWidget isAdmin={isAdmin} isSuperAdmin={isSuperAdmin} prominent={false} />
+            </div>
+
+            {/* v55.60 — Nadia highlights when a new build has deployed.
+                Shows the latest build version, label, and top 3 highlights
+                in a Nadia-styled card. User taps "Got it" and it disappears
+                until the next build. */}
+            <NadiaNewBuildCard isAdmin={isAdmin} isSuperAdmin={isSuperAdmin} />
+
+            {/* v55.45 — Pending team messages + reminders, with per-item
+                Acknowledge buttons. Renders nothing if nothing pending. */}
+            <PendingNadiaMessages
+              userId={userProfile?.id || user?.id}
+              getUserName={getUserName}
+            />
+
+            {/* ===========================================================
+                TERMINAL EXECUTIVE SUMMARY (v55.8 — Apr 25 2026)
+                ===========================================================
+                Bloomberg-style command-deck overview. Permission-gated:
+                only renders for users with Treasury access (matches the
+                header NET widget logic). Six tiles in a sharp grid:
+                  • Treasury Net (with sparkline)
+                  • Month-to-date In/Out/Net
+                  • A/R + overdue
+                  • Pending checks (next 7 days)
+                  • Open tickets + my queue
+                  • System status (last login, sync state)
+                Pure data. No emoji except status dots. Tabular numerics
+                in JetBrains Mono. Sharp corners. Click-through on every
+                tile to the relevant tab.
+                =========================================================== */}
+            {(isSuperAdmin || modulePerms?.['Treasury'] === true) && (() => {
+              const todayN = todayET();
+              const monthStart = todayN.substring(0, 7) + '-01';
+              const sevenDaysOut = new Date(Date.now() + 7 * 86400000).toISOString().substring(0, 10);
+              const myId = userProfile?.id;
+
+              // Money flows
+              const monthIn = treasury.filter(t => (t.transaction_date || '') >= monthStart).reduce((a, t) => a + Number(t.cash_in || 0) + Number(t.bank_in || 0), 0);
+              const monthOut = treasury.filter(t => (t.transaction_date || '') >= monthStart).reduce((a, t) => a + Number(t.cash_out || 0) + Number(t.bank_out || 0), 0);
+              const monthNet = monthIn - monthOut;
+
+              // A/R and overdue
+              const ar = invoices.reduce((a, i) => a + Number(i.outstanding || 0), 0);
+              const overdueInvs = invoices.filter(i => Number(i.outstanding || 0) > 0 && i.invoice_date && (Date.now() - new Date(i.invoice_date).getTime()) > 30 * 86400000);
+              const overdueAmt = overdueInvs.reduce((a, i) => a + Number(i.outstanding || 0), 0);
+
+              // Checks
+              const pendCkAmt = pendingChecks.reduce((a, c) => a + Number(c.amount || 0), 0);
+              const overdueCk = pendingChecks.filter(c => (c.due_date || c.check_date || '') < todayN && (c.due_date || c.check_date));
+              const next7Ck = pendingChecks.filter(c => {
+                const d = c.due_date || c.check_date;
+                return d && d >= todayN && d <= sevenDaysOut;
+              });
+              const next7CkAmt = next7Ck.reduce((a, c) => a + Number(c.amount || 0), 0);
+
+              // Tickets
+              const openT = (dashTickets || []).filter(t => t.status !== 'Closed' && t.status !== 'Resolved');
+              const myT = openT.filter(t => t.assigned_to === myId);
+              const overdueT = myT.filter(t => t.due_date && t.due_date < todayN);
+
+              // 30-day sparkline data for treasury net
+              const sparkData = (() => {
+                var days = [];
+                for (var i = 29; i >= 0; i--) {
+                  var d = new Date(Date.now() - i * 86400000).toISOString().substring(0, 10);
+                  var dayIn = treasury.filter(t => (t.transaction_date || '') === d).reduce((a, t) => a + Number(t.cash_in || 0) + Number(t.bank_in || 0), 0);
+                  var dayOut = treasury.filter(t => (t.transaction_date || '') === d).reduce((a, t) => a + Number(t.cash_out || 0) + Number(t.bank_out || 0), 0);
+                  days.push(dayIn - dayOut);
+                }
+                return days;
+              })();
+              const sparkMin = Math.min.apply(null, sparkData.length > 0 ? sparkData : [0]);
+              const sparkMax = Math.max.apply(null, sparkData.length > 0 ? sparkData : [0]);
+              const sparkRange = sparkMax - sparkMin || 1;
+              const sparkPath = sparkData.map((v, i) => {
+                var x = (i / Math.max(sparkData.length - 1, 1)) * 100;
+                var y = 100 - ((v - sparkMin) / sparkRange) * 100;
+                return (i === 0 ? 'M' : 'L') + x.toFixed(1) + ',' + y.toFixed(1);
+              }).join(' ');
+
+              // Tile component (inline closure to avoid hoisting it out of dashboard scope)
+              const Tile = function(props) {
+                return (
+                  <button onClick={props.onClick}
+                    className="text-left border border-zinc-800 hover:border-zinc-600 transition-colors group p-3 flex flex-col gap-1"
+                    style={{ background: '#0a0a0a' }}>
+                    <div className="flex items-center justify-between">
+                      <div className="text-[9px] font-bold uppercase tracking-[0.18em] text-zinc-500 font-mono"
+                        style={{ fontFamily: '"JetBrains Mono", monospace' }}>
+                        <span className="text-zinc-700">// </span>{props.label}
+                      </div>
+                      {props.badge}
+                    </div>
+                    <div className="flex items-baseline gap-1.5 mt-1">
+                      <div className="text-xl sm:text-2xl font-bold tabular-nums leading-none"
+                        style={{ fontFamily: '"JetBrains Mono", monospace', color: props.valueColor || '#fafafa' }}>
+                        {props.value}
+                      </div>
+                      {props.unit && <div className="text-[10px] text-zinc-500 font-mono" style={{ fontFamily: '"JetBrains Mono", monospace' }}>{props.unit}</div>}
+                    </div>
+                    {props.sub && (
+                      <div className="text-[10px] text-zinc-500 mt-0.5 leading-snug">
+                        {props.sub}
+                      </div>
+                    )}
+                    {props.children}
+                  </button>
+                );
+              };
+
+              return (
+                <div className="mb-5">
+                  {/* Section header — terminal command line */}
+                  <div className="flex items-baseline justify-between mb-3 pb-2 border-b border-zinc-800">
+                    <div className="flex items-baseline gap-3">
+                      <span className="text-[10px] font-bold uppercase tracking-[0.2em] text-emerald-400 font-mono"
+                        style={{ fontFamily: '"JetBrains Mono", monospace' }}>
+                        <span className="text-zinc-600">$</span> command-deck
+                      </span>
+                      <span className="text-[10px] text-zinc-600 font-mono" style={{ fontFamily: '"JetBrains Mono", monospace' }}>
+                        // {todayN.replace(/-/g, '.')}
+                      </span>
+                    </div>
+                    <div className="text-[10px] text-zinc-600 font-mono uppercase tracking-wider hidden sm:block" style={{ fontFamily: '"JetBrains Mono", monospace' }}>
+                      <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 inline-block mr-1.5 align-middle" style={{ boxShadow: '0 0 6px #34d399' }} />
+                      LIVE
+                    </div>
+                  </div>
+
+                  {/* Six-tile grid — responsive: 2col mobile, 3col tablet, 6col desktop */}
+                  <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-px bg-zinc-800 border border-zinc-800">
+                    {/* TILE 1 — TREASURY NET (with sparkline) */}
+                    <Tile
+                      label="TREASURY NET"
+                      value={(allTimeNet >= 0 ? '+' : '') + fE(allTimeNet)}
+                      valueColor={allTimeNet >= 0 ? '#34d399' : '#f87171'}
+                      sub="all-time · click for detail"
+                      onClick={() => { setTab('treasury'); setMode('all'); }}
+                      badge={<span className="w-1.5 h-1.5 rounded-full" style={{ background: allTimeNet >= 0 ? '#34d399' : '#f87171', boxShadow: '0 0 6px ' + (allTimeNet >= 0 ? '#34d399' : '#f87171') }} />}>
+                      {/* 30-day sparkline */}
+                      {sparkData.length > 1 && (
+                        <svg viewBox="0 0 100 30" preserveAspectRatio="none" className="w-full h-6 mt-1.5" aria-label="30-day net sparkline">
+                          <defs>
+                            <linearGradient id="sparkFill" x1="0" y1="0" x2="0" y2="1">
+                              <stop offset="0%" stopColor={allTimeNet >= 0 ? '#34d399' : '#f87171'} stopOpacity="0.3" />
+                              <stop offset="100%" stopColor={allTimeNet >= 0 ? '#34d399' : '#f87171'} stopOpacity="0" />
+                            </linearGradient>
+                          </defs>
+                          <path d={sparkPath + ' L100,30 L0,30 Z'} fill="url(#sparkFill)" />
+                          <path d={sparkPath} fill="none" stroke={allTimeNet >= 0 ? '#34d399' : '#f87171'} strokeWidth="1.5" vectorEffect="non-scaling-stroke" />
+                        </svg>
+                      )}
+                    </Tile>
+
+                    {/* TILE 2 — MTD NET */}
+                    <Tile
+                      label="MTD NET"
+                      value={(monthNet >= 0 ? '+' : '') + fE(monthNet)}
+                      valueColor={monthNet >= 0 ? '#34d399' : '#f87171'}
+                      sub={'IN ' + fE(monthIn) + ' / OUT ' + fE(monthOut)}
+                      onClick={() => { setTab('treasury'); setMode('mtd'); }}
+                    />
+
+                    {/* TILE 3 — ACCOUNTS RECEIVABLE */}
+                    <Tile
+                      label="A/R OUTSTANDING"
+                      value={fE(ar)}
+                      valueColor="#fafafa"
+                      sub={overdueAmt > 0
+                        ? <span className="text-orange-400">{overdueInvs.length} overdue · {fE(overdueAmt)}</span>
+                        : 'no overdue invoices'}
+                      onClick={() => { setTab('sales'); }}
+                      badge={overdueAmt > 0 ? <span className="w-1.5 h-1.5 rounded-full bg-orange-400" style={{ boxShadow: '0 0 6px #fb923c' }} /> : null}
+                    />
+
+                    {/* TILE 4 — PENDING CHECKS */}
+                    <Tile
+                      label="CHECKS PENDING"
+                      value={fE(pendCkAmt)}
+                      valueColor={overdueCk.length > 0 ? '#f87171' : '#fafafa'}
+                      sub={overdueCk.length > 0
+                        ? <span className="text-red-400">{overdueCk.length} overdue · next 7d {fE(next7CkAmt)}</span>
+                        : <span>next 7d {fE(next7CkAmt)} ({next7Ck.length})</span>}
+                      onClick={() => { setTab('checks'); }}
+                      badge={overdueCk.length > 0 ? <span className="w-1.5 h-1.5 rounded-full bg-red-500" style={{ boxShadow: '0 0 6px #ef4444' }} /> : null}
+                    />
+
+                    {/* TILE 5 — TICKETS */}
+                    <Tile
+                      label="OPEN TICKETS"
+                      value={openT.length}
+                      unit={openT.length === 1 ? 'ticket' : 'tickets'}
+                      valueColor="#fafafa"
+                      sub={myT.length > 0
+                        ? <span><span className="text-sky-400">{myT.length} mine</span>{overdueT.length > 0 ? <span className="text-red-400"> · {overdueT.length} overdue</span> : null}</span>
+                        : 'none assigned to me'}
+                      onClick={() => { setTab('tickets'); }}
+                      badge={overdueT.length > 0 ? <span className="w-1.5 h-1.5 rounded-full bg-red-500" style={{ boxShadow: '0 0 6px #ef4444' }} /> : (myT.length > 0 ? <span className="w-1.5 h-1.5 rounded-full bg-sky-400" style={{ boxShadow: '0 0 6px #38bdf8' }} /> : null)}
+                    />
+
+                    {/* TILE 6 — SYSTEM STATUS */}
+                    <Tile
+                      label="SYSTEM"
+                      value={teamUsers.length}
+                      unit={teamUsers.length === 1 ? 'user' : 'users'}
+                      valueColor="#fafafa"
+                      sub={<span className="font-mono" style={{ fontFamily: '"JetBrains Mono", monospace' }}>{invoices.length} INV · {treasury.length} TXN</span>}
+                      onClick={() => { setTab('admin'); }}
+                      badge={<span className="w-1.5 h-1.5 rounded-full bg-emerald-400" style={{ boxShadow: '0 0 6px #34d399' }} />}
+                    />
+                  </div>
+                </div>
+              );
+            })()}
 
             {/* ===== PRIORITY: UNACKNOWLEDGED ANNOUNCEMENTS FIRST ===== */}
             {(() => {
@@ -5621,7 +9929,7 @@ export default function App() {
                           </div>
                           {a.body && <div style={{ fontSize: '1rem', marginTop: '0.5rem', lineHeight: 1.6, color: '#1e293b', whiteSpace: 'pre-wrap' }}>{a.body}</div>}
                           <div style={{ fontSize: '0.75rem', marginTop: '0.5rem', color: '#94a3b8' }}>
-                            From: {poster ? poster.name : 'Admin'} • {new Date(a.created_at).toLocaleDateString()} {new Date(a.created_at).toLocaleTimeString([], {hour:'2-digit',minute:'2-digit'})}
+                            From: {poster ? poster.name : 'Admin'} • {fmtET(a.created_at, 'shortdate')} {fmtET(a.created_at, 'time', { tag: false })}
                             {isTargeted && <span style={{ color: '#7c3aed', fontWeight: 700, marginLeft: 8 }}>📩 Sent to you directly</span>}
                           </div>
                           <button onClick={async () => {
@@ -5643,7 +9951,7 @@ export default function App() {
             {/* ===== SMART WELCOME BRIEFING ===== */}
             {!welcomeDismissed && userProfile && (isSuperAdmin || modulePerms?.['Welcome Briefing']) && (() => {
               const myId = userProfile.id;
-              const todayStr = new Date().toISOString().substring(0, 10);
+              const todayStr = todayET();
               const hour = new Date().getHours();
               const greeting = hour < 12 ? 'Good morning' : hour < 17 ? 'Good afternoon' : 'Good evening';
               const firstName = (userProfile.name || '').split(' ')[0];
@@ -5658,12 +9966,28 @@ export default function App() {
               const prevLogins = (lastLoginInfo || []).filter(s => s.date !== todayStr);
               const lastDate = prevLogins.length > 0 ? prevLogins[0].date : null;
               const daysSinceLast = lastDate ? Math.floor((new Date(todayStr) - new Date(lastDate)) / 86400000) : null;
+              // v55.83-A.6.13 (Max May 14 2026) — STRICT streak: only consecutive
+              // days count. Old logic allowed up to 2-day gap which produced
+              // "3-day streak" even when user had logged in May 14, May 12,
+              // May 10 — gaps that shouldn't count. A streak should mean
+              // "today AND every day before today until a gap."
               const loginStreak = (() => {
-                let streak = 1;
                 const dates = (lastLoginInfo || []).map(s => s.date).filter((v, i, a) => a.indexOf(v) === i).sort().reverse();
-                for (let i = 1; i < dates.length; i++) {
-                  const diff = Math.floor((new Date(dates[i-1]) - new Date(dates[i])) / 86400000);
-                  if (diff <= 2) streak++; else break;
+                if (dates.length === 0) return 0;
+                // Walk backwards from today requiring strict +1 day progression.
+                let streak = 0;
+                let cursor = todayStr;
+                for (let i = 0; i < dates.length; i++) {
+                  if (dates[i] === cursor) {
+                    streak++;
+                    const prev = new Date(cursor);
+                    prev.setDate(prev.getDate() - 1);
+                    cursor = prev.toISOString().substring(0, 10);
+                  } else if (dates[i] < cursor) {
+                    // Gap detected — streak ends.
+                    break;
+                  }
+                  // If dates[i] > cursor (future date), skip — shouldn't happen but defensive.
                 }
                 return streak;
               })();
@@ -5671,6 +9995,11 @@ export default function App() {
               // Ticket analysis (only if permitted)
               const myTickets = hasTickets ? dashTickets.filter(t => t.assigned_to === myId && t.status !== 'Closed') : [];
               const overdueTickets = myTickets.filter(t => t.due_date && t.due_date < todayStr);
+              // v55.82-D — Critical = "must be done within hours" (Max May 10 2026).
+              // Surfaced as its own briefing line ahead of high-priority since the
+              // SLA is hours not days. Tracks separately so we can call it out
+              // even when there are no overdue items yet.
+              const criticalPriority = myTickets.filter(t => t.priority === 'critical');
               const highPriority = myTickets.filter(t => t.priority === 'high');
               const newTickets = myTickets.filter(t => t.status === 'New');
 
@@ -5697,9 +10026,15 @@ export default function App() {
               const messages = [];
 
               // Login commentary
+              // v55.83-A.6.13 (Max May 14 2026) — guard against contradiction.
+              // Old logic could show BOTH "3-day streak" header AND "haven't
+              // logged in for 6 days" red banner — impossible to be true at
+              // the same time. If user logged in today (loginStreak >= 1),
+              // the "haven't logged in for N days" message is suppressed.
+              const loggedInToday = (lastLoginInfo || []).some(s => s.date === todayStr);
               if (daysSinceLast === null) {
                 messages.push({ icon: '👋', text: 'Welcome to NextTrade Hub! This is your first time here.', type: 'info' });
-              } else if (daysSinceLast === 0 || daysSinceLast === 1) {
+              } else if (loggedInToday || daysSinceLast === 0 || daysSinceLast === 1) {
                 if (loginStreak >= 5) messages.push({ icon: '🔥', text: loginStreak + '-day streak! You\'re on fire. Keep it up.', type: 'success' });
               } else if (daysSinceLast === 2) {
                 messages.push({ icon: '👀', text: 'You missed yesterday. Things may have piled up — let\'s catch up.', type: 'warning' });
@@ -5708,10 +10043,16 @@ export default function App() {
               }
 
               // Overdue tickets (only if permitted)
-              if (hasTickets && overdueTickets.length > 0) {
-                messages.push({ icon: '🚨', text: overdueTickets.length + ' ticket' + (overdueTickets.length > 1 ? 's are' : ' is') + ' OVERDUE. These need to be resolved immediately — clients are waiting.', type: 'error', items: overdueTickets.map(t => t.ticket_number + ' — ' + t.title) });
+              // v55.82-D — Critical priority surfaces FIRST (above overdue) since
+              // the SLA is "within hours" — even if not yet overdue, it needs
+              // immediate attention.
+              if (hasTickets && criticalPriority.length > 0) {
+                messages.push({ icon: '🚨', text: criticalPriority.length + ' CRITICAL ticket' + (criticalPriority.length > 1 ? 's' : '') + ' — must be handled within hours. Drop everything and resolve now.', type: 'error', items: criticalPriority.map(t => ({ id: t.id, label: t.ticket_number + ' — ' + t.title })) });
               }
-              if (hasTickets && highPriority.length > 0 && overdueTickets.length === 0) {
+              if (hasTickets && overdueTickets.length > 0) {
+                messages.push({ icon: '🚨', text: overdueTickets.length + ' ticket' + (overdueTickets.length > 1 ? 's are' : ' is') + ' OVERDUE. These need to be resolved immediately — clients are waiting.', type: 'error', items: overdueTickets.map(t => ({ id: t.id, label: t.ticket_number + ' — ' + t.title })) });
+              }
+              if (hasTickets && highPriority.length > 0 && overdueTickets.length === 0 && criticalPriority.length === 0) {
                 messages.push({ icon: '🔴', text: highPriority.length + ' high-priority ticket' + (highPriority.length > 1 ? 's' : '') + ' in your queue. Handle these before anything else.', type: 'warning' });
               }
               if (hasTickets && newTickets.length > 0) {
@@ -5759,7 +10100,7 @@ export default function App() {
                     <div>
                       <div style={{ fontSize: 20, fontWeight: 900, color: '#e2e8f0' }}>{greeting}, {firstName} 👋</div>
                       <div style={{ fontSize: 11, color: '#64748b', marginTop: 2 }}>
-                        {new Date().toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric', year: 'numeric' })}
+                        {fmtET(new Date(), 'longdate', { tag: false })}
                         {loginStreak >= 3 && <span style={{ marginLeft: 8, color: '#f59e0b', fontWeight: 700 }}>🔥 {loginStreak}-day streak</span>}
                       </div>
                     </div>
@@ -5776,9 +10117,44 @@ export default function App() {
                         </div>
                         {m.items && (
                           <div style={{ marginTop: 6, marginLeft: 28 }}>
-                            {m.items.slice(0, 5).map((item, j) => (
-                              <div key={j} style={{ fontSize: 11, color: typeColors[m.type], fontWeight: 600, padding: '2px 0' }}>• {item}</div>
-                            ))}
+                            {m.items.slice(0, 5).map((item, j) => {
+                              // v55.83-A.6.13 — items can now be either strings
+                              // (legacy) or { id, label } objects. Object items
+                              // are clickable and open the ticket modal directly,
+                              // remembering the current tab so closing returns here.
+                              if (item && typeof item === 'object' && item.id) {
+                                return (
+                                  <button
+                                    key={j}
+                                    type="button"
+                                    onClick={() => {
+                                      setReturnToTabAfterTicket(tab);
+                                      setOpenTicketId(item.id);
+                                      setTab('tickets');
+                                    }}
+                                    style={{
+                                      display: 'block',
+                                      background: 'transparent',
+                                      border: 'none',
+                                      padding: '2px 0',
+                                      fontSize: 11,
+                                      color: typeColors[m.type],
+                                      fontWeight: 600,
+                                      textAlign: 'left',
+                                      cursor: 'pointer',
+                                      textDecoration: 'underline',
+                                      textDecorationStyle: 'dotted',
+                                      textUnderlineOffset: '2px',
+                                    }}
+                                    title="Open this ticket / افتح التذكرة">
+                                    • {item.label}
+                                  </button>
+                                );
+                              }
+                              return (
+                                <div key={j} style={{ fontSize: 11, color: typeColors[m.type], fontWeight: 600, padding: '2px 0' }}>• {item}</div>
+                              );
+                            })}
                             {m.items.length > 5 && <div style={{ fontSize: 10, color: '#64748b' }}>+ {m.items.length - 5} more</div>}
                           </div>
                         )}
@@ -5796,39 +10172,12 @@ export default function App() {
               </button>
             )}
 
-            {/* ===== AI ASSISTANT (compact — click to expand) =====
-                H2 (Apr 20): wrapper has max-md:order-last so Nadia visually sinks
-                to the bottom on viewports <768px. Desktop (md+) keeps natural order.
-                Single instance — no double mount, sessionMessages/hasGreeted preserved.
-                S17.8 (Apr 23): Reverted to original props only — no context
-                props, no muted prop. This is Nadia's ORIGINAL dashboard behavior,
-                unchanged from before any of the recent tab/overlay work. */}
-            <div className="max-md:order-last">
-            {!greeterDismissed && greeterSettings.enabled ? (
-              <div className="mb-4">
-                <SafeSection label="Nadia">
-                  <AIGreeter
-                    user={user} userProfile={userProfile} users={teamUsers}
-                    tickets={dashTickets} invoices={invoices} treasury={treasury}
-                    checks={pendingChecks} loginHistory={lastLoginInfo} loginHistoryLoaded={loginHistoryLoaded}
-                    lang={lang} personality={greeterSettings.personality}
-                    greeterLang={greeterSettings.language}
-                    enabled={greeterSettings.enabled}
-                    hasGreeted={greeterHasGreeted} onGreeted={handleGreeted}
-                    sessionMessages={greeterMessages} onMessagesUpdate={setGreeterMessages}
-                    onToggle={(on) => { if (!on) setGreeterDismissed(true); }}
-                    toast={toast}
-                  />
-                </SafeSection>
-              </div>
-            ) : greeterSettings.enabled ? (
-              <button onClick={() => setGreeterDismissed(false)}
-                className="mb-4 w-full px-4 py-2.5 rounded-xl text-xs font-semibold text-indigo-300 border border-indigo-500/20 hover:bg-indigo-500/10 transition flex items-center gap-2"
-                style={{ background: 'rgba(99,102,241,0.05)' }}>
-                🤖 <span>Open AI Assistant</span> <span className="ml-auto text-[10px] text-indigo-400/60">Nadia</span>
-              </button>
-            ) : null}
-            </div>
+            {/* v55.75 — AIGreeter NO LONGER mounts here (was the standalone
+                "Nadia chat" surface separate from the avatars). Per Max's
+                Build A spec: the chat must live INSIDE the AssistantsBar
+                directly under the avatars. AIGreeter is now constructed
+                just before PersonalDashboard and passed in as a chatSurface
+                slot — search for "v55.75 chatSurface" in this file. */}
 
                 </>)}{/* end !hasUnacked gate */}
               </>);
@@ -5837,7 +10186,7 @@ export default function App() {
             {/* ===== TODAY'S EVENTS + SCORECARD ===== */}
             {(() => {
               const myId = userProfile?.id;
-              const todayStr = new Date().toISOString().substring(0, 10);
+              const todayStr = todayET();
               const myTicketsCount = dashTickets.filter(t => t.assigned_to === myId && t.status !== 'Closed').length;
               const assignedByMe = dashTickets.filter(t => t.created_by === myId && t.assigned_to !== myId && t.status !== 'Closed').length;
               const teamTicketsCount = dashTickets.filter(t => t.status !== 'Closed' && t.assigned_to !== myId && t.created_by !== myId).length;
@@ -5890,9 +10239,12 @@ export default function App() {
                     const openTickets = dashTickets.filter(t => t.status !== 'Closed' && t.status !== 'Resolved').length;
                     const overdueTickets = dashTickets.filter(t => t.status !== 'Closed' && t.status !== 'Resolved' && t.due_date && t.due_date < todayStr).length;
                     const teamTickets = dashTickets.filter(t => t.status !== 'Closed' && t.assigned_to !== myId && t.created_by !== myId).length;
+                    // v55.83-A.6.22 (Max May 14 2026) — REMOVED "Overdue Tickets" stat card.
+                    // The new DashboardPrioritySections cluster above already shows overdue
+                    // count + the actual overdue ticket list. Keeping a duplicate stat tile
+                    // would re-create the visual clutter Max asked to clean up.
                     const cards = [
                       { label: 'Open Tickets', value: openTickets, color: '#60a5fa', icon: '🎫', click: () => setTab('tickets') },
-                      { label: 'Overdue Tickets', value: overdueTickets, color: '#ef4444', icon: '⚠️', click: () => setTab('tickets') },
                       { label: 'Team Tickets', value: teamTickets, color: '#38bdf8', icon: '👥', click: () => setTab('tickets') },
                       { label: "Today's Events", value: todayEvents.length, color: '#34d399', icon: '📅', click: () => setTab('calendar') },
                       { label: 'Follow-ups', value: myFollowUps.length, color: '#fbbf24', icon: '🔔', click: () => setTab('crm') },
@@ -5914,7 +10266,7 @@ export default function App() {
 
                   {/* ── CHECKS CASH FLOW — treasury access only ── */}
                   {hasTreasuryAccess && pendingChecks.length > 0 && (() => {
-                    const todayD = new Date().toISOString().substring(0, 10);
+                    const todayD = todayET();
                     const tmrwD = new Date(Date.now() + 86400000).toISOString().substring(0, 10);
                     const thisMonthD = todayD.substring(0, 7);
                     const pendingTotal = pendingChecks.reduce((a, c) => a + Number(c.amount || 0), 0);
@@ -5987,7 +10339,7 @@ export default function App() {
 
             {/* ===== TEAM REMINDERS ===== */}
             {(() => {
-              const todayStr = new Date().toISOString().substring(0, 10);
+              const todayStr = todayET();
               const myReminders = reminders.filter(r => {
                 const isForMe = !r.target_users || r.target_users === 'all' || (r.target_users || '').includes(userProfile?.id);
                 return isForMe;
@@ -6009,7 +10361,13 @@ export default function App() {
                         <div key={r.id} className="rounded-xl p-4" style={bgStyle}>
                           <div className="flex justify-between items-start">
                             <div className="flex-1">
-                              <div style={{ fontSize: '15px', lineHeight: '1.4', fontWeight: 900, color: '#ffffff' }}>
+                              {/* v55.72 — whiteSpace: pre-wrap preserves the line breaks
+                                  + blank lines + bullet markers the sender typed. Was a single
+                                  flat div which collapsed everything into one running line.
+                                  Reported by Max May 7 2026: "I should be able to format
+                                  it the way I submit it. I don't want one running message
+                                  which is hard to read if it's a long message." */}
+                              <div style={{ fontSize: '15px', lineHeight: '1.5', fontWeight: 900, color: '#ffffff', whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>
                                 📢 {r.message || r.title}
                               </div>
                               <div className="flex gap-3 mt-2" style={{ fontSize: '10px', color: 'rgba(255,255,255,0.7)' }}>
@@ -6037,28 +10395,27 @@ export default function App() {
                   )}
                   
                   {/* Admin/permitted create + archive link */}
-                  <div className="flex justify-between items-center mb-2">
-                    {(isAdmin || modulePerms?.['Post Reminders']) && (
-                      <button onClick={() => setShowReminderForm(!showReminderForm)}
-                        className="px-3 py-1.5 bg-amber-500 text-white rounded-lg text-xs font-bold hover:bg-amber-600">
-                        📢 {showReminderForm ? 'Close' : 'Post Reminder'}
-                      </button>
-                    )}
-                    {archivedReminders.length > 0 && (
-                      <button onClick={() => setShowReminderArchive(!showReminderArchive)}
-                        className="text-[10px] text-slate-400 hover:text-blue-500 hover:underline">
-                        📋 {showReminderArchive ? 'Hide' : 'View'} past reminders ({archivedReminders.length})
-                      </button>
-                    )}
-                  </div>
+                  {/* v55.83-A.6.27.9 — duplicate button + archive link
+                      removed. The compact "Post Reminder" pill above
+                      DashboardPrioritySections + the archive link below it
+                      now drive these. Keeping the form mount below. */}
 
                   {/* Create reminder form */}
+                  {/* v55.83-A.6.27.12 — wrapped in fixed centered modal so
+                      the form is visible regardless of scroll position. */}
                   {showReminderForm && (isAdmin || modulePerms?.['Post Reminders']) && (
-                    <div className="bg-white rounded-xl p-4 border border-amber-200 mb-3">
+                    <div className="fixed inset-0 bg-black/60 z-[300] flex items-start justify-center p-4 overflow-auto"
+                      onClick={() => setShowReminderForm(false)}>
+                    <div className="bg-white rounded-xl p-4 border border-amber-200 mb-3 shadow-2xl w-full max-w-2xl my-8"
+                      onClick={(e) => e.stopPropagation()}>
                       <h4 className="text-sm font-bold mb-2">📢 Post Team Reminder</h4>
+                      {/* v55.72 — bigger textarea + formatting hint so Max knows
+                          that line breaks, blank lines, and bullet/numbered lists
+                          are preserved exactly as typed. */}
                       <textarea value={formData.reminderMsg || ''} onChange={e => setFormData({...formData, reminderMsg: e.target.value})}
-                        placeholder="Type your reminder message..."
-                        rows={3} className="w-full px-3 py-2 rounded-lg border text-sm mb-2" />
+                        placeholder={"Type your reminder message...\n\nFormatting is preserved:\n- bullets become a list\n- so do 1. numbered items\n\nBlank lines become paragraphs."}
+                        rows={6} className="w-full px-3 py-2 rounded-lg border text-sm mb-1 font-sans" style={{ whiteSpace: 'pre-wrap', lineHeight: 1.5 }} />
+                      <div className="text-[10px] text-slate-400 mb-2 italic">✓ Line breaks, paragraphs, and bullet/numbered lists preserved in the email and in-app view</div>
                       <div className="flex gap-2 flex-wrap items-center mb-3">
                         <div>
                           <label className="text-[9px] text-slate-500">Date</label>
@@ -6094,15 +10451,25 @@ export default function App() {
                             created_by: userProfile?.id,
                           }, userProfile?.id);
                           // Send email notification
+                          // v55.72 — was: only sent the subject (truncated to 60 chars).
+                          // Now: pass the FULL message body so recipients see exactly what
+                          // was typed, with line breaks / bullets / paragraphs preserved
+                          // (notify route formats plain text → HTML).
                           try {
                             const targetIds = formData.reminderTarget === 'all'
                               ? (teamUsers || []).map(u => u.id)
                               : [formData.reminderTarget];
+                            const fullBody = formData.reminderMsg.trim();
+                            // Use a SHORT subject (preview line) and the full text as body
+                            const shortSubject = (formData.reminderPriority === 'urgent' ? '🔴 URGENT: ' : '📢 ')
+                              + fullBody.split('\n')[0].substring(0, 80)
+                              + (fullBody.split('\n')[0].length > 80 || fullBody.indexOf('\n') >= 0 ? '…' : '');
                             await fetch('/api/notify', {
                               method: 'POST', headers: { 'Content-Type': 'application/json' },
                               body: JSON.stringify({
                                 type: 'reminder', recipientIds: targetIds,
-                                subject: (formData.reminderPriority === 'urgent' ? '🔴 URGENT: ' : '📢 ') + formData.reminderMsg.trim().substring(0, 60),
+                                subject: shortSubject,
+                                body: fullBody,
                                 triggeredBy: userProfile?.id,
                               })
                             });
@@ -6133,6 +10500,7 @@ export default function App() {
                         📢 Post Reminder
                       </button>
                     </div>
+                    </div>
                   )}
 
                   {/* Archive */}
@@ -6159,28 +10527,34 @@ export default function App() {
             <div className="flex justify-between flex-wrap gap-2 mb-4">
               <h2 className="text-xl font-extrabold">Dashboard / لوحة التحكم</h2>
               {isAdmin && <ModeBar />}
-              {fxRate && (
-                <div className="flex items-center gap-2 px-3 py-1.5 bg-slate-800 rounded-lg border border-slate-700">
-                  <span className="text-[10px] text-slate-400">USD/EGP</span>
-                  <span className="text-sm font-black text-emerald-400">{fxRate.rate.toFixed(2)}</span>
-                  <span className="text-[9px] text-slate-500">💱</span>
-                </div>
-              )}
+              {/* v55.83-A.6.27.9 — FX widget moved to dedicated top row above
+                  the dashboard. Removed from this header. */}
             </div>
 
 
             {/* ===== ANNOUNCEMENTS / URGENT MESSAGES ===== */}
-            {isAdmin && (
-              <button onClick={() => setShowAddAnnouncement(true)}
-                className="px-4 py-2 bg-red-500 text-white rounded-lg text-sm font-bold mb-3 shadow-lg">📢 Send Message to Team / إرسال رسالة للفريق</button>
-            )}
+            {/* v55.83-A.6.27.9 — button removed; the new compact "Send Message"
+                button at the top of the order:2 cluster now drives this form.
+                The form itself stays here so the modal experience is unchanged. */}
+            {/* v55.83-A.6.27.12 (Max May 15 2026) — REGRESSION FIX.
+                Form was an inline block 4000 lines below the trigger button,
+                so clicking "Send Message to Team" at the top of dashboard
+                appeared to do nothing — the form was rendering offscreen.
+                Now wrap in a fixed centered modal overlay. */}
             {showAddAnnouncement && (
-              <div className="bg-red-50 rounded-xl p-5 mb-4 border-2 border-red-400 shadow-lg">
+              <div className="fixed inset-0 bg-black/60 z-[300] flex items-start justify-center p-4 overflow-auto"
+                onClick={() => setShowAddAnnouncement(false)}>
+              <div className="bg-red-50 rounded-xl p-5 mb-4 border-2 border-red-400 shadow-2xl w-full max-w-2xl my-8"
+                onClick={(e) => e.stopPropagation()}>
                 <h4 className="text-lg font-extrabold text-red-800 mb-3">📢 New Message / رسالة جديدة</h4>
                 <input value={formData.annTitle || ''} onChange={e => setFormData({...formData, annTitle: e.target.value})}
                   placeholder="Subject / الموضوع *" className="w-full px-4 py-3 rounded-lg border-2 border-red-200 text-base font-bold mb-3" aria-label="Message subject" />
+                {/* v55.72 — bigger textarea + formatting hint. Line breaks,
+                    blank-line paragraphs, and bullet/numbered lists are preserved
+                    in the email body. */}
                 <textarea value={formData.annBody || ''} onChange={e => setFormData({...formData, annBody: e.target.value})}
-                  placeholder="Message details / تفاصيل الرسالة" rows={4} className="w-full px-4 py-3 rounded-lg border-2 border-red-200 text-sm mb-3" aria-label="Message body" />
+                  placeholder={"Message details / تفاصيل الرسالة\n\nFormatting tips:\n- Use bullets like this\n- Or numbered: 1. 2. 3.\n\nBlank lines become paragraphs."} rows={6} className="w-full px-4 py-3 rounded-lg border-2 border-red-200 text-sm mb-1 font-sans" style={{ whiteSpace: 'pre-wrap', lineHeight: 1.5 }} aria-label="Message body" />
+                <div className="text-[10px] text-red-500 mb-3 italic">✓ Line breaks, paragraphs, and bullet/numbered lists preserved in the email recipients see</div>
                 <div className="grid grid-cols-2 gap-3 mb-3">
                   <div>
                     <label className="text-xs font-bold text-red-800 block mb-1">Priority / الأهمية</label>
@@ -6225,11 +10599,25 @@ export default function App() {
                       if (sendEmail) {
                         try {
                           const recipients = target === 'all' ? teamUsers : teamUsers.filter(u => u.id === target);
+                          // v55.72 — preserve sender's formatting in the email body.
+                          // Was: body.replace(/\n/g,'<br/>') which collapsed blank-line
+                          // paragraph breaks. Now: split on blank lines → wrap each
+                          // chunk in <p>, single newlines inside become <br/>.
+                          const formatBody = (raw) => {
+                            const s = String(raw || '');
+                            if (!s.trim()) return '';
+                            const escapeHtml = (t) => String(t).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+                            const paragraphs = escapeHtml(s).split(/\r?\n\s*\r?\n/);
+                            return paragraphs
+                              .filter(p => p.trim())
+                              .map(p => '<p style="margin:8px 0;line-height:1.6;">' + p.split(/\r?\n/).join('<br/>') + '</p>')
+                              .join('');
+                          };
                           for (const r of recipients) {
                             if (r.email) {
                               await fetch('/api/notify', {
                                 method: 'POST', headers: {'Content-Type':'application/json'},
-                                body: JSON.stringify({ to: r.email, subject: (priority === 'urgent' ? '🚨 URGENT: ' : priority === 'warning' ? '⚠️ ':'') + title, html: '<div style="font-family:sans-serif;padding:20px;'+(priority==='urgent'?'background:#fef2f2;border:3px solid #ef4444;':priority==='warning'?'background:#fffbeb;border:2px solid #f59e0b;':'background:#eff6ff;border:1px solid #3b82f6;')+'border-radius:12px;"><h2 style="margin:0 0 10px;font-size:18px;">'+(priority==='urgent'?'🚨':'⚠️')+' '+title+'</h2>'+(body?'<p style="font-size:14px;color:#333;">'+body.replace(/\n/g,'<br/>')+'</p>':'')+'<hr style="margin:15px 0;border-color:#eee;"/><p style="font-size:11px;color:#999;">From KTC Hub — '+(userProfile?.name||'Admin')+'</p></div>' })
+                                body: JSON.stringify({ to: r.email, subject: (priority === 'urgent' ? '🚨 URGENT: ' : priority === 'warning' ? '⚠️ ':'') + title, html: '<div style="font-family:sans-serif;padding:20px;'+(priority==='urgent'?'background:#fef2f2;border:3px solid #ef4444;':priority==='warning'?'background:#fffbeb;border:2px solid #f59e0b;':'background:#eff6ff;border:1px solid #3b82f6;')+'border-radius:12px;"><h2 style="margin:0 0 10px;font-size:18px;">'+(priority==='urgent'?'🚨':'⚠️')+' '+title+'</h2>'+(body?'<div style="font-size:14px;color:#333;">'+formatBody(body)+'</div>':'')+'<hr style="margin:15px 0;border-color:#eee;"/><p style="font-size:11px;color:#999;">From KTC Hub — '+(userProfile?.name||'Admin')+'</p></div>' })
                               });
                             }
                           }
@@ -6244,6 +10632,7 @@ export default function App() {
                   }} className="px-6 py-3 bg-red-600 text-white rounded-lg text-sm font-extrabold shadow-lg">📢 SEND NOW / أرسل الآن</button>
                   <button onClick={() => { setShowAddAnnouncement(false); setFormData({}); }} className="px-4 py-3 border-2 border-slate-300 rounded-lg text-sm font-bold">Cancel</button>
                 </div>
+              </div>
               </div>
             )}
             {/* Active Announcements */}
@@ -6281,13 +10670,13 @@ export default function App() {
                           </div>
                           {a.body && <div style={{ fontSize: '0.95rem', marginTop: '0.5rem', lineHeight: 1.6, color: '#1e293b', whiteSpace: 'pre-wrap' }}>{a.body}</div>}
                           <div style={{ fontSize: '0.7rem', marginTop: '0.5rem', color: '#94a3b8' }}>
-                            {poster ? poster.name : 'Admin'} • {new Date(a.created_at).toLocaleDateString()} {new Date(a.created_at).toLocaleTimeString([], {hour:'2-digit',minute:'2-digit'})}
+                            {poster ? poster.name : 'Admin'} • {fmtET(a.created_at, 'shortdate')} {fmtET(a.created_at, 'time', { tag: false })}
                             {isTargeted && <span style={{ color: '#7c3aed', fontWeight: 700, marginLeft: 8 }}>📩 Sent to you directly</span>}
                           </div>
                           {/* Acknowledge button */}
                           <div style={{ marginTop: '0.75rem' }}>
                             {myAck ? (
-                              <span style={{ fontSize: '0.75rem', color: '#16a34a', fontWeight: 700, background: '#f0fdf4', padding: '4px 12px', borderRadius: 8, border: '1px solid #bbf7d0' }}>✅ Acknowledged {new Date(myAck.acked_at).toLocaleTimeString([], {hour:'2-digit',minute:'2-digit'})}</span>
+                              <span style={{ fontSize: '0.75rem', color: '#16a34a', fontWeight: 700, background: '#f0fdf4', padding: '4px 12px', borderRadius: 8, border: '1px solid #bbf7d0' }}>✅ Acknowledged {fmtET(myAck.acked_at, 'time', { tag: false })}</span>
                             ) : (
                               <button onClick={async () => {
                                 await dbInsert('announcement_acks', { announcement_id: a.id, user_id: myId, acked_at: new Date().toISOString() }, myId);
@@ -6303,7 +10692,7 @@ export default function App() {
                               {ackedUsers.length > 0 && (
                                 <div style={{ color: '#16a34a' }}>✅ {ackedUsers.map(u => {
                                   const ack = thisAcks.find(ak => ak.user_id === u.id);
-                                  return u.name + (ack ? ' (' + new Date(ack.acked_at).toLocaleString([], {month:'short',day:'numeric',hour:'2-digit',minute:'2-digit'}) + ')' : '');
+                                  return u.name + (ack ? ' (' + fmtET(ack.acked_at, 'datetime') + ')' : '');
                                 }).join(', ')}</div>
                               )}
                               {unackedUsers.length > 0 && (
@@ -6350,7 +10739,14 @@ export default function App() {
                           const icon = a.priority === 'urgent' ? '🚨' : a.priority === 'warning' ? '⚠️' : 'ℹ️';
                           const poster = teamUsers.find(u => u.id === a.posted_by);
                           const thisAcks = announcementAcks.filter(ak => ak.announcement_id === a.id);
-                          const targetUsers2 = a.target_user ? teamUsers.filter(u => u.id === a.target_user) : teamUsers;
+                          // v55.60 — Only count ACTIVE teammates as targets. A deactivated
+                          // user from months ago shouldn't show as "didn't acknowledge"
+                          // forever. Their original acknowledgment (if any) still appears
+                          // in the acked list because the ack row exists in the DB.
+                          const activeTeamUsers = filterActiveUsers(teamUsers);
+                          const targetUsers2 = a.target_user
+                            ? activeTeamUsers.filter(u => u.id === a.target_user)
+                            : activeTeamUsers;
                           const ackedNames = targetUsers2.filter(u => thisAcks.some(ak => ak.user_id === u.id));
                           const unackedNames = targetUsers2.filter(u => !thisAcks.some(ak => ak.user_id === u.id));
                           return (
@@ -6360,16 +10756,31 @@ export default function App() {
                                   <div style={{ fontSize: '0.85rem', fontWeight: 700 }}>{icon} {a.title}</div>
                                   {a.body && <div style={{ fontSize: '0.75rem', color: '#475569', marginTop: 4, whiteSpace: 'pre-wrap' }}>{a.body}</div>}
                                   <div style={{ fontSize: '0.6rem', color: '#94a3b8', marginTop: 4 }}>
-                                    {poster ? poster.name : 'Admin'} • {new Date(a.created_at).toLocaleDateString()}
+                                    {poster ? poster.name : 'Admin'} • {fmtET(a.created_at, 'shortdate')}
                                   </div>
                                   {isAdmin && (
-                                    <div style={{ fontSize: '0.6rem', marginTop: 4 }}>
-                                      {ackedNames.length > 0 && <div style={{ color: '#16a34a' }}>✅ {ackedNames.map(u => {
-                                        const ack = thisAcks.find(ak => ak.user_id === u.id);
-                                        return u.name + (ack ? ' (' + new Date(ack.acked_at).toLocaleString([], {month:'short',day:'numeric',hour:'2-digit',minute:'2-digit'}) + ')' : '');
-                                      }).join(', ')}</div>}
-                                      {unackedNames.length > 0 && <div style={{ color: '#dc2626', fontWeight: 700 }}>⏳ {unackedNames.map(u => u.name).join(', ')}</div>}
-                                      <div style={{ color: '#94a3b8' }}>{ackedNames.length}/{targetUsers2.length} acknowledged</div>
+                                    <div style={{ marginTop: 8, padding: '8px 10px', background: 'rgba(255,255,255,0.6)', borderRadius: 8, border: '1px solid rgba(0,0,0,0.05)' }}>
+                                      {/* v55.60 — Acknowledgment block in archived announcements
+                                          made more prominent. Was a small inline line; now a
+                                          clear pull-out box showing who acked + when, who didn't,
+                                          and a count summary. */}
+                                      <div style={{ fontSize: '0.7rem', fontWeight: 700, color: '#475569', marginBottom: 4 }}>
+                                        Acknowledgments: <span style={{ color: ackedNames.length === targetUsers2.length && targetUsers2.length > 0 ? '#16a34a' : '#94a3b8' }}>{ackedNames.length}/{targetUsers2.length}</span>
+                                        {ackedNames.length === targetUsers2.length && targetUsers2.length > 0 && <span style={{ color: '#16a34a', marginLeft: 8 }}>✅ ALL ACKNOWLEDGED</span>}
+                                      </div>
+                                      {ackedNames.length > 0 && (
+                                        <div style={{ fontSize: '0.65rem', color: '#16a34a', marginBottom: 2 }}>
+                                          <b>✅ Acknowledged by:</b> {ackedNames.map(u => {
+                                            const ack = thisAcks.find(ak => ak.user_id === u.id);
+                                            return u.name + (ack ? ' (' + fmtET(ack.acked_at, 'datetime') + ')' : '');
+                                          }).join(', ')}
+                                        </div>
+                                      )}
+                                      {unackedNames.length > 0 && (
+                                        <div style={{ fontSize: '0.65rem', color: '#dc2626', fontWeight: 700 }}>
+                                          ⏳ <b>Not acknowledged:</b> {unackedNames.map(u => u.name).join(', ')}
+                                        </div>
+                                      )}
                                     </div>
                                   )}
                                 </div>
@@ -6389,322 +10800,16 @@ export default function App() {
             })()}
 
 
-            {/* Section: Tickets */}
-            <div style={{ display: 'flex', alignItems: 'center', gap: 10, margin: '20px 0 12px' }}>
-              <div style={{ width: 3, height: 20, borderRadius: 2, background: '#8b5cf6' }} />
-              <span style={{ fontSize: 12, fontWeight: 800, color: '#94a3b8', letterSpacing: '0.06em' }}>🎫 TICKETS</span>
-              <div style={{ flex: 1, height: 1, background: 'rgba(148,163,184,0.1)' }} />
-            </div>
+            {/* v55.83-A.6.22 (Max May 14 2026) — REMOVED the old "Section: Tickets"
+                cluster (Newly Assigned + Overdue + Recently Updated + All My Open).
+                These were duplicates of the new DashboardPrioritySections rendered
+                way above (order:2 cluster, right after the AI Workforce hero). Max
+                explicitly asked: "Remove or hide the previous sections such as
+                Previous Tickets Assigned, My Tickets, Urgent Tickets, Overdue
+                Tickets. Those old sections are no longer needed because the new
+                dashboard cards are supposed to replace them." The new priority
+                cards are the sole ticket surface on the dashboard now. */}
 
-            {/* ===== TICKETS DASHBOARD ===== */}
-            {dashTickets.length > 0 && (() => {
-              const myId = userProfile?.id;
-              const todayStr = new Date().toISOString().substring(0, 10);
-              const twoDaysAgo = new Date(Date.now() - 48 * 3600000).toISOString();
-              const priColor = (p) => p === 'high' ? '#ef4444' : p === 'low' ? '#10b981' : '#f59e0b';
-              const timeAgo = (d) => { const m = Math.floor((Date.now() - new Date(d).getTime()) / 60000); if (m < 60) return m + 'm'; const h = Math.floor(m/60); if (h < 24) return h + 'h'; return Math.floor(h/24) + 'd'; };
-
-              const myTickets = dashTickets.filter(t => (t.assigned_to === myId || t.created_by === myId) && t.status !== 'Closed');
-              const newlyAssigned = myTickets.filter(t => t.assigned_to === myId && t.created_at >= twoDaysAgo);
-              const myUpdates = recentTicketUpdates.filter(c => c.tickets && (c.tickets.assigned_to === myId || c.tickets.created_by === myId));
-              const overdueTickets = myTickets.filter(t => t.due_date && t.due_date < todayStr);
-
-              // S14 — Dashboard ticket UI redesign for better readability.
-              //
-              // What changed (in plain English):
-              //   1. Each section gets a distinct "chapter feel" — the header
-              //      band has a colored left accent bar + tighter typography.
-              //   2. Ticket cards now have a clear left border in the priority
-              //      color (red/amber/yellow/grey) — your eye jumps to the hot
-              //      ones first.
-              //   3. The ticket title is BIG and bold; the ticket number
-              //      becomes a subtle tag. Before they fought for attention.
-              //   4. Status + due date + assignee now sit in a clean info row
-              //      using small "pills" instead of random inline text.
-              //   5. Overdue days show as "3 days overdue" not a cryptic ⚠ icon.
-              //   6. Space between cards: gap 6px instead of a flat 1px line,
-              //      with the colored left border acting as the divider.
-              //   7. Last-update comment: cleaner, indented, with the commenter
-              //      shown as a small avatar circle instead of purple text.
-              const sectionStyle = { background: 'rgba(17,24,39,0.7)', borderRadius: 14, border: '1px solid rgba(255,255,255,0.08)', marginBottom: 12, overflow: 'hidden' };
-              const sectionHeaderStyle = (color, bgColor) => ({
-                display: 'flex', alignItems: 'center', justifyContent: 'space-between',
-                padding: '12px 16px',
-                borderBottom: '1px solid rgba(255,255,255,0.06)',
-                background: bgColor,
-                borderLeft: '3px solid ' + color,
-              });
-              const sectionLabel = (icon, text, count, color) => (
-                <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-                  <span style={{ fontSize: 15, lineHeight: 1 }}>{icon}</span>
-                  <span style={{ fontSize: 12, fontWeight: 800, color: color, letterSpacing: '0.04em', textTransform: 'uppercase' }}>{text}</span>
-                  <span style={{ fontSize: 10, fontWeight: 800, color: '#fff', background: color, borderRadius: 10, padding: '2px 9px', minWidth: 20, textAlign: 'center', lineHeight: 1.4 }}>{count}</span>
-                </div>
-              );
-
-              // Priority → row-level urgency color
-              // S16: DISTINCT colors for each urgency type. Previously both
-              // "due today" and "medium priority" shared amber, confusing.
-              //   Overdue    → #ef4444 red      (danger)
-              //   Due today  → #f97316 orange   (attention now)
-              //   Urgent/High→ #dc2626 crimson  (critical importance)
-              //   Medium     → #eab308 yellow   (warning)
-              //   Low        → #64748b grey     (normal)
-              const priBorderColor = (p) => {
-                if (p === 'urgent' || p === 'high') return '#dc2626';  // crimson
-                if (p === 'medium') return '#eab308';                  // yellow
-                if (p === 'low') return '#64748b';                     // grey
-                return '#475569';                                      // default
-              };
-
-              // Status pill style — replaces the old inline badge
-              const statusPillStyle = (status) => {
-                const map = {
-                  'New':         { bg: 'rgba(59,130,246,0.12)',  fg: '#60a5fa', border: 'rgba(59,130,246,0.3)' },
-                  'In Progress': { bg: 'rgba(234,179,8,0.12)',   fg: '#fbbf24', border: 'rgba(234,179,8,0.3)' },
-                  'Resolved':    { bg: 'rgba(16,185,129,0.12)',  fg: '#34d399', border: 'rgba(16,185,129,0.3)' },
-                  'Closed':      { bg: 'rgba(100,116,139,0.12)', fg: '#94a3b8', border: 'rgba(100,116,139,0.3)' },
-                };
-                const s = map[status] || { bg: 'rgba(139,92,246,0.12)', fg: '#a78bfa', border: 'rgba(139,92,246,0.3)' };
-                return {
-                  display: 'inline-flex', alignItems: 'center', gap: 4,
-                  padding: '2px 8px', borderRadius: 4,
-                  fontWeight: 700, fontSize: 10,
-                  background: s.bg, color: s.fg,
-                  border: '1px solid ' + s.border,
-                  letterSpacing: '0.02em',
-                };
-              };
-
-              // Infer initials for avatar circles
-              const initialsOf = (name) => {
-                if (!name) return '?';
-                const parts = String(name).trim().split(/\s+/);
-                return (parts[0][0] + (parts[1] ? parts[1][0] : '')).toUpperCase();
-              };
-
-              const TicketCard = ({ t, accent }) => {
-                const lastUpdate = recentTicketUpdates.find(c => c.tickets?.id === t.id);
-                const updaterName = lastUpdate ? ((teamUsers || []).find(u => u.id === lastUpdate.created_by)?.name || 'System') : null;
-                const daysOverdue = t.due_date && t.due_date < todayStr
-                  ? Math.floor((new Date(todayStr).getTime() - new Date(t.due_date).getTime()) / 86400000)
-                  : 0;
-                const dueToday = t.due_date === todayStr;
-                // Overdue = red, Due Today = orange (distinct from amber medium), else priority color
-                const leftBorderColor = daysOverdue > 0 ? '#ef4444' : (dueToday ? '#f97316' : priBorderColor(t.priority));
-
-                return (
-                <div style={{
-                  cursor: 'pointer',
-                  transition: 'background 0.15s',
-                  borderLeft: '4px solid ' + leftBorderColor,
-                  background: 'rgba(255,255,255,0.015)',
-                  borderBottom: '1px solid rgba(255,255,255,0.06)',
-                }}
-                  className="hover:bg-white/[0.05]" onClick={() => { setOpenTicketId(t.id); setTab('tickets'); }}>
-                  <div style={{ padding: '12px 14px 12px 12px' }}>
-                    {/* Title row — title is the star, ticket # is a subtle tag */}
-                    <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 12 }}>
-                      <div style={{ flex: 1, minWidth: 0 }}>
-                        <div style={{
-                          fontSize: 15, fontWeight: 800, color: '#f1f5f9',
-                          lineHeight: 1.35, marginBottom: 8,
-                          overflow: 'hidden', textOverflow: 'ellipsis',
-                          display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical',
-                        }}>
-                          {t.title}
-                        </div>
-                        {/* Info row — status pill, ticket#, assignee, due */}
-                        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, alignItems: 'center' }}>
-                          <span style={statusPillStyle(t.status)}>{t.status}</span>
-                          <span style={{ fontSize: 10, fontWeight: 700, color: '#64748b', fontFamily: 'monospace', letterSpacing: '0.03em' }}>
-                            {t.ticket_number}
-                          </span>
-                          {t.assigned_to && (
-                            <span style={{ fontSize: 11, color: '#94a3b8', display: 'inline-flex', alignItems: 'center', gap: 4 }}>
-                              <span style={{ fontSize: 9, color: '#64748b' }}>→</span>
-                              {getUserName(t.assigned_to)}
-                            </span>
-                          )}
-                          {daysOverdue > 0 && (
-                            <span style={{
-                              fontSize: 10, fontWeight: 800,
-                              color: '#fca5a5', background: 'rgba(239,68,68,0.12)',
-                              border: '1px solid rgba(239,68,68,0.3)',
-                              padding: '2px 8px', borderRadius: 4,
-                              letterSpacing: '0.02em',
-                            }}>
-                              {daysOverdue === 1 ? '1 DAY OVERDUE' : daysOverdue + ' DAYS OVERDUE'}
-                            </span>
-                          )}
-                          {dueToday && (
-                            <span style={{
-                              fontSize: 10, fontWeight: 800,
-                              color: '#fdba74', background: 'rgba(249,115,22,0.15)',
-                              border: '1px solid rgba(249,115,22,0.4)',
-                              padding: '2px 8px', borderRadius: 4,
-                            }}>
-                              DUE TODAY
-                            </span>
-                          )}
-                          {t.due_date && t.due_date > todayStr && (
-                            <span style={{ fontSize: 11, color: '#64748b' }}>
-                              Due {t.due_date}
-                            </span>
-                          )}
-                        </div>
-                      </div>
-                      <span style={{ fontSize: 10, color: '#475569', flexShrink: 0, whiteSpace: 'nowrap' }}>
-                        {timeAgo(t.created_at)}
-                      </span>
-                    </div>
-
-                    {/* Last update block — cleaner presentation with avatar */}
-                    {lastUpdate && (
-                      <div style={{
-                        marginTop: 10,
-                        padding: '8px 10px',
-                        background: 'rgba(139,92,246,0.05)',
-                        borderRadius: 6,
-                        borderLeft: '2px solid rgba(167,139,250,0.5)',
-                        display: 'flex', gap: 8, alignItems: 'flex-start',
-                      }}>
-                        <div style={{
-                          width: 22, height: 22, borderRadius: '50%',
-                          background: 'rgba(167,139,250,0.2)', color: '#c4b5fd',
-                          display: 'flex', alignItems: 'center', justifyContent: 'center',
-                          fontSize: 9, fontWeight: 800, flexShrink: 0,
-                        }}>
-                          {initialsOf(updaterName)}
-                        </div>
-                        <div style={{ flex: 1, minWidth: 0 }}>
-                          <div style={{ fontSize: 11, color: '#cbd5e1', marginBottom: 2 }}>
-                            <span style={{ fontWeight: 700, color: '#a78bfa' }}>{updaterName}</span>
-                            <span style={{ color: '#64748b', marginLeft: 6 }}>{timeAgo(lastUpdate.created_at)}</span>
-                          </div>
-                          <div style={{ fontSize: 12, color: '#e2e8f0', lineHeight: 1.4 }}>
-                            {(lastUpdate.comment_text || '').substring(0, 120)}{(lastUpdate.comment_text || '').length > 120 ? '…' : ''}
-                          </div>
-                        </div>
-                      </div>
-                    )}
-                    {!lastUpdate && t.updated_by && t.updated_at && t.updated_at !== t.created_at && (
-                      <div style={{ fontSize: 11, color: '#64748b', marginTop: 8, display: 'flex', alignItems: 'center', gap: 6 }}>
-                        <span>Last touched by</span>
-                        <span style={{ fontWeight: 600, color: '#94a3b8' }}>{getUserName(t.updated_by) || 'Unknown'}</span>
-                        <span>·</span>
-                        <span>{timeAgo(t.updated_at)}</span>
-                      </div>
-                    )}
-                  </div>
-                </div>
-                );
-              };
-
-              const UpdateCard = ({ c }) => {
-                const ticket = c.tickets;
-                if (!ticket) return null;
-                const commenter = (teamUsers || []).find(u => u.id === c.created_by);
-                return (
-                  <div style={{
-                    cursor: 'pointer',
-                    transition: 'background 0.15s',
-                    borderLeft: '3px solid #a78bfa',
-                    background: 'rgba(255,255,255,0.01)',
-                    borderBottom: '1px solid rgba(255,255,255,0.04)',
-                  }}
-                    className="hover:bg-white/[0.04]" onClick={() => { setOpenTicketId(ticket.id); setTab('tickets'); }}>
-                    <div style={{ padding: '12px 14px 12px 12px', display: 'flex', gap: 10, alignItems: 'flex-start' }}>
-                      <div style={{
-                        width: 28, height: 28, borderRadius: '50%',
-                        background: 'rgba(139,92,246,0.15)',
-                        display: 'flex', alignItems: 'center', justifyContent: 'center',
-                        fontSize: 12, flexShrink: 0,
-                      }}>
-                        {c.is_system ? '🤖' : initialsOf(commenter?.name)}
-                      </div>
-                      <div style={{ flex: 1, minWidth: 0 }}>
-                        <div style={{
-                          fontSize: 13, fontWeight: 700, color: '#f1f5f9',
-                          marginBottom: 4, lineHeight: 1.3,
-                          overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
-                        }}>
-                          {ticket.title}
-                        </div>
-                        <div style={{ display: 'flex', gap: 8, alignItems: 'center', fontSize: 11, color: '#64748b', marginBottom: 6 }}>
-                          <span style={{ fontWeight: 700, color: '#a78bfa' }}>{commenter?.name || 'System'}</span>
-                          <span>·</span>
-                          <span>{timeAgo(c.created_at)}</span>
-                          <span>·</span>
-                          <span style={{ fontFamily: 'monospace', letterSpacing: '0.03em' }}>{ticket.ticket_number}</span>
-                        </div>
-                        <div style={{ fontSize: 12, color: '#cbd5e1', lineHeight: 1.5 }}>
-                          {(c.comment_text || '').substring(0, 150)}{(c.comment_text || '').length > 150 ? '…' : ''}
-                        </div>
-                      </div>
-                    </div>
-                  </div>
-                );
-              };
-
-              const recentlyUpdated = myTickets.filter(t => t.updated_at && t.updated_at >= twoDaysAgo).sort((a,b) => (b.updated_at||'').localeCompare(a.updated_at||''));
-
-              const toggleSection = (key) => setHideSections(prev => ({...prev, [key]: !prev[key]}));
-              const isExpanded = (key) => hideSections[key] === true;
-
-              const CollapsibleSection = ({ id, icon, title, count, color, bgColor, borderColor, items, renderItem, defaultShow }) => {
-                const show = defaultShow || 5;
-                const expanded = isExpanded('dash_' + id);
-                const visible = expanded ? items : items.slice(0, show);
-                if (items.length === 0) return null;
-                return (
-                  <div style={{ ...sectionStyle, ...(borderColor ? { border: '1px solid ' + borderColor } : {}) }}>
-                    <div style={sectionHeaderStyle(color, bgColor)} className="cursor-pointer" onClick={() => toggleSection('dash_' + id)}>
-                      {sectionLabel(icon, title, count, color)}
-                      <span style={{ fontSize: 10, color: '#64748b' }}>{expanded ? '▲ Collapse' : '▼ Show All'}</span>
-                    </div>
-                    {visible.map(renderItem)}
-                    {!expanded && items.length > show && (
-                      <div style={{ padding: '8px 14px', fontSize: 11, color: color, fontWeight: 700, textAlign: 'center', cursor: 'pointer', background: 'rgba(255,255,255,0.02)' }}
-                        onClick={() => toggleSection('dash_' + id)}>
-                        Show all {items.length} (+{items.length - show} more) ▼
-                      </div>
-                    )}
-                  </div>
-                );
-              };
-
-              return (
-                <div style={{ marginBottom: 16 }}>
-                  {/* ── 1. NEWLY ASSIGNED ── */}
-                  <CollapsibleSection id="newAssign" icon="✨" title="Newly Assigned to You" count={newlyAssigned.length}
-                    color="#60a5fa" bgColor="rgba(59,130,246,0.08)" items={newlyAssigned}
-                    renderItem={(t) => <TicketCard key={t.id} t={t} accent="#60a5fa" />} />
-
-                  {/* ── 2. OVERDUE TICKETS ── */}
-                  <CollapsibleSection id="overdue" icon="🚨" title="Overdue Tickets" count={overdueTickets.length}
-                    color="#f87171" bgColor="rgba(239,68,68,0.1)" borderColor="rgba(239,68,68,0.3)" items={overdueTickets}
-                    renderItem={(t) => <TicketCard key={t.id} t={t} accent="#f87171" />} />
-
-                  {/* ── 3. RECENTLY UPDATED ── */}
-                  {myUpdates.length > 0 && (
-                    <CollapsibleSection id="recentUpd" icon="💬" title="Recently Updated" count={myUpdates.length}
-                      color="#a78bfa" bgColor="rgba(139,92,246,0.08)" items={myUpdates}
-                      renderItem={(c) => <UpdateCard key={c.id} c={c} />} />
-                  )}
-                  {recentlyUpdated.length > 0 && myUpdates.length === 0 && (
-                    <CollapsibleSection id="recentUpd2" icon="🔄" title="Recently Updated Tickets" count={recentlyUpdated.length}
-                      color="#a78bfa" bgColor="rgba(139,92,246,0.08)" items={recentlyUpdated}
-                      renderItem={(t) => <TicketCard key={t.id} t={t} accent="#a78bfa" />} />
-                  )}
-
-                  {/* ── 4. ALL MY OPEN TICKETS ── */}
-                  <CollapsibleSection id="allOpen" icon="📋" title="All My Open Tickets" count={myTickets.length}
-                    color="#94a3b8" bgColor="rgba(255,255,255,0.03)" items={myTickets}
-                    renderItem={(t) => <TicketCard key={t.id} t={t} accent="#94a3b8" />} />
-                </div>
-              );
-            })()}
 
 
             {/* Section: Activity */}
@@ -6714,59 +10819,8 @@ export default function App() {
               <div style={{ flex: 1, height: 1, background: 'rgba(148,163,184,0.1)' }} />
             </div>
 
-            {/* ===== TEAM ACTIVITY FEED ===== */}
-            {activityFeed.length > 0 && (() => {
-              const expanded = hideSections.dash_teamFeed;
-              const visible = expanded ? activityFeed.slice(0, 100) : activityFeed.slice(0, 5);
-              return (
-              <div style={{ background: 'rgba(17,24,39,0.7)', borderRadius: 14, border: '1px solid rgba(255,255,255,0.08)', marginBottom: 16, overflow: 'hidden' }}>
-                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '10px 14px', borderBottom: '1px solid rgba(255,255,255,0.06)', background: 'rgba(52,211,153,0.06)', cursor: 'pointer' }}
-                  onClick={() => setHideSections(prev => ({...prev, dash_teamFeed: !prev.dash_teamFeed}))}>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                    <span style={{ width: 8, height: 8, borderRadius: '50%', background: '#34d399', boxShadow: '0 0 8px rgba(52,211,153,0.5)', animation: 'pulse 2s infinite' }} />
-                    <span style={{ fontSize: 12, fontWeight: 800, color: '#34d399', letterSpacing: '0.03em' }}>Team Activity</span>
-                    <span style={{ fontSize: 10, fontWeight: 800, color: '#fff', background: '#34d399', borderRadius: 10, padding: '1px 8px' }}>{activityFeed.length}</span>
-                  </div>
-                  <span style={{ fontSize: 10, color: '#64748b' }}>{expanded ? '▲ Collapse' : '▼ Show All'}</span>
-                </div>
-                {visible.map((a, i) => {
-                  const who = (teamUsers || []).find(u => u.id === a.user_id);
-                  const name = who?.name || 'System';
-                  const initials = name.split(' ').map(w => w[0]).join('').toUpperCase().substring(0, 2);
-                  const colors = ['bg-blue-500','bg-purple-500','bg-emerald-500','bg-amber-500','bg-rose-500','bg-cyan-500'];
-                  const color = colors[(name.charCodeAt(0) || 0) % colors.length];
-                  const timeAgo = (() => {
-                    const diff = Date.now() - new Date(a.created_at).getTime();
-                    const mins = Math.floor(diff / 60000);
-                    if (mins < 1) return 'just now';
-                    if (mins < 60) return mins + 'm ago';
-                    const hrs = Math.floor(mins / 60);
-                    if (hrs < 24) return hrs + 'h ago';
-                    return Math.floor(hrs / 24) + 'd ago';
-                  })();
-                  const icon = a.log_category === 'finance' ? '💰' : a.log_category === 'crm' ? '🤝' : a.log_category === 'ticket' ? '🎫' : a.log_category === 'shipping' ? '🚢' : a.log_category === 'admin' ? '⚙️' : a.log_category === 'login' ? '🟢' : '📋';
-                  return (
-                    <div key={a.id || i} style={{ display: 'flex', alignItems: 'flex-start', gap: 10, padding: '8px 14px', borderBottom: '1px solid rgba(255,255,255,0.04)' }}>
-                      <div className={`w-7 h-7 rounded-full ${color} text-white text-[10px] font-bold flex items-center justify-center flex-shrink-0 mt-0.5`}>{initials}</div>
-                      <div style={{ flex: 1, minWidth: 0 }}>
-                        <div style={{ fontSize: 12 }}>
-                          <span style={{ fontWeight: 700, color: '#e2e8f0' }}>{name}</span>
-                          <span style={{ color: '#94a3b8', marginLeft: 6 }}>{a.entry_text}</span>
-                        </div>
-                        <div style={{ fontSize: 10, color: '#475569', marginTop: 2 }}>{icon} {a.log_category || 'general'} · {timeAgo}</div>
-                      </div>
-                    </div>
-                  );
-                })}
-                {!expanded && activityFeed.length > 5 && (
-                  <div style={{ padding: '8px 14px', fontSize: 11, color: '#34d399', fontWeight: 700, textAlign: 'center', cursor: 'pointer', background: 'rgba(255,255,255,0.02)' }}
-                    onClick={() => setHideSections(prev => ({...prev, dash_teamFeed: true}))}>
-                    Show all ({Math.min(activityFeed.length, 100)}) ▼
-                  </div>
-                )}
-              </div>
-              );
-            })()}
+            {/* v55.83-A.6.27.9 — Team Activity moved to AFTER Monthly Sales
+                per Max's reorder request May 15 2026. See new mount below. */}
 
             {/* ===== PENDING CHECKS ===== */}
             {pendingChecks && pendingChecks.length > 0 && (isSuperAdmin || modulePerms['Treasury']) && (() => {
@@ -6807,6 +10861,16 @@ export default function App() {
 
 
 
+            {/* v55.83-A.6.27.11 (Max May 15 2026) — Per Max: "no one except
+                the super admin and those with treasury access permissioning
+                can see any financial data on the dashboard from the banks
+                or transactions or sales or otherwise (except for monthly
+                sales)". Wrap the entire Financial Overview block in a single
+                top-level gate so Sales-only users no longer see ANY of it
+                (invoices, cash register, etc.). Monthly Sales is rendered
+                inside PersonalDashboard and stays available to all per the
+                "except for monthly sales" carve-out. */}
+            {(isSuperAdmin || modulePerms['Treasury']) && (<>
             {/* Section: Financial */}
             <div style={{ display: 'flex', alignItems: 'center', gap: 10, margin: '20px 0 12px' }}>
               <div style={{ width: 3, height: 20, borderRadius: 2, background: '#10b981' }} />
@@ -6840,7 +10904,9 @@ export default function App() {
               )}
             </div>
 
-            {/* Invoices — Sales or Treasury access */}
+            {/* Invoices — Sales or Treasury access. After A.6.27.11 the outer
+                gate is already Treasury OR super_admin, so this inner gate is
+                effectively the same; keeping it for defense-in-depth. */}
             {(isSuperAdmin || modulePerms['Sales'] || modulePerms['Treasury']) && (<>
             <div className="bg-blue-100 rounded-lg px-3 py-2 mb-3 flex justify-between items-center cursor-pointer" onClick={() => setHideSections({...hideSections, invoices: !hideSections.invoices})}>
               <span className="text-sm font-bold text-blue-800">📋 INVOICES / فواتير العملاء</span>
@@ -6947,9 +11013,17 @@ export default function App() {
                       <tbody>
                         {sorted.map(m => {
                           running += m.invoiced;
+                          // v55.55 — Click month → drill to Sales tab filtered to that month.
+                          const [yr2, mo2] = m.month.split('-').map(Number);
+                          const lastDay2 = new Date(yr2, mo2, 0).getDate();
+                          const monthFrom2 = m.month + '-01';
+                          const monthTo2 = m.month + '-' + String(lastDay2).padStart(2, '0');
                           return (
-                            <tr key={m.month} className="border-b border-slate-50">
-                              <td className="px-2 py-1 text-xs font-semibold">{m.month}</td>
+                            <tr key={m.month}
+                                onClick={() => navigate('sales', { from: monthFrom2, to: monthTo2 })}
+                                title={'Click to see all ' + m.count + ' orders from ' + m.month}
+                                className="border-b border-slate-50 hover:bg-blue-50 cursor-pointer">
+                              <td className="px-2 py-1 text-xs font-semibold">{m.month} <span className="text-[9px] text-blue-500 ml-1">→ view orders</span></td>
                               <td className="px-2 py-1 text-xs text-right text-blue-600">{fE(m.invoiced)}</td>
                               <td className="px-2 py-1 text-xs text-right text-emerald-600">{fE(m.collected)}</td>
                               <td className="px-2 py-1 text-xs text-right text-red-500">{m.outstanding > 0 ? fE(m.outstanding) : '-'}</td>
@@ -6965,6 +11039,64 @@ export default function App() {
               })()}
             </div>
             )}{/* end monthly sales gate */}
+
+            {/* v55.83-A.6.27.9 — Team Activity Feed (moved from earlier
+                position per Max May 15 2026: "Move the Monthly Sales Report
+                down after the To-Do List. Put Team Activity after the
+                Monthly Sales Report."). */}
+            {/* ===== TEAM ACTIVITY FEED ===== */}
+            {activityFeed.length > 0 && (() => {
+              const expanded = hideSections.dash_teamFeed;
+              const visible = expanded ? activityFeed.slice(0, 100) : activityFeed.slice(0, 5);
+              return (
+              <div style={{ background: 'rgba(17,24,39,0.7)', borderRadius: 14, border: '1px solid rgba(255,255,255,0.08)', marginBottom: 16, overflow: 'hidden' }}>
+                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '10px 14px', borderBottom: '1px solid rgba(255,255,255,0.06)', background: 'rgba(52,211,153,0.06)', cursor: 'pointer' }}
+                  onClick={() => setHideSections(prev => ({...prev, dash_teamFeed: !prev.dash_teamFeed}))}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                    <span style={{ width: 8, height: 8, borderRadius: '50%', background: '#34d399', boxShadow: '0 0 8px rgba(52,211,153,0.5)', animation: 'pulse 2s infinite' }} />
+                    <span style={{ fontSize: 12, fontWeight: 800, color: '#34d399', letterSpacing: '0.03em' }}>Team Activity</span>
+                    <span style={{ fontSize: 10, fontWeight: 800, color: '#fff', background: '#34d399', borderRadius: 10, padding: '1px 8px' }}>{activityFeed.length}</span>
+                  </div>
+                  <span style={{ fontSize: 10, color: '#64748b' }}>{expanded ? '▲ Collapse' : '▼ Show All'}</span>
+                </div>
+                {visible.map((a, i) => {
+                  const who = (teamUsers || []).find(u => u.id === a.user_id);
+                  const name = who?.name || 'System';
+                  const initials = name.split(' ').map(w => w[0]).join('').toUpperCase().substring(0, 2);
+                  const colors = ['bg-blue-500','bg-purple-500','bg-emerald-500','bg-amber-500','bg-rose-500','bg-cyan-500'];
+                  const color = colors[(name.charCodeAt(0) || 0) % colors.length];
+                  const timeAgo = (() => {
+                    const diff = Date.now() - new Date(a.created_at).getTime();
+                    const mins = Math.floor(diff / 60000);
+                    if (mins < 1) return 'just now';
+                    if (mins < 60) return mins + 'm ago';
+                    const hrs = Math.floor(mins / 60);
+                    if (hrs < 24) return hrs + 'h ago';
+                    return Math.floor(hrs / 24) + 'd ago';
+                  })();
+                  const icon = a.log_category === 'finance' ? '💰' : a.log_category === 'crm' ? '🤝' : a.log_category === 'ticket' ? '🎫' : a.log_category === 'shipping' ? '🚢' : a.log_category === 'admin' ? '⚙️' : a.log_category === 'login' ? '🟢' : '📋';
+                  return (
+                    <div key={a.id || i} style={{ display: 'flex', alignItems: 'flex-start', gap: 10, padding: '8px 14px', borderBottom: '1px solid rgba(255,255,255,0.04)' }}>
+                      <div className={`w-7 h-7 rounded-full ${color} text-white text-[10px] font-bold flex items-center justify-center flex-shrink-0 mt-0.5`}>{initials}</div>
+                      <div style={{ flex: 1, minWidth: 0 }}>
+                        <div style={{ fontSize: 12 }}>
+                          <span style={{ fontWeight: 700, color: '#e2e8f0' }}>{name}</span>
+                          <span style={{ color: '#94a3b8', marginLeft: 6 }}>{a.entry_text}</span>
+                        </div>
+                        <div style={{ fontSize: 10, color: '#475569', marginTop: 2 }}>{icon} {a.log_category || 'general'} · {timeAgo}</div>
+                      </div>
+                    </div>
+                  );
+                })}
+                {!expanded && activityFeed.length > 5 && (
+                  <div style={{ padding: '8px 14px', fontSize: 11, color: '#34d399', fontWeight: 700, textAlign: 'center', cursor: 'pointer', background: 'rgba(255,255,255,0.02)' }}
+                    onClick={() => setHideSections(prev => ({...prev, dash_teamFeed: true}))}>
+                    Show all ({Math.min(activityFeed.length, 100)}) ▼
+                  </div>
+                )}
+              </div>
+              );
+            })()}
 
             {/* Income/Expense Buckets + USD — Treasury access only */}
             {(isSuperAdmin || modulePerms['Treasury']) && (<>
@@ -7059,6 +11191,7 @@ export default function App() {
             })()}
             </>)}{/* end treasury gate for buckets */}
             </div>{/* end financial-command */}
+            </>)}{/* v55.83-A.6.27.11 — end gate: super_admin OR Treasury only */}
 
             {/* ===== EGYPT BANK TRANSACTIONS DASHBOARD ===== */}
             {egyptBankTxns.length > 0 && (isSuperAdmin || modulePerms['Egypt Bank']) && (() => {
@@ -7086,7 +11219,7 @@ export default function App() {
                         </div>
                         <div className="bg-amber-50 rounded-lg p-2 border border-amber-200 text-center">
                           <div className="text-[9px] text-amber-600 font-bold">Unmatched</div>
-                          <div className="text-xs font-black text-amber-700">{unmatched}</div>
+                          <div className="text-xs font-black text-amber-900">{unmatched}</div>
                         </div>
                         <div className="bg-slate-50 rounded-lg p-2 border border-slate-200 text-center">
                           <div className="text-[9px] text-slate-600 font-bold">No Category</div>
@@ -7124,7 +11257,7 @@ export default function App() {
               return (
                 <div className="mt-6">
                   <div className="bg-amber-100 rounded-lg px-3 py-2 mb-3 flex justify-between items-center cursor-pointer" onClick={() => setHideSections({...hideSections, usd: !hideSections.usd})}>
-                    <span className="text-sm font-bold text-amber-800">💵 USD DOLLAR LEDGER / دفتر الدولار</span>
+                    <span className="text-sm font-bold text-amber-900">💵 USD DOLLAR LEDGER / دفتر الدولار</span>
                     <span className="text-xs text-amber-600">{hideSections.usd ? '👁️ Show' : '🙈 Hide'}</span>
                   </div>
                   {!hideSections.usd && (<>
@@ -7350,9 +11483,75 @@ export default function App() {
               );
             })()}
 
+            </div>{/* end order:2 widget cluster */}
+
+            {/* v55.81 — PersonalDashboard wrapper with order: 1 so it pins to the TOP.
+                AI Workforce (Nadia/Sara/Jenna avatars) is the visual anchor. */}
+            <div className="flex flex-col" style={{ order: 1 }}>
+
             {/* ===== PERSONAL DASHBOARD (tickets, reminders, calendar — after financial for admins, first for team) ===== */}
-            <PersonalDashboard user={user} userProfile={userProfile} isAdmin={isAdmin}
-              invoices={invoices} customers={customers} navigate={navigate} fE={fE} users={teamUsers} />
+            {/* v55.75 chatSurface — Build A item #1: the AIGreeter chat surface
+                is built here and passed INTO PersonalDashboard, which threads
+                it down to AssistantsBar to render directly under the avatars.
+                Single GUI surface. No redirects. */}
+            {(() => {
+              // v55.76 (A5) — Persona-aware fallback when chat is dismissed.
+              // The "wake the assistant" affordance now reflects whichever
+              // persona is currently active, not hard-coded "Nadia". This
+              // preserves the unified-module feel: the user sees who's in
+              // control even when chat is collapsed.
+              const activePersonaName =
+                selectedAssistant === 'jenna' ? 'Ms. Jenna' :
+                selectedAssistant === 'sara'  ? 'Sara' :
+                                                'Nadia';
+              const activePersonaColor =
+                selectedAssistant === 'jenna' ? 'text-rose-700 border-rose-300 hover:bg-rose-50' :
+                selectedAssistant === 'sara'  ? 'text-cyan-700 border-cyan-300 hover:bg-cyan-50' :
+                                                'text-indigo-700 border-indigo-300 hover:bg-indigo-50';
+              const nadiaChatSurface = (!greeterDismissed && greeterSettings.enabled) ? (
+                <div id="nadia-greeter-anchor">
+                  <SafeSection label="Nadia">
+                    <AIGreeter
+                      user={user} userProfile={userProfile} users={teamUsers}
+                      tickets={dashTickets} closedTickets={closedTicketsForAI}
+                      invoices={invoices} treasury={treasury}
+                      checks={pendingChecks} loginHistory={lastLoginInfo} loginHistoryLoaded={loginHistoryLoaded}
+                      lang={lang} personality={greeterSettings.personality}
+                      greeterLang={greeterSettings.language}
+                      enabled={greeterSettings.enabled}
+                      hasGreeted={greeterHasGreeted} onGreeted={handleGreeted}
+                      sessionMessages={greeterMessages} onMessagesUpdate={setGreeterMessages}
+                      onToggle={(on) => { if (!on) setGreeterDismissed(true); }}
+                      toast={toast}
+                      selectedAssistant={selectedAssistant}
+                      modulePerms={modulePerms} isSuperAdmin={isSuperAdmin}
+                    />
+                  </SafeSection>
+                </div>
+              ) : greeterSettings.enabled ? (
+                <button onClick={() => setGreeterDismissed(false)}
+                  className={'w-full px-4 py-3 rounded-xl text-sm font-semibold border-2 transition flex items-center justify-center gap-2 bg-white ' + activePersonaColor}>
+                  🤖 <span>Talk to {activePersonaName}</span>
+                </button>
+              ) : null;
+              return (
+                <PersonalDashboard user={user} userProfile={userProfile} isAdmin={isAdmin} isSuperAdmin={isSuperAdmin}
+                  invoices={invoices} customers={customers} navigate={navigate} fE={fE} users={teamUsers}
+                  chatSurface={nadiaChatSurface} renderSection="ai" />
+              );
+            })()}
+
+            {/* ===== VOICEMAILS WIDGET (Phase B — Apr 26 2026) =====
+                Shows the logged-in user's unread voicemails with audio + Whisper transcript.
+                Auto-refreshes every 30 seconds so new voicemails appear without page reload.
+                v55.40 — `id` anchor so the header voicemail badge can scroll to it. */}
+            <div className="mt-4" id="voicemails-widget">
+              <SafeSection label="Voicemails">
+                <VoicemailsWidget user={user} userProfile={userProfile} customers={customers} toast={toast} />
+              </SafeSection>
+            </div>
+
+            </div>{/* end order:1 PersonalDashboard wrapper */}
 
           </div>
         )}
@@ -7408,7 +11607,7 @@ export default function App() {
                   ws['!cols'] = [{wch:14},{wch:30},{wch:12},{wch:14},{wch:14},{wch:14},{wch:14},{wch:14}];
                   const wb = XLSX.utils.book_new();
                   XLSX.utils.book_append_sheet(wb, ws, 'Sales');
-                  XLSX.writeFile(wb, `Sales-Export-${new Date().toISOString().substring(0,10)}.xlsx`);
+                  XLSX.writeFile(wb, `Sales-Export-${todayET()}.xlsx`);
                 }} className="px-3 py-1.5 bg-slate-100 text-slate-600 rounded-lg text-xs font-semibold hover:bg-slate-200">
                   📥 Export
                 </button>
@@ -7836,25 +12035,46 @@ export default function App() {
                   title="Run AI accounting review / تشغيل مراجعة المحاسب الذكي">
                   🤖 AI Review
                 </button>
-                <button onClick={async () => {
-                  // Find all treasury rows with an order# but no linked_invoice_id where an invoice
-                  // with that order# DOES exist. Link them, recalc each affected invoice.
-                  const byOrder = {};
-                  invoices.forEach(i => { if (i.order_number) byOrder[String(i.order_number).trim()] = i; });
-                  const needsLink = treasury.filter(t => {
-                    if (t.linked_invoice_id) return false;
-                    if (t.is_bank_placeholder) return false;
-                    if (!t.order_number) return false;
-                    const inflow = Number(t.cash_in || 0) + Number(t.bank_in || 0);
-                    if (inflow <= 0) return false;
-                    return !!byOrder[String(t.order_number).trim()];
-                  });
-                  if (needsLink.length === 0) {
-                    toast.success('No missing links found — everything is in order ✓');
-                    return;
-                  }
-                  if (!confirm('Found ' + needsLink.length + ' treasury row(s) that should be linked to existing invoices but aren\'t. Link them now and recalculate the affected invoices?')) return;
+                <button
+                  disabled={fixLinksBusy}
+                  onClick={async () => {
+                  // v55.83-A.6.27.21 (Max May 17 2026) — Max reported "FIX
+                  // button doesn't do anything anymore." Multiple possible
+                  // causes: confirm() was being dismissed silently, every
+                  // row already linked so "no missing links" toast was
+                  // unreadable, or async handler failed silently. This
+                  // build adds: console log on every press, busy state
+                  // (button disabled while running), info toast BEFORE
+                  // confirm so user sees the click was registered, loud
+                  // success toast (toast.info with explicit "0 found"),
+                  // and a clear "Cancelled" toast if confirm is dismissed.
+                  console.log('[fix-links] button pressed');
+                  setFixLinksBusy(true);
                   try {
+                    toast.info('🔍 Scanning treasury for missing invoice links...');
+                    // Find all treasury rows with an order# but no linked_invoice_id where an invoice
+                    // with that order# DOES exist. Link them, recalc each affected invoice.
+                    const byOrder = {};
+                    invoices.forEach(i => { if (i.order_number) byOrder[String(i.order_number).trim()] = i; });
+                    const needsLink = treasury.filter(t => {
+                      if (t.linked_invoice_id) return false;
+                      if (t.is_bank_placeholder) return false;
+                      if (!t.order_number) return false;
+                      const inflow = Number(t.cash_in || 0) + Number(t.bank_in || 0);
+                      if (inflow <= 0) return false;
+                      return !!byOrder[String(t.order_number).trim()];
+                    });
+                    console.log('[fix-links] found ' + needsLink.length + ' rows needing link');
+                    if (needsLink.length === 0) {
+                      toast.success('✓ No missing links found — every treasury row with a matching invoice is already linked.');
+                      setFixLinksBusy(false);
+                      return;
+                    }
+                    if (!confirm('Found ' + needsLink.length + ' treasury row(s) that should be linked to existing invoices but aren\'t. Link them now and recalculate the affected invoices?')) {
+                      toast.info('Cancelled — no changes made.');
+                      setFixLinksBusy(false);
+                      return;
+                    }
                     const affectedInvoiceIds = new Set();
                     for (const t of needsLink) {
                       const inv = byOrder[String(t.order_number).trim()];
@@ -7865,17 +12085,45 @@ export default function App() {
                     for (const invId of affectedInvoiceIds) {
                       await recalcInvoiceCollected(invId);
                     }
-                    toast.success('Linked ' + needsLink.length + ' row(s) and recalculated ' + affectedInvoiceIds.size + ' invoice(s) ✓');
+                    toast.success('✓ Linked ' + needsLink.length + ' row(s) and recalculated ' + affectedInvoiceIds.size + ' invoice(s).');
                     await loadAllData();
                   } catch (err) {
-                    toast.error('Fix failed: ' + err.message);
+                    console.error('[fix-links] failed:', err);
+                    toast.error('Fix failed: ' + (err && err.message ? err.message : String(err)));
+                  } finally {
+                    setFixLinksBusy(false);
                   }
                 }}
-                  className="px-3 py-1.5 bg-amber-500 text-white rounded-lg text-xs font-extrabold hover:bg-amber-600 shadow"
+                  className="px-3 py-1.5 bg-amber-500 text-white rounded-lg text-xs font-extrabold hover:bg-amber-600 shadow disabled:opacity-50 disabled:cursor-wait"
                   title="Find and link treasury rows whose order# matches an existing invoice but aren't linked. Fixes the invoice collected totals. / ابحث عن قيود الخزنة التي يطابق رقم أمرها فاتورة موجودة لكنها غير مربوطة، واربطها.">
-                  🔗 Fix Links
+                  {fixLinksBusy ? '⏳ Working...' : '🔗 Fix Links'}
                 </button>
-                <button onClick={() => { setShowAddTreasury(true); setFormData({ date: today() }); }}
+                <button onClick={() => {
+                    // v55.82-E — RESET-OPEN HARDENING. Previously this button
+                    // only flipped showAddTreasury=true and seeded formData.
+                    // It did NOT clear pendingTreasuryRecord, duplicateConfirm,
+                    // treasuryFormErrors, isCreatingInvoice, or createInvoiceError.
+                    //
+                    // Failure mode (Max May 11 2026): if a prior submission
+                    // errored out in a path that didn't clean up (e.g. the
+                    // recalcInvoiceCollected throw → catch-block-without-modal-
+                    // reset described in v55.82-E ROOT-CAUSE #1), pressing
+                    // this button "did nothing" — gate at line 6665 checks
+                    // !pendingTreasuryRecord && !duplicateConfirm, so the
+                    // form Modal never re-rendered. User had to refresh the
+                    // whole page to recover.
+                    //
+                    // Now: every click hard-resets every Treasury modal flag
+                    // before opening. Idempotent — clean state if no stale
+                    // state existed; recovery if there was.
+                    setPendingTreasuryRecord(null);
+                    setDuplicateConfirm(null);
+                    setTreasuryFormErrors([]);
+                    setIsCreatingInvoice(false);
+                    setCreateInvoiceError(null);
+                    setShowAddTreasury(true);
+                    setFormData({ date: today(), type: 'in' });
+                  }}
                   className="px-3 py-1.5 bg-blue-500 text-white rounded-lg text-xs font-semibold hover:bg-blue-600">
                   + New Transaction
                 </button>
@@ -7890,10 +12138,35 @@ export default function App() {
                   ws['!cols'] = [{wch:12},{wch:12},{wch:40},{wch:14},{wch:14},{wch:16}];
                   const wb = XLSX.utils.book_new();
                   XLSX.utils.book_append_sheet(wb, ws, 'Treasury');
-                  XLSX.writeFile(wb, `Treasury-Export-${new Date().toISOString().substring(0,10)}.xlsx`);
+                  XLSX.writeFile(wb, `Treasury-Export-${todayET()}.xlsx`);
                 }} className="px-3 py-1.5 bg-slate-100 text-slate-600 rounded-lg text-xs font-semibold hover:bg-slate-200">
                   📥 Export
                 </button>
+                {/* v55.82-F — Wake Nadia button. Only shown when Nadia is
+                    SUPPRESSED in Treasury (default state). Per Max's spec:
+                    "in Treasury, Nadia should only appear if the user clicks
+                    a clear button such as Wake Nadia or Open Nadia Assistant."
+                    Click flips nadiaWokenInTab.treasury → suppressNadia goes
+                    false → overlay re-renders. Resets on tab change so the
+                    next visit defaults back to suppressed. The mute button
+                    inside Nadia's panel still works to silence audio without
+                    hiding her. */}
+                {greeterSettings.enabled && !greeterDismissed && !nadiaWokenInTab.treasury && (
+                  <button
+                    onClick={() => setNadiaWokenInTab(function(prev) { return Object.assign({}, prev, { treasury: true }); })}
+                    title="Bring Nadia back into Treasury — she'll stay until you switch tabs"
+                    className="px-3 py-1.5 bg-indigo-500 text-white rounded-lg text-xs font-semibold hover:bg-indigo-600">
+                    🤖 Wake Nadia
+                  </button>
+                )}
+                {greeterSettings.enabled && !greeterDismissed && nadiaWokenInTab.treasury && (
+                  <button
+                    onClick={() => setNadiaWokenInTab(function(prev) { var n = Object.assign({}, prev); delete n.treasury; return n; })}
+                    title="Hide Nadia again — she won't pop up while you work"
+                    className="px-3 py-1.5 bg-slate-200 text-slate-700 rounded-lg text-xs font-semibold hover:bg-slate-300">
+                    😴 Sleep Nadia
+                  </button>
+                )}
               </div>
             </div>
             <div className="mb-3">
@@ -8348,7 +12621,7 @@ export default function App() {
                                     });
                                     setShowAddInvoice(true);
                                   }}
-                                  className="text-amber-700 hover:text-amber-900 font-extrabold underline-offset-2 hover:underline"
+                                  className="text-amber-900 hover:text-amber-900 font-extrabold underline-offset-2 hover:underline"
                                   title="No invoice exists for this order. Click to create one — the amount will auto-link.">
                                   {txn.order_number} ⚠️
                                 </button>
@@ -8391,7 +12664,7 @@ export default function App() {
                           </div>
                           {/* Category — own line, below description, smaller muted */}
                           {(txn.category || txn.subcategory) && (
-                            <div className="text-[10px] text-amber-700 mt-0.5">
+                            <div className="text-[10px] text-amber-900 mt-0.5">
                               <span className="font-semibold">{txCat(txn.category) || 'Uncategorized'}</span>
                               {txn.subcategory && <span className="text-amber-600"> › {txn.subcategory}</span>}
                             </div>
@@ -8410,9 +12683,9 @@ export default function App() {
                             <div className="text-[10px] text-indigo-700 italic mt-0.5">Does not affect safe balance / لا يؤثر على رصيد الخزنة</div>
                           )}
                           {isOrphanWaiting && (
-                            <div className="text-[11px] text-amber-800 italic mt-1 font-semibold leading-snug">
+                            <div className="text-[11px] text-amber-900 italic mt-1 font-semibold leading-snug">
                               <div>⏳ Not yet credited — invoice #{txn.order_number} does not exist. Click the order# to create it.</div>
-                              <div style={{direction:'rtl'}} className="text-amber-700 mt-0.5">⏳ لم تُضف بعد إلى المحصّل — الفاتورة رقم {txn.order_number} غير موجودة. اضغط رقم الأمر لإنشائها.</div>
+                              <div style={{direction:'rtl'}} className="text-amber-900 mt-0.5">⏳ لم تُضف بعد إلى المحصّل — الفاتورة رقم {txn.order_number} غير موجودة. اضغط رقم الأمر لإنشائها.</div>
                             </div>
                           )}
                         </td>
@@ -8564,7 +12837,7 @@ export default function App() {
             CHECKS TAB
         ========================================== */}
         {tab === 'checks' && (() => {
-          const todayStr = new Date().toISOString().substring(0, 10);
+          const todayStr = todayET();
           const thisMonth = todayStr.substring(0, 7);
           const tomorrowStr = new Date(Date.now() + 86400000).toISOString().substring(0, 10);
           const dueThisMonth = pendingChecks.filter(c => (c.due_date || c.check_date || '').substring(0, 7) === thisMonth);
@@ -8651,7 +12924,7 @@ export default function App() {
                 </div>
                 <div className="flex gap-2">
                   <button onClick={async () => {
-                    if (!formData.chkCustomer || !formData.chkAmount) { alert('Customer and amount required'); return; }
+                    if (!formData.chkCustomer || !isValidAmount(formData.chkAmount)) { alert('Customer and amount required'); return; }
                     try {
                       const orderNum = formData.chkOrder || '';
                       const matchInv = orderNum ? invoices.find(i => i.order_number === orderNum) : null;
@@ -8659,7 +12932,7 @@ export default function App() {
                         customer_name: formData.chkCustomer,
                         order_number: orderNum,
                         invoice_id: matchInv?.id || null,
-                        amount: Number(formData.chkAmount),
+                        amount: parseAmount(formData.chkAmount),
                         check_date: formData.chkDueDate || today(),
                         due_date: formData.chkDueDate || today(),
                         check_number: formData.chkNumber || '',
@@ -8747,7 +13020,7 @@ export default function App() {
                 } else if (checkSort === 'order') {
                   groupLabel = '📦 Order #' + gKey;
                 } else {
-                  groupLabel = gKey === 'Unknown' ? 'No Date' : new Date(gKey + '-01').toLocaleDateString('en-US', { year: 'numeric', month: 'long' });
+                  groupLabel = gKey === 'Unknown' ? 'No Date' : (function(){ var d = new Date(gKey + '-01'); var m = new Intl.DateTimeFormat('en-US', { month: 'long', year: 'numeric', timeZone: 'America/New_York' }).format(d); return m; })();
                   isOverdueGroup = checkView === 'pending' && gKey < todayStr.substring(0, 7);
                 }
                 return (
@@ -8781,7 +13054,7 @@ export default function App() {
                                 ) : isOD ? (
                                   <span className="px-2 py-0.5 bg-red-100 text-red-700 rounded-full text-[8px] font-bold">OVERDUE</span>
                                 ) : isDueSoon ? (
-                                  <span className="px-2 py-0.5 bg-amber-100 text-amber-700 rounded-full text-[8px] font-bold">TOMORROW</span>
+                                  <span className="px-2 py-0.5 bg-amber-100 text-amber-900 rounded-full text-[8px] font-bold">TOMORROW</span>
                                 ) : isDueThisMonth ? (
                                   <span className="px-2 py-0.5 bg-blue-100 text-blue-700 rounded-full text-[8px] font-bold">THIS MONTH</span>
                                 ) : (
@@ -8826,7 +13099,7 @@ export default function App() {
                                     {/* S15 — Uncollect button: reverses the collect flow cleanly */}
                                     {(userProfile?.role === 'super_admin' || userProfile?.role === 'admin') && (
                                       <button onClick={() => handleUncollectCheck(c)}
-                                        className="px-1.5 py-0.5 rounded border border-amber-300 text-amber-700 text-[9px] hover:bg-amber-50 font-semibold"
+                                        className="px-1.5 py-0.5 rounded border border-amber-300 text-amber-900 text-[9px] hover:bg-amber-50 font-semibold"
                                         title="Uncollect — reverse this collection">
                                         ↩︎ Uncollect
                                       </button>
@@ -8914,7 +13187,7 @@ export default function App() {
                   ws['!cols'] = [{wch:12},{wch:50},{wch:14},{wch:20},{wch:20}];
                   const wb = XLSX.utils.book_new();
                   XLSX.utils.book_append_sheet(wb, ws, 'Warehouse');
-                  XLSX.writeFile(wb, `Warehouse-Export-${formData.whYear || 'All'}-${new Date().toISOString().substring(0,10)}.xlsx`);
+                  XLSX.writeFile(wb, `Warehouse-Export-${formData.whYear || 'All'}-${todayET()}.xlsx`);
                 }} className="px-3 py-1.5 bg-slate-100 text-slate-600 rounded-lg text-xs font-semibold hover:bg-slate-200">
                   📥 Export
                 </button>
@@ -9000,7 +13273,7 @@ export default function App() {
                     await dbInsert('warehouse_expenses', {
                       expense_date: formData.whExpDate || today(),
                       description: formData.whExpDesc,
-                      amount: Number(formData.whExpAmount),
+                      amount: parseAmount(formData.whExpAmount),
                       category: cat,
                       subcategory: formData.whExpSub || '',
                       america_ref: formData.whType === 'shipment' ? (formData.whExpRef || '') : 'GENERAL',
@@ -9339,1907 +13612,45 @@ export default function App() {
         })()}
 
         {/* ==========================================
-            INVENTORY TAB
+        {/* ==========================================
+            INVENTORY TAB (v55.83-A — new module)
+            Replaced the inline ~1900-line inventory section with the
+            new module. Stage 1 ships Master SKUs + Warehouses; future
+            stages fill in Shipments, Movements, Adjustments, Reports.
         ========================================== */}
         {tab === 'inventory' && (
-          <div>
-            <div className="flex justify-between flex-wrap gap-2 mb-3">
-              <h2 className="text-xl font-extrabold">Inventory / المخزون</h2>
-              <div className="flex gap-2 items-center flex-wrap">
-                <input value={query} onChange={e => setQuery(e.target.value)}
-                  placeholder="Search / بحث" className="px-3 py-1.5 rounded-lg border border-slate-200 text-xs w-32" />
-                <select value={formData.invTypeFilter || 'all'} onChange={e => setFormData({...formData, invTypeFilter: e.target.value, invSubFilter: 'all'})}
-                  className="px-2 py-1.5 rounded border text-xs">
-                  <option value="all">All Categories</option>
-                  {[...new Set(inventory.map(p => p.product_type).filter(Boolean))].sort().map(t =>
-                    <option key={t} value={t}>{t}</option>)}
-                </select>
-                <select value={formData.invSubFilter || 'all'} onChange={e => setFormData({...formData, invSubFilter: e.target.value})}
-                  className="px-2 py-1.5 rounded border text-xs">
-                  <option value="all">All Subcategories</option>
-                  {[...new Set(inventory
-                    .filter(p => !formData.invTypeFilter || formData.invTypeFilter === 'all' || p.product_type === formData.invTypeFilter)
-                    .map(p => p.subcategory).filter(Boolean))].sort().map(s =>
-                    <option key={s} value={s}>{s}</option>)}
-                </select>
-                <select value={formData.invColorFilter || 'all'} onChange={e => setFormData({...formData, invColorFilter: e.target.value})}
-                  className="px-2 py-1.5 rounded border text-xs"
-                  title="Filter by color">
-                  <option value="all">All Colors</option>
-                  {[...new Set(inventory.map(p => p.color_en || p.color).filter(Boolean))].sort().map(c =>
-                    <option key={c} value={c}>{c}</option>)}
-                </select>
-                <button onClick={() => setFormData({...formData, showInvBreakdown: !formData.showInvBreakdown})}
-                  className={'px-3 py-1.5 rounded-lg text-xs font-bold ' + (formData.showInvBreakdown ? 'bg-indigo-600 text-white' : 'bg-slate-100 text-slate-700 hover:bg-slate-200')}
-                  title="Toggle breakdown by product type, subcategory, color">
-                  📊 Breakdown
-                </button>
-                <select value={formData.invView || 'cards'} onChange={e => setFormData({...formData, invView: e.target.value})}
-                  className="px-2 py-1.5 rounded border text-xs">
-                  <option value="cards">📷 Cards</option>
-                  <option value="table">📋 Table</option>
-                </select>
-                <button onClick={() => setFormData({...formData, showAddProduct: true})}
-                  className="px-3 py-1.5 bg-gradient-to-r from-blue-500 to-indigo-600 text-white rounded-lg text-xs font-bold shadow-sm">
-                  + Add Product
-                </button>
-                <button onClick={() => setFormData({...formData, showInvImport: true})}
-                  className="px-3 py-1.5 bg-emerald-500 hover:bg-emerald-600 text-white rounded-lg text-xs font-bold shadow-sm"
-                  title="Bulk import inventory items from Excel">
-                  📥 Import
-                </button>
-                {/* S22.12 (Apr 23 2026) — Direct Download Template button on
-                    the Inventory tab itself. Previously the template was
-                    only accessible from inside the Import modal. Per Max:
-                    the template should be a link downloadable from the
-                    portal. This generates the same XLSX as the import
-                    modal's button so the columns are always in sync with
-                    what the importer expects. */}
-                <button onClick={() => {
-                  try {
-                    var cols = [
-                      'Product ID','Reference #','Product Type','Subcategory',
-                      'Description (Arabic)','Description (English)',
-                      'Color (Arabic)','Color (English)',
-                      'Inbound Quantity','Original Quantity','Current Quantity','Expected Quantity',
-                      'Unit of Measure','Linear Density (g/m)',
-                      'Gross Weight (kg)','Net Weight (kg)','Unit Price','Roll Count',
-                      'Shipment Reference','Inbound Date',
-                      'Purchase Cost','Purchase Currency','Customs Cost','Customs Currency',
-                      'Shipping Cost','Shipping Currency','Other Cost','Other Currency',
-                      'FX Rate','Notes',
-                    ];
-                    var examples = [
-                      ['SKU-001','REF-2026-001','Textiles','Cotton','قماش قطن أحمر','Red Cotton Fabric','أحمر','Red',200,200,200,0,'yd',420,150,140,25,10,'SH-2026-01','2026-04-20',1200,'USD',5000,'EGP',800,'USD',0,'EGP',50,'First batch — opening balance'],
-                      ['SKU-001','REF-2026-015','Textiles','Cotton','قماش قطن أحمر','Red Cotton Fabric','أحمر','Red',80,'','',0,'yd',420,150,140,25,4,'SH-2026-02','2026-05-10',500,'USD',2000,'EGP',300,'USD',0,'EGP',50,'Restock — inbound only'],
-                      ['SKU-002','REF-2026-002','Leather','Genuine','جلد طبيعي بني','Brown Leather','بني','Brown',50,50,50,60,'kg','',30,28,80,5,'SH-2026-01','2026-04-20',2500,'USD',3000,'EGP',400,'USD',0,'EGP',50,'Expected 60, got 50'],
-                    ];
-                    var aoa = [cols].concat(examples);
-                    var ws = XLSX.utils.aoa_to_sheet(aoa);
-                    ws['!cols'] = cols.map(function(c) { return { wch: Math.max(14, c.length + 2) }; });
-                    var instr = [
-                      ['KTC Inventory Import Template'],
-                      [''],
-                      ['HOW TO USE'],
-                      ['1. Keep the header row. Fill in one row per product / inbound below.'],
-                      ['2. Save as .xlsx and upload through Inventory → Import.'],
-                      [''],
-                      ['THE THREE QUANTITY COLUMNS'],
-                      ['- Inbound Quantity — ALWAYS the primary input. How much arrived this time.'],
-                      ['- Original Quantity — only used the first time a Product ID is created.'],
-                      ['- Current Quantity — only used the first time a Product ID is created.'],
-                      [''],
-                      ['UNIT OF MEASURE (S22.11)'],
-                      ['- Pick kg, ton, m (meter), yd (yard), roll, piece, pair, or box.'],
-                      ['- For m/yd products, also set Linear Density (g/m) to enable'],
-                      ['  apples-to-apples per-kg P&L math. Example: if 1 meter of your'],
-                      ['  fabric weighs 420 grams, enter 420.'],
-                      [''],
-                      ['EXPECTED QUANTITY'],
-                      ['- Optional. Fill in to compare expected-vs-actual in the report.'],
-                      ['- Does NOT affect your live inventory — stored in a separate table.'],
-                    ];
-                    var iws = XLSX.utils.aoa_to_sheet(instr);
-                    iws['!cols'] = [{ wch: 80 }];
-                    var wb = XLSX.utils.book_new();
-                    XLSX.utils.book_append_sheet(wb, ws, 'Inventory');
-                    XLSX.utils.book_append_sheet(wb, iws, 'Instructions');
-                    XLSX.writeFile(wb, 'KTC_Inventory_Import_Template.xlsx');
-                  } catch (err) {
-                    alert('Could not generate template: ' + (err.message || 'unknown'));
-                  }
-                }}
-                  className="px-3 py-1.5 bg-white border border-emerald-300 text-emerald-700 hover:bg-emerald-50 rounded-lg text-xs font-bold shadow-sm"
-                  title="Download the Excel template for bulk import (with instructions + examples)">
-                  ⬇ Template
-                </button>
-                <button onClick={() => setFormData({...formData, showInvHistorical: true})}
-                  className="px-3 py-1.5 bg-slate-200 hover:bg-slate-300 text-slate-700 rounded-lg text-xs font-bold"
-                  title="See quantity received as of a specific date">
-                  📅 Historical
-                </button>
-                <button onClick={() => setFormData({...formData, showInvByShipment: true})}
-                  className="px-3 py-1.5 bg-indigo-500 hover:bg-indigo-600 text-white rounded-lg text-xs font-bold shadow-sm"
-                  title="See original quantity received per shipment, per product">
-                  📦 By Shipment
-                </button>
-                <button onClick={() => setFormData({...formData, showInvExpected: true})}
-                  className="px-3 py-1.5 bg-purple-500 hover:bg-purple-600 text-white rounded-lg text-xs font-bold shadow-sm"
-                  title="Compare expected vs actual per shipment">
-                  📊 Expected vs Actual
-                </button>
-              </div>
-            </div>
-
-            {/* Summary */}
-            {(() => {
-              const filtered = inventory.filter(p => {
-                if (formData.invTypeFilter && formData.invTypeFilter !== 'all' && p.product_type !== formData.invTypeFilter) return false;
-                if (formData.invSubFilter && formData.invSubFilter !== 'all' && p.subcategory !== formData.invSubFilter) return false;
-                if (formData.invColorFilter && formData.invColorFilter !== 'all' && (p.color_en || p.color) !== formData.invColorFilter) return false;
-                if (query) return (p.product_id||'').includes(query)||(p.reference_number||'').includes(query)||(p.description||'').includes(query)||(p.description_en||'').toLowerCase().includes(query.toLowerCase())||(p.color||'').includes(query)||(p.product_type||'').toLowerCase().includes(query.toLowerCase())||(p.subcategory||'').toLowerCase().includes(query.toLowerCase());
-                return true;
-              });
-              const totalOriginal = filtered.reduce((a, p) => a + Number(p.original_quantity || p.roll_count || 0), 0);
-              const totalCurrent = filtered.reduce((a, p) => a + Number(p.current_quantity || p.roll_count || 0), 0);
-              const totalWeight = filtered.reduce((a, p) => a + Number(p.net_weight || 0), 0);
-              const totalValue = filtered.reduce((a, p) => a + (Number(p.current_quantity || p.roll_count || 0) * Number(p.unit_price || 0)), 0);
-
-              return (<>
-              <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-4">
-                <div className="bg-white rounded-xl p-3 border border-slate-100">
-                  <div className="text-[9px] text-slate-400 uppercase tracking-wide">Products</div>
-                  <div className="text-xl font-extrabold">{filtered.length}</div>
-                </div>
-                <div className="bg-white rounded-xl p-3 border border-slate-100">
-                  <div className="text-[9px] text-slate-400 uppercase tracking-wide">Original Qty</div>
-                  <div className="text-xl font-extrabold text-blue-600">{totalOriginal.toLocaleString()}</div>
-                </div>
-                <div className="bg-white rounded-xl p-3 border border-slate-100">
-                  <div className="text-[9px] text-slate-400 uppercase tracking-wide">Current Qty</div>
-                  <div className="text-xl font-extrabold text-emerald-600">{totalCurrent.toLocaleString()}</div>
-                </div>
-                <div className="bg-white rounded-xl p-3 border border-slate-100">
-                  <div className="text-[9px] text-slate-400 uppercase tracking-wide">Est. Value</div>
-                  <div className="text-xl font-extrabold text-purple-600">{fE(totalValue)}</div>
-                </div>
-              </div>
-
-              {/* S22.9 — Cleaner breakdown: single unified table instead of
-                  three side-by-side "bubble bucket" cards. Max: "I don't
-                  really like the bubble buckets. Make it better."
-                  Now it's ONE sortable table with a tab selector for the
-                  grouping dimension (Type / Subcategory / Color). Fewer
-                  visual containers, more data density, easier to scan. */}
-              {formData.showInvBreakdown && (() => {
-                const activeDim = formData.invBreakdownDim || 'type';
-                const keyFnByDim = {
-                  type: p => p.product_type,
-                  sub: p => p.subcategory,
-                  color: p => p.color_en || p.color,
-                };
-                const labelByDim = { type: 'Product Type', sub: 'Subcategory', color: 'Color' };
-                const keyFn = keyFnByDim[activeDim];
-                const map = {};
-                filtered.forEach(p => {
-                  const k = keyFn(p) || '(none)';
-                  if (!map[k]) map[k] = { key: k, count: 0, orig: 0, curr: 0, value: 0 };
-                  map[k].count += 1;
-                  map[k].orig += Number(p.original_quantity || p.roll_count || 0);
-                  map[k].curr += Number(p.current_quantity || p.roll_count || 0);
-                  map[k].value += Number(p.current_quantity || p.roll_count || 0) * Number(p.unit_price || 0);
-                });
-                const rows = Object.values(map).sort((a, b) => b.curr - a.curr);
-                const totals = rows.reduce((a, r) => ({
-                  count: a.count + r.count, orig: a.orig + r.orig, curr: a.curr + r.curr, value: a.value + r.value,
-                }), { count: 0, orig: 0, curr: 0, value: 0 });
-                return (
-                  <div className="mb-4 bg-white rounded-xl border border-slate-200 overflow-hidden">
-                    <div className="px-4 py-3 border-b border-slate-100 flex items-center justify-between flex-wrap gap-2">
-                      <div className="flex items-center gap-3">
-                        <h3 className="text-sm font-bold text-slate-800">Inventory Breakdown</h3>
-                        <span className="text-[10px] text-slate-500">{rows.length} group{rows.length === 1 ? '' : 's'} · {totals.count} products</span>
-                      </div>
-                      {/* Dimension selector — pill row BUT tight, not bubbly */}
-                      <div className="flex rounded-md overflow-hidden border border-slate-200 text-[11px]">
-                        {['type', 'sub', 'color'].map(d => (
-                          <button key={d}
-                            onClick={() => setFormData({...formData, invBreakdownDim: d})}
-                            className={'px-3 py-1 font-semibold transition ' + (activeDim === d ? 'bg-slate-800 text-white' : 'bg-white text-slate-600 hover:bg-slate-50')}>
-                            {labelByDim[d]}
-                          </button>
-                        ))}
-                      </div>
-                    </div>
-                    <div className="overflow-auto max-h-[360px]">
-                      <table className="w-full text-xs border-collapse">
-                        <thead className="sticky top-0 bg-slate-50 z-[1]">
-                          <tr className="text-slate-500 text-[10px] uppercase tracking-wide">
-                            <th className="px-3 py-2 text-left font-semibold">{labelByDim[activeDim]}</th>
-                            <th className="px-3 py-2 text-right font-semibold">Products</th>
-                            <th className="px-3 py-2 text-right font-semibold">Original</th>
-                            <th className="px-3 py-2 text-right font-semibold">Current</th>
-                            <th className="px-3 py-2 text-right font-semibold">Est. Value</th>
-                            <th className="px-3 py-2 text-right font-semibold w-[90px]">% Left</th>
-                          </tr>
-                        </thead>
-                        <tbody>
-                          {rows.map(r => {
-                            const pctLeft = r.orig > 0 ? Math.round((r.curr / r.orig) * 100) : 0;
-                            return (
-                              <tr key={r.key} className="border-b border-slate-100 hover:bg-slate-50">
-                                <td className="px-3 py-1.5 font-semibold text-slate-800 truncate max-w-[200px]" title={r.key}>{r.key}</td>
-                                <td className="px-3 py-1.5 text-right text-slate-500">{r.count}</td>
-                                <td className="px-3 py-1.5 text-right text-slate-600">{r.orig.toLocaleString()}</td>
-                                <td className="px-3 py-1.5 text-right font-bold text-emerald-600">{r.curr.toLocaleString()}</td>
-                                <td className="px-3 py-1.5 text-right text-slate-700">{fE(r.value)}</td>
-                                <td className="px-3 py-1.5 text-right">
-                                  <div className="inline-flex items-center gap-1.5">
-                                    <div className="w-12 h-1 bg-slate-200 rounded overflow-hidden">
-                                      <div className="h-full rounded" style={{ width: pctLeft + '%', background: pctLeft >= 50 ? '#10b981' : pctLeft >= 20 ? '#f59e0b' : '#ef4444' }} />
-                                    </div>
-                                    <span className="text-[10px] text-slate-500 tabular-nums w-7 text-right">{pctLeft}%</span>
-                                  </div>
-                                </td>
-                              </tr>
-                            );
-                          })}
-                          {rows.length === 0 && (
-                            <tr><td colSpan="6" className="text-center text-slate-400 py-6 text-xs">No products in current filter.</td></tr>
-                          )}
-                        </tbody>
-                        {rows.length > 0 && (
-                          <tfoot>
-                            <tr className="bg-slate-50 border-t-2 border-slate-200 font-bold text-xs">
-                              <td className="px-3 py-2 text-slate-700">Total</td>
-                              <td className="px-3 py-2 text-right">{totals.count}</td>
-                              <td className="px-3 py-2 text-right">{totals.orig.toLocaleString()}</td>
-                              <td className="px-3 py-2 text-right text-emerald-700">{totals.curr.toLocaleString()}</td>
-                              <td className="px-3 py-2 text-right">{fE(totals.value)}</td>
-                              <td className="px-3 py-2 text-right text-slate-400">—</td>
-                            </tr>
-                          </tfoot>
-                        )}
-                      </table>
-                    </div>
-                  </div>
-                );
-              })()}
-
-              {/* Cards View */}
-              {(formData.invView || 'cards') === 'cards' && (
-                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
-                  {filtered.map(p => {
-                    const origQty = Number(p.original_quantity || p.roll_count || 0);
-                    const currQty = Number(p.current_quantity || p.roll_count || 0);
-                    const usedPct = origQty > 0 ? Math.round(((origQty - currQty) / origQty) * 100) : 0;
-                    return (
-                      <div key={p.id} onClick={() => setFormData({...formData, selectedProduct: p})}
-                        className="bg-white rounded-2xl overflow-hidden border border-slate-100 hover:border-slate-300 hover:shadow-lg transition cursor-pointer group">
-                        {/* Photo */}
-                        {p.photo_url ? (
-                          <div className="h-40 bg-slate-100 overflow-hidden">
-                            <img src={p.photo_url} alt={p.description_en || p.description} className="w-full h-full object-cover group-hover:scale-105 transition-transform" />
-                          </div>
-                        ) : (
-                          <div className="h-24 bg-gradient-to-br from-slate-100 to-slate-50 flex items-center justify-center">
-                            <span className="text-3xl opacity-30">📦</span>
-                          </div>
-                        )}
-                        <div className="p-3">
-                          {/* Category pills */}
-                          <div className="flex gap-1 mb-2 flex-wrap">
-                            {p.product_type && <span className="px-2 py-0.5 bg-indigo-50 text-indigo-700 rounded-md text-[9px] font-bold">{p.product_type}</span>}
-                            {p.subcategory && <span className="px-2 py-0.5 bg-amber-50 text-amber-700 rounded-md text-[9px] font-medium">{p.subcategory}</span>}
-                            <span className={'px-2 py-0.5 rounded-md text-[9px] font-bold ' +
-                              (p.stock_status === 'in_stock' ? 'bg-green-50 text-green-700' :
-                               p.stock_status === 'low' ? 'bg-amber-50 text-amber-700' :
-                               p.stock_status === 'reserved' ? 'bg-blue-50 text-blue-700' : 'bg-red-50 text-red-700')}>
-                              {p.stock_status === 'in_stock' ? 'In Stock' : p.stock_status === 'low' ? 'Low' : p.stock_status === 'reserved' ? 'Reserved' : p.stock_status === 'out_of_stock' ? 'Out' : 'Available'}
-                            </span>
-                          </div>
-                          {/* Name */}
-                          <div className="text-sm font-bold truncate">{p.reference_number || p.product_id}</div>
-                          <div className="text-[11px] text-slate-500 truncate" style={{direction:'rtl'}}>{lang === 'en' && p.description_en ? p.description_en : p.description}</div>
-                          {p.color && <div className="text-[10px] text-slate-400 mt-0.5">🎨 {lang === 'en' && p.color_en ? p.color_en : p.color}</div>}
-                          {/* Quantity bar */}
-                          <div className="mt-2">
-                            <div className="flex justify-between text-[9px] mb-0.5">
-                              <span className="text-slate-400">Qty: {currQty.toLocaleString()} / {origQty.toLocaleString()}</span>
-                              <span className="font-bold text-emerald-600">{fE(p.unit_price)}</span>
-                            </div>
-                            <div className="h-1.5 bg-slate-100 rounded-full overflow-hidden">
-                              <div className="h-full rounded-full" style={{width: Math.max(5, 100 - usedPct) + '%', background: usedPct > 80 ? '#ef4444' : usedPct > 50 ? '#f59e0b' : '#10b981'}} />
-                            </div>
-                          </div>
-                        </div>
-                      </div>
-                    );
-                  })}
-                </div>
-              )}
-
-              {/* Table View */}
-              {formData.invView === 'table' && (
-                <div className="overflow-auto rounded-xl border border-slate-200 max-h-[450px]">
-                  <table className="w-full border-collapse">
-                    <thead className="sticky top-0"><tr className="bg-slate-50">
-                      <th className="px-2 py-2 text-[10px] text-left">Photo</th>
-                      <th className="px-2 py-2 text-[10px] text-left">Product</th>
-                      <th className="px-2 py-2 text-[10px]">Category</th>
-                      <th className="px-2 py-2 text-[10px]">Subcategory</th>
-                      <th className="px-2 py-2 text-[10px] text-right">Original</th>
-                      <th className="px-2 py-2 text-[10px] text-right">Current</th>
-                      <th className="px-2 py-2 text-[10px] text-right" title="Number of inbound batches">Batches</th>
-                      <th className="px-2 py-2 text-[10px] text-right" title="Number of journal adjustments">Adj.</th>
-                      <th className="px-2 py-2 text-[10px] text-right">Price</th>
-                      <th className="px-2 py-2 text-[10px]">Status</th>
-                    </tr></thead>
-                    <tbody>
-                      {filtered.map(p => {
-                        const batchCount = (invInbounds || []).filter(ib => ib.product_id === p.product_id).length;
-                        const adjCount = (invAdjustments || []).filter(a => a.product_id === p.product_id).length;
-                        return (
-                        <tr key={p.id} className="border-b border-slate-50 hover:bg-indigo-50/50 cursor-pointer group"
-                          onClick={() => setFormData({...formData, selectedProduct: p})}
-                          title="Click for full history (batches + adjustments)">
-                          <td className="px-2 py-1.5">
-                            {p.photo_url ? <img src={p.photo_url} className="w-10 h-10 rounded object-cover" /> : <span className="text-slate-300 text-lg">📦</span>}
-                          </td>
-                          <td className="px-2 py-1.5">
-                            <div className="text-xs font-bold text-blue-600 group-hover:underline">{p.reference_number || p.product_id}</div>
-                            <div className="text-[10px] text-slate-500">{lang === 'en' && p.description_en ? p.description_en : p.description}</div>
-                          </td>
-                          <td className="px-2 py-1.5">{p.product_type && <span className="px-1.5 py-0.5 bg-indigo-100 text-indigo-700 rounded text-[9px]">{p.product_type}</span>}</td>
-                          <td className="px-2 py-1.5">{p.subcategory && <span className="px-1.5 py-0.5 bg-amber-100 text-amber-700 rounded text-[9px]">{p.subcategory}</span>}</td>
-                          <td className="px-2 py-1.5 text-xs text-right">{Number(p.original_quantity || p.roll_count || 0).toLocaleString()}</td>
-                          <td className="px-2 py-1.5 text-xs text-right font-bold text-emerald-600">{Number(p.current_quantity || p.roll_count || 0).toLocaleString()}</td>
-                          <td className="px-2 py-1.5 text-xs text-right">
-                            {batchCount > 0 ? (
-                              <span className="inline-flex items-center gap-1 text-slate-700 font-semibold">
-                                <span>{batchCount}</span>
-                                <span className="text-[9px] text-indigo-500">▸</span>
-                              </span>
-                            ) : <span className="text-slate-300">—</span>}
-                          </td>
-                          <td className="px-2 py-1.5 text-xs text-right">
-                            {adjCount > 0 ? (
-                              <span className="inline-flex items-center gap-1 text-amber-700 font-semibold">
-                                <span>🧾</span>
-                                <span>{adjCount}</span>
-                              </span>
-                            ) : <span className="text-slate-300">—</span>}
-                          </td>
-                          <td className="px-2 py-1.5 text-xs text-right font-semibold text-emerald-600">{fE(p.unit_price)}</td>
-                          <td className="px-2 py-1.5">
-                            <span className={'px-1.5 py-0.5 rounded-full text-[9px] font-semibold ' +
-                              (p.stock_status === 'in_stock' ? 'bg-green-100 text-green-700' :
-                               p.stock_status === 'low' ? 'bg-amber-100 text-amber-700' :
-                               p.stock_status === 'reserved' ? 'bg-blue-100 text-blue-700' : 'bg-red-100 text-red-700')}>
-                              {p.stock_status === 'in_stock' ? 'In Stock' : p.stock_status === 'low' ? 'Low' : p.stock_status === 'reserved' ? 'Reserved' : 'Out'}
-                            </span>
-                          </td>
-                        </tr>
-                        );
-                      })}
-                    </tbody>
-                  </table>
-                </div>
-              )}
-              </>);
-            })()}
-
-            {/* Add Product Form */}
-            {formData.showAddProduct && (
-              <div className="fixed inset-0 bg-black/60 z-50 flex items-start justify-center overflow-auto p-4" onClick={e => { if (e.target === e.currentTarget) setFormData({}); }}>
-                <div className="bg-white rounded-2xl shadow-2xl w-full max-w-[600px] my-8 overflow-hidden">
-                  <div className="bg-gradient-to-r from-indigo-600 to-purple-600 px-5 py-4">
-                    <h3 className="text-white font-bold text-base">📦 New Product / منتج جديد</h3>
-                  </div>
-                  <div className="p-5 space-y-3 max-h-[70vh] overflow-auto">
-                    <div className="grid grid-cols-2 gap-3">
-                      <div><label className="text-[10px] font-bold text-slate-500">Product ID</label>
-                        <input value={formData.prodId || ''} onChange={e => setFormData({...formData, prodId: e.target.value})} className="w-full px-3 py-2 rounded-lg border text-sm" /></div>
-                      <div><label className="text-[10px] font-bold text-slate-500">Shipment Reference #</label>
-                        <input value={formData.prodShipment || ''} onChange={e => setFormData({...formData, prodShipment: e.target.value})} className="w-full px-3 py-2 rounded-lg border text-sm" /></div>
-                      <div><label className="text-[10px] font-bold text-slate-500">Category / النوع</label>
-                        <select value={formData.prodType || ''} onChange={e => { if (e.target.value === '_new') { const n = prompt('New category:'); if (n) setFormData({...formData, prodType: n}); } else setFormData({...formData, prodType: e.target.value}); }}
-                          className="w-full px-3 py-2 rounded-lg border text-sm">
-                          <option value="">Select...</option>
-                          {['Pool','Leather','Roofing','Fabrics','PVC','Chemicals','Headliner','Boat Flooring','Upholstery',
-                            ...new Set(inventory.map(p => p.product_type).filter(Boolean))].filter((v,i,a) => v && a.indexOf(v)===i).sort().map(t =>
-                            <option key={t} value={t}>{t}</option>)}
-                          <option value="_new">+ New Category</option>
-                        </select></div>
-                      <div><label className="text-[10px] font-bold text-slate-500">Subcategory / تصنيف فرعي</label>
-                        <input list="inv-subcats-add" value={formData.prodSubcat || ''} onChange={e => setFormData({...formData, prodSubcat: e.target.value})}
-                          placeholder="e.g. Mosaic Liner, Looks..." className="w-full px-3 py-2 rounded-lg border text-sm" />
-                        <datalist id="inv-subcats-add">{[...new Set(inventory.map(p => p.subcategory).filter(Boolean))].sort().map(s => <option key={s} value={s} />)}</datalist></div>
-                      <div><label className="text-[10px] font-bold text-slate-500">Inbound Date</label>
-                        <DatePickerSelect value={formData.prodDate || today()} onChange={v => setFormData({...formData, prodDate: v})} /></div>
-                      {formData.prodId && inventory.find(p => p.product_id === formData.prodId) && (
-                        <div className="col-span-2 bg-amber-50 rounded-lg p-2 border border-amber-200">
-                          <div className="text-[10px] font-bold text-amber-700">⚠️ Product ID "{formData.prodId}" already exists — this will be added as a new inbound and quantities/costs will be aggregated.</div>
-                        </div>
-                      )}
-                      <div><label className="text-[10px] font-bold text-slate-500">Description (Arabic)</label>
-                        <input value={formData.prodDesc || ''} onChange={e => setFormData({...formData, prodDesc: e.target.value})} className="w-full px-3 py-2 rounded-lg border text-sm" style={{direction:'rtl'}} /></div>
-                      <div><label className="text-[10px] font-bold text-slate-500">Description (English)</label>
-                        <input value={formData.prodDescEn || ''} onChange={e => setFormData({...formData, prodDescEn: e.target.value})} className="w-full px-3 py-2 rounded-lg border text-sm" /></div>
-                      <div><label className="text-[10px] font-bold text-slate-500">Color (Arabic)</label>
-                        <input value={formData.prodColor || ''} onChange={e => setFormData({...formData, prodColor: e.target.value})} className="w-full px-3 py-2 rounded-lg border text-sm" style={{direction:'rtl'}} /></div>
-                      <div><label className="text-[10px] font-bold text-slate-500">Color (English)</label>
-                        <input value={formData.prodColorEn || ''} onChange={e => setFormData({...formData, prodColorEn: e.target.value})} className="w-full px-3 py-2 rounded-lg border text-sm" /></div>
-                      {(() => {
-                        // S20 (Apr 23 2026) — three-field inventory flow:
-                        //   - Inbound Qty: always editable. It's how much
-                        //     arrived THIS TIME.
-                        //   - Original Qty + Current Qty: editable ONLY the
-                        //     first time a product_id is created, OR by a
-                        //     super-admin / user with "Adjust Inventory
-                        //     Quantities" permission (which triggers an
-                        //     adjustment journal entry).
-                        // S22.10 (Apr 23 2026) — split permissions per Max:
-                        //   "Edit Inventory" = day-to-day (add products,
-                        //     record inbounds, edit descriptions, photos)
-                        //   "Adjust Inventory Quantities" = the rarer,
-                        //     audit-worthy action of overriding Original or
-                        //     Current on an existing product.
-                        // Normal rule: add an inbound → current auto-updates.
-                        const existingForCurr = formData.prodId
-                          ? inventory.find(p => p.product_id === formData.prodId)
-                          : null;
-                        const canOverrideQty = userProfile?.role === 'super_admin' || modulePerms?.['Adjust Inventory Quantities'] === true;
-                        const isFirstTime = !existingForCurr;
-                        const qtyLocked = !isFirstTime && !canOverrideQty;
-                        const exOrig = existingForCurr ? Number(existingForCurr.original_quantity) || 0 : 0;
-                        const exCurr = existingForCurr ? Number(existingForCurr.current_quantity) || 0 : 0;
-                        return (<>
-                          <div className="col-span-2">
-                            <label className="text-[10px] font-bold text-slate-500">
-                              Inbound Quantity {isFirstTime ? '(this first batch)' : '(add to existing)'}
-                            </label>
-                            <input
-                              type="number"
-                              value={formData.prodInboundQty || ''}
-                              onChange={e => setFormData({...formData, prodInboundQty: e.target.value})}
-                              placeholder={isFirstTime ? 'How much in this first batch?' : 'How much came in this shipment?'}
-                              className="w-full px-3 py-2 rounded-lg border text-sm" />
-                            {!isFirstTime && (
-                              <div className="text-[10px] text-slate-500 mt-1">
-                                Adding <strong>{Number(formData.prodInboundQty) || 0}</strong> to current stock of <strong>{exCurr}</strong> → new total <strong>{exCurr + (Number(formData.prodInboundQty) || 0)}</strong>.
-                              </div>
-                            )}
-                          </div>
-                          <div>
-                            <label className="text-[10px] font-bold text-slate-500">
-                              Original Quantity {qtyLocked && <span className="text-red-600">🔒</span>}
-                            </label>
-                            <input
-                              type="number"
-                              value={isFirstTime ? (formData.prodOrigQty || '') : (formData.prodOrigQty !== undefined ? formData.prodOrigQty : exOrig)}
-                              disabled={qtyLocked}
-                              onChange={e => setFormData({...formData, prodOrigQty: e.target.value})}
-                              placeholder={isFirstTime ? 'Opening original' : '—'}
-                              className={'w-full px-3 py-2 rounded-lg border text-sm ' + (qtyLocked ? 'bg-slate-100 text-slate-500 cursor-not-allowed' : '')} />
-                            {qtyLocked && (
-                              <div className="text-[10px] text-slate-400 mt-1">Locked — needs the "Adjust Inventory Quantities" permission.</div>
-                            )}
-                            {!isFirstTime && canOverrideQty && (
-                              <div className="text-[10px] text-amber-600 mt-1">
-                                ⚠️ Any change here writes a journal entry under this product.
-                              </div>
-                            )}
-                          </div>
-                          <div>
-                            <label className="text-[10px] font-bold text-slate-500">
-                              Current Quantity {qtyLocked && <span className="text-red-600">🔒</span>}
-                            </label>
-                            <input
-                              type="number"
-                              value={isFirstTime ? (formData.prodCurrQty || '') : (formData.prodCurrQty !== undefined ? formData.prodCurrQty : exCurr)}
-                              disabled={qtyLocked}
-                              onChange={e => setFormData({...formData, prodCurrQty: e.target.value})}
-                              placeholder={isFirstTime ? 'Same as Original if blank' : '—'}
-                              className={'w-full px-3 py-2 rounded-lg border text-sm ' + (qtyLocked ? 'bg-slate-100 text-slate-500 cursor-not-allowed' : '')} />
-                            {qtyLocked && (
-                              <div className="text-[10px] text-slate-400 mt-1">Locked — auto-updates when an inbound is added.</div>
-                            )}
-                            {!isFirstTime && canOverrideQty && (formData.prodCurrQty !== undefined && Number(formData.prodCurrQty) !== exCurr) && (
-                              <div className="text-[10px] text-amber-600 mt-1">
-                                ⚠️ Overrides running total. Needs a reason (below).
-                              </div>
-                            )}
-                          </div>
-                          {/* Override reason for manual adjustment — required when
-                              super-admin OR permissioned user changes Original or
-                              Current away from the computed values. */}
-                          {!isFirstTime && canOverrideQty && (
-                            (formData.prodOrigQty !== undefined && Number(formData.prodOrigQty) !== exOrig) ||
-                            (formData.prodCurrQty !== undefined && Number(formData.prodCurrQty) !== exCurr)
-                          ) && (
-                            <div className="col-span-2">
-                              <label className="text-[10px] font-bold text-amber-700">🧾 Reason for adjustment (journal entry)</label>
-                              <input
-                                value={formData.prodAdjReason || ''}
-                                onChange={e => setFormData({...formData, prodAdjReason: e.target.value})}
-                                placeholder="e.g. Physical count correction, damaged goods write-off, historical correction"
-                                className="w-full px-3 py-2 rounded-lg border border-amber-300 bg-amber-50 text-sm" />
-                            </div>
-                          )}
-                        </>);
-                      })()}
-                      {/* S22.11 — Unit of Measure + Linear Density.
-                          Lets products be billed/tracked in kg, ton, yard,
-                          meter, roll, or piece. Linear density (grams per
-                          meter) lets us convert yards/meters ↔ weight so
-                          per-kg math still works on length-priced items. */}
-                      <div><label className="text-[10px] font-bold text-slate-500">Unit of Measure</label>
-                        <select value={formData.prodUom || ''} onChange={e => setFormData({...formData, prodUom: e.target.value})}
-                          className="w-full px-3 py-2 rounded-lg border text-sm">
-                          <option value="">Select unit...</option>
-                          <option value="kg">kg (kilogram)</option>
-                          <option value="ton">ton (metric ton)</option>
-                          <option value="m">m (meter)</option>
-                          <option value="yd">yd (yard)</option>
-                          <option value="roll">roll</option>
-                          <option value="piece">piece</option>
-                          <option value="pair">pair</option>
-                          <option value="box">box</option>
-                        </select></div>
-                      <div><label className="text-[10px] font-bold text-slate-500">Linear Density (g/m)
-                        <span className="text-slate-400 font-normal"> — for m/yd products</span></label>
-                        <input type="number" step="0.01" value={formData.prodLinearDensity || ''}
-                          onChange={e => setFormData({...formData, prodLinearDensity: e.target.value})}
-                          placeholder="e.g. 450 if 1 meter weighs 450g"
-                          className="w-full px-3 py-2 rounded-lg border text-sm" />
-                      </div>
-                      <div><label className="text-[10px] font-bold text-slate-500">Gross Weight (kg)</label>
-                        <input type="number" value={formData.prodGross || ''} onChange={e => setFormData({...formData, prodGross: e.target.value})} className="w-full px-3 py-2 rounded-lg border text-sm" /></div>
-                      <div><label className="text-[10px] font-bold text-slate-500">Net Weight (kg)</label>
-                        <input type="number" value={formData.prodNet || ''} onChange={e => setFormData({...formData, prodNet: e.target.value})} className="w-full px-3 py-2 rounded-lg border text-sm" /></div>
-                      <div><label className="text-[10px] font-bold text-slate-500">Unit Price</label>
-                        <input type="number" value={formData.prodPrice || ''} onChange={e => setFormData({...formData, prodPrice: e.target.value})} className="w-full px-3 py-2 rounded-lg border text-sm" /></div>
-                      <div><label className="text-[10px] font-bold text-slate-500">Roll Count</label>
-                        <input type="number" value={formData.prodRolls || ''} onChange={e => setFormData({...formData, prodRolls: e.target.value})} className="w-full px-3 py-2 rounded-lg border text-sm" /></div>
-                      <div className="col-span-2">
-                        <label className="text-[10px] font-bold text-slate-500">Product Photo / صورة المنتج</label>
-                        <input type="file" accept="image/*" id="prod-photo" className="w-full px-3 py-2 rounded-lg border text-sm" />
-                        <div className="text-[9px] text-slate-400 mt-1">JPEG or PNG. Stored in Supabase Storage.</div>
-                      </div>
-                      {(userProfile?.role === 'super_admin' || modulePerms?.['View Costs'] === true) && (<>
-                        <div className="col-span-2 mt-2 pt-2 border-t border-red-200">
-                          <div className="text-[10px] font-bold text-red-700">🔒 Cost Fields (Internal)</div>
-                        </div>
-                        <div><label className="text-[9px] font-bold text-slate-500">Purchase Cost</label>
-                          <div className="flex gap-1">
-                            <input type="number" value={formData.prodPurchaseCost || ''} onChange={e => setFormData({...formData, prodPurchaseCost: e.target.value})} placeholder="0.00" className="flex-1 px-2 py-1.5 rounded border text-sm" />
-                            <select value={formData.prodPurchaseCurr || 'USD'} onChange={e => setFormData({...formData, prodPurchaseCurr: e.target.value})} className="px-1 py-1 rounded border text-xs w-16"><option value="USD">USD</option><option value="EGP">EGP</option></select>
-                          </div></div>
-                        <div><label className="text-[9px] font-bold text-slate-500">Customs / Duties</label>
-                          <div className="flex gap-1">
-                            <input type="number" value={formData.prodCustomsCost || ''} onChange={e => setFormData({...formData, prodCustomsCost: e.target.value})} placeholder="0.00" className="flex-1 px-2 py-1.5 rounded border text-sm" />
-                            <select value={formData.prodCustomsCurr || 'EGP'} onChange={e => setFormData({...formData, prodCustomsCurr: e.target.value})} className="px-1 py-1 rounded border text-xs w-16"><option value="USD">USD</option><option value="EGP">EGP</option></select>
-                          </div></div>
-                        <div><label className="text-[9px] font-bold text-slate-500">Shipping & Freight</label>
-                          <div className="flex gap-1">
-                            <input type="number" value={formData.prodShippingCost || ''} onChange={e => setFormData({...formData, prodShippingCost: e.target.value})} placeholder="0.00" className="flex-1 px-2 py-1.5 rounded border text-sm" />
-                            <select value={formData.prodShippingCurr || 'USD'} onChange={e => setFormData({...formData, prodShippingCurr: e.target.value})} className="px-1 py-1 rounded border text-xs w-16"><option value="USD">USD</option><option value="EGP">EGP</option></select>
-                          </div></div>
-                        <div><label className="text-[9px] font-bold text-slate-500">Other Charges</label>
-                          <div className="flex gap-1">
-                            <input type="number" value={formData.prodOtherCost || ''} onChange={e => setFormData({...formData, prodOtherCost: e.target.value})} placeholder="0.00" className="flex-1 px-2 py-1.5 rounded border text-sm" />
-                            <select value={formData.prodOtherCurr || 'EGP'} onChange={e => setFormData({...formData, prodOtherCurr: e.target.value})} className="px-1 py-1 rounded border text-xs w-16"><option value="USD">USD</option><option value="EGP">EGP</option></select>
-                          </div></div>
-                        <div><label className="text-[9px] font-bold text-slate-500">FX Rate (USD→EGP)</label>
-                          <input type="number" value={formData.prodFxRate || 50} onChange={e => setFormData({...formData, prodFxRate: e.target.value})} step="0.01" className="w-full px-2 py-1.5 rounded border text-sm" /></div>
-                      </>)}
-                    </div>
-                    <div className="flex gap-2 pt-2">
-                      <button onClick={async () => {
-                        try {
-                          const isSuperAdmin = userProfile?.role === 'super_admin';
-                          const existingProduct = formData.prodId ? inventory.find(p => p.product_id === formData.prodId) : null;
-                          const isFirstTime = !existingProduct;
-
-                          // Inbound quantity is always editable. Original/Current input
-                          // is editable only on first creation OR for super_admin.
-                          const inboundQty = Number(formData.prodInboundQty) || 0;
-
-                          // Compute what Original and Current should become. Regular
-                          // users: locked to "existing + inbound" (existing flow).
-                          // Super-admin: can enter explicit overrides, which get
-                          // written to inventory_adjustments as a journal entry.
-                          let finalOrigQty, finalCurrQty;
-                          let adjustmentsToLog = []; // {field, old, new, reason}
-
-                          if (isFirstTime) {
-                            // First time: user can enter Original/Current directly.
-                            // If blank, default to inbound. Same as before.
-                            finalOrigQty = Number(formData.prodOrigQty) || inboundQty;
-                            finalCurrQty = Number(formData.prodCurrQty) || finalOrigQty;
-                            if (inboundQty === 0 && finalOrigQty === 0) {
-                              alert('Please enter at least a quantity.');
-                              return;
-                            }
-                          } else {
-                            // Existing product. Default path: add inbound to both.
-                            const exOrig = Number(existingProduct.original_quantity) || 0;
-                            const exCurr = Number(existingProduct.current_quantity) || 0;
-                            finalOrigQty = exOrig + inboundQty;
-                            finalCurrQty = exCurr + inboundQty;
-
-                            // S22.10 — super-admin OR anyone with "Adjust
-                            // Inventory Quantities" perm may override
-                            // Original/Current. This is separate from the
-                            // broader "Edit Inventory" day-to-day permission.
-                            const canOverrideQty = isSuperAdmin || modulePerms?.['Adjust Inventory Quantities'] === true;
-                            if (canOverrideQty) {
-                              const typedOrig = formData.prodOrigQty;
-                              const typedCurr = formData.prodCurrQty;
-                              const origChanged = typedOrig !== undefined && Number(typedOrig) !== exOrig;
-                              const currChanged = typedCurr !== undefined && Number(typedCurr) !== exCurr;
-                              if (origChanged || currChanged) {
-                                if (!formData.prodAdjReason || !formData.prodAdjReason.trim()) {
-                                  alert('Please provide a reason for the adjustment — it will be logged on the product.');
-                                  return;
-                                }
-                                if (origChanged) {
-                                  adjustmentsToLog.push({ field: 'original_quantity', old: exOrig, new: Number(typedOrig), reason: formData.prodAdjReason });
-                                  finalOrigQty = Number(typedOrig) + inboundQty; // inbound still added on top
-                                }
-                                if (currChanged) {
-                                  adjustmentsToLog.push({ field: 'current_quantity', old: exCurr, new: Number(typedCurr), reason: formData.prodAdjReason });
-                                  finalCurrQty = Number(typedCurr) + inboundQty;
-                                }
-                              }
-                            }
-
-                            if (inboundQty === 0 && adjustmentsToLog.length === 0) {
-                              alert('Nothing to save. Enter an Inbound Quantity, or (if you have the "Adjust Inventory Quantities" permission) change Original/Current with a reason.');
-                              return;
-                            }
-                          }
-
-                          const costData = {
-                            purchase_cost: Number(formData.prodPurchaseCost) || 0, purchase_currency: formData.prodPurchaseCurr || 'USD',
-                            customs_cost: Number(formData.prodCustomsCost) || 0, customs_currency: formData.prodCustomsCurr || 'EGP',
-                            shipping_cost: Number(formData.prodShippingCost) || 0, shipping_currency: formData.prodShippingCurr || 'USD',
-                            other_cost: Number(formData.prodOtherCost) || 0, other_currency: formData.prodOtherCurr || 'EGP',
-                            fx_rate: Number(formData.prodFxRate) || 50,
-                          };
-
-                          // Upload photo if selected
-                          let photoUrl = '';
-                          const fileInput = document.getElementById('prod-photo');
-                          if (fileInput && fileInput.files && fileInput.files[0]) {
-                            const file = fileInput.files[0];
-                            const ext = file.name.split('.').pop();
-                            const fileName = 'product-' + Date.now() + '.' + ext;
-                            const { data: uploadData, error: uploadErr } = await supabase.storage.from('product-photos').upload(fileName, file);
-                            if (!uploadErr && uploadData) {
-                              const { data: urlData } = supabase.storage.from('product-photos').getPublicUrl(fileName);
-                              photoUrl = urlData?.publicUrl || '';
-                            }
-                          }
-
-                          // Record the inbound (only if there IS an inbound this time)
-                          if (inboundQty > 0) {
-                            await dbInsert('inventory_inbounds', {
-                              product_id: formData.prodId || '',
-                              reference_number: formData.prodShipment || '',
-                              shipment_reference: formData.prodShipment || '',
-                              inbound_date: formData.prodDate || today(),
-                              quantity: inboundQty,
-                              unit_price: Number(formData.prodPrice) || 0,
-                              ...costData,
-                              notes: formData.prodDescEn || formData.prodDesc || '',
-                            }, userProfile?.id);
-                          }
-
-                          if (existingProduct) {
-                            // AGGREGATE: weighted-average costs exactly like before
-                            const toEgp = (amt, curr, fx) => curr === 'USD' ? amt * fx : amt;
-                            const oldFx = Number(existingProduct.fx_rate) || 50;
-                            const newFx = costData.fx_rate;
-                            const oldTotal = toEgp(Number(existingProduct.purchase_cost)||0, existingProduct.purchase_currency, oldFx);
-                            const newTotal = toEgp(costData.purchase_cost, costData.purchase_currency, newFx);
-                            const avgPurchase = (Number(existingProduct.original_quantity) || 0) + inboundQty > 0 ? (oldTotal + newTotal) / 2 : 0;
-                            const oldCustoms = toEgp(Number(existingProduct.customs_cost)||0, existingProduct.customs_currency, oldFx);
-                            const newCustoms = toEgp(costData.customs_cost, costData.customs_currency, newFx);
-                            const avgCustoms = (Number(existingProduct.original_quantity) || 0) + inboundQty > 0 ? (oldCustoms + newCustoms) / 2 : 0;
-
-                            await dbUpdate('inventory', existingProduct.id, {
-                              original_quantity: finalOrigQty,
-                              current_quantity: finalCurrQty,
-                              purchase_cost: Math.round(avgPurchase * 100) / 100,
-                              purchase_currency: 'EGP',
-                              customs_cost: Math.round(avgCustoms * 100) / 100,
-                              customs_currency: 'EGP',
-                              shipping_cost: (Number(existingProduct.shipping_cost)||0) + costData.shipping_cost,
-                              other_cost: (Number(existingProduct.other_cost)||0) + costData.other_cost,
-                              fx_rate: newFx,
-                              shipment_reference: (existingProduct.shipment_reference || '') + (formData.prodShipment ? ', ' + formData.prodShipment : ''),
-                              ...(photoUrl ? { photo_url: photoUrl } : {}),
-                            }, userProfile?.id);
-
-                            // Log any super-admin adjustments to the journal
-                            for (const adj of adjustmentsToLog) {
-                              try {
-                                await dbInsert('inventory_adjustments', {
-                                  product_id: formData.prodId,
-                                  field: adj.field,
-                                  old_value: adj.old,
-                                  new_value: adj.new,
-                                  reason: adj.reason,
-                                  source: 'manual',
-                                  adjusted_by: userProfile?.id || null,
-                                }, userProfile?.id);
-                              } catch (adjErr) {
-                                console.warn('[adjustment-log] failed — run S20 SQL if missing', adjErr?.message);
-                              }
-                            }
-
-                            alert('✅ Added ' + inboundQty + ' to existing product ' + formData.prodId + ' (now ' + finalCurrQty + ' total)' + (adjustmentsToLog.length ? ' — ' + adjustmentsToLog.length + ' adjustment(s) logged.' : ''));
-                          } else {
-                            // NEW product
-                            const record = {
-                              product_id: formData.prodId || '', reference_number: formData.prodShipment || '',
-                              shipment_reference: formData.prodShipment || '', product_type: formData.prodType || '',
-                              subcategory: formData.prodSubcat || '',
-                              description: formData.prodDesc || '', description_en: formData.prodDescEn || '',
-                              color: formData.prodColor || '', color_en: formData.prodColorEn || '',
-                              roll_count: Number(formData.prodRolls) || 0, gross_weight: Number(formData.prodGross) || 0,
-                              net_weight: Number(formData.prodNet) || 0, unit_price: Number(formData.prodPrice) || 0,
-                              // S22.11 — UoM + linear density (for P&L normalization)
-                              uom: formData.prodUom || null,
-                              linear_density_g_per_m: Number(formData.prodLinearDensity) || null,
-                              original_quantity: finalOrigQty, current_quantity: finalCurrQty,
-                              ...costData,
-                              ...(photoUrl ? { photo_url: photoUrl } : {}),
-                            };
-                            // S22.11 — Defensive: if the DB doesn't yet have
-                            // the new columns, retry without them so the save
-                            // still works on older schemas. User just won't see
-                            // per-m/per-yd math until they run the S22 SQL.
-                            try {
-                              await dbInsert('inventory', record, user?.id);
-                            } catch (colErr) {
-                              if (String(colErr.message || '').match(/column.*uom|column.*linear_density/i)) {
-                                console.warn('[inventory] new columns missing — run s22_inventory_uom.sql. Saving without.');
-                                delete record.uom;
-                                delete record.linear_density_g_per_m;
-                                await dbInsert('inventory', record, user?.id);
-                              } else {
-                                throw colErr;
-                              }
-                            }
-                          }
-                          setFormData({});
-                          await loadAllData();
-                        } catch (err) { toast.error(err.message); }
-                      }} className="flex-1 py-3 rounded-xl text-sm font-bold text-white"
-                        style={{background:'linear-gradient(135deg, #10b981, #059669)'}}>
-                        Save / حفظ
-                      </button>
-                      <button onClick={() => setFormData({})} className="px-5 py-3 rounded-xl text-sm border border-slate-200">Cancel</button>
-                    </div>
-                  </div>
-                </div>
-              </div>
-            )}
-
-            {/* Product Detail Modal */}
-            {formData.selectedProduct && (() => {
-              const p = formData.selectedProduct;
-              const origQty = Number(p.original_quantity || p.roll_count || 0);
-              const currQty = Number(p.current_quantity || p.roll_count || 0);
-              const usedPct = origQty > 0 ? Math.round(((origQty - currQty) / origQty) * 100) : 0;
-              return (
-                <div className="fixed inset-0 bg-black/60 z-50 flex items-start justify-center overflow-auto p-4" onClick={e => { if (e.target === e.currentTarget) setFormData({...formData, selectedProduct: null}); }}>
-                  <div className="bg-white rounded-2xl shadow-2xl w-full max-w-[600px] my-8 overflow-hidden">
-                    {/* Photo header */}
-                    {p.photo_url ? (
-                      <div className="h-48 overflow-hidden relative">
-                        <img src={p.photo_url} alt="" className="w-full h-full object-cover" />
-                        <button onClick={() => setFormData({...formData, selectedProduct: null})}
-                          className="absolute top-3 right-3 w-8 h-8 bg-black/50 rounded-full text-white flex items-center justify-center">✕</button>
-                      </div>
-                    ) : (
-                      <div className="bg-gradient-to-r from-indigo-600 to-purple-600 px-5 py-4 flex justify-between items-center">
-                        <h3 className="text-white font-bold">{p.reference_number || p.product_id}</h3>
-                        <button onClick={() => setFormData({...formData, selectedProduct: null})} className="text-white/70 text-xl">✕</button>
-                      </div>
-                    )}
-                    <div className="p-5 space-y-3">
-                      {/* Upload photo for existing product */}
-                      {!p.photo_url && (
-                        <div className="flex gap-2 items-center">
-                          <input type="file" accept="image/*" id="prod-photo-edit" className="text-xs flex-1" />
-                          <button onClick={async () => {
-                            const fi = document.getElementById('prod-photo-edit');
-                            if (!fi?.files?.[0]) return;
-                            const file = fi.files[0];
-                            const fileName = 'product-' + Date.now() + '.' + file.name.split('.').pop();
-                            const { data: ud, error: ue } = await supabase.storage.from('product-photos').upload(fileName, file);
-                            if (!ue && ud) {
-                              const { data: url } = supabase.storage.from('product-photos').getPublicUrl(fileName);
-                              await dbUpdate('inventory', p.id, { photo_url: url?.publicUrl || '' }, user?.id);
-                              setFormData({...formData, selectedProduct: {...p, photo_url: url?.publicUrl}});
-                              await loadAllData();
-                            } else { alert('Upload error: ' + (ue?.message || 'unknown')); }
-                          }} className="px-3 py-1.5 bg-blue-500 text-white rounded text-xs font-bold">📷 Upload</button>
-                        </div>
-                      )}
-                      {/* Category pills */}
-                      <div className="flex gap-2 flex-wrap">
-                        {p.product_type && <span className="px-2 py-1 bg-indigo-100 text-indigo-700 rounded-lg text-xs font-bold">{p.product_type}</span>}
-                        {p.subcategory && <span className="px-2 py-1 bg-amber-100 text-amber-700 rounded-lg text-xs font-bold">{p.subcategory}</span>}
-                      </div>
-                      <div>
-                        <div className="text-lg font-bold">{p.reference_number || p.product_id}</div>
-                        <div className="text-sm text-slate-600" style={{direction:'rtl'}}>{p.description}</div>
-                        {p.description_en && <div className="text-sm text-blue-600">{p.description_en}</div>}
-                        {p.color && <div className="text-xs text-slate-400 mt-1">🎨 {p.color}{p.color_en ? ' / ' + p.color_en : ''}</div>}
-                      </div>
-                      {/* Quantity tracking */}
-                      <div className="bg-slate-50 rounded-xl p-4">
-                        <div className="flex justify-between mb-2">
-                          <div><div className="text-[9px] text-slate-400">Original</div><div className="text-lg font-bold text-blue-600">{origQty.toLocaleString()}</div></div>
-                          <div className="text-center"><div className="text-[9px] text-slate-400">Used</div><div className="text-lg font-bold text-red-500">{(origQty - currQty).toLocaleString()}</div></div>
-                          <div className="text-right"><div className="text-[9px] text-slate-400">Remaining</div><div className="text-lg font-bold text-emerald-600">{currQty.toLocaleString()}</div></div>
-                        </div>
-                        <div className="h-3 bg-slate-200 rounded-full overflow-hidden">
-                          <div className="h-full rounded-full transition-all" style={{width: Math.max(3, 100 - usedPct) + '%', background: usedPct > 80 ? '#ef4444' : usedPct > 50 ? '#f59e0b' : '#10b981'}} />
-                        </div>
-                        <div className="text-[10px] text-slate-400 text-center mt-1">{usedPct}% used</div>
-                      </div>
-                      <div className="grid grid-cols-3 gap-2">
-                        <div className="bg-blue-50 rounded-lg p-2 text-center"><div className="text-[9px] text-slate-500">Rolls</div><div className="text-sm font-bold">{p.roll_count}</div></div>
-                        <div className="bg-emerald-50 rounded-lg p-2 text-center"><div className="text-[9px] text-slate-500">Net Weight</div><div className="text-sm font-bold">{fmt(p.net_weight)} kg</div></div>
-                        <div className="bg-purple-50 rounded-lg p-2 text-center"><div className="text-[9px] text-slate-500">Unit Price</div><div className="text-sm font-bold text-emerald-600">{fE(p.unit_price)}</div></div>
-                      </div>
-                      {/* Update current quantity */}
-                      <div className="flex gap-2 items-center bg-amber-50 rounded-lg p-3">
-                        <span className="text-xs font-bold text-amber-700">Update Qty:</span>
-                        <input type="number" id="update-qty" defaultValue={currQty} className="flex-1 px-2 py-1.5 rounded border text-sm" />
-                        <button onClick={async () => {
-                          const val = Number(document.getElementById('update-qty')?.value);
-                          if (isNaN(val)) return;
-                          await dbUpdate('inventory', p.id, { current_quantity: val }, user?.id);
-                          setFormData({...formData, selectedProduct: {...p, current_quantity: val}});
-                          await loadAllData();
-                        }} className="px-3 py-1.5 bg-amber-500 text-white rounded text-xs font-bold">Save</button>
-                      </div>
-                      {/* ===== COST & PROFIT (Super Admin / View Costs permission) ===== */}
-                      {(userProfile?.role === 'super_admin' || modulePerms?.['View Costs'] === true) && (
-                        <div className="bg-red-50/50 rounded-xl p-4 border border-red-200/50">
-                          <h4 className="text-xs font-bold text-red-800 mb-2">🔒 Cost & Profit (Internal)</h4>
-                          <div className="grid grid-cols-2 gap-2 mb-3">
-                            <div>
-                              <label className="text-[9px] font-bold text-slate-500">Purchase Cost</label>
-                              <div className="flex gap-1">
-                                <input type="number" id="cost-purchase" defaultValue={p.purchase_cost || ''} placeholder="0.00" className="flex-1 px-2 py-1.5 rounded border text-sm" />
-                                <select id="cost-purchase-curr" defaultValue={p.purchase_currency || 'USD'} className="px-2 py-1.5 rounded border text-xs w-16">
-                                  <option value="USD">USD</option><option value="EGP">EGP</option></select>
-                              </div>
-                            </div>
-                            <div>
-                              <label className="text-[9px] font-bold text-slate-500">Customs / Duties</label>
-                              <div className="flex gap-1">
-                                <input type="number" id="cost-customs" defaultValue={p.customs_cost || ''} placeholder="0.00" className="flex-1 px-2 py-1.5 rounded border text-sm" />
-                                <select id="cost-customs-curr" defaultValue={p.customs_currency || 'EGP'} className="px-2 py-1.5 rounded border text-xs w-16">
-                                  <option value="USD">USD</option><option value="EGP">EGP</option></select>
-                              </div>
-                            </div>
-                            <div>
-                              <label className="text-[9px] font-bold text-slate-500">Shipping & Freight</label>
-                              <div className="flex gap-1">
-                                <input type="number" id="cost-shipping" defaultValue={p.shipping_cost || ''} placeholder="0.00" className="flex-1 px-2 py-1.5 rounded border text-sm" />
-                                <select id="cost-shipping-curr" defaultValue={p.shipping_currency || 'USD'} className="px-2 py-1.5 rounded border text-xs w-16">
-                                  <option value="USD">USD</option><option value="EGP">EGP</option></select>
-                              </div>
-                            </div>
-                            <div>
-                              <label className="text-[9px] font-bold text-slate-500">Other Charges</label>
-                              <div className="flex gap-1">
-                                <input type="number" id="cost-other" defaultValue={p.other_cost || ''} placeholder="0.00" className="flex-1 px-2 py-1.5 rounded border text-sm" />
-                                <select id="cost-other-curr" defaultValue={p.other_currency || 'EGP'} className="px-2 py-1.5 rounded border text-xs w-16">
-                                  <option value="USD">USD</option><option value="EGP">EGP</option></select>
-                              </div>
-                            </div>
-                            <div>
-                              <label className="text-[9px] font-bold text-slate-500">FX Rate (USD→EGP)</label>
-                              <input type="number" id="cost-fx" defaultValue={p.fx_rate || 50} step="0.01" className="w-full px-2 py-1.5 rounded border text-sm" />
-                            </div>
-                            <div>
-                              <label className="text-[9px] font-bold text-slate-500">Sale Price (per unit)</label>
-                              <div className="flex gap-1">
-                                <input type="number" id="cost-sale" defaultValue={p.unit_price || ''} className="flex-1 px-2 py-1.5 rounded border text-sm bg-emerald-50" disabled />
-                                <span className="px-2 py-1.5 text-xs text-slate-500">EGP</span>
-                              </div>
-                            </div>
-                          </div>
-                          <button onClick={async () => {
-                            const costs = {
-                              purchase_cost: Number(document.getElementById('cost-purchase')?.value) || 0,
-                              purchase_currency: document.getElementById('cost-purchase-curr')?.value || 'USD',
-                              customs_cost: Number(document.getElementById('cost-customs')?.value) || 0,
-                              customs_currency: document.getElementById('cost-customs-curr')?.value || 'EGP',
-                              shipping_cost: Number(document.getElementById('cost-shipping')?.value) || 0,
-                              shipping_currency: document.getElementById('cost-shipping-curr')?.value || 'USD',
-                              other_cost: Number(document.getElementById('cost-other')?.value) || 0,
-                              other_currency: document.getElementById('cost-other-curr')?.value || 'EGP',
-                              fx_rate: Number(document.getElementById('cost-fx')?.value) || 50,
-                            };
-                            try {
-                              await dbUpdate('inventory', p.id, costs, user?.id);
-                              setFormData({...formData, selectedProduct: {...p, ...costs}});
-                              await loadAllData();
-                            } catch (err) { toast.error(err.message); }
-                          }} className="px-4 py-2 bg-red-600 text-white rounded-lg text-xs font-bold w-full mb-3">Save Costs</button>
-
-                          {/* Profit Calculation */}
-                          {(() => {
-                            const fx = Number(p.fx_rate) || 50;
-                            const toEGP = (amt, curr) => curr === 'USD' ? amt * fx : amt;
-                            const toUSD = (amt, curr) => curr === 'EGP' ? amt / fx : amt;
-                            const purchaseEGP = toEGP(Number(p.purchase_cost || 0), p.purchase_currency || 'USD');
-                            const customsEGP = toEGP(Number(p.customs_cost || 0), p.customs_currency || 'EGP');
-                            const shippingEGP = toEGP(Number(p.shipping_cost || 0), p.shipping_currency || 'USD');
-                            const otherEGP = toEGP(Number(p.other_cost || 0), p.other_currency || 'EGP');
-                            const totalCostEGP = purchaseEGP + customsEGP + shippingEGP + otherEGP;
-                            const totalCostUSD = totalCostEGP / fx;
-                            const salesEGP = Number(p.unit_price || 0) * origQty;
-                            const linkedInvs = invoiceItems.filter(it => (it.description||'').includes(p.description)||(it.description||'').includes(p.reference_number));
-                            const actualSalesEGP = linkedInvs.reduce((a, it) => a + Number(it.line_total || 0), 0);
-                            const profitEGP = (actualSalesEGP || salesEGP) - totalCostEGP;
-                            const profitUSD = profitEGP / fx;
-                            const margin = (actualSalesEGP || salesEGP) > 0 ? (profitEGP / (actualSalesEGP || salesEGP) * 100).toFixed(1) : 0;
-                            return (
-                              <div className="bg-white rounded-lg p-3 border">
-                                <div className="grid grid-cols-2 gap-2 mb-2">
-                                  <div className="text-center"><div className="text-[9px] text-slate-400">Total Cost</div>
-                                    <div className="text-sm font-bold text-red-600">{fE(totalCostEGP)}</div>
-                                    <div className="text-[9px] text-slate-400">${totalCostUSD.toLocaleString(undefined,{maximumFractionDigits:2})} USD</div></div>
-                                  <div className="text-center"><div className="text-[9px] text-slate-400">Revenue</div>
-                                    <div className="text-sm font-bold text-blue-600">{fE(actualSalesEGP || salesEGP)}</div>
-                                    <div className="text-[9px] text-slate-400">{actualSalesEGP > 0 ? 'From invoices' : 'Estimated'}</div></div>
-                                </div>
-                                <div className={'rounded-lg p-3 text-center ' + (profitEGP >= 0 ? 'bg-emerald-50' : 'bg-red-50')}>
-                                  <div className="text-[9px] text-slate-400">Profit / الربح</div>
-                                  <div className={'text-lg font-extrabold ' + (profitEGP >= 0 ? 'text-emerald-600' : 'text-red-600')}>{fE(profitEGP)}</div>
-                                  <div className="text-xs text-slate-500">${profitUSD.toLocaleString(undefined,{maximumFractionDigits:2})} USD · {margin}% margin</div>
-                                </div>
-
-                                {/* S22.11 (Apr 23 2026) — Apples-to-apples normalization.
-                                    Max: "P&L should show per kg and per ton, and we should
-                                    know how to make it apples-to-apples — could be billed
-                                    by kg, ton, yard, or meter. Also a conversion for
-                                    yards/meters understanding the cost in weight."
-                                    We express the totals in as many units as we can derive:
-                                      - /kg and /ton use net_weight
-                                      - /m uses net_weight + linear_density_g_per_m
-                                      - /yd uses the /m value × 0.9144
-                                    Missing inputs → that row is hidden (not zero-divided).
-                                    Uses origQty as the denominator for per-unit and the
-                                    total net weight (origQty × net_weight_per_unit) for
-                                    /kg /ton. */}
-                                {(() => {
-                                  const netWeightPerUnit = Number(p.net_weight || 0);
-                                  const totalKg = netWeightPerUnit * origQty;
-                                  const totalTon = totalKg / 1000;
-                                  const linearDensityGperM = Number(p.linear_density_g_per_m || 0);
-                                  // Meters per unit = weight per unit (kg) / (g/m) × 1000
-                                  const metersPerUnit = linearDensityGperM > 0 && netWeightPerUnit > 0
-                                    ? (netWeightPerUnit * 1000) / linearDensityGperM
-                                    : 0;
-                                  const totalMeters = metersPerUnit * origQty;
-                                  const totalYards = totalMeters / 0.9144;
-                                  const revenueEGP = actualSalesEGP || salesEGP;
-                                  const rows = [];
-                                  // Per unit (always available as long as qty > 0)
-                                  if (origQty > 0) {
-                                    rows.push({
-                                      label: 'Per unit',
-                                      sub: p.uom ? ('(' + p.uom + ')') : '',
-                                      cost: totalCostEGP / origQty,
-                                      rev: revenueEGP / origQty,
-                                      profit: profitEGP / origQty,
-                                    });
-                                  }
-                                  if (totalKg > 0) {
-                                    rows.push({
-                                      label: 'Per kg',
-                                      sub: totalKg.toLocaleString(undefined,{maximumFractionDigits:1}) + ' kg',
-                                      cost: totalCostEGP / totalKg,
-                                      rev: revenueEGP / totalKg,
-                                      profit: profitEGP / totalKg,
-                                    });
-                                  }
-                                  if (totalTon > 0.01) {
-                                    rows.push({
-                                      label: 'Per ton',
-                                      sub: totalTon.toLocaleString(undefined,{maximumFractionDigits:3}) + ' ton',
-                                      cost: totalCostEGP / totalTon,
-                                      rev: revenueEGP / totalTon,
-                                      profit: profitEGP / totalTon,
-                                    });
-                                  }
-                                  if (totalMeters > 0) {
-                                    rows.push({
-                                      label: 'Per meter',
-                                      sub: totalMeters.toLocaleString(undefined,{maximumFractionDigits:1}) + ' m',
-                                      cost: totalCostEGP / totalMeters,
-                                      rev: revenueEGP / totalMeters,
-                                      profit: profitEGP / totalMeters,
-                                    });
-                                  }
-                                  if (totalYards > 0) {
-                                    rows.push({
-                                      label: 'Per yard',
-                                      sub: totalYards.toLocaleString(undefined,{maximumFractionDigits:1}) + ' yd',
-                                      cost: totalCostEGP / totalYards,
-                                      rev: revenueEGP / totalYards,
-                                      profit: profitEGP / totalYards,
-                                    });
-                                  }
-                                  if (rows.length === 0) return null;
-                                  return (
-                                    <div className="mt-2 pt-2 border-t border-slate-200">
-                                      <div className="text-[9px] font-bold text-slate-500 mb-1">📏 Apples-to-Apples (per unit of measure)</div>
-                                      {netWeightPerUnit === 0 && (
-                                        <div className="text-[9px] text-amber-600 mb-1">⚠ Set Net Weight on this product to unlock /kg and /ton views.</div>
-                                      )}
-                                      {linearDensityGperM === 0 && netWeightPerUnit > 0 && (
-                                        <div className="text-[9px] text-slate-400 mb-1">ℹ To see /meter and /yard, set "Linear Density (g/m)" on the product — converts length ↔ weight.</div>
-                                      )}
-                                      <table className="w-full text-[10px] border-collapse">
-                                        <thead>
-                                          <tr className="text-slate-400 text-[9px] uppercase">
-                                            <th className="text-left py-1">Basis</th>
-                                            <th className="text-right py-1">Cost</th>
-                                            <th className="text-right py-1">Revenue</th>
-                                            <th className="text-right py-1">Profit</th>
-                                          </tr>
-                                        </thead>
-                                        <tbody>
-                                          {rows.map(r => (
-                                            <tr key={r.label} className="border-t border-slate-100">
-                                              <td className="py-1">
-                                                <div className="font-semibold">{r.label}</div>
-                                                {r.sub && <div className="text-[9px] text-slate-400">{r.sub}</div>}
-                                              </td>
-                                              <td className="text-right text-red-600 font-semibold py-1">{fE(r.cost)}</td>
-                                              <td className="text-right text-blue-600 font-semibold py-1">{fE(r.rev)}</td>
-                                              <td className={'text-right font-bold py-1 ' + (r.profit >= 0 ? 'text-emerald-600' : 'text-red-600')}>{fE(r.profit)}</td>
-                                            </tr>
-                                          ))}
-                                        </tbody>
-                                      </table>
-                                    </div>
-                                  );
-                                })()}
-
-                                {/* Customs Cost/kg per Inbound Reference */}
-                                {(() => {
-                                  const shipRefs = [...new Set([p.shipment_reference, ...invInbounds.filter(ib => ib.product_id === p.product_id).map(ib => ib.shipment_reference)].filter(Boolean).flatMap(s => s.split(',').map(x => x.trim())).filter(Boolean))];
-                                  if (shipRefs.length === 0) return null;
-                                  return (
-                                    <div className="mt-2 pt-2 border-t border-slate-200">
-                                      <div className="text-[9px] font-bold text-slate-500 mb-1">Customs Cost/kg per Inbound Reference</div>
-                                      {shipRefs.map(ref => {
-                                        // All products with this shipment reference
-                                        const prodsInShipment = inventory.filter(pr => (pr.shipment_reference || '').includes(ref));
-                                        const inboundsInShipment = invInbounds.filter(ib => (ib.shipment_reference || '').includes(ref));
-                                        // Total customs from inventory records
-                                        const totalCustomsInv = prodsInShipment.reduce((a, pr) => {
-                                          const f = Number(pr.fx_rate) || 50;
-                                          return a + ((pr.customs_currency || 'EGP') === 'USD' ? Number(pr.customs_cost || 0) * f : Number(pr.customs_cost || 0));
-                                        }, 0);
-                                        // Total customs from inbounds
-                                        const totalCustomsIb = inboundsInShipment.reduce((a, ib) => {
-                                          const f = Number(ib.fx_rate) || 50;
-                                          return a + ((ib.customs_currency || 'EGP') === 'USD' ? Number(ib.customs_cost || 0) * f : Number(ib.customs_cost || 0));
-                                        }, 0);
-                                        const totalCustoms = Math.max(totalCustomsInv, totalCustomsIb);
-                                        // Total weight from products
-                                        const totalKg = prodsInShipment.reduce((a, pr) => a + Number(pr.net_weight || pr.gross_weight || 0), 0);
-                                        const costPerKg = totalKg > 0 ? totalCustoms / totalKg : 0;
-                                        // This product's weight
-                                        const thisKg = Number(p.net_weight || p.gross_weight || 0);
-                                        const thisCustomsShare = thisKg > 0 ? costPerKg * thisKg : 0;
-                                        return (
-                                          <div key={ref} className="flex justify-between text-[10px] py-1 border-b border-slate-50">
-                                            <span className="font-semibold text-blue-600">{ref}</span>
-                                            <div className="flex gap-3 text-right">
-                                              <span className="text-slate-500">{totalKg.toLocaleString()} kg</span>
-                                              <span className="text-amber-600">Customs: {fE(totalCustoms)}</span>
-                                              <span className="font-bold text-purple-600">{fE(costPerKg)}/kg</span>
-                                              {thisKg > 0 && <span className="text-red-500">This: {fE(thisCustomsShare)}</span>}
-                                            </div>
-                                          </div>
-                                        );
-                                      })}
-                                    </div>
-                                  );
-                                })()}
-                                <div className="grid grid-cols-4 gap-1 mt-2 text-center">
-                                  <div><div className="text-[8px] text-slate-400">Purchase</div><div className="text-[10px] font-bold">{fE(purchaseEGP)}</div></div>
-                                  <div><div className="text-[8px] text-slate-400">Customs</div><div className="text-[10px] font-bold">{fE(customsEGP)}</div></div>
-                                  <div><div className="text-[8px] text-slate-400">Shipping</div><div className="text-[10px] font-bold">{fE(shippingEGP)}</div></div>
-                                  <div><div className="text-[8px] text-slate-400">Other</div><div className="text-[10px] font-bold">{fE(otherEGP)}</div></div>
-                                </div>
-                              </div>
-                            );
-                          })()}
-                        </div>
-                      )}
-                      {/* Linked Invoices */}
-                      <h4 className="text-xs font-bold">Linked Invoices</h4>
-                      <div className="overflow-auto max-h-[200px] rounded border border-slate-200">
-                        {invoiceItems.filter(it => (it.description||'').includes(p.description)||(it.description||'').includes(p.reference_number)).length > 0 ? (
-                          <table className="w-full border-collapse">
-                            <thead><tr className="bg-slate-50">
-                              <th className="px-2 py-1 text-[10px] text-left">Invoice</th>
-                              <th className="px-2 py-1 text-[10px] text-right">Qty</th>
-                              <th className="px-2 py-1 text-[10px] text-right">Price</th>
-                              <th className="px-2 py-1 text-[10px] text-right">Total</th>
-                            </tr></thead>
-                            <tbody>
-                              {invoiceItems.filter(it => (it.description||'').includes(p.description)||(it.description||'').includes(p.reference_number)).map(it => {
-                                const inv = invoices.find(i => i.id === it.invoice_id);
-                                return (
-                                  <tr key={it.id} className="border-b border-slate-50 cursor-pointer hover:bg-blue-50"
-                                    onClick={() => { if (inv) { setFormData({...formData, selectedProduct: null}); setSelectedInvoice(inv); } }}>
-                                    <td className="px-2 py-1 text-xs font-semibold">{inv ? '#'+inv.order_number : '—'}</td>
-                                    <td className="px-2 py-1 text-xs text-right">{fmt(it.quantity)}</td>
-                                    <td className="px-2 py-1 text-xs text-right">{fmt(it.unit_price)}</td>
-                                    <td className="px-2 py-1 text-xs text-right font-semibold">{fE(it.line_total)}</td>
-                                  </tr>
-                                );
-                              })}
-                            </tbody>
-                          </table>
-                        ) : (<div className="px-3 py-4 text-xs text-slate-400 text-center">No linked invoices</div>)}
-                      </div>
-                      
-                      {/* S20.2 — Per-Shipment Original Quantity breakdown.
-                          Max's ask: remember what ORIGINALLY arrived in each shipment
-                          for this product. The product-level "overall value" still
-                          lives in inventory.original_quantity; this panel uses the
-                          immutable inventory_inbounds rows as the source of truth
-                          for per-shipment originals. "Estimated remaining" is a
-                          FIFO allocation against the product's current_quantity —
-                          it's an estimate because we don't track which shipment a
-                          unit was sold from. */}
-                      {(() => {
-                        const inbs = invInbounds
-                          .filter(ib => ib.product_id === p.product_id)
-                          .sort((a, b) => (a.inbound_date || '').localeCompare(b.inbound_date || ''));
-                        if (inbs.length === 0) return null;
-                        // Group by shipment_reference. Multiple inbounds for the same
-                        // shipment reference collapse into one row (summed original qty).
-                        const groups = {};
-                        inbs.forEach(ib => {
-                          const key = ib.shipment_reference || '(no shipment ref)';
-                          if (!groups[key]) groups[key] = {
-                            shipment: key,
-                            originalQty: 0,
-                            firstDate: ib.inbound_date,
-                            lastDate: ib.inbound_date,
-                            rows: [],
-                          };
-                          groups[key].originalQty += Number(ib.quantity || 0);
-                          if ((ib.inbound_date || '') < (groups[key].firstDate || '9999')) groups[key].firstDate = ib.inbound_date;
-                          if ((ib.inbound_date || '') > (groups[key].lastDate || '')) groups[key].lastDate = ib.inbound_date;
-                          groups[key].rows.push(ib);
-                        });
-                        const ordered = Object.values(groups).sort((a, b) => (a.firstDate || '').localeCompare(b.firstDate || ''));
-                        // FIFO remaining: current_quantity is the product-wide running
-                        // total. Allocate it from newest shipment backward — newest
-                        // shipments are "still in stock" first, older shipments are
-                        // "sold down" first. This matches how traders typically think
-                        // about it but is a heuristic.
-                        let remainingBudget = Number(p.current_quantity || 0);
-                        // Allocate newest-first → iterate reverse
-                        for (let i = ordered.length - 1; i >= 0; i--) {
-                          const g = ordered[i];
-                          if (remainingBudget <= 0) { g.estimatedRemaining = 0; continue; }
-                          if (remainingBudget >= g.originalQty) {
-                            g.estimatedRemaining = g.originalQty;
-                            remainingBudget -= g.originalQty;
-                          } else {
-                            g.estimatedRemaining = remainingBudget;
-                            remainingBudget = 0;
-                          }
-                        }
-                        return (
-                          <div className="mt-3 pt-3 border-t border-slate-200">
-                            <h4 className="text-xs font-bold mb-1">📦 Per-Shipment Original Quantity ({ordered.length})</h4>
-                            <div className="text-[10px] text-slate-500 mb-2">
-                              Each shipment's original quantity is locked to what arrived — it never changes. "Est. remaining" is a newest-first estimate of how much of each shipment is still in stock (based on the product's current quantity).
-                            </div>
-                            <div className="overflow-auto max-h-[220px] rounded border border-slate-200">
-                              <table className="w-full border-collapse text-[10px]">
-                                <thead className="sticky top-0"><tr className="bg-indigo-50">
-                                  <th className="px-2 py-1 text-left">Shipment</th>
-                                  <th className="px-2 py-1 text-left">Arrived</th>
-                                  <th className="px-2 py-1 text-right">Original Qty</th>
-                                  <th className="px-2 py-1 text-right">Est. Remaining</th>
-                                  <th className="px-2 py-1 text-right">Est. Sold</th>
-                                  <th className="px-2 py-1 text-right">% left</th>
-                                </tr></thead>
-                                <tbody>
-                                  {ordered.map(g => {
-                                    const sold = Math.max(0, g.originalQty - (g.estimatedRemaining || 0));
-                                    const pct = g.originalQty > 0 ? Math.round((g.estimatedRemaining || 0) / g.originalQty * 100) : 0;
-                                    return (
-                                      <tr key={g.shipment} className="border-b border-slate-50">
-                                        <td className="px-2 py-1 text-blue-600 font-semibold">{g.shipment}</td>
-                                        <td className="px-2 py-1 text-slate-600">
-                                          {g.firstDate}
-                                          {g.firstDate !== g.lastDate && <span className="text-slate-400"> → {g.lastDate}</span>}
-                                        </td>
-                                        <td className="px-2 py-1 text-right font-bold text-indigo-700">{g.originalQty.toLocaleString()}</td>
-                                        <td className="px-2 py-1 text-right text-emerald-600 font-semibold">{(g.estimatedRemaining || 0).toLocaleString()}</td>
-                                        <td className="px-2 py-1 text-right text-slate-500">{sold.toLocaleString()}</td>
-                                        <td className={'px-2 py-1 text-right font-bold ' + (pct >= 75 ? 'text-emerald-600' : pct >= 25 ? 'text-amber-600' : 'text-red-600')}>{pct}%</td>
-                                      </tr>
-                                    );
-                                  })}
-                                  <tr className="bg-slate-50 border-t-2 border-slate-200 font-bold">
-                                    <td className="px-2 py-1.5" colSpan="2">Total across shipments</td>
-                                    <td className="px-2 py-1.5 text-right text-indigo-700">{ordered.reduce((a, g) => a + g.originalQty, 0).toLocaleString()}</td>
-                                    <td className="px-2 py-1.5 text-right text-emerald-600">{ordered.reduce((a, g) => a + (g.estimatedRemaining || 0), 0).toLocaleString()}</td>
-                                    <td className="px-2 py-1.5 text-right text-slate-500">{ordered.reduce((a, g) => a + Math.max(0, g.originalQty - (g.estimatedRemaining || 0)), 0).toLocaleString()}</td>
-                                    <td className="px-2 py-1.5 text-right text-slate-400">—</td>
-                                  </tr>
-                                </tbody>
-                              </table>
-                            </div>
-                          </div>
-                        );
-                      })()}
-
-                      {/* Inbound History */}
-                      {(() => {
-                        const inbounds = invInbounds.filter(ib => ib.product_id === p.product_id);
-                        if (inbounds.length === 0) return null;
-                        return (
-                          <div className="mt-3 pt-3 border-t border-slate-200">
-                            <h4 className="text-xs font-bold mb-2">📥 Inbound History ({inbounds.length})</h4>
-                            <div className="overflow-auto max-h-[200px] rounded border border-slate-200">
-                              <table className="w-full border-collapse text-[10px]">
-                                <thead className="sticky top-0"><tr className="bg-slate-50">
-                                  <th className="px-2 py-1 text-left">Date</th>
-                                  <th className="px-2 py-1 text-left">Shipment</th>
-                                  <th className="px-2 py-1 text-right">Qty</th>
-                                  <th className="px-2 py-1 text-right">Purchase</th>
-                                  <th className="px-2 py-1 text-right">Customs</th>
-                                  <th className="px-2 py-1 text-right">Customs/kg</th>
-                                  <th className="px-2 py-1 text-right">Total Cost</th>
-                                </tr></thead>
-                                <tbody>
-                                  {inbounds.sort((a,b) => (b.inbound_date||'').localeCompare(a.inbound_date||'')).map(ib => {
-                                    const fx = Number(ib.fx_rate) || 50;
-                                    const toEgp = (amt, curr) => curr === 'USD' ? amt * fx : amt;
-                                    const total = toEgp(Number(ib.purchase_cost)||0, ib.purchase_currency) + toEgp(Number(ib.customs_cost)||0, ib.customs_currency) + toEgp(Number(ib.shipping_cost)||0, ib.shipping_currency) + toEgp(Number(ib.other_cost)||0, ib.other_currency);
-                                    return (
-                                      <tr key={ib.id} className="border-b border-slate-50">
-                                        <td className="px-2 py-1">{ib.inbound_date}</td>
-                                        <td className="px-2 py-1 text-blue-600 font-semibold">{ib.shipment_reference || '—'}</td>
-                                        <td className="px-2 py-1 text-right font-bold">{fmt(ib.quantity)}</td>
-                                        <td className="px-2 py-1 text-right">{fE(toEgp(Number(ib.purchase_cost)||0, ib.purchase_currency))}</td>
-                                        <td className="px-2 py-1 text-right">{fE(toEgp(Number(ib.customs_cost)||0, ib.customs_currency))}</td>
-                                        <td className="px-2 py-1 text-right text-purple-600 font-semibold">{(() => {
-                                          const shipRef = ib.shipment_reference;
-                                          if (!shipRef) return '—';
-                                          const prodsInShip = inventory.filter(pr => (pr.shipment_reference || '').includes(shipRef));
-                                          const totalKg = prodsInShip.reduce((a, pr) => a + Number(pr.net_weight || pr.gross_weight || 0), 0);
-                                          const ibsInShip = invInbounds.filter(i2 => (i2.shipment_reference || '').includes(shipRef));
-                                          const totalCustoms = ibsInShip.reduce((a, i2) => { const f2 = Number(i2.fx_rate)||50; return a + ((i2.customs_currency||'EGP')==='USD'?Number(i2.customs_cost||0)*f2:Number(i2.customs_cost||0)); }, 0);
-                                          return totalKg > 0 ? fE(totalCustoms / totalKg) + '/kg' : '—';
-                                        })()}</td>
-                                        <td className="px-2 py-1 text-right font-bold text-red-600">{fE(total)}</td>
-                                      </tr>
-                                    );
-                                  })}
-                                </tbody>
-                              </table>
-                            </div>
-                          </div>
-                        );
-                      })()}
-
-                      {/* S20 — Adjustment journal for this product. Each row is a
-                          super-admin override to original_quantity or current_quantity.
-                          Immutable audit trail; never affects live values directly. */}
-                      {(() => {
-                        const adjForProd = (invAdjustments || []).filter(a => a.product_id === p.product_id);
-                        if (adjForProd.length === 0) return null;
-                        const userName = (uid) => (teamUsers || []).find(u => u.id === uid)?.name || 'Unknown';
-                        return (
-                          <div className="mt-3 pt-3 border-t border-slate-200">
-                            <h4 className="text-xs font-bold mb-2 flex items-center gap-2">
-                              🧾 Adjustment Journal ({adjForProd.length})
-                              <span className="text-[9px] font-normal text-slate-400">super-admin manual changes</span>
-                            </h4>
-                            <div className="overflow-auto max-h-[200px] rounded border border-slate-200">
-                              <table className="w-full border-collapse text-[10px]">
-                                <thead className="sticky top-0"><tr className="bg-amber-50">
-                                  <th className="px-2 py-1 text-left">When</th>
-                                  <th className="px-2 py-1 text-left">Who</th>
-                                  <th className="px-2 py-1 text-left">Field</th>
-                                  <th className="px-2 py-1 text-right">From</th>
-                                  <th className="px-2 py-1 text-right">To</th>
-                                  <th className="px-2 py-1 text-right">Δ</th>
-                                  <th className="px-2 py-1 text-left">Source</th>
-                                  <th className="px-2 py-1 text-left">Reason</th>
-                                </tr></thead>
-                                <tbody>
-                                  {adjForProd.map(a => {
-                                    const delta = Number(a.new_value || 0) - Number(a.old_value || 0);
-                                    return (
-                                      <tr key={a.id} className="border-b border-slate-50">
-                                        <td className="px-2 py-1">{a.adjusted_at ? new Date(a.adjusted_at).toLocaleString() : '—'}</td>
-                                        <td className="px-2 py-1 font-semibold text-slate-700">{userName(a.adjusted_by)}</td>
-                                        <td className="px-2 py-1">{a.field === 'original_quantity' ? 'Original Qty' : a.field === 'current_quantity' ? 'Current Qty' : a.field}</td>
-                                        <td className="px-2 py-1 text-right text-slate-500">{a.old_value}</td>
-                                        <td className="px-2 py-1 text-right font-bold">{a.new_value}</td>
-                                        <td className={'px-2 py-1 text-right font-bold ' + (delta > 0 ? 'text-emerald-600' : delta < 0 ? 'text-red-600' : 'text-slate-400')}>{delta > 0 ? '+' : ''}{delta}</td>
-                                        <td className="px-2 py-1">
-                                          <span className={'px-1.5 py-0.5 rounded text-[9px] ' + (a.source === 'import' ? 'bg-blue-100 text-blue-700' : 'bg-slate-100 text-slate-600')}>
-                                            {a.source || 'manual'}
-                                          </span>
-                                        </td>
-                                        <td className="px-2 py-1 text-slate-600 max-w-[220px] truncate" title={a.reason}>{a.reason || '—'}</td>
-                                      </tr>
-                                    );
-                                  })}
-                                </tbody>
-                              </table>
-                            </div>
-                          </div>
-                        );
-                      })()}
-                      
-                      {/* P&L Summary */}
-                      {(userProfile?.role === 'super_admin' || modulePerms?.['View Costs'] === true) && (() => {
-                        const fx = Number(p.fx_rate) || 50;
-                        const toEgp = (amt, curr) => curr === 'USD' ? amt * fx : amt;
-                        const totalCost = toEgp(Number(p.purchase_cost)||0, p.purchase_currency) + toEgp(Number(p.customs_cost)||0, p.customs_currency) + toEgp(Number(p.shipping_cost)||0, p.shipping_currency) + toEgp(Number(p.other_cost)||0, p.other_currency);
-                        const linkedItems = invoiceItems.filter(it => it.product_id === p.id);
-                        const totalRevenue = linkedItems.reduce((a, it) => a + Number(it.line_total || 0), 0);
-                        const profit = totalRevenue - totalCost;
-                        const margin = totalRevenue > 0 ? Math.round((profit / totalRevenue) * 100) : 0;
-                        const inbounds = invInbounds.filter(ib => ib.product_id === p.product_id);
-                        const shipments = [...new Set([p.shipment_reference, ...inbounds.map(ib => ib.shipment_reference)].filter(Boolean).flatMap(s => s.split(',').map(x => x.trim())).filter(Boolean))];
-                        
-                        return (
-                          <div className="mt-3 pt-3 border-t border-red-200">
-                            <h4 className="text-xs font-bold text-red-700 mb-2">📊 P&L Summary</h4>
-                            <div className="grid grid-cols-4 gap-2 mb-2">
-                              <div className="bg-red-50 rounded p-2 text-center">
-                                <div className="text-[8px] text-red-500">Total Cost</div>
-                                <div className="text-xs font-extrabold text-red-600">{fE(totalCost)}</div>
-                              </div>
-                              <div className="bg-blue-50 rounded p-2 text-center">
-                                <div className="text-[8px] text-blue-500">Revenue</div>
-                                <div className="text-xs font-extrabold text-blue-600">{fE(totalRevenue)}</div>
-                              </div>
-                              <div className={'rounded p-2 text-center ' + (profit >= 0 ? 'bg-emerald-50' : 'bg-red-50')}>
-                                <div className="text-[8px] text-slate-500">Profit</div>
-                                <div className={'text-xs font-extrabold ' + (profit >= 0 ? 'text-emerald-600' : 'text-red-600')}>{fE(profit)}</div>
-                              </div>
-                              <div className={'rounded p-2 text-center ' + (margin >= 0 ? 'bg-emerald-50' : 'bg-red-50')}>
-                                <div className="text-[8px] text-slate-500">Margin</div>
-                                <div className={'text-xs font-extrabold ' + (margin >= 0 ? 'text-emerald-600' : 'text-red-600')}>{margin}%</div>
-                              </div>
-                            </div>
-                            {shipments.length > 0 && (
-                              <div>
-                                <h5 className="text-[10px] font-bold text-slate-500 mb-1">Per Shipment</h5>
-                                {shipments.map(ship => {
-                                  const ibsForShip = inbounds.filter(ib => (ib.shipment_reference || '').includes(ship));
-                                  const shipCost = ibsForShip.reduce((a, ib) => {
-                                    const f = Number(ib.fx_rate) || 50;
-                                    const te = (amt, c) => c === 'USD' ? amt * f : amt;
-                                    return a + te(Number(ib.purchase_cost)||0, ib.purchase_currency) + te(Number(ib.customs_cost)||0, ib.customs_currency) + te(Number(ib.shipping_cost)||0, ib.shipping_currency) + te(Number(ib.other_cost)||0, ib.other_currency);
-                                  }, 0);
-                                  const shipRevItems = linkedItems.filter(it => {
-                                    const inv = invoices.find(i => i.id === it.invoice_id);
-                                    return inv && (inv.order_number || '').includes(ship);
-                                  });
-                                  const shipRev = shipRevItems.reduce((a, it) => a + Number(it.line_total || 0), 0);
-                                  const shipProfit = shipRev - shipCost;
-                                  return (
-                                    <div key={ship} className="flex justify-between text-[10px] py-0.5 border-b border-slate-50">
-                                      <span className="font-semibold text-blue-600">{ship}</span>
-                                      <div className="flex gap-3">
-                                        <span className="text-red-500">Cost: {fE(shipCost)}</span>
-                                        <span className="text-blue-500">Rev: {fE(shipRev)}</span>
-                                        <span className={shipProfit >= 0 ? 'text-emerald-600 font-bold' : 'text-red-600 font-bold'}>{fE(shipProfit)}</span>
-                                      </div>
-                                    </div>
-                                  );
-                                })}
-                              </div>
-                            )}
-                          </div>
-                        );
-                      })()}
-                    </div>
-                  </div>
-                </div>
-              );
-            })()}
-
-            {/* ===== S19 — Inventory Import modal ===== */}
-            {formData.showInvImport && (
-              <InventoryImport
-                inventory={inventory}
-                isSuperAdmin={userProfile?.role === 'super_admin'}
-                userId={userProfile?.id}
-                onClose={() => setFormData({...formData, showInvImport: false})}
-                onComplete={() => { loadAllData(); }}
-              />
-            )}
-
-            {/* ===== S19 — Historical received-by-date report =====
-                Plain-English: shows how much of each product had been received
-                up to a chosen date, by summing inventory_inbounds. This is NOT
-                a full stock-on-hand snapshot (we don't track outbounds yet) —
-                it's "stock received as of date X" which is still useful for
-                reconciliation and planning. */}
-            {formData.showInvHistorical && (() => {
-              const asOfDate = formData.invHistDate || today();
-              // Per product: sum inbound qty where inbound_date <= asOfDate
-              const byProduct = {};
-              (invInbounds || []).forEach(ib => {
-                if (!ib.inbound_date || ib.inbound_date > asOfDate) return;
-                const pid = ib.product_id || '—';
-                if (!byProduct[pid]) byProduct[pid] = { qty: 0, lastDate: '' };
-                byProduct[pid].qty += Number(ib.quantity || 0);
-                if (ib.inbound_date > byProduct[pid].lastDate) byProduct[pid].lastDate = ib.inbound_date;
-              });
-              const rows = Object.entries(byProduct).map(([pid, v]) => {
-                const p = inventory.find(x => x.product_id === pid);
-                return {
-                  product_id: pid,
-                  description: p?.description_en || p?.description || '',
-                  qty_received: v.qty,
-                  current_qty: p ? Number(p.current_quantity || 0) : 0,
-                  last_inbound: v.lastDate,
-                };
-              }).sort((a, b) => b.qty_received - a.qty_received);
-              const totalRx = rows.reduce((a, r) => a + r.qty_received, 0);
-              return (
-                <div className="fixed inset-0 bg-black/50 z-[60] flex items-center justify-center p-4" onClick={() => setFormData({...formData, showInvHistorical: false})}>
-                  <div className="bg-white rounded-2xl w-full max-w-3xl max-h-[85vh] overflow-hidden shadow-2xl flex flex-col" onClick={e => e.stopPropagation()}>
-                    <div className="px-5 py-3 border-b border-slate-100 flex justify-between items-center">
-                      <h3 className="text-base font-extrabold">📅 Inventory Received as of…</h3>
-                      <button onClick={() => setFormData({...formData, showInvHistorical: false})} className="text-slate-400 hover:text-slate-600 text-xl">×</button>
-                    </div>
-                    <div className="p-5 overflow-auto">
-                      <div className="flex items-center gap-3 mb-4 flex-wrap">
-                        <label className="text-xs font-semibold">As of date:</label>
-                        <input type="date" value={asOfDate}
-                          max={today()}
-                          onChange={e => setFormData({...formData, invHistDate: e.target.value})}
-                          className="px-2 py-1 rounded border text-xs" />
-                        {[['7d', 7], ['30d', 30], ['90d', 90], ['1y', 365]].map(([label, days]) => (
-                          <button key={label}
-                            onClick={() => {
-                              const d = new Date(Date.now() - days * 86400000).toISOString().substring(0, 10);
-                              setFormData({...formData, invHistDate: d});
-                            }}
-                            className="px-2 py-1 rounded border text-xs hover:bg-slate-50">{label} ago</button>
-                        ))}
-                        <button
-                          onClick={() => {
-                            if (rows.length === 0) return;
-                            const headers = ['Product ID', 'Description', 'Received Qty', 'Current Qty', 'Last Inbound'];
-                            const csv = [headers.join(',')].concat(
-                              rows.map(r => [r.product_id, r.description, r.qty_received, r.current_qty, r.last_inbound].map(v => '"' + String(v || '').replace(/"/g, '""') + '"').join(','))
-                            ).join('\n');
-                            const blob = new Blob([csv], { type: 'text/csv;charset=utf-8' });
-                            const url = URL.createObjectURL(blob);
-                            const a = document.createElement('a');
-                            a.href = url;
-                            a.download = 'inventory_as_of_' + asOfDate + '.csv';
-                            a.click();
-                            URL.revokeObjectURL(url);
-                          }}
-                          disabled={rows.length === 0}
-                          className="px-3 py-1 bg-emerald-500 text-white rounded text-xs font-semibold disabled:opacity-40">📥 Export CSV</button>
-                      </div>
-                      <div className="text-xs text-slate-500 mb-2">
-                        Based on <strong>{rows.length}</strong> product{rows.length === 1 ? '' : 's'} · total <strong>{totalRx.toLocaleString()}</strong> units received on or before {asOfDate}.
-                      </div>
-                      <div className="text-[10px] text-amber-600 mb-3 italic">
-                        Note: this counts received inbounds only. If you need point-in-time stock-on-hand (after sales), ask to add inventory_outbounds + daily snapshots.
-                      </div>
-                      <div className="overflow-auto border rounded max-h-[420px]">
-                        <table className="w-full text-xs border-collapse">
-                          <thead className="sticky top-0 bg-slate-100"><tr>
-                            <th className="px-2 py-2 text-left">Product ID</th>
-                            <th className="px-2 py-2 text-left">Description</th>
-                            <th className="px-2 py-2 text-right">Received Qty</th>
-                            <th className="px-2 py-2 text-right">Current Qty</th>
-                            <th className="px-2 py-2 text-left">Last Inbound</th>
-                          </tr></thead>
-                          <tbody>
-                            {rows.map(r => (
-                              <tr key={r.product_id} className="border-b border-slate-50">
-                                <td className="px-2 py-1.5 font-bold">{r.product_id}</td>
-                                <td className="px-2 py-1.5 text-slate-600 truncate max-w-[260px]">{r.description}</td>
-                                <td className="px-2 py-1.5 text-right font-semibold text-blue-600">{r.qty_received.toLocaleString()}</td>
-                                <td className="px-2 py-1.5 text-right">{r.current_qty.toLocaleString()}</td>
-                                <td className="px-2 py-1.5 text-slate-500">{r.last_inbound}</td>
-                              </tr>
-                            ))}
-                            {rows.length === 0 && (
-                              <tr><td colSpan="5" className="text-center text-slate-400 py-4 text-xs">No inbounds on or before this date.</td></tr>
-                            )}
-                          </tbody>
-                        </table>
-                      </div>
-                    </div>
-                  </div>
-                </div>
-              );
-            })()}
-
-            {/* ===== S19 — Expected vs Actual by shipment report =====
-                Reads inventory_expected (optional table — gracefully handles missing).
-                For each shipment_reference it matches to actual inbounds in that
-                shipment and shows the delta. */}
-            {formData.showInvExpected && (() => {
-              // Load expected rows lazily via state held in formData.invExpected
-              const expected = formData.invExpected || null;
-              if (expected === null) {
-                // Kick off load once
-                supabase.from('inventory_expected').select('*').order('expected_date', { ascending: false })
-                  .then(r => {
-                    setFormData(prev => ({...prev, invExpected: r.data || []}));
-                  })
-                  .catch(() => setFormData(prev => ({...prev, invExpected: []})));
-              }
-              // Build shipment summary: for each shipment_reference, list expected
-              // per product and the actual received
-              const byShipment = {};
-              (expected || []).forEach(e => {
-                const key = (e.shipment_reference || '—') + '|' + e.product_id;
-                if (!byShipment[e.shipment_reference]) byShipment[e.shipment_reference] = {};
-                if (!byShipment[e.shipment_reference][e.product_id]) {
-                  byShipment[e.shipment_reference][e.product_id] = { expected: 0, actual: 0 };
-                }
-                byShipment[e.shipment_reference][e.product_id].expected += Number(e.expected_quantity || 0);
-              });
-              (invInbounds || []).forEach(ib => {
-                if (!ib.shipment_reference) return;
-                if (!byShipment[ib.shipment_reference]) return; // no expected for this shipment
-                if (!byShipment[ib.shipment_reference][ib.product_id]) {
-                  byShipment[ib.shipment_reference][ib.product_id] = { expected: 0, actual: 0 };
-                }
-                byShipment[ib.shipment_reference][ib.product_id].actual += Number(ib.quantity || 0);
-              });
-              const shipments = Object.entries(byShipment).map(([shipRef, prods]) => {
-                const products = Object.entries(prods).map(([pid, v]) => ({
-                  product_id: pid,
-                  expected: v.expected,
-                  actual: v.actual,
-                  delta: v.actual - v.expected,
-                }));
-                const totalExp = products.reduce((a, x) => a + x.expected, 0);
-                const totalAct = products.reduce((a, x) => a + x.actual, 0);
-                return { shipRef, products, totalExp, totalAct, totalDelta: totalAct - totalExp };
-              }).sort((a, b) => a.shipRef.localeCompare(b.shipRef));
-
-              return (
-                <div className="fixed inset-0 bg-black/50 z-[60] flex items-center justify-center p-4" onClick={() => setFormData({...formData, showInvExpected: false, invExpected: undefined})}>
-                  <div className="bg-white rounded-2xl w-full max-w-4xl max-h-[85vh] overflow-hidden shadow-2xl flex flex-col" onClick={e => e.stopPropagation()}>
-                    <div className="px-5 py-3 border-b border-slate-100 flex justify-between items-center">
-                      <h3 className="text-base font-extrabold">📊 Expected vs Actual by Shipment</h3>
-                      <button onClick={() => setFormData({...formData, showInvExpected: false, invExpected: undefined})} className="text-slate-400 hover:text-slate-600 text-xl">×</button>
-                    </div>
-                    <div className="p-5 overflow-auto">
-                      {/* S22.11 (Apr 23 2026) — Manual entry for expected qty.
-                          Previously the only way to populate this was the
-                          Excel import. Max wants to enter it by hand too. */}
-                      <div className="mb-4 bg-slate-50 border border-slate-200 rounded-lg p-3">
-                        <div className="flex items-center justify-between mb-2">
-                          <div className="text-xs font-bold text-slate-700">➕ Add Expected Quantity Manually</div>
-                          {!formData.showExpForm && (
-                            <button onClick={() => setFormData({...formData, showExpForm: true})}
-                              className="px-2.5 py-1 bg-indigo-600 text-white rounded text-[11px] font-bold hover:bg-indigo-700">
-                              + New Entry
-                            </button>
-                          )}
-                        </div>
-                        {formData.showExpForm && (
-                          <div className="grid grid-cols-2 md:grid-cols-5 gap-2">
-                            <div>
-                              <label className="text-[9px] font-bold text-slate-500">Product ID</label>
-                              <input list="inv-exp-products" value={formData.expProdId || ''}
-                                onChange={e => setFormData({...formData, expProdId: e.target.value})}
-                                placeholder="e.g. LEA-001" className="w-full px-2 py-1 rounded border text-xs" />
-                              <datalist id="inv-exp-products">
-                                {[...new Set((inventory || []).map(p => p.product_id).filter(Boolean))].sort().map(id =>
-                                  <option key={id} value={id} />)}
-                              </datalist>
-                            </div>
-                            <div>
-                              <label className="text-[9px] font-bold text-slate-500">Shipment Ref</label>
-                              <input value={formData.expShipRef || ''}
-                                onChange={e => setFormData({...formData, expShipRef: e.target.value})}
-                                placeholder="e.g. SH-2026-04" className="w-full px-2 py-1 rounded border text-xs" />
-                            </div>
-                            <div>
-                              <label className="text-[9px] font-bold text-slate-500">Expected Qty</label>
-                              <input type="number" value={formData.expQty || ''}
-                                onChange={e => setFormData({...formData, expQty: e.target.value})}
-                                className="w-full px-2 py-1 rounded border text-xs" />
-                            </div>
-                            <div>
-                              <label className="text-[9px] font-bold text-slate-500">Expected Date</label>
-                              <input type="date" value={formData.expDate || ''}
-                                onChange={e => setFormData({...formData, expDate: e.target.value})}
-                                className="w-full px-2 py-1 rounded border text-xs" />
-                            </div>
-                            <div>
-                              <label className="text-[9px] font-bold text-slate-500">Notes</label>
-                              <input value={formData.expNotes || ''}
-                                onChange={e => setFormData({...formData, expNotes: e.target.value})}
-                                className="w-full px-2 py-1 rounded border text-xs" />
-                            </div>
-                            <div className="col-span-2 md:col-span-5 flex justify-end gap-2 mt-1">
-                              <button onClick={() => setFormData({...formData, showExpForm: false, expProdId: '', expShipRef: '', expQty: '', expDate: '', expNotes: ''})}
-                                className="px-3 py-1 rounded border text-[11px]">Cancel</button>
-                              <button onClick={async () => {
-                                if (!formData.expProdId || !formData.expShipRef || !formData.expQty) {
-                                  alert('Please fill in Product ID, Shipment Ref, and Expected Qty.');
-                                  return;
-                                }
-                                try {
-                                  const { error } = await supabase.from('inventory_expected').insert({
-                                    product_id: formData.expProdId.trim(),
-                                    shipment_reference: formData.expShipRef.trim(),
-                                    expected_quantity: Number(formData.expQty) || 0,
-                                    expected_date: formData.expDate || null,
-                                    notes: formData.expNotes || null,
-                                    created_by: userProfile?.id || null,
-                                  });
-                                  if (error) throw error;
-                                  toast.success('Expected quantity saved');
-                                  // Reset + reload the panel by flipping the invExpected cache
-                                  setFormData({
-                                    ...formData,
-                                    showExpForm: false,
-                                    expProdId: '', expShipRef: '', expQty: '', expDate: '', expNotes: '',
-                                    invExpected: undefined, // forces re-fetch
-                                  });
-                                } catch (err) {
-                                  alert('Could not save: ' + (err.message || 'unknown error') +
-                                    '\n\nMake sure you ran s19_inventory_expected.sql in Supabase.');
-                                }
-                              }} className="px-3 py-1 rounded bg-indigo-600 text-white text-[11px] font-bold hover:bg-indigo-700">
-                                Save
-                              </button>
-                            </div>
-                          </div>
-                        )}
-                      </div>
-
-                      {expected === null && (
-                        <div className="text-center py-6 text-sm text-slate-500">Loading…</div>
-                      )}
-                      {expected !== null && shipments.length === 0 && (
-                        <div className="p-4 bg-amber-50 border border-amber-200 rounded text-xs text-amber-900">
-                          <div className="font-bold mb-1">No expected quantities recorded yet.</div>
-                          <div>Use the Excel import and fill in the <strong>Expected Quantity</strong> + <strong>Shipment Reference</strong> columns to populate this report. Expected quantities never change the actual inventory — they're stored separately.</div>
-                          <div className="mt-2 text-slate-600">
-                            If you've never set this up in the database, run the <code className="bg-white px-1 rounded">inventory_expected</code> SQL in the handover doc first.
-                          </div>
-                        </div>
-                      )}
-                      {expected !== null && shipments.length > 0 && (
-                        <>
-                          <div className="grid grid-cols-3 gap-3 mb-4">
-                            <div className="bg-purple-50 border border-purple-200 rounded-lg p-3">
-                              <div className="text-[10px] text-purple-700 font-bold">Shipments tracked</div>
-                              <div className="text-xl font-extrabold text-purple-700">{shipments.length}</div>
-                            </div>
-                            <div className="bg-blue-50 border border-blue-200 rounded-lg p-3">
-                              <div className="text-[10px] text-blue-700 font-bold">Total expected</div>
-                              <div className="text-xl font-extrabold text-blue-700">{shipments.reduce((a, s) => a + s.totalExp, 0).toLocaleString()}</div>
-                            </div>
-                            <div className="bg-emerald-50 border border-emerald-200 rounded-lg p-3">
-                              <div className="text-[10px] text-emerald-700 font-bold">Total received</div>
-                              <div className="text-xl font-extrabold text-emerald-700">{shipments.reduce((a, s) => a + s.totalAct, 0).toLocaleString()}</div>
-                            </div>
-                          </div>
-                          {shipments.map(s => (
-                            <div key={s.shipRef} className="mb-4 border border-slate-200 rounded-lg overflow-hidden">
-                              <div className="bg-slate-50 px-3 py-2 flex justify-between items-center">
-                                <div>
-                                  <div className="text-sm font-bold">📦 {s.shipRef}</div>
-                                  <div className="text-[10px] text-slate-500">
-                                    Expected <strong>{s.totalExp.toLocaleString()}</strong> · Received <strong>{s.totalAct.toLocaleString()}</strong>
-                                    <span className={'ml-2 font-bold ' + (s.totalDelta === 0 ? 'text-emerald-600' : s.totalDelta < 0 ? 'text-red-600' : 'text-amber-600')}>
-                                      {s.totalDelta === 0 ? '✓ Match' : (s.totalDelta > 0 ? '+' : '') + s.totalDelta.toLocaleString()}
-                                    </span>
-                                  </div>
-                                </div>
-                              </div>
-                              <table className="w-full text-xs border-collapse">
-                                <thead><tr className="bg-white border-b"><th className="px-2 py-1.5 text-left">Product ID</th><th className="px-2 py-1.5 text-right">Expected</th><th className="px-2 py-1.5 text-right">Received</th><th className="px-2 py-1.5 text-right">Delta</th></tr></thead>
-                                <tbody>
-                                  {s.products.sort((a, b) => a.product_id.localeCompare(b.product_id)).map(p => (
-                                    <tr key={p.product_id} className={'border-b border-slate-50 ' + (p.delta === 0 ? '' : p.delta < 0 ? 'bg-red-50' : 'bg-amber-50')}>
-                                      <td className="px-2 py-1.5 font-semibold">{p.product_id}</td>
-                                      <td className="px-2 py-1.5 text-right">{p.expected.toLocaleString()}</td>
-                                      <td className="px-2 py-1.5 text-right">{p.actual.toLocaleString()}</td>
-                                      <td className={'px-2 py-1.5 text-right font-bold ' + (p.delta === 0 ? 'text-emerald-600' : p.delta < 0 ? 'text-red-600' : 'text-amber-600')}>
-                                        {p.delta === 0 ? '✓' : (p.delta > 0 ? '+' : '') + p.delta.toLocaleString()}
-                                      </td>
-                                    </tr>
-                                  ))}
-                                </tbody>
-                              </table>
-                            </div>
-                          ))}
-                        </>
-                      )}
-                    </div>
-                  </div>
-                </div>
-              );
-            })()}
-
-            {/* ===== S20.2 — By-Shipment report =====
-                Pick a shipment reference. See every product that arrived in it,
-                with each product's original quantity AT THAT SHIPMENT (immutable,
-                from inventory_inbounds). This is the "per-shipment original"
-                view Max asked for, independent of the product-level running
-                totals. */}
-            {formData.showInvByShipment && (() => {
-              // All shipment references present in inbounds
-              const refSet = new Set();
-              (invInbounds || []).forEach(ib => { if (ib.shipment_reference) refSet.add(ib.shipment_reference); });
-              const refs = [...refSet].sort();
-              const chosen = formData.invByShipRef || refs[0] || '';
-              const ibsInShip = (invInbounds || []).filter(ib => ib.shipment_reference === chosen);
-              // Per-product rollup for this shipment
-              const perProd = {};
-              ibsInShip.forEach(ib => {
-                const pid = ib.product_id;
-                if (!perProd[pid]) {
-                  const p = inventory.find(x => x.product_id === pid);
-                  perProd[pid] = {
-                    product_id: pid,
-                    description: p?.description_en || p?.description || '',
-                    color: p?.color_en || p?.color || '',
-                    product_type: p?.product_type || '',
-                    originalInShipment: 0,
-                    firstDate: ib.inbound_date,
-                    lastDate: ib.inbound_date,
-                    productCurrent: p ? Number(p.current_quantity || 0) : 0,
-                    productOriginal: p ? Number(p.original_quantity || 0) : 0,
-                  };
-                }
-                perProd[pid].originalInShipment += Number(ib.quantity || 0);
-                if ((ib.inbound_date || '') < (perProd[pid].firstDate || '9999')) perProd[pid].firstDate = ib.inbound_date;
-                if ((ib.inbound_date || '') > (perProd[pid].lastDate || '')) perProd[pid].lastDate = ib.inbound_date;
-              });
-              const prodRows = Object.values(perProd).sort((a, b) => b.originalInShipment - a.originalInShipment);
-              const totalOrigInShip = prodRows.reduce((a, r) => a + r.originalInShipment, 0);
-              return (
-                <div className="fixed inset-0 bg-black/50 z-[60] flex items-center justify-center p-4" onClick={() => setFormData({...formData, showInvByShipment: false})}>
-                  <div className="bg-white rounded-2xl w-full max-w-4xl max-h-[85vh] overflow-hidden shadow-2xl flex flex-col" onClick={e => e.stopPropagation()}>
-                    <div className="px-5 py-3 border-b border-slate-100 flex justify-between items-center">
-                      <h3 className="text-base font-extrabold">📦 By Shipment — Original Quantities</h3>
-                      <button onClick={() => setFormData({...formData, showInvByShipment: false})} className="text-slate-400 hover:text-slate-600 text-xl">×</button>
-                    </div>
-                    <div className="p-5 overflow-auto">
-                      {refs.length === 0 ? (
-                        <div className="text-center py-6 text-sm text-slate-500">No shipments on file yet. Add inventory with a Shipment Reference to see it here.</div>
-                      ) : (<>
-                        <div className="flex items-center gap-3 mb-3 flex-wrap">
-                          <label className="text-xs font-semibold">Shipment:</label>
-                          <select value={chosen}
-                            onChange={e => setFormData({...formData, invByShipRef: e.target.value})}
-                            className="px-2 py-1 rounded border text-xs">
-                            {refs.map(r => <option key={r} value={r}>{r}</option>)}
-                          </select>
-                          <span className="text-[10px] text-slate-500">{refs.length} shipment{refs.length === 1 ? '' : 's'} tracked</span>
-                          <button
-                            onClick={() => {
-                              if (prodRows.length === 0) return;
-                              const headers = ['Shipment', 'Product ID', 'Description', 'Color', 'Type', 'Original in Shipment', 'Arrived', 'Product Current (whole)', 'Product Original (whole)'];
-                              const csv = [headers.join(',')].concat(
-                                prodRows.map(r => [chosen, r.product_id, r.description, r.color, r.product_type, r.originalInShipment, r.firstDate === r.lastDate ? r.firstDate : r.firstDate + ' → ' + r.lastDate, r.productCurrent, r.productOriginal]
-                                  .map(v => '"' + String(v || '').replace(/"/g, '""') + '"').join(','))
-                              ).join('\n');
-                              const blob = new Blob([csv], { type: 'text/csv;charset=utf-8' });
-                              const url = URL.createObjectURL(blob);
-                              const a = document.createElement('a');
-                              a.href = url;
-                              a.download = 'shipment_' + chosen + '.csv';
-                              a.click();
-                              URL.revokeObjectURL(url);
-                            }}
-                            className="ml-auto px-3 py-1 bg-emerald-500 text-white rounded text-xs font-semibold">📥 CSV</button>
-                        </div>
-                        <div className="grid grid-cols-3 gap-3 mb-3">
-                          <div className="bg-indigo-50 border border-indigo-200 rounded-lg p-3">
-                            <div className="text-[10px] text-indigo-700 font-bold">Products in shipment</div>
-                            <div className="text-xl font-extrabold text-indigo-700">{prodRows.length}</div>
-                          </div>
-                          <div className="bg-blue-50 border border-blue-200 rounded-lg p-3">
-                            <div className="text-[10px] text-blue-700 font-bold">Original qty (this shipment)</div>
-                            <div className="text-xl font-extrabold text-blue-700">{totalOrigInShip.toLocaleString()}</div>
-                          </div>
-                          <div className="bg-slate-50 border border-slate-200 rounded-lg p-3">
-                            <div className="text-[10px] text-slate-500 font-bold">Product-level current total</div>
-                            <div className="text-xl font-extrabold text-slate-700">{prodRows.reduce((a, r) => a + r.productCurrent, 0).toLocaleString()}</div>
-                            <div className="text-[9px] text-slate-400">(across these products, all shipments)</div>
-                          </div>
-                        </div>
-                        <div className="overflow-auto border rounded max-h-[360px]">
-                          <table className="w-full text-xs border-collapse">
-                            <thead className="sticky top-0 bg-slate-100"><tr>
-                              <th className="px-2 py-2 text-left">Product ID</th>
-                              <th className="px-2 py-2 text-left">Description</th>
-                              <th className="px-2 py-2 text-left">Color</th>
-                              <th className="px-2 py-2 text-left">Type</th>
-                              <th className="px-2 py-2 text-right">Original in Shipment</th>
-                              <th className="px-2 py-2 text-left">Arrived</th>
-                              <th className="px-2 py-2 text-right">Product Current</th>
-                            </tr></thead>
-                            <tbody>
-                              {prodRows.map(r => (
-                                <tr key={r.product_id} className="border-b border-slate-50">
-                                  <td className="px-2 py-1.5 font-bold">{r.product_id}</td>
-                                  <td className="px-2 py-1.5 text-slate-600 truncate max-w-[220px]" title={r.description}>{r.description}</td>
-                                  <td className="px-2 py-1.5 text-slate-600">{r.color}</td>
-                                  <td className="px-2 py-1.5 text-slate-600">{r.product_type}</td>
-                                  <td className="px-2 py-1.5 text-right font-bold text-indigo-700">{r.originalInShipment.toLocaleString()}</td>
-                                  <td className="px-2 py-1.5 text-slate-500">{r.firstDate === r.lastDate ? r.firstDate : r.firstDate + ' → ' + r.lastDate}</td>
-                                  <td className="px-2 py-1.5 text-right text-emerald-600">{r.productCurrent.toLocaleString()}</td>
-                                </tr>
-                              ))}
-                              {prodRows.length === 0 && (
-                                <tr><td colSpan="7" className="text-center text-slate-400 py-4">No products in this shipment.</td></tr>
-                              )}
-                            </tbody>
-                          </table>
-                        </div>
-                        <div className="text-[10px] text-slate-400 mt-2 italic">
-                          "Original in Shipment" never changes after import — it's the immutable record of what arrived in this shipment. "Product Current" is the running total for the whole product across all shipments.
-                        </div>
-                      </>)}
-                    </div>
-                  </div>
-                </div>
-              );
-            })()}
-          </div>
+          <SafeSection label="Inventory">
+            <InventoryTab userProfile={userProfile} modulePerms={modulePerms} isSuperAdmin={isSuperAdmin} toast={toast} />
+          </SafeSection>
         )}
+
+        {/* ==========================================
+            CRM TAB
+            v55.83-A — Restored to byte-exact match with v55.82-Z baseline.
+        ========================================== */}
         {tab === 'crm' && (
           <SafeSection label="CRM"><CRMTab toast={toast} customers={customers} invoices={invoices} user={user} userProfile={userProfile} users={teamUsers} onReload={loadAllData} isAdmin={isAdmin} onSelectInvoice={setSelectedInvoice} lang={lang} modulePerms={modulePerms} /></SafeSection>
         )}
 
         {/* ==========================================
             TICKETS TAB
+            v55.83-A — Restored to byte-exact match with v55.82-Z baseline.
         ========================================== */}
         {tab === 'tickets' && (
-          <SafeSection label="Tickets"><TicketsTab toast={toast} customers={customers} user={user} userProfile={userProfile} users={teamUsers} onReload={loadAllData} lang={lang} isAdmin={isAdmin} modulePerms={modulePerms} openTicketId={openTicketId} onOpenTicketHandled={() => setOpenTicketId(null)} /></SafeSection>
+          <SafeSection label="Tickets"><TicketsTab toast={toast} customers={customers} user={user} userProfile={userProfile} users={teamUsers} onReload={loadAllData} lang={lang} isAdmin={isAdmin} modulePerms={modulePerms} openTicketId={openTicketId} onOpenTicketHandled={() => setOpenTicketId(null)} onTicketModalClosed={() => {
+            // v55.83-A.6.13 — return to whichever tab the user was on
+            // when they clicked the ticket link (e.g. dashboard).
+            if (returnToTabAfterTicket) {
+              const t = returnToTabAfterTicket;
+              setReturnToTabAfterTicket(null);
+              setTab(t);
+            }
+          }} /></SafeSection>
         )}
 
         {/* ==========================================
             CALENDAR TAB
+            v55.83-A — Restored to byte-exact match with v55.82-Z baseline.
         ========================================== */}
         {tab === 'calendar' && (
           <SafeSection label="Calendar"><CalendarTab customers={customers} user={user} userProfile={userProfile} users={teamUsers} tickets={dashTickets} onOpenTicket={(tid) => { setOpenTicketId(tid); setTab('tickets'); }} onReload={loadAllData} /></SafeSection>
@@ -11249,7 +13660,7 @@ export default function App() {
             CUSTOMS / BROKER TAB
         ========================================== */}
         {tab === 'customs' && (
-          <SafeSection label="Customs"><CustomsTab customers={customers} user={user} /></SafeSection>
+          <SafeSection label="Customs"><CustomsTab customers={customers} user={user} fxRate={fxRate} /></SafeSection>
         )}
 
         {/* ==========================================
@@ -11264,11 +13675,29 @@ export default function App() {
         )}
 
         {tab === 'egyptbank' && (
-          <SafeSection label="Egypt Bank"><EgyptBankTab toast={toast} user={user} userProfile={userProfile} isAdmin={isAdmin} invoices={invoices} onReload={loadAllData} /></SafeSection>
+          <SafeSection label="Egypt Bank"><EgyptBankTab toast={toast} user={user} userProfile={userProfile} isAdmin={isAdmin} invoices={invoices} recalcInvoiceCollected={recalcInvoiceCollected} onReload={loadAllData} /></SafeSection>
         )}
 
         {tab === 'reports' && (
-          <SafeSection label="Reports"><ReportsTab treasury={treasury} invoices={invoices} warehouseExpenses={warehouse} egyptBankTxns={egyptBankTxns} canViewFinancials={isSuperAdmin || modulePerms?.['View Financial Reports'] === true} /></SafeSection>
+          <SafeSection label="Reports">
+            <ReportsTab treasury={treasury} invoices={invoices} warehouseExpenses={warehouse} egyptBankTxns={egyptBankTxns} canViewFinancials={isSuperAdmin || modulePerms?.['View Financial Reports'] === true} supabase={supabase} isSuperAdmin={isSuperAdmin} userProfile={userProfile} checks={checks} customers={customers} onReload={loadAllData} toast={toast} recalcInvoiceCollected={recalcInvoiceCollected} onOpenInvoice={(inv) => {
+              // v55.83-A.6.17 — opens the invoice modal (rendered globally
+              // outside tab gates, so we DO NOT switch tabs — Reports stays
+              // mounted in the background. Closing the modal returns naturally.
+              if (!inv) return;
+              setSelectedInvoice(inv);
+            }} />
+            {/* v55.83-A.6.9 — Write-offs audit report. Reuses same
+                permission gate as financial reports. */}
+            <div className="mt-4">
+              <WriteOffsReport
+                invoices={invoices}
+                customers={customers}
+                users={teamUsers}
+                canView={isSuperAdmin || modulePerms?.['View Financial Reports'] === true}
+              />
+            </div>
+          </SafeSection>
         )}
 
         {tab === 'quotes' && (
@@ -11286,7 +13715,7 @@ export default function App() {
             ADMIN TAB
         ========================================== */}
         {tab === 'admin' && (
-          <SafeSection label="Admin"><AdminTab user={user} userProfile={userProfile} users={teamUsers} isAdmin={isAdmin} customers={customers} /></SafeSection>
+          <SafeSection label="Admin"><AdminTab user={user} userProfile={userProfile} users={teamUsers} isAdmin={isAdmin} customers={customers} modulePerms={modulePerms} /></SafeSection>
         )}
 
         {/* ==========================================
@@ -11297,7 +13726,7 @@ export default function App() {
         )}
 
         {tab === 'comms' && (
-          <SafeSection label="Communications"><CommunicationsTab user={user} supabase={supabase} /></SafeSection>
+          <SafeSection label="Communications"><CommunicationsTab user={user} userProfile={userProfile} customers={customers} supabase={supabase} /></SafeSection>
         )}
 
         {/* ==========================================
@@ -11314,170 +13743,18 @@ export default function App() {
 
         {/* ==========================================
             SYSTEM TICKETS TAB
+            v55.45 — extracted to SystemTicketsPanel component (clean
+            React state, no window globals, no setState-during-render).
         ========================================== */}
         {tab === 'systemtickets' && (
           <SafeSection label="System Tickets">
-          <div>
-            <div className="flex justify-between items-center mb-3">
-              <h2 className="text-xl font-extrabold">🐛 System Tickets / تذاكر النظام</h2>
-              <button onClick={() => setFormData({ showSysTicket: true, sysTitle: '', sysDesc: '', sysPriority: 'medium', sysCategory: 'bug' })}
-                className="px-4 py-2 bg-red-500 text-white rounded-lg text-xs font-bold">+ New System Ticket / تذكرة جديدة</button>
-            </div>
-            <div className="text-xs text-slate-400 mb-3">Report bugs, feature requests, and system issues / الإبلاغ عن الأخطاء وطلبات الميزات</div>
-
-            {formData.showSysTicket && (
-              <div className="bg-white rounded-xl p-4 mb-4 border-2 border-red-200">
-                <h3 className="text-sm font-bold mb-2">New System Ticket / تذكرة نظام جديدة</h3>
-                <div className="grid grid-cols-2 gap-3 mb-3">
-                  <div>
-                    <label className="text-[10px] font-semibold text-slate-500 block mb-1">Category / الفئة</label>
-                    <select value={formData.sysCategory || 'bug'} onChange={e => setFormData({...formData, sysCategory: e.target.value})} className="dark-input">
-                      <option value="bug">🐛 Bug / خطأ</option>
-                      <option value="feature">✨ Feature Request / ميزة</option>
-                      <option value="improvement">📈 Improvement / تحسين</option>
-                      <option value="question">❓ Question / سؤال</option>
-                      <option value="urgent">🚨 Urgent Fix / إصلاح عاجل</option>
-                    </select>
-                  </div>
-                  <div>
-                    <label className="text-[10px] font-semibold text-slate-500 block mb-1">Priority / الأولوية</label>
-                    <select value={formData.sysPriority || 'medium'} onChange={e => setFormData({...formData, sysPriority: e.target.value})} className="dark-input">
-                      <option value="low">🟢 Low / منخفض</option>
-                      <option value="medium">🟡 Medium / متوسط</option>
-                      <option value="high">🔴 High / عالي</option>
-                      <option value="critical">🚨 Critical / حرج</option>
-                    </select>
-                  </div>
-                </div>
-                <input value={formData.sysTitle || ''} onChange={e => setFormData({...formData, sysTitle: e.target.value})}
-                  placeholder="Title / العنوان *" className="dark-input mb-3" />
-                <textarea value={formData.sysDesc || ''} onChange={e => setFormData({...formData, sysDesc: e.target.value})}
-                  placeholder="Description — steps to reproduce, expected vs actual behavior&#10;الوصف — خطوات إعادة الإنتاج، السلوك المتوقع مقابل الفعلي"
-                  rows={4} className="dark-input mb-3" />
-                <div className="flex gap-2">
-                  <button onClick={async () => {
-                    if (!formData.sysTitle) { toast.warning('Title is required / العنوان مطلوب'); return; }
-                    try {
-                      const count = (await supabase.from('system_tickets').select('*', { count: 'exact', head: true })).count || 0;
-                      await dbInsert('system_tickets', {
-                        ticket_number: 'SYS-' + String(count + 1).padStart(4, '0'),
-                        title: sanitize(formData.sysTitle),
-                        description: sanitize(formData.sysDesc || ''),
-                        category: formData.sysCategory || 'bug',
-                        priority: formData.sysPriority || 'medium',
-                        status: 'Open',
-                        created_by: userProfile?.id || user?.id,
-                        assigned_to: null,
-                      }, user?.id);
-                      toast.success('System ticket created ✓');
-                      setFormData({});
-                      await loadAllData();
-                    } catch(err) { toast.error(err.message); }
-                  }} className="px-5 py-2.5 bg-red-500 text-white rounded-lg text-sm font-bold">Submit / إرسال</button>
-                  <button onClick={() => setFormData({})} className="px-4 py-2.5 border-2 border-slate-300 rounded-lg text-sm font-bold">Cancel</button>
-                </div>
-              </div>
-            )}
-
-            {(() => {
-              const sysTicketsRaw = (window.__sysTickets || []);
-              // Load system tickets on first render
-              if (!window.__sysTicketsLoaded) {
-                window.__sysTicketsLoaded = true;
-                supabase.from('system_tickets').select('*').order('created_at', { ascending: false }).then(({ data }) => {
-                  window.__sysTickets = data || [];
-                  setFormData(prev => ({...prev, _sysRefresh: Date.now()}));
-                });
-              }
-              // Sort: Claude-flagged first, then Reopened, then Open, then In Progress,
-              // then Resolved/Fixed/Closed. Within each bucket, newest first.
-              const statusOrder = { 'Reopened': 0, 'Open': 1, 'In Progress': 2, 'Resolved': 3, 'Fixed': 3, 'Closed': 4 };
-              const sysTickets = [...sysTicketsRaw].sort((a, b) => {
-                if (!!a.claude_review_requested !== !!b.claude_review_requested) {
-                  return a.claude_review_requested ? -1 : 1;
-                }
-                const sa = statusOrder[a.status] ?? 5;
-                const sb = statusOrder[b.status] ?? 5;
-                if (sa !== sb) return sa - sb;
-                return (b.created_at || '').localeCompare(a.created_at || '');
-              });
-              const CATS = { bug: '🐛', feature: '✨', improvement: '📈', question: '❓', urgent: '🚨' };
-              const PRIS = { critical: '🚨', high: '🔴', medium: '🟡', low: '🟢' };
-              const STATS = { Open: 'bg-blue-100 text-blue-700', 'In Progress': 'bg-amber-100 text-amber-700', Resolved: 'bg-emerald-100 text-emerald-700', Fixed: 'bg-emerald-100 text-emerald-700', Reopened: 'bg-rose-100 text-rose-700', Closed: 'bg-slate-100 text-slate-500' };
-              const claudeCount = sysTickets.filter(t => t.claude_review_requested).length;
-              return (
-                <div className="space-y-2">
-                  {claudeCount > 0 && (
-                    <div className="rounded-xl p-3 bg-gradient-to-r from-indigo-50 to-purple-50 border border-indigo-200">
-                      <div className="flex items-center gap-2">
-                        <span className="text-lg">🤖</span>
-                        <div className="flex-1">
-                          <div className="text-sm font-bold text-indigo-700">{claudeCount} ticket{claudeCount === 1 ? '' : 's'} flagged for Claude to fix next session</div>
-                          <div className="text-[11px] text-indigo-600">Claude will pull these automatically at the start of your next chat session if CLAUDE_HANDOFF_TOKEN is set.</div>
-                        </div>
-                      </div>
-                    </div>
-                  )}
-                  {sysTickets.length === 0 && <div className="text-center text-slate-400 text-sm py-8">No system tickets yet / لا توجد تذاكر نظام</div>}
-                  {sysTickets.map(t => (
-                    <div key={t.id} className="bg-white rounded-xl p-4 border border-slate-100">
-                      <div className="flex justify-between items-start">
-                        <div className="flex-1">
-                          <div className="flex items-center gap-2 mb-1 flex-wrap">
-                            <span className="text-xs font-mono text-slate-400">{t.ticket_number}</span>
-                            <span>{CATS[t.category] || '🐛'}</span>
-                            <span>{PRIS[t.priority] || '🟡'}</span>
-                            <span className={'px-2 py-0.5 rounded text-[10px] font-bold ' + (STATS[t.status] || STATS.Open)}>{t.status}</span>
-                            {t.claude_review_requested && <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-indigo-100 text-indigo-700">🤖 Claude review requested</span>}
-                            {t.claude_last_fixed_at && <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-emerald-50 text-emerald-700" title={'Fixed by Claude: ' + t.claude_last_fixed_at}>✨ Claude-fixed</span>}
-                          </div>
-                          <div className="text-sm font-bold">{t.title}</div>
-                          {t.description && <div className="text-xs text-slate-500 mt-1 line-clamp-2">{t.description}</div>}
-                          {t.claude_fix_notes && (
-                            <div className="mt-2 p-2 rounded bg-indigo-50 border-l-2 border-indigo-400">
-                              <div className="text-[9px] font-bold text-indigo-600 mb-0.5">🤖 CLAUDE NOTES</div>
-                              <div className="text-[11px] text-indigo-900 whitespace-pre-wrap">{t.claude_fix_notes}</div>
-                            </div>
-                          )}
-                          <div className="text-[10px] text-slate-400 mt-1">
-                            {t.created_at ? new Date(t.created_at).toLocaleDateString() : ''} · {getUserName(t.created_by) || 'Unknown'}
-                          </div>
-                        </div>
-                        <div className="flex flex-col gap-1 flex-shrink-0 ml-2">
-                          {isAdmin && (
-                            <label className="flex items-center gap-1 text-[10px] font-semibold text-indigo-600 cursor-pointer select-none px-2 py-1 rounded hover:bg-indigo-50">
-                              <input
-                                type="checkbox"
-                                checked={!!t.claude_review_requested}
-                                onChange={async (e) => {
-                                  try {
-                                    await dbUpdate('system_tickets', t.id, { claude_review_requested: e.target.checked }, user?.id);
-                                    window.__sysTicketsLoaded = false;
-                                    setFormData(prev => ({...prev, _r: Date.now()}));
-                                  } catch (err) { alert(err.message); }
-                                }}
-                              />
-                              🤖 Fix next session
-                            </label>
-                          )}
-                          {isAdmin && t.status !== 'Closed' && (
-                            <div className="flex gap-1 flex-shrink-0">
-                              {t.status === 'Open' && <button onClick={async () => { await dbUpdate('system_tickets', t.id, { status: 'In Progress' }, user?.id); window.__sysTicketsLoaded = false; setFormData(prev => ({...prev, _r: Date.now()})); }} className="px-2 py-1 bg-amber-500 text-white rounded text-[10px]">Start</button>}
-                              {(t.status === 'Open' || t.status === 'In Progress') && <button onClick={async () => { await dbUpdate('system_tickets', t.id, { status: 'Resolved' }, user?.id); window.__sysTicketsLoaded = false; setFormData(prev => ({...prev, _r: Date.now()})); }} className="px-2 py-1 bg-emerald-500 text-white rounded text-[10px]">Resolve</button>}
-                              <button onClick={async () => { await dbUpdate('system_tickets', t.id, { status: 'Closed' }, user?.id); window.__sysTicketsLoaded = false; setFormData(prev => ({...prev, _r: Date.now()})); }} className="px-2 py-1 bg-slate-500 text-white rounded text-[10px]">Close</button>
-                            </div>
-                          )}
-                          {isAdmin && (t.status === 'Closed' || t.status === 'Resolved' || t.status === 'Fixed') && (
-                            <button onClick={async () => { await dbUpdate('system_tickets', t.id, { status: 'Reopened', claude_review_requested: true }, user?.id); window.__sysTicketsLoaded = false; setFormData(prev => ({...prev, _r: Date.now()})); }} className="px-2 py-1 bg-rose-500 text-white rounded text-[10px]">Reopen</button>
-                          )}
-                        </div>
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              );
-            })()}
-          </div>
+            <SystemTicketsPanel
+              userId={userProfile?.id || user?.id}
+              isAdmin={isAdmin}
+              getUserName={getUserName}
+              sanitize={sanitize}
+              toast={toast}
+            />
           </SafeSection>
         )}
 
@@ -11624,9 +13901,14 @@ export default function App() {
         </button>
       </div>
 
-      {/* Data Freshness Indicator */}
+      {/* Data Freshness Indicator
+          v55.58 — Hidden on mobile (overlapped voice pill + phone button on
+          phones). Still visible on desktop where there's room. Was at
+          bottom-4 left-4 which collided with VoiceController + PhoneWidget.
+          The data is still accurate; it's just not worth the screen real
+          estate on a phone where the user can pull-to-refresh anyway. */}
       {lastLoaded && (
-        <div className="fixed bottom-4 left-4 lg:left-[220px] z-30 flex items-center gap-2">
+        <div className="hidden lg:flex fixed bottom-4 lg:left-[220px] z-30 items-center gap-2">
           <button onClick={() => loadAllData()} className="px-2.5 py-1 bg-white/90 border border-slate-200 rounded-lg shadow-sm text-[10px] text-slate-500 hover:bg-slate-50 transition flex items-center gap-1.5">
             <span className="w-1.5 h-1.5 rounded-full bg-green-400" />
             Synced {Math.floor((Date.now() - lastLoaded.getTime()) / 60000)}m ago
@@ -11635,8 +13917,15 @@ export default function App() {
         </div>
       )}
 
-      {/* Phone Widget - floating on all tabs */}
-      <PhoneWidget user={user} userProfile={userProfile} users={teamUsers} customers={customers} />
+      {/* Phone Widget - floating on all tabs.
+          Wrapped in its own ErrorBoundary so a Twilio SDK crash, a
+          missing-env-var error, or a microphone-blocked browser CANNOT
+          take down the whole dashboard (which would hide the sidebar +
+          logout button). If the widget crashes, this boundary swallows
+          it silently and we render nothing in its place. */}
+      <ErrorBoundary label="Phone widget unavailable">
+        <PhoneWidget user={user} userProfile={userProfile} users={teamUsers} customers={customers} />
+      </ErrorBoundary>
 
       {/* Treasury Inspector Modal — bilingual AR/EN transaction explainer */}
       {inspectedTreasury && (
@@ -11677,11 +13966,108 @@ export default function App() {
         />
       )}
 
-      {/* "Order # not found — create invoice now?" Modal */}
+      {/* "Order # not found — create invoice now?" Modal
+          v55.48 — z-[200] (was z-[60]) so it's unambiguously above the
+          form Modal even on devices that exhibit weird stacking-context
+          behavior. Plus the form Modal now hides itself when this modal
+          is open, so there's no overlap to worry about anyway. */}
+      {/* v55.83-A.6.27.17 (Max May 17 2026) — Phase 1 Payment Instruments.
+          Smart-popup that fires when a treasury entry's amount matches a
+          pending/deposited instrument on the same invoice. Per Max: this is
+          documentation-only, never creates a second treasury row, never
+          changes invoice money math. The popup's Yes path just stamps
+          source_check_id on the record we're about to insert. The No path
+          inserts without the link. Either way → exactly ONE treasury row. */}
+      {pendingInstrumentMatch && (() => {
+        // v55.83-A.6.27.19 — popup shape now carries an ARRAY of candidate
+        // instruments. Each gets its own button. Plus "No, separate
+        // payment" and Cancel. The onResume callback is supplied by the
+        // caller (handleAddTreasury or PaymentForm) so the same popup
+        // works from both flows.
+        var candidates = pendingInstrumentMatch.instruments || (pendingInstrumentMatch.instrument ? [pendingInstrumentMatch.instrument] : []);
+        var multiple = candidates.length > 1;
+        return (
+          <div
+            className="fixed inset-0 z-[210] bg-black/70"
+            onClick={() => { setPendingInstrumentMatch(null); }}
+            style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 12 }}
+          >
+            <div
+              className="bg-white rounded-2xl shadow-2xl w-full max-w-md"
+              onClick={(e) => e.stopPropagation()}
+              style={{ padding: 20, maxHeight: 'calc(100vh - 24px)', overflowY: 'auto' }}
+            >
+              <div className="flex items-center gap-2 mb-2">
+                <span style={{ fontSize: 24 }}>🧾</span>
+                <h3 className="text-base font-extrabold text-slate-900">
+                  {multiple ? candidates.length + ' matching instruments found' : 'Matching instrument found'}
+                </h3>
+              </div>
+              <div className="text-[11px] text-slate-600 mb-3">
+                {multiple
+                  ? 'Multiple instruments on this invoice have the same amount. Pick which one this payment clears, or "Separate payment" if none.'
+                  : 'Does this payment clear that instrument? Picking "Yes" links them and marks the instrument as cleared — it does NOT change the amount you entered.'}
+                <span className="italic"> Documentation only — this never changes any treasury or invoice money math.</span>
+              </div>
+              <div className="flex flex-col gap-2">
+                {candidates.map(function (inst) {
+                  var instLabel = (inst.instrument_type === 'promissory_note' ? '📜 Promissory Note' : '🧾 Check')
+                    + (inst.check_number ? ' #' + inst.check_number : '');
+                  return (
+                    <button
+                      key={inst.id}
+                      onClick={async () => {
+                        var stamped = pendingInstrumentMatch.record;
+                        stamped.source_check_id = inst.id;
+                        stamped.payment_source = 'check';
+                        stamped.__instrument_popup_decision = 'link';
+                        setPendingInstrumentMatch(null);
+                        // Use caller-supplied onResume if provided; fall back to commitInstrumentLinkedTreasury otherwise.
+                        var resume = pendingInstrumentMatch.onResume || (function (s) { return commitInstrumentLinkedTreasury(s, pendingInstrumentMatch.invoice, pendingInstrumentMatch.isBankPlaceholder); });
+                        await resume(stamped);
+                      }}
+                      className="text-left px-4 py-2.5 bg-emerald-50 hover:bg-emerald-100 border-2 border-emerald-300 rounded-lg"
+                    >
+                      <div className="text-sm font-bold text-emerald-900">
+                        ✓ Yes, this clears {instLabel} — {fE(Number(inst.amount))}
+                      </div>
+                      <div className="text-[11px] text-emerald-800 mt-0.5">
+                        Customer: <strong>{inst.customer_name || 'N/A'}</strong>
+                        {inst.bank_name ? ' · Bank: ' + inst.bank_name : ''}
+                        {' · Due: '}<strong>{inst.due_date || inst.check_date || 'N/A'}</strong>
+                        {' · '}{inst.status}
+                      </div>
+                    </button>
+                  );
+                })}
+                <button
+                  onClick={async () => {
+                    var stamped = pendingInstrumentMatch.record;
+                    stamped.__instrument_popup_decision = 'no_link';
+                    setPendingInstrumentMatch(null);
+                    var resume = pendingInstrumentMatch.onResume || (function (s) { return commitInstrumentLinkedTreasury(s, pendingInstrumentMatch.invoice, pendingInstrumentMatch.isBankPlaceholder); });
+                    await resume(stamped);
+                  }}
+                  className="px-4 py-2.5 bg-slate-200 hover:bg-slate-300 text-slate-900 rounded-lg font-semibold text-sm"
+                >
+                  ✕ No, this is a separate payment
+                </button>
+                <button
+                  onClick={() => { setPendingInstrumentMatch(null); }}
+                  className="px-4 py-1 text-[11px] text-slate-500 hover:text-slate-700"
+                >
+                  Cancel — go back to the form
+                </button>
+              </div>
+            </div>
+          </div>
+        );
+      })()}
+
       {pendingTreasuryRecord && (
         <div
-          className="fixed inset-0 z-[60] bg-black/70 backdrop-blur-sm"
-          onClick={() => { setPendingTreasuryRecord(null); }}
+          className="fixed inset-0 z-[200] bg-black/70"
+          onClick={() => { closePendingTreasuryModal(); }}
           style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 12 }}
         >
           <div
@@ -11696,13 +14082,34 @@ export default function App() {
                   <div className="text-lg font-bold text-white mt-1" style={{ direction: 'rtl' }}>
                     رقم الأمر #{pendingTreasuryRecord.record.order_number} غير موجود
                   </div>
+                  {/* Build stamp so Max can confirm at a glance that the
+                      latest fix is actually deployed. If he doesn't see this
+                      tag in the modal, his browser is running stale JS. */}
+                  <div className="mt-1.5 inline-block px-2 py-0.5 rounded bg-amber-900/60 text-amber-100 text-[10px] font-mono font-bold tracking-wide">
+                    BUILD v55.83-A.6.27.45
+                  </div>
                 </div>
-                <button onClick={() => setPendingTreasuryRecord(null)}
+                <button onClick={() => closePendingTreasuryModal()}
                   className="px-3 py-1.5 rounded-lg bg-white text-slate-900 text-sm font-extrabold hover:bg-slate-100 shadow">✕</button>
               </div>
             </div>
 
             <div className="p-5 space-y-4" style={{ overflowY: 'auto', flex: '1 1 auto', minHeight: 0 }}>
+              {/* Apr 25 2026 — Visible, persistent error banner. Toasts in
+                  the corner are easy to miss on mobile; this stays in the
+                  modal until dismissed so a failed save can never look like
+                  "nothing happened". */}
+              {createInvoiceError && (
+                <div className="bg-red-100 border-2 border-red-600 rounded-lg p-3 flex items-start gap-2">
+                  <div className="text-2xl flex-shrink-0">⚠️</div>
+                  <div className="flex-1 min-w-0">
+                    <div className="text-sm font-extrabold text-red-900 mb-1">Save failed / فشل الحفظ</div>
+                    <div className="text-xs text-red-800 break-words whitespace-pre-wrap">{createInvoiceError}</div>
+                  </div>
+                  <button onClick={() => setCreateInvoiceError(null)}
+                    className="text-red-700 hover:text-red-900 text-lg font-bold flex-shrink-0">✕</button>
+                </div>
+              )}
               {/* Typo suggestions */}
               {pendingTreasuryRecord.suggestions && pendingTreasuryRecord.suggestions.length > 0 && !formData.__creatingInvoice && (
                 <div className="bg-blue-100 border-2 border-blue-500 rounded-lg p-3">
@@ -11744,52 +14151,281 @@ export default function App() {
                   </div>
 
                   <div>
-                    <label className="text-xs font-bold text-slate-700">Customer Name / اسم العميل *</label>
-                    <input
-                      autoFocus
-                      value={formData.__newInvCustomer || ''}
-                      onChange={e => {
-                        const v = e.target.value;
-                        setFormData({ ...formData, __newInvCustomer: v, __newInvCustomerId: null });
-                      }}
-                      placeholder="Type or pick from customers below"
-                      className="w-full px-3 py-2 rounded-lg border-2 border-slate-300 text-sm font-semibold"
-                      style={{ direction: 'rtl' }}
-                    />
-                    {/* Linked badge — shows when customer_id is set, so user knows the invoice will link correctly */}
-                    {formData.__newInvCustomerId && (
-                      <div className="mt-1 inline-flex items-center gap-1 text-[11px] font-bold text-emerald-700 bg-emerald-50 border border-emerald-200 rounded px-2 py-0.5">
-                        ✓ Linked to existing customer / مربوط بعميل موجود
-                      </div>
-                    )}
-                    {/* Suggestion dropdown — only while no customer is linked yet. Hides the "shows my own typing again" visual confusion. */}
-                    {formData.__newInvCustomer && formData.__newInvCustomer.length >= 2 && !formData.__newInvCustomerId && (
-                      <div className="mt-1 max-h-[140px] overflow-auto rounded border border-slate-200 bg-white">
+                    <label className="text-xs font-bold text-slate-700 uppercase tracking-wide">Customer / اسم العميل <span className="text-red-600">*</span></label>
+
+                    {/* ===========================================================
+                        v55.11 CUSTOMER PICKER — Apr 26 2026
+                        ===========================================================
+                        Workflow guarantees (from Max's spec):
+                          1. EVERY invoice gets a customer_id. No orphans.
+                             "Save without link" path is removed.
+                          2. List of customers is ALWAYS visible while picker
+                             is open. Even if user typed text that doesn't match
+                             any customer, the list is still scrollable so they
+                             can pick a different one.
+                          3. Dedicated SEARCH input filters the dropdown live.
+                             It's separate from the typed-name field so search
+                             and name don't fight each other.
+                          4. When typed name has no match: prominent "Create new
+                             customer with this name" button appears. Clicking
+                             it creates the customer record AND links it to the
+                             invoice in one shot.
+                          5. Auto-prefill (case-insensitive match): customer is
+                             pre-selected as a chip, picker stays open below for
+                             optional change.
+                        =========================================================== */}
+
+                    {/* Compute lookup data once per render — used by both states */}
+                    {(() => { return null; })()}
+
+                    {formData.__newInvCustomerId ? (
+                      // ============================================================
+                      // STATE A: CUSTOMER SELECTED (chip + picker stays open below)
+                      // ============================================================
+                      <>
+                        <div className="mt-1 flex items-center gap-2 px-3 py-2.5 rounded-lg bg-white border-2 border-emerald-500 shadow-sm">
+                          <div className="w-7 h-7 rounded-full bg-emerald-500 text-white flex items-center justify-center text-sm font-bold flex-shrink-0">✓</div>
+                          <div className="flex-1 min-w-0">
+                            <div className="text-[10px] font-bold text-emerald-700 uppercase tracking-wide">
+                              {formData.__newInvCustomerAutoLinked ? 'Auto-linked — confirm or pick another below' : 'Linked'}
+                            </div>
+                            <div className="text-sm font-extrabold text-slate-900 truncate" style={{ direction: 'rtl' }}>{formData.__newInvCustomer}</div>
+                          </div>
+                          <button
+                            type="button"
+                            onClick={() => setFormData({ ...formData, __newInvCustomer: '', __newInvCustomerId: null, __newInvCustomerAutoLinked: false, __newInvSearch: '' })}
+                            className="px-3 py-1.5 rounded-md bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-bold border border-slate-300"
+                          >
+                            Change / تغيير
+                          </button>
+                        </div>
+
+                        {/* Picker stays available below the chip so user can change easily */}
+                        <div className="mt-3 rounded-lg overflow-hidden bg-slate-900 border border-slate-700 shadow-md">
+                          <div className="px-3 py-2 bg-slate-800 border-b border-slate-700 flex items-center gap-2">
+                            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="text-slate-400 flex-shrink-0">
+                              <circle cx="11" cy="11" r="8"></circle>
+                              <line x1="21" y1="21" x2="16.65" y2="16.65"></line>
+                            </svg>
+                            <input
+                              type="text"
+                              value={formData.__newInvSearch || ''}
+                              onChange={e => setFormData({ ...formData, __newInvSearch: e.target.value })}
+                              placeholder="Search to change customer..."
+                              className="flex-1 bg-transparent border-0 text-sm text-slate-100 placeholder-slate-500 focus:outline-none"
+                            />
+                          </div>
+                          <div className="max-h-[180px] overflow-auto">
+                            {(() => {
+                              var search = String(formData.__newInvSearch || '').trim().toLowerCase();
+                              var pool = Array.isArray(customers) ? customers : [];
+                              if (pool.length === 0) {
+                                return <div className="px-3 py-4 text-xs text-slate-400 text-center">⏳ Customers loading...</div>;
+                              }
+                              var filtered = search.length === 0
+                                ? pool.slice(0, 20)
+                                : pool.filter(function(c) { return String(c.name || '').toLowerCase().indexOf(search) >= 0; }).slice(0, 30);
+                              if (filtered.length === 0) {
+                                return <div className="px-3 py-4 text-xs text-slate-400 text-center">No customer matches "{formData.__newInvSearch}"</div>;
+                              }
+                              return filtered.map(function(c) {
+                                var isCurrent = c.id === formData.__newInvCustomerId;
+                                return (
+                                  <div key={c.id}
+                                    onClick={function() { setFormData({ ...formData, __newInvCustomer: c.name, __newInvCustomerId: c.id, __newInvCustomerAutoLinked: false, __newInvSearch: '' }); }}
+                                    className={'px-3 py-2.5 cursor-pointer border-b border-slate-800 last:border-0 flex items-center justify-between gap-2 ' + (isCurrent ? 'bg-emerald-900/40' : 'hover:bg-slate-800')}>
+                                    <span className="font-semibold text-slate-100 text-sm truncate" style={{ direction: 'rtl' }}>{c.name}</span>
+                                    {isCurrent
+                                      ? <span className="text-[9px] font-bold text-emerald-300 uppercase">current</span>
+                                      : <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" className="text-slate-500 flex-shrink-0"><polyline points="9 18 15 12 9 6"></polyline></svg>}
+                                  </div>
+                                );
+                              });
+                            })()}
+                          </div>
+                        </div>
+                      </>
+                    ) : (
+                      // ============================================================
+                      // STATE B: NO CUSTOMER YET (typed-name input + dropdown + create-new action)
+                      // ============================================================
+                      <>
+                        {/* Typed name input (this is the customer's NAME — used as
+                            the invoice's customer_name field, AND as the fill-in
+                            for "Create new customer" if user picks that path) */}
+                        <div className="relative mt-1">
+                          <input
+                            autoFocus
+                            value={formData.__newInvCustomer || ''}
+                            onChange={e => {
+                              const v = e.target.value;
+                              // Auto-link if exact case-insensitive match exists
+                              var match = Array.isArray(customers)
+                                ? customers.find(function(c) { return String(c.name || '').trim().toLowerCase() === v.trim().toLowerCase(); })
+                                : null;
+                              setFormData({
+                                ...formData,
+                                __newInvCustomer: v,
+                                __newInvCustomerId: match ? match.id : null,
+                                __newInvCustomerAutoLinked: match ? true : false,
+                                __newInvSearch: v, // Also seed search with what they typed
+                              });
+                            }}
+                            placeholder="Customer name (or pick from list below) / اسم العميل"
+                            className="w-full px-3 py-2.5 pr-10 rounded-lg border-2 border-slate-300 bg-white text-sm font-semibold text-slate-900 placeholder-slate-400 focus:border-emerald-500 focus:outline-none"
+                            style={{ direction: 'rtl' }}
+                          />
+                          {formData.__newInvCustomer && (
+                            <button type="button"
+                              onClick={() => setFormData({ ...formData, __newInvCustomer: '', __newInvCustomerId: null, __newInvCustomerAutoLinked: false, __newInvSearch: '' })}
+                              className="absolute right-2 top-1/2 -translate-y-1/2 w-7 h-7 flex items-center justify-center rounded-full bg-slate-100 hover:bg-slate-200 text-slate-700 text-sm font-bold"
+                              aria-label="Clear">✕</button>
+                          )}
+                        </div>
+
+                        {/* No-match warning + CREATE NEW CUSTOMER button.
+                            When typed text doesn't match anyone in the list, this
+                            is the primary action. Customer record is created on
+                            click and the invoice links to it in one shot. */}
                         {(() => {
-                          var typed = String(formData.__newInvCustomer || '').trim();
-                          var matches = customers
-                            .filter(function(c) { return String(c.name || '').includes(formData.__newInvCustomer); })
-                            .slice(0, 6);
-                          if (matches.length === 0) {
-                            return (
-                              <div className="px-3 py-2 text-[11px] text-amber-800 bg-amber-50">
-                                ⚠ No match — a new customer won't be auto-created. Type exact existing name or leave unlinked.
-                              </div>
-                            );
-                          }
-                          return matches.map(function(c) {
-                            var isExact = String(c.name || '').trim() === typed;
-                            return (
-                              <div key={c.id}
-                                onClick={function() { setFormData({ ...formData, __newInvCustomer: c.name, __newInvCustomerId: c.id }); }}
-                                className={'px-3 py-2 text-sm cursor-pointer hover:bg-emerald-50 border-b border-slate-100 ' + (isExact ? 'bg-emerald-50' : '')}>
-                                <span className="font-bold text-slate-900" style={{ direction: 'rtl' }}>{c.name}</span>
-                                {isExact && <span className="ml-2 text-[10px] text-emerald-700 font-bold">exact match — click to link</span>}
-                              </div>
-                            );
+                          var typedRaw = String(formData.__newInvCustomer || '').trim();
+                          if (!typedRaw) return null;
+                          var pool = Array.isArray(customers) ? customers : [];
+                          var hasAnyMatch = pool.some(function(c) {
+                            return String(c.name || '').toLowerCase().indexOf(typedRaw.toLowerCase()) >= 0;
                           });
+                          if (hasAnyMatch) return null;
+                          return (
+                            <div className="mt-2 p-3 rounded-lg bg-amber-50 border-2 border-amber-300 space-y-2">
+                              <div className="flex items-start gap-2">
+                                <span className="text-amber-900 text-base flex-shrink-0">⚠</span>
+                                <div className="flex-1 text-[12px] text-amber-900">
+                                  <div className="font-bold">"{typedRaw}" is not in your customers list</div>
+                                  <div>Create them as a new customer, or pick someone different from the list below.</div>
+                                </div>
+                              </div>
+                              <button
+                                type="button"
+                                disabled={isCreatingInvoice || isCreatingCustomer}
+                                onClick={async () => {
+                                  if (isCreatingCustomer) return;
+                                  setIsCreatingCustomer(true);
+                                  try {
+                                    const newCust = await dbInsert('customers', {
+                                      name: sanitize(typedRaw),
+                                    }, user?.id);
+                                    if (newCust && newCust.id) {
+                                      setCustomers(function(prev) { return [newCust].concat(Array.isArray(prev) ? prev : []); });
+                                      setFormData(function(prev) {
+                                        return Object.assign({}, prev, {
+                                          __newInvCustomer: newCust.name,
+                                          __newInvCustomerId: newCust.id,
+                                          __newInvCustomerAutoLinked: false,
+                                          __newInvSearch: '',
+                                        });
+                                      });
+                                      try { (toast && toast.success) && toast.success('Customer "' + newCust.name + '" created and linked ✓'); } catch (_) {}
+                                    } else {
+                                      try { (toast && toast.error) && toast.error('Customer creation returned no record'); } catch (_) {}
+                                    }
+                                  } catch (err) {
+                                    console.error('[create-customer] failed', err);
+                                    var msg = (err && err.message) ? err.message : String(err);
+                                    try { (toast && toast.error) && toast.error('Failed to create customer: ' + msg); } catch (_) {}
+                                  } finally {
+                                    setIsCreatingCustomer(false);
+                                  }
+                                }}
+                                className={'w-full px-3 py-2.5 rounded-lg text-sm font-extrabold shadow flex items-center justify-center gap-2 ' + (isCreatingCustomer ? 'bg-emerald-400 text-white cursor-not-allowed' : 'bg-emerald-600 text-white hover:bg-emerald-700')}
+                              >
+                                {isCreatingCustomer
+                                  ? <span>⏳ Creating customer...</span>
+                                  : <><span>➕</span><span>Create "{typedRaw}" as new customer / إنشاء عميل جديد</span></>}
+                              </button>
+                            </div>
+                          );
                         })()}
-                      </div>
+
+                        {/* ALWAYS-VISIBLE customer dropdown with dedicated search input.
+                            User can pick a different name even if they typed something
+                            else. Search box filters the list live without affecting the
+                            customer-name input above. */}
+                        <div className="mt-2 rounded-lg overflow-hidden bg-slate-900 border border-slate-700 shadow-md">
+                          <div className="px-3 py-2 bg-slate-800 border-b border-slate-700">
+                            <div className="flex items-center gap-2">
+                              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="text-emerald-400 flex-shrink-0">
+                                <circle cx="11" cy="11" r="8"></circle>
+                                <line x1="21" y1="21" x2="16.65" y2="16.65"></line>
+                              </svg>
+                              <input
+                                type="text"
+                                value={formData.__newInvSearch || ''}
+                                onChange={e => setFormData({ ...formData, __newInvSearch: e.target.value })}
+                                placeholder="Search customers... / بحث"
+                                className="flex-1 bg-transparent border-0 text-sm text-slate-100 placeholder-slate-500 focus:outline-none"
+                              />
+                              {formData.__newInvSearch && (
+                                <button type="button" onClick={() => setFormData({ ...formData, __newInvSearch: '' })}
+                                  className="text-slate-400 hover:text-slate-200 text-xs">✕</button>
+                              )}
+                              <span className="text-[10px] text-slate-400 font-medium ml-1 whitespace-nowrap">
+                                {(() => {
+                                  var s = String(formData.__newInvSearch || '').trim().toLowerCase();
+                                  var pool = Array.isArray(customers) ? customers : [];
+                                  if (s.length === 0) return pool.length + ' total';
+                                  var n = pool.filter(function(c) { return String(c.name || '').toLowerCase().indexOf(s) >= 0; }).length;
+                                  return n + ' match' + (n === 1 ? '' : 'es');
+                                })()}
+                              </span>
+                            </div>
+                          </div>
+                          <div className="max-h-[220px] overflow-auto">
+                            {(() => {
+                              var search = String(formData.__newInvSearch || '').trim().toLowerCase();
+                              var pool = Array.isArray(customers) ? customers : [];
+                              if (pool.length === 0) {
+                                return (
+                                  <div className="px-3 py-5 text-xs text-slate-300 text-center">
+                                    <div className="font-bold mb-1 text-amber-300">⏳ Customers list not loaded</div>
+                                    <div className="text-slate-400">If this persists, check your connection. You can still type a name above and create them as a new customer.</div>
+                                  </div>
+                                );
+                              }
+                              var filtered;
+                              if (search.length === 0) {
+                                filtered = pool.slice(0, 20);
+                              } else {
+                                filtered = pool.filter(function(c) {
+                                  return String(c.name || '').toLowerCase().indexOf(search) >= 0;
+                                }).slice(0, 30);
+                              }
+                              if (filtered.length === 0) {
+                                return (
+                                  <div className="px-3 py-5 text-xs text-slate-300 text-center">
+                                    <div className="font-bold mb-1">No customer matches "{formData.__newInvSearch}"</div>
+                                    <div className="text-slate-400">Clear the search to see all customers, or type a name in the field above to create a new one.</div>
+                                  </div>
+                                );
+                              }
+                              return filtered.map(function(c) {
+                                var typedRaw = String(formData.__newInvCustomer || '').trim();
+                                var isExact = String(c.name || '').trim().toLowerCase() === typedRaw.toLowerCase() && typedRaw.length > 0;
+                                return (
+                                  <div key={c.id}
+                                    onClick={function() { setFormData({ ...formData, __newInvCustomer: c.name, __newInvCustomerId: c.id, __newInvCustomerAutoLinked: false, __newInvSearch: '' }); }}
+                                    className={'px-3 py-2.5 cursor-pointer border-b border-slate-800 last:border-0 flex items-center justify-between gap-2 ' + (isExact ? 'bg-emerald-900/40 hover:bg-emerald-900/60' : 'hover:bg-slate-800')}>
+                                    <span className="font-semibold text-slate-100 text-sm truncate" style={{ direction: 'rtl' }}>{c.name}</span>
+                                    <div className="flex items-center gap-2 flex-shrink-0">
+                                      {isExact && <span className="text-[9px] font-bold text-emerald-300 uppercase">match</span>}
+                                      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" className="text-slate-500"><polyline points="9 18 15 12 9 6"></polyline></svg>
+                                    </div>
+                                  </div>
+                                );
+                              });
+                            })()}
+                          </div>
+                        </div>
+                      </>
                     )}
                   </div>
 
@@ -11817,71 +14453,183 @@ export default function App() {
                     </div>
                   </div>
 
-                  <div className="flex gap-2 pt-2">
+                  <div className="flex flex-col gap-2 pt-2">
+                    {/* Hint when button disabled because no customer chosen */}
+                    {!formData.__newInvCustomerId && !isCreatingInvoice && (
+                      <div className="text-[11px] text-slate-700 bg-slate-100 border border-slate-300 rounded-md px-3 py-2 flex items-start gap-2">
+                        <span className="text-slate-500 flex-shrink-0">ℹ</span>
+                        <span>
+                          <span className="font-bold">Pick or create a customer first.</span> Every invoice must be linked so it shows up under that customer in the Customers tab and in reports.
+                        </span>
+                      </div>
+                    )}
+                    <div className="flex gap-2">
                     <button
+                      disabled={isCreatingInvoice || !formData.__newInvCustomerId}
+                      title={!formData.__newInvCustomerId ? 'Pick a customer from the list, or create a new one with the typed name above.' : ''}
                       onClick={async () => {
-                        const name = String(formData.__newInvCustomer || '').trim();
-                        const totalAmt = Number(formData.__newInvTotal ?? pendingTreasuryRecord.amount);
-                        if (!name) { toast.warning('Customer name is required / اسم العميل مطلوب'); return; }
-                        if (!(totalAmt > 0)) { toast.warning('Invoice total must be > 0'); return; }
-                        const orderNum = pendingTreasuryRecord.record.order_number;
-                        const invDate = formData.__newInvDate || pendingTreasuryRecord.record.transaction_date || today();
-                        // Belt-and-suspenders: if customer_id wasn't explicitly linked via dropdown,
-                        // try an exact-name match here before saving. Prevents silent orphan invoices
-                        // when the user typed an existing customer's name verbatim but didn't click
-                        // the dropdown suggestion.
-                        var resolvedCustomerId = formData.__newInvCustomerId || null;
-                        if (!resolvedCustomerId) {
-                          var exact = customers.find(function(c) { return String(c.name || '').trim() === name; });
-                          if (exact) resolvedCustomerId = exact.id;
+                        // Apr 25 2026 — Bulletproof local toast wrapper. Same
+                        // pattern as finalizePendingTreasury. Prevents the
+                        // "Cannot read properties of undefined (reading
+                        // 'success')" error from blowing up the save.
+                        var safeT = {
+                          success: function(m) { try { (toast && toast.success) ? toast.success(m) : console.log('[toast.success]', m); } catch (_) {} },
+                          error: function(m) { try { (toast && toast.error) ? toast.error(m) : console.error('[toast.error]', m); } catch (_) {} },
+                          warning: function(m) { try { (toast && toast.warning) ? toast.warning(m) : console.warn('[toast.warning]', m); } catch (_) {} },
+                          info: function(m) { try { (toast && toast.info) ? toast.info(m) : console.log('[toast.info]', m); } catch (_) {} },
+                        };
+                        // Guard against double-tap: if already in flight, ignore.
+                        if (isCreatingInvoice) {
+                          console.log('[create-invoice] click ignored — already in flight');
+                          return;
                         }
+                        // Apr 26 2026 — HARD GATE: require a customer_id.
+                        // The picker also disables the button, but defense in
+                        // depth here in case a stale prop / state bug ever
+                        // re-enables it without a customer_id.
+                        if (!formData.__newInvCustomerId) {
+                          setCreateInvoiceError('Pick a customer from the dropdown first, or create a new one. / اختر عميل من القائمة أو أنشئ عميل جديد.');
+                          safeT.warning('Customer is required / العميل مطلوب');
+                          return;
+                        }
+                        console.log('[create-invoice] click fired');
+                        setCreateInvoiceError(null);
+                        setIsCreatingInvoice(true);
                         try {
-                          const { data: inserted, error } = await supabase.from('invoices').insert({
-                            order_number: sanitize(orderNum),
-                            customer_name: sanitize(name),
-                            customer_id: resolvedCustomerId,
-                            invoice_date: invDate,
-                            total_amount: totalAmt,
-                            total_collected: 0,
-                            outstanding: totalAmt,
-                            source: 'treasury',
-                          }).select('id, order_number, customer_name, total_amount, outstanding').single();
-                          if (error) throw error;
-                          toast.success(resolvedCustomerId
-                            ? 'Invoice #' + orderNum + ' created + linked to customer ✓'
-                            : 'Invoice #' + orderNum + ' created (new customer — no link) ✓');
-                          await finalizePendingTreasury(inserted);
-                          setFormData(prev => {
-                            const next = { ...prev };
-                            delete next.__creatingInvoice;
-                            delete next.__newInvCustomer;
-                            delete next.__newInvCustomerId;
-                            delete next.__newInvTotal;
-                            delete next.__newInvDate;
-                            return next;
+                          const name = String(formData.__newInvCustomer || '').trim();
+                          // v55.82-E — parseAmount for the inline-create
+                          // total too. pendingTreasuryRecord.amount is
+                          // already a Number (set from parseAmount in
+                          // handleAddTreasury), but __newInvTotal could
+                          // be a fresh user-typed string with comma or
+                          // Arabic-Indic digits.
+                          const totalAmt = parseAmount(formData.__newInvTotal ?? pendingTreasuryRecord.amount);
+                          if (!(totalAmt > 0)) {
+                            setCreateInvoiceError('Invoice total must be greater than zero. / الإجمالي يجب أن يكون أكبر من صفر.');
+                            safeT.warning('Invoice total must be > 0 / الإجمالي يجب أن يكون أكبر من صفر');
+                            setIsCreatingInvoice(false);
+                            return;
+                          }
+                          const orderNum = pendingTreasuryRecord.record.order_number;
+                          if (!orderNum) {
+                            setCreateInvoiceError('Order number is missing. Close this dialog and re-enter the transaction. / رقم الأمر مفقود.');
+                            safeT.error('Order number missing — please close and re-enter / رقم الأمر مفقود');
+                            setIsCreatingInvoice(false);
+                            return;
+                          }
+                          const invDate = formData.__newInvDate || pendingTreasuryRecord.record.transaction_date || today();
+                          // The customer_id is guaranteed at this point thanks to the
+                          // hard gate above. Apr 26 2026 — no more fallback orphan path.
+                          var resolvedCustomerId = formData.__newInvCustomerId;
+                          console.log('[create-invoice] inserting', { orderNum: orderNum, name: name, totalAmt: totalAmt, customerId: resolvedCustomerId });
+                          var inserted = null;
+                          var dbErrorMessage = null;
+                          try {
+                            inserted = await dbInsert('invoices', {
+                              order_number: sanitize(orderNum),
+                              customer_name: sanitize(name),
+                              customer_id: resolvedCustomerId,
+                              invoice_date: invDate,
+                              total_amount: totalAmt,
+                              total_collected: 0,
+                              outstanding: totalAmt,
+                              source: 'manual',
+                            }, user?.id);
+                          } catch (dbErr) {
+                            console.error('[create-invoice] dbInsert threw', dbErr);
+                            dbErrorMessage = String((dbErr && dbErr.message) || dbErr || 'Unknown error');
+                          }
+                          // Apr 25 2026 — RECOVERY PATH: if dbInsert threw OR returned
+                          // nothing, the invoice MAY still have been written to the
+                          // database. Two known causes:
+                          //   (a) audit_log insert failure inside dbInsert (test-full
+                          //       documented this as 25.src.1b KNOWN GAP) — invoice
+                          //       row succeeded, audit_log failed, error propagates
+                          //   (b) duplicate-key error (concurrent creation by another
+                          //       user / tab) — invoice already exists
+                          // Either way, the right move is: fetch by order_number. If
+                          // it's there, USE IT. Don't make the user retry and risk a
+                          // second invoice. This was the cause of "transaction shows
+                          // greyed out" — the invoice WAS in DB but my fix bailed.
+                          if (!inserted || !inserted.id) {
+                            console.log('[create-invoice] checking DB for invoice (recovery path)');
+                            try {
+                              var lookup = await supabase.from('invoices').select('*').eq('order_number', sanitize(orderNum)).maybeSingle();
+                              if (lookup && lookup.data && lookup.data.id) {
+                                console.log('[create-invoice] recovered existing invoice', lookup.data.id);
+                                inserted = lookup.data;
+                                if (dbErrorMessage) {
+                                  // Show a non-blocking warning so user knows audit_log
+                                  // didn't fully record the create, but their data is safe.
+                                  safeT.warning('Invoice was saved but audit log had a hiccup. Data is safe.');
+                                }
+                              }
+                            } catch (e2) {
+                              console.error('[create-invoice] DB lookup also failed', e2);
+                            }
+                          }
+                          // If we STILL don't have an invoice after the recovery
+                          // attempt, surface a big visible error and stop.
+                          if (!inserted || !inserted.id) {
+                            var visibleMsg = 'Could not create the invoice. '
+                              + (dbErrorMessage ? 'Database said: ' + dbErrorMessage : 'No row was returned and no matching invoice was found.')
+                              + ' / تعذر إنشاء الفاتورة.';
+                            setCreateInvoiceError(visibleMsg);
+                            safeT.error('Failed to create invoice — see the red banner in the dialog');
+                            setIsCreatingInvoice(false);
+                            return;
+                          }
+                          console.log('[create-invoice] invoice ready', inserted.id);
+                          // Apr 25 2026 — Optimistic insert into LOCAL invoices state.
+                          // Without this, the just-linked treasury entry showed as
+                          // "greyed out / unlinked" for the 500ms before loadAllData
+                          // refreshed. The Sales tab also missed the new invoice
+                          // until then. Now visible immediately.
+                          setInvoices(function(prev) {
+                            if (prev.some(function(i) { return i.id === inserted.id; })) return prev;
+                            return [inserted].concat(prev);
                           });
+                          safeT.success('Invoice #' + orderNum + ' created + linked to ' + name + ' ✓');
+                          await finalizePendingTreasury(inserted);
                         } catch (err) {
-                          toast.error(err.message || 'Failed to create invoice');
+                          console.error('[create-invoice] unexpected error', err);
+                          var bigMsg = 'Unexpected error: ' + (err && err.message ? err.message : String(err));
+                          setCreateInvoiceError(bigMsg);
+                          safeT.error(bigMsg);
+                        } finally {
+                          setIsCreatingInvoice(false);
                         }
                       }}
-                      className="flex-1 px-4 py-2.5 bg-emerald-700 text-white rounded-lg text-sm font-extrabold hover:bg-emerald-800 shadow"
+                      className={'flex-1 px-4 py-2.5 rounded-lg text-sm font-extrabold shadow ' + (isCreatingInvoice
+                        ? 'bg-emerald-400 text-white cursor-not-allowed'
+                        : !formData.__newInvCustomerId
+                          ? 'bg-slate-300 text-slate-500 cursor-not-allowed'
+                          : 'bg-emerald-700 text-white hover:bg-emerald-800')}
                     >
-                      ✓ Create Invoice + Save Treasury / إنشاء وحفظ
+                      {isCreatingInvoice
+                        ? '⏳ Creating... / جارٍ الإنشاء...'
+                        : !formData.__newInvCustomerId
+                          ? '🔒 Pick a customer first / اختر عميل'
+                          : '✓ Create Invoice + Save Treasury / إنشاء وحفظ'}
                     </button>
                     <button
+                      disabled={isCreatingInvoice}
                       onClick={() => setFormData(prev => {
                         const next = { ...prev };
                         delete next.__creatingInvoice;
                         delete next.__newInvCustomer;
                         delete next.__newInvCustomerId;
+                        delete next.__newInvCustomerAutoLinked;
+                        delete next.__newInvSearch;
                         delete next.__newInvTotal;
                         delete next.__newInvDate;
                         return next;
                       })}
-                      className="px-4 py-2.5 bg-slate-300 text-slate-900 rounded-lg text-sm font-bold hover:bg-slate-400"
+                      className={'px-4 py-2.5 rounded-lg text-sm font-bold ' + (isCreatingInvoice ? 'bg-slate-200 text-slate-500 cursor-not-allowed' : 'bg-slate-300 text-slate-900 hover:bg-slate-400')}
                     >
                       ← Back
                     </button>
+                    </div>
                   </div>
                 </div>
               ) : (
@@ -11895,19 +14643,30 @@ export default function App() {
                   <div className="flex gap-2 pt-2">
                     <button
                       onClick={() => {
-                        // Pre-fill customer from treasury desc. If desc exactly matches an
-                        // existing customer, auto-link customer_id so the user doesn't have
-                        // to re-pick from the dropdown. Fixes silent-orphan-invoice bug where
-                        // invoices were saved with customer_id:null when the dropdown wasn't clicked.
-                        var descText = String(formData.desc || '').trim();
-                        var exactMatch = descText
-                          ? customers.find(function(c) { return String(c.name || '').trim() === descText; })
+                        // Pre-fill customer from treasury desc.
+                        // v55.11 (Apr 26 2026):
+                        //   • Case-insensitive exact match (was case-sensitive before,
+                        //     so "shawar home" wouldn't match "Shawar Home" — forced
+                        //     unnecessary re-typing).
+                        //   • Sets __newInvCustomerAutoLinked=true so the chip shows
+                        //     "Auto-linked — confirm or pick another" instead of just
+                        //     "Linked", giving user a clear cue to verify the match.
+                        //   • Seeds __newInvSearch with the prefill so if the picker
+                        //     opens and user wants to change, the dropdown is already
+                        //     filtered to similar names.
+                        var rawDesc = String(formData.desc || '');
+                        var descText = stripBankMatchMetadata(rawDesc).trim();
+                        var lcDesc = descText.toLowerCase();
+                        var exactMatch = (descText && Array.isArray(customers))
+                          ? customers.find(function(c) { return String(c.name || '').trim().toLowerCase() === lcDesc; })
                           : null;
                         setFormData({
                           ...formData,
                           __creatingInvoice: true,
-                          __newInvCustomer: descText,
+                          __newInvCustomer: exactMatch ? exactMatch.name : descText,
                           __newInvCustomerId: exactMatch ? exactMatch.id : null,
+                          __newInvCustomerAutoLinked: !!exactMatch,
+                          __newInvSearch: '',
                           __newInvTotal: pendingTreasuryRecord.amount,
                           __newInvDate: pendingTreasuryRecord.record.transaction_date || today(),
                         });
@@ -11917,7 +14676,7 @@ export default function App() {
                       + Create Invoice Now / إنشاء فاتورة الآن
                     </button>
                     <button
-                      onClick={() => setPendingTreasuryRecord(null)}
+                      onClick={() => closePendingTreasuryModal()}
                       className="px-4 py-2.5 bg-slate-300 text-slate-900 rounded-lg text-sm font-bold hover:bg-slate-400"
                     >
                       Cancel / إلغاء
@@ -11932,6 +14691,127 @@ export default function App() {
           </div>
         </div>
       )}
+
+      {/* v55.41 — Duplicate-confirmation modal.
+          Opens when handleAddTreasury detects an existing row with the same
+          date + amount + direction + description, OR when Postgres rejects
+          the insert with a unique-constraint violation. The user sees the
+          existing match(es) clearly and can either:
+            • Cancel — they'll edit the row to make it distinct
+            • Confirm — it really is a separate payment that happens to look
+              identical (regular weekly cash, two identical fuel runs, etc.).
+              The save proceeds with confirmed_not_duplicate=true stamped on
+              the new row so the AI auditor doesn't flag it later. */}
+      {duplicateConfirm && (
+        <div
+          className="fixed inset-0 z-[200] bg-black/70"
+          onClick={() => setDuplicateConfirm(null)}
+          style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 12 }}
+        >
+          <div
+            className="bg-white rounded-2xl shadow-2xl w-full max-w-xl flex flex-col"
+            style={{ maxHeight: 'calc(100vh - 24px)' }}
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="px-5 py-4 rounded-t-2xl bg-amber-600 border-b-4 border-amber-800" style={{ flexShrink: 0 }}>
+              <div className="flex justify-between items-start gap-3">
+                <div className="flex-1">
+                  <div className="text-xl font-extrabold text-white">⚠️ Possible Duplicate Transaction</div>
+                  <div className="text-lg font-bold text-white mt-1" style={{ direction: 'rtl' }}>
+                    معاملة قد تكون مكررة
+                  </div>
+                  <div className="mt-1.5 inline-block px-2 py-0.5 rounded bg-amber-900/60 text-amber-100 text-[10px] font-mono font-bold tracking-wide">
+                    BUILD v55.83-A.6.27.45
+                  </div>
+                </div>
+                <button
+                  onClick={() => setDuplicateConfirm(null)}
+                  className="text-white/90 hover:text-white text-2xl leading-none px-2"
+                  title="Close">
+                  ×
+                </button>
+              </div>
+            </div>
+
+            <div className="p-5 overflow-y-auto" style={{ minHeight: 0 }}>
+              <div className="text-sm text-slate-700 mb-3">
+                {duplicateConfirm.fromDbError
+                  ? 'The database flagged this entry as a potential duplicate. We found '
+                  : 'We found '}
+                <span className="font-extrabold text-amber-900">
+                  {duplicateConfirm.matches.length} existing transaction{duplicateConfirm.matches.length === 1 ? '' : 's'}
+                </span>
+                {' '}with the same date, amount, and description:
+              </div>
+              <div className="text-sm text-slate-700 mb-3" style={{ direction: 'rtl' }}>
+                وجدنا <span className="font-extrabold text-amber-900">{duplicateConfirm.matches.length} معاملة موجودة</span> بنفس التاريخ والمبلغ والوصف.
+              </div>
+
+              {/* List of existing matches */}
+              <div className="space-y-2 mb-4">
+                {duplicateConfirm.matches.length === 0 && (
+                  <div className="bg-slate-50 border border-slate-200 rounded-lg p-3 text-xs text-slate-600">
+                    The database constraint blocked the save, but we couldn't pull up the matching row to show you. You can still confirm this is a legitimate separate payment to proceed.
+                  </div>
+                )}
+                {duplicateConfirm.matches.map(function(t) {
+                  var direction = Number(t.cash_in || 0) + Number(t.bank_in || 0) > 0 ? 'IN' : 'OUT';
+                  var amt = Number(t.cash_in || 0) + Number(t.cash_out || 0) + Number(t.bank_in || 0) + Number(t.bank_out || 0) + Number(t.expected_amount || 0);
+                  return (
+                    <div key={t.id} className="bg-amber-50 border-2 border-amber-300 rounded-lg p-3">
+                      <div className="flex justify-between items-start gap-2 mb-1">
+                        <span className="text-[10px] font-mono font-bold text-amber-900 uppercase">
+                          {direction === 'IN' ? '💵 Cash In' : '💸 Cash Out'}
+                          {t.is_bank_placeholder ? ' (Bank — pending statement)' : ''}
+                        </span>
+                        <span className="text-sm font-extrabold text-slate-900 font-mono">
+                          {fE(amt)}
+                        </span>
+                      </div>
+                      <div className="text-xs text-slate-800 font-semibold mb-1">{t.description || '(no description)'}</div>
+                      <div className="flex items-center gap-3 text-[10px] text-slate-600 font-mono">
+                        <span>📅 {t.transaction_date}</span>
+                        {t.order_number ? <span>📄 #{t.order_number}</span> : null}
+                        {t.category ? <span>🏷️ {t.category}</span> : null}
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+
+              {/* Question + buttons */}
+              <div className="bg-blue-50 border border-blue-200 rounded-lg p-3 mb-4">
+                <div className="text-sm font-bold text-blue-900 mb-1">Is this a real separate payment, or did you accidentally enter the same one twice?</div>
+                <div className="text-sm font-bold text-blue-900 mt-1" style={{ direction: 'rtl' }}>
+                  هل هذه دفعة منفصلة فعلاً، أم أنك أدخلت نفس المعاملة مرتين بالخطأ؟
+                </div>
+                <div className="text-[11px] text-blue-700 italic mt-2">
+                  Choose &quot;Cancel&quot; if it&apos;s a typo. Choose &quot;Yes, save anyway&quot; if it really is a separate payment that happens to look identical (e.g. weekly cash, two identical fuel runs).
+                </div>
+              </div>
+
+              <div className="flex flex-col-reverse sm:flex-row gap-2 sm:justify-end">
+                <button
+                  onClick={() => setDuplicateConfirm(null)}
+                  className="px-4 py-2.5 bg-slate-100 text-slate-700 rounded-lg text-sm font-bold hover:bg-slate-200 border border-slate-300">
+                  Cancel — let me edit / إلغاء
+                </button>
+                <button
+                  onClick={async () => {
+                    setDuplicateConfirm(null);
+                    // Re-call the save with the bypass flag — same form data,
+                    // confirmed_not_duplicate stamp gets written.
+                    await handleAddTreasury({ bypassDupCheck: true });
+                  }}
+                  className="px-4 py-2.5 bg-amber-600 text-white rounded-lg text-sm font-extrabold hover:bg-amber-700 shadow">
+                  ✓ Yes, save anyway — it&apos;s a separate payment
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
     </div>
     </ErrorBoundary>
     </ToastProvider>

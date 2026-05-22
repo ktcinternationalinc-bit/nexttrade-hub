@@ -4,6 +4,68 @@ export const fmt = (n) => {
   return new Intl.NumberFormat('en-US', { maximumFractionDigits: 0 }).format(n);
 };
 
+// v55.82-E — Robust amount parser for user-typed money fields.
+//
+// ROOT CAUSE FIXED HERE: Number(formData.amount) returned NaN for several
+// real inputs Max types regularly:
+//   • "5,000" — comma thousands separator → NaN
+//   • "5 000" — space thousands separator → NaN
+//   • "٥٠٠٠"  — Arabic-Indic digits → NaN  (frequent on iOS Arabic keyboard)
+//   • "5000,50" — EU/Arabic decimal comma → NaN
+// Postgres then either rejected the insert (silent fail because the toast
+// got swallowed) or coerced NaN to 0 — either way the saved cash_in was
+// not the amount the user typed.
+//
+// parseAmount() handles all of these. Returns 0 (not NaN) on unparseable
+// input so callers can use the result directly in arithmetic without
+// blowing up on isNaN. Use isValidAmount() if you need to validate
+// presence vs zero.
+//
+// Implementation note: kept self-contained in utils.js (does NOT depend
+// on shipping-import-helpers.js) because page.jsx already imports utils
+// and the import chain matters for SWC compilation in API routes.
+export const parseAmount = (raw) => {
+  if (raw == null || raw === '') return 0;
+  if (typeof raw === 'number') return isNaN(raw) ? 0 : raw;
+  let s = String(raw).trim();
+  if (!s) return 0;
+  // Arabic-Indic (٠-٩) → ASCII
+  s = s.replace(/[\u0660-\u0669]/g, (d) => String(d.charCodeAt(0) - 0x0660));
+  // Persian/Urdu (۰-۹) → ASCII
+  s = s.replace(/[\u06F0-\u06F9]/g, (d) => String(d.charCodeAt(0) - 0x06F0));
+  // Strip every kind of whitespace, including NBSP that some keyboards inject
+  s = s.replace(/[\s\u00A0]/g, '');
+  if (!s) return 0;
+  let clean = s.replace(/[^0-9.,\-]/g, '');
+  if (!clean) return 0;
+  const lastComma = clean.lastIndexOf(',');
+  const lastDot = clean.lastIndexOf('.');
+  if (lastComma > -1 && lastDot > -1 && lastComma > lastDot) {
+    // EU style: 1.234,56 — dot=thousands, comma=decimal
+    clean = clean.replace(/\./g, '').replace(',', '.');
+  } else if (lastComma > -1 && lastDot === -1) {
+    // Comma-only: ambiguous between thousands and decimal.
+    // Heuristic: 2+ commas OR exactly 3 digits after the last comma → thousands.
+    const commaCount = (clean.match(/,/g) || []).length;
+    const afterComma = clean.length - lastComma - 1;
+    if (commaCount > 1 || afterComma >= 3) clean = clean.replace(/,/g, '');
+    else clean = clean.replace(',', '.');
+  } else {
+    // Dot-only or pure digits: comma stripping is safe.
+    clean = clean.replace(/,/g, '');
+  }
+  const n = Number(clean);
+  return isNaN(n) ? 0 : n;
+};
+
+// Companion check: did the user actually type a non-zero amount?
+// Use this for validation ("Amount required") so 0 is treated as missing.
+// parseAmount("") returns 0 too — this disambiguates.
+export const isValidAmount = (raw) => {
+  const n = parseAmount(raw);
+  return n > 0;
+};
+
 // Format as EGP currency
 export const fE = (n) => {
   if (n == null || isNaN(n)) return '—';
@@ -159,6 +221,14 @@ export const getWarehouseCat = (desc) => {
 // Reconciliation status with 2% tolerance
 export const getReconStatus = (invoice, treasuryTotal) => {
   const tolerance = invoice.total_amount * 0.02;
+  // v55.83-A.6.8 (Max May 13 2026) — write-off awareness. If a customer
+  // short-paid by 50 EGP and we wrote it off, the "effective expected"
+  // is invoice.total_amount - total_written_off. So comparisons of
+  // treasuryTotal against expected amount must subtract written-off.
+  // Without this, every written-off invoice would show MISMATCH because
+  // treasury < total_amount.
+  const writtenOff = Number(invoice.total_written_off || 0);
+  const effectiveExpected = Math.max(0, Number(invoice.total_amount || 0) - writtenOff);
   // If invoice notes say UNVERIFIED, always show unverified
   if ((invoice.notes || '').includes('UNVERIFIED')) return 'unverified';
   // If says paid but no treasury entries, it's unverified
@@ -166,8 +236,10 @@ export const getReconStatus = (invoice, treasuryTotal) => {
   // If treasury exists but doesn't match collected amount (>2% gap)
   if (treasuryTotal > 0 && invoice.total_collected > 0 && Math.abs(treasuryTotal - invoice.total_collected) > invoice.total_collected * 0.02) return 'mismatch';
   if (invoice.outstanding > tolerance) return 'open';
-  if (treasuryTotal > invoice.total_amount * 1.02) return 'overpaid';
-  if (treasuryTotal >= invoice.total_amount * 0.98 || invoice.total_collected >= invoice.total_amount * 0.98) return 'reconciled';
+  // Compare against effective expected (post-write-off) so an invoice
+  // closed via small write-off shows RECONCILED, not OVERPAID.
+  if (treasuryTotal > effectiveExpected * 1.02) return 'overpaid';
+  if (treasuryTotal >= effectiveExpected * 0.98 || invoice.total_collected >= effectiveExpected * 0.98) return 'reconciled';
   return 'unverified';
 };
 
@@ -220,6 +292,31 @@ export const inRange = (d, mode, df, dt) => {
 export const sanitize = (str) => {
   if (!str || typeof str !== 'string') return str || '';
   return str.replace(/<[^>]*>/g, '').replace(/javascript:/gi, '').replace(/on\w+\s*=/gi, '').trim();
+};
+
+// ============================================================
+// Strip auto-appended bank-reconciliation metadata from a treasury
+// description so the underlying text (typically a customer name or
+// payment note) can be used for things like pre-filling a "Create
+// Invoice" form. WITHOUT this, the customer name field on the new
+// invoice ended up reading e.g. "ايداع اشرف سلطان ✅ matched bank
+// 2026-03-29" — bank-match metadata that doesn't belong on an invoice.
+//
+// Three suffixes are added by the reconciliation system:
+//   1.  [awaiting bank confirmation]                   — placeholder insert
+//   2.  ✅ matched bank YYYY-MM-DD                      — placeholder match
+//   3.  [auto-matched from bank YYYY-MM-DD]            — check auto-match
+//
+// All three live AT THE END of the description with a leading space,
+// so we strip from the first occurrence of any of them onward.
+// ============================================================
+export const stripBankMatchMetadata = (desc) => {
+  if (!desc || typeof desc !== 'string') return desc || '';
+  return desc
+    .replace(/\s*✅\s*matched\s+bank\s+\d{4}-\d{2}-\d{2}.*$/u, '')
+    .replace(/\s*\[awaiting bank confirmation\]/g, '')
+    .replace(/\s*\[auto-matched from bank \d{4}-\d{2}-\d{2}\]/g, '')
+    .trim();
 };
 
 // ============================================================
@@ -317,7 +414,15 @@ export const aggregatePaymentSources = (txns) => {
   for (let i = 0; i < txns.length; i++) {
     const t = txns[i];
     if (!t || typeof t !== 'object') continue;
-    const amt = n(t.cash_in) + n(t.bank_in);
+    let amt = n(t.cash_in) + n(t.bank_in);
+    // v55.83-A.6.6 — virtual check rows shimmed from collected post-dated
+    // checks have payment_source='check' and amount set, but no cash_in/
+    // bank_in (the check is a separate object, not a treasury row). Recognize
+    // those so the breakdown can include them. Real treasury rows from a
+    // collected check unstamp path keep their cash_in semantics.
+    if (amt <= 0 && String(t.payment_source || '').trim().toLowerCase() === 'check') {
+      amt = n(t.amount) || n(t.check_amount);
+    }
     if (amt <= 0) continue;
 
     let src = String(t.payment_source || '').trim().toLowerCase();

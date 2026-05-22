@@ -26,6 +26,7 @@
 
 import { useState, useMemo, useRef } from 'react';
 import { supabase, dbInsert, dbUpdate, logActivity } from '../lib/supabase';
+import { todayET } from '../lib/et-time';
 
 var STATUS_COLORS_MINI = {
   'Open': '#3b82f6',
@@ -84,12 +85,113 @@ export default function PriorityBoard({
   // types a number + Enter → reorders the ranked pile to that position.
   var [editingPriorityFor, setEditingPriorityFor] = useState(null);
   var [priorityEditValue, setPriorityEditValue] = useState('');
+  // v53 — move-to picker state. null = no picker open; otherwise holds
+  // the ticket.id whose picker is currently open. Card on hover shows a
+  // small "Move to →" button that opens a dropdown of other users.
+  // Clicking a user reassigns the ticket (same effect as dragging there).
+  var [moveToPickerFor, setMoveToPickerFor] = useState(null);
+  // v52.2 — Brief pulse highlight on a column when user jumps to it from
+  // the person-picker. Gives a visual cue "this is where you asked to go"
+  // so the user doesn't lose their place among 10 columns.
+  var [highlightedColumn, setHighlightedColumn] = useState(null);
   // v52 — horizontal scroll ref for the board strip so the person-picker
   // can scroll a specific column into view.
   var boardStripRef = useRef(null);
   var columnRefs = useRef({}); // user.id → DOM node of that column
+
+  // v53 — EDGE AUTO-SCROLL during drag.
+  //
+  // Problem v52 didn't solve: to drag a ticket from Omar (col 1) to Sara
+  // (col 9), you need Omar visible to GRAB it AND Sara visible to DROP
+  // on her. The person-picker jump we built scrolled Sara into view but
+  // then the grab source was gone.
+  //
+  // Fix: while dragging, if the cursor is within EDGE_ZONE of the left
+  // or right edge of the scroll container, the board auto-scrolls in
+  // that direction. This is how Trello / Asana / Jira handle it.
+  //
+  // Implementation: pointer position is tracked via `dragover` on the
+  // container (dragover fires continuously during HTML5 drag). Scroll
+  // v52.1 — Edge auto-scroll during drag.
+  //
+  // When Max has many employees, the board scrolls horizontally. To drag
+  // a ticket from person A's column to person F's column (off-screen),
+  // the user drags toward the right edge of the board; we detect this
+  // and auto-scroll horizontally so F comes into view. Source column
+  // slides off the left, drop works normally.
+  //
+  // The scrolling itself is applied via a RAF loop that keeps running as
+  // long as we're near an edge. We stop the loop on dragend/drop.
+  //
+  // v52.2 (Apr 24 2026) — CRITICAL FIX: the original implementation only
+  // fired handleBoardDragOver when the cursor was directly over the
+  // board strip element. But once the cursor enters a column (which is
+  // a child of the strip), dragover events fire on the column, and the
+  // strip-level listener gets inconsistent coverage. Result: edge scroll
+  // only worked in narrow bands where no child was under the cursor.
+  //
+  // Fix: attach a document-level `dragover` listener that fires for
+  // EVERY cursor position during the drag. The listener only does work
+  // when we're actively dragging (dragging state != null) and uses the
+  // same speed-ramp math.
+  var edgeScrollRAFRef = useRef(null);
+  var edgeScrollSpeedRef = useRef(0); // -N..+N pixels per frame; 0 = not scrolling
+  var documentDragOverRef = useRef(null);
+
+  function stopEdgeScroll() {
+    if (edgeScrollRAFRef.current) {
+      cancelAnimationFrame(edgeScrollRAFRef.current);
+      edgeScrollRAFRef.current = null;
+    }
+    edgeScrollSpeedRef.current = 0;
+  }
+
+  function edgeScrollTick() {
+    var el = boardStripRef.current;
+    if (!el || !edgeScrollSpeedRef.current) {
+      edgeScrollRAFRef.current = null;
+      return;
+    }
+    el.scrollLeft += edgeScrollSpeedRef.current;
+    edgeScrollRAFRef.current = requestAnimationFrame(edgeScrollTick);
+  }
+
+  function checkEdgeScroll(clientX) {
+    var el = boardStripRef.current;
+    if (!el) return;
+    var rect = el.getBoundingClientRect();
+    var EDGE_ZONE = 100;  // px from edge that triggers scrolling (was 80, bumped for better reach)
+    var MAX_SPEED = 22;   // px per frame at full speed (was 18)
+    var MIN_SPEED = 5;    // floor so the first few pixels from the edge actually move
+    var speed = 0;
+    if (clientX < rect.left + EDGE_ZONE) {
+      var leftT = 1 - (clientX - rect.left) / EDGE_ZONE; // 0..1
+      if (leftT < 0) leftT = 0;
+      if (leftT > 1) leftT = 1;
+      speed = -Math.max(MIN_SPEED, Math.round(leftT * MAX_SPEED));
+    } else if (clientX > rect.right - EDGE_ZONE) {
+      var rightT = 1 - (rect.right - clientX) / EDGE_ZONE;
+      if (rightT < 0) rightT = 0;
+      if (rightT > 1) rightT = 1;
+      speed = Math.max(MIN_SPEED, Math.round(rightT * MAX_SPEED));
+    }
+    edgeScrollSpeedRef.current = speed;
+    if (speed !== 0 && !edgeScrollRAFRef.current) {
+      edgeScrollRAFRef.current = requestAnimationFrame(edgeScrollTick);
+    } else if (speed === 0) {
+      stopEdgeScroll();
+    }
+  }
+
+  function handleBoardDragOver(e) {
+    if (!dragging) return;
+    checkEdgeScroll(e.clientX);
+  }
   // Per-column expand/collapse state for the Unranked pile.
   var [expandedUnranked, setExpandedUnranked] = useState({});
+  // v54.1 — Per-column expand/collapse state for the Closed pile. Default
+  // collapsed (show 5, hide rest). Click "+ Show N more" to expand.
+  var [expandedClosed, setExpandedClosed] = useState({});
   // S22.14 (Apr 24 2026) — Inline quick-create for a new ticket assigned
   // directly to a team member from their board column. Max: "team members
   // who have no tickets on priority, I need to have the ability to add a
@@ -161,13 +263,53 @@ export default function PriorityBoard({
   var visibleTickets = useMemo(function() {
     return (tickets || []).filter(function(t) {
       if (!t.assigned_to) return false;
-      if (statusFilter === 'open') {
-        var s = String(t.status || '').toLowerCase();
-        return s !== 'closed' && s !== 'done' && s !== 'cancelled' && s !== 'resolved';
-      }
-      return true;
+      // v54.1 — ALWAYS exclude closed/done/cancelled/resolved from the
+      // ranked/unranked piles. Closed tickets live in their own pile at
+      // the bottom of each column (see closedByUser below). The
+      // statusFilter state is kept for future use (e.g. "hide completely"
+      // vs "show greyed-out"), but the current filter options are:
+      //   - 'open' (default): hide closed (they still show in the closed pile)
+      //   - 'all': show closed inline in the closed pile too (same as 'open'
+      //     for now — closed always shows in the dedicated pile)
+      // The distinction matters once we add a third option like "hide closed
+      // entirely". For now they behave the same because closed always appear
+      // in the bottom pile.
+      var s = String(t.status || '').toLowerCase();
+      return s !== 'closed' && s !== 'done' && s !== 'cancelled' && s !== 'resolved';
     });
-  }, [tickets, statusFilter]);
+  }, [tickets]);
+
+  // v54.1 — Closed tickets are always kept (regardless of statusFilter)
+  // so they can be shown greyed-out at the bottom of each person's
+  // column. Max: "all closed tickets for priority should appear on
+  // bottom of their buckets greyed out and closed... show last 5 and
+  // then drill down for more."
+  //
+  // This is a separate pipeline from `visibleTickets` because:
+  //   - The 'all' filter already includes them (would show as normal
+  //     cards, which defeats the "context at the bottom" pattern)
+  //   - The 'open' filter excludes them entirely (would hide them)
+  // So we always build closedByUser independent of the filter.
+  var closedByUser = useMemo(function() {
+    var result = {};
+    (users || []).forEach(function(u) { result[u.id] = []; });
+    (tickets || []).forEach(function(t) {
+      if (!t.assigned_to || !result[t.assigned_to]) return;
+      var s = String(t.status || '').toLowerCase();
+      if (s === 'closed' || s === 'done' || s === 'cancelled' || s === 'resolved') {
+        result[t.assigned_to].push(t);
+      }
+    });
+    // Sort by most recently closed (falls back to updated_at, then created_at).
+    Object.keys(result).forEach(function(uid) {
+      result[uid].sort(function(a, b) {
+        var ta = new Date(a.closed_at || a.updated_at || a.created_at).getTime();
+        var tb = new Date(b.closed_at || b.updated_at || b.created_at).getTime();
+        return tb - ta;
+      });
+    });
+    return result;
+  }, [tickets, users]);
 
   // Build per-user columns. Ranked first (priority 1 at top), then unranked.
   //
@@ -231,12 +373,27 @@ export default function PriorityBoard({
     try { e.dataTransfer.setData('text/plain', t.id); } catch (_) {}
     // v52 — flag so drop zones become visible everywhere on the board.
     try { window.__priorityBoardDragging = true; } catch (_) {}
+    // v52.2 — attach document-level dragover so edge-scroll works even
+    // when cursor is over a child column (not the strip itself).
+    try {
+      var docHandler = function(ev) { checkEdgeScroll(ev.clientX); };
+      documentDragOverRef.current = docHandler;
+      document.addEventListener('dragover', docHandler);
+    } catch (_) {}
   }
 
   function onDragEnd() {
     setDragging(null);
     setDropTarget(null);
     try { window.__priorityBoardDragging = false; } catch (_) {}
+    stopEdgeScroll();
+    // v52.2 — detach document-level dragover listener.
+    try {
+      if (documentDragOverRef.current) {
+        document.removeEventListener('dragover', documentDragOverRef.current);
+        documentDragOverRef.current = null;
+      }
+    } catch (_) {}
   }
 
   function onDragOverCol(e, userId, position, pile) {
@@ -425,6 +582,35 @@ export default function PriorityBoard({
     })();
   }
 
+  // v53 — reassign via click (no drag). Click-to-move picker on each card
+  // calls this. Reuses the existing onDropCol machinery by constructing a
+  // synthetic drag state and simulating a drop at the END of the target's
+  // unranked pile. No event object needed because onDropCol only uses
+  // e.preventDefault(), which we stub.
+  async function reassignTicketTo(ticket, targetUserId) {
+    if (!ticket || !targetUserId) return;
+    if (ticket.assigned_to === targetUserId) {
+      showToast('Already assigned to that person.');
+      return;
+    }
+    if (!canDragTicket(ticket)) {
+      showToast('Only people on this ticket can move it.');
+      return;
+    }
+    // Close the picker immediately so the UI feels responsive.
+    setMoveToPickerFor(null);
+    // Prime the drag state so onDropCol sees a valid source.
+    setDragging({ ticketId: ticket.id, fromUserId: ticket.assigned_to });
+    // Give React a tick to apply state, then simulate the drop at end of
+    // the target's unranked pile.
+    setTimeout(function() {
+      var targetCol = columns[targetUserId] || { ranked: [], unranked: [] };
+      var targetPosition = (targetCol.unranked && targetCol.unranked.length) || 0;
+      var fakeEvent = { preventDefault: function() {} };
+      onDropCol(fakeEvent, targetUserId, targetPosition, 'unranked');
+    }, 0);
+  }
+
   // v52 — set a ticket's priority by typed number. User clicks the #N
   // badge → types a number + Enter. The ranked pile re-sequences to place
   // the ticket at that rank (clamped to 1..N+1 where N is current pile length).
@@ -492,8 +678,14 @@ export default function PriorityBoard({
     var canDrag = canDragTicket(t);
     var additional = parseAdditional(t);
     var isStarred = !!t.starred_today;
-    // v52 — starred cards get an amber glow so they stand out at a glance.
-    var starredCls = isStarred ? 'bg-gradient-to-br from-amber-50 to-white border-amber-300 shadow-amber-100 shadow-md' : 'bg-white border-slate-200';
+    // v54.1 — starred cards need HIGH CONTRAST. Previous amber-50→white
+    // gradient made the card nearly white with dark text on a pale
+    // background — looked good but lacked visual punch when starred.
+    // Now starred cards use amber-200→amber-100 gradient with a bold
+    // amber-600 border so they pop. Non-starred stays clean white.
+    var starredCls = isStarred
+      ? 'bg-gradient-to-br from-amber-200 to-amber-100 border-amber-500 border-2 shadow-amber-300 shadow-md'
+      : 'bg-white border-slate-200';
     var isEditingPrio = editingPriorityFor === t.id;
     return (
       <div
@@ -502,7 +694,7 @@ export default function PriorityBoard({
         onDragStart={canDrag ? function(e) { onDragStart(e, t); } : undefined}
         onDragEnd={onDragEnd}
         onClick={function() { if (!isEditingPrio && onSelectTicket) onSelectTicket(t); }}
-        className={'border rounded-lg p-2 mb-1.5 hover:shadow-md hover:border-indigo-300 transition select-none ' + starredCls + ' ' + (canDrag && !isEditingPrio ? 'cursor-grab' : 'cursor-pointer')}
+        className={'group relative border rounded-lg p-2 mb-1.5 hover:shadow-md hover:border-indigo-300 transition select-none ' + starredCls + ' ' + (canDrag && !isEditingPrio ? 'cursor-grab' : 'cursor-pointer')}
         title={canDrag ? 'Drag to reorder or move to another column; click to open' : 'Click to open (only people on this ticket can drag)'}
       >
         <div className="flex items-center gap-1.5 mb-1">
@@ -573,21 +765,120 @@ export default function PriorityBoard({
           >
             {t.status}
           </span>
-          {t.due_date && new Date(t.due_date) < new Date(new Date().toISOString().substring(0, 10)) && (
+          {t.due_date && t.due_date < todayET() && (
             <span className="text-[8px] font-bold text-red-600">⏰ overdue</span>
           )}
         </div>
-        <div className="text-xs font-semibold text-slate-800 leading-tight line-clamp-2">{t.title}</div>
+        {/* v54.1 — ticket number + title, displayed together. The ticket
+            number in bold amber-900 (starred) or slate-500 (normal) helps
+            Max + team scan the board and reference tickets by number.
+            Title uses black/slate-900 for maximum readability on amber. */}
+        {t.ticket_number && (
+          <div className={'text-[10px] font-bold mb-0.5 ' + (isStarred ? 'text-amber-900' : 'text-slate-500')}>
+            {t.ticket_number}
+          </div>
+        )}
+        {/* v55.26 — globals.css forces text-slate-900 to near-white for the
+            dark theme, which would make the title invisible on the amber
+            starred-card background. Inline style on the starred branch beats
+            the global !important rule. Non-starred branch stays as-is so the
+            dark-theme override correctly lights up text on the dark glass card. */}
+        <div
+          className={'text-xs font-semibold leading-tight line-clamp-2 ' + (isStarred ? '' : 'text-slate-800')}
+          style={isStarred ? { color: '#0f172a' } : undefined}
+        >{t.title}</div>
         <div className="flex items-center gap-1 mt-1">
           {t.due_date && (
-            <div className="text-[9px] text-slate-500">Due {t.due_date}</div>
+            <div className={'text-[9px] ' + (isStarred ? 'text-amber-900 font-semibold' : 'text-slate-500')}>Due {t.due_date}</div>
           )}
           {additional.length > 0 && (
-            <div className="text-[9px] text-slate-400 ml-auto" title="Also assigned to others">
+            <div
+              className={'text-[9px] ml-auto ' + (isStarred ? '' : 'text-slate-500')}
+              style={isStarred ? { color: '#78350f' /* dark amber, beats globals.css text-amber-900 → light-yellow override */ } : undefined}
+              title="Also assigned to others"
+            >
               +{additional.length} other{additional.length === 1 ? '' : 's'}
             </div>
           )}
         </div>
+        {/* v53 — MOVE TO PICKER. Button shown on card hover (opacity-0 →
+            hover opens). Clicking opens a mini dropdown with all other
+            team members; clicking a name reassigns the ticket to them
+            (same effect as dragging). Solves the problem where the
+            target person was scrolled off-screen during drag.
+            v52.2 — Made always visible (was opacity-0 group-hover) so
+            this works on touch devices too. Subtle styling keeps it out
+            of the way when you don't need it. */}
+        {canDrag && (users || []).length > 1 && (
+          <div className="relative mt-1 pt-1 border-t border-slate-100">
+            <button
+              onClick={function(e) {
+                e.stopPropagation();
+                setMoveToPickerFor(moveToPickerFor === t.id ? null : t.id);
+              }}
+              className="w-full text-[9px] text-slate-500 hover:text-indigo-600 hover:bg-indigo-50 rounded py-0.5 transition"
+              title="Reassign to someone else without dragging"
+            >
+              {moveToPickerFor === t.id ? 'Close ▲' : 'Move to → ▾'}
+            </button>
+            {moveToPickerFor === t.id && (
+              <div
+                onClick={function(e) { e.stopPropagation(); }}
+                className="absolute top-full left-0 right-0 mt-1 bg-white border border-slate-200 rounded-lg shadow-lg z-20 max-h-48 overflow-y-auto"
+              >
+                {(users || []).filter(function(u) { return u.id !== t.assigned_to; }).map(function(u) {
+                  var ini = (u.name || '?').split(' ').map(function(p) { return p[0]; }).filter(Boolean).slice(0, 2).join('').toUpperCase();
+                  return (
+                    <button key={u.id}
+                      onClick={function(e) {
+                        e.stopPropagation();
+                        reassignTicketTo(t, u.id);
+                      }}
+                      className="w-full flex items-center gap-2 px-2 py-1.5 text-[10px] font-semibold hover:bg-indigo-50 text-left transition"
+                    >
+                      <span className="w-5 h-5 rounded-full bg-gradient-to-br from-indigo-500 to-purple-600 text-white flex items-center justify-center text-[9px] font-bold flex-shrink-0">
+                        {ini}
+                      </span>
+                      <span className="truncate">{u.name}</span>
+                    </button>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+        )}
+      </div>
+    );
+  }
+
+  // v54.1 — Compact, greyed-out rendering for CLOSED tickets. Shown at
+  // the bottom of each column as read-only context ("what's been done
+  // recently"). Not draggable. Clicking still opens the detail modal
+  // so the user can review/edit/reopen if needed.
+  function renderClosedCard(t) {
+    var closedDate = t.closed_at || t.updated_at || t.created_at;
+    var daysAgo = null;
+    if (closedDate) {
+      var diff = (Date.now() - new Date(closedDate).getTime()) / (1000 * 60 * 60 * 24);
+      daysAgo = Math.floor(diff);
+    }
+    var ago = daysAgo === 0 ? 'today' : daysAgo === 1 ? 'yesterday' : daysAgo != null ? daysAgo + 'd ago' : '';
+    return (
+      <div
+        key={t.id}
+        onClick={function() { if (onSelectTicket) onSelectTicket(t); }}
+        className="bg-slate-100 border border-slate-200 rounded-md px-2 py-1 mb-1 hover:bg-slate-200 transition cursor-pointer opacity-60 hover:opacity-100"
+        title={'Closed ' + ago + ' — click to reopen or review'}
+      >
+        <div className="flex items-center gap-1">
+          <span className="text-[9px] text-slate-500">✓</span>
+          <span className="text-[10px] text-slate-600 font-medium truncate line-through" style={{ textDecorationColor: '#cbd5e1' }}>
+            {t.title}
+          </span>
+        </div>
+        {ago && (
+          <div className="text-[8px] text-slate-500 pl-3">{ago}</div>
+        )}
       </div>
     );
   }
@@ -674,7 +965,7 @@ export default function PriorityBoard({
                     {s.top ? (
                       <div className="text-[11px] font-semibold text-slate-800 truncate" title={s.top.title}>{s.top.title}</div>
                     ) : (
-                      <div className="text-[10px] text-slate-400 italic">No priority set</div>
+                      <div className="text-[10px] text-slate-500 italic">No priority set</div>
                     )}
                   </div>
                 </div>
@@ -696,7 +987,7 @@ export default function PriorityBoard({
               was 6 columns to the right. */}
           {(users || []).length > 3 && (
             <div className="flex items-center gap-1 overflow-x-auto max-w-[60%] pb-1">
-              <span className="text-[9px] text-slate-400 flex-shrink-0 mr-1">Jump to:</span>
+              <span className="text-[9px] text-slate-500 flex-shrink-0 mr-1">Jump to:</span>
               {(users || []).map(function(u) {
                 var col = columns[u.id] || { ranked: [], unranked: [] };
                 var starredCount = (col.ranked.concat(col.unranked) || []).filter(function(t) { return t && t.starred_today; }).length;
@@ -708,6 +999,10 @@ export default function PriorityBoard({
                       if (node && node.scrollIntoView) {
                         node.scrollIntoView({ behavior: 'smooth', block: 'nearest', inline: 'start' });
                       }
+                      // v52.2 — pulse the column briefly so the user's eye
+                      // lands on it. Clears after 1.5 sec.
+                      setHighlightedColumn(u.id);
+                      setTimeout(function() { setHighlightedColumn(function(cur) { return cur === u.id ? null : cur; }); }, 1500);
                     }}
                     className="flex-shrink-0 px-2 py-1 rounded-full text-[10px] font-semibold bg-white border border-slate-200 hover:border-indigo-400 hover:bg-indigo-50 transition flex items-center gap-1"
                     title={'Jump to ' + u.name}>
@@ -719,7 +1014,20 @@ export default function PriorityBoard({
             </div>
           )}
         </div>
-        <div ref={boardStripRef} className="flex gap-3 overflow-x-auto pb-3" style={{ scrollSnapType: 'x mandatory' }}>
+        <div ref={boardStripRef}
+          className="flex gap-3 overflow-x-auto pb-3 priority-board-strip"
+          style={{
+            // v52.1 — scroll-snap must be OFF during drag or the edge
+            // auto-scroll logic fights with the snap mandate and nothing
+            // actually moves. We toggle via the window flag set by
+            // onDragStart. When idle, snap is on for nice column alignment
+            // when the user flicks through columns.
+            scrollSnapType: dragging ? 'none' : 'x mandatory',
+          }}
+          onDragOver={handleBoardDragOver}
+          onDragLeave={stopEdgeScroll}
+          onDrop={stopEdgeScroll}
+        >
           {(users || []).map(function(u) {
             var col = columns[u.id] || { ranked: [], unranked: [] };
             var total = col.ranked.length + col.unranked.length;
@@ -727,7 +1035,10 @@ export default function PriorityBoard({
             return (
               <div key={u.id}
                 ref={function(el) { if (el) columnRefs.current[u.id] = el; }}
-                className="flex-shrink-0 w-64 bg-slate-50 rounded-xl p-2.5"
+                className={
+                  'flex-shrink-0 w-64 bg-slate-50 rounded-xl p-2.5 transition-all ' +
+                  (highlightedColumn === u.id ? 'ring-4 ring-indigo-400 ring-opacity-75 shadow-xl scale-[1.02]' : '')
+                }
                 style={{ scrollSnapAlign: 'start', scrollMarginLeft: 12 }}>
                 <div className="flex items-center justify-between mb-2">
                   <div className="flex items-center gap-2">
@@ -741,7 +1052,7 @@ export default function PriorityBoard({
                   </div>
                   {(isAdmin || u.id === currentUserId) && col.ranked.length > 0 && (
                     <button onClick={function() { clearRanking(u.id); }}
-                      className="text-[9px] text-slate-400 hover:text-red-500"
+                      className="text-[9px] text-slate-500 hover:text-red-500"
                       title="Clear all priority ranks for this person">↺</button>
                   )}
                 </div>
@@ -771,7 +1082,7 @@ export default function PriorityBoard({
                     className={'text-center py-6 rounded-lg border-2 border-dashed ' + (dropTarget && dropTarget.userId === u.id ? 'border-indigo-400 bg-indigo-50' : 'border-slate-200')}>
                     {total === 0 ? (
                       <div>
-                        <div className="text-[10px] text-slate-400 italic mb-2">
+                        <div className="text-[10px] text-slate-500 italic mb-2">
                           {((u.name || '').split(' ')[0] || 'They')} has no tickets
                         </div>
                         {(isAdmin || u.id === currentUserId) && quickCreateFor !== u.id && (
@@ -785,13 +1096,13 @@ export default function PriorityBoard({
                           </button>
                         )}
                         {!(isAdmin || u.id === currentUserId) && (
-                          <div className="text-[9px] text-slate-400">
+                          <div className="text-[9px] text-slate-500">
                             Only {u.name || 'they'} or an admin can create tickets for this person
                           </div>
                         )}
                       </div>
                     ) : (
-                      <div className="text-[10px] text-slate-400 italic">Drop a ticket here to prioritize</div>
+                      <div className="text-[10px] text-slate-500 italic">Drop a ticket here to prioritize</div>
                     )}
                   </div>
                 )}
@@ -808,7 +1119,7 @@ export default function PriorityBoard({
                   var shown = col.unranked.slice(0, shownCount);
                   return (
                     <div className="mt-3 pt-2 border-t border-slate-200">
-                      <div className="text-[9px] font-bold text-slate-400 uppercase mb-1">Unranked ({col.unranked.length})</div>
+                      <div className="text-[9px] font-bold text-slate-500 uppercase mb-1">Unranked ({col.unranked.length})</div>
                       {renderDropZone(u.id, 0, 'unranked')}
                       {shown.map(function(t, idx) {
                         return (
@@ -845,15 +1156,53 @@ export default function PriorityBoard({
                     is empty, so there's always a target. */}
                 {col.unranked.length === 0 && col.ranked.length > 0 && (
                   <div className="mt-3 pt-2 border-t border-slate-200">
-                    <div className="text-[9px] font-bold text-slate-400 uppercase mb-1">Unranked (0)</div>
+                    <div className="text-[9px] font-bold text-slate-500 uppercase mb-1">Unranked (0)</div>
                     <div
                       onDragOver={function(e) { onDragOverCol(e, u.id, 0, 'unranked'); }}
                       onDrop={function(e) { onDropCol(e, u.id, 0, 'unranked'); }}
-                      className={'text-center text-[9px] text-slate-400 italic py-3 rounded-lg border-2 border-dashed ' + (dropTarget && dropTarget.userId === u.id && dropTarget.pile === 'unranked' ? 'border-indigo-400 bg-indigo-50' : 'border-slate-200')}>
+                      className={'text-center text-[9px] text-slate-500 italic py-3 rounded-lg border-2 border-dashed ' + (dropTarget && dropTarget.userId === u.id && dropTarget.pile === 'unranked' ? 'border-indigo-400 bg-indigo-50' : 'border-slate-200')}>
                       Drop here to demote (unranked)
                     </div>
                   </div>
                 )}
+
+                {/* v54.1 — CLOSED pile. Shows the 5 most recently closed
+                    tickets greyed-out with a line-through, sorted most
+                    recent first. User can click "+ Show N more" to expand
+                    the full list. Clicking a closed card opens the detail
+                    modal so they can review or reopen. Not draggable. */}
+                {(closedByUser[u.id] || []).length > 0 && (function() {
+                  var closedList = closedByUser[u.id];
+                  var isExpandedC = !!expandedClosed[u.id];
+                  var shownC = isExpandedC ? closedList.length : Math.min(5, closedList.length);
+                  var hiddenC = closedList.length - shownC;
+                  return (
+                    <div className="mt-3 pt-2 border-t border-slate-200">
+                      <div className="text-[9px] font-bold text-slate-500 uppercase mb-1 flex items-center gap-1">
+                        <span>✓</span>
+                        <span>Closed ({closedList.length})</span>
+                      </div>
+                      {closedList.slice(0, shownC).map(function(t) {
+                        return renderClosedCard(t);
+                      })}
+                      {closedList.length > 5 && (
+                        <button
+                          onClick={function() {
+                            setExpandedClosed(function(prev) {
+                              var next = {};
+                              for (var k in prev) next[k] = prev[k];
+                              next[u.id] = !prev[u.id];
+                              return next;
+                            });
+                          }}
+                          className="w-full mt-1 text-[10px] font-bold text-slate-500 hover:bg-slate-100 rounded py-1 transition"
+                        >
+                          {isExpandedC ? '− Show less' : '+ Show ' + hiddenC + ' more'}
+                        </button>
+                      )}
+                    </div>
+                  );
+                })()}
 
                 {/* S22.14 — Quick-create new ticket for this person.
                     Available to admins (can assign to anyone) and to the

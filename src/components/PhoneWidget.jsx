@@ -1,8 +1,65 @@
 'use client';
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { supabase } from '../lib/supabase';
+import { fmtET } from '../lib/et-time';
 
 const DIAL_KEYS = [['1','2','3'],['4','5','6'],['7','8','9'],['*','0','#']];
+
+// v55.24 — Robust error-to-string formatter.
+//
+// JavaScript "errors" come in many shapes:
+//   • Real Error objects       (have .message)
+//   • DOM Event objects        (no .message — what caused the original
+//                               "[object Event]" bug; thrown by script
+//                               tag onerror, fetch network errors, etc.)
+//   • Plain strings            ("oops")
+//   • Plain objects            ({code:'X',reason:'Y'})
+//   • Twilio errors            (have .code, .message, .twilioError)
+//   • undefined / null         (when something throws nothing)
+//
+// String(e) on an Event yields "[object Event]" with zero info. This
+// helper extracts whatever's actually useful and falls back to a
+// concrete message rather than leaking the type-coercion garbage.
+function formatErr(e) {
+  if (e == null) return 'unknown error (no error value)';
+  if (typeof e === 'string') return e;
+  if (e instanceof Error) {
+    // Twilio errors have a .code in addition to .message; show both
+    if (e.code !== undefined) {
+      var base = '[' + e.code + '] ' + e.message;
+      // v55.83-A.6.27.12 — add actionable hints for the codes we keep
+      // hitting in production so the operator knows what to do next.
+      if (e.code === 20101 || e.code === '20101') {
+        return base + '\n→ Action: Twilio access token is invalid or expired. Refresh the page; if that fails, ask the admin to verify TWILIO_API_KEY/SECRET in Vercel env vars.';
+      }
+      if (e.code === 31005 || e.code === '31005') {
+        return base + '\n→ Action: WebSocket connection lost. Check network and reload.';
+      }
+      if (e.code === 31201 || e.code === '31201') {
+        return base + '\n→ Action: Microphone permission denied. Click the 🔒/🎙 icon in the browser address bar and allow microphone.';
+      }
+      return base;
+    }
+    return e.message || 'Error (no message)';
+  }
+  // DOM Event — try to get the source URL or type
+  if (typeof Event !== 'undefined' && e instanceof Event) {
+    var t = e.target;
+    var src = t && (t.src || t.href || t.tagName) ? (t.src || t.href || t.tagName) : '';
+    return 'Resource load error (' + (e.type || 'event') + ')' + (src ? ' for: ' + src : '');
+  }
+  // Object with a .message — common shape for non-Error errors
+  if (typeof e === 'object' && e !== null) {
+    if (e.message) return String(e.message);
+    if (e.error) return String(e.error);
+    if (e.code) return 'Code ' + String(e.code);
+    try {
+      var s = JSON.stringify(e);
+      if (s && s !== '{}') return s;
+    } catch (_) {}
+  }
+  return String(e);
+}
 
 export default function PhoneWidget({ user, userProfile, users, customers }) {
   const [open, setOpen] = useState(false);
@@ -20,13 +77,23 @@ export default function PhoneWidget({ user, userProfile, users, customers }) {
   const deviceRef = useRef(null);
   const connectionRef = useRef(null);
   const timerRef = useRef(null);
+  // v55.40 — deviceReady = true once Twilio registers us as a Client.
+  // Used to render a green "ready" dot on the floating phone button so
+  // team members can see at a glance whether the system can actually
+  // route inbound calls to them right now.
+  const [deviceReady, setDeviceReady] = useState(false);
+  // endCall is defined further down (it depends on state setters), but it
+  // gets referenced from inside Twilio event callbacks set up earlier.
+  // We hold it in a ref so the callbacks always reach the latest version
+  // without any source-order dependency or stale-closure bugs.
+  const endCallRef = useRef(() => {});
   const myId = userProfile?.id || user?.id;
 
   // Load call logs and phone numbers
   const loadData = useCallback(async () => {
     try {
       const [{ data: l }, { data: n }] = await Promise.all([
-        supabase.from('call_logs').select('*').eq('user_id', myId).order('called_at', { ascending: false }).limit(50),
+        supabase.from('phone_calls').select('*').eq('user_id', myId).order('started_at', { ascending: false }).limit(50),
         supabase.from('phone_numbers').select('*').order('created_at'),
       ]);
       setLogs(l || []);
@@ -38,120 +105,423 @@ export default function PhoneWidget({ user, userProfile, users, customers }) {
 
   useEffect(() => { loadData(); }, [loadData]);
 
-  // Initialize Twilio Device
+  // Initialize Twilio Voice SDK v2 Device.
+  //
+  // Major changes vs v1 (which we used previously):
+  //   • Different URL — /js/voice/releases/2.x.x/ not /js/client/...
+  //   • Device is created with a Token, then call .register()
+  //   • Token expiry handled via 'tokenWillExpire' event
+  //   • Incoming call object is named 'Call' not 'Connection' but the event
+  //     is still 'incoming'
+  //
+  // We always init when there's a logged-in user — even if they have no
+  // assigned phone number. They might still need to receive incoming calls
+  // through their browser if someone <Dial><Client>uuid</Client></Dial>'s them.
   const initDevice = useCallback(async () => {
     if (deviceRef.current) return;
     if (typeof window === 'undefined') return;
+    if (!myId) return;
 
     try {
-      // Load Twilio Client JS SDK
-      if (!window.Twilio?.Device) {
-        await new Promise((resolve, reject) => {
-          const s = document.createElement('script');
-          s.src = 'https://sdk.twilio.com/js/client/releases/1.14.0/twilio.min.js';
-          s.onload = resolve;
-          s.onerror = reject;
-          document.head.appendChild(s);
-        });
+      // 1. Load the Twilio Voice SDK v2.
+      //
+      // v55.25 — REWRITTEN. We now import the SDK from the npm package
+      // `@twilio/voice-sdk` bundled with the app, instead of loading
+      // it from sdk.twilio.com via a script tag.
+      //
+      // Why: Max's network repeatedly failed to fetch the script from
+      // sdk.twilio.com. Common causes that we cannot fix at our end:
+      //   • Corporate / hotel / cafe firewalls blocking *.twilio.com
+      //   • Ad blockers categorizing twilio.com as a tracker
+      //   • Browser privacy extensions blocking external scripts
+      //   • Country-level filtering (some Mideast/EG ISPs)
+      //
+      // By bundling the SDK with our app, the SDK code is served from
+      // OUR Vercel domain (the same origin that already loaded the
+      // dashboard), so any network that can reach the dashboard can
+      // also reach the SDK. Ad blockers and firewalls don't see
+      // "sdk.twilio.com" anywhere — they just see the dashboard's
+      // own JavaScript.
+      //
+      // We use a dynamic import() so the SDK only downloads when
+      // someone actually opens the phone widget, not on every page
+      // load. This keeps the initial dashboard bundle lean.
+      var DeviceClass;
+      try {
+        var mod = await import('@twilio/voice-sdk');
+        DeviceClass = mod.Device || (mod.default && mod.default.Device);
+        if (!DeviceClass) {
+          throw new Error('Voice SDK loaded but Device class not found in module exports.');
+        }
+      } catch (importErr) {
+        throw new Error(
+          'Could not load the phone software. ' +
+          'This usually means the deploy is missing the @twilio/voice-sdk package. ' +
+          'Original: ' + (importErr && importErr.message ? importErr.message : String(importErr))
+        );
       }
 
+      // 2. Get an access token from our backend.
+      //    We pass the Supabase session token in the Authorization header
+      //    so the backend can verify which user is requesting the token
+      //    and reject anonymous or impersonation attempts.
+      const sessionRes = await supabase.auth.getSession();
+      const accessToken = sessionRes?.data?.session?.access_token || '';
       const res = await fetch('/api/phone/token', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': accessToken ? 'Bearer ' + accessToken : '',
+        },
         body: JSON.stringify({ user_id: myId }),
       });
-      const data = await res.json();
-      if (data.error) { setError(data.error); return; }
+      // Read the response defensively. If the backend returned non-JSON
+      // (e.g. a 500 HTML error page from Vercel), .json() throws and we
+      // want a real error message instead of the cryptic [object Event].
+      var data;
+      try {
+        data = await res.json();
+      } catch (parseErr) {
+        var bodyText = '';
+        try { bodyText = (await res.clone().text()).slice(0, 200); } catch (_) {}
+        throw new Error('Token endpoint returned non-JSON (HTTP ' + res.status + '): ' + (bodyText || 'no body'));
+      }
+      if (!res.ok) {
+        // Backend returned an error JSON — surface its message
+        throw new Error(data.error || ('Token endpoint returned HTTP ' + res.status));
+      }
+      if (data.error) {
+        throw new Error(data.error);
+      }
+      if (!data.token) {
+        throw new Error('Token endpoint returned no token.');
+      }
 
-      const device = new window.Twilio.Device(data.token, {
+      // 3. Create the Device with the imported class
+      const device = new DeviceClass(data.token, {
         codecPreferences: ['opus', 'pcmu'],
-        enableRingingState: true,
+        // Sound options
+        sounds: {
+          incoming: undefined, // use default ringtone
+        },
+        // Allow incoming when device registers
+        allowIncomingWhileBusy: false,
+        logLevel: 1, // 1 = errors only; bump higher for debugging
       });
 
-      device.on('ready', () => { console.warn('📞 Twilio Device ready'); });
-      device.on('error', (err) => { setError(err.message); setCallState('idle'); });
+      // 4. Wire up events. v2 uses 'registered' / 'unregistered' / 'tokenWillExpire'
+      device.on('registered', () => {
+        console.warn('📞 Twilio Device registered — ready to receive calls');
+        setDeviceReady(true);
+      });
+      device.on('unregistered', () => {
+        console.warn('📞 Twilio Device unregistered');
+        setDeviceReady(false);
+      });
+      device.on('error', (err) => {
+        // err in v2 is a TwilioError with .code and .message — but it's
+        // sometimes a plain Error or DOM Event depending on what failed.
+        // Format defensively so "[object Event]" can never appear again.
+        var msg = formatErr(err);
+        setError('Phone error: ' + msg);
+        console.error('📞 Twilio Device error:', err);
+      });
 
-      device.on('incoming', (conn) => {
-        connectionRef.current = conn;
-        const from = conn.parameters.From || 'Unknown';
-        // Try to match caller to customer
-        const customer = (customers || []).find(c => c.phone && from.includes(c.phone.replace(/\D/g, '').slice(-10)));
+      // Token will expire in 5 min — refresh it. Critical for keeping the
+      // device alive past the 1-hour token TTL.
+      device.on('tokenWillExpire', async () => {
+        try {
+          const sessionRes2 = await supabase.auth.getSession();
+          const accessToken2 = sessionRes2?.data?.session?.access_token || '';
+          const r2 = await fetch('/api/phone/token', {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+              'Authorization': accessToken2 ? 'Bearer ' + accessToken2 : '',
+            },
+            body: JSON.stringify({ user_id: myId }),
+          });
+          const d2 = await r2.json();
+          if (d2.token) {
+            device.updateToken(d2.token);
+            console.warn('📞 Token refreshed');
+          }
+        } catch (e) {
+          console.error('📞 Token refresh failed:', e);
+        }
+      });
+
+      // Incoming call — in v2 it's a Call object not a Connection
+      device.on('incoming', (call) => {
+        connectionRef.current = call;
+        const from = (call.parameters && call.parameters.From) || 'Unknown';
+        // Try to match caller to customer by last 10 digits
+        const digitsOnly = String(from).replace(/\D/g, '').slice(-10);
+        const customer = (customers || []).find(c => c.phone && String(c.phone).replace(/\D/g, '').includes(digitsOnly));
         setIncomingCaller({ number: from, name: customer?.customer || customer?.name || null });
         setCallState('incoming');
         setOpen(true);
 
-        conn.on('disconnect', () => { endCall(); });
-        conn.on('cancel', () => { setCallState('idle'); setIncomingCaller(null); });
+        call.on('disconnect', () => { endCallRef.current(); });
+        call.on('cancel',     () => { setCallState('idle'); setIncomingCaller(null); connectionRef.current = null; });
+        call.on('reject',     () => { setCallState('idle'); setIncomingCaller(null); connectionRef.current = null; });
       });
 
-      device.on('disconnect', () => { endCall(); });
+      // 5. Register so we can RECEIVE calls. (Without this, only outbound works.)
+      await device.register();
 
       deviceRef.current = device;
-    } catch (e) { setError('Phone init failed: ' + e.message); }
+    } catch (e) {
+      // v55.24 — robust error formatter. Was: `e.message || String(e)`.
+      // That returned "[object Event]" if `e` was a DOM Event (e.g. from
+      // a script-tag onerror). Now we extract whatever's most useful.
+      setError('Phone init failed: ' + formatErr(e));
+      console.error('Phone init error:', e);
+    }
   }, [myId, customers]);
 
+  // Init when the user actually opens the widget. We deliberately do NOT
+  // auto-init on page load anymore. Reasons:
+  //
+  //   1. device.register() can throw if microphone is blocked, Twilio env
+  //      vars aren't configured, or the access token can't be obtained.
+  //      An unhandled throw on every page load would take down the whole
+  //      dashboard (logout button, sidebar, everything) for users who
+  //      can't or don't want to use the phone system.
+  //
+  //   2. The microphone permission prompt is jarring as a side-effect of
+  //      opening the dashboard. Users should only see it after they've
+  //      explicitly chosen to use the phone (e.g. clicked the phone icon).
+  //
+  // Trade-off: incoming calls won't ring in the browser until the user
+  // opens the widget at least once per session. For now that's acceptable —
+  // cell forwarding still rings their phone. We can revisit once browser
+  // dialing is fully validated.
   useEffect(() => {
-    if (myNumber) initDevice();
-  }, [myNumber, initDevice]);
+    // Cleanup on unmount or user change. We don't init here.
+    return () => {
+      try {
+        if (deviceRef.current) {
+          deviceRef.current.destroy();
+          deviceRef.current = null;
+          setDeviceReady(false);
+        }
+      } catch (e) { /* ignore */ }
+    };
+  }, [myId]);
 
-  // Make call
-  const makeCall = (phoneNum) => {
-    if (!deviceRef.current) { setError('Phone not connected. Check Twilio settings.'); return; }
-    const num = (phoneNum || number).replace(/[^\d+]/g, '');
-    if (!num) return;
+  // Init lazily when the user opens the widget for the first time.
+  // initDevice itself is idempotent (early-returns if deviceRef is set)
+  // so calling it multiple times is safe.
+  useEffect(() => {
+    if (open && myId && !deviceRef.current) {
+      initDevice();
+    }
+  }, [open, myId, initDevice]);
 
-    setCallState('connecting');
-    const conn = deviceRef.current.connect({ To: num, CallerId: myNumber });
-    connectionRef.current = conn;
+  // v55.40 — AUTO-REGISTER on app load when it's safe to do so.
+  //
+  // The original lazy-init policy (only register when the user opens the
+  // phone widget) had an unintended consequence: nobody's browser was
+  // ever registered, so EVERY inbound call went to voicemail. Customers
+  // calling KTC would never reach a live person.
+  //
+  // The fix: try to auto-register, but ONLY when all of the following are
+  // true. Skipping any of these makes the silent attempt impossible:
+  //
+  //   1. The browser supports the Permissions API for 'microphone'
+  //      (Chromium, Firefox, modern Safari).
+  //   2. Mic permission is already 'granted' (i.e. the user has used
+  //      the phone widget or another mic feature like Nadia previously
+  //      and said yes). If state is 'prompt', registering would force a
+  //      jarring browser dialog the user didn't ask for. If 'denied',
+  //      registering would just throw.
+  //   3. The user's `phone_routing` is NOT 'cell' (browser disabled).
+  //   4. The user is not in vacation mode.
+  //
+  // When all conditions hold, we silently call initDevice() in the
+  // background. The Twilio Device's 'registered' event flips deviceReady
+  // to true, which lights up the green dot on the floating phone button.
+  // No prompts, no UI takeover. Inbound calls now find a live browser.
+  //
+  // If any condition isn't met, we fall back to the original lazy behavior:
+  // user has to open the widget once per session to enable inbound.
+  useEffect(() => {
+    if (!myId) return;
+    if (deviceRef.current) return;
+    if (typeof window === 'undefined') return;
 
-    conn.on('ringing', () => { setCallState('ringing'); });
-    conn.on('accept', () => {
-      setCallState('active');
-      setCallDuration(0);
-      timerRef.current = setInterval(() => setCallDuration(prev => prev + 1), 1000);
-    });
-    conn.on('disconnect', () => { endCall(); });
-    conn.on('error', (err) => { setError(err.message); endCall(); });
+    var cancelled = false;
 
-    // Log outbound call
-    fetch('/api/phone/call', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ user_id: myId, phone_number: num, direction: 'outbound', status: 'initiated' }),
-    });
+    var tryAutoRegister = async function () {
+      try {
+        // Step 1+2 — check Permissions API. If unavailable or not granted,
+        // bail silently.
+        if (!navigator.permissions || !navigator.permissions.query) return;
+        var perm;
+        try {
+          perm = await navigator.permissions.query({ name: 'microphone' });
+        } catch (_e) {
+          return;
+        }
+        if (!perm || perm.state !== 'granted') return;
+
+        if (cancelled) return;
+
+        // Step 3+4 — check the user's routing prefs. If they explicitly
+        // chose 'cell only' or are on vacation, skip auto-register
+        // (registering would still work, but it'd be wasted setup).
+        try {
+          var routing = await supabase
+            .from('users')
+            .select('phone_routing, phone_vacation_mode')
+            .eq('id', myId)
+            .maybeSingle();
+          if (routing && routing.data) {
+            if (routing.data.phone_vacation_mode) return;
+            if (routing.data.phone_routing === 'cell') return;
+          }
+        } catch (_e) {
+          // Column may not exist yet (s31 not run) — fall through.
+        }
+
+        if (cancelled) return;
+        if (deviceRef.current) return;
+
+        console.warn('📞 [auto-register] mic pre-granted; registering for inbound calls');
+        // initDevice has its own try/catch — failures here are silent
+        // by design (we don't want a background attempt to spam errors
+        // at the user). When they open the widget, any persistent issue
+        // surfaces in the existing error UI.
+        await initDevice();
+      } catch (e) {
+        console.warn('[auto-register] skipped:', e && e.message ? e.message : e);
+      }
+    };
+
+    // Tiny delay so we don't race the auth handshake on initial app load.
+    var t = setTimeout(tryAutoRegister, 1200);
+    return function () { cancelled = true; clearTimeout(t); };
+  }, [myId, initDevice]);
+
+  // v55.29 — toE164(): auto-format whatever the user typed into a proper
+  // E.164 number (the "+1..." format Twilio requires).
+  //
+  // The dial-pad UI strips the + when typing numerics, so users typing on
+  // the keypad always end up with no plus sign. Twilio's outbound endpoint
+  // strictly requires E.164 ("Destination must be in E.164 format starting
+  // with plus sign") so without this normalization, every dialed call from
+  // the on-screen keypad would be rejected.
+  //
+  // Rules:
+  //   • If the input already starts with +, treat it as fully-qualified —
+  //     just strip non-digits after the + and trust the caller knows what
+  //     country code they want.
+  //   • If it's 10 digits (NXXNXXXXXX), assume US/Canada and prepend +1.
+  //   • If it's 11 digits and starts with 1, assume US/Canada with the
+  //     country code already typed, just prepend +.
+  //   • Anything else (7-9 digits, 12+ digits without +) is ambiguous —
+  //     return null so we surface a clear error to the user instead of
+  //     silently calling the wrong country.
+  const toE164 = (raw) => {
+    var s = String(raw || '').trim();
+    if (!s) return null;
+    // Already E.164
+    if (s.startsWith('+')) {
+      var afterPlus = s.slice(1).replace(/\D/g, '');
+      if (afterPlus.length < 7 || afterPlus.length > 15) return null;
+      return '+' + afterPlus;
+    }
+    // No plus — strip non-digits and decide
+    var digits = s.replace(/\D/g, '');
+    if (digits.length === 10) return '+1' + digits;          // US/Canada local
+    if (digits.length === 11 && digits.charAt(0) === '1') return '+' + digits; // US/Canada with country code
+    return null; // ambiguous — let the caller show an error
   };
 
-  // Answer incoming
+  // Make outbound call. SDK v2 differences from v1:
+  //   • device.connect() returns a Promise<Call>, not a Connection directly
+  //   • params go in { params: { To, From } } not directly
+  //   • Call uses 'accept' not 'accept' (same name actually) but the
+  //     event firing pattern is slightly different
+  const makeCall = async (phoneNum) => {
+    if (!deviceRef.current) {
+      setError('Phone not connected. Wait for "registered" or check microphone permissions.');
+      return;
+    }
+    var raw = phoneNum || number;
+    var num = toE164(raw);
+    if (!num) {
+      setError(
+        'Could not understand "' + raw + '" as a phone number. ' +
+        'Either type a 10-digit US/Canada number (the system will add +1) ' +
+        'or include the full international format starting with + and country code.'
+      );
+      return;
+    }
+
+    setCallState('connecting');
+    try {
+      // v2 connect() takes an options object and returns a Promise
+      const call = await deviceRef.current.connect({
+        params: {
+          To: num,
+          // CallerId comes from outbound TwiML lookup, no need to pass here
+        },
+      });
+      connectionRef.current = call;
+
+      call.on('ringing', () => { setCallState('ringing'); });
+      call.on('accept', () => {
+        setCallState('active');
+        setCallDuration(0);
+        if (timerRef.current) clearInterval(timerRef.current);
+        timerRef.current = setInterval(() => setCallDuration(prev => prev + 1), 1000);
+      });
+      call.on('disconnect', () => { endCallRef.current(); });
+      call.on('error', (err) => {
+        // v55.24 — same robust formatter so call errors never show
+        // "[object Event]" either.
+        setError(formatErr(err));
+        endCallRef.current();
+      });
+    } catch (e) {
+      setError('Call failed: ' + formatErr(e));
+      setCallState('idle');
+    }
+  };
+
+  // Answer incoming call (v2 — same `accept()` method)
   const answerCall = () => {
     if (connectionRef.current) {
       connectionRef.current.accept();
       setCallState('active');
       setCallDuration(0);
+      if (timerRef.current) clearInterval(timerRef.current);
       timerRef.current = setInterval(() => setCallDuration(prev => prev + 1), 1000);
     }
   };
 
   // Reject incoming
   const rejectCall = () => {
-    if (connectionRef.current) connectionRef.current.reject();
+    if (connectionRef.current) {
+      try { connectionRef.current.reject(); } catch (e) { /* might already be rejected */ }
+    }
     setCallState('idle');
     setIncomingCaller(null);
+    connectionRef.current = null;
   };
 
-  // End call
+  // End call (works for both incoming and outgoing in v2).
+  // We also write this to endCallRef so async Twilio callbacks set up
+  // earlier (e.g. inside initDevice) can reach the latest version
+  // without depending on JavaScript declaration order.
   const endCall = () => {
-    if (connectionRef.current) { try { connectionRef.current.disconnect(); } catch(e) { console.warn(e); } }
+    if (connectionRef.current) {
+      try { connectionRef.current.disconnect(); } catch (e) { console.warn('disconnect error:', e); }
+    }
     connectionRef.current = null;
     if (timerRef.current) { clearInterval(timerRef.current); timerRef.current = null; }
-
-    // Log duration
-    if (callDuration > 0) {
-      fetch('/api/phone/call', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ user_id: myId, phone_number: number, direction: 'outbound', status: 'completed', duration: callDuration }),
-      });
-    }
 
     setCallState('idle');
     setCallDuration(0);
@@ -159,12 +529,18 @@ export default function PhoneWidget({ user, userProfile, users, customers }) {
     setMuted(false);
     loadData();
   };
+  // Keep the ref pointing at the freshest endCall every render so the
+  // callbacks set up inside Twilio Device events always see the latest
+  // state (e.g. so loadData closes over the current myId).
+  endCallRef.current = endCall;
 
-  // Toggle mute
+  // Toggle mute (v2 — same `mute()` method)
   const toggleMute = () => {
     if (connectionRef.current) {
-      connectionRef.current.mute(!muted);
-      setMuted(!muted);
+      try {
+        connectionRef.current.mute(!muted);
+        setMuted(!muted);
+      } catch (e) { /* call may have ended */ }
     }
   };
 
@@ -196,15 +572,32 @@ export default function PhoneWidget({ user, userProfile, users, customers }) {
 
   return (
     <>
-      {/* Floating phone button — moved to LEFT side to stop obstructing
-          action buttons on the right side of cards (calendar check-in,
-          ticket action buttons, FAB). Smaller footprint. */}
+      {/* v55.58 — Floating phone button moved to bottom-left corner.
+          Previously at left-20 (80px in) which put it weirdly between
+          the voice pill (at left-4) and the rest of the screen. Now
+          at left-4 like every other corner anchor. The voice pill
+          gets pushed UP (bottom-24 on mobile) to make room — see
+          VoiceController.jsx. */}
       <button onClick={() => setOpen(!open)}
-        className="fixed bottom-6 left-20 w-12 h-12 rounded-full bg-green-500 text-white text-xl shadow-xl z-50 flex items-center justify-center hover:bg-green-600 transition"
+        className="fixed bottom-4 left-4 w-12 h-12 rounded-full bg-green-500 text-white text-xl shadow-xl z-50 flex items-center justify-center hover:bg-green-600 transition"
         style={{ boxShadow: '0 4px 20px rgba(34,197,94,0.4)' }}
-        title="Phone">
+        title={deviceReady
+          ? 'Phone (ready to receive calls)'
+          : 'Phone (open to enable inbound calls)'}>
         📞
+        {/* v55.40 — Active call indicator (red, pulsing). Highest priority. */}
         {callState === 'active' && <span className="absolute -top-1 -right-1 w-4 h-4 bg-red-500 rounded-full animate-pulse" />}
+        {/* v55.40 — Ready-for-inbound indicator (green dot). Only shown when
+            no active call is in progress and the Twilio Device is registered.
+            Tells team members at a glance that customers calling them right
+            now WILL ring this browser. */}
+        {callState !== 'active' && deviceReady && (
+          <span
+            className="absolute -top-1 -right-1 w-3 h-3 bg-emerald-400 rounded-full border-2 border-white"
+            style={{ boxShadow: '0 0 6px rgba(52,211,153,0.7)' }}
+            title="Ready to receive calls"
+          />
+        )}
       </button>
 
       {/* Phone panel — anchored to the left now, matching the button */}
@@ -215,7 +608,7 @@ export default function PhoneWidget({ user, userProfile, users, customers }) {
             <div className="flex justify-between items-center">
               <div>
                 <div className="font-bold text-sm">📞 KTC Phone</div>
-                <div className="text-[10px] text-slate-400">{myNumber || 'No number assigned'}</div>
+                <div className="text-[10px] text-slate-500">{myNumber || 'No number assigned'}</div>
               </div>
               <button onClick={() => setOpen(false)} className="text-slate-400 text-lg">✕</button>
             </div>
@@ -228,16 +621,33 @@ export default function PhoneWidget({ user, userProfile, users, customers }) {
                 </div>
                 <div className="flex gap-2">
                   <button onClick={toggleMute} className={'w-8 h-8 rounded-full text-sm flex items-center justify-center ' + (muted ? 'bg-red-500' : 'bg-white/20')}>{muted ? '🔇' : '🎤'}</button>
-                  <button onClick={endCall} className="w-8 h-8 rounded-full bg-red-500 text-sm flex items-center justify-center">📵</button>
+                  <button onClick={endCall} title="Hang up" className="w-8 h-8 rounded-full bg-red-500 text-sm flex items-center justify-center">📵</button>
                 </div>
               </div>
             )}
-            {callState === 'connecting' && <div className="mt-2 text-xs text-amber-400 animate-pulse">Connecting...</div>}
-            {callState === 'ringing' && <div className="mt-2 text-xs text-blue-400 animate-pulse">Ringing...</div>}
+            {/* v55.83-A.6.27.12 (Max May 15 2026) — hang-up button for
+                connecting/ringing states. Was missing entirely, so on a
+                stuck connection (AccessTokenInvalid, slow Twilio, network
+                glitch) user had no way to cancel. */}
+            {(callState === 'connecting' || callState === 'ringing') && (
+              <div className="mt-2 bg-slate-800 rounded-lg p-2 flex items-center justify-between">
+                <div className="text-xs">
+                  {callState === 'connecting' ? (
+                    <span className="text-amber-400 animate-pulse font-bold">📞 Connecting…</span>
+                  ) : (
+                    <span className="text-blue-400 animate-pulse font-bold">📞 Ringing…</span>
+                  )}
+                </div>
+                <button onClick={endCall} title="Cancel call"
+                  className="px-3 py-1 rounded-lg bg-red-500 hover:bg-red-600 text-white text-xs font-bold">
+                  📵 Cancel
+                </button>
+              </div>
+            )}
           </div>
 
           {error && (
-            <div className="bg-red-50 text-red-600 text-[10px] p-2">{error} <button onClick={() => setError('')} className="underline ml-1">dismiss</button></div>
+            <div className="bg-red-50 text-red-900 text-[11px] p-2 border border-red-200 font-semibold" style={{ whiteSpace: 'pre-line' }}>{error} <button onClick={() => setError('')} className="underline ml-1">dismiss</button></div>
           )}
 
           {/* Tabs */}
@@ -251,7 +661,19 @@ export default function PhoneWidget({ user, userProfile, users, customers }) {
           {tab === 'dial' && (
             <div className="p-4">
               <input value={number} onChange={e => setNumber(e.target.value)} placeholder="+1 (555) 123-4567"
-                className="w-full text-center text-xl font-bold border-b-2 border-slate-200 pb-2 mb-3 outline-none" />
+                className="w-full text-center text-xl font-bold border-b-2 border-slate-200 pb-2 mb-1 outline-none" />
+              {/* v55.29 — live E.164 preview. Shows the user exactly what number
+                  will be dialed. If they type just 10 digits, this confirms
+                  +1 will be added. If their input is ambiguous, it warns them. */}
+              <div className="text-[10px] text-center mb-3 min-h-[14px]">
+                {number ? (
+                  toE164(number) ? (
+                    <span className="text-emerald-600">Will dial: {toE164(number)}</span>
+                  ) : (
+                    <span className="text-amber-600">Add country code (e.g. +1 for US, +20 for Egypt)</span>
+                  )
+                ) : null}
+              </div>
               <div className="grid grid-cols-3 gap-2 mb-3">
                 {DIAL_KEYS.flat().map(k => (
                   <button key={k} onClick={() => setNumber(n => n + k)}
@@ -260,7 +682,10 @@ export default function PhoneWidget({ user, userProfile, users, customers }) {
               </div>
               <div className="flex gap-2">
                 <button onClick={() => setNumber(n => n.slice(0, -1))} className="flex-1 py-3 rounded-lg bg-slate-100 text-sm font-semibold">⌫ Delete</button>
-                <button onClick={() => makeCall()} disabled={!number || callState !== 'idle'}
+                {/* v55.29 — disable Call if the typed number can't be normalized.
+                    Better to grey out the button than send to /outbound and get
+                    the "must be in E.164" rejection. */}
+                <button onClick={() => makeCall()} disabled={!number || !toE164(number) || callState !== 'idle'}
                   className="flex-1 py-3 rounded-lg bg-green-500 text-white font-bold text-sm disabled:opacity-50">📞 Call</button>
               </div>
             </div>
@@ -272,18 +697,18 @@ export default function PhoneWidget({ user, userProfile, users, customers }) {
               {logs.length === 0 ? (
                 <div className="text-center py-8 text-slate-400 text-xs">No calls yet</div>
               ) : logs.map(l => {
-                const contactName = getContactName(l.phone_number);
+                const contactName = getContactName(l.customer_number);
                 return (
-                  <div key={l.id} className="flex items-center justify-between p-3 border-b hover:bg-slate-50 cursor-pointer" onClick={() => { setNumber(l.phone_number); setTab('dial'); }}>
+                  <div key={l.id} className="flex items-center justify-between p-3 border-b hover:bg-slate-50 cursor-pointer" onClick={() => { setNumber(l.customer_number); setTab('dial'); }}>
                     <div className="flex items-center gap-2">
                       <span className={l.direction === 'inbound' ? 'text-blue-500' : 'text-green-500'}>{l.direction === 'inbound' ? '📥' : '📤'}</span>
                       <div>
-                        <div className="text-xs font-semibold">{contactName || fmtPhone(l.phone_number)}</div>
-                        {contactName && <div className="text-[10px] text-slate-400">{fmtPhone(l.phone_number)}</div>}
-                        <div className="text-[10px] text-slate-400">{new Date(l.called_at).toLocaleString()}{l.duration ? ` • ${fmtDuration(l.duration)}` : ''}</div>
+                        <div className="text-xs font-semibold">{contactName || fmtPhone(l.customer_number)}</div>
+                        {contactName && <div className="text-[10px] text-slate-500">{fmtPhone(l.customer_number)}</div>}
+                        <div className="text-[10px] text-slate-500">{fmtET(l.started_at, 'datetime')}{l.duration_seconds ? ` • ${fmtDuration(l.duration_seconds)}` : ''}</div>
                       </div>
                     </div>
-                    <button onClick={(e) => { e.stopPropagation(); setNumber(l.phone_number); makeCall(l.phone_number); }}
+                    <button onClick={(e) => { e.stopPropagation(); setNumber(l.customer_number); makeCall(l.customer_number); }}
                       className="text-green-500 text-sm">📞</button>
                   </div>
                 );

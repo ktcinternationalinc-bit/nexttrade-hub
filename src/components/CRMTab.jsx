@@ -1,7 +1,9 @@
 'use client';
 import { useState, useMemo } from 'react';
+import { filterActiveUsers } from '../lib/active-users';
 import { supabase, dbInsert, dbUpdate, logActivity } from '../lib/supabase';
 import { notifyClientAssigned, notifyFollowUp, notifyCRMStatus } from '../lib/notify';
+import { fmtET, todayET } from '../lib/et-time';
 import EmailComposer from './EmailComposer';
 import { fE, fmt } from '../lib/utils';
 
@@ -20,6 +22,10 @@ const PIPELINE_STAGES = [
 
 export default function CRMTab({ toast, customers, invoices, user, userProfile, users, onReload, isAdmin, onSelectInvoice, lang, modulePerms, initialClient }) {
   const myId = userProfile?.id;
+  // v55.52 — Active users only, for assignee dropdowns. `users` (full list)
+  // remains available for resolving historical assigned-rep names of
+  // deactivated teammates so existing records still display correctly.
+  const activeUsers = filterActiveUsers(users); // v55.62 — handles active=NULL
   const canViewAll = isAdmin || modulePerms?.['CRM View All'] === true;
   const canViewContacts = isAdmin || modulePerms?.['CRM View Contacts'] === true;
   // Can see contact info if: admin, has CRM View Contacts perm, or is the assigned rep
@@ -44,6 +50,9 @@ export default function CRMTab({ toast, customers, invoices, user, userProfile, 
   const [notes, setNotes] = useState([]);
   const [followUps, setFollowUps] = useState([]);
   const [contactLog, setContactLog] = useState([]);
+  // Phase B (Apr 26 2026): per-customer call history + voicemails
+  const [phoneCalls, setPhoneCalls] = useState([]);
+  const [phoneVoicemails, setPhoneVoicemails] = useState([]);
   const [allNotes, setAllNotes] = useState([]);
   const [notesLoaded, setNotesLoaded] = useState(false);
   const [f, setF] = useState({});
@@ -103,14 +112,20 @@ export default function CRMTab({ toast, customers, invoices, user, userProfile, 
   const loadClientData = async (client) => {
     setSel(client);
     if (!client) return;
-    const [n, fu, cl] = await Promise.all([
+    const [n, fu, cl, pc, vm] = await Promise.all([
       supabase.from('client_notes').select('*').eq('customer_id', client.id).order('created_at', { ascending: false }),
       supabase.from('follow_ups').select('*').eq('customer_id', client.id).order('due_date', { ascending: true }),
       supabase.from('contact_log').select('*').eq('customer_id', client.id).order('contacted_at', { ascending: false }).limit(50),
+      // Phase B: phone call history for this customer
+      supabase.from('phone_calls').select('*').eq('customer_id', client.id).order('started_at', { ascending: false }).limit(50),
+      // Phase B: voicemails left for this customer
+      supabase.from('phone_voicemails').select('*').eq('customer_id', client.id).order('created_at', { ascending: false }).limit(20),
     ]);
     setNotes(n.data || []);
     setFollowUps(fu.data || []);
     setContactLog(cl.data || []);
+    setPhoneCalls(pc.data || []);
+    setPhoneVoicemails(vm.data || []);
   };
 
   const logContact = async (type, notes) => {
@@ -354,7 +369,7 @@ export default function CRMTab({ toast, customers, invoices, user, userProfile, 
         </select>
         <select value={repF} onChange={e => setRepF(e.target.value)} className="px-3 py-1.5 rounded-lg border border-slate-200 text-[11px] bg-white">
           <option value="all">All Reps</option>
-          {(users || []).map(u => <option key={u.id} value={u.id}>{u.name}</option>)}
+          {activeUsers.map(u => <option key={u.id} value={u.id}>{u.name}</option>)}
           <option value="unassigned">Unassigned</option>
         </select>
         <select value={sortBy} onChange={e => setSortBy(e.target.value)} className="px-3 py-1.5 rounded-lg border border-slate-200 text-[11px] bg-white">
@@ -362,14 +377,14 @@ export default function CRMTab({ toast, customers, invoices, user, userProfile, 
           <option value="most_orders">Most Orders</option><option value="top_sales">Top Sales</option>
           <option value="latest_note">Latest Note</option><option value="no_notes">No Notes</option>
         </select>
-        <span className="text-[10px] text-slate-400 ml-auto">{filtered.length} results</span>
+        <span className="text-[10px] text-slate-500 ml-auto">{filtered.length} results</span>
       </div>
 
       {/* Stats Row */}
       <div className="grid grid-cols-4 gap-3 mb-4">
-        <div className="bg-white rounded-xl p-3 border border-slate-100"><div className="text-[9px] text-slate-400 uppercase tracking-wide">Total</div>
+        <div className="bg-white rounded-xl p-3 border border-slate-100"><div className="text-[9px] text-slate-500 uppercase tracking-wide">Total</div>
           <div className="text-xl font-extrabold">{filtered.length}</div></div>
-        <div className="bg-white rounded-xl p-3 border border-slate-100"><div className="text-[9px] text-slate-400 uppercase tracking-wide">Active</div>
+        <div className="bg-white rounded-xl p-3 border border-slate-100"><div className="text-[9px] text-slate-500 uppercase tracking-wide">Active</div>
           <div className="text-xl font-extrabold text-blue-600">{filtered.filter(c=>!['won','lost'].includes(c.pipeline_stage||'lead')).length}</div></div>
         <div className="bg-white rounded-xl p-3 border border-slate-100"><div className="text-[9px] text-emerald-500 uppercase tracking-wide">Won</div>
           <div className="text-xl font-extrabold text-emerald-600">{filtered.filter(c=>(c.pipeline_stage)==='won').length}</div></div>
@@ -477,21 +492,21 @@ export default function CRMTab({ toast, customers, invoices, user, userProfile, 
 
                 {/* Tags */}
                 <div className="flex gap-1 mb-3 flex-wrap">
-                  {c.industry && <span className="px-2 py-0.5 bg-amber-50 text-amber-700 rounded-md text-[9px] font-medium">{c.industry}</span>}
+                  {c.industry && <span className="px-2 py-0.5 bg-amber-100 text-amber-900 rounded-md text-[9px] font-bold border border-amber-200">{c.industry}</span>}
                   {c.group_name && <span className="px-2 py-0.5 bg-purple-50 text-purple-700 rounded-md text-[9px] font-medium">{c.group_name}</span>}
                 </div>
 
                 {/* Sales — hidden for non-assigned unless permitted */}
                 {showSales ? (
                   <div className="flex justify-between items-end mb-3 px-3 py-2 rounded-xl bg-slate-50">
-                    <div><div className="text-[8px] text-slate-400 uppercase tracking-wider">Sales</div>
+                    <div><div className="text-[8px] text-slate-500 uppercase tracking-wider">Sales</div>
                       <div className="text-sm font-extrabold text-slate-800">{total > 0 ? fmt(total) : '—'}</div></div>
-                    <div className="text-right"><div className="text-[8px] text-slate-400 uppercase tracking-wider">{invs.length} orders</div>
+                    <div className="text-right"><div className="text-[8px] text-slate-500 uppercase tracking-wider">{invs.length} orders</div>
                       <div className={'text-sm font-extrabold ' + (owed > 0 ? 'text-red-500' : 'text-emerald-500')}>{owed > 0 ? fmt(owed) : '✓ Paid'}</div></div>
                   </div>
                 ) : (
                   <div className="flex items-center justify-center mb-3 px-3 py-2 rounded-xl bg-slate-50">
-                    <span className="text-[10px] text-slate-400">🔒 Sales restricted</span>
+                    <span className="text-[10px] text-slate-500">🔒 Sales restricted</span>
                   </div>
                 )}
 
@@ -503,13 +518,13 @@ export default function CRMTab({ toast, customers, invoices, user, userProfile, 
                         <span className="w-1.5 h-1.5 rounded-full bg-indigo-400" />{rep.name}
                       </span>
                     ) : (
-                      <span className="text-[10px] text-slate-400">No rep</span>
+                      <span className="text-[10px] text-slate-500">No rep</span>
                     )}
                   </div>
                   <div className="text-right">
                     {lastNote ? (
-                      <div className="text-[9px] text-slate-400">
-                        {new Date(lastNote.created_at).toLocaleDateString()}
+                      <div className="text-[9px] text-slate-500">
+                        {fmtET(lastNote.created_at, 'shortdate')}
                         {noteUser && <span className="ml-0.5 text-blue-400">{noteUser.name}</span>}
                       </div>
                     ) : (
@@ -571,7 +586,7 @@ export default function CRMTab({ toast, customers, invoices, user, userProfile, 
             <div><label className="text-[10px] font-semibold">Assigned Rep / الممثل</label>
               <select value={f.assignedRep!==undefined?f.assignedRep:(sel.assigned_rep||'')} onChange={e=>setF({...f,assignedRep:e.target.value})} className="w-full px-2 py-1.5 border rounded text-sm">
                 <option value="">Unassigned / غير معيّن</option>
-                {(users||[]).map(u=><option key={u.id} value={u.id}>{u.name}</option>)}
+                {activeUsers.map(u=><option key={u.id} value={u.id}>{u.name}</option>)}
               </select></div>
             <div className="col-span-2 flex gap-2">
               <button onClick={handleEditClient} className="px-3 py-1.5 bg-emerald-500 text-white rounded text-xs font-semibold">Save / حفظ</button>
@@ -585,7 +600,7 @@ export default function CRMTab({ toast, customers, invoices, user, userProfile, 
                 <h3 className="text-xl font-extrabold" style={{direction: lang === 'ar' ? 'rtl' : 'ltr'}}>{lang === 'en' && sel.name_en ? sel.name_en : sel.name}</h3>
                 {lang === 'ar' && sel.name_en && <div className="text-sm text-blue-500">{sel.name_en}</div>}
                 <div className="flex gap-1 mt-1 flex-wrap">
-                  {sel.industry && <span className="px-2 py-0.5 bg-amber-100 text-amber-700 rounded text-xs font-semibold">{sel.industry}</span>}
+                  {sel.industry && <span className="px-2 py-0.5 bg-amber-100 text-amber-900 rounded text-xs font-bold border border-amber-200">{sel.industry}</span>}
                   {sel.group_name && <span className="px-2 py-0.5 bg-purple-100 text-purple-700 rounded text-xs">{sel.group_name}</span>}
                   {sel.lead_source && <span className="px-2 py-0.5 bg-green-100 text-green-700 rounded text-xs">{sel.lead_source}</span>}
                   {sel.city && <span className="px-2 py-0.5 bg-slate-100 text-slate-600 rounded text-xs">{sel.city}</span>}
@@ -601,7 +616,7 @@ export default function CRMTab({ toast, customers, invoices, user, userProfile, 
                 setSel({...sel, important: newVal});
                 onReload();
               } catch(err) { toast ? toast.error(err.message) : toast ? toast.error(err.message) : alert(err.message); }
-            }} className={'mt-2 px-3 py-1.5 rounded-lg text-xs font-bold border-2 transition ' + (sel.important ? 'border-amber-400 bg-amber-50 text-amber-700' : 'border-slate-200 text-slate-400')}>
+            }} className={'mt-2 px-3 py-1.5 rounded-lg text-xs font-bold border-2 transition ' + (sel.important ? 'border-amber-400 bg-amber-50 text-amber-900' : 'border-slate-200 text-slate-400')}>
               {sel.important ? '⭐ Important Client / عميل مهم' : '☆ Mark as Important / تعيين كمهم'}
             </button>
             {sel.phone && <div className="text-xs text-slate-500 mt-2">Phone: {canSeeContact(sel) ? sel.phone : maskPhone(sel.phone)}</div>}
@@ -645,7 +660,7 @@ export default function CRMTab({ toast, customers, invoices, user, userProfile, 
         <div className="grid grid-cols-4 gap-2 mb-3">
           <div className="bg-blue-50 rounded-lg p-2 text-center"><div className="text-[9px] text-slate-500">Sales</div><div className="text-sm font-bold text-blue-600">{fE(totalSales)}</div></div>
           <div className="bg-emerald-50 rounded-lg p-2 text-center"><div className="text-[9px] text-slate-500">Collected</div><div className="text-sm font-bold text-emerald-600">{fE(totalCollected)}</div></div>
-          <div className="bg-red-50 rounded-lg p-2 text-center"><div className="text-[9px] text-slate-500">Owed</div><div className="text-sm font-bold text-red-500">{fE(totalOwed)}</div></div>
+          <div className="bg-red-50 rounded-lg p-2 text-center border border-red-200"><div className="text-[9px] text-slate-600">Owed</div><div className="text-sm font-bold text-red-500">{fE(totalOwed)}</div></div>
           <div className="bg-amber-50 rounded-lg p-2 text-center"><div className="text-[9px] text-slate-500">Orders</div><div className="text-sm font-bold">{invs.length}</div></div>
         </div>
       ) : (
@@ -666,7 +681,7 @@ export default function CRMTab({ toast, customers, invoices, user, userProfile, 
         <button onClick={() => { const note = prompt('Visit notes / ملاحظات الزيارة:'); if(note) logContact('visit', note); }}
           className="px-3 py-1.5 bg-cyan-500 text-white rounded-lg text-xs font-semibold">🚗 Visit</button>
         </>) : (
-          <span className="text-[10px] text-slate-400 bg-slate-100 px-3 py-1.5 rounded-lg">🔒 Contact info restricted — assigned reps only</span>
+          <span className="text-[10px] text-amber-900 bg-amber-100 font-bold border border-amber-200 px-3 py-1.5 rounded-lg">🔒 Contact info restricted — assigned reps only</span>
         )}
       </div>
       {showNote && (
@@ -686,7 +701,7 @@ export default function CRMTab({ toast, customers, invoices, user, userProfile, 
             <input type="time" value={f.dueTime||'09:00'} onChange={e=>setF({...f,dueTime:e.target.value})} className="px-3 py-2 rounded border text-sm" />
             <select value={f.assignTo||''} onChange={e=>setF({...f,assignTo:e.target.value})} className="col-span-2 px-3 py-2 rounded border text-sm">
               <option value="">Assign to me / تعيين لي</option>
-              {(users || []).map(u => <option key={u.id} value={u.id}>{u.name}</option>)}
+              {activeUsers.map(u => <option key={u.id} value={u.id}>{u.name}</option>)}
             </select>
           </div>
           <div className="flex gap-2">
@@ -697,9 +712,9 @@ export default function CRMTab({ toast, customers, invoices, user, userProfile, 
       )}
       {pendingFU.length > 0 && (
         <div className="bg-amber-50 rounded-xl p-4 mb-3 border border-amber-200">
-          <h4 className="text-sm font-bold text-amber-800 mb-2">Follow-ups ({pendingFU.length})</h4>
+          <h4 className="text-sm font-bold text-amber-900 mb-2">Follow-ups ({pendingFU.length})</h4>
           {pendingFU.map(fu => {
-            const isOverdue = fu.due_date && fu.due_date < new Date().toISOString().substring(0, 10);
+            const isOverdue = fu.due_date && fu.due_date < todayET();
             const assignedName = users?.find(u => u.id === fu.assigned_to)?.name;
             return (
               <div key={fu.id} className={'flex justify-between items-center py-2 border-b border-amber-100 ' + (isOverdue ? 'bg-red-50 -mx-2 px-2 rounded' : '')}>
@@ -725,9 +740,9 @@ export default function CRMTab({ toast, customers, invoices, user, userProfile, 
             return (
               <div key={n.id} className="py-2 border-b border-slate-50">
                 <div className="text-xs">{n.note_text}</div>
-                <div className="text-[10px] text-slate-400 mt-1">
+                <div className="text-[10px] text-slate-500 mt-1">
                   {noteUser && <span className="font-semibold text-blue-500 mr-1">{noteUser.name}</span>}
-                  {new Date(n.created_at).toLocaleString()}
+                  {fmtET(n.created_at, 'datetime')}
                 </div>
               </div>
             );
@@ -750,14 +765,100 @@ export default function CRMTab({ toast, customers, invoices, user, userProfile, 
                     <span className={'font-semibold ' + (colors[c.contact_type] || '')}>{c.contact_type}</span>
                     {c.notes && <span className="text-slate-600 ml-1">— {c.notes}</span>}
                   </div>
-                  <div className="text-[10px] text-slate-400">
+                  <div className="text-[10px] text-slate-500">
                     {contactUser && <span className="font-semibold text-blue-500 mr-1">{contactUser.name}</span>}
-                    {new Date(c.contacted_at).toLocaleString()}
+                    {fmtET(c.contacted_at, 'datetime')}
                   </div>
                 </div>
               </div>
             );
           })}
+        </div>
+      )}
+
+      {/* Phase B (Apr 26 2026) — Phone Calls + Voicemails for this customer */}
+      {(phoneCalls.length > 0 || phoneVoicemails.length > 0) && (
+        <div className="bg-white rounded-xl p-4 mb-3 border border-slate-200">
+          <h4 className="text-sm font-bold mb-2">
+            📞 Calls &amp; Voicemails ({phoneCalls.length + phoneVoicemails.length})
+          </h4>
+
+          {/* Voicemails first — they need attention */}
+          {phoneVoicemails.length > 0 && (
+            <div className="mb-3">
+              <div className="text-[10px] font-bold text-slate-500 uppercase tracking-wider mb-1">Voicemails</div>
+              {phoneVoicemails.map(vm => {
+                const handler = users?.find(u => u.id === vm.assigned_to);
+                return (
+                  <div key={vm.id} className={'rounded-lg p-2 mb-1 border ' + (vm.is_read ? 'bg-slate-50 border-slate-200' : 'bg-amber-50 border-amber-300')}>
+                    <div className="flex items-start gap-2">
+                      <span className="text-base">📬</span>
+                      <div className="flex-1 min-w-0">
+                        <div className="text-xs font-semibold text-slate-900">
+                          {vm.is_read ? 'Voicemail' : '🔴 Unread voicemail'}
+                          {vm.duration_seconds ? <span className="text-slate-500 ml-1 font-normal">({vm.duration_seconds}s)</span> : null}
+                        </div>
+                        {vm.transcript_status === 'completed' && vm.transcript ? (
+                          <div className="text-xs text-slate-700 mt-1 italic">"{vm.transcript}"</div>
+                        ) : vm.transcript_status === 'transcribing' ? (
+                          <div className="text-[11px] text-slate-500 mt-1">⏳ Transcribing…</div>
+                        ) : vm.transcript_status === 'failed' ? (
+                          <div className="text-[11px] text-red-600 mt-1">⚠ Transcription failed</div>
+                        ) : (
+                          <div className="text-[11px] text-slate-500 mt-1">⏳ Pending transcription</div>
+                        )}
+                        {vm.recording_url && (
+                          <audio controls className="mt-1 h-7 w-full max-w-xs"
+                            src={'/api/phone/recording-stream?id=' + encodeURIComponent(vm.id) + '&kind=voicemail'}
+                            preload="none">
+                            Your browser doesn't support audio playback.
+                          </audio>
+                        )}
+                        <div className="text-[10px] text-slate-500 mt-1">
+                          {handler && <span className="font-semibold text-blue-500 mr-1">For {handler.name || handler.email}</span>}
+                          {fmtET(vm.created_at, 'datetime')}
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          )}
+
+          {/* Calls */}
+          {phoneCalls.length > 0 && (
+            <div>
+              <div className="text-[10px] font-bold text-slate-500 uppercase tracking-wider mb-1">Calls</div>
+              {phoneCalls.slice(0, 10).map(c => {
+                const handler = users?.find(u => u.id === c.user_id);
+                const isInbound = c.direction === 'inbound';
+                const dur = c.duration_seconds ? Math.floor(c.duration_seconds / 60) + ':' + String(c.duration_seconds % 60).padStart(2, '0') : null;
+                return (
+                  <div key={c.id} className="flex items-start gap-2 py-1.5 border-b border-slate-50 last:border-0">
+                    <span className="text-sm">{isInbound ? '📥' : '📤'}</span>
+                    <div className="flex-1 min-w-0">
+                      <div className="text-xs">
+                        <span className={'font-semibold ' + (isInbound ? 'text-blue-600' : 'text-emerald-600')}>
+                          {isInbound ? 'Inbound' : 'Outbound'}
+                        </span>
+                        <span className="text-slate-500 ml-1">{c.status}</span>
+                        {dur && <span className="text-slate-700 ml-2 font-mono">{dur}</span>}
+                      </div>
+                      <div className="text-[10px] text-slate-500">
+                        {handler && <span className="font-semibold text-blue-500 mr-1">{handler.name || handler.email}</span>}
+                        {fmtET(c.started_at, 'datetime')}
+                        {c.notes && <span className="text-slate-600 ml-1">— {c.notes}</span>}
+                      </div>
+                    </div>
+                  </div>
+                );
+              })}
+              {phoneCalls.length > 10 && (
+                <div className="text-[10px] text-slate-500 mt-1 italic">…and {phoneCalls.length - 10} older</div>
+              )}
+            </div>
+          )}
         </div>
       )}
       {invs.length > 0 && (

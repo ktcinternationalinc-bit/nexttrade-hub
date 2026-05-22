@@ -174,10 +174,18 @@ export function runAccountingAudit(data) {
     var tr2 = treasury[dt];
     if (isDedupMarker(tr2)) continue;
     if (tr2.is_bank_placeholder) continue;
+    // v55.41 — skip rows the user has explicitly confirmed are NOT
+    // duplicates (via the "Possible Duplicate Transaction" modal). Without
+    // this skip, the auditor keeps reporting the same legitimate
+    // same-amount-same-day repeats over and over on every audit.
+    if (tr2.confirmed_not_duplicate === true) continue;
     var amt = Number(tr2.cash_in || 0) + Number(tr2.cash_out || 0) + Number(tr2.bank_in || 0) + Number(tr2.bank_out || 0);
     if (amt === 0) continue;
     var key = (tr2.transaction_date || '') + '|' + amt + '|' + (tr2.order_number || '') + '|' + (tr2.description || '').substring(0, 40);
     if (dupeKey[key]) {
+      // If the EXISTING (original) row in this key was already user-confirmed,
+      // the new (duplicate) row is also legitimate by extension — don't flag.
+      if (dupeKey[key].confirmed_not_duplicate === true) continue;
       dupes.push({ original: dupeKey[key], duplicate: tr2, amount: amt });
     } else {
       dupeKey[key] = tr2;

@@ -119,8 +119,10 @@ test('PB13 Star toggle permission-gated', function() {
 });
 
 test('PB14 Starred cards have amber glow + star icon', function() {
-  assert(/bg-gradient-to-br from-amber-50[\s\S]{0,100}border-amber-300/.test(board),
-    'starred card styling present');
+  // v54.1 bumped from amber-50→white (too pale) to amber-200→amber-100
+  // with a bold amber-500 border for proper contrast.
+  assert(/bg-gradient-to-br from-amber-200 to-amber-100[\s\S]{0,100}border-amber-500/.test(board),
+    'starred card styling (strong amber, v54.1)');
   assert(/isStarred \? '⭐' : '☆'/.test(board),
     'filled vs empty star icon');
 });

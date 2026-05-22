@@ -27,6 +27,7 @@
 
 import { useEffect } from 'react';
 import { supabase, dbInsert, dbUpdate, logActivity } from '../lib/supabase';
+import { etDateStr } from '../lib/et-time';
 
 // ----- Individual action handlers ---------------------------------------
 
@@ -81,7 +82,7 @@ async function handleCreateReminder(params, ctx) {
     await dbInsert('reminders', {
       user_id: ctx.userId,
       task: note,
-      due_date: due.toISOString().substring(0, 10),
+      due_date: etDateStr(due),
       completed: false,
       source: 'nadia_decision',
     }, ctx.userId);

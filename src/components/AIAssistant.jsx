@@ -1,5 +1,6 @@
 'use client';
 import { useState, useRef, useEffect, useCallback, useMemo } from 'react';
+import { fmtET, todayET } from '../lib/et-time';
 
 export default function AIAssistant({ user, userProfile, users, customers }) {
   const myId = userProfile?.id || user?.id;
@@ -43,7 +44,7 @@ export default function AIAssistant({ user, userProfile, users, customers }) {
   // On mount: show briefing once per day per user (first open of the day)
   useEffect(() => {
     if (!myId) return;
-    const key = 'ktc_briefing_shown_' + myId + '_' + new Date().toISOString().substring(0, 10);
+    const key = 'ktc_briefing_shown_' + myId + '_' + todayET();
     if (typeof window !== 'undefined' && window.sessionStorage && window.sessionStorage.getItem(key)) return;
     (async () => {
       const b = await fetchBriefing();
@@ -542,7 +543,7 @@ export default function AIAssistant({ user, userProfile, users, customers }) {
         // Execute inline
         if (currentPending.type === 'request_quote') {
           const a = currentPending;
-          const todayStr = new Date().toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: 'numeric' });
+          const todayStr = fmtET(new Date(), 'longdate', { tag: false });
           const msg = `Dear ${a.vendor_contact || a.vendor_company || 'Team'},\n\nWe are requesting your best rates:\n\nOrigin: ${a.origin || '[Origin]'}\nDestination: ${a.destination || 'Egypt'}\nContainer: ${a.container || '40ft'}\nCommodity: ${a.commodity || 'Trading materials'}${a.customer_name ? '\nClient: ' + a.customer_name : ''}\n\nPlease include freight rate, transit time, free days, fees, and validity.\n\nBest regards,\nKTC International\n${todayStr}`;
           const subj = 'Rate Request — ' + (a.origin||'') + ' to ' + (a.destination||'Egypt') + ' — KTC';
           if (a.send_via === 'email' && a.vendor_email) {
@@ -634,7 +635,7 @@ export default function AIAssistant({ user, userProfile, users, customers }) {
   };
 
   const executeQuoteRequest = (action) => {
-    const today = new Date().toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: 'numeric' });
+    const today = fmtET(new Date(), 'longdate', { tag: false });
     const msg = `Dear ${action.vendor_contact || action.vendor_company || 'Team'},
 
 I hope this message finds you well.
@@ -735,7 +736,7 @@ ${today}`;
           <div className="flex justify-between items-start mb-2">
             <div>
               <div style={{fontSize:14, fontWeight:900, color:'#fff'}}>☀️ Good morning{userProfile?.name ? ', ' + userProfile.name : ''}</div>
-              <div style={{fontSize:11, color:'rgba(255,255,255,0.6)'}}>Your briefing for {new Date().toLocaleDateString()}</div>
+              <div style={{fontSize:11, color:'rgba(255,255,255,0.6)'}}>Your briefing for {fmtET(new Date(), 'date')} (ET)</div>
             </div>
             <button onClick={() => setBriefingShown(false)} style={{color:'rgba(255,255,255,0.5)', fontSize:16}}>✕</button>
           </div>

@@ -1,6 +1,8 @@
 'use client';
 import { useState, useMemo, useCallback, useEffect } from 'react';
+import { filterActiveUsers } from '../lib/active-users';
 import { supabase, dbInsert, dbUpdate } from '../lib/supabase';
+import { fmtET, todayET } from '../lib/et-time';
 
 const CAT_ICONS = {
   ticket: '🎫', crm: '🤝', shipping: '🛳️', customs: '🚢', calendar: '📅',
@@ -17,7 +19,7 @@ export default function DailyLogTab({ user, userProfile, users, isAdmin }) {
   const [loaded, setLoaded] = useState(false);
   const [viewMode, setViewMode] = useState('my');
   const [selUser, setSelUser] = useState(null);
-  const [selDate, setSelDate] = useState(new Date().toISOString().substring(0, 10));
+  const [selDate, setSelDate] = useState(() => todayET());
   const [newEntry, setNewEntry] = useState('');
   const [newCategory, setNewCategory] = useState('manual');
   const [archiveView, setArchiveView] = useState(false);
@@ -28,7 +30,7 @@ export default function DailyLogTab({ user, userProfile, users, isAdmin }) {
   const [sessions, setSessions] = useState([]);
 
   const myId = userProfile?.id;
-  const today = new Date().toISOString().substring(0, 10);
+  const today = todayET();
 
   const loadLogs = useCallback(async () => {
     const [{ data }, { data: sess }] = await Promise.all([
@@ -95,7 +97,10 @@ export default function DailyLogTab({ user, userProfile, users, isAdmin }) {
 
   const teamSummary = useMemo(() => {
     if (!users) return [];
-    return users.map(u => {
+    // v55.52 — Only include active teammates. Deactivated users are not
+    // logging activity anymore and should not appear in the daily team view.
+    const activeUsers = filterActiveUsers(users); // v55.62 — handles active=NULL
+    return activeUsers.map(u => {
       const userLogs = logs.filter(l => l.user_id === u.id && (l.log_date || '').substring(0, 10) === selDate);
       const autoCount = userLogs.filter(l => l.auto_generated).length;
       const manualCount = userLogs.filter(l => !l.auto_generated).length;
@@ -127,9 +132,9 @@ export default function DailyLogTab({ user, userProfile, users, isAdmin }) {
   }, [archiveView, archiveDates, logs]);
 
   const navigateDate = (dir) => {
-    const d = new Date(selDate);
-    d.setDate(d.getDate() + dir);
-    setSelDate(d.toISOString().substring(0, 10));
+    var d = new Date(selDate + 'T12:00:00Z');
+    d.setUTCDate(d.getUTCDate() + dir);
+    setSelDate(fmtET(d, 'iso'));
   };
 
   const getCatIcon = (log) => {
@@ -148,8 +153,8 @@ export default function DailyLogTab({ user, userProfile, users, isAdmin }) {
   };
 
   const formatTime = (log) => {
-    if (log.log_time) return log.log_time.substring(0, 5);
-    if (log.created_at) return new Date(log.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+    if (log.log_time) return log.log_time.substring(0, 5) + ' ET';
+    if (log.created_at) return fmtET(log.created_at, 'time');
     return '';
   };
 
@@ -239,7 +244,7 @@ export default function DailyLogTab({ user, userProfile, users, isAdmin }) {
               <button onClick={handleAddEntry} className="px-4 py-2 bg-blue-500 text-white rounded-lg text-xs font-semibold whitespace-nowrap">+ Log</button>
             </div>
             {selDate !== today && (
-              <div className="text-[10px] text-amber-600 font-semibold px-1">⚠️ Adding to {selDate} (historical) — entry will be flagged</div>
+              <div className="text-[10px] text-amber-900 font-bold px-1">⚠️ Adding to {selDate} (historical) — entry will be flagged</div>
             )}
           </div>
 
@@ -263,7 +268,7 @@ export default function DailyLogTab({ user, userProfile, users, isAdmin }) {
           {viewMode === 'team' && isAdmin && (
             <div className="grid grid-cols-2 md:grid-cols-4 gap-2 mb-3">
               {teamSummary.map(u => {
-                const fmtTime = (iso) => iso ? new Date(iso).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : null;
+                const fmtTime = (iso) => iso ? fmtET(iso, 'time', { tag: false }) : null;
                 const hrs = Math.floor(u.totalMinutes / 60);
                 const mins = Math.round(u.totalMinutes % 60);
                 const durStr = u.totalMinutes > 0 ? (hrs > 0 ? hrs + 'h ' : '') + mins + 'm' : null;
@@ -284,12 +289,12 @@ export default function DailyLogTab({ user, userProfile, users, isAdmin }) {
                       {durStr && <div>⏱️ <span className="font-bold text-emerald-600">{durStr}</span>{u.sessionCount > 1 ? ` (${u.sessionCount} sessions)` : ''}</div>}
                     </div>
                   ) : (
-                    <div className="mt-1 text-[10px] text-slate-400">No login today</div>
+                    <div className="mt-1 text-[10px] text-slate-500">No login today</div>
                   )}
                   {u.logCount > 0 ? (
                     <div className="mt-1">
                       <span className="text-xs font-bold text-emerald-600">{u.logCount} entries</span>
-                      <div className="text-[10px] text-slate-400">⚡ {u.autoCount} auto · ✏️ {u.manualCount} manual</div>
+                      <div className="text-[10px] text-slate-500">⚡ {u.autoCount} auto · ✏️ {u.manualCount} manual</div>
                       <div className="flex gap-1 mt-1 flex-wrap">
                         {Object.entries(u.cats).map(([c, n]) => (
                           <span key={c} className="text-[9px] px-1 rounded" style={{ background: (CAT_COLORS[c] || '#94a3b8') + '20', color: CAT_COLORS[c] || '#94a3b8' }}>
@@ -327,7 +332,7 @@ export default function DailyLogTab({ user, userProfile, users, isAdmin }) {
                           <span className="text-lg">{CAT_ICONS[cat] || '⚡'}</span>
                           <div>
                             <div className="text-xs font-bold" style={{color: CAT_COLORS[cat]}}>{getCatLabel(cat)}</div>
-                            <div className="text-[10px] text-slate-400">{catEntries.slice(0, 2).map(l => l.entry_text.substring(0, 40) + (l.entry_text.length > 40 ? '...' : '')).join(' · ')}</div>
+                            <div className="text-[10px] text-slate-500">{catEntries.slice(0, 2).map(l => l.entry_text.substring(0, 40) + (l.entry_text.length > 40 ? '...' : '')).join(' · ')}</div>
                           </div>
                         </div>
                         <div className="flex items-center gap-2">
@@ -377,12 +382,12 @@ export default function DailyLogTab({ user, userProfile, users, isAdmin }) {
                             style={{ background: getCatColor(l) + '15', color: getCatColor(l) }}>
                             {getCatLabel(l.log_category || (l.auto_generated ? 'other' : 'manual'))}
                           </span>
-                          {l.auto_generated && <span className="text-[9px] text-slate-400">auto</span>}
+                          {l.auto_generated && <span className="text-[9px] text-slate-500">auto</span>}
                           {viewMode === 'team' && userName && <span className="text-[10px] font-semibold text-blue-500">{userName}</span>}
-                          {isEdited && <span className="text-[9px] font-bold text-amber-600">⚠️ edited{l.edited_at ? ' ' + new Date(l.edited_at).toLocaleDateString() : ''}</span>}
+                          {isEdited && <span className="text-[9px] font-extrabold text-amber-900">⚠️ edited{l.edited_at ? ' ' + fmtET(l.edited_at, 'shortdate') : ''}</span>}
                           {!l.auto_generated && !isEditMode && l.user_id === myId && (
                             <button onClick={() => { setEditingId(l.id); setEditText(l.entry_text); }}
-                              className="text-[9px] text-slate-400 hover:text-blue-500 cursor-pointer">edit</button>
+                              className="text-[9px] text-slate-500 hover:text-blue-500 cursor-pointer">edit</button>
                           )}
                         </div>
                       </div>

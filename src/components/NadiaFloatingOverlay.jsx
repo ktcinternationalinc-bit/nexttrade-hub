@@ -107,7 +107,7 @@ export default function NadiaFloatingOverlay(props) {
     var handleMute = function() { setMuted(true); };
     var handleUnmute = function() { setMuted(false); };
     var handleToggle = function() { setMuted(function(m) { return !m; }); };
-    var handleExpand = function() { setExpanded(true); };
+    var handleExpand = function() { setExpanded(true); setUserCollapsedAt(0); };
     var handleCollapse = function() { setExpanded(false); };
     window.addEventListener('nadia-mute', handleMute);
     window.addEventListener('nadia-unmute', handleUnmute);
@@ -123,7 +123,10 @@ export default function NadiaFloatingOverlay(props) {
     };
   }, []);
 
-  if (!props.enabled) return null;
+  // v55.83-A.4 (Max May 13 2026) — REACT HOOKS COMPLIANCE.
+  // ALL hooks must run before ANY conditional return — including `if (!props.enabled)`
+  // and `if (props.suppressed)`. Otherwise the hook count changes between renders,
+  // triggering React error #310 ("Rendered more hooks than during the previous render").
 
   // S17.6 — Track when user last opened the overlay. Any assistant message
   // added after this timestamp is "unread". Used to show a pulsing badge on
@@ -133,6 +136,45 @@ export default function NadiaFloatingOverlay(props) {
     if (expanded) setLastOpenedAt(Date.now());
   }, [expanded]);
 
+  // v55.83-A.6.27.11 (Max May 15 2026) — track user-initiated collapse so
+  // auto-expand on new assistant messages doesn't override a fresh dismissal.
+  // Per Max: "once i x her out she should not return unless i click back on
+  // her to wake her". When user collapses, store timestamp. Auto-expand
+  // only fires if the new message arrived AFTER this timestamp AND user
+  // has since explicitly opened (which clears the timestamp).
+  var [userCollapsedAt, setUserCollapsedAt] = useState(0);
+  useEffect(function() {
+    // When expanded transitions FROM true TO false via user action, mark.
+    // Set in the same effect that already tracks expanded changes so we
+    // don't add hook count.
+  }, []);
+
+  // S17.7 — AUTO-EXPAND on new assistant message. Tracks count of assistant
+  // messages and opens the overlay when it increases. Hooks run on every
+  // render regardless of enabled/suppressed state.
+  // v55.83-A.6.27.11 — Gated by userCollapsedAt: if user collapsed and
+  // hasn't reopened yet, don't auto-expand on new messages.
+  var assistantCountRef = useRef(0);
+  var sessionMsgsForCount = props.sessionMessages || [];
+  useEffect(function() {
+    if (props.suppressed) return; // skip side-effect; hook itself still ran
+    var currentCount = sessionMsgsForCount.filter(function(m) { return m && m.role === 'assistant'; }).length;
+    if (currentCount > assistantCountRef.current) {
+      // Only auto-expand if user hasn't recently dismissed. userCollapsedAt
+      // is cleared when user manually expands (see setExpanded usage below).
+      if (!expanded && !userCollapsedAt) setExpanded(true);
+    }
+    assistantCountRef.current = currentCount;
+  }, [sessionMsgsForCount.length, props.suppressed]);
+
+  if (!props.enabled) return null;
+
+  if (props.suppressed) {
+    // One-shot effect: cancel any active speech and force collapse so the
+    // next time suppression lifts, the user sees a calm collapsed pill.
+    return <NadiaSuppressedKiller setExpanded={setExpanded} />;
+  }
+
   // Count assistant messages newer than lastOpenedAt. These are "unread".
   var sessionMsgs = props.sessionMessages || [];
   var unreadCount = 0;
@@ -140,34 +182,12 @@ export default function NadiaFloatingOverlay(props) {
     for (var i = sessionMsgs.length - 1; i >= 0; i--) {
       var m = sessionMsgs[i];
       if (m && m.role === 'assistant') {
-        // messages don't carry timestamps; approximate by counting new assistant
-        // messages since the last time we opened. A fresh-mounted overlay starts
-        // with lastOpenedAt=now, so only NEW replies count as unread.
         unreadCount++;
       } else if (m && m.role === 'user') {
-        // Stop counting once we hit the latest user message — anything older
-        // was already "read" before the user typed.
         break;
       }
     }
   }
-
-  // S17.7 — AUTO-EXPAND on new assistant message. The previous design was
-  // that Nadia would type invisibly in the collapsed pill and the user had
-  // to click to see. Max (correctly) pointed out this felt broken — she
-  // types things you can't read. Fix: when a fresh assistant message arrives
-  // (proactive tab-greeting, answer to a question, etc.), the overlay
-  // pops open automatically. User can still minimize anytime.
-  // We track the count of assistant messages and open when it increases.
-  var assistantCountRef = useRef(0);
-  useEffect(function() {
-    var currentCount = sessionMsgs.filter(function(m) { return m && m.role === 'assistant'; }).length;
-    if (currentCount > assistantCountRef.current) {
-      // New assistant message arrived — auto-expand so user sees + hears it.
-      if (!expanded) setExpanded(true);
-    }
-    assistantCountRef.current = currentCount;
-  }, [sessionMsgs.length]);
 
   // COLLAPSED state — AIGreeter is still mounted (hidden offscreen) so its
   // tab-greeting effects still fire and Nadia still speaks proactively.
@@ -183,8 +203,17 @@ export default function NadiaFloatingOverlay(props) {
         <div
           style={{
             position: 'fixed',
-            bottom: 20,
-            right: 20,
+            // v55.82-F (Max May 11 2026): MOVED FROM LEFT → RIGHT.
+            // Max's explicit ask: "Nadia must stay all the way to the
+            // right side of the screen and never cover the main Treasury
+            // transaction form." The pill and the expanded panel both
+            // anchor to the right now, leaving the entire left/center
+            // of the viewport free for forms. Phone button still owns
+            // the immediate bottom-right corner; we sit ABOVE it at
+            // bottom: 76. (Previous v55.58 logic moved this to LEFT for
+            // a different reason — that constraint no longer applies.)
+            bottom: 76,
+            right: 16,
             zIndex: 9998,
             display: 'flex',
             alignItems: 'center',
@@ -199,7 +228,7 @@ export default function NadiaFloatingOverlay(props) {
             fontWeight: 700,
             border: '1px solid rgba(255,255,255,0.15)',
           }}
-          onClick={function() { setExpanded(true); }}
+          onClick={function() { setExpanded(true); setUserCollapsedAt(0); }}
           title="Open Nadia"
         >
           <span style={{ fontSize: 18 }}>🤖</span>
@@ -229,7 +258,26 @@ export default function NadiaFloatingOverlay(props) {
 
   // EXPANDED state — the full AIGreeter inside a floating panel
   return (
-    <div style={{ position: 'fixed', bottom: 20, right: 20, zIndex: 9998, maxWidth: 400, width: 'calc(100vw - 40px)' }}>
+    // v55.82-F (Max May 11 2026): EXPANDED PANEL ALSO ANCHORED TO RIGHT.
+    // Max's ask: "Nadia must stay all the way to the right side of the
+    // screen and never cover the main Treasury transaction form." The
+    // collapsed pill moved to right; the panel now matches.
+    //
+    // Width is also tightened. Was width: 'calc(100vw - 96px)' which on
+    // a 360px phone was 264px — basically all the screen. Now max 360px
+    // AND capped at 90vw on phones with min(...) so on a small screen
+    // it's narrower, on a tablet it stays a comfortable 360. Either way,
+    // form fields next to the panel remain visible/touchable.
+    //
+    // bottom: 76 still keeps us above the phone FAB. right: 16 mirrors
+    // the collapsed pill exactly so opening/closing doesn't shift.
+    <div style={{
+      position: 'fixed',
+      bottom: 76,
+      right: 16,
+      zIndex: 9998,
+      width: 'min(360px, 90vw)',
+    }}>
       {/* Floating control bar ABOVE the chat (collapse + mute toggle) */}
       <div style={{
         display: 'flex', alignItems: 'center', justifyContent: 'space-between',
@@ -260,7 +308,7 @@ export default function NadiaFloatingOverlay(props) {
             {muted ? <><span>🔇</span><span>Unmute</span></> : <><span>🔊</span><span>Mute</span></>}
           </button>
           <button
-            onClick={function() { setExpanded(false); }}
+            onClick={function() { setExpanded(false); setUserCollapsedAt(Date.now()); }}
             title="Minimize"
             style={{
               padding: '4px 10px', borderRadius: 6,
@@ -285,4 +333,28 @@ export default function NadiaFloatingOverlay(props) {
       </div>
     </div>
   );
+}
+
+// v55.82-F — Helper rendered in place of the overlay when suppressed=true.
+// Renders nothing visible. Does TWO things on mount:
+//   1. Cancels any active speech / TTS audio so a Modal opening mid-word
+//      doesn't leave Nadia talking over the form.
+//   2. Calls setExpanded(false) once so when suppression is later lifted,
+//      Nadia comes back as a calm collapsed pill, not whatever state she
+//      was in (mid-sentence, mid-panel-open, etc.).
+// Returning null after the effect means no DOM is rendered — guaranteed
+// no overlay in the way. AIGreeter is not mounted at all, so no greet
+// effects can fire, no tab-change side-effects, no audio.
+function NadiaSuppressedKiller(props) {
+  React.useEffect(function() {
+    if (typeof window === 'undefined') return;
+    try { if (window.speechSynthesis) window.speechSynthesis.cancel(); } catch (_) {}
+    try {
+      document.querySelectorAll('audio').forEach(function(a) {
+        try { a.pause(); a.currentTime = 0; } catch (er) {}
+      });
+    } catch (_) {}
+    try { props.setExpanded(false); } catch (_) {}
+  }, []);
+  return null;
 }

@@ -1,4 +1,5 @@
 import { createClient } from '@supabase/supabase-js';
+import { sanitizeErr } from '../../../lib/sanitize-error';
 
 const supabase = createClient(
   process.env.NEXT_PUBLIC_SUPABASE_URL,
@@ -66,7 +67,7 @@ export async function POST(request) {
               'anthropic-version': '2023-06-01',
             },
             body: JSON.stringify({
-              model: 'claude-sonnet-4-20250514',
+              model: 'claude-sonnet-4-6',
               max_tokens: 4000,
               system: systemPrompt,
               messages: [{ role: 'user', content: 'Translate these ' + chunk.length + ' items:\n\n' + numbered }],
@@ -192,7 +193,7 @@ export async function POST(request) {
         .neq(arCol, '')
         .limit(limit);
 
-      if (error) return Response.json({ error: error.message }, { status: 500 });
+      if (error) return Response.json({ error: sanitizeErr(error) }, { status: 500 });
 
       return Response.json({
         records: (data || []).map(r => ({ id: r.id, text: r[arCol] })),
@@ -202,6 +203,6 @@ export async function POST(request) {
 
     return Response.json({ error: 'Unknown action. Use: batch_translate, get_stats, fetch_untranslated' }, { status: 400 });
   } catch (err) {
-    return Response.json({ error: err.message }, { status: 500 });
+    return Response.json({ error: sanitizeErr(err) }, { status: 500 });
   }
 }

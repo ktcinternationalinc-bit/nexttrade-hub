@@ -1,10 +1,11 @@
 'use client';
-import { useState, useMemo } from 'react';
+import { useState, useMemo, useEffect } from 'react';
 import { EXPENSE_CATS, COLORS } from '../lib/utils';
+import { todayET, daysAgoET } from '../lib/et-time';
 
 const MONTHS = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
 
-export default function ReportsTab({ treasury, invoices, warehouseExpenses, egyptBankTxns, canViewFinancials }) {
+export default function ReportsTab({ treasury, invoices, warehouseExpenses, egyptBankTxns, canViewFinancials, supabase, isSuperAdmin, userProfile, checks, customers, onReload, toast, recalcInvoiceCollected, onOpenInvoice }) {
   // Financial gate — all the data in this tab is cash totals, outstanding,
   // treasury breakdowns, P&L. None of that is appropriate for team members
   // without "View Financial Reports" permission (or super_admin).
@@ -22,8 +23,8 @@ export default function ReportsTab({ treasury, invoices, warehouseExpenses, egyp
       </div>
     );
   }
-  const [dateFrom, setDateFrom] = useState(() => { const d = new Date(); d.setFullYear(d.getFullYear() - 1); return d.toISOString().substring(0, 10); });
-  const [dateTo, setDateTo] = useState(new Date().toISOString().substring(0, 10));
+  const [dateFrom, setDateFrom] = useState(() => daysAgoET(365));
+  const [dateTo, setDateTo] = useState(() => todayET());
   const [view, setView] = useState('overview'); // overview | income | expenses | categories | comparison
   const [selCategory, setSelCategory] = useState(null);
   const [chartType, setChartType] = useState('bar'); // bar | line
@@ -250,14 +251,14 @@ export default function ReportsTab({ treasury, invoices, warehouseExpenses, egyp
 
   // Quick date presets
   const setPreset = (p) => {
-    const now = new Date();
-    const to = now.toISOString().substring(0, 10);
-    let from;
+    var now = new Date();
+    var to = todayET();
+    var from;
     if (p === 'ytd') { from = now.getFullYear() + '-01-01'; }
-    else if (p === '1y') { const d = new Date(); d.setFullYear(d.getFullYear() - 1); from = d.toISOString().substring(0, 10); }
-    else if (p === '6m') { const d = new Date(); d.setMonth(d.getMonth() - 6); from = d.toISOString().substring(0, 10); }
-    else if (p === '3m') { const d = new Date(); d.setMonth(d.getMonth() - 3); from = d.toISOString().substring(0, 10); }
-    else if (p === '1m') { const d = new Date(); d.setMonth(d.getMonth() - 1); from = d.toISOString().substring(0, 10); }
+    else if (p === '1y') { from = daysAgoET(365); }
+    else if (p === '6m') { from = daysAgoET(180); }
+    else if (p === '3m') { from = daysAgoET(90); }
+    else if (p === '1m') { from = daysAgoET(30); }
     else if (p === 'all') { from = '2014-01-01'; }
     setDateFrom(from); setDateTo(to);
   };
@@ -285,7 +286,7 @@ export default function ReportsTab({ treasury, invoices, warehouseExpenses, egyp
 
       {/* View tabs */}
       <div className="flex gap-1 mb-3 flex-wrap">
-        {[['overview', '📊 Overview'], ['income', '💰 Income'], ['expenses', '💸 Expenses'], ['categories', '🏷️ Categories'], ['comparison', '📅 Year Compare']].map(([v, l]) => (
+        {[['overview', '📊 Overview'], ['income', '💰 Income'], ['expenses', '💸 Expenses'], ['categories', '🏷️ Categories'], ['comparison', '📅 Year Compare'], ...(isSuperAdmin ? [['audit', '🔍 Audit / مراجعة'], ['cleanup', '🧹 Cleanup / تنظيف']] : [])].map(([v, l]) => (
           <button key={v} onClick={() => setView(v)} className={'px-3 py-1.5 rounded-lg text-xs font-semibold ' + (view === v ? 'bg-slate-900 text-white' : 'bg-slate-100 text-slate-500')}>{l}</button>
         ))}
       </div>
@@ -370,9 +371,9 @@ export default function ReportsTab({ treasury, invoices, warehouseExpenses, egyp
                       <div className="flex items-center gap-2">
                         <div className="w-3 h-3 rounded" style={{ background: COLORS[i % COLORS.length] }} />
                         <span className="text-xs font-bold">{c.category}</span>
-                        <span className="text-[10px] text-slate-400">{c.count} txns</span>
+                        <span className="text-[10px] text-slate-500">{c.count} txns</span>
                       </div>
-                      <span className="text-sm font-bold text-red-600">{fmtE(c.total)} <span className="text-[10px] text-slate-400">({pct.toFixed(1)}%)</span></span>
+                      <span className="text-sm font-bold text-red-600">{fmtE(c.total)} <span className="text-[10px] text-slate-500">({pct.toFixed(1)}%)</span></span>
                     </div>
                     <div className="h-2 bg-slate-100 rounded-full overflow-hidden">
                       <div className="h-full rounded-full" style={{ width: pct + '%', background: COLORS[i % COLORS.length] }} />
@@ -478,6 +479,158 @@ export default function ReportsTab({ treasury, invoices, warehouseExpenses, egyp
           </div>
         </div>
       )}
+
+      {/* ===== AUDIT (v55.83-A.6.15) — super-admin only ===== */}
+      {view === 'audit' && isSuperAdmin && (
+        <AuditView supabase={supabase} />
+      )}
+
+      {/* ===== CLEANUP (v55.83-A.6.15) — super-admin only ===== */}
+      {view === 'cleanup' && isSuperAdmin && (
+        <CleanupSection
+          supabase={supabase}
+          treasury={treasury}
+          invoices={invoices}
+          checks={checks}
+          egyptBankTxns={egyptBankTxns}
+          customers={customers}
+          userProfile={userProfile}
+          isSuperAdmin={isSuperAdmin}
+          onReload={onReload}
+          toast={toast}
+          recalcInvoiceCollected={recalcInvoiceCollected}
+          onOpenInvoice={onOpenInvoice}
+        />
+      )}
     </div>
   );
+}
+
+// =====================================================================
+// AUDIT VIEW (v55.83-A.6.15)
+// Shows bank import audit log entries from the audit_log table.
+// =====================================================================
+function AuditView({ supabase }) {
+  var [logs, setLogs] = useState([]);
+  var [loading, setLoading] = useState(true);
+  var [filter, setFilter] = useState('all');
+
+  useEffect(function () {
+    var alive = true;
+    (async function () {
+      setLoading(true);
+      try {
+        var resp = await supabase.from('audit_log')
+          .select('id, user_id, entity_type, action, details, created_at')
+          .in('entity_type', ['egypt_bank_transactions', 'treasury', 'invoices'])
+          .order('created_at', { ascending: false })
+          .limit(500);
+        if (alive) {
+          setLogs(resp.data || []);
+        }
+      } catch (e) {
+        if (alive) setLogs([]);
+      }
+      if (alive) setLoading(false);
+    })();
+    return function () { alive = false; };
+  }, [supabase]);
+
+  var filtered = useMemo(function () {
+    if (filter === 'all') return logs;
+    return logs.filter(function (l) {
+      if (filter === 'imports') return /^import/.test(l.action || '');
+      if (filter === 'cleanup') return /^cleanup_/.test(l.action || '');
+      if (filter === 'treasury') return l.entity_type === 'treasury';
+      return true;
+    });
+  }, [logs, filter]);
+
+  return (
+    <div className="bg-white rounded-xl p-4 shadow-sm border">
+      <h3 className="font-bold text-sm mb-1">🔍 Audit Log <span className="text-slate-400 font-normal">/ سجل المراجعة</span></h3>
+      <p className="text-[10px] text-slate-500 mb-3">
+        Recent changes to treasury, bank imports, and invoices. Most recent 500 entries. /
+        آخر 500 تغيير على الخزنة والاستيرادات والفواتير.
+      </p>
+
+      <div className="flex gap-2 flex-wrap mb-3">
+        {[
+          { key: 'all', en: 'All', ar: 'الكل' },
+          { key: 'imports', en: 'Bank imports', ar: 'استيرادات بنكية' },
+          { key: 'cleanup', en: 'Cleanup actions', ar: 'إجراءات تنظيف' },
+          { key: 'treasury', en: 'Treasury changes', ar: 'تغييرات الخزنة' },
+        ].map(function (b) {
+          return (
+            <button key={b.key} onClick={function () { setFilter(b.key); }}
+              className={'px-3 py-1 rounded-lg text-[11px] font-bold border ' + (filter === b.key ? 'bg-slate-900 text-white border-slate-900' : 'bg-white text-slate-700 border-slate-300 hover:bg-slate-50')}>
+              {b.en} <span className="opacity-60">/ {b.ar}</span>
+            </button>
+          );
+        })}
+      </div>
+
+      {loading ? (
+        <div className="text-center py-6 text-sm text-slate-500">Loading... / جاري التحميل...</div>
+      ) : filtered.length === 0 ? (
+        <div className="text-center py-6 text-sm text-slate-500">No entries / لا توجد قيود</div>
+      ) : (
+        <div className="overflow-auto max-h-[500px] border border-slate-200 rounded">
+          <table className="w-full text-xs">
+            <thead className="sticky top-0 bg-slate-50">
+              <tr>
+                <th className="px-2 py-2 text-left text-[10px]">When / متى</th>
+                <th className="px-2 py-2 text-left text-[10px]">User / مستخدم</th>
+                <th className="px-2 py-2 text-left text-[10px]">Entity / الكيان</th>
+                <th className="px-2 py-2 text-left text-[10px]">Action / إجراء</th>
+                <th className="px-2 py-2 text-left text-[10px]">Details / تفاصيل</th>
+              </tr>
+            </thead>
+            <tbody>
+              {filtered.map(function (l) {
+                var detailsStr = '';
+                try {
+                  detailsStr = typeof l.details === 'string' ? l.details : JSON.stringify(l.details);
+                } catch (_) { detailsStr = String(l.details); }
+                return (
+                  <tr key={l.id} className="border-b border-slate-50">
+                    <td className="px-2 py-2 text-[10px] whitespace-nowrap">{(l.created_at || '').substring(0, 19).replace('T', ' ')}</td>
+                    <td className="px-2 py-2 text-[10px] font-mono">{(l.user_id || '').substring(0, 8)}</td>
+                    <td className="px-2 py-2 text-[10px]">{l.entity_type}</td>
+                    <td className="px-2 py-2 text-[10px] font-bold">{l.action}</td>
+                    <td className="px-2 py-2 text-[10px] text-slate-600 max-w-md truncate" title={detailsStr}>{detailsStr.substring(0, 120)}</td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// =====================================================================
+// CLEANUP SECTION (v55.83-A.6.15)
+// Hosts the Treasury Cleanup Review tool (loaded lazily on first view).
+// =====================================================================
+function CleanupSection(props) {
+  // Dynamic import-via-state pattern: avoids loading TreasuryCleanupTab on
+  // every Reports render. Only loads when user clicks Cleanup tab.
+  var [TreasuryCleanupTab, setTreasuryCleanupTab] = useState(null);
+  useEffect(function () {
+    var alive = true;
+    import('./TreasuryCleanupTab').then(function (mod) {
+      if (alive) setTreasuryCleanupTab(function () { return mod.default; });
+    }).catch(function () { /* silent — show fallback below */ });
+    return function () { alive = false; };
+  }, []);
+  if (!TreasuryCleanupTab) {
+    return (
+      <div className="bg-white rounded-xl p-6 text-center text-sm text-slate-500 border">
+        Loading cleanup tool... / جاري تحميل أداة التنظيف...
+      </div>
+    );
+  }
+  return <TreasuryCleanupTab {...props} />;
 }

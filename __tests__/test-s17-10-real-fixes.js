@@ -68,14 +68,19 @@ test('S17.10.CUT3 AIGreeter sets speakingStartedAtRef on doSpeak', function() {
     'speakingStartedAtRef.current must be set to Date.now() when speech begins');
 });
 
-test('S17.10.CUT4 AIGreeter has NO onBargeIn listener at all (safer than time-window)', function() {
-  // Originally planned a 5s echo-guard window. Ended up removing the
-  // listener entirely — simpler and there's no way for a misfire to
-  // sneak in. Verify it stays gone.
-  assert(!/onBargeIn/.test(greet),
-    'AIGreeter must not define an onBargeIn handler — the whole barge-in path is severed');
-  assert(!/hey-bob-bargein/.test(greet),
-    'AIGreeter must not listen for hey-bob-bargein at all');
+test('S17.10.CUT4 v55.13 INSTANT BARGE-IN restored with smarter design', function() {
+  // v51 / S18 originally removed barge-in entirely because raw-audio-level
+  // detection was triggering on Nadia's own voice through the speakers,
+  // cutting her off after 2-3 words. v55.13 (Apr 26 2026) brings it back
+  // using TRANSCRIPT CONTENT (≥3 chars) instead of raw audio level.
+  // The 3-char minimum filters single-word echo blips. Modern voice
+  // assistants (ChatGPT voice, Claude voice) use this same pattern.
+  assert(/onBargeIn/.test(greet),
+    'AIGreeter must define an onBargeIn handler (v55.13 design)');
+  assert(/addEventListener\('nadia-bargein'/.test(greet),
+    'AIGreeter must listen for nadia-bargein events from VoiceController');
+  assert(/var onBargeIn = function\(ev\) \{[\s\S]{0,500}stopSpeech\(\)/.test(greet),
+    'onBargeIn must call stopSpeech() to silence Nadia immediately');
 });
 
 test('S17.10.CUT5 aiSpeakingRef flag still flipped by nadia-tts-start/stop', function() {

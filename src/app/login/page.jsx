@@ -7,14 +7,24 @@ export default function LoginPage() {
   const [password, setPassword] = useState('');
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
-  const [time, setTime] = useState(new Date());
+  // v55.38 FIX (Emad bounce-out, locale/translate hydration crash):
+  // time MUST start as null. If we use `new Date()` here, the server
+  // renders one timestamp and the client renders a different one
+  // (Arabic locale, Egypt time, Chrome auto-translate, etc.) — that
+  // mismatch crashes React hydration with errors #425/#418/#423 and
+  // the whole app refuses to start. We let the server render a
+  // placeholder, then fill the time in after the browser has mounted.
+  const [time, setTime] = useState(null);
+  const [mounted, setMounted] = useState(false);
   const [clockedIn, setClockedIn] = useState(false);
   const [userName, setUserName] = useState('');
   const [particles, setParticles] = useState([]);
   const canvasRef = useRef(null);
 
-  // Live clock
+  // Live clock — first render happens AFTER mount, on the client only.
   useEffect(() => {
+    setMounted(true);
+    setTime(new Date());
     const t = setInterval(() => setTime(new Date()), 1000);
     return () => clearInterval(t);
   }, []);
@@ -43,7 +53,7 @@ export default function LoginPage() {
         if (d.x < 0 || d.x > canvas.width) d.vx *= -1;
         if (d.y < 0 || d.y > canvas.height) d.vy *= -1;
         ctx.beginPath(); ctx.arc(d.x, d.y, d.r, 0, Math.PI * 2);
-        ctx.fillStyle = `rgba(56,189,248,${d.a})`; ctx.fill();
+        ctx.fillStyle = 'rgba(56,189,248,' + d.a + ')'; ctx.fill();
       });
       for (let i = 0; i < dots.length; i++) {
         for (let j = i + 1; j < dots.length; j++) {
@@ -51,7 +61,7 @@ export default function LoginPage() {
           const dist = Math.sqrt(dx * dx + dy * dy);
           if (dist < 140) {
             ctx.beginPath(); ctx.moveTo(dots[i].x, dots[i].y); ctx.lineTo(dots[j].x, dots[j].y);
-            ctx.strokeStyle = `rgba(56,189,248,${0.05 * (1 - dist / 140)})`; ctx.stroke();
+            ctx.strokeStyle = 'rgba(56,189,248,' + (0.05 * (1 - dist / 140)) + ')'; ctx.stroke();
           }
         }
       }
@@ -61,8 +71,9 @@ export default function LoginPage() {
     return () => { cancelAnimationFrame(animId); window.removeEventListener('resize', resize); };
   }, []);
 
-  const getGreeting = () => {
-    const h = time.getHours();
+  const getGreeting = (d) => {
+    if (!d) return { text: 'Welcome', emoji: '👋', ar: 'أهلاً' };
+    const h = d.getHours();
     if (h < 6) return { text: 'Working Late', emoji: '🌙', ar: 'سهران؟' };
     if (h < 12) return { text: 'Good Morning', emoji: '☀️', ar: 'صباح الخير' };
     if (h < 17) return { text: 'Good Afternoon', emoji: '🌤️', ar: 'مساء الخير' };
@@ -70,9 +81,21 @@ export default function LoginPage() {
     return { text: 'Night Shift', emoji: '🌙', ar: 'وردية ليلية' };
   };
 
-  const fmt = (d) => d.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: true });
-  const fmtDate = (d) => d.toLocaleDateString('en-US', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' });
-  const greeting = getGreeting();
+  // Force en-US locale so Arabic-locale browsers don't render Arabic numerals,
+  // which would cause a hydration mismatch on its own.
+  const fmt = (d) => {
+    if (!d) return '--:--:--';
+    try {
+      return d.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: true });
+    } catch (_) { return '--:--:--'; }
+  };
+  const fmtDate = (d) => {
+    if (!d) return '';
+    try {
+      return d.toLocaleDateString('en-US', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' });
+    } catch (_) { return ''; }
+  };
+  const greeting = getGreeting(time);
 
   const spawnBurst = () => {
     const p = [];
@@ -91,20 +114,35 @@ export default function LoginPage() {
     if (!email || !password) { setError('Enter email and password'); return; }
     setLoading(true); setError('');
     try {
-      const { data, error } = await supabase.auth.signInWithPassword({ email, password });
+      const { data, error } = await supabase.auth.signInWithPassword({
+        email: email.trim(),
+        password,
+      });
       if (error) throw error;
       let name = email.split('@')[0];
+      // v55.33 — profile lookup must NEVER block the redirect. Auth
+      // already succeeded; a profile-lookup hiccup must not undo it.
       if (data?.user) {
-        const { data: profile } = await supabase.from('users').select('id, name').eq('email', email.toLowerCase().trim()).single();
-        if (profile?.name) name = profile.name;
-        var sessionUserId = profile?.id || data.user.id;
-        await supabase.from('user_sessions').insert({
-          user_id: sessionUserId, login_at: new Date().toISOString(),
-          last_seen: new Date().toISOString(),
-          // ET, not UTC. Late-night ET logins (after ~7pm) used to land on
-          // tomorrow UTC and cause AI's "you weren't here yesterday" bug.
-          date: new Intl.DateTimeFormat('en-CA', { timeZone: 'America/New_York' }).format(new Date()),
-        });
+        try {
+          const lookupEmail = (email || '').toLowerCase().trim();
+          const { data: profile } = await supabase
+            .from('users')
+            .select('id, name')
+            .ilike('email', lookupEmail)
+            .maybeSingle();
+          if (profile?.name) name = profile.name;
+          var sessionUserId = profile?.id || data.user.id;
+          await supabase.from('user_sessions').insert({
+            user_id: sessionUserId,
+            login_at: new Date().toISOString(),
+            last_seen: new Date().toISOString(),
+            // ET, not UTC. Late-night ET logins (after ~7pm) used to land on
+            // tomorrow UTC and cause AI's "you weren't here yesterday" bug.
+            date: new Intl.DateTimeFormat('en-CA', { timeZone: 'America/New_York' }).format(new Date()),
+          });
+        } catch (profileErr) {
+          try { console.warn('[login] profile lookup soft-fail:', profileErr?.message || profileErr); } catch(_){}
+        }
       }
       setUserName(name); setClockedIn(true); spawnBurst();
       setTimeout(() => { window.location.href = '/'; }, 2400);
@@ -112,7 +150,7 @@ export default function LoginPage() {
   };
 
   return (
-    <div className="min-h-screen flex items-center justify-center p-4 relative overflow-hidden" style={{ background: '#060a14' }}>
+    <div className="min-h-screen flex items-center justify-center p-4 relative overflow-hidden notranslate" translate="no" style={{ background: '#060a14' }}>
       <canvas ref={canvasRef} className="absolute inset-0" style={{ zIndex: 0 }} />
       <div className="absolute inset-0" style={{
         background: 'radial-gradient(ellipse 80% 50% at 50% 0%, rgba(56,189,248,0.07) 0%, transparent 60%), radial-gradient(ellipse 60% 40% at 80% 100%, rgba(167,139,250,0.05) 0%, transparent 50%)',
@@ -122,9 +160,9 @@ export default function LoginPage() {
       {particles.length > 0 && <div className="absolute inset-0 pointer-events-none" style={{ zIndex: 10 }}>
         {particles.map(p => <div key={p.id} style={{
           position:'absolute', left:'50%', top:'50%', width:6, height:6, borderRadius:'50%',
-          background:p.color, boxShadow:`0 0 10px ${p.color}`,
-          transform:`translate(${p.vx*50}px, ${p.vy*50}px)`,
-          animation:'burstOut 1.2s ease-out forwards', animationDelay:`${p.id*20}ms`,
+          background:p.color, boxShadow:'0 0 10px ' + p.color,
+          transform:'translate(' + (p.vx*50) + 'px, ' + (p.vy*50) + 'px)',
+          animation:'burstOut 1.2s ease-out forwards', animationDelay:(p.id*20) + 'ms',
         }} />)}
       </div>}
 
@@ -146,15 +184,17 @@ export default function LoginPage() {
       <div className={clockedIn ? 'clocked-card' : 'login-card'} style={{
         background: clockedIn ? 'rgba(12,18,32,0.9)' : 'rgba(12,18,32,0.85)',
         backdropFilter: 'blur(24px)',
-        border: `1px solid ${clockedIn ? 'rgba(52,211,153,0.25)' : 'rgba(255,255,255,0.06)'}`,
+        border: '1px solid ' + (clockedIn ? 'rgba(52,211,153,0.25)' : 'rgba(255,255,255,0.06)'),
         boxShadow: '0 25px 60px rgba(0,0,0,0.5)',
         zIndex: 5, position: 'relative', transition: 'border-color 0.5s',
       }} className="rounded-3xl p-8 w-full max-w-md">
-        
+
         {!clockedIn ? (<>
           {/* Logo + greeting */}
           <div className="text-center mb-5">
-            <div className="text-4xl mb-2">{greeting.emoji}</div>
+            {/* Emoji is locale-stable, but we still suppress hydration warnings
+                for safety in case Chrome auto-translate gets to it. */}
+            <div className="text-4xl mb-2" suppressHydrationWarning>{greeting.emoji}</div>
             <h1 className="text-3xl font-black tracking-tight mb-0.5"
               style={{ background:'linear-gradient(135deg,#38bdf8,#818cf8,#a78bfa)', WebkitBackgroundClip:'text', WebkitTextFillColor:'transparent' }}>
               KANDIL KTC
@@ -162,15 +202,24 @@ export default function LoginPage() {
             <p style={{ color:'rgba(148,163,184,0.35)' }} className="text-[9px] tracking-[0.3em] uppercase">Egypt — USA Operations Hub</p>
           </div>
 
-          {/* Live clock */}
-          <div className="text-center mb-5">
-            <div className="text-[11px] font-medium mb-0.5" style={{ color:'rgba(148,163,184,0.5)' }}>{greeting.text} / {greeting.ar}</div>
-            <div className="font-mono text-2xl font-bold" style={{ color:'#f1f5f9', letterSpacing:'0.06em' }}>
-              {fmt(time).split(':').map((p, i) => (
-                <span key={i}>{i > 0 && <span className="sec-tick" style={{ color:'rgba(56,189,248,0.6)' }}>:</span>}{p}</span>
-              ))}
+          {/* Live clock — only renders after mount, so server and client agree
+              on the initial "--:--:--" placeholder. No hydration mismatch. */}
+          <div className="text-center mb-5" suppressHydrationWarning>
+            <div className="text-[11px] font-medium mb-0.5" style={{ color:'rgba(148,163,184,0.5)' }}>
+              {greeting.text} / {greeting.ar}
             </div>
-            <div className="text-[10px] mt-0.5" style={{ color:'rgba(148,163,184,0.3)' }}>{fmtDate(time)}</div>
+            <div className="font-mono text-2xl font-bold" style={{ color:'#f1f5f9', letterSpacing:'0.06em' }}>
+              {mounted && time ? (
+                fmt(time).split(':').map((p, i) => (
+                  <span key={i}>{i > 0 && <span className="sec-tick" style={{ color:'rgba(56,189,248,0.6)' }}>:</span>}{p}</span>
+                ))
+              ) : (
+                <span style={{ opacity: 0.4 }}>--:--:--</span>
+              )}
+            </div>
+            <div className="text-[10px] mt-0.5" style={{ color:'rgba(148,163,184,0.3)', minHeight: 14 }}>
+              {mounted && time ? fmtDate(time) : '\u00A0'}
+            </div>
           </div>
 
           <div className="flex items-center gap-3 mb-5">
@@ -182,12 +231,14 @@ export default function LoginPage() {
           <div className="mb-3.5">
             <label style={{ color:'rgba(148,163,184,0.5)' }} className="block text-[10px] font-semibold mb-1 uppercase tracking-wider">Email</label>
             <input type="email" value={email} onChange={e => setEmail(e.target.value)}
+              autoComplete="username"
               style={{ background:'rgba(255,255,255,0.03)', border:'1px solid rgba(255,255,255,0.07)', color:'#f1f5f9' }}
               className="w-full px-4 py-3 rounded-xl outline-none text-sm" placeholder="you@ktcus.com" />
           </div>
           <div className="mb-5">
             <label style={{ color:'rgba(148,163,184,0.5)' }} className="block text-[10px] font-semibold mb-1 uppercase tracking-wider">Password</label>
             <input type="password" value={password} onChange={e => setPassword(e.target.value)}
+              autoComplete="current-password"
               style={{ background:'rgba(255,255,255,0.03)', border:'1px solid rgba(255,255,255,0.07)', color:'#f1f5f9' }}
               className="w-full px-4 py-3 rounded-xl outline-none text-sm"
               onKeyDown={e => e.key === 'Enter' && handleLogin(e)} placeholder="••••••••" />
@@ -219,7 +270,7 @@ export default function LoginPage() {
           </p>
         </>) : (
           /* ===== CLOCKED IN ===== */
-          <div className="text-center py-2" style={{ animation:'fadeIn 0.3s ease-out' }}>
+          <div className="text-center py-2" style={{ animation:'fadeIn 0.3s ease-out' }} suppressHydrationWarning>
             <div className="stamp mb-4">
               <div style={{
                 width:90, height:90, borderRadius:'50%',

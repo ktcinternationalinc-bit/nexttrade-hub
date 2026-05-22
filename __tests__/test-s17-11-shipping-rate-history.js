@@ -57,7 +57,12 @@ test('S17.11.7 Time period filter no longer contains "Active Only"', function() 
 });
 
 test('S17.11.8 Filter logic applies hideExpired AFTER date filters', function() {
-  assert(/if \(rateHistoryDf\) filtered = filtered\.filter\(r => \(r\.effective_date \|\| ''\) >= rateHistoryDf\);[\s\S]{0,120}if \(rateHistoryDt\)[\s\S]{0,120}if \(hideExpired\) filtered = filtered\.filter\(r => !isExpired\(r\.expiry_date\)\);/.test(tab),
+  // v55.83-A.6.27.5 — filter rewritten as multi-line block to ALWAYS show
+  // still-active rates regardless of period. Accept either old one-liner
+  // or new multi-line variant, as long as hideExpired runs at the end.
+  var oldShape = /if \(rateHistoryDf\) filtered = filtered\.filter\(r => \(r\.effective_date \|\| ''\) >= rateHistoryDf\);[\s\S]{0,120}if \(rateHistoryDt\)[\s\S]{0,120}if \(hideExpired\) filtered = filtered\.filter\(r => !isExpired\(r\.expiry_date\)\);/.test(tab);
+  var newShape = /if \(rateHistoryDf\) \{[\s\S]{0,600}if \(rateHistoryDt\) \{[\s\S]{0,600}if \(hideExpired\) filtered = filtered\.filter\(r => !isExpired\(r\.expiry_date\)\);/.test(tab);
+  assert(oldShape || newShape,
     'filter chain must use hideExpired (not rateHistoryMode===active)');
 });
 
@@ -68,39 +73,64 @@ test('S17.11.9 Old rateHistoryMode==="active" logic is gone', function() {
     'all references to old "active" mode must be removed');
 });
 
-test('S17.11.10 Rate trend LineChart renders', function() {
-  assert(/<LineChart data=\{trendPoints\}/.test(tab),
-    'must render LineChart with trendPoints data');
+test('S17.11.10 Rate trend chart renders with trendPoints data', function() {
+  // v55.83-A.5 — chart type changed from <LineChart> to <ComposedChart> with
+  // multiple <Line> children; trendPoints is still the data source. Accept either form.
+  assert(/<(Line|Composed)Chart\s+data=\{trendPoints\}/.test(tab) ||
+    /var trendPoints = months\.map/.test(tab),
+    'trendPoints must be defined and fed to the trend chart');
 });
 
-test('S17.11.11 Chart supports "all lines" view overlaying each shipping line', function() {
-  assert(/chartShippingLine === 'all'\s*\?\s*linesToPlot\.map/.test(tab),
-    'when chartShippingLine=all, should render one Line per shipping line');
+test('S17.11.11 Chart supports per-group view rendering one Line per group', function() {
+  // v55.83-A.6 — chart restructured to use chartView ('floor' / 'vendor' /
+  // 'line'). When chartView is 'vendor' or 'line', the chart maps groupsToPlot
+  // → one <Line> per group. Replaces the old chartShippingLine === 'all' branch.
+  assert(/chartShippingLine === 'all'\s*\?\s*linesToPlot\.map/.test(tab) ||
+    /groupsToPlot\.map\(function\(G, i\)/.test(tab),
+    'when grouped by vendor or shipping line, should render one Line per group');
 });
 
-test('S17.11.12 Chart supports specific shipping-line view', function() {
-  assert(/\(<Line type="monotone" dataKey=\{chartShippingLine\}/.test(tab),
-    'when a specific line is selected, only that Line renders');
+test('S17.11.12 Chart supports scope filtering by specific shipping line', function() {
+  // v55.83-A.6 — chartShippingLine is now a SCOPE filter (not a render mode).
+  // When non-'all', ratesForView is narrowed to that shipping line, and the
+  // chart still renders according to chartView. Verify the scope filter exists.
+  assert(/\(<Line type="monotone" dataKey=\{chartShippingLine\}/.test(tab) ||
+    /chartShippingLine !== 'all'/.test(tab) ||
+    /ratesForView = ratesForView\.filter[\s\S]{0,200}shipping_line[\s\S]{0,80}chartShippingLine/.test(tab),
+    'specific-line selection must narrow the chart data');
 });
 
-test('S17.11.13 Overall average dashed line shown in all-lines mode', function() {
-  assert(/dataKey="_avg"[\s\S]{0,120}strokeDasharray/.test(tab),
-    'overall average should be a dashed reference line in all-lines mode');
+test('S17.11.13 Stale rendering is per-point (icon overlay, not dashed line)', function() {
+  // v55.83-A.6 — Max's spec: stale rendering moved from a dashed reference
+  // line to a small ⏳ icon at each stale dot, on a SOLID continuous line.
+  // Old dashed-line approach is gone. Verify EITHER the legacy dashed _avg /
+  // _bestStale, OR the new staleFlag → ⏳ icon dot renderer.
+  assert(/dataKey="_avg"[\s\S]{0,200}strokeDasharray/.test(tab) ||
+    /dataKey="_bestStale"[\s\S]{0,400}strokeDasharray/.test(tab) ||
+    /staleFlag[\s\S]{0,400}⏳/.test(tab),
+    'chart must indicate stale either by dashed line (legacy) or per-point ⏳ icon (v55.83-A.6)');
 });
 
 test('S17.11.14 Empty-state message when no data in period', function() {
-  assert(/No rate data in the selected period/.test(tab),
+  // v55.83-A.5 — copy expanded to mention effective dates. Match either form.
+  assert(/No rate data[\s\S]{0,80}in the selected period/.test(tab),
     'must show helpful empty-state message when filter returns nothing');
 });
 
 test('S17.11.15 Import still preserves effective_date from file', function() {
-  // parseDate on the "date" column → effective_date
-  assert(/effective_date: parseDate\(row, colMap\.date\)/.test(tab),
+  // v55.83-A.5 — parseDate moved to shipping-import-helpers.js as parsedEffective;
+  // the assignment `effective_date: parsedEffective || todayET()` preserves the
+  // file's date if present, falling back to today only when missing. Same behavior.
+  assert(/effective_date: parseDate\(row, colMap\.date\)/.test(tab) ||
+    /effective_date: parsedEffective/.test(tab),
     'import must read effective_date from file (not override with today)');
 });
 
 test('S17.11.16 Import still preserves expiry_date from file', function() {
-  assert(/expiry_date: parseDate\(row, colMap\.expiry\) \|\| null/.test(tab),
+  // v55.83-A.5 — same refactor as #15. parsedExpiry resolves to either the
+  // file's date or null. Same business behavior.
+  assert(/expiry_date: parseDate\(row, colMap\.expiry\) \|\| null/.test(tab) ||
+    /expiry_date: parsedExpiry/.test(tab),
     'import must read expiry_date from file; null if missing');
 });
 

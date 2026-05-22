@@ -1,6 +1,7 @@
 'use client';
 import React, { useMemo } from 'react';
 import { classifyTreasuryTransaction } from '../lib/treasury-classifier';
+import { fmtET } from '../lib/et-time';
 
 // ============================================================
 // TREASURY INSPECTOR MODAL
@@ -15,12 +16,11 @@ function fE(n) {
 
 function fmtDate(s) {
   if (!s) return '—';
-  try {
-    var d = new Date(s);
-    if (isNaN(d.getTime())) return s;
-    return d.toLocaleDateString('en-US', { year: 'numeric', month: 'short', day: 'numeric' }) +
-      (s.length > 10 ? ' ' + d.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' }) : '');
-  } catch (e) { return s; }
+  // s could be 'YYYY-MM-DD' (date-only) or a full ISO timestamp.
+  // For date-only strings, render as ET shortdate (no time component).
+  // For full timestamps, render as ET datetime.
+  if (typeof s === 'string' && s.length === 10) return fmtET(s, 'date');
+  return fmtET(s, 'datetime');
 }
 
 function colorClasses(color) {
@@ -162,7 +162,7 @@ export default function TreasuryInspectorModal(props) {
                   <span className="text-sm font-semibold text-slate-800">
                     Cash In / وارد نقدي
                     {txn.cash_method === 'vodafone' && <span className="ml-1 px-1.5 py-0.5 rounded bg-red-100 text-red-800 text-[10px] font-bold">📱 Vodafone</span>}
-                    {txn.cash_method === 'instapay' && <span className="ml-1 px-1.5 py-0.5 rounded bg-amber-100 text-amber-800 text-[10px] font-bold">⚡ InstaPay</span>}
+                    {txn.cash_method === 'instapay' && <span className="ml-1 px-1.5 py-0.5 rounded bg-amber-100 text-amber-900 text-[10px] font-bold">⚡ InstaPay</span>}
                   </span>
                   <span className="text-base font-extrabold text-emerald-700">{fE(c.amounts.cashIn)}</span>
                 </div>
@@ -172,7 +172,7 @@ export default function TreasuryInspectorModal(props) {
                   <span className="text-sm font-semibold text-slate-800">
                     Cash Out / صادر نقدي
                     {txn.cash_method === 'vodafone' && <span className="ml-1 px-1.5 py-0.5 rounded bg-red-100 text-red-800 text-[10px] font-bold">📱 Vodafone</span>}
-                    {txn.cash_method === 'instapay' && <span className="ml-1 px-1.5 py-0.5 rounded bg-amber-100 text-amber-800 text-[10px] font-bold">⚡ InstaPay</span>}
+                    {txn.cash_method === 'instapay' && <span className="ml-1 px-1.5 py-0.5 rounded bg-amber-100 text-amber-900 text-[10px] font-bold">⚡ InstaPay</span>}
                   </span>
                   <span className="text-base font-extrabold text-red-700">{fE(c.amounts.cashOut)}</span>
                 </div>
@@ -209,10 +209,10 @@ export default function TreasuryInspectorModal(props) {
                   <div className="text-sm font-extrabold text-amber-900">
                     Matched bank amount / المبلغ المطابق: {fE(Number(txn.expected_amount || 0) || Number(txn.cash_in || 0) || Number(txn.cash_out || 0))}
                   </div>
-                  <div className="text-[11px] text-amber-800 mt-1 italic">
+                  <div className="text-[11px] text-amber-900 mt-1 italic">
                     This row was matched before the bank-separation migration ran. Amount currently sits in cash_in/expected_amount instead of bank_in. Running the migration will move it.
                   </div>
-                  <div className="text-[11px] text-amber-800 mt-1 italic" style={{direction:'rtl'}}>
+                  <div className="text-[11px] text-amber-900 mt-1 italic" style={{direction:'rtl'}}>
                     تمت مطابقة هذا القيد قبل تشغيل ترقية الفصل البنكي. المبلغ حاليًا في cash_in بدلًا من bank_in. شغّل الترقية لنقله.
                   </div>
                 </div>
@@ -273,7 +273,7 @@ export default function TreasuryInspectorModal(props) {
                 <div className="border-2 border-amber-500 bg-amber-50 rounded-lg p-3">
                   <div className="text-xs font-extrabold text-amber-900 uppercase mb-2 tracking-wider">⏳ Waiting for invoice / بانتظار الفاتورة</div>
                   <div className="text-sm text-amber-900 font-semibold">Invoice #{txn.order_number} does not exist yet. This amount is tracked but not yet credited to any invoice. When you create invoice #{txn.order_number}, this row will auto-link and the invoice's collected total will update.</div>
-                  <div className="text-sm text-amber-800 mt-1 font-semibold" style={{ direction: 'rtl' }}>
+                  <div className="text-sm text-amber-900 mt-1 font-semibold" style={{ direction: 'rtl' }}>
                     الفاتورة رقم {txn.order_number} غير موجودة بعد. هذا المبلغ مُسجّل لكن لم يُضف بعد إلى أي فاتورة. عند إنشاء الفاتورة، سيتم الربط تلقائيًا وسيتحدّث المحصّل.
                   </div>
                 </div>

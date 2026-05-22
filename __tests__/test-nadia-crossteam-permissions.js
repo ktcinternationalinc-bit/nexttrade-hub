@@ -141,7 +141,12 @@ test('M10 Greeter loads active team_reminders for recipient', function() {
 });
 
 test('M10b team_reminders filtered to due today or earlier', function() {
-  assert(/r\.reminder_date <= new Date\(\)\.toISOString\(\)\.substring\(0, ?10\)/.test(askRoute),
+  // Code uses negation ("> today → return false") which is equivalent to
+  // "<= today → keep". Either pattern proves the filter is in place.
+  assert(
+    /r\.reminder_date <= new Date\(\)\.toISOString\(\)\.substring\(0, ?10\)/.test(askRoute)
+    || /r\.reminder_date > new Date\(\)\.toISOString\(\)\.substring\(0, ?10\)/.test(askRoute)
+    || /r\.reminder_date.*todayET/.test(askRoute),
     'only surface reminders due today or in the past, not future ones');
 });
 

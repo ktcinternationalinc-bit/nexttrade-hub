@@ -12,11 +12,60 @@ import { useEffect, useRef, useState } from 'react';
 // Keeps the editor DOM as the source of truth during composition — we only
 // call onChange on input events to reflect upward. Clearing is driven by
 // parent's `value==='' ` → we reset the editor DOM.
+//
+// v55.44 — DOUBLE-SUBMIT GUARD. Max reported tapping Send 3 times posted
+// the same comment 3 times. Two layers of protection:
+//   1) `submitting` prop from parent disables the button while the save
+//      is in flight. Parent sets it true before await, false in finally.
+//   2) Internal `localSubmitting` state guards against the parent forgetting
+//      to set the prop. We flip it on first call and reset only when
+//      `value` clears (parent successfully cleared the input on save) OR
+//      when `submitting` prop transitions back to false.
+// Belt + suspenders: even if parent forgets one layer, the other catches it.
 // ============================================================
-export default function RichCommentComposer({ value, onChange, onSubmit, uploading, onAttach }) {
+export default function RichCommentComposer({ value, onChange, onSubmit, uploading, onAttach, submitting }) {
   const editorRef = useRef(null);
   const fileRef = useRef(null);
   const [showHelp, setShowHelp] = useState(false);
+  // v55.44 — internal submit-in-flight flag. Backstops the parent's
+  // `submitting` prop in case the parent forgets to set it.
+  const [localSubmitting, setLocalSubmitting] = useState(false);
+
+  // The button is disabled if EITHER the parent says we're submitting OR
+  // our local guard says so. This combined flag is also used to suppress
+  // Ctrl+Enter and the Send onClick.
+  const isSubmitting = !!submitting || localSubmitting;
+
+  // Reset local guard when parent clears the value (signals successful save)
+  // or when the parent's `submitting` prop transitions back to false.
+  useEffect(() => {
+    if (value === '' || value == null) {
+      if (localSubmitting) setLocalSubmitting(false);
+    }
+  }, [value, localSubmitting]);
+  useEffect(() => {
+    if (!submitting && localSubmitting) {
+      // Parent finished its work; release our guard too so the user can
+      // retry if the save errored and the parent left the value in place.
+      setLocalSubmitting(false);
+    }
+  }, [submitting, localSubmitting]);
+
+  // Wrapped submit that flips the local guard before calling parent's
+  // onSubmit, and silently drops re-entry attempts.
+  const safeSubmit = () => {
+    if (isSubmitting) return; // hard block — first tap wins
+    if (!onSubmit) return;
+    setLocalSubmitting(true);
+    try {
+      onSubmit();
+    } catch (e) {
+      // If onSubmit threw synchronously, release the guard so the user
+      // can retry. Async errors are released by the effects above.
+      setLocalSubmitting(false);
+      throw e;
+    }
+  };
 
   // Keep editor in sync with parent value. Only overwrite when parent clears the value
   // (avoid cursor jumps during normal typing).
@@ -47,10 +96,10 @@ export default function RichCommentComposer({ value, onChange, onSubmit, uploadi
   };
 
   const handleKeyDown = (e) => {
-    // Ctrl+Enter / Cmd+Enter → submit
+    // Ctrl+Enter / Cmd+Enter → submit (with double-submit guard)
     if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) {
       e.preventDefault();
-      if (onSubmit) onSubmit();
+      safeSubmit();
       return;
     }
     // Plain Enter → inserts a <br> (default contenteditable behavior varies by browser;
@@ -123,7 +172,15 @@ export default function RichCommentComposer({ value, onChange, onSubmit, uploadi
             if (fileRef.current) fileRef.current.value = '';
           }} />
         </label>
-        <button type="button" onClick={onSubmit} className="px-4 py-2 bg-blue-500 text-white rounded-lg text-xs font-semibold self-start">Send</button>
+        <button
+          type="button"
+          onClick={safeSubmit}
+          disabled={isSubmitting}
+          aria-busy={isSubmitting}
+          className={'px-4 py-2 rounded-lg text-xs font-semibold self-start transition ' + (isSubmitting ? 'bg-blue-300 text-white cursor-not-allowed opacity-60' : 'bg-blue-500 text-white hover:bg-blue-600')}
+        >
+          {isSubmitting ? '⏳ Sending…' : 'Send'}
+        </button>
       </div>
 
       {/* Empty-state placeholder — rendered via CSS :empty::before */}

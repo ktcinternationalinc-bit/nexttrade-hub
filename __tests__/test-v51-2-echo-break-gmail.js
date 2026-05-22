@@ -28,27 +28,37 @@ test('E1 Follow-up auto-send is disabled (was causing echo loop)', function() {
     'must contain the disable marker so maintainers know why');
 });
 
-test('E2 Self-suppress tail extended to 3 seconds', function() {
-  assert(/SELF_SUPPRESS_MS = 3000/.test(greeter),
-    'tail must be at least 3s to cover laptop-speaker echo');
+test('E2 Self-suppress tail is 500 milliseconds (v54.2 — short enough not to eat real commands)', function() {
+  // v51.2: 3000ms (too long — ate real user commands in the tail)
+  // v54.2: 500ms (real mic echo is under 500ms; commands arrive ~500-2000ms after ack)
+  assert(/SELF_SUPPRESS_MS = 500/.test(greeter),
+    'tail is 500ms (v54.2 fix)');
 });
 
-test('E3 AIGreeter self-suppress is floor-only (never shrinks)', function() {
+test('E3 AIGreeter self-suppress: floor on start, REPLACE on stop (v51.3 fix)', function() {
+  // Start: take MAX so nothing can shrink the 30s safety upper bound mid-speech.
   assert(/startUntil > selfSuppressUntilRef\.current\) selfSuppressUntilRef\.current = startUntil/.test(greeter),
-    'onStart take-max protection');
-  assert(/stopUntil > selfSuppressUntilRef\.current\) selfSuppressUntilRef\.current = stopUntil/.test(greeter),
-    'onStop take-max protection');
+    'onStart still take-max protection');
+  // Stop: REPLACE (not max) so when TTS actually ends, the suppress shrinks
+  // down to now+tail so the mic is ready for the user's command.
+  var m = greeter.match(/var fireStop = function\(\) \{[\s\S]*?\};/);
+  assert(m, 'fireStop defined');
+  assert(/selfSuppressUntilRef\.current = stopUntil/.test(m[0]),
+    'fireStop REPLACES the window (not max), so 30s upper bound is trimmed to 3s tail when TTS ends');
+  // Must NOT be `if (stopUntil > selfSuppressUntilRef.current)` inside fireStop
+  assert(!/if \(stopUntil > selfSuppressUntilRef\.current\)/.test(m[0]),
+    'fireStop should NOT gate the assignment on take-max — that was the bug');
 });
 
-test('E4 VoiceController self-suppress is floor-only (never shrinks)', function() {
+test('E4 VoiceController self-suppress: floor on start, REPLACE on stop (v51.3 fix)', function() {
   var m = vc.match(/var onStart = function\(ev\) \{[\s\S]*?\};/);
   assert(m, 'onStart handler');
   assert(/until && until > selfSuppressUntilRef\.current/.test(m[0]),
-    'floor-only on start');
+    'onStart is floor-only so mid-speech updates never shrink the window');
   var m2 = vc.match(/var onStop  = function\(ev\) \{[\s\S]*?\};/);
   assert(m2, 'onStop handler');
-  assert(/until && until > selfSuppressUntilRef\.current/.test(m2[0]),
-    'floor-only on stop');
+  assert(/if \(until\) selfSuppressUntilRef\.current = until/.test(m2[0]),
+    'onStop REPLACES — so the 30s upper bound can be trimmed to 3s when TTS really ends, unmuting the mic for the user command');
 });
 
 test('E5 onStop no longer opens a follow-up fire window', function() {

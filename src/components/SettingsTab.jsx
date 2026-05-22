@@ -1,9 +1,10 @@
 'use client';
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import { supabase, dbInsert, dbUpdate } from '../lib/supabase';
 import { EXPENSE_CATS } from '../lib/utils';
 import TranslationPanel from './TranslationPanel';
 import AIMemorySettingsPanel from './AIMemorySettingsPanel';
+import CustomsRateLibrary from './CustomsRateLibrary';
 import { PERSONALITIES } from './AIGreeter';
 
 // ============================================================
@@ -206,7 +207,7 @@ function VoiceSettingsPanel({ userProfile, toast }) {
           className="px-4 py-1.5 rounded text-xs font-bold bg-emerald-600 hover:bg-emerald-700 text-white disabled:bg-slate-300">
           {savingVoice ? 'Saving…' : 'Save voice'}
         </button>
-        <p className="text-[10px] text-slate-400 mt-2">
+        <p className="text-[10px] text-slate-500 mt-2">
           New settings apply to the next thing Nadia says. If you don't have the ElevenLabs paid plan, some voices may be blocked.
         </p>
       </div>
@@ -215,7 +216,7 @@ function VoiceSettingsPanel({ userProfile, toast }) {
       <div className="p-4 rounded-lg border border-slate-200 mb-3">
         <div className="text-xs font-bold mb-2">Browser support</div>
         {support.kind === 'ok' && <div className="text-[11px] text-emerald-600">✅ This browser supports continuous voice — "Hey Nadia" will listen automatically.</div>}
-        {support.kind === 'safari' && <div className="text-[11px] text-amber-600">⚠️ Safari supports voice but re-starts after each utterance. Works — just slightly less seamless than Chrome.</div>}
+        {support.kind === 'safari' && <div className="text-[11px] text-amber-900 font-semibold">⚠️ Safari supports voice but re-starts after each utterance. Works — just slightly less seamless than Chrome.</div>}
         {support.kind === 'firefox' && <div className="text-[11px] text-rose-600">❌ Firefox does NOT support speech recognition. Use Chrome/Safari/Edge for voice. Push-to-talk via Space bar still works.</div>}
         {support.kind === 'unsupported' && <div className="text-[11px] text-rose-600">❌ No speech recognition in this browser. Update browser or switch to Chrome.</div>}
         {support.kind === 'checking' && <div className="text-[11px] text-slate-400">Checking...</div>}
@@ -281,7 +282,7 @@ function AdminToolsPanel({ toast }) {
           <div className="text-2xl font-extrabold text-emerald-600">{stats?.memory_count ?? '—'}</div>
         </div>
         <div className="rounded-lg p-3 bg-amber-50">
-          <div className="text-[10px] text-amber-700 uppercase tracking-wide">Uncategorized Invoices</div>
+          <div className="text-[10px] text-amber-900 uppercase tracking-wide">Uncategorized Invoices</div>
           <div className="text-2xl font-extrabold text-amber-600">{stats?.uncategorized_invoice_count ?? '—'}</div>
         </div>
       </div>
@@ -357,7 +358,7 @@ const MODULES = [
   // Granular permissions
   'Edit Treasury', 'Edit Invoices', 'Delete Invoices', 'Edit Inventory', 'Adjust Inventory Quantities', 'Edit Warehouse',
   'Edit CRM', 'View Costs', 'Delete Tickets', 'Assign Tickets', 'Merge Customers',
-  'Manage Categories', 'Export Data', 'Post Reminders', 'Welcome Briefing',
+  'Manage Categories', 'Manage Inventory Master', 'Edit Product Master', 'Export Data', 'Post Reminders', 'Welcome Briefing', 'HR Report',
 ];
 
 const NOTIF_TYPES = [
@@ -377,6 +378,478 @@ const NOTIF_TYPES = [
   { v: 'translation_complete', l: 'Translation Complete / اكتمال الترجمة' },
   { v: 'reminder', l: 'Team Reminders / تذكيرات الفريق' },
 ];
+
+// ============================================================
+// PhoneSettingsPanel — Phase B (Apr 26 2026)
+// ============================================================
+// Admin-only panel for managing the phone system:
+//   • All KTC Twilio numbers (top section)
+//   • Per-number settings: assignee, recording, voicemail
+//   • Per-user routing settings: forwarding number, mode, vacation
+//
+// Reads/writes:
+//   /api/phone/numbers       — phone_numbers table CRUD
+//   supabase users table     — forwarding_number, phone_routing,
+//                              phone_vacation_mode columns (Phase B)
+//
+// Non-admins see a read-only view of their OWN routing settings.
+// ============================================================
+function PhoneSettingsPanel({ users, userProfile, toast, isAdmin, isSuperAdmin }) {
+  const [numbers, setNumbers] = useState([]);
+  const [usersWithRouting, setUsersWithRouting] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(null); // tracks which row is currently saving
+  // v55.28 — diagnostics state. When the user clicks "Run Diagnostics" we
+  // hit /api/phone/diagnose and show the per-check results inline. Lets
+  // admins verify the phone system is wired up end-to-end (env vars set,
+  // Twilio API reachable, phone numbers registered properly) without
+  // having to actually place a real call.
+  const [diagRunning, setDiagRunning] = useState(false);
+  const [diagResult, setDiagResult] = useState(null);
+  const myId = userProfile?.id;
+  const canEdit = isAdmin || isSuperAdmin;
+
+  const safeT = {
+    success: function(m) { try { toast && toast.success && toast.success(m); } catch(e) {} },
+    error:   function(m) { try { toast && toast.error   && toast.error(m);   } catch(e) {} },
+    warning: function(m) { try { toast && toast.warning && toast.warning(m); } catch(e) {} },
+  };
+
+  const reload = useCallback(async function() {
+    setLoading(true);
+    try {
+      // v55.25 — Send Supabase session bearer token so /api/phone/numbers
+      // can authenticate the request. Without this, requireUser() returns
+      // null → 401 → empty numbers list → "No phone numbers registered"
+      // even though the SQL seed already populated 4 rows. Max ran the SQL
+      // multiple times trying to fix what was actually an auth bug.
+      const sessionRes = await supabase.auth.getSession();
+      const accessToken = sessionRes?.data?.session?.access_token || '';
+      const authHeader = accessToken ? { 'Authorization': 'Bearer ' + accessToken } : {};
+
+      // Fetch phone numbers
+      const numsRes = await fetch('/api/phone/numbers', { headers: authHeader });
+      const numsData = await numsRes.json();
+      if (numsData.error) {
+        // Surface the real error so we don't silently fall back to "no numbers"
+        safeT.error('Could not load phone numbers: ' + numsData.error);
+        setNumbers([]);
+      } else {
+        setNumbers(numsData.numbers || []);
+      }
+
+      // Fetch users with routing data. The users table column is `name` (not full_name).
+      const usersRes = await supabase
+        .from('users')
+        .select('id, name, email, role, forwarding_number, phone_routing, phone_vacation_mode')
+        .order('name');
+      setUsersWithRouting(usersRes.data || []);
+    } catch (e) {
+      safeT.error('Failed to load phone settings: ' + e.message);
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  useEffect(function() { reload(); }, [reload]);
+
+  // Update a phone number's assignment / recording / voicemail
+  const updateNumber = async function(id, field, value) {
+    setSaving('num-' + id);
+    try {
+      // v55.25 — Send bearer token, same reason as the GET fetch above.
+      const sessionRes = await supabase.auth.getSession();
+      const accessToken = sessionRes?.data?.session?.access_token || '';
+      const body = { id: id };
+      body[field] = value;
+      const res = await fetch('/api/phone/numbers', {
+        method: 'PATCH',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': accessToken ? 'Bearer ' + accessToken : '',
+        },
+        body: JSON.stringify(body),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || 'Update failed');
+      // Optimistic local update
+      setNumbers(function(prev) {
+        return prev.map(function(n) {
+          return n.id === id ? Object.assign({}, n, body) : n;
+        });
+      });
+      safeT.success('Saved ✓');
+    } catch (e) {
+      safeT.error('Save failed: ' + e.message);
+    } finally {
+      setSaving(null);
+    }
+  };
+
+  // Update a user's routing prefs
+  const updateUserRouting = async function(userId, field, value) {
+    setSaving('user-' + userId);
+    try {
+      const updates = {};
+      updates[field] = value;
+      const res = await supabase.from('users').update(updates).eq('id', userId);
+      if (res.error) throw res.error;
+      setUsersWithRouting(function(prev) {
+        return prev.map(function(u) {
+          return u.id === userId ? Object.assign({}, u, updates) : u;
+        });
+      });
+      safeT.success('Saved ✓');
+    } catch (e) {
+      safeT.error('Save failed: ' + (e.message || 'unknown'));
+    } finally {
+      setSaving(null);
+    }
+  };
+
+  // v55.28 — runDiagnostics
+  // Calls /api/phone/diagnose and displays the per-check results inline.
+  // Designed so the admin can verify everything is hooked up end-to-end
+  // BEFORE placing a real test call, since real calls cost money and
+  // troubleshooting "why didn't this work" after the fact is harder.
+  const runDiagnostics = async function() {
+    setDiagRunning(true);
+    setDiagResult(null);
+    try {
+      var sessionRes = await supabase.auth.getSession();
+      var accessToken = sessionRes && sessionRes.data && sessionRes.data.session
+        ? sessionRes.data.session.access_token : '';
+      var res = await fetch('/api/phone/diagnose', {
+        headers: accessToken ? { 'Authorization': 'Bearer ' + accessToken } : {},
+      });
+      var data = await res.json();
+      if (!res.ok) {
+        safeT.error('Diagnostics failed: ' + (data.error || ('HTTP ' + res.status)));
+        setDiagResult(null);
+      } else {
+        setDiagResult(data);
+        if (data.overall === 'ok') {
+          safeT.success('All checks passed ✓');
+        } else if (data.overall === 'warn') {
+          safeT.warning(data.summary.warn + ' warning(s) found — see report below');
+        } else {
+          safeT.error(data.summary.fail + ' problem(s) found — see report below');
+        }
+      }
+    } catch (e) {
+      safeT.error('Diagnostics request crashed: ' + e.message);
+    } finally {
+      setDiagRunning(false);
+    }
+  };
+
+  if (loading) {
+    return (
+      <div className="bg-white rounded-xl p-6 text-center text-slate-500">
+        Loading phone settings...
+      </div>
+    );
+  }
+
+  return (
+    <div className="space-y-4">
+      {/* Header */}
+      <div className="bg-white rounded-xl p-4">
+        <h3 className="text-sm font-bold mb-1">📞 Phone System</h3>
+        <p className="text-xs text-slate-600">
+          Configure your KTC Twilio numbers and team member call routing.
+          {canEdit ? '' : ' Only admins can change number assignments.'}
+        </p>
+      </div>
+
+      {/* === SYSTEM HEALTH (v55.28) === */}
+      {/* Lets admins verify the entire phone system is wired up end-to-end
+          before placing a real test call. Each row tells you what's right,
+          what's wrong, and what to do about it. */}
+      {canEdit && (
+        <div className="bg-white rounded-xl p-4">
+          <div className="flex items-center justify-between mb-2">
+            <div>
+              <h3 className="text-sm font-bold">🔍 System Health</h3>
+              <p className="text-[11px] text-slate-500 mt-0.5">
+                Verifies every piece of the phone system without making a real call.
+              </p>
+            </div>
+            <button
+              onClick={runDiagnostics}
+              disabled={diagRunning}
+              className="px-4 py-2 bg-blue-500 text-white rounded-lg text-xs font-bold hover:bg-blue-600 disabled:opacity-50"
+            >
+              {diagRunning ? '⏳ Checking...' : '▶ Run Diagnostics'}
+            </button>
+          </div>
+
+          {diagResult && (
+            <div className="mt-3">
+              {/* Overall summary banner */}
+              <div className={'rounded-lg px-3 py-2 mb-3 text-xs font-bold ' + (
+                diagResult.overall === 'ok'
+                  ? 'bg-green-100 text-green-800 border border-green-300'
+                  : diagResult.overall === 'warn'
+                    ? 'bg-amber-100 text-amber-900 border border-amber-300'
+                    : 'bg-red-100 text-red-800 border border-red-300'
+              )}>
+                {diagResult.overall === 'ok'
+                  ? '✅ Everything is working — phone system ready'
+                  : diagResult.overall === 'warn'
+                    ? '⚠️ Phone system mostly works, but some things need attention'
+                    : '❌ Phone system is not functional — fix the items below'}
+                <span className="font-normal ml-2">
+                  ({diagResult.summary.ok} ok, {diagResult.summary.warn} warning, {diagResult.summary.fail} failed)
+                </span>
+              </div>
+
+              {/* Per-check results */}
+              <div className="space-y-1.5">
+                {(diagResult.results || []).map(function(r, idx) {
+                  var bg = r.status === 'ok' ? 'bg-green-50 border-green-200'
+                    : r.status === 'warn' ? 'bg-amber-50 border-amber-200'
+                    : 'bg-red-50 border-red-200';
+                  var icon = r.status === 'ok' ? '✓' : r.status === 'warn' ? '⚠' : '✗';
+                  var iconColor = r.status === 'ok' ? 'text-green-600'
+                    : r.status === 'warn' ? 'text-amber-900' : 'text-red-700';
+                  return (
+                    <div key={idx} className={'rounded border p-2.5 ' + bg}>
+                      <div className="flex items-start gap-2">
+                        <span className={'text-base font-bold ' + iconColor}>{icon}</span>
+                        <div className="flex-1 min-w-0">
+                          <div className="font-semibold text-slate-900 text-xs">{r.label}</div>
+                          <div className="text-[11px] text-slate-700 mt-0.5">{r.message}</div>
+                          {r.fix && (
+                            <div className="text-[11px] text-slate-600 mt-1 italic">
+                              <strong>Fix:</strong> {r.fix}
+                            </div>
+                          )}
+                        </div>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          )}
+
+          {!diagResult && !diagRunning && (
+            <div className="text-[11px] text-slate-500 mt-1">
+              Click <strong>Run Diagnostics</strong> to verify your Twilio credentials, phone numbers, and database tables are all configured correctly.
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* === SECTION 1: PHONE NUMBERS === */}
+      <div className="bg-white rounded-xl p-4">
+        <div className="flex items-center justify-between mb-3">
+          <h3 className="text-sm font-bold">Your KTC Numbers</h3>
+          <span className="text-[10px] text-slate-500 font-medium">
+            {numbers.length} number{numbers.length === 1 ? '' : 's'}
+          </span>
+        </div>
+
+        {numbers.length === 0 ? (
+          <div className="text-xs text-slate-500 text-center py-6">
+            No phone numbers registered. Run the s30 SQL seed to add them.
+          </div>
+        ) : (
+          <div className="space-y-2">
+            {numbers.map(function(n) {
+              const assignee = usersWithRouting.find(function(u) { return u.id === n.assigned_to; });
+              const isSaving = saving === 'num-' + n.id;
+              return (
+                <div key={n.id} className="border border-slate-200 rounded-lg p-3 bg-slate-50">
+                  {/* Number + label */}
+                  <div className="flex items-center justify-between mb-2">
+                    <div>
+                      <div className="font-bold text-slate-900 text-base">
+                        {n.phone_number}
+                        {n.number_type === 'main' && (
+                          <span className="ml-2 text-[10px] font-bold text-emerald-700 bg-emerald-100 px-1.5 py-0.5 rounded">MAIN</span>
+                        )}
+                      </div>
+                      <div className="text-xs text-slate-600">{n.label || '(no label)'}</div>
+                    </div>
+                    {isSaving && <span className="text-[10px] text-slate-500">Saving...</span>}
+                  </div>
+
+                  {/* Settings grid */}
+                  <div className="grid grid-cols-1 md:grid-cols-3 gap-2 text-xs">
+                    {/* Assignee */}
+                    <div>
+                      <label className="block font-semibold text-slate-700 mb-1">Assigned to</label>
+                      <select
+                        disabled={!canEdit || isSaving}
+                        value={n.assigned_to || ''}
+                        onChange={function(e) { updateNumber(n.id, 'assigned_to', e.target.value || null); }}
+                        className="w-full px-2 py-1.5 rounded border border-slate-300 bg-white"
+                      >
+                        <option value="">— Unassigned (voicemail only) —</option>
+                        {usersWithRouting.map(function(u) {
+                          return <option key={u.id} value={u.id}>{u.name || u.email}</option>;
+                        })}
+                      </select>
+                    </div>
+
+                    {/* Recording */}
+                    <div>
+                      <label className="block font-semibold text-slate-700 mb-1">Recording</label>
+                      <select
+                        disabled={!canEdit || isSaving}
+                        value={n.recording_enabled ? 'on' : 'off'}
+                        onChange={function(e) { updateNumber(n.id, 'recording_enabled', e.target.value === 'on'); }}
+                        className="w-full px-2 py-1.5 rounded border border-slate-300 bg-white"
+                      >
+                        <option value="on">🔴 On (with disclaimer)</option>
+                        <option value="off">⚫ Off</option>
+                      </select>
+                    </div>
+
+                    {/* Voicemail */}
+                    <div>
+                      <label className="block font-semibold text-slate-700 mb-1">Voicemail</label>
+                      <select
+                        disabled={!canEdit || isSaving}
+                        value={n.voicemail_enabled ? 'on' : 'off'}
+                        onChange={function(e) { updateNumber(n.id, 'voicemail_enabled', e.target.value === 'on'); }}
+                        className="w-full px-2 py-1.5 rounded border border-slate-300 bg-white"
+                      >
+                        <option value="on">📬 On</option>
+                        <option value="off">⚫ Off</option>
+                      </select>
+                    </div>
+                  </div>
+
+                  {assignee && (
+                    <div className="mt-2 text-[11px] text-slate-600">
+                      Calls reach <span className="font-bold">{assignee.name || assignee.email}</span> via {' '}
+                      <span className="font-bold">
+                        {assignee.phone_vacation_mode ? '(vacation mode — voicemail only)' :
+                         assignee.phone_routing === 'browser' ? 'browser only' :
+                         assignee.phone_routing === 'cell' ? 'cell only' :
+                         'browser, then cell'}
+                      </span>
+                    </div>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+        )}
+      </div>
+
+      {/* === SECTION 2: PER-USER ROUTING === */}
+      <div className="bg-white rounded-xl p-4">
+        <div className="flex items-center justify-between mb-3">
+          <h3 className="text-sm font-bold">Team Routing Preferences</h3>
+          <span className="text-[10px] text-slate-500 font-medium">
+            {usersWithRouting.length} team member{usersWithRouting.length === 1 ? '' : 's'}
+          </span>
+        </div>
+        <p className="text-[11px] text-slate-600 mb-3">
+          For each team member: set their cell forwarding number, choose how they receive calls,
+          and toggle vacation mode (sends all their calls to voicemail).
+        </p>
+
+        <div className="space-y-2">
+          {usersWithRouting.map(function(u) {
+            const isSaving = saving === 'user-' + u.id;
+            const isSelf = u.id === myId;
+            const editable = canEdit || isSelf;
+            return (
+              <div key={u.id} className="border border-slate-200 rounded-lg p-3 bg-slate-50">
+                <div className="flex items-center justify-between mb-2">
+                  <div>
+                    <span className="font-bold text-slate-900 text-sm">{u.name || u.email}</span>
+                    {u.role && <span className="ml-2 text-[10px] font-semibold text-slate-500 uppercase">{u.role}</span>}
+                    {isSelf && <span className="ml-2 text-[10px] font-bold text-blue-700 bg-blue-100 px-1.5 py-0.5 rounded">YOU</span>}
+                  </div>
+                  {isSaving && <span className="text-[10px] text-slate-500">Saving...</span>}
+                </div>
+
+                <div className="grid grid-cols-1 md:grid-cols-3 gap-2 text-xs">
+                  {/* Forwarding number */}
+                  <div>
+                    <label className="block font-semibold text-slate-700 mb-1">Cell phone (for forwarding)</label>
+                    <input
+                      type="tel"
+                      disabled={!editable || isSaving}
+                      defaultValue={u.forwarding_number || ''}
+                      onBlur={function(e) {
+                        const val = e.target.value.trim();
+                        if (val !== (u.forwarding_number || '')) {
+                          updateUserRouting(u.id, 'forwarding_number', val || null);
+                        }
+                      }}
+                      placeholder="+201001234567"
+                      className="w-full px-2 py-1.5 rounded border border-slate-300 bg-white font-mono"
+                    />
+                    <div className="text-[10px] text-slate-500 mt-0.5">E.164 format: + then country code + number</div>
+                  </div>
+
+                  {/* Routing mode */}
+                  <div>
+                    <label className="block font-semibold text-slate-700 mb-1">How calls reach me</label>
+                    <select
+                      disabled={!editable || isSaving}
+                      value={u.phone_routing || 'browser_cell'}
+                      onChange={function(e) { updateUserRouting(u.id, 'phone_routing', e.target.value); }}
+                      className="w-full px-2 py-1.5 rounded border border-slate-300 bg-white"
+                    >
+                      <option value="browser_cell">Browser, then cell (recommended)</option>
+                      <option value="browser">Browser only (cheap)</option>
+                      <option value="cell">Cell only</option>
+                    </select>
+                  </div>
+
+                  {/* Vacation mode */}
+                  <div>
+                    <label className="block font-semibold text-slate-700 mb-1">Vacation mode</label>
+                    <select
+                      disabled={!editable || isSaving}
+                      value={u.phone_vacation_mode ? 'on' : 'off'}
+                      onChange={function(e) { updateUserRouting(u.id, 'phone_vacation_mode', e.target.value === 'on'); }}
+                      className="w-full px-2 py-1.5 rounded border border-slate-300 bg-white"
+                    >
+                      <option value="off">Off — receive calls normally</option>
+                      <option value="on">🌴 On — all calls to voicemail</option>
+                    </select>
+                  </div>
+                </div>
+
+                {u.phone_routing === 'cell' && !u.forwarding_number && (
+                  <div className="mt-2 p-2 rounded bg-amber-50 border border-amber-200 text-[11px] text-amber-900">
+                    ⚠ Cell-only routing but no forwarding number set — calls will go straight to voicemail.
+                  </div>
+                )}
+                {u.phone_routing === 'browser_cell' && !u.forwarding_number && (
+                  <div className="mt-2 p-2 rounded bg-blue-50 border border-blue-200 text-[11px] text-blue-900">
+                    ℹ Browser-only effectively — no cell number set for fallback.
+                  </div>
+                )}
+              </div>
+            );
+          })}
+        </div>
+      </div>
+
+      {/* Cost note */}
+      <div className="bg-slate-50 border border-slate-200 rounded-xl p-3 text-[11px] text-slate-700">
+        <div className="font-bold mb-1">💵 Cost notes</div>
+        <ul className="space-y-1 list-disc list-inside">
+          <li><strong>Browser ringing</strong> — essentially free (uses the inbound minute already paid for)</li>
+          <li><strong>Cell forwarding to Egypt</strong> — about $0.16-0.22 per minute on top of the inbound rate</li>
+          <li><strong>"Browser, then cell"</strong> — only pays the cell rate IF nobody answered in browser first</li>
+          <li><strong>Vacation mode</strong> — fully free (calls go straight to voicemail)</li>
+        </ul>
+      </div>
+    </div>
+  );
+}
+
 
 export default function SettingsTab({ toast, user, users, onReload, isAdmin, userProfile, categoriesList, onCategoriesReload }) {
   const isSuperAdmin = userProfile?.role === 'super_admin';
@@ -559,7 +1032,7 @@ export default function SettingsTab({ toast, user, users, onReload, isAdmin, use
 
       {/* Section Tabs */}
       <div className="flex gap-1 mb-3 flex-wrap">
-        {[['roles', 'Team & Roles'], ['profiles', '👤 Team Profiles'], ['permissions', 'Module Access'], ['notifications', 'Notifications'], ['voice', '🎙️ Voice'], ['comms', '📬 Communications'], ['greeter', '🤖 AI Greeter'], ...(isSuperAdmin ? [['aimemory', '🧠 AI Memory'], ['admintools', '🛠️ Admin Tools']] : []), ['categories', '🏷️ Categories'], ['rules', 'Category Rules / قواعد'], ['expenses', '📋 Expense Descriptions'], ['translation', '🌐 Translation / ترجمة']].map(([v, l]) => (
+        {[['roles', 'Team & Roles'], ['profiles', '👤 Team Profiles'], ['permissions', 'Module Access'], ['notifications', 'Notifications'], ['voice', '🎙️ Voice'], ['comms', '📬 Communications'], ['phone', '📞 Phone'], ['greeter', '🤖 AI Greeter'], ...(isSuperAdmin ? [['aimemory', '🧠 AI Memory'], ['admintools', '🛠️ Admin Tools']] : []), ['categories', '🏷️ Categories'], ['rules', 'Category Rules / قواعد'], ['expenses', '📋 Expense Descriptions'], ['customs', '🛃 Customs Rates'], ['translation', '🌐 Translation / ترجمة']].map(([v, l]) => (
           <button key={v} onClick={() => setSection(v)}
             className={'px-3 py-1.5 rounded-lg text-xs font-semibold transition ' + (section === v ? 'bg-slate-900 text-white' : 'bg-slate-100 text-slate-500')}>
             {l}
@@ -572,9 +1045,25 @@ export default function SettingsTab({ toast, user, users, onReload, isAdmin, use
         <AIMemorySettingsPanel userProfile={userProfile} toast={toast} />
       )}
 
+      {/* ===== CUSTOMS RATES (v55.51) ===== */}
+      {section === 'customs' && (
+        <CustomsRateLibrary user={user} isAdmin={isAdmin} />
+      )}
+
       {/* ===== VOICE SETTINGS (ALL USERS) ===== */}
       {section === 'voice' && (
         <VoiceSettingsPanel userProfile={userProfile} toast={toast} />
+      )}
+
+      {/* ===== PHONE SETTINGS (Phase B) ===== */}
+      {section === 'phone' && (
+        <PhoneSettingsPanel
+          users={users}
+          userProfile={userProfile}
+          toast={toast}
+          isAdmin={isAdmin}
+          isSuperAdmin={isSuperAdmin}
+        />
       )}
 
       {/* ===== ADMIN TOOLS (SUPER ADMIN ONLY) ===== */}
@@ -640,7 +1129,7 @@ export default function SettingsTab({ toast, user, users, onReload, isAdmin, use
                 </div>
                 <div className="flex gap-1 mt-1">
                   <button onClick={() => setSelectedModules([...MODULES])} className="text-[9px] text-blue-500 hover:underline">Select All</button>
-                  <button onClick={() => setSelectedModules([])} className="text-[9px] text-slate-400 hover:underline">Clear</button>
+                  <button onClick={() => setSelectedModules([])} className="text-[9px] text-slate-500 hover:underline">Clear</button>
                 </div>
               </div>
               <div className="flex gap-2 mt-3">
@@ -650,7 +1139,7 @@ export default function SettingsTab({ toast, user, users, onReload, isAdmin, use
                 </button>
                 <button onClick={() => { setShowAddMember(false); setAddError(''); }} className="px-4 py-2 border border-slate-200 rounded-lg text-sm">Cancel</button>
               </div>
-              <div className="text-[9px] text-slate-400 mt-2">This creates a login account + sets their role and permissions. They can sign in immediately.</div>
+              <div className="text-[9px] text-slate-500 mt-2">This creates a login account + sets their role and permissions. They can sign in immediately.</div>
             </div>
           )}
 
@@ -672,7 +1161,7 @@ export default function SettingsTab({ toast, user, users, onReload, isAdmin, use
                           <input defaultValue={u.name_ar||''} id={'edit-namear-'+u.id} className="w-full px-3 py-2 rounded border text-sm" style={{direction:'rtl'}} /></div>
                         <div><label className="text-[10px] font-semibold">Email</label>
                           <input defaultValue={u.email} className="w-full px-3 py-2 rounded border text-sm bg-slate-50" disabled />
-                          <div className="text-[9px] text-slate-400">Email cannot be changed</div></div>
+                          <div className="text-[9px] text-slate-500">Email cannot be changed</div></div>
                         <div><label className="text-[10px] font-semibold">Phone</label>
                           <input defaultValue={u.phone||''} id={'edit-phone-'+u.id} className="w-full px-3 py-2 rounded border text-sm" placeholder="+20..." /></div>
                         <div><label className="text-[10px] font-semibold">Role</label>
@@ -713,8 +1202,8 @@ export default function SettingsTab({ toast, user, users, onReload, isAdmin, use
                           <div className="text-sm font-bold">{u.name} {u.active === false && <span className="text-red-500 text-[10px]">(Deactivated)</span>}</div>
                           {u.name_ar && <div className="text-xs text-slate-500" style={{ direction: 'rtl' }}>{u.name_ar}</div>}
                           <div className="text-xs text-slate-400">{u.email}</div>
-                          {u.phone && <div className="text-[10px] text-slate-400">📱 {u.phone}</div>}
-                          {reportsToUser && <div className="text-[10px] text-slate-400">Reports to: {reportsToUser.name}</div>}
+                          {u.phone && <div className="text-[10px] text-slate-500">📱 {u.phone}</div>}
+                          {reportsToUser && <div className="text-[10px] text-slate-500">Reports to: {reportsToUser.name}</div>}
                         </div>
                         <span className={'text-xs font-bold ' + roleInfo.c}>{roleInfo.l}</span>
                       </div>
@@ -725,7 +1214,7 @@ export default function SettingsTab({ toast, user, users, onReload, isAdmin, use
                           var pw = prompt('New password for ' + u.name + ' (min 6 chars):');
                           if (pw && pw.length >= 6) handleUpdateUser(u.id, { new_password: pw });
                           else if (pw) alert('Password must be at least 6 characters');
-                        }} className="px-2 py-1 rounded border border-amber-300 text-amber-600 text-[10px] font-semibold">🔑 Reset Password</button>
+                        }} className="px-2 py-1 rounded border border-amber-400 text-amber-900 text-[10px] font-bold">🔑 Reset Password</button>
                         {u.active !== false && <button onClick={() => handleDeactivateUser(u.id, u.name)}
                           className="px-2 py-1 rounded border border-red-300 text-red-500 text-[10px] font-semibold">Deactivate</button>}
                         {u.active === false && <button onClick={() => handleUpdateUser(u.id, { active: true })}
@@ -746,7 +1235,7 @@ export default function SettingsTab({ toast, user, users, onReload, isAdmin, use
       {section === 'profiles' && (
         <div className="bg-white rounded-xl p-4">
           <h3 className="text-sm font-bold mb-1">Team Profiles / \u0645\u0644\u0641\u0627\u062a \u0627\u0644\u0641\u0631\u064a\u0642</h3>
-          <p className="text-[10px] text-slate-400 mb-3">Add personal info about team members. AI Secretary uses this for personalized conversations.</p>
+          <p className="text-[10px] text-slate-500 mb-3">Add personal info about team members. AI Secretary uses this for personalized conversations.</p>
 
           {editingProfile ? (() => {
             const u = users.find(x => x.id === editingProfile);
@@ -827,7 +1316,7 @@ export default function SettingsTab({ toast, user, users, onReload, isAdmin, use
                         {p.conversation_starters && <div className="text-[10px] text-blue-500">\ud83d\udcac {p.conversation_starters}</div>}
                       </div>
                     ) : (
-                      <div className="text-[10px] text-slate-400 mt-1">No profile yet</div>
+                      <div className="text-[10px] text-slate-500 mt-1">No profile yet</div>
                     )}
                   </div>
                   <button onClick={() => { setEditingProfile(u.id); setProfileForm(profiles[u.id] || {}); }}
@@ -845,7 +1334,7 @@ export default function SettingsTab({ toast, user, users, onReload, isAdmin, use
       {section === 'permissions' && (
         <div className="bg-white rounded-xl p-4 overflow-auto">
           <h3 className="text-sm font-bold mb-3">Module Access / صلاحيات الوحدات</h3>
-          <p className="text-[10px] text-slate-400 mb-3">Super Admin always has full access. Toggle modules for other users.</p>
+          <p className="text-[10px] text-slate-500 mb-3">Super Admin always has full access. Toggle modules for other users.</p>
           <table className="w-full border-collapse text-xs">
             <thead>
               <tr className="bg-slate-50">
@@ -866,7 +1355,7 @@ export default function SettingsTab({ toast, user, users, onReload, isAdmin, use
                     return (
                       <td key={u.id} className="px-2 py-1 text-center">
                         <button onClick={() => togglePermission(u.id, mod)}
-                          className={'px-2 py-0.5 rounded text-[9px] font-bold ' + (hasAccess ? 'bg-emerald-100 text-emerald-700' : 'bg-red-100 text-red-600')}>
+                          className={'px-2 py-0.5 rounded text-[9px] font-bold ' + (hasAccess ? 'bg-emerald-100 text-emerald-700' : 'bg-red-100 text-red-900 border border-red-300')}>
                           {hasAccess ? 'ON' : 'OFF'}
                         </button>
                       </td>
@@ -875,16 +1364,16 @@ export default function SettingsTab({ toast, user, users, onReload, isAdmin, use
                 </tr>
               ))}
               {/* Action Permissions */}
-              <tr><td colSpan={nonSuperUsers.length + 1} className="px-2 py-2 bg-amber-50 text-[10px] font-bold text-amber-700 border-b border-amber-200 mt-2">🔐 ACTION PERMISSIONS — what the user can do (Tab ON + Edit OFF = Read Only 👁️)</td></tr>
-              {['Edit Treasury', 'Edit Invoices', 'Delete Invoices', 'Edit Inventory', 'Adjust Inventory Quantities', 'Edit Warehouse', 'Edit CRM', 'View Costs', 'View Financial Reports', 'CRM View All', 'CRM View Contacts', 'Delete Tickets', 'Assign Tickets', 'Merge Customers', 'Manage Categories', 'Export Data', 'Post Reminders'].map(mod => (
+              <tr><td colSpan={nonSuperUsers.length + 1} className="px-2 py-2 bg-amber-50 text-[10px] font-bold text-amber-900 border-b border-amber-200 mt-2">🔐 ACTION PERMISSIONS — what the user can do (Tab ON + Edit OFF = Read Only 👁️)</td></tr>
+              {['Edit Treasury', 'Edit Invoices', 'Delete Invoices', 'Edit Inventory', 'Adjust Inventory Quantities', 'Edit Warehouse', 'Edit CRM', 'View Costs', 'View Financial Reports', 'CRM View All', 'CRM View Contacts', 'Delete Tickets', 'Assign Tickets', 'Merge Customers', 'Manage Categories', 'Manage Inventory Master', 'Edit Product Master', 'Export Data', 'Post Reminders', 'HR Report'].map(mod => (
                 <tr key={mod} className="border-b border-slate-50">
-                  <td className="px-2 py-1.5 text-[10px] font-semibold text-amber-700">{mod}</td>
+                  <td className="px-2 py-1.5 text-[10px] font-semibold text-amber-900">{mod}</td>
                   {nonSuperUsers.map(u => {
                     const hasAccess = permissions[u.id]?.[mod] ?? false;
                     return (
                       <td key={u.id} className="px-2 py-1 text-center">
                         <button onClick={() => togglePermission(u.id, mod)}
-                          className={'px-2 py-0.5 rounded text-[9px] font-bold ' + (hasAccess ? 'bg-emerald-100 text-emerald-700' : 'bg-red-100 text-red-600')}>
+                          className={'px-2 py-0.5 rounded text-[9px] font-bold ' + (hasAccess ? 'bg-emerald-100 text-emerald-700' : 'bg-red-100 text-red-900 border border-red-300')}>
                           {hasAccess ? 'ON' : 'OFF'}
                         </button>
                       </td>
@@ -919,7 +1408,7 @@ export default function SettingsTab({ toast, user, users, onReload, isAdmin, use
                     return (
                       <td key={u.id} className="px-2 py-1 text-center">
                         <button onClick={() => toggleNotif(u.id, nt.v)}
-                          className={'px-2 py-0.5 rounded text-[9px] font-bold ' + (enabled ? 'bg-emerald-100 text-emerald-700' : 'bg-red-100 text-red-600')}>
+                          className={'px-2 py-0.5 rounded text-[9px] font-bold ' + (enabled ? 'bg-emerald-100 text-emerald-700' : 'bg-red-100 text-red-900 border border-red-300')}>
                           {enabled ? 'ON' : 'OFF'}
                         </button>
                       </td>
@@ -942,7 +1431,7 @@ export default function SettingsTab({ toast, user, users, onReload, isAdmin, use
               className="px-4 py-2 rounded-lg text-sm font-bold text-white" style={{background:'linear-gradient(135deg, #0ea5e9, #3b82f6)'}}>
               Connect Gmail Account
             </button>
-            <div className="mt-2 text-[10px] text-slate-400">Requires: GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET, GOOGLE_REDIRECT_URI in Vercel env vars</div>
+            <div className="mt-2 text-[10px] text-slate-500">Requires: GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET, GOOGLE_REDIRECT_URI in Vercel env vars</div>
           </div>
           <div className="bg-white rounded-xl p-4">
             <h3 className="text-sm font-bold mb-3">💬 WhatsApp Business (Twilio)</h3>
@@ -965,7 +1454,7 @@ export default function SettingsTab({ toast, user, users, onReload, isAdmin, use
               <div>• Send WhatsApp: <em>&quot;Send WhatsApp to Omar confirming the shipment&quot;</em></div>
               <div>• Create tickets from messages: <em>&quot;Create a ticket from that email&quot;</em></div>
             </div>
-            <p className="text-[10px] text-slate-400 mt-2">All sends require your approval first. Full audit log in Communications tab.</p>
+            <p className="text-[10px] text-slate-500 mt-2">All sends require your approval first. Full audit log in Communications tab.</p>
           </div>
         </div>
       )}
@@ -983,7 +1472,7 @@ export default function SettingsTab({ toast, user, users, onReload, isAdmin, use
                 <div className="flex items-center justify-between mb-3">
                   <div>
                     <div className="text-sm font-bold">{u.name}</div>
-                    <div className="text-[10px] text-slate-400">{u.email}</div>
+                    <div className="text-[10px] text-slate-500">{u.email}</div>
                   </div>
                   <label className="flex items-center gap-2 cursor-pointer">
                     <span className="text-[10px] text-slate-500">Greeter</span>
@@ -1036,7 +1525,7 @@ export default function SettingsTab({ toast, user, users, onReload, isAdmin, use
                     </select>
                   </div>
                 </div>
-                <div className="mt-2 text-[10px] text-slate-400">
+                <div className="mt-2 text-[10px] text-slate-500">
                   Current: {(PERSONALITIES || []).find(p => p.id === (u.greeter_personality || 'friendly'))?.label || 'Friendly'} · {u.greeter_language === 'ar' ? 'Arabic' : 'English'}
                 </div>
               </div>
@@ -1062,7 +1551,7 @@ export default function SettingsTab({ toast, user, users, onReload, isAdmin, use
           <div className="flex justify-between items-center mb-4">
             <div>
               <h3 className="text-sm font-bold">🏷️ Manage Categories & Subcategories</h3>
-              <p className="text-[10px] text-slate-400">Categories are stored bilingually in the <code className="bg-slate-100 px-1 rounded">categories</code> table. Arabic is the stable internal key; English is the display label. New categories appear in all dropdowns immediately.</p>
+              <p className="text-[10px] text-slate-500">Categories are stored bilingually in the <code className="bg-slate-100 px-1 rounded">categories</code> table. Arabic is the stable internal key; English is the display label. New categories appear in all dropdowns immediately.</p>
             </div>
           </div>
           {/* Add New Category — bilingual with auto-translate */}
@@ -1164,7 +1653,7 @@ export default function SettingsTab({ toast, user, users, onReload, isAdmin, use
                 } catch(err) { alert('Error: ' + (err.message || err)); }
               }} className="px-3 py-1.5 bg-blue-500 text-white rounded text-xs font-bold">+ Add</button>
             </div>
-            <div className="text-[9px] text-slate-400 mt-2">💡 Fill one side and tap 🌐 to auto-translate. Internal storage key is always the Arabic name for stability across language switches.</div>
+            <div className="text-[9px] text-slate-500 mt-2">💡 Fill one side and tap 🌐 to auto-translate. Internal storage key is always the Arabic name for stability across language switches.</div>
           </div>
           {/* Add New Subcategory (unchanged storage — still uses expense_rules subcat convention) */}
           <div className="bg-orange-50 rounded-lg p-3 mb-4 border border-orange-200">
@@ -1221,7 +1710,7 @@ export default function SettingsTab({ toast, user, users, onReload, isAdmin, use
               const dbList = Array.isArray(categoriesList) ? categoriesList : [];
               if (dbList.length === 0) {
                 return (
-                  <div className="bg-amber-50 border border-amber-200 rounded p-3 text-[11px] text-amber-700">
+                  <div className="bg-amber-50 border border-amber-200 rounded p-3 text-[11px] text-amber-900">
                     No categories in the database yet. Run <code className="bg-white px-1 rounded">supabase/categories.sql</code> in Supabase to seed the bilingual categories table, then reload this page.
                     <div className="mt-2 text-slate-500 text-[10px]">Legacy EXPENSE_CATS fallback is still active in dropdowns until the migration is run.</div>
                   </div>
@@ -1258,12 +1747,12 @@ export default function SettingsTab({ toast, user, users, onReload, isAdmin, use
                         {c.name_en && c.name_ar && c.name_en !== c.name_ar && (
                           <span className="text-xs text-slate-500" style={{direction:'rtl'}}>/ {c.name_ar}</span>
                         )}
-                        <span className={'text-[9px] px-1.5 py-0.5 rounded-full ' + (c.type === 'income' ? 'bg-emerald-100 text-emerald-600' : 'bg-red-100 text-red-500')}>
+                        <span className={'text-[9px] px-1.5 py-0.5 rounded-full ' + (c.type === 'income' ? 'bg-emerald-100 text-emerald-600' : 'bg-red-100 text-red-900 border border-red-300')}>
                           {c.type || 'expense'}
                         </span>
                       </div>
                       <div className="flex items-center gap-2">
-                        <span className="text-[10px] text-slate-400">{subs.length} subcategories</span>
+                        <span className="text-[10px] text-slate-500">{subs.length} subcategories</span>
                         {canEdit && (
                           <button onClick={async () => {
                             if (!confirm('Deactivate "' + (c.name_en || c.name_ar) + '"? It will be hidden from dropdowns but existing rows keep their tag.')) return;
@@ -1347,7 +1836,7 @@ export default function SettingsTab({ toast, user, users, onReload, isAdmin, use
                                     alert('Reversed ' + (matching || []).length + ' transactions');
                                     onReload();
                                   } catch(err) { toast ? toast.error(err.message) : toast ? toast.error(err.message) : alert(err.message); }
-                                }} className="px-2 py-0.5 rounded border border-amber-300 text-amber-600 text-[10px] hover:bg-amber-50">Reverse</button>
+                                }} className="px-2 py-0.5 rounded border border-amber-400 text-amber-900 text-[10px] font-bold hover:bg-amber-50">Reverse</button>
                                 <button onClick={async () => {
                                   if (!confirm('Delete this rule?\nحذف هذه القاعدة؟')) return;
                                   try {
@@ -1394,7 +1883,7 @@ export default function SettingsTab({ toast, user, users, onReload, isAdmin, use
             <div className="flex justify-between items-center flex-wrap gap-2 mb-3">
               <div>
                 <h3 className="text-sm font-bold">📋 Expense Descriptions ({expDescs.length} unique)</h3>
-                <p className="text-[10px] text-slate-400">Every unique expense description. Update category/subcategory here — changes apply to ALL matching treasury entries and create rules for future entries.</p>
+                <p className="text-[10px] text-slate-500">Every unique expense description. Update category/subcategory here — changes apply to ALL matching treasury entries and create rules for future entries.</p>
               </div>
               <div className="flex gap-2 items-center">
                 <input value={expSearch} onChange={e => setExpSearch(e.target.value)} placeholder="Search..."
@@ -1522,7 +2011,7 @@ export default function SettingsTab({ toast, user, users, onReload, isAdmin, use
                 </tbody>
               </table>
             </div>
-            <div className="mt-2 text-[10px] text-slate-400">
+            <div className="mt-2 text-[10px] text-slate-500">
               Showing {expDescs.filter(d => {
                 if (expSearch && !(d.description || '').includes(expSearch) && !(d.description || '').toLowerCase().includes(expSearch.toLowerCase())) return false;
                 if (expCatFilter === 'uncategorized' && d.category) return false;

@@ -26,6 +26,43 @@ export const notifyTicketReassigned = (newAssigneeIds, ticketTitle, triggeredBy)
   notify('ticket_reassigned', newAssigneeIds, `Ticket Reassigned: ${ticketTitle}`,
     `<p>You have been reassigned to ticket: <strong>${ticketTitle}</strong></p>`, triggeredBy);
 
+// v55.44 — Ticket priority change. Goes to creator + all assignees.
+export const notifyTicketPriority = (recipientIds, ticketTitle, oldPri, newPri, triggeredBy) =>
+  notify('ticket_priority', recipientIds, `Priority Changed: ${ticketTitle}`,
+    `<p>Priority on <strong>${ticketTitle}</strong> changed: <strong>${(oldPri || 'none').toUpperCase()}</strong> → <strong>${(newPri || 'none').toUpperCase()}</strong></p>`, triggeredBy);
+
+// v55.44 — Ticket due-date change. Goes to creator + all assignees.
+export const notifyTicketDueDate = (recipientIds, ticketTitle, oldDate, newDate, triggeredBy) =>
+  notify('ticket_due_date', recipientIds, `Due Date Changed: ${ticketTitle}`,
+    `<p>Due date on <strong>${ticketTitle}</strong> changed: <strong>${oldDate || 'no date'}</strong> → <strong>${newDate || 'no date'}</strong></p>`, triggeredBy);
+
+// v55.44 — Generic ticket update (title/description/etc.). Goes to creator + all assignees.
+export const notifyTicketUpdate = (recipientIds, ticketTitle, whatChanged, triggeredBy) =>
+  notify('ticket_update', recipientIds, `Ticket Updated: ${ticketTitle}`,
+    `<p>${whatChanged || 'A ticket you\'re on has been updated'}: <strong>${ticketTitle}</strong></p>`, triggeredBy);
+
+// v55.44 — Helper: build the recipient list for a ticket update.
+// Returns deduped list of: creator + current assignee + additional_assignees,
+// minus the actor themselves (don't notify yourself about your own change).
+// Pass the parsed-assignees array as the optional second argument; if omitted,
+// the function tries to read additional_assignees from the ticket.
+export function ticketRecipients(ticket, actorId, parsedExtras) {
+  if (!ticket) return [];
+  const ids = new Set();
+  if (ticket.assigned_to) ids.add(ticket.assigned_to);
+  if (ticket.created_by) ids.add(ticket.created_by);
+  let extras = parsedExtras;
+  if (!extras) {
+    try {
+      const raw = ticket.additional_assignees;
+      if (raw) extras = typeof raw === 'string' ? JSON.parse(raw) : raw;
+    } catch (_) { extras = []; }
+  }
+  if (Array.isArray(extras)) extras.forEach(id => { if (id) ids.add(id); });
+  if (actorId) ids.delete(actorId); // never notify yourself about your own change
+  return Array.from(ids).filter(Boolean);
+}
+
 export const notifyEventScheduled = (attendeeIds, eventTitle, date, triggeredBy) =>
   notify('event_scheduled', attendeeIds, `Event: ${eventTitle}`,
     `<p>You have been invited to: <strong>${eventTitle}</strong> on <strong>${date}</strong></p>`, triggeredBy);

@@ -9,8 +9,60 @@
 //
 // Callers (AIGreeter) read these from per-user settings so Max can pick
 // a voice he likes, and each team member can pick their own.
+//
+// v55.80 BD-AUDIT FIX:
+//   - Auth check: require Supabase session cookie. ElevenLabs costs real
+//     money — we don't expose anonymous TTS.
+//   - Rate-limit: 60 req/hour/user via in-memory bucket. See rate-limit.js.
+//   - Error sanitization: no raw err.message back to client (could leak
+//     ElevenLabs API key embedded in error body).
+import { createClient } from '@supabase/supabase-js';
+import { sanitizeErr } from '../../../lib/sanitize-error';
+import { checkRateLimit } from '../../../lib/rate-limit';
+
 export async function POST(request) {
   try {
+    // ---- Auth: require a Supabase session ----
+    var authHeader = request.headers.get('authorization') || '';
+    var jwt = authHeader.indexOf('Bearer ') === 0 ? authHeader.substring(7) : null;
+    // Some clients send the cookie instead — try both
+    if (!jwt) {
+      var cookieHeader = request.headers.get('cookie') || '';
+      // Extract sb-access-token cookie (Supabase v2 default name)
+      var match = cookieHeader.match(/sb-[a-z0-9-]+-auth-token=([^;]+)/i);
+      if (match) {
+        try {
+          var cookieVal = decodeURIComponent(match[1]);
+          var cookieJson = JSON.parse(cookieVal);
+          jwt = cookieJson && cookieJson.access_token;
+        } catch (_) {}
+      }
+    }
+    var userId = null;
+    if (jwt) {
+      try {
+        var supa = createClient(
+          process.env.NEXT_PUBLIC_SUPABASE_URL,
+          process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY,
+          { auth: { persistSession: false, autoRefreshToken: false } }
+        );
+        var ures = await supa.auth.getUser(jwt);
+        userId = ures && ures.data && ures.data.user && ures.data.user.id;
+      } catch (_) {}
+    }
+    if (!userId) {
+      return Response.json({ error: 'Authentication required' }, { status: 401 });
+    }
+
+    // ---- Rate-limit: 60 calls/hour/user ----
+    var rl = checkRateLimit(userId, 'tts');
+    if (!rl.allowed) {
+      return Response.json({
+        error: 'Rate limit exceeded — try again in a minute',
+        resetAt: rl.resetAt,
+      }, { status: 429 });
+    }
+
     var body = await request.json();
     var text = body.text || '';
     if (!text) return Response.json({ error: 'No text provided' }, { status: 400 });
@@ -57,7 +109,9 @@ export async function POST(request) {
 
     if (!res.ok) {
       var errText = await res.text();
-      return Response.json({ error: 'ElevenLabs error: ' + errText.substring(0, 200) }, { status: res.status });
+      // Sanitize before returning — error body might contain xi-api-key
+      // header info or other secrets.
+      return Response.json({ error: 'TTS service error: ' + sanitizeErr(errText.substring(0, 200)) }, { status: res.status });
     }
 
     // Return audio as MP3
@@ -69,6 +123,7 @@ export async function POST(request) {
       }
     });
   } catch (err) {
-    return Response.json({ error: err.message }, { status: 500 });
+    console.error('[tts] error:', err);
+    return Response.json({ error: sanitizeErr(err) }, { status: 500 });
   }
 }

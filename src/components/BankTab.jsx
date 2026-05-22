@@ -1,5 +1,6 @@
 'use client';
 import { useState, useEffect, useCallback } from 'react';
+import { fmtET } from '../lib/et-time';
 
 export default function BankTab({ user, supabase }) {
   const [connections, setConnections] = useState([]);
@@ -174,8 +175,8 @@ export default function BankTab({ user, supabase }) {
               <div key={c.id} className="flex items-center justify-between bg-slate-50 rounded-lg p-3">
                 <div>
                   <div className="font-semibold text-sm">{c.institution_name}</div>
-                  <div className="text-[10px] text-slate-400">
-                    Last synced: {c.last_synced ? new Date(c.last_synced).toLocaleString() : 'Never'}
+                  <div className="text-[10px] text-slate-500">
+                    Last synced: {c.last_synced ? fmtET(c.last_synced, 'datetime') : 'Never'}
                     <span className={`ml-2 px-1.5 py-0.5 rounded text-[9px] font-bold ${c.status === 'active' ? 'bg-green-100 text-green-700' : 'bg-red-100 text-red-700'}`}>
                       {c.status}
                     </span>
@@ -211,7 +212,7 @@ export default function BankTab({ user, supabase }) {
           </div>
           <div className="bg-amber-50 rounded-xl p-3 border border-amber-200">
             <div className="text-[10px] text-amber-600 font-bold">Unmatched / غير متطابق</div>
-            <div className="text-lg font-black text-amber-700">{unmatchedCount}</div>
+            <div className="text-lg font-black text-amber-900">{unmatchedCount}</div>
           </div>
         </div>
       )}
@@ -247,7 +248,7 @@ export default function BankTab({ user, supabase }) {
                 <div className="flex items-start justify-between">
                   <div className="flex-1 min-w-0">
                     <div className="font-semibold text-sm truncate">{t.name}</div>
-                    <div className="text-[10px] text-slate-400">
+                    <div className="text-[10px] text-slate-500">
                       {t.date} • {t.category || 'Uncategorized'}
                       {t.pending && <span className="ml-1 text-amber-500 font-bold">PENDING</span>}
                     </div>
@@ -289,7 +290,7 @@ export default function BankTab({ user, supabase }) {
               <div className="flex justify-between items-start">
                 <div>
                   <h3 className="font-bold text-sm">Match Transaction / مطابقة</h3>
-                  <p className="text-[10px] text-slate-400 mt-0.5">
+                  <p className="text-[10px] text-slate-500 mt-0.5">
                     {matchingTxn.name} — {fmtMoney(matchingTxn.amount)} on {matchingTxn.date}
                   </p>
                 </div>
@@ -313,7 +314,7 @@ export default function BankTab({ user, supabase }) {
                   <div className="flex justify-between items-center">
                     <div>
                       <div className="font-semibold text-xs">{inv.customer || 'N/A'}</div>
-                      <div className="text-[10px] text-slate-400">
+                      <div className="text-[10px] text-slate-500">
                         #{inv.invoice_number || '—'} • {inv.date}
                       </div>
                     </div>

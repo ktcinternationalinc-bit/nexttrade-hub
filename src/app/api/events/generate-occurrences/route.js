@@ -69,6 +69,10 @@ async function generateForSeries(seriesId) {
 
   // Build child rows — inherit everything from master that should carry forward,
   // but NOT the completion/check-in/meeting-notes fields.
+  // v55.33 — also inherit attendees, description, location, join_link, all_day
+  // from the master. Previously these were dropped, so each new occurrence
+  // showed up with no attendees, no agenda, no Zoom link, etc. — the recurring
+  // event was effectively broken from the second instance onward.
   var childRows = dates.map(function(d) {
     return {
       title: master.title,
@@ -83,6 +87,12 @@ async function generateForSeries(seriesId) {
       created_by: master.created_by,
       series_id: seriesId,
       is_series_master: false,
+      // v55.33 — carry-forward fields
+      attendees: master.attendees || [],
+      description: master.description || null,
+      location: master.location || null,
+      join_link: master.join_link || null,
+      all_day: !!master.all_day,
       // completed, event_status, meeting_notes, checked_in_* left null (fresh occurrence)
     };
   });
@@ -92,16 +102,28 @@ async function generateForSeries(seriesId) {
   var insRes = await supabase
     .from('calendar_events')
     .upsert(childRows, { onConflict: 'series_id,event_date', ignoreDuplicates: true })
-    .select('id, event_date, assigned_to');
+    .select('id, event_date, assigned_to, attendees');
 
   if (insRes.error) { result.error = insRes.error.message; return result; }
   var inserted = insRes.data || [];
   result.inserted = inserted.length;
 
-  // Schedule reminders for each newly created occurrence (for the assignee only — single-user model pre-R9).
+  // v55.33 — schedule reminders for EVERY attendee on each new occurrence,
+  // not just the primary assigned_to. Previously side-attendees on a
+  // recurring meeting got reminders for the FIRST occurrence (set by
+  // CalendarTab on creation) but nothing for any later occurrence — they
+  // would silently miss every recurring meeting after the first one.
   for (var i = 0; i < inserted.length; i++) {
     var occ = inserted[i];
-    if (!occ.assigned_to) continue;
+    // Build the recipient list: union of assigned_to + attendees from master.
+    var recipients = [];
+    if (Array.isArray(master.attendees) && master.attendees.length) {
+      recipients = master.attendees.slice();
+    }
+    if (occ.assigned_to && recipients.indexOf(occ.assigned_to) === -1) {
+      recipients.push(occ.assigned_to);
+    }
+    if (recipients.length === 0) continue;
     var times = computeReminderTimes(occ.event_date, master.event_time);
     var nowIso = new Date().toISOString();
     var fut = times.filter(function(t) { return t.scheduled_for > nowIso; });
@@ -109,18 +131,21 @@ async function generateForSeries(seriesId) {
     var subject = 'Upcoming: ' + (master.title || 'Event');
     var body = '<p>Reminder: <strong>' + escapeHtml(master.title || '') + '</strong> on <strong>' + occ.event_date + '</strong>'
       + (master.event_time ? ' at <strong>' + master.event_time + '</strong>' : '') + '</p>';
-    var remRows = fut.map(function(t) {
-      return {
-        target_user_id: occ.assigned_to,
-        target_kind: 'event',
-        target_id: occ.id,
-        scheduled_for: t.scheduled_for,
-        remind_type: t.remind_type,
-        subject_snapshot: subject,
-        body_snapshot: body,
-        created_by: master.created_by || null,
-      };
-    });
+    var remRows = [];
+    for (var ri = 0; ri < recipients.length; ri++) {
+      for (var ti = 0; ti < fut.length; ti++) {
+        remRows.push({
+          target_user_id: recipients[ri],
+          target_kind: 'event',
+          target_id: occ.id,
+          scheduled_for: fut[ti].scheduled_for,
+          remind_type: fut[ti].remind_type,
+          subject_snapshot: subject,
+          body_snapshot: body,
+          created_by: master.created_by || null,
+        });
+      }
+    }
     // Fire and forget — dedup unique index (target_kind, target_id, target_user_id, remind_type, scheduled_for)
     // protects against doubles. Includes scheduled_for so reschedule-to-new-time works across sent rows.
     try {

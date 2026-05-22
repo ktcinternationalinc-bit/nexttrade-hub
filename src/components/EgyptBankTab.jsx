@@ -3,8 +3,9 @@ import { useState, useEffect, useCallback, useMemo } from 'react';
 import { supabase, dbInsert, dbUpdate, dbDelete, logActivity } from '../lib/supabase';
 import * as XLSX from 'xlsx';
 import { EXPENSE_CATS } from '../lib/utils';
+import { todayET } from '../lib/et-time';
 
-export default function EgyptBankTab({ toast, user, userProfile, isAdmin, invoices, onReload }) {
+export default function EgyptBankTab({ toast, user, userProfile, isAdmin, invoices, onReload, recalcInvoiceCollected }) {
   const [accounts, setAccounts] = useState([]);
   const [transactions, setTransactions] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -31,9 +32,24 @@ export default function EgyptBankTab({ toast, user, userProfile, isAdmin, invoic
   const [importData, setImportData] = useState([]);
   const [importAccount, setImportAccount] = useState('');
   const [importStats, setImportStats] = useState(null);
+  // v55.83-A.6.15 (Max May 14 2026) — Bulk delete modal state
+  const [bulkDeleteOpen, setBulkDeleteOpen] = useState(false);
+  const [bulkDeleteAccountId, setBulkDeleteAccountId] = useState('');
+  const [bulkDeleteFrom, setBulkDeleteFrom] = useState('');
+  const [bulkDeleteTo, setBulkDeleteTo] = useState('');
+  const [bulkDeleteReason, setBulkDeleteReason] = useState('');
+  const [bulkDeleteImpact, setBulkDeleteImpact] = useState(null); // {count, sum, invoices, treasury_rows}
+  const [bulkDeleteWorking, setBulkDeleteWorking] = useState(false);
 
   const myId = userProfile?.id || user?.id;
   const isSuperAdmin = userProfile?.role === 'super_admin';
+  // v55.83-A.6.27.45 — Owner deposit + rules engine state
+  const [rules, setRules] = useState([]);                  // egypt_bank_rules rows
+  const [rulesModalOpen, setRulesModalOpen] = useState(false);
+  const [ruleEditOpen, setRuleEditOpen] = useState(false);
+  const [ruleDraft, setRuleDraft] = useState(null);        // null | { ...rule fields }
+  const [ruleBusy, setRuleBusy] = useState(false);
+  const [applyingRules, setApplyingRules] = useState(false);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -43,8 +59,19 @@ export default function EgyptBankTab({ toast, user, userProfile, isAdmin, invoic
     ]);
     setAccounts(acc || []);
     setTransactions(txn || []);
+    // v55.83-A.6.27.45 — Load rules (best-effort; tolerates missing table).
+    // Non-super-admins do NOT see private rules.
+    try {
+      let q = supabase.from('egypt_bank_rules').select('*').order('is_private', { ascending: false }).order('created_at', { ascending: false });
+      if (!isSuperAdmin) q = q.eq('is_private', false);
+      const { data: ruleRows } = await q;
+      setRules(ruleRows || []);
+    } catch (e) {
+      console.warn('[EgyptBankTab] rules load failed (table may be missing):', e && e.message);
+      setRules([]);
+    }
     setLoading(false);
-  }, []);
+  }, [isSuperAdmin]);
   useEffect(() => { load(); }, [load]);
 
   // ───── Account CRUD ─────
@@ -293,6 +320,96 @@ export default function EgyptBankTab({ toast, user, userProfile, isAdmin, invoic
     return parsed;
   };
 
+  // v55.83-A.6.14 (Max May 14 2026) — TWO-STAGE IMPORT with duplicate review.
+  //
+  // Old import had a critical bug: the duplicate check filtered by account_id.
+  // Importing the same bank statement to two different accounts bypassed dedup
+  // entirely, creating duplicate rows that propagated downstream into treasury
+  // and invoice totals (see post-mortem: ~100 duplicate rows across 6 invoices,
+  // ~163K EGP fake overpayment money).
+  //
+  // New flow:
+  //   1. Pre-scan all rows against ENTIRE bank table (every account)
+  //   2. Classify each row: clean / exact-duplicate / possible-duplicate
+  //   3. If any non-clean rows, show review UI; user decides per row
+  //   4. Only after user confirms, write the approved rows
+  //   5. Audit log every override decision (who, when, why)
+  //
+  // Three classifications:
+  //   • CLEAN: no match anywhere → imported automatically
+  //   • EXACT: same date + amount + (first 60 chars of) description in ANY
+  //     account → auto-skipped (with override-all option for edge cases)
+  //   • POSSIBLE: same amount + adjacent date (±2 days) OR same amount + same
+  //     date in different account but slightly different description →
+  //     shown for per-row decision
+  const classifyDuplicates = async (toImport, accId) => {
+    // Load ALL existing transactions across ALL accounts (was the original bug).
+    var allExisting = [];
+    var pageSize = 1000;
+    var from = 0;
+    while (true) {
+      var resp = await supabase.from('egypt_bank_transactions')
+        .select('id, date, description, amount, account_id')
+        .range(from, from + pageSize - 1);
+      if (resp.error || !resp.data || resp.data.length === 0) break;
+      allExisting = allExisting.concat(resp.data);
+      if (resp.data.length < pageSize) break;
+      from += pageSize;
+    }
+    // Build lookup index: key = date|amount|desc60, value = list of existing rows
+    var exactIndex = {};
+    var amountDateIndex = {}; // key = date|amount (for cross-description match)
+    allExisting.forEach(function (e) {
+      var dsc60 = (e.description || '').substring(0, 60).trim().toLowerCase();
+      var key = e.date + '|' + e.amount + '|' + dsc60;
+      if (!exactIndex[key]) exactIndex[key] = [];
+      exactIndex[key].push(e);
+      var ak = e.date + '|' + e.amount;
+      if (!amountDateIndex[ak]) amountDateIndex[ak] = [];
+      amountDateIndex[ak].push(e);
+    });
+
+    var classified = toImport.map(function (row) {
+      var dsc60 = (row.description || '').substring(0, 60).trim().toLowerCase();
+      var key = row.date + '|' + row.amount + '|' + dsc60;
+      var exactMatches = exactIndex[key] || [];
+      if (exactMatches.length > 0) {
+        return { row: row, status: 'exact', matches: exactMatches, decision: 'skip' };
+      }
+      // Same date + amount but different description?
+      var ak = row.date + '|' + row.amount;
+      var sameDayAmount = (amountDateIndex[ak] || []).filter(function (e) {
+        var edsc = (e.description || '').substring(0, 60).trim().toLowerCase();
+        return edsc !== dsc60;
+      });
+      if (sameDayAmount.length > 0) {
+        return { row: row, status: 'possible', matches: sameDayAmount, decision: 'review' };
+      }
+      // Adjacent date (±2 days), same amount, similar description?
+      var rowDate = new Date(row.date);
+      var nearMatches = allExisting.filter(function (e) {
+        if (e.amount !== row.amount) return false;
+        var ed = new Date(e.date);
+        var diffDays = Math.abs((ed - rowDate) / 86400000);
+        if (diffDays > 2 || diffDays === 0) return false;
+        var edsc = (e.description || '').substring(0, 40).trim().toLowerCase();
+        var rdsc = (row.description || '').substring(0, 40).trim().toLowerCase();
+        // Both strings contain a common token longer than 6 chars
+        if (edsc.length === 0 || rdsc.length === 0) return false;
+        return edsc === rdsc || (edsc.length > 10 && rdsc.includes(edsc.substring(0, 10))) || (rdsc.length > 10 && edsc.includes(rdsc.substring(0, 10)));
+      });
+      if (nearMatches.length > 0) {
+        return { row: row, status: 'possible', matches: nearMatches, decision: 'review' };
+      }
+      return { row: row, status: 'clean', matches: [], decision: 'import' };
+    });
+    return classified;
+  };
+
+  // State for the review step (v55.83-A.6.14)
+  const [reviewClassified, setReviewClassified] = useState(null); // null = no review pending
+  const [reviewOverrideAll, setReviewOverrideAll] = useState(false);
+
   const doImport = async () => {
     let accId = importAccount;
     if (!accId && accounts.length > 0) { accId = accounts[0].id; setImportAccount(accId); }
@@ -300,40 +417,232 @@ export default function EgyptBankTab({ toast, user, userProfile, isAdmin, invoic
       try {
         const { data: newAcc } = await dbInsert('egypt_bank_accounts', { bank_name: 'Default Bank', account_number: 'AUTO-001', currency: 'EGP' }, myId);
         if (newAcc) { accId = newAcc.id; setImportAccount(accId); }
-      } catch(err) { alert('Create an account first'); return; }
+      } catch(err) { alert('Create an account first / أنشئ حسابًا أولاً'); return; }
     }
-    if (!accId) { alert('Select an account first'); return; }
+    if (!accId) { alert('Select an account first / اختر حسابًا أولاً'); return; }
     const toImport = importData.filter(r => r._include);
-    if (toImport.length === 0) { alert('No rows selected'); return; }
+    if (toImport.length === 0) { alert('No rows selected / لم يتم اختيار صفوف'); return; }
+
+    setImportStep('analyzing');
+    // v55.83-A.6.14 — classify before importing
+    var classified = await classifyDuplicates(toImport, accId);
+    var cleanCount = classified.filter(function (c) { return c.status === 'clean'; }).length;
+    var exactCount = classified.filter(function (c) { return c.status === 'exact'; }).length;
+    var possibleCount = classified.filter(function (c) { return c.status === 'possible'; }).length;
+
+    // If anything needs review, show the review UI; otherwise import clean rows directly.
+    if (exactCount > 0 || possibleCount > 0) {
+      setReviewClassified(classified);
+      setImportStep('review');
+      return;
+    }
+    // All clean — proceed to insert
+    await executeImport(classified, accId);
+  };
+
+  // v55.83-A.6.14 — actually write the approved rows after review
+  // v55.83-A.6.15 — also tag each row with an import_batch_id so we can
+  // roll back this specific import later if needed. Best-effort; if the
+  // bank_import_batches table doesn't exist yet, imports still succeed.
+  const executeImport = async (classified, accId) => {
     setImportStep('importing');
-    let imported = 0, skipped = 0, duplicates = 0;
-    
-    // Load existing transactions for duplicate detection
-    const { data: existing } = await supabase.from('egypt_bank_transactions').select('date, description, amount').eq('account_id', accId);
-    const existingSet = new Set((existing || []).map(e => `${e.date}|${e.amount}|${(e.description || '').substring(0, 30)}`));
-    
-    // Filter out duplicates
-    const newRows = [];
-    for (const row of toImport) {
-      const key = `${row.date}|${row.amount}|${(row.description || '').substring(0, 30)}`;
-      if (existingSet.has(key)) { duplicates++; skipped++; }
-      else { newRows.push({ account_id: accId, date: row.date, description: row.description, amount: row.amount, imported_by: myId }); existingSet.add(key); }
-    }
-    
+    var imported = 0, skipped = 0, exactSkipped = 0, possibleSkipped = 0, overridden = 0;
+    var toInsert = [];
+    var auditEntries = [];
+    classified.forEach(function (c) {
+      if (c.decision === 'import') {
+        toInsert.push({ account_id: accId, date: c.row.date, description: c.row.description, amount: c.row.amount, imported_by: myId });
+        if (c.status !== 'clean') overridden += 1;
+      } else if (c.decision === 'skip') {
+        skipped += 1;
+        if (c.status === 'exact') exactSkipped += 1;
+        else if (c.status === 'possible') possibleSkipped += 1;
+      }
+      if (c.status !== 'clean') {
+        auditEntries.push({
+          row_date: c.row.date,
+          amount: c.row.amount,
+          description_short: (c.row.description || '').substring(0, 80),
+          status: c.status,
+          decision: c.decision,
+          matched_ids: c.matches.map(function (m) { return m.id; }),
+          decided_by: myId,
+          decided_at: new Date().toISOString(),
+        });
+      }
+    });
+
+    // v55.83-A.6.15 — Create batch record first; best-effort (don't fail import if table missing)
+    var batchId = null;
+    try {
+      var totalAmt = toInsert.reduce(function (a, r) { return a + Number(r.amount || 0); }, 0);
+      var batchResp = await supabase.from('bank_import_batches').insert({
+        imported_by: myId,
+        account_id: accId,
+        row_count: toInsert.length,
+        total_amount: totalAmt,
+        status: 'active',
+      }).select().maybeSingle();
+      if (batchResp.data && batchResp.data.id) {
+        batchId = batchResp.data.id;
+        // Tag every row with this batch_id
+        toInsert = toInsert.map(function (r) { return Object.assign({}, r, { import_batch_id: batchId }); });
+      }
+    } catch (_) { /* table may not exist yet; proceed without batch */ }
+
     // Batch insert in chunks of 100
-    for (let i = 0; i < newRows.length; i += 100) {
-      const chunk = newRows.slice(i, i + 100);
+    for (var i = 0; i < toInsert.length; i += 100) {
+      var chunk = toInsert.slice(i, i + 100);
       try {
-        const { error } = await supabase.from('egypt_bank_transactions').insert(chunk);
-        if (error) skipped += chunk.length; else imported += chunk.length;
-      } catch(e) { skipped += chunk.length; }
+        var resp = await supabase.from('egypt_bank_transactions').insert(chunk);
+        if (resp.error) skipped += chunk.length;
+        else imported += chunk.length;
+      } catch (e) { skipped += chunk.length; }
     }
-    setImportStats({ imported, skipped, duplicates, total: toImport.length });
+
+    // Write audit log for every override decision (best-effort, swallows errors)
+    if (auditEntries.length > 0) {
+      try {
+        await supabase.from('bank_import_audit').insert(auditEntries.map(function (a) {
+          return {
+            user_id: myId,
+            action: 'bank_import_duplicate_decision',
+            details: JSON.stringify(a),
+            created_at: a.decided_at,
+          };
+        }));
+      } catch (e) { /* audit_log fallback below */ }
+      try {
+        for (var ai = 0; ai < auditEntries.length; ai++) {
+          await supabase.from('audit_log').insert({
+            user_id: myId,
+            entity_type: 'egypt_bank_transactions',
+            action: 'import_dedup_' + auditEntries[ai].decision,
+            details: Object.assign({ import_batch_id: batchId }, auditEntries[ai]),
+            created_at: auditEntries[ai].decided_at,
+          });
+        }
+      } catch (e) { /* ignore */ }
+    }
+
+    setImportStats({ imported: imported, skipped: skipped, duplicates: exactSkipped + possibleSkipped, exactSkipped: exactSkipped, possibleSkipped: possibleSkipped, overridden: overridden, total: classified.length });
     setImportStep('done');
-    await logActivity(myId, `Imported ${imported} Egypt bank transactions (${duplicates} duplicates skipped)`, 'finance');
+    setReviewClassified(null);
+    await logActivity(myId, 'Imported ' + imported + ' Egypt bank transactions (' + exactSkipped + ' exact duplicates skipped, ' + possibleSkipped + ' possible duplicates skipped, ' + overridden + ' overridden)', 'finance');
     await load();
-    // Auto-categorize new transactions based on existing patterns
     await autoCategorizeTxns();
+    // v55.83-A.6.27.45 — Auto-apply rules to newly imported (untouched) transactions.
+    // Failure here is non-fatal: import completes either way.
+    try {
+      const ruleResult = await applyRulesAtImport();
+      if (ruleResult && (ruleResult.newly_hidden > 0 || ruleResult.newly_categorized > 0)) {
+        toast?.info?.('Rules applied to import: ' + (ruleResult.newly_hidden || 0) + ' hidden, ' + (ruleResult.newly_categorized || 0) + ' categorized');
+        await load();
+      }
+    } catch (e) { /* non-fatal */ }
+  };
+
+  // v55.83-A.6.14 — update a single row's decision in the review UI
+  const setReviewDecision = (idx, decision) => {
+    setReviewClassified(function (prev) {
+      if (!prev) return prev;
+      var next = prev.slice();
+      next[idx] = Object.assign({}, next[idx], { decision: decision });
+      return next;
+    });
+  };
+
+  // v55.83-A.6.15 (Max May 14 2026) — Bulk delete: preview impact, then execute.
+  // Two-step (preview → confirm) so user sees count/sum/affected invoices first.
+  const computeBulkDeleteImpact = async () => {
+    if (!bulkDeleteAccountId || !bulkDeleteFrom || !bulkDeleteTo) {
+      alert('Pick an account and date range first / اختر حسابًا ونطاق تاريخ');
+      return;
+    }
+    setBulkDeleteWorking(true);
+    try {
+      var bankResp = await supabase.from('egypt_bank_transactions')
+        .select('id, date, amount, description')
+        .eq('account_id', bulkDeleteAccountId)
+        .gte('date', bulkDeleteFrom)
+        .lte('date', bulkDeleteTo);
+      var bankRows = bankResp.data || [];
+      var bankIds = bankRows.map(function (r) { return r.id; });
+      var totalSum = bankRows.reduce(function (a, r) { return a + Number(r.amount || 0); }, 0);
+      var affectedInvoiceIds = [];
+      var matchedTreasury = [];
+      if (bankIds.length > 0) {
+        var tResp = await supabase.from('treasury')
+          .select('id, linked_invoice_id, matched_bank_txn_id')
+          .in('matched_bank_txn_id', bankIds);
+        matchedTreasury = tResp.data || [];
+        affectedInvoiceIds = Array.from(new Set(matchedTreasury.map(function (t) { return t.linked_invoice_id; }).filter(Boolean)));
+      }
+      setBulkDeleteImpact({
+        count: bankRows.length,
+        sum: totalSum,
+        treasury_rows: matchedTreasury.length,
+        invoices: affectedInvoiceIds.length,
+        invoice_ids: affectedInvoiceIds,
+      });
+    } catch (e) {
+      alert('Preview failed: ' + (e.message || e));
+      setBulkDeleteImpact(null);
+    }
+    setBulkDeleteWorking(false);
+  };
+
+  const executeBulkDelete = async () => {
+    if (!bulkDeleteImpact) { alert('Run preview first'); return; }
+    if (!bulkDeleteReason || bulkDeleteReason.length < 5) {
+      alert('Provide a reason (at least 5 characters) / أدخل سببًا للحذف');
+      return;
+    }
+    if (!confirm('You are about to DELETE ' + bulkDeleteImpact.count + ' bank transactions totaling EGP ' + bulkDeleteImpact.sum.toLocaleString() + '. This affects ' + bulkDeleteImpact.invoices + ' invoices. Continue? / تأكيد الحذف؟')) return;
+    setBulkDeleteWorking(true);
+    try {
+      var bankResp = await supabase.from('egypt_bank_transactions')
+        .select('id')
+        .eq('account_id', bulkDeleteAccountId)
+        .gte('date', bulkDeleteFrom)
+        .lte('date', bulkDeleteTo);
+      var bankIds = (bankResp.data || []).map(function (r) { return r.id; });
+      if (bankIds.length === 0) { alert('Nothing to delete'); setBulkDeleteWorking(false); return; }
+      var tBefore = (await supabase.from('treasury').select('linked_invoice_id').in('matched_bank_txn_id', bankIds)).data || [];
+      var invoiceIds = Array.from(new Set(tBefore.map(function (t) { return t.linked_invoice_id; }).filter(Boolean)));
+      // Unmatch treasury rows pointing at these
+      await supabase.from('treasury').update({ matched_bank_txn_id: null }).in('matched_bank_txn_id', bankIds);
+      // Audit BEFORE delete
+      try {
+        await supabase.from('audit_log').insert({
+          user_id: myId,
+          entity_type: 'egypt_bank_transactions',
+          action: 'bulk_delete',
+          details: {
+            account_id: bulkDeleteAccountId,
+            from: bulkDeleteFrom,
+            to: bulkDeleteTo,
+            count: bulkDeleteImpact.count,
+            sum: bulkDeleteImpact.sum,
+            invoices_affected: bulkDeleteImpact.invoices,
+            reason: bulkDeleteReason,
+            bank_row_ids: bankIds,
+            source: 'v55.83-A.6.15 EgyptBankTab bulk delete',
+          },
+          created_at: new Date().toISOString(),
+        });
+      } catch (_) {}
+      await supabase.from('egypt_bank_transactions').delete().in('id', bankIds);
+      toast && toast.success && toast.success(bankIds.length + ' rows deleted, ' + invoiceIds.length + ' invoices need recalc on reload / تم الحذف');
+      setBulkDeleteOpen(false);
+      setBulkDeleteImpact(null);
+      setBulkDeleteReason('');
+      if (onReload) await onReload();
+      await load();
+    } catch (e) {
+      alert('Delete failed: ' + (e.message || e));
+    }
+    setBulkDeleteWorking(false);
   };
 
   // ───── Smart Auto-categorize (amount-first + keywords + timing patterns + direction) ─────
@@ -511,72 +820,437 @@ export default function EgyptBankTab({ toast, user, userProfile, isAdmin, invoic
   };
 
   // ───── Match ─────
+  //
+  // v55.83-A.6.27.14 (Max May 16 2026) — ARCHITECTURAL FIX.
+  //
+  // OLD BEHAVIOR (BROKEN): this function wrote invoices.total_collected
+  // directly, which violated the contract in src/lib/supabase.js (line ~245):
+  // "all invoice recalculation MUST go through recalcInvoiceCollected". It
+  // also didn't create or update any treasury row to represent the bank
+  // inflow, so recalcInvoiceCollected (when fired from any other code path
+  // afterward) would see ZERO linked rows and reset total_collected to 0 —
+  // silently wiping the bank match. Plus total_confirmed, total_pending_bank,
+  // overpayment_amount, and the write-off tolerance on outstanding were
+  // all going stale.
+  //
+  // NEW BEHAVIOR: prefer to update an existing placeholder (consistent with
+  // the auto-match path in page.jsx). If no matching placeholder exists,
+  // create a treasury row representing the bank inflow with the right
+  // bookkeeping (bank_in set, cash_in=0, linked_invoice_id UUID set,
+  // matched_bank_txn_id set, needs_bank_match=false because it IS the
+  // bank-side confirmation). Then defer to recalcInvoiceCollected.
+  // ─────────────────────────────────────────────────────────────────
+  // v55.83-A.6.27.45 — OWNER DEPOSIT toggle (super_admin OR isAdmin)
+  // ─────────────────────────────────────────────────────────────────
+  // Marks a bank transaction as an owner capital injection so it doesn't
+  // need to be linked to an invoice. The transaction still:
+  //   - counts toward totalIn (bank inflow is real)
+  //   - is excluded from the "Unmatched" filter noise (covered in filter logic below)
+  //   - cannot be matched to an invoice (UI disables the button)
+  // Does NOT touch treasury, invoices, checks, or anything else.
+  const canMarkOwnerDeposit = isSuperAdmin || isAdmin;
+
+  const toggleOwnerDeposit = async (txnId) => {
+    if (!canMarkOwnerDeposit) { toast?.error?.('Permission denied / غير مسموح'); return; }
+    const txn = transactions.find(t => t.id === txnId);
+    if (!txn) return;
+    if (txn.matched_invoice_id) {
+      const ok = confirm('This transaction is matched to an invoice. Unmatch it first before marking as owner deposit.\n\nهذه المعاملة مرتبطة بفاتورة. يرجى فك الربط أولاً.');
+      if (!ok) return;
+      return;
+    }
+    const newVal = !txn.is_owner_deposit;
+    try {
+      await dbUpdate('egypt_bank_transactions', txnId, { is_owner_deposit: newVal }, myId);
+      setTransactions(prev => prev.map(t => t.id === txnId ? { ...t, is_owner_deposit: newVal } : t));
+      try {
+        await supabase.from('audit_log').insert({
+          user_id: myId,
+          entity_type: 'egypt_bank_transactions',
+          entity_id: txnId,
+          action: newVal ? 'mark_owner_deposit' : 'unmark_owner_deposit',
+          details: { txn_amount: txn.amount, txn_date: txn.date, txn_description: txn.description },
+        });
+      } catch (e) { /* audit failure is non-fatal */ }
+      toast?.success?.(newVal
+        ? '💰 Marked as owner deposit / تم تحديدها كإيداع المالك'
+        : 'Owner deposit flag removed / تم إلغاء العلامة');
+    } catch (e) {
+      console.error('[toggleOwnerDeposit]', e);
+      toast?.error?.('Failed to update / فشل التحديث: ' + ((e && e.message) || String(e)));
+    }
+  };
+
+  // ─────────────────────────────────────────────────────────────────
+  // v55.83-A.6.27.45 — RULES ENGINE (categorize + hide, retroactive + forward)
+  // ─────────────────────────────────────────────────────────────────
+  // Permissions:
+  //   - Non-private rules: super_admin OR isAdmin can create/edit/delete
+  //   - Private rules:     super_admin ONLY can create/edit/delete or even see
+  const canManageNormalRules = isSuperAdmin || isAdmin;
+  const canManagePrivateRules = isSuperAdmin;
+
+  // Open rule editor (new or edit). draft = null for new, or existing rule object.
+  const openRuleEditor = (draft) => {
+    const isPrivateDraft = draft ? !!draft.is_private : false;
+    if (isPrivateDraft && !canManagePrivateRules) { toast?.error?.('Permission denied / غير مسموح'); return; }
+    setRuleDraft(draft ? { ...draft } : {
+      match_description: '',
+      match_amount: '',
+      match_account_id: '',
+      set_category: '',
+      set_subcategory: '',
+      set_hidden: false,
+      rule_name: '',
+      notes: '',
+      is_private: false,
+      active: true,
+    });
+    setRuleEditOpen(true);
+  };
+
+  const saveRule = async () => {
+    if (!ruleDraft) return;
+    // Validation
+    if (!ruleDraft.rule_name || !String(ruleDraft.rule_name).trim()) {
+      alert('Rule name is required / اسم القاعدة مطلوب');
+      return;
+    }
+    const hasMatcher = !!(ruleDraft.match_description || ruleDraft.match_amount || ruleDraft.match_account_id);
+    if (!hasMatcher) {
+      alert('At least one match criterion is required (description, amount, or account) / يجب تحديد معيار مطابقة واحد على الأقل');
+      return;
+    }
+    const hasAction = !!(ruleDraft.set_category || ruleDraft.set_hidden);
+    if (!hasAction) {
+      alert('At least one action is required (category or hide) / يجب تحديد إجراء واحد على الأقل');
+      return;
+    }
+    // Private rule permission gate
+    if (ruleDraft.is_private && !canManagePrivateRules) {
+      alert('Only super admin can create or edit private rules / المسؤول الأعلى فقط');
+      return;
+    }
+    setRuleBusy(true);
+    try {
+      const payload = {
+        match_description: ruleDraft.match_description || null,
+        match_amount: ruleDraft.match_amount === '' || ruleDraft.match_amount == null ? null : Number(ruleDraft.match_amount),
+        match_account_id: ruleDraft.match_account_id || null,
+        set_category: ruleDraft.set_category || null,
+        set_subcategory: ruleDraft.set_subcategory || null,
+        set_hidden: !!ruleDraft.set_hidden,
+        rule_name: String(ruleDraft.rule_name).trim(),
+        notes: ruleDraft.notes || null,
+        is_private: !!ruleDraft.is_private,
+        active: ruleDraft.active !== false,
+      };
+      let saved;
+      if (ruleDraft.id) {
+        const { data, error } = await supabase.from('egypt_bank_rules').update(payload).eq('id', ruleDraft.id).select().single();
+        if (error) throw error;
+        saved = data;
+        setRules(prev => prev.map(r => r.id === saved.id ? saved : r));
+      } else {
+        payload.created_by = myId;
+        const { data, error } = await supabase.from('egypt_bank_rules').insert(payload).select().single();
+        if (error) throw error;
+        saved = data;
+        setRules(prev => [saved, ...prev]);
+      }
+      toast?.success?.((ruleDraft.id ? 'Rule updated' : 'Rule created') + ' / تم الحفظ');
+      setRuleEditOpen(false);
+      setRuleDraft(null);
+      // Offer to apply right after save
+      if (saved && saved.active) {
+        setTimeout(async () => {
+          const ok = confirm('Apply this rule now to all existing transactions (retroactive)?\n\nتطبيق هذه القاعدة على جميع المعاملات الحالية؟');
+          if (ok) await applyRules({ ruleId: saved.id });
+        }, 200);
+      }
+    } catch (e) {
+      console.error('[saveRule]', e);
+      toast?.error?.('Failed to save rule / فشل: ' + ((e && e.message) || String(e)));
+    } finally {
+      setRuleBusy(false);
+    }
+  };
+
+  const deleteRule = async (ruleId) => {
+    const rule = rules.find(r => r.id === ruleId);
+    if (!rule) return;
+    if (rule.is_private && !canManagePrivateRules) { toast?.error?.('Permission denied / غير مسموح'); return; }
+    const ok = confirm('Delete this rule?\n"' + (rule.rule_name || '') + '"\n\nThis does NOT un-hide or un-categorize any transactions the rule already touched.\n\nحذف هذه القاعدة؟');
+    if (!ok) return;
+    try {
+      await supabase.from('egypt_bank_rules').delete().eq('id', ruleId);
+      setRules(prev => prev.filter(r => r.id !== ruleId));
+      toast?.success?.('Rule deleted / تم الحذف');
+    } catch (e) {
+      console.error('[deleteRule]', e);
+      toast?.error?.('Failed to delete / فشل: ' + ((e && e.message) || String(e)));
+    }
+  };
+
+  // Apply rules to existing transactions (RETROACTIVE).
+  // opts = { ruleId, onlyPrivate }  — both optional
+  //   - if ruleId given: apply only that one rule
+  //   - if onlyPrivate true/false: filter to that subset
+  //   - if neither: apply all rules visible to the caller
+  const applyRules = async (opts) => {
+    opts = opts || {};
+    if (opts.onlyPrivate === true && !canManagePrivateRules) { toast?.error?.('Permission denied / غير مسموح'); return; }
+    if (opts.onlyPrivate !== true && !canManageNormalRules) { toast?.error?.('Permission denied / غير مسموح'); return; }
+    setApplyingRules(true);
+    try {
+      const params = {
+        p_only_private: opts.onlyPrivate === undefined ? null : !!opts.onlyPrivate,
+        p_only_rule_id: opts.ruleId || null,
+        p_only_unprocessed: false,  // retroactive: re-process even already-touched rows
+      };
+      const { data, error } = await supabase.rpc('apply_egypt_bank_rules', params);
+      if (error) throw error;
+      const result = data || {};
+      toast?.success?.(
+        'Rules applied — ' +
+        (result.newly_hidden || 0) + ' hidden, ' +
+        (result.newly_categorized || 0) + ' categorized / تم تطبيق القواعد'
+      );
+      // Reload transactions to reflect updated category/hidden state
+      await load();
+    } catch (e) {
+      console.error('[applyRules]', e);
+      toast?.error?.('Failed to apply rules / فشل: ' + ((e && e.message) || String(e)));
+    } finally {
+      setApplyingRules(false);
+    }
+  };
+
+  // Auto-apply at import time. Caller (the import flow) calls this after batch insert.
+  // Uses p_only_unprocessed=true to avoid touching already-categorized old data.
+  const applyRulesAtImport = async () => {
+    try {
+      const { data } = await supabase.rpc('apply_egypt_bank_rules', {
+        p_only_private: null,
+        p_only_rule_id: null,
+        p_only_unprocessed: true,
+      });
+      return data || {};
+    } catch (e) {
+      console.warn('[applyRulesAtImport] non-fatal:', e && e.message);
+      return null;
+    }
+  };
+
   const matchToInvoice = async (txnId, invoiceId) => {
     const txn = transactions.find(t => t.id === txnId);
     const inv = (invoices || []).find(i => i.id === invoiceId);
-    await dbUpdate('egypt_bank_transactions', txnId, { matched_invoice_id: invoiceId, matched_at: new Date().toISOString(), matched_by: myId }, myId);
-    
-    if (inv && txn && txn.amount > 0) {
-      const bankAmt = Number(txn.amount);
-      
-      // Check if a pending check exists for same order + similar amount → auto-collect it
-      try {
+    if (!inv || !txn || !(Number(txn.amount) > 0)) {
+      // Nothing meaningful to link — just mark the bank txn matched.
+      await dbUpdate('egypt_bank_transactions', txnId, { matched_invoice_id: invoiceId, matched_at: new Date().toISOString(), matched_by: myId }, myId);
+      setMatchingTxn(null);
+      setTransactions(prev => prev.map(t => t.id === txnId ? { ...t, matched_invoice_id: invoiceId, matched_at: new Date().toISOString() } : t));
+      if (onReload) setTimeout(() => onReload(), 500);
+      return;
+    }
+    const bankAmt = Number(txn.amount);
+    let touchedTreasuryId = null;
+    try {
+      // Step 1: look for an existing placeholder on this invoice matching
+      // the amount. Same dedup tolerance as the auto-match path
+      // (2% of expected, capped at 500 EGP).
+      const { data: candidates } = await supabase.from('treasury')
+        .select('*')
+        .eq('linked_invoice_id', invoiceId)
+        .eq('is_bank_placeholder', true);
+      const tol = Math.min(bankAmt * 0.02, 500);
+      const matchingPlaceholder = (candidates || []).find(p => {
+        const exp = Number(p.expected_amount || p.bank_in || 0);
+        return Math.abs(exp - bankAmt) < tol && !p.matched_bank_txn_id;
+      });
+
+      if (matchingPlaceholder) {
+        // Promote placeholder to confirmed bank-in
+        await dbUpdate('treasury', matchingPlaceholder.id, {
+          is_bank_placeholder: false,
+          bank_in: bankAmt,
+          matched_bank_txn_id: txnId,
+          needs_bank_match: false,
+        }, myId);
+        touchedTreasuryId = matchingPlaceholder.id;
+      } else {
+        // Step 2: look for a pending check on this invoice matching the
+        // amount EXACTLY. If found, auto-collect it AND create a treasury
+        // row tied to it via source_check_id.
         const { data: pendingChecks } = await supabase.from('checks')
           .select('*')
           .eq('invoice_id', invoiceId)
           .eq('status', 'pending');
-        
-        const matchingCheck = (pendingChecks || []).find(c => 
-          Math.abs(Number(c.amount) - bankAmt) < 1 // Exact match — checks must be the exact amount
+        const matchingCheck = (pendingChecks || []).find(c =>
+          Math.abs(Number(c.amount) - bankAmt) < 1
         );
-        
+
         if (matchingCheck) {
-          // Auto-collect the check — the bank confirmed it
+          // v55.83-A.6.27.14 harden — before creating a new treasury row,
+          // check whether one already represents this check (via
+          // source_check_id). If so, just update it with the bank match.
+          // Per Max's clarification: marking a check collected should NOT
+          // create a duplicate treasury row when one already exists for
+          // that money.
+          const { data: existingForCheck } = await supabase.from('treasury')
+            .select('*')
+            .eq('source_check_id', matchingCheck.id)
+            .limit(1)
+            .maybeSingle();
+
           await dbUpdate('checks', matchingCheck.id, {
             status: 'collected',
-            collection_date: txn.date || new Date().toISOString().substring(0, 10),
+            collection_date: txn.date || todayET(),
           }, myId);
-          // Update invoice collected (check wasn't counted before, bank confirms it now)
-          const newCollected = Number(inv.total_collected || 0) + bankAmt;
-          const capped = Math.min(newCollected, Number(inv.total_amount || 0));
-          await dbUpdate('invoices', invoiceId, { 
-            total_collected: capped,
-            outstanding: Math.max(0, Number(inv.total_amount || 0) - capped),
-          }, myId);
-        } else {
-          // No matching check — check if this amount was already collected (dedup)
-          const existingCollected = Number(inv.total_collected || 0);
-          // Only add if it wouldn't exceed invoice total
-          const newCollected = Math.min(existingCollected + bankAmt, Number(inv.total_amount || 0));
-          if (newCollected > existingCollected) {
-            await dbUpdate('invoices', invoiceId, { 
-              total_collected: newCollected,
-              outstanding: Math.max(0, Number(inv.total_amount || 0) - newCollected),
+
+          if (existingForCheck) {
+            // Update the existing row with the bank match. If it was sitting
+            // in cash_in (e.g. recorded as cash-swap earlier — unusual flow
+            // but possible), don't overwrite the channel; just stamp the
+            // bank match metadata. If it was sitting as a placeholder, the
+            // earlier placeholder branch would have caught it — so by the
+            // time we get here, the existing row is either an unmatched
+            // bank row or some odd legacy state. Be conservative: stamp the
+            // bank match link, leave the channel/amount alone.
+            await dbUpdate('treasury', existingForCheck.id, {
+              matched_bank_txn_id: txnId,
+              needs_bank_match: false,
+              is_bank_placeholder: false,
             }, myId);
+            touchedTreasuryId = existingForCheck.id;
+          } else {
+            // No existing treasury row for this check — create one.
+            const { data: newRow, error: insErr } = await supabase.from('treasury').insert({
+              transaction_date: txn.date || todayET(),
+              cash_in: 0,
+              cash_out: 0,
+              bank_in: bankAmt,
+              bank_out: 0,
+              linked_invoice_id: invoiceId,
+              order_number: inv.order_number,
+              matched_bank_txn_id: txnId,
+              needs_bank_match: false,
+              is_bank_placeholder: false,
+              source_check_id: matchingCheck.id,
+              description: 'Bank collection of check #' + (matchingCheck.check_number || matchingCheck.id),
+              created_by: myId,
+            }).select().single();
+            if (insErr) throw insErr;
+            touchedTreasuryId = newRow && newRow.id;
           }
+        } else {
+          // Step 3: no placeholder, no matching check. Create a fresh
+          // treasury row for the bank inflow.
+          const { data: newRow, error: insErr } = await supabase.from('treasury').insert({
+            transaction_date: txn.date || todayET(),
+            cash_in: 0,
+            cash_out: 0,
+            bank_in: bankAmt,
+            bank_out: 0,
+            linked_invoice_id: invoiceId,
+            order_number: inv.order_number,
+            matched_bank_txn_id: txnId,
+            needs_bank_match: false,
+            is_bank_placeholder: false,
+            description: 'Bank deposit matched to invoice #' + inv.order_number,
+            created_by: myId,
+          }).select().single();
+          if (insErr) throw insErr;
+          touchedTreasuryId = newRow && newRow.id;
         }
-      } catch(e) {
-        // Fallback: simple add but capped
-        const newCollected = Math.min(Number(inv.total_collected || 0) + bankAmt, Number(inv.total_amount || 0));
-        await dbUpdate('invoices', invoiceId, { total_collected: newCollected }, myId);
       }
+
+      // Step 4: mark the bank txn matched AFTER treasury is in good shape.
+      await dbUpdate('egypt_bank_transactions', txnId, {
+        matched_invoice_id: invoiceId,
+        matched_treasury_id: touchedTreasuryId,
+        matched_at: new Date().toISOString(),
+        matched_by: myId,
+      }, myId);
+
+      // Step 5: delegate to the canonical recalc. This computes
+      // total_collected / total_confirmed / total_pending_bank /
+      // overpayment_amount / outstanding correctly — no parallel math.
+      if (recalcInvoiceCollected) {
+        try { await recalcInvoiceCollected(invoiceId); }
+        catch (e) { console.warn('[EgyptBankTab.match] recalc failed (non-fatal, will retry on reload):', e && e.message); }
+      } else {
+        console.warn('[EgyptBankTab.match] recalcInvoiceCollected prop not provided — totals may be stale until next page reload');
+      }
+    } catch (err) {
+      if (toast && toast.error) toast.error('Match failed: ' + (err && err.message ? err.message : String(err)));
+      else alert('Match failed: ' + (err && err.message ? err.message : String(err)));
+      // Make sure we don't leave a half-matched state. If the bank txn was
+      // already marked matched by step 4, leave it; the next reload will
+      // surface the inconsistency.
     }
-    
+
     setMatchingTxn(null);
     setTransactions(prev => prev.map(t => t.id === txnId ? { ...t, matched_invoice_id: invoiceId, matched_at: new Date().toISOString() } : t));
     if (onReload) setTimeout(() => onReload(), 500);
   };
+
+  // v55.83-A.6.27.14 — unmatch follows the same architecture. Instead of
+  // subtracting from total_collected, it unlinks the treasury row from the
+  // bank txn (and unlinks from the invoice if the treasury row was created
+  // SOLELY for this bank match — i.e. there's no source_check_id and the
+  // description matches our auto-created pattern). Then recalc fires.
   const unmatch = async (txnId) => {
     const txn = transactions.find(t => t.id === txnId);
-    const inv = txn?.matched_invoice_id ? (invoices || []).find(i => i.id === txn.matched_invoice_id) : null;
-    await dbUpdate('egypt_bank_transactions', txnId, { matched_invoice_id: null, matched_at: null, matched_by: null }, myId);
-    // Reduce invoice total_collected
-    if (inv && txn && txn.amount > 0) {
-      const newCollected = Math.max(0, Number(inv.total_collected || 0) - Number(txn.amount));
-      await dbUpdate('invoices', inv.id, { total_collected: newCollected }, myId);
+    if (!txn) return;
+    const invoiceId = txn.matched_invoice_id;
+    const treasuryId = txn.matched_treasury_id;
+    try {
+      // If a treasury row was tied to this bank txn, unlink it carefully.
+      if (treasuryId) {
+        // Look up the treasury row to decide whether it should be reverted
+        // to a placeholder, deleted, or just have matched_bank_txn_id cleared.
+        const { data: tRow } = await supabase.from('treasury').select('*').eq('id', treasuryId).maybeSingle();
+        if (tRow) {
+          var wasAutoCreated = /^Bank deposit matched to invoice|^Bank collection of check/.test(tRow.description || '');
+          if (wasAutoCreated && !tRow.source_check_id) {
+            // We created it solely for this bank match — delete it.
+            await supabase.from('treasury').delete().eq('id', treasuryId);
+          } else if (tRow.source_check_id) {
+            // Treasury row backs a collected check. Revert check + delete the bank-side row.
+            await dbUpdate('checks', tRow.source_check_id, {
+              status: 'pending',
+              collection_date: null,
+            }, myId);
+            await supabase.from('treasury').delete().eq('id', treasuryId);
+          } else {
+            // It's an existing placeholder we promoted — revert it.
+            await dbUpdate('treasury', treasuryId, {
+              is_bank_placeholder: true,
+              bank_in: 0,
+              matched_bank_txn_id: null,
+              needs_bank_match: true,
+            }, myId);
+          }
+        }
+      }
+      // Clear the bank txn match
+      await dbUpdate('egypt_bank_transactions', txnId, {
+        matched_invoice_id: null,
+        matched_treasury_id: null,
+        matched_at: null,
+        matched_by: null,
+      }, myId);
+      // Recalc the invoice (do NOT subtract from total_collected directly).
+      if (invoiceId && recalcInvoiceCollected) {
+        try { await recalcInvoiceCollected(invoiceId); }
+        catch (e) { console.warn('[EgyptBankTab.unmatch] recalc failed (non-fatal):', e && e.message); }
+      }
+    } catch (err) {
+      if (toast && toast.error) toast.error('Unmatch failed: ' + (err && err.message ? err.message : String(err)));
+      else alert('Unmatch failed: ' + (err && err.message ? err.message : String(err)));
     }
-    setTransactions(prev => prev.map(t => t.id === txnId ? { ...t, matched_invoice_id: null, matched_at: null } : t));
-    // Refresh dashboard data
+    setTransactions(prev => prev.map(t => t.id === txnId ? { ...t, matched_invoice_id: null, matched_at: null, matched_treasury_id: null } : t));
     if (onReload) setTimeout(() => onReload(), 500);
   };
 
@@ -588,7 +1262,7 @@ export default function EgyptBankTab({ toast, user, userProfile, isAdmin, invoic
     else if (!showHidden) arr = arr.filter(t => !t.hidden);
     if (selAccount !== 'all') arr = arr.filter(t => t.account_id === selAccount);
     if (matchFilter === 'matched') arr = arr.filter(t => t.matched_invoice_id);
-    if (matchFilter === 'unmatched') arr = arr.filter(t => !t.matched_invoice_id);
+    if (matchFilter === 'unmatched') arr = arr.filter(t => !t.matched_invoice_id && !t.is_owner_deposit);
     if (catFilter === 'uncategorized') arr = arr.filter(t => !t.category);
     else if (catFilter !== 'all') arr = arr.filter(t => t.category === catFilter);
     if (search) {
@@ -605,7 +1279,7 @@ export default function EgyptBankTab({ toast, user, userProfile, isAdmin, invoic
   const totalIn = filtered.filter(t => t.amount > 0).reduce((s, t) => s + t.amount, 0);
   const totalOut = filtered.filter(t => t.amount < 0).reduce((s, t) => s + Math.abs(t.amount), 0);
   const matchedCount = filtered.filter(t => t.matched_invoice_id).length;
-  const unmatchedCount = filtered.filter(t => !t.matched_invoice_id).length;
+  const unmatchedCount = filtered.filter(t => !t.matched_invoice_id && !t.is_owner_deposit).length;
 
   const fmtE = (n) => 'E£' + Math.abs(n || 0).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
   const getAccName = (id) => { const a = accounts.find(a => a.id === id); return a ? `${a.bank_name} - ${a.account_number}` : ''; };
@@ -641,6 +1315,19 @@ export default function EgyptBankTab({ toast, user, userProfile, isAdmin, invoic
           <button onClick={() => setView('accounts')} className={'px-3 py-1.5 rounded-lg text-xs font-semibold ' + (view === 'accounts' ? 'bg-blue-500 text-white' : 'bg-slate-100 text-slate-600')}>🏛️ Accounts</button>
           <button onClick={() => { setView('import'); setImportStep('select'); }} className={'px-3 py-1.5 rounded-lg text-xs font-semibold ' + (view === 'import' ? 'bg-blue-500 text-white' : 'bg-slate-100 text-slate-600')}>📥 Import</button>
           <button onClick={() => setView('transactions')} className={'px-3 py-1.5 rounded-lg text-xs font-semibold ' + (view === 'transactions' ? 'bg-blue-500 text-white' : 'bg-slate-100 text-slate-600')}>📋 Transactions</button>
+          {canManageNormalRules && (
+            <button
+              onClick={() => setRulesModalOpen(true)}
+              className="px-3 py-1.5 rounded-lg text-xs font-semibold bg-purple-600 hover:bg-purple-700 text-white"
+              title="Rules — auto-categorize and auto-hide transactions / القواعد"
+            >
+              ⚙️ Rules / القواعد
+              {rules.length > 0 && <span className="ml-1 bg-white text-purple-700 rounded px-1 text-[9px] font-extrabold">{rules.length}</span>}
+            </button>
+          )}
+          {isSuperAdmin && (
+            <button onClick={() => setView('history')} className={'px-3 py-1.5 rounded-lg text-xs font-semibold ' + (view === 'history' ? 'bg-blue-500 text-white' : 'bg-slate-100 text-slate-600')}>📜 Import History / السجل</button>
+          )}
         </div>
       </div>
 
@@ -676,12 +1363,12 @@ export default function EgyptBankTab({ toast, user, userProfile, isAdmin, invoic
                   <div className="flex justify-between items-center">
                     <div>
                       <div className="font-bold text-sm">{a.bank_name}</div>
-                      <div className="text-[10px] text-slate-400">{a.account_number} {a.account_name ? `• ${a.account_name}` : ''} • {a.currency}</div>
+                      <div className="text-[10px] text-slate-500">{a.account_number} {a.account_name ? `• ${a.account_name}` : ''} • {a.currency}</div>
                       <div className="text-xs mt-1">{txnCount} transactions • Net: <span className={balance >= 0 ? 'text-green-600 font-bold' : 'text-red-600 font-bold'}>{fmtE(balance)}</span></div>
                     </div>
                     <div className="flex gap-1">
                       <button onClick={() => { setAccForm(a); setShowAddAccount(true); }} className="px-2 py-1 bg-blue-50 text-blue-600 rounded text-[10px] font-semibold">Edit</button>
-                      <button onClick={() => deleteAccount(a.id)} className="px-2 py-1 bg-red-50 text-red-600 rounded text-[10px] font-semibold">Delete</button>
+                      <button onClick={() => deleteAccount(a.id)} className="px-2 py-1 bg-red-50 text-red-800 rounded text-[10px] font-semibold border border-red-200">Delete</button>
                     </div>
                   </div>
                 </div>
@@ -699,7 +1386,7 @@ export default function EgyptBankTab({ toast, user, userProfile, isAdmin, invoic
             <div className="bg-white rounded-xl p-6 text-center border-2 border-dashed border-blue-300">
               <div className="text-4xl mb-2">📁</div>
               <h3 className="font-bold text-sm mb-1">Upload Bank Statement / رفع كشف حساب</h3>
-              <p className="text-[10px] text-slate-400 mb-3">Supports CIB bank statements, and any Excel/CSV with Date/Description/Amount columns.<br/>يدعم كشوف حسابات CIB وأي ملف Excel أو CSV بأعمدة التاريخ والوصف والمبلغ</p>
+              <p className="text-[10px] text-slate-500 mb-3">Supports CIB bank statements, and any Excel/CSV with Date/Description/Amount columns.<br/>يدعم كشوف حسابات CIB وأي ملف Excel أو CSV بأعمدة التاريخ والوصف والمبلغ</p>
               {accounts.length > 0 && (
                 <div className="mb-3">
                   <label className="text-[10px] text-slate-500 font-bold block mb-1">Select Account / اختر الحساب</label>
@@ -710,7 +1397,7 @@ export default function EgyptBankTab({ toast, user, userProfile, isAdmin, invoic
                 </div>
               )}
               {accounts.length === 0 && (
-                <p className="text-[10px] text-amber-600 font-semibold mb-3">⚠️ No accounts — a default account will be auto-created on import</p>
+                <p className="text-[10px] text-amber-900 font-bold mb-3">⚠️ No accounts — a default account will be auto-created on import</p>
               )}
               <label className="px-6 py-3 bg-blue-500 text-white rounded-lg text-sm font-semibold cursor-pointer hover:bg-blue-600 inline-block">
                 Select File(s) / اختر ملفات
@@ -789,6 +1476,146 @@ export default function EgyptBankTab({ toast, user, userProfile, isAdmin, invoic
             );
           })()}
 
+          {importStep === 'analyzing' && (
+            <div className="text-center py-12">
+              <div className="text-3xl mb-2 animate-pulse">🔍</div>
+              <p className="text-sm font-semibold">Scanning for duplicates across all accounts...</p>
+              <p className="text-[11px] text-slate-500 mt-1">جاري فحص التكرارات في جميع الحسابات</p>
+            </div>
+          )}
+
+          {importStep === 'review' && reviewClassified && (() => {
+            var cleanCount = reviewClassified.filter(function (c) { return c.status === 'clean'; }).length;
+            var exactCount = reviewClassified.filter(function (c) { return c.status === 'exact'; }).length;
+            var possibleCount = reviewClassified.filter(function (c) { return c.status === 'possible'; }).length;
+            var importing = reviewClassified.filter(function (c) { return c.decision === 'import'; }).length;
+            var skipping = reviewClassified.filter(function (c) { return c.decision === 'skip'; }).length;
+            return (
+              <div>
+                <div className="bg-amber-50 border-2 border-amber-300 rounded-xl p-4 mb-3">
+                  <h3 className="font-bold text-amber-900 mb-1">
+                    🔍 Duplicate review needed / مراجعة التكرارات
+                  </h3>
+                  <p className="text-[12px] text-amber-900">
+                    Some rows in this statement already exist in your data. Review and decide each one below.
+                    Your import on April 12 and May 13 created ~100 duplicates because the system used to only check
+                    within the selected account. That bug is now fixed — we check across ALL accounts. /
+                    بعض الصفوف موجودة بالفعل. راجع كل صف وحدد ما إذا كنت تريد استيراده أم تخطيه.
+                  </p>
+                </div>
+
+                <div className="grid grid-cols-2 md:grid-cols-4 gap-2 mb-3">
+                  <div className="bg-emerald-50 border border-emerald-200 rounded p-2 text-center">
+                    <div className="text-xs text-emerald-700">🟢 Clean / نظيف</div>
+                    <div className="text-xl font-extrabold text-emerald-800">{cleanCount}</div>
+                  </div>
+                  <div className="bg-red-50 border border-red-200 rounded p-2 text-center">
+                    <div className="text-xs text-red-700">🔴 Exact duplicate / مكرر</div>
+                    <div className="text-xl font-extrabold text-red-700">{exactCount}</div>
+                  </div>
+                  <div className="bg-amber-50 border border-amber-200 rounded p-2 text-center">
+                    <div className="text-xs text-amber-800">🟡 Possible duplicate / محتمل</div>
+                    <div className="text-xl font-extrabold text-amber-800">{possibleCount}</div>
+                  </div>
+                  <div className="bg-blue-50 border border-blue-200 rounded p-2 text-center">
+                    <div className="text-xs text-blue-700">Will import / سيتم استيراده</div>
+                    <div className="text-xl font-extrabold text-blue-700">{importing}</div>
+                    <div className="text-[9px] text-blue-600">({skipping} skip)</div>
+                  </div>
+                </div>
+
+                <div className="bg-white rounded-xl border border-slate-200 overflow-auto max-h-[500px]">
+                  <table className="w-full text-xs">
+                    <thead className="bg-slate-50 sticky top-0">
+                      <tr>
+                        <th className="px-2 py-2 text-left text-[10px]">Status</th>
+                        <th className="px-2 py-2 text-left text-[10px]">Date / تاريخ</th>
+                        <th className="px-2 py-2 text-right text-[10px]">Amount / مبلغ</th>
+                        <th className="px-2 py-2 text-left text-[10px]">Description / وصف</th>
+                        <th className="px-2 py-2 text-left text-[10px]">Existing match / السجل الحالي</th>
+                        <th className="px-2 py-2 text-center text-[10px]">Decision / القرار</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {reviewClassified.map(function (c, idx) {
+                        if (c.status === 'clean') return null; // hide clean rows from review table
+                        var statusBadge = c.status === 'exact'
+                          ? <span className="px-1.5 py-0.5 rounded bg-red-100 text-red-800 font-bold text-[10px]">🔴 EXACT</span>
+                          : <span className="px-1.5 py-0.5 rounded bg-amber-100 text-amber-800 font-bold text-[10px]">🟡 POSSIBLE</span>;
+                        var firstMatch = c.matches[0] || {};
+                        return (
+                          <tr key={idx} className="border-b border-slate-100 align-top">
+                            <td className="px-2 py-2">{statusBadge}</td>
+                            <td className="px-2 py-2 whitespace-nowrap">{c.row.date}</td>
+                            <td className="px-2 py-2 text-right font-mono">{Number(c.row.amount).toLocaleString()}</td>
+                            <td className="px-2 py-2 text-[11px]">{(c.row.description || '').substring(0, 80)}</td>
+                            <td className="px-2 py-2 text-[10px] text-slate-600">
+                              <div>{firstMatch.date} · acct ending {(firstMatch.account_id || '').slice(-6)}</div>
+                              <div className="text-slate-500">{(firstMatch.description || '').substring(0, 60)}</div>
+                              {c.matches.length > 1 && <div className="text-amber-600 font-bold">+ {c.matches.length - 1} more</div>}
+                            </td>
+                            <td className="px-2 py-2 text-center">
+                              <div className="inline-flex rounded border border-slate-300 overflow-hidden text-[10px] font-bold">
+                                <button onClick={function () { setReviewDecision(idx, 'skip'); }}
+                                  className={'px-2 py-1 ' + (c.decision === 'skip' ? 'bg-red-600 text-white' : 'bg-white text-slate-700 hover:bg-red-50')}>
+                                  Skip / تخطى
+                                </button>
+                                <button onClick={function () { setReviewDecision(idx, 'import'); }}
+                                  className={'px-2 py-1 ' + (c.decision === 'import' ? 'bg-emerald-600 text-white' : 'bg-white text-slate-700 hover:bg-emerald-50')}>
+                                  Import anyway / استورد رغماً
+                                </button>
+                              </div>
+                            </td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                </div>
+
+                <div className="mt-3 flex justify-between items-center flex-wrap gap-2">
+                  <div className="flex gap-2">
+                    <button onClick={function () {
+                      // Skip all flagged duplicates (default safe action)
+                      setReviewClassified(function (prev) {
+                        return prev.map(function (c) {
+                          return c.status === 'clean' ? c : Object.assign({}, c, { decision: 'skip' });
+                        });
+                      });
+                    }} className="px-3 py-1.5 rounded bg-red-100 text-red-800 text-[11px] font-bold hover:bg-red-200">
+                      🛑 Skip all flagged / تخطى الكل
+                    </button>
+                    {isAdmin && (
+                      <button onClick={function () {
+                        // Super-admin override: import EVERYTHING including exact duplicates.
+                        // This is rare — only use if you're absolutely sure these aren't real duplicates.
+                        if (!confirm('You are about to import ALL flagged rows including exact duplicates. This will be logged with your name. Continue? / استورد جميع الصفوف بما فيها المكررة؟ سيتم تسجيل هذا.')) return;
+                        setReviewClassified(function (prev) {
+                          return prev.map(function (c) {
+                            return c.status === 'clean' ? c : Object.assign({}, c, { decision: 'import' });
+                          });
+                        });
+                        setReviewOverrideAll(true);
+                      }} className="px-3 py-1.5 rounded bg-amber-100 text-amber-800 text-[11px] font-bold hover:bg-amber-200">
+                        ⚠️ Override: import ALL (super-admin)
+                      </button>
+                    )}
+                  </div>
+                  <div className="flex gap-2">
+                    <button onClick={function () { setImportStep('preview'); setReviewClassified(null); }}
+                      className="px-3 py-1.5 rounded border border-slate-300 text-[11px] font-bold hover:bg-slate-50">
+                      ← Back / رجوع
+                    </button>
+                    <button onClick={function () { executeImport(reviewClassified, importAccount); }}
+                      className="px-4 py-1.5 rounded bg-blue-600 text-white text-[11px] font-bold hover:bg-blue-700">
+                      Confirm and import / تأكيد واستيراد
+                    </button>
+                  </div>
+                </div>
+              </div>
+            );
+          })()}
+
           {importStep === 'importing' && (
             <div className="text-center py-12">
               <div className="text-3xl mb-2 animate-spin">⏳</div>
@@ -799,9 +1626,23 @@ export default function EgyptBankTab({ toast, user, userProfile, isAdmin, invoic
           {importStep === 'done' && importStats && (
             <div className="bg-green-50 rounded-xl p-6 text-center border border-green-200">
               <div className="text-3xl mb-2">✅</div>
-              <h3 className="font-bold text-lg text-green-800">Import Complete!</h3>
-              <p className="text-sm mt-2">{importStats.imported} imported{importStats.duplicates > 0 ? `, ${importStats.duplicates} duplicates skipped` : ''}{importStats.skipped > importStats.duplicates ? `, ${importStats.skipped - (importStats.duplicates||0)} errors` : ''}</p>
-              <button onClick={() => { setImportStep('select'); setImportData([]); setImportStats(null); setView('transactions'); }} className="mt-3 px-4 py-2 bg-blue-500 text-white rounded-lg text-xs font-semibold">View Transactions</button>
+              <h3 className="font-bold text-lg text-green-800">Import Complete! / اكتمل الاستيراد</h3>
+              <div className="text-sm mt-2 space-y-0.5">
+                <div><span className="font-bold text-emerald-700">{importStats.imported}</span> imported / تم استيرادها</div>
+                {importStats.exactSkipped > 0 && (
+                  <div className="text-red-700">🔴 {importStats.exactSkipped} exact duplicates skipped / مكررات تم تخطيها</div>
+                )}
+                {importStats.possibleSkipped > 0 && (
+                  <div className="text-amber-700">🟡 {importStats.possibleSkipped} possible duplicates skipped / مكررات محتملة تم تخطيها</div>
+                )}
+                {importStats.overridden > 0 && (
+                  <div className="text-amber-900 font-bold">⚠️ {importStats.overridden} flagged rows imported anyway (override) / تم تجاوز التحذير</div>
+                )}
+                {importStats.skipped > (importStats.duplicates || 0) && (
+                  <div className="text-slate-600">{importStats.skipped - (importStats.duplicates || 0)} errors / أخطاء</div>
+                )}
+              </div>
+              <button onClick={() => { setImportStep('select'); setImportData([]); setImportStats(null); setReviewClassified(null); setView('transactions'); }} className="mt-3 px-4 py-2 bg-blue-500 text-white rounded-lg text-xs font-semibold">View Transactions / عرض المعاملات</button>
             </div>
           )}
         </div>
@@ -820,7 +1661,7 @@ export default function EgyptBankTab({ toast, user, userProfile, isAdmin, invoic
                   {accounts.map(a => <option key={a.id} value={a.id}>{a.bank_name} - {a.account_number}</option>)}
                 </select>
               ) : (
-                <span className="text-[10px] text-amber-600 font-semibold">⚠️ No accounts yet — one will be created automatically</span>
+                <span className="text-[10px] text-amber-900 font-bold">⚠️ No accounts yet — one will be created automatically</span>
               )}
             </div>
             <div className="flex gap-2">
@@ -843,6 +1684,13 @@ export default function EgyptBankTab({ toast, user, userProfile, isAdmin, invoic
                   }
                 }} />
               </label>
+              {/* v55.83-A.6.15 — Bulk delete (super-admin only) */}
+              {isSuperAdmin && (
+                <button onClick={function () { setBulkDeleteOpen(true); setBulkDeleteImpact(null); }}
+                  className="px-3 py-2 bg-red-600 hover:bg-red-700 text-white rounded-lg text-xs font-bold">
+                  🗑 Bulk Delete / حذف بالجملة
+                </button>
+              )}
               <button onClick={() => {
                 const ws = XLSX.utils.aoa_to_sheet([
                   ['Date', 'Description', 'Credit (In)', 'Debit (Out)', 'Balance', 'Reference', 'Notes'],
@@ -875,8 +1723,8 @@ export default function EgyptBankTab({ toast, user, userProfile, isAdmin, invoic
               <div className="text-lg font-black text-blue-700">{matchedCount}</div>
             </div>
             <div className="bg-amber-50 rounded-xl p-3 border border-amber-200">
-              <div className="text-[10px] text-amber-600 font-bold">Unmatched / غير متطابق</div>
-              <div className="text-lg font-black text-amber-700">{unmatchedCount}</div>
+              <div className="text-[10px] text-amber-900 font-extrabold">Unmatched / غير متطابق</div>
+              <div className="text-lg font-black text-amber-900">{unmatchedCount}</div>
             </div>
           </div>
 
@@ -900,7 +1748,7 @@ export default function EgyptBankTab({ toast, user, userProfile, isAdmin, invoic
             {transactions.filter(t => !t.category && !t.hidden).length > 0 && (
               <div className="flex items-center gap-1">
                 <button onClick={() => setShowSmartConfig(!showSmartConfig)}
-                  className="px-2 py-1.5 bg-amber-100 text-amber-700 rounded-lg text-[10px] font-bold border border-amber-200 hover:bg-amber-200">
+                  className="px-2 py-1.5 bg-amber-100 text-amber-900 rounded-lg text-[10px] font-bold border border-amber-300 hover:bg-amber-200">
                   🤖 Smart Categorize ▾
                 </button>
               </div>
@@ -911,8 +1759,8 @@ export default function EgyptBankTab({ toast, user, userProfile, isAdmin, invoic
           {showSmartConfig && (
             <div className="bg-amber-50 rounded-xl p-3 mb-3 border border-amber-200">
               <div className="flex items-center justify-between mb-2">
-                <span className="text-xs font-bold text-amber-800">🤖 Smart Categorize Settings</span>
-                <button onClick={() => setShowSmartConfig(false)} className="text-[10px] text-slate-400">✕</button>
+                <span className="text-xs font-bold text-amber-900">🤖 Smart Categorize Settings</span>
+                <button onClick={() => setShowSmartConfig(false)} className="text-[10px] text-slate-500">✕</button>
               </div>
               <div className="grid grid-cols-1 md:grid-cols-3 gap-3 mb-3">
                 <div>
@@ -924,16 +1772,16 @@ export default function EgyptBankTab({ toast, user, userProfile, isAdmin, invoic
                     <option value="20">±20%</option>
                     <option value="50">±50%</option>
                   </select>
-                  <div className="text-[9px] text-slate-400 mt-0.5">0% = amount must match exactly</div>
+                  <div className="text-[9px] text-slate-500 mt-0.5">0% = amount must match exactly</div>
                 </div>
                 <div>
                   <label className="text-[10px] font-bold text-slate-600 block mb-1">Day of Month Range</label>
                   <div className="flex items-center gap-1">
                     <input type="number" min="1" max="31" value={dayFrom} onChange={e => setDayFrom(e.target.value)} placeholder="1" className="border rounded-lg px-2 py-1.5 text-xs w-16" />
-                    <span className="text-[10px] text-slate-400">to</span>
+                    <span className="text-[10px] text-slate-500">to</span>
                     <input type="number" min="1" max="31" value={dayTo} onChange={e => setDayTo(e.target.value)} placeholder="31" className="border rounded-lg px-2 py-1.5 text-xs w-16" />
                   </div>
-                  <div className="text-[9px] text-slate-400 mt-0.5">Only categorize transactions within these days</div>
+                  <div className="text-[9px] text-slate-500 mt-0.5">Only categorize transactions within these days</div>
                 </div>
                 <div>
                   <label className="text-[10px] font-bold text-slate-600 block mb-1">Scoring</label>
@@ -958,7 +1806,7 @@ export default function EgyptBankTab({ toast, user, userProfile, isAdmin, invoic
                 }} className="px-4 py-2 bg-amber-500 text-white rounded-lg text-xs font-bold hover:bg-amber-600">
                   ▶ Run Smart Categorize
                 </button>
-                <span className="text-[10px] text-slate-400">
+                <span className="text-[10px] text-slate-500">
                   {transactions.filter(t => t.category).length} categorized → {transactions.filter(t => !t.category && !t.hidden).length} uncategorized
                 </span>
               </div>
@@ -978,12 +1826,12 @@ export default function EgyptBankTab({ toast, user, userProfile, isAdmin, invoic
                 <option key={m} value={m}>{['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'][parseInt(m)-1]}</option>
               ))}
             </select>
-            <span className="text-[10px] text-slate-400">or</span>
+            <span className="text-[10px] text-slate-500">or</span>
             <input type="date" value={dateFrom} onChange={e => setDateFrom(e.target.value)} className="border rounded-lg px-2 py-1 text-xs" />
-            <span className="text-[10px] text-slate-400">→</span>
+            <span className="text-[10px] text-slate-500">→</span>
             <input type="date" value={dateTo} onChange={e => setDateTo(e.target.value)} className="border rounded-lg px-2 py-1 text-xs" />
             {(dateFrom || dateTo || filterMonth || filterYear) && <button onClick={() => { setDateFrom(''); setDateTo(''); setFilterMonth(''); setFilterYear(''); }} className="text-[10px] text-red-500 font-semibold">✕ Clear</button>}
-            <span className="text-[10px] text-slate-400 ml-auto">{filtered.length} transactions</span>
+            <span className="text-[10px] text-slate-500 ml-auto">{filtered.length} transactions</span>
             <button onClick={() => {
               const rows = filtered.map(t => ({
                 Date: t.date, Description: t.description,
@@ -996,7 +1844,7 @@ export default function EgyptBankTab({ toast, user, userProfile, isAdmin, invoic
               ws['!cols'] = [{wch:12},{wch:50},{wch:14},{wch:14},{wch:16},{wch:16},{wch:8}];
               const wb = XLSX.utils.book_new();
               XLSX.utils.book_append_sheet(wb, ws, 'Egypt Bank');
-              XLSX.writeFile(wb, `Egypt-Bank-Export-${new Date().toISOString().substring(0,10)}.xlsx`);
+              XLSX.writeFile(wb, `Egypt-Bank-Export-${todayET()}.xlsx`);
             }} className="text-[10px] text-blue-500 font-semibold">📥 Export Excel</button>
           </div>
 
@@ -1033,7 +1881,7 @@ export default function EgyptBankTab({ toast, user, userProfile, isAdmin, invoic
                   await supabase.from('egypt_bank_transactions').update({ category: null, subcategory: null }).in('id', ids);
                   setTransactions(prev => prev.map(t => selectedTxns.has(t.id) ? {...t, category: '', subcategory: ''} : t));
                   setSelectedTxns(new Set());
-                }} className="px-3 py-1 bg-amber-100 text-amber-700 border border-amber-300 rounded-lg text-[10px] font-bold">✕ Clear Category</button>
+                }} className="px-3 py-1 bg-amber-100 text-amber-900 border border-amber-400 rounded-lg text-[10px] font-bold">✕ Clear Category</button>
               </div>
               {/* Super Admin: Delete + Hide */}
               {isSuperAdmin && (
@@ -1064,7 +1912,7 @@ export default function EgyptBankTab({ toast, user, userProfile, isAdmin, invoic
                 {showHidden ? '🔓 Showing Hidden' : '🔒 Show Hidden'}
               </button>
             )}
-            {isSuperAdmin && showHidden && <span className="text-[10px] text-slate-400">{transactions.filter(t => t.hidden).length} hidden</span>}
+            {isSuperAdmin && showHidden && <span className="text-[10px] text-slate-500">{transactions.filter(t => t.hidden).length} hidden</span>}
             {filtered.length > 0 && (
               <button onClick={() => {
                 if (selectedTxns.size === filtered.length) setSelectedTxns(new Set());
@@ -1099,7 +1947,7 @@ export default function EgyptBankTab({ toast, user, userProfile, isAdmin, invoic
                       <div className="flex-1 min-w-0">
                         {/* Full description — no truncate */}
                         <div className="font-semibold text-sm" style={{ wordBreak: 'break-word' }}>{t.description || '—'}</div>
-                        <div className="text-[10px] text-slate-400">
+                        <div className="text-[10px] text-slate-500">
                           {t.date} {accName ? `• ${accName}` : ''}{isHidden ? ' • 🔒 Hidden' : ''}
                         </div>
                         {/* Category / Subcategory */}
@@ -1134,15 +1982,31 @@ export default function EgyptBankTab({ toast, user, userProfile, isAdmin, invoic
                         <div className={'font-bold text-sm ' + (isDeposit ? 'text-green-600' : 'text-red-600')}>
                           {isDeposit ? '+' : ''}{fmtE(t.amount)}
                         </div>
-                        {!t.matched_invoice_id && (
+                        {!t.matched_invoice_id && !t.is_owner_deposit && (
                           <button onClick={() => { setMatchingTxn(t); setSearchInv(''); }} className="text-[10px] text-blue-500 font-semibold mt-1">🔗 Match</button>
+                        )}
+                        {/* v55.83-A.6.27.45 — Owner Deposit badge + toggle button */}
+                        {t.is_owner_deposit && (
+                          <div className="mt-1">
+                            <span className="text-[9px] bg-emerald-600 text-white font-extrabold rounded px-1.5 py-0.5 inline-block">💰 OWNER DEPOSIT</span>
+                            <div className="text-[8px] text-emerald-700 font-bold" style={{direction:'rtl'}}>إيداع المالك</div>
+                          </div>
+                        )}
+                        {canMarkOwnerDeposit && !t.matched_invoice_id && isDeposit && (
+                          <button
+                            onClick={() => toggleOwnerDeposit(t.id)}
+                            className={'text-[10px] font-semibold mt-1 block ' + (t.is_owner_deposit ? 'text-amber-500' : 'text-emerald-600')}
+                            title={t.is_owner_deposit ? 'Click to remove owner-deposit flag' : 'Mark as owner capital injection — no invoice link needed'}
+                          >
+                            {t.is_owner_deposit ? '↩ Unmark Owner / إلغاء' : '💰 Owner / مالك'}
+                          </button>
                         )}
                         {/* Hide/Unhide (Super Admin) */}
                         {isSuperAdmin && (
                           <button onClick={async () => {
                             await dbUpdate('egypt_bank_transactions', t.id, { hidden: !isHidden }, myId);
                             setTransactions(prev => prev.map(x => x.id === t.id ? {...x, hidden: !isHidden} : x));
-                          }} className={'text-[10px] font-semibold mt-1 block ' + (isHidden ? 'text-green-500' : 'text-slate-400')}>
+                          }} className={'text-[10px] font-semibold mt-1 block ' + (isHidden ? 'text-green-500' : 'text-slate-500')}>
                             {isHidden ? '🔓 Unhide' : '🔒 Hide'}
                           </button>
                         )}
@@ -1198,7 +2062,7 @@ export default function EgyptBankTab({ toast, user, userProfile, isAdmin, invoic
                           <span className="font-semibold text-xs truncate">{inv.customer || inv.customer_name || inv.customer_name_en || 'N/A'}</span>
                           {isExactMatch && <span className="px-1 py-0.5 bg-emerald-200 text-emerald-800 rounded text-[8px] font-bold flex-shrink-0">EXACT MATCH</span>}
                         </div>
-                        <div className="text-[10px] text-slate-400 mt-0.5">
+                        <div className="text-[10px] text-slate-500 mt-0.5">
                           #{inv.invoice_number || inv.order_number || '—'} • {inv.invoice_date || inv.date || '—'}
                         </div>
                       </div>
@@ -1218,6 +2082,410 @@ export default function EgyptBankTab({ toast, user, userProfile, isAdmin, invoic
         </div>
         );
       })()}
+
+      {/* v55.83-A.6.15 — Import History (super-admin only) */}
+      {view === 'history' && isSuperAdmin && (
+        <ImportHistoryView supabase={supabase} accounts={accounts} myId={myId} toast={toast} onReload={onReload} reload={load} />
+      )}
+
+      {/* v55.83-A.6.15 — Bulk Delete Modal */}
+      {bulkDeleteOpen && isSuperAdmin && (
+        <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50 p-4" onClick={function () { if (!bulkDeleteWorking) setBulkDeleteOpen(false); }}>
+          <div className="bg-white rounded-2xl w-full max-w-2xl max-h-[90vh] overflow-auto shadow-2xl" onClick={function (e) { e.stopPropagation(); }}>
+            <div className="p-4 border-b border-slate-200">
+              <h3 className="text-lg font-bold text-red-700">🗑 Bulk Delete Bank Transactions</h3>
+              <p className="text-[11px] text-slate-500 mt-1">حذف معاملات بنكية بالجملة — اختر الحساب والتاريخ، ثم عاين قبل الحذف</p>
+            </div>
+
+            <div className="p-4 space-y-3">
+              <div>
+                <label className="block text-[11px] font-bold text-slate-700 mb-1">Bank Account / الحساب البنكي</label>
+                <select value={bulkDeleteAccountId} onChange={function (e) { setBulkDeleteAccountId(e.target.value); setBulkDeleteImpact(null); }}
+                  className="w-full border border-slate-300 rounded px-2 py-1.5 text-xs">
+                  <option value="">— Select account / اختر حسابًا —</option>
+                  {accounts.map(function (a) { return <option key={a.id} value={a.id}>{a.bank_name} — {a.account_number}</option>; })}
+                </select>
+              </div>
+
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-[11px] font-bold text-slate-700 mb-1">From date / من تاريخ</label>
+                  <input type="date" value={bulkDeleteFrom} onChange={function (e) { setBulkDeleteFrom(e.target.value); setBulkDeleteImpact(null); }}
+                    className="w-full border border-slate-300 rounded px-2 py-1.5 text-xs" />
+                </div>
+                <div>
+                  <label className="block text-[11px] font-bold text-slate-700 mb-1">To date / إلى تاريخ</label>
+                  <input type="date" value={bulkDeleteTo} onChange={function (e) { setBulkDeleteTo(e.target.value); setBulkDeleteImpact(null); }}
+                    className="w-full border border-slate-300 rounded px-2 py-1.5 text-xs" />
+                </div>
+              </div>
+
+              <div>
+                <label className="block text-[11px] font-bold text-slate-700 mb-1">Reason / سبب الحذف <span className="text-red-600">*</span></label>
+                <textarea value={bulkDeleteReason} onChange={function (e) { setBulkDeleteReason(e.target.value); }}
+                  placeholder="e.g. Imported same statement to wrong account on May 13"
+                  className="w-full border border-slate-300 rounded px-2 py-1.5 text-xs" rows={2} />
+              </div>
+
+              <div className="flex gap-2">
+                <button onClick={computeBulkDeleteImpact} disabled={bulkDeleteWorking || !bulkDeleteAccountId || !bulkDeleteFrom || !bulkDeleteTo}
+                  className="px-3 py-1.5 rounded bg-blue-600 hover:bg-blue-700 disabled:opacity-50 text-white text-xs font-bold">
+                  🔍 Preview Impact / عاين التأثير
+                </button>
+              </div>
+
+              {bulkDeleteImpact && (
+                <div className="bg-amber-50 border-2 border-amber-300 rounded p-3">
+                  <div className="font-bold text-amber-900 text-sm mb-2">Impact preview / معاينة التأثير:</div>
+                  <div className="grid grid-cols-2 gap-2 text-xs">
+                    <div><span className="text-slate-600">Rows to delete:</span> <span className="font-bold text-red-700">{bulkDeleteImpact.count}</span></div>
+                    <div><span className="text-slate-600">Total amount:</span> <span className="font-bold text-red-700">EGP {bulkDeleteImpact.sum.toLocaleString()}</span></div>
+                    <div><span className="text-slate-600">Treasury rows affected:</span> <span className="font-bold text-amber-700">{bulkDeleteImpact.treasury_rows}</span></div>
+                    <div><span className="text-slate-600">Invoices affected:</span> <span className="font-bold text-amber-700">{bulkDeleteImpact.invoices}</span></div>
+                  </div>
+                  <div className="text-[10px] text-amber-800 mt-2">Treasury rows will be unmatched (kept), but invoice totals will recalc after reload. Audit log entry is created with your reason. الخزنة ستفصل، الإجمالي يُعاد حسابه.</div>
+                </div>
+              )}
+
+              <div className="flex justify-end gap-2 pt-2 border-t border-slate-100">
+                <button onClick={function () { setBulkDeleteOpen(false); setBulkDeleteImpact(null); setBulkDeleteReason(''); }} disabled={bulkDeleteWorking}
+                  className="px-3 py-1.5 rounded border border-slate-300 hover:bg-slate-50 disabled:opacity-50 text-slate-700 text-xs font-bold">
+                  Cancel / إلغاء
+                </button>
+                <button onClick={executeBulkDelete} disabled={bulkDeleteWorking || !bulkDeleteImpact || !bulkDeleteReason || bulkDeleteReason.length < 5}
+                  className="px-3 py-1.5 rounded bg-red-600 hover:bg-red-700 disabled:opacity-50 text-white text-xs font-bold">
+                  {bulkDeleteWorking ? 'Working...' : '🗑 Confirm Delete / تأكيد الحذف'}
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// =====================================================================
+// IMPORT HISTORY VIEW (v55.83-A.6.15)
+// Shows last 10 bank import batches with one-click rollback.
+// =====================================================================
+function ImportHistoryView({ supabase, accounts, myId, toast, onReload, reload }) {
+  var [batches, setBatches] = useState([]);
+  var [loading, setLoading] = useState(true);
+  var [working, setWorking] = useState(false);
+  var [error, setError] = useState(null);
+
+  function loadBatches() {
+    setLoading(true);
+    setError(null);
+    supabase.from('bank_import_batches')
+      .select('id, imported_by, imported_at, account_id, row_count, total_amount, status, rolled_back_at, rolled_back_by, notes')
+      .order('imported_at', { ascending: false })
+      .limit(20)
+      .then(function (resp) {
+        if (resp.error) {
+          // Table may not exist yet — show friendly message
+          setError(resp.error.message || 'Could not load import history');
+          setBatches([]);
+        } else {
+          setBatches(resp.data || []);
+        }
+        setLoading(false);
+      })
+      .catch(function (e) {
+        setError(e.message || String(e));
+        setLoading(false);
+      });
+  }
+
+  useEffect(function () { loadBatches(); }, []);
+
+  function accountLabel(accId) {
+    var a = (accounts || []).find(function (x) { return x.id === accId; });
+    return a ? (a.bank_name + ' — ' + a.account_number) : (accId ? accId.substring(0, 8) : '—');
+  }
+
+  async function rollbackBatch(batch) {
+    if (batch.status === 'rolled_back') { alert('This batch is already rolled back'); return; }
+    if (!confirm('Roll back this import? ALL ' + batch.row_count + ' bank rows from this batch will be deleted (totaling EGP ' + Number(batch.total_amount || 0).toLocaleString() + '). Affected invoices recalc on reload. Continue? / تراجع عن الاستيراد؟')) return;
+    setWorking(true);
+    try {
+      // 1. Find the bank rows tagged with this batch_id
+      var rowsResp = await supabase.from('egypt_bank_transactions').select('id').eq('import_batch_id', batch.id);
+      var bankIds = (rowsResp.data || []).map(function (r) { return r.id; });
+      if (bankIds.length === 0) {
+        alert('No rows found tagged with this batch. The import may pre-date batch tracking, or the rows were already deleted.');
+        setWorking(false);
+        return;
+      }
+      // 2. Find affected invoices BEFORE unmatch
+      var tBefore = (await supabase.from('treasury').select('linked_invoice_id').in('matched_bank_txn_id', bankIds)).data || [];
+      var invoiceIds = Array.from(new Set(tBefore.map(function (t) { return t.linked_invoice_id; }).filter(Boolean)));
+      // 3. Unmatch treasury rows
+      await supabase.from('treasury').update({ matched_bank_txn_id: null }).in('matched_bank_txn_id', bankIds);
+      // 4. Audit
+      try {
+        await supabase.from('audit_log').insert({
+          user_id: myId,
+          entity_type: 'egypt_bank_transactions',
+          action: 'batch_rollback',
+          details: {
+            batch_id: batch.id,
+            rolled_row_count: bankIds.length,
+            sum: batch.total_amount,
+            invoices_affected: invoiceIds.length,
+            invoice_ids: invoiceIds,
+            source: 'v55.83-A.6.15 ImportHistoryView rollback',
+          },
+          created_at: new Date().toISOString(),
+        });
+      } catch (_) {}
+      // 5. Delete the bank rows
+      await supabase.from('egypt_bank_transactions').delete().in('id', bankIds);
+      // 6. Mark the batch as rolled back
+      await supabase.from('bank_import_batches').update({
+        status: 'rolled_back',
+        rolled_back_at: new Date().toISOString(),
+        rolled_back_by: myId,
+      }).eq('id', batch.id);
+      toast && toast.success && toast.success('Batch rolled back — ' + bankIds.length + ' rows removed, ' + invoiceIds.length + ' invoices need recalc / تم التراجع');
+      loadBatches();
+      if (onReload) await onReload();
+      if (reload) await reload();
+    } catch (e) {
+      alert('Rollback failed: ' + (e.message || e));
+    }
+    setWorking(false);
+  }
+
+  return (
+    <div>
+      <div className="bg-white rounded-xl p-4 mb-3">
+        <div className="flex justify-between items-center mb-2 flex-wrap gap-2">
+          <h3 className="text-sm font-bold">📜 Import History <span className="text-slate-400 font-normal">/ سجل الاستيراد</span></h3>
+          <button onClick={loadBatches} disabled={loading}
+            className="px-2 py-1 rounded border border-slate-300 hover:bg-slate-50 text-[10px] font-bold">
+            {loading ? '⏳' : '🔄'} Refresh / تحديث
+          </button>
+        </div>
+        <p className="text-[10px] text-slate-500 mb-3">
+          Most recent 20 bank import batches. Click "Roll back" to undo an entire import. Only super-admin. /
+          آخر 20 استيراد بنكي. يمكنك التراجع عن استيراد كامل. للمسؤول فقط.
+        </p>
+
+        {error && (
+          <div className="bg-amber-50 border border-amber-300 rounded p-3 mb-3">
+            <div className="text-xs font-bold text-amber-900 mb-1">⚠️ Batch tracking not set up yet</div>
+            <div className="text-[10px] text-amber-800 mb-2">
+              The <code className="bg-amber-100 px-1 rounded">bank_import_batches</code> table doesn't exist. Run the v55.83-A.6.15 SQL migration in Supabase to enable batch tracking and rollback.
+              لم يتم إعداد تتبع الدفعات بعد. شغّل SQL الإعداد في Supabase.
+            </div>
+            <div className="text-[9px] font-mono text-amber-900">Error: {error}</div>
+          </div>
+        )}
+
+        {!error && batches.length === 0 && !loading && (
+          <div className="text-center py-6 text-sm text-slate-500">No import batches yet / لا يوجد سجل استيراد بعد</div>
+        )}
+
+        {batches.length > 0 && (
+          <div className="overflow-auto max-h-[500px] border border-slate-200 rounded">
+            <table className="w-full text-xs">
+              <thead className="sticky top-0 bg-slate-50">
+                <tr>
+                  <th className="px-2 py-2 text-left text-[10px]">When / متى</th>
+                  <th className="px-2 py-2 text-left text-[10px]">Account / حساب</th>
+                  <th className="px-2 py-2 text-right text-[10px]">Rows / صفوف</th>
+                  <th className="px-2 py-2 text-right text-[10px]">Total / إجمالي</th>
+                  <th className="px-2 py-2 text-left text-[10px]">Status / الحالة</th>
+                  <th className="px-2 py-2 text-center text-[10px]">Action / إجراء</th>
+                </tr>
+              </thead>
+              <tbody>
+                {batches.map(function (b) {
+                  return (
+                    <tr key={b.id} className={'border-b border-slate-50 ' + (b.status === 'rolled_back' ? 'bg-slate-50 opacity-60' : '')}>
+                      <td className="px-2 py-2 text-[10px] whitespace-nowrap">{(b.imported_at || '').substring(0, 16).replace('T', ' ')}</td>
+                      <td className="px-2 py-2 text-[10px]">{accountLabel(b.account_id)}</td>
+                      <td className="px-2 py-2 text-right font-bold">{b.row_count}</td>
+                      <td className="px-2 py-2 text-right font-mono">EGP {Number(b.total_amount || 0).toLocaleString()}</td>
+                      <td className="px-2 py-2 text-[10px]">
+                        {b.status === 'rolled_back' ? (
+                          <span className="px-1 py-0.5 rounded bg-red-100 text-red-800 text-[9px] font-bold">↩️ Rolled back {(b.rolled_back_at || '').substring(0, 10)}</span>
+                        ) : (
+                          <span className="px-1 py-0.5 rounded bg-emerald-100 text-emerald-800 text-[9px] font-bold">✓ Active</span>
+                        )}
+                      </td>
+                      <td className="px-2 py-2 text-center">
+                        {b.status === 'rolled_back' ? (
+                          <span className="text-[10px] text-slate-500">—</span>
+                        ) : (
+                          <button onClick={function () { rollbackBatch(b); }} disabled={working}
+                            className="px-2 py-1 rounded bg-red-600 hover:bg-red-700 disabled:opacity-50 text-white text-[10px] font-bold">
+                            🗑 Roll back
+                          </button>
+                        )}
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </div>
+
+      {/* v55.83-A.6.27.45 — RULES MANAGER MODAL */}
+      {rulesModalOpen && canManageNormalRules && (
+        <div className="fixed inset-0 z-[200] bg-black/70 flex items-center justify-center p-4" onClick={() => setRulesModalOpen(false)}>
+          <div className="bg-white text-slate-900 rounded-2xl shadow-2xl max-w-4xl w-full max-h-[90vh] flex flex-col" onClick={(e) => e.stopPropagation()}>
+            <div className="bg-purple-700 text-white rounded-t-2xl px-5 py-3 flex items-center justify-between">
+              <div>
+                <div className="text-xs font-bold uppercase tracking-wide text-purple-100">Bank Rules / قواعد البنك</div>
+                <div className="text-lg font-extrabold">⚙️ Auto-categorize & Auto-hide</div>
+                <div className="text-xs text-purple-100 mt-0.5">Rules apply retroactively AND at import time / تطبق على الماضي والمستقبل</div>
+              </div>
+              <button onClick={() => setRulesModalOpen(false)} className="px-3 py-1 bg-white text-purple-700 hover:bg-purple-100 text-sm font-extrabold rounded-lg">✕ Close</button>
+            </div>
+            <div className="flex-1 overflow-auto p-5 space-y-3">
+              {/* Toolbar */}
+              <div className="flex flex-wrap items-center gap-2 mb-3">
+                <button onClick={() => openRuleEditor(null)} disabled={ruleBusy} className="px-3 py-1.5 bg-emerald-600 hover:bg-emerald-700 text-white text-sm font-extrabold rounded shadow disabled:opacity-50">+ New Rule / قاعدة جديدة</button>
+                <button onClick={() => applyRules({ onlyPrivate: false })} disabled={applyingRules || ruleBusy} className="px-3 py-1.5 bg-blue-600 hover:bg-blue-700 text-white text-sm font-bold rounded disabled:opacity-50">
+                  {applyingRules ? 'Applying...' : '🔄 Apply All Normal Rules Now / تطبيق'}
+                </button>
+                {canManagePrivateRules && (
+                  <button onClick={() => applyRules({ onlyPrivate: true })} disabled={applyingRules || ruleBusy} className="px-3 py-1.5 bg-slate-700 hover:bg-slate-800 text-white text-sm font-bold rounded disabled:opacity-50">
+                    🔒 Apply Private Rules / تطبيق القواعد الخاصة
+                  </button>
+                )}
+                <span className="text-xs text-slate-600 ml-auto">{rules.length} rule(s) / قاعدة</span>
+              </div>
+              {/* Rules list */}
+              {rules.length === 0 ? (
+                <div className="text-center py-8 text-slate-600 font-bold">No rules yet. Click "+ New Rule" to create one. / لا توجد قواعد</div>
+              ) : (
+                <div className="space-y-2">
+                  {rules.map((r) => (
+                    <div key={r.id} className={'border-2 rounded-lg p-3 ' + (r.is_private ? 'bg-slate-100 border-slate-400' : 'bg-white border-purple-200')}>
+                      <div className="flex items-start justify-between gap-2">
+                        <div className="flex-1">
+                          <div className="flex items-center gap-2 flex-wrap">
+                            <span className="font-extrabold text-slate-900">{r.rule_name}</span>
+                            {r.is_private && <span className="text-[9px] bg-slate-700 text-white font-extrabold rounded px-1.5 py-0.5">🔒 PRIVATE</span>}
+                            {!r.active && <span className="text-[9px] bg-amber-500 text-white font-extrabold rounded px-1.5 py-0.5">PAUSED</span>}
+                            {r.total_matches > 0 && <span className="text-[10px] text-slate-600">→ matched {r.total_matches} txns</span>}
+                          </div>
+                          <div className="text-xs text-slate-700 mt-1">
+                            <strong>Match:</strong>{' '}
+                            {r.match_description && <span>desc contains "<em>{r.match_description}</em>"</span>}
+                            {r.match_amount != null && <span>{r.match_description ? ' AND ' : ''}amount = {r.match_amount}</span>}
+                            {r.match_account_id && <span>{(r.match_description || r.match_amount != null) ? ' AND ' : ''}specific account</span>}
+                          </div>
+                          <div className="text-xs text-slate-700 mt-0.5">
+                            <strong>Action:</strong>{' '}
+                            {r.set_category && <span className="text-purple-700 font-bold">Set category to "{r.set_category}{r.set_subcategory ? ' / ' + r.set_subcategory : ''}"</span>}
+                            {r.set_category && r.set_hidden && <span> AND </span>}
+                            {r.set_hidden && <span className="text-red-700 font-bold">Hide from non-admin views</span>}
+                          </div>
+                          {r.notes && <div className="text-[10px] text-slate-500 mt-1 italic">{r.notes}</div>}
+                        </div>
+                        <div className="flex flex-col gap-1">
+                          <button onClick={() => applyRules({ ruleId: r.id })} disabled={applyingRules || ruleBusy} className="px-2 py-1 bg-blue-600 hover:bg-blue-700 text-white text-[10px] font-bold rounded disabled:opacity-50">🔄 Apply</button>
+                          <button onClick={() => openRuleEditor(r)} disabled={ruleBusy || (r.is_private && !canManagePrivateRules)} className="px-2 py-1 bg-indigo-600 hover:bg-indigo-700 text-white text-[10px] font-bold rounded disabled:opacity-50">Edit</button>
+                          <button onClick={() => deleteRule(r.id)} disabled={ruleBusy || (r.is_private && !canManagePrivateRules)} className="px-2 py-1 bg-red-600 hover:bg-red-700 text-white text-[10px] font-bold rounded disabled:opacity-50">Delete</button>
+                        </div>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* v55.83-A.6.27.45 — RULE EDITOR MODAL */}
+      {ruleEditOpen && ruleDraft && (
+        <div className="fixed inset-0 z-[210] bg-black/80 flex items-center justify-center p-4" onClick={() => { if (!ruleBusy) { setRuleEditOpen(false); setRuleDraft(null); } }}>
+          <div className="bg-white text-slate-900 rounded-2xl shadow-2xl max-w-2xl w-full max-h-[90vh] flex flex-col" onClick={(e) => e.stopPropagation()}>
+            <div className="bg-indigo-700 text-white rounded-t-2xl px-5 py-3">
+              <div className="text-lg font-extrabold">{ruleDraft.id ? '✏️ Edit Rule' : '+ New Rule'} / قاعدة</div>
+              <div className="text-xs text-indigo-100">Define a match pattern and what to do when it matches.</div>
+            </div>
+            <div className="flex-1 overflow-auto p-5 space-y-4">
+              <label className="block">
+                <span className="text-xs font-extrabold text-slate-900">Rule Name * / اسم القاعدة</span>
+                <input type="text" value={ruleDraft.rule_name || ''} onChange={(e) => setRuleDraft({...ruleDraft, rule_name: e.target.value})} className="w-full mt-1 px-3 py-2 border-2 border-slate-300 rounded text-sm bg-white text-slate-900 font-bold" placeholder="e.g. Bank wire fees / رسوم التحويل" />
+              </label>
+
+              {/* MATCH CRITERIA */}
+              <div className="bg-blue-50 border-2 border-blue-300 rounded-lg p-3 space-y-2">
+                <div className="text-xs font-extrabold text-blue-900">📌 Match Criteria (AND) / معايير المطابقة</div>
+                <label className="block">
+                  <span className="text-[11px] font-bold text-slate-700">Description contains / الوصف يحتوي</span>
+                  <input type="text" value={ruleDraft.match_description || ''} onChange={(e) => setRuleDraft({...ruleDraft, match_description: e.target.value})} className="w-full mt-0.5 px-2 py-1.5 border border-slate-300 rounded text-sm bg-white text-slate-900" placeholder="case-insensitive substring" />
+                </label>
+                <label className="block">
+                  <span className="text-[11px] font-bold text-slate-700">Amount = (exact) / المبلغ بالضبط</span>
+                  <input type="number" step="0.01" value={ruleDraft.match_amount === null || ruleDraft.match_amount === undefined ? '' : ruleDraft.match_amount} onChange={(e) => setRuleDraft({...ruleDraft, match_amount: e.target.value})} className="w-full mt-0.5 px-2 py-1.5 border border-slate-300 rounded text-sm bg-white text-slate-900" placeholder="(positive=deposit, negative=withdrawal)" />
+                </label>
+                <label className="block">
+                  <span className="text-[11px] font-bold text-slate-700">Specific Account (optional) / حساب محدد</span>
+                  <select value={ruleDraft.match_account_id || ''} onChange={(e) => setRuleDraft({...ruleDraft, match_account_id: e.target.value || null})} className="w-full mt-0.5 px-2 py-1.5 border border-slate-300 rounded text-sm bg-white text-slate-900">
+                    <option value="">— Any account / أي حساب —</option>
+                    {accounts.map(a => <option key={a.id} value={a.id}>{a.bank_name} — {a.account_number}</option>)}
+                  </select>
+                </label>
+                <div className="text-[10px] text-blue-800 italic">At least ONE criterion required. All filled criteria must match (AND).</div>
+              </div>
+
+              {/* ACTIONS */}
+              <div className="bg-emerald-50 border-2 border-emerald-300 rounded-lg p-3 space-y-2">
+                <div className="text-xs font-extrabold text-emerald-900">⚡ Actions / الإجراءات</div>
+                <label className="block">
+                  <span className="text-[11px] font-bold text-slate-700">Set Category / الفئة</span>
+                  <input type="text" value={ruleDraft.set_category || ''} onChange={(e) => setRuleDraft({...ruleDraft, set_category: e.target.value})} className="w-full mt-0.5 px-2 py-1.5 border border-slate-300 rounded text-sm bg-white text-slate-900" placeholder="e.g. Bank Charges" />
+                </label>
+                <label className="block">
+                  <span className="text-[11px] font-bold text-slate-700">Set Subcategory (optional) / الفئة الفرعية</span>
+                  <input type="text" value={ruleDraft.set_subcategory || ''} onChange={(e) => setRuleDraft({...ruleDraft, set_subcategory: e.target.value})} className="w-full mt-0.5 px-2 py-1.5 border border-slate-300 rounded text-sm bg-white text-slate-900" placeholder="e.g. Wire Fee" />
+                </label>
+                <label className="flex items-center gap-2 mt-1">
+                  <input type="checkbox" checked={!!ruleDraft.set_hidden} onChange={(e) => setRuleDraft({...ruleDraft, set_hidden: e.target.checked, is_private: e.target.checked ? true : ruleDraft.is_private})} className="w-4 h-4" />
+                  <span className="text-sm font-bold text-slate-900">🔒 Hide from non-admin views (forces private) / إخفاء</span>
+                </label>
+                <div className="text-[10px] text-emerald-800 italic">At least ONE action required (category or hide).</div>
+              </div>
+
+              {/* PRIVACY */}
+              {canManagePrivateRules && (
+                <div className="bg-slate-100 border-2 border-slate-400 rounded-lg p-3">
+                  <label className="flex items-center gap-2">
+                    <input type="checkbox" checked={!!ruleDraft.is_private} disabled={!!ruleDraft.set_hidden} onChange={(e) => setRuleDraft({...ruleDraft, is_private: e.target.checked})} className="w-4 h-4" />
+                    <span className="text-sm font-extrabold text-slate-900">🔒 Private rule (super-admin only) / قاعدة خاصة</span>
+                  </label>
+                  <div className="text-[10px] text-slate-600 mt-1 italic">Private rules are visible only to you. Auto-checked when "Hide" is enabled.</div>
+                </div>
+              )}
+
+              <label className="block">
+                <span className="text-xs font-extrabold text-slate-900">Notes (optional) / ملاحظات</span>
+                <textarea value={ruleDraft.notes || ''} onChange={(e) => setRuleDraft({...ruleDraft, notes: e.target.value})} className="w-full mt-1 px-3 py-2 border-2 border-slate-300 rounded text-sm bg-white text-slate-900" rows={2} />
+              </label>
+
+              <label className="flex items-center gap-2">
+                <input type="checkbox" checked={ruleDraft.active !== false} onChange={(e) => setRuleDraft({...ruleDraft, active: e.target.checked})} className="w-4 h-4" />
+                <span className="text-sm font-bold text-slate-900">Active (will fire at import + when applied) / نشطة</span>
+              </label>
+            </div>
+            <div className="border-t border-slate-200 px-5 py-3 flex justify-end gap-2 bg-slate-50 rounded-b-2xl">
+              <button onClick={() => { setRuleEditOpen(false); setRuleDraft(null); }} disabled={ruleBusy} className="px-4 py-2 bg-slate-300 hover:bg-slate-400 text-slate-900 text-sm font-bold rounded disabled:opacity-50">Cancel / إلغاء</button>
+              <button onClick={saveRule} disabled={ruleBusy} className="px-4 py-2 bg-emerald-600 hover:bg-emerald-700 text-white text-sm font-extrabold rounded shadow disabled:opacity-50">{ruleBusy ? 'Saving...' : '💾 Save Rule / حفظ'}</button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

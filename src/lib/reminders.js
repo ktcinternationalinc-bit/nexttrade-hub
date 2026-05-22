@@ -110,6 +110,30 @@ export async function cancelEventReminders(eventId) {
   }
 }
 
+// v55.50 — Bulk cancel reminders for many events in ONE DB call instead of
+// N sequential calls. Critical for hard-deleting / cancelling a recurring
+// series with hundreds of occurrences (was the cause of the calendar
+// "delete hangs for 10 minutes" bug — Max reported it on May 6 2026).
+//
+// Usage: await cancelEventRemindersBulk(['id1','id2',...,'idN'])
+// Returns: { deleted: <count>, error?: <message> }
+export async function cancelEventRemindersBulk(eventIds) {
+  if (!Array.isArray(eventIds) || eventIds.length === 0) return { deleted: 0 };
+  try {
+    const { error, count } = await supabase
+      .from('scheduled_reminders')
+      .delete({ count: 'exact' })
+      .eq('target_kind', 'event')
+      .in('target_id', eventIds)
+      .is('sent_at', null);
+    if (error) throw error;
+    return { deleted: count || 0 };
+  } catch (err) {
+    console.log('[reminders] cancelEventRemindersBulk failed: ' + err.message);
+    return { deleted: 0, error: err.message };
+  }
+}
+
 // Rescheduling helper: wipes any pending reminders for the event then
 // re-queues fresh ones. Use when event_date or event_time changes.
 export async function rescheduleEventReminders(eventRow, userIds, createdBy) {

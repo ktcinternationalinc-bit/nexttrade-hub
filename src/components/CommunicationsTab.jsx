@@ -1,7 +1,10 @@
 'use client';
 import { useState, useEffect } from 'react';
+import WhatsAppInbox from './WhatsAppInbox';
+import { fmtET } from '../lib/et-time';
 
-export default function CommunicationsTab({ user, supabase }) {
+export default function CommunicationsTab({ user, userProfile, customers, supabase }) {
+  const [section, setSection] = useState('inbox'); // 'inbox' | 'legacy' — inbox is the new WhatsApp inbox
   const [activeChannel, setActiveChannel] = useState('all');
   const [messages, setMessages] = useState([]);
   const [emails, setEmails] = useState([]);
@@ -167,6 +170,30 @@ export default function CommunicationsTab({ user, supabase }) {
         </div>
       </div>
 
+      {/* v55.37 — Section toggle: WhatsApp Inbox is the new full inbox view.
+          Legacy view keeps the Gmail/compose/history UI for email + the
+          one-shot WhatsApp send. */}
+      <div className="flex gap-2 border-b border-slate-200 pb-2">
+        <button
+          onClick={function() { setSection('inbox'); }}
+          className={'px-4 py-2 rounded-lg text-sm font-semibold transition ' + (section === 'inbox' ? 'bg-emerald-600 text-white' : 'bg-slate-100 text-slate-600 hover:bg-slate-200')}
+        >
+          💬 WhatsApp Inbox
+        </button>
+        <button
+          onClick={function() { setSection('legacy'); }}
+          className={'px-4 py-2 rounded-lg text-sm font-semibold transition ' + (section === 'legacy' ? 'bg-emerald-600 text-white' : 'bg-slate-100 text-slate-600 hover:bg-slate-200')}
+        >
+          📨 Email & History
+        </button>
+      </div>
+
+      {section === 'inbox' && (
+        <WhatsAppInbox user={user} userProfile={userProfile} customers={customers} />
+      )}
+
+      {section === 'legacy' && (<>
+
       {/* Gmail Connection Status */}
       {gmailStatus === 'disconnected' && (
         <div style={{ ...cardStyle, borderColor: 'rgba(251,191,36,0.3)', background: 'rgba(251,191,36,0.06)' }} className="p-4">
@@ -305,7 +332,7 @@ export default function CommunicationsTab({ user, supabase }) {
                       <div className="text-xs truncate mt-0.5" style={{ color: 'var(--text-muted)' }}>{e.snippet}</div>
                     </div>
                     <div className="text-[10px] ml-2 flex-shrink-0" style={{ color: 'var(--text-muted)' }}>
-                      {e.date ? new Date(e.date).toLocaleDateString() : ''}
+                      {e.date ? fmtET(e.date, 'shortdate') : ''}
                     </div>
                   </div>
                 </div>
@@ -366,6 +393,7 @@ export default function CommunicationsTab({ user, supabase }) {
           </div>
         </div>
       )}
+      </>)}
     </div>
   );
 }

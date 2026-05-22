@@ -151,7 +151,10 @@ test('E5 API-key-missing case has a dedicated plain-English message', function()
   assert(/OPENAI_API_KEY\|not configured/.test(recordBlock) ||
          /\/OPENAI_API_KEY\|not configured\/i/.test(recordBlock),
     'code must detect the specific "not configured" server error pattern');
-  assert(/has not been configured in Vercel/.test(recordBlock),
+  // v55.82-O — wording softened from "has not been configured" to
+  // "is not configured", and the OPENAI_API_KEY phrase is now embedded
+  // in the user-facing detail. Accept either phrasing.
+  assert(/(has not been configured in Vercel|is not configured in Vercel)/.test(recordBlock),
     'dedicated message must explain WHAT is not configured in plain English');
 });
 
