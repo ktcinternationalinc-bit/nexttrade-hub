@@ -24,6 +24,7 @@ import InventoryStockImport from './InventoryStockImport';
 import InventoryMovementsLedger from './InventoryMovementsLedger';
 import InventoryCostLayers from './InventoryCostLayers';
 import InventoryAdjustments from './InventoryAdjustments';
+import InventoryOverview from './InventoryOverview';
 import {
   canViewInventory,
   canSeeInventoryCosts,
@@ -31,13 +32,16 @@ import {
 } from '../lib/inventory-permissions';
 
 var SUBTABS = [
+  // v55.83-A.6.27.51 — Inventory Overview (default landing): big "what's in stock" screen
+  // with accordion grouped by Family, current/original/sold + avg cost & P&L (super-admin).
+  { id: 'overview', label: '📊 Overview', stage: 'View', desc: 'One-screen view of current stock by Family, with cascading multi-level classification filters.' },
   // v55.83-A.6.27.32 — old-system subtabs HIDDEN from nav (Max never used
   // them; new Phase 1 system replaces them). Components stay imported and
   // in code for the eventual cleanup build, but no nav entries point here.
   // Old tabs that were hidden: inventory (view), skus (Master SKUs),
   // shipments, layers (Cost Layers), pnl (Profit by SKU), movements,
   // adjustments, reports. These will be rebuilt in Builds 4.2-5 against
-  // the new Product Master.
+  // the new Product List.
   // { id: 'inventory', label: '📊 Inventory View', stage: 'B', desc: '...' },
   // { id: 'skus', label: '📦 Master SKUs', stage: 'A', desc: '...' },
   // { id: 'shipments', label: '🚢 Shipments', stage: 'B', desc: '...' },
@@ -49,12 +53,12 @@ var SUBTABS = [
   { id: 'warehouses', label: '🏭 Warehouses', stage: 'A', desc: 'Physical stock locations' },
   // v55.83-A.6.27.22 — Phase 1 Build 1 of the classification system
   { id: 'masterlists', label: '🗂️ Master Lists', stage: 'Classification', desc: 'Manage the 8 classification levels (Product Family, Category, Grade, etc.) — super-admin only' },
-  // v55.83-A.6.27.23 — Phase 1 Build 2: Product Master catalog
-  { id: 'productmaster', label: '🏷️ Product Master', stage: 'Classification', desc: 'Define each product with classification + quick code + defaults' },
+  // v55.83-A.6.27.23 — Phase 1 Build 2: Product List catalog
+  { id: 'productmaster', label: '🏷️ Product List', stage: 'Classification', desc: 'Define each product with classification + quick code + defaults' },
   // v55.83-A.6.27.28 — Phase 1 Build 3: Bulk import products from Excel
   { id: 'importproducts', label: '📥 Import Products', stage: 'Classification', desc: 'Bulk-import products from an Excel file with template + preview + validation' },
-  // v55.83-A.6.27.29 — Phase 1 Build 4.0: Receive Stock (warehouse receiving)
-  { id: 'receivestock', label: '🚚 Receive Stock', stage: 'Receiving', desc: 'Record incoming shipments. Multi-line per receipt with autofill from Product Master.' },
+  // v55.83-A.6.27.29 — Phase 1 Build 4.0: Inbound Shipments (warehouse receiving)
+  { id: 'receivestock', label: '🚚 Inbound Shipments', stage: 'Receiving', desc: 'Record incoming shipments. Multi-line per receipt with autofill from Product List.' },
   // v55.83-A.6.27.30 — Phase 1 Build 4.5: Bulk import legacy stock
   { id: 'importstock', label: '📦 Import Stock', stage: 'Receiving', desc: 'One-time bulk import of existing inventory from Excel.' },
   // v55.83-A.6.27.34 — Phase 1 Build 4.3: Movements Ledger + FIFO Cost Layers (engine)
@@ -65,7 +69,7 @@ var SUBTABS = [
 ];
 
 export default function InventoryTab({ userProfile, modulePerms, toast, isSuperAdmin }) {
-  var [subtab, setSubtab] = useState('inventory');
+  var [subtab, setSubtab] = useState('overview');
 
   // v55.83-A.6.27.44 — load SKUs + warehouses once at this level so Layers + P&L
   // subtabs don't each refetch.
@@ -312,19 +316,19 @@ export default function InventoryTab({ userProfile, modulePerms, toast, isSuperA
           if (st.id === 'masterlists' && !(isSuperAdmin || (modulePerms && modulePerms['Manage Inventory Master'] === true))) {
             return null;
           }
-          // v55.83-A.6.27.23 — Product Master tab visible to anyone with
+          // v55.83-A.6.27.23 — Product List tab visible to anyone with
           // Inventory access (read-only) or super_admin / Edit Product
           // Master (full CRUD). Component itself handles edit-gating.
-          if (st.id === 'productmaster' && !(isSuperAdmin || (modulePerms && (modulePerms['Inventory'] === true || modulePerms['Edit Product Master'] === true)))) {
+          if (st.id === 'productmaster' && !(isSuperAdmin || (modulePerms && (modulePerms['Inventory'] === true || modulePerms['Edit Product List'] === true)))) {
             return null;
           }
           // v55.83-A.6.27.28 — Import Products tab requires Edit Product
           // Master (same as creating individual products). Hidden if no
           // perm. This is a heavy-impact action — strict gate.
-          if (st.id === 'importproducts' && !(isSuperAdmin || (modulePerms && modulePerms['Edit Product Master'] === true))) {
+          if (st.id === 'importproducts' && !(isSuperAdmin || (modulePerms && modulePerms['Edit Product List'] === true))) {
             return null;
           }
-          // v55.83-A.6.27.29 — Receive Stock tab visible to anyone with
+          // v55.83-A.6.27.29 — Inbound Shipments tab visible to anyone with
           // Inventory access (read-only) or super_admin / Edit Inventory
           // (full CRUD). Cost fields inside the component are gated
           // separately by canSeeInventoryCosts.
@@ -332,7 +336,7 @@ export default function InventoryTab({ userProfile, modulePerms, toast, isSuperA
             return null;
           }
           // v55.83-A.6.27.30 — Import Stock tab gated to super_admin OR
-          // Edit Inventory (same as Receive Stock — both write to the
+          // Edit Inventory (same as Inbound Shipments — both write to the
           // same table). Cost columns in the template/preview are gated
           // separately by canSeeInventoryCosts inside the component.
           if (st.id === 'importstock' && !(isSuperAdmin || (modulePerms && modulePerms['Edit Inventory'] === true))) {
@@ -399,11 +403,15 @@ export default function InventoryTab({ userProfile, modulePerms, toast, isSuperA
       {subtab === 'reports' && (
         <InventoryReports skus={skus} warehouses={warehouses} toast={toast} />
       )}
+      {/* v55.83-A.6.27.51 — Inventory Overview (new default landing) */}
+      {subtab === 'overview' && (
+        <InventoryOverview userProfile={userProfile} modulePerms={modulePerms} isSuperAdmin={isSuperAdmin} toast={toast} />
+      )}
       {/* v55.83-A.6.27.22 — Phase 1 Build 1: Master Lists admin */}
       {subtab === 'masterlists' && (
         <InventoryMasterAdmin userProfile={userProfile} modulePerms={modulePerms} isSuperAdmin={isSuperAdmin} toast={toast} />
       )}
-      {/* v55.83-A.6.27.23 — Phase 1 Build 2: Product Master catalog */}
+      {/* v55.83-A.6.27.23 — Phase 1 Build 2: Product List catalog */}
       {subtab === 'productmaster' && (
         <InventoryProductMaster userProfile={userProfile} modulePerms={modulePerms} isSuperAdmin={isSuperAdmin} toast={toast} />
       )}
@@ -411,7 +419,7 @@ export default function InventoryTab({ userProfile, modulePerms, toast, isSuperA
       {subtab === 'importproducts' && (
         <InventoryImportProducts userProfile={userProfile} modulePerms={modulePerms} isSuperAdmin={isSuperAdmin} toast={toast} />
       )}
-      {/* v55.83-A.6.27.29 — Phase 1 Build 4.0: Receive Stock */}
+      {/* v55.83-A.6.27.29 — Phase 1 Build 4.0: Inbound Shipments */}
       {subtab === 'receivestock' && (
         <InventoryReceiving userProfile={userProfile} modulePerms={modulePerms} isSuperAdmin={isSuperAdmin} toast={toast} />
       )}

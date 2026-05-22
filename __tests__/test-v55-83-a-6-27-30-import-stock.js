@@ -58,7 +58,7 @@ ok('A3a: downloadTemplate creates a 4-sheet workbook',
   /XLSX\.utils\.book_append_sheet\(wb, whSheet, 'Warehouses Reference'\)/.test(imp) &&
   /XLSX\.utils\.book_append_sheet\(wb, instrSheet, 'Instructions'\)/.test(imp));
 ok('A3b: blocks download if no products exist (with friendly alert)',
-  /if \(!products\.length\)[\s\S]{0,300}don\\'t have any products in the Product Master/.test(imp));
+  /if \(!products\.length\)[\s\S]{0,300}don\\'t have any products in the Product List/.test(imp));
 ok('A3c: blocks download if no warehouses exist',
   /if \(!warehouses\.length\)[\s\S]{0,300}don\\'t have any warehouses defined/.test(imp));
 ok('A3d: Products Reference sheet only includes cost columns if seeCosts',
@@ -80,7 +80,7 @@ ok('A5a: validateRows returns valid + errors buckets',
 ok('A5b: product_quick_code required',
   /if \(!quickCode\) \{\s+errs\.push\('product_quick_code required'\)/.test(imp));
 ok('A5c: unknown product_quick_code rejected with row#',
-  /errs\.push\('product_quick_code "' \+ quickCode \+ '" not found in Product Master/.test(imp));
+  /errs\.push\('product_quick_code "' \+ quickCode \+ '" not found in Product List/.test(imp));
 ok('A5d: quantity required and must be > 0',
   /if \(qty === null\) errs\.push\('quantity required'\)/.test(imp) &&
   /else if \(qty <= 0\) errs\.push\('quantity must be greater than 0/.test(imp));
@@ -138,9 +138,9 @@ ok('A9e: commit button disabled when no valid rows',
 ok('A9f: cost-permission notice shown to non-cost users on download step',
   /you don't have cost-view permission/.test(imp));
 
-// ── A10. Helper banner explaining when to use this vs. Receive Stock
-ok('A10a: helper banner present comparing this with Receive Stock',
-  /When to use this vs\. Receive Stock[\s\S]{0,600}new shipments arriving from now on/.test(imp));
+// ── A10. Helper banner explaining when to use this vs. Inbound Shipments
+ok('A10a: helper banner present comparing this with Inbound Shipments',
+  /When to use this vs\. Inbound Shipments[\s\S]{0,600}new shipments arriving from now on/.test(imp));
 
 // ══════════════════════════════════════════════════════════════════
 // PART B — InventoryTab wiring
@@ -169,8 +169,8 @@ ok('R4: Build 4.0 (InventoryReceiving) still imported',
   /import InventoryReceiving from '\.\/InventoryReceiving'/.test(inv));
 ok('R5: A.6.27.28 closed-tickets fetch still has NO .limit(100)',
   !/\.eq\('status', 'Closed'\)[\s\S]{0,200}\.limit\(100\)/.test(page));
-ok('R6: A.6.27.29 Receive Stock subtab still in SUBTABS',
-  /id: 'receivestock', label: '🚚 Receive Stock'/.test(inv));
+ok('R6: A.6.27.29 Inbound Shipments subtab still in SUBTABS',
+  /id: 'receivestock', label: '🚚 Inbound Shipments'/.test(inv));
 ok('R7: A.6.27.21 fixLinksBusy still in page.jsx',
   /fixLinksBusy/.test(page));
 

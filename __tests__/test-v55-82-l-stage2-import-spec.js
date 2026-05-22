@@ -57,8 +57,8 @@ ok('1e: full_sync mode value exists in code',
 // SECTION 2 — Matching by all 5 keys
 // ============================================================
 
-ok('2a: keyFor builder uses all 5 spec-required fields',
-  /keyFor = function \(r\) \{[\s\S]{0,500}r\.origin[\s\S]{0,200}r\.destination[\s\S]{0,200}r\.expiry_date[\s\S]{0,200}r\.vendor_name[\s\S]{0,200}r\.shipping_line/.test(src)
+ok('2a: keyFor builder uses 5 spec-required fields (v.47 — swapped expiry_date for effective_date to enable expiry_date backfill, swapped origin/destination for port_of_loading/port_of_discharge with fallback)',
+  /keyFor = function \(r\) \{[\s\S]{0,1500}r\.port_of_loading[\s\S]{0,500}r\.port_of_discharge[\s\S]{0,500}r\.effective_date[\s\S]{0,500}r\.vendor_name[\s\S]{0,500}r\.shipping_line/.test(src)
 );
 
 ok('2b: REGRESSION GUARD — match key no longer uses container_type or effective_date',

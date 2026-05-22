@@ -5,6 +5,7 @@ import { EXPENSE_CATS } from '../lib/utils';
 import TranslationPanel from './TranslationPanel';
 import AIMemorySettingsPanel from './AIMemorySettingsPanel';
 import CustomsRateLibrary from './CustomsRateLibrary';
+import BusinessEntitiesPanel from './BusinessEntitiesPanel';
 import { PERSONALITIES } from './AIGreeter';
 
 // ============================================================
@@ -353,12 +354,12 @@ const ROLES = [
 const MODULES = [
   'Dashboard', 'Personal Dashboard', 'Sales', 'Customers', 'Treasury', 'Checks', 'Debts',
   'Warehouse', 'Inventory', 'CRM', 'CRM View All', 'Tickets', 'Calendar', 'Customs',
-  'Shipping Rates', 'Quotes', 'Bank', 'Egypt Bank', 'Reports',
+  'Shipping Rates', 'Quotes', 'Bank', 'Egypt Bank', 'Open Accounts', 'Reports',
   'Daily Log', 'Admin', 'AI Assistant', 'Communications', 'Settings', 'Import',
   // Granular permissions
   'Edit Treasury', 'Edit Invoices', 'Delete Invoices', 'Edit Inventory', 'Adjust Inventory Quantities', 'Edit Warehouse',
-  'Edit CRM', 'View Costs', 'Delete Tickets', 'Assign Tickets', 'Merge Customers',
-  'Manage Categories', 'Manage Inventory Master', 'Edit Product Master', 'Export Data', 'Post Reminders', 'Welcome Briefing', 'HR Report',
+  'Edit CRM', 'View Costs', 'See Inventory Costs', 'Delete Tickets', 'Assign Tickets', 'Merge Customers',
+  'Manage Categories', 'Manage Inventory Master', 'Edit Product List', 'Export Data', 'Post Reminders', 'Welcome Briefing', 'HR Report',
 ];
 
 const NOTIF_TYPES = [
@@ -1032,7 +1033,7 @@ export default function SettingsTab({ toast, user, users, onReload, isAdmin, use
 
       {/* Section Tabs */}
       <div className="flex gap-1 mb-3 flex-wrap">
-        {[['roles', 'Team & Roles'], ['profiles', '👤 Team Profiles'], ['permissions', 'Module Access'], ['notifications', 'Notifications'], ['voice', '🎙️ Voice'], ['comms', '📬 Communications'], ['phone', '📞 Phone'], ['greeter', '🤖 AI Greeter'], ...(isSuperAdmin ? [['aimemory', '🧠 AI Memory'], ['admintools', '🛠️ Admin Tools']] : []), ['categories', '🏷️ Categories'], ['rules', 'Category Rules / قواعد'], ['expenses', '📋 Expense Descriptions'], ['customs', '🛃 Customs Rates'], ['translation', '🌐 Translation / ترجمة']].map(([v, l]) => (
+        {[['roles', 'Team & Roles'], ['profiles', '👤 Team Profiles'], ['permissions', 'Module Access'], ['notifications', 'Notifications'], ['voice', '🎙️ Voice'], ['comms', '📬 Communications'], ['phone', '📞 Phone'], ['greeter', '🤖 AI Greeter'], ...(isSuperAdmin ? [['aimemory', '🧠 AI Memory'], ['admintools', '🛠️ Admin Tools'], ['entities', '🏢 Business Entities']] : []), ['categories', '🏷️ Categories'], ['rules', 'Category Rules / قواعد'], ['expenses', '📋 Expense Descriptions'], ['customs', '🛃 Customs Rates'], ['translation', '🌐 Translation / ترجمة']].map(([v, l]) => (
           <button key={v} onClick={() => setSection(v)}
             className={'px-3 py-1.5 rounded-lg text-xs font-semibold transition ' + (section === v ? 'bg-slate-900 text-white' : 'bg-slate-100 text-slate-500')}>
             {l}
@@ -1043,6 +1044,11 @@ export default function SettingsTab({ toast, user, users, onReload, isAdmin, use
       {/* ===== AI MEMORY (SUPER ADMIN ONLY) ===== */}
       {section === 'aimemory' && isSuperAdmin && (
         <AIMemorySettingsPanel userProfile={userProfile} toast={toast} />
+      )}
+
+      {/* ===== BUSINESS ENTITIES (SUPER ADMIN ONLY) v55.83-A.6.27.53 ===== */}
+      {section === 'entities' && isSuperAdmin && (
+        <BusinessEntitiesPanel userProfile={userProfile} isSuperAdmin={isSuperAdmin} toast={toast} />
       )}
 
       {/* ===== CUSTOMS RATES (v55.51) ===== */}
@@ -1365,7 +1371,7 @@ export default function SettingsTab({ toast, user, users, onReload, isAdmin, use
               ))}
               {/* Action Permissions */}
               <tr><td colSpan={nonSuperUsers.length + 1} className="px-2 py-2 bg-amber-50 text-[10px] font-bold text-amber-900 border-b border-amber-200 mt-2">🔐 ACTION PERMISSIONS — what the user can do (Tab ON + Edit OFF = Read Only 👁️)</td></tr>
-              {['Edit Treasury', 'Edit Invoices', 'Delete Invoices', 'Edit Inventory', 'Adjust Inventory Quantities', 'Edit Warehouse', 'Edit CRM', 'View Costs', 'View Financial Reports', 'CRM View All', 'CRM View Contacts', 'Delete Tickets', 'Assign Tickets', 'Merge Customers', 'Manage Categories', 'Manage Inventory Master', 'Edit Product Master', 'Export Data', 'Post Reminders', 'HR Report'].map(mod => (
+              {['Edit Treasury', 'Edit Invoices', 'Delete Invoices', 'Edit Inventory', 'Adjust Inventory Quantities', 'Edit Warehouse', 'Edit CRM', 'View Costs', 'See Inventory Costs', 'View Financial Reports', 'CRM View All', 'CRM View Contacts', 'Delete Tickets', 'Assign Tickets', 'Merge Customers', 'Manage Categories', 'Manage Inventory Master', 'Edit Product List', 'Open Accounts', 'Export Data', 'Post Reminders', 'HR Report'].map(mod => (
                 <tr key={mod} className="border-b border-slate-50">
                   <td className="px-2 py-1.5 text-[10px] font-semibold text-amber-900">{mod}</td>
                   {nonSuperUsers.map(u => {

@@ -62,8 +62,8 @@ ok('A8: privacy filtering still applied in page.jsx (super_admin sees all, other
 // ── B1. Component existence + permission gate ─────────────────────
 ok('B1a: InventoryImportProducts component exists',
   /export default function InventoryImportProducts/.test(imp));
-ok('B1b: canImport gates on isSuperAdmin OR Edit Product Master',
-  /canImport = isSuperAdmin \|\| modulePerms\['Edit Product Master'\] === true/.test(imp));
+ok('B1b: canImport gates on isSuperAdmin OR Edit Product List',
+  /canImport = isSuperAdmin \|\| modulePerms\['Edit Product List'\] === true/.test(imp));
 ok('B1c: Access restricted screen if no perm',
   /if \(!canImport\) \{[\s\S]{0,500}Access restricted/.test(imp));
 
@@ -137,8 +137,8 @@ ok('B7a: InventoryTab imports InventoryImportProducts',
   /import InventoryImportProducts from '\.\/InventoryImportProducts'/.test(inv));
 ok('B7b: SUBTABS includes importproducts entry',
   /id: 'importproducts', label: '📥 Import Products'/.test(inv));
-ok('B7c: importproducts tab gated to super_admin OR Edit Product Master',
-  /st\.id === 'importproducts' && !\(isSuperAdmin \|\| \(modulePerms && modulePerms\['Edit Product Master'\] === true\)\)/.test(inv));
+ok('B7c: importproducts tab gated to super_admin OR Edit Product List',
+  /st\.id === 'importproducts' && !\(isSuperAdmin \|\| \(modulePerms && modulePerms\['Edit Product List'\] === true\)\)/.test(inv));
 ok('B7d: render branch mounts InventoryImportProducts',
   /subtab === 'importproducts' && \([\s\S]{0,200}<InventoryImportProducts/.test(inv));
 

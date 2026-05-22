@@ -147,7 +147,7 @@ export default function InventoryStockImport(props) {
   // ── Template generation ────────────────────────────────────────────
   function downloadTemplate() {
     if (!products.length) {
-      alert('You don\'t have any products in the Product Master yet. Add products first (or use Import Products in Build 3) before importing stock.');
+      alert('You don\'t have any products in the Product List yet. Add products first (or use Import Products in Build 3) before importing stock.');
       return;
     }
     if (!warehouses.length) {
@@ -321,7 +321,7 @@ export default function InventoryStockImport(props) {
       }
       var product = quickCode ? findProductByQuickCode(quickCode) : null;
       if (quickCode && !product) {
-        errs.push('product_quick_code "' + quickCode + '" not found in Product Master (or product is inactive)');
+        errs.push('product_quick_code "' + quickCode + '" not found in Product List (or product is inactive)');
       }
 
       var qty = asNumber(raw.quantity);
@@ -497,10 +497,10 @@ export default function InventoryStockImport(props) {
 
       {/* Helper banner */}
       <div className="bg-blue-50 border border-blue-300 rounded-lg p-3 mb-4 text-sm text-blue-900">
-        <div className="font-extrabold mb-1">💡 When to use this vs. Receive Stock</div>
+        <div className="font-extrabold mb-1">💡 When to use this vs. Inbound Shipments</div>
         <ul className="list-disc ml-5 space-y-1 text-blue-800">
           <li><span className="font-bold">Use this (Import Stock)</span> to bring legacy inventory — rolls that are already in your warehouses — into the new system in one go.</li>
-          <li><span className="font-bold">Use Receive Stock (the other tab)</span> for new shipments arriving from now on, one shipment at a time.</li>
+          <li><span className="font-bold">Use Inbound Shipments (the other tab)</span> for new shipments arriving from now on, one shipment at a time.</li>
         </ul>
       </div>
 
@@ -528,7 +528,7 @@ export default function InventoryStockImport(props) {
       <div className="bg-slate-50 rounded-xl border border-slate-200 p-4 mb-4">
         <div className="text-[11px] font-extrabold text-slate-700 tracking-wider mb-2">STEP 2 — UPLOAD FILLED TEMPLATE</div>
         <div className="text-sm text-slate-700 mb-3">
-          Every row is validated against your Product Master and warehouses. You'll see a preview before anything is saved.
+          Every row is validated against your Product List and warehouses. You'll see a preview before anything is saved.
         </div>
         <input
           ref={fileInputRef}
@@ -636,7 +636,7 @@ export default function InventoryStockImport(props) {
                 })}
               </div>
             )}
-            <div className="mt-2 text-xs text-slate-600 italic">View the imported receipts in the Receive Stock tab (filter by "Legacy" badge).</div>
+            <div className="mt-2 text-xs text-slate-600 italic">View the imported receipts in the Inbound Shipments tab (filter by "Legacy" badge).</div>
           </div>
         </div>
       )}

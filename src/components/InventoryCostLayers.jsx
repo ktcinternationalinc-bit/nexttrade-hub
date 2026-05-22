@@ -243,7 +243,7 @@ export default function InventoryCostLayers(props) {
           {summary.length === 0 ? (
             <div className="text-center text-slate-500 italic text-sm py-8">
               {layers.length === 0
-                ? 'No cost layers yet. Finalize a receipt in Receive Stock to create the first one.'
+                ? 'No cost layers yet. Finalize a receipt in Inbound Shipments to create the first one.'
                 : 'No open stock matches your filters.'}
             </div>
           ) : (
@@ -290,7 +290,7 @@ export default function InventoryCostLayers(props) {
           {filtered.length === 0 ? (
             <div className="text-center text-slate-500 italic text-sm py-8">
               {layers.length === 0
-                ? 'No cost layers yet. Finalize a receipt in Receive Stock to create the first one.'
+                ? 'No cost layers yet. Finalize a receipt in Inbound Shipments to create the first one.'
                 : 'No layers match your filters.'}
             </div>
           ) : (

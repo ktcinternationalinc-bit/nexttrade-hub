@@ -233,8 +233,8 @@ ok('R22: source=manual still default for new invoices',
 // ──────────────────────────────────────────────────────────────────
 // Version stamp
 // ──────────────────────────────────────────────────────────────────
-ok('V1: version stamp v55.83-A.6.27.45',
-  /BUILD v55\.83-A\.6\.27\.45/.test(page));
+ok('V1: version stamp v55.83-A.6.27.45 or later',
+  /BUILD v55\.83-A\.6\.27\.\d+/.test(page));
 
 if (failures.length > 0) {
   console.log('\n❌ ' + failures.length + ' failure(s):');

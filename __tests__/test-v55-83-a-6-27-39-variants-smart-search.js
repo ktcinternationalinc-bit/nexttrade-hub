@@ -140,8 +140,8 @@ ok('E1: suggestionsFor splits query on whitespace',
   /var keywords = query\.trim\(\)\.toLowerCase\(\)\.split\(\/\\s\+\/\)/.test(rec));
 ok('E2: every keyword must appear as substring (AND, not OR)',
   /for \(var i = 0; i < keywords\.length; i\+\+\) \{\s+if \(searchable\.indexOf\(keywords\[i\]\) < 0\) return false;\s+\}\s+return true/.test(rec));
-ok('E3: searchable includes quick_code, name_en, name_ar, slug, suffix',
-  /var searchable = \(\(p\.quick_code \|\| ''\) \+ ' ' \+[\s\S]{0,500}\(p\.variant_suffix \? p\.quick_code \+ '-' \+ p\.variant_suffix \+ ' ' : ''\)[\s\S]{0,300}\(p\.classification_slug \|\| ''\)\)\.toLowerCase\(\)/.test(rec));
+ok('E3: searchable includes quick_code, name_en, name_ar, slug, suffix (v.49 expanded to also include design_sku + supplier + notes + classification text)',
+  /var searchable = \(\s*\(p\.quick_code \|\| ''\) \+ ' ' \+[\s\S]{0,2000}\(p\.variant_suffix \? p\.quick_code \+ '-' \+ p\.variant_suffix \+ ' ' : ''\)[\s\S]{0,2000}\(p\.classification_slug \|\| ''\)/.test(rec));
 ok('E4: sort featured DESC first',
   /\(b\.featured === true \? 1 : 0\) - \(a\.featured === true \? 1 : 0\)/.test(rec));
 ok('E5: sort use_count DESC second',

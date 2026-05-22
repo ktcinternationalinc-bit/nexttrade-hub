@@ -3,7 +3,7 @@
 //
 // Super-admin (or anyone with "Manage Inventory Master" permission) maintains
 // the 8 classification levels here. This is the foundation for the inventory
-// classification system — Product Master (Build 2), Receiving Updates (Build 4),
+// classification system — Product List (Build 2), Receiving Updates (Build 4),
 // and Reports (Build 5) all pull from these lists.
 //
 // Five rules that mirror the Payment Instruments work:
@@ -87,7 +87,7 @@ export default function InventoryMasterAdmin(props) {
   }, [canManage]);
 
   // v55.83-A.6.27.24 — Esc key closes the modal. Guaranteed escape hatch
-  // matching Build 2 Product Master modal behavior.
+  // matching Build 2 Product List modal behavior.
   useEffect(function () {
     function onKey(e) {
       if ((e.key === 'Escape' || e.key === 'Esc') && editing) {
@@ -387,7 +387,7 @@ export default function InventoryMasterAdmin(props) {
               scrolling.
               Fix: convert to centered modal with sticky footer so save
               + cancel are ALWAYS visible regardless of form height.
-              Matches the Build 2 Product Master modal pattern. */}
+              Matches the Build 2 Product List modal pattern. */}
           {editing && (
             <div
               className="fixed inset-0 z-[200] bg-black/70 backdrop-blur-sm overflow-y-auto"

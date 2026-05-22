@@ -198,7 +198,7 @@ ok('R2: Build 4.2 (InventoryFinalizeCostDialog) still wired into InventoryReceiv
 ok('R3: Build 4.5 (InventoryStockImport) still imported',
   /import InventoryStockImport from '\.\/InventoryStockImport'/.test(inv));
 ok('R4: Build 4.1 — receivestock subtab still in nav',
-  /id: 'receivestock', label: '🚚 Receive Stock'/.test(inv));
+  /id: 'receivestock', label: '🚚 Inbound Shipments'/.test(inv));
 ok('R5: Build 4.1 — old shipments tab still commented out',
   /\/\/ \{ id: 'shipments', label: '🚢 Shipments'/.test(inv));
 ok('R6: A.6.27.28 closed-tickets fetch still has NO .limit(100)',

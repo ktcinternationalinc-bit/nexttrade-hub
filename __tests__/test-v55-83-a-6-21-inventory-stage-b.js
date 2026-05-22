@@ -107,8 +107,8 @@ ok('8e: movements subtab renders MovementsLedger',
   /subtab === 'movements'[\s\S]{0,200}<MovementsLedger/.test(tab));
 ok('8f: header badge bumped to v.43 (Stage 6 of 6 removed)',
   /v55\.83-A\.6\.27\.\d+/.test(tab) && !/Stage 6 of 6/.test(tab));
-ok('8g: default subtab is inventory pivot view',
-  /var \[subtab, setSubtab\] = useState\('inventory'\)/.test(tab));
+ok('8g: default subtab is the overview screen (.51 changed from legacy "inventory" to new "overview")',
+  /var \[subtab, setSubtab\] = useState\('overview'\)/.test(tab));
 ok('8h: coming-soon placeholder only for E and F (A.6.27.9: removed entirely)',
   /\['adjustments', 'reports'\]\.indexOf\(subtab\) >= 0/.test(tab) ||
   // After A.6.27.9 the placeholder block is gone — both subtabs render real components

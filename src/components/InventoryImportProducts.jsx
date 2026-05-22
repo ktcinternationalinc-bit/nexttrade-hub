@@ -5,7 +5,7 @@
 //   1. Download template → fill offline → upload
 //   2. Validate every row → preview screen → user confirms → bulk insert
 //
-// Permission: super_admin OR "Edit Product Master" (same gate as Build 2).
+// Permission: super_admin OR "Edit Product List" (same gate as Build 2).
 //
 // Locked decisions (Max May 18 2026):
 //   - Duplicate quick_code: skip the row UNLESS the import row has fields
@@ -102,7 +102,7 @@ export default function InventoryImportProducts(props) {
   var toast = props.toast || { success: function(){}, error: function(){}, warning: function(){}, info: function(){} };
 
   // Permission gates
-  var canImport = isSuperAdmin || modulePerms['Edit Product Master'] === true;
+  var canImport = isSuperAdmin || modulePerms['Edit Product List'] === true;
 
   var [lists, setLists] = useState([]);
   var [rules, setRules] = useState([]);
@@ -258,7 +258,7 @@ export default function InventoryImportProducts(props) {
 
     // Sheet 4: Instructions
     var instrAOA = [
-      ['KTC NextTrade Hub — Product Master Import Template'],
+      ['KTC NextTrade Hub — Product List Import Template'],
       [''],
       ['HOW TO USE:'],
       ['1. Fill in the "Products" sheet — one row per product.'],
@@ -569,7 +569,7 @@ export default function InventoryImportProducts(props) {
         <div className="bg-amber-50 border-2 border-amber-300 rounded-lg p-4">
           <div className="text-base font-extrabold text-amber-900">🔒 Access restricted</div>
           <div className="text-sm text-amber-800 mt-1 font-medium">
-            Importing products requires the "Edit Product Master" permission. Ask Max to grant it from Settings → Roles &amp; Permissions.
+            Importing products requires the "Edit Product List" permission. Ask Max to grant it from Settings → Roles &amp; Permissions.
           </div>
         </div>
       </div>

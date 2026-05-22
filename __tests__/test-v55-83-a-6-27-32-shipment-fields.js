@@ -138,15 +138,14 @@ ok('E5: Arrival Date input rendered (type date)',
 ok('E6: Purchase Currency dropdown rendered with EGP/USD/EUR',
   /Purchase Currency[\s\S]{0,400}value=\{header\.purchase_currency\}[\s\S]{0,400}<option value="EGP">EGP[\s\S]{0,100}<option value="USD">USD[\s\S]{0,100}<option value="EUR">EUR/.test(rec));
 
-ok('E7: Ordered Qty input rendered per line',
-  /Ordered Qty[\s\S]{0,400}value=\{line\.ordered_quantity\}/.test(rec));
-ok('E8: Received Qty input rendered per line (was just "Quantity")',
-  /Received Qty \*[\s\S]{0,400}value=\{line\.quantity\}/.test(rec) ||
-  /Received Qty \(rolled-up\)[\s\S]{0,400}value=\{line\.quantity\}/.test(rec));
+ok('E7: Order Qty input rendered per line (v.49 renamed)',
+  /Order Qty[\s\S]{0,400}value=\{line\.ordered_quantity\}/.test(rec));
+ok('E8: Quantity Received input rendered per line (v.49 renamed from "Received Qty (rolled-up)")',
+  /Quantity Received \*[\s\S]{0,400}value=\{line\.quantity\}/.test(rec));
 ok('E9: Variance reason input shows conditionally when ordered != received',
   /Variance: ordered[\s\S]{0,500}variance_reason/.test(rec));
-ok('E10: Quantity in kg input rendered per line',
-  /Quantity in kg[\s\S]{0,400}value=\{line\.quantity_kg\}/.test(rec));
+ok('E10: Quantity in Kilos input rendered per line',
+  /Quantity in Kilos[\s\S]{0,400}value=\{line\.quantity_kg\}/.test(rec));
 ok('E11: Roll Count input rendered per line',
   /Roll Count[\s\S]{0,400}value=\{line\.roll_count\}/.test(rec));
 ok('E12: Line Notes input rendered per line',
@@ -202,9 +201,9 @@ ok('G9: "warehouses" tab KEPT (still needed)',
 ok('G10: new Phase 1 subtabs still in nav (masterlists)',
   /^\s*\{ id: 'masterlists', label: '🗂️ Master Lists'/m.test(inv));
 ok('G11: new Phase 1 subtabs still in nav (productmaster)',
-  /^\s*\{ id: 'productmaster', label: '🏷️ Product Master'/m.test(inv));
+  /^\s*\{ id: 'productmaster', label: '🏷️ Product List'/m.test(inv));
 ok('G12: new Phase 1 subtabs still in nav (receivestock)',
-  /^\s*\{ id: 'receivestock', label: '🚚 Receive Stock'/m.test(inv));
+  /^\s*\{ id: 'receivestock', label: '🚚 Inbound Shipments'/m.test(inv));
 ok('G13: new Phase 1 subtabs still in nav (importstock)',
   /^\s*\{ id: 'importstock', label: '📦 Import Stock'/m.test(inv));
 

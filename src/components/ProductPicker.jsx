@@ -2,7 +2,7 @@
 // v55.83-A.6.27.38 — Universal ProductPicker
 //
 // One picker component used wherever a product needs to be selected:
-//   - Receive Stock line items
+//   - Inbound Shipments line items
 //   - Inventory Adjustments (quantity / transfer)
 //   - Sales Invoice lines (Build 4.6 will plug in)
 //
@@ -317,7 +317,7 @@ export default function ProductPicker(props) {
             {filtered.length === 0 ? (
               <div className="text-center text-slate-500 italic text-sm py-8">
                 {products.length === 0
-                  ? 'No products in the master. Import via Inventory → Product Master → Import Products.'
+                  ? 'No products in the master. Import via Inventory → Product List → Import Products.'
                   : filterByStock
                     ? 'No products with on-hand stock match your search/filters.'
                     : 'No products match.'}

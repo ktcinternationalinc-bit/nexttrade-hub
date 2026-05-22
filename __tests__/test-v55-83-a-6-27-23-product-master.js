@@ -4,7 +4,7 @@
 // the 8-level hierarchy from Build 1. Each product is created ONCE here.
 //
 // Key behaviors locked:
-//   1. Separate permission "Edit Product Master" — distinct from "Edit Inventory"
+//   1. Separate permission "Edit Product List" — distinct from "Edit Inventory"
 //   2. Universal cascading dropdowns — respect parent rules if they exist,
 //      otherwise universal. Max's call: maximum flexibility.
 //   3. 8 levels REQUIRED on save — slug must be computable
@@ -72,10 +72,10 @@ ok('1n: RLS enabled',
 // ── 2. Component file ──────────────────────────────────────────────
 ok('2a: InventoryProductMaster export',
   /export default function InventoryProductMaster/.test(pm));
-ok('2b: canView gates on isSuperAdmin OR Inventory OR Edit Product Master',
-  /canView = isSuperAdmin \|\| modulePerms\['Inventory'\] === true \|\| modulePerms\['Edit Product Master'\] === true/.test(pm));
-ok('2c: canEdit gates only on isSuperAdmin OR Edit Product Master',
-  /canEdit = isSuperAdmin \|\| modulePerms\['Edit Product Master'\] === true/.test(pm));
+ok('2b: canView gates on isSuperAdmin OR Inventory OR Edit Product List',
+  /canView = isSuperAdmin \|\| modulePerms\['Inventory'\] === true \|\| modulePerms\['Edit Product List'\] === true/.test(pm));
+ok('2c: canEdit gates only on isSuperAdmin OR Edit Product List',
+  /canEdit = isSuperAdmin \|\| modulePerms\['Edit Product List'\] === true/.test(pm));
 ok('2d: Access restricted screen for non-canView users',
   /if \(!canView\) \{[\s\S]{0,500}Access restricted/.test(pm));
 ok('2e: edit buttons only shown when canEdit (uses {canEdit && ...} pattern)',
@@ -124,18 +124,18 @@ ok('2y: "No options yet" hint when level has zero matches given parent picks',
   /No options yet — add some in Master Lists or pick a different parent level/.test(pm));
 
 // ── 3. SettingsTab permissions registered ─────────────────────────
-ok('3a: "Edit Product Master" added to master permissions array',
-  /'Manage Inventory Master', 'Edit Product Master', 'Export Data'/.test(settings));
-ok('3b: "Edit Product Master" added to action permissions render list',
-  /'Manage Inventory Master', 'Edit Product Master', 'Export Data', 'Post Reminders'/.test(settings));
+ok('3a: "Edit Product List" added to master permissions array',
+  /'Manage Inventory Master', 'Edit Product List', 'Export Data'/.test(settings));
+ok('3b: "Edit Product List" added to action permissions render list',
+  /'Manage Inventory Master', 'Edit Product List', 'Export Data', 'Post Reminders'/.test(settings));
 
 // ── 4. InventoryTab wiring ─────────────────────────────────────────
 ok('4a: InventoryTab imports InventoryProductMaster',
   /import InventoryProductMaster from '\.\/InventoryProductMaster'/.test(inv));
 ok('4b: SUBTABS includes productmaster entry',
-  /id: 'productmaster', label: '🏷️ Product Master'/.test(inv));
+  /id: 'productmaster', label: '🏷️ Product List'/.test(inv));
 ok('4c: productmaster tab hidden if no Inventory access and not super_admin',
-  /st\.id === 'productmaster' && !\(isSuperAdmin \|\| \(modulePerms && \(modulePerms\['Inventory'\] === true \|\| modulePerms\['Edit Product Master'\] === true\)\)\)[\s\S]{0,50}return null/.test(inv));
+  /st\.id === 'productmaster' && !\(isSuperAdmin \|\| \(modulePerms && \(modulePerms\['Inventory'\] === true \|\| modulePerms\['Edit Product List'\] === true\)\)\)[\s\S]{0,50}return null/.test(inv));
 ok('4d: render branch passes isSuperAdmin',
   /subtab === 'productmaster' && \([\s\S]{0,200}<InventoryProductMaster[\s\S]{0,200}isSuperAdmin=\{isSuperAdmin\}/.test(inv));
 

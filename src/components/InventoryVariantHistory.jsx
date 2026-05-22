@@ -1,7 +1,7 @@
 'use client';
 // v55.83-A.6.27.44d.1 — Inventory Variant History modal.
 //
-// Opens from Product Master "🔍 History" button. Shows everywhere a variant has
+// Opens from Product List "🔍 History" button. Shows everywhere a variant has
 // been touched: receipts (Inbound), invoice consumptions (Outbound), adjustments,
 // and a stock summary.
 //
@@ -199,11 +199,11 @@ export default function InventoryVariantHistory({ variant, onClose, isOpen }) {
   var displayCode = variant.quick_code + (variant.variant_suffix ? '-' + variant.variant_suffix : '');
 
   return (
-    <div className="fixed inset-0 z-[100] bg-black/70 flex items-center justify-center p-4" onClick={onClose}>
+    <div className="fixed inset-0 z-[200] bg-black/80 flex items-start justify-center pt-6 pb-6 px-4 overflow-y-auto" onClick={onClose}>
       <div
         className="bg-white text-slate-900 rounded-2xl shadow-2xl mx-auto flex flex-col"
         onClick={function (e) { e.stopPropagation(); }}
-        style={{ width: '95vw', maxWidth: 1600, maxHeight: '92vh' }}
+        style={{ width: '95vw', maxWidth: 1600, maxHeight: 'calc(100vh - 60px)' }}
       >
         {/* Header */}
         <div className="bg-indigo-700 text-white rounded-t-2xl px-6 py-4 flex items-start justify-between">
@@ -218,8 +218,8 @@ export default function InventoryVariantHistory({ variant, onClose, isOpen }) {
           </button>
         </div>
 
-        {/* Tabs */}
-        <div className="flex gap-1 px-4 pt-3 bg-slate-50 border-b-2 border-slate-200">
+        {/* Tabs — v55.83-A.6.27.50: high-contrast (black on white when active, white on slate-800 when inactive, no opacity tricks) */}
+        <div className="flex gap-1 px-4 pt-3 bg-indigo-100 border-b-2 border-indigo-400">
           {[
             { id: 'summary', label_en: '📊 Stock Summary', label_ar: 'ملخص المخزون' },
             { id: 'inbound', label_en: '📥 Inbound', label_ar: 'الوارد', count: receipts.length },
@@ -231,9 +231,9 @@ export default function InventoryVariantHistory({ variant, onClose, isOpen }) {
               <button
                 key={t.id}
                 onClick={function () { setTab(t.id); }}
-                className={'px-4 py-2 text-sm font-extrabold rounded-t-lg ' + (active ? 'bg-white text-indigo-900 border-2 border-b-0 border-slate-200' : 'bg-slate-200 text-slate-700 hover:bg-slate-300')}
+                className={'px-4 py-2 text-sm font-extrabold rounded-t-lg transition-colors ' + (active ? 'bg-white text-slate-900 border-2 border-b-0 border-indigo-600 shadow-md' : 'bg-slate-800 text-white hover:bg-slate-700 border-2 border-transparent')}
               >
-                {t.label_en} <span className="opacity-75 mx-1">/</span> <span style={{ direction: 'rtl' }}>{t.label_ar}</span>
+                {t.label_en} <span className="mx-1">/</span> <span style={{ direction: 'rtl' }}>{t.label_ar}</span>
                 {t.count != null && <span className="ml-1 text-xs">({t.count})</span>}
               </button>
             );

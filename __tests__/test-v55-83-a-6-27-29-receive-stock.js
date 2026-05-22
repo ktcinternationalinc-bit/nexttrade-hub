@@ -1,6 +1,6 @@
-// v55.83-A.6.27.29 — Inventory Phase 1 Build 4.0: Receive Stock
+// v55.83-A.6.27.29 — Inventory Phase 1 Build 4.0: Inbound Shipments
 //
-// First operational build of Phase 1. Adds an everyday "Receive Stock"
+// First operational build of Phase 1. Adds an everyday "Inbound Shipments"
 // flow tied to the Product Master (Build 2). One shipment = one receipt
 // number = potentially many product lines, all sharing the same number.
 //
@@ -230,7 +230,7 @@ ok('B12e: footer has Save Draft + Submit + Cancel buttons (v.43 redesign)',
 ok('C1: InventoryTab imports InventoryReceiving',
   /import InventoryReceiving from '\.\/InventoryReceiving'/.test(inv));
 ok('C2: SUBTABS includes receivestock entry',
-  /id: 'receivestock', label: '🚚 Receive Stock'/.test(inv));
+  /id: 'receivestock', label: '🚚 Inbound Shipments'/.test(inv));
 ok('C3: receivestock tab gated to super_admin OR Inventory OR Edit Inventory',
   /st\.id === 'receivestock' && !\(isSuperAdmin \|\| \(modulePerms && \(modulePerms\['Inventory'\] === true \|\| modulePerms\['Edit Inventory'\] === true\)\)\)/.test(inv));
 ok('C4: render branch mounts InventoryReceiving with full props',
@@ -266,4 +266,4 @@ if (failures.length > 0) {
   failures.forEach(f => console.log('  - ' + f));
   process.exit(1);
 }
-console.log('\n✅ All v55.83-A.6.27.29 Build 4.0 Receive Stock tests passed');
+console.log('\n✅ All v55.83-A.6.27.29 Build 4.0 Inbound Shipments tests passed');

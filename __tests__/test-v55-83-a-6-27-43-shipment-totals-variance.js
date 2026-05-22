@@ -132,8 +132,8 @@ ok('F3: line processing loop skips blank lines on Draft save',
 // PART G — Modal UI: width + Shipment Expected Totals section
 // ══════════════════════════════════════════════════════════════════
 
-ok('G1: modal width = 95vw (uses the screen)',
-  /style=\{\{ width: '95vw', maxWidth: 1800 \}\}/.test(rec));
+ok('G1: modal width = 97vw (uses the screen) — v.48 widened from 95vw',
+  /style=\{\{ width: '97vw', maxWidth: 1900/.test(rec));
 ok('G2: SHIPMENT EXPECTED TOTALS section rendered with amber-50 styling',
   /📦 Shipment Expected Totals/.test(rec) &&
   /bg-amber-50 border-2 border-amber-400 rounded-xl/.test(rec));
@@ -253,7 +253,7 @@ ok('M4: classification cell renders <ul> with list-disc bullets',
 ok('M5: each <li> uses text-slate-900 (high contrast)',
   /<li key=\{i\} className="text-slate-900 leading-tight">/.test(pm));
 ok('M6: bullet shows label + value + (code)',
-  /<span className="font-bold text-slate-600">\{b\.label\}:[\s\S]{0,200}<span className="font-extrabold text-slate-900">\{b\.value\}<\/span>[\s\S]{0,200}\(\{b\.code\}\)/.test(pm));
+  /<span className="font-extrabold text-slate-700">\{b\.label\}:[\s\S]{0,200}<span className="font-extrabold text-slate-900">\{b\.value\}<\/span>[\s\S]{0,200}\(\{b\.code\}\)/.test(pm));
 ok('M7: LEVEL_FIELD_MAP includes Level 9 → origin_list_id',
   /9: 'origin_list_id'/.test(pm));
 ok('M8: grid widened: name 1.5fr, classification 2fr, actions 370px',

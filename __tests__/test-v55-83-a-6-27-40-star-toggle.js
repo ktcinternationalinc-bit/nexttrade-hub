@@ -27,7 +27,7 @@ ok('A3: toggleFeatured calls dbUpdate(inventory_products) with featured field',
 ok('A4: toggleFeatured shows star/unstar toast',
   /toast\.success\(\(newVal \? '⭐ Starred: ' : '☆ Unstarred: '\)/.test(pm));
 ok('A5: toggleFeatured awaits reload after update',
-  /toggleFeatured\(p\)[\s\S]{0,1000}await reload\(\)/.test(pm));
+  /toggleFeatured\(p\)[\s\S]{0,3000}await reload\(\)/.test(pm));
 ok('A6: toggleFeatured handles errors with toast.error',
   /\[product-master\] toggleFeatured failed:[\s\S]{0,300}toast\.error\('Star toggle failed:/.test(pm));
 

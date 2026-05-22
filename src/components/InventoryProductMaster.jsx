@@ -1,5 +1,5 @@
 'use client';
-// v55.83-A.6.27.23 — Inventory Product Master (Phase 1 Build 2)
+// v55.83-A.6.27.23 — Inventory Product List (Phase 1 Build 2)
 //
 // The catalog of every product the business stocks, classified via the
 // 8-level hierarchy from Build 1. Each product is created ONCE here with
@@ -7,7 +7,7 @@
 // and default tech specs / operational data. Build 4 (warehouse
 // receiving) will use these as the source of truth for auto-fill.
 //
-// Permission: super_admin OR "Edit Product Master" — separate from "Edit
+// Permission: super_admin OR "Edit Product List" — separate from "Edit
 // Inventory" (Max's call: editing the master is more sensitive than
 // receiving day-to-day inventory).
 //
@@ -93,8 +93,8 @@ export default function InventoryProductMaster(props) {
   var toast = props.toast || { success: function(){}, error: function(){}, warning: function(){}, info: function(){} };
 
   // Permission gates
-  var canView = isSuperAdmin || modulePerms['Inventory'] === true || modulePerms['Edit Product Master'] === true;
-  var canEdit = isSuperAdmin || modulePerms['Edit Product Master'] === true;
+  var canView = isSuperAdmin || modulePerms['Inventory'] === true || modulePerms['Edit Product List'] === true;
+  var canEdit = isSuperAdmin || modulePerms['Edit Product List'] === true;
 
   var [lists, setLists] = useState([]);          // all inventory_lists rows
   var [rules, setRules] = useState([]);          // all inventory_list_rules rows
@@ -128,6 +128,9 @@ export default function InventoryProductMaster(props) {
   var [modalProductId, setModalProductId] = useState(null);
   var [form, setForm] = useState(emptyForm());
   var [busy, setBusy] = useState(false);
+  // v55.83-A.6.27.46 — Schema diagnostic: detect missing SQL migrations and warn user.
+  // Avoids the silent-failure trap where a button "doesn't work" because a column doesn't exist.
+  var [schemaIssues, setSchemaIssues] = useState([]);  // array of { migration, columns_missing }
 
   // Load all reference data + products
   useEffect(function () {
@@ -145,6 +148,43 @@ export default function InventoryProductMaster(props) {
         setLists(lstRes.data || []);
         setRules(ruleRes.data || []);
         setProducts(prodRes.data || []);
+        // v55.83-A.6.27.46 — Schema diagnostic: probe optional columns to detect missing
+        // SQL migrations. We surface a banner so the user knows WHY their buttons aren't
+        // working instead of giving up on the feature.
+        var issues = [];
+        // Migration .38 — featured + use_count
+        try {
+          var pr = await supabase.from('inventory_products').select('featured, use_count').limit(1);
+          if (pr.error && /(featured|use_count).*does not exist/i.test(pr.error.message || '')) {
+            issues.push({ migration: 'v55.83-A.6.27.38', columns_missing: ['featured', 'use_count'], affects: 'Star/favorite button' });
+          }
+        } catch (e) {/* swallow */}
+        // Migration .39 — variant_suffix + parent_template_id + is_family_template
+        try {
+          var pr2 = await supabase.from('inventory_products').select('is_family_template, variant_suffix, parent_template_id').limit(1);
+          if (pr2.error && /(is_family_template|variant_suffix|parent_template_id).*does not exist/i.test(pr2.error.message || '')) {
+            issues.push({ migration: 'v55.83-A.6.27.39', columns_missing: ['is_family_template', 'variant_suffix', 'parent_template_id'], affects: 'Family templates / Create Variant' });
+          }
+        } catch (e) {/* swallow */}
+        // Migration .43 — can_delete_product function
+        try {
+          var fnRes = await supabase.rpc('can_delete_product', { p_id: '00000000-0000-0000-0000-000000000000' });
+          // We expect false or null for a non-existent UUID; any "function does not exist" error means migration missing
+          if (fnRes.error && /function.*can_delete_product.*does not exist/i.test(fnRes.error.message || '')) {
+            issues.push({ migration: 'v55.83-A.6.27.43', columns_missing: ['can_delete_product()'], affects: 'Edit lock + Delete button' });
+          }
+        } catch (e) {/* swallow */}
+        setSchemaIssues(issues);
+        // v55.83-A.6.27.50 — Loud toast on page load so user can't miss the banner.
+        // Without this, the banner is silent and a user who never scrolls past their
+        // product list won't realize their database is missing migrations.
+        if (issues.length > 0 && !cancelled) {
+          toast.warning(
+            '⚠ Database missing ' + issues.length + ' migration' + (issues.length === 1 ? '' : 's') +
+            ' — see the amber banner above for details. ' +
+            'Some buttons (like the star) won\'t save until the SQL is run.'
+          );
+        }
       } catch (e) {
         console.error('[product-master] load failed:', e);
         toast.error('Failed to load product master data');
@@ -430,19 +470,48 @@ export default function InventoryProductMaster(props) {
     }
   }
 
+  // v55.83-A.6.27.46 — Fix race condition: openDuplicate must NOT depend on the
+  // async openEdit. openEdit awaits can_delete_product RPC, then calls setForm()
+  // with the ORIGINAL product data. If openDuplicate calls setForm(prev => ...,
+  // quick_code: '') BEFORE that resolves, the await wins and overwrites with the
+  // original quick_code, leading to "save does nothing because of unique violation
+  // (or stale data)" — the silent failure the user reported.
+  //
+  // Fix: inline the form-set directly, set modalMode synchronously, skip the
+  // can_delete check (a NEW product doesn't need it — there are no references).
   function openDuplicate(p) {
-    openEdit(p);
-    setModalMode('new');
+    setModalMode('new');               // synchronous
     setModalProductId(null);
-    // Wipe identity fields, keep classification + defaults
-    setForm(function (prev) {
-      return Object.assign({}, prev, {
-        name_en: prev.name_en + ' (copy)',
-        name_ar: prev.name_ar + ' (نسخة)',
-        quick_code: '',
-        design_sku: '',
-      });
+    setEditLocked(false);              // a new copy can't be "locked"
+    setEditIsTemplate(p.is_family_template === true);
+    setForm({
+      name_en: (p.name_en || '') + ' (copy)',
+      name_ar: (p.name_ar || '') + ' (نسخة)',
+      quick_code: '',                  // user must enter a new quick code (uniqueness)
+      design_sku: '',
+      family_list_id: p.family_list_id || '',
+      category_list_id: p.category_list_id || '',
+      grade_list_id: p.grade_list_id || '',
+      construction_list_id: p.construction_list_id || '',
+      backing_list_id: p.backing_list_id || '',
+      color_list_id: p.color_list_id || '',
+      pattern_list_id: p.pattern_list_id || '',
+      spec_class_list_id: p.spec_class_list_id || '',
+      default_uom: p.default_uom || '',
+      default_thickness_mm: p.default_thickness_mm != null ? String(p.default_thickness_mm) : '',
+      default_width_m: p.default_width_m != null ? String(p.default_width_m) : '',
+      default_gsm: p.default_gsm != null ? String(p.default_gsm) : '',
+      default_density: p.default_density != null ? String(p.default_density) : '',
+      default_weight_per_roll: p.default_weight_per_roll != null ? String(p.default_weight_per_roll) : '',
+      default_roll_length_m: p.default_roll_length_m != null ? String(p.default_roll_length_m) : '',
+      default_supplier: p.default_supplier || '',
+      default_cost: p.default_cost != null ? String(p.default_cost) : '',
+      default_currency: p.default_currency || 'EGP',
+      default_rack: p.default_rack || '',
+      notes: p.notes || '',
     });
+    // Immediate user feedback so it's obvious the copy happened.
+    toast.success('✓ Copied — change the Quick Code, then Save / تم النسخ — غيّر الكود ثم احفظ');
   }
 
   function closeModal() {
@@ -479,6 +548,13 @@ export default function InventoryProductMaster(props) {
 
     // Quick code uniqueness (client-side; DB also enforces)
     var quickCode = (form.quick_code || '').trim();
+    // v55.83-A.6.27.46 — Helpful explicit message when user clicks Save on a "(copy)"
+    // and never set a new quick code. Previous behavior: insert tried with null,
+    // sometimes silently failed depending on DB state. Now we tell them what to do.
+    if (modalMode === 'new' && (form.name_en || '').endsWith('(copy)') && !quickCode) {
+      toast.error('Please change the Quick Code before saving this copied item / يرجى تغيير الكود قبل الحفظ');
+      return;
+    }
     if (quickCode) {
       var dup = products.find(function (p) {
         if (modalMode === 'edit' && p.id === modalProductId) return false;
@@ -555,14 +631,31 @@ export default function InventoryProductMaster(props) {
 
   // v55.83-A.6.27.40 — Star toggle: marks/unmarks a product as featured.
   // Featured products always appear at the top of search dropdowns in
-  // Receive Stock, Adjustments, and Sales Invoice pickers.
+  // Inbound Shipments, Adjustments, and Sales Invoice pickers.
   async function toggleFeatured(p) {
     var newVal = !(p.featured === true);
     try {
+      // v55.83-A.6.27.46 — Defensive read-back. dbUpdate auto-strips missing columns
+      // (when SQL migration .38 hasn't been run), so we directly verify the column exists
+      // by querying for it. If the column is missing, give the user a clear, actionable
+      // error instead of a silent failure that looks like the button "doesn't work."
+      var verifyRes = await supabase.from('inventory_products').select('id, featured').eq('id', p.id).maybeSingle();
+      if (verifyRes.error && /column.*featured.*does not exist/i.test(verifyRes.error.message || '')) {
+        toast.error('Stars not yet enabled — run SQL migration v55.83-A.6.27.38 (adds featured + use_count columns) / لم يتم تفعيل النجوم — قم بتشغيل ملف SQL');
+        console.error('[product-master] featured column missing. Run sql/v55-83-a-6-27-38-catalog-support.sql');
+        return;
+      }
       await dbUpdate('inventory_products', p.id, {
         featured: newVal,
         updated_by: userProfile && userProfile.id,
       }, userProfile && userProfile.id);
+      // Re-read to confirm the write took effect
+      var after = await supabase.from('inventory_products').select('featured').eq('id', p.id).maybeSingle();
+      if (after && after.data && after.data.featured !== newVal) {
+        toast.error('Star save did not persist — check that SQL migration .38 was run / لم يتم الحفظ — تحقق من تشغيل ملف SQL');
+        console.error('[product-master] toggleFeatured wrote but read-back shows no change. SQL migration may be missing.');
+        return;
+      }
       toast.success((newVal ? '⭐ Starred: ' : '☆ Unstarred: ') + (p.name_en || p.quick_code || 'product'));
       await reload();
     } catch (err) {
@@ -627,7 +720,7 @@ export default function InventoryProductMaster(props) {
         <div className="bg-amber-50 border-2 border-amber-300 rounded-lg p-4">
           <div className="text-base font-extrabold text-amber-900">🔒 Access restricted</div>
           <div className="text-sm text-amber-800 mt-1 font-medium">
-            Viewing the Product Master requires the Inventory permission. Ask Max to grant it from Settings → Roles &amp; Permissions.
+            Viewing the Product List requires the Inventory permission. Ask Max to grant it from Settings → Roles &amp; Permissions.
           </div>
         </div>
       </div>
@@ -645,7 +738,7 @@ export default function InventoryProductMaster(props) {
       <div className="mb-4">
         <div className="flex items-center gap-2">
           <span style={{ fontSize: 24 }}>📦</span>
-          <h2 className="text-xl font-extrabold text-slate-900">Product Master</h2>
+          <h2 className="text-xl font-extrabold text-slate-900">Product List</h2>
         </div>
         <div className="text-sm text-slate-700 font-medium mt-1">
           Define each product once with its 8-level classification, optional quick code, and default specs. Used everywhere downstream.
@@ -654,6 +747,48 @@ export default function InventoryProductMaster(props) {
           عرّف كل منتج مرة واحدة بتصنيفه ذي الثمانية مستويات ورمزه السريع ومواصفاته الافتراضية.
         </div>
       </div>
+
+      {/* v55.83-A.6.27.46 — SCHEMA DIAGNOSTIC BANNER.
+          When SQL migrations are missing, certain buttons silently fail. This banner
+          tells the user exactly which SQL file to run instead of leaving them confused. */}
+      {schemaIssues.length > 0 && (
+        <div className="bg-amber-100 border-2 border-amber-500 rounded-xl p-4 mb-4">
+          <div className="flex items-start gap-3">
+            <span className="text-3xl">⚠️</span>
+            <div className="flex-1">
+              <div className="text-base font-extrabold text-amber-950">
+                Database migrations needed — some buttons will silently fail until you run the SQL
+              </div>
+              <div className="text-xs font-bold text-amber-900 mt-0.5" style={{ direction: 'rtl' }}>
+                هناك ترقيات قاعدة بيانات مطلوبة — بعض الأزرار لن تعمل حتى يتم تشغيل SQL
+              </div>
+              <div className="mt-3 space-y-2">
+                {schemaIssues.map(function (iss, i) {
+                  return (
+                    <div key={i} className="bg-white border-2 border-amber-300 rounded-lg p-2">
+                      <div className="text-sm font-extrabold text-amber-950">
+                        <span className="font-mono">{iss.migration}</span>
+                      </div>
+                      <div className="text-xs text-slate-900 font-bold mt-0.5">
+                        Affects: <span className="text-amber-900">{iss.affects}</span>
+                      </div>
+                      <div className="text-[11px] text-slate-700 font-semibold mt-0.5">
+                        Missing: <span className="font-mono">{iss.columns_missing.join(', ')}</span>
+                      </div>
+                      <div className="text-[11px] text-slate-700 mt-1">
+                        Run <span className="font-mono bg-slate-200 px-1 rounded">sql/{iss.migration.toLowerCase().replace(/v/, 'v').replace(/\./g, '-')}-*.sql</span> in Supabase SQL Editor.
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+              <div className="text-[10px] text-amber-900 italic mt-2">
+                This banner will disappear automatically once the migrations run successfully.
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Top filter bar */}
       <div className="flex flex-wrap items-center gap-2 mb-3">
@@ -771,9 +906,9 @@ export default function InventoryProductMaster(props) {
                         {bullets.map(function (b, i) {
                           return (
                             <li key={i} className="text-slate-900 leading-tight">
-                              <span className="font-bold text-slate-600">{b.label}:</span>{' '}
+                              <span className="font-extrabold text-slate-700">{b.label}:</span>{' '}
                               <span className="font-extrabold text-slate-900">{b.value}</span>
-                              <span className="text-slate-500 font-mono"> ({b.code})</span>
+                              <span className="text-slate-700 font-mono"> ({b.code})</span>
                             </li>
                           );
                         })}
@@ -798,9 +933,16 @@ export default function InventoryProductMaster(props) {
                     </button>
                   )}
                   {/* v55.83-A.6.27.44d.1 — 🔍 History button (read-only, available to all viewers).
-                      Opens the Variant History modal: 4 tabs (Summary / Inbound / Outbound / Adjustments). */}
+                      Opens the Variant History modal: 4 tabs (Summary / Inbound / Outbound / Adjustments).
+                      v55.83-A.6.27.46 — added toast confirmation so user knows the modal opened
+                      (was confusing when scrolled past the modal). */}
                   <button
-                    onClick={function () { setHistoryVariant(p); }}
+                    onClick={function () {
+                      setHistoryVariant(p);
+                      toast.success('📂 History opened for ' + (p.quick_code || p.name_en || 'product') + ' / تم فتح السجل');
+                      // Ensure scroll-to-top in case the user is far down the page when they click.
+                      setTimeout(function () { window.scrollTo({ top: 0, behavior: 'smooth' }); }, 50);
+                    }}
                     className="px-2 py-1 text-[10px] bg-slate-700 hover:bg-slate-800 text-white rounded font-extrabold shadow"
                     title="View full history of this variant — inbound shipments, sales, adjustments, stock summary / سجل المنتج"
                   >

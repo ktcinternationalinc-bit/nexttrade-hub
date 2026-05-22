@@ -1,9 +1,9 @@
 'use client';
-// v55.83-A.6.27.29 — Inventory Phase 1 Build 4.0: Receive Stock
+// v55.83-A.6.27.29 — Inventory Phase 1 Build 4.0: Inbound Shipments
 //
 // The everyday warehouse receiving flow. When a shipment arrives, the user
 // creates a receipt with one or more product lines. Each product is
-// identified by Quick Code (typed) or by browsing the Product Master.
+// identified by Quick Code (typed) or by browsing the Product List.
 //
 // Decisions locked (Max May 18 2026):
 //   - Receipt number: RCV-YYYY-MM-DD-NNN (full date + 3-digit daily seq)
@@ -105,6 +105,9 @@ export default function InventoryReceiving(props) {
   var [headers, setHeaders] = useState([]);
   var [products, setProducts] = useState([]);
   var [warehouses, setWarehouses] = useState([]);
+  // v55.83-A.6.27.49 — classification lists, used to enrich the product search
+  // (so typing "headliner" or "leather" or "BMW" matches by readable category names).
+  var [lists, setLists] = useState([]);
   var [loading, setLoading] = useState(true);
 
   // Filters
@@ -160,17 +163,19 @@ export default function InventoryReceiving(props) {
     async function load() {
       setLoading(true);
       try {
-        var [recRes, prodRes, whRes, hdrRes] = await Promise.all([
+        var [recRes, prodRes, whRes, hdrRes, lstRes] = await Promise.all([
           supabase.from('inventory_stock_receipts').select('*').order('created_at', { ascending: false }),
           supabase.from('inventory_products').select('*').eq('active', true),
           supabase.from('inv_warehouses').select('*').order('name'),
           supabase.from('inventory_shipment_headers').select('*').order('created_at', { ascending: false }),
+          supabase.from('inventory_lists').select('id, level, code, label_en, label_ar').eq('active', true),
         ]);
         if (cancelled) return;
         setReceipts(recRes.data || []);
         setProducts(prodRes.data || []);
         setWarehouses(whRes.data || []);
         setHeaders(hdrRes.data || []);
+        setLists(lstRes.data || []);
       } catch (e) {
         console.error('[receiving] load failed:', e);
         toast.error('Failed to load receiving data');
@@ -184,16 +189,18 @@ export default function InventoryReceiving(props) {
 
   async function reload() {
     try {
-      var [recRes, prodRes, whRes, hdrRes] = await Promise.all([
+      var [recRes, prodRes, whRes, hdrRes, lstRes] = await Promise.all([
         supabase.from('inventory_stock_receipts').select('*').order('created_at', { ascending: false }),
         supabase.from('inventory_products').select('*').eq('active', true),
         supabase.from('inv_warehouses').select('*').order('name'),
         supabase.from('inventory_shipment_headers').select('*').order('created_at', { ascending: false }),
+        supabase.from('inventory_lists').select('id, level, code, label_en, label_ar').eq('active', true),
       ]);
       setReceipts(recRes.data || []);
       setProducts(prodRes.data || []);
       setWarehouses(whRes.data || []);
       setHeaders(hdrRes.data || []);
+      setLists(lstRes.data || []);
     } catch (e) { console.error('[receiving] reload failed:', e); }
   }
 
@@ -226,20 +233,52 @@ export default function InventoryReceiving(props) {
   function suggestionsFor(query) {
     if (!query || !query.trim()) return [];
     // v55.83-A.6.27.39 — Smart multi-keyword search.
-    // Split on whitespace, every keyword must appear (substring, case-insensitive)
-    // in the product's searchable string (quick_code, name_en, name_ar, slug, suffix).
-    // Sort: featured first, then by use_count DESC, then name ASC.
+    // v55.83-A.6.27.49 — EXPANDED searchable surface so the user can find a product
+    // by ANY meaningful word in any order: design_sku, classification names
+    // (family/category/grade/construction/backing/color/pattern/spec — both English
+    // AND Arabic labels), variant_suffix, supplier, origin, and notes. This is
+    // the "AI-smart" search the user asked for — it's exact-keyword matching after
+    // normalization, but the matched surface is wide enough that natural words like
+    // "headliner brown leather BMW" all hit the right product.
     var keywords = query.trim().toLowerCase().split(/\s+/).filter(function (k) { return k.length > 0; });
     if (keywords.length === 0) return [];
+
+    // Build a quick lookup from list_id → "code label_en label_ar" string.
+    var listsById = {};
+    lists.forEach(function (l) {
+      listsById[l.id] = ((l.code || '') + ' ' + (l.label_en || '') + ' ' + (l.label_ar || '')).toLowerCase();
+    });
+    function classText(p) {
+      // Concatenate every level's classification text (whatever's set)
+      var parts = [];
+      var idFields = [
+        'family_list_id', 'category_list_id', 'grade_list_id', 'construction_list_id',
+        'backing_list_id', 'color_list_id', 'pattern_list_id', 'spec_class_list_id',
+        // v55.83-A.6.27.40+ — origin classification (some installs use this)
+        'origin_list_id',
+      ];
+      for (var i = 0; i < idFields.length; i++) {
+        var lid = p[idFields[i]];
+        if (lid && listsById[lid]) parts.push(listsById[lid]);
+      }
+      return parts.join(' ');
+    }
+
     var matches = products.filter(function (p) {
       if (!p.active) return false;
-      // Build searchable string for this product
-      var searchable = ((p.quick_code || '') + ' ' +
+      // Build the expanded searchable string for this product
+      var searchable = (
+        (p.quick_code || '') + ' ' +
         (p.variant_suffix ? p.quick_code + '-' + p.variant_suffix + ' ' : '') +
+        (p.design_sku || '') + ' ' +
         (p.name_en || '') + ' ' +
         (p.name_ar || '') + ' ' +
-        (p.classification_slug || '')).toLowerCase();
-      // Every keyword must appear somewhere in the searchable string
+        (p.classification_slug || '') + ' ' +
+        (p.default_supplier || '') + ' ' +
+        (p.notes || '') + ' ' +
+        classText(p)
+      ).toLowerCase();
+      // Every keyword must appear somewhere in the searchable string (any order)
       for (var i = 0; i < keywords.length; i++) {
         if (searchable.indexOf(keywords[i]) < 0) return false;
       }
@@ -774,6 +813,28 @@ export default function InventoryReceiving(props) {
           return;
         }
       }
+      // v55.83-A.6.27.49 — REQUIRED FIELDS (at submit, not at draft save):
+      //   Unit of Measure, Roll Count, Release #, and Quantity in Kilos (if UoM is kg).
+      if (!L.uom || !String(L.uom).trim()) {
+        alert('Line ' + (i + 1) + ': Unit of Measure is required.');
+        return;
+      }
+      if (L.roll_count === '' || L.roll_count == null) {
+        alert('Line ' + (i + 1) + ': Roll Count is required.');
+        return;
+      }
+      if (!L.batch_number || !String(L.batch_number).trim()) {
+        alert('Line ' + (i + 1) + ': Release # is required.');
+        return;
+      }
+      var uomLow = String(L.uom || '').trim().toLowerCase();
+      var uomIsKg = (uomLow === 'kg' || uomLow === 'kgs' || uomLow === 'kilo' || uomLow === 'kilogram' || uomLow === 'kilograms');
+      if (uomIsKg) {
+        if (L.quantity_kg === '' || L.quantity_kg == null) {
+          alert('Line ' + (i + 1) + ': Quantity in Kilos is required because Unit of Measure is kg.');
+          return;
+        }
+      }
       // If both ordered & actual exist and differ → variance reason required
       var ordered = asNum(L.ordered_quantity);
       var actual = asNum(L.quantity);
@@ -1029,7 +1090,7 @@ export default function InventoryReceiving(props) {
     } catch (err) {
       console.error('[receiving] save failed:', err);
       toast.error('Save failed: ' + ((err && err.message) || String(err)));
-      alert('Save failed: ' + ((err && err.message) || String(err)) + '\n\nIf this is the first time you\'re using Receive Stock, make sure the v55.83-A.6.27.29 + v55.83-A.6.27.35 SQL migrations have been run in Supabase.');
+      alert('Save failed: ' + ((err && err.message) || String(err)) + '\n\nIf this is the first time you\'re using Inbound Shipments, make sure the v55.83-A.6.27.29 + v55.83-A.6.27.35 SQL migrations have been run in Supabase.');
     } finally {
       setBusy(false);
     }
@@ -1177,10 +1238,10 @@ export default function InventoryReceiving(props) {
       <div className="mb-4">
         <div className="flex items-center gap-2">
           <span style={{ fontSize: 24 }}>🚚</span>
-          <h2 className="text-xl font-extrabold text-slate-900">Receive Stock</h2>
+          <h2 className="text-xl font-extrabold text-slate-900">Inbound Shipments</h2>
         </div>
         <div className="text-sm text-slate-700 font-medium mt-1">
-          Record incoming shipments. Each receipt can have multiple product lines. Auto-fills from Product Master defaults.
+          Record incoming shipments. Each receipt can have multiple product lines. Auto-fills from Product List defaults.
         </div>
         <div className="text-sm text-slate-700 font-medium" style={{ direction: 'rtl' }}>
           سجّل الشحنات الواردة. كل إيصال يمكن أن يحتوي على عدة منتجات. يُعبأ تلقائياً من القيم الافتراضية للمنتج.
@@ -1191,7 +1252,7 @@ export default function InventoryReceiving(props) {
       <div className="flex flex-wrap items-center gap-2 mb-3">
         <input
           type="text"
-          placeholder="Search receipt#, product, batch, supplier..."
+          placeholder="Search receipt#, product, release, supplier..."
           value={search}
           onChange={function (e) { setSearch(e.target.value); }}
           className="flex-1 min-w-[260px] px-3 py-2 border border-slate-300 rounded-lg text-sm bg-white"
@@ -1380,7 +1441,7 @@ export default function InventoryReceiving(props) {
           <div
             className="bg-white text-slate-900 rounded-2xl shadow-2xl mx-auto"
             onClick={function (e) { e.stopPropagation(); }}
-            style={{ width: '95vw', maxWidth: 1800 }}
+            style={{ width: '97vw', maxWidth: 1900, maxHeight: '96vh', display: 'flex', flexDirection: 'column' }}
           >
             {/* Modal header */}
             <div
@@ -1402,7 +1463,7 @@ export default function InventoryReceiving(props) {
               </button>
             </div>
 
-            <div style={{ padding: 20, maxHeight: 'calc(100vh - 140px)', overflowY: 'auto' }}>
+            <div style={{ padding: 20, flex: 1, overflowY: 'auto' }}>
               {/* Header section — v55.83-A.6.27.32 extended with old Shipments form fields */}
               <div className="mb-4 bg-slate-50 rounded-lg p-3 border border-slate-200">
                 <div className="text-[11px] font-extrabold text-slate-700 tracking-wider mb-2">SHIPMENT INFO (applies to all lines)</div>
@@ -1478,18 +1539,19 @@ export default function InventoryReceiving(props) {
               </div>
 
               {/* v55.83-A.6.27.43 — SHIPMENT EXPECTED TOTALS (per supplier docs)
-                  Big, prominent, can't-miss. Optional during Draft, required at Submit. */}
-              <div className="bg-amber-50 border-2 border-amber-400 rounded-xl p-4 mt-4">
-                <div className="flex items-baseline justify-between mb-3">
+                  Big, prominent, can't-miss. Optional during Draft, required at Submit.
+                  v55.83-A.6.27.48 — widened: more padding + larger inputs to use the full modal width. */}
+              <div className="bg-amber-50 border-2 border-amber-400 rounded-xl p-6 mt-4">
+                <div className="flex items-baseline justify-between mb-4">
                   <div>
-                    <div className="text-base font-extrabold text-slate-900">📦 Shipment Expected Totals</div>
+                    <div className="text-lg font-extrabold text-slate-900">📦 Shipment Expected Totals</div>
                     <div className="text-sm text-slate-700 font-medium mt-0.5">
                       What the supplier&apos;s shipping documents say came in this container.
                       Per-product details go in the lines below. We reconcile at the bottom.
                     </div>
                   </div>
                 </div>
-                <div className="grid grid-cols-5 gap-3">
+                <div className="grid grid-cols-5 gap-4">
                   <label className="text-sm font-extrabold text-slate-900 block">Expected Total Rolls
                     <input
                       type="number"
@@ -1758,7 +1820,7 @@ export default function InventoryReceiving(props) {
                                         <div className="text-[11px] font-mono font-extrabold text-blue-900">{rIdx + 1}</div>
                                         <input type="text" value={r.roll_number} onChange={function (e) {
                                           var nr = (line.rolls || []).slice(); nr[rIdx] = Object.assign({}, nr[rIdx], { roll_number: e.target.value }); updateLineField(lineIdx, 'rolls', nr);
-                                        }} placeholder="batch / ID" className="w-full px-1 py-1 border border-slate-300 rounded text-xs bg-white font-mono" />
+                                        }} placeholder="release / ID" className="w-full px-1 py-1 border border-slate-300 rounded text-xs bg-white font-mono" />
                                         <input type="text" value={r.gross_kg} onChange={function (e) {
                                           var nr = (line.rolls || []).slice(); nr[rIdx] = Object.assign({}, nr[rIdx], { gross_kg: e.target.value }); updateLineField(lineIdx, 'rolls', nr);
                                         }} placeholder="0.00" className="w-full px-1 py-1 border border-slate-300 rounded text-xs bg-white font-mono" />
@@ -1848,21 +1910,22 @@ export default function InventoryReceiving(props) {
                           );
                         })()}
 
-                        {/* Quantity row 1: ordered + received + variance reason (conditional) + batch */}
+                        {/* Quantity row 1: ordered + received + uom + release_number
+                            v55.83-A.6.27.49 — clearer labels showing what's required at submit. */}
                         <div className="grid grid-cols-4 gap-2 mb-2">
-                          <label className="text-[11px] font-extrabold text-slate-700">Ordered Qty
+                          <label className="text-[11px] font-extrabold text-slate-700">Order Qty
                             <input type="text" value={line.ordered_quantity} onChange={function (e) { updateLineField(lineIdx, 'ordered_quantity', e.target.value); }} placeholder="what supplier shipped" className="w-full mt-0.5 px-2 py-1.5 border border-slate-300 rounded text-sm bg-white" />
                           </label>
-                          <label className="text-[11px] font-extrabold text-slate-700">Received Qty (rolled-up)
-                            <input type="text" value={line.quantity} onChange={function (e) { updateLineField(lineIdx, 'quantity', e.target.value); }} placeholder="actual UOM total (or auto)" className="w-full mt-0.5 px-2 py-1.5 border border-slate-300 rounded text-sm bg-white" />
+                          <label className="text-[11px] font-extrabold text-slate-700">Quantity Received *
+                            <input type="text" value={line.quantity} onChange={function (e) { updateLineField(lineIdx, 'quantity', e.target.value); }} placeholder="required at submit" className="w-full mt-0.5 px-2 py-1.5 border border-slate-300 rounded text-sm bg-white" />
                           </label>
-                          <label className="text-[11px] font-extrabold text-slate-700">UOM
+                          <label className="text-[11px] font-extrabold text-slate-700">Unit of Measure *
                             <select value={line.uom} onChange={function (e) { updateLineField(lineIdx, 'uom', e.target.value); }} className={'w-full mt-0.5 px-2 py-1.5 border border-slate-300 rounded text-sm ' + (line.fromMaster.uom ? 'bg-blue-50' : 'bg-white')}>
                               <option value="">—</option>
                               {UOM_OPTIONS.map(function (u) { return <option key={u} value={u}>{u}</option>; })}
                             </select>
                           </label>
-                          <label className="text-[11px] font-extrabold text-slate-700">Batch # *
+                          <label className="text-[11px] font-extrabold text-slate-700">Release # *
                             <input type="text" value={line.batch_number} onChange={function (e) { updateLineField(lineIdx, 'batch_number', e.target.value); }} className="w-full mt-0.5 px-2 py-1.5 border border-slate-300 rounded text-sm bg-white" />
                           </label>
                         </div>
@@ -1883,13 +1946,34 @@ export default function InventoryReceiving(props) {
                           );
                         })()}
 
-                        {/* Quantity row 2: qty_kg + roll_count + rack */}
+                        {/* Quantity row 2: qty_kg (conditional required) + roll_count (always required) + rack
+                            v55.83-A.6.27.49 — Quantity in Kilos required only when UoM = kg;
+                            otherwise optional. Roll count is always required. */}
                         <div className="grid grid-cols-4 gap-2 mb-2">
-                          <label className="text-[11px] font-extrabold text-slate-700">Quantity in kg
-                            <input type="text" value={line.quantity_kg} onChange={function (e) { updateLineField(lineIdx, 'quantity_kg', e.target.value); }} placeholder="for cross-unit tracking" className="w-full mt-0.5 px-2 py-1.5 border border-slate-300 rounded text-sm bg-white" />
-                          </label>
-                          <label className="text-[11px] font-extrabold text-slate-700">Roll Count
-                            <input type="text" value={line.roll_count} onChange={function (e) { updateLineField(lineIdx, 'roll_count', e.target.value); }} placeholder="# of physical rolls" className="w-full mt-0.5 px-2 py-1.5 border border-slate-300 rounded text-sm bg-white" />
+                          {(function () {
+                            var u = String(line.uom || '').trim().toLowerCase();
+                            var kgRequired = (u === 'kg' || u === 'kgs' || u === 'kilo' || u === 'kilogram' || u === 'kilograms');
+                            return (
+                              <label className="text-[11px] font-extrabold text-slate-700">
+                                Quantity in Kilos {kgRequired ? '*' : '(optional)'}
+                                <input
+                                  type="text"
+                                  value={line.quantity_kg}
+                                  onChange={function (e) { updateLineField(lineIdx, 'quantity_kg', e.target.value); }}
+                                  placeholder={kgRequired ? 'required because UoM = kg' : 'optional cross-unit tracking'}
+                                  className={'w-full mt-0.5 px-2 py-1.5 border rounded text-sm bg-white ' + (kgRequired && (line.quantity_kg === '' || line.quantity_kg == null) ? 'border-red-400' : 'border-slate-300')}
+                                />
+                              </label>
+                            );
+                          })()}
+                          <label className="text-[11px] font-extrabold text-slate-700">Roll Count *
+                            <input
+                              type="text"
+                              value={line.roll_count}
+                              onChange={function (e) { updateLineField(lineIdx, 'roll_count', e.target.value); }}
+                              placeholder="required: # of physical rolls"
+                              className={'w-full mt-0.5 px-2 py-1.5 border rounded text-sm bg-white ' + ((line.roll_count === '' || line.roll_count == null) ? 'border-red-400' : 'border-slate-300')}
+                            />
                           </label>
                           <label className="text-[11px] font-extrabold text-slate-700">Rack
                             <input type="text" value={line.rack} onChange={function (e) { updateLineField(lineIdx, 'rack', e.target.value); }} className={'w-full mt-0.5 px-2 py-1.5 border border-slate-300 rounded text-sm ' + (line.fromMaster.rack ? 'bg-blue-50' : 'bg-white')} />

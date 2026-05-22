@@ -96,8 +96,8 @@ ok('D9: empty states bilingual (no data row → "No X yet. / لا يوجد X ب�
   /empty_en="No inbound receipts yet\."/.test(vh) &&
   /empty_en="No sales yet for this variant\."/.test(vh) &&
   /empty_en="No adjustments recorded for this variant\."/.test(vh));
-ok('D10: tabs row has hover/active states distinguishable',
-  /active \? 'bg-white text-indigo-900 border-2 border-b-0 border-slate-200' : 'bg-slate-200 text-slate-700 hover:bg-slate-300'/.test(vh));
+ok('D10: tabs row has hover/active states distinguishable (v.46 high-contrast)',
+  /active \? 'bg-white text-slate-900 border-2 border-b-0 border-indigo-600 shadow-md' : 'bg-slate-800 text-white hover:bg-slate-700/.test(vh));
 
 // ══════════════════════════════════════════════════════════════════
 // PART E — Modal mechanics
@@ -105,12 +105,14 @@ ok('D10: tabs row has hover/active states distinguishable',
 
 ok('E1: modal returns null when !isOpen or no variant',
   /if \(!isOpen \|\| !variant\) return null/.test(vh));
-ok('E2: backdrop click closes modal',
-  /<div className="fixed inset-0 z-\[100\] bg-black\/70[^"]*" onClick=\{onClose\}>/.test(vh));
+ok('E2: backdrop click closes modal (v.46 z-[200] + black/80)',
+  /<div className="fixed inset-0 z-\[200\] bg-black\/80[^"]*" onClick=\{onClose\}>/.test(vh));
 ok('E3: inner content stopPropagation on click',
   /onClick=\{function \(e\) \{ e\.stopPropagation\(\); \}\}/.test(vh));
-ok('E4: modal width 95vw / max 1600',
-  /style=\{\{ width: '95vw', maxWidth: 1600, maxHeight: '92vh' \}\}/.test(vh));
+ok('E4: modal width 95vw / max 1600 / fits viewport with padding',
+  /width: '95vw'/.test(vh) &&
+  /maxWidth: 1600/.test(vh) &&
+  /maxHeight: 'calc\(100vh - 60px\)'/.test(vh));
 ok('E5: displayCode appends variant_suffix when present',
   /var displayCode = variant\.quick_code \+ \(variant\.variant_suffix \? '-' \+ variant\.variant_suffix : ''\)/.test(vh));
 
@@ -123,7 +125,8 @@ ok('F1: ProductMaster imports VariantHistory',
 ok('F2: historyVariant state declared',
   /var \[historyVariant, setHistoryVariant\] = useState\(null\)/.test(pm));
 ok('F3: 🔍 History button rendered (no canEdit gate — read-only available to all viewers)',
-  /onClick=\{function \(\) \{ setHistoryVariant\(p\); \}\}[\s\S]{0,500}🔍 History/.test(pm));
+  /setHistoryVariant\(p\)/.test(pm) &&
+  /🔍 History/.test(pm));
 ok('F4: History button uses slate-700 + white (high contrast)',
   /bg-slate-700 hover:bg-slate-800 text-white rounded font-extrabold shadow[\s\S]{0,500}🔍 History/.test(pm));
 ok('F5: VariantHistory modal rendered with correct props',

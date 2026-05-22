@@ -182,7 +182,7 @@ export default function InventoryMovementsLedger(props) {
         {filtered.length === 0 ? (
           <div className="text-center text-slate-500 italic text-sm py-8">
             {movements.length === 0
-              ? 'No movements yet. Finalize a receipt in Receive Stock to create the first one.'
+              ? 'No movements yet. Finalize a receipt in Inbound Shipments to create the first one.'
               : 'No movements match your filters.'}
           </div>
         ) : (

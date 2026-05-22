@@ -1527,11 +1527,30 @@ export default function ShippingRatesTab({ toast, user, userProfile, isAdmin, cu
         .replace(/\s+/g, ' ')           // collapse whitespace
         .trim();
     };
+    // v55.83-A.6.27.47 — Match key updated for expiry_date backfill use case.
+    //
+    // OLD key (broken for backfill): origin|destination|expiry_date|vendor|line
+    //   Problem: many historical rows have NULL expiry_date. When the import file
+    //   has expiry_date filled in, the key doesn't match, so the system inserts a
+    //   duplicate row instead of updating the existing one to fill in expiry_date.
+    //
+    // NEW key: port_of_loading|port_of_discharge|effective_date|vendor|shipping_line
+    //   - Identifies a unique shipping quote: specific port pair + specific sailing
+    //     date (effective_date colloquially called "ETD") + specific vendor + line.
+    //   - effective_date is well-populated on historical rows (unlike expiry_date).
+    //   - Falls back to origin/destination when port_of_loading/discharge are blank
+    //     (handles rows imported before the port fields existed).
+    //
+    // Reasoning for excluding expiry_date from the key: it's the field we're trying
+    // to BACKFILL. If we keyed on it, the match would always fail for the rows we
+    // most need to update.
     var keyFor = function (r) {
+      var pol = normName(r.port_of_loading) || normName(r.origin);
+      var pod = normName(r.port_of_discharge) || normName(r.destination);
       return [
-        normName(r.origin),
-        normName(r.destination),
-        String(r.expiry_date || '').trim(),
+        pol,
+        pod,
+        String(r.effective_date || '').trim(),
         normName(r.vendor_name),
         normName(r.shipping_line),
       ].join('|');
@@ -1541,7 +1560,16 @@ export default function ShippingRatesTab({ toast, user, userProfile, isAdmin, cu
     // "changed" vs "unchanged". We only compare fields that the import
     // provides (excluding match-key fields, which are by definition equal).
     var rowChanged = function (newRow, existingRow) {
-      var skipKeys = { id: 1, created_at: 1, updated_at: 1, origin: 1, destination: 1, expiry_date: 1, vendor_name: 1, shipping_line: 1 };
+      // v55.83-A.6.27.47 — skipKeys now matches the NEW match key fields.
+      // expiry_date is NO LONGER in the skip list — it's a field we want to
+      // detect changes on (e.g., NULL → real date) so it triggers the update.
+      var skipKeys = {
+        id: 1, created_at: 1, updated_at: 1,
+        port_of_loading: 1, port_of_discharge: 1,
+        origin: 1, destination: 1,           // also exempt — used as port fallback
+        effective_date: 1,
+        vendor_name: 1, shipping_line: 1,
+      };
       for (var k in newRow) {
         if (skipKeys[k]) continue;
         var nv = newRow[k];

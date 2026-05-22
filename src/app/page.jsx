@@ -42,6 +42,7 @@ import NotificationBell from '../components/NotificationBell';
 import BankTab from '../components/BankTab';
 import QuotesTab from '../components/QuotesTab';
 import EgyptBankTab from '../components/EgyptBankTab';
+import OpenAccountsTab from '../components/OpenAccountsTab';
 import PhoneWidget from '../components/PhoneWidget';
 import ReportsTab from '../components/ReportsTab';
 import WriteOffsReport from '../components/WriteOffsReport';
@@ -150,6 +151,7 @@ const TABS = [
   { id: 'bank', label: 'Bank / البنك', icon: '🏛️' },
   { id: 'checks', label: 'Checks / شيكات', icon: '📝' },
   { id: 'debts', label: 'Debts / المديونية', icon: '⚠️' },
+  { id: 'openaccounts', label: 'Open Accounts / حسابات', icon: '📒' },
   { id: 'reports', label: 'Reports / تقارير', icon: '📊' },
   { id: 'warehouse', label: 'Warehouse / المخزن', icon: '🏭' },
   { id: 'inventory', label: 'Inventory / المخزون', icon: '📦' },
@@ -5160,7 +5162,7 @@ export default function App() {
               {/* Brand mark — bracket prefix is a terminal callout convention. */}
               <span className="text-emerald-400 font-mono text-xs font-bold tracking-tight" style={{ fontFamily: '"JetBrains Mono", monospace' }}>[KTC]</span>
               <h1 className="text-sm font-bold text-white tracking-tight whitespace-nowrap">NEXTTRADE HUB</h1>
-              <span className="text-[10px] text-zinc-500 font-mono hidden md:inline" style={{ fontFamily: '"JetBrains Mono", monospace' }}>v55.83-A.6.27.45</span>
+              <span className="text-[10px] text-zinc-500 font-mono hidden md:inline" style={{ fontFamily: '"JetBrains Mono", monospace' }}>v55.83-A.6.27.53</span>
               {/* Live clock — terminals always show one. Updates via the
                   existing tick state; if not present, falls back to no clock. */}
               <span className="hidden lg:inline text-[10px] text-zinc-500 font-mono ml-2 pl-2 border-l border-zinc-800" style={{ fontFamily: '"JetBrains Mono", monospace' }}>
@@ -8445,7 +8447,7 @@ export default function App() {
                                 />
                                 <div className="max-h-[280px] overflow-auto border border-slate-200 rounded">
                                   {(function () {
-                                    // Smart multi-keyword search (same pattern as Receive Stock)
+                                    // Smart multi-keyword search (same pattern as Inbound Shipments)
                                     var q = (formData.invProdSearch || '').trim().toLowerCase();
                                     var keywords = q ? q.split(/\s+/).filter(function (k) { return k.length > 0; }) : [];
                                     var matches = (inventoryProducts || []).filter(function (p) {
@@ -13678,6 +13680,14 @@ export default function App() {
           <SafeSection label="Egypt Bank"><EgyptBankTab toast={toast} user={user} userProfile={userProfile} isAdmin={isAdmin} invoices={invoices} recalcInvoiceCollected={recalcInvoiceCollected} onReload={loadAllData} /></SafeSection>
         )}
 
+        {/* v55.83-A.6.27.52 — Open Accounts: internal customer-by-customer ledger.
+            Independent of invoices/treasury. Gated by super_admin OR "Open Accounts" permission. */}
+        {tab === 'openaccounts' && (
+          <SafeSection label="Open Accounts">
+            <OpenAccountsTab userProfile={userProfile} modulePerms={modulePerms} isSuperAdmin={isSuperAdmin} toast={toast} />
+          </SafeSection>
+        )}
+
         {tab === 'reports' && (
           <SafeSection label="Reports">
             <ReportsTab treasury={treasury} invoices={invoices} warehouseExpenses={warehouse} egyptBankTxns={egyptBankTxns} canViewFinancials={isSuperAdmin || modulePerms?.['View Financial Reports'] === true} supabase={supabase} isSuperAdmin={isSuperAdmin} userProfile={userProfile} checks={checks} customers={customers} onReload={loadAllData} toast={toast} recalcInvoiceCollected={recalcInvoiceCollected} onOpenInvoice={(inv) => {
@@ -14086,7 +14096,7 @@ export default function App() {
                       latest fix is actually deployed. If he doesn't see this
                       tag in the modal, his browser is running stale JS. */}
                   <div className="mt-1.5 inline-block px-2 py-0.5 rounded bg-amber-900/60 text-amber-100 text-[10px] font-mono font-bold tracking-wide">
-                    BUILD v55.83-A.6.27.45
+                    BUILD v55.83-A.6.27.53
                   </div>
                 </div>
                 <button onClick={() => closePendingTreasuryModal()}
@@ -14721,7 +14731,7 @@ export default function App() {
                     معاملة قد تكون مكررة
                   </div>
                   <div className="mt-1.5 inline-block px-2 py-0.5 rounded bg-amber-900/60 text-amber-100 text-[10px] font-mono font-bold tracking-wide">
-                    BUILD v55.83-A.6.27.45
+                    BUILD v55.83-A.6.27.53
                   </div>
                 </div>
                 <button
