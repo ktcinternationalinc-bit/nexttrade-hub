@@ -392,21 +392,17 @@ export default function InventoryProductMaster(props) {
     setModalMode('edit');
     setModalProductId(p.id);
     setEditIsTemplate(p.is_family_template === true);
-    // v55.83-A.6.27.43 — Check usage. If product has been used, lock the spec fields.
-    var locked = false;
-    try {
-      var res = await supabase.rpc('can_delete_product', { p_id: p.id });
-      if (res.error) {
-        // RPC missing or other failure — fall back to permissive (allow edit)
-        console.warn('[product-master] can_delete_product unavailable, falling back to edit-allowed:', res.error.message);
-      } else {
-        // can_delete returns TRUE when no references → safe to edit. FALSE → locked.
-        locked = (res.data === false);
-      }
-    } catch (e) {
-      console.warn('[product-master] can_delete_product RPC threw, falling back to edit-allowed:', e);
-    }
-    setEditLocked(locked);
+    // v55.83-A.6.27.60 — Spec-field edit lock REMOVED per Max May 22 2026.
+    // The mental model: when a variant is created from a template, the variant
+    // is a snapshot. From then on the variant is independent. Editing or deleting
+    // the template does NOT propagate to existing variants. So there's no reason
+    // to lock template editing once variants exist — they're not affected.
+    // Variants themselves are also always editable (they're already independent
+    // entities; editing them only changes the one variant).
+    //
+    // We keep editLocked state for back-compat with the JSX banner conditionals,
+    // but always set it to false.
+    setEditLocked(false);
     setForm({
       name_en: p.name_en || '',
       name_ar: p.name_ar || '',
@@ -438,37 +434,38 @@ export default function InventoryProductMaster(props) {
   // v55.83-A.6.27.43 — Delete handler. Only allowed when product has zero references.
   // Two-step confirmation: dialog → require user to type DELETE.
   async function deleteProduct(p) {
-    // v55.83-A.6.27.55 — Defense in depth: surface failures via BOTH toast AND
-    // alert so a broken toast system doesn't make the button look dead.
-    // Also log to console so dev can diagnose.
-    console.log('[product-master] deleteProduct clicked for:', p && p.quick_code, p && p.id);
-    // Re-check at click time (in case usage was added since list-render)
-    try {
-      var chk = await supabase.rpc('can_delete_product', { p_id: p.id });
-      if (chk.error) throw chk.error;
-      if (chk.data === false) {
-        alert('Cannot delete "' + (p.name_en || p.quick_code) + '" — it is referenced by one or more receipts, movements, layers, or adjustments. Use Deactivate instead.');
-        await reload();
-        return;
+    console.log('[product-master] deleteProduct clicked for:', p && p.quick_code, p && p.id, 'is_template:', p && p.is_family_template);
+
+    // v55.83-A.6.27.60 — Always allow deleting templates (per Max: variants are
+    // independent snapshots, so removing a template never affects existing
+    // products). For VARIANTS, we still check FK references because deleting
+    // a variant with inventory layers/movements would orphan real warehouse
+    // stock — that's not what Max meant by "independent."
+    var isTemplate = (p && p.is_family_template === true);
+
+    if (!isTemplate) {
+      // Variant: try the RPC if available; fall back to permissive if missing.
+      try {
+        var chk = await supabase.rpc('can_delete_product', { p_id: p.id });
+        if (!chk.error && chk.data === false) {
+          alert('Cannot delete Product "' + (p.name_en || p.quick_code) + '" — it has inventory layers, movements, or invoice references. Use Deactivate instead.\n\nIf you want to delete anyway, first clear all related inventory rows.');
+          await reload();
+          return;
+        }
+        // If RPC errored (missing function), log and proceed permissive.
+        if (chk.error) {
+          console.warn('[product-master] can_delete_product unavailable, proceeding permissive (DB FK constraints will still block if unsafe):', chk.error.message);
+        }
+      } catch (e) {
+        console.warn('[product-master] can_delete_product threw, proceeding permissive:', e);
       }
-    } catch (e) {
-      console.error('[product-master] can_delete check failed:', e);
-      var errMsg = (e && e.message) || String(e);
-      // v55.83-A.6.27.55 — fire both. Some browsers throttle toast; alert always shows.
-      try { toast.error('Could not verify deletion safety: ' + errMsg); } catch (_) {}
-      // If it's a "function does not exist" error, give a clear actionable message.
-      if (/function.*can_delete_product.*does not exist|could not find the function/i.test(errMsg)) {
-        alert('Delete is not available yet — the database function `can_delete_product` is missing.\n\nFIX: Run SQL migration v55.83-A.6.27.43 (sql/v55-83-a-6-27-43-expected-totals-variance.sql) in Supabase SQL Editor.\n\nUntil then, use Deactivate instead.');
-      } else {
-        alert('Delete failed: ' + errMsg);
-      }
-      return;
     }
+
     var typed = prompt(
       'PERMANENT DELETE — this cannot be undone.\n\n' +
-      'Product: ' + (p.name_en || p.quick_code) + '\n' +
+      (isTemplate ? '[TEMPLATE PRODUCT — blueprint only, no stock attached]\n\n' : '[PRODUCT — actual SKU. Will fail if inventory rows reference it.]\n\n') +
+      'Name: ' + (p.name_en || p.quick_code) + '\n' +
       'Quick code: ' + (p.quick_code || '—') + (p.variant_suffix ? '-' + p.variant_suffix : '') + '\n\n' +
-      'Verified: zero references in receipts, movements, layers, or adjustments.\n\n' +
       'Type DELETE (in capitals) to confirm:'
     );
     if (typed !== 'DELETE') {
@@ -486,7 +483,12 @@ export default function InventoryProductMaster(props) {
       console.error('[product-master] deleteProduct failed:', e);
       var errMsg2 = (e && e.message) || String(e);
       try { toast.error('Delete failed: ' + errMsg2); } catch (_) {}
-      alert('Delete failed: ' + errMsg2);
+      // Better error messages for the most common FK violations
+      var hint = '';
+      if (/violates foreign key constraint|still referenced/i.test(errMsg2)) {
+        hint = '\n\nThis product is referenced by inventory layers, movements, or invoice items. Database refused the delete. Use Deactivate instead, or remove the related rows first.';
+      }
+      alert('Delete failed: ' + errMsg2 + hint);
     }
   }
 
@@ -844,9 +846,9 @@ export default function InventoryProductMaster(props) {
           onChange={function (e) { setTypeFilter(e.target.value); }}
           className="px-3 py-2 border border-slate-300 rounded-lg text-sm bg-white font-semibold"
         >
-          <option value="variants">Variants (default — actual products)</option>
-          <option value="all">All (variants + templates)</option>
-          <option value="templates">Template Products only (for creating variants)</option>
+          <option value="variants">Products (default — actual SKUs)</option>
+          <option value="all">All (Products + Template blueprints)</option>
+          <option value="templates">Template Products only (blueprints — for creating Products)</option>
         </select>
         {canEdit && (
           <button
@@ -877,10 +879,17 @@ export default function InventoryProductMaster(props) {
           </div>
         ) : (
           filteredProducts.map(function (p) {
+            // v55.83-A.6.27.60 — Light-blue background on template rows so they
+            // visually distinguish from real Products. Templates are blueprints
+            // (don't hold stock); Products are the actual SKUs that get received
+            // and sold.
+            var rowBgClass = p.is_family_template === true
+              ? 'bg-sky-50 hover:bg-sky-100'
+              : 'bg-white hover:bg-slate-50';
             return (
               <div
                 key={p.id}
-                className={'grid items-center border-t border-slate-200 bg-white text-slate-900 ' + (p.active ? '' : 'opacity-60')}
+                className={'grid items-center border-t border-slate-200 text-slate-900 transition-colors ' + rowBgClass + ' ' + (p.active ? '' : 'opacity-60')}
                 style={{ gridTemplateColumns: '110px 1.5fr 2fr 140px 60px 370px', padding: '12px 12px' }}
               >
                 <div className="text-sm font-mono font-extrabold text-slate-900">
@@ -891,12 +900,13 @@ export default function InventoryProductMaster(props) {
                     </span>
                   ) : <span className="text-slate-400 italic font-normal">—</span>}
                   {/* v55.83-A.6.27.40 — badges for template vs variant
-                      v55.83-A.6.27.55 — "FAMILY" → "TEMPLATE" per Max */}
+                      v55.83-A.6.27.55 — "FAMILY" → "TEMPLATE" per Max
+                      v55.83-A.6.27.60 — TEMPLATE badge uses stronger sky color to match row */}
                   {p.is_family_template === true && (
-                    <div className="text-[9px] bg-indigo-100 text-indigo-800 font-bold rounded px-1 inline-block mt-0.5">TEMPLATE</div>
+                    <div className="text-[9px] bg-sky-200 text-sky-900 font-extrabold rounded px-1.5 inline-block mt-0.5">📋 TEMPLATE</div>
                   )}
                   {p.is_family_template === false && p.variant_suffix && (
-                    <div className="text-[9px] bg-emerald-100 text-emerald-800 font-bold rounded px-1 inline-block mt-0.5">VARIANT</div>
+                    <div className="text-[9px] bg-emerald-100 text-emerald-800 font-bold rounded px-1 inline-block mt-0.5">PRODUCT</div>
                   )}
                   {Number(p.use_count || 0) > 0 && (
                     <div className="text-[9px] text-slate-500 mt-0.5">used {p.use_count}×</div>
@@ -965,7 +975,7 @@ export default function InventoryProductMaster(props) {
                       setTimeout(function () { window.scrollTo({ top: 0, behavior: 'smooth' }); }, 50);
                     }}
                     className="px-2 py-1 text-[10px] bg-slate-700 hover:bg-slate-800 text-white rounded font-extrabold shadow"
-                    title="View full history of this variant — inbound shipments, sales, adjustments, stock summary / سجل المنتج"
+                    title="View full history of this Product — inbound shipments, sales, adjustments, stock summary / سجل المنتج"
                   >
                     🔍 History
                   </button>
@@ -983,10 +993,10 @@ export default function InventoryProductMaster(props) {
                   {canEdit && p.is_family_template === true && (
                     <button
                       onClick={function () { openCreateVariant(p); }}
-                      className="px-2 py-1 text-[10px] bg-purple-600 hover:bg-purple-700 text-white rounded font-bold shadow"
-                      title="Create a spec variant of this template product (Category + Construction + Backing + Pattern)"
+                      className="px-2 py-1 text-[10px] bg-purple-600 hover:bg-purple-700 text-white rounded font-extrabold shadow"
+                      title="Create an actual Product from this Template blueprint (independent — edits/deletes to template won't affect it)"
                     >
-                      + Variant
+                      + Product
                     </button>
                   )}
                   {canEdit && (
@@ -1064,21 +1074,15 @@ export default function InventoryProductMaster(props) {
               {/* v55.83-A.6.27.43 — Edit lock banner: shown when this product has references
                   (used in receipts/movements/layers/adjustments). Spec dropdowns are read-only.
                   Name + notes + defaults remain editable. To change specs, create a new variant. */}
-              {modalMode === 'edit' && editLocked && (
-                <div className="bg-amber-100 border-2 border-amber-500 rounded-lg p-3 mb-4">
-                  <div className="text-base font-extrabold text-amber-900">🔒 This {editIsTemplate ? 'template product' : 'variant'} is in use — spec fields are read-only</div>
-                  <div className="text-sm text-amber-900 mt-1 font-semibold">
-                    {editIsTemplate
-                      ? 'Receipts, movements, or layers reference this template. To change specs, use the "+ Variant" button on the row to create a new variant instead.'
-                      : 'Receipts, movements, or layers reference this variant. To change specs, create a new variant via the "+ Variant" button on the parent template product. You CAN still edit the Name and Notes here.'}
-                  </div>
-                </div>
-              )}
-              {modalMode === 'edit' && !editLocked && (
+              {/* v55.83-A.6.27.60 — Lock banner REMOVED. Edits are always allowed because
+                  variants are snapshots — independent of their parent template. */}
+              {modalMode === 'edit' && (
                 <div className="bg-emerald-100 border-2 border-emerald-500 rounded-lg p-3 mb-4">
-                  <div className="text-base font-extrabold text-emerald-900">✏️ This product has zero references — all fields fully editable</div>
+                  <div className="text-base font-extrabold text-emerald-900">✏️ All fields editable</div>
                   <div className="text-sm text-emerald-900 mt-1 font-semibold">
-                    Once it&apos;s used in any receipt, the spec fields will become read-only to protect historical accuracy.
+                    {editIsTemplate
+                      ? 'This is a Template Product (blueprint). Editing or deleting does NOT affect any Products already created from it — they\'re independent snapshots.'
+                      : 'This is a Product. Editing changes only this product. Existing inventory/sales attribution stays intact.'}
                   </div>
                 </div>
               )}

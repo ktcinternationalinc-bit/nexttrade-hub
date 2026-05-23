@@ -54,8 +54,8 @@ ok('C1: quick_code display appends variant_suffix for variants',
   /\{p\.quick_code\}\{p\.variant_suffix \? \('-' \+ p\.variant_suffix\) : ''\}/.test(pm));
 ok('C2: TEMPLATE badge shown when is_family_template is true (renamed from FAMILY in .55)',
   /p\.is_family_template === true && \([\s\S]{0,200}TEMPLATE/.test(pm));
-ok('C3: VARIANT badge shown when not template and has suffix',
-  /p\.is_family_template === false && p\.variant_suffix && \([\s\S]{0,200}VARIANT/.test(pm));
+ok('C3: VARIANT/PRODUCT badge shown when not template and has suffix',
+  /p\.is_family_template === false && p\.variant_suffix && \([\s\S]{0,200}(VARIANT|PRODUCT)/.test(pm));
 ok('C4: use_count display when > 0',
   /Number\(p\.use_count \|\| 0\) > 0 && \([\s\S]{0,200}used \{p\.use_count\}×/.test(pm));
 
@@ -71,8 +71,10 @@ ok('D2: typeFilter state declared (default changed to "variants" in .55 — temp
 ok('D3: Featured-only checkbox rendered',
   /⭐ Starred only/.test(pm) &&
   /<input type="checkbox" checked=\{featuredOnly\} onChange=\{function \(e\) \{ setFeaturedOnly\(e\.target\.checked\); \}\} \/>/.test(pm));
-ok('D4: Type filter select with 3 options (renamed in .55: Variants first as default; Template Products replaces "Family templates only")',
-  /<option value="variants">Variants \(default — actual products\)<\/option>\s+<option value="all">All \(variants \+ templates\)<\/option>\s+<option value="templates">Template Products only \(for creating variants\)<\/option>/.test(pm));
+ok('D4: Type filter select with 3 options (Variants/Products rename — Variants first as default; Template Products + All)',
+  /<option value="variants">(Variants|Products)/.test(pm) &&
+  /<option value="all">All/.test(pm) &&
+  /<option value="templates">Template Products only/.test(pm));
 
 // ══════════════════════════════════════════════════════════════════
 // PART E — Filter logic + smart multi-keyword search + featured sort

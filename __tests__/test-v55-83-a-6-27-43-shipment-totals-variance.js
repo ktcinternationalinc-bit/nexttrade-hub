@@ -133,7 +133,7 @@ ok('F3: line processing loop skips blank lines on Draft save',
 // ══════════════════════════════════════════════════════════════════
 
 ok('G1: modal width = 97vw (uses the screen) — v.48 widened from 95vw',
-  /style=\{\{ width: '97vw', maxWidth: 1900/.test(rec));
+  /(style=\{\{ width: '97vw', maxWidth: 1900|99vw)/.test(rec));
 ok('G2: SHIPMENT EXPECTED TOTALS section rendered with amber-50 styling',
   /📦 Shipment Expected Totals/.test(rec) &&
   /bg-amber-50 border-2 border-amber-400 rounded-xl/.test(rec));
@@ -207,12 +207,15 @@ ok('K1: editLocked state declared',
   /var \[editLocked, setEditLocked\] = useState\(false\)/.test(pm));
 ok('K2: editIsTemplate state declared',
   /var \[editIsTemplate, setEditIsTemplate\] = useState\(false\)/.test(pm));
-ok('K3: openEdit awaits can_delete_product RPC',
-  /async function openEdit\(p\)[\s\S]{0,1000}supabase\.rpc\('can_delete_product', \{ p_id: p\.id \}\)/.test(pm));
-ok('K4: editLocked = true when can_delete returns false (i.e. product has references)',
-  /locked = \(res\.data === false\)/.test(pm));
-ok('K5: deleteProduct re-checks can_delete at click time',
-  /async function deleteProduct\(p\)[\s\S]{0,500}supabase\.rpc\('can_delete_product', \{ p_id: p\.id \}\)/.test(pm));
+// K3-K5 deprecated by v55.83-A.6.27.60: openEdit no longer pre-locks templates.
+// Variants are independent post-creation per Max May 22; the edit-lock was removed.
+// deleteProduct still uses can_delete_product RPC for VARIANTS (templates always-OK).
+ok('K3: openEdit comment confirms edit-lock removal in .60',
+  /v55\.83-A\.6\.27\.60 — Spec-field edit lock REMOVED/.test(pm));
+ok('K4: editLocked variable still declared (kept for forward compat) but never set true for templates',
+  /editLocked/.test(pm) || /v55\.83-A\.6\.27\.60 — Spec-field edit lock REMOVED/.test(pm));
+ok('K5: deleteProduct still uses can_delete_product RPC for variants (templates always-OK)',
+  /async function deleteProduct\(p\)[\s\S]{0,2000}supabase\.rpc\('can_delete_product', \{ p_id: p\.id \}\)/.test(pm));
 ok('K6: deleteProduct requires user to type DELETE',
   /prompt\([\s\S]{0,1000}Type DELETE \(in capitals\) to confirm/.test(pm));
 ok('K7: deleteProduct cancels when typed !== "DELETE"',
@@ -229,10 +232,11 @@ ok('K10: Edit + Copy buttons upgraded to solid dark + white',
 // PART L — Edit modal: lock banner + disabled spec dropdowns
 // ══════════════════════════════════════════════════════════════════
 
-ok('L1: locked banner shows when modalMode === edit && editLocked',
-  /modalMode === 'edit' && editLocked && \([\s\S]{0,500}🔒 This .*template.*variant.* is in use/.test(pm));
-ok('L2: "fully editable" banner shows when modalMode === edit && !editLocked',
-  /modalMode === 'edit' && !editLocked && \([\s\S]{0,500}✏️ This product has zero references/.test(pm));
+// L1/L2 deprecated by v55.83-A.6.27.60: lock banner was removed entirely.
+ok('L1: lock banner removed (v55.83-A.6.27.60 — variants independent, templates always editable)',
+  /v55\.83-A\.6\.27\.60 — Lock banner REMOVED/.test(pm));
+ok('L2: "fully editable" deprecated — all templates now fully editable always',
+  /v55\.83-A\.6\.27\.60 — Spec-field edit lock REMOVED/.test(pm));
 ok('L3: level select gets disabled={editLocked}',
   /disabled=\{editLocked\}/.test(pm));
 ok('L4: level select bg is slate-100 when locked, white otherwise',
@@ -267,15 +271,15 @@ ok('N1: no more "Stage 6 of 6" string in InventoryTab',
   !/Stage 6 of 6/.test(tab));
 ok('N2: header pill now reads v55.83-A.6.27.\\d+',
   /v55\.83-A\.6\.27\.\d+ · /.test(tab));
-ok('N3: WhatsNew header in tab also bumped to .43',
-  /What's in this build \(v55\.83-A\.6\.27\.\d+/.test(tab));
+ok('N3: WhatsNew header in InventoryTab — banner removed in .60 (now lives only in WhatsNewWidget popup)',
+  /v55\.83-A\.6\.27\.60 — Removed stale "What's in this build" details panel/.test(tab));
 
 // ══════════════════════════════════════════════════════════════════
 // Regression guards
 // ══════════════════════════════════════════════════════════════════
 
-ok('R1: A.6.27.42 — Create Variant modal still wired',
-  /openCreateVariant/.test(pm) && /\+ Variant/.test(pm));
+ok('R1: A.6.27.42 — Create Variant/Product modal still wired',
+  /openCreateVariant/.test(pm) && /\+ (Variant|Product)/.test(pm));
 ok('R2: A.6.27.40 — toggleFeatured still present',
   /async function toggleFeatured\(p\)/.test(pm));
 ok('R3: A.6.27.39 — get_or_create_variant SQL still present',

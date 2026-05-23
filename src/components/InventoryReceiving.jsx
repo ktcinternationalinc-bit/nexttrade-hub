@@ -1450,14 +1450,16 @@ export default function InventoryReceiving(props) {
         <div
           className="fixed inset-0 z-[200] bg-black/70 backdrop-blur-sm overflow-y-auto"
           onClick={closeModal}
-          style={{ padding: 16 }}
+          style={{ padding: 6 }}
         >
           <div
             className="bg-white text-slate-900 rounded-2xl shadow-2xl mx-auto"
             onClick={function (e) { e.stopPropagation(); }}
-            style={{ width: '97vw', maxWidth: 1900, maxHeight: '96vh', display: 'flex', flexDirection: 'column' }}
+            style={{ width: '99vw', maxWidth: 'none', height: 'calc(100vh - 12px)', maxHeight: 'calc(100vh - 12px)', display: 'flex', flexDirection: 'column' }}
           >
-            {/* Modal header */}
+            {/* v55.83-A.6.27.60 — Modal now near-fullscreen (99vw × calc 100vh - 12px).
+                Previous 97vw/1900 cap made it look cramped on big monitors. Now the
+                whole form is visible end-to-end without compromise. */}
             <div
               className="rounded-t-2xl flex justify-between items-center gap-2"
               style={{ background: '#3730a3', padding: '14px 20px' }}
@@ -1708,7 +1710,7 @@ export default function InventoryReceiving(props) {
                                   {s.featured === true && <span title="Featured" className="text-amber-500">⭐</span>}
                                   <span className="font-mono font-extrabold text-slate-900">{displayCode || '(no code)'}</span>
                                   {s.is_family_template === true && <span className="text-[9px] bg-indigo-200 text-indigo-900 font-bold rounded px-1.5">TEMPLATE</span>}
-                                  {s.is_family_template === false && s.variant_suffix && <span className="text-[9px] bg-emerald-200 text-emerald-900 font-bold rounded px-1.5">VARIANT</span>}
+                                  {s.is_family_template === false && s.variant_suffix && <span className="text-[9px] bg-emerald-200 text-emerald-900 font-bold rounded px-1.5">PRODUCT</span>}
                                   {Number(s.use_count || 0) > 0 && <span className="text-[10px] text-slate-700 font-bold ml-auto">used {s.use_count}×</span>}
                                 </div>
                                 <div className="text-slate-800 font-semibold">{s.name_en} / <span style={{ direction: 'rtl' }}>{s.name_ar}</span></div>

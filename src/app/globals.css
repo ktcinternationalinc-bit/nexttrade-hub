@@ -29,6 +29,22 @@
 
 html { font-size: 16px; }
 
+/* v55.83-A.6.27.60 — Center form labels app-wide for professional look.
+   Targets the common pattern: <label className="text-[10px] font-semibold">Field</label>
+   followed by an input/select on the next line. Excludes labels that contain
+   a checkbox/radio input (those need their flex inline layout) and labels with
+   explicit text-left/text-right already set. */
+label[class*="text-["][class*="font-"]:not([class*="text-left"]):not([class*="text-right"]):not(:has(input[type="checkbox"])):not(:has(input[type="radio"])) {
+  display: block;
+  text-align: center;
+}
+/* Make sure the label wrapper itself stays block-level so child input
+   stretches normally underneath the centered label. */
+label[class*="text-["][class*="font-"]:not(:has(input[type="checkbox"])):not(:has(input[type="radio"])) > span:first-child {
+  display: block;
+  text-align: center;
+}
+
 body {
   font-family: 'Plus Jakarta Sans', system-ui, -apple-system, sans-serif;
   background: var(--bg-primary);

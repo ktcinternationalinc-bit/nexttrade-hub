@@ -205,7 +205,7 @@ ok('G11: new Phase 1 subtabs still in nav (productmaster)',
 ok('G12: new Phase 1 subtabs still in nav (receivestock)',
   /^\s*\{ id: 'receivestock', label: '🚚 Inbound Shipments'/m.test(inv));
 ok('G13: new Phase 1 subtabs still in nav (importstock)',
-  /^\s*\{ id: 'importstock', label: '📦 Import Stock'/m.test(inv));
+  /^\s*\{ id: 'importstock', label: '📦 Import (Stock|Shipment)'/m.test(inv));
 
 // ══════════════════════════════════════════════════════════════════
 // Regression guards

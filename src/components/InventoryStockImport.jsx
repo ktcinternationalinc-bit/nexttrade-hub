@@ -156,6 +156,48 @@ export default function InventoryStockImport(props) {
     }
     var wb = XLSX.utils.book_new();
 
+    // v55.83-A.6.27.61 — Sheet 0: Shipment Info (header — one row of fields for the whole shipment).
+    // These values apply to ALL product lines in Stock Import sheet UNLESS the row overrides.
+    // Saves you from repeating "warehouse_name" and "supplier" on every line.
+    var shipmentInfoHeaders = [
+      'shipment_reference',
+      'warehouse_name',
+      'receipt_date',
+      'supplier',
+      'freight_forwarder',
+      'shipping_line',
+      'origin_country',
+      'bl_number',
+      'container_number',
+      'eta',
+      'total_shipping_cost',
+      'shipping_cost_currency',
+      'notes',
+    ];
+    var shipmentInfoExample = [
+      'KTC-2026-042',                            // shipment_reference
+      warehouses[0] ? warehouses[0].name : '',   // warehouse_name
+      new Date().toISOString().substring(0, 10), // receipt_date
+      'ABC Suppliers',                            // supplier
+      'DHL Global Forwarding',                    // freight_forwarder
+      'Maersk',                                   // shipping_line
+      'China',                                    // origin_country
+      'MAEU123456789',                            // bl_number
+      'MAEU1234567',                              // container_number
+      '',                                         // eta
+      '4500',                                     // total_shipping_cost
+      'USD',                                      // shipping_cost_currency
+      'Q3 leather replenishment',                 // notes
+    ];
+    var shipmentSheet = XLSX.utils.aoa_to_sheet([shipmentInfoHeaders, shipmentInfoExample]);
+    shipmentSheet['!cols'] = shipmentInfoHeaders.map(function (h) {
+      if (h === 'shipment_reference' || h === 'bl_number' || h === 'container_number') return { wch: 20 };
+      if (h === 'warehouse_name' || h === 'supplier' || h === 'freight_forwarder' || h === 'shipping_line') return { wch: 22 };
+      if (h === 'notes') return { wch: 40 };
+      return { wch: 14 };
+    });
+    XLSX.utils.book_append_sheet(wb, shipmentSheet, 'Shipment Info');
+
     // Sheet 1: Stock Import — one example row
     var exampleRow = (function () {
       var p = products[0];
@@ -230,25 +272,30 @@ export default function InventoryStockImport(props) {
 
     // Sheet 4: Instructions
     var instr = [
-      ['KTC NextTrade Hub — Legacy Stock Import Template'],
+      ['KTC NextTrade Hub — Import Shipment Template (v55.83-A.6.27.61)'],
       [''],
       ['PURPOSE:'],
-      ['Bulk-import your existing inventory (rolls that are already in your warehouses)'],
-      ['into the new classification system. Each row becomes ONE stock receipt with'],
-      ['receipt_type = "legacy_import".'],
+      ['Bulk-import an entire shipment in one Excel file. Each shipment has ONE set of'],
+      ['shipment-level info (forwarder, BL #, container #, warehouse, supplier, etc.) and'],
+      ['MANY product lines (one row per product received).'],
+      [''],
+      ['STRUCTURE:'],
+      ['• Sheet "Shipment Info" — fill ONE row with shipment-level fields. These apply to'],
+      ['  ALL product lines below. (Don\'t repeat them per row.)'],
+      ['• Sheet "Stock Import" — fill MANY rows, one per product received in this shipment.'],
+      ['  If you leave warehouse_name / supplier / receipt_date / container_number BLANK on'],
+      ['  a row, it inherits from "Shipment Info" sheet. Override per-row only when needed.'],
       [''],
       ['HOW TO USE:'],
-      ['1. Fill in the "Stock Import" sheet — one row per product/warehouse/batch combination.'],
-      ['2. product_quick_code must match an existing product (see Products Reference).'],
-      ['3. warehouse_name must match an existing warehouse (see Warehouses Reference).'],
+      ['1. Fill in the "Shipment Info" sheet — only one data row, shipment-level fields.'],
+      ['2. Fill in the "Stock Import" sheet — one row per product received.'],
+      ['3. product_quick_code must match an existing product (see Products Reference).'],
       ['4. quantity is required (must be > 0).'],
       ['5. uom is optional — defaults to the product master if blank.'],
-      ['6. Other fields are optional but encouraged (supplier, batch_number, cost, etc).'],
-      ['7. receipt_date defaults to today if blank.'],
-      ['8. Tech spec overrides (thickness, width, GSM, density, weight, length) only fill'],
+      ['6. Tech spec overrides (thickness, width, GSM, density, weight, length) only fill'],
       ['   if the actual roll differs from the product master default.'],
-      ['9. Delete the example row before uploading.'],
-      ['10. Save as .xlsx and upload via the Import Stock screen.'],
+      ['7. Delete the example rows before uploading.'],
+      ['8. Save as .xlsx and upload via the Import Shipment screen.'],
       [''],
       ['VALIDATION:'],
       ['- Unknown quick codes → row rejected with row#.'],
@@ -267,7 +314,7 @@ export default function InventoryStockImport(props) {
     XLSX.utils.book_append_sheet(wb, instrSheet, 'Instructions');
 
     var stamp = new Date().toISOString().substring(0, 10);
-    XLSX.writeFile(wb, 'KTC-Legacy-Stock-Import-Template-' + stamp + '.xlsx');
+    XLSX.writeFile(wb, 'KTC-Import-Shipment-Template-' + stamp + '.xlsx');
     toast.success('Template downloaded. Fill it out and upload back here.');
   }
 
@@ -281,9 +328,30 @@ export default function InventoryStockImport(props) {
     try {
       var data = await file.arrayBuffer();
       var wb = XLSX.read(data);
+
+      // v55.83-A.6.27.61 — Try to read Shipment Info sheet first (new template structure).
+      // Its values become defaults for any Stock Import rows that leave fields blank.
+      var shipmentDefaults = {};
+      if (wb.SheetNames.includes('Shipment Info')) {
+        try {
+          var infoSheet = wb.Sheets['Shipment Info'];
+          var infoRows = XLSX.utils.sheet_to_json(infoSheet, { defval: '' });
+          if (infoRows && infoRows.length > 0) {
+            // Use first data row as defaults
+            shipmentDefaults = infoRows[0] || {};
+          }
+        } catch (e) {
+          console.warn('[stock-import] could not parse Shipment Info sheet:', e);
+        }
+      }
+
       var sheetName = 'Stock Import';
       if (!wb.SheetNames.includes(sheetName)) {
         sheetName = wb.SheetNames[0];
+        // If first sheet is Shipment Info, skip past it
+        if (sheetName === 'Shipment Info' && wb.SheetNames.length > 1) {
+          sheetName = wb.SheetNames[1];
+        }
       }
       var sheet = wb.Sheets[sheetName];
       var rows = XLSX.utils.sheet_to_json(sheet, { defval: '' });
@@ -293,9 +361,13 @@ export default function InventoryStockImport(props) {
         if (fileInputRef.current) fileInputRef.current.value = '';
         return;
       }
-      var result = validateRows(rows);
+      var result = validateRows(rows, shipmentDefaults);
       setParsedRows(result);
-      toast.info('Parsed ' + rows.length + ' row(s). Review preview below.');
+      var hint = '';
+      if (shipmentDefaults && Object.keys(shipmentDefaults).length > 0) {
+        hint = ' (' + Object.keys(shipmentDefaults).filter(function (k) { return shipmentDefaults[k]; }).length + ' shipment-level defaults applied)';
+      }
+      toast.info('Parsed ' + rows.length + ' row(s)' + hint + '. Review preview below.');
     } catch (err) {
       console.error('[stock-import] parse failed:', err);
       toast.error('Could not parse file: ' + ((err && err.message) || String(err)));
@@ -306,10 +378,22 @@ export default function InventoryStockImport(props) {
     }
   }
 
-  function validateRows(rows) {
+  // v55.83-A.6.27.61 — validateRows now takes shipmentDefaults (from Shipment Info sheet).
+  // When a row leaves a field blank, fall back to the shipment-level default before erroring.
+  function validateRows(rows, shipmentDefaults) {
+    shipmentDefaults = shipmentDefaults || {};
     var valid = [];
     var errors = [];
     var todayStr = new Date().toISOString().substring(0, 10);
+
+    // Helper: get the row value, or fall back to shipment-level default
+    function getWithDefault(raw, key) {
+      var rowVal = raw[key];
+      if (rowVal != null && String(rowVal).trim() !== '') return rowVal;
+      var dflt = shipmentDefaults[key];
+      if (dflt != null && String(dflt).trim() !== '') return dflt;
+      return '';
+    }
 
     rows.forEach(function (raw, idx) {
       var rowNum = idx + 2; // header is row 1
@@ -329,7 +413,8 @@ export default function InventoryStockImport(props) {
       else if (qty === 'INVALID') errs.push('quantity must be a number (got "' + raw.quantity + '")');
       else if (qty <= 0) errs.push('quantity must be greater than 0 (got ' + qty + ')');
 
-      var warehouseName = String(raw.warehouse_name || '').trim();
+      // v55.83-A.6.27.61 — warehouse_name falls back to shipment default
+      var warehouseName = String(getWithDefault(raw, 'warehouse_name') || '').trim();
       if (!warehouseName) errs.push('warehouse_name required');
       var warehouse = warehouseName ? findWarehouseByName(warehouseName) : null;
       if (warehouseName && !warehouse) {
@@ -346,9 +431,10 @@ export default function InventoryStockImport(props) {
         errs.push('currency must be one of: ' + VALID_CURRENCY.join(', '));
       }
 
-      var receiptDate = asDate(raw.receipt_date);
+      // v55.83-A.6.27.61 — receipt_date falls back to shipment default
+      var receiptDate = asDate(getWithDefault(raw, 'receipt_date'));
       if (receiptDate === 'INVALID') {
-        errs.push('receipt_date is invalid (got "' + raw.receipt_date + '"). Use YYYY-MM-DD or leave blank for today.');
+        errs.push('receipt_date is invalid (got "' + getWithDefault(raw, 'receipt_date') + '"). Use YYYY-MM-DD or leave blank for today.');
       }
 
       // Numeric validation for cost + tech specs
@@ -385,9 +471,9 @@ export default function InventoryStockImport(props) {
         actual_density: asNumber(raw.actual_density) === 'INVALID' ? null : asNumber(raw.actual_density),
         actual_weight_per_roll: asNumber(raw.actual_weight_per_roll) === 'INVALID' ? null : asNumber(raw.actual_weight_per_roll),
         actual_roll_length_m: asNumber(raw.actual_roll_length_m) === 'INVALID' ? null : asNumber(raw.actual_roll_length_m),
-        supplier: String(raw.supplier || '').trim() || null,
+        supplier: String(getWithDefault(raw, 'supplier') || '').trim() || null,
         batch_number: String(raw.batch_number || '').trim() || null,
-        container_number: String(raw.container_number || '').trim() || null,
+        container_number: String(getWithDefault(raw, 'container_number') || '').trim() || null,
         cost_per_uom: resolvedCost,
         currency: currency || null,
         total_cost: total,

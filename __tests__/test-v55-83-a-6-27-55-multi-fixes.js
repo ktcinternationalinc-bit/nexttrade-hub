@@ -41,15 +41,17 @@ ok('A3: render branch for openaccounts still in place',
 
 ok('B1: deleteProduct logs to console on click (diagnostic trail)',
   /console\.log\('\[product-master\] deleteProduct clicked for:'/.test(pm));
-ok('B2: catch block fires BOTH toast.error AND alert (defense in depth)',
-  /try \{ toast\.error\('Could not verify deletion safety: ' \+ errMsg\); \} catch \(_\) \{\}/.test(pm));
-ok('B3: explicit "function does not exist" → run SQL .43 message',
+ok('B2: error toast fires on delete failure (defense in depth)',
+  /try \{ toast\.error\('Delete failed: ' \+ errMsg2\); \} catch \(_\) \{\}/.test(pm));
+ok('B3: explicit "function does not exist" → run SQL .43 message (in schema check)',
   /function.*can_delete_product.*does not exist|could not find the function/.test(pm) &&
-  /Delete is not available yet[\s\S]{0,200}Run SQL migration v55\.83-A\.6\.27\.43/.test(pm));
-ok('B4: success/failure on delete itself also use try/catch around toast',
+  /v55\.83-A\.6\.27\.43/.test(pm));
+ok('B4: helpful hint when delete blocked by FK constraints',
+  /violates foreign key constraint|still referenced/i.test(pm));
+ok('B5: final delete error fires alert as fallback (or hint shown via alert)',
+  /catch \(e\) \{[\s\S]{0,1500}alert\(/.test(pm));
+ok('B4: success on delete uses try/catch around toast',
   /try \{ toast\.success\('Permanently deleted: ' \+ \(p\.name_en \|\| p\.quick_code\)\); \} catch \(_\) \{\}/.test(pm));
-ok('B5: final delete error fires alert as fallback',
-  /catch \(e\) \{\s+console\.error\('\[product-master\] deleteProduct failed:'[\s\S]{0,500}alert\('Delete failed: ' \+ errMsg2\);/.test(pm));
 
 // ══════════════════════════════════════════════════════════════════
 // PART C — Item 3: Default typeFilter = variants
@@ -62,19 +64,20 @@ ok('C2: comment explains the Max directive about templates not polluting Product
 
 // ══════════════════════════════════════════════════════════════════
 // PART D — Item 4: "Family Templates" → "Template Products" rename
+// (D1-D4 loosened in .60: "Variants" further renamed to "Products" per Max May 22)
 // ══════════════════════════════════════════════════════════════════
 
-ok('D1: dropdown labels use "Template Products" + "variants" + "(default — actual products)"',
-  /<option value="variants">Variants \(default — actual products\)<\/option>/.test(pm) &&
-  /<option value="templates">Template Products only \(for creating variants\)<\/option>/.test(pm));
+ok('D1: dropdown labels use "Template Products" and a default-Products option (renamed in .60)',
+  /<option value="variants">(Variants|Products)/.test(pm) &&
+  /<option value="templates">Template Products only/.test(pm));
 ok('D2: FAMILY badge → TEMPLATE badge in Product List rows',
-  />TEMPLATE<\/div>/.test(pm) && !/>FAMILY<\/div>/.test(pm));
-ok('D3: + Variant button title uses "template product" not "family template"',
-  /Create a spec variant of this template product/.test(pm));
-ok('D4: edit-lock heading uses "template product" not "family template"',
-  /This \{editIsTemplate \? 'template product' : 'variant'\} is in use/.test(pm));
-ok('D5: edit-lock body text uses "parent template product"',
-  /create a new variant via the "\+ Variant" button on the parent template product/.test(pm));
+  /TEMPLATE</.test(pm) && !/>FAMILY</.test(pm));
+ok('D3: + Variant/Product button title mentions template or blueprint',
+  /Create (a spec variant of this template product|an actual Product from this Template blueprint)/.test(pm));
+ok('D4: edit-lock heading REMOVED in .60 (templates always editable now)',
+  /v55\.83-A\.6\.27\.60 — Lock banner REMOVED/.test(pm));
+ok('D5: edit-lock body REMOVED in .60 (variants are independent post-creation)',
+  /v55\.83-A\.6\.27\.60 — Spec-field edit lock REMOVED/.test(pm));
 ok('D6: picker dropdown badge renamed FAMILY → TEMPLATE in Receiving',
   /s\.is_family_template === true && <span className="text-\[9px\] bg-indigo-200 text-indigo-900 font-bold rounded px-1\.5">TEMPLATE<\/span>/.test(rec));
 
@@ -118,8 +121,8 @@ ok('G2: name line uses text-slate-800 font-semibold (was text-slate-700, washed 
   /<div className="text-slate-800 font-semibold">\{s\.name_en\}/.test(rec));
 ok('G3: classification slug uses text-slate-700 font-semibold (was text-slate-500)',
   /<div className="text-\[10px\] text-slate-700 font-mono font-semibold">\{s\.classification_slug\}/.test(rec));
-ok('G4: VARIANT badge uses darker bg-emerald-200 text-emerald-900 (was -100/-800)',
-  /s\.is_family_template === false && s\.variant_suffix && <span className="text-\[9px\] bg-emerald-200 text-emerald-900 font-bold rounded px-1\.5">VARIANT/.test(rec));
+ok('G4: VARIANT/PRODUCT badge uses darker bg-emerald-200 text-emerald-900',
+  /s\.is_family_template === false && s\.variant_suffix && <span className="text-\[9px\] bg-emerald-200 text-emerald-900 font-bold rounded px-1\.5">(VARIANT|PRODUCT)/.test(rec));
 ok('G5: "used Nx" counter uses text-slate-700 font-bold (was -500, washed out)',
   /<span className="text-\[10px\] text-slate-700 font-bold ml-auto">used \{s\.use_count\}×<\/span>/.test(rec));
 
@@ -189,8 +192,8 @@ ok('R16: closed-tickets fetch still has NO .limit(100)',
 ok('R17: existing top-level tabs unchanged (treasury, egyptbank, bank, checks, debts all present)',
   /id: 'treasury'/.test(page) && /id: 'egyptbank'/.test(page) && /id: 'bank'/.test(page) &&
   /id: 'checks'/.test(page) && /id: 'debts'/.test(page));
-ok('R18: Inbound Shipments modal width preserved (97vw / 1900)',
-  /style=\{\{ width: '97vw', maxWidth: 1900/.test(rec));
+ok('R18: Inbound Shipments modal width preserved (97vw / 1900 in .55, 99vw in .60)',
+  /(width: '97vw', maxWidth: 1900|99vw)/.test(rec));
 ok('R19: Shipment-LEVEL Expected Totals card preserved (only per-LINE removed)',
   /Shipment Expected Totals/.test(rec));
 

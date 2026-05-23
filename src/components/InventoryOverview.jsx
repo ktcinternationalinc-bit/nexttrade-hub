@@ -57,6 +57,15 @@ export default function InventoryOverview(props) {
   // exposes them for the rare case someone wants to audit templates too.
   var [showTemplates, setShowTemplates] = useState(false);
 
+  // v55.83-A.6.27.60 — History drilldown modal state. When user clicks "↗ History"
+  // on a product row, this opens a modal showing all inbound shipments, outbound
+  // sales, and the current stock summary for that product.
+  var [historyProduct, setHistoryProduct] = useState(null); // null = closed; object = open for that product
+  var [historyLayers, setHistoryLayers] = useState([]);     // inventory_layers rows for inbound history
+  var [historyMovements, setHistoryMovements] = useState([]); // inventory_movements rows for outbound history
+  var [historyLoading, setHistoryLoading] = useState(false);
+  var [historyError, setHistoryError] = useState(null);
+
   // v55.83-A.6.27.51 — Cascading multi-level filters. User can filter by ANY
   // combination of the 9 classification levels. Each dropdown shows only the
   // options that match the higher-level filters that are already set.
@@ -83,6 +92,44 @@ export default function InventoryOverview(props) {
       backing_list_id: '', color_list_id: '', pattern_list_id: '', spec_class_list_id: '', origin_list_id: '',
     });
     setSearch('');
+  }
+
+  // v55.83-A.6.27.60 — open the product History drawer.
+  // Fetches inventory_layers (inbound shipments) and inventory_movements
+  // (outbound sales / adjustments) for the given product. Each query is in its
+  // own try/catch so a single missing table doesn't kill the whole drawer.
+  async function openHistory(product) {
+    if (!product) return;
+    setHistoryProduct(product);
+    setHistoryLayers([]);
+    setHistoryMovements([]);
+    setHistoryLoading(true);
+    setHistoryError(null);
+    try {
+      var layersRes = await supabase
+        .from('inventory_layers')
+        .select('*')
+        .eq('product_id', product.id)
+        .order('received_at', { ascending: false });
+      if (!layersRes.error) setHistoryLayers(layersRes.data || []);
+      else console.warn('[history] layers query failed:', layersRes.error.message);
+    } catch (e) { console.warn('[history] layers threw:', e); }
+    try {
+      var movRes = await supabase
+        .from('inventory_movements')
+        .select('*')
+        .eq('product_id', product.id)
+        .order('moved_at', { ascending: false });
+      if (!movRes.error) setHistoryMovements(movRes.data || []);
+      else console.warn('[history] movements query failed:', movRes.error.message);
+    } catch (e) { console.warn('[history] movements threw:', e); }
+    setHistoryLoading(false);
+  }
+  function closeHistory() {
+    setHistoryProduct(null);
+    setHistoryLayers([]);
+    setHistoryMovements([]);
+    setHistoryError(null);
   }
 
   useEffect(function () {
@@ -360,7 +407,7 @@ export default function InventoryOverview(props) {
           <input type="checkbox" checked={showZeroStock} onChange={function (e) { setShowZeroStock(e.target.checked); }} className="w-4 h-4" />
           Show zero-stock items / إظهار المخزون الصفري
         </label>
-        <label className="flex items-center gap-1.5 text-xs font-extrabold text-slate-900" title="Template Products have no physical stock — they're only used to create variants.">
+        <label className="flex items-center gap-1.5 text-xs font-extrabold text-slate-900" title="Template Products have no physical stock — they're only used to create Products.">
           <input type="checkbox" checked={showTemplates} onChange={function (e) { setShowTemplates(e.target.checked); }} className="w-4 h-4" />
           Show Template Products / إظهار قوالب المنتجات
         </label>
@@ -377,7 +424,10 @@ export default function InventoryOverview(props) {
       {/* v55.83-A.6.27.51 — Cascading classification filters.
           9 dropdowns, one per level. Options cascade: choosing Family=Textiles
           narrows the Category dropdown to categories that exist in Textile products. */}
-      <details className="bg-white border-2 border-indigo-300 rounded-lg" open={activeFilterCount > 0}>
+      {/* v55.83-A.6.27.60 — Filter section defaults to ALWAYS OPEN (was: open only
+          when filters active). User wanted all 9 levels visible by default per Max
+          May 22 2026 — option A. */}
+      <details className="bg-white border-2 border-indigo-300 rounded-lg" open>
         <summary className="px-4 py-2 cursor-pointer font-extrabold text-slate-900 bg-indigo-50 hover:bg-indigo-100 rounded-t-lg flex items-center justify-between">
           <span>🔍 Filter by classification (Family → Category → Grade → ...) / تصفية حسب التصنيف</span>
           {activeFilterCount > 0 && (
@@ -528,6 +578,18 @@ export default function InventoryOverview(props) {
                       var s = productStats[p.id] || { current_qty: 0, current_weighted_cost: 0, original_qty: 0, sold_qty: 0, sold_revenue: 0, cogs_total: 0, gross_profit: 0 };
                       var avgCost = s.current_qty > 0 ? s.current_weighted_cost / s.current_qty : 0;
                       var avgSoldPrice = s.sold_qty > 0 ? s.sold_revenue / s.sold_qty : 0;
+                      // v55.83-A.6.27.60 — 9-level classification labels for inline display
+                      var levelLabels = [
+                        ['F', listsById[p.family_list_id]],
+                        ['Cat', listsById[p.category_list_id]],
+                        ['Gr', listsById[p.grade_list_id]],
+                        ['Co', listsById[p.construction_list_id]],
+                        ['B', listsById[p.backing_list_id]],
+                        ['Cl', listsById[p.color_list_id]],
+                        ['P', listsById[p.pattern_list_id]],
+                        ['Sp', listsById[p.spec_class_list_id]],
+                        ['O', listsById[p.origin_list_id]],
+                      ].filter(function (pair) { return pair[1]; });
                       return (
                         <tr key={p.id} className="border-b border-slate-200 hover:bg-slate-50">
                           <td className="px-3 py-1.5 font-mono text-slate-900 font-bold">
@@ -538,6 +600,25 @@ export default function InventoryOverview(props) {
                           <td className="px-3 py-1.5">
                             <div className="font-bold text-slate-900">{p.name_en || '—'}</div>
                             {p.name_ar && <div className="text-xs text-slate-700" style={{ direction: 'rtl' }}>{p.name_ar}</div>}
+                            {/* v55.83-A.6.27.60 — All 9 classification levels inline under name */}
+                            {levelLabels.length > 0 && (
+                              <div className="text-[10px] text-slate-600 mt-0.5 leading-relaxed">
+                                {levelLabels.map(function (pair, i) {
+                                  return (
+                                    <span key={i} className="inline-block mr-2">
+                                      <span className="font-bold text-slate-500">{pair[0]}:</span>{' '}
+                                      <span className="text-slate-800">{pair[1].label_en || pair[1].code}</span>
+                                    </span>
+                                  );
+                                })}
+                              </div>
+                            )}
+                            {/* v55.83-A.6.27.60 — History drilldown link */}
+                            <button
+                              onClick={function () { openHistory(p); }}
+                              className="text-[10px] text-blue-700 hover:text-blue-900 font-bold mt-0.5 hover:underline"
+                              title="View inbound shipments, outbound sales, and stock history for this product"
+                            >↗ History</button>
                           </td>
                           <td className="px-3 py-1.5 text-right font-mono font-extrabold text-blue-900">{fmtNum(s.current_qty, 2)}</td>
                           <td className="px-3 py-1.5 text-right font-mono text-indigo-900">{fmtNum(s.original_qty, 2)}</td>
@@ -565,6 +646,153 @@ export default function InventoryOverview(props) {
       {!seeCosts && !loading && (
         <div className="text-xs text-slate-600 italic mt-2">
           Avg Cost and P&amp;L columns are hidden. Ask a super admin to grant you the &quot;See Inventory Costs&quot; permission to view them.
+        </div>
+      )}
+
+      {/* v55.83-A.6.27.60 — Product History drilldown modal.
+          Opens when user clicks "↗ History" on any product row. Shows:
+            • Stock summary (current / original / sold / avg cost / P&L)
+            • Inbound shipments (inventory_layers — when stock was received)
+            • Outbound movements (inventory_movements — sales + adjustments) */}
+      {historyProduct && (
+        <div className="fixed inset-0 bg-black/60 z-[120] flex items-start justify-center p-4 overflow-auto">
+          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-5xl my-4">
+            {/* Modal header */}
+            <div className="bg-gradient-to-r from-blue-700 to-indigo-700 text-white rounded-t-2xl px-5 py-3 flex justify-between items-center">
+              <div>
+                <div className="text-lg font-extrabold">📜 Product History</div>
+                <div className="text-xs font-semibold text-blue-100">
+                  {historyProduct.quick_code || ''}{historyProduct.variant_suffix ? '-' + historyProduct.variant_suffix : ''}
+                  {' · '}
+                  {historyProduct.name_en || '—'}
+                </div>
+              </div>
+              <button
+                onClick={closeHistory}
+                aria-label="Close"
+                className="bg-white text-slate-800 w-9 h-9 rounded-full font-bold text-lg shadow"
+              >✕</button>
+            </div>
+
+            <div className="px-5 py-4 space-y-4">
+              {/* Stock summary */}
+              {(function () {
+                var s = productStats[historyProduct.id] || { current_qty: 0, current_weighted_cost: 0, original_qty: 0, sold_qty: 0, sold_revenue: 0, cogs_total: 0, gross_profit: 0 };
+                var avgCost = s.current_qty > 0 ? s.current_weighted_cost / s.current_qty : 0;
+                var avgSold = s.sold_qty > 0 ? s.sold_revenue / s.sold_qty : 0;
+                return (
+                  <div className="grid grid-cols-2 md:grid-cols-4 gap-2">
+                    <div className="bg-blue-100 border border-blue-300 rounded p-2">
+                      <div className="text-[10px] font-extrabold text-blue-900 uppercase tracking-wider">Current Stock</div>
+                      <div className="text-lg font-mono font-extrabold text-blue-900">{fmtNum(s.current_qty, 2)} {historyProduct.default_uom || ''}</div>
+                    </div>
+                    <div className="bg-indigo-100 border border-indigo-300 rounded p-2">
+                      <div className="text-[10px] font-extrabold text-indigo-900 uppercase tracking-wider">Original Received</div>
+                      <div className="text-lg font-mono font-extrabold text-indigo-900">{fmtNum(s.original_qty, 2)}</div>
+                    </div>
+                    <div className="bg-emerald-100 border border-emerald-300 rounded p-2">
+                      <div className="text-[10px] font-extrabold text-emerald-900 uppercase tracking-wider">Sold</div>
+                      <div className="text-lg font-mono font-extrabold text-emerald-900">{fmtNum(s.sold_qty, 2)}</div>
+                    </div>
+                    {seeCosts && (
+                      <div className={'border rounded p-2 ' + (s.gross_profit >= 0 ? 'bg-emerald-50 border-emerald-300' : 'bg-red-50 border-red-300')}>
+                        <div className="text-[10px] font-extrabold uppercase tracking-wider text-slate-900">P&amp;L</div>
+                        <div className={'text-lg font-mono font-extrabold ' + (s.gross_profit >= 0 ? 'text-emerald-900' : 'text-red-900')}>{fmtNum(s.gross_profit, 2)}</div>
+                        <div className="text-[10px] text-slate-700">Avg cost {fmtNum(avgCost, 2)} · sold {fmtNum(avgSold, 2)}</div>
+                      </div>
+                    )}
+                  </div>
+                );
+              })()}
+
+              {historyLoading && (
+                <div className="text-center py-6 text-slate-600 font-semibold">Loading history...</div>
+              )}
+
+              {!historyLoading && (
+                <>
+                  {/* Inbound shipments */}
+                  <div>
+                    <div className="text-sm font-extrabold text-slate-900 mb-2">📥 Inbound — Stock Received ({historyLayers.length})</div>
+                    {historyLayers.length === 0 ? (
+                      <div className="text-xs text-slate-600 italic p-3 bg-slate-50 rounded">No inbound history found for this product.</div>
+                    ) : (
+                      <div className="overflow-auto border border-slate-200 rounded">
+                        <table className="w-full text-xs">
+                          <thead className="bg-slate-100">
+                            <tr>
+                              <th className="px-2 py-1.5 text-left font-extrabold text-slate-900">Receipt #</th>
+                              <th className="px-2 py-1.5 text-left font-extrabold text-slate-900">Date</th>
+                              <th className="px-2 py-1.5 text-left font-extrabold text-slate-900">Supplier</th>
+                              <th className="px-2 py-1.5 text-right font-extrabold text-slate-900">Qty Received</th>
+                              <th className="px-2 py-1.5 text-right font-extrabold text-slate-900">Qty Remaining</th>
+                              {seeCosts && <th className="px-2 py-1.5 text-right font-extrabold text-slate-900 bg-amber-50">Unit Cost</th>}
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {historyLayers.map(function (layer) {
+                              return (
+                                <tr key={layer.id} className="border-b border-slate-200">
+                                  <td className="px-2 py-1.5 font-mono text-slate-800">{layer.receipt_number || '—'}</td>
+                                  <td className="px-2 py-1.5 font-mono text-slate-700">{layer.received_at ? String(layer.received_at).substring(0, 10) : '—'}</td>
+                                  <td className="px-2 py-1.5 text-slate-700">{layer.supplier || '—'}</td>
+                                  <td className="px-2 py-1.5 text-right font-mono font-bold text-indigo-900">{fmtNum(layer.qty_received || layer.quantity || 0, 2)}</td>
+                                  <td className="px-2 py-1.5 text-right font-mono font-bold text-blue-900">{fmtNum(layer.qty_remaining || 0, 2)}</td>
+                                  {seeCosts && <td className="px-2 py-1.5 text-right font-mono text-slate-800 bg-amber-50">{fmtNum(layer.unit_cost || 0, 2)} {layer.cost_currency || ''}</td>}
+                                </tr>
+                              );
+                            })}
+                          </tbody>
+                        </table>
+                      </div>
+                    )}
+                  </div>
+
+                  {/* Outbound movements */}
+                  <div>
+                    <div className="text-sm font-extrabold text-slate-900 mb-2">📤 Outbound — Movements ({historyMovements.length})</div>
+                    {historyMovements.length === 0 ? (
+                      <div className="text-xs text-slate-600 italic p-3 bg-slate-50 rounded">No outbound history found for this product.</div>
+                    ) : (
+                      <div className="overflow-auto border border-slate-200 rounded">
+                        <table className="w-full text-xs">
+                          <thead className="bg-slate-100">
+                            <tr>
+                              <th className="px-2 py-1.5 text-left font-extrabold text-slate-900">Date</th>
+                              <th className="px-2 py-1.5 text-left font-extrabold text-slate-900">Type</th>
+                              <th className="px-2 py-1.5 text-left font-extrabold text-slate-900">Reference</th>
+                              <th className="px-2 py-1.5 text-right font-extrabold text-slate-900">Qty</th>
+                              {seeCosts && <th className="px-2 py-1.5 text-right font-extrabold text-slate-900 bg-amber-50">Revenue</th>}
+                              {seeCosts && <th className="px-2 py-1.5 text-right font-extrabold text-slate-900 bg-amber-50">COGS</th>}
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {historyMovements.map(function (mov) {
+                              return (
+                                <tr key={mov.id} className="border-b border-slate-200">
+                                  <td className="px-2 py-1.5 font-mono text-slate-700">{mov.moved_at ? String(mov.moved_at).substring(0, 10) : '—'}</td>
+                                  <td className="px-2 py-1.5 text-slate-800 font-semibold">{mov.movement_type || mov.type || '—'}</td>
+                                  <td className="px-2 py-1.5 font-mono text-slate-700">{mov.invoice_number || mov.reference || mov.notes || '—'}</td>
+                                  <td className="px-2 py-1.5 text-right font-mono font-bold text-emerald-800">{fmtNum(mov.quantity || mov.qty || 0, 2)}</td>
+                                  {seeCosts && <td className="px-2 py-1.5 text-right font-mono text-slate-800 bg-amber-50">{fmtNum(mov.revenue || 0, 2)}</td>}
+                                  {seeCosts && <td className="px-2 py-1.5 text-right font-mono text-slate-800 bg-amber-50">{fmtNum(mov.cogs || 0, 2)}</td>}
+                                </tr>
+                              );
+                            })}
+                          </tbody>
+                        </table>
+                      </div>
+                    )}
+                  </div>
+                </>
+              )}
+            </div>
+
+            {/* Modal footer */}
+            <div className="border-t border-slate-200 px-5 py-3 flex justify-end bg-slate-50 rounded-b-2xl">
+              <button onClick={closeHistory} className="px-4 py-2 bg-slate-700 hover:bg-slate-800 text-white text-sm font-extrabold rounded">Close</button>
+            </div>
+          </div>
         </div>
       )}
     </div>

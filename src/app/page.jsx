@@ -43,6 +43,8 @@ import BankTab from '../components/BankTab';
 import QuotesTab from '../components/QuotesTab';
 import EgyptBankTab from '../components/EgyptBankTab';
 import OpenAccountsTab from '../components/OpenAccountsTab';
+// v55.83-A.6.27.65 — Sales-rep KPI dashboard
+import SalesRepDashboard from '../components/SalesRepDashboard';
 import PhoneWidget from '../components/PhoneWidget';
 import ReportsTab from '../components/ReportsTab';
 import WriteOffsReport from '../components/WriteOffsReport';
@@ -371,6 +373,18 @@ export default function App() {
   const [dt, setDt] = useState(today());
   const [query, setQuery] = useState('');
   const [customerFilter, setCustomerFilter] = useState('');
+  // v55.83-A.6.27.65 — Advanced invoice filters (collapsible panel).
+  // salesRepFilter: filter by sales_rep name (empty = all reps)
+  // amountMin / amountMax: filter by total_amount range (empty = no limit)
+  // hasOutstanding: 'all' | 'yes' | 'no' — only invoices with outstanding > 0 (or fully collected)
+  // showAdvFilters: persistent toggle for the panel
+  // showRepDashboard: toggle the SalesRepDashboard section above the invoice list
+  const [salesRepFilter, setSalesRepFilter] = useState('');
+  const [amountMin, setAmountMin] = useState('');
+  const [amountMax, setAmountMax] = useState('');
+  const [hasOutstandingFilter, setHasOutstandingFilter] = useState('all');
+  const [showAdvFilters, setShowAdvFilters] = useState(false);
+  const [showRepDashboard, setShowRepDashboard] = useState(false);
 
   // Data
   const [invoices, setInvoices] = useState([]);
@@ -379,6 +393,9 @@ export default function App() {
   const [debts, setDebts] = useState([]);
   const [customers, setCustomers] = useState([]);
   const [warehouse, setWarehouse] = useState([]);
+  // v55.83-A.6.27.64 — Open advances loaded for the warehouse expense form dropdown
+  // (so operator can tag the expense to an advance at save time).
+  const [warehouseAdvances, setWarehouseAdvances] = useState([]);
   const [invoiceItems, setInvoiceItems] = useState([]);
   // v55.83-A.6.27 — Stage D: invoice line items can optionally link to an
   // inv_skus row. When set + qty present at save time, we drain FIFO layers
@@ -1397,6 +1414,12 @@ export default function App() {
         const { data: whRows } = await supabase.from('inv_warehouses').select('*').eq('is_active', true).order('name');
         setInvWarehouses(whRows || []);
       } catch (e) { setInvWarehouses([]); }
+      // v55.83-A.6.27.64 — load open warehouse advances for the expense form dropdown.
+      // Safe to fail silently (table may not exist yet if .62 SQL hasn't been run).
+      try {
+        const { data: advRows } = await supabase.from('warehouse_advances').select('id, issue_date, amount, currency, recipient_name, recipient_role, status').eq('status', 'open').order('issue_date', { ascending: false });
+        setWarehouseAdvances(advRows || []);
+      } catch (e) { setWarehouseAdvances([]); }
       // v55.83-A.6.27.44b — load inventory_products (variants) for the invoice picker.
       // Safe to fail silently — invoice form falls back to legacy/manual mode.
       try {
@@ -1790,10 +1813,25 @@ export default function App() {
     if (query) arr = arr.filter(s =>
       (s.customer_name || '').includes(query) || (s.customer_name_en || '').toLowerCase().includes(query.toLowerCase()) || (s.order_number || '').includes(query)
     );
+    // v55.83-A.6.27.65 — advanced filters
+    if (salesRepFilter) {
+      const repLow = salesRepFilter.toLowerCase();
+      arr = arr.filter(s => (s.sales_rep || '').toLowerCase() === repLow);
+    }
+    if (amountMin !== '' && amountMin != null) {
+      const minN = Number(amountMin);
+      if (!isNaN(minN)) arr = arr.filter(s => Number(s.total_amount || s.amount || 0) >= minN);
+    }
+    if (amountMax !== '' && amountMax != null) {
+      const maxN = Number(amountMax);
+      if (!isNaN(maxN)) arr = arr.filter(s => Number(s.total_amount || s.amount || 0) <= maxN);
+    }
+    if (hasOutstandingFilter === 'yes') arr = arr.filter(s => Number(s.outstanding || 0) > 0);
+    if (hasOutstandingFilter === 'no') arr = arr.filter(s => Number(s.outstanding || 0) <= 0);
     const dir = invoiceSort === 'oldest' ? 1 : -1;
     arr.sort((a, b) => dir * ((a.created_at || '').localeCompare(b.created_at || '')));
     return arr;
-  }, [invoices, mode, df, dt, query, customerFilter, invoiceSort]);
+  }, [invoices, mode, df, dt, query, customerFilter, invoiceSort, salesRepFilter, amountMin, amountMax, hasOutstandingFilter]);
 
   const totalInvoiced = useMemo(() => filteredInvoices.reduce((a, r) => a + Number(r.total_amount || 0), 0), [filteredInvoices]);
   const totalCollected = useMemo(() => filteredInvoices.reduce((a, r) => a + Number(r.total_collected || 0), 0), [filteredInvoices]);
@@ -5166,7 +5204,7 @@ export default function App() {
                   Was: text-zinc-500 (mid-gray) on #0a0a0a (true black) — barely readable.
                   Now: bright amber pill on dark background — readable at any zoom, still
                   matches the terminal aesthetic. */}
-              <span className="text-[10px] font-mono font-extrabold hidden md:inline px-2 py-0.5 rounded" style={{ fontFamily: '"JetBrains Mono", monospace', background: '#fef3c7', color: '#451a03', border: '1px solid #d97706' }}>v55.83-A.6.27.59</span>
+              <span className="text-[10px] font-mono font-extrabold hidden md:inline px-2 py-0.5 rounded" style={{ fontFamily: '"JetBrains Mono", monospace', background: '#fef3c7', color: '#451a03', border: '1px solid #d97706' }}>v55.83-A.6.27.65</span>
               {/* Live clock — also bumped to readable amber. */}
               <span
                 className="hidden lg:inline text-[10px] font-mono ml-2 pl-2 border-l border-zinc-700"
@@ -8617,7 +8655,7 @@ export default function App() {
                                   <span className="text-[9px] font-mono font-extrabold text-emerald-800">{item.variant_quick_code}</span>
                                 )}
                                 {item.is_family_template && (
-                                  <span className="text-[8px] bg-amber-500 text-white font-bold rounded px-1 py-0.5" title="Family template — variant will be created at consumption">⚠ Template</span>
+                                  <span className="text-[8px] bg-amber-500 text-white font-bold rounded px-1 py-0.5" title="Family template — Product will be created at consumption">⚠ Template</span>
                                 )}
                               </div>
                             )}
@@ -11619,8 +11657,79 @@ export default function App() {
                 }} className="px-3 py-1.5 bg-slate-100 text-slate-600 rounded-lg text-xs font-semibold hover:bg-slate-200">
                   📥 Export
                 </button>
+                {/* v55.83-A.6.27.65 — Toggle the Sales-Rep KPI dashboard */}
+                <button onClick={() => setShowRepDashboard(v => !v)}
+                  className={'px-3 py-1.5 rounded-lg text-xs font-extrabold ' +
+                    (showRepDashboard ? 'bg-indigo-600 text-white hover:bg-indigo-700' : 'bg-indigo-100 text-indigo-800 hover:bg-indigo-200')}>
+                  📊 Rep KPIs
+                </button>
+                {/* v55.83-A.6.27.65 — Toggle the advanced filters panel */}
+                <button onClick={() => setShowAdvFilters(v => !v)}
+                  className={'px-3 py-1.5 rounded-lg text-xs font-extrabold ' +
+                    (showAdvFilters ? 'bg-slate-700 text-white hover:bg-slate-800' : 'bg-slate-100 text-slate-700 hover:bg-slate-200')}>
+                  {showAdvFilters ? '▾ Less' : '▸ More filters'}
+                </button>
               </div>
             </div>
+
+            {/* v55.83-A.6.27.65 — Advanced filters panel.
+                Collapsible. Adds: sales rep, amount min/max, has-outstanding. */}
+            {showAdvFilters && (
+              <div className="bg-slate-50 border border-slate-200 rounded-lg p-3 mb-3">
+                <div className="text-xs font-extrabold text-slate-700 uppercase tracking-wider mb-2">Advanced Filters / فلاتر متقدمة</div>
+                <div className="grid grid-cols-1 md:grid-cols-4 gap-2">
+                  <label className="block">
+                    <span className="text-[10px] font-extrabold text-slate-700">Sales Rep / المندوب</span>
+                    <select value={salesRepFilter} onChange={e => setSalesRepFilter(e.target.value)}
+                      className="w-full mt-0.5 px-2 py-1.5 border border-slate-300 rounded text-xs bg-white text-slate-900">
+                      <option value="">All reps</option>
+                      {[...new Set(invoices.map(i => i.sales_rep).filter(Boolean))].sort().map(r => (
+                        <option key={r} value={r}>{r}</option>
+                      ))}
+                    </select>
+                  </label>
+                  <label className="block">
+                    <span className="text-[10px] font-extrabold text-slate-700">Amount From</span>
+                    <input type="number" step="0.01" value={amountMin} onChange={e => setAmountMin(e.target.value)}
+                      placeholder="0.00"
+                      className="w-full mt-0.5 px-2 py-1.5 border border-slate-300 rounded text-xs bg-white text-slate-900 font-mono text-right" />
+                  </label>
+                  <label className="block">
+                    <span className="text-[10px] font-extrabold text-slate-700">Amount To</span>
+                    <input type="number" step="0.01" value={amountMax} onChange={e => setAmountMax(e.target.value)}
+                      placeholder="∞"
+                      className="w-full mt-0.5 px-2 py-1.5 border border-slate-300 rounded text-xs bg-white text-slate-900 font-mono text-right" />
+                  </label>
+                  <label className="block">
+                    <span className="text-[10px] font-extrabold text-slate-700">Outstanding</span>
+                    <select value={hasOutstandingFilter} onChange={e => setHasOutstandingFilter(e.target.value)}
+                      className="w-full mt-0.5 px-2 py-1.5 border border-slate-300 rounded text-xs bg-white text-slate-900">
+                      <option value="all">All invoices</option>
+                      <option value="yes">Has outstanding ({'>'}0)</option>
+                      <option value="no">Fully collected</option>
+                    </select>
+                  </label>
+                </div>
+                {(salesRepFilter || amountMin || amountMax || hasOutstandingFilter !== 'all') && (
+                  <div className="flex justify-between items-center mt-2">
+                    <div className="text-[11px] text-slate-700 font-semibold">
+                      {filteredInvoices.length} matching invoice{filteredInvoices.length === 1 ? '' : 's'}
+                    </div>
+                    <button onClick={() => { setSalesRepFilter(''); setAmountMin(''); setAmountMax(''); setHasOutstandingFilter('all'); }}
+                      className="px-2 py-1 bg-slate-300 hover:bg-slate-400 text-slate-900 text-[10px] font-extrabold rounded">
+                      Clear filters
+                    </button>
+                  </div>
+                )}
+              </div>
+            )}
+
+            {/* v55.83-A.6.27.65 — Sales-Rep KPI dashboard. Toggleable. */}
+            {showRepDashboard && (
+              <div className="mb-3">
+                <SalesRepDashboard invoices={filteredInvoices} label={'in current Sales tab filter'} />
+              </div>
+            )}
             <div className="grid grid-cols-3 gap-3 mb-3">
               {/* S17 — Sales summary cards redesigned. Dark backgrounds, bright
                   centered numbers, matching Treasury. */}
@@ -13269,6 +13378,27 @@ export default function App() {
                     <div className="text-[10px] text-slate-400">This expense is for general warehouse operations, not tied to a specific shipment.</div>
                   )}
                 </div>
+
+                {/* v55.83-A.6.27.64 — Optional: tag this expense to an open advance.
+                    If picked, the expense counts against that advance's "spent" total
+                    so the Advances tab shows remaining balance correctly. */}
+                {warehouseAdvances.length > 0 && (
+                  <div className="bg-amber-50 border border-amber-200 rounded-lg p-3 mb-3">
+                    <label className="text-xs font-semibold text-amber-900 mb-1 block">💵 Link to Advance (optional) / ربط بسلفة</label>
+                    <select value={formData.whAdvanceId || ''} onChange={e => setFormData({...formData, whAdvanceId: e.target.value})}
+                      className="w-full px-3 py-2 rounded-lg border border-amber-300 text-sm bg-white">
+                      <option value="">(none — company paid)</option>
+                      {warehouseAdvances.map(a => (
+                        <option key={a.id} value={a.id}>
+                          {a.recipient_name}{a.recipient_role ? ' (' + a.recipient_role + ')' : ''} · {Number(a.amount).toLocaleString()} {a.currency || 'EGP'} · {a.issue_date}
+                        </option>
+                      ))}
+                    </select>
+                    <div className="text-[10px] text-amber-700 mt-1">
+                      Pick the advance this expense was paid from. Leave blank if it was paid directly by the company.
+                    </div>
+                  </div>
+                )}
                 <button onClick={async () => {
                   if (!formData.whExpDesc || !formData.whExpAmount) { alert('Please fill in description and amount'); return; }
                   let cat = formData.whExpCat || '';
@@ -13285,9 +13415,10 @@ export default function App() {
                       category: cat,
                       subcategory: formData.whExpSub || '',
                       america_ref: formData.whType === 'shipment' ? (formData.whExpRef || '') : 'GENERAL',
+                      advance_id: formData.whAdvanceId || null,
                       created_by: userProfile?.id,
                     }, userProfile?.id);
-                    setFormData({...formData, showAddWarehouse: false, whExpDate: '', whExpDesc: '', whExpAmount: '', whExpCat: '', whExpSub: '', whExpRef: '', whType: 'general'});
+                    setFormData({...formData, showAddWarehouse: false, whExpDate: '', whExpDesc: '', whExpAmount: '', whExpCat: '', whExpSub: '', whExpRef: '', whType: 'general', whAdvanceId: ''});
                     await loadAllData();
                   } catch(err) { toast.error(err.message); }
                 }} className="w-full px-4 py-2 bg-purple-500 text-white rounded-lg font-semibold">
@@ -14102,7 +14233,7 @@ export default function App() {
                       latest fix is actually deployed. If he doesn't see this
                       tag in the modal, his browser is running stale JS. */}
                   <div className="mt-1.5 inline-block px-2 py-0.5 rounded bg-amber-900/60 text-amber-100 text-[10px] font-mono font-bold tracking-wide">
-                    BUILD v55.83-A.6.27.59
+                    BUILD v55.83-A.6.27.65
                   </div>
                 </div>
                 <button onClick={() => closePendingTreasuryModal()}
@@ -14737,7 +14868,7 @@ export default function App() {
                     معاملة قد تكون مكررة
                   </div>
                   <div className="mt-1.5 inline-block px-2 py-0.5 rounded bg-amber-900/60 text-amber-100 text-[10px] font-mono font-bold tracking-wide">
-                    BUILD v55.83-A.6.27.59
+                    BUILD v55.83-A.6.27.65
                   </div>
                 </div>
                 <button

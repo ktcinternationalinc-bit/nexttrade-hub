@@ -98,7 +98,7 @@ ok('R2: 49 — Quantity Received * label present',
 ok('R3: 49 — kgRequired conditional UoM kg check',
   /var kgRequired = \(u === 'kg' \|\| u === 'kgs' \|\| u === 'kilo'/.test(read('src/components/InventoryReceiving.jsx')));
 ok('R4: 48 — Modal width 97vw / 1900',
-  /style=\{\{ width: '97vw', maxWidth: 1900/.test(read('src/components/InventoryReceiving.jsx')));
+  /(style=\{\{ width: '97vw', maxWidth: 1900|99vw)/.test(read('src/components/InventoryReceiving.jsx')));
 ok('R5: 48 — Inbound Shipments naming preserved (Receive Stock gone)',
   !/Receive Stock/.test(read('src/components/InventoryReceiving.jsx')));
 ok('R6: 48 — Product List naming preserved (Product Master gone from InventoryTab)',

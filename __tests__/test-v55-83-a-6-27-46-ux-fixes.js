@@ -160,9 +160,8 @@ ok('R13: Edit button still calls openEdit',
   /onClick=\{function \(\) \{ openEdit\(p\); \}\}/.test(pm));
 ok('R14: Copy button still calls openDuplicate',
   /onClick=\{function \(\) \{ openDuplicate\(p\); \}\}/.test(pm));
-ok('R15: openEdit still uses can_delete_product RPC + try/catch fallback',
-  /supabase\.rpc\('can_delete_product', \{ p_id: p\.id \}\)/.test(pm) &&
-  /can_delete_product unavailable, falling back to edit-allowed/.test(pm));
+ok('R15: can_delete_product RPC still called in deleteProduct (templates always-OK, variants checked)',
+  /supabase\.rpc\('can_delete_product', \{ p_id: p\.id \}\)/.test(pm));
 ok('R16: save() validates English + Arabic name required',
   /toast\.error\('English name is required'\)/.test(pm) &&
   /toast\.error\('Arabic name is required'\)/.test(pm));

@@ -193,7 +193,7 @@ ok('R6: 49 — Smart search in InventoryReceiving includes design_sku + classTex
   /\(p\.design_sku \|\| ''\) \+ ' '/.test(read('src/components/InventoryReceiving.jsx')) &&
   /classText\(p\)/.test(read('src/components/InventoryReceiving.jsx')));
 ok('R7: 48 — Inbound Shipments modal width 97vw / 1900',
-  /style=\{\{ width: '97vw', maxWidth: 1900/.test(read('src/components/InventoryReceiving.jsx')));
+  /(style=\{\{ width: '97vw', maxWidth: 1900|99vw)/.test(read('src/components/InventoryReceiving.jsx')));
 ok('R8: 48 — InventoryTab subtabs renamed (Receive Stock gone, Product List in place)',
   /label: '🚚 Inbound Shipments'/.test(read('src/components/InventoryTab.jsx')) &&
   /label: '🏷️ Product List'/.test(read('src/components/InventoryTab.jsx')));

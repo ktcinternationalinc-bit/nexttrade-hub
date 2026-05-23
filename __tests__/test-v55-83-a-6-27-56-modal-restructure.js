@@ -101,11 +101,11 @@ ok('D5: Submit button preserved',
 // ══════════════════════════════════════════════════════════════════
 
 ok('E1: Modal outer div still flex column (so 3 regions stack vertically)',
-  /style=\{\{ width: '97vw', maxWidth: 1900, maxHeight: '96vh', display: 'flex', flexDirection: 'column' \}\}/.test(rec));
-ok('E2: Modal max width preserved (1900px)',
-  /maxWidth: 1900/.test(rec));
-ok('E3: Modal max height preserved (96vh)',
-  /maxHeight: '96vh'/.test(rec));
+  /display: 'flex', flexDirection: 'column'/.test(rec));
+ok('E2: Modal max width set (1900px in .56, none in .60)',
+  /maxWidth: (1900|'none')/.test(rec));
+ok('E3: Modal max height set (96vh in .56, calc(100vh - 12px) in .60)',
+  /maxHeight: ('96vh'|'calc\(100vh - 12px\)')/.test(rec));
 
 // ══════════════════════════════════════════════════════════════════
 // PART R — REGRESSION GUARDS
@@ -113,12 +113,12 @@ ok('E3: Modal max height preserved (96vh)',
 
 ok('R1: 55 — openaccounts still in FINANCE sidebar',
   /\{ group: 'FINANCE', items: \['sales', 'treasury', 'checks', 'debts', 'openaccounts'/.test(page));
-ok('R2: 55 — deleteProduct alert fallback preserved',
-  /Delete is not available yet[\s\S]{0,200}Run SQL migration v55\.83-A\.6\.27\.43/.test(read('src/components/InventoryProductMaster.jsx')));
+ok('R2: 60 — deleteProduct permissive fallback when can_delete_product RPC unavailable',
+  /can_delete_product unavailable, proceeding permissive/.test(read('src/components/InventoryProductMaster.jsx')));
 ok('R3: 55 — typeFilter default = variants',
   /var \[typeFilter, setTypeFilter\] = useState\('variants'\)/.test(read('src/components/InventoryProductMaster.jsx')));
 ok('R4: 55 — TEMPLATE rename preserved (not FAMILY)',
-  />TEMPLATE</.test(read('src/components/InventoryProductMaster.jsx')) &&
+  /TEMPLATE</.test(read('src/components/InventoryProductMaster.jsx')) &&
   !/>FAMILY</.test(read('src/components/InventoryProductMaster.jsx')));
 ok('R5: 55 — showTemplates state in InventoryOverview',
   /var \[showTemplates, setShowTemplates\] = useState\(false\)/.test(read('src/components/InventoryOverview.jsx')));

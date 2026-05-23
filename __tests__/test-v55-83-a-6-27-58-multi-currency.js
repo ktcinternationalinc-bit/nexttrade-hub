@@ -218,7 +218,7 @@ ok('R3: 56 — Inbound Shipments 3-region modal preserved (headerCollapsed)',
 ok('R4: 55 — openaccounts in FINANCE sidebar preserved',
   /\{ group: 'FINANCE', items: \['sales', 'treasury', 'checks', 'debts', 'openaccounts'/.test(page));
 ok('R5: 55 — Template Products rename preserved',
-  />TEMPLATE</.test(read('src/components/InventoryProductMaster.jsx')) &&
+  /TEMPLATE</.test(read('src/components/InventoryProductMaster.jsx')) &&
   !/>FAMILY</.test(read('src/components/InventoryProductMaster.jsx')));
 ok('R6: 55 — TEXTJOIN slug formula in Excel template preserved',
   /f: 'TEXTJOIN\("-",TRUE,E' \+ rowNum \+ ':M' \+ rowNum \+ '\)'/.test(read('src/components/InventoryImportProducts.jsx')));

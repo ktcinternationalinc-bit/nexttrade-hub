@@ -25,6 +25,12 @@ import InventoryMovementsLedger from './InventoryMovementsLedger';
 import InventoryCostLayers from './InventoryCostLayers';
 import InventoryAdjustments from './InventoryAdjustments';
 import InventoryOverview from './InventoryOverview';
+// v55.83-A.6.27.62 — new reports + warehouse advances subtabs
+import InventoryPnLReports from './InventoryPnLReports';
+import WarehouseAdvancesTab from './WarehouseAdvancesTab';
+// v55.83-A.6.27.63 — FX rates admin + FX P&L report
+import FxRatesPanel from './FxRatesPanel';
+import FxPnLReport from './FxPnLReport';
 import {
   canViewInventory,
   canSeeInventoryCosts,
@@ -60,12 +66,19 @@ var SUBTABS = [
   // v55.83-A.6.27.29 — Phase 1 Build 4.0: Inbound Shipments (warehouse receiving)
   { id: 'receivestock', label: '🚚 Inbound Shipments', stage: 'Receiving', desc: 'Record incoming shipments. Multi-line per receipt with autofill from Product List.' },
   // v55.83-A.6.27.30 — Phase 1 Build 4.5: Bulk import legacy stock
-  { id: 'importstock', label: '📦 Import Stock', stage: 'Receiving', desc: 'One-time bulk import of existing inventory from Excel.' },
+  { id: 'importstock', label: '📦 Import Shipment', stage: 'Receiving', desc: 'One-time bulk import of existing inventory + shipment metadata from Excel.' },
   // v55.83-A.6.27.34 — Phase 1 Build 4.3: Movements Ledger + FIFO Cost Layers (engine)
   { id: 'movementsledger', label: '📜 Movements', stage: 'Engine', desc: 'Append-only log of every stock change. Auto-populated when receipts are finalized.' },
   { id: 'costlayers',      label: '🧱 Cost Layers', stage: 'Engine', desc: 'FIFO cost layers per product per warehouse. Stock-on-hand + inventory value.' },
   // v55.83-A.6.27.36 — Phase 1 Build 4.5: Adjustments (qty / transfer / cost)
   { id: 'adjustments',     label: '🔧 Adjustments', stage: 'Engine', desc: 'Damage / theft / count corrections, warehouse transfers, cost restatements.' },
+  // v55.83-A.6.27.62 — Inventory P&L Reports (qty sold, revenue, COGS, gross profit, margin per product/category/warehouse/period)
+  { id: 'pnlreports',      label: '💹 P&L Reports', stage: 'Reports', desc: 'Profit and Loss by product, category, warehouse, or period. Top movers + export.' },
+  // v55.83-A.6.27.62 — Warehouse Advances (issue cash float to manager/driver/broker, track expenses against it)
+  { id: 'advances',        label: '💵 Advances', stage: 'Reports', desc: 'Issue cash advances; track spending against each advance.' },
+  // v55.83-A.6.27.63 — FX rate logging + FX P&L report (real margin vs currency-move gain/loss)
+  { id: 'fxrates',         label: '💱 FX Rates', stage: 'Reports', desc: 'Daily USD/EGP and other exchange rates. Used by FX P&L report.' },
+  { id: 'fxpnl',           label: '💱 FX P&L', stage: 'Reports', desc: 'Separates real margin from currency-movement gain/loss.' },
 ];
 
 export default function InventoryTab({ userProfile, modulePerms, toast, isSuperAdmin }) {
@@ -440,31 +453,27 @@ export default function InventoryTab({ userProfile, modulePerms, toast, isSuperA
         <InventoryAdjustments userProfile={userProfile} modulePerms={modulePerms} isSuperAdmin={isSuperAdmin} toast={toast} />
       )}
 
-      {/* Stage guidance */}
-      <details className="bg-slate-50 border border-slate-200 rounded-lg p-3 text-xs">
-        <summary className="font-bold text-slate-700 cursor-pointer">
-          ℹ️ What's in this build (v55.83-A.6.27.43 — Family templates + Variants + Reconciliation)
-        </summary>
-        <div className="mt-2 space-y-2 text-slate-600 leading-relaxed">
-          <p>
-            <strong>The inventory module is complete.</strong> All six stages
-            have shipped: master SKUs &amp; warehouses (A), shipments &amp;
-            movements (B), landed cost finalization (C), FIFO sale deduction
-            &amp; P&amp;L (D), adjustments with approval workflow (E), and
-            operational reports — stock value, aging, slow-moving (F).
-          </p>
-          <p className="font-semibold text-slate-700">All stages:</p>
-          <ul className="space-y-1 pl-4">
-            {SUBTABS.map(function (st) {
-              return (
-                <li key={st.id} className="text-emerald-700">
-                  <strong>Stage {st.stage}:</strong> {st.desc} ✓ shipped
-                </li>
-              );
-            })}
-          </ul>
-        </div>
-      </details>
+      {/* v55.83-A.6.27.62 — Inventory P&L Reports */}
+      {subtab === 'pnlreports' && (
+        <InventoryPnLReports userProfile={userProfile} modulePerms={modulePerms} isSuperAdmin={isSuperAdmin} toast={toast} />
+      )}
+      {/* v55.83-A.6.27.62 — Warehouse Advances workflow */}
+      {subtab === 'advances' && (
+        <WarehouseAdvancesTab userProfile={userProfile} toast={toast} canEdit={isSuperAdmin || (modulePerms && modulePerms['Edit Inventory'] === true)} />
+      )}
+
+      {/* v55.83-A.6.27.63 — FX Rates admin */}
+      {subtab === 'fxrates' && (
+        <FxRatesPanel userProfile={userProfile} toast={toast} canEdit={isSuperAdmin || (modulePerms && modulePerms['Edit Treasury'] === true)} />
+      )}
+      {/* v55.83-A.6.27.63 — FX P&L report (real margin vs FX gain/loss) */}
+      {subtab === 'fxpnl' && (
+        <FxPnLReport userProfile={userProfile} modulePerms={modulePerms} isSuperAdmin={isSuperAdmin} toast={toast} />
+      )}
+
+      {/* v55.83-A.6.27.60 — Removed stale "What's in this build" details panel.
+          Release notes belong in the WhatsNewWidget popup (top-right version pill),
+          not duplicated on each tab page. Cleaner, less noisy. */}
     </div>
   );
 }

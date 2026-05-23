@@ -88,8 +88,8 @@ ok('D6: activeFilterCount memo counts non-empty filters + search',
 // PART E — Filter UI rendered (9 dropdowns in collapsible section)
 // ══════════════════════════════════════════════════════════════════
 
-ok('E1: filter section is <details> (collapsible), open when activeFilterCount > 0',
-  /<details className="bg-white border-2 border-indigo-300 rounded-lg" open=\{activeFilterCount > 0\}>/.test(ov));
+ok('E1: filter section is visible (was <details> in .51, always-rendered in .60)',
+  /Filter by classification/.test(ov));
 ok('E2: filter section header bilingual',
   /Filter by classification \(Family → Category → Grade → \.\.\.\) \/ تصفية حسب التصنيف/.test(ov));
 ok('E3: shows active filter count badge',
@@ -196,8 +196,8 @@ ok('R5: 49 — Quantity Received * + UoM * + Release # * + Roll Count * labels',
   /Unit of Measure \*\s/.test(read('src/components/InventoryReceiving.jsx')) &&
   /Release # \*\s/.test(read('src/components/InventoryReceiving.jsx')) &&
   /Roll Count \*\s/.test(read('src/components/InventoryReceiving.jsx')));
-ok('R6: 48 — Modal width 97vw / 1900 still in place',
-  /style=\{\{ width: '97vw', maxWidth: 1900/.test(read('src/components/InventoryReceiving.jsx')));
+ok('R6: 48 — Modal sized for max real estate (97vw/1900 in .48, 99vw in .60)',
+  /(width: '97vw', maxWidth: 1900|99vw)/.test(read('src/components/InventoryReceiving.jsx')));
 ok('R7: 48 — "Inbound Shipments" + "Product List" labels still in InventoryTab',
   /label: '🚚 Inbound Shipments'/.test(invTab) &&
   /label: '🏷️ Product List'/.test(invTab));

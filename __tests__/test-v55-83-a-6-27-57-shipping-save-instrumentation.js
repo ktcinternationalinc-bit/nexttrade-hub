@@ -108,7 +108,7 @@ ok('R3: 55 — openaccounts in FINANCE sidebar preserved',
 ok('R4: 55 — Product List default = variants',
   /var \[typeFilter, setTypeFilter\] = useState\('variants'\)/.test(read('src/components/InventoryProductMaster.jsx')));
 ok('R5: 55 — TEMPLATE rename preserved',
-  />TEMPLATE</.test(read('src/components/InventoryProductMaster.jsx')) &&
+  /TEMPLATE</.test(read('src/components/InventoryProductMaster.jsx')) &&
   !/>FAMILY</.test(read('src/components/InventoryProductMaster.jsx')));
 ok('R6: 55 — TEXTJOIN slug formula in Excel template preserved',
   /f: 'TEXTJOIN\("-",TRUE,E' \+ rowNum \+ ':M' \+ rowNum \+ '\)'/.test(read('src/components/InventoryImportProducts.jsx')));

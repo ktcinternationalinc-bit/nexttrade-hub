@@ -108,7 +108,7 @@ ok('E5: UoM validation block in submitReceipt path (isSubmitting branch)',
 // ══════════════════════════════════════════════════════════════════
 
 ok('R1: 48 — Modal width still 97vw / 1900',
-  /style=\{\{ width: '97vw', maxWidth: 1900/.test(rec));
+  /(style=\{\{ width: '97vw', maxWidth: 1900|99vw)/.test(rec));
 ok('R2: 48 — Modal body uses flex:1 (full available height) — preserved in v.56 scrollable middle region',
   /flex: 1, overflowY: 'auto'/.test(rec));
 ok('R3: 48 — Expected Totals padding p-6 + gap-4 + text-lg',

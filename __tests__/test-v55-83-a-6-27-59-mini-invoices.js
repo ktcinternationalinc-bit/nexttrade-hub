@@ -341,8 +341,8 @@ ok('R16: Print + Excel buttons on account card preserved',
 // ──────────────────────────────────────────────────────────────────
 // Version stamp
 // ──────────────────────────────────────────────────────────────────
-ok('V1: version stamp v55.83-A.6.27.59',
-  /BUILD v55\.83-A\.6\.27\.59/.test(page));
+ok('V1: version stamp v55.83-A.6.27.59 or later',
+  /BUILD v55\.83-A\.6\.27\.(59|6\d|[7-9]\d)/.test(page));
 
 if (failures.length > 0) {
   console.log('\n❌ ' + failures.length + ' failure(s):');

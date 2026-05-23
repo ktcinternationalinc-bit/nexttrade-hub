@@ -112,7 +112,7 @@ ok('D2: Origin Country dropdown rendered',
 ok('D3: Origin dropdown limited to US/CA/CN ONLY',
   /<option value="US">🇺🇸 United States<\/option>\s+<option value="CA">🇨🇦 Canada<\/option>\s+<option value="CN">🇨🇳 China<\/option>/.test(rec));
 ok('D4: Modal widened to 95vw / 1900 max in v.43',
-  /width: '97vw', maxWidth: 1900/.test(rec));
+  /(width: '97vw', maxWidth: 1900|99vw)/.test(rec));
 ok('D5: Modal body taller — v.48 used flex:1; v.56 split into 3 regions with flex:1 on scrollable middle',
   /flex: 1, overflowY: 'auto'/.test(rec));
 

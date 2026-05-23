@@ -120,26 +120,46 @@ export default function LoginPage() {
       });
       if (error) throw error;
       let name = email.split('@')[0];
-      // v55.33 — profile lookup must NEVER block the redirect. Auth
-      // already succeeded; a profile-lookup hiccup must not undo it.
+      // v55.83-A.6.27.60 — Profile lookup now blocks deactivated users.
+      // Previously "Deactivate" in Settings only set users.active=false but did
+      // NOT block login (auth.users was untouched). This check enforces the
+      // deactivation at the app layer: if profile.active === false, sign out
+      // immediately and show a clear error.
+      // ALSO: session insert is now skipped when no profile.id is found
+      // (previously fell back to data.user.id which is the auth UUID — a
+      // different value from users.id — silently breaking Admin tab stats).
       if (data?.user) {
         try {
           const lookupEmail = (email || '').toLowerCase().trim();
           const { data: profile } = await supabase
             .from('users')
-            .select('id, name')
+            .select('id, name, active')
             .ilike('email', lookupEmail)
             .maybeSingle();
+
+          // v55.83-A.6.27.60 — Hard block: deactivated users CANNOT log in.
+          if (profile && profile.active === false) {
+            try { await supabase.auth.signOut(); } catch (_) {}
+            setError('Your account has been deactivated. Contact your administrator to restore access.');
+            setLoading(false);
+            return;
+          }
+
           if (profile?.name) name = profile.name;
-          var sessionUserId = profile?.id || data.user.id;
-          await supabase.from('user_sessions').insert({
-            user_id: sessionUserId,
-            login_at: new Date().toISOString(),
-            last_seen: new Date().toISOString(),
-            // ET, not UTC. Late-night ET logins (after ~7pm) used to land on
-            // tomorrow UTC and cause AI's "you weren't here yesterday" bug.
-            date: new Intl.DateTimeFormat('en-CA', { timeZone: 'America/New_York' }).format(new Date()),
-          });
+
+          // Only insert session if we found the profile.id. Skipping when
+          // missing is better than inserting a row with the wrong user_id
+          // that would silently never show up in Admin tab.
+          if (profile?.id) {
+            await supabase.from('user_sessions').insert({
+              user_id: profile.id,
+              login_at: new Date().toISOString(),
+              last_seen: new Date().toISOString(),
+              date: new Intl.DateTimeFormat('en-CA', { timeZone: 'America/New_York' }).format(new Date()),
+            });
+          } else {
+            try { console.warn('[login] no users.id found for ' + lookupEmail + ' — session NOT tracked. Add user to public.users table.'); } catch(_){}
+          }
         } catch (profileErr) {
           try { console.warn('[login] profile lookup soft-fail:', profileErr?.message || profileErr); } catch(_){}
         }

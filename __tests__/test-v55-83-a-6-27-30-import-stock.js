@@ -63,7 +63,8 @@ ok('A3c: blocks download if no warehouses exist',
   /if \(!warehouses\.length\)[\s\S]{0,300}don\\'t have any warehouses defined/.test(imp));
 ok('A3d: Products Reference sheet only includes cost columns if seeCosts',
   /if \(seeCosts\) prodHeaders\.push\('Default Cost', 'Default Currency'\)/.test(imp));
-ok('A3e: template filename stamped with ISO date',
+ok('A3e: template filename stamped with ISO date (renamed in .61)',
+  /'KTC-Import-Shipment-Template-' \+ stamp \+ '\.xlsx'/.test(imp) ||
   /'KTC-Legacy-Stock-Import-Template-' \+ stamp \+ '\.xlsx'/.test(imp));
 
 // ── A4. Date parsing — handles Excel serial and string dates ───────
@@ -149,7 +150,7 @@ ok('A10a: helper banner present comparing this with Inbound Shipments',
 ok('B1: InventoryTab imports InventoryStockImport',
   /import InventoryStockImport from '\.\/InventoryStockImport'/.test(inv));
 ok('B2: SUBTABS includes importstock entry',
-  /id: 'importstock', label: '📦 Import Stock'/.test(inv));
+  /id: 'importstock', label: '📦 Import (Stock|Shipment)'/.test(inv));
 ok('B3: importstock tab gated to super_admin OR Edit Inventory',
   /st\.id === 'importstock' && !\(isSuperAdmin \|\| \(modulePerms && modulePerms\['Edit Inventory'\] === true\)\)/.test(inv));
 ok('B4: render branch mounts InventoryStockImport with full props',

@@ -20,6 +20,8 @@ import { useState, useEffect, useMemo } from 'react';
 import { supabase, dbInsert, dbUpdate } from '../lib/supabase';
 import { printAccountLedger, exportAccountLedgerToExcel } from '../lib/open-account-export';
 import { printOpenAccountInvoice } from '../lib/open-account-invoice-print';
+// v55.83-A.6.27.61 — Attachments wire-up
+import AttachmentManager from './AttachmentManager';
 
 function fmtNum(n) {
   if (n == null || isNaN(Number(n))) return '—';
@@ -1160,6 +1162,23 @@ export default function OpenAccountsTab(props) {
                 <span className="text-xs font-extrabold text-slate-900">Notes (optional) / ملاحظات</span>
                 <textarea value={entryDraft.notes} onChange={function (e) { setEntryDraft(Object.assign({}, entryDraft, { notes: e.target.value })); }} rows={2} className="w-full mt-1 px-3 py-2 border-2 border-slate-300 rounded text-sm bg-white text-slate-900" />
               </label>
+
+              {/* v55.83-A.6.27.61 — Attachments on ledger entries (only when editing — needs id).
+                  Use case: warehouse manager attaches receipt PDF/photo to each expense entry. */}
+              {entryDraft.id && (
+                <AttachmentManager
+                  parentType="open_account_entry"
+                  parentId={entryDraft.id}
+                  currentUserId={userProfile && userProfile.id}
+                  isSuperAdmin={userProfile && userProfile.role === 'super_admin'}
+                  canEdit={canEdit}
+                />
+              )}
+              {!entryDraft.id && (
+                <div className="text-[11px] text-slate-600 italic bg-slate-100 border border-slate-200 rounded p-2 mt-2">
+                  💡 Save the entry first, then attach receipts (photos, PDFs) here.
+                </div>
+              )}
             </div>
             <div className="border-t border-slate-200 px-5 py-3 flex justify-end gap-2 bg-slate-50 rounded-b-2xl">
               <button onClick={function () { setEntryModalOpen(false); setEntryDraft(null); }} disabled={busy} className="px-4 py-2 bg-slate-300 hover:bg-slate-400 text-slate-900 text-sm font-bold rounded disabled:opacity-50">Cancel</button>
@@ -1389,6 +1408,22 @@ export default function OpenAccountsTab(props) {
                     <input type="text" value={invoiceDraft.notes} onChange={function (e) { setInvoiceDraft(Object.assign({}, invoiceDraft, { notes: e.target.value })); }} className="w-full mt-0.5 px-2 py-1.5 border border-slate-300 rounded text-sm bg-white text-slate-900" />
                   </label>
                 </div>
+
+                {/* v55.83-A.6.27.61 — Attachments (only when invoice is saved — needs an id) */}
+                {invoiceDraft.id && (
+                  <AttachmentManager
+                    parentType="open_account_invoice"
+                    parentId={invoiceDraft.id}
+                    currentUserId={userProfile && userProfile.id}
+                    isSuperAdmin={userProfile && userProfile.role === 'super_admin'}
+                    canEdit={canEdit}
+                  />
+                )}
+                {!invoiceDraft.id && (
+                  <div className="text-[11px] text-slate-600 italic bg-slate-100 border border-slate-200 rounded p-2">
+                    💡 Save the invoice first, then attach files (PDFs, photos, supporting docs) here.
+                  </div>
+                )}
               </div>
 
               {/* Modal footer */}

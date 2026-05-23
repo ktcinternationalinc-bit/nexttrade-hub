@@ -17,8 +17,9 @@ function ok(label, cond) {
 // PART A — Row background + text colors (contrast fix)
 // ══════════════════════════════════════════════════════════════════
 
-ok('A1: row container forces bg-white text-slate-900 (no more grey-on-dark)',
-  /bg-white text-slate-900 ' \+ \(p\.active \? '' : 'opacity-60'\)/.test(pm));
+ok('A1: row container has bg-white or bg-sky-50 (light-blue templates added in .60)',
+  /bg-(white|sky-50)/.test(pm) &&
+  /text-slate-900/.test(pm));
 ok('A2: actions column widened further in v.43 (now 370px for 5 buttons including Delete)',
   /'110px 1\.5fr 2fr 140px 60px 370px'/.test(pm));
 ok('A3: new v.43 grid applied in both header AND row',
@@ -60,12 +61,12 @@ ok('C6: saveVariant reloads + shows success toast + closes modal',
 
 ok('D1: + Variant button shown ONLY when canEdit && is_family_template === true',
   /\{canEdit && p\.is_family_template === true && \(\s+<button\s+onClick=\{function \(\) \{ openCreateVariant\(p\); \}\}/.test(pm));
-ok('D2: + Variant button uses purple-600 (high contrast)',
-  /bg-purple-600 hover:bg-purple-700 text-white rounded font-bold/.test(pm));
-ok('D3: + Variant button label literal',
-  /\+ Variant/.test(pm));
-ok('D4: + Variant button title tooltip (renamed "family template" → "template product" in .55)',
-  /title="Create a spec variant of this template product/.test(pm));
+ok('D2: + Variant/Product button uses purple-600 (high contrast)',
+  /bg-purple-600 hover:bg-purple-700 text-white rounded font-(bold|extrabold)/.test(pm));
+ok('D3: + Variant/Product button label literal (renamed to Product in .60)',
+  /\+ (Variant|Product)/.test(pm));
+ok('D4: + Variant/Product button tooltip (template product or Product blueprint)',
+  /title="Create (a spec variant of this template product|an actual Product from this Template blueprint)/.test(pm));
 
 // ══════════════════════════════════════════════════════════════════
 // PART E — Modal UI

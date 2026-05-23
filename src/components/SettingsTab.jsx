@@ -966,6 +966,32 @@ export default function SettingsTab({ toast, user, users, onReload, isAdmin, use
   const handleAddMember = async () => {
     if (!f.name || !f.email || !f.password) { setAddError('Name, email, and password are required'); return; }
     if (f.password.length < 6) { setAddError('Password must be at least 6 characters'); return; }
+
+    // v55.83-A.6.27.60 — Duplicate-user guard. Was an issue with Amad Abbas
+    // (yahoo + outlook both existed for same person → broken stats, broken
+    // attribution). Catch case-insensitive email matches AND name matches
+    // BEFORE the API call so the operator gets a clear chance to abort.
+    var newEmail = (f.email || '').toLowerCase().trim();
+    var newName  = (f.name  || '').toLowerCase().trim();
+    var dupByEmail = (users || []).find(function (u) {
+      return ((u.email || '').toLowerCase().trim()) === newEmail;
+    });
+    var dupByName = (users || []).find(function (u) {
+      return ((u.name || '').toLowerCase().trim()) === newName;
+    });
+    if (dupByEmail) {
+      setAddError('A team member with email ' + dupByEmail.email + ' already exists (name: ' + dupByEmail.name + ', status: ' + (dupByEmail.active === false ? 'Deactivated' : 'Active') + '). Use a different email or reactivate the existing one.');
+      return;
+    }
+    if (dupByName) {
+      var proceed = window.confirm(
+        'WARNING: A team member named "' + dupByName.name + '" already exists with email ' + dupByName.email + '.\n\n' +
+        'Adding another row will likely create duplicate-stats problems (logins split across rows, work attribution split).\n\n' +
+        'Click OK to add anyway (you confirm this is a different person), or Cancel to go back and review.'
+      );
+      if (!proceed) return;
+    }
+
     setAddLoading(true); setAddError(''); setAddSuccess('');
     try {
       var res = await fetch('/api/users', {
