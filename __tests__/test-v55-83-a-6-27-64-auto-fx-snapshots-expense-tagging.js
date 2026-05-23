@@ -138,7 +138,7 @@ ok('R6: 62 — WarehouseAdvancesTab preserved',
 ok('R7: 61 — AttachmentManager preserved',
   fs.existsSync(path.join(__dirname, '..', 'src/components/AttachmentManager.jsx')));
 ok('R8: 60 — Deactivate-blocks-login fix preserved',
-  /profile && profile\.active === false/.test(read('src/app/login/page.jsx')));
+  /profile && !isActiveUser\(profile\)/.test(read('src/app/login/page.jsx')));
 ok('R9: 60 — Product Overview history modal preserved',
   /function openHistory\(product\)/.test(read('src/components/InventoryOverview.jsx')));
 ok('R10: 59 — mini-invoice + Invoice button preserved',

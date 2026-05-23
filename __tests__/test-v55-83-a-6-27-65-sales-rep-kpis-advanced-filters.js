@@ -30,41 +30,47 @@ ok('A4: takes invoices prop',
   /var invoices = props\.invoices \|\| \[\]/.test(srd));
 ok('A5: takes optional label prop',
   /var label = props\.label \|\| 'in selected range'/.test(srd));
-ok('A6: perRep useMemo buckets by sales_rep (with "(Unassigned)" fallback)',
-  /perRep = useMemo\(function/.test(srd) &&
-  /var rep = \(inv\.sales_rep \|\| ''\)\.trim\(\) \|\| '\(Unassigned\)'/.test(srd));
+ok('A6: perRepCurrency useMemo buckets by sales_rep × currency (with "(Unassigned)" fallback)',
+  /perRepCurrency = useMemo\(function/.test(srd) &&
+  /var rep = \(inv\.sales_rep \|\| ''\)\.trim\(\) \|\| '\(Unassigned\)'/.test(srd) &&
+  /normalizeCurrency\(inv\.currency\)/.test(srd));
 ok('A7: bucket has count + invoiced + collected + outstanding + customers',
-  /count: 0,\s+invoiced: 0,\s+collected: 0,\s+outstanding: 0,\s+customers: \{\}/.test(srd));
-ok('A8: accumulates invoiced (total_amount OR amount)',
-  /b\.invoiced \+= Number\(inv\.total_amount \|\| inv\.amount \|\| 0\)/.test(srd));
+  /count: 0,\s+invoiced: 0,\s+collected: 0,/.test(srd) &&
+  /customers: \{\}/.test(srd));
+ok('A8: accumulates invoiced from total_amount (?? fallback handles legit zero)',
+  /b\.invoiced \+= invd/.test(srd) &&
+  /Number\(inv\.total_amount != null \? inv\.total_amount : \(inv\.amount \|\| 0\)\)/.test(srd));
 ok('A9: accumulates collected from total_collected',
-  /b\.collected \+= Number\(inv\.total_collected \|\| 0\)/.test(srd));
-ok('A10: accumulates outstanding',
-  /b\.outstanding \+= Number\(inv\.outstanding \|\| 0\)/.test(srd));
+  /b\.collected \+= coll/.test(srd));
+ok('A10: accumulates outstanding with fallback compute (H3)',
+  /b\.outstanding \+= outs/.test(srd) &&
+  /Math\.max\(0, invd - coll\)/.test(srd));
 ok('A11: tracks per-customer revenue for best-customer pick',
-  /b\.customers\[cust\] = \(b\.customers\[cust\] \|\| 0\) \+ Number\(inv\.total_amount \|\| inv\.amount \|\| 0\)/.test(srd));
+  /b\.customers\[cust\] = \(b\.customers\[cust\] \|\| 0\) \+ invd/.test(srd));
 ok('A12: avg = invoiced / count',
   /b\.avg = b\.count > 0 \? b\.invoiced \/ b\.count : 0/.test(srd));
 ok('A13: collection_rate = collected/invoiced * 100',
   /b\.collection_rate = b\.invoiced > 0 \? \(b\.collected \/ b\.invoiced\) \* 100 : 0/.test(srd));
 ok('A14: best_customer = highest revenue customer',
   /Object\.keys\(b\.customers\)\.forEach\(function \(cust\) \{\s+if \(b\.customers\[cust\] > bestRev\)/.test(srd));
-ok('A15: rows sorted by invoiced desc',
-  /rows\.sort\(function \(a, b\) \{ return b\.invoiced - a\.invoiced; \}\)/.test(srd));
-ok('A16: grand totals useMemo aggregates across all reps',
-  /grand = useMemo\(function/.test(srd) &&
+ok('A15: rows sorted by currency, then invoiced desc within currency',
+  /if \(a\.currency !== b\.currency\) return a\.currency\.localeCompare\(b\.currency\)/.test(srd) &&
+  /return b\.invoiced - a\.invoiced/.test(srd));
+ok('A16: grandByCurrency aggregates per-currency totals',
+  /grandByCurrency = useMemo\(function/.test(srd) &&
   /t\.invoiced \+= r\.invoiced/.test(srd));
 ok('A17: empty state when no invoices',
-  /perRep\.length === 0/.test(srd) &&
+  /visibleRows\.length === 0/.test(srd) &&
   /No invoices/.test(srd));
 ok('A18: gradient header (blue → indigo → purple)',
   /bg-gradient-to-r from-blue-700 via-indigo-700 to-purple-700/.test(srd));
-ok('A19: 5 grand-total tiles (Reps Active / Invoices / Invoiced / Collected / Outstanding)',
-  />Reps Active</.test(srd) &&
+ok('A19: per-currency grand-total tiles (Currency / Reps / Invoices / Invoiced / Collected / Outstanding)',
+  />Currency</.test(srd) &&
+  />Reps</.test(srd) &&
   />Invoices</.test(srd) &&
-  />Invoiced</.test(srd) &&
-  />Collected</.test(srd) &&
-  />Outstanding</.test(srd));
+  /Invoiced \{g\.currency\}/.test(srd) &&
+  /Collected \{g\.currency\}/.test(srd) &&
+  /Outstanding \{g\.currency\}/.test(srd));
 ok('A20: top-3 medals (🥇🥈🥉)',
   /'🥇'/.test(srd) &&
   /'🥈'/.test(srd) &&
@@ -73,8 +79,9 @@ ok('A21: collection % color-coded (emerald/amber/red thresholds at 90/70)',
   /r\.collection_rate >= 90 \? 'text-emerald-800' : r\.collection_rate >= 70 \? 'text-amber-700' : 'text-red-700'/.test(srd));
 ok('A22: best customer column with truncate + title',
   /truncate max-w-\[180px\]" title=\{r\.best_customer\}/.test(srd));
-ok('A23: tfoot total row',
-  /<tfoot>[\s\S]{0,500}TOTAL \(\{perRep\.length\} reps\)/.test(srd));
+ok('A23: showUnassigned toggle defaults to false (H5)',
+  /var \[showUnassigned, setShowUnassigned\] = useState\(false\)/.test(srd) &&
+  /Include "\(Unassigned\)"/.test(srd));
 
 // ══════════════════════════════════════════════════════════════════
 // PART B — page.jsx state additions
@@ -95,8 +102,8 @@ ok('B5: showAdvFilters + showRepDashboard toggle state',
 // ══════════════════════════════════════════════════════════════════
 // PART C — filteredInvoices extended with new filters
 // ══════════════════════════════════════════════════════════════════
-ok('C1: filteredInvoices honors salesRepFilter (case-insensitive equality)',
-  /if \(salesRepFilter\) \{\s+const repLow = salesRepFilter\.toLowerCase\(\);\s+arr = arr\.filter\(s => \(s\.sales_rep \|\| ''\)\.toLowerCase\(\) === repLow\)/.test(page));
+ok('C1: filteredInvoices honors salesRepFilter (case-insensitive equality with trim — v55.83-A.6.27.66 M2 fix)',
+  /if \(salesRepFilter\) \{\s+const repLow = salesRepFilter\.trim\(\)\.toLowerCase\(\);\s+arr = arr\.filter\(s => \(s\.sales_rep \|\| ''\)\.trim\(\)\.toLowerCase\(\) === repLow\)/.test(page));
 ok('C2: filteredInvoices honors amountMin (>=)',
   /if \(amountMin !== '' && amountMin != null\) \{[\s\S]{0,400}arr\.filter\(s => Number\(s\.total_amount \|\| s\.amount \|\| 0\) >= minN\)/.test(page));
 ok('C3: filteredInvoices honors amountMax (<=)',
@@ -154,8 +161,9 @@ ok('R6: 62 — InventoryPnLReports preserved',
   fs.existsSync(path.join(__dirname, '..', 'src/components/InventoryPnLReports.jsx')));
 ok('R7: 61 — AttachmentManager preserved',
   fs.existsSync(path.join(__dirname, '..', 'src/components/AttachmentManager.jsx')));
-ok('R8: 60 — Deactivate-blocks-login fix preserved',
-  /profile && profile\.active === false/.test(read('src/app/login/page.jsx')));
+ok('R8: 60 — Deactivate-blocks-login fix preserved (now using isActiveUser helper, v55.83-A.6.27.66 C2 — covers NULL active too)',
+  /import \{ isActiveUser \} from '\.\.\/\.\.\/lib\/active-users'/.test(read('src/app/login/page.jsx')) &&
+  /profile && !isActiveUser\(profile\)/.test(read('src/app/login/page.jsx')));
 ok('R9: 60 — Product Overview history modal preserved',
   /function openHistory\(product\)/.test(read('src/components/InventoryOverview.jsx')));
 ok('R10: 59 — mini-invoice + Invoice button preserved',
@@ -179,8 +187,8 @@ ok('R15: existing Sales tab status + customer + query filters preserved',
 // ──────────────────────────────────────────────────────────────────
 // Version stamp
 // ──────────────────────────────────────────────────────────────────
-ok('V1: version stamp v55.83-A.6.27.65',
-  /BUILD v55\.83-A\.6\.27\.65/.test(page));
+ok('V1: version stamp v55.83-A.6.27.65 or later (currently bumped to .66)',
+  /BUILD v55\.83-A\.6\.27\.(6[5-9]|[7-9][0-9])/.test(page));
 
 if (failures.length > 0) {
   console.log('\n❌ ' + failures.length + ' failure(s):');

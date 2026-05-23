@@ -7,6 +7,9 @@ import AIMemorySettingsPanel from './AIMemorySettingsPanel';
 import CustomsRateLibrary from './CustomsRateLibrary';
 import BusinessEntitiesPanel from './BusinessEntitiesPanel';
 import { PERSONALITIES } from './AIGreeter';
+// v55.83-A.6.27.NEXT (Issue 7) — kill deactivated users leaking into Settings grids.
+// Existing helper rejects both active===false AND active===null (legacy bug).
+import { isActiveUser, filterActiveUsers } from '../lib/active-users';
 
 // ============================================================
 // VoiceSettingsPanel — per-user "Hey Bob" toggle + diagnostics.
@@ -359,7 +362,85 @@ const MODULES = [
   // Granular permissions
   'Edit Treasury', 'Edit Invoices', 'Delete Invoices', 'Edit Inventory', 'Adjust Inventory Quantities', 'Edit Warehouse',
   'Edit CRM', 'View Costs', 'See Inventory Costs', 'Delete Tickets', 'Assign Tickets', 'Merge Customers',
-  'Manage Categories', 'Manage Inventory Master', 'Edit Product List', 'Export Data', 'Post Reminders', 'Welcome Briefing', 'HR Report',
+  'Manage Categories', 'Manage Inventory Master', 'Edit Product List', 'Edit Open Accounts',
+  'Export Data', 'Post Reminders', 'Welcome Briefing', 'HR Report',
+];
+
+// ============================================================
+// v55.83-A.6.27.NEXT (Issues 4, 5, 6) — Structured permission lists with
+// plain-language definitions. Used by the Permissions table in Settings.
+//
+// TAB_PERMS  → top section ("Tab Access"). Default = ON for new users.
+//              Controls whether the user can SEE that tab at all.
+// ACTION_PERMS → bottom section ("Action Permissions"). Default = OFF.
+//                Controls what the user can DO once they're in a tab.
+//                Pattern: Tab ON + Edit OFF = read-only view.
+//
+// Each entry is { key, label, desc }. The key is what gets stored in
+// the permissions JSON. The desc is shown when "Show descriptions" is
+// toggled on — plain English so non-technical admins know what each
+// permission actually does.
+//
+// Issue 4 change: Open Accounts was previously ONE key controlling both
+//   view + edit. It's now split:
+//     - 'Open Accounts'      → TAB (default ON) — can view ledgers
+//     - 'Edit Open Accounts' → ACTION (default OFF) — can add/edit/delete
+//   Back-compat: legacy users with `Open Accounts: true` get treated as
+//   having both new permissions ON until super_admin changes anything.
+//   See OpenAccountsTab.jsx for the read-side back-compat logic.
+// ============================================================
+const TAB_PERMS = [
+  { key: 'Dashboard',          label: 'Dashboard',           desc: 'Main landing screen with company-wide stats, totals, and quick links.' },
+  { key: 'Personal Dashboard', label: 'Personal Dashboard',  desc: 'Per-user home screen with their own assigned work, tickets, and recent activity.' },
+  { key: 'Sales',              label: 'Sales',               desc: 'Customer invoicing, sales records, payment status, collections.' },
+  { key: 'Customers',          label: 'Customers',           desc: 'Customer master list (the official roster, separate from CRM leads).' },
+  { key: 'Treasury',           label: 'Treasury',            desc: 'Cash register: money-in and money-out entries, daily balance, expense categorization.' },
+  { key: 'Checks',             label: 'Checks',              desc: 'Tracking outgoing and incoming checks (issued, deposited, cleared).' },
+  { key: 'Debts',              label: 'Debts',               desc: 'Rollup of how much each customer owes us across invoices.' },
+  { key: 'Warehouse',          label: 'Warehouse',           desc: 'Warehouse-related expense entries (rent, utilities, labor, etc.).' },
+  { key: 'Inventory',          label: 'Inventory',           desc: 'Stock levels, products, receiving, classifications, P&L reports, FX rates, advances.' },
+  { key: 'CRM',                label: 'CRM',                 desc: 'Customer relationship management: leads, contacts, deal pipeline, follow-ups.' },
+  { key: 'Tickets',            label: 'Tickets',             desc: 'Regular customer/internal support tickets (the working queue).' },
+  { key: 'Calendar',           label: 'Calendar',            desc: 'Team calendar, scheduled events, meeting notes, attendee tracking.' },
+  { key: 'Customs',            label: 'Customs',             desc: 'Customs broker filings, declarations, and rate lookups.' },
+  { key: 'Shipping Rates',     label: 'Shipping Rates',      desc: 'Carrier rate sheets, freight quotes, booked shipments.' },
+  { key: 'Quotes',             label: 'Quotes',              desc: 'Customer-facing quote builder with line items, VAT, expiry dates.' },
+  { key: 'Bank',               label: 'Bank',                desc: 'US bank accounts connected via Plaid — transactions and matching.' },
+  { key: 'Egypt Bank',         label: 'Egypt Bank',          desc: 'Egypt bank account transactions and reconciliation.' },
+  { key: 'Open Accounts',      label: 'Open Accounts',       desc: 'Customer/vendor ledgers with multi-currency entries and internal mini-invoices. View-only when this is ON but "Edit Open Accounts" is OFF.' },
+  { key: 'Reports',            label: 'Reports',             desc: 'Financial reports, P&L summaries, write-offs audit.' },
+  { key: 'Daily Log',          label: 'Daily Log',           desc: 'Per-employee daily activity log (what each team member did each day).' },
+  { key: 'Admin',              label: 'Admin',               desc: 'Admin panel: audit trail, system tickets, late-edit flags, focus mode.' },
+  { key: 'AI Assistant',       label: 'AI Assistant',        desc: 'Chat with Nadia (executive assistant), Jenna (HR), and Sara (work coach).' },
+  { key: 'Communications',     label: 'Communications',      desc: 'Email inbox (Gmail), WhatsApp inbox, outgoing email composer.' },
+  { key: 'Settings',           label: 'Settings',            desc: 'Personal settings: profile, voice, notification preferences, AI greeter style.' },
+  { key: 'Import',             label: 'Import',              desc: 'Bulk data import tools for treasury, invoices, inventory, etc.' },
+  { key: 'Welcome Briefing',   label: 'Welcome Briefing',    desc: 'AI-generated morning briefing shown when the user logs in for the day.' },
+];
+
+const ACTION_PERMS = [
+  { key: 'Edit Treasury',                label: 'Edit Treasury',                desc: 'Add, modify, or delete cash register entries. Without this, Treasury is read-only.' },
+  { key: 'Edit Invoices',                label: 'Edit Invoices',                desc: 'Create or modify sales invoices. Without this, Sales is read-only.' },
+  { key: 'Delete Invoices',              label: 'Delete Invoices',              desc: 'Permanently remove invoices. Separate from Edit because deletion is irreversible.' },
+  { key: 'Edit Inventory',               label: 'Edit Inventory',               desc: 'Modify product details, classifications, and stock receipts.' },
+  { key: 'Adjust Inventory Quantities',  label: 'Adjust Inventory Quantities',  desc: 'Manually correct stock counts (e.g., after a physical count). Every adjustment is audit-logged.' },
+  { key: 'Edit Warehouse',               label: 'Edit Warehouse',               desc: 'Add or edit warehouse expense entries.' },
+  { key: 'Edit CRM',                     label: 'Edit CRM',                     desc: 'Modify lead/contact details, deal stages, follow-up notes.' },
+  { key: 'View Costs',                   label: 'View Costs',                   desc: 'See cost prices on invoices (the difference between cost and sale = margin). Sensitive — only give to trusted finance/management.' },
+  { key: 'See Inventory Costs',          label: 'See Inventory Costs',          desc: 'Show cost columns in inventory listings and P&L reports.' },
+  { key: 'View Financial Reports',       label: 'View Financial Reports',       desc: 'Access P&L, profit margins, write-offs audit. Sensitive — finance/management only.' },
+  { key: 'CRM View All',                 label: 'CRM View All',                 desc: 'See every CRM contact in the company. Without this, the user only sees contacts assigned to them.' },
+  { key: 'CRM View Contacts',            label: 'CRM View Contacts',            desc: 'See phone numbers and email addresses on CRM contacts. Without this, contact info is masked and Call/Email/WhatsApp buttons are hidden.' },
+  { key: 'Delete Tickets',               label: 'Delete Tickets',               desc: 'Permanently remove tickets (not just close them). Use sparingly — closed tickets are the audit trail.' },
+  { key: 'Assign Tickets',               label: 'Assign Tickets',               desc: 'Reassign tickets to other team members. Without this, the user can only work on tickets already assigned to them.' },
+  { key: 'Merge Customers',              label: 'Merge Customers',              desc: 'Combine duplicate customer records into one. Audit-logged because it touches invoice/payment history.' },
+  { key: 'Manage Categories',            label: 'Manage Categories',            desc: 'Add, rename, or deactivate expense categories used in Treasury and Warehouse.' },
+  { key: 'Manage Inventory Master',      label: 'Manage Inventory Master',      desc: 'Edit the master classification lists (factories, categories, brands, colors, etc.) used across inventory.' },
+  { key: 'Edit Product List',            label: 'Edit Product List',            desc: 'Add, edit, or delete products and template blueprints in the product catalog.' },
+  { key: 'Edit Open Accounts',           label: 'Edit Open Accounts',           desc: 'Add or edit ledger entries, invoices, and attachments on Open Account ledgers. Without this (but with "Open Accounts" tab access), the user can VIEW ledgers but not change anything.' },
+  { key: 'Export Data',                  label: 'Export Data',                  desc: 'Download Excel or CSV exports from any tab.' },
+  { key: 'Post Reminders',               label: 'Post Reminders',               desc: 'Pin announcements and reminders to the team dashboard so everyone sees them.' },
+  { key: 'HR Report',                    label: 'HR Report',                    desc: 'Access HR-sensitive reports (Jenna\u2019s territory): time off, complaints, performance summaries.' },
 ];
 
 const NOTIF_TYPES = [
@@ -440,11 +521,13 @@ function PhoneSettingsPanel({ users, userProfile, toast, isAdmin, isSuperAdmin }
       }
 
       // Fetch users with routing data. The users table column is `name` (not full_name).
+      // v55.83-A.6.27.NEXT (Issue 7) — also select `active` so we can filter out
+      // deactivated team members from phone-routing assignment dropdowns.
       const usersRes = await supabase
         .from('users')
-        .select('id, name, email, role, forwarding_number, phone_routing, phone_vacation_mode')
+        .select('id, name, email, role, active, forwarding_number, phone_routing, phone_vacation_mode')
         .order('name');
-      setUsersWithRouting(usersRes.data || []);
+      setUsersWithRouting(filterActiveUsers(usersRes.data || []));
     } catch (e) {
       safeT.error('Failed to load phone settings: ' + e.message);
     } finally {
@@ -869,6 +952,12 @@ export default function SettingsTab({ toast, user, users, onReload, isAdmin, use
   const [editingProfile, setEditingProfile] = useState(null);
   const [profileForm, setProfileForm] = useState({});
   const [loaded, setLoaded] = useState(false);
+  // v55.83-A.6.27.NEXT (Issue 6) — toggle plain-language descriptions
+  // under each permission row in the Module Access table.
+  const [showPermDescs, setShowPermDescs] = useState(false);
+  // v55.83-A.6.27.NEXT (Issue 6) — quick text filter for the permissions
+  // table (search by permission name when there are 50+ rows).
+  const [permFilter, setPermFilter] = useState('');
 
   useEffect(() => {
     loadPrefs();
@@ -1051,7 +1140,12 @@ export default function SettingsTab({ toast, user, users, onReload, isAdmin, use
     else setSelectedModules([...selectedModules, mod]);
   };
 
-  const nonSuperUsers = (users || []).filter(u => u.role !== 'super_admin');
+  // v55.83-A.6.27.NEXT (Issue 7) — was: filter(u => u.role !== 'super_admin').
+  // That left deactivated users in the permissions grid as ghost columns
+  // (Emad appeared twice — active + deactivated record). isActiveUser()
+  // correctly excludes both active===false AND active===null rows.
+  const nonSuperUsers = (users || []).filter(u => u.role !== 'super_admin' && isActiveUser(u));
+  const activeUsers = filterActiveUsers(users || []);
 
   return (
     <div>
@@ -1144,7 +1238,7 @@ export default function SettingsTab({ toast, user, users, onReload, isAdmin, use
                 <div><label className="text-[10px] font-semibold">Reports To / المدير</label>
                   <select value={f.reportsTo || ''} onChange={e => setF({ ...f, reportsTo: e.target.value })} className="w-full px-3 py-2 rounded border text-sm">
                     <option value="">None (Top Level)</option>
-                    {(users || []).filter(u => u.role === 'super_admin' || u.role === 'admin').map(u => (
+                    {(users || []).filter(u => (u.role === 'super_admin' || u.role === 'admin') && isActiveUser(u)).map(u => (
                       <option key={u.id} value={u.id}>{u.name}</option>
                     ))}
                   </select></div>
@@ -1203,7 +1297,7 @@ export default function SettingsTab({ toast, user, users, onReload, isAdmin, use
                         <div><label className="text-[10px] font-semibold">Reports To</label>
                           <select defaultValue={u.reports_to||''} id={'edit-reports-'+u.id} className="w-full px-3 py-2 rounded border text-sm">
                             <option value="">None (Top Level)</option>
-                            {(users || []).filter(m => m.id !== u.id).map(m => (
+                            {(users || []).filter(m => m.id !== u.id && isActiveUser(m)).map(m => (
                               <option key={m.id} value={m.id}>{m.name}</option>
                             ))}
                           </select></div>
@@ -1247,9 +1341,14 @@ export default function SettingsTab({ toast, user, users, onReload, isAdmin, use
                           if (pw && pw.length >= 6) handleUpdateUser(u.id, { new_password: pw });
                           else if (pw) alert('Password must be at least 6 characters');
                         }} className="px-2 py-1 rounded border border-amber-400 text-amber-900 text-[10px] font-bold">🔑 Reset Password</button>
-                        {u.active !== false && <button onClick={() => handleDeactivateUser(u.id, u.name)}
+                        {/* v55.83-A.6.27.66 (bug sweep) — was u.active !== false
+                            (only blocks active===false, not null). Now uses
+                            the shared isActiveUser helper so a NULL-active
+                            user shows the "Reactivate" button (correct), not
+                            "Deactivate" (would be a no-op). */}
+                        {isActiveUser(u) && <button onClick={() => handleDeactivateUser(u.id, u.name)}
                           className="px-2 py-1 rounded border border-red-300 text-red-500 text-[10px] font-semibold">Deactivate</button>}
-                        {u.active === false && <button onClick={() => handleUpdateUser(u.id, { active: true })}
+                        {!isActiveUser(u) && <button onClick={() => handleUpdateUser(u.id, { active: true })}
                           className="px-2 py-1 rounded border border-emerald-300 text-emerald-600 text-[10px] font-semibold">✅ Reactivate</button>}
                         {isSuperAdmin && <button onClick={() => handlePermanentDelete(u.id, u.name)}
                           className="px-2 py-1 rounded border border-red-600 bg-red-50 text-red-700 text-[10px] font-bold">🗑 Delete Permanently</button>}
@@ -1330,7 +1429,8 @@ export default function SettingsTab({ toast, user, users, onReload, isAdmin, use
           })() : null}
 
           <div className="space-y-2">
-            {(users || []).map(u => {
+            {/* v55.83-A.6.27.NEXT (Issue 7) — hide deactivated from profiles list */}
+            {activeUsers.map(u => {
               const p = profiles[u.id] || {};
               const hasProfile = Object.keys(p).length > 2;
               return (
@@ -1364,57 +1464,159 @@ export default function SettingsTab({ toast, user, users, onReload, isAdmin, use
 
             {/* ===== MODULE ACCESS ===== */}
       {section === 'permissions' && (
-        <div className="bg-white rounded-xl p-4 overflow-auto">
-          <h3 className="text-sm font-bold mb-3">Module Access / صلاحيات الوحدات</h3>
-          <p className="text-[10px] text-slate-500 mb-3">Super Admin always has full access. Toggle modules for other users.</p>
-          <table className="w-full border-collapse text-xs">
-            <thead>
-              <tr className="bg-slate-50">
-                <th className="px-2 py-1.5 text-left text-[10px] font-bold">Module / Permission</th>
-                {nonSuperUsers.map(u => (
-                  <th key={u.id} className="px-2 py-1.5 text-center text-[10px] font-bold">{u.name}</th>
-                ))}
-              </tr>
-            </thead>
-            <tbody>
-              {/* Tab Access */}
-              <tr><td colSpan={nonSuperUsers.length + 1} className="px-2 py-2 bg-blue-50 text-[10px] font-bold text-blue-700 border-b border-blue-200">📑 TAB ACCESS — which tabs the user can see</td></tr>
-              {['Dashboard', 'Personal Dashboard', 'Sales', 'Customers', 'Treasury', 'Checks', 'Debts', 'Warehouse', 'Inventory', 'CRM', 'Tickets', 'Calendar', 'Customs', 'Shipping Rates', 'Quotes', 'Bank', 'Egypt Bank', 'Reports', 'Daily Log', 'Admin', 'AI Assistant', 'Communications', 'Settings', 'Import', 'Welcome Briefing'].map(mod => (
-                <tr key={mod} className="border-b border-slate-50">
-                  <td className="px-2 py-1.5 text-[10px] font-semibold">{mod}</td>
-                  {nonSuperUsers.map(u => {
-                    const hasAccess = permissions[u.id]?.[mod] ?? true;
-                    return (
-                      <td key={u.id} className="px-2 py-1 text-center">
-                        <button onClick={() => togglePermission(u.id, mod)}
-                          className={'px-2 py-0.5 rounded text-[9px] font-bold ' + (hasAccess ? 'bg-emerald-100 text-emerald-700' : 'bg-red-100 text-red-900 border border-red-300')}>
-                          {hasAccess ? 'ON' : 'OFF'}
-                        </button>
-                      </td>
-                    );
-                  })}
-                </tr>
-              ))}
-              {/* Action Permissions */}
-              <tr><td colSpan={nonSuperUsers.length + 1} className="px-2 py-2 bg-amber-50 text-[10px] font-bold text-amber-900 border-b border-amber-200 mt-2">🔐 ACTION PERMISSIONS — what the user can do (Tab ON + Edit OFF = Read Only 👁️)</td></tr>
-              {['Edit Treasury', 'Edit Invoices', 'Delete Invoices', 'Edit Inventory', 'Adjust Inventory Quantities', 'Edit Warehouse', 'Edit CRM', 'View Costs', 'See Inventory Costs', 'View Financial Reports', 'CRM View All', 'CRM View Contacts', 'Delete Tickets', 'Assign Tickets', 'Merge Customers', 'Manage Categories', 'Manage Inventory Master', 'Edit Product List', 'Open Accounts', 'Export Data', 'Post Reminders', 'HR Report'].map(mod => (
-                <tr key={mod} className="border-b border-slate-50">
-                  <td className="px-2 py-1.5 text-[10px] font-semibold text-amber-900">{mod}</td>
-                  {nonSuperUsers.map(u => {
-                    const hasAccess = permissions[u.id]?.[mod] ?? false;
-                    return (
-                      <td key={u.id} className="px-2 py-1 text-center">
-                        <button onClick={() => togglePermission(u.id, mod)}
-                          className={'px-2 py-0.5 rounded text-[9px] font-bold ' + (hasAccess ? 'bg-emerald-100 text-emerald-700' : 'bg-red-100 text-red-900 border border-red-300')}>
-                          {hasAccess ? 'ON' : 'OFF'}
-                        </button>
-                      </td>
-                    );
-                  })}
-                </tr>
-              ))}
-            </tbody>
-          </table>
+        <div className="bg-white rounded-xl p-4">
+          {/* v55.83-A.6.27.NEXT (Issues 4, 5, 6) — Permissions table rebuild:
+              - Heading + controls live ABOVE the scroll container so they stay
+                visible while scrolling.
+              - Table is in its own scroll container with max-height, so the
+                user-name header row stays pinned at top and the
+                permission-name column stays pinned at left.
+              - "Show descriptions" toggle reveals a plain-language explanation
+                under each permission name.
+              - Filter input lets you search 50+ permissions by name.
+              - "Open Accounts" is now in TAB ACCESS (default ON); the action
+                permission is renamed "Edit Open Accounts" (default OFF). */}
+          <div className="flex items-start justify-between gap-4 mb-3 flex-wrap">
+            <div>
+              <h3 className="text-sm font-bold">Module Access / صلاحيات الوحدات</h3>
+              <p className="text-[10px] text-slate-500 mt-0.5">Super Admin always has full access. Toggle modules and actions for other users.</p>
+            </div>
+            <div className="flex items-center gap-2 flex-wrap">
+              <input
+                type="text"
+                value={permFilter}
+                onChange={e => setPermFilter(e.target.value)}
+                placeholder="🔎 Filter by name…"
+                className="px-3 py-1.5 rounded border border-slate-300 text-[11px] w-44 focus:outline-none focus:border-slate-500 bg-white"
+              />
+              <button
+                onClick={() => setShowPermDescs(!showPermDescs)}
+                className={'px-3 py-1.5 rounded text-[11px] font-bold border transition-colors ' + (showPermDescs ? 'bg-slate-900 text-white border-slate-900' : 'bg-white text-slate-700 border-slate-300 hover:border-slate-500')}
+                title="Show plain-language description under each permission name"
+              >
+                {showPermDescs ? 'ⓘ Descriptions: ON' : 'ⓘ Show descriptions'}
+              </button>
+            </div>
+          </div>
+
+          {/* Helper: match against filter (case-insensitive) */}
+          {(() => {
+            const fLow = permFilter.trim().toLowerCase();
+            const matches = (label, desc) => {
+              if (!fLow) return true;
+              return label.toLowerCase().includes(fLow) || (desc || '').toLowerCase().includes(fLow);
+            };
+            const visibleTabs = TAB_PERMS.filter(p => matches(p.label, p.desc));
+            const visibleActions = ACTION_PERMS.filter(p => matches(p.label, p.desc));
+            const colCount = nonSuperUsers.length + 1;
+
+            // v55.83-A.6.27.NEXT (Issue 4 back-compat) — for "Edit Open Accounts"
+            // specifically, fall back to the legacy "Open Accounts" key if the
+            // new key isn't set yet. That way users who had Open Accounts
+            // turned on before the split keep their edit access by default.
+            const readPerm = (userId, key, fallbackKey, defaultVal) => {
+              const userPerms = permissions[userId] || {};
+              if (key in userPerms) return userPerms[key] === true;
+              if (fallbackKey && fallbackKey in userPerms) return userPerms[fallbackKey] === true;
+              return defaultVal;
+            };
+
+            return (
+              <div className="border border-slate-200 rounded-lg overflow-auto" style={{ maxHeight: 'calc(100vh - 260px)' }}>
+                <table className="w-full border-collapse text-xs">
+                  <thead className="sticky top-0 z-30">
+                    <tr className="bg-slate-100 shadow-[0_1px_0_0_rgb(203,213,225)]">
+                      <th className="sticky left-0 z-40 bg-slate-100 px-3 py-2 text-left text-[10px] font-bold border-r border-slate-200 min-w-[200px]">
+                        Module / Permission
+                      </th>
+                      {nonSuperUsers.map(u => (
+                        <th key={u.id} className="px-2 py-2 text-center text-[10px] font-bold min-w-[80px]">{u.name}</th>
+                      ))}
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {/* Tab Access banner */}
+                    {visibleTabs.length > 0 && (
+                      <tr>
+                        <td colSpan={colCount} className="sticky left-0 px-3 py-2 bg-blue-50 text-[10px] font-bold text-blue-800 border-b border-blue-200">
+                          📑 TAB ACCESS — which tabs the user can see (default: ON)
+                        </td>
+                      </tr>
+                    )}
+                    {visibleTabs.map(p => (
+                      <tr key={p.key} className="border-b border-slate-100 hover:bg-slate-50">
+                        <td className="sticky left-0 z-10 bg-white hover:bg-slate-50 px-3 py-1.5 border-r border-slate-100 align-top">
+                          <div className="text-[11px] font-semibold text-slate-900">{p.label}</div>
+                          {showPermDescs && (
+                            <div className="text-[10px] text-slate-500 mt-0.5 leading-tight max-w-[300px]">{p.desc}</div>
+                          )}
+                        </td>
+                        {nonSuperUsers.map(u => {
+                          // v55.83-A.6.27.NEXT (Issue 4) — for Open Accounts TAB,
+                          // legacy users who had `Open Accounts: true` keep view access.
+                          const hasAccess = p.key === 'Open Accounts'
+                            ? readPerm(u.id, 'Open Accounts', null, true)
+                            : (permissions[u.id]?.[p.key] ?? true);
+                          return (
+                            <td key={u.id} className="px-2 py-1.5 text-center align-top">
+                              <button onClick={() => togglePermission(u.id, p.key)}
+                                className={'px-2 py-0.5 rounded text-[9px] font-bold transition-colors ' + (hasAccess ? 'bg-emerald-100 text-emerald-800 hover:bg-emerald-200' : 'bg-red-100 text-red-900 border border-red-300 hover:bg-red-200')}>
+                                {hasAccess ? 'ON' : 'OFF'}
+                              </button>
+                            </td>
+                          );
+                        })}
+                      </tr>
+                    ))}
+
+                    {/* Action Permissions banner */}
+                    {visibleActions.length > 0 && (
+                      <tr>
+                        <td colSpan={colCount} className="sticky left-0 px-3 py-2 bg-amber-50 text-[10px] font-bold text-amber-900 border-b border-amber-200">
+                          🔐 ACTION PERMISSIONS — what the user can DO (default: OFF) · Tab ON + Edit OFF = Read Only 👁️
+                        </td>
+                      </tr>
+                    )}
+                    {visibleActions.map(p => (
+                      <tr key={p.key} className="border-b border-slate-100 hover:bg-slate-50">
+                        <td className="sticky left-0 z-10 bg-white hover:bg-slate-50 px-3 py-1.5 border-r border-slate-100 align-top">
+                          <div className="text-[11px] font-semibold text-amber-900">{p.label}</div>
+                          {showPermDescs && (
+                            <div className="text-[10px] text-slate-500 mt-0.5 leading-tight max-w-[300px]">{p.desc}</div>
+                          )}
+                        </td>
+                        {nonSuperUsers.map(u => {
+                          // v55.83-A.6.27.NEXT (Issue 4) — for "Edit Open Accounts",
+                          // legacy users who had `Open Accounts: true` automatically
+                          // get edit access until super_admin explicitly changes it.
+                          const hasAccess = p.key === 'Edit Open Accounts'
+                            ? readPerm(u.id, 'Edit Open Accounts', 'Open Accounts', false)
+                            : (permissions[u.id]?.[p.key] ?? false);
+                          return (
+                            <td key={u.id} className="px-2 py-1.5 text-center align-top">
+                              <button onClick={() => togglePermission(u.id, p.key)}
+                                className={'px-2 py-0.5 rounded text-[9px] font-bold transition-colors ' + (hasAccess ? 'bg-emerald-100 text-emerald-800 hover:bg-emerald-200' : 'bg-red-100 text-red-900 border border-red-300 hover:bg-red-200')}>
+                                {hasAccess ? 'ON' : 'OFF'}
+                              </button>
+                            </td>
+                          );
+                        })}
+                      </tr>
+                    ))}
+
+                    {/* Empty state when filter matches nothing */}
+                    {visibleTabs.length === 0 && visibleActions.length === 0 && (
+                      <tr>
+                        <td colSpan={colCount} className="px-3 py-6 text-center text-[11px] text-slate-500 italic">
+                          No permissions match "{permFilter}"
+                        </td>
+                      </tr>
+                    )}
+                  </tbody>
+                </table>
+              </div>
+            );
+          })()}
         </div>
       )}
 
@@ -1426,7 +1628,8 @@ export default function SettingsTab({ toast, user, users, onReload, isAdmin, use
             <thead>
               <tr className="bg-slate-50">
                 <th className="px-2 py-1.5 text-left text-[10px] font-bold">Notification Type</th>
-                {(users || []).map(u => (
+                {/* v55.83-A.6.27.NEXT (Issue 7) — hide deactivated from notifications grid */}
+                {activeUsers.map(u => (
                   <th key={u.id} className="px-2 py-1.5 text-center text-[10px] font-bold">{u.name}</th>
                 ))}
               </tr>
@@ -1435,7 +1638,7 @@ export default function SettingsTab({ toast, user, users, onReload, isAdmin, use
               {NOTIF_TYPES.map(nt => (
                 <tr key={nt.v} className="border-b border-slate-50">
                   <td className="px-2 py-1.5 text-[10px] font-semibold">{nt.l}</td>
-                  {(users || []).map(u => {
+                  {activeUsers.map(u => {
                     const enabled = notifPrefs[u.id]?.[nt.v] ?? true;
                     return (
                       <td key={u.id} className="px-2 py-1 text-center">
@@ -1499,7 +1702,8 @@ export default function SettingsTab({ toast, user, users, onReload, isAdmin, use
           <p className="text-xs text-slate-500 mb-4">Configure the AI personality that greets each team member when they log in. Super admin can set per-user preferences.</p>
           
           <div className="space-y-3">
-            {(users || []).filter(u => u.role !== 'super_admin' || isSuperAdmin).map(u => (
+            {/* v55.83-A.6.27.NEXT (Issue 7) — hide deactivated from AI Greeter settings */}
+            {activeUsers.filter(u => u.role !== 'super_admin' || isSuperAdmin).map(u => (
               <div key={u.id} className="border border-slate-200 rounded-lg p-4">
                 <div className="flex items-center justify-between mb-3">
                   <div>

@@ -235,7 +235,8 @@ export default function InventoryProductMaster(props) {
   // When a parent level changes, reset child levels whose currently-selected option is no longer valid
   function resetInvalidChildren(updatedForm, changedLevel) {
     var newForm = Object.assign({}, updatedForm);
-    for (var lvl = changedLevel + 1; lvl <= 8; lvl++) {
+    // v55.83-A.6.27.NEXT (Issue 11) — now iterates through Level 9 too
+    for (var lvl = changedLevel + 1; lvl <= 9; lvl++) {
       var fieldName = LEVEL_FIELD_MAP[lvl];
       var currentValue = newForm[fieldName];
       if (!currentValue) continue;
@@ -264,7 +265,10 @@ export default function InventoryProductMaster(props) {
     });
   }
 
-  // Compute the classification slug from form selections
+  // Compute the classification slug from form selections.
+  // v55.83-A.6.27.NEXT (Issue 11, Max May 23 2026) — Levels 1-8 required;
+  // Level 9 (Country/origin) is OPTIONAL — appended to the slug only if
+  // the user actually picked one. Returns null if any of 1-8 is missing.
   function computeSlug(formData) {
     var parts = [];
     for (var lvl = 1; lvl <= 8; lvl++) {
@@ -275,13 +279,20 @@ export default function InventoryProductMaster(props) {
       if (!opt) return null;
       parts.push(opt.code);
     }
+    // Level 9 — optional, append only if picked
+    var l9Id = formData[LEVEL_FIELD_MAP[9]];
+    if (l9Id) {
+      var l9Opt = lists.find(function (l) { return l.id === l9Id; });
+      if (l9Opt) parts.push(l9Opt.code);
+    }
     return parts.join('.');
   }
 
   // Build a human-readable description of a product from list IDs (for the table)
+  // v55.83-A.6.27.NEXT (Issue 11) — iterates all 9 levels (was 8, dropping Country)
   function describeProduct(p) {
     var parts = [];
-    for (var lvl = 1; lvl <= 8; lvl++) {
+    for (var lvl = 1; lvl <= 9; lvl++) {
       var fieldName = LEVEL_FIELD_MAP[lvl];
       var id = p[fieldName];
       if (id) {
@@ -551,30 +562,56 @@ export default function InventoryProductMaster(props) {
   }
 
   async function save() {
+    // v55.83-A.6.27.NEXT (Issue 11, Max May 23 2026 — URGENT):
+    //   "i tried to add a product manually and i clicked save after entering
+    //    all the levels and data and nothing happened when i clicked on save.
+    //    it just remained in the current pop box."
+    //
+    // Hardened against ALL silent-failure modes:
+    //   1. console.log breadcrumbs at every step so we can see in DevTools
+    //      exactly where it stops
+    //   2. alert() fallback alongside every toast — if the toast UI is
+    //      broken/dismissed, alert() is unmissable
+    //   3. Level 9 (Country/origin_list_id) now validated AND included in
+    //      payload AND included in slug — was missing before, causing inserts
+    //      to fail or origin data to be silently dropped
+    //   4. Audit-log failure no longer swallowed silently
+    var DEBUG = '[product-master.save]';
+    console.log(DEBUG, 'START — modalMode:', modalMode, 'form:', form);
+
+    function fail(msg) {
+      console.error(DEBUG, 'FAIL:', msg);
+      toast.error(msg);
+      // Belt-and-braces: if the toast UI is broken/offscreen, the user
+      // gets an unmissable native alert instead of silently nothing.
+      try { alert(msg); } catch (_) {}
+    }
+
     // Validation
     var nameEn = (form.name_en || '').trim();
     var nameAr = (form.name_ar || '').trim();
-    if (!nameEn) { toast.error('English name is required'); return; }
-    if (!nameAr) { toast.error('Arabic name is required'); return; }
+    if (!nameEn) { fail('English name is required'); return; }
+    if (!nameAr) { fail('Arabic name is required'); return; }
 
-    // All 8 classification levels must be picked
+    // Levels 1-8 are required. Level 9 (Country/origin) is OPTIONAL because
+    // the InventoryMasterAdmin UI doesn't expose Level 9 management yet, so
+    // most installs have no L9 options to pick. If/when L9 options exist
+    // and the user picks one, it's included in the slug and payload.
+    // v55.83-A.6.27.NEXT (Issue 11, Max May 23 2026).
     for (var lvl = 1; lvl <= 8; lvl++) {
       if (!form[LEVEL_FIELD_MAP[lvl]]) {
-        toast.error('Please select Level ' + lvl + ' — ' + LEVEL_LABELS[lvl].en);
+        fail('Please select Level ' + lvl + ' — ' + (LEVEL_LABELS[lvl] ? LEVEL_LABELS[lvl].en : 'level ' + lvl));
         return;
       }
     }
 
     var slug = computeSlug(form);
-    if (!slug) { toast.error('Could not compute classification slug — please re-check selections'); return; }
+    if (!slug) { fail('Could not compute classification slug — please re-check selections'); return; }
 
     // Quick code uniqueness (client-side; DB also enforces)
     var quickCode = (form.quick_code || '').trim();
-    // v55.83-A.6.27.46 — Helpful explicit message when user clicks Save on a "(copy)"
-    // and never set a new quick code. Previous behavior: insert tried with null,
-    // sometimes silently failed depending on DB state. Now we tell them what to do.
     if (modalMode === 'new' && (form.name_en || '').endsWith('(copy)') && !quickCode) {
-      toast.error('Please change the Quick Code before saving this copied item / يرجى تغيير الكود قبل الحفظ');
+      fail('Please change the Quick Code before saving this copied item / يرجى تغيير الكود قبل الحفظ');
       return;
     }
     if (quickCode) {
@@ -582,9 +619,10 @@ export default function InventoryProductMaster(props) {
         if (modalMode === 'edit' && p.id === modalProductId) return false;
         return p.active && (p.quick_code || '').trim().toLowerCase() === quickCode.toLowerCase();
       });
-      if (dup) { toast.error('Quick code "' + quickCode + '" is already used by another active product'); return; }
+      if (dup) { fail('Quick code "' + quickCode + '" is already used by another active product'); return; }
     }
 
+    console.log(DEBUG, 'validation passed — proceeding to insert');
     setBusy(true);
     try {
       var payload = {
@@ -600,6 +638,8 @@ export default function InventoryProductMaster(props) {
         color_list_id: form.color_list_id,
         pattern_list_id: form.pattern_list_id,
         spec_class_list_id: form.spec_class_list_id,
+        // v55.83-A.6.27.NEXT (Issue 11) — origin_list_id was missing!
+        origin_list_id: form.origin_list_id,
         classification_slug: slug,
         default_uom: form.default_uom || null,
         default_thickness_mm: form.default_thickness_mm ? Number(form.default_thickness_mm) : null,
@@ -615,22 +655,49 @@ export default function InventoryProductMaster(props) {
         notes: (form.notes || '').trim() || null,
         updated_by: userProfile && userProfile.id,
       };
+      console.log(DEBUG, 'payload built:', payload);
 
+      var saved;
       if (modalMode === 'new') {
         payload.created_by = userProfile && userProfile.id;
         payload.active = true;
-        await dbInsert('inventory_products', payload, userProfile && userProfile.id);
+        console.log(DEBUG, 'calling dbInsert...');
+        saved = await dbInsert('inventory_products', payload, userProfile && userProfile.id);
+        console.log(DEBUG, 'dbInsert returned:', saved);
+        if (!saved || !saved.id) {
+          // dbInsert should always return data on success. If we get here
+          // with no id, something went wrong in the helper without throwing.
+          throw new Error('Insert returned no data — check console for [dbInsert] warnings about stripped columns.');
+        }
         toast.success('Product added: ' + nameEn);
+        try { console.log(DEBUG, 'product saved id:', saved.id); } catch (_) {}
       } else {
+        console.log(DEBUG, 'calling dbUpdate id=' + modalProductId);
         await dbUpdate('inventory_products', modalProductId, payload, userProfile && userProfile.id);
         toast.success('Product saved: ' + nameEn);
       }
+      console.log(DEBUG, 'reloading list...');
       await reload();
+      console.log(DEBUG, 'closing modal');
       closeModal();
+      console.log(DEBUG, 'DONE — save flow complete');
     } catch (err) {
-      console.error('[product-master] save failed:', err);
-      toast.error('Save failed: ' + ((err && err.message) || String(err)));
+      console.error(DEBUG, 'CAUGHT EXCEPTION:', err);
+      var msg = (err && err.message) || String(err);
+      var hint = '';
+      // Common cases — give actionable guidance.
+      if (/column.*does not exist/i.test(msg)) {
+        hint = '\n\nLikely a missing column. Open DevTools → Console and look for [dbInsert] warnings about stripped columns. If the column is critical, you may need to run a SQL migration.';
+      } else if (/violates.*not-null/i.test(msg)) {
+        hint = '\n\nA required column is null. Check that every classification level is selected, including Country (Level 9).';
+      } else if (/violates.*unique/i.test(msg)) {
+        hint = '\n\nSomething is duplicated (probably quick_code or classification_slug). Try a different code.';
+      } else if (/permission denied|rls/i.test(msg)) {
+        hint = '\n\nDatabase Row Level Security is blocking this write. Check Supabase RLS policies on inventory_products.';
+      }
+      fail('Save failed: ' + msg + hint);
     } finally {
+      console.log(DEBUG, 'setBusy(false)');
       setBusy(false);
     }
   }
@@ -686,53 +753,80 @@ export default function InventoryProductMaster(props) {
     }
   }
 
-  // v55.83-A.6.27.42 — Create Variant flow.
-  // openCreateVariant: opens the modal pre-bound to a family template.
-  // saveVariant: calls get_or_create_variant RPC, silent-reuses or creates new.
-  function openCreateVariant(template) {
-    if (!template || template.is_family_template !== true) {
-      toast.error('Variants can only be created from a Family template row.');
+  // v55.83-A.6.27.NEXT (Issue 10, Max May 23 2026): replaced the old 4-spec
+  // "Create Variant" flow with a Clone-Template flow.
+  //
+  // OLD flow: 4 inline dropdowns + RPC get_or_create_variant + auto-suffix.
+  //   Problem reported by Max: "Trying to add a product. NOTHING HAPPENS
+  //   and no error message." The hardcoded dropdowns and the dedup RPC made
+  //   the path opaque — if the RPC silently returned a no-op or the toast
+  //   wasn't surfacing, the user got no feedback.
+  //
+  // NEW flow: clone the template into the FULL edit modal with name blank
+  //   and let the user fill in the rest. No RPC, no dedup magic — what you
+  //   see is what gets saved. Errors surface as toast messages from save().
+  //   Max May 23 2026: "all i care about is to clone a family template and
+  //   then we just add the description and the remainder of the levels.
+  //   Not sure if variant is even viable or makes sense any more."
+  function openCloneTemplate(template) {
+    if (!template) return;
+    if (template.is_family_template !== true) {
+      toast.error('Clone only works on Template rows (📋 TEMPLATE badge). Use Copy for regular products.');
       return;
     }
-    setVariantTemplate(template);
-    setVariantForm({ category_code: '', construction_code: '', backing_code: '', pattern_code: '' });
-    setVariantModalOpen(true);
+    setModalMode('new');
+    setModalProductId(null);
+    setEditIsTemplate(false);  // cloning a template produces a Product, not a template
+    setEditLocked(false);
+    setForm({
+      // Name fields BLANK — user types the new product's name
+      name_en: '',
+      name_ar: '',
+      // Quick code blank too — user enters a new unique code
+      quick_code: '',
+      // Design SKU blank — usually variant-specific
+      design_sku: '',
+      // Classification: copy every level the template has set.
+      // For levels the template DIDN'T set (typically category/construction/
+      // backing/pattern on a leather family template), user fills in.
+      family_list_id:       template.family_list_id || '',
+      category_list_id:     template.category_list_id || '',
+      grade_list_id:        template.grade_list_id || '',
+      construction_list_id: template.construction_list_id || '',
+      backing_list_id:      template.backing_list_id || '',
+      color_list_id:        template.color_list_id || '',
+      pattern_list_id:      template.pattern_list_id || '',
+      spec_class_list_id:   template.spec_class_list_id || '',
+      origin_list_id:       template.origin_list_id || '',
+      // Defaults inherited from template
+      default_uom:                template.default_uom || '',
+      default_thickness_mm:       template.default_thickness_mm != null ? String(template.default_thickness_mm) : '',
+      default_width_m:            template.default_width_m != null ? String(template.default_width_m) : '',
+      default_gsm:                template.default_gsm != null ? String(template.default_gsm) : '',
+      default_density:            template.default_density != null ? String(template.default_density) : '',
+      default_weight_per_roll:    template.default_weight_per_roll != null ? String(template.default_weight_per_roll) : '',
+      default_roll_length_m:      template.default_roll_length_m != null ? String(template.default_roll_length_m) : '',
+      default_supplier:           template.default_supplier || '',
+      default_cost:               template.default_cost != null ? String(template.default_cost) : '',
+      default_currency:           template.default_currency || 'EGP',
+      default_rack:               template.default_rack || '',
+      notes:                      '',  // notes are per-product, not inherited
+    });
+    toast.success('Cloned from template "' + (template.name_en || template.quick_code || 'unnamed') + '" — fill in the name and any remaining classification levels, then Save.');
   }
 
+  // v55.83-A.6.27.NEXT — the old variant modal handlers are kept as no-ops
+  // so any stale references don't crash. They can be removed entirely once
+  // the variant modal JSX is removed (see below — modal is now unused).
+  function openCreateVariant(template) { openCloneTemplate(template); }
   function closeVariantModal() {
     setVariantModalOpen(false);
     setVariantTemplate(null);
     setVariantForm({ category_code: '', construction_code: '', backing_code: '', pattern_code: '' });
   }
-
   async function saveVariant() {
-    if (!variantTemplate) return;
-    if (!variantForm.category_code)     { alert('Category required.'); return; }
-    if (!variantForm.construction_code) { alert('Construction required.'); return; }
-    if (!variantForm.backing_code)      { alert('Backing required.'); return; }
-    if (!variantForm.pattern_code)      { alert('Pattern required.'); return; }
-    setVariantBusy(true);
-    try {
-      var res = await supabase.rpc('get_or_create_variant', {
-        p_template_id:       variantTemplate.id,
-        p_category_code:     variantForm.category_code,
-        p_construction_code: variantForm.construction_code,
-        p_backing_code:      variantForm.backing_code,
-        p_pattern_code:      variantForm.pattern_code,
-        p_user_id:           userProfile && userProfile.id,
-      });
-      if (res.error) throw res.error;
-      await reload();
-      toast.success('Variant ready — ' + variantTemplate.quick_code + ' · ' +
-        variantForm.category_code + ' · ' + variantForm.construction_code + ' · ' +
-        variantForm.backing_code + ' · ' + variantForm.pattern_code);
-      closeVariantModal();
-    } catch (err) {
-      console.error('[product-master] saveVariant failed:', err);
-      toast.error('Variant creation failed: ' + ((err && err.message) || String(err)));
-    } finally {
-      setVariantBusy(false);
-    }
+    // No-op kept for stale references. New flow uses save() in the main modal.
+    toast.error('Variant flow has been replaced by Clone-Template — open a template row, click + Product, and use the main form.');
   }
 
   // Permission denied
@@ -992,7 +1086,7 @@ export default function InventoryProductMaster(props) {
                       Silent-reuses if a matching variant exists, else creates new with next suffix. */}
                   {canEdit && p.is_family_template === true && (
                     <button
-                      onClick={function () { openCreateVariant(p); }}
+                      onClick={function () { openCloneTemplate(p); }}
                       className="px-2 py-1 text-[10px] bg-purple-600 hover:bg-purple-700 text-white rounded font-extrabold shadow"
                       title="Create an actual Product from this Template blueprint (independent — edits/deletes to template won't affect it)"
                     >
@@ -1143,26 +1237,40 @@ export default function InventoryProductMaster(props) {
                   <div className="text-base font-mono font-extrabold text-indigo-900">{liveSlug}</div>
                 </div>
                 <div className="grid grid-cols-2 gap-2">
-                  {[1, 2, 3, 4, 5, 6, 7, 8].map(function (lvl) {
+                  {/* v55.83-A.6.27.NEXT (Issue 11, Max May 23 2026): was
+                      [1..8].map — dropped Level 9 (Country/origin) from the
+                      form even though it's in LEVEL_FIELD_MAP, LEVEL_LABELS,
+                      emptyForm, and the row display. Because Country wasn't
+                      in the form, two products in the same 8-level classi-
+                      fication but different countries collided on the unique
+                      classification_slug index, which silently failed the
+                      insert with a unique-violation that didn't reach the
+                      UI. Now all 9 render. */}
+                  {[1, 2, 3, 4, 5, 6, 7, 8, 9].map(function (lvl) {
                     var opts = optionsForLevel(lvl, form);
                     var fieldName = LEVEL_FIELD_MAP[lvl];
                     var currentValue = form[fieldName];
+                    // v55.83-A.6.27.NEXT (Issue 11) — L9 (Country) is optional
+                    var isOptional = lvl === 9;
                     return (
                       <label key={lvl} className="text-[11px] font-extrabold text-slate-700">
-                        L{lvl} · {LEVEL_LABELS[lvl].en} *
+                        L{lvl} · {LEVEL_LABELS[lvl].en} {isOptional ? <span className="text-[10px] font-semibold text-slate-500">(optional)</span> : '*'}
                         <select
                           value={currentValue}
                           onChange={function (e) { handleLevelChange(lvl, e.target.value); }}
                           disabled={editLocked}
                           className={'w-full mt-0.5 px-2 py-1.5 border border-slate-300 rounded text-sm ' + (editLocked ? 'bg-slate-100 text-slate-600 cursor-not-allowed' : 'bg-white text-slate-900')}
                         >
-                          <option value="">— pick {LEVEL_LABELS[lvl].en.toLowerCase()} —</option>
+                          <option value="">{isOptional ? '— none —' : '— pick ' + LEVEL_LABELS[lvl].en.toLowerCase() + ' —'}</option>
                           {opts.map(function (o) {
                             return <option key={o.id} value={o.id}>{o.code} · {o.label_en} / {o.label_ar}</option>;
                           })}
                         </select>
-                        {opts.length === 0 && (
+                        {opts.length === 0 && !isOptional && (
                           <span className="text-[10px] text-amber-700 font-semibold italic">No options yet — add some in Master Lists or pick a different parent level</span>
+                        )}
+                        {opts.length === 0 && isOptional && (
+                          <span className="text-[10px] text-slate-500 italic">No countries set up yet — leave blank or add via Master Lists</span>
                         )}
                       </label>
                     );
@@ -1356,8 +1464,18 @@ export default function InventoryProductMaster(props) {
                 var colorCode = parts[5] || '';
                 if (colorCode && colorCode !== 'BK') {
                   return (
-                    <div className="bg-yellow-100 border-2 border-yellow-400 rounded p-3 text-sm text-yellow-950 font-semibold">
-                      ⚠ <span className="font-extrabold">Heads up:</span> Smooth leather is typically only available in Black, but this template is for color <span className="font-mono font-extrabold">{colorCode}</span>. You can still proceed if this is correct.
+                    /* v55.83-A.6.27.NEXT (Issue 9, Max May 23 2026): was bg-yellow-100
+                       text-yellow-950 font-semibold — globally bg-yellow-100 wasn't
+                       overridden and font-extrabold was clobbering nested spans to
+                       near-white, giving yellow-on-yellow "Heads up:" and "BK". Now
+                       uses self-contained dark-theme-aware colours that read on both
+                       the dark modal background and any future light-mode rendering. */
+                    <div className="rounded p-3 text-sm font-semibold border-2" style={{ background: 'rgba(251,191,36,0.15)', borderColor: '#f59e0b', color: '#fde68a' }}>
+                      <span style={{ color: '#fbbf24' }}>⚠</span>{' '}
+                      <span style={{ color: '#fbbf24', fontWeight: 800 }}>Heads up:</span>{' '}
+                      <span style={{ color: '#fef3c7' }}>Smooth leather is typically only available in Black, but this template is for color </span>
+                      <span style={{ color: '#fbbf24', fontWeight: 800, fontFamily: 'JetBrains Mono, monospace' }}>{colorCode}</span>
+                      <span style={{ color: '#fef3c7' }}>. You can still proceed if this is correct.</span>
                     </div>
                   );
                 }

@@ -57,7 +57,9 @@ test('S12.T5 Treasury Net card has progress bar for visual ratio', function() {
 test('S12.S1 Sales Invoiced card uses sky-blue gradient', function() {
   // S17: Sales cards redesigned — Invoiced now uses dark sky #0c4a6e → #075985
   // The label emoji was moved into a separate span from the text.
-  assert(/Invoiced<\/div>/.test(page),
+  // v55.83-A.6.27.66 (C1): label is now "Invoiced{totalsAreMixedCurrency ? ' (mixed)' : ''}"
+  // when multi-currency invoices are filtered, so accept either literal.
+  assert(/Invoiced\{totalsAreMixedCurrency.*\}<\/div>/.test(page) || /Invoiced<\/div>/.test(page),
     'Invoiced label must still exist in the Sales cards');
   assert(/linear-gradient\(135deg, #0c4a6e 0%, #075985 100%\)/.test(page),
     'dark sky-blue gradient must be present on Invoiced card (S17 upgrade)');

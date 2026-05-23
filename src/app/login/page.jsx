@@ -1,6 +1,10 @@
 'use client';
 import { useState, useEffect, useRef } from 'react';
 import { supabase } from '../../lib/supabase';
+// v55.83-A.6.27.66 (C2, Max May 23 2026): the deactivation check was using
+// active === false which misses NULL-active users (legacy deactivation path).
+// Switch to the shared helper that rejects both false AND null.
+import { isActiveUser } from '../../lib/active-users';
 
 export default function LoginPage() {
   const [email, setEmail] = useState('');
@@ -137,8 +141,10 @@ export default function LoginPage() {
             .ilike('email', lookupEmail)
             .maybeSingle();
 
-          // v55.83-A.6.27.60 — Hard block: deactivated users CANNOT log in.
-          if (profile && profile.active === false) {
+          // v55.83-A.6.27.66 (C2, Max May 23 2026) — Hard block: deactivated
+          // users CANNOT log in. Use the shared helper because active===false
+          // misses NULL-active users (legacy bug pattern across the codebase).
+          if (profile && !isActiveUser(profile)) {
             try { await supabase.auth.signOut(); } catch (_) {}
             setError('Your account has been deactivated. Contact your administrator to restore access.');
             setLoading(false);

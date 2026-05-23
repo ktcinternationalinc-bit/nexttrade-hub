@@ -36,11 +36,30 @@ export default function OpenAccountsTab(props) {
   var userProfile = props.userProfile;
   var modulePerms = props.modulePerms || {};
   var isSuperAdmin = props.isSuperAdmin === true;
-  var toast = props.toast || { success: function(){}, error: function(){}, warning: function(){}, info: function(){} };
 
-  // Permission gates
-  var canView = isSuperAdmin || modulePerms['Open Accounts'] === true;
-  var canEdit = isSuperAdmin || modulePerms['Open Accounts'] === true;
+  // v55.83-A.6.27.NEXT (Issue 4) — Permission split.
+  //
+  //   BEFORE: a single "Open Accounts" key controlled both view + edit.
+  //   AFTER:
+  //     - "Open Accounts"      → TAB-level (default ON)  → controls canView
+  //     - "Edit Open Accounts" → ACTION-level (default OFF) → controls canEdit
+  //
+  // Back-compat: legacy users with only "Open Accounts: true" set keep BOTH
+  // view + edit by falling back to the old key when the new ones aren't
+  // defined. Super admins always have full access regardless.
+  var legacyOpenAccts = modulePerms['Open Accounts'];
+  var newTab = modulePerms['Open Accounts'];          // same key for tab view
+  var newEdit = modulePerms['Edit Open Accounts'];    // new edit key
+
+  // canView: new tab key (default ON), falling back to legacy (default true)
+  var canView = isSuperAdmin
+    || (newTab === undefined ? true : newTab === true);
+  // canEdit: new edit key (default OFF), but if the new key is undefined AND
+  // the legacy "Open Accounts" key is true, grant edit (back-compat).
+  var canEdit = isSuperAdmin
+    || newEdit === true
+    || (newEdit === undefined && legacyOpenAccts === true);
+  var toast = props.toast || { success: function(){}, error: function(){}, warning: function(){}, info: function(){} };
 
   // Data
   var [accounts, setAccounts] = useState([]);
@@ -68,6 +87,9 @@ export default function OpenAccountsTab(props) {
     //          shipping_amount, notes, terms, items: [{id?, description, quantity, unit_price}] }
   var [busy, setBusy] = useState(false);
   var [search, setSearch] = useState('');
+  // v55.83-A.6.27.66 (Issue 2) — account-level attachments modal: stores
+  // which account the 📎 Files button was clicked on; null when closed.
+  var [attachAccountId, setAttachAccountId] = useState(null);
 
   useEffect(function () {
     if (!canView) { setLoading(false); return; }
@@ -464,6 +486,45 @@ export default function OpenAccountsTab(props) {
     };
   }
 
+  // v55.83-A.6.27.66 (Issue 1, Max May 23 2026) — per-account invoice number.
+  // Format B (Max's choice): INV-{ACCT-SLUG}-{YEAR}-{NNN}
+  //   • SLUG = uppercase ASCII, alphanumeric only, hyphens for spaces
+  //     (e.g. "El Sayad" → "EL-SAYAD", "Stitches & More" → "STITCHES-MORE")
+  //   • YEAR = current 4-digit year
+  //   • NNN  = next sequential per-account counter for that year (zero-padded
+  //            to 3 digits, expands automatically if you reach 1000)
+  // Pre-filled when the user clicks + Invoice. Editable — type over it to
+  // override; otherwise saved as-is. If counting fails for any reason
+  // (account not loaded, no invoices array, etc.) returns the format prefix
+  // with NNN = 001 so save still works.
+  function slugifyAccountName(name) {
+    if (!name) return 'ACCT';
+    var s = String(name).toUpperCase()
+      .replace(/[^A-Z0-9]+/g, '-')   // non-alphanumeric → hyphen
+      .replace(/^-+|-+$/g, '');      // trim leading/trailing hyphens
+    if (!s) return 'ACCT';
+    if (s.length > 18) s = s.substring(0, 18).replace(/-+$/, '');  // keep tidy
+    return s;
+  }
+  function computeNextInvoiceNumber(account) {
+    var year = new Date().getFullYear();
+    var slug = slugifyAccountName(account && account.account_name);
+    var prefix = 'INV-' + slug + '-' + year + '-';
+    // Find max existing sequence for this prefix
+    var maxN = 0;
+    (invoices || []).forEach(function (inv) {
+      if (!inv || inv.account_id !== (account && account.id)) return;
+      var num = String(inv.invoice_number || '');
+      if (num.indexOf(prefix) !== 0) return;
+      var tail = num.substring(prefix.length);
+      var n = parseInt(tail, 10);
+      if (!isNaN(n) && n > maxN) maxN = n;
+    });
+    var next = maxN + 1;
+    var padded = next < 1000 ? ('000' + next).slice(-3) : String(next);
+    return prefix + padded;
+  }
+
   function openNewInvoice(accountId) {
     var today = new Date().toISOString().substring(0, 10);
     var acc = accounts.find(function (a) { return a.id === accountId; });
@@ -471,7 +532,10 @@ export default function OpenAccountsTab(props) {
     var defaultCur = (ent && ent.default_currency) || 'USD';
     setInvoiceDraft({
       account_id: accountId,
-      invoice_number: '',
+      // v55.83-A.6.27.66 (Issue 1) — pre-fill the next sequential invoice
+      // number per account in format INV-{ACCT-SLUG}-{YEAR}-{NNN}. User can
+      // override by typing over it; otherwise save uses it as-is.
+      invoice_number: computeNextInvoiceNumber(acc),
       direction: 'credit',  // default: we billed them
       counterparty_name: (acc && acc.account_name) || '',
       counterparty_name_ar: (acc && acc.account_name_ar) || '',
@@ -918,6 +982,13 @@ export default function OpenAccountsTab(props) {
                     <button onClick={function () { openNewInvoice(a.id); }} className="px-2 py-1 bg-blue-600 hover:bg-blue-700 text-white text-[10px] font-extrabold rounded shadow" title="Create a mini-invoice. Will auto-create a linked ledger entry.">+ Invoice</button>
                     <button onClick={function () { handlePrintLedger(a); }} className="px-2 py-1 bg-slate-700 hover:bg-slate-800 text-white text-[10px] font-extrabold rounded shadow" title="Print or save as PDF">🖨️ Print</button>
                     <button onClick={function () { handleExportExcel(a); }} className="px-2 py-1 bg-green-700 hover:bg-green-800 text-white text-[10px] font-extrabold rounded shadow" title="Download Excel file">📊 Excel</button>
+                    {/* v55.83-A.6.27.66 (Issue 2, Max May 23 2026) — account-level
+                        attachments. Stores files (contracts, master agreements,
+                        signed docs) against the customer card itself, separate
+                        from per-entry and per-invoice attachments. parent_type
+                        used is 'open_account' — attachments table is extensible
+                        by parent_type per the .61 migration, no SQL needed. */}
+                    <button onClick={function () { setAttachAccountId(a.id); }} className="px-2 py-1 bg-slate-600 hover:bg-slate-700 text-white text-[10px] font-extrabold rounded shadow" title="Attach files to this customer (contracts, master agreements, etc.)">📎 Files</button>
                     <button onClick={function () { openEditAccount(a); }} className="px-2 py-1 bg-indigo-600 hover:bg-indigo-700 text-white text-[10px] font-extrabold rounded shadow">Edit</button>
                     <button onClick={function () { deleteAccount(a); }} className="px-2 py-1 bg-red-700 hover:bg-red-800 text-white text-[10px] font-extrabold rounded shadow">Delete</button>
                   </div>
@@ -1439,6 +1510,42 @@ export default function OpenAccountsTab(props) {
                   </>
                 )}
                 <button onClick={saveInvoice} disabled={busy} className="px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white text-sm font-extrabold rounded shadow disabled:opacity-50">{busy ? 'Saving...' : '💾 Save Invoice'}</button>
+              </div>
+            </div>
+          </div>
+        );
+      })()}
+
+      {/* v55.83-A.6.27.66 (Issue 2, Max May 23 2026) — Account-level attachments
+          modal. Opens when 📎 Files is clicked on a customer card row. Stores
+          contracts, master agreements, signed documents, vendor profile docs
+          at the account level (separate from per-entry and per-invoice
+          attachments). parent_type='open_account' uses the .61 attachments
+          table's extensibility — no SQL needed. */}
+      {attachAccountId && (() => {
+        var acc = accounts.find(function (a) { return a.id === attachAccountId; });
+        if (!acc) return null;
+        return (
+          <div className="fixed inset-0 z-[210] bg-black/80 flex items-start justify-center pt-10 px-4 overflow-y-auto" onClick={function () { setAttachAccountId(null); }}>
+            <div className="bg-white text-slate-900 rounded-2xl shadow-2xl w-full max-w-2xl" onClick={function (e) { e.stopPropagation(); }}>
+              <div className="bg-slate-700 text-white rounded-t-2xl px-5 py-3 flex items-center justify-between">
+                <div>
+                  <div className="text-lg font-extrabold">📎 Account Files — {acc.account_name || '(unnamed)'}</div>
+                  <div className="text-xs text-slate-200 mt-0.5">Contracts, agreements, vendor docs — anything that lives at the customer level (not on a single entry or invoice).</div>
+                </div>
+                <button onClick={function () { setAttachAccountId(null); }} className="text-2xl text-white hover:text-slate-200 leading-none">×</button>
+              </div>
+              <div className="p-5">
+                <AttachmentManager
+                  parentType="open_account"
+                  parentId={acc.id}
+                  currentUserId={userProfile && userProfile.id}
+                  isSuperAdmin={userProfile && userProfile.role === 'super_admin'}
+                  canEdit={canEdit}
+                />
+              </div>
+              <div className="border-t border-slate-200 px-5 py-3 flex justify-end bg-slate-50 rounded-b-2xl">
+                <button onClick={function () { setAttachAccountId(null); }} className="px-4 py-2 bg-slate-300 hover:bg-slate-400 text-slate-900 text-sm font-bold rounded">Close</button>
               </div>
             </div>
           </div>

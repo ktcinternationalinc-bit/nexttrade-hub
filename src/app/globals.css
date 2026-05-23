@@ -99,19 +99,19 @@ body {
 
 /* Colored tint cards */
 .bg-blue-50, .bg-emerald-50, .bg-green-50, .bg-amber-50, .bg-red-50, .bg-purple-50,
-.bg-indigo-50, .bg-orange-50, .bg-yellow-50, .bg-cyan-50 {
+.bg-indigo-50, .bg-orange-50, .bg-yellow-50, .bg-cyan-50, .bg-sky-50, .bg-teal-50,
+.bg-pink-50, .bg-rose-50, .bg-fuchsia-50, .bg-violet-50, .bg-lime-50 {
   background: rgba(255,255,255,0.05) !important;
   backdrop-filter: blur(8px);
   border-color: var(--border-glass) !important;
   color: var(--text-primary) !important;
 }
-.bg-blue-50 { background: rgba(56,189,248,0.1) !important; border-color: rgba(56,189,248,0.2) !important; }
-.bg-emerald-50, .bg-green-50 { background: rgba(52,211,153,0.1) !important; border-color: rgba(52,211,153,0.2) !important; }
-.bg-red-50 { background: rgba(248,113,113,0.1) !important; border-color: rgba(248,113,113,0.2) !important; }
+.bg-blue-50, .bg-sky-50, .bg-cyan-50 { background: rgba(56,189,248,0.1) !important; border-color: rgba(56,189,248,0.2) !important; }
+.bg-emerald-50, .bg-green-50, .bg-teal-50, .bg-lime-50 { background: rgba(52,211,153,0.1) !important; border-color: rgba(52,211,153,0.2) !important; }
+.bg-red-50, .bg-rose-50, .bg-pink-50 { background: rgba(248,113,113,0.1) !important; border-color: rgba(248,113,113,0.2) !important; }
 .bg-amber-50, .bg-yellow-50 { background: rgba(251,191,36,0.1) !important; border-color: rgba(251,191,36,0.2) !important; }
-.bg-purple-50, .bg-indigo-50 { background: rgba(167,139,250,0.1) !important; border-color: rgba(167,139,250,0.2) !important; }
+.bg-purple-50, .bg-indigo-50, .bg-violet-50, .bg-fuchsia-50 { background: rgba(167,139,250,0.1) !important; border-color: rgba(167,139,250,0.2) !important; }
 .bg-orange-50 { background: rgba(251,146,60,0.1) !important; border-color: rgba(251,146,60,0.2) !important; }
-.bg-cyan-50 { background: rgba(56,189,248,0.1) !important; border-color: rgba(56,189,248,0.2) !important; }
 
 /* Ensure text inside tinted areas stays readable */
 .bg-blue-50 *, .bg-emerald-50 *, .bg-green-50 *, .bg-amber-50 *, .bg-red-50 *,
@@ -120,18 +120,32 @@ body {
 }
 
 /* Status badges - brighter */
-.bg-blue-100 { background: rgba(56,189,248,0.2) !important; color: #7dd3fc !important; }
-.bg-emerald-100, .bg-green-100 { background: rgba(52,211,153,0.2) !important; color: #6ee7b7 !important; }
-.bg-red-100 { background: rgba(248,113,113,0.2) !important; color: #fca5a5 !important; }
+.bg-blue-100, .bg-sky-100, .bg-cyan-100 { background: rgba(56,189,248,0.2) !important; color: #7dd3fc !important; }
+.bg-emerald-100, .bg-green-100, .bg-teal-100, .bg-lime-100 { background: rgba(52,211,153,0.2) !important; color: #6ee7b7 !important; }
+.bg-red-100, .bg-rose-100, .bg-pink-100 { background: rgba(248,113,113,0.2) !important; color: #fca5a5 !important; }
 /* v55.82-I (Max May 11 2026): bg-amber-100 was forcing text color to
    light yellow (#fde68a), which produced yellow-on-yellow with no
    contrast on the resulting amber pill. Now we keep the background
    tint but DROP the text-color override — JSX className for text
-   (e.g. text-amber-900) wins. */
-.bg-amber-100 { background: rgba(251,191,36,0.2) !important; }
-.bg-purple-100 { background: rgba(167,139,250,0.2) !important; color: #c4b5fd !important; }
+   (e.g. text-amber-900) wins.
+   v55.83-A.6.27.NEXT (Issue 8/9, Max May 23 2026): same fix for
+   bg-yellow-100 — was missing from this list entirely, so warning
+   banners rendered as Tailwind's bright #fef9c3 with no dark-theme
+   adjustment. Added to the amber group. */
+.bg-amber-100, .bg-yellow-100 { background: rgba(251,191,36,0.2) !important; }
+.bg-purple-100, .bg-violet-100, .bg-fuchsia-100 { background: rgba(167,139,250,0.2) !important; color: #c4b5fd !important; }
 .bg-slate-100:not(.min-h-screen) { background: rgba(255,255,255,0.08) !important; color: var(--text-secondary) !important; }
 .bg-indigo-100 { background: rgba(167,139,250,0.2) !important; color: #c4b5fd !important; }
+/* v55.83-A.6.27.NEXT (Issue 8, Max May 23 2026): -200 intensity overrides.
+   Previously these rendered as bright Tailwind defaults with whatever text
+   colour the JSX specified — usually invisible because the .font-extrabold
+   rule (line below) forced text to near-white. Map them to slightly more
+   saturated translucent overlays so e.g. the TEMPLATE badge reads. */
+.bg-sky-200 { background: rgba(56,189,248,0.28) !important; }
+.bg-blue-200 { background: rgba(56,189,248,0.28) !important; }
+.bg-emerald-200, .bg-green-200, .bg-teal-200 { background: rgba(52,211,153,0.28) !important; }
+.bg-amber-200, .bg-yellow-200 { background: rgba(251,191,36,0.28) !important; }
+.bg-purple-200, .bg-violet-200, .bg-indigo-200 { background: rgba(167,139,250,0.28) !important; }
 
 /* Text colors for dark */
 .text-slate-900, .text-slate-800, .text-slate-700 { color: var(--text-primary) !important; }
@@ -352,7 +366,15 @@ h2 { letter-spacing: -0.03em; font-weight: 800 !important; }
 h3 { letter-spacing: -0.02em; }
 
 /* Title text colors for dark backgrounds */
-.font-extrabold { color: var(--text-primary); }
+/* v55.83-A.6.27.NEXT (Issue 8/9, Max May 23 2026): REMOVED the rule
+   .font-extrabold { color: var(--text-primary); } that lived here.
+   That rule clobbered every bold element's color, overriding explicit
+   dark text colours set by parent banners. It was the cause of the
+   yellow-on-yellow "Heads up:" / "BK" bug in the Create Variant modal
+   AND the white-text-on-light-blue TEMPLATE badge in Product List.
+   The body cascade already sets color: var(--text-primary) for dark
+   backgrounds, so this rule was redundant on dark-themed pages and
+   actively harmful inside light-coloured callout banners. */
 .text-blue-800 { color: #7dd3fc !important; }
 .text-emerald-800, .text-green-800 { color: #6ee7b7 !important; }
 .text-red-800 { color: #fca5a5 !important; }

@@ -72,10 +72,10 @@ ok('A16: backout SQL block present (commented out)',
 
 ok('B1: OpenAccountsTab default export',
   /export default function OpenAccountsTab\(props\)/.test(oa));
-ok('B2: canView = isSuperAdmin OR "Open Accounts" permission',
-  /var canView = isSuperAdmin \|\| modulePerms\['Open Accounts'\] === true/.test(oa));
-ok('B3: canEdit = isSuperAdmin OR "Open Accounts" permission',
-  /var canEdit = isSuperAdmin \|\| modulePerms\['Open Accounts'\] === true/.test(oa));
+ok('B2: canView = isSuperAdmin OR "Open Accounts" tab permission (v55.83-A.6.27.66 Issue 4 — split: tab key default ON)',
+  /var canView = isSuperAdmin\s+\|\| \(newTab === undefined \? true : newTab === true\)/.test(oa));
+ok('B3: canEdit = isSuperAdmin OR "Edit Open Accounts" action permission (v55.83-A.6.27.66 Issue 4 — split: edit key default OFF, with back-compat)',
+  /var canEdit = isSuperAdmin\s+\|\| newEdit === true\s+\|\| \(newEdit === undefined && legacyOpenAccts === true\)/.test(oa));
 ok('B4: shows permission-denied banner when !canView',
   /if \(!canView\) \{\s+return \(\s+<div className="bg-amber-50/.test(oa));
 
@@ -172,8 +172,8 @@ ok('G1: "Open Accounts" added to main module permission list',
   /'Bank', 'Egypt Bank', 'Open Accounts', 'Reports'/.test(settings));
 ok('G2: "See Inventory Costs" added to granular permissions',
   /'View Costs', 'See Inventory Costs',/.test(settings));
-ok('G3: "Open Accounts" appears in admin permission UI grid (line ~1368)',
-  /'Edit Product List', 'Open Accounts', 'Export Data'/.test(settings));
+ok('G3: "Open Accounts" registered in permissions (v55.83-A.6.27.66 Issue 4 — now in TAB_PERMS constant with description, plus the new "Edit Open Accounts" in ACTION_PERMS)',
+  /key: 'Open Accounts'/.test(settings) && /key: 'Edit Open Accounts'/.test(settings));
 
 // ══════════════════════════════════════════════════════════════════
 // PART R — REGRESSION GUARDS

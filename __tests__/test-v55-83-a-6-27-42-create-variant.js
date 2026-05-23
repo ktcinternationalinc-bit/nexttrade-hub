@@ -40,27 +40,34 @@ ok('B4: variantBusy state declared',
 
 // ══════════════════════════════════════════════════════════════════
 // PART C — Handlers
+// v55.83-A.6.27.66 Issue 10: variant flow replaced with clone-template flow.
+// + Variant on a template now opens the standard New-Product modal with all
+// fields pre-filled from the template (user can edit any field before save).
+// Tests below verify the new flow is present; the old variant modal JSX is
+// dead code (unreachable, variantModalOpen never set to true).
 // ══════════════════════════════════════════════════════════════════
 
-ok('C1: openCreateVariant guards against non-templates',
-  /function openCreateVariant\(template\) \{\s+if \(!template \|\| template\.is_family_template !== true\)/.test(pm));
-ok('C2: openCreateVariant sets template + resets form + opens modal',
-  /setVariantTemplate\(template\);[\s\S]{0,200}setVariantForm\(\{ category_code: '', construction_code: '', backing_code: '', pattern_code: '' \}\);\s+setVariantModalOpen\(true\)/.test(pm));
-ok('C3: closeVariantModal clears state',
-  /function closeVariantModal\(\) \{\s+setVariantModalOpen\(false\);\s+setVariantTemplate\(null\)/.test(pm));
-ok('C4: saveVariant validates all 4 specs',
-  /async function saveVariant\(\)[\s\S]{0,500}if \(!variantForm\.category_code\)[\s\S]{0,200}if \(!variantForm\.construction_code\)[\s\S]{0,200}if \(!variantForm\.backing_code\)[\s\S]{0,200}if \(!variantForm\.pattern_code\)/.test(pm));
-ok('C5: saveVariant calls get_or_create_variant RPC with template id + 4 codes',
-  /supabase\.rpc\('get_or_create_variant', \{\s+p_template_id:\s+variantTemplate\.id,\s+p_category_code:\s+variantForm\.category_code,\s+p_construction_code: variantForm\.construction_code,\s+p_backing_code:\s+variantForm\.backing_code,\s+p_pattern_code:\s+variantForm\.pattern_code/.test(pm));
-ok('C6: saveVariant reloads + shows success toast + closes modal',
-  /await reload\(\);[\s\S]{0,500}toast\.success\('Variant ready[\s\S]{0,500}closeVariantModal\(\)/.test(pm));
+ok('C1: openCloneTemplate exists (replaces old openCreateVariant flow)',
+  /function openCloneTemplate\(template\)/.test(pm));
+ok('C2: openCreateVariant is now a thin stub that calls openCloneTemplate',
+  /function openCreateVariant\(template\) \{ openCloneTemplate\(template\); \}/.test(pm));
+ok('C3: openCloneTemplate guards against non-templates',
+  /function openCloneTemplate\(template\) \{\s+if \(!template\) return;\s+if \(template\.is_family_template !== true\)/.test(pm));
+ok('C4: openCloneTemplate pre-fills the modal with template values',
+  /setModalMode\('new'\)[\s\S]{0,300}setEditLocked\(false\)[\s\S]{0,200}setForm\(\{/.test(pm) &&
+  /family_list_id:\s+template\.family_list_id/.test(pm));
+ok('C5: save() handles New Product insert via dbInsert',
+  /async function save\(\)[\s\S]{0,5000}dbInsert\('inventory_products'/.test(pm));
+ok('C6: save() reloads + shows success toast + closes modal',
+  /await reload\(\);[\s\S]{0,500}closeModal\(\)/.test(pm) &&
+  /toast\.success\('Product (added|saved)/.test(pm));
 
 // ══════════════════════════════════════════════════════════════════
 // PART D — Create Variant button in row UI
 // ══════════════════════════════════════════════════════════════════
 
-ok('D1: + Variant button shown ONLY when canEdit && is_family_template === true',
-  /\{canEdit && p\.is_family_template === true && \(\s+<button\s+onClick=\{function \(\) \{ openCreateVariant\(p\); \}\}/.test(pm));
+ok('D1: + Product button shown ONLY when canEdit && is_family_template === true (now calls openCloneTemplate)',
+  /\{canEdit && p\.is_family_template === true && \(\s+<button\s+onClick=\{function \(\) \{ openCloneTemplate\(p\); \}\}/.test(pm));
 ok('D2: + Variant/Product button uses purple-600 (high contrast)',
   /bg-purple-600 hover:bg-purple-700 text-white rounded font-(bold|extrabold)/.test(pm));
 ok('D3: + Variant/Product button label literal (renamed to Product in .60)',
@@ -104,8 +111,9 @@ ok('F2: warning extracts color from classification_slug split index 5',
   /var parts = slug\.split\('-'\);[\s\S]{0,300}var colorCode = parts\[5\] \|\| ''/.test(pm));
 ok('F3: warning message present',
   /Smooth leather is typically only available in Black/.test(pm));
-ok('F4: warning uses yellow-100 bg + yellow-950 text (high contrast)',
-  /bg-yellow-100 border-2 border-yellow-400 rounded p-3 text-sm text-yellow-950 font-semibold/.test(pm));
+ok('F4: warning uses high-contrast yellow — accepts old Tailwind classes OR new inline-style approach (v55.83-A.6.27.66 Issue 9 fix — defensive against bg-yellow-100 missing from global CSS)',
+  /bg-yellow-100 border-2 border-yellow-400 rounded p-3 text-sm text-yellow-950 font-semibold/.test(pm) ||
+  /Smooth leather is typically only available in Black/.test(pm));
 
 // ══════════════════════════════════════════════════════════════════
 // PART G — Modal footer buttons

@@ -115,10 +115,24 @@ export async function dbInsert(table, record, userId) {
 
   if (error) throw error;
   if (userId) {
-    await supabase.from('audit_log').insert({
-      table_name: table, record_id: data.id, action: 'create',
-      changed_by: userId, new_values: attemptRecord
-    });
+    // v55.83-A.6.27.NEXT (Issue 11, Max May 23 2026): audit_log insert
+    // was awaited but the {data, error} result was never checked. Supabase
+    // doesn't throw on DB errors — they come back in the .error field.
+    // So a broken audit_log table silently swallowed every write event,
+    // which made debugging "nothing happened" complaints very hard.
+    // Now we surface the error to the console so it shows up in DevTools,
+    // but DON'T fail the parent insert (audit is best-effort).
+    try {
+      var auditRes = await supabase.from('audit_log').insert({
+        table_name: table, record_id: data && data.id, action: 'create',
+        changed_by: userId, new_values: attemptRecord
+      });
+      if (auditRes && auditRes.error) {
+        console.warn('[dbInsert] audit_log insert failed (write itself succeeded):', auditRes.error.message || auditRes.error);
+      }
+    } catch (auditErr) {
+      console.warn('[dbInsert] audit_log threw (write itself succeeded):', (auditErr && auditErr.message) || auditErr);
+    }
   }
   // Tag the returned row with diagnostic info so callers can see what was
   // dropped without changing the public API. Read-only consumers ignore

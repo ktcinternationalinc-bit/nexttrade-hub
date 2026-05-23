@@ -124,10 +124,13 @@ ok('2y: "No options yet" hint when level has zero matches given parent picks',
   /No options yet — add some in Master Lists or pick a different parent level/.test(pm));
 
 // ── 3. SettingsTab permissions registered ─────────────────────────
-ok('3a: "Edit Product List" added to master permissions array',
-  /'Manage Inventory Master', 'Edit Product List', 'Export Data'/.test(settings));
-ok('3b: "Edit Product List" added to action permissions render list',
-  /'Manage Inventory Master', 'Edit Product List', 'Export Data', 'Post Reminders'/.test(settings));
+// v55.83-A.6.27.66: permissions now use TAB_PERMS/ACTION_PERMS constants
+// with description objects. We just verify 'Edit Product List' is present
+// in the constants (descriptions matter, not array literal ordering).
+ok('3a: "Edit Product List" registered in permissions list',
+  /['"]Edit Product List['"]/.test(settings));
+ok('3b: "Edit Product List" has an action-permission definition with description',
+  /key: 'Edit Product List'[\s\S]{0,300}desc:/.test(settings));
 
 // ── 4. InventoryTab wiring ─────────────────────────────────────────
 ok('4a: InventoryTab imports InventoryProductMaster',

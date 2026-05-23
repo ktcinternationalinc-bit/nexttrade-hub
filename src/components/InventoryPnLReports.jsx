@@ -70,6 +70,11 @@ export default function InventoryPnLReports(props) {
   var [groupBy, setGroupBy] = useState('product'); // 'product' | 'category' | 'warehouse'
   var [dateFrom, setDateFrom] = useState(firstOfMonth());
   var [dateTo, setDateTo] = useState(TODAY());
+  // v55.83-A.6.27.66 (C1, Max May 23 2026) — currency filter. P&L numbers
+  // are meaningless if USD movements and EGP movements are summed without
+  // conversion. Default to the most common currency in the data; user can
+  // switch to a specific currency or 'all' (which shows a warning banner).
+  var [currencyFilter, setCurrencyFilter] = useState('EGP');
 
   useEffect(function () {
     if (!canSeePnL) { setLoading(false); return; }
@@ -127,6 +132,11 @@ export default function InventoryPnLReports(props) {
       var d = m.moved_at ? String(m.moved_at).substring(0, 10) : '';
       if (dateFrom && d < dateFrom) return;
       if (dateTo && d > dateTo) return;
+      // v55.83-A.6.27.66 (C1) — currency filter. Skip movements that don't
+      // match the selected currency. 'all' includes everything (and a warning
+      // banner is shown at the top so the user knows totals are mixed).
+      var mCur = String(m.cost_currency || m.currency || 'EGP').toUpperCase();
+      if (currencyFilter !== 'all' && mCur !== currencyFilter) return;
       var s = byProduct[m.product_id];
       if (!s) return;
       var qty = Number(m.quantity || m.qty || 0);
@@ -150,7 +160,22 @@ export default function InventoryPnLReports(props) {
     });
 
     return byProduct;
-  }, [products, movements, dateFrom, dateTo]);
+  }, [products, movements, dateFrom, dateTo, currencyFilter]);
+
+  // v55.83-A.6.27.66 (C1) — derive currencies actually present in the data
+  // for the selected date range, so the dropdown only shows real options
+  // and so we can flash a warning when multiple currencies coexist.
+  var presentCurrencies = useMemo(function () {
+    var seen = {};
+    movements.forEach(function (m) {
+      var d = m.moved_at ? String(m.moved_at).substring(0, 10) : '';
+      if (dateFrom && d < dateFrom) return;
+      if (dateTo && d > dateTo) return;
+      var c = String(m.cost_currency || m.currency || 'EGP').toUpperCase();
+      seen[c] = true;
+    });
+    return Object.keys(seen).sort();
+  }, [movements, dateFrom, dateTo]);
 
   // Rows for the current groupBy
   var rows = useMemo(function () {
@@ -324,13 +349,25 @@ export default function InventoryPnLReports(props) {
 
       {/* Filters */}
       <div className="bg-white border-2 border-slate-200 rounded-lg p-3 space-y-2">
-        <div className="grid grid-cols-1 md:grid-cols-4 gap-2">
+        <div className="grid grid-cols-1 md:grid-cols-5 gap-2">
           <label className="block">
             <span className="text-xs font-extrabold text-slate-900">Group By</span>
             <select value={groupBy} onChange={function (e) { setGroupBy(e.target.value); }} className="w-full mt-0.5 px-2 py-1.5 border-2 border-slate-300 rounded text-sm bg-white text-slate-900 font-extrabold">
               <option value="product">Product</option>
               <option value="category">Category</option>
               <option value="warehouse">Warehouse</option>
+            </select>
+          </label>
+          {/* v55.83-A.6.27.66 (C1) — currency filter. Defaults to EGP because
+              it's the most common in KTC Egypt operations. 'all' is allowed
+              but shows a warning that numbers are mixed-currency totals. */}
+          <label className="block">
+            <span className="text-xs font-extrabold text-slate-900">Currency</span>
+            <select value={currencyFilter} onChange={function (e) { setCurrencyFilter(e.target.value); }} className="w-full mt-0.5 px-2 py-1.5 border-2 border-slate-300 rounded text-sm bg-white text-slate-900 font-extrabold">
+              <option value="EGP">EGP only</option>
+              <option value="USD">USD only</option>
+              <option value="EUR">EUR only</option>
+              <option value="all">All (mixed — numbers will be misleading!)</option>
             </select>
           </label>
           <label className="block">
@@ -351,6 +388,19 @@ export default function InventoryPnLReports(props) {
             </div>
           </div>
         </div>
+        {/* v55.83-A.6.27.66 (C1) — banner when mixing currencies */}
+        {currencyFilter === 'all' && presentCurrencies.length > 1 && (
+          <div className="rounded p-2 border-2" style={{ background: 'rgba(248,113,113,0.15)', borderColor: '#dc2626', color: '#fef2f2' }}>
+            <span style={{ color: '#fca5a5', fontWeight: 800 }}>⚠ Mixed-currency totals:</span>{' '}
+            <span style={{ color: '#fef2f2' }}>This range contains movements in {presentCurrencies.join(' + ')}. Numbers below are added without conversion and DO NOT reflect real profit. Pick a single currency to see meaningful figures.</span>
+          </div>
+        )}
+        {currencyFilter !== 'all' && presentCurrencies.length > 1 && presentCurrencies.indexOf(currencyFilter) >= 0 && (
+          <div className="rounded p-2 border-2 text-[11px]" style={{ background: 'rgba(56,189,248,0.1)', borderColor: '#0284c7', color: '#e0f2fe' }}>
+            <span style={{ color: '#7dd3fc', fontWeight: 700 }}>ℹ Showing {currencyFilter} only.</span>{' '}
+            <span style={{ color: '#e0f2fe' }}>Other currencies in this range ({presentCurrencies.filter(function (c) { return c !== currencyFilter; }).join(', ')}) are excluded.</span>
+          </div>
+        )}
         <div className="flex gap-2 flex-wrap pt-2 border-t border-slate-200">
           <button onClick={exportExcel} className="px-3 py-1.5 bg-emerald-700 hover:bg-emerald-800 text-white text-xs font-extrabold rounded shadow">📊 Export Excel</button>
           <button onClick={printReport} className="px-3 py-1.5 bg-slate-700 hover:bg-slate-800 text-white text-xs font-extrabold rounded shadow">🖨️ Print</button>

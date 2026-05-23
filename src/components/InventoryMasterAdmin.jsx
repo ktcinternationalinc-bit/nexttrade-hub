@@ -35,6 +35,12 @@ var LEVELS = [
   { num: 6, en: 'Color',            ar: 'اللون',            hasParent: true,  parentLevel: 1 },
   { num: 7, en: 'Pattern',          ar: 'النمط',            hasParent: true,  parentLevel: 1 },
   { num: 8, en: 'Spec Class',       ar: 'فئة المواصفات',    hasParent: true,  parentLevel: 1 },
+  // v55.83-A.6.27.NEXT (Issue 11, Max May 23 2026) — Level 9 (Country) is
+  // referenced everywhere else (LEVEL_FIELD_MAP, schema column origin_list_id,
+  // variant SQL function, classification slug) but was missing from this
+  // admin LEVELS array, so there was no UI to populate it. Without options,
+  // the Product form's L9 dropdown stays empty. Marked universal (no parent).
+  { num: 9, en: 'Country',          ar: 'الدولة',           hasParent: false, parentLevel: null },
 ];
 
 // Code validation — uppercase alphanumeric, 1-4 chars

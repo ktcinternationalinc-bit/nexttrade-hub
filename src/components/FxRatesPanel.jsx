@@ -151,6 +151,31 @@ export default function FxRatesPanel(props) {
       };
       var res;
       if (editingId) {
+        // v55.83-A.6.27.66 (H1, Max May 23 2026): edit path used to fail with a
+        // confusing "duplicate key" error if the user moved an existing rate
+        // to a date+pair that already had a rate. Now: check for the conflict
+        // first; if there's a different rate at that date+pair, ask the user
+        // whether to replace it (delete the existing + update this one), or
+        // bail. Same date+pair as before is always fine.
+        var conflictCheck = await supabase.from('fx_rates')
+          .select('id')
+          .eq('rate_date', payload.rate_date)
+          .eq('from_currency', payload.from_currency)
+          .eq('to_currency', payload.to_currency)
+          .neq('id', editingId)
+          .maybeSingle();
+        if (conflictCheck && conflictCheck.data && conflictCheck.data.id) {
+          var confirmMsg = 'A rate already exists for ' + payload.from_currency + '→' + payload.to_currency +
+            ' on ' + payload.rate_date + '. Replace it with this one?\n\nClick OK to replace, Cancel to keep both ' +
+            '(the existing one will block this save).';
+          if (!confirm(confirmMsg)) {
+            setBusy(false);
+            return;
+          }
+          // Delete the existing other-row at the same date+pair, then update ours
+          var delRes = await supabase.from('fx_rates').delete().eq('id', conflictCheck.data.id);
+          if (delRes && delRes.error) throw delRes.error;
+        }
         res = await supabase.from('fx_rates').update(payload).eq('id', editingId);
       } else {
         // Try insert; on unique violation, upsert by date+pair
@@ -187,6 +212,21 @@ export default function FxRatesPanel(props) {
     try {
       var res = await supabase.from('fx_rates').delete().eq('id', r.id);
       if (res.error) throw res.error;
+      // v55.83-A.6.27.66 (bug sweep, Max May 23 2026) — FX rate deletes
+      // weren't being logged. Now best-effort audit entry so the trail
+      // exists for any financial recon. Best-effort = don't fail the delete
+      // if the audit table is unavailable; just log a warning.
+      try {
+        var auditRes = await supabase.from('audit_log').insert({
+          table_name: 'fx_rates',
+          record_id: r.id,
+          action: 'delete',
+          changed_by: (userProfile && userProfile.id) || null,
+          new_values: null,
+          old_values: { rate_date: r.rate_date, from_currency: r.from_currency, to_currency: r.to_currency, rate: r.rate, source: r.source },
+        });
+        if (auditRes && auditRes.error) console.warn('[fx-rates] audit_log insert failed:', auditRes.error.message);
+      } catch (auditErr) { console.warn('[fx-rates] audit_log threw:', auditErr); }
       toast.success('Rate deleted');
       await reload();
     } catch (e) {

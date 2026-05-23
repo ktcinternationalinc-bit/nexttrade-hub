@@ -27,6 +27,11 @@
 import { useState, useEffect } from 'react';
 import { supabase, dbInsert } from '../lib/supabase';
 import { AGENT_PERSONALITIES } from '../lib/agent-personalities';
+// v55.83-A.6.27.66 (bug sweep, Max May 23 2026) — use the shared helper to
+// reject both active===false AND active===null when picking the routing
+// super_admin. Previously a deactivated super_admin with active=null could
+// receive HR submissions silently.
+import { isActiveUser } from '../lib/active-users';
 // v55.81 QA-17 (Max May 9 2026): crisis-language detection in HR
 // submissions. Surfaces hotline resources to users whose text suggests
 // self-harm, threat, or severe distress, and tags the submission
@@ -154,7 +159,7 @@ export default function MyHRDesk({ user, userProfile, users, active }) {
   var managerId = (myProfile && myProfile.reports_to) || null;
   var manager = managerId ? safeUsers.find(function (u) { return u.id === managerId; }) : null;
   var managerName = (manager && manager.name) || 'your manager';
-  var superAdmin = safeUsers.find(function (u) { return u.role === 'super_admin' && u.active !== false; });
+  var superAdmin = safeUsers.find(function (u) { return u.role === 'super_admin' && isActiveUser(u); });
   var superAdminName = (superAdmin && superAdmin.name) || 'Mr. Kandil';
   var superAdminId = (superAdmin && superAdmin.id) || null;
 

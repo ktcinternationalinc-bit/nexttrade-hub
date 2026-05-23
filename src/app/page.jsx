@@ -43,7 +43,7 @@ import BankTab from '../components/BankTab';
 import QuotesTab from '../components/QuotesTab';
 import EgyptBankTab from '../components/EgyptBankTab';
 import OpenAccountsTab from '../components/OpenAccountsTab';
-// v55.83-A.6.27.65 — Sales-rep KPI dashboard
+// v55.83-A.6.27.66 — Sales-rep KPI dashboard
 import SalesRepDashboard from '../components/SalesRepDashboard';
 import PhoneWidget from '../components/PhoneWidget';
 import ReportsTab from '../components/ReportsTab';
@@ -373,7 +373,7 @@ export default function App() {
   const [dt, setDt] = useState(today());
   const [query, setQuery] = useState('');
   const [customerFilter, setCustomerFilter] = useState('');
-  // v55.83-A.6.27.65 — Advanced invoice filters (collapsible panel).
+  // v55.83-A.6.27.66 — Advanced invoice filters (collapsible panel).
   // salesRepFilter: filter by sales_rep name (empty = all reps)
   // amountMin / amountMax: filter by total_amount range (empty = no limit)
   // hasOutstanding: 'all' | 'yes' | 'no' — only invoices with outstanding > 0 (or fully collected)
@@ -1813,10 +1813,11 @@ export default function App() {
     if (query) arr = arr.filter(s =>
       (s.customer_name || '').includes(query) || (s.customer_name_en || '').toLowerCase().includes(query.toLowerCase()) || (s.order_number || '').includes(query)
     );
-    // v55.83-A.6.27.65 — advanced filters
+    // v55.83-A.6.27.66 (advanced filters) — trim + case-insensitive sales-rep
+    // match so "John Smith" matches "  john smith  " etc. (M2 fix).
     if (salesRepFilter) {
-      const repLow = salesRepFilter.toLowerCase();
-      arr = arr.filter(s => (s.sales_rep || '').toLowerCase() === repLow);
+      const repLow = salesRepFilter.trim().toLowerCase();
+      arr = arr.filter(s => (s.sales_rep || '').trim().toLowerCase() === repLow);
     }
     if (amountMin !== '' && amountMin != null) {
       const minN = Number(amountMin);
@@ -1833,10 +1834,52 @@ export default function App() {
     return arr;
   }, [invoices, mode, df, dt, query, customerFilter, invoiceSort, salesRepFilter, amountMin, amountMax, hasOutstandingFilter]);
 
-  const totalInvoiced = useMemo(() => filteredInvoices.reduce((a, r) => a + Number(r.total_amount || 0), 0), [filteredInvoices]);
-  const totalCollected = useMemo(() => filteredInvoices.reduce((a, r) => a + Number(r.total_collected || 0), 0), [filteredInvoices]);
-  const totalOutstanding = useMemo(() => filteredInvoices.reduce((a, r) => a + Number(r.outstanding || 0), 0), [filteredInvoices]);
+  // v55.83-A.6.27.66 (C1 + H3 + M6, Max May 23 2026) — Sales totals are now
+  // multi-currency aware. Previously the page summed total_amount/outstanding
+  // across USD + EGP invoices as if currencies were the same — meaningless.
+  //
+  // Three fixes in one block:
+  //   C1: bucket by currency. totalsByCurrency is an array of
+  //       {currency, invoiced, collected, outstanding, count} objects.
+  //   H3: outstanding is computed as total_amount - total_collected when the
+  //       stored .outstanding field is missing (stale or not yet recalc'd).
+  //   M6: use ?? null check so a legitimate zero total_amount doesn't trigger
+  //       the .amount fallback unexpectedly.
+  //
+  // Legacy single-number totals are kept as the SUM of EGP-equivalent if
+  // EGP is the only currency present — to avoid breaking any other code
+  // that consumes them — but they're flagged stale if multi-currency.
+  const totalsByCurrency = useMemo(() => {
+    const buckets = {};
+    filteredInvoices.forEach(inv => {
+      const cur = String(inv.currency || 'USD').toUpperCase().trim() || 'USD';
+      if (!buckets[cur]) buckets[cur] = { currency: cur, invoiced: 0, collected: 0, outstanding: 0, count: 0 };
+      const b = buckets[cur];
+      const invd = Number(inv.total_amount != null ? inv.total_amount : (inv.amount || 0));
+      const coll = Number(inv.total_collected != null ? inv.total_collected : 0);
+      const outs = inv.outstanding != null ? Number(inv.outstanding) : Math.max(0, invd - coll);
+      b.invoiced += invd;
+      b.collected += coll;
+      b.outstanding += outs;
+      b.count++;
+    });
+    const arr = Object.values(buckets);
+    arr.sort((a, b) => a.currency.localeCompare(b.currency));
+    return arr;
+  }, [filteredInvoices]);
+
+  // Backward-compatible single-number totals — used by any old UI that reads
+  // these without knowing about currency. If multiple currencies are present
+  // these numbers are mathematically nonsense, but we keep them so callers
+  // don't break; a banner in the UI warns when this happens.
+  const totalInvoiced = useMemo(() => totalsByCurrency.reduce((a, b) => a + b.invoiced, 0), [totalsByCurrency]);
+  const totalCollected = useMemo(() => totalsByCurrency.reduce((a, b) => a + b.collected, 0), [totalsByCurrency]);
+  const totalOutstanding = useMemo(() => totalsByCurrency.reduce((a, b) => a + b.outstanding, 0), [totalsByCurrency]);
   const totalDebt = useMemo(() => debts.reduce((a, d) => a + Number(d.total_debt || 0), 0), [debts]);
+  // Flag: true when filtered range contains more than one currency. The Sales
+  // tab UI should show a warning banner when this is true and the single-
+  // number totals are displayed.
+  const totalsAreMixedCurrency = totalsByCurrency.length > 1;
 
   const filteredTreasury = useMemo(() => {
     const dir = treasurySort === 'oldest' ? 1 : -1;
@@ -5204,7 +5247,7 @@ export default function App() {
                   Was: text-zinc-500 (mid-gray) on #0a0a0a (true black) — barely readable.
                   Now: bright amber pill on dark background — readable at any zoom, still
                   matches the terminal aesthetic. */}
-              <span className="text-[10px] font-mono font-extrabold hidden md:inline px-2 py-0.5 rounded" style={{ fontFamily: '"JetBrains Mono", monospace', background: '#fef3c7', color: '#451a03', border: '1px solid #d97706' }}>v55.83-A.6.27.65</span>
+              <span className="text-[10px] font-mono font-extrabold hidden md:inline px-2 py-0.5 rounded" style={{ fontFamily: '"JetBrains Mono", monospace', background: '#fef3c7', color: '#451a03', border: '1px solid #d97706' }}>v55.83-A.6.27.66</span>
               {/* Live clock — also bumped to readable amber. */}
               <span
                 className="hidden lg:inline text-[10px] font-mono ml-2 pl-2 border-l border-zinc-700"
@@ -11657,13 +11700,13 @@ export default function App() {
                 }} className="px-3 py-1.5 bg-slate-100 text-slate-600 rounded-lg text-xs font-semibold hover:bg-slate-200">
                   📥 Export
                 </button>
-                {/* v55.83-A.6.27.65 — Toggle the Sales-Rep KPI dashboard */}
+                {/* v55.83-A.6.27.66 — Toggle the Sales-Rep KPI dashboard */}
                 <button onClick={() => setShowRepDashboard(v => !v)}
                   className={'px-3 py-1.5 rounded-lg text-xs font-extrabold ' +
                     (showRepDashboard ? 'bg-indigo-600 text-white hover:bg-indigo-700' : 'bg-indigo-100 text-indigo-800 hover:bg-indigo-200')}>
                   📊 Rep KPIs
                 </button>
-                {/* v55.83-A.6.27.65 — Toggle the advanced filters panel */}
+                {/* v55.83-A.6.27.66 — Toggle the advanced filters panel */}
                 <button onClick={() => setShowAdvFilters(v => !v)}
                   className={'px-3 py-1.5 rounded-lg text-xs font-extrabold ' +
                     (showAdvFilters ? 'bg-slate-700 text-white hover:bg-slate-800' : 'bg-slate-100 text-slate-700 hover:bg-slate-200')}>
@@ -11672,7 +11715,7 @@ export default function App() {
               </div>
             </div>
 
-            {/* v55.83-A.6.27.65 — Advanced filters panel.
+            {/* v55.83-A.6.27.66 — Advanced filters panel.
                 Collapsible. Adds: sales rep, amount min/max, has-outstanding. */}
             {showAdvFilters && (
               <div className="bg-slate-50 border border-slate-200 rounded-lg p-3 mb-3">
@@ -11724,10 +11767,31 @@ export default function App() {
               </div>
             )}
 
-            {/* v55.83-A.6.27.65 — Sales-Rep KPI dashboard. Toggleable. */}
+            {/* v55.83-A.6.27.66 — Sales-Rep KPI dashboard. Toggleable. */}
             {showRepDashboard && (
               <div className="mb-3">
                 <SalesRepDashboard invoices={filteredInvoices} label={'in current Sales tab filter'} />
+              </div>
+            )}
+            {/* v55.83-A.6.27.66 (C1, Max May 23 2026) — multi-currency warning
+                banner. The tile numbers below add invoiced/collected/outstanding
+                without converting currencies. If multiple currencies are
+                present in the filtered range, the user sees a warning that
+                those numbers are meaningless and gets the per-currency
+                breakdown card below. */}
+            {totalsAreMixedCurrency && (
+              <div className="mb-3 rounded-xl border-2 p-3" style={{ background: 'rgba(239,68,68,0.12)', borderColor: '#dc2626' }}>
+                <div className="flex items-start gap-2">
+                  <span className="text-2xl">⚠️</span>
+                  <div className="flex-1">
+                    <div className="text-sm font-extrabold" style={{ color: '#fecaca' }}>
+                      Mixed currencies in this range — the three tiles below are NOT meaningful totals
+                    </div>
+                    <div className="text-xs mt-1" style={{ color: '#fee2e2' }}>
+                      The filtered invoices include {totalsByCurrency.map(b => b.currency).join(' + ')}. Use the per-currency breakdown below those tiles, or filter to one currency for accurate totals.
+                    </div>
+                  </div>
+                </div>
               </div>
             )}
             <div className="grid grid-cols-3 gap-3 mb-3">
@@ -11741,7 +11805,7 @@ export default function App() {
                 }}>
                 <div className="flex items-center justify-center gap-1.5 mb-1">
                   <span className="text-sky-300 text-base">📊</span>
-                  <div className="text-[10px] text-sky-200 font-bold uppercase tracking-wider">Invoiced</div>
+                  <div className="text-[10px] text-sky-200 font-bold uppercase tracking-wider">Invoiced{totalsAreMixedCurrency ? ' (mixed)' : ''}</div>
                 </div>
                 <div className="text-xl sm:text-2xl font-black text-sky-300 tracking-tight" style={{ textShadow: '0 0 20px rgba(14,165,233,0.3)' }}>
                   {fE(totalInvoiced)}
@@ -11755,7 +11819,7 @@ export default function App() {
                 }}>
                 <div className="flex items-center justify-center gap-1.5 mb-1">
                   <span className="text-emerald-400 text-base">💵</span>
-                  <div className="text-[10px] text-emerald-200 font-bold uppercase tracking-wider">Collected</div>
+                  <div className="text-[10px] text-emerald-200 font-bold uppercase tracking-wider">Collected{totalsAreMixedCurrency ? ' (mixed)' : ''}</div>
                 </div>
                 <div className="text-xl sm:text-2xl font-black text-emerald-300 tracking-tight" style={{ textShadow: '0 0 20px rgba(16,185,129,0.3)' }}>
                   {fE(totalCollected)}
@@ -11779,7 +11843,7 @@ export default function App() {
                 }}>
                 <div className="flex items-center justify-center gap-1.5 mb-1">
                   <span className="text-red-400 text-base">⚠️</span>
-                  <div className="text-[10px] text-red-200 font-bold uppercase tracking-wider">Outstanding</div>
+                  <div className="text-[10px] text-red-200 font-bold uppercase tracking-wider">Outstanding{totalsAreMixedCurrency ? ' (mixed)' : ''}</div>
                 </div>
                 <div className="text-xl sm:text-2xl font-black text-red-300 tracking-tight" style={{ textShadow: '0 0 20px rgba(239,68,68,0.3)' }}>
                   {fE(totalOutstanding)}
@@ -11796,6 +11860,41 @@ export default function App() {
                 )}
               </div>
             </div>
+            {/* v55.83-A.6.27.66 (C1) — per-currency breakdown — always visible
+                so user can see currencies side-by-side without having to filter. */}
+            {totalsByCurrency.length > 0 && (
+              <div className="mb-3 rounded-xl border-2 p-3" style={{ background: 'rgba(15,23,42,0.7)', borderColor: '#334155' }}>
+                <div className="text-[11px] font-extrabold uppercase tracking-wider mb-2" style={{ color: '#cbd5e1' }}>By Currency / حسب العملة</div>
+                <div className="overflow-x-auto">
+                  <table className="w-full text-xs">
+                    <thead>
+                      <tr style={{ color: '#94a3b8' }}>
+                        <th className="text-left px-2 py-1 font-extrabold uppercase tracking-wider">Currency</th>
+                        <th className="text-right px-2 py-1 font-extrabold uppercase tracking-wider">Invoices</th>
+                        <th className="text-right px-2 py-1 font-extrabold uppercase tracking-wider">Invoiced</th>
+                        <th className="text-right px-2 py-1 font-extrabold uppercase tracking-wider">Collected</th>
+                        <th className="text-right px-2 py-1 font-extrabold uppercase tracking-wider">Outstanding</th>
+                        <th className="text-right px-2 py-1 font-extrabold uppercase tracking-wider">Coll %</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {totalsByCurrency.map(b => (
+                        <tr key={b.currency} className="border-t" style={{ borderColor: '#334155' }}>
+                          <td className="px-2 py-1.5 font-mono font-extrabold" style={{ color: '#f1f5f9' }}>{b.currency}</td>
+                          <td className="px-2 py-1.5 text-right font-mono" style={{ color: '#cbd5e1' }}>{b.count.toLocaleString()}</td>
+                          <td className="px-2 py-1.5 text-right font-mono font-bold" style={{ color: '#7dd3fc' }}>{b.invoiced.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</td>
+                          <td className="px-2 py-1.5 text-right font-mono font-bold" style={{ color: '#86efac' }}>{b.collected.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</td>
+                          <td className="px-2 py-1.5 text-right font-mono font-bold" style={{ color: b.outstanding > 0 ? '#fca5a5' : '#94a3b8' }}>{b.outstanding.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</td>
+                          <td className="px-2 py-1.5 text-right font-mono font-bold" style={{ color: b.invoiced > 0 ? (b.collected/b.invoiced >= 0.9 ? '#86efac' : b.collected/b.invoiced >= 0.7 ? '#fde047' : '#fca5a5') : '#94a3b8' }}>
+                            {b.invoiced > 0 ? ((b.collected/b.invoiced)*100).toFixed(1) + '%' : '—'}
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            )}
             {/* Sales by Division / المبيعات حسب القسم */}
             {(() => {
               const divisionData = {};
@@ -14233,7 +14332,7 @@ export default function App() {
                       latest fix is actually deployed. If he doesn't see this
                       tag in the modal, his browser is running stale JS. */}
                   <div className="mt-1.5 inline-block px-2 py-0.5 rounded bg-amber-900/60 text-amber-100 text-[10px] font-mono font-bold tracking-wide">
-                    BUILD v55.83-A.6.27.65
+                    BUILD v55.83-A.6.27.66
                   </div>
                 </div>
                 <button onClick={() => closePendingTreasuryModal()}
@@ -14868,7 +14967,7 @@ export default function App() {
                     معاملة قد تكون مكررة
                   </div>
                   <div className="mt-1.5 inline-block px-2 py-0.5 rounded bg-amber-900/60 text-amber-100 text-[10px] font-mono font-bold tracking-wide">
-                    BUILD v55.83-A.6.27.65
+                    BUILD v55.83-A.6.27.66
                   </div>
                 </div>
                 <button

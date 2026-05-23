@@ -151,6 +151,25 @@ export function AttachmentManager(props) {
       alert('Empty file — cannot upload.');
       return;
     }
+    // v55.83-A.6.27.66 (H6, Max May 23 2026) — per-record attachment quota.
+    // Caps: max 50 files per parent record, max 500 MB total size. Prevents
+    // runaway uploads (whether accidental, buggy, or malicious) from racking
+    // up Supabase Storage bills. The 100 MB per-file cap above doesn't help
+    // if 200 files are uploaded.
+    var MAX_FILES_PER_RECORD = 50;
+    var MAX_TOTAL_SIZE_PER_RECORD = 500 * 1024 * 1024;  // 500 MB
+    if (items.length >= MAX_FILES_PER_RECORD) {
+      alert('Maximum ' + MAX_FILES_PER_RECORD + ' files reached for this record.\n\nDelete some attachments before uploading more.');
+      return;
+    }
+    var currentTotal = items.reduce(function (a, x) { return a + (Number(x.file_size) || 0); }, 0);
+    if ((currentTotal + file.size) > MAX_TOTAL_SIZE_PER_RECORD) {
+      alert('Storage quota exceeded for this record.\n\nCurrent: ' + fmtSize(currentTotal) +
+        '\nThis file: ' + fmtSize(file.size) +
+        '\nLimit: ' + fmtSize(MAX_TOTAL_SIZE_PER_RECORD) +
+        '\n\nDelete some attachments first or compress the file.');
+      return;
+    }
     setUploading(true);
     setUploadProgress('Uploading ' + file.name + ' (' + fmtSize(file.size) + ')...');
     try {
@@ -263,19 +282,31 @@ export function AttachmentManager(props) {
       if (delRes.error) throw delRes.error;
 
       // 3. Log to audit_log (best-effort)
+      // v55.83-A.6.27.66 (H4, Max May 23 2026) — the column name was wrong.
+      // Everywhere else in the codebase (dbInsert in supabase.js, audit_log
+      // schema) uses `new_values` / `old_values`. This block was using
+      // `field_changes`, which doesn't exist — so every attachment delete
+      // silently failed its audit log write. The whole block is in a try/
+      // catch that swallows the error, so the symptom was: no audit trail
+      // for attachment deletions, no error in the UI either. Now fixed.
       try {
-        await supabase.from('audit_log').insert({
+        var auditRes = await supabase.from('audit_log').insert({
           table_name: 'attachments',
           record_id: att.id,
-          action: 'DELETE',
+          action: 'delete',
           changed_by: currentUserId || null,
-          field_changes: {
+          new_values: null,
+          old_values: {
             file_name: att.file_name,
             parent_type: att.parent_type,
             parent_id: att.parent_id,
             file_size: att.file_size,
+            storage_path: att.storage_path,
           },
         });
+        if (auditRes && auditRes.error) {
+          console.warn('[attachments] audit_log insert failed:', auditRes.error.message);
+        }
       } catch (_) {}
 
       await reload();

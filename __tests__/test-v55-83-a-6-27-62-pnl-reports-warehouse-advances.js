@@ -117,8 +117,8 @@ ok('B12: saveIssue treasury description includes "Advance to" + recipient',
   /description: 'Advance to ' \+ issueDraft\.recipient_name\.trim\(\)/.test(adv));
 ok('B13: saveIssue treasury category = "Warehouse Advance"',
   /category: 'Warehouse Advance'/.test(adv));
-ok('B14: saveIssue inserts advance with linked_treasury_id',
-  /linked_treasury_id: treasuryId \|\| null/.test(adv) &&
+ok('B14: saveIssue inserts advance with linked_treasury_id (v55.83-A.6.27.66 C3 — variable renamed to createdTreasuryId for atomic rollback tracking)',
+  /linked_treasury_id: createdTreasuryId/.test(adv) &&
   /supabase\.from\('warehouse_advances'\)\.insert\(advPayload\)/.test(adv));
 ok('B15: closeAdvance sets status closed + closed_at + closed_by + close_reason',
   /async function closeAdvance\(\)/.test(adv) &&
@@ -277,7 +277,7 @@ ok('R3: 61 — Import Shipment template has Shipment Info sheet',
 ok('R4: 60 — light-blue template highlight preserved',
   /bg-sky-50/.test(read('src/components/InventoryProductMaster.jsx')));
 ok('R5: 60 — Deactivate-blocks-login fix preserved',
-  /profile && profile\.active === false/.test(read('src/app/login/page.jsx')));
+  /profile && !isActiveUser\(profile\)/.test(read('src/app/login/page.jsx')));
 ok('R6: 60 — duplicate user guard preserved',
   /v55\.83-A\.6\.27\.60 — Duplicate-user guard/.test(read('src/components/SettingsTab.jsx')));
 ok('R7: 60 — Product Overview history modal preserved',

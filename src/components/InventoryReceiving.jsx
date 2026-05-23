@@ -1118,6 +1118,33 @@ export default function InventoryReceiving(props) {
       // Cancel ALL lines sharing the same receipt_number
       var rn = cancelTarget.receipt_number;
       var rows = receipts.filter(function (r) { return r.receipt_number === rn && r.status !== 'cancelled'; });
+
+      // v55.83-A.6.27.66 (C4, Max May 23 2026) — finalized lines need their
+      // FIFO cost layer reversed BEFORE we flip status to 'cancelled'.
+      // Previously the cancel just set status='cancelled' on every line
+      // including finalized ones, leaving the cost layer in place — so
+      // stock counts and COGS still pointed to a "cancelled" receipt.
+      // Now we route finalized lines through reopen_finalized_receipt first
+      // (which writes a reversal movement, marks the layer as reversed, and
+      // resets status to 'received'). Only THEN do we flip everything to
+      // 'cancelled'.
+      var finalizedLines = rows.filter(function (r) { return r.status === 'finalized'; });
+      for (var f = 0; f < finalizedLines.length; f++) {
+        var fLine = finalizedLines[f];
+        var rRes = await supabase.rpc('reopen_finalized_receipt', {
+          p_receipt_id: fLine.id,
+          p_user_id: userProfile && userProfile.id,
+          p_reason: 'Cancellation: ' + cancelReason.trim(),
+        });
+        if (rRes && rRes.error) {
+          // If reversal fails, abort the whole cancel — partial state is worse
+          // than no state. Surface the error so user can investigate.
+          console.error('[receiving] cancel aborted: reopen_finalized_receipt failed for line ' + fLine.id, rRes.error);
+          throw new Error('Cannot cancel — finalized line ' + (fLine.product_name || fLine.id) + ' could not be reversed: ' + ((rRes.error && rRes.error.message) || rRes.error));
+        }
+      }
+
+      // Now flip all lines (including the just-reopened ones) to 'cancelled'
       for (var i = 0; i < rows.length; i++) {
         await dbUpdate('inventory_stock_receipts', rows[i].id, {
           status: 'cancelled',
@@ -1127,13 +1154,14 @@ export default function InventoryReceiving(props) {
           updated_by: userProfile && userProfile.id,
         }, userProfile && userProfile.id);
       }
-      toast.success('Receipt ' + rn + ' cancelled (' + rows.length + ' line(s)).');
+      toast.success('Receipt ' + rn + ' cancelled (' + rows.length + ' line(s)' + (finalizedLines.length > 0 ? ', ' + finalizedLines.length + ' cost layer(s) reversed' : '') + ').');
       setCancelTarget(null);
       setCancelReason('');
       await reload();
     } catch (err) {
       console.error('[receiving] cancel failed:', err);
       toast.error('Cancel failed: ' + ((err && err.message) || String(err)));
+      alert('Cancel failed: ' + ((err && err.message) || String(err)));
     }
   }
 

@@ -125,10 +125,35 @@ export default function FxPnLReport(props) {
     return Number(candidates[0].rate);
   }, [fxRates]);
 
+  // v55.83-A.6.27.66 (H2, Max May 23 2026): helper to look up the FX rate
+  // for a given date + source currency → EGP. Used when a movement's
+  // cost_egp_at_receipt / cost_egp_at_sale snapshot isn't set yet (pre-.64
+  // data). Without this we used to assume `cogs` was already EGP and use
+  // it verbatim — which silently produced wrong numbers by ~50× when the
+  // underlying receipt was in USD.
+  function fxToEgp(date, sourceCurrency) {
+    var src = String(sourceCurrency || 'EGP').toUpperCase();
+    if (src === 'EGP') return 1;  // no conversion needed
+    if (!date) return null;
+    // Find the most recent rate at or before `date` for src→EGP
+    var candidates = fxRates.filter(function (r) {
+      return r.from_currency === src && r.to_currency === 'EGP' && r.rate_date <= date;
+    });
+    if (candidates.length === 0) {
+      // Fall back to latest rate of any date
+      var anyDate = fxRates.filter(function (r) { return r.from_currency === src && r.to_currency === 'EGP'; });
+      if (anyDate.length === 0) return null;
+      anyDate.sort(function (a, b) { return b.rate_date.localeCompare(a.rate_date); });
+      return Number(anyDate[0].rate);
+    }
+    candidates.sort(function (a, b) { return b.rate_date.localeCompare(a.rate_date); });
+    return Number(candidates[0].rate);
+  }
+
   // ── REALIZED P&L (per sold movement) ────────────────────────
   var realized = useMemo(function () {
     var rows = [];
-    var totals = { real_margin: 0, realized_fx: 0, total_gp: 0, sold_qty: 0, revenue: 0, backfill_count: 0 };
+    var totals = { real_margin: 0, realized_fx: 0, total_gp: 0, sold_qty: 0, revenue: 0, backfill_count: 0, unconvertable_count: 0 };
 
     movements.forEach(function (m) {
       var d = m.moved_at ? String(m.moved_at).substring(0, 10) : '';
@@ -143,25 +168,51 @@ export default function FxPnLReport(props) {
       var label = product ? ((product.quick_code || '') + ' · ' + (product.name_en || '')) : (m.product_id || '(unknown)');
       var revenue = Number(m.revenue || 0);
       var cogs = Number(m.cogs || 0);
+      // v55.83-A.6.27.66 (H2) — currency of the source layer/movement.
+      var sourceCur = String(m.cost_currency || (m.source_layer_id && layersById[m.source_layer_id] && layersById[m.source_layer_id].cost_currency) || 'EGP').toUpperCase();
 
       // Determine cost_egp_at_receipt — prefer stored value, fall back to layer cost or backfill
       var costAtReceipt = Number(m.cost_egp_at_receipt || 0);
       var backfill = false;
+      var unconvertable = false;
       if (!costAtReceipt) {
-        // Try the source layer
         var layer = m.source_layer_id ? layersById[m.source_layer_id] : null;
         if (layer && Number(layer.cost_egp_at_receipt) > 0) {
           costAtReceipt = Number(layer.cost_egp_at_receipt);
         } else if (cogs > 0) {
-          // Last resort: use the COGS itself (assume already in EGP if no FX data)
-          costAtReceipt = cogs;
+          // v55.83-A.6.27.66 (H2) — CONVERT through FX rate instead of
+          // assuming cogs is EGP. Was the worst silent-data bug in the
+          // app: USD cogs treated as EGP → reports off by 50× silently.
+          if (sourceCur === 'EGP') {
+            costAtReceipt = cogs;
+          } else {
+            var rate = fxToEgp(d, sourceCur);
+            if (rate && rate > 0) {
+              costAtReceipt = cogs * rate;
+            } else {
+              // No FX rate available — flag as unconvertable, don't make up a number
+              costAtReceipt = 0;
+              unconvertable = true;
+            }
+          }
           backfill = true;
         }
       }
 
       var costAtSale = Number(m.cost_egp_at_sale || 0);
       if (!costAtSale && cogs > 0) {
-        costAtSale = cogs;
+        // Same conversion logic for cost-at-sale
+        if (sourceCur === 'EGP') {
+          costAtSale = cogs;
+        } else {
+          var rateAtSale = fxToEgp(d, sourceCur);
+          if (rateAtSale && rateAtSale > 0) {
+            costAtSale = cogs * rateAtSale;
+          } else {
+            costAtSale = 0;
+            unconvertable = true;
+          }
+        }
         backfill = backfill || (!Number(m.cost_egp_at_sale));
       }
 
@@ -181,6 +232,8 @@ export default function FxPnLReport(props) {
         realized_fx: realizedFx,
         total_gp: totalGp,
         backfill: backfill,
+        unconvertable: unconvertable,
+        source_currency: sourceCur,
       });
 
       totals.real_margin += realMargin;
@@ -189,6 +242,7 @@ export default function FxPnLReport(props) {
       totals.sold_qty += Math.abs(qty);
       totals.revenue += revenue;
       if (backfill) totals.backfill_count++;
+      if (unconvertable) totals.unconvertable_count++;
     });
 
     rows.sort(function (a, b) { return (b.date || '').localeCompare(a.date || ''); });

@@ -164,6 +164,15 @@ export default function WarehouseAdvancesTab(props) {
     try {
       var nowUserId = userProfile && userProfile.id;
 
+      // v55.83-A.6.27.66 (C3, Max May 23 2026): make this two-step write
+      // recoverable. Previously: insert treasury first; if advance insert
+      // fails, the treasury debit is orphaned (the cash "left" but no
+      // advance card exists to reconcile against). Now: track the inserted
+      // treasury id and, if step 2 throws, delete it before re-throwing.
+      // Best-effort cleanup — if the cleanup itself fails, both errors get
+      // logged so the corruption is discoverable in the console.
+      var createdTreasuryId = null;
+
       // 1. Create the treasury debit first
       var treasuryPayload = {
         transaction_date: issueDraft.issue_date,
@@ -182,11 +191,16 @@ export default function WarehouseAdvancesTab(props) {
       };
       var treasuryRes = await supabase.from('treasury').insert(treasuryPayload).select().single();
       if (treasuryRes.error) {
-        console.warn('[advances] treasury insert failed (advance still created):', treasuryRes.error.message);
+        // Treasury insert failed — don't try to write the advance.
+        // (Previously this just logged + continued, producing an advance
+        // with no linked treasury entry. That's a less-bad corruption but
+        // still corruption. Better to fail visibly.)
+        console.error('[advances] treasury insert failed:', treasuryRes.error.message);
+        throw new Error('Treasury entry could not be created: ' + treasuryRes.error.message);
       }
-      var treasuryId = treasuryRes.data && treasuryRes.data.id;
+      createdTreasuryId = treasuryRes.data && treasuryRes.data.id;
 
-      // 2. Create the advance row
+      // 2. Create the advance row, linking to the treasury debit
       var advPayload = {
         issue_date: issueDraft.issue_date,
         amount: amt,
@@ -195,12 +209,26 @@ export default function WarehouseAdvancesTab(props) {
         recipient_role: (issueDraft.recipient_role || '').trim() || null,
         description: (issueDraft.description || '').trim() || null,
         reference_number: (issueDraft.reference_number || '').trim() || null,
-        linked_treasury_id: treasuryId || null,
+        linked_treasury_id: createdTreasuryId,
         status: 'open',
         created_by: nowUserId,
       };
       var advRes = await supabase.from('warehouse_advances').insert(advPayload).select().single();
-      if (advRes.error) throw advRes.error;
+      if (advRes.error) {
+        // Advance insert failed — undo the treasury entry to keep books in sync.
+        console.error('[advances] advance insert failed, rolling back treasury entry', createdTreasuryId);
+        try {
+          var rbRes = await supabase.from('treasury').delete().eq('id', createdTreasuryId);
+          if (rbRes.error) {
+            console.error('[advances] ROLLBACK ALSO FAILED — treasury entry ' + createdTreasuryId + ' is orphaned:', rbRes.error.message);
+          } else {
+            console.log('[advances] rollback OK — treasury entry ' + createdTreasuryId + ' removed');
+          }
+        } catch (rbErr) {
+          console.error('[advances] rollback threw — treasury entry ' + createdTreasuryId + ' may be orphaned:', rbErr && rbErr.message);
+        }
+        throw advRes.error;
+      }
 
       toast.success('Advance issued: ' + fmtMoney(amt, cur) + ' to ' + issueDraft.recipient_name);
       setIssueModalOpen(false);

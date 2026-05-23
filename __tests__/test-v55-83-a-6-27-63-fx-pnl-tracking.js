@@ -102,8 +102,8 @@ ok('B11: saveDraft validates rate>0 + date + currencies + from<>to',
   /From and To must be different/.test(fxr));
 ok('B12: saveDraft uses upsert with onConflict for insert path',
   /\.upsert\(payload, \{\s+onConflict: 'rate_date,from_currency,to_currency'/.test(fxr));
-ok('B13: saveDraft uses update for editing path',
-  /if \(editingId\) \{[\s\S]{0,400}\.update\(payload\)\.eq\('id', editingId\)/.test(fxr));
+ok('B13: saveDraft uses update for editing path (v55.83-A.6.27.66 H1 — now includes collision pre-check, widened from 400→2000)',
+  /if \(editingId\) \{[\s\S]{0,2000}\.update\(payload\)\.eq\('id', editingId\)/.test(fxr));
 ok('B14: deleteRate super_admin only with confirmation',
   /async function deleteRate\(r\)/.test(fxr) &&
   /Only super admin can delete FX rates/.test(fxr));
@@ -239,7 +239,7 @@ ok('R6: 61 — attachments SQL preserved',
 ok('R7: 60 — light-blue template highlight preserved',
   /bg-sky-50/.test(read('src/components/InventoryProductMaster.jsx')));
 ok('R8: 60 — Deactivate-blocks-login fix preserved',
-  /profile && profile\.active === false/.test(read('src/app/login/page.jsx')));
+  /profile && !isActiveUser\(profile\)/.test(read('src/app/login/page.jsx')));
 ok('R9: 60 — Product Overview history modal preserved',
   /function openHistory\(product\)/.test(read('src/components/InventoryOverview.jsx')));
 ok('R10: 59 — mini-invoice + Invoice button preserved',

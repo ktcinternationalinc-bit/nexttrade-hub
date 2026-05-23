@@ -87,8 +87,8 @@ ok('5.2: No remaining stale "What\'s in this build" rendered text in InventoryTa
 // ══════════════════════════════════════════════════════════════════
 ok('6.1: login flow SELECTs profile.active',
   /\.select\('id, name, active'\)/.test(login));
-ok('6.2: deactivated users get signed out',
-  /if \(profile && profile\.active === false\)/.test(login) &&
+ok('6.2: deactivated users get signed out (v55.83-A.6.27.66 — now uses isActiveUser helper which catches NULL too)',
+  /if \(profile && !isActiveUser\(profile\)\)/.test(login) &&
   /supabase\.auth\.signOut\(\)/.test(login));
 ok('6.3: blocking error shown to deactivated user',
   /Your account has been deactivated\. Contact your administrator to restore access/.test(login));

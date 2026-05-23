@@ -213,7 +213,7 @@ ok('R1: 60 — light-blue template highlight preserved',
 ok('R2: 60 — Inbound Shipments modal still 99vw',
   /99vw/.test(read('src/components/InventoryReceiving.jsx')));
 ok('R3: 60 — login Deactivate-blocks-login fix preserved',
-  /profile && profile\.active === false/.test(read('src/app/login/page.jsx')));
+  /profile && !isActiveUser\(profile\)/.test(read('src/app/login/page.jsx')));
 ok('R4: 60 — duplicate user guard preserved',
   /v55\.83-A\.6\.27\.60 — Duplicate-user guard/.test(read('src/components/SettingsTab.jsx')));
 ok('R5: 60 — Product Overview history modal preserved',
