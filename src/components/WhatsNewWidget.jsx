@@ -35,8 +35,9 @@ export const BUILD_HISTORY = [
   {
     version: 'v55.83-A.6.27.71',
     date: '2026-05-23',
-    label: 'Warehouse Buckets — Phase 4 (History & Analytics) + dead code cleanup',
+    label: 'Warehouse Buckets — Phase 4 (History & Analytics) + dead code cleanup [HOTFIX 1]',
     items: [
+      '**🩹 HOTFIX 1 (May 23 2026, post-deploy):** Initial .71 deploy crashed with "Application error: a client-side exception has occurred" because the bucket-create modal in page.jsx was referencing an undefined variable `users` instead of the correct `teamUsers`. Fixed. If you deployed the first .71 zip, REDEPLOY with the hotfix zip immediately.',
       '**Buckets History & Analytics section** now appears in the Warehouse tab below the live bucket list. Multi-year warehouse-only lens — totally separate from your company expense reports.',
       '**What you can see at a glance:**',
       '   • **Summary cards per currency** — Total Advanced / Reconciled / Pending / Cancelled. No mixed-currency totals (USD and EGP shown on separate rows so you never see "200,000" that\'s really $100k + EGP 100k mashed together).',

@@ -9350,7 +9350,7 @@ export default function App() {
             try { loadAllData && loadAllData(); } catch (_) {}
           }}
           userId={userProfile?.id}
-          users={users}
+          users={teamUsers}
           toast={toast}
         />
 

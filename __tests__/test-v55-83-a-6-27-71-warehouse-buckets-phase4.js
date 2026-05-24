@@ -137,6 +137,15 @@ ok('E3: WhatsNewWidget .71 entry has layman public bullets (Permanent Rule 1)',
   /History & Analytics/.test(wnw) && /Excel/.test(wnw));
 
 // ══════════════════════════════════════════════════════════════════
+// PART F — Hotfix 1 regression guards (post-deploy crash fix)
+// ══════════════════════════════════════════════════════════════════
+ok('F1: page.jsx passes `teamUsers` (not undefined `users`) to WarehouseBucketCreate',
+  /<WarehouseBucketCreate[\s\S]{0,800}users=\{teamUsers\}/.test(page) &&
+  !/<WarehouseBucketCreate[\s\S]{0,800}users=\{users\}/.test(page));
+ok('F2: no other dangling `users={users}` references in page.jsx (only `teamUsers` allowed)',
+  !/users=\{users\}/.test(page));
+
+// ══════════════════════════════════════════════════════════════════
 // FINAL
 // ══════════════════════════════════════════════════════════════════
 console.log('');
