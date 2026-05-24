@@ -441,6 +441,12 @@ const ACTION_PERMS = [
   { key: 'Export Data',                  label: 'Export Data',                  desc: 'Download Excel or CSV exports from any tab.' },
   { key: 'Post Reminders',               label: 'Post Reminders',               desc: 'Pin announcements and reminders to the team dashboard so everyone sees them.' },
   { key: 'HR Report',                    label: 'HR Report',                    desc: 'Access HR-sensitive reports (Jenna\u2019s territory): time off, complaints, performance summaries.' },
+  // v55.83-A.6.27.69 (Phase 2) — Warehouse Buckets permissions.
+  { key: 'Manage Warehouse Buckets',     label: 'Manage Warehouse Buckets',     desc: 'Create warehouse advance buckets, add spend entries against them, edit, cancel. Without this, the user cannot use the bucket workflow at all.' },
+  { key: 'Approve Warehouse Buckets',    label: 'Approve Warehouse Buckets',    desc: 'Approve a bucket for close-out once it\u2019s fully reconciled. The user cannot approve a bucket they themselves created (super-admin can override). Reconciliation updates the Expense Report categorization view ONLY — the original cash-out in Treasury never changes.' },
+  { key: 'Reopen Closed Buckets',        label: 'Reopen Closed Buckets',        desc: 'Reopen a closed bucket to revert reconciliation. Use sparingly — every reopen is audit-logged.' },
+  // v55.83-A.6.27.69 (Phase 2 bonus) — Shipping bulk-delete permission.
+  { key: 'Delete Shipping Bubbles',      label: 'Delete Shipping Bubbles',      desc: 'Use bulk-delete inside a shipping route bubble (Detail view) to remove multiple historical rates at once. Without this, the bulk-select toolbar and per-row checkboxes are hidden. Super-admin always has this.' },
 ];
 
 const NOTIF_TYPES = [

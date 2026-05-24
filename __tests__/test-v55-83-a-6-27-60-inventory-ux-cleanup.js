@@ -248,8 +248,8 @@ ok('R12: WhatsNew widget has .60 entry',
   /version: 'v55\.83-A\.6\.27\.60'/.test(wn));
 ok('R13: WhatsNew widget still has .59 entry',
   /version: 'v55\.83-A\.6\.27\.59'/.test(wn));
-ok('R14: 40 — variantTemplate state preserved (variant creation flow still works)',
-  /var \[variantTemplate, setVariantTemplate\] = useState\(null\)/.test(ipm));
+ok('R14: 40 — variantTemplate state REMOVED in v55.83-A.6.27.71 Phase 4 cleanup (variant modal was orphaned dead code)',
+  !/var \[variantTemplate, setVariantTemplate\] = useState\(null\)/.test(ipm));
 
 // ──────────────────────────────────────────────────────────────────
 // Version stamp

@@ -1,0 +1,371 @@
+'use client';
+// v55.83-A.6.27.69 — Warehouse Buckets list + detail view (Phase 2).
+//
+// Renders the bucket cards grid in the Warehouse tab + click-into detail view.
+// READ-ONLY in this phase — spend-entry form arrives in Phase 3.
+//
+// View states:
+//   • 'list' — grid of bucket cards, each card showing status + progress + summary
+//   • 'detail' — single bucket's ledger view with entries table (read-only)
+
+import { useState, useEffect, useMemo } from 'react';
+import { listBuckets, getBucketWithEntries } from '../lib/warehouse-buckets';
+// v55.83-A.6.27.70 — Phase 3: entry form + lifecycle actions
+import WarehouseBucketEntryForm from './WarehouseBucketEntryForm';
+import WarehouseBucketActions from './WarehouseBucketActions';
+
+function fmtMoney(n, cur) {
+  if (n == null || isNaN(Number(n))) return '0.00';
+  return Number(n).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 }) + ' ' + (cur || '');
+}
+function fmtDate(d) {
+  if (!d) return '—';
+  return String(d).substring(0, 10);
+}
+
+// Status visual treatment — colors picked for clear contrast (Permanent Rule 8)
+function statusBadge(status) {
+  switch (status) {
+    case 'open':
+      return { bg: 'bg-blue-100', text: 'text-blue-900', label: '📭 Open', tooltip: 'Accepting spend entries' };
+    case 'fully_spent':
+      return { bg: 'bg-emerald-100', text: 'text-emerald-900', label: '✓ Fully Spent', tooltip: 'All amount accounted — ready to submit for approval' };
+    case 'pending_approval':
+      return { bg: 'bg-amber-100', text: 'text-amber-900', label: '⏳ Pending Approval', tooltip: 'Waiting for approver' };
+    case 'closed':
+      return { bg: 'bg-green-200', text: 'text-green-900', label: '🔒 Closed & Reconciled', tooltip: 'Approved & expense report updated' };
+    case 'cancelled':
+      return { bg: 'bg-slate-200', text: 'text-slate-700', label: '✗ Cancelled', tooltip: 'Refunded back to treasury' };
+    default:
+      return { bg: 'bg-slate-100', text: 'text-slate-900', label: status, tooltip: '' };
+  }
+}
+
+export default function WarehouseBucketList(props) {
+  // Props:
+  //   userId, isSuperAdmin, canCreate, canApprove, toast
+  //   onRequestCreate: () => void  — open the create modal
+  //   reloadToken: number  — bump to force a reload (caller increments after creating)
+
+  var userId = props.userId;
+  var isSuperAdmin = !!props.isSuperAdmin;
+  var canCreate = !!props.canCreate;
+  var onRequestCreate = props.onRequestCreate || function () {};
+  var reloadToken = props.reloadToken || 0;
+  var toast = props.toast || { success: function(){}, error: function(){}, warning: function(){}, info: function(){} };
+
+  var [view, setView] = useState('list');   // 'list' | 'detail'
+  var [buckets, setBuckets] = useState([]);
+  var [loading, setLoading] = useState(true);
+  var [statusFilter, setStatusFilter] = useState('all');
+  var [searchTerm, setSearchTerm] = useState('');
+  var [selectedBucketId, setSelectedBucketId] = useState(null);
+  var [selectedBucket, setSelectedBucket] = useState(null);
+  var [selectedEntries, setSelectedEntries] = useState([]);
+  var [detailLoading, setDetailLoading] = useState(false);
+
+  // Load buckets on mount and whenever reloadToken changes
+  useEffect(function () {
+    var cancelled = false;
+    setLoading(true);
+    listBuckets({}).then(function (rows) {
+      if (cancelled) return;
+      setBuckets(rows || []);
+      setLoading(false);
+    }).catch(function (err) {
+      console.warn('[buckets-list] load failed:', err);
+      if (!cancelled) {
+        setBuckets([]);
+        setLoading(false);
+      }
+    });
+    return function () { cancelled = true; };
+  }, [reloadToken]);
+
+  // Load detail when entering detail view
+  useEffect(function () {
+    if (view !== 'detail' || !selectedBucketId) return;
+    var cancelled = false;
+    setDetailLoading(true);
+    getBucketWithEntries(selectedBucketId).then(function (res) {
+      if (cancelled) return;
+      setSelectedBucket(res.bucket);
+      setSelectedEntries(res.entries || []);
+      setDetailLoading(false);
+    }).catch(function (err) {
+      console.warn('[buckets-detail] load failed:', err);
+      if (!cancelled) {
+        setDetailLoading(false);
+        toast.error('Could not load bucket: ' + ((err && err.message) || err));
+      }
+    });
+    return function () { cancelled = true; };
+  }, [view, selectedBucketId, reloadToken]);
+
+  // Filtered list
+  var filtered = useMemo(function () {
+    var arr = buckets;
+    if (statusFilter !== 'all') arr = arr.filter(function (b) { return b.status === statusFilter; });
+    var q = searchTerm.trim().toLowerCase();
+    if (q) {
+      arr = arr.filter(function (b) {
+        return (
+          (b.recipient_name || '').toLowerCase().indexOf(q) >= 0 ||
+          (b.reference || '').toLowerCase().indexOf(q) >= 0 ||
+          (b.reference_slug || '').toLowerCase().indexOf(q) >= 0
+        );
+      });
+    }
+    return arr;
+  }, [buckets, statusFilter, searchTerm]);
+
+  // ─── DETAIL VIEW ─────────────────────────────────────────────────
+  if (view === 'detail' && selectedBucketId) {
+    if (detailLoading) {
+      return (
+        <div className="p-6 text-center text-slate-500 italic">Loading bucket...</div>
+      );
+    }
+    if (!selectedBucket) {
+      return (
+        <div className="p-6">
+          <button onClick={function () { setView('list'); setSelectedBucketId(null); }} className="text-blue-600 hover:underline text-sm mb-3">← Back to buckets</button>
+          <div className="bg-amber-50 border-2 border-amber-400 rounded p-4 text-amber-900">Bucket not found or could not be loaded.</div>
+        </div>
+      );
+    }
+    var b = selectedBucket;
+    var spent = selectedEntries.reduce(function (a, e) { return a + Number(e.amount || 0); }, 0);
+    var remaining = Number(b.amount) - spent;
+    var pct = b.amount > 0 ? Math.min(100, (spent / Number(b.amount)) * 100) : 0;
+    var badge = statusBadge(b.status);
+    return (
+      <div className="space-y-3">
+        <button onClick={function () { setView('list'); setSelectedBucketId(null); }} className="text-blue-600 hover:underline text-sm">← Back to buckets</button>
+
+        {/* Bucket summary card */}
+        <div className={'rounded-lg border-2 p-4 ' + (b.status === 'closed' ? 'bg-emerald-50 border-emerald-400' : b.status === 'cancelled' ? 'bg-slate-100 border-slate-300' : 'bg-amber-50 border-amber-400')}>
+          <div className="flex items-start justify-between flex-wrap gap-2">
+            <div>
+              <div className="flex items-center gap-2 mb-1">
+                <span className="text-2xl">🏭</span>
+                <h3 className="text-lg font-extrabold text-slate-900">{b.recipient_name}</h3>
+                <span className={'px-2 py-0.5 rounded text-[10px] font-extrabold ' + badge.bg + ' ' + badge.text} title={badge.tooltip}>{badge.label}</span>
+                {b.status === 'closed' && (
+                  <span className="px-2 py-0.5 rounded text-[10px] font-extrabold bg-green-300 text-green-950" title={'Reconciled on ' + fmtDate(b.closed_at)}>✓ RECONCILED</span>
+                )}
+              </div>
+              <div className="font-mono text-sm text-slate-700">{b.reference_slug}</div>
+              <div className="text-xs text-slate-600 mt-1">
+                Issued <strong>{fmtDate(b.issue_date)}</strong> · Reference: <strong>{b.reference}</strong>
+                {b.closed_at && <> · Closed <strong>{fmtDate(b.closed_at)}</strong></>}
+                {b.cancelled_at && <> · Cancelled <strong>{fmtDate(b.cancelled_at)}</strong></>}
+              </div>
+              {b.notes && <div className="text-xs text-slate-600 italic mt-1">"{b.notes}"</div>}
+            </div>
+            <div className="text-right">
+              <div className="text-[10px] font-extrabold text-slate-600 uppercase tracking-wider">Advance</div>
+              <div className="text-2xl font-mono font-extrabold text-slate-900">{fmtMoney(b.amount, b.currency)}</div>
+            </div>
+          </div>
+
+          {/* Progress bar */}
+          <div className="mt-3 grid grid-cols-3 gap-2 text-xs">
+            <div className="bg-white rounded p-2 border border-slate-200">
+              <div className="text-[10px] font-extrabold text-slate-600 uppercase">Spent</div>
+              <div className="font-mono font-bold text-blue-900">{fmtMoney(spent, b.currency)}</div>
+            </div>
+            <div className="bg-white rounded p-2 border border-slate-200">
+              <div className="text-[10px] font-extrabold text-slate-600 uppercase">Remaining</div>
+              <div className={'font-mono font-bold ' + (remaining < 0 ? 'text-red-700' : remaining === 0 ? 'text-emerald-700' : 'text-slate-900')}>{fmtMoney(remaining, b.currency)}</div>
+            </div>
+            <div className="bg-white rounded p-2 border border-slate-200">
+              <div className="text-[10px] font-extrabold text-slate-600 uppercase">Entries</div>
+              <div className="font-mono font-bold text-slate-900">{selectedEntries.length}</div>
+            </div>
+          </div>
+          <div className="mt-2 w-full h-2 bg-slate-200 rounded overflow-hidden">
+            <div style={{ width: pct + '%', background: pct >= 100 ? '#10b981' : '#f59e0b', height: '100%', transition: 'width 0.3s' }} />
+          </div>
+        </div>
+
+        {/* v55.83-A.6.27.70 (Phase 3) — Lifecycle action bar.
+            Submit / Approve / Cancel / Reopen buttons based on bucket status
+            and user permissions. Self-approve protection built in. */}
+        {props.canManage || props.canApprove || props.canReopen || isSuperAdmin ? (
+          <div className="bg-slate-50 border border-slate-200 rounded-lg p-3">
+            <WarehouseBucketActions
+              bucket={b}
+              spent={spent}
+              userId={userId}
+              isSuperAdmin={isSuperAdmin}
+              canManage={!!props.canManage || isSuperAdmin}
+              canApprove={!!props.canApprove || isSuperAdmin}
+              canReopen={!!props.canReopen || isSuperAdmin}
+              onChanged={function () {
+                // Reload this detail view AND the parent list
+                getBucketWithEntries(selectedBucketId).then(function (res) {
+                  setSelectedBucket(res.bucket);
+                  setSelectedEntries(res.entries || []);
+                });
+                if (props.onBucketChanged) props.onBucketChanged();
+              }}
+              toast={toast}
+            />
+          </div>
+        ) : null}
+
+        {/* v55.83-A.6.27.70 (Phase 3) — Spend-entry form. */}
+        {(b.status === 'open' || b.status === 'fully_spent') && (props.canManage || isSuperAdmin) && (
+          <WarehouseBucketEntryForm
+            bucket={b}
+            spent={spent}
+            userId={userId}
+            isSuperAdmin={isSuperAdmin}
+            canManageCategories={!!props.canManageCategories || isSuperAdmin}
+            onCreated={function () {
+              getBucketWithEntries(selectedBucketId).then(function (res) {
+                setSelectedBucket(res.bucket);
+                setSelectedEntries(res.entries || []);
+              });
+              if (props.onBucketChanged) props.onBucketChanged();
+            }}
+            toast={toast}
+          />
+        )}
+
+        {/* Entries table (read-only in Phase 2) */}
+        <div className="bg-white rounded-lg border-2 border-slate-200 overflow-hidden">
+          <div className="bg-slate-100 px-3 py-2 font-extrabold text-sm text-slate-900 border-b border-slate-200">
+            Ledger — {selectedEntries.length} {selectedEntries.length === 1 ? 'entry' : 'entries'}
+          </div>
+          {selectedEntries.length === 0 ? (
+            <div className="p-6 text-center text-slate-500 italic text-sm">No spend entries yet.</div>
+          ) : (
+            <div className="overflow-x-auto">
+              <table className="w-full text-xs">
+                <thead>
+                  <tr className="bg-slate-50 border-b border-slate-200">
+                    <th className="px-3 py-2 text-left font-extrabold text-slate-800 uppercase tracking-wider">Date</th>
+                    <th className="px-3 py-2 text-left font-extrabold text-slate-800 uppercase tracking-wider">Category</th>
+                    <th className="px-3 py-2 text-left font-extrabold text-slate-800 uppercase tracking-wider">Subcategory</th>
+                    <th className="px-3 py-2 text-left font-extrabold text-slate-800 uppercase tracking-wider">Description</th>
+                    <th className="px-3 py-2 text-right font-extrabold text-slate-800 uppercase tracking-wider">Amount</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {selectedEntries.map(function (e) {
+                    return (
+                      <tr key={e.id} className="border-b border-slate-100 hover:bg-slate-50">
+                        <td className="px-3 py-1.5 font-mono text-slate-700">{fmtDate(e.entry_date)}</td>
+                        <td className="px-3 py-1.5 font-semibold text-slate-900">{e.category}</td>
+                        <td className="px-3 py-1.5 text-slate-700">{e.subcategory || <span className="text-slate-400">—</span>}</td>
+                        <td className="px-3 py-1.5 text-slate-700">{e.description || <span className="text-slate-400">—</span>}</td>
+                        <td className="px-3 py-1.5 text-right font-mono font-bold text-blue-900">{fmtMoney(e.amount, b.currency)}</td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+                <tfoot>
+                  <tr className="bg-slate-100 border-t-2 border-slate-300 font-extrabold">
+                    <td colSpan={4} className="px-3 py-2 text-right text-slate-900">Total Spent</td>
+                    <td className="px-3 py-2 text-right font-mono text-slate-900">{fmtMoney(spent, b.currency)}</td>
+                  </tr>
+                </tfoot>
+              </table>
+            </div>
+          )}
+        </div>
+      </div>
+    );
+  }
+
+  // ─── LIST VIEW ───────────────────────────────────────────────────
+  return (
+    <div className="space-y-3">
+      {/* Header + create button */}
+      <div className="flex items-center justify-between flex-wrap gap-2">
+        <div>
+          <h3 className="text-base font-extrabold text-slate-900">🏭 Warehouse Buckets / دلاء المخزن</h3>
+          <div className="text-[11px] text-slate-600">{buckets.length} total · click any bucket to see its ledger</div>
+        </div>
+        <div className="flex items-center gap-2 flex-wrap">
+          <input
+            type="text"
+            value={searchTerm}
+            onChange={function (e) { setSearchTerm(e.target.value); }}
+            placeholder="Search recipient or reference..."
+            className="px-2 py-1 border-2 border-slate-300 rounded text-xs bg-white text-slate-900"
+          />
+          <select
+            value={statusFilter}
+            onChange={function (e) { setStatusFilter(e.target.value); }}
+            className="px-2 py-1 border-2 border-slate-300 rounded text-xs bg-white text-slate-900 font-extrabold"
+          >
+            <option value="all">All ({buckets.length})</option>
+            <option value="open">Open ({buckets.filter(function (b) { return b.status === 'open'; }).length})</option>
+            <option value="fully_spent">Fully Spent ({buckets.filter(function (b) { return b.status === 'fully_spent'; }).length})</option>
+            <option value="pending_approval">Pending Approval ({buckets.filter(function (b) { return b.status === 'pending_approval'; }).length})</option>
+            <option value="closed">Closed ({buckets.filter(function (b) { return b.status === 'closed'; }).length})</option>
+            <option value="cancelled">Cancelled ({buckets.filter(function (b) { return b.status === 'cancelled'; }).length})</option>
+          </select>
+          {canCreate && (
+            <button
+              onClick={onRequestCreate}
+              className="px-3 py-1.5 bg-amber-600 hover:bg-amber-700 text-white text-xs font-extrabold rounded shadow"
+            >
+              + Create Bucket
+            </button>
+          )}
+        </div>
+      </div>
+
+      {/* List */}
+      {loading ? (
+        <div className="p-6 text-center text-slate-500 italic">Loading buckets...</div>
+      ) : filtered.length === 0 ? (
+        <div className="p-6 text-center bg-slate-50 border-2 border-dashed border-slate-300 rounded-lg text-slate-600">
+          {buckets.length === 0 ? (
+            <>
+              <div className="text-4xl mb-2">🏭</div>
+              <div className="font-extrabold text-slate-900 mb-1">No buckets yet</div>
+              <div className="text-xs">Create your first warehouse advance from the Treasury tab or click "+ Create Bucket" above.</div>
+            </>
+          ) : (
+            <div className="text-sm">No buckets match your filter.</div>
+          )}
+        </div>
+      ) : (
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
+          {filtered.map(function (b) {
+            var badge = statusBadge(b.status);
+            // We don't have spent total in the list query — show amount and status
+            // Detail view does the real math. For card we just show the headline.
+            return (
+              <div
+                key={b.id}
+                onClick={function () { setSelectedBucketId(b.id); setView('detail'); }}
+                className={'cursor-pointer rounded-lg border-2 p-3 hover:shadow-lg transition-all hover:-translate-y-0.5 ' + (b.status === 'closed' ? 'bg-emerald-50 border-emerald-300' : b.status === 'cancelled' ? 'bg-slate-100 border-slate-300 opacity-70' : 'bg-white border-slate-200 hover:border-amber-400')}
+              >
+                <div className="flex items-start justify-between gap-2 mb-2">
+                  <div className="flex-1 min-w-0">
+                    <div className="flex items-center gap-1 mb-0.5">
+                      <span className="text-base">🏭</span>
+                      <div className="font-extrabold text-slate-900 truncate" title={b.recipient_name}>{b.recipient_name}</div>
+                    </div>
+                    <div className="font-mono text-[10px] text-slate-600 truncate" title={b.reference_slug}>{b.reference_slug}</div>
+                  </div>
+                  <span className={'px-1.5 py-0.5 rounded text-[9px] font-extrabold whitespace-nowrap ' + badge.bg + ' ' + badge.text} title={badge.tooltip}>{badge.label}</span>
+                </div>
+                <div className="flex items-end justify-between">
+                  <div className="text-[10px] text-slate-500">{fmtDate(b.issue_date)}</div>
+                  <div className="font-mono font-extrabold text-slate-900 text-lg">{fmtMoney(b.amount, b.currency)}</div>
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
+}

@@ -353,7 +353,7 @@ function RequestQuoteModal({ data, onClose, origins, destinations, openWhatsApp,
   </div>);
 }
 
-export default function ShippingRatesTab({ toast, user, userProfile, isAdmin, customers }) {
+export default function ShippingRatesTab({ toast, user, userProfile, isAdmin, customers, canBulkDeleteBubbles }) {
   const myId = userProfile?.id;
   const [rates, setRates] = useState([]);
   const [quotes, setQuotes] = useState([]);
@@ -433,6 +433,24 @@ export default function ShippingRatesTab({ toast, user, userProfile, isAdmin, cu
   };
   const [selectedRoute, setSelectedRoute] = useState(null);
   const [editingRate, setEditingRate] = useState(null);
+  // v55.83-A.6.27.67 (Max May 23 2026) — bulk-select for route detail page.
+  // Tracks which rate IDs the user has ticked inside a bubble. Cleared when
+  // route changes or the view leaves the route detail. Empty Set = nothing
+  // selected = bulk-action bar hidden.
+  const [selectedRateIds, setSelectedRateIds] = useState(new Set());
+  // v55.83-A.6.27.69 (Phase 2) — bulk-delete permission. Falls back to
+  // isAdmin if the prop isn't passed, so existing super-admin behavior
+  // is preserved. When the new `Delete Shipping Bubbles` permission is
+  // granted to a non-admin user, canBulkDeleteBubbles=true is passed in.
+  const canBulkDelete = canBulkDeleteBubbles !== undefined ? !!canBulkDeleteBubbles : !!isAdmin;
+  // Lifecycle: clear selection whenever the user navigates to a different
+  // route or leaves the route detail view entirely. Prevents "I deleted
+  // these in one bubble and now the ticks are still there in a different
+  // bubble" bugs. Declared right after the state vars it depends on.
+  useEffect(function () {
+    setSelectedRateIds(new Set());
+  }, [selectedRoute, view]);
+
   // v55.82-J (Max May 11 2026): destination-continent filter for the
   // Routes grid. Lets the user narrow to "show me only routes going to
   // Europe" / "Africa" / etc. Persists across reloads like the other
@@ -988,6 +1006,52 @@ export default function ShippingRatesTab({ toast, user, userProfile, isAdmin, cu
   };
 
   const handleDeleteRate = async (rate) => { if (!confirm('Delete this rate?')) return; try { await dbDelete('shipping_rates', rate.id, myId); await loadData(); } catch (err) { toast ? toast.error(err.message) : alert(err.message); } };
+
+  // v55.83-A.6.27.67 (Max May 23 2026) — Bulk-delete inside a bubble.
+  // Deletes all rates whose IDs are in the provided list. Each delete goes
+  // through dbDelete so the audit_log gets a per-rate entry. We don't use
+  // Promise.all here — sequential deletes give us per-rate progress AND if
+  // one fails midway, the user knows exactly how far we got. Returns count
+  // of successful deletes; throws if first delete fails (so user knows
+  // nothing happened).
+  const handleBulkDeleteRates = async (ids, label) => {
+    var arr = Array.from(ids || []);
+    if (arr.length === 0) { alert('No rates selected.'); return; }
+    var prompt = 'Delete ' + arr.length + ' rate' + (arr.length === 1 ? '' : 's') +
+      (label ? ' (' + label + ')' : '') +
+      '?\n\nThis permanently removes the rows from the database. Cannot be undone. Each delete is logged to the audit trail.';
+    if (!confirm(prompt)) return;
+    var succeeded = 0;
+    var failed = [];
+    for (var i = 0; i < arr.length; i++) {
+      var rateId = arr[i];
+      try {
+        await dbDelete('shipping_rates', rateId, myId);
+        succeeded++;
+      } catch (err) {
+        console.error('[bulk-delete] rate ' + rateId + ' failed:', err);
+        failed.push({ id: rateId, error: (err && err.message) || String(err) });
+        // If the first one fails, bail — likely a permission or auth issue
+        // that will fail for all of them, no point in spamming the audit log.
+        if (succeeded === 0) {
+          alert('Bulk delete aborted on first failure: ' + (err && err.message) +
+            '\n\nNo rates were deleted. Check your permissions and try again.');
+          return;
+        }
+      }
+    }
+    var msg = 'Deleted ' + succeeded + ' of ' + arr.length + ' rate' + (arr.length === 1 ? '' : 's') + '.';
+    if (failed.length > 0) {
+      msg += '\n\n' + failed.length + ' failed:\n' + failed.slice(0, 5).map(function (f) { return '  • ' + f.error; }).join('\n');
+      if (failed.length > 5) msg += '\n  ... and ' + (failed.length - 5) + ' more (see console).';
+    }
+    if (toast && toast.success) {
+      toast.success('Bulk delete: ' + succeeded + '/' + arr.length + ' deleted' + (failed.length > 0 ? ' (' + failed.length + ' failed)' : ''));
+    }
+    if (failed.length > 0) alert(msg);
+    setSelectedRateIds(new Set());
+    await loadData();
+  };
 
   // v55.82-N — Compute a per-field "did this come through" report for the
   // 21 template fields. Returns an array of { field, label, dbField,
@@ -3556,9 +3620,131 @@ Date: ${today}`;
           <span className="text-[10px] font-bold text-emerald-700">🏆 Best rate in period ({bestCurrency}): {bestRate.vendor_name} {bestRate.shipping_line ? '/ '+bestRate.shipping_line : ''}</span>
           <span className="text-sm font-extrabold text-emerald-600">{fCur(bestRate.rate_amount, bestRate.currency)} <span className="text-[10px] font-normal">({bestRate.effective_date})</span></span>
         </div>}
+        {/* v55.83-A.6.27.67 (Max May 23 2026) — bulk-action bar.
+            Super-admin only. Quick-select buttons + selection count + bulk
+            delete. Calculated from `filtered` so it respects the current
+            date-window + hide-expired filters above (you can't accidentally
+            bulk-delete rates that aren't visible). Stays hidden until
+            something is selected, so non-super-admin users never see it.
+            Quick-select buttons: "All Visible", "Historical (Expired)",
+            "Not Booked", "Clear". Each operates on `filtered` for safety. */}
+        {canBulkDelete && (() => {
+          var visibleIds = filtered.map(function (r) { return r.id; });
+          var expiredIds = filtered.filter(function (r) { return isExpired(r.expiry_date); }).map(function (r) { return r.id; });
+          var notBookedIds = filtered.filter(function (r) { return !r.booked; }).map(function (r) { return r.id; });
+          var notBookedExpiredIds = filtered.filter(function (r) { return isExpired(r.expiry_date) && !r.booked; }).map(function (r) { return r.id; });
+          var selectedInView = visibleIds.filter(function (id) { return selectedRateIds.has(id); }).length;
+          return (
+            <div className="bg-slate-100 rounded-lg px-3 py-2 mb-2 border border-slate-200 flex flex-wrap items-center gap-2">
+              <span className="text-[10px] font-bold text-slate-700">Bulk select / تحديد متعدد:</span>
+              <button
+                type="button"
+                onClick={function () {
+                  var s = new Set(selectedRateIds);
+                  visibleIds.forEach(function (id) { s.add(id); });
+                  setSelectedRateIds(s);
+                }}
+                className="px-2 py-0.5 rounded border border-slate-300 bg-white text-slate-700 text-[10px] font-semibold hover:bg-slate-50"
+                title={'Tick all ' + visibleIds.length + ' rates currently visible (respects your filters above)'}
+              >
+                ☑ All Visible ({visibleIds.length})
+              </button>
+              <button
+                type="button"
+                onClick={function () {
+                  var s = new Set(selectedRateIds);
+                  expiredIds.forEach(function (id) { s.add(id); });
+                  setSelectedRateIds(s);
+                }}
+                disabled={expiredIds.length === 0}
+                className={'px-2 py-0.5 rounded border text-[10px] font-semibold ' + (expiredIds.length === 0 ? 'bg-slate-100 text-slate-400 border-slate-200 cursor-not-allowed' : 'bg-red-50 border-red-300 text-red-700 hover:bg-red-100')}
+                title="Tick all expired rates in the visible list"
+              >
+                🗓️ Historical / Expired ({expiredIds.length})
+              </button>
+              <button
+                type="button"
+                onClick={function () {
+                  var s = new Set(selectedRateIds);
+                  notBookedIds.forEach(function (id) { s.add(id); });
+                  setSelectedRateIds(s);
+                }}
+                disabled={notBookedIds.length === 0}
+                className={'px-2 py-0.5 rounded border text-[10px] font-semibold ' + (notBookedIds.length === 0 ? 'bg-slate-100 text-slate-400 border-slate-200 cursor-not-allowed' : 'bg-amber-50 border-amber-300 text-amber-800 hover:bg-amber-100')}
+                title="Tick everything that isn't a confirmed booking"
+              >
+                📭 Not Booked ({notBookedIds.length})
+              </button>
+              <button
+                type="button"
+                onClick={function () {
+                  var s = new Set(selectedRateIds);
+                  notBookedExpiredIds.forEach(function (id) { s.add(id); });
+                  setSelectedRateIds(s);
+                }}
+                disabled={notBookedExpiredIds.length === 0}
+                className={'px-2 py-0.5 rounded border text-[10px] font-semibold ' + (notBookedExpiredIds.length === 0 ? 'bg-slate-100 text-slate-400 border-slate-200 cursor-not-allowed' : 'bg-orange-50 border-orange-300 text-orange-800 hover:bg-orange-100')}
+                title="Safest bulk delete — expired + unused rates. Booked rates are PROTECTED."
+              >
+                💡 Expired & Not Booked ({notBookedExpiredIds.length})
+              </button>
+              {selectedRateIds.size > 0 && (
+                <>
+                  <button
+                    type="button"
+                    onClick={function () { setSelectedRateIds(new Set()); }}
+                    className="px-2 py-0.5 rounded border border-slate-300 bg-white text-slate-600 text-[10px] font-semibold hover:bg-slate-50"
+                    title="Untick everything"
+                  >
+                    ✗ Clear
+                  </button>
+                  <span className="ml-auto flex items-center gap-2">
+                    <span className="text-[10px] font-bold text-slate-800 bg-yellow-100 px-2 py-0.5 rounded">
+                      {selectedRateIds.size} selected{selectedInView !== selectedRateIds.size ? ' (' + selectedInView + ' visible)' : ''}
+                    </span>
+                    <button
+                      type="button"
+                      onClick={function () {
+                        var label = (selectedRoute && (selectedRoute.pol || selectedRoute.origin)) +
+                          ' → ' + (selectedRoute && (selectedRoute.pod || selectedRoute.destination));
+                        handleBulkDeleteRates(selectedRateIds, label);
+                      }}
+                      className="px-3 py-1 rounded bg-red-600 hover:bg-red-700 text-white text-[11px] font-extrabold shadow"
+                      title="Delete the ticked rates permanently. Each deletion is audit-logged."
+                    >
+                      🗑️ Delete Selected ({selectedRateIds.size})
+                    </button>
+                  </span>
+                </>
+              )}
+            </div>
+          );
+        })()}
       <div className="overflow-auto max-h-[420px] rounded-lg border border-slate-200">
         <table className="w-full border-collapse text-xs">
           <thead className="sticky top-0 z-10"><tr className="bg-slate-50">
+            {/* v55.83-A.6.27.67 — checkbox column for bulk-select. Header
+                tick = toggle all visible (in `filtered`). Only rendered for
+                super-admin. */}
+            {canBulkDelete && (
+              <th className="px-2 py-2 text-[10px] text-center" style={{ width: 28 }}>
+                <input
+                  type="checkbox"
+                  className="w-3.5 h-3.5 cursor-pointer"
+                  title="Tick all visible rates"
+                  checked={filtered.length > 0 && filtered.every(function (r) { return selectedRateIds.has(r.id); })}
+                  onChange={function (e) {
+                    var s = new Set(selectedRateIds);
+                    if (e.target.checked) {
+                      filtered.forEach(function (r) { s.add(r.id); });
+                    } else {
+                      filtered.forEach(function (r) { s.delete(r.id); });
+                    }
+                    setSelectedRateIds(s);
+                  }}
+                />
+              </th>
+            )}
             <th className="px-2 py-2 text-[10px] text-left">Date</th>
             <th className="px-2 py-2 text-[10px] text-left">Vendor / Forwarder</th>
             <th className="px-2 py-2 text-[10px] text-left">Shipping Line</th>
@@ -3589,8 +3775,28 @@ Date: ${today}`;
             return (<tr
               key={r.id}
               id={'rate-row-' + r.id}
-              className={'border-b border-slate-50 transition-all duration-300 ' + (isBest ? 'bg-emerald-50 ' : exp ? 'bg-slate-50 ' : '') + (r.booked ? ' bg-green-50' : '') + (isHighlighted ? ' ring-4 ring-yellow-400 ring-offset-1 bg-yellow-50' : '')}
+              className={'border-b border-slate-50 transition-all duration-300 ' + (isBest ? 'bg-emerald-50 ' : exp ? 'bg-slate-50 ' : '') + (r.booked ? ' bg-green-50' : '') + (isHighlighted ? ' ring-4 ring-yellow-400 ring-offset-1 bg-yellow-50' : '') + (selectedRateIds.has(r.id) ? ' bg-yellow-100 ring-1 ring-yellow-400' : '')}
             >
+              {/* v55.83-A.6.27.67 — per-row select checkbox.
+                  Click toggles the rate's id in the selectedRateIds Set. Row
+                  background switches to yellow when selected for visual feedback.
+                  v55.83-A.6.27.69 — now gated on canBulkDelete (Delete Shipping
+                  Bubbles permission, falls back to isAdmin). */}
+              {canBulkDelete && (
+                <td className="px-2 py-1.5 text-center">
+                  <input
+                    type="checkbox"
+                    className="w-3.5 h-3.5 cursor-pointer"
+                    checked={selectedRateIds.has(r.id)}
+                    onChange={function (e) {
+                      var s = new Set(selectedRateIds);
+                      if (e.target.checked) s.add(r.id); else s.delete(r.id);
+                      setSelectedRateIds(s);
+                    }}
+                    title={selectedRateIds.has(r.id) ? 'Untick to remove from bulk selection' : 'Tick to include in bulk delete'}
+                  />
+                </td>
+              )}
               <td className="px-2 py-1.5">{r.effective_date}</td>
               <td className="px-2 py-1.5 font-semibold">{isBest && <span className="text-emerald-500 mr-1">★</span>}{r.vendor_name}</td>
               <td className="px-2 py-1.5">{r.shipping_line || '—'}</td>

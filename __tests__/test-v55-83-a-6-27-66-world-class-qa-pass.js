@@ -92,11 +92,11 @@ ok('D3: .font-extrabold color clobber REMOVED (no override forcing white on bold
 // ══════════════════════════════════════════════════════════════════
 ok('E1 (Issue 10): openCloneTemplate replaces variant flow',
   /function openCloneTemplate\(template\)/.test(pm));
-ok('E2 (Issue 10): openCreateVariant is now a stub that calls openCloneTemplate',
-  /function openCreateVariant\(template\) \{ openCloneTemplate\(template\); \}/.test(pm));
-ok('E3 (Issue 9): yellow warning uses inline styles (defensive against bg-yellow-100 missing)',
-  /Smooth leather is typically only available in Black/.test(pm) &&
-  /style=\{\{ color: '#fef3c7' \}\}/.test(pm));
+ok('E2 (Issue 10): openCreateVariant stub REMOVED in v55.83-A.6.27.71 Phase 4 (replaced by openCloneTemplate calls at point-of-use)',
+  !/function openCreateVariant\(template\) \{ openCloneTemplate\(template\); \}/.test(pm) &&
+  /function openCloneTemplate\(template\)/.test(pm));
+ok('E3 (Issue 9): yellow leather/black warning REMOVED with dead variant modal in v55.83-A.6.27.71 Phase 4',
+  !/Smooth leather is typically only available in Black/.test(pm));
 
 // ══════════════════════════════════════════════════════════════════
 // PART F — Issue 11: manual Add Product silent-fail FIXED
@@ -277,8 +277,8 @@ ok('T4: FX rate delete now writes audit_log entry',
 // ══════════════════════════════════════════════════════════════════
 // PART V — Version stamp + WhatsNewWidget entry
 // ══════════════════════════════════════════════════════════════════
-ok('V1: page.jsx stamped v55.83-A.6.27.66',
-  /v55\.83-A\.6\.27\.66/.test(page) && !/BUILD v55\.83-A\.6\.27\.65/.test(page));
+ok('V1: page.jsx stamped v55.83-A.6.27.66 or later',
+  /v55\.83-A\.6\.27\.(6[6-9]|[7-9][0-9])/.test(page));
 ok('V2: WhatsNewWidget BUILD_HISTORY has v55.83-A.6.27.66 entry at top',
   /version: 'v55\.83-A\.6\.27\.66'/.test(wnw));
 ok('V3: WhatsNewWidget .66 entry has layman public bullets (Permanent Rule 1)',

@@ -43,7 +43,22 @@ import BankTab from '../components/BankTab';
 import QuotesTab from '../components/QuotesTab';
 import EgyptBankTab from '../components/EgyptBankTab';
 import OpenAccountsTab from '../components/OpenAccountsTab';
-// v55.83-A.6.27.66 — Sales-rep KPI dashboard
+// v55.83-A.6.27.71 (Phase 2) — Warehouse Buckets.
+// Both components live behind the `warehouse_buckets_enabled` feature flag,
+// which defaults to OFF. When the flag is OFF, neither the "+ Warehouse
+// Advance" button nor the bucket list section renders — existing flows
+// (Treasury "+ New Transaction", Warehouse "+ New Expense") work exactly
+// as they did before. Treasury transaction modal code is completely
+// untouched by this phase.
+import WarehouseBucketCreate from '../components/WarehouseBucketCreate';
+import WarehouseBucketList from '../components/WarehouseBucketList';
+// v55.83-A.6.27.71 (Phase 4) — Buckets History & Analytics in Warehouse tab.
+// Read-only multi-year lens. Reads from warehouse_buckets + entries tables
+// directly — does NOT query treasury (separate lens from company expense
+// report). Renders below the WarehouseBucketList in the warehouse tab.
+import WarehouseBucketsHistory from '../components/WarehouseBucketsHistory';
+import { getFeatureFlag, getFeatureFlagSync } from '../lib/feature-flags';
+// v55.83-A.6.27.71 — Sales-rep KPI dashboard
 import SalesRepDashboard from '../components/SalesRepDashboard';
 import PhoneWidget from '../components/PhoneWidget';
 import ReportsTab from '../components/ReportsTab';
@@ -373,7 +388,7 @@ export default function App() {
   const [dt, setDt] = useState(today());
   const [query, setQuery] = useState('');
   const [customerFilter, setCustomerFilter] = useState('');
-  // v55.83-A.6.27.66 — Advanced invoice filters (collapsible panel).
+  // v55.83-A.6.27.71 — Advanced invoice filters (collapsible panel).
   // salesRepFilter: filter by sales_rep name (empty = all reps)
   // amountMin / amountMax: filter by total_amount range (empty = no limit)
   // hasOutstanding: 'all' | 'yes' | 'no' — only invoices with outstanding > 0 (or fully collected)
@@ -389,6 +404,14 @@ export default function App() {
   // Data
   const [invoices, setInvoices] = useState([]);
   const [treasury, setTreasury] = useState([]);
+  // v55.83-A.6.27.71 (Phase 3): bucket-status map for the treasury renderer.
+  // When a bucket placeholder treasury row is rendered, we look up the bucket
+  // status here to decide whether to show "pending" (amber) or "reconciled"
+  // (green) styling. Loaded lazily via a separate query that only runs when
+  // bucket placeholder rows are present in the filtered treasury list, and
+  // cached in this state. Updated alongside treasury via loadAllData ripples.
+  // KEY: this NEVER modifies the treasury row itself — just decides UI.
+  const [bucketStatusMap, setBucketStatusMap] = useState({});
   const [checks, setChecks] = useState([]);
   const [debts, setDebts] = useState([]);
   const [customers, setCustomers] = useState([]);
@@ -471,6 +494,79 @@ export default function App() {
   const [showAddPayment, setShowAddPayment] = useState(false);
   const [showAddInvoice, setShowAddInvoice] = useState(false);
   const [showAddTreasury, setShowAddTreasury] = useState(false);
+  // v55.83-A.6.27.71 (Phase 2): bucket-create modal state. Completely
+  // independent from showAddTreasury — they don't share any handlers or
+  // form state. The treasury modal flow is untouched.
+  const [showBucketModal, setShowBucketModal] = useState(false);
+  // Bumped each time a bucket is created so the WarehouseBucketList reloads.
+  const [bucketReloadToken, setBucketReloadToken] = useState(0);
+  // Feature flag — warmed on mount via useEffect below. UI checks read
+  // getFeatureFlagSync() which falls through to false until the warm
+  // completes (safe default — buttons stay hidden until we KNOW the flag is on).
+  const [bucketsFeatureEnabled, setBucketsFeatureEnabled] = useState(false);
+  useEffect(function () {
+    getFeatureFlag('warehouse_buckets_enabled', false).then(setBucketsFeatureEnabled).catch(function () {
+      setBucketsFeatureEnabled(false);
+    });
+  }, []);
+  // v55.83-A.6.27.71 (Phase 3): bucket entries for CLOSED buckets, keyed
+  // by bucket_id. Used by the Expense Report aggregation to substitute
+  // closed bucket entries' real categories for the "Warehouse Bucket"
+  // placeholder. Loaded as a side effect of bucketStatusMap, only for
+  // buckets that resolve to 'closed' status. Cleared when no closed
+  // buckets appear in current view.
+  const [bucketEntriesByBucket, setBucketEntriesByBucket] = useState({});
+  useEffect(function () {
+    var closedIds = Object.keys(bucketStatusMap || {}).filter(function (id) {
+      return bucketStatusMap[id] === 'closed';
+    });
+    if (closedIds.length === 0) {
+      setBucketEntriesByBucket({});
+      return;
+    }
+    var cancelled = false;
+    (async function () {
+      try {
+        var res = await supabase.from('warehouse_bucket_entries').select('*').in('bucket_id', closedIds);
+        if (cancelled || res.error) return;
+        var map = {};
+        (res.data || []).forEach(function (e) {
+          if (!map[e.bucket_id]) map[e.bucket_id] = [];
+          map[e.bucket_id].push(e);
+        });
+        setBucketEntriesByBucket(map);
+      } catch (e) {
+        console.warn('[bucket-entries-map] load failed:', e);
+      }
+    })();
+    return function () { cancelled = true; };
+  }, [bucketStatusMap]);
+  useEffect(function () {
+    var bucketIds = (treasury || [])
+      .filter(function (t) { return t && t.bucket_role === 'placeholder' && t.bucket_id; })
+      .map(function (t) { return t.bucket_id; });
+    if (bucketIds.length === 0) {
+      setBucketStatusMap({});
+      return;
+    }
+    // Dedupe
+    var uniq = {};
+    bucketIds.forEach(function (id) { uniq[id] = true; });
+    var unique = Object.keys(uniq);
+    var cancelled = false;
+    (async function () {
+      try {
+        var res = await supabase.from('warehouse_buckets').select('id,status').in('id', unique);
+        if (cancelled || res.error) return;
+        var map = {};
+        (res.data || []).forEach(function (b) { map[b.id] = b.status; });
+        setBucketStatusMap(map);
+      } catch (e) {
+        console.warn('[bucket-status-map] load failed:', e);
+      }
+    })();
+    return function () { cancelled = true; };
+  }, [treasury]);
   // v55.82-F — Per-tab opt-in: Nadia is suppressed by default in Treasury
   // (per Max May 11 2026 spec), and only appears when the user explicitly
   // clicks "Wake Nadia" on the Treasury tab. Resets on tab change so each
@@ -1813,7 +1909,7 @@ export default function App() {
     if (query) arr = arr.filter(s =>
       (s.customer_name || '').includes(query) || (s.customer_name_en || '').toLowerCase().includes(query.toLowerCase()) || (s.order_number || '').includes(query)
     );
-    // v55.83-A.6.27.66 (advanced filters) — trim + case-insensitive sales-rep
+    // v55.83-A.6.27.71 (advanced filters) — trim + case-insensitive sales-rep
     // match so "John Smith" matches "  john smith  " etc. (M2 fix).
     if (salesRepFilter) {
       const repLow = salesRepFilter.trim().toLowerCase();
@@ -1834,7 +1930,7 @@ export default function App() {
     return arr;
   }, [invoices, mode, df, dt, query, customerFilter, invoiceSort, salesRepFilter, amountMin, amountMax, hasOutstandingFilter]);
 
-  // v55.83-A.6.27.66 (C1 + H3 + M6, Max May 23 2026) — Sales totals are now
+  // v55.83-A.6.27.71 (C1 + H3 + M6, Max May 23 2026) — Sales totals are now
   // multi-currency aware. Previously the page summed total_amount/outstanding
   // across USD + EGP invoices as if currencies were the same — meaningless.
   //
@@ -5247,7 +5343,7 @@ export default function App() {
                   Was: text-zinc-500 (mid-gray) on #0a0a0a (true black) — barely readable.
                   Now: bright amber pill on dark background — readable at any zoom, still
                   matches the terminal aesthetic. */}
-              <span className="text-[10px] font-mono font-extrabold hidden md:inline px-2 py-0.5 rounded" style={{ fontFamily: '"JetBrains Mono", monospace', background: '#fef3c7', color: '#451a03', border: '1px solid #d97706' }}>v55.83-A.6.27.66</span>
+              <span className="text-[10px] font-mono font-extrabold hidden md:inline px-2 py-0.5 rounded" style={{ fontFamily: '"JetBrains Mono", monospace', background: '#fef3c7', color: '#451a03', border: '1px solid #d97706' }}>v55.83-A.6.27.71</span>
               {/* Live clock — also bumped to readable amber. */}
               <span
                 className="hidden lg:inline text-[10px] font-mono ml-2 pl-2 border-l border-zinc-700"
@@ -9238,6 +9334,26 @@ export default function App() {
             state so when the child closes via Cancel, the form returns
             with all values intact.
         ========================================== */}
+        {/* v55.83-A.6.27.71 (Phase 2) — Bucket-create modal. Lives at the
+            page level so it can be triggered from either Treasury tab or
+            Warehouse tab. Renders only when showBucketModal is true. Has
+            ZERO interaction with showAddTreasury — both can never be open
+            simultaneously since UI buttons are separate, but even if they
+            could, they have independent state machines. */}
+        <WarehouseBucketCreate
+          open={showBucketModal}
+          onClose={() => { setShowBucketModal(false); }}
+          onCreated={(bucket) => {
+            // Bump reload token so the bucket list refreshes; also reload
+            // treasury data so the new placeholder row appears immediately.
+            setBucketReloadToken(t => t + 1);
+            try { loadAllData && loadAllData(); } catch (_) {}
+          }}
+          userId={userProfile?.id}
+          users={users}
+          toast={toast}
+        />
+
         {showAddTreasury && !pendingTreasuryRecord && !duplicateConfirm && (
           <Modal onClose={() => {
             // v55.82-E — Full reset on every close path. See companion notes
@@ -11467,9 +11583,37 @@ export default function App() {
               const divMax = divSorted[0]?.[1] || 1;
 
               const catData = {};
+              // v55.83-A.6.27.71 (Phase 3): Expense Report integration —
+              // when a treasury row is a bucket placeholder AND that bucket
+              // is CLOSED, replace the placeholder amount with the bucket
+              // entry breakdown (real categories from the accountant's work).
+              // For 'open' / 'pending_approval' / 'fully_spent' buckets, the
+              // placeholder stays as "Warehouse Bucket" (unreconciled).
+              // For 'cancelled' buckets, the placeholder is excluded entirely
+              // (since the refund credit offsets the original cash-out).
+              //
+              // IMPORTANT INVARIANT: The treasury row itself NEVER changes.
+              // This is purely a read-side aggregation that decides what
+              // category to credit the spend toward in this chart.
               filteredTreasury.forEach(t => {
+                if (Number(t.cash_out || 0) <= 0) return;
+                if (t.bucket_role === 'placeholder' && t.bucket_id) {
+                  var bStatus = bucketStatusMap[t.bucket_id];
+                  if (bStatus === 'cancelled') return;  // refund credit balances it
+                  if (bStatus === 'closed' && bucketEntriesByBucket[t.bucket_id]) {
+                    // Replace placeholder amount with per-entry category breakdown
+                    bucketEntriesByBucket[t.bucket_id].forEach(function (e) {
+                      var c = e.category || 'Uncategorized';
+                      catData[c] = (catData[c] || 0) + Number(e.amount || 0);
+                    });
+                    return;
+                  }
+                  // Open / fully_spent / pending_approval — show as "Warehouse Bucket"
+                  catData['Warehouse Bucket'] = (catData['Warehouse Bucket'] || 0) + Number(t.cash_out);
+                  return;
+                }
                 const cat = t.expense_category || 'Uncategorized';
-                if (Number(t.cash_out || 0) > 0) catData[cat] = (catData[cat] || 0) + Number(t.cash_out);
+                catData[cat] = (catData[cat] || 0) + Number(t.cash_out);
               });
               const catSorted = Object.entries(catData).sort((a, b) => b[1] - a[1]).slice(0, 8);
               const catMax = catSorted[0]?.[1] || 1;
@@ -11700,13 +11844,13 @@ export default function App() {
                 }} className="px-3 py-1.5 bg-slate-100 text-slate-600 rounded-lg text-xs font-semibold hover:bg-slate-200">
                   📥 Export
                 </button>
-                {/* v55.83-A.6.27.66 — Toggle the Sales-Rep KPI dashboard */}
+                {/* v55.83-A.6.27.71 — Toggle the Sales-Rep KPI dashboard */}
                 <button onClick={() => setShowRepDashboard(v => !v)}
                   className={'px-3 py-1.5 rounded-lg text-xs font-extrabold ' +
                     (showRepDashboard ? 'bg-indigo-600 text-white hover:bg-indigo-700' : 'bg-indigo-100 text-indigo-800 hover:bg-indigo-200')}>
                   📊 Rep KPIs
                 </button>
-                {/* v55.83-A.6.27.66 — Toggle the advanced filters panel */}
+                {/* v55.83-A.6.27.71 — Toggle the advanced filters panel */}
                 <button onClick={() => setShowAdvFilters(v => !v)}
                   className={'px-3 py-1.5 rounded-lg text-xs font-extrabold ' +
                     (showAdvFilters ? 'bg-slate-700 text-white hover:bg-slate-800' : 'bg-slate-100 text-slate-700 hover:bg-slate-200')}>
@@ -11715,7 +11859,7 @@ export default function App() {
               </div>
             </div>
 
-            {/* v55.83-A.6.27.66 — Advanced filters panel.
+            {/* v55.83-A.6.27.71 — Advanced filters panel.
                 Collapsible. Adds: sales rep, amount min/max, has-outstanding. */}
             {showAdvFilters && (
               <div className="bg-slate-50 border border-slate-200 rounded-lg p-3 mb-3">
@@ -11767,13 +11911,13 @@ export default function App() {
               </div>
             )}
 
-            {/* v55.83-A.6.27.66 — Sales-Rep KPI dashboard. Toggleable. */}
+            {/* v55.83-A.6.27.71 — Sales-Rep KPI dashboard. Toggleable. */}
             {showRepDashboard && (
               <div className="mb-3">
                 <SalesRepDashboard invoices={filteredInvoices} label={'in current Sales tab filter'} />
               </div>
             )}
-            {/* v55.83-A.6.27.66 (C1, Max May 23 2026) — multi-currency warning
+            {/* v55.83-A.6.27.71 (C1, Max May 23 2026) — multi-currency warning
                 banner. The tile numbers below add invoiced/collected/outstanding
                 without converting currencies. If multiple currencies are
                 present in the filtered range, the user sees a warning that
@@ -11860,7 +12004,7 @@ export default function App() {
                 )}
               </div>
             </div>
-            {/* v55.83-A.6.27.66 (C1) — per-currency breakdown — always visible
+            {/* v55.83-A.6.27.71 (C1) — per-currency breakdown — always visible
                 so user can see currencies side-by-side without having to filter. */}
             {totalsByCurrency.length > 0 && (
               <div className="mb-3 rounded-xl border-2 p-3" style={{ background: 'rgba(15,23,42,0.7)', borderColor: '#334155' }}>
@@ -12343,6 +12487,23 @@ export default function App() {
                   className="px-3 py-1.5 bg-blue-500 text-white rounded-lg text-xs font-semibold hover:bg-blue-600">
                   + New Transaction
                 </button>
+                {/* v55.83-A.6.27.71 (Phase 2) — "+ Warehouse Advance" button.
+                    Sits next to "+ New Transaction". Opens the dedicated
+                    bucket-create modal — completely separate code path from
+                    the treasury transaction modal. Gated behind the feature
+                    flag AND a permission check (super-admin OR Manage
+                    Warehouse Buckets OR has Treasury access). When the flag
+                    is OFF, the button doesn't render — existing layout
+                    unchanged. */}
+                {bucketsFeatureEnabled && (isSuperAdmin || (modulePerms && (modulePerms['Manage Warehouse Buckets'] || modulePerms['Treasury'] || modulePerms['Edit Treasury']))) && (
+                  <button
+                    onClick={() => { setShowBucketModal(true); }}
+                    className="px-3 py-1.5 bg-amber-600 text-white rounded-lg text-xs font-semibold hover:bg-amber-700 shadow"
+                    title="Create a warehouse advance bucket — issues a treasury cash-out + opens a bucket for the accountant to itemize the spend"
+                  >
+                    🏭 + Warehouse Advance
+                  </button>
+                )}
                 <button onClick={() => {
                   const ft = treasury.filter(t => inRange(t.transaction_date, mode, df, dt));
                   const rows = ft.map(t => ({
@@ -12780,8 +12941,27 @@ export default function App() {
                         && !txn.linked_invoice_id
                         && !txn.is_bank_placeholder
                         && !invoices.find(i => String(i.order_number || '') === String(txn.order_number || ''));
+                      // v55.83-A.6.27.71 (Phase 2) — bucket placeholder rows
+                      // get a distinct amber highlight + 🏭 icon. When the
+                      // bucket closes (Phase 3), the same row's visual flips
+                      // to green/reconciled. The amount on this row NEVER
+                      // changes — only the visual treatment + tooltip do.
+                      const isBucketPlaceholder = txn.bucket_role === 'placeholder';
+                      // v55.83-A.6.27.71 (Phase 3) — closed bucket lookup.
+                      // bucketStatusMap is populated in a useEffect that
+                      // watches the treasury array. NEVER touches the
+                      // treasury row data itself.
+                      const bucketStatus = isBucketPlaceholder && txn.bucket_id ? bucketStatusMap[txn.bucket_id] : null;
+                      const isBucketClosed = bucketStatus === 'closed';
+                      const isBucketCancelled = bucketStatus === 'cancelled';
                       const rowClass = "border-b border-slate-100 " +
-                        (isBankPlaceholder
+                        (isBucketClosed
+                          ? "bg-emerald-100 hover:bg-emerald-200 border-l-4 border-l-emerald-600"
+                          : isBucketCancelled
+                          ? "bg-slate-100 hover:bg-slate-200 border-l-4 border-l-slate-500 opacity-70"
+                          : isBucketPlaceholder
+                          ? "bg-amber-100 hover:bg-amber-200 border-l-4 border-l-amber-600"
+                          : isBankPlaceholder
                           ? "bg-indigo-100 hover:bg-indigo-200 border-l-4 border-l-indigo-600"
                           : isOrphanWaiting
                           ? "bg-amber-50 hover:bg-amber-100 border-l-4 border-l-amber-500"
@@ -12798,12 +12978,21 @@ export default function App() {
                       const bankAcc = isBankRow && txn.bank_account_id ? egyptBankAccounts.find(a => a.id === txn.bank_account_id) : null;
                       return (
                       <tr key={txn.id} className={rowClass} style={rowStyle}
-                          title={isOrphanWaiting
+                          title={isBucketClosed
+                            ? "🏭 Warehouse Bucket — RECONCILED. The cash-out stays exactly as-is in Treasury; expense reporting now reflects the per-category breakdown. Open the Warehouse tab to see the ledger."
+                            : isBucketCancelled
+                            ? "🏭 Warehouse Bucket — CANCELLED. A refund credit was posted to Treasury. Open the Warehouse tab for details."
+                            : isBucketPlaceholder
+                            ? "🏭 Warehouse Bucket — advance pending reconciliation. Open the Warehouse tab to log spending against this bucket."
+                            : isOrphanWaiting
                             ? "Waiting for invoice #" + txn.order_number + " to be created — amount shown but not yet credited to any invoice"
                             : isBankRow
                             ? "Bank entry — affects invoice collections only, does NOT impact treasury (safe) net / قيد بنكي — يؤثر على تحصيل الفاتورة فقط، لا يؤثر على رصيد الخزنة"
                             : undefined}>
-                        <td className="px-2 py-1.5 text-[10px] whitespace-nowrap">{txn.transaction_date}</td>
+                        <td className="px-2 py-1.5 text-[10px] whitespace-nowrap">
+                          {isBucketPlaceholder && <span className="mr-1" title={isBucketClosed ? "Reconciled" : isBucketCancelled ? "Cancelled" : "Warehouse Bucket"}>{isBucketClosed ? '✅' : isBucketCancelled ? '✗' : '🏭'}</span>}
+                          {txn.transaction_date}
+                        </td>
                         <td className="px-2 py-1.5 text-[10px] font-semibold text-center">
                           {txn.order_number ? (() => {
                             const matchInv = invoices.find(i => i.order_number === txn.order_number);
@@ -13409,6 +13598,39 @@ export default function App() {
                 </button>
               </div>
             </div>
+
+            {/* v55.83-A.6.27.71 (Phase 2) — Warehouse Buckets section.
+                Sits ABOVE the existing warehouse expense list/forms — doesn't
+                interfere with the existing "+ New Expense" workflow at all.
+                Feature-flag gated, so when OFF the warehouse tab looks
+                exactly like it did before this build. */}
+            {bucketsFeatureEnabled && (
+              <div className="mb-4 p-3 bg-amber-50 rounded-lg border-2 border-amber-200">
+                <WarehouseBucketList
+                  userId={userProfile?.id}
+                  isSuperAdmin={isSuperAdmin}
+                  canCreate={isSuperAdmin || (modulePerms && (modulePerms['Manage Warehouse Buckets'] || modulePerms['Treasury'] || modulePerms['Edit Treasury']))}
+                  canManage={isSuperAdmin || (modulePerms && (modulePerms['Manage Warehouse Buckets'] || modulePerms['Treasury'] || modulePerms['Edit Treasury']))}
+                  canApprove={isSuperAdmin || (modulePerms && modulePerms['Approve Warehouse Buckets'])}
+                  canReopen={isSuperAdmin || (modulePerms && modulePerms['Reopen Closed Buckets'])}
+                  canManageCategories={isSuperAdmin || (modulePerms && modulePerms['Manage Categories'])}
+                  onRequestCreate={() => { setShowBucketModal(true); }}
+                  reloadToken={bucketReloadToken}
+                  onBucketChanged={() => { setBucketReloadToken(t => t + 1); try { loadAllData && loadAllData(); } catch (_) {} }}
+                  toast={toast}
+                />
+                {/* v55.83-A.6.27.71 (Phase 4) — History & Analytics below the
+                    live list. Read-only multi-year lens; reads from buckets
+                    tables only, doesn't touch treasury. */}
+                <WarehouseBucketsHistory
+                  userId={userProfile?.id}
+                  isSuperAdmin={isSuperAdmin}
+                  reloadToken={bucketReloadToken}
+                  toast={toast}
+                />
+              </div>
+            )}
+
             {/* Add Warehouse Expense Modal */}
             {formData.showAddWarehouse && (
               <Modal onClose={() => setFormData({...formData, showAddWarehouse: false})} title="New Warehouse Expense / مصروف مخزن جديد">
@@ -13905,7 +14127,7 @@ export default function App() {
             SHIPPING RATES TAB
         ========================================== */}
         {tab === 'shipping' && (
-          <SafeSection label="Shipping"><ShippingRatesTab toast={toast} user={user} userProfile={userProfile} isAdmin={isAdmin} customers={customers} /></SafeSection>
+          <SafeSection label="Shipping"><ShippingRatesTab toast={toast} user={user} userProfile={userProfile} isAdmin={isAdmin} customers={customers} canBulkDeleteBubbles={isSuperAdmin || (modulePerms && modulePerms['Delete Shipping Bubbles'] === true)} /></SafeSection>
         )}
 
         {tab === 'bank' && (
@@ -14332,7 +14554,7 @@ export default function App() {
                       latest fix is actually deployed. If he doesn't see this
                       tag in the modal, his browser is running stale JS. */}
                   <div className="mt-1.5 inline-block px-2 py-0.5 rounded bg-amber-900/60 text-amber-100 text-[10px] font-mono font-bold tracking-wide">
-                    BUILD v55.83-A.6.27.66
+                    BUILD v55.83-A.6.27.71
                   </div>
                 </div>
                 <button onClick={() => closePendingTreasuryModal()}
@@ -14967,7 +15189,7 @@ export default function App() {
                     معاملة قد تكون مكررة
                   </div>
                   <div className="mt-1.5 inline-block px-2 py-0.5 rounded bg-amber-900/60 text-amber-100 text-[10px] font-mono font-bold tracking-wide">
-                    BUILD v55.83-A.6.27.66
+                    BUILD v55.83-A.6.27.71
                   </div>
                 </div>
                 <button

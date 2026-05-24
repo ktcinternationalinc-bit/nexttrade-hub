@@ -116,16 +116,12 @@ export default function InventoryProductMaster(props) {
 
   // Modal state
   var [modalMode, setModalMode] = useState(null); // null | 'new' | 'edit'
-  // v55.83-A.6.27.42 — Create Variant modal state
-  var [variantModalOpen, setVariantModalOpen] = useState(false);
-  var [variantTemplate, setVariantTemplate] = useState(null); // the family template the variant will belong to
-  var [variantForm, setVariantForm] = useState({
-    category_code: '',
-    construction_code: '',
-    backing_code: '',
-    pattern_code: '',
-  });
-  var [variantBusy, setVariantBusy] = useState(false);
+  // v55.83-A.6.27.71 (Phase 4) — Removed dead variant modal state.
+  // The variant modal was replaced by openCloneTemplate() in v55.83-A.6.27.42
+  // but the JSX + state + helpers were left in place. None of variantModalOpen,
+  // variantTemplate, variantForm, variantBusy, closeVariantModal, saveVariant,
+  // openCreateVariant were ever called from anywhere outside this file. Safely
+  // removed in Phase 4. ~115 lines of dead code eliminated.
 
   // v55.83-A.6.27.44d.1 — Variant History modal state
   var [historyVariant, setHistoryVariant] = useState(null);  // when non-null, modal is open
@@ -815,19 +811,8 @@ export default function InventoryProductMaster(props) {
     toast.success('Cloned from template "' + (template.name_en || template.quick_code || 'unnamed') + '" — fill in the name and any remaining classification levels, then Save.');
   }
 
-  // v55.83-A.6.27.NEXT — the old variant modal handlers are kept as no-ops
-  // so any stale references don't crash. They can be removed entirely once
-  // the variant modal JSX is removed (see below — modal is now unused).
-  function openCreateVariant(template) { openCloneTemplate(template); }
-  function closeVariantModal() {
-    setVariantModalOpen(false);
-    setVariantTemplate(null);
-    setVariantForm({ category_code: '', construction_code: '', backing_code: '', pattern_code: '' });
-  }
-  async function saveVariant() {
-    // No-op kept for stale references. New flow uses save() in the main modal.
-    toast.error('Variant flow has been replaced by Clone-Template — open a template row, click + Product, and use the main form.');
-  }
+  // v55.83-A.6.27.71 (Phase 4) — Removed openCreateVariant + closeVariantModal +
+  // saveVariant helpers along with their modal JSX (see state block above).
 
   // Permission denied
   if (!canView) {
@@ -1385,122 +1370,6 @@ export default function InventoryProductMaster(props) {
         onClose={function () { setHistoryVariant(null); }}
       />
 
-      {variantModalOpen && variantTemplate && (
-        <div className="fixed inset-0 bg-black/60 z-[60] flex items-center justify-center p-4" onClick={closeVariantModal}>
-          <div
-            className="bg-white text-slate-900 rounded-2xl shadow-2xl w-full max-w-2xl"
-            onClick={function (e) { e.stopPropagation(); }}
-          >
-            <div className="bg-purple-700 text-white rounded-t-2xl px-6 py-4">
-              <div className="text-xs font-bold uppercase tracking-wider text-purple-100">Create Variant</div>
-              <div className="text-xl font-extrabold mt-0.5">{variantTemplate.quick_code} — {variantTemplate.name_en}</div>
-              <div className="text-xs text-purple-100 mt-1">
-                Pick the 4 specs below. If a variant with these specs already exists, the system reuses it. Otherwise a new variant is created (next sequential suffix like {variantTemplate.quick_code}-001, -002, ...).
-              </div>
-            </div>
-            <div className="p-6 space-y-4">
-              <div className="grid grid-cols-2 gap-4">
-                <label className="text-xs font-extrabold text-slate-900">Category *
-                  <select
-                    value={variantForm.category_code}
-                    onChange={function (e) { setVariantForm(Object.assign({}, variantForm, { category_code: e.target.value })); }}
-                    className="w-full mt-1 px-3 py-2 border-2 border-slate-300 rounded text-sm bg-white text-slate-900 font-semibold"
-                  >
-                    <option value="">— pick —</option>
-                    <option value="SM">SM · Smooth</option>
-                    <option value="EM">EM · Embossed</option>
-                  </select>
-                </label>
-                <label className="text-xs font-extrabold text-slate-900">Construction *
-                  <select
-                    value={variantForm.construction_code}
-                    onChange={function (e) { setVariantForm(Object.assign({}, variantForm, { construction_code: e.target.value })); }}
-                    className="w-full mt-1 px-3 py-2 border-2 border-slate-300 rounded text-sm bg-white text-slate-900 font-semibold"
-                  >
-                    <option value="">— pick —</option>
-                    <option value="RG">RG · Regular</option>
-                    <option value="PF">PF · Perforated</option>
-                    <option value="FN">FN · Foam Non-Perforated</option>
-                    <option value="FP">FP · Foam Perforated</option>
-                    <option value="TL">TL · Tri-Lam</option>
-                  </select>
-                </label>
-                <label className="text-xs font-extrabold text-slate-900">Backing *
-                  <select
-                    value={variantForm.backing_code}
-                    onChange={function (e) { setVariantForm(Object.assign({}, variantForm, { backing_code: e.target.value })); }}
-                    className="w-full mt-1 px-3 py-2 border-2 border-slate-300 rounded text-sm bg-white text-slate-900 font-semibold"
-                  >
-                    <option value="">— pick —</option>
-                    <option value="BK">BK · Black</option>
-                    <option value="CT">CT · Cotton</option>
-                    <option value="FL">FL · Felt</option>
-                    <option value="GR">GR · Gray</option>
-                    <option value="GS">GS · Gray Suede</option>
-                    <option value="NW">NW · Non-Woven</option>
-                    <option value="OT">OT · Other</option>
-                  </select>
-                </label>
-                <label className="text-xs font-extrabold text-slate-900">Pattern *
-                  <select
-                    value={variantForm.pattern_code}
-                    onChange={function (e) { setVariantForm(Object.assign({}, variantForm, { pattern_code: e.target.value })); }}
-                    className="w-full mt-1 px-3 py-2 border-2 border-slate-300 rounded text-sm bg-white text-slate-900 font-semibold"
-                  >
-                    <option value="">— pick —</option>
-                    <option value="NA">NA · None</option>
-                    <option value="HC">HC · Honeycomb</option>
-                    <option value="MG">MG · Mechanical Grain</option>
-                    <option value="RG">RG · Normal Emboss</option>
-                  </select>
-                </label>
-              </div>
-              {/* Smooth-Black soft warning — Smooth typically only available in Black */}
-              {variantForm.category_code === 'SM' && variantTemplate && (function () {
-                var slug = variantTemplate.classification_slug || '';
-                var parts = slug.split('-');
-                // Slug order: family - category - grade - construction - backing - color - pattern - spec - country
-                // For templates, category/constr/back/pattern are blank, so color is at index 5
-                var colorCode = parts[5] || '';
-                if (colorCode && colorCode !== 'BK') {
-                  return (
-                    /* v55.83-A.6.27.NEXT (Issue 9, Max May 23 2026): was bg-yellow-100
-                       text-yellow-950 font-semibold — globally bg-yellow-100 wasn't
-                       overridden and font-extrabold was clobbering nested spans to
-                       near-white, giving yellow-on-yellow "Heads up:" and "BK". Now
-                       uses self-contained dark-theme-aware colours that read on both
-                       the dark modal background and any future light-mode rendering. */
-                    <div className="rounded p-3 text-sm font-semibold border-2" style={{ background: 'rgba(251,191,36,0.15)', borderColor: '#f59e0b', color: '#fde68a' }}>
-                      <span style={{ color: '#fbbf24' }}>⚠</span>{' '}
-                      <span style={{ color: '#fbbf24', fontWeight: 800 }}>Heads up:</span>{' '}
-                      <span style={{ color: '#fef3c7' }}>Smooth leather is typically only available in Black, but this template is for color </span>
-                      <span style={{ color: '#fbbf24', fontWeight: 800, fontFamily: 'JetBrains Mono, monospace' }}>{colorCode}</span>
-                      <span style={{ color: '#fef3c7' }}>. You can still proceed if this is correct.</span>
-                    </div>
-                  );
-                }
-                return null;
-              })()}
-            </div>
-            <div className="bg-slate-100 rounded-b-2xl px-6 py-4 flex justify-end gap-2">
-              <button
-                onClick={closeVariantModal}
-                disabled={variantBusy}
-                className="px-4 py-2 bg-slate-300 hover:bg-slate-400 disabled:opacity-50 text-slate-900 text-sm font-bold rounded-lg"
-              >
-                Cancel
-              </button>
-              <button
-                onClick={saveVariant}
-                disabled={variantBusy}
-                className="px-5 py-2 bg-purple-600 hover:bg-purple-700 disabled:opacity-50 text-white text-sm font-extrabold rounded-lg shadow"
-              >
-                {variantBusy ? 'Creating...' : '✓ Create / Reuse Variant'}
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
     </div>
   );
 }
